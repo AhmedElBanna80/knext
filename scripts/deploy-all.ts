@@ -7,12 +7,11 @@ import { Client } from 'minio';
 // Configuration
 const REGISTRY_BASE = 'local'; // Use 'local' to skip push
 const IMAGE_PREFIX = 'dev.local/knative-next';
-const NAMESPACE = 'default'; // Kubernetes namespace
-const MINIO_ENDPOINT = '127.0.0.1';
-const MINIO_PORT = 9000;
-const MINIO_ACCESS_KEY = 'minioadmin';
-const MINIO_SECRET_KEY = 'minioadmin';
-const BUCKET_NAME = 'next-assets';
+const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || '127.0.0.1';
+const MINIO_PORT = parseInt(process.env.MINIO_PORT || '9000');
+const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY || 'minioadmin'; // Warn: Default credentials are not secure for production
+const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY || 'minioadmin'; // Warn: Default credentials are not secure for production
+const BUCKET_NAME = process.env.MINIO_BUCKET || 'next-assets';
 // The asset prefix accessible from inside the cluster (or via Magic DNS)
 // Since the browser needs to access it, we use the external Magic URL.
 // MinIO Service is at minio.default.svc.cluster.local internally, but browser needs external.
@@ -94,24 +93,24 @@ function findPages(dir: string, fileList: string[] = []) {
         // Upload files
         // We need to upload .next/static/... to bucket/_next/static/...
         // So prefix in bucket should be "_next/static"
-        const uploadDir = (dir: string, prefix: string) => {
+        const uploadDir = async (dir: string, prefix: string) => {
             const files = fs.readdirSync(dir);
-            files.forEach(async file => {
+            for (const file of files) {
                 const filePath = path.join(dir, file);
                 const stat = fs.statSync(filePath);
                 if (stat.isDirectory()) {
-                    uploadDir(filePath, `${prefix}/${file}`);
+                    await uploadDir(filePath, `${prefix}/${file}`);
                 } else {
                     const objectName = `${prefix}/${file}`;
                     await minioClient.fPutObject(BUCKET_NAME, objectName, filePath);
                 }
-            });
+            }
         };
 
         if (fs.existsSync(STATIC_ASSETS_DIR)) {
             console.log(`Uploading ${STATIC_ASSETS_DIR} to ${BUCKET_NAME}/_next/static...`);
-            uploadDir(STATIC_ASSETS_DIR, '_next/static');
-            console.log('Asset upload initiated.');
+            await uploadDir(STATIC_ASSETS_DIR, '_next/static');
+            console.log('Asset upload completed.');
         } else {
             console.warn(`Static assets dir not found: ${STATIC_ASSETS_DIR}`);
         }
@@ -149,6 +148,9 @@ function findPages(dir: string, fileList: string[] = []) {
         if (dirName === '.') pageName = 'index';
 
         // Skip internal pages
+        // Skips directories starting with underscore like _not-found, _error, etc.
+        // Note: _app and _document are usually not standalone pages in App Router but can be in Pages Router.
+        // In App Router, we mainly want to skip special Next.js internal folders if they appear here.
         if (pageName.startsWith('_')) {
             console.log(`Skipping internal page: ${pageName}`);
             return;

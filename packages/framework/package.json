@@ -8,7 +8,7 @@
     ".": "./dist/runtime/index.js"
   },
   "scripts": {
-    "build": "tsc && cp compiler/tracer.js dist/compiler/tracer.js",
+    "build": "tsc",
     "start": "node dist/compiler/index.js"
   },
   "dependencies": {

@@ -128,9 +128,17 @@ if (existsSync(serverJsPath)) {
     // Patch server.js to respect ASSET_PREFIX
     let serverJsContent = readFileSync(serverJsDest, 'utf-8');
     if (assetPrefix) {
-        serverJsContent = serverJsContent.replace(/"assetPrefix"\s*:\s*""/, `"assetPrefix":"${assetPrefix}"`);
-        console.log(`Patched server.js with hardcoded assetPrefix: ${assetPrefix}`);
-        writeFileSync(serverJsDest, serverJsContent);
+        const assetPrefixPattern = /"assetPrefix"\s*:\s*"[^"]*"/;
+        if (assetPrefixPattern.test(serverJsContent)) {
+            serverJsContent = serverJsContent.replace(
+                assetPrefixPattern,
+                `"assetPrefix":"${assetPrefix}"`,
+            );
+            console.log(`Patched server.js with hardcoded assetPrefix: ${assetPrefix}`);
+            writeFileSync(serverJsDest, serverJsContent);
+        } else {
+            console.warn('Warning: Could not find "assetPrefix" property to patch in server.js');
+        }
     }
 
     // 2.1 Copy all node_modules from standalone
@@ -174,17 +182,63 @@ if (existsSync(serverJsPath)) {
                         return results;
                     };
 
-                    const manifestFiles = findManifestFiles(serverDir);
+                    // Limit search to known Next.js output subdirs for performance.
+                    const searchRoots: string[] = [];
+                    const appServerDir = path.join(serverDir, 'app');
+                    const pagesServerDir = path.join(serverDir, 'pages');
+                    if (existsSync(appServerDir)) searchRoots.push(appServerDir);
+                    if (existsSync(pagesServerDir)) searchRoots.push(pagesServerDir);
+                    if (searchRoots.length === 0) searchRoots.push(serverDir);
+
+                    const manifestFiles = searchRoots.flatMap(findManifestFiles);
+
+                    const patchManifestJs = (content: string): string | null => {
+                        const assignmentIndex = content.indexOf('=');
+                        const jsonStart =
+                            assignmentIndex !== -1 ? content.indexOf('{', assignmentIndex) : -1;
+                        const jsonEnd = jsonStart !== -1 ? content.lastIndexOf('}') : -1;
+
+                        if (
+                            assignmentIndex === -1 ||
+                            jsonStart === -1 ||
+                            jsonEnd === -1 ||
+                            jsonEnd <= jsonStart
+                        ) {
+                            return null;
+                        }
+
+                        const updateManifestValues = (value: any): any => {
+                            const staticPrefix = '/_next/static/';
+                            if (typeof value === 'string') {
+                                return value.includes(staticPrefix)
+                                    ? value.replace(staticPrefix, 'static/')
+                                    : value;
+                            }
+                            if (Array.isArray(value)) return value.map(updateManifestValues);
+                            if (value && typeof value === 'object') {
+                                const result: any = {};
+                                for (const [k, v] of Object.entries(value)) {
+                                    result[k] = updateManifestValues(v);
+                                }
+                                return result;
+                            }
+                            return value;
+                        };
+
+                        try {
+                            const parsed = JSON.parse(content.slice(jsonStart, jsonEnd + 1));
+                            const updated = updateManifestValues(parsed);
+                            const updatedJson = JSON.stringify(updated);
+                            return content.slice(0, jsonStart) + updatedJson + content.slice(jsonEnd + 1);
+                        } catch (parseError) {
+                            return null;
+                        }
+                    };
 
                     for (const manifestFile of manifestFiles) {
-                        let content = readFileSync(manifestFile, 'utf-8');
-                        const before = content;
-
-                        content = content.replaceAll('"/_next/static/', '"static/');
-
-                        if (content !== before) {
-                            writeFileSync(manifestFile, content);
-                        }
+                        const content = readFileSync(manifestFile, 'utf-8');
+                        const patched = patchManifestJs(content);
+                        if (patched) writeFileSync(manifestFile, patched);
                     }
                     console.log(`Patched ${manifestFiles.length} client-reference-manifest files`);
                 }
@@ -216,6 +270,7 @@ if (imageName && serviceName) {
     const envLines: string[] = [
         `            - name: HOSTNAME
               value: "0.0.0.0"`,
+        `            # Prerequisite: a Secret named "db-credentials" with key "database-url" must exist in this namespace.`,
         `            - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

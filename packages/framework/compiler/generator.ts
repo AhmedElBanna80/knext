@@ -32,8 +32,14 @@ export class Generator {
 
     // 1. Generate Knative Services
     for (const group of groups) {
-      const imageName = groupImages[group.name] || this.imageName; // Fallback to default if not found (shouldn't happen)
-      const serviceYaml = this.generateServiceYaml(group, imageName);
+      const explicitImageName = groupImages[group.name];
+      if (!explicitImageName) {
+        console.warn(
+          `Generator: No image specified for route group "${group.name}" in groupImages; falling back to default image "${this.imageName}".`,
+        );
+      }
+      const effectiveImageName = explicitImageName || this.imageName;
+      const serviceYaml = this.generateServiceYaml(group, effectiveImageName);
       await fs.writeFile(path.join(this.outputDir, `service-${group.name}.yaml`), serviceYaml);
     }
 
@@ -43,7 +49,9 @@ export class Generator {
   }
 
   private generateServiceYaml(group: RouteGroup, imageName: string): string {
-    const envVars = Object.entries(this.envConfig).map(([key, value]) => `            - name: ${key}
+    const envVars = Object.entries(this.envConfig)
+      .filter(([, value]) => value !== "")
+      .map(([key, value]) => `            - name: ${key}
               value: "${value}"`).join('\n');
 
     return `

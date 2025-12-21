@@ -1,6 +1,11 @@
 import fs from 'fs-extra';
 import path from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { nodeFileTrace } from '@vercel/nft';
 import { RouteGroup } from './splitter';
+
+const execAsync = promisify(exec);
 
 export class Packager {
     private projectDir: string;
@@ -52,32 +57,55 @@ export class Packager {
             entryPoints.push(path.join(this.projectDir, 'runner.js'));
         }
 
-        // 2. Bundle dependencies by copying full node_modules (tracing currently disabled)
-        // Note: We intentionally do not run a separate tracer here; the entire node_modules
-        // directory is copied into the build output to ensure all dependencies are available.
+        // 2. Bundle dependencies
+        // Prefer @vercel/nft to copy a minimal set of files (smaller images, faster builds).
+        // Set KNATIVE_NEXT_ENABLE_NFT=false to force the fallback behavior.
+        let traced = false;
+        const enableNft = process.env.KNATIVE_NEXT_ENABLE_NFT !== 'false';
 
-        console.log(`Copying full node_modules for ${groupName}...`);
+        if (enableNft && entryPoints.length > 0) {
+            try {
+                console.log(`Tracing dependencies with @vercel/nft for ${groupName}...`);
+                const result = await nodeFileTrace(entryPoints, {
+                    base: this.projectDir,
+                    processCwd: this.projectDir,
+                });
 
-        const localNodeModules = path.join(this.projectDir, 'node_modules');
-        const rootNodeModules = path.join(this.projectDir, '../../node_modules');
-
-        if (await fs.pathExists(localNodeModules)) {
-            await fs.copy(localNodeModules, path.join(buildDir, 'node_modules'));
-        } else if (await fs.pathExists(rootNodeModules)) {
-            console.log('Local node_modules not found, copying from root...');
-            await fs.copy(rootNodeModules, path.join(buildDir, 'node_modules'));
-        } else {
-            console.warn('Could not find node_modules to copy!');
+                for (const file of result.fileList) {
+                    const src = path.join(this.projectDir, file);
+                    const dest = path.join(buildDir, file);
+                    await fs.copy(src, dest);
+                }
+                traced = true;
+            } catch (e) {
+                console.warn(`Dependency tracing failed for ${groupName}, falling back to full copy.`, e);
+            }
         }
 
-        // Copy .next/server
-        await fs.copy(path.join(this.nextDir, 'server'), path.join(buildDir, '.next', 'server'));
+        if (!traced) {
+            console.log(`Copying full node_modules for ${groupName}...`);
 
-        // Copy entry points if they are not in .next/server
-        for (const ep of entryPoints) {
-            const rel = path.relative(this.projectDir, ep);
-            if (!rel.startsWith('.next') && !rel.startsWith('node_modules')) {
-                await fs.copy(ep, path.join(buildDir, rel));
+            const localNodeModules = path.join(this.projectDir, 'node_modules');
+            const rootNodeModules = path.join(this.projectDir, '../../node_modules');
+
+            if (await fs.pathExists(localNodeModules)) {
+                await fs.copy(localNodeModules, path.join(buildDir, 'node_modules'));
+            } else if (await fs.pathExists(rootNodeModules)) {
+                console.log('Local node_modules not found, copying from root...');
+                await fs.copy(rootNodeModules, path.join(buildDir, 'node_modules'));
+            } else {
+                console.warn('Could not find node_modules to copy!');
+            }
+
+            // Copy .next/server
+            await fs.copy(path.join(this.nextDir, 'server'), path.join(buildDir, '.next', 'server'));
+
+            // Copy entry points if they are not in .next/server
+            for (const ep of entryPoints) {
+                const rel = path.relative(this.projectDir, ep);
+                if (!rel.startsWith('.next') && !rel.startsWith('node_modules')) {
+                    await fs.copy(ep, path.join(buildDir, rel));
+                }
             }
         }
 
@@ -156,9 +184,6 @@ CMD ["node", "runner.js"]
         }
 
         console.log(`Building Docker image ${imageName}...`);
-        const { exec } = require('child_process');
-        const util = require('util');
-        const execAsync = util.promisify(exec);
 
         try {
             await execAsync(`docker build -t ${imageName} .`, { cwd: buildDir });

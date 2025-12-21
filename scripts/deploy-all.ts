@@ -4,32 +4,48 @@ import fs from 'fs';
 import path from 'path';
 import { Client } from 'minio';
 
-// Configuration
-const REGISTRY_BASE = 'local'; // Use 'local' to skip push
-const IMAGE_PREFIX = 'dev.local/knative-next';
-const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || '127.0.0.1';
-const MINIO_PORT = Number.parseInt(process.env.MINIO_PORT || '9000', 10);
+// MinIO credentials must be set before running this script.
 const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY;
 const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY;
-const BUCKET_NAME = process.env.MINIO_BUCKET || 'next-assets';
-// The externally accessible MinIO base URL (browser-facing). Override for non-local clusters.
-const MINIO_ASSET_BASE_URL =
-    process.env.MINIO_ASSET_BASE_URL || 'http://minio.default.127.0.0.1.sslip.io:9000';
 
 if (!MINIO_ACCESS_KEY || !MINIO_SECRET_KEY) {
     throw new Error(
-        'MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables must be set before running this deployment script.',
+        'MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables must be set before running this deployment script. ' +
+            'Set them in your environment (for example, in a .env file or by exporting them in your shell) and try again.',
     );
 }
+
+// Configuration
+const REGISTRY_BASE = 'local'; // Use 'local' to skip push
+const IMAGE_PREFIX = process.env.IMAGE_PREFIX || 'dev.local/knative-next';
+const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || '127.0.0.1';
+const MINIO_PORT = Number.parseInt(process.env.MINIO_PORT || '9000', 10);
+const BUCKET_NAME = process.env.MINIO_BUCKET || 'next-assets';
+const MINIO_REGION = process.env.MINIO_REGION || 'us-east-1'; // MinIO ignores regions, but some S3 clients require one.
+const MINIO_PUBLIC_READ = (process.env.MINIO_PUBLIC_READ || 'true') === 'true';
+const MINIO_UPLOAD_FAIL_FAST = (process.env.MINIO_UPLOAD_FAIL_FAST || 'true') === 'true';
 // The asset prefix accessible from inside the cluster (or via Magic DNS)
 // Since the browser needs to access it, we use the external Magic URL.
 // MinIO Service is at minio.default.svc.cluster.local internally, but browser needs external.
+// The externally accessible MinIO base URL (browser-facing). Override for non-local clusters.
+const MINIO_ASSET_BASE_URL =
+    process.env.MINIO_ASSET_BASE_URL || 'http://minio.default.127.0.0.1.sslip.io:9000';
 const ASSET_PREFIX = `${MINIO_ASSET_BASE_URL}/${BUCKET_NAME}`;
 
 // Find all page.js files in standalone build
-const STANDALONE_ROOT = 'apps/file-manager/.next/standalone';
-const APP_DIR = path.join(STANDALONE_ROOT, 'apps/file-manager/.next/server/app');
-const STATIC_ASSETS_DIR = 'apps/file-manager/.next/static';
+const APP_NAME = process.env.APP_NAME || 'file-manager';
+const STANDALONE_ROOT = process.env.STANDALONE_ROOT || `apps/${APP_NAME}/.next/standalone`;
+const APP_DIR =
+    process.env.APP_DIR || path.join(STANDALONE_ROOT, `apps/${APP_NAME}/.next/server/app`);
+const STATIC_ASSETS_DIR = process.env.STATIC_ASSETS_DIR || `apps/${APP_NAME}/.next/static`;
+
+function toDns1123Label(input: string): string {
+    // Kubernetes DNS-1123 label: lowercase alphanumeric or '-', must start/end alnum, max 63 chars.
+    const lower = input.toLowerCase();
+    const replaced = lower.replace(/[^a-z0-9-]+/g, '-');
+    const trimmed = replaced.replace(/^-+/, '').replace(/-+$/, '');
+    return trimmed.slice(0, 63) || 'default';
+}
 
 function findPages(dir: string, fileList: string[] = []) {
     const files = fs.readdirSync(dir);
@@ -80,22 +96,27 @@ function findPages(dir: string, fileList: string[] = []) {
 
         const exists = await minioClient.bucketExists(BUCKET_NAME);
         if (!exists) {
-            await minioClient.makeBucket(BUCKET_NAME, 'us-east-1');
+            await minioClient.makeBucket(BUCKET_NAME, MINIO_REGION);
             console.log(`Created bucket: ${BUCKET_NAME}`);
-            // Set policy to public read
-            const policy = {
-                Version: '2012-10-17',
-                Statement: [
-                    {
-                        Effect: 'Allow',
-                        Principal: { AWS: ['*'] },
-                        Action: ['s3:GetObject'],
-                        Resource: [`arn:aws:s3:::${BUCKET_NAME}/*`],
-                    },
-                ],
-            };
-            await minioClient.setBucketPolicy(BUCKET_NAME, JSON.stringify(policy));
-            console.log('Set bucket policy to public read');
+
+            if (MINIO_PUBLIC_READ) {
+                // Security note: this makes all uploaded assets world-readable.
+                const policy = {
+                    Version: '2012-10-17',
+                    Statement: [
+                        {
+                            Effect: 'Allow',
+                            Principal: { AWS: ['*'] },
+                            Action: ['s3:GetObject'],
+                            Resource: [`arn:aws:s3:::${BUCKET_NAME}/*`],
+                        },
+                    ],
+                };
+                await minioClient.setBucketPolicy(BUCKET_NAME, JSON.stringify(policy));
+                console.log('Set bucket policy to public read (MINIO_PUBLIC_READ=true)');
+            } else {
+                console.log('Skipping bucket public-read policy (MINIO_PUBLIC_READ=false)');
+            }
         }
 
         // Upload files
@@ -126,7 +147,7 @@ function findPages(dir: string, fileList: string[] = []) {
                         `Failed to upload file to MinIO: localPath="${filePath}", objectName="${objectName}", bucket="${BUCKET_NAME}"`,
                         err,
                     );
-                    throw err;
+                    if (MINIO_UPLOAD_FAIL_FAST) throw err;
                 }
             }
         };
@@ -182,9 +203,10 @@ function findPages(dir: string, fileList: string[] = []) {
 
         let pageName = dirName.replace(/\//g, '-');
         if (dirName === '.') pageName = 'index';
+        pageName = toDns1123Label(pageName);
 
         // Skip internal pages
-        // Skips directories starting with underscore like _not-found, _error, etc.
+        // Skip directories starting with underscore like _not-found, _error, etc.
         // Note: _app and _document are usually not standalone pages in App Router but can be in Pages Router.
         // In App Router, we mainly want to skip special Next.js internal folders if they appear here.
         if (pageName.startsWith('_')) {
@@ -201,9 +223,15 @@ function findPages(dir: string, fileList: string[] = []) {
         console.log(`[1/4] Isolating to ${isolateDir}...`);
         const serviceName = `knative-${pageName}`;
         try {
-            execSync(`npx ts-node scripts/isolate.ts ${pagePath} ${isolateDir} --image ${imageName} --service ${serviceName} --asset-prefix ${ASSET_PREFIX}`, { stdio: 'inherit' });
+            execSync(
+                `npx ts-node scripts/isolate.ts ${pagePath} ${isolateDir} --image ${imageName} --service ${serviceName} --asset-prefix ${ASSET_PREFIX}`,
+                {
+                    stdio: 'inherit',
+                    timeout: Number.parseInt(process.env.ISOLATE_TIMEOUT_MS || '0', 10) || undefined,
+                },
+            );
         } catch (e) {
-            console.error(`Failed to isolate ${pageName}`);
+            console.error(`Failed to isolate ${pageName}`, e);
             return;
         }
 

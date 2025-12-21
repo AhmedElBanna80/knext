@@ -4,8 +4,10 @@ export const dynamic = 'force-dynamic';
 
 async function getStats() {
   const db = getDbPool();
-  
-  const fileStats = await db.query('SELECT COUNT(*) as count, COALESCE(SUM(size), 0) as total_size FROM files');
+
+  const fileStats = await db.query(
+    'SELECT COUNT(*) as count, COALESCE(SUM(size), 0) as total_size FROM files',
+  );
   const userStats = await db.query('SELECT COUNT(*) as count FROM users');
   const recentFiles = await db.query('SELECT * FROM files ORDER BY uploaded_at DESC LIMIT 5');
 
@@ -13,7 +15,7 @@ async function getStats() {
     fileCount: fileStats.rows[0].count,
     totalSize: fileStats.rows[0].total_size,
     userCount: userStats.rows[0].count,
-    recentFiles: recentFiles.rows
+    recentFiles: recentFiles.rows,
   };
 }
 
@@ -23,7 +25,7 @@ export default async function DashboardPage() {
   return (
     <div className="p-8 text-white">
       <h1 className="text-3xl font-bold mb-8">Dashboard</h1>
-      
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="bg-white/10 p-6 rounded-xl border border-white/20">
           <h3 className="text-xl text-purple-200">Total Files</h3>
@@ -59,7 +61,9 @@ export default async function DashboardPage() {
             ))}
             {stats.recentFiles.length === 0 && (
               <tr>
-                <td colSpan={3} className="p-4 text-center text-gray-400">No files uploaded yet</td>
+                <td colSpan={3} className="p-4 text-center text-gray-400">
+                  No files uploaded yet
+                </td>
               </tr>
             )}
           </tbody>

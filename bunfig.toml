@@ -1,0 +1,14 @@
+# Bun test runner configuration
+[test]
+# Enable coverage by default
+coverage = true
+
+# Enforce minimum 80% coverage threshold
+coverageThreshold = 0.8
+
+# Coverage output directory
+coverageDir = "coverage"
+
+# Preload TypeScript configuration
+preload = ["./tests/setup.ts"]
+

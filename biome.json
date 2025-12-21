@@ -1,0 +1,68 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": false,
+    "ignore": [
+      "**/.next/**",
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/coverage/**",
+      "**/.turbo/**",
+      "**/build/**",
+      "**/.cursor/**",
+      "**/bun.lockb"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "lineWidth": 100,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "a11y": {
+        "noLabelWithoutControl": "warn",
+        "noSvgWithoutTitle": "warn"
+      },
+      "correctness": {
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        "useExhaustiveDependencies": "warn"
+      },
+      "suspicious": {
+        "noConsoleLog": "warn",
+        "noExplicitAny": "off",
+        "noDoubleEquals": "error",
+        "noArrayIndexKey": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useConst": "error"
+      },
+      "complexity": {
+        "noForEach": "off",
+        "noExtraBooleanCast": "error",
+        "noUselessTypeConstraint": "error",
+        "useFlatMap": "warn"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "organizeImports": {
+    "enabled": true
+  }
+}

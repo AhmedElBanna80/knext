@@ -55,22 +55,28 @@ deploy-app:
 	@echo "Building File Manager app..."
 	npm run build --workspace=packages/framework
 	npm run build --workspace=apps/file-manager
-	@echo "Building Docker image..."
+	@echo "Preparing runtime files..."
 	cp packages/framework/dist/runtime/cache-handler.js apps/file-manager/cache-handler.js
 	cp packages/framework/dist/runtime/runner.js apps/file-manager/runner.js
-	docker build --no-cache -t file-manager:latest -f packages/framework/runtime/Dockerfile apps/file-manager
-	docker tag file-manager:latest dev.local/file-manager:latest
-	@if minikube status > /dev/null 2>&1; then \
-		echo "Loading image into Minikube..."; \
-		minikube image rm dev.local/file-manager:latest 2>/dev/null || true; \
-		minikube image load dev.local/file-manager:latest; \
-	fi
-	rm apps/file-manager/cache-handler.js apps/file-manager/runner.js
-	@echo "Generating Knative manifests..."
+	@echo "Compiling and building images..."
 	node packages/framework/dist/compiler/index.js \
 		--dir apps/file-manager \
 		--output ./manifests \
 		--image dev.local/file-manager:latest
+	rm apps/file-manager/cache-handler.js apps/file-manager/runner.js
+	@if minikube status > /dev/null 2>&1; then \
+		echo "Loading images into Minikube..."; \
+		imgs=$$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "dev.local/file-manager-" || true); \
+		if [ -z "$$imgs" ]; then \
+			echo "No dev.local/file-manager-* images found to load into Minikube. Skipping image load."; \
+		else \
+			for img in $$imgs; do \
+				echo "Loading $$img..."; \
+				minikube image rm $$img 2>/dev/null || true; \
+				minikube image load $$img; \
+			done; \
+		fi; \
+	fi
 	@echo "Deploying to Knative..."
 	@if kubectl cluster-info > /dev/null 2>&1; then \
 		kubectl apply -f ./manifests; \

@@ -33,9 +33,13 @@ export default async function AuditPage() {
                   {new Date(log.created_at).toISOString()}
                 </td>
                 <td className="p-4">
-                  <span className={`px-2 py-1 rounded text-xs font-bold ${
-                    log.action === 'LOGIN' ? 'bg-green-500/20 text-green-200' : 'bg-blue-500/20 text-blue-200'
-                  }`}>
+                  <span
+                    className={`px-2 py-1 rounded text-xs font-bold ${
+                      log.action === 'LOGIN'
+                        ? 'bg-green-500/20 text-green-200'
+                        : 'bg-blue-500/20 text-blue-200'
+                    }`}
+                  >
                     {log.action}
                   </span>
                 </td>

@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic';
 
 async function setupDatabase() {
   const db = getDbPool();
-  
+
   try {
     // Create files table
     await db.query(`
@@ -39,7 +39,7 @@ async function setupDatabase() {
 
     // Seed some data if empty
     const userCount = await db.query('SELECT COUNT(*) FROM users');
-    if (parseInt(userCount.rows[0].count) === 0) {
+    if (Number.parseInt(userCount.rows[0].count) === 0) {
       await db.query(`
         INSERT INTO users (name, email, role) VALUES 
         ('Admin User', 'admin@example.com', 'admin'),
@@ -50,12 +50,13 @@ async function setupDatabase() {
 
     // Seed audit logs
     const auditCount = await db.query('SELECT COUNT(*) FROM audit_logs');
-    if (parseInt(auditCount.rows[0].count) === 0) {
-       // Generate 1000 dummy logs
-       const values = Array.from({ length: 1000 }, (_, i) => 
-         `('LOGIN', 'User logged in session ${i}', NOW() - INTERVAL '${i} minutes')`
-       ).join(',');
-       await db.query(`INSERT INTO audit_logs (action, details, created_at) VALUES ${values}`);
+    if (Number.parseInt(auditCount.rows[0].count) === 0) {
+      // Generate 1000 dummy logs
+      const values = Array.from(
+        { length: 1000 },
+        (_, i) => `('LOGIN', 'User logged in session ${i}', NOW() - INTERVAL '${i} minutes')`,
+      ).join(',');
+      await db.query(`INSERT INTO audit_logs (action, details, created_at) VALUES ${values}`);
     }
 
     return { success: true, message: 'Database initialized successfully' };

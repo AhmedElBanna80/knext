@@ -4,15 +4,17 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
-    "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\""
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "bun test --coverage",
+    "ci": "biome check . && bun test --coverage",
+    "isolate": "npx ts-node scripts/isolate.ts",
+    "deploy-all": "npx ts-node scripts/deploy-all.ts"
   },
   "devDependencies": {
-    "turbo": "latest",
-    "prettier": "^3.0.0"
+    "@biomejs/biome": "^1.9.4",
+    "minio": "^8.0.6",
+    "turbo": "latest"
   },
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ]
+  "workspaces": ["apps/*", "packages/*"]
 }

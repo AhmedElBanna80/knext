@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+
+const { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync } = fs;
 
 const [, , entryFile, outputDir, ...restArgs] = process.argv;
 
@@ -15,9 +16,37 @@ let serviceName = '';
 let assetPrefix = '';
 
 for (let i = 0; i < restArgs.length; i++) {
-    if (restArgs[i] === '--image') imageName = restArgs[i + 1];
-    if (restArgs[i] === '--service') serviceName = restArgs[i + 1];
-    if (restArgs[i] === '--asset-prefix') assetPrefix = restArgs[i + 1];
+    const arg = restArgs[i];
+    if (arg === '--image') {
+        if (i + 1 >= restArgs.length) {
+            console.error('Missing value for --image');
+            process.exit(1);
+        }
+        imageName = restArgs[i + 1];
+        i++;
+    } else if (arg === '--service') {
+        if (i + 1 >= restArgs.length) {
+            console.error('Missing value for --service');
+            process.exit(1);
+        }
+        serviceName = restArgs[i + 1];
+        i++;
+    } else if (arg === '--asset-prefix') {
+        if (i + 1 >= restArgs.length) {
+            console.error('Missing value for --asset-prefix');
+            process.exit(1);
+        }
+        assetPrefix = restArgs[i + 1];
+        i++;
+    }
+}
+
+// If either is provided, require both (used for ksvc.yaml generation).
+if ((imageName || serviceName) && (!imageName || !serviceName)) {
+    console.error(
+        'Usage: npx ts-node scripts/isolate.ts <entry-file> <output-dir> --image <image-name> --service <service-name> [--asset-prefix <asset-prefix>]',
+    );
+    process.exit(1);
 }
 
 const absEntryFile = path.resolve(entryFile);
@@ -89,6 +118,8 @@ if (nextIndex !== -1) {
 const serverJsRel = path.join(appRootRel, 'server.js');
 const serverJsPath = path.join(standaloneRoot, serverJsRel);
 const serverJsDest = path.join(absOutputDir, serverJsRel);
+// Docker runs in Linux; ensure CMD uses forward slashes even if this script runs on Windows.
+const serverJsRelForDocker = serverJsRel.split(path.sep).join('/');
 
 if (existsSync(serverJsPath)) {
     console.log(`Found server.js at ${serverJsRel}`);
@@ -175,13 +206,28 @@ WORKDIR /app
 COPY . .
 ENV NODE_ENV=production
 ENV PORT=3000
-CMD ["node", "${serverJsRel}"]
+CMD ["node", "${serverJsRelForDocker}"]
 `;
 
 writeFileSync(path.join(absOutputDir, 'Dockerfile'), dockerfileContent.trim());
 
 // 4. Generate Knative Service Config
 if (imageName && serviceName) {
+    const envLines: string[] = [
+        `            - name: HOSTNAME
+              value: "0.0.0.0"`,
+        `            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: database-url`,
+    ];
+
+    if (assetPrefix) {
+        envLines.push(`            - name: ASSET_PREFIX
+              value: "${assetPrefix}"`);
+    }
+
     const ksvcContent = `
 apiVersion: serving.knative.dev/v1
 kind: Service
@@ -200,32 +246,7 @@ spec:
           ports:
             - containerPort: 3000
           env:
-            - name: HOSTNAME
-              value: "0.0.0.0"
-            - name: DB_USER
-              valueFrom:
-                secretKeyRef:
-                  name: db-credentials
-                  key: username
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: db-credentials
-                  key: password
-            - name: DB_HOST
-              valueFrom:
-                secretKeyRef:
-                  name: db-credentials
-                  key: host
-            - name: DB_NAME
-              valueFrom:
-                secretKeyRef:
-                  name: db-credentials
-                  key: database
-            - name: DATABASE_URL
-              value: "postgresql://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):5432/$(DB_NAME)"
-            ${assetPrefix ? `- name: ASSET_PREFIX
-              value: "${assetPrefix}"` : ''}
+${envLines.join('\n')}
 `;
     writeFileSync(path.join(absOutputDir, 'ksvc.yaml'), ksvcContent.trim());
     console.log(`Generated ksvc.yaml for service: ${serviceName}`);

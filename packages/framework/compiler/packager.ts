@@ -52,9 +52,9 @@ export class Packager {
             entryPoints.push(path.join(this.projectDir, 'runner.js'));
         }
 
-        // 2. Trace Dependencies (SKIPPED: tracer.js is missing, using fallback)
-        // We previously tried to use @vercel/nft via a separate tracer script, but it's missing.
-        // Falling back to copying full node_modules.
+        // 2. Bundle dependencies by copying full node_modules (tracing currently disabled)
+        // Note: We intentionally do not run a separate tracer here; the entire node_modules
+        // directory is copied into the build output to ensure all dependencies are available.
 
         console.log(`Copying full node_modules for ${groupName}...`);
 
@@ -97,7 +97,7 @@ export class Packager {
 
         // Use fs.copy for cross-platform compatibility
         try {
-             await fs.copy(staticSrc, staticDest);
+            await fs.copy(staticSrc, staticDest);
         } catch (e) {
             console.warn('Failed to copy .next/static', e);
         }
@@ -113,7 +113,9 @@ export class Packager {
 
         // 5. Generate Dockerfile
         const dockerfileContent = `
-FROM node:18-alpine
+# Use a build argument to configure the Node.js version (default: 18)
+ARG NODE_VERSION=18
+FROM node:\${NODE_VERSION}-alpine
 WORKDIR /app
 ENV NODE_ENV production
 ENV NEXT_TELEMETRY_DISABLED 1
@@ -140,7 +142,12 @@ CMD ["node", "runner.js"]
 
         // 6. Build Docker Image
         let imageName = '';
-        const [base, tag] = this.baseImageName.split(':');
+        const lastSlash = this.baseImageName.lastIndexOf('/');
+        const lastColon = this.baseImageName.lastIndexOf(':');
+        const hasTag = lastColon > lastSlash;
+
+        const base = hasTag ? this.baseImageName.slice(0, lastColon) : this.baseImageName;
+        const tag = hasTag ? this.baseImageName.slice(lastColon + 1) : '';
 
         if (tag) {
             imageName = `${base}-${groupName}:${tag}`;

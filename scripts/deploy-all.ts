@@ -8,15 +8,23 @@ import { Client } from 'minio';
 const REGISTRY_BASE = 'local'; // Use 'local' to skip push
 const IMAGE_PREFIX = 'dev.local/knative-next';
 const MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || '127.0.0.1';
-const MINIO_PORT = parseInt(process.env.MINIO_PORT || '9000');
-const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY || 'minioadmin'; // Warn: Default credentials are not secure for production
-const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY || 'minioadmin'; // Warn: Default credentials are not secure for production
+const MINIO_PORT = Number.parseInt(process.env.MINIO_PORT || '9000', 10);
+const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY;
+const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY;
 const BUCKET_NAME = process.env.MINIO_BUCKET || 'next-assets';
+// The externally accessible MinIO base URL (browser-facing). Override for non-local clusters.
+const MINIO_ASSET_BASE_URL =
+    process.env.MINIO_ASSET_BASE_URL || 'http://minio.default.127.0.0.1.sslip.io:9000';
+
+if (!MINIO_ACCESS_KEY || !MINIO_SECRET_KEY) {
+    throw new Error(
+        'MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables must be set before running this deployment script.',
+    );
+}
 // The asset prefix accessible from inside the cluster (or via Magic DNS)
 // Since the browser needs to access it, we use the external Magic URL.
 // MinIO Service is at minio.default.svc.cluster.local internally, but browser needs external.
-// We'll use the Magic DNS for MinIO too: http://minio.default.127.0.0.1.sslip.io:9000
-const ASSET_PREFIX = `http://minio.default.127.0.0.1.sslip.io:9000/${BUCKET_NAME}`;
+const ASSET_PREFIX = `${MINIO_ASSET_BASE_URL}/${BUCKET_NAME}`;
 
 // Find all page.js files in standalone build
 const STANDALONE_ROOT = 'apps/file-manager/.next/standalone';
@@ -29,7 +37,8 @@ function findPages(dir: string, fileList: string[] = []) {
         const filePath = path.join(dir, file);
         const stat = fs.statSync(filePath);
         if (stat.isDirectory()) {
-            if (!file.startsWith('_')) { // Skip _not-found, _error,etc.
+            if (!file.startsWith('_')) {
+                // Skip internal routes like _not-found, _error, etc.
                 findPages(filePath, fileList);
             }
         } else if (file === 'page.js') {
@@ -48,8 +57,8 @@ function findPages(dir: string, fileList: string[] = []) {
             endPoint: MINIO_ENDPOINT,
             port: MINIO_PORT,
             useSSL: false,
-            accessKey: MINIO_ACCESS_KEY,
-            secretKey: MINIO_SECRET_KEY,
+            accessKey: MINIO_ACCESS_KEY!,
+            secretKey: MINIO_SECRET_KEY!,
         });
 
         // Check if MinIO is reachable (simple retry)
@@ -66,8 +75,7 @@ function findPages(dir: string, fileList: string[] = []) {
         }
 
         if (retries === 0) {
-            console.error('Failed to connect to MinIO. Skipping asset upload.');
-            return;
+            throw new Error('Failed to connect to MinIO after retries. Aborting deployment.');
         }
 
         const exists = await minioClient.bucketExists(BUCKET_NAME);
@@ -91,25 +99,41 @@ function findPages(dir: string, fileList: string[] = []) {
         }
 
         // Upload files
-        // We need to upload .next/static/... to bucket/_next/static/...
-        // So prefix in bucket should be "_next/static"
+        // Upload .next/static/... into the bucket under "static/..." to align with manifest patching.
         const uploadDir = async (dir: string, prefix: string) => {
-            const files = fs.readdirSync(dir);
-            for (const file of files) {
-                const filePath = path.join(dir, file);
-                const stat = fs.statSync(filePath);
-                if (stat.isDirectory()) {
-                    await uploadDir(filePath, `${prefix}/${file}`);
-                } else {
-                    const objectName = `${prefix}/${file}`;
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const filePath = path.join(dir, entry.name);
+
+                // Avoid symlink cycles / unexpected traversal.
+                if (entry.isSymbolicLink()) {
+                    console.warn(`Skipping symlink during upload: ${filePath}`);
+                    continue;
+                }
+
+                if (entry.isDirectory()) {
+                    await uploadDir(filePath, path.posix.join(prefix, entry.name));
+                    continue;
+                }
+
+                if (!entry.isFile()) continue;
+
+                const objectName = path.posix.join(prefix, entry.name);
+                try {
                     await minioClient.fPutObject(BUCKET_NAME, objectName, filePath);
+                } catch (err) {
+                    console.error(
+                        `Failed to upload file to MinIO: localPath="${filePath}", objectName="${objectName}", bucket="${BUCKET_NAME}"`,
+                        err,
+                    );
+                    throw err;
                 }
             }
         };
 
         if (fs.existsSync(STATIC_ASSETS_DIR)) {
-            console.log(`Uploading ${STATIC_ASSETS_DIR} to ${BUCKET_NAME}/_next/static...`);
-            await uploadDir(STATIC_ASSETS_DIR, '_next/static');
+            console.log(`Uploading ${STATIC_ASSETS_DIR} to ${BUCKET_NAME}/static...`);
+            await uploadDir(STATIC_ASSETS_DIR, 'static');
             console.log('Asset upload completed.');
         } else {
             console.warn(`Static assets dir not found: ${STATIC_ASSETS_DIR}`);
@@ -131,10 +155,22 @@ function findPages(dir: string, fileList: string[] = []) {
         await uploadAssets();
     } catch (e) {
         console.error('Error uploading assets:', e);
+        process.exit(1);
     }
 
     const pages = findPages(APP_DIR);
     console.log(`Found ${pages.length} pages to deploy.`);
+
+    // Use a consistent tag to avoid unbounded image accumulation.
+    // Prefer an explicitly provided IMAGE_TAG, then git commit SHA, and finally fall back to 'latest'.
+    let TAG: string = process.env.IMAGE_TAG || '';
+    if (!TAG) {
+        try {
+            TAG = execSync('git rev-parse --short HEAD').toString().trim();
+        } catch {
+            TAG = 'latest';
+        }
+    }
 
     pages.forEach(pagePath => {
         // Determine page name from path
@@ -159,8 +195,6 @@ function findPages(dir: string, fileList: string[] = []) {
         console.log(`\n--- Deploying Page: ${pageName} ---`);
 
         const isolateDir = `dist/isolated/${pageName}`;
-        // Use unique tag to force update (bypass IfNotPresent cache issue)
-        const TAG = Date.now().toString();
         const imageName = `${IMAGE_PREFIX}-${pageName}:${TAG}`;
 
         // 1. Isolate

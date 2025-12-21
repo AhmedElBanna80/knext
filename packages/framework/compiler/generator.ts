@@ -19,9 +19,10 @@ export class Generator {
       MINIO_ENDPOINT: "minio.default.svc.cluster.local",
       MINIO_PORT: "9000",
       MINIO_USE_SSL: "false",
-      DATABASE_URL: "postgresql://neondb_owner:password@postgres-postgresql.default.svc.cluster.local:5432/neondb?sslmode=disable",
-      MINIO_ACCESS_KEY: "minio",
-      MINIO_SECRET_KEY: "minio123",
+      // Prefer explicitly provided envConfig (or environment variables) for sensitive values.
+      DATABASE_URL: "",
+      MINIO_ACCESS_KEY: "",
+      MINIO_SECRET_KEY: "",
       ...envConfig
     };
   }

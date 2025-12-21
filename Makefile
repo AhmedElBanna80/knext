@@ -66,11 +66,16 @@ deploy-app:
 	rm apps/file-manager/cache-handler.js apps/file-manager/runner.js
 	@if minikube status > /dev/null 2>&1; then \
 		echo "Loading images into Minikube..."; \
-		for img in $$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "dev.local/file-manager-"); do \
-			echo "Loading $$img..."; \
-			minikube image rm $$img 2>/dev/null || true; \
-			minikube image load $$img; \
-		done; \
+		imgs=$$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "dev.local/file-manager-" || true); \
+		if [ -z "$$imgs" ]; then \
+			echo "No dev.local/file-manager-* images found to load into Minikube. Skipping image load."; \
+		else \
+			for img in $$imgs; do \
+				echo "Loading $$img..."; \
+				minikube image rm $$img 2>/dev/null || true; \
+				minikube image load $$img; \
+			done; \
+		fi; \
 	fi
 	@echo "Deploying to Knative..."
 	@if kubectl cluster-info > /dev/null 2>&1; then \

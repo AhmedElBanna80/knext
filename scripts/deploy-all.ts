@@ -1,18 +1,18 @@
-
-import { execSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Client } from 'minio';
+import { toDns1123Label } from './lib/names';
 
 // MinIO credentials must be set before running this script.
 const MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY;
 const MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY;
 
 if (!MINIO_ACCESS_KEY || !MINIO_SECRET_KEY) {
-    throw new Error(
-        'MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables must be set before running this deployment script. ' +
-            'Set them in your environment (for example, in a .env file or by exporting them in your shell) and try again.',
-    );
+  throw new Error(
+    'MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables must be set before running this deployment script. ' +
+      'Set them in your environment (for example, in a .env file or by exporting them in your shell) and try again.',
+  );
 }
 
 // Configuration
@@ -29,254 +29,213 @@ const MINIO_UPLOAD_FAIL_FAST = (process.env.MINIO_UPLOAD_FAIL_FAST || 'true') ==
 // MinIO Service is at minio.default.svc.cluster.local internally, but browser needs external.
 // The externally accessible MinIO base URL (browser-facing). Override for non-local clusters.
 const MINIO_ASSET_BASE_URL =
-    process.env.MINIO_ASSET_BASE_URL || 'http://minio.default.127.0.0.1.sslip.io:9000';
+  process.env.MINIO_ASSET_BASE_URL || 'http://minio.default.127.0.0.1.sslip.io:9000';
 const ASSET_PREFIX = `${MINIO_ASSET_BASE_URL}/${BUCKET_NAME}`;
 
 // Find all page.js files in standalone build
 const APP_NAME = process.env.APP_NAME || 'file-manager';
 const STANDALONE_ROOT = process.env.STANDALONE_ROOT || `apps/${APP_NAME}/.next/standalone`;
 const APP_DIR =
-    process.env.APP_DIR || path.join(STANDALONE_ROOT, `apps/${APP_NAME}/.next/server/app`);
+  process.env.APP_DIR || path.join(STANDALONE_ROOT, `apps/${APP_NAME}/.next/server/app`);
 const STATIC_ASSETS_DIR = process.env.STATIC_ASSETS_DIR || `apps/${APP_NAME}/.next/static`;
 
-function toDns1123Label(input: string): string {
-    // Kubernetes DNS-1123 label: lowercase alphanumeric or '-', must start/end alnum, max 63 chars.
-    const lower = input.toLowerCase();
-    const replaced = lower.replace(/[^a-z0-9-]+/g, '-');
-    const trimmed = replaced.replace(/^-+/, '').replace(/-+$/, '');
-    return trimmed.slice(0, 63) || 'default';
-}
-
 function findPages(dir: string, fileList: string[] = []) {
-    const files = fs.readdirSync(dir);
-    files.forEach(file => {
-        const filePath = path.join(dir, file);
-        const stat = fs.statSync(filePath);
-        if (stat.isDirectory()) {
-            if (!file.startsWith('_')) {
-                // Skip internal routes like _not-found, _error, etc.
-                findPages(filePath, fileList);
-            }
-        } else if (file === 'page.js') {
-            fileList.push(filePath);
-        }
-    });
-    return fileList;
+  const files = fs.readdirSync(dir);
+  files.forEach((file) => {
+    const filePath = path.join(dir, file);
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      if (!file.startsWith('_')) {
+        // Skip internal routes like _not-found, _error, etc.
+        findPages(filePath, fileList);
+      }
+    } else if (file === 'page.js') {
+      fileList.push(filePath);
+    }
+  });
+  return fileList;
 }
 
 (async () => {
-    console.log('--- Starting Deployment ---');
-
-    async function uploadAssets() {
-        console.log('\n--- Uploading Static Assets to MinIO ---');
-        const minioClient = new Client({
-            endPoint: MINIO_ENDPOINT,
-            port: MINIO_PORT,
-            useSSL: false,
-            accessKey: MINIO_ACCESS_KEY!,
-            secretKey: MINIO_SECRET_KEY!,
-        });
-
-        // Check if MinIO is reachable (simple retry)
-        let retries = 5;
-        while (retries > 0) {
-            try {
-                await minioClient.listBuckets();
-                break;
-            } catch (e) {
-                console.log(`Waiting for MinIO... (${retries} retries left)`);
-                await new Promise(r => setTimeout(r, 2000));
-                retries--;
-            }
-        }
-
-        if (retries === 0) {
-            throw new Error('Failed to connect to MinIO after retries. Aborting deployment.');
-        }
-
-        const exists = await minioClient.bucketExists(BUCKET_NAME);
-        if (!exists) {
-            await minioClient.makeBucket(BUCKET_NAME, MINIO_REGION);
-            console.log(`Created bucket: ${BUCKET_NAME}`);
-
-            if (MINIO_PUBLIC_READ) {
-                // Security note: this makes all uploaded assets world-readable.
-                const policy = {
-                    Version: '2012-10-17',
-                    Statement: [
-                        {
-                            Effect: 'Allow',
-                            Principal: { AWS: ['*'] },
-                            Action: ['s3:GetObject'],
-                            Resource: [`arn:aws:s3:::${BUCKET_NAME}/*`],
-                        },
-                    ],
-                };
-                await minioClient.setBucketPolicy(BUCKET_NAME, JSON.stringify(policy));
-                console.log('Set bucket policy to public read (MINIO_PUBLIC_READ=true)');
-            } else {
-                console.log('Skipping bucket public-read policy (MINIO_PUBLIC_READ=false)');
-            }
-        }
-
-        // Upload files
-        // Upload .next/static/... into the bucket under "static/..." to align with manifest patching.
-        const uploadDir = async (dir: string, prefix: string) => {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const entry of entries) {
-                const filePath = path.join(dir, entry.name);
-
-                // Avoid symlink cycles / unexpected traversal.
-                if (entry.isSymbolicLink()) {
-                    console.warn(`Skipping symlink during upload: ${filePath}`);
-                    continue;
-                }
-
-                if (entry.isDirectory()) {
-                    await uploadDir(filePath, path.posix.join(prefix, entry.name));
-                    continue;
-                }
-
-                if (!entry.isFile()) continue;
-
-                const objectName = path.posix.join(prefix, entry.name);
-                try {
-                    await minioClient.fPutObject(BUCKET_NAME, objectName, filePath);
-                } catch (err) {
-                    console.error(
-                        `Failed to upload file to MinIO: localPath="${filePath}", objectName="${objectName}", bucket="${BUCKET_NAME}"`,
-                        err,
-                    );
-                    if (MINIO_UPLOAD_FAIL_FAST) throw err;
-                }
-            }
-        };
-
-        if (fs.existsSync(STATIC_ASSETS_DIR)) {
-            console.log(`Uploading ${STATIC_ASSETS_DIR} to ${BUCKET_NAME}/static...`);
-            await uploadDir(STATIC_ASSETS_DIR, 'static');
-            console.log('Asset upload completed.');
-        } else {
-            console.warn(`Static assets dir not found: ${STATIC_ASSETS_DIR}`);
-        }
-    }
-
-
-
-    // Main execution
-
-    // 0. Upload Assets
-    // We need to port-forward MinIO to localhost:9000 for this script to work
-    // The user or script should ensure port-forward is running.
-    // Or we can try to run port-forward in background?
-    // For now, let's assume MinIO is accessible at localhost:9000 (LoadBalancer might work if supported, or NodePort)
-    // On Docker Desktop, LoadBalancer localhost:9000 works.
-
-    try {
-        await uploadAssets();
-    } catch (e) {
-        console.error('Error uploading assets:', e);
-        process.exit(1);
-    }
-
-    const pages = findPages(APP_DIR);
-    console.log(`Found ${pages.length} pages to deploy.`);
-
-    // Use a consistent tag to avoid unbounded image accumulation.
-    // Prefer an explicitly provided IMAGE_TAG, then git commit SHA, and finally fall back to 'latest'.
-    let TAG: string = process.env.IMAGE_TAG || '';
-    if (!TAG) {
-        try {
-            TAG = execSync('git rev-parse --short HEAD').toString().trim();
-        } catch {
-            TAG = 'latest';
-        }
-    }
-
-    pages.forEach(pagePath => {
-        // Determine page name from path
-        // e.g. .../server/app/dashboard/page.js -> dashboard
-        // .../server/app/page.js -> index
-
-        const relPath = path.relative(APP_DIR, pagePath);
-        const dirName = path.dirname(relPath);
-
-        let pageName = dirName.replace(/\//g, '-');
-        if (dirName === '.') pageName = 'index';
-        pageName = toDns1123Label(pageName);
-
-        // Skip internal pages
-        // Skip directories starting with underscore like _not-found, _error, etc.
-        // Note: _app and _document are usually not standalone pages in App Router but can be in Pages Router.
-        // In App Router, we mainly want to skip special Next.js internal folders if they appear here.
-        if (pageName.startsWith('_')) {
-            console.log(`Skipping internal page: ${pageName}`);
-            return;
-        }
-
-        console.log(`\n--- Deploying Page: ${pageName} ---`);
-
-        const isolateDir = `dist/isolated/${pageName}`;
-        const imageName = `${IMAGE_PREFIX}-${pageName}:${TAG}`;
-
-        // 1. Isolate
-        console.log(`[1/4] Isolating to ${isolateDir}...`);
-        const serviceName = `knative-${pageName}`;
-        try {
-            execSync(
-                `npx ts-node scripts/isolate.ts ${pagePath} ${isolateDir} --image ${imageName} --service ${serviceName} --asset-prefix ${ASSET_PREFIX}`,
-                {
-                    stdio: 'inherit',
-                    timeout: Number.parseInt(process.env.ISOLATE_TIMEOUT_MS || '0', 10) || undefined,
-                },
-            );
-        } catch (e) {
-            console.error(`Failed to isolate ${pageName}`, e);
-            return;
-        }
-
-        // 2. Build Docker image
-        console.log(`[2/4] Building Docker image ${imageName}...`);
-        try {
-            execSync(`docker build -t ${imageName} ${isolateDir}`, { stdio: 'inherit' });
-        } catch (e) {
-            console.error(`Failed to build ${pageName}`);
-            return;
-        }
-
-        // 3. Push (Skipped for local)
-        if (REGISTRY_BASE !== 'local') {
-            console.log(`[3/4] Pushing to ${REGISTRY_BASE}...`);
-            try {
-                execSync(`docker push ${imageName}`, { stdio: 'inherit' });
-            } catch (e) {
-                console.error(`Failed to push ${pageName}`);
-                return;
-            }
-        } else {
-            console.log(`[3/4] Skipping push (local mode)...`);
-        }
-
-        // 4. Deploy (Using generated ksvc.yaml)
-        console.log(`[4/4] Deploying Knative Service...`);
-        const manifestPath = `${isolateDir}/ksvc.yaml`;
-
-        if (!fs.existsSync(manifestPath)) {
-            console.error(`ksvc.yaml not found for ${pageName}`);
-            return;
-        }
-
-        try {
-            execSync(`kubectl apply -f ${manifestPath}`, { stdio: 'inherit' });
-            console.log(`Deployed ${serviceName}`);
-        } catch (e) {
-            console.error(`Failed to deploy ${pageName}`);
-        }
+  async function uploadAssets() {
+    const minioClient = new Client({
+      endPoint: MINIO_ENDPOINT,
+      port: MINIO_PORT,
+      useSSL: false,
+      accessKey: MINIO_ACCESS_KEY!,
+      secretKey: MINIO_SECRET_KEY!,
     });
 
-    // 5. Output URLs
-    console.log('\n--- Deployment Complete ---');
-    console.log('Services deployed. Check URLs with: kubectl get ksvc');
-    console.log(`Assets served from: ${ASSET_PREFIX}`);
+    // Check if MinIO is reachable (simple retry)
+    let retries = 5;
+    while (retries > 0) {
+      try {
+        await minioClient.listBuckets();
+        break;
+      } catch (_e) {
+        await new Promise((r) => setTimeout(r, 2000));
+        retries--;
+      }
+    }
 
+    if (retries === 0) {
+      throw new Error('Failed to connect to MinIO after retries. Aborting deployment.');
+    }
+
+    const exists = await minioClient.bucketExists(BUCKET_NAME);
+    if (!exists) {
+      await minioClient.makeBucket(BUCKET_NAME, MINIO_REGION);
+
+      if (MINIO_PUBLIC_READ) {
+        // Security note: this makes all uploaded assets world-readable.
+        const policy = {
+          Version: '2012-10-17',
+          Statement: [
+            {
+              Effect: 'Allow',
+              Principal: { AWS: ['*'] },
+              Action: ['s3:GetObject'],
+              Resource: [`arn:aws:s3:::${BUCKET_NAME}/*`],
+            },
+          ],
+        };
+        await minioClient.setBucketPolicy(BUCKET_NAME, JSON.stringify(policy));
+      } else {
+      }
+    }
+
+    // Upload files
+    // Upload .next/static/... into the bucket under "static/..." to align with manifest patching.
+    const uploadDir = async (dir: string, prefix: string) => {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const filePath = path.join(dir, entry.name);
+
+        // Avoid symlink cycles / unexpected traversal.
+        if (entry.isSymbolicLink()) {
+          console.warn(`Skipping symlink during upload: ${filePath}`);
+          continue;
+        }
+
+        if (entry.isDirectory()) {
+          await uploadDir(filePath, path.posix.join(prefix, entry.name));
+          continue;
+        }
+
+        if (!entry.isFile()) continue;
+
+        const objectName = path.posix.join(prefix, entry.name);
+        try {
+          await minioClient.fPutObject(BUCKET_NAME, objectName, filePath);
+        } catch (err) {
+          console.error(
+            `Failed to upload file to MinIO: localPath="${filePath}", objectName="${objectName}", bucket="${BUCKET_NAME}"`,
+            err,
+          );
+          if (MINIO_UPLOAD_FAIL_FAST) throw err;
+        }
+      }
+    };
+
+    if (fs.existsSync(STATIC_ASSETS_DIR)) {
+      await uploadDir(STATIC_ASSETS_DIR, 'static');
+    } else {
+      console.warn(`Static assets dir not found: ${STATIC_ASSETS_DIR}`);
+    }
+  }
+
+  // Main execution
+
+  // 0. Upload Assets
+  // We need to port-forward MinIO to localhost:9000 for this script to work
+  // The user or script should ensure port-forward is running.
+  // Or we can try to run port-forward in background?
+  // For now, let's assume MinIO is accessible at localhost:9000 (LoadBalancer might work if supported, or NodePort)
+  // On Docker Desktop, LoadBalancer localhost:9000 works.
+
+  try {
+    await uploadAssets();
+  } catch (e) {
+    console.error('Error uploading assets:', e);
+    process.exit(1);
+  }
+
+  const pages = findPages(APP_DIR);
+
+  // Use a consistent tag to avoid unbounded image accumulation.
+  // Prefer an explicitly provided IMAGE_TAG, then git commit SHA, and finally fall back to 'latest'.
+  let TAG: string = process.env.IMAGE_TAG || '';
+  if (!TAG) {
+    try {
+      TAG = execSync('git rev-parse --short HEAD').toString().trim();
+    } catch {
+      TAG = 'latest';
+    }
+  }
+
+  pages.forEach((pagePath) => {
+    // Determine page name from path
+    // e.g. .../server/app/dashboard/page.js -> dashboard
+    // .../server/app/page.js -> index
+
+    const relPath = path.relative(APP_DIR, pagePath);
+    const dirName = path.dirname(relPath);
+
+    let pageName = dirName.replace(/\//g, '-');
+    if (dirName === '.') pageName = 'index';
+    pageName = toDns1123Label(pageName);
+
+    // Skip internal pages
+    // Skip directories starting with underscore like _not-found, _error, etc.
+    // Note: _app and _document are usually not standalone pages in App Router but can be in Pages Router.
+    // In App Router, we mainly want to skip special Next.js internal folders if they appear here.
+    if (pageName.startsWith('_')) {
+      return;
+    }
+
+    const isolateDir = `dist/isolated/${pageName}`;
+    const imageName = `${IMAGE_PREFIX}-${pageName}:${TAG}`;
+    const serviceName = `knative-${pageName}`;
+    try {
+      execSync(
+        `npx ts-node scripts/isolate.ts ${pagePath} ${isolateDir} --image ${imageName} --service ${serviceName} --asset-prefix ${ASSET_PREFIX}`,
+        {
+          stdio: 'inherit',
+          timeout: Number.parseInt(process.env.ISOLATE_TIMEOUT_MS || '0', 10) || undefined,
+        },
+      );
+    } catch (e) {
+      console.error(`Failed to isolate ${pageName}`, e);
+      return;
+    }
+    try {
+      execSync(`docker build -t ${imageName} ${isolateDir}`, { stdio: 'inherit' });
+    } catch (_e) {
+      console.error(`Failed to build ${pageName}`);
+      return;
+    }
+
+    // 3. Push (Skipped for local)
+    if (REGISTRY_BASE !== 'local') {
+      try {
+        execSync(`docker push ${imageName}`, { stdio: 'inherit' });
+      } catch (_e) {
+        console.error(`Failed to push ${pageName}`);
+        return;
+      }
+    } else {
+    }
+    const manifestPath = `${isolateDir}/ksvc.yaml`;
+
+    if (!fs.existsSync(manifestPath)) {
+      console.error(`ksvc.yaml not found for ${pageName}`);
+      return;
+    }
+
+    try {
+      execSync(`kubectl apply -f ${manifestPath}`, { stdio: 'inherit' });
+    } catch (_e) {
+      console.error(`Failed to deploy ${pageName}`);
+    }
+  });
 })().catch(console.error);

@@ -1,6 +1,6 @@
+import path from 'node:path';
 import fs from 'fs-extra';
-import path from 'path';
-import { RouteGroup } from './splitter';
+import type { RouteGroup } from './splitter';
 
 export class Generator {
   private outputDir: string;
@@ -9,21 +9,27 @@ export class Generator {
   private envConfig: Record<string, string>;
   private projectRoot: string;
 
-  constructor(outputDir: string, imageName: string, namespace: string = 'default', envConfig: Record<string, string> = {}, projectRoot: string = '.') {
+  constructor(
+    outputDir: string,
+    imageName: string,
+    namespace = 'default',
+    envConfig: Record<string, string> = {},
+    projectRoot = '.',
+  ) {
     this.outputDir = outputDir;
     this.imageName = imageName;
     this.namespace = namespace;
     this.projectRoot = projectRoot;
     this.envConfig = {
-      CERBOS_URL: "cerbos.default.svc.cluster.local:3593",
-      MINIO_ENDPOINT: "minio.default.svc.cluster.local",
-      MINIO_PORT: "9000",
-      MINIO_USE_SSL: "false",
+      CERBOS_URL: 'cerbos.default.svc.cluster.local:3593',
+      MINIO_ENDPOINT: 'minio.default.svc.cluster.local',
+      MINIO_PORT: '9000',
+      MINIO_USE_SSL: 'false',
       // Prefer explicitly provided envConfig (or environment variables) for sensitive values.
-      DATABASE_URL: "",
-      MINIO_ACCESS_KEY: "",
-      MINIO_SECRET_KEY: "",
-      ...envConfig
+      DATABASE_URL: '',
+      MINIO_ACCESS_KEY: '',
+      MINIO_SECRET_KEY: '',
+      ...envConfig,
     };
   }
 
@@ -50,9 +56,12 @@ export class Generator {
 
   private generateServiceYaml(group: RouteGroup, imageName: string): string {
     const envVars = Object.entries(this.envConfig)
-      .filter(([, value]) => value !== "")
-      .map(([key, value]) => `            - name: ${key}
-              value: "${value}"`).join('\n');
+      .filter(([, value]) => value !== '')
+      .map(
+        ([key, value]) => `            - name: ${key}
+              value: "${value}"`,
+      )
+      .join('\n');
 
     return `
 apiVersion: serving.knative.dev/v1
@@ -87,38 +96,40 @@ ${envVars}
   }
 
   private generateVirtualServiceYaml(groups: RouteGroup[]): string {
-    const routes = groups.map(group => {
-      // Simple path matching. For regex/dynamic routes, Istio supports regex.
-      // Next.js regex needs to be converted to Istio regex if complex.
-      // For now, we use exact match for static and prefix/regex for dynamic.
+    const routes = groups
+      .map((group) => {
+        // Simple path matching. For regex/dynamic routes, Istio supports regex.
+        // Next.js regex needs to be converted to Istio regex if complex.
+        // For now, we use exact match for static and prefix/regex for dynamic.
 
-      const matchers = group.paths.map(p => {
-        if (p.includes('[')) {
-          // Convert Next.js dynamic route /blog/[slug] to regex /blog/[^/]+
-          // Handle catch-all [...slug] -> .*
-          let regex = p;
+        const matchers = group.paths
+          .map((p) => {
+            if (p.includes('[')) {
+              // Convert Next.js dynamic route /blog/[slug] to regex /blog/[^/]+
+              // Handle catch-all [...slug] -> .*
+              let regex = p;
 
-          // Handle catch-all [...param]
-          regex = regex.replace(/\/\[\.\.\..*?\]/g, '/.*');
+              // Handle catch-all [...param]
+              regex = regex.replace(/\/\[\.\.\..*?\]/g, '/.*');
 
-          // Handle single param [param]
-          regex = regex.replace(/\/\[.*?\]/g, '/[^/]+');
+              // Handle single param [param]
+              regex = regex.replace(/\/\[.*?\]/g, '/[^/]+');
 
-          // Ensure start anchor, and if it doesn't end with .*, ensure end anchor (or handle subpaths?)
-          // Next.js routes are exact matches unless catch-all.
-          // But /blog/[slug] should match /blog/foo but NOT /blog/foo/bar
+              // Ensure start anchor, and if it doesn't end with .*, ensure end anchor (or handle subpaths?)
+              // Next.js routes are exact matches unless catch-all.
+              // But /blog/[slug] should match /blog/foo but NOT /blog/foo/bar
 
-          regex = '^' + regex + '$';
+              regex = `^${regex}$`;
 
-          return `    - uri:
+              return `    - uri:
         regex: "${regex}"`;
-        } else {
-          return `    - uri:
+            }
+            return `    - uri:
         exact: "${p}"`;
-        }
-      }).join('\n');
+          })
+          .join('\n');
 
-      return `
+        return `
   - match:
 ${matchers}
     rewrite:
@@ -127,7 +138,8 @@ ${matchers}
     - destination:
         host: next-${group.name}.${this.namespace}.svc.cluster.local
 `;
-    }).join('\n');
+      })
+      .join('\n');
 
     return `
 apiVersion: networking.istio.io/v1alpha3

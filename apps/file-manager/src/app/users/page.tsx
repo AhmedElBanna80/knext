@@ -13,7 +13,7 @@ async function addUser(formData: FormData) {
   'use server';
   const name = formData.get('name') as string;
   const email = formData.get('email') as string;
-  
+
   if (!name || !email) return;
 
   const db = getDbPool();
@@ -62,13 +62,26 @@ export default async function UsersPage() {
             <form action={addUser} className="space-y-4">
               <div>
                 <label className="block text-sm mb-1">Name</label>
-                <input name="name" type="text" className="w-full p-2 rounded bg-black/20 border border-white/10" required />
+                <input
+                  name="name"
+                  type="text"
+                  className="w-full p-2 rounded bg-black/20 border border-white/10"
+                  required
+                />
               </div>
               <div>
                 <label className="block text-sm mb-1">Email</label>
-                <input name="email" type="email" className="w-full p-2 rounded bg-black/20 border border-white/10" required />
+                <input
+                  name="email"
+                  type="email"
+                  className="w-full p-2 rounded bg-black/20 border border-white/10"
+                  required
+                />
               </div>
-              <button type="submit" className="w-full bg-purple-600 hover:bg-purple-500 py-2 rounded font-bold">
+              <button
+                type="submit"
+                className="w-full bg-purple-600 hover:bg-purple-500 py-2 rounded font-bold"
+              >
                 Add User
               </button>
             </form>

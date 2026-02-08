@@ -276,7 +276,7 @@ volumes:
 
 Knative scale-to-zero services incur a cold start cost each time a pod is created. One significant component of this is V8's JIT compilation — parsing and compiling JavaScript into bytecode. 
 
-Using Node.js 22's built-in `NODE_COMPILE_CACHE`, the framework can persist compiled V8 bytecode to a shared volume, so subsequent pods skip JIT compilation entirely.
+Using Node.js 24's built-in `NODE_COMPILE_CACHE`, the framework can persist compiled V8 bytecode to a shared volume, so subsequent pods skip JIT compilation entirely.
 
 ### How It Works
 
@@ -319,7 +319,7 @@ This generates:
 
 ### Requirements
 
-- **Node.js 22+** (Dockerfile uses `node:24-alpine`)
+- **Node.js 24+** (Dockerfile uses `node:24-alpine`)
 - **ReadWriteMany PVC** support in the cluster (NFS, GCS Filestore, EFS, etc.)
 
 ## CLI Reference

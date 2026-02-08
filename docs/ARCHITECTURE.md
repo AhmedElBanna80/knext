@@ -201,14 +201,36 @@ interface CacheEvent {
 
 ## Environment Variables
 
+The environment variables depend on your chosen storage and cache providers.
+
+**Core (all deployments):**
+
 | Variable | Description | Default |
 | ---------- | ------------- | --------- |
-| `GCS_BUCKET_NAME` | GCS bucket for cache | Required |
-| `GCS_BUCKET_KEY_PREFIX` | Key prefix in bucket | `''` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | SA key path | ADC |
-| `REDIS_URL` | Redis connection URL | Required |
+| `NODE_ENV` | Runtime environment | `production` |
 | `NEXT_BUILD_ID` | From OpenNext build | Auto |
 | `DATABASE_URL` | PostgreSQL connection | Required |
+| `NODE_COMPILE_CACHE` | V8 bytecode cache path | Optional |
+
+**Cache (Redis):**
+
+| Variable | Description | Default |
+| ---------- | ------------- | --------- |
+| `REDIS_URL` | Redis connection URL | Required |
+| `REDIS_KEY_PREFIX` | Cache key namespace | App name |
+
+**Storage (provider-specific):**
+
+| Variable | Provider | Description |
+| ---------- | ---------- | ------------- |
+| `GCS_BUCKET_NAME` | GCS | Bucket name |
+| `GOOGLE_APPLICATION_CREDENTIALS` | GCS | SA key path (or use ADC) |
+| `S3_BUCKET_NAME` | S3 | Bucket name |
+| `AWS_REGION` | S3 | AWS region |
+| `AZURE_STORAGE_ACCOUNT` | Azure | Storage account |
+| `MINIO_ENDPOINT` | MinIO | MinIO endpoint URL |
+| `MINIO_ACCESS_KEY` | MinIO | Access key |
+| `MINIO_SECRET_KEY` | MinIO | Secret key |
 
 ## API Endpoints
 

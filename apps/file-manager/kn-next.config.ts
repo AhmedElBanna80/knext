@@ -28,7 +28,7 @@ const config: KnativeNextConfig = {
 
   // Knative autoscaling
   scaling: {
-    minScale: 1, // Keep 1 pod always running (no cold starts)
+    minScale: 0, // changed to test bytecode cache
     maxScale: 2, // Scale up to 2 pods max
   },
 

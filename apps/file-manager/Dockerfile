@@ -2,7 +2,7 @@
 # Uses pre-built .open-next output (built by kn-next CLI)
 # Build from repo root: docker build -f apps/file-manager/Dockerfile .
 
-FROM node:24-alpine AS runner
+FROM --platform=linux/amd64 node:24-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

@@ -31,6 +31,11 @@ const config: KnativeNextConfig = {
     minScale: 1, // Keep 1 pod always running (no cold starts)
     maxScale: 2, // Scale up to 2 pods max
   },
+
+  // V8 bytecode caching for faster cold starts
+  bytecodeCache: {
+    enabled: true,
+  },
 };
 
 export default config;

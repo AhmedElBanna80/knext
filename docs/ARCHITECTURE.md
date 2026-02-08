@@ -272,6 +272,56 @@ volumes:
       secretName: gcs-credentials
 ```
 
+## Bytecode Caching
+
+Knative scale-to-zero services incur a cold start cost each time a pod is created. One significant component of this is V8's JIT compilation — parsing and compiling JavaScript into bytecode. 
+
+Using Node.js 22's built-in `NODE_COMPILE_CACHE`, the framework can persist compiled V8 bytecode to a shared volume, so subsequent pods skip JIT compilation entirely.
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant Pod1 as Pod 1 (Cold Start)
+    participant PVC as Shared Volume<br/>/cache/bytecode/{BUILD_ID}
+    participant Pod2 as Pod 2 (Warm Cache)
+
+    Pod1->>Pod1: Parse JS → Compile to V8 bytecode
+    Pod1->>PVC: Write compiled bytecode
+    Pod1->>Pod1: Serve requests
+
+    Note over PVC: Cache persists across pod restarts
+
+    Pod2->>PVC: Load pre-compiled bytecode
+    Pod2->>Pod2: Skip JIT compilation
+    Pod2->>Pod2: Serve requests (faster start)
+```
+
+### Configuration
+
+Enable in `kn-next.config.ts`:
+
+```typescript
+const config: KnativeNextConfig = {
+  name: 'my-app',
+  // ...other config
+  bytecodeCache: {
+    enabled: true,
+    storageSize: '512Mi', // optional, default: 512Mi
+  },
+};
+```
+
+This generates:
+- **`NODE_COMPILE_CACHE`** env var pointing to `/cache/bytecode/{imageTag}`
+- **PersistentVolumeClaim** (`ReadWriteMany`) for shared cache storage
+- **Volume mount** on the container at `/cache/bytecode`
+
+### Requirements
+
+- **Node.js 22+** (Dockerfile uses `node:24-alpine`)
+- **ReadWriteMany PVC** support in the cluster (NFS, GCS Filestore, EFS, etc.)
+
 ## CLI Reference
 
 The `kn-next` CLI provides commands for building and deploying Next.js applications to Knative.

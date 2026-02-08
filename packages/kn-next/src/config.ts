@@ -78,6 +78,12 @@ export interface ScalingConfig {
   maxScale?: number; // Default: 10
 }
 
+// V8 bytecode caching via NODE_COMPILE_CACHE
+export interface BytecodeCacheConfig {
+  enabled: boolean;
+  storageSize?: string; // PVC size, default: "512Mi"
+}
+
 // Main Knative-Next config (subset of OpenNext we support)
 export interface KnativeNextConfig {
   name: string;
@@ -87,4 +93,5 @@ export interface KnativeNextConfig {
   registry: string;
   infrastructure?: InfrastructureConfig; // Deploy PostgreSQL, Redis, MinIO as Knative services
   scaling?: ScalingConfig; // Knative autoscaling options
+  bytecodeCache?: BytecodeCacheConfig; // V8 compile cache for faster cold starts
 }

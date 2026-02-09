@@ -22,11 +22,11 @@ interface CacheEvent {
 // Access the global cache events array (populated by cache-handler.js at runtime)
 // Using globalThis to avoid re-declaring the global type
 function getEvents(): CacheEvent[] {
-  return (globalThis as Record<string, unknown>).cacheEvents as CacheEvent[] || [];
+  return ((globalThis as Record<string, unknown>).cacheEvents as CacheEvent[]) || [];
 }
 
 function getCounter(): number {
-  return (globalThis as Record<string, unknown>).cacheEventCounter as number || 0;
+  return ((globalThis as Record<string, unknown>).cacheEventCounter as number) || 0;
 }
 
 function getCacheStats() {

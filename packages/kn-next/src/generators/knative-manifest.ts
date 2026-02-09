@@ -84,6 +84,7 @@ metadata:
     app: ${config.name}
     generated-by: kn-next
 spec:
+  # Knative uses the latest ready revision by default
   template:
     metadata:
       annotations:
@@ -97,6 +98,8 @@ spec:
           ports:
             - containerPort: 3000
           env:
+            - name: HOSTNAME
+              value: "0.0.0.0"
             - name: NODE_ENV
               value: "production"
 ${envVarsYaml}
@@ -252,8 +255,26 @@ if [ -d "$CACHE_BASE" ]; then
   echo "[kn-next] Cache dir ready: $(ls -la $CACHE_BASE | head -5)"
 fi
 
-# Drop privileges and start the server
-exec su-exec node node index.mjs
+# Override HOSTNAME — Kubernetes sets it to the pod name (e.g. my-app-00001-...-bqrct),
+# which causes Next.js to bind on that hostname instead of all interfaces.
+# Without this, queue-proxy health checks on 127.0.0.1:3000 fail with "connection refused".
+export HOSTNAME=0.0.0.0
+
+# Fix Next.js cache directory permissions — the .next dir is root-owned from the
+# Docker build, but Next.js 16 needs write access for prerender cache (.next/cache)
+# and segment files (.next/server/app/*.segments). Without this fix, cache writes
+# fail with EACCES and OpenNext cache adapters never fire.
+NEXT_DIR="\$(pwd)/.next"
+if [ -d "\$NEXT_DIR" ]; then
+  mkdir -p "\$NEXT_DIR/cache" 2>/dev/null || true
+  chown -R node:node "\$NEXT_DIR/cache" 2>/dev/null || true
+  chown -R node:node "\$NEXT_DIR/server" 2>/dev/null || true
+  echo "[kn-next] Fixed .next cache permissions"
+fi
+
+# Drop privileges and start the Next.js standalone server
+# (OpenNext for pnpm monorepos produces server.js at the app root)
+exec su-exec node node server.js
 `;
 
   const outputPath = path.join(outputDir, 'entrypoint.sh');

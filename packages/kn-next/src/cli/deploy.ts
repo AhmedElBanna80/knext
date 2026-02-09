@@ -25,14 +25,58 @@
  *   KN_DATABASE_URL      Database connection URL (overrides config)
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { $ } from 'bun';
 import type { KnativeNextConfig } from '../config';
 import { generateInfrastructure } from '../generators/infrastructure';
 import { generateEntrypoint, generateKnativeManifest } from '../generators/knative-manifest';
-import { uploadAssets } from '../utils/asset-upload';
+import { getAssetPrefix, uploadAssets } from '../utils/asset-upload';
+
+/**
+ * Patches the OpenNext standalone output to fix known Next.js 16 trace omissions.
+ *
+ * Issue: Next.js 16's standalone trace can miss `next/dist/compiled/babel/code-frame.js`
+ * (a 1-line redirect to `babel-code-frame/`), causing MODULE_NOT_FOUND at container startup.
+ * This is especially common in pnpm monorepos where the trace doesn't follow all symlinks.
+ *
+ * Fix: Walk all `babel-code-frame` directories in the standalone output and create the
+ * missing `babel/code-frame.js` redirect file if it doesn't exist.
+ */
+async function patchStandaloneOutput(appDir: string): Promise<void> {
+  const serverFunctionsDir = join(appDir, '.open-next', 'server-functions', 'default');
+
+  if (!existsSync(serverFunctionsDir)) {
+    console.log('   ⚠️  No server-functions/default directory found, skipping patch');
+    return;
+  }
+
+  // Find all babel-code-frame directories and ensure sibling babel/code-frame.js exists
+  const result = await $`find ${serverFunctionsDir} -path "*/next/dist/compiled/babel-code-frame" -type d`.text();
+  const dirs = result.trim().split('\n').filter(Boolean);
+  let patched = 0;
+
+  for (const babelCodeFrameDir of dirs) {
+    // The redirect file lives at ../babel/code-frame.js (sibling directory)
+    const compiledDir = resolve(babelCodeFrameDir, '..');
+    const redirectDir = join(compiledDir, 'babel');
+    const redirectFile = join(redirectDir, 'code-frame.js');
+
+    if (!existsSync(redirectFile)) {
+      mkdirSync(redirectDir, { recursive: true });
+      writeFileSync(
+        redirectFile,
+        "module.exports = require('next/dist/compiled/babel-code-frame');\n"
+      );
+      patched++;
+    }
+  }
+
+  if (patched > 0) {
+    console.log(`   🔧 Patched ${patched} missing babel/code-frame.js redirect(s)`);
+  }
+}
 
 const CONFIG_FILE = 'kn-next.config.ts';
 
@@ -175,14 +219,21 @@ async function deploy() {
 
   // 2. Build Next.js (unless skipped)
   if (!options.skipBuild) {
-    console.log('📦 Building Next.js...');
-    await $`npm run build`.quiet();
+    // Inject ASSET_PREFIX so next.config.ts picks up the CDN URL at build time
+    const assetPrefix = getAssetPrefix(config.storage);
+    console.log(`📦 Building Next.js (assetPrefix: ${assetPrefix})...`);
+    await $`ASSET_PREFIX=${assetPrefix} npm run build`.quiet();
     console.log('   ✅ Next.js build complete\n');
 
     // 3. Build OpenNext
     console.log('⚡ Building OpenNext...');
     await $`npx open-next build`.quiet();
-    console.log('   ✅ OpenNext build complete\n');
+    console.log('   ✅ OpenNext build complete');
+
+    // 4. Patch standalone output for known Next.js trace omissions
+    console.log('🔧 Patching standalone output...');
+    await patchStandaloneOutput(process.cwd());
+    console.log('   ✅ Standalone output patched\n');
   }
 
   // 4. PARALLEL: Asset upload + Docker build/push

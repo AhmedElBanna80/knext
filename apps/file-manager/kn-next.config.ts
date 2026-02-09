@@ -24,6 +24,7 @@ const config: KnativeNextConfig = {
   // Infrastructure services (deployed by CLI)
   infrastructure: {
     postgres: { enabled: true },
+    redis: { enabled: true },
   },
 
   // Knative autoscaling

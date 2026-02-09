@@ -6,7 +6,7 @@ export interface StorageConfig {
   bucket: string;
   region?: string;
   endpoint?: string; // For MinIO/S3-compatible
-  publicUrl?: string; // Optional, defaults to cloud provider CDN URL
+  publicUrl: string; // Public CDN URL where assets are served from (e.g. https://storage.googleapis.com/my-bucket)
   accessKey?: string; // Optional, use IAM when possible
   secretKey?: string;
 }

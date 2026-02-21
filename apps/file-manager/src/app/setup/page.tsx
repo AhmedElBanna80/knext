@@ -1,4 +1,4 @@
-import { getDbPool } from '@knative-next/lib';
+import { getDbPool } from '@knative-next/lib/clients';
 import { unstable_noStore } from 'next/cache';
 
 async function setupDatabase() {
@@ -68,7 +68,7 @@ async function setupDatabase() {
 
     return { success: true, message: 'Database initialized successfully' };
   } catch (error: any) {
-    console.error('Setup failed:', error);
+    console.error('Database setup failed:', error);
     return { success: false, message: error.message };
   }
 }

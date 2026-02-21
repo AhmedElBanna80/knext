@@ -99,6 +99,17 @@ export interface ObservabilityConfig {
   };
 }
 
+// Kubernetes Native Secrets Binding
+export interface SecretRef {
+  name: string; // Name of the Kubernetes Secret resource
+  key?: string; // Specific key within the Secret (if mapping a single env var)
+}
+
+export interface SecretsConfig {
+  envFrom?: string[]; // Array of Secret names to inject fully as environment variables
+  envMap?: Record<string, SecretRef>; // Map of explicit ENV_VAR -> { name, key } Secret mapping
+}
+
 // Main Knative-Next config (subset of OpenNext we support)
 export interface KnativeNextConfig {
   name: string;
@@ -111,4 +122,5 @@ export interface KnativeNextConfig {
   bytecodeCache?: BytecodeCacheConfig; // V8 compile cache for faster cold starts
   observability?: ObservabilityConfig; // Prometheus metrics + Grafana dashboards
   healthCheckPath?: string; // Default: "/api/health"
+  secrets?: SecretsConfig; // Kubernetes Native Secrets Binding
 }

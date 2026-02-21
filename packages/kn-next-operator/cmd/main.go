@@ -37,6 +37,7 @@ import (
 
 	appsv1alpha1 "github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator/api/v1alpha1"
 	"github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator/internal/controller"
+	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -49,6 +50,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(appsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(servingv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

@@ -51,3 +51,7 @@ cors.json
 *.log
 
 package-lock.json
+
+# Testing
+coverage/
+.nyc_output/

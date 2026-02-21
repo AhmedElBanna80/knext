@@ -19,10 +19,7 @@
       "settings": {
         "terminal.integrated.shell.linux": "/bin/bash"
       },
-      "extensions": [
-        "ms-kubernetes-tools.vscode-kubernetes-tools",
-        "ms-azuretools.vscode-docker"
-      ]
+      "extensions": ["ms-kubernetes-tools.vscode-kubernetes-tools", "ms-azuretools.vscode-docker"]
     }
   },
 
@@ -32,4 +29,3 @@
 
   "onCreateCommand": "bash .devcontainer/post-install.sh"
 }
-

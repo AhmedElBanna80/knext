@@ -5,7 +5,15 @@
     "build": {
       "dependsOn": ["^build"],
       "outputs": [".next/**", "!.next/cache/**", "dist/**"],
-      "env": ["DATABASE_URL", "MINIO_*", "CERBOS_URL", "DASHBOARD_URL", "USERS_URL"]
+      "env": [
+        "DATABASE_URL",
+        "MINIO_*",
+        "CERBOS_URL",
+        "DASHBOARD_URL",
+        "USERS_URL",
+        "ASSET_PREFIX",
+        "REDIS_URL"
+      ]
     },
     "lint": {},
     "dev": {

@@ -1,30 +1,30 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Create mock methods with explicit types
-const mockSmembers = mock((): Promise<string[]> => Promise.resolve([]));
-const mockGet = mock((): Promise<string | null> => Promise.resolve(null));
-const mockSadd = mock((): unknown => ({}));
-const mockSet = mock((): unknown => ({}));
-const mockPipelineExec = mock((): Promise<Array<[Error | null, unknown]>> => Promise.resolve([]));
-const mockConnect = mock(() => Promise.resolve(undefined));
+const mockSmembers = vi.fn((): Promise<string[]> => Promise.resolve([]));
+const mockGet = vi.fn((): Promise<string | null> => Promise.resolve(null));
+const mockSadd = vi.fn((): unknown => ({}));
+const mockSet = vi.fn((): unknown => ({}));
+const mockPipelineExec = vi.fn((): Promise<Array<[Error | null, unknown]>> => Promise.resolve([]));
+const mockConnect = vi.fn(() => Promise.resolve(undefined));
 
 // Mock ioredis before importing adapter
-mock.module('ioredis', () => {
+vi.mock('ioredis', () => {
   return {
     default: class MockRedis {
       smembers = mockSmembers;
       get = mockGet;
       connect = mockConnect;
-      quit = mock();
-      on = mock();
+      quit = vi.fn();
+      on = vi.fn();
       pipeline() {
         return {
           sadd: mockSadd,
           set: mockSet,
-          get: mock(() => ({
+          get: vi.fn(() => ({
             sadd: mockSadd,
             set: mockSet,
-            get: mock(),
+            get: vi.fn(),
             exec: mockPipelineExec,
           })),
           exec: mockPipelineExec,

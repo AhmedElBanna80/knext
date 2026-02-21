@@ -41,8 +41,7 @@ flowchart TB
 
 OpenNext transforms Next.js build output into a serverless-compatible format:
 
-```
-.open-next/
+```text
 ├── assets/                  # Static files → GCS
 │   ├── BUILD_ID             # Unique build identifier
 │   └── _next/static/        # JS, CSS, fonts
@@ -56,7 +55,7 @@ OpenNext transforms Next.js build output into a serverless-compatible format:
 The `@kn-next/config` package provides pluggable adapters:
 
 | Adapter | Purpose | Implementation |
-|---------|---------|----------------|
+| --------- | --------- | ---------------- |
 | **GCS Cache** | ISR data cache | `gcs-cache.ts` |
 | **Redis Tag Cache** | Cache invalidation tags | `redis-tag-cache.ts` |
 | **Kafka Queue** | Revalidation queue | `kafka-queue.ts` |
@@ -64,7 +63,7 @@ The `@kn-next/config` package provides pluggable adapters:
 
 ### 3. Configuration System
 
-```
+```text
 kn-next.config.ts           # User configuration
         ↓
     kn-next build
@@ -165,7 +164,7 @@ The BUILD_ID ensures server and client assets are always in sync:
 
 ### Two-Tier Cache
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │                     GCS (Data Cache)                │
 │  - ISR page cache                                   │
@@ -202,19 +201,41 @@ interface CacheEvent {
 
 ## Environment Variables
 
+The environment variables depend on your chosen storage and cache providers.
+
+**Core (all deployments):**
+
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `GCS_BUCKET_NAME` | GCS bucket for cache | Required |
-| `GCS_BUCKET_KEY_PREFIX` | Key prefix in bucket | `''` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | SA key path | ADC |
-| `REDIS_URL` | Redis connection URL | Required |
+| ---------- | ------------- | --------- |
+| `NODE_ENV` | Runtime environment | `production` |
 | `NEXT_BUILD_ID` | From OpenNext build | Auto |
 | `DATABASE_URL` | PostgreSQL connection | Required |
+| `NODE_COMPILE_CACHE` | V8 bytecode cache path | Optional |
+
+**Cache (Redis):**
+
+| Variable | Description | Default |
+| ---------- | ------------- | --------- |
+| `REDIS_URL` | Redis connection URL | Required |
+| `REDIS_KEY_PREFIX` | Cache key namespace | App name |
+
+**Storage (provider-specific):**
+
+| Variable | Provider | Description |
+| ---------- | ---------- | ------------- |
+| `GCS_BUCKET_NAME` | GCS | Bucket name |
+| `GOOGLE_APPLICATION_CREDENTIALS` | GCS | SA key path (or use ADC) |
+| `S3_BUCKET_NAME` | S3 | Bucket name |
+| `AWS_REGION` | S3 | AWS region |
+| `AZURE_STORAGE_ACCOUNT` | Azure | Storage account |
+| `MINIO_ENDPOINT` | MinIO | MinIO endpoint URL |
+| `MINIO_ACCESS_KEY` | MinIO | Access key |
+| `MINIO_SECRET_KEY` | MinIO | Secret key |
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
+| ---------- | -------- | ------------- |
 | `/api/health` | GET | Health check |
 | `/api/audit` | GET | Paginated audit logs |
 | `/api/cache-stats` | GET | Cache statistics |
@@ -223,7 +244,7 @@ interface CacheEvent {
 
 ## Project Structure
 
-```
+```text
 knative-next-monorepo/
 ├── apps/
 │   └── file-manager/           # Example Next.js 16 application
@@ -272,6 +293,57 @@ volumes:
       secretName: gcs-credentials
 ```
 
+## Bytecode Caching
+
+Knative scale-to-zero services incur a cold start cost each time a pod is created. One significant component of this is V8's JIT compilation — parsing and compiling JavaScript into bytecode.
+
+Using Node.js 24's built-in `NODE_COMPILE_CACHE`, the framework can persist compiled V8 bytecode to a shared volume, so subsequent pods skip JIT compilation entirely.
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant Pod1 as Pod 1 (Cold Start)
+    participant PVC as Shared Volume<br/>/cache/bytecode/{BUILD_ID}
+    participant Pod2 as Pod 2 (Warm Cache)
+
+    Pod1->>Pod1: Parse JS → Compile to V8 bytecode
+    Pod1->>PVC: Write compiled bytecode
+    Pod1->>Pod1: Serve requests
+
+    Note over PVC: Cache persists across pod restarts
+
+    Pod2->>PVC: Load pre-compiled bytecode
+    Pod2->>Pod2: Skip JIT compilation
+    Pod2->>Pod2: Serve requests (faster start)
+```
+
+### Configuration
+
+Enable in `kn-next.config.ts`:
+
+```typescript
+const config: KnativeNextConfig = {
+  name: 'my-app',
+  // ...other config
+  bytecodeCache: {
+    enabled: true,
+    storageSize: '512Mi', // optional, default: 512Mi
+  },
+};
+```
+
+This generates:
+
+- **`NODE_COMPILE_CACHE`** env var pointing to `/cache/bytecode/{imageTag}`
+- **PersistentVolumeClaim** (`ReadWriteMany`) for shared cache storage
+- **Volume mount** on the container at `/cache/bytecode`
+
+### Requirements
+
+- **Node.js 24+** (Dockerfile uses `node:24-alpine`)
+- **ReadWriteMany PVC** support in the cluster (NFS, GCS Filestore, EFS, etc.)
+
 ## CLI Reference
 
 The `kn-next` CLI provides commands for building and deploying Next.js applications to Knative.
@@ -285,7 +357,7 @@ npx kn-next deploy [options]
 #### Options
 
 | Option | Short | Description |
-|--------|-------|-------------|
+| -------- | ------- | ------------- |
 | `--registry <url>` | `-r` | Override container registry |
 | `--bucket <name>` | `-b` | Override storage bucket |
 | `--tag <tag>` | `-t` | Image tag (default: timestamp) |
@@ -301,7 +373,7 @@ npx kn-next deploy [options]
 These environment variables can override config file values, useful for CI/CD pipelines:
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `KN_REGISTRY` | Container registry URL |
 | `KN_BUCKET` | Storage bucket name |
 | `KN_IMAGE_TAG` | Docker image tag |
@@ -421,6 +493,7 @@ npx kn-next build
 ```
 
 Runs the following steps:
+
 1. Generates `open-next.config.ts` from `kn-next.config.ts`
 2. Runs `npm run build` (Next.js build)
 3. Runs `npx open-next build` (OpenNext compilation)
@@ -433,35 +506,41 @@ npx kn-next cleanup [--namespace <ns>]
 ```
 
 Removes deployed resources from the cluster:
+
 - Knative Service
 - Infrastructure services (if deployed)
 
 ## Development Workflow
 
 1. **Local Development:**
+
    ```bash
    cd apps/file-manager
    pnpm dev
    ```
 
 2. **Build for Production:**
+
    ```bash
    cd apps/file-manager
    npx kn-next deploy
    ```
 
 3. **Deploy to Staging:**
+
    ```bash
    npx kn-next deploy --namespace staging --tag staging-$(date +%s)
    ```
 
 4. **Preview Manifest (Dry Run):**
+
    ```bash
    npx kn-next deploy --dry-run
    cat .open-next/knative-service.yaml
    ```
 
 5. **Manual Steps (if needed):**
+
    ```bash
    # Build Next.js + OpenNext
    cd apps/file-manager

@@ -6,7 +6,7 @@ export interface StorageConfig {
   bucket: string;
   region?: string;
   endpoint?: string; // For MinIO/S3-compatible
-  publicUrl?: string; // Optional, defaults to cloud provider CDN URL
+  publicUrl: string; // Public CDN URL where assets are served from (e.g. https://storage.googleapis.com/my-bucket)
   accessKey?: string; // Optional, use IAM when possible
   secretKey?: string;
 }
@@ -76,6 +76,27 @@ export interface InfrastructureConfig {
 export interface ScalingConfig {
   minScale?: number; // Default: 0 (scale to zero)
   maxScale?: number; // Default: 10
+  cpuRequest?: string; // Default: "250m"
+  memoryRequest?: string; // Default: "512Mi"
+  cpuLimit?: string; // Default: "1000m"
+  memoryLimit?: string; // Default: "1Gi"
+}
+
+// V8 bytecode caching via NODE_COMPILE_CACHE
+export interface BytecodeCacheConfig {
+  enabled: boolean;
+  storageSize?: string; // PVC size, default: "512Mi"
+}
+
+// Observability — Prometheus metrics + Grafana dashboards
+export interface ObservabilityConfig {
+  enabled: boolean;
+  prometheus?: {
+    scrapeInterval?: string; // Default: "15s"
+  };
+  grafana?: {
+    enabled?: boolean; // Default: true (deploy dashboard ConfigMap)
+  };
 }
 
 // Main Knative-Next config (subset of OpenNext we support)
@@ -87,4 +108,7 @@ export interface KnativeNextConfig {
   registry: string;
   infrastructure?: InfrastructureConfig; // Deploy PostgreSQL, Redis, MinIO as Knative services
   scaling?: ScalingConfig; // Knative autoscaling options
+  bytecodeCache?: BytecodeCacheConfig; // V8 compile cache for faster cold starts
+  observability?: ObservabilityConfig; // Prometheus metrics + Grafana dashboards
+  healthCheckPath?: string; // Default: "/api/health"
 }

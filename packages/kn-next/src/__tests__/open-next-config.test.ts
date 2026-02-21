@@ -22,6 +22,7 @@ describe('OpenNext Config Generator', () => {
       storage: {
         provider: 'gcs',
         bucket: 'test-bucket',
+        publicUrl: 'https://storage.googleapis.com/test-bucket',
       },
       registry: 'gcr.io/test-project',
     };
@@ -44,6 +45,7 @@ describe('OpenNext Config Generator', () => {
       storage: {
         provider: 'gcs',
         bucket: 'test-bucket',
+        publicUrl: 'https://storage.googleapis.com/test-bucket',
       },
       cache: {
         provider: 'redis',
@@ -67,6 +69,7 @@ describe('OpenNext Config Generator', () => {
       storage: {
         provider: 'gcs',
         bucket: 'test-bucket',
+        publicUrl: 'https://storage.googleapis.com/test-bucket',
       },
       registry: 'gcr.io/test-project',
     };
@@ -88,6 +91,7 @@ describe('OpenNext Config Generator', () => {
         storage: {
           provider: 'gcs',
           bucket: 'my-bucket',
+          publicUrl: 'https://storage.googleapis.com/my-bucket',
         },
         registry: 'gcr.io/test-project',
       };
@@ -103,6 +107,7 @@ describe('OpenNext Config Generator', () => {
         storage: {
           provider: 'gcs',
           bucket: 'my-bucket',
+          publicUrl: 'https://storage.googleapis.com/my-bucket',
         },
         cache: {
           provider: 'redis',
@@ -122,6 +127,7 @@ describe('OpenNext Config Generator', () => {
         storage: {
           provider: 'minio',
           bucket: 'my-bucket',
+          publicUrl: 'http://minio:9000/my-bucket',
           region: 'us-east-1',
           endpoint: 'http://minio:9000',
         },

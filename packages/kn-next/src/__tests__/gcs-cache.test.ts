@@ -1,14 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Create mock methods
-const mockExists = mock(() => Promise.resolve([false]));
-const mockDownload = mock(() => Promise.resolve([Buffer.from('{}')]));
-const mockSave = mock(() => Promise.resolve(undefined));
-const mockDelete = mock(() => Promise.resolve(undefined));
-const mockGetMetadata = mock(() => Promise.resolve([{}]));
+const mockExists = vi.fn(() => Promise.resolve([false]));
+const mockDownload = vi.fn(() => Promise.resolve([Buffer.from('{}')]));
+const mockSave = vi.fn(() => Promise.resolve(undefined));
+const mockDelete = vi.fn(() => Promise.resolve(undefined));
+const mockGetMetadata = vi.fn(() => Promise.resolve([{}]));
 
 // Mock @google-cloud/storage before importing adapter
-mock.module('@google-cloud/storage', () => {
+vi.mock('@google-cloud/storage', () => {
   return {
     Storage: class MockStorage {
       bucket() {

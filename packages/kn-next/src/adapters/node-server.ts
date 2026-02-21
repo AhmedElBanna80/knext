@@ -1,19 +1,36 @@
 import { createServer } from 'node:http';
 import type { InternalEvent, InternalResult } from '@opennextjs/aws/types/open-next';
 import type { Converter, OpenNextHandler, Wrapper } from '@opennextjs/aws/types/overrides';
+import {
+  initBytecodeCacheMetrics,
+  metricsRegistry,
+  recordServerReady,
+} from './bytecode-metrics.js';
 
 const PORT = Number.parseInt(process.env.PORT || '8080', 10);
 
 /**
  * Node.js HTTP server wrapper handler for Knative.
  * Runs the OpenNext handler as a standalone HTTP server instead of Lambda.
+ * Includes Prometheus metrics endpoint at /metrics.
  */
 const wrapperHandler = async (
   handler: OpenNextHandler<InternalEvent, InternalResult>,
   converter: Converter<InternalEvent, InternalResult>,
 ) => {
+  // Initialize bytecode cache metrics before the server starts
+  initBytecodeCacheMetrics();
+
   const server = createServer(async (req, res) => {
     try {
+      // Prometheus metrics endpoint
+      if (req.url === '/metrics' && req.method === 'GET') {
+        res.setHeader('Content-Type', metricsRegistry.contentType);
+        const metrics = await metricsRegistry.metrics();
+        res.end(metrics);
+        return;
+      }
+
       // Convert Node.js request to internal event format
       const internalEvent = await converter.convertFrom(req);
 
@@ -78,12 +95,15 @@ const wrapperHandler = async (
   });
 
   server.listen(PORT, () => {
-    console.log(`[kn-next] Server listening on port ${PORT}`);
+    // Record startup duration metric
+    recordServerReady();
+    console.info(`[kn-next] Server listening on port ${PORT}`);
+    console.info(`[kn-next] Prometheus metrics at http://localhost:${PORT}/metrics`);
   });
 
   // Handle graceful shutdown
   const shutdown = () => {
-    console.log('[kn-next] Shutting down gracefully...');
+    console.info('[kn-next] Shutting down gracefully...');
     server.close(() => {
       process.exit(0);
     });

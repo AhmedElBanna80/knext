@@ -24,12 +24,23 @@ const config: KnativeNextConfig = {
   // Infrastructure services (deployed by CLI)
   infrastructure: {
     postgres: { enabled: true },
+    redis: { enabled: true },
   },
 
   // Knative autoscaling
   scaling: {
-    minScale: 1, // Keep 1 pod always running (no cold starts)
+    minScale: 0, // changed to test bytecode cache
     maxScale: 2, // Scale up to 2 pods max
+  },
+
+  // V8 bytecode caching for faster cold starts
+  bytecodeCache: {
+    enabled: true,
+  },
+
+  // Observability (Prometheus metrics + Grafana dashboards)
+  observability: {
+    enabled: true,
   },
 };
 

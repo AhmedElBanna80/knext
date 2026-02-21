@@ -1,4 +1,4 @@
-import { getDbPool } from '@knative-next/lib';
+import { getDbPool } from '@knative-next/lib/clients';
 import { unstable_cache } from 'next/cache';
 import { type NextRequest, NextResponse } from 'next/server';
 

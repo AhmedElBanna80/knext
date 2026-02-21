@@ -20,8 +20,8 @@ const nextConfig = {
       resolveAlias: {
         'pino-elasticsearch': false,
         'thread-stream': false,
-      }
-    }
+      },
+    },
   },
   webpack: (config: any, { isServer }: { isServer: boolean }) => {
     // Fallback for Webpack environments

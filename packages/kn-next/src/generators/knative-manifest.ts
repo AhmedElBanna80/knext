@@ -57,7 +57,20 @@ export function generateKnativeManifest(options: GenerateKnativeManifestOptions)
     .map(([key, value]) => `            - name: ${key}\n              value: "${value}"`)
     .join('\n');
 
-  // Build volume mount and volume sections if bytecode cache is enabled
+  // Handle mapped secrets (envMap)
+  const envMapEntries = config.secrets?.envMap
+    ? Object.entries(config.secrets.envMap).map(
+        ([envName, ref]) =>
+          `            - name: ${envName}\n              valueFrom:\n                secretKeyRef:\n                  name: ${ref.name}\n                  key: ${ref.key ?? envName}`,
+      )
+    : [];
+
+  const allEnvItems = [envVarsYaml, ...envMapEntries].filter(Boolean).join('\n');
+
+  // Handle entire secrets injected as envFrom
+  const envFromYaml = config.secrets?.envFrom?.length
+    ? `\n          envFrom:\n${config.secrets.envFrom.map((secretName) => `            - secretRef:\n                name: ${secretName}`).join('\n')}`
+    : '';
   const volumeMountYaml = bytecodeCacheEnabled
     ? `
           volumeMounts:
@@ -102,7 +115,7 @@ spec:
               value: "0.0.0.0"
             - name: NODE_ENV
               value: "production"
-${envVarsYaml}
+${allEnvItems}${envFromYaml}
           resources:
             requests:
               cpu: "${config.scaling?.cpuRequest ?? '250m'}"

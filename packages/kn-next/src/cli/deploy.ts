@@ -239,7 +239,8 @@ async function patchStandaloneOutput(appDir: string): Promise<void> {
   const srcChunksDir = join(appDir, '.next', 'server', 'chunks');
   if (existsSync(srcChunksDir)) {
     try {
-      const destDirs = await $`find ${serverFunctionsDir} -type d -path "*/.next/server/chunks"`.text();
+      const destDirs =
+        await $`find ${serverFunctionsDir} -type d -path "*/.next/server/chunks"`.text();
       const targetDirs = destDirs.trim().split('\n').filter(Boolean);
 
       for (const targetDir of targetDirs) {
@@ -247,7 +248,7 @@ async function patchStandaloneOutput(appDir: string): Promise<void> {
         await $`cp -n ${srcChunksDir}/*instrumentation* ${targetDir}/ 2>/dev/null || true`.quiet();
       }
       console.info('   🔧 Synced missing Turbopack instrumentation chunks to standalone output');
-    } catch { }
+    } catch {}
   }
 }
 

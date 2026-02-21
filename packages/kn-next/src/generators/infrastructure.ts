@@ -376,7 +376,7 @@ function generateDashboardJson(appName: string): string {
       {
         title: '🧠 Memory (RSS)',
         type: 'timeseries',
-        gridPos: { h: 8, w: 12, x: 0, y: 12 },
+        gridPos: { h: 6, w: 12, x: 0, y: 12 },
         targets: [{
           expr: `process_resident_memory_bytes{app="${appName}"}`,
           legendFormat: 'RSS - {{pod}}',
@@ -386,12 +386,43 @@ function generateDashboardJson(appName: string): string {
       {
         title: '⚡ Event Loop Lag',
         type: 'timeseries',
-        gridPos: { h: 8, w: 12, x: 12, y: 12 },
+        gridPos: { h: 6, w: 12, x: 12, y: 12 },
         targets: [{
           expr: `nodejs_eventloop_lag_seconds{app="${appName}"}`,
           legendFormat: '{{pod}}',
         }],
         fieldConfig: { defaults: { unit: 's' } },
+      },
+      {
+        title: '💻 CPU Usage',
+        type: 'timeseries',
+        gridPos: { h: 6, w: 8, x: 0, y: 18 },
+        targets: [{
+          expr: `rate(process_cpu_user_seconds_total{app="${appName}"}[$__rate_interval])`,
+          legendFormat: 'User - {{pod}}',
+        }, {
+          expr: `rate(process_cpu_system_seconds_total{app="${appName}"}[$__rate_interval])`,
+          legendFormat: 'System - {{pod}}',
+        }],
+        fieldConfig: { defaults: { unit: 'percentunit' } },
+      },
+      {
+        title: '🚦 Active Requests',
+        type: 'timeseries',
+        gridPos: { h: 6, w: 8, x: 8, y: 18 },
+        targets: [{
+          expr: `nodejs_active_requests{app="${appName}"}`,
+          legendFormat: 'Requests - {{pod}}',
+        }],
+      },
+      {
+        title: '🎛️ Active Handles',
+        type: 'timeseries',
+        gridPos: { h: 6, w: 8, x: 16, y: 18 },
+        targets: [{
+          expr: `nodejs_active_handles{app="${appName}"}`,
+          legendFormat: 'Handles - {{pod}}',
+        }],
       },
     ],
     refresh: '10s',

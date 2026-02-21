@@ -188,7 +188,7 @@ describe('Knative Manifest Generator', () => {
       const content = readFileSync(outputPath, 'utf-8');
       expect(content).toContain('PersistentVolumeClaim');
       expect(content).toContain('my-app-bytecode-cache');
-      expect(content).toContain('ReadWriteMany');
+      expect(content).toContain('ReadWriteOnce');
       expect(content).toContain('namespace: production');
       expect(content).toContain('storage: 512Mi'); // default size
     });

@@ -8,6 +8,33 @@ import type {
 import Redis from 'ioredis';
 import { logCacheEvent } from './cache-events';
 
+/**
+ * JSON replacer/reviver for types that JSON.stringify/parse cannot handle natively.
+ * Next.js 16 uses Map<string, Buffer> for segmentData and Buffer for rscData.
+ */
+function jsonReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Map) {
+    return { __type: 'Map', entries: Array.from(value.entries()) };
+  }
+  if (Buffer.isBuffer(value)) {
+    return { __type: 'Buffer', data: value.toString('base64') };
+  }
+  return value;
+}
+
+function jsonReviver(_key: string, value: unknown): unknown {
+  if (value && typeof value === 'object' && '__type' in value) {
+    const typed = value as { __type: string; entries?: [string, unknown][]; data?: string };
+    if (typed.__type === 'Map' && Array.isArray(typed.entries)) {
+      return new Map(typed.entries);
+    }
+    if (typed.__type === 'Buffer' && typeof typed.data === 'string') {
+      return Buffer.from(typed.data, 'base64');
+    }
+  }
+  return value;
+}
+
 const { REDIS_URL, REDIS_KEY_PREFIX } = process.env;
 
 // Redis client with automatic reconnection
@@ -82,7 +109,7 @@ const incrementalCache: IncrementalCache = {
         return null;
       }
 
-      const entry: RedisCacheEntry<CacheValue<CacheType>> = JSON.parse(data);
+      const entry: RedisCacheEntry<CacheValue<CacheType>> = JSON.parse(data, jsonReviver as (key: string, value: unknown) => unknown);
 
       logCacheEvent('HIT', 'redis', key, {
         durationMs: Date.now() - startTime,
@@ -119,7 +146,7 @@ const incrementalCache: IncrementalCache = {
       };
 
       // Set with 1 hour TTL by default (can be configured)
-      await redis.set(redisKey, JSON.stringify(entry), 'EX', 3600);
+      await redis.set(redisKey, JSON.stringify(entry, jsonReplacer as (key: string, value: unknown) => unknown), 'EX', 3600);
 
       logCacheEvent('SET', 'redis', key, {
         durationMs: Date.now() - startTime,

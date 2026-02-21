@@ -25,4 +25,4 @@ if [ -d "$NEXT_DIR" ]; then
 fi
 
 # Drop to node user and exec the Next.js standalone server
-exec su-exec node node server.js
+exec su-exec node node index.mjs

@@ -138,7 +138,7 @@ metadata:
     generated-by: kn-next
 spec:
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce
   resources:
     requests:
       storage: ${config.bytecodeCache?.storageSize ?? '512Mi'}
@@ -273,8 +273,8 @@ if [ -d "\$NEXT_DIR" ]; then
 fi
 
 # Drop privileges and start the Next.js standalone server
-# (OpenNext for pnpm monorepos produces server.js at the app root)
-exec su-exec node node server.js
+# (OpenNext produces index.mjs as the default server function entrypoint)
+exec su-exec node node index.mjs
 `;
 
   const outputPath = path.join(outputDir, 'entrypoint.sh');

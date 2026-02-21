@@ -25,7 +25,7 @@
  *   KN_DATABASE_URL      Database connection URL (overrides config)
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { $ } from 'bun';
@@ -44,11 +44,126 @@ import { getAssetPrefix, uploadAssets } from '../utils/asset-upload';
  * Fix: Walk all `babel-code-frame` directories in the standalone output and create the
  * missing `babel/code-frame.js` redirect file if it doesn't exist.
  */
+/**
+ * Recursively find target files in a directory matching a predicate.
+ */
+function findFiles(dir: string, predicate: (name: string) => boolean): string[] {
+  const results: string[] = [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findFiles(fullPath, predicate));
+    } else if (predicate(entry.name)) {
+      results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+/**
+ * Patch a collection of files using the provided patching logic.
+ * The patchLogic function should return the patched content, or null if no changes.
+ */
+function patchFiles(files: string[], patchLogic: (content: string) => string | null): number {
+  let patchedCount = 0;
+  for (const filePath of files) {
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      const patchedContent = patchLogic(content);
+      if (patchedContent !== null && patchedContent !== content) {
+        writeFileSync(filePath, patchedContent);
+        patchedCount++;
+      }
+    } catch {
+      // Skip files that can't be read or parsed
+    }
+  }
+  return patchedCount;
+}
+
+/**
+ * Patch assetPrefix in OpenNext output.
+ * OpenNext strips assetPrefix from required-server-files.json and server.js during build.
+ * Next.js standalone server.js hardcodes the config at build time, so we must patch
+ * both the JSON config files AND the server.js bundles to inject the CDN URL.
+ */
+function patchAssetPrefix(appDir: string, assetPrefix: string): number {
+  const openNextDir = join(appDir, '.open-next');
+  if (!existsSync(openNextDir)) return 0;
+
+  let patched = 0;
+
+  // 1. Patch required-server-files.json (runtime config)
+  patched += patchFiles(
+    findFiles(openNextDir, (name) => name === 'required-server-files.json'),
+    (content) => {
+      const parsed = JSON.parse(content);
+      if (parsed.config && parsed.config.assetPrefix !== assetPrefix) {
+        parsed.config.assetPrefix = assetPrefix;
+        return JSON.stringify(parsed);
+      }
+      return null;
+    }
+  );
+
+  // 2. Patch server.js (hardcoded config in standalone bundle)
+  // Next.js embeds the config as `"assetPrefix":""` in the minified server.js
+  const emptyPrefix = '"assetPrefix":""';
+  const patchedPrefix = `"assetPrefix":"${assetPrefix}"`;
+  patched += patchFiles(
+    findFiles(openNextDir, (name) => name === 'server.js'),
+    (content) => content.includes(emptyPrefix) ? content.replace(emptyPrefix, patchedPrefix) : null
+  );
+
+  // 3. Patch client-reference-manifest.js (rewrite chunk paths to absolute CDN URLs)
+  //
+  // Architecture: The manifest's clientModules.chunks arrays contain relative paths
+  // like "/_next/static/chunks/...". These chunk paths flow to TWO consumers:
+  //   a) SSR HTML <script> tags: `moduleLoading.prefix + chunk_path`
+  //   b) RSC flight data I[moduleId, [chunks], ...]: chunk paths emitted AS-IS
+  //
+  // The client-side React Flight client has moduleLoading=null (Turbopack quirk),
+  // so it uses chunk paths directly. Therefore chunk paths MUST be absolute CDN URLs.
+  // With absolute chunk paths, moduleLoading.prefix MUST stay empty to avoid
+  // double-prefixing in the HTML <script> tags.
+  patched += patchFiles(
+    findFiles(openNextDir, (name) => name.endsWith('_client-reference-manifest.js')),
+    (content) => content.replaceAll('"/_next/static/', `"${assetPrefix}/_next/static/`)
+  );
+
+  // 4. Patch Turbopack runtime chunk (dynamic chunk loading base path)
+  // Turbopack's runtime has a hardcoded `let t="/_next/"` used as the base URL
+  // for dynamically imported chunks. Initial <script> tags have explicit GCS URLs
+  // in their src, but any chunks loaded AFTER page load (client components, lazy
+  // imports, etc.) use this base path — causing silent 404s and hydration failure.
+  const turbopackBase = 'let t="/_next/"';
+  const turbopackPatchedBase = `let t="${assetPrefix}/_next/"`;
+  patched += patchFiles(
+    findFiles(openNextDir, (name) => name.includes('turbopack-') && name.endsWith('.js')),
+    (content) => content.includes(turbopackBase) ? content.replaceAll(turbopackBase, turbopackPatchedBase) : null
+  );
+
+  // 5. Patch Turbopack SSR runtime (ASSET_PREFIX for RSC flight data)
+  // The SSR Turbopack runtime has `const ASSET_PREFIX = "/_next/"` which is used
+  // to construct client chunk URLs in RSC flight data (I[moduleId, [chunks], ...]).
+  // Without this patch, RSC flight data contains relative /_next/ paths that the
+  // client cannot resolve (404 from local server → silent hydration failure).
+  const ssrAssetPrefix = 'const ASSET_PREFIX = "/_next/"';
+  const ssrPatchedPrefix = `const ASSET_PREFIX = "${assetPrefix}/_next/"`;
+  patched += patchFiles(
+    findFiles(openNextDir, (name) => name.includes('[turbopack]_runtime') && name.endsWith('.js')),
+    (content) => content.includes(ssrAssetPrefix) ? content.replaceAll(ssrAssetPrefix, ssrPatchedPrefix) : null
+  );
+
+  return patched;
+}
+
 async function patchStandaloneOutput(appDir: string): Promise<void> {
   const serverFunctionsDir = join(appDir, '.open-next', 'server-functions', 'default');
 
   if (!existsSync(serverFunctionsDir)) {
-    console.log('   ⚠️  No server-functions/default directory found, skipping patch');
+    console.info('   ⚠️  No server-functions/default directory found, skipping patch');
     return;
   }
 
@@ -74,7 +189,41 @@ async function patchStandaloneOutput(appDir: string): Promise<void> {
   }
 
   if (patched > 0) {
-    console.log(`   🔧 Patched ${patched} missing babel/code-frame.js redirect(s)`);
+    console.info(`   🔧 Patched ${patched} missing babel/code-frame.js redirect(s)`);
+  }
+
+  // Patch cache.cjs: OpenNext drops segmentData in APP_PAGE set().
+  // The get() side already knows how to read it (Object<string, base64> → Map<string, Buffer>).
+  // We just need to include it in the stored payload.
+  const cacheFiles = await $`find ${serverFunctionsDir} -name "cache.cjs" -type f`.text();
+  const cachePaths = cacheFiles.trim().split('\n').filter(Boolean);
+  let cachePatched = 0;
+
+  for (const cacheFile of cachePaths) {
+    let content = readFileSync(cacheFile, 'utf8');
+
+    // Original: case"APP_PAGE":{let{html:s,rscData:l,headers:r,status:c}=t;
+    //   await globalThis.incrementalCache.set(e,{type:"app",html:s,rsc:l.toString("utf8"),
+    //   meta:{status:c,headers:r},revalidate:o},"cache");break}
+    //
+    // We need to also destructure segmentData from t and include it in the stored object.
+    // segmentData is a Map<string, Buffer>, we serialize it as Object<string, base64-string>.
+    const appPageSetPattern =
+      /case"APP_PAGE":\{let\{html:(\w+),rscData:(\w+),headers:(\w+),status:(\w+)\}=(\w+);await globalThis\.incrementalCache\.set\((\w+),\{type:"app",html:\1,rsc:\2\.toString\("utf8"\),meta:\{status:\4,headers:\3\},revalidate:(\w+)\},"cache"\);break\}/;
+
+    const match = content.match(appPageSetPattern);
+    if (match) {
+      const [fullMatch, html, rsc, headers, status, src, key, reval] = match;
+      // Destructure segmentData alongside existing fields and serialize it
+      const replacement = `case"APP_PAGE":{let{html:${html},rscData:${rsc},headers:${headers},status:${status},segmentData:__sd}=${src};let __sdObj;if(__sd instanceof Map){__sdObj={};for(let[__k,__v]of __sd)__sdObj[__k]=__v.toString("base64")}await globalThis.incrementalCache.set(${key},{type:"app",html:${html},rsc:${rsc}.toString("utf8"),meta:{status:${status},headers:${headers}},revalidate:${reval},segmentData:__sdObj},"cache");break}`;
+      content = content.replace(fullMatch, replacement);
+      writeFileSync(cacheFile, content);
+      cachePatched++;
+    }
+  }
+
+  if (cachePatched > 0) {
+    console.info(`   🔧 Patched ${cachePatched} cache.cjs file(s) to preserve segmentData`);
   }
 }
 
@@ -109,7 +258,7 @@ function parseCliArgs(): DeployOptions {
   });
 
   if (values.help) {
-    console.log(`
+    console.info(`
 kn-next deploy - Deploy Next.js to Knative
 
 USAGE:
@@ -197,50 +346,63 @@ function applyOverrides(
 async function deploy() {
   const options = parseCliArgs();
 
-  console.log('🚀 kn-next deploy\n');
+  console.info('🚀 kn-next deploy\n');
 
   if (options.dryRun) {
-    console.log('⚠️  DRY RUN MODE - No actual deployment\n');
+    console.info('⚠️  DRY RUN MODE - No actual deployment\n');
   }
 
   // 1. Load and merge config
-  console.log('📋 Loading configuration...');
+  console.info('📋 Loading configuration...');
   const baseConfig = await loadConfig();
   const config = applyOverrides(baseConfig, options);
 
-  console.log(`   App: ${config.name}`);
-  console.log(`   Storage: ${config.storage.provider} (${config.storage.bucket})`);
-  console.log(`   Registry: ${config.registry}`);
-  console.log(`   Namespace: ${options.namespace}`);
-  if (options.skipBuild) console.log('   ⏭️  Skipping build');
-  if (options.skipUpload) console.log('   ⏭️  Skipping upload');
-  if (options.skipInfra) console.log('   ⏭️  Skipping infrastructure');
-  console.log('');
+  console.info(`   App: ${config.name}`);
+  console.info(`   Storage: ${config.storage.provider} (${config.storage.bucket})`);
+  console.info(`   Registry: ${config.registry}`);
+  console.info(`   Namespace: ${options.namespace}`);
+  if (options.skipBuild) console.info('   ⏭️  Skipping build');
+  if (options.skipUpload) console.info('   ⏭️  Skipping upload');
+  if (options.skipInfra) console.info('   ⏭️  Skipping infrastructure');
+  console.info('');
 
   // 2. Build Next.js (unless skipped)
   if (!options.skipBuild) {
     // Inject ASSET_PREFIX so next.config.ts picks up the CDN URL at build time
+    // Set via process.env so turbo inherits it (shell inline vars get stripped by turbo)
     const assetPrefix = getAssetPrefix(config.storage);
-    console.log(`📦 Building Next.js (assetPrefix: ${assetPrefix})...`);
-    await $`ASSET_PREFIX=${assetPrefix} npm run build`.quiet();
-    console.log('   ✅ Next.js build complete\n');
+    process.env.ASSET_PREFIX = assetPrefix;
+    console.info(`📦 Building Next.js (assetPrefix: ${assetPrefix})...`);
+    await $`npm run build`.quiet();
+    console.info('   ✅ Next.js build complete\n');
 
     // 3. Build OpenNext
-    console.log('⚡ Building OpenNext...');
-    await $`npx open-next build`.quiet();
-    console.log('   ✅ OpenNext build complete');
+    console.info('⚡ Building OpenNext...');
+    await $`npx open-next build`;
+    console.info('   ✅ OpenNext build complete');
+
+    // 3b. Restore assetPrefix in OpenNext output
+    // OpenNext strips assetPrefix from required-server-files.json during build.
+    // We must patch it back so the server renders HTML with CDN-prefixed asset URLs.
+    if (assetPrefix) {
+      console.info('🔧 Patching assetPrefix in OpenNext output...');
+      const patchedCount = patchAssetPrefix(process.cwd(), assetPrefix);
+      if (patchedCount > 0) {
+        console.info(`   ✅ Patched assetPrefix in ${patchedCount} file(s)`);
+      }
+    }
 
     // 4. Patch standalone output for known Next.js trace omissions
-    console.log('🔧 Patching standalone output...');
+    console.info('🔧 Patching standalone output...');
     await patchStandaloneOutput(process.cwd());
-    console.log('   ✅ Standalone output patched\n');
+    console.info('   ✅ Standalone output patched\n');
   }
 
   // 4. PARALLEL: Asset upload + Docker build/push
   const imageTag = options.tag || `${Date.now()}`;
   const imageName = `${config.registry}/${config.name}:${imageTag}`;
 
-  console.log(`📌 Image: ${imageName}\n`);
+  console.info(`📌 Image: ${imageName}\n`);
 
   // Generate entrypoint.sh for bytecode cache PVC permissions fix
   if (config.bytecodeCache?.enabled) {
@@ -253,35 +415,35 @@ async function deploy() {
 
     // Asset upload (unless skipped)
     if (!options.skipUpload) {
-      console.log('🔀 Running in parallel:');
-      console.log(`   - Uploading assets to ${config.storage.provider}`);
+      console.info('🔀 Running in parallel:');
+      console.info(`   - Uploading assets to ${config.storage.provider}`);
       tasks.push(
         (async () => {
           await uploadAssets(config);
-          console.log('   ✅ Assets uploaded');
+          console.info('   ✅ Assets uploaded');
         })()
       );
     }
 
     // Docker build + push
-    console.log('   - Building & pushing Docker image\n');
+    console.info('   - Building & pushing Docker image\n');
     tasks.push(
       (async () => {
         const repoRoot = resolve(process.cwd(), '../..');
-        await $`docker buildx build --platform linux/amd64 -f ${process.cwd()}/Dockerfile -t ${imageName} --push ${repoRoot}`.quiet();
-        console.log('   ✅ Docker image built and pushed');
+        await $`docker buildx build --platform linux/amd64 -f ${process.cwd()}/Dockerfile -t ${imageName} --push ${repoRoot}`;
+        console.info('   ✅ Docker image built and pushed');
       })()
     );
 
     await Promise.all(tasks);
-    console.log('');
+    console.info('');
   }
 
   // 5. Deploy infrastructure & observability (unless skipped)
   let infraEnvVars: Record<string, string> = {};
   const hasInfra = config.infrastructure || config.observability?.enabled;
   if (hasInfra && !options.skipInfra && !options.dryRun) {
-    console.log('🏗️  Deploying infrastructure services...');
+    console.info('🏗️  Deploying infrastructure services...');
     const outputDir = join(process.cwd(), '.open-next');
     const { manifests, envVars } = generateInfrastructure(config, outputDir);
     infraEnvVars = envVars;
@@ -291,24 +453,24 @@ async function deploy() {
     }
 
     if (config.observability?.enabled) {
-      console.log('   📊 Observability: ServiceMonitor + Grafana dashboard deployed');
+      console.info('   📊 Observability: ServiceMonitor + Grafana dashboard deployed');
     }
-    console.log('   ✅ Infrastructure deployed\n');
+    console.info('   ✅ Infrastructure deployed\n');
 
     // Wait for services to be ready
     if (config.infrastructure?.postgres?.enabled) {
-      console.log('   Waiting for PostgreSQL...');
+      console.info('   Waiting for PostgreSQL...');
       await $`kubectl wait --for=condition=ready pod -l app=${config.name}-postgres -n ${options.namespace} --timeout=120s`.quiet();
     }
     if (config.infrastructure?.redis?.enabled) {
-      console.log('   Waiting for Redis...');
+      console.info('   Waiting for Redis...');
       await $`kubectl wait --for=condition=ready pod -l app=${config.name}-redis -n ${options.namespace} --timeout=60s`.quiet();
     }
     if (config.infrastructure?.minio?.enabled) {
-      console.log('   Waiting for MinIO...');
+      console.info('   Waiting for MinIO...');
       await $`kubectl wait --for=condition=ready pod -l app=${config.name}-minio -n ${options.namespace} --timeout=120s`.quiet();
     }
-    console.log('   ✅ Infrastructure ready\n');
+    console.info('   ✅ Infrastructure ready\n');
   }
 
   // Inject DATABASE_URL from environment if provided
@@ -317,7 +479,7 @@ async function deploy() {
   }
 
   // 6. Generate and deploy Knative manifest
-  console.log('🌐 Generating Knative manifest...');
+  console.info('🌐 Generating Knative manifest...');
   const outputDir = join(process.cwd(), '.open-next');
   generateKnativeManifest({
     config,
@@ -327,21 +489,21 @@ async function deploy() {
     additionalEnvVars: infraEnvVars,
   });
   const manifestPath = join(outputDir, 'knative-service.yaml');
-  console.log(`   📄 Manifest: ${manifestPath}`);
+  console.info(`   📄 Manifest: ${manifestPath}`);
 
   if (!options.dryRun) {
-    console.log('   Applying to cluster...');
+    console.info('   Applying to cluster...');
     await $`kubectl apply -f ${manifestPath} -n ${options.namespace}`;
 
     // Get service URL
     const result =
       await $`kubectl get ksvc ${config.name} -n ${options.namespace} -o jsonpath='{.status.url}'`.text();
 
-    console.log('\n✨ Deployment complete!');
-    console.log(`🔗 URL: ${result.replace(/'/g, '')}`);
+    console.info('\n✨ Deployment complete!');
+    console.info(`🔗 URL: ${result.replace(/'/g, '')}`);
   } else {
-    console.log('\n✅ Dry run complete - manifest generated');
-    console.log(`   View: cat ${manifestPath}`);
+    console.info('\n✅ Dry run complete - manifest generated');
+    console.info(`   View: cat ${manifestPath}`);
   }
 }
 

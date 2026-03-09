@@ -12,17 +12,11 @@ fi
 # This makes queue-proxy health checks on 127.0.0.1:3000 fail with "connection refused".
 export HOSTNAME=0.0.0.0
 
-# Fix Next.js cache directory permissions — the .next dir is root-owned from the
-# Docker build, but Next.js 16 needs write access for prerender cache (.next/cache)
-# and segment files (.next/server/app/*.segments). Without this fix, cache writes
-# fail with EACCES and OpenNext cache adapters never fire.
-NEXT_DIR="$(pwd)/.next"
-if [ -d "$NEXT_DIR" ]; then
-  mkdir -p "$NEXT_DIR/cache" 2>/dev/null || true
-  chown -R node:node "$NEXT_DIR/cache" 2>/dev/null || true
-  chown -R node:node "$NEXT_DIR/server" 2>/dev/null || true
-  echo "[kn-next] Fixed .next cache permissions"
+# Fix Nitro/Vinext cache permissions if needed
+# We don't have .next anymore, but just in case any specific folders need writes
+if [ -d ".output" ]; then
+  chown -R node:node .output 2>/dev/null || true
 fi
 
-# Drop to node user and exec the Next.js standalone server
-exec su-exec node node index.mjs
+# Drop to node user and exec the Nitro standalone server
+exec su-exec node node .output/server/index.mjs

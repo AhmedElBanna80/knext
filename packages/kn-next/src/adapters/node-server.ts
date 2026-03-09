@@ -1,49 +1,46 @@
-import { createServer } from "node:http";
-import { join } from "node:path";
-import { startProdServer } from "vinext/server/prod-server";
+import http from "node:http";
 import {
     initBytecodeCacheMetrics,
     metricsRegistry,
     recordServerReady,
 } from "./bytecode-metrics.ts";
 
-const PORT = Number.parseInt(process.env.PORT || "8080", 10);
-
 async function main() {
     initBytecodeCacheMetrics();
 
-    // Vinext startProdServer creates an HTTP server and binds to the given port
-    const server = await startProdServer({ port: PORT, outDir: join(process.cwd(), "dist") });
+    // Intercept requests for /metrics before they reach the Nitro server
+    const originalCreateServer = http.createServer;
 
-    // Intercept requests for /metrics before they reach Vinext handler
-    const originalEmit = server.emit.bind(server);
     // @ts-ignore - dynamic override
-    server.emit = function (event, ...args) {
-        if (event === "request") {
-            const [req, res] = args;
+    http.createServer = function (requestListener?: http.RequestListener) {
+        return originalCreateServer((req, res) => {
             if (req.url === "/metrics" && req.method === "GET") {
                 res.setHeader("Content-Type", metricsRegistry.contentType);
                 metricsRegistry.metrics().then((metrics) => {
                     res.end(metrics);
                 });
-                return true;
+                return;
             }
-        }
-        return originalEmit(event, ...args);
+            if (requestListener) {
+                return requestListener(req, res);
+            }
+        });
     };
 
+    // Import Nitro server
+    // Nitro's node-server preset automatically starts listening
+    await import("../server/index.mjs");
+
     recordServerReady();
-    console.info(`[kn-next] Vinext server listening on port ${PORT}`);
+    console.info(`[kn-next] Nitro server listening`);
     console.info(
-        `[kn-next] Prometheus metrics at http://localhost:${PORT}/metrics`,
+        `[kn-next] Prometheus metrics at /metrics`,
     );
 
     // Handle graceful shutdown
     const shutdown = () => {
         console.info("[kn-next] Shutting down gracefully...");
-        server.close(() => {
-            process.exit(0);
-        });
+        process.exit(0);
     };
 
     process.on("SIGTERM", shutdown);

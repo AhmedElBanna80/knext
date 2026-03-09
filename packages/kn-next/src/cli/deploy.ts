@@ -130,13 +130,13 @@ async function deploy() {
     const baseConfig = await loadConfig();
     const config = applyOverrides(baseConfig, options);
 
-    const outputDir = join(process.cwd(), "dist");
+    const outputDir = join(process.cwd(), ".output");
 
     if (!options.skipBuild) {
         const assetPrefix = getAssetPrefix(config.storage);
         process.env.ASSET_PREFIX = assetPrefix;
-        console.info(`📦 Building Vinext app (assetPrefix: ${assetPrefix})...`);
-        await $`npm run build`.quiet();
+        console.info(`📦 Building Vinext app with Nitro (assetPrefix: ${assetPrefix})...`);
+        await $`NITRO_PRESET=node-server npm run build`.quiet();
         console.info("   ✅ Vinext build complete\n");
     }
 

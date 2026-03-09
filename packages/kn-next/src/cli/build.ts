@@ -17,7 +17,7 @@ import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { $ } from "bun";
 import type { KnativeNextConfig } from "../config";
-import { generateKnativeManifest } from "../generators/knative-manifest";
+import { generateKnativeManifest, generateEntrypoint } from "../generators/knative-manifest";
 import { uploadAssets } from "../utils/asset-upload";
 
 const CONFIG_FILE = "kn-next.config.ts";
@@ -65,11 +65,11 @@ async function copyAdapters(
 }
 
 export async function build(options: BuildOptions = {}) {
-    console.info("🔨 kn-next build (Vinext)\n");
+    console.info("🔨 kn-next build (Vinext + Nitro)\n");
 
     const workDir = process.cwd();
-    // Vinext output directory is typically dist
-    const outputDir = join(workDir, "dist");
+    // Nitro output directory is .output
+    const outputDir = join(workDir, ".output");
 
     // 1. Load config
     console.info("📋 Loading configuration...");
@@ -82,14 +82,14 @@ export async function build(options: BuildOptions = {}) {
 
     // 2. Run Vinext build
     if (!options.skipNextBuild) {
-        console.info("📦 Building Vinext app...");
-        await $`npm run build`.quiet();
+        console.info("📦 Building Vinext app with Nitro...");
+        await $`NITRO_PRESET=node-server npm run build`.quiet();
         console.info("   ✅ Vinext build complete\n");
     }
 
     // 3. Upload static assets
     console.info("☁️  Uploading static assets...");
-    // We pass dist/client/assets to asset-upload, but we need to verify uploadAssets logic
+    // We pass .output/public/assets to asset-upload, but we need to verify uploadAssets logic
     await uploadAssets(config);
     console.info("   ✅ Assets uploaded\n");
 
@@ -108,6 +108,10 @@ export async function build(options: BuildOptions = {}) {
         outputDir,
         enableKafkaQueue: options.enableKafkaQueue,
     });
+
+    if (config.bytecodeCache?.enabled) {
+        generateEntrypoint({ config, outputDir });
+    }
 
     console.info("\n✨ Build complete!");
     console.info(`   Output: ${outputDir}`);

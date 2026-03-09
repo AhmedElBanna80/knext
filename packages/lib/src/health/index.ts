@@ -17,7 +17,6 @@ function getRedisClient(): RedisClient | null {
   if (!process.env.REDIS_URL) return null;
   redisCache = new RedisClient(process.env.REDIS_URL, {
     maxRetriesPerRequest: 1, // Fail fast for health checks
-    enableOfflineQueue: false,
     connectTimeout: 2000,
   });
   return redisCache;

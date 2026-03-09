@@ -363,8 +363,8 @@ if [ -d "$NEXT_DIR" ]; then
   echo "[kn-next] Fixed .next cache permissions"
 fi
 
-# Drop privileges and start the Vinext production server
-exec su-exec node node --experimental-strip-types dist/adapters/node-server.ts
+# Drop privileges and start the Nitro production server
+exec su-exec node node --experimental-strip-types .output/adapters/node-server.ts
 `;
 
     const outputPath = path.join(outputDir, "entrypoint.sh");

@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
-import { vinext } from 'vinext';
+import vinext from 'vinext';
+import { nitro } from "nitro/vite";
 
 export default defineConfig({
   base: process.env.ASSET_PREFIX || '/',
-  plugins: [vinext({ cacheHandler: './cache-handler.js' })],
+  plugins: [vinext(), nitro()],
   resolve: {
     alias: {
       'pino-elasticsearch': './src/mocks/empty.js',

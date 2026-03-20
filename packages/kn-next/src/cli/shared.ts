@@ -15,18 +15,18 @@ const CONFIG_FILE = "kn-next.config.ts";
  * Runs validation after loading — fails fast with clear error messages.
  */
 export async function loadConfig(): Promise<KnativeNextConfig> {
-	const configPath = resolve(process.cwd(), CONFIG_FILE);
+    const configPath = resolve(process.cwd(), CONFIG_FILE);
 
-	if (!existsSync(configPath)) {
-		throw new Error(`Config file not found: ${configPath}`);
-	}
+    if (!existsSync(configPath)) {
+        throw new Error(`Config file not found: ${configPath}`);
+    }
 
-	const module = await import(configPath);
-	const config: KnativeNextConfig = module.default;
+    const module = await import(configPath);
+    const config: KnativeNextConfig = module.default;
 
-	validateConfig(config);
+    validateConfig(config);
 
-	return config;
+    return config;
 }
 
 /**
@@ -34,29 +34,29 @@ export async function loadConfig(): Promise<KnativeNextConfig> {
  * Both build.ts and deploy.ts need this — single implementation here.
  */
 export async function copyAdapters(outputDir: string): Promise<void> {
-	const adaptersDir = join(outputDir, "adapters");
-	mkdirSync(adaptersDir, { recursive: true });
+    const adaptersDir = join(outputDir, "adapters");
+    mkdirSync(adaptersDir, { recursive: true });
 
-	// Resolve adapter source relative to this file's location
-	const sourceDir = resolve(dirname(import.meta.path), "..", "adapters");
+    // Resolve adapter source relative to this file's location
+    const sourceDir = resolve(dirname(import.meta.path), "..", "adapters");
 
-	const adaptersToCopy = ["bytecode-metrics.ts", "node-server.ts"];
+    const adaptersToCopy = ["bytecode-metrics.ts", "node-server.ts"];
 
-	for (const adapter of adaptersToCopy) {
-		const src = join(sourceDir, adapter);
-		const dest = join(adaptersDir, adapter);
-		if (existsSync(src)) {
-			copyFileSync(src, dest);
-			console.info(`   Copied ${adapter}`);
-		}
-	}
+    for (const adapter of adaptersToCopy) {
+        const src = join(sourceDir, adapter);
+        const dest = join(adaptersDir, adapter);
+        if (existsSync(src)) {
+            copyFileSync(src, dest);
+            console.info(`   Copied ${adapter}`);
+        }
+    }
 
-	// Copy custom cache handler if it exists in the app directory
-	const cacheHandlerSrc = join(process.cwd(), "cache-handler.js");
-	if (existsSync(cacheHandlerSrc)) {
-		copyFileSync(cacheHandlerSrc, join(adaptersDir, "cache-handler.js"));
-		console.info("   Copied cache-handler.js");
-	}
+    // Copy custom cache handler if it exists in the app directory
+    const cacheHandlerSrc = join(process.cwd(), "cache-handler.js");
+    if (existsSync(cacheHandlerSrc)) {
+        copyFileSync(cacheHandlerSrc, join(adaptersDir, "cache-handler.js"));
+        console.info("   Copied cache-handler.js");
+    }
 }
 
 /**
@@ -64,6 +64,6 @@ export async function copyAdapters(outputDir: string): Promise<void> {
  * Default: 'bun' (matches Dockerfile and deploy pipeline).
  */
 export function getNitroPreset(config: KnativeNextConfig): string {
-	const runtime = config.runtime ?? "bun";
-	return runtime === "bun" ? "bun" : "node-server";
+    const runtime = config.runtime ?? "bun";
+    return runtime === "bun" ? "bun" : "node-server";
 }

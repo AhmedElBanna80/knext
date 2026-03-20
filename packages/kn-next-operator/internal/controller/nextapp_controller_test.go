@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	appsv1alpha1 "github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator/api/v1alpha1"
+	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
 
 var _ = Describe("NextApp Controller", func() {

@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -33,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	appsv1alpha1 "github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator/api/v1alpha1"
+	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 )
 
@@ -59,6 +60,15 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	// Validate image spec contains an explicit tag — prevent :latest footgun
+	if !strings.Contains(nextApp.Spec.Image, ":") {
+		logger.Error(fmt.Errorf("image %q has no explicit tag", nextApp.Spec.Image), "Rejecting NextApp: image must include an explicit tag (e.g. myapp:v1.0.0)")
+		return ctrl.Result{}, fmt.Errorf("image %q must include an explicit tag (e.g. :v1.0.0), :latest is not allowed for production Knative services", nextApp.Spec.Image)
+	}
+	if strings.HasSuffix(nextApp.Spec.Image, ":latest") {
+		logger.Info("WARNING: image uses :latest tag — this can prevent rollbacks and break digest pinning", "image", nextApp.Spec.Image)
 	}
 
 	// 1. Create/Update ServiceAccount

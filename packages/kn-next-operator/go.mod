@@ -1,4 +1,4 @@
-module github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator
+module github.com/AhmedElBanna80/knext/packages/kn-next-operator
 
 go 1.25.3
 

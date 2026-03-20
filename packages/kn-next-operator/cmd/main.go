@@ -35,8 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	appsv1alpha1 "github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator/api/v1alpha1"
-	"github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator/internal/controller"
+	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
+	"github.com/AhmedElBanna80/knext/packages/kn-next-operator/internal/controller"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	// +kubebuilder:scaffold:imports
 )

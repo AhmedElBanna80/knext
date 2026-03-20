@@ -192,8 +192,8 @@ ${allEnvItems}${envFromYaml}
             httpGet:
               path: ${config.healthCheckPath ?? "/api/health"}
               port: 3000
-            initialDelaySeconds: 0
-            periodSeconds: 1
+            initialDelaySeconds: 2
+            periodSeconds: 3
           livenessProbe:
             httpGet:
               path: ${config.healthCheckPath ?? "/api/health"}

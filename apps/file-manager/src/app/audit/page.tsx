@@ -44,9 +44,16 @@ export default function AuditPage() {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
+  // Declare stateRefs before fetchLogs so the callback can use them
+  const stateRefs = useRef({ page, hasMore, loading });
+  useEffect(() => {
+    stateRefs.current = { page, hasMore, loading };
+  }, [page, hasMore, loading]);
+
   const fetchLogs = useCallback(async (pageNum: number, append = true) => {
-    // Don't use 'loading' from state directly in the dependency array
-    // to avoid infinite loops, instead rely on the component flow.
+    // Guard against concurrent fetches using ref (not state) to avoid races
+    if (stateRefs.current.loading) return;
+    stateRefs.current.loading = true;
     setLoading(true);
     setError(null);
 
@@ -60,10 +67,13 @@ export default function AuditPage() {
       setHasMore(data.hasMore);
       setTotal(data.total);
       setPage(pageNum);
+      stateRefs.current.page = pageNum;
+      stateRefs.current.hasMore = data.hasMore;
     } catch (err) {
       setError('Failed to load audit logs. Please try again.');
       console.error('Fetch error:', err);
     } finally {
+      stateRefs.current.loading = false;
       setLoading(false);
       setInitialLoading(false);
     }
@@ -74,12 +84,6 @@ export default function AuditPage() {
     fetchLogs(0, false);
     // eslint-disable-next-line -- intentional: only run on mount
   }, [fetchLogs]);
-
-  // Use refs for latest state values so observer doesn't need to be recreated
-  const stateRefs = useRef({ page, hasMore, loading });
-  useEffect(() => {
-    stateRefs.current = { page, hasMore, loading };
-  }, [page, hasMore, loading]);
 
   // Infinite scroll observer
   useEffect(() => {

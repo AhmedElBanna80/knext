@@ -32,7 +32,7 @@ Built on **Vinext** (Vite-based Next.js) for serverless compatibility with distr
 | **Portability** | Vendor-locked | Any Kubernetes cluster |
 | **Scale-to-Zero** | ✅ | ✅ |
 | **Autoscaling** | Managed | Configurable (KPA/HPA) |
-| **Cold Starts** | ~200-500ms | Configurable `minScale` |
+| **Cold Starts** | ~200-500ms | **< 1s** with Bun bytecode + Knative caching |
 | **Container Control** | Limited | Full Docker access |
 | **Networking** | Platform-managed | Full K8s networking |
 | **Cost Model** | Per-invocation | Per-pod-second |
@@ -93,12 +93,61 @@ flowchart LR
 ## Features
 
 - ✅ **Vinext Integration** – Fast Vite-based Next.js compilation for containers
+- ✅ **Bun Bytecode Compilation** – Single-binary Docker images with sub-second cold starts
 - ✅ **Fluid Compute** – Scale-to-zero, high concurrency, auto-scaling
 - ✅ **Distributed Caching** – Redis-backed caching with automatic tag invalidation
 - ✅ **Multi-Cloud** – Deploy to GKE, EKS, AKS, or any Kubernetes
 - ✅ **Cache Monitoring** – Built-in cache event dashboard
 - ✅ **Single-Command Deploy** – Automated build, push, and deploy
 - ✅ **Monorepo Ready** – Turborepo for efficient builds
+- ✅ **Kubernetes Operator** – Declarative `NextApp` CRD for GitOps-style deployment
+
+---
+
+## Performance Benchmarks
+
+> Benchmarks measured on Knative Serving with scale-to-zero (`minScale: 0`) on GKE.
+> Cold start speed is achieved through **Knative resource caching** and **Bun bytecode compilation** into a single binary executable.
+
+### Cold Start Performance (Scale from Zero)
+
+With `minScale: 0`, pods terminate after 10 seconds of inactivity and must be provisioned fresh on next request:
+
+| Metric | Value |
+|--------|-------|
+| **Time to First Byte (TTFB)** | **0.66s** |
+| **Total Response Time** | **0.92s** |
+| **Pod Provisioning** | Container goes from `Pending → Running` in ~1s |
+
+### Warm Start Performance
+
+| Metric | Value |
+|--------|-------|
+| **Time to First Byte (TTFB)** | **0.58s** |
+| **Total Response Time** | **0.80s** |
+
+### Load Testing (100K Requests)
+
+```bash
+seq 1 100000 | xargs -n1 -P100 -I {} curl -s -o /dev/null -w "%{time_total}\n" \
+  "http://file-manager.default.136.111.227.195.sslip.io/audit"
+```
+
+| Metric | Value |
+|--------|-------|
+| **Total Requests** | 100,000 |
+| **Concurrency** | 100 parallel workers |
+| **Average Response Time** | **0.521s** |
+
+### Why Sub-Second Cold Starts?
+
+The Dockerfile uses a **3-stage build** that produces a single compiled Bun binary:
+
+1. **Build Stage** – `node:22-alpine` + `pnpm` compiles the Vinext/Nitro application
+2. **Compiler Stage** – `oven/bun:1.3.10-alpine` compiles to a native binary via `bun build --compile --bytecode`
+3. **Runner Stage** – `alpine:latest` runs the ~50MB single executable (no Node.js runtime needed)
+
+Combined with Knative's internal resource caching (pre-pulled images, warm network paths), this achieves consistent sub-second cold starts even with `minScale: 0`.
 
 ---
 

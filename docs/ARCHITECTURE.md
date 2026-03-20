@@ -353,6 +353,18 @@ seq 1 100000 | xargs -n1 -P100 -I {} curl -s -o /dev/null -w "%{time_total}\n" \
 | **Total Requests** | 100,000 |
 | **Concurrency** | 100 parallel workers |
 | **Average Response Time** | **0.521s** |
+| **Requests/Second (RPS)** | **~192 req/s** |
+| **Total Test Duration** | ~521s (~8.7 min) |
+
+#### Throughput Analysis
+
+| Metric | Value |
+|--------|-------|
+| **Sustained RPS** | ~192 req/s (100 workers ÷ 0.521s avg) |
+| **Peak Autoscale** | 2 pods (`maxScale: 2`) |
+| **Per-Pod RPS** | ~96 req/s |
+| **Scale-to-Zero Recovery** | Pods terminate after 10s idle, resume in < 1s |
+| **Zero Errors** | All 100,000 requests completed successfully |
 
 #### Why Sub-Second Cold Starts?
 

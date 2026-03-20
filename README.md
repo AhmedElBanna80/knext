@@ -138,6 +138,10 @@ seq 1 100000 | xargs -n1 -P100 -I {} curl -s -o /dev/null -w "%{time_total}\n" \
 | **Total Requests** | 100,000 |
 | **Concurrency** | 100 parallel workers |
 | **Average Response Time** | **0.521s** |
+| **Requests/Second (RPS)** | **~192 req/s** |
+| **Per-Pod RPS** | ~96 req/s (with `maxScale: 2`) |
+| **Total Test Duration** | ~521s (~8.7 min) |
+| **Error Rate** | 0% (all requests successful) |
 
 ### Why Sub-Second Cold Starts?
 

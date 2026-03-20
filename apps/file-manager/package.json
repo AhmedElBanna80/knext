@@ -32,7 +32,7 @@
     "nitro": "3.0.1-alpha.2"
   },
   "devDependencies": {
-    "@kn-next/config": "workspace:*",
+    "@kn-next/core": "workspace:*",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

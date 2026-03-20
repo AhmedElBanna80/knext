@@ -11,9 +11,9 @@ async function main() {
     // Intercept requests for /metrics before they reach the Nitro server
     const originalCreateServer = http.createServer;
 
-    // @ts-ignore - dynamic override
-    http.createServer = function (requestListener?: http.RequestListener) {
-        return originalCreateServer((req, res) => {
+    // @ts-expect-error - dynamic override
+    http.createServer = (requestListener?: http.RequestListener) =>
+        originalCreateServer((req, res) => {
             if (req.url === "/metrics" && req.method === "GET") {
                 res.setHeader("Content-Type", metricsRegistry.contentType);
                 metricsRegistry.metrics().then((metrics) => {
@@ -25,7 +25,6 @@ async function main() {
                 return requestListener(req, res);
             }
         });
-    };
 
     // Import Nitro server
     // Nitro's node-server preset automatically starts listening
@@ -33,9 +32,7 @@ async function main() {
 
     recordServerReady();
     console.info(`[kn-next] Nitro server listening`);
-    console.info(
-        `[kn-next] Prometheus metrics at /metrics`,
-    );
+    console.info(`[kn-next] Prometheus metrics at /metrics`);
 
     // Handle graceful shutdown
     const shutdown = () => {

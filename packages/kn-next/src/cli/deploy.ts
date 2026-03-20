@@ -6,7 +6,7 @@
  *   npx kn-next deploy [options]
  */
 
-import { existsSync, mkdirSync, copyFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { $ } from "bun";
@@ -142,7 +142,9 @@ async function deploy() {
     if (!options.skipBuild) {
         const assetPrefix = getAssetPrefix(config.storage);
         process.env.ASSET_PREFIX = assetPrefix;
-        console.info(`📦 Building Vinext app with Nitro (assetPrefix: ${assetPrefix})...`);
+        console.info(
+            `📦 Building Vinext app with Nitro (assetPrefix: ${assetPrefix})...`,
+        );
         await $`NITRO_PRESET=bun npm run build`.quiet();
         console.info("   ✅ Vinext build complete\n");
     }

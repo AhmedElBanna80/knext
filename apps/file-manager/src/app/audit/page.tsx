@@ -44,33 +44,30 @@ export default function AuditPage() {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
-  const fetchLogs = useCallback(
-    async (pageNum: number, append = true) => {
-      // Don't use 'loading' from state directly in the dependency array
-      // to avoid infinite loops, instead rely on the component flow.
-      setLoading(true);
-      setError(null);
+  const fetchLogs = useCallback(async (pageNum: number, append = true) => {
+    // Don't use 'loading' from state directly in the dependency array
+    // to avoid infinite loops, instead rely on the component flow.
+    setLoading(true);
+    setError(null);
 
-      try {
-        const res = await fetch(`/api/audit?page=${pageNum}`);
-        if (!res.ok) throw new Error('Failed to fetch');
+    try {
+      const res = await fetch(`/api/audit?page=${pageNum}`);
+      if (!res.ok) throw new Error('Failed to fetch');
 
-        const data: AuditData = await res.json();
+      const data: AuditData = await res.json();
 
-        setLogs((prev) => (append ? [...prev, ...data.logs] : data.logs));
-        setHasMore(data.hasMore);
-        setTotal(data.total);
-        setPage(pageNum);
-      } catch (err) {
-        setError('Failed to load audit logs. Please try again.');
-        console.error('Fetch error:', err);
-      } finally {
-        setLoading(false);
-        setInitialLoading(false);
-      }
-    },
-    [],
-  );
+      setLogs((prev) => (append ? [...prev, ...data.logs] : data.logs));
+      setHasMore(data.hasMore);
+      setTotal(data.total);
+      setPage(pageNum);
+    } catch (err) {
+      setError('Failed to load audit logs. Please try again.');
+      console.error('Fetch error:', err);
+    } finally {
+      setLoading(false);
+      setInitialLoading(false);
+    }
+  }, []);
 
   // Initial load
   useEffect(() => {

@@ -1,5 +1,5 @@
-import { NextResponse } from 'next/server';
 import Redis from 'ioredis';
+import { NextResponse } from 'next/server';
 import '../../../../cache-init';
 
 /**

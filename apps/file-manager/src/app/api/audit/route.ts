@@ -20,10 +20,10 @@ const getAuditLogsCached = unstable_cache(
 
     return {
       logs: logsResult.rows,
-      total: Number.parseInt(countResult.rows[0].count),
+      total: Number.parseInt(countResult.rows[0].count, 10),
       page,
       pageSize: PAGE_SIZE,
-      hasMore: offset + logsResult.rows.length < Number.parseInt(countResult.rows[0].count),
+      hasMore: offset + logsResult.rows.length < Number.parseInt(countResult.rows[0].count, 10),
     };
   },
   ['audit-logs'],
@@ -33,7 +33,7 @@ const getAuditLogsCached = unstable_cache(
   },
 );
 
-export async function GET(request: any, context: any) {
+export async function GET(request: any, _context: any) {
   // Vinext passes route params in context.params.
   // It turns out Vinext's Request shim sometimes drops the internal Next.js `nextUrl`
   // property entirely or strips standard properties off when creating the dummy request.
@@ -42,13 +42,13 @@ export async function GET(request: any, context: any) {
 
   let page = 0;
   try {
-     // Safe fallback parsing. Some runtimes pass URL string directly or inside strange proxy objects
-     const urlString = request?.url || (request?.nextUrl?.href) || 'http://localhost';
-     const parsedUrl = new URL(urlString);
-     const pageParam = parsedUrl.searchParams?.get('page');
-     page = Number.parseInt(pageParam || '0');
+    // Safe fallback parsing. Some runtimes pass URL string directly or inside strange proxy objects
+    const urlString = request?.url || request?.nextUrl?.href || 'http://localhost';
+    const parsedUrl = new URL(urlString);
+    const pageParam = parsedUrl.searchParams?.get('page');
+    page = Number.parseInt(pageParam || '0', 10);
   } catch (e) {
-     console.warn('Failed to parse URL in audit route:', e);
+    console.warn('Failed to parse URL in audit route:', e);
   }
 
   try {

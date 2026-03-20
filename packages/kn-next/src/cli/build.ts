@@ -17,7 +17,10 @@ import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { $ } from "bun";
 import type { KnativeNextConfig } from "../config";
-import { generateKnativeManifest, generateEntrypoint } from "../generators/knative-manifest";
+import {
+    generateEntrypoint,
+    generateKnativeManifest,
+} from "../generators/knative-manifest";
 import { uploadAssets } from "../utils/asset-upload";
 
 const CONFIG_FILE = "kn-next.config.ts";
@@ -40,8 +43,8 @@ async function loadConfig(): Promise<KnativeNextConfig> {
 
 async function copyAdapters(
     outputDir: string,
-    storageProvider: string,
-    cacheProvider: string,
+    _storageProvider: string,
+    _cacheProvider: string,
 ) {
     const adaptersDir = join(outputDir, "adapters");
     mkdirSync(adaptersDir, { recursive: true });

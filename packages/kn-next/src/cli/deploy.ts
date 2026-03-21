@@ -153,9 +153,15 @@ async function deploy() {
     await copyAdapters(outputDir);
 
     const imageTag = options.tag || `${Date.now()}`;
-    const imageName = `${config.registry}/${config.name}:${imageTag}`;
-
-    console.info(`📌 Image: ${imageName}\n`);
+    let imageName = `${config.registry}/${config.name}:${imageTag}`;
+    
+    const isCustomAdminImage = config.name === "kn-next-admin" && config.admin?.image;
+    if (isCustomAdminImage) {
+        imageName = config.admin!.image!;
+        console.info(`📌 Using custom admin image override: ${imageName}\n`);
+    } else {
+        console.info(`📌 Image: ${imageName}\n`);
+    }
 
     if (config.bytecodeCache?.enabled) {
         generateEntrypoint({ config, outputDir });
@@ -164,7 +170,7 @@ async function deploy() {
     if (!options.dryRun) {
         const tasks: Promise<void>[] = [];
 
-        if (!options.skipUpload) {
+        if (!options.skipUpload && !isCustomAdminImage) {
             console.info("🔀 Running in parallel:");
             console.info(`   - Uploading assets to ${config.storage.provider}`);
             tasks.push(
@@ -178,9 +184,11 @@ async function deploy() {
         console.info("   - Building & pushing Docker image\n");
         tasks.push(
             (async () => {
-                const repoRoot = resolve(process.cwd(), "../..");
-                await $`docker buildx build --platform linux/amd64 -f ${process.cwd()}/Dockerfile -t ${imageName} --push ${repoRoot}`;
-                console.info("   ✅ Docker image built and pushed");
+                if (!isCustomAdminImage) {
+                    const repoRoot = resolve(process.cwd(), "../..");
+                    await $`docker buildx build --platform linux/amd64 -f ${process.cwd()}/Dockerfile -t ${imageName} --push ${repoRoot}`;
+                    console.info("   ✅ Docker image built and pushed");
+                }
             })(),
         );
 
@@ -189,7 +197,7 @@ async function deploy() {
     }
 
     let infraEnvVars: Record<string, string> = {};
-    const hasInfra = config.infrastructure || config.observability?.enabled;
+    const hasInfra = config.infrastructure || config.observability?.enabled || config.admin?.enabled;
     if (hasInfra && !options.skipInfra && !options.dryRun) {
         console.info("🏗️  Deploying infrastructure services...");
         const { manifests, envVars } = generateInfrastructure(

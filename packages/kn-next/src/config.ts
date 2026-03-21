@@ -125,6 +125,16 @@ export interface SecretsConfig {
 }
 
 // Main Knative-Next config (subset of OpenNext we support)
+export interface AdminConfig {
+    enabled: boolean;
+    image?: string; // Optional custom Docker image for the admin dashboard
+    credentialsSecret?: string; // Default: 'kn-next-admin-credentials'
+    scaling?: {
+        minScale?: number; // Default: 0 (scales to zero when admins aren't using it)
+        maxScale?: number; // Default: 2
+    };
+}
+
 export interface KnativeNextConfig {
     name: string;
     storage: StorageConfig;
@@ -137,4 +147,5 @@ export interface KnativeNextConfig {
     observability?: ObservabilityConfig; // Prometheus metrics + Grafana dashboards
     healthCheckPath?: string; // Default: "/api/health"
     secrets?: SecretsConfig; // Kubernetes Native Secrets Binding
+    admin?: AdminConfig; // Built-in Observability Admin Dashboard
 }

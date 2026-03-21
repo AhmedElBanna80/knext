@@ -7,6 +7,7 @@ import type {
     PostgresConfig,
     RedisInfraConfig,
 } from "../config";
+import { generateAdminRBAC, generateAdminSecret } from "./admin-rbac";
 
 /**
  * Generates Kubernetes/Knative manifests for infrastructure services
@@ -96,6 +97,29 @@ export function generateInfrastructure(
             envVars.OTEL_SERVICE_NAME = config.name;
             console.info(`[kn-next] Generated ${collectorPath}`);
         }
+    }
+
+    // Admin Dashboard Security (RBAC + Secret)
+    if (config.admin?.enabled) {
+        const rbacOutput = generateAdminRBAC(
+            config.name,
+            outputDir,
+            namespace,
+            config.admin,
+        );
+        for (const rbacManifest of rbacOutput.manifests) {
+            manifests.push(rbacManifest);
+            console.info(`[kn-next] Generated ${rbacManifest}`);
+        }
+
+        const secretPath = generateAdminSecret(
+            config.name,
+            outputDir,
+            config.admin.credentialsSecret,
+            namespace,
+        );
+        manifests.push(secretPath);
+        console.info(`[kn-next] Generated ${secretPath}`);
     }
 
     return { manifests, envVars };

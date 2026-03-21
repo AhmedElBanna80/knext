@@ -1,0 +1,37 @@
+{
+  "name": "@knative-next/admin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "NITRO_PRESET=bun vite build",
+    "start": "node .output/server/index.mjs"
+  },
+  "dependencies": {
+    "@knative-next/lib": "workspace:*",
+    "@knative-next/ui": "workspace:*",
+    "jose": "^5.9.6",
+    "bcryptjs": "^2.4.3",
+    "next": "16.0.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.15.0",
+    "lucide-react": "^0.473.0",
+    "vinext": "^0.0.19",
+    "vite": "^7.3.1",
+    "nitro": "3.0.1-alpha.2"
+  },
+  "devDependencies": {
+    "@kn-next/config": "workspace:*",
+    "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-rsc": "^0.5.21",
+    "react-server-dom-webpack": "^19.2.4",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

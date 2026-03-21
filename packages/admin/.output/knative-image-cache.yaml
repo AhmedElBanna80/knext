@@ -1,0 +1,11 @@
+# Image Cache - Pre-pulls the docker image on nodes for faster cold starts
+apiVersion: caching.internal.knative.dev/v1alpha1
+kind: Image
+metadata:
+  name: kn-next-admin-image-cache
+  namespace: default
+  labels:
+    app: kn-next-admin
+    generated-by: kn-next
+spec:
+  image: us-central1-docker.pkg.dev/gsw-mcp/knative-next-repo/kn-next-admin:1774076154288

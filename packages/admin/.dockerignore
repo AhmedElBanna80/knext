@@ -1,0 +1,9 @@
+node_modules
+dist
+.next
+.open-next
+.git
+.turbo
+*.log
+coverage
+docs

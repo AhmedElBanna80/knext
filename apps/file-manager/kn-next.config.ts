@@ -55,6 +55,12 @@ const config: KnativeNextConfig = {
       API_TOKEN: { name: 'global-tokens', key: 'file_manager_token' },
     },
   },
+
+  // Observability Admin Dashboard Deployment
+  admin: {
+    enabled: true,
+    image: 'ghcr.io/AhmedElBanna80/knext-admin:latest',
+  },
 };
 
 export default config;

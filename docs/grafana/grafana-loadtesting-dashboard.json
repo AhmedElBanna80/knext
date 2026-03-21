@@ -28,10 +28,7 @@
           "defaults": {
             "color": { "mode": "thresholds" },
             "thresholds": {
-              "steps": [
-                { "color": "red", "value": null },
-                { "color": "green", "value": 1 }
-              ]
+              "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }]
             }
           }
         }
@@ -151,7 +148,9 @@
             },
             {
               "matcher": { "id": "byName", "options": "4xx" },
-              "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }]
+              "properties": [
+                { "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }
+              ]
             },
             {
               "matcher": { "id": "byName", "options": "5xx" },
@@ -201,7 +200,9 @@
             },
             {
               "matcher": { "id": "byName", "options": "p95" },
-              "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }]
+              "properties": [
+                { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+              ]
             },
             {
               "matcher": { "id": "byName", "options": "p50" },

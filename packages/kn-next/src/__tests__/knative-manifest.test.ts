@@ -356,7 +356,7 @@ describe("Observability", () => {
 
         expect(content).toContain('prometheus.io/scrape: "true"');
         expect(content).toContain('prometheus.io/port: "3000"');
-        expect(content).toContain('prometheus.io/path: "/api/metrics"');
+        expect(content).toContain('prometheus.io/path: "/metrics"');
     });
 
     it("should NOT include Prometheus annotations when observability is disabled", () => {

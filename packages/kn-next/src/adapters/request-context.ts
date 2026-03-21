@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 
 /**
  * Request context propagation via AsyncLocalStorage.
@@ -11,14 +11,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 
 export interface RequestContext {
-	/** Unique request identifier (UUID v4) */
-	requestId: string;
-	/** Start time for duration tracking */
-	startTime: number;
-	/** HTTP method */
-	method?: string;
-	/** Request path */
-	path?: string;
+    /** Unique request identifier (UUID v4) */
+    requestId: string;
+    /** Start time for duration tracking */
+    startTime: number;
+    /** HTTP method */
+    method?: string;
+    /** Request path */
+    path?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -27,14 +27,14 @@ const storage = new AsyncLocalStorage<RequestContext>();
  * Get the current request context, or undefined if not in a request scope.
  */
 export function getRequestContext(): RequestContext | undefined {
-	return storage.getStore();
+    return storage.getStore();
 }
 
 /**
  * Get the current request ID, or "no-request-context" if outside a request scope.
  */
 export function getRequestId(): string {
-	return storage.getStore()?.requestId ?? "no-request-context";
+    return storage.getStore()?.requestId ?? "no-request-context";
 }
 
 /**
@@ -47,27 +47,27 @@ export function getRequestId(): string {
  * 3. Generate a new UUID v4
  */
 export function withRequestContext<T>(
-	req: { headers: Record<string, string | string[] | undefined> },
-	fn: () => T,
+    req: { headers: Record<string, string | string[] | undefined> },
+    fn: () => T,
 ): T {
-	const incomingId =
-		getHeader(req.headers, "x-request-id") ??
-		getHeader(req.headers, "x-trace-id");
+    const incomingId =
+        getHeader(req.headers, "x-request-id") ??
+        getHeader(req.headers, "x-trace-id");
 
-	const ctx: RequestContext = {
-		requestId: incomingId || randomUUID(),
-		startTime: Date.now(),
-		method: undefined,
-		path: undefined,
-	};
+    const ctx: RequestContext = {
+        requestId: incomingId || randomUUID(),
+        startTime: Date.now(),
+        method: undefined,
+        path: undefined,
+    };
 
-	return storage.run(ctx, fn);
+    return storage.run(ctx, fn);
 }
 
 function getHeader(
-	headers: Record<string, string | string[] | undefined>,
-	name: string,
+    headers: Record<string, string | string[] | undefined>,
+    name: string,
 ): string | undefined {
-	const val = headers[name];
-	return Array.isArray(val) ? val[0] : val;
+    const val = headers[name];
+    return Array.isArray(val) ? val[0] : val;
 }

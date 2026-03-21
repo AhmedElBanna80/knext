@@ -1,4 +1,4 @@
-import type { KnativeNextConfig } from '@kn-next/config';
+import type { KnativeNextConfig } from '@kn-next/core';
 
 const config: KnativeNextConfig = {
   name: 'file-manager',
@@ -14,7 +14,7 @@ const config: KnativeNextConfig = {
   // Cache adapter for data cache & ISR
   cache: {
     provider: 'redis',
-    url: process.env.REDIS_URL || 'redis://redis.default.svc.cluster.local:6379',
+    url: process.env.REDIS_URL || 'redis://file-manager-redis.default.svc.cluster.local:6379',
     keyPrefix: 'file-manager',
   },
 
@@ -31,11 +31,17 @@ const config: KnativeNextConfig = {
   scaling: {
     minScale: 0, // changed to test bytecode cache
     maxScale: 2, // Scale up to 2 pods max
+    // Thanks to V8 pointer compression, we can safely halve the standard memory limits
+    memoryRequest: '256Mi',
+    memoryLimit: '512Mi',
   },
 
-  // V8 bytecode caching for faster cold starts
+  // V8 bytecode caching for faster cold starts.
+  // Disabled: Bun's `--bytecode` flag pre-compiles JS to native bytecode at
+  // build time (Dockerfile stage 2), making runtime NODE_COMPILE_CACHE redundant.
+  // Re-enable only if switching back to a Node.js-based runner without Bun compilation.
   bytecodeCache: {
-    enabled: true,
+    enabled: false,
   },
 
   // Observability (Prometheus metrics + Grafana dashboards)

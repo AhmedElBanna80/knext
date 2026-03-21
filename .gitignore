@@ -55,3 +55,6 @@ package-lock.json
 # Testing
 coverage/
 .nyc_output/
+
+# Compiled Bun binaries (output of: bun build --compile)
+apps/*/**/*-server

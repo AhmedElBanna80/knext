@@ -1,162 +1,96 @@
 #!/usr/bin/env bun
 /**
- * kn-next build - Prepares Next.js app for Knative deployment
+ * kn-next build - Prepares Next.js app for Knative deployment using Vinext
  *
  * Usage:
  *   bun run packages/kn-next/src/cli/build.ts
  *
  * Steps:
- *   1. Load kn-next.config.ts
- *   2. Generate open-next.config.ts (internal)
- *   3. Run Next.js build
- *   4. Run OpenNext build
- *   5. Upload static assets to storage (GCS/S3)
- *   6. Copy adapters to .open-next
- *   7. Generate knative-service.yaml
+ *   1. Load kn-next.config.ts (with validation)
+ *   2. Run Vinext build via Nitro (preset from config.runtime)
+ *   3. Upload static assets to storage (GCS/S3)
+ *   4. Copy adapters to dist
+ *   5. Generate knative-service.yaml
  */
 
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { $ } from "bun";
-import type { KnativeNextConfig } from "../config";
 import { generateKnativeManifest } from "../generators/knative-manifest";
-import {
-    generateOpenNextConfig,
-    getRequiredEnvVars,
-} from "../generators/open-next-config";
 import { uploadAssets } from "../utils/asset-upload";
+import { createLogger } from "../utils/logger";
+import { copyAdapters, getNitroPreset, loadConfig } from "./shared";
 
-const CONFIG_FILE = "kn-next.config.ts";
+const log = createLogger({ module: "build" });
 
 interface BuildOptions {
     enableKafkaQueue?: boolean;
     skipNextBuild?: boolean;
 }
 
-async function loadConfig(): Promise<KnativeNextConfig> {
-    const configPath = resolve(process.cwd(), CONFIG_FILE);
-
-    if (!existsSync(configPath)) {
-        throw new Error(`Config file not found: ${configPath}`);
-    }
-
-    const module = await import(configPath);
-    return module.default;
-}
-
-async function copyAdapters(
-    outputDir: string,
-    storageProvider: string,
-    cacheProvider: string,
-) {
-    const adaptersDir = join(outputDir, "adapters");
-    mkdirSync(adaptersDir, { recursive: true });
-
-    const sourceDir = resolve(dirname(import.meta.path), "..", "adapters");
-
-    // Copy relevant adapters based on config
-    const adaptersToCopy = [];
-
-    if (storageProvider === "gcs") {
-        adaptersToCopy.push("gcs-cache.ts");
-    }
-
-    if (cacheProvider === "redis") {
-        adaptersToCopy.push("redis-tag-cache.ts");
-    }
-
-    // Always copy node-server wrapper
-    // adaptersToCopy.push("node-server.ts");
-
-    for (const adapter of adaptersToCopy) {
-        const src = join(sourceDir, adapter);
-        const dest = join(adaptersDir, adapter);
-        if (existsSync(src)) {
-            copyFileSync(src, dest);
-            console.info(`   Copied ${adapter}`);
-        }
-    }
-}
-
 export async function build(options: BuildOptions = {}) {
-    console.info("🔨 kn-next build\n");
+    log.info("🔨 kn-next build (Vinext + Nitro)");
 
     const workDir = process.cwd();
-    const outputDir = join(workDir, ".open-next");
+    const outputDir = join(workDir, ".output");
 
-    // 1. Load config
-    console.info("📋 Loading configuration...");
+    // 1. Load config (validates at load time)
+    log.info("Loading configuration...");
     const config = await loadConfig();
-    console.info(`   App: ${config.name}`);
-    console.info(
-        `   Storage: ${config.storage.provider} (${config.storage.bucket})`,
+    log.info(
+        {
+            app: config.name,
+            storage: `${config.storage.provider} (${config.storage.bucket})`,
+            cache: config.cache?.provider ?? "none",
+            runtime: config.runtime ?? "bun",
+        },
+        "Configuration loaded",
     );
-    console.info(`   Cache: ${config.cache?.provider ?? "none"}\n`);
 
-    // 2. Generate open-next.config.ts
-    console.info("⚙️  Generating OpenNext config...");
-    mkdirSync(outputDir, { recursive: true });
-    generateOpenNextConfig({
-        config,
-        outputDir: workDir, // Root of project for open-next to find it
-        enableKafkaQueue: options.enableKafkaQueue,
-    });
-
-    // 3. Run Next.js build
+    // 2. Run Vinext build with the correct Nitro preset from config
     if (!options.skipNextBuild) {
-        console.info("📦 Building Next.js...");
-        await $`npm run build`.quiet();
-        console.info("   ✅ Next.js build complete\n");
+        const preset = getNitroPreset(config);
+        log.info({ preset }, "Building Vinext app with Nitro");
+        await $`NITRO_PRESET=${preset} npm run build`.quiet();
+        log.info("Vinext build complete");
     }
 
-    // 4. Run OpenNext build
-    console.info("⚡ Building OpenNext...");
-    await $`npx open-next build`.quiet();
-    console.info("   ✅ OpenNext build complete\n");
-
-    // 5. Upload static assets
-    console.info("☁️  Uploading static assets...");
+    // 3. Upload static assets
+    log.info("Uploading static assets...");
     await uploadAssets(config);
-    console.info("   ✅ Assets uploaded\n");
+    log.info("Assets uploaded");
 
-    // 6. Copy adapters
-    console.info("📂 Copying adapters...");
-    await copyAdapters(
-        outputDir,
-        config.storage.provider,
-        config.cache?.provider ?? "redis",
-    );
+    // 4. Copy adapters
+    log.info("Copying adapters...");
+    await copyAdapters(outputDir);
 
-    // 7. Generate Knative manifest
-    console.info("🌐 Generating Knative manifest...");
+    // 5. Generate Knative manifest
+    log.info("Generating Knative manifest...");
     generateKnativeManifest({
         config,
         outputDir,
         enableKafkaQueue: options.enableKafkaQueue,
     });
 
-    // 7. Show required env vars
-    console.info("\n📝 Required environment variables:");
-    const envVars = getRequiredEnvVars(config);
-    for (const [key, value] of Object.entries(envVars)) {
-        console.info(`   ${key}=${value}`);
-    }
-
-    console.info("\n✨ Build complete!");
-    console.info(`   Output: ${outputDir}`);
-    console.info(`   Manifest: ${join(outputDir, "knative-service.yaml")}`);
+    log.info(
+        {
+            output: outputDir,
+            manifest: join(outputDir, "knative-service.yaml"),
+        },
+        "✨ Build complete!",
+    );
 }
 
 // Run if executed directly
 if (import.meta.main) {
-    build({
-        // Kafka is the default for Knative ISR, use --no-kafka to disable
-        enableKafkaQueue: process.argv.includes("--no-kafka")
-            ? false
-            : undefined,
-        skipNextBuild: process.argv.includes("--skip-next"),
-    }).catch((err) => {
-        console.error("❌ Build failed:", err.message);
+    try {
+        await build({
+            enableKafkaQueue: process.argv.includes("--no-kafka")
+                ? false
+                : undefined,
+            skipNextBuild: process.argv.includes("--skip-next"),
+        });
+    } catch (err) {
+        log.fatal({ err }, "Build failed");
         process.exit(1);
-    });
+    }
 }

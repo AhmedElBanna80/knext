@@ -5,7 +5,7 @@
 import { startServer } from 'next/dist/server/lib/start-server';
 
 export async function start() {
-  const port = Number.parseInt(process.env.PORT || '8080');
+  const port = Number.parseInt(process.env.PORT || '8080', 10);
   const hostname = process.env.HOSTNAME || '0.0.0.0';
 
   console.info('[Runtime] Starting Next.js server...');

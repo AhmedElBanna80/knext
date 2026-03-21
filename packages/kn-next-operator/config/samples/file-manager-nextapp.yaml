@@ -1,0 +1,22 @@
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: file-manager-v2
+  namespace: default
+spec:
+  image: "us-central1-docker.pkg.dev/gsw-mcp/knative-next-repo/file-manager:1771698393596"
+  scaling:
+    minScale: 1
+    maxScale: 10
+    containerConcurrency: 100
+  storage:
+    provider: "gcs"
+    bucket: "knative-next-assets-banna"
+  cache:
+    provider: "redis"
+    url: "redis://redis.default.svc.cluster.local:6379"
+    enableBytecodeCache: true
+    bytecodeCacheSize: "512Mi"
+  secrets:
+    envFrom:
+      - "global-tokens"

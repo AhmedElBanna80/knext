@@ -45,7 +45,7 @@ async function setupDatabase() {
 
     // Seed some data if empty
     const userCount = await db.query('SELECT COUNT(*) FROM users');
-    if (Number.parseInt(userCount.rows[0].count) === 0) {
+    if (Number.parseInt(userCount.rows[0].count, 10) === 0) {
       await db.query(`
         INSERT INTO users (name, email, role) VALUES 
         ('Admin User', 'admin@example.com', 'admin'),
@@ -57,7 +57,7 @@ async function setupDatabase() {
 
     // Seed audit logs
     const auditCount = await db.query('SELECT COUNT(*) FROM audit_logs');
-    if (Number.parseInt(auditCount.rows[0].count) === 0) {
+    if (Number.parseInt(auditCount.rows[0].count, 10) === 0) {
       // Generate 1000 dummy logs
       const values = Array.from(
         { length: 1000 },

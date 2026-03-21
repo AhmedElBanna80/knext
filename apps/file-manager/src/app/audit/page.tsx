@@ -44,33 +44,40 @@ export default function AuditPage() {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
-  const fetchLogs = useCallback(
-    async (pageNum: number, append = true) => {
-      if (loading) return;
+  // Declare stateRefs before fetchLogs so the callback can use them
+  const stateRefs = useRef({ page, hasMore, loading });
+  useEffect(() => {
+    stateRefs.current = { page, hasMore, loading };
+  }, [page, hasMore, loading]);
 
-      setLoading(true);
-      setError(null);
+  const fetchLogs = useCallback(async (pageNum: number, append = true) => {
+    // Guard against concurrent fetches using ref (not state) to avoid races
+    if (stateRefs.current.loading) return;
+    stateRefs.current.loading = true;
+    setLoading(true);
+    setError(null);
 
-      try {
-        const res = await fetch(`/api/audit?page=${pageNum}`);
-        if (!res.ok) throw new Error('Failed to fetch');
+    try {
+      const res = await fetch(`/api/audit?page=${pageNum}`);
+      if (!res.ok) throw new Error('Failed to fetch');
 
-        const data: AuditData = await res.json();
+      const data: AuditData = await res.json();
 
-        setLogs((prev) => (append ? [...prev, ...data.logs] : data.logs));
-        setHasMore(data.hasMore);
-        setTotal(data.total);
-        setPage(pageNum);
-      } catch (err) {
-        setError('Failed to load audit logs. Please try again.');
-        console.error('Fetch error:', err);
-      } finally {
-        setLoading(false);
-        setInitialLoading(false);
-      }
-    },
-    [loading],
-  );
+      setLogs((prev) => (append ? [...prev, ...data.logs] : data.logs));
+      setHasMore(data.hasMore);
+      setTotal(data.total);
+      setPage(pageNum);
+      stateRefs.current.page = pageNum;
+      stateRefs.current.hasMore = data.hasMore;
+    } catch (err) {
+      setError('Failed to load audit logs. Please try again.');
+      console.error('Fetch error:', err);
+    } finally {
+      stateRefs.current.loading = false;
+      setLoading(false);
+      setInitialLoading(false);
+    }
+  }, []);
 
   // Initial load
   useEffect(() => {
@@ -80,12 +87,11 @@ export default function AuditPage() {
 
   // Infinite scroll observer
   useEffect(() => {
-    if (loading || !hasMore) return;
-
     observerRef.current = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loading) {
-          fetchLogs(page + 1);
+        const { page: currPage, hasMore: currHasMore, loading: currLoading } = stateRefs.current;
+        if (entries[0].isIntersecting && currHasMore && !currLoading) {
+          fetchLogs(currPage + 1);
         }
       },
       { threshold: 0.1 },
@@ -100,7 +106,7 @@ export default function AuditPage() {
         observerRef.current.disconnect();
       }
     };
-  }, [hasMore, loading, page, fetchLogs]);
+  }, [fetchLogs]);
 
   return (
     <div className="p-8 text-white">

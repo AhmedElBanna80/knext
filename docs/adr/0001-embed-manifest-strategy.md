@@ -18,7 +18,7 @@ Rely on the files being present in a specific location on the host file system a
 **Option A: NFT-Driven Generator Script**
 
 ## Rationale
-Spike #12 proved that `with { type: "file" }` imports allow embedding files into the binary VFS (`$bunfs`) and satisfying `require()` calls at runtime. This is the most deterministic approach for Next.js standalone output as it leverages Next.js's own tracing logic to ensure all required assets are included in the bundle and accessible via the virtual file system.
+[Spike #12][spike-12] proved that `with { type: "file" }` imports allow embedding files into the binary VFS (`$bunfs`) and satisfying `require()` calls at runtime. This is the most deterministic approach for Next.js standalone output as it leverages Next.js's own tracing logic to ensure all required assets are included in the bundle and accessible via the virtual file system.
 
 ## Consequences
 - Requires a generator script in the build pipeline to scan the standalone output and produce the embedding TypeScript file.
@@ -28,3 +28,11 @@ Spike #12 proved that `with { type: "file" }` imports allow embedding files into
 ## Revisit triggers
 - If Bun introduces native, built-in support for Next.js standalone output that handles manifest embedding automatically.
 - Significant changes in Next.js's standalone output structure that make NFT-based tracing unreliable.
+
+## References
+- [Spike #12][spike-12] — Empirical proof of `next build` standalone → `bun --compile --bytecode` pipeline; full report at `docs/spikes/0001-bun-bytecode-pipeline.md`.
+- [`@vercel/nft`](https://github.com/vercel/nft) — Node File Trace, the Vercel-maintained dependency tracer used to enumerate the standalone output's runtime files.
+- [Bun `--compile` documentation](https://bun.sh/docs/bundler/executables) — Bun's single-executable compilation and bytecode flags.
+- [Next.js standalone output](https://nextjs.org/docs/app/api-reference/config/next-config-js/output) — `output: 'standalone'` configuration.
+
+[spike-12]: https://github.com/AhmedElBanna80/knext/issues/12

@@ -1,0 +1,42 @@
+# NextApp CR for the adapter+standalone file-manager (POC GKE deploy).
+# The kn-next-operator reconciles this into a Knative Service + bytecode-cache
+# PVC (mounted /cache/bytecode, NODE_COMPILE_CACHE=/cache/bytecode/latest) +
+# ServiceAccount + (KafkaSource if revalidation.queue=kafka).
+#
+# Replace <REGISTRY> + <TAG> with the image you push (must be an explicit tag —
+# the operator rejects :latest). e.g. us-central1-docker.pkg.dev/<proj>/<repo>/file-manager:poc-1
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: file-manager-poc
+  namespace: default
+spec:
+  image: "<REGISTRY>/file-manager:<TAG>"
+
+  # Fluid pillars ----------------------------------------------------------
+  scaling:
+    # Cold-start bytecode-reuse test: set minScale 0, scale to zero, hit URL,
+    # then scale-from-zero again and compare TTFB (2nd cold start reuses the
+    # V8 cache on the PVC). For the pre-warm variant set minScale: 1.
+    minScale: 0
+    maxScale: 3
+    containerConcurrency: 80   # in-function concurrency (safe: Redis is the cache source of truth)
+
+  cache:
+    provider: "redis"
+    url: "redis://redis.default.svc.cluster.local:6379"
+    enableBytecodeCache: true   # -> operator provisions the PVC + NODE_COMPILE_CACHE
+    bytecodeCacheSize: "512Mi"
+
+  storage:
+    provider: "gcs"
+    bucket: "<YOUR_ASSET_BUCKET>"   # onBuildComplete uploaded static/prerenders here by buildId
+
+  # Optional — async ISR revalidation across pods (Kafka dual-routing, ADR-0003)
+  # revalidation:
+  #   queue: "kafka"
+  #   kafkaBrokerUrl: "kafka.default.svc.cluster.local:9092"
+
+  observability:
+    enabled: true
+  healthCheckPath: "/api/health"

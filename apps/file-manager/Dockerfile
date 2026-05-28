@@ -1,47 +1,39 @@
-# Stage 1: Build Vinext app with Node + pnpm
-FROM node:22-alpine AS builder
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-RUN npm install -g pnpm
+# file-manager — official Next.js Adapter + output:'standalone', run on Node.
+# Cold-start bytecode caching is provided at runtime via NODE_COMPILE_CACHE
+# (the kn-next-operator injects NODE_COMPILE_CACHE=/cache/bytecode/latest and
+# mounts the bytecode-cache PVC). No bun --compile, no NFT embedding.
+# Build context = repo root:  docker build -f apps/file-manager/Dockerfile .
+
+# ── Stage 1: build the standalone server ──────────────────────────────────
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
+RUN corepack enable
 COPY . .
 RUN pnpm install --frozen-lockfile
-RUN NITRO_PRESET=bun pnpm --filter file-manager build
+# Build the workspace lib first (its exports map to dist/) so `next build`
+# can trace it into the standalone output, then build the app.
+RUN pnpm --filter "@knative-next/lib" build
+RUN pnpm --filter file-manager build   # next build --webpack -> .next/standalone
 
-# Stage 2: Compile executable using Bun named image (latest 1.x version)
-FROM oven/bun:1.3.10-alpine AS compiler
+# ── Stage 2: distroless Node runtime ──────────────────────────────────────
+FROM gcr.io/distroless/nodejs22-debian12 AS runner
 WORKDIR /app
-COPY --from=builder /app /app
-WORKDIR /app/apps/file-manager
-# We compile to linux-x64-musl since we'll run on Alpine
-RUN bun build --compile --minify --bytecode --target=bun-linux-x64-musl .output/server/index.mjs --outfile file-manager-server
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    # Default V8 compile-cache dir; the operator overrides this with the
+    # PVC-backed /cache/bytecode/latest for cross-cold-start reuse.
+    NODE_COMPILE_CACHE=/tmp/v8-compile-cache
 
-# Stage 3: Final runner stage using pure alpine
-FROM alpine:latest AS runner
-WORKDIR /app/apps/file-manager
-ENV NODE_ENV=production
-ENV PORT=3000
-
-# Install required network tools and C++ standard libraries needed by the compiled bun executable
-RUN apk add --no-cache ca-certificates wget libstdc++ libgcc
-
-# Create node user and group
-RUN addgroup -g 1000 node && adduser -u 1000 -G node -s /bin/sh -D node
-
-# Pre-create the Next.js cache directory to avoid permission issues
-RUN mkdir -p .next/cache .next/server && chown -R node:node .next
-
-# Copy the compiled executable and public assets from compiler
-COPY --from=compiler /app/apps/file-manager/file-manager-server ./file-manager-server
-COPY --from=compiler /app/apps/file-manager/.output/public ./.output/public
+# Standalone server + its traced node_modules/workspace packages.
+COPY --from=builder /app/apps/file-manager/.next/standalone ./
+# Static assets + public are NOT included in standalone — place them where
+# the standalone server expects them.
+COPY --from=builder /app/apps/file-manager/.next/static ./apps/file-manager/.next/static
+COPY --from=builder /app/apps/file-manager/public ./apps/file-manager/public
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
-
-# Drop privileges
-USER node
-
-# Run the single binary executable
-CMD ["./file-manager-server"]
+# distroless nodejs ENTRYPOINT is ["/usr/bin/node"]; pass the server entry.
+# Readiness/liveness is handled by the Knative probes the operator injects.
+CMD ["apps/file-manager/server.js"]

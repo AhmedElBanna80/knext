@@ -30,16 +30,41 @@ GET /cache-tests/time-based [2nd] → HTTP 200 (served from in-memory cache)
 [Cache] HIT  /cache-tests/time-based (memory)
 ```
 
-### (b) On-Demand Revalidation (revalidateTag)
+### (b) On-Demand Revalidation (revalidateTag) — WITH BEFORE/AFTER BODY PROOF
+
+The `/cache-tests/on-demand` page uses `unstable_cache` with `generatedAt: new Date().toISOString()`.
+After `revalidateTag("products")`, the cache function re-runs and produces a **new** `generatedAt`
+timestamp — proving the cache was actually invalidated, not just status-200 served.
 
 ```
-GET  /cache-tests/on-demand [before]   → HTTP 200
-POST /api/cache/invalidate {tag:"products"} → HTTP 200
-     {"success":true,"message":"Cache invalidated for tag: products","timestamp":"…"}
-GET  /api/cache/invalidate?tag=files   → HTTP 200
-     {"success":true,"message":"Cache invalidated for tag: files","timestamp":"…"}
-GET  /cache-tests/on-demand [after]    → HTTP 200 (revalidated on next fetch)
+Step 1 — Warm-up GET (populate unstable_cache):
+  HTTP 200 | Timestamps in body:
+    products.generatedAt : 2026-05-28T11:27:28.032Z   ← product cache created
+    orders.generatedAt   : 2026-05-28T11:27:27.694Z
+    summary.generatedAt  : 2026-05-28T11:27:28.084Z
+
+Step 2 — Second GET (HIT — same cached generatedAt values):
+  HTTP 200 | Timestamps in body:
+    products.generatedAt : 2026-05-28T11:27:28.032Z   ← identical ✓ (cache HIT)
+    orders.generatedAt   : 2026-05-28T11:27:27.694Z   ← unchanged ✓
+    summary.generatedAt  : 2026-05-28T11:27:28.084Z   ← unchanged ✓
+
+Step 3 — POST /api/cache/invalidate {tag:"products"}:
+  HTTP 200: {"success":true,"message":"Cache invalidated for tag: products",
+             "timestamp":"2026-05-28T11:28:13.701Z"}
+
+Step 4 — GET after invalidation (products cache MISS → re-computed):
+  HTTP 200 | Timestamps in body:
+    products.generatedAt : 2026-05-28T11:28:14.055Z   ← NEW timestamp ✅ CHANGED
+    orders.generatedAt   : 2026-05-28T11:27:27.694Z   ← unchanged (orders tag not invalidated)
+    summary.generatedAt  : 2026-05-28T11:28:14.108Z   ← NEW (summary tagged products+orders)
+
+✅ PROVED: generatedAt changed 2026-05-28T11:27:28.032Z → 2026-05-28T11:28:14.055Z
+   revalidateTag("products") busted products + summary caches.
+   orders cache (different tag) remained stable — correct selective invalidation.
 ```
+
+**Probe script:** `node apps/file-manager/scripts/invalidation-probe.mjs`
 
 ### (c) RSC / Streaming Response
 

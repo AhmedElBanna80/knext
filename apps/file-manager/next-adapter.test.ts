@@ -3,8 +3,11 @@
  * RED phase: these tests should fail before the adapter is implemented.
  */
 
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { NextAdapter } from 'next';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 describe('next-adapter (POC-ADAPTER-P0 spike)', () => {
   it('exports a valid NextAdapter with name, modifyConfig and onBuildComplete', async () => {
@@ -143,6 +146,26 @@ describe('next-adapter (POC-ADAPTER-P0 spike)', () => {
 });
 
 describe('next-adapter upload (POC-ADAPTER-P1-rework)', () => {
+  // Real temp dir with real files so existsSync + createReadStream work without
+  // mocking node:fs (CJS interop makes node:fs hard to mock cleanly in Vitest).
+  let tmpDir: string;
+  let faviconPath: string;
+  let mainJsPath: string;
+  let prerenderPath: string;
+
+  beforeAll(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'knext-upload-test-'));
+    faviconPath = join(tmpDir, 'favicon.ico');
+    mainJsPath = join(tmpDir, 'main.js');
+    prerenderPath = join(tmpDir, 'time-based.html');
+    writeFileSync(faviconPath, 'icon');
+    writeFileSync(mainJsPath, 'js');
+    writeFileSync(prerenderPath, '<html>cached</html>');
+  });
+
+  // No afterAll cleanup: temp files in /tmp are small and the OS cleans them.
+  // Explicit cleanup races with lazy createReadStream open → ENOENT errors.
+
   const makeCtx = (overrides: Record<string, unknown> = {}) => ({
     buildId: 'upload-test-id',
     distDir: '/tmp/.next',
@@ -201,28 +224,100 @@ describe('next-adapter upload (POC-ADAPTER-P1-rework)', () => {
     consoleSpy.mockRestore();
   });
 
-  it('calls getMinioClient().putObject for each staticFile and prerender when STORAGE_BUCKET is set', async () => {
+  it('calls putObject exactly twice (2 staticFiles; prerender has no fallback.filePath)', async () => {
     vi.resetModules();
     process.env.STORAGE_BUCKET = 'test-bucket';
 
-    // Mock @knative-next/lib/clients
-    const putObjectMock = vi.fn().mockResolvedValue({ etag: 'mock-etag' });
-    vi.mock('@knative-next/lib/clients', () => ({
+    // Use real on-disk files (created in beforeAll) so existsSync + createReadStream
+    // work without mocking node:fs (CJS interop makes that fragile in Vitest).
+    // Destroy the stream immediately so no ENOENT fires after afterAll cleanup.
+    const putObjectMock = vi.fn().mockImplementation(async (_b, _k, stream: any) => {
+      stream?.destroy?.();
+      return { etag: 'mock-etag' };
+    });
+    vi.doMock('@knative-next/lib/clients', () => ({
       getMinioClient: () => ({ putObject: putObjectMock }),
     }));
 
     const { default: adapter } = (await import('./next-adapter.js')) as { default: NextAdapter };
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    await adapter.onBuildComplete!(makeCtx());
+    // 2 staticFiles with real file paths + 1 prerender WITHOUT fallback.filePath
+    // (prerenders without fallback.filePath are filtered → expect exactly 2 uploads).
+    const ctx = makeCtx({
+      outputs: {
+        pages: [],
+        middleware: undefined,
+        appPages: [],
+        pagesApi: [],
+        appRoutes: [],
+        prerenders: [{ id: '/cache-tests/time-based' } as any],
+        staticFiles: [
+          { id: '/favicon.ico', filePath: faviconPath, pathname: '/favicon.ico' } as any,
+          {
+            id: '/_next/static/chunks/main.js',
+            filePath: mainJsPath,
+            pathname: '/_next/static/chunks/main.js',
+          } as any,
+        ],
+      },
+    });
 
-    // Should have attempted to upload 2 staticFiles + 1 prerender = 3 uploads
-    // (or at least attempted — files may not exist on disk in test env → best-effort)
-    const loggedText = consoleSpy.mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(loggedText).toMatch(/upload|artifact|storage/i);
+    await adapter.onBuildComplete!(ctx);
+
+    // This assertion would fail if the upload loop were removed or skipped.
+    expect(putObjectMock).toHaveBeenCalledTimes(2);
+    expect(putObjectMock.mock.calls[0][1]).toBe('upload-test-id/favicon.ico');
+    expect(putObjectMock.mock.calls[1][1]).toBe('upload-test-id/_next/static/chunks/main.js');
 
     consoleSpy.mockRestore();
     delete process.env.STORAGE_BUCKET;
-    vi.unmock('@knative-next/lib/clients');
+    vi.doUnmock('@knative-next/lib/clients');
+  });
+
+  it('calls putObject 3 times when prerender has fallback.filePath', async () => {
+    vi.resetModules();
+    process.env.STORAGE_BUCKET = 'test-bucket';
+
+    const putObjectMock = vi.fn().mockResolvedValue({ etag: 'mock-etag' });
+    vi.doMock('@knative-next/lib/clients', () => ({
+      getMinioClient: () => ({ putObject: putObjectMock }),
+    }));
+
+    const { default: adapter } = (await import('./next-adapter.js')) as { default: NextAdapter };
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const ctx = makeCtx({
+      outputs: {
+        pages: [],
+        middleware: undefined,
+        appPages: [],
+        pagesApi: [],
+        appRoutes: [],
+        prerenders: [
+          {
+            id: '/cache-tests/time-based',
+            fallback: { filePath: prerenderPath },
+          } as any,
+        ],
+        staticFiles: [
+          { id: '/favicon.ico', filePath: faviconPath, pathname: '/favicon.ico' } as any,
+          {
+            id: '/_next/static/chunks/main.js',
+            filePath: mainJsPath,
+            pathname: '/_next/static/chunks/main.js',
+          } as any,
+        ],
+      },
+    });
+
+    await adapter.onBuildComplete!(ctx);
+
+    // 2 staticFiles + 1 prerender with real fallback.filePath = 3
+    expect(putObjectMock).toHaveBeenCalledTimes(3);
+
+    consoleSpy.mockRestore();
+    delete process.env.STORAGE_BUCKET;
+    vi.doUnmock('@knative-next/lib/clients');
   });
 });

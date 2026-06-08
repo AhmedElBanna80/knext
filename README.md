@@ -2,14 +2,14 @@
 
 > **Production-ready framework for deploying Next.js applications on Knative with Fluid Compute characteristics.**
 
-Built on **Vinext** (Vite-based Next.js) for serverless compatibility with distributed caching (Redis).
+Built on the **official Next.js Adapter API** with `output: 'standalone'` — no forks, no vendor build tools — for serverless compatibility with distributed caching (Redis). Runs natively on **Node 20+** (and Bun), with Vercel-Fluid-style cold-start bytecode caching.
 
 ---
 
 ## Table of Contents
 
 - [Why Knative?](#why-knative)
-- [How It Works: OpenNext Builder](#how-it-works-opennext-builder)
+- [How It Works: Next.js Adapter](#how-it-works-nextjs-adapter)
 - [Features](#features)
 - [Quick Start](#quick-start)
 - [Configuration Reference](#configuration-reference)
@@ -32,7 +32,7 @@ Built on **Vinext** (Vite-based Next.js) for serverless compatibility with distr
 | **Portability** | Vendor-locked | Any Kubernetes cluster |
 | **Scale-to-Zero** | ✅ | ✅ |
 | **Autoscaling** | Managed | Configurable (KPA/HPA) |
-| **Cold Starts** | ~200-500ms | **< 1s** with Bun bytecode + Knative caching |
+| **Cold Starts** | ~200-500ms | **< 1s** with V8 bytecode cache (`NODE_COMPILE_CACHE`) + Knative caching |
 | **Container Control** | Limited | Full Docker access |
 | **Networking** | Platform-managed | Full K8s networking |
 | **Cost Model** | Per-invocation | Per-pod-second |
@@ -47,9 +47,9 @@ Built on **Vinext** (Vite-based Next.js) for serverless compatibility with distr
 
 ---
 
-## How It Works: Vinext Builder
+## How It Works: Next.js Adapter
 
-**Vinext** is a Vite-based reimplementation of the Next.js compiler that transforms Next.js build output into a fast, standard web request handler compatible with Knative containers.
+kn-next integrates via the **official Next.js Adapter API** (`NextAdapter`), registered through `experimental.adapterPath`. A standard `next build` with `output: 'standalone'` produces a self-contained Node server; the adapter hooks into the build to wire Knative-specific behavior — no custom compiler, no fork of Next.js.
 
 ### Build Pipeline
 
@@ -59,18 +59,18 @@ flowchart LR
         A["Next.js App<br/>(App Router)"]
     end
     
-    subgraph Compiler
-        B["Vinext<br/>(Vite Compiler)"]
+    subgraph Build
+        B["next build<br/>output: 'standalone'<br/>+ NextAdapter"]
     end
     
     subgraph Output
-        C["Knative-Ready<br/>Bundle"]
+        C["Standalone Server<br/>(distroless Node)"]
     end
     
     A --> B --> C
     
     C --> D["Static Assets<br/>→ CDN/GCS"]
-    C --> E["Server Function<br/>→ Docker"]
+    C --> E["Server (server.js)<br/>→ Docker"]
     C --> F["Adapters<br/>(GCS/S3/Redis)"]
 
     style A fill:#3b82f6,color:#fff
@@ -81,19 +81,19 @@ flowchart LR
     style F fill:#f59e0b,color:#fff
 ```
 
-### What Vinext Does
+### What the Adapter Does
 
-1. **Extracts static assets** (`_next/static/`) → uploaded to cloud storage
-2. **Bundles server code** (App Router, API routes) → packaged into Docker image
-3. **Enables pluggable caching** → custom Redis cache handler replaces default in-memory cache
-4. **Maintains BUILD_ID sync** → ensures client/server assets match
+1. **`modifyConfig`** → forces `output: 'standalone'` and injects the Redis `cacheHandler` at build time
+2. **`onBuildComplete`** → uploads `staticFiles` + `prerenders` to cloud storage, keyed by `buildId`
+3. **Standalone server** → `next build` emits a self-contained `server.js` that runs on plain **Node 20+** (and Bun via `node:http` compat) — no bundler-specific runtime
+4. **Cold-start bytecode caching** → `NODE_COMPILE_CACHE` persists the V8 code cache so scaled-from-zero pods skip re-compilation (the mechanism behind Vercel Fluid)
 
 ---
 
 ## Features
 
-- ✅ **Vinext Integration** – Fast Vite-based Next.js compilation for containers
-- ✅ **Bun Bytecode Compilation** – Single-binary Docker images with sub-second cold starts
+- ✅ **Official Next.js Adapter API** – `next build` standalone, no fork, runs on Node 20+ and Bun
+- ✅ **V8 Bytecode Caching** – `NODE_COMPILE_CACHE` on a shared volume for sub-second cold starts (Vercel-Fluid-style)
 - ✅ **Fluid Compute** – Scale-to-zero, high concurrency, auto-scaling
 - ✅ **Distributed Caching** – Redis-backed caching with automatic tag invalidation
 - ✅ **Multi-Cloud** – Deploy to GKE, EKS, AKS, or any Kubernetes
@@ -107,7 +107,7 @@ flowchart LR
 ## Performance Benchmarks
 
 > Benchmarks measured on Knative Serving with scale-to-zero (`minScale: 0`) on GKE.
-> Cold start speed is achieved through **Knative resource caching** and **Bun bytecode compilation** into a single binary executable.
+> Cold start speed is achieved through **Knative resource caching** and **V8 bytecode caching** (`NODE_COMPILE_CACHE` on a shared volume).
 
 ### Cold Start Performance (Scale from Zero)
 
@@ -145,13 +145,12 @@ seq 1 100000 | xargs -n1 -P100 -I {} curl -s -o /dev/null -w "%{time_total}\n" \
 
 ### Why Sub-Second Cold Starts?
 
-The Dockerfile uses a **3-stage build** that produces a single compiled Bun binary:
+The Dockerfile uses a **2-stage build** producing a lean distroless Node image:
 
-1. **Build Stage** – `node:22-alpine` + `pnpm` compiles the Vinext/Nitro application
-2. **Compiler Stage** – `oven/bun:1.3.10-alpine` compiles to a native binary via `bun build --compile --bytecode`
-3. **Runner Stage** – `alpine:latest` runs the ~50MB single executable (no Node.js runtime needed)
+1. **Build Stage** – `node:22` + `pnpm` runs `next build` (`output: 'standalone'`) → self-contained `server.js`
+2. **Runtime Stage** – `gcr.io/distroless/nodejs22` runs the standalone server with `NODE_COMPILE_CACHE` pointed at a shared volume
 
-Combined with Knative's internal resource caching (pre-pulled images, warm network paths), this achieves consistent sub-second cold starts even with `minScale: 0`.
+On the first request a pod compiles its JavaScript and writes the V8 code cache to the volume; subsequent cold-started pods deserialize that cache instead of re-parsing/JIT-compiling — the same approach Vercel Fluid uses. In production the [kn-next operator](./docs/operator/README.md) mounts this cache on a PVC (`spec.cache.enableBytecodeCache`) so it survives scale-to-zero. Combined with Knative's resource caching, this achieves consistent sub-second cold starts even with `minScale: 0`.
 
 ---
 
@@ -219,12 +218,11 @@ npx kn-next deploy
 ```
 
 This single command:
-1. Builds Next.js application
-2. Runs Vinext to generate serverless bundle
-3. Syncs static assets to cloud storage
-4. Builds & pushes Docker image (tagged with BUILD_ID)
-5. Generates Knative manifest
-6. Deploys to cluster
+1. Runs `next build` (`output: 'standalone'`) with the kn-next adapter
+2. Syncs static assets + prerenders to cloud storage (keyed by `buildId`)
+3. Builds & pushes the distroless Node Docker image
+4. Generates the Knative manifest
+5. Deploys to cluster
 
 ---
 
@@ -553,7 +551,7 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for detailed diagrams includi
 
 ```mermaid
 flowchart TB
-    A["Next.js App<br/>(App Router)"] --> B["Vinext<br/>(Vite Compiler)"]
+    A["Next.js App<br/>(App Router)"] --> B["next build<br/>(standalone + adapter)"]
     
     B --> C["Static Assets<br/>(Cloud CDN)"]
     B --> D["Server Function<br/>(Docker)"]
@@ -647,7 +645,7 @@ pnpm dev
 npx kn-next deploy
 
 # Or step-by-step
-npx kn-next build       # Build with Vinext
+npx kn-next build       # next build (standalone) + adapter
 npx kn-next deploy      # Deploy to cluster
 npx kn-next cleanup     # Remove from cluster
 ```
@@ -664,7 +662,7 @@ npx kn-next deploy [options]
 | `--bucket <name>` | `-b` | Override storage bucket |
 | `--tag <tag>` | `-t` | Image tag (default: timestamp) |
 | `--namespace <ns>` | `-n` | Kubernetes namespace (default: default) |
-| `--skip-build` | | Skip Vinext build |
+| `--skip-build` | | Skip the `next build` step |
 | `--skip-upload` | | Skip asset upload to storage |
 | `--skip-infra` | | Skip infrastructure deployment |
 | `--dry-run` | | Generate manifests without deploying |

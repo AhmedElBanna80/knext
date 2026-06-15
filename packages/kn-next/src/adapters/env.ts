@@ -9,10 +9,12 @@
  * Exported separately so tests can assert forwarding without starting the server
  * or spawning a real child process.
  */
-export function buildChildEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PORT: process.env.PORT ?? '3000',
-    ...overrides,
-  };
+export function buildChildEnv(
+    overrides: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+    return {
+        ...process.env,
+        PORT: process.env.PORT ?? "3000",
+        ...overrides,
+    };
 }

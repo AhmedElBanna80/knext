@@ -66,7 +66,8 @@ state. Keep payloads small and serializable; treat them as events, not a shared 
 
 ## What knext provides vs. what the app ships
 - **knext (framework):** serves the App Shell, generates the precache manifest, wires each zone's
-  `assetPrefix`.
+  `assetPrefix`. *(Target-state — App-Shell serving + precache generation are design-phase, not yet
+  in core; see the `scs-zones` Status note + Sequencing.)*
 - **App template (this recipe):** the Service Worker, SWI logic, Navigation-API interceptor,
   Serwist config, BroadcastChannel wiring. This code must **not** land in core packages
   (`packages/kn-next`, `packages/cli`, the operator) — a hook

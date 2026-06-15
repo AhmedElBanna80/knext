@@ -47,8 +47,14 @@ Next.js zone app   →   its gRPC BackendService(s)   →   its own PostgreSQL
 
 cross-zone: async Kafka domain events + UI composition ONLY — never a shared DB.
 ```
-- The zone app reaches its backend(s) over h2c via `<NAME>_SERVICE_URL` (operator-injected; see
-  the `grpc-services` + `knative-kubernetes` skills).
+> **Status — target architecture, not yet built.** The operator today defines only the `NextApp`
+> CRD (`packages/kn-next-operator/api/.../nextapp_types.go`). `BackendService`/zone databases, the
+> `<NAME>_SERVICE_URL` injection, App-Shell serving and precache-manifest generation are
+> **ADR-0004 (Proposed) / design-phase** (see Sequencing). Treat this as the contract to build to,
+> not current behaviour.
+
+- The zone app reaches its backend(s) over h2c via `<NAME>_SERVICE_URL` (operator-injected — ADR-0004
+  target state; see the `grpc-services` + `knative-kubernetes` skills).
 - The zone's own DB is reached via **`DATABASE_URL` injected from a K8s Secret** — never a
   hardcoded host.
 
@@ -65,8 +71,10 @@ service. Transient cross-zone UI state (auth/theme/cart) syncs via **BroadcastCh
 ### Adding a zone (recipe)
 1. **Scaffold the Next.js app** with a unique `basePath` + `assetPrefix`.
 2. **Add host `rewrites`** routing `/<zone>/*` to the new zone.
-3. **Declare its `ZoneDatabase`** (a CNPG `Cluster` + `Pooler`) — its own store.
+3. **Declare its zone database** — a CNPG `Cluster` + `Pooler` (its own store). *Conceptual, not a
+   shipped CRD Kind.*
 4. **Define its `BackendService`(s)** with **proto contracts** (proto = SSOT; see `grpc-services`).
+   *`BackendService` is the ADR-0004 (Proposed) CRD — design-phase, not yet in the operator.*
 5. **Wire cross-zone needs as Kafka events** (publish/consume; keep a local projection) — not a
    sync call or DB read.
 6. **Deploy as its own Knative Service** (scale-to-zero; operator reconciles).
@@ -80,9 +88,10 @@ service. Transient cross-zone UI state (auth/theme/cart) syncs via **BroadcastCh
 - SQLite/Knex "just for now" shortcuts in a zone — zones use CNPG Postgres.
 
 ## Scope boundary (load-bearing)
-knext is the **deployment layer**, not the micro-frontend runtime. knext **owns**:
-Knative/scale-to-zero, the official Next.js adapter, per-zone deploy, `assetPrefix` wiring,
-serving the App Shell, and generating the precache manifest. knext does **NOT** own the Service
+knext is the **deployment layer**, not the micro-frontend runtime. knext **owns** (responsibility,
+not all shipped yet): Knative/scale-to-zero, the official Next.js adapter, per-zone deploy,
+`assetPrefix` wiring, serving the App Shell, and generating the precache manifest. *App-Shell
+serving + precache generation are design-phase — see Status note above and Sequencing.* knext does **NOT** own the Service
 Worker / SWI / BroadcastChannel / Module-Federation machinery — those are **app-level patterns**
 shipped as an **optional "SCS/PWA zones" template/recipe** (`pwa-zones`), never framework core.
 (Why: keep knext a focused adapter, not an enterprise MFE platform.)

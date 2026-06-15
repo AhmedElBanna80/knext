@@ -39,7 +39,14 @@ Complements `.claude/rules/architecture.md`. These run through **every** phase â
 - Distroless runtime, non-root, least-privilege ServiceAccounts (operator already sets
   `AutomountServiceAccountToken: false`).
 
+## Git autonomy (project policy)
+Agents **may** push feature branches and open PRs autonomously (`git push <branch>`, `gh pr create`)
+â€” this is standing authorization for this project. Still **never** acceptable on the agent's behalf
+without explicit human action: **force/mirror/`--all` push**, **direct push to `main`/`master`**, and
+**history rewrite** (`filter-branch`, `reset --hard`). The `block-dangerous-bash.sh` hook enforces
+this split.
+
 ## Hard line
-Adding an unauthenticated mutating endpoint, committing a secret, or pushing/force-pushing on
-the agent's behalf are **never** acceptable without explicit human action. When unsure, stop and
-surface it.
+Adding an unauthenticated mutating endpoint, committing a secret, or force-pushing / pushing
+directly to `main` on the agent's behalf are **never** acceptable without explicit human action.
+When unsure, stop and surface it.

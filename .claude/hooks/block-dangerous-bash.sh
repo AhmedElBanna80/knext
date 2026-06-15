@@ -15,12 +15,17 @@ deny() { echo "BLOCKED (block-dangerous-bash): $1" >&2; exit 2; }
 if printf '%s' "$norm" | grep -qE '\brm\b[^|;&]*-[A-Za-z]*r[A-Za-z]*f|\brm\b[^|;&]*-[A-Za-z]*f[A-Za-z]*r'; then
   deny "destructive 'rm -rf'. Remove specific paths deliberately, or run it yourself."
 fi
-# git push (human-gated) + force-push (forbidden)
+# git push: feature-branch pushes are ALLOWED so agents can open PRs autonomously.
+# Still forbidden: force/mirror/--all (history rewrite / review bypass) and direct
+# pushes to main/master (PRs only). See .claude/rules/security.md.
 if printf '%s' "$norm" | grep -qE '\bgit\b[^|;&]*\bpush\b'; then
-  if printf '%s' "$norm" | grep -qE -- '--force|--force-with-lease|--mirror|(^|[[:space:]])-f([[:space:]]|$)'; then
-    deny "force/mirror push is forbidden."
+  if printf '%s' "$norm" | grep -qE -- '--force|--force-with-lease|--mirror|--all|(^|[[:space:]])-[A-Za-z]*f[A-Za-z]*([[:space:]]|$)'; then
+    deny "force/mirror/--all push is forbidden. Push a single feature branch and open a PR."
   fi
-  deny "'git push' is human-gated. Commit locally; the user pushes (or asks you to via their terminal)."
+  if printf '%s' "$norm" | grep -qE -- '(^|[[:space:]:])(main|master)([[:space:]]|$)'; then
+    deny "direct push to main/master is forbidden — push a feature branch and open a PR instead."
+  fi
+  # otherwise: feature-branch push allowed (needed to open PRs).
 fi
 # history rewrite / hard reset
 if printf '%s' "$norm" | grep -qE '\bgit\b[^|;&]*\b(filter-branch|filter-repo)\b|\bgit\b[^|;&]*reset[[:space:]]+--hard'; then

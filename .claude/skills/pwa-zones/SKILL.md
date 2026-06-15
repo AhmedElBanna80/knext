@@ -1,13 +1,15 @@
 ---
 name: pwa-zones
-description: The PWA stitching layer that makes independently-deployed knext zones (Multi-Zones SCS) feel like one SPA — App Shell, the Navigation API + event.intercept(), Service Worker Includes (SWI), Serwist, the caching matrix, and BroadcastChannel cross-zone state. Use this skill whenever the user mentions PWA, service workers, offline support, app shell, cross-zone or cross-app navigation feeling slow/janky, "make zones feel like one app", precaching, Serwist/Workbox, BroadcastChannel, or hydration/version-skew issues between zones. This is an OPT-IN app-level recipe, never knext framework core.
+description: The PWA stitching layer that makes independently-deployed knext zones (Multi-Zones SCS) feel like one SPA — App Shell, the Navigation API + event.intercept(), Service Worker Includes (SWI), Serwist, the caching matrix, and BroadcastChannel cross-zone state. Use this skill whenever the user mentions PWA, service workers, offline support, app shell, cross-zone or cross-app navigation feeling slow/janky, "make zones feel like one app", precaching, Serwist/Workbox, BroadcastChannel, or hydration/version-skew issues between zones. End goal: knext ships this as a first-class, generated framework capability; today it is an app-level recipe (not built into core yet).
 ---
 
 # PWA Stitching Layer for Zones
 
-> **Opt-in, app-level recipe — NOT knext core.** knext owns serving the App Shell and generating
-> the precache manifest; the Service Worker / SWI / BroadcastChannel machinery lives in the app
-> template (see Scope boundary in `scs-zones`). The macro-architecture is the `scs-zones` skill.
+> **End goal:** knext ships this PWA stitching layer as a **first-class, generated framework
+> capability** (part of the comprehensive full-stack SCS goal). **Today:** it is **not in core
+> yet** — knext owns serving the App Shell and generating the precache manifest, while the Service
+> Worker / SWI / BroadcastChannel machinery lives in the **app template** as an opt-in recipe (see
+> *Current state vs end goal* in `scs-zones`). The macro-architecture is the `scs-zones` skill.
 
 ## The problem: the "initialisation tax"
 Cross-zone navigation in Next.js Multi-Zones is a **hard navigation** — the browser unloads the
@@ -65,13 +67,16 @@ state. Keep payloads small and serializable; treat them as events, not a shared 
   the operational cost. A plain hard navigation is a perfectly valid default.
 
 ## What knext provides vs. what the app ships
-- **knext (framework):** serves the App Shell, generates the precache manifest, wires each zone's
-  `assetPrefix`. *(Target-state — App-Shell serving + precache generation are design-phase, not yet
-  in core; see the `scs-zones` Status note + Sequencing.)*
-- **App template (this recipe):** the Service Worker, SWI logic, Navigation-API interceptor,
-  Serwist config, BroadcastChannel wiring. This code must **not** land in core packages
-  (`packages/kn-next`, `packages/cli`, the operator) — a hook
-  (`protect-core-vs-app-boundary.sh`) warns if it does.
+- **knext today (current state):** serves the App Shell, generates the precache manifest, wires
+  each zone's `assetPrefix`.
+- **App template today (this recipe):** the Service Worker, SWI logic, Navigation-API interceptor,
+  Serwist config, BroadcastChannel wiring.
+- **End goal:** knext **generates** this whole recipe as a first-class capability (e.g. a PWA flag
+  on the zone scaffolder), so teams opt in by config rather than hand-writing the SW.
+- **Phasing line (for now):** until the framework absorbs it, keep this runtime code in the app
+  template, **not** in core packages (`packages/kn-next`, `packages/cli`, the operator) — an
+  advisory hook (`protect-core-vs-app-boundary.sh`) flags it. This is a sequencing guard during the
+  adapter-correctness phase, **not** a permanent boundary.
 
 ## Related
 `scs-zones` (the architecture this stitches), `nextjs-deployment-adapter` (assetPrefix/standalone),

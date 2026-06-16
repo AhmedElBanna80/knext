@@ -18,8 +18,8 @@ ENV PORT=3000
 # Install curl for healthcheck
 RUN apk add --no-cache curl
 
-# Create non-root user
-RUN addgroup -g 1000 node && adduser -u 1000 -G node -s /bin/sh -D node
+# node:22-alpine already ships a non-root `node` user/group at uid/gid 1000;
+# recreating it fails ("group 'node' in use"). Reuse the existing user.
 
 # Copy standalone server bundle (includes node_modules trace)
 COPY --from=builder /app/apps/file-manager/.next/standalone ./

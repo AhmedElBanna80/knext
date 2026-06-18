@@ -63,7 +63,12 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller:latest
+        # PLACEHOLDER: replace this digest before any real deployment.
+        # Build the image, push it, then run:
+        #   docker inspect --format='{{index .RepoDigests 0}}' <image>
+        # and substitute the resulting sha256 here.
+        # The check-no-latest.sh CI guard enforces that :latest never reaches main.
+        image: ghcr.io/ahmedelbanna80/kn-next-operator:v0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
         name: manager
         ports: []
         securityContext:

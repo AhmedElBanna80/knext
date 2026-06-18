@@ -1,5 +1,10 @@
-# Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+# Image URL to use all building/pushing image targets.
+# PLACEHOLDER: set IMG to a real digest-pinned ref before deploying, e.g.:
+#   make docker-build docker-push IMG=ghcr.io/ahmedelbanna80/kn-next-operator:v0.1.0
+#   docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/ahmedelbanna80/kn-next-operator:v0.1.0
+#   make deploy IMG=ghcr.io/ahmedelbanna80/kn-next-operator:v0.1.0@sha256:<real-hash>
+# The CI check-no-latest guard blocks :latest from reaching main.
+IMG ?= ghcr.io/ahmedelbanna80/kn-next-operator:v0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))

@@ -39,3 +39,12 @@ jobs:
           directory: ./coverage
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  no-latest-guard:
+    name: No :latest images in operator manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Check operator manifests are digest-pinned
+        run: bash packages/kn-next-operator/hack/check-no-latest.sh --quiet

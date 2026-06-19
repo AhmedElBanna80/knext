@@ -181,8 +181,9 @@ describe("resolveDigest", () => {
     //   registry.example.com/my-app@sha256:<hash>
     const FAKE_REPO_DIGEST = `registry.example.com/my-app@${FAKE_DIGEST}`;
 
-    it("calls execFn with docker inspect and returns a digest-pinned ref", async () => {
-        // execSpy simulates: docker inspect --format ... returning a RepoDigest line
+    it("calls execFn with docker inspect ARGV array and returns a digest-pinned ref", async () => {
+        // execSpy simulates: docker inspect --format ... returning a RepoDigest line.
+        // ExecFn now receives string[] (ARGV), never a shell string.
         const execSpy = vi.fn().mockResolvedValue(FAKE_REPO_DIGEST);
 
         const taggedRef = "registry.example.com/my-app:1234567890";
@@ -190,10 +191,14 @@ describe("resolveDigest", () => {
 
         // Must have called the exec boundary exactly once
         expect(execSpy).toHaveBeenCalledTimes(1);
-        // The command must reference docker inspect and the tagged image
-        const calledCmd = execSpy.mock.calls[0][0] as string;
-        expect(calledCmd).toMatch(/docker\s+inspect/);
-        expect(calledCmd).toContain(taggedRef);
+
+        // ExecFn MUST receive an ARGV array — not a shell string.
+        const argv = execSpy.mock.calls[0][0] as string[];
+        expect(Array.isArray(argv)).toBe(true);
+        expect(argv[0]).toBe("docker");
+        expect(argv[1]).toBe("inspect");
+        // taggedRef must be the last element — a single, uninterpreted token.
+        expect(argv[argv.length - 1]).toBe(taggedRef);
 
         // The result must contain @sha256: so operator accepts it
         expect(result).toContain("@sha256:");

@@ -160,10 +160,40 @@ export function renderNextAppCR(
 
 /**
  * ExecFn is the exec-boundary type injected into digest-resolution and deploy helpers.
- * In production this wraps bun's `$`; in tests it is a spy.
+ * Takes an ARGV array (string[]) — never a shell string — to prevent command injection.
+ * In production this spawns the process directly (no shell); in tests it is a spy.
  * The return value is cast to string — callers use `.trim()` on the result.
  */
-export type ExecFn = (cmd: string) => Promise<unknown>;
+export type ExecFn = (argv: string[]) => Promise<unknown>;
+
+/**
+ * IMAGE_REF_RE is the strict allowlist for image reference characters.
+ * Only characters safe in a registry image ref are allowed:
+ *   alphanumerics, dot, hyphen, underscore, colon, slash, at-sign.
+ * Anything else (semicolons, backticks, dollar signs, spaces, etc.) is
+ * a shell metacharacter and indicates a malformed or malicious ref.
+ */
+const IMAGE_REF_RE = /^[A-Za-z0-9._:/@-]+$/;
+
+/**
+ * validateTaggedRef validates that an image ref contains only characters
+ * safe to pass to docker (no shell metacharacters).
+ *
+ * This is defense-in-depth: even though ExecFn takes an ARGV array (no shell),
+ * we reject obviously malformed refs early so the error is clear.
+ *
+ * @param ref - the image ref to validate (e.g. "registry/name:tag")
+ * @throws    - if the ref contains characters outside [A-Za-z0-9._:/@-]
+ */
+export function validateTaggedRef(ref: string): void {
+    if (!IMAGE_REF_RE.test(ref)) {
+        throw new Error(
+            `Image ref "${ref}" contains invalid characters. ` +
+                `Only [A-Za-z0-9._:/@-] are allowed. ` +
+                `Shell metacharacters (;, \`, $, spaces, etc.) are not permitted.`,
+        );
+    }
+}
 
 /**
  * ReadFileFn reads a file synchronously and returns its content as a string.
@@ -234,14 +264,14 @@ export function resolveDigestFromMetadataFile(
  *   1. PRIMARY:  read `containerimage.digest` from the buildx metadata JSON file
  *                (written by `docker buildx build --metadata-file <path>`)
  *                → emits `taggedRef@sha256:<digest>` (tag + digest)
- *   2. FALLBACK: `docker inspect --format '{{index .RepoDigests 0}}' <taggedRef>`
- *                → returns the RepoDigest string (repo@sha256:<digest>)
+ *   2. FALLBACK: `docker inspect` via ARGV array — NO shell string, NO injection risk.
+ *                taggedRef is passed as a single argv element after validateTaggedRef.
  *
  * This is intentionally bun-free: all I/O is injected via execFn / readFileFn
  * so tests run without Docker or a real filesystem.
  *
  * @param taggedRef        - mutable push target (e.g. "registry/name:timestamp")
- * @param execFn           - injected exec boundary (spy in tests, bun `$` wrapper in prod)
+ * @param execFn           - injected exec boundary (argv: string[]) — ARGV, never shell string
  * @param metadataFilePath - optional path to buildx --metadata-file output (PRIMARY path)
  * @param readFileFn       - optional file-read fn required when metadataFilePath is given
  * @returns                - digest-pinned ref containing "@sha256:"
@@ -252,6 +282,10 @@ export async function resolveDigest(
     metadataFilePath?: string,
     readFileFn?: ReadFileFn,
 ): Promise<string> {
+    // Defense-in-depth: reject refs with shell metacharacters before any exec.
+    // This fires whether we take the PRIMARY or FALLBACK path.
+    validateTaggedRef(taggedRef);
+
     // PRIMARY: metadata-file path — no shell call needed.
     if (metadataFilePath && readFileFn) {
         try {
@@ -266,11 +300,15 @@ export async function resolveDigest(
         }
     }
 
-    // FALLBACK: docker inspect returns the full RepoDigest string, e.g.:
-    //   registry.example.com/my-app@sha256:deadbeef...
-    const raw = await execFn(
-        `docker inspect --format '{{index .RepoDigests 0}}' ${taggedRef}`,
-    );
+    // FALLBACK: docker inspect via ARGV (no shell, no injection).
+    // taggedRef is a validated, single element — never concatenated into a shell string.
+    const raw = await execFn([
+        "docker",
+        "inspect",
+        "--format",
+        "{{index .RepoDigests 0}}",
+        taggedRef,
+    ]);
     const line = String(raw ?? "").trim();
 
     if (!line.includes("@sha256:")) {

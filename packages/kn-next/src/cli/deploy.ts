@@ -182,9 +182,12 @@ async function deploy() {
         // The operator's validateImageRef rejects any ref without @sha256:.
         log.info({ taggedRef }, "Resolving @sha256: digest...");
         const { readFileSync } = await import("node:fs");
-        const execFn = async (cmd: string) => {
-            const result = await $`sh -c ${cmd}`.text();
-            return result.trim();
+        // ExecFn takes an ARGV array — no shell, no injection risk.
+        // Bun.spawn() bypasses sh entirely; each element is a separate argv token.
+        const execFn = async (argv: string[]): Promise<string> => {
+            const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+            await proc.exited;
+            return new Response(proc.stdout).text();
         };
         const readFileFn = (p: string) => readFileSync(p, "utf-8");
         imageRef = await resolveDigest(

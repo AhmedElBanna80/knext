@@ -1,0 +1,86 @@
+name: Supply Chain
+
+# B2 (security.md "Supply chain — the open security milestone"):
+# SBOM per image · scan + FAIL on HIGH/CRITICAL · sign (cosign keyless) + SBOM attestation.
+# Build/scan run on every PR; push + sign only on main (no signing throwaway PR images).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image-supply-chain:
+    name: SBOM + Trivy (+ cosign sign on main)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR on main
+      id-token: write # cosign keyless signing via OIDC
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/file-manager
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # On PRs: build + load locally for scanning (no push).
+      # On main: build + push by digest so we can sign the exact pushed image.
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/file-manager/Dockerfile
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          load: ${{ github.ref != 'refs/heads/main' }}
+          push: ${{ github.ref == 'refs/heads/main' }}
+          provenance: true
+
+      - name: Generate SBOM (syft, SPDX-JSON)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}:${{ github.sha }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom.spdx.json
+
+      - name: Trivy scan — FAIL on HIGH/CRITICAL
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          format: table
+
+      - name: Install cosign
+        if: github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image + attest SBOM (keyless)
+        if: github.ref == 'refs/heads/main'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          DIGEST="${{ steps.build.outputs.digest }}"
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          cosign attest --yes --predicate sbom.spdx.json --type spdxjson "${IMAGE}@${DIGEST}"

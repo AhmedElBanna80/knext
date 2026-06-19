@@ -6,8 +6,10 @@ RUN npm install -g pnpm
 WORKDIR /app
 COPY . .
 RUN pnpm install --frozen-lockfile
-# next build → .next/standalone/ (output:'standalone' set in next.config.ts)
-RUN pnpm --filter file-manager build
+# Build workspace libs (e.g. @knative-next/lib ships only dist/) BEFORE the app,
+# else `next build` can't resolve @knative-next/lib/* on a clean checkout.
+# `-r` builds every package in topological (dependency) order.
+RUN pnpm -r build
 
 # Stage 2: Lean production image using Node.js standalone output
 FROM node:22-alpine AS runner

@@ -21,10 +21,14 @@ jobs:
       contents: read
       packages: write # push to GHCR on main
       id-token: write # cosign keyless signing via OIDC
-    env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/file-manager
     steps:
       - uses: actions/checkout@v4
+
+      # GHCR repository names must be lowercase; the owner can be mixed-case.
+      - name: Compute lowercase image name
+        run: echo "IMAGE=ghcr.io/${OWNER,,}/file-manager" >> "$GITHUB_ENV"
+        env:
+          OWNER: ${{ github.repository_owner }}
 
       - uses: docker/setup-buildx-action@v3
 

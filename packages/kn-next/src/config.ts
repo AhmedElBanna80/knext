@@ -111,7 +111,7 @@ export interface KnativeNextConfig {
     cache?: CacheConfig;
     queue?: QueueConfig; // For ISR revalidation (Kafka for Knative Eventing)
     registry: string;
-    runtime?: "bun" | "node"; // Nitro preset: 'bun' (default) or 'node' (node-server)
+    runtime?: "bun" | "node"; // Runtime to execute the Next.js standalone server.js: 'bun' or 'node' (default)
     infrastructure?: InfrastructureConfig; // Deploy PostgreSQL, Redis, MinIO as Knative services
     scaling?: ScalingConfig; // Knative autoscaling options
     observability?: ObservabilityConfig; // Prometheus metrics + Grafana dashboards

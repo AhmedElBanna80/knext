@@ -19,7 +19,7 @@
     "./cli/shared": "./src/cli/shared.ts"
   },
   "scripts": {
-    "build": "bun run ./src/cli/build.ts",
+    "build": "tsc --noEmit",
     "deploy": "bun run ./src/cli/deploy.ts",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",

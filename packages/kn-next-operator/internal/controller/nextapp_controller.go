@@ -19,10 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -36,6 +36,16 @@ import (
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
+)
+
+// Condition type constants used across the reconciler.
+const (
+	// ConditionReconciling indicates the operator is actively reconciling the resource.
+	ConditionReconciling = "Reconciling"
+	// ConditionReady indicates the NextApp Knative Service is available.
+	ConditionReady = "Ready"
+	// ConditionDegraded indicates the reconciliation failed or the resource is unhealthy.
+	ConditionDegraded = "Degraded"
 )
 
 // NextAppReconciler reconciles a NextApp object
@@ -63,13 +73,38 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// Validate image spec contains an explicit tag — prevent :latest footgun
-	if !strings.Contains(nextApp.Spec.Image, ":") {
-		logger.Error(fmt.Errorf("image %q has no explicit tag", nextApp.Spec.Image), "Rejecting NextApp: image must include an explicit tag (e.g. myapp:v1.0.0)")
-		return ctrl.Result{}, fmt.Errorf("image %q must include an explicit tag (e.g. :v1.0.0), :latest is not allowed for production Knative services", nextApp.Spec.Image)
+	// Mark Reconciling=True at the start of every reconcile loop.
+	apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+		Type:               ConditionReconciling,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: nextApp.Generation,
+		Reason:             "Reconciling",
+		Message:            "Reconciliation in progress",
+	})
+	if err := r.Status().Update(ctx, &nextApp); err != nil {
+		return ctrl.Result{}, err
 	}
-	if strings.HasSuffix(nextApp.Spec.Image, ":latest") {
-		logger.Info("WARNING: image uses :latest tag — this can prevent rollbacks and break digest pinning", "image", nextApp.Spec.Image)
+
+	// Enforce digest pinning — validateImageRef rejects :latest and tag-only refs.
+	// This was previously a warn-only check; A1-digest promotes it to a hard reject.
+	if err := validateImageRef(nextApp.Spec.Image); err != nil {
+		logger.Error(err, "Rejecting NextApp: image must be digest-pinned")
+		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+			Type:               ConditionDegraded,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: nextApp.Generation,
+			Reason:             "InvalidImage",
+			Message:            err.Error(),
+		})
+		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+			Type:               ConditionReady,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: nextApp.Generation,
+			Reason:             "InvalidImage",
+			Message:            "Image does not meet digest-pinning requirements",
+		})
+		_ = r.Status().Update(ctx, &nextApp)
+		return ctrl.Result{}, err
 	}
 
 	// 1. Create/Update ServiceAccount
@@ -178,7 +213,7 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if nextApp.Spec.Preview != nil && nextApp.Spec.Preview.Enabled {
 			ksvc.Labels["environment"] = "preview"
 			ksvc.Labels["pr-id"] = nextApp.Spec.Preview.PRID
-			
+
 			// Override max-scale to 1 to save cluster resources on previews
 			annotations["autoscaling.knative.dev/max-scale"] = "1"
 			annotations["autoscaling.knative.dev/min-scale"] = "0"
@@ -193,10 +228,20 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if nextApp.Spec.Storage != nil && nextApp.Spec.Storage.Provider != "" {
 			envVars = append(envVars, corev1.EnvVar{Name: "STORAGE_PROVIDER", Value: nextApp.Spec.Storage.Provider})
 			envVars = append(envVars, corev1.EnvVar{Name: "GCS_BUCKET_NAME", Value: nextApp.Spec.Storage.Bucket})
+			// S3/MinIO provider fields — aligned with CLI knative-manifest.ts storageEnvVarGenerators
+			if nextApp.Spec.Storage.Region != "" {
+				envVars = append(envVars, corev1.EnvVar{Name: "CACHE_BUCKET_REGION", Value: nextApp.Spec.Storage.Region})
+			}
+			if nextApp.Spec.Storage.Endpoint != "" {
+				envVars = append(envVars, corev1.EnvVar{Name: "S3_ENDPOINT", Value: nextApp.Spec.Storage.Endpoint})
+			}
 		}
 		if nextApp.Spec.Cache != nil && nextApp.Spec.Cache.Provider != "" {
 			envVars = append(envVars, corev1.EnvVar{Name: "CACHE_PROVIDER", Value: nextApp.Spec.Cache.Provider})
 			envVars = append(envVars, corev1.EnvVar{Name: "REDIS_URL", Value: nextApp.Spec.Cache.URL})
+			if nextApp.Spec.Cache.KeyPrefix != "" {
+				envVars = append(envVars, corev1.EnvVar{Name: "REDIS_KEY_PREFIX", Value: nextApp.Spec.Cache.KeyPrefix})
+			}
 			if nextApp.Spec.Cache.EnableBytecodeCache {
 				envVars = append(envVars, corev1.EnvVar{Name: "NODE_COMPILE_CACHE", Value: "/cache/bytecode/latest"})
 			}
@@ -281,12 +326,26 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 		}
 
+		// TimeoutSeconds: default 300s when unset (matches knative-manifest.ts hardcoded value)
+		timeoutSeconds := int64(300)
+		if nextApp.Spec.TimeoutSeconds > 0 {
+			timeoutSeconds = int64(nextApp.Spec.TimeoutSeconds)
+		}
+
+		// Runtime: select bun or node to exec server.js
+		var containerCommand []string
+		if nextApp.Spec.Runtime == "bun" {
+			containerCommand = []string{"bun", "run", "server.js"}
+		}
+
 		ksvc.Spec.Template.ObjectMeta.Annotations = annotations
 		ksvc.Spec.Template.Spec.ServiceAccountName = nextApp.Name + "-sa"
 		ksvc.Spec.Template.Spec.ContainerConcurrency = &cc
+		ksvc.Spec.Template.Spec.TimeoutSeconds = &timeoutSeconds
 		ksvc.Spec.Template.Spec.Containers = []corev1.Container{
 			{
 				Image:        nextApp.Spec.Image,
+				Command:      containerCommand,
 				Env:          envVars,
 				EnvFrom:      envFrom,
 				VolumeMounts: volumeMounts,
@@ -364,12 +423,35 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// 6. Update Status
+	// 6. Update Status: URL + conditions
 	if ksvc.Status.URL != nil {
 		nextApp.Status.URL = ksvc.Status.URL.String()
-		if err := r.Status().Update(ctx, &nextApp); err != nil {
-			return ctrl.Result{}, err
-		}
+	}
+
+	// Reconcile succeeded — set Ready=True, Reconciling=False, Degraded=False.
+	apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+		Type:               ConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: nextApp.Generation,
+		Reason:             "ReconcileSuccess",
+		Message:            "NextApp reconciled successfully",
+	})
+	apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+		Type:               ConditionReconciling,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: nextApp.Generation,
+		Reason:             "ReconcileSuccess",
+		Message:            "Reconciliation complete",
+	})
+	apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+		Type:               ConditionDegraded,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: nextApp.Generation,
+		Reason:             "ReconcileSuccess",
+		Message:            "No errors detected",
+	})
+	if err := r.Status().Update(ctx, &nextApp); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	logger.Info("Successfully reconciled NextApp", "name", nextApp.Name, "url", nextApp.Status.URL)

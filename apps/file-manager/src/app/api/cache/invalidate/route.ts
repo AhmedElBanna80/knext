@@ -1,13 +1,18 @@
 import { revalidateTag } from 'next/cache';
 import { NextResponse } from 'next/server';
+import { isAuthorized } from './auth';
 
 /**
  * Cache Invalidation API
  * POST /api/cache/invalidate
  *
- * Triggers Next.js tag-based cache invalidation with SWR semantics
+ * Mutating endpoint — requires a Bearer token (B1, security.md). Token from the
+ * CACHE_INVALIDATE_TOKEN env var (K8s Secret); fail-closed when unconfigured.
  */
 export async function POST(request: Request) {
+  if (!isAuthorized(request.headers.get('authorization'), process.env.CACHE_INVALIDATE_TOKEN)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const body = await request.json();
     const { tag } = body;
@@ -35,6 +40,11 @@ export async function POST(request: Request) {
  * Alternative GET-based invalidation for testing
  */
 export async function GET(request: any) {
+  // GET also mutates (invalidates) — same auth as POST. (A mutating GET is a smell;
+  // retire this handler once callers move to POST.)
+  if (!isAuthorized(request?.headers?.get?.('authorization'), process.env.CACHE_INVALIDATE_TOKEN)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   let tag: string | null = null;
   try {
     const urlString = request?.url || request?.nextUrl?.href || 'http://localhost';

@@ -1,20 +1,33 @@
 #!/usr/bin/env bun
 /**
- * kn-next CLI - Knative Next.js Deployment Automation (Vinext)
+ * kn-next CLI — Knative Next.js Deployment Automation
  *
  * Usage:
  *   npx kn-next deploy [options]
+ *
+ * ADR-0001: The operator is the single source of truth for cluster state.
+ * This CLI's job is strictly: build → push → apply the NextApp CR.
+ *
+ * What was removed (A1-cli):
+ * - kubectl apply of raw Knative Service manifests (was deploy.ts:176)
+ * - kubectl apply of infrastructure manifests (was deploy.ts:153)
+ * - generateKnativeManifest / generateInfrastructure calls
+ *
+ * The operator reconciles everything from the NextApp CR.
  */
 
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { $ } from "bun";
 import type { KnativeNextConfig } from "../config";
-import { generateInfrastructure } from "../generators/infrastructure";
-import { generateKnativeManifest } from "../generators/knative-manifest";
 import { getAssetPrefix, uploadAssets } from "../utils/asset-upload";
 import { createLogger } from "../utils/logger";
-import { copyAdapters, getNitroPreset, loadConfig } from "./shared";
+import {
+    renderNextAppCR,
+    resolveDigest,
+    validateCRImageRef,
+} from "./cr-builder";
+import { loadConfig } from "./shared";
 
 const log = createLogger({ module: "deploy" });
 
@@ -25,7 +38,6 @@ interface DeployOptions {
     namespace: string;
     skipBuild: boolean;
     skipUpload: boolean;
-    skipInfra: boolean;
     dryRun: boolean;
 }
 
@@ -38,7 +50,6 @@ function parseCliArgs(): DeployOptions {
             namespace: { type: "string", short: "n", default: "default" },
             "skip-build": { type: "boolean", default: false },
             "skip-upload": { type: "boolean", default: false },
-            "skip-infra": { type: "boolean", default: false },
             "dry-run": { type: "boolean", default: false },
             help: { type: "boolean", short: "h", default: false },
         },
@@ -47,7 +58,21 @@ function parseCliArgs(): DeployOptions {
     });
 
     if (values.help) {
-        log.info("Help output omitted for brevity");
+        log.info(
+            [
+                "kn-next deploy — build → push → apply NextApp CR",
+                "",
+                "Options:",
+                "  -r, --registry  Container registry (overrides config)",
+                "  -b, --bucket    Storage bucket (overrides config)",
+                "  -t, --tag       Image tag (default: timestamp)",
+                "  -n, --namespace Kubernetes namespace (default: default)",
+                "  --skip-build    Skip next build step",
+                "  --skip-upload   Skip asset upload step",
+                "  --dry-run       Print the NextApp CR without applying it",
+                "  -h, --help      Show this help",
+            ].join("\n"),
+        );
         process.exit(0);
     }
 
@@ -58,7 +83,6 @@ function parseCliArgs(): DeployOptions {
         namespace: values.namespace || process.env.KN_NAMESPACE || "default",
         skipBuild: values["skip-build"] ?? false,
         skipUpload: values["skip-upload"] ?? false,
-        skipInfra: values["skip-infra"] ?? false,
         dryRun: values["dry-run"] ?? false,
     };
 }
@@ -89,30 +113,35 @@ function applyOverrides(
 async function deploy() {
     const options = parseCliArgs();
 
-    log.info({ dryRun: options.dryRun }, "🚀 kn-next deploy");
+    log.info({ dryRun: options.dryRun }, "kn-next deploy");
 
     // Load config with validation
     const baseConfig = await loadConfig();
     const config = applyOverrides(baseConfig, options);
 
-    const outputDir = join(process.cwd(), ".output");
-
     if (!options.skipBuild) {
         const assetPrefix = getAssetPrefix(config.storage);
         process.env.ASSET_PREFIX = assetPrefix;
-        const preset = getNitroPreset(config);
-        log.info({ preset, assetPrefix }, "Building Vinext app with Nitro");
-        await $`NITRO_PRESET=${preset} npm run build`.quiet();
-        log.info("Vinext build complete");
+        log.info({ assetPrefix }, "Running next build (output:standalone)...");
+        await $`npm run build`.quiet();
+        log.info(
+            "Next.js build complete — standalone output in .next/standalone/",
+        );
     }
 
-    // Always copy adapters after build
-    await copyAdapters(outputDir);
-
     const imageTag = options.tag || `${Date.now()}`;
-    const imageName = `${config.registry}/${config.name}:${imageTag}`;
+    // taggedRef is the mutable push target — used for docker build/push only.
+    // The operator-facing CR image ref MUST be digest-pinned (see resolveDigest below).
+    const taggedRef = `${config.registry}/${config.name}:${imageTag}`;
 
-    log.info({ image: imageName }, "Image tag resolved");
+    log.info(
+        { image: taggedRef },
+        "Image tag resolved (will be digest-pinned after push)",
+    );
+
+    // imageRef is what we put in the CR — starts as taggedRef for dry-run,
+    // then replaced with the @sha256:-pinned ref after a real push.
+    let imageRef = taggedRef;
 
     if (!options.dryRun) {
         const tasks: Promise<void>[] = [];
@@ -127,59 +156,81 @@ async function deploy() {
             );
         }
 
+        // Write buildx metadata to a temp file so resolveDigest can read
+        // containerimage.digest directly — no extra docker inspect round-trip.
+        const metadataFilePath = join(
+            process.cwd(),
+            ".output",
+            "buildx-metadata.json",
+        );
+
         log.info("Building & pushing Docker image");
         tasks.push(
             (async () => {
                 const repoRoot = resolve(process.cwd(), "../..");
-                await $`docker buildx build --platform linux/amd64 -f ${process.cwd()}/Dockerfile -t ${imageName} --push ${repoRoot}`;
+                // --metadata-file writes the buildx result JSON (includes containerimage.digest).
+                await $`docker buildx build --platform linux/amd64 -f ${process.cwd()}/Dockerfile -t ${taggedRef} --push --metadata-file ${metadataFilePath} ${repoRoot}`;
                 log.info("Docker image built and pushed");
             })(),
         );
 
         await Promise.all(tasks);
-    }
 
-    let infraEnvVars: Record<string, string> = {};
-    const hasInfra = config.infrastructure || config.observability?.enabled;
-    if (hasInfra && !options.skipInfra && !options.dryRun) {
-        log.info("Deploying infrastructure services...");
-        const { manifests, envVars } = generateInfrastructure(
-            config,
-            outputDir,
+        // Resolve the real content-digest after push so the CR image ref is pinned.
+        // PRIMARY: read containerimage.digest from the buildx metadata file (no extra I/O).
+        // FALLBACK: docker inspect --format '{{index .RepoDigests 0}}' (if metadata missing).
+        // The operator's validateImageRef rejects any ref without @sha256:.
+        log.info({ taggedRef }, "Resolving @sha256: digest...");
+        const { readFileSync } = await import("node:fs");
+        // ExecFn takes an ARGV array — no shell, no injection risk.
+        // Bun.spawn() bypasses sh entirely; each element is a separate argv token.
+        const execFn = async (argv: string[]): Promise<string> => {
+            const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+            await proc.exited;
+            return new Response(proc.stdout).text();
+        };
+        const readFileFn = (p: string) => readFileSync(p, "utf-8");
+        imageRef = await resolveDigest(
+            taggedRef,
+            execFn,
+            metadataFilePath,
+            readFileFn,
         );
-        infraEnvVars = envVars;
+        log.info({ imageRef }, "Digest-pinned image ref resolved");
 
-        for (const manifest of manifests) {
-            await $`kubectl apply -f ${manifest} -n ${options.namespace}`;
-        }
-        log.info("Infrastructure deployed");
+        // Guard: fail fast if digest resolution produced a non-pinned ref.
+        validateCRImageRef(imageRef);
     }
 
-    if (process.env.KN_DATABASE_URL) {
-        infraEnvVars.DATABASE_URL = process.env.KN_DATABASE_URL;
+    // Render the NextApp CR from config + resolved image.
+    // The operator reconciles all cluster resources from this CR.
+    // In dry-run mode imageRef is the mutable tag (acceptable for preview only).
+    const crYaml = renderNextAppCR(config, imageRef, options.namespace);
+    const crPath = join(process.cwd(), ".output", "nextapp-cr.yaml");
+
+    if (options.dryRun) {
+        log.info("Dry run — NextApp CR (not applied):");
+        // Print to stdout so callers can capture or display it
+        process.stdout.write(crYaml);
+        log.info("Dry run complete — no cluster changes made");
+        return;
     }
 
-    log.info("Generating Knative manifest...");
-    generateKnativeManifest({
-        config,
-        outputDir,
-        imageTag,
-        namespace: options.namespace,
-        additionalEnvVars: infraEnvVars,
-    });
-    const manifestPath = join(outputDir, "knative-service.yaml");
-    const imageCachePath = join(outputDir, "knative-image-cache.yaml");
-    log.info({ manifest: manifestPath }, "Manifest generated");
+    // Write CR to .output/ and apply it — only CR apply, operator handles the rest.
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    mkdirSync(join(process.cwd(), ".output"), { recursive: true });
+    writeFileSync(crPath, crYaml, "utf-8");
 
-    if (!options.dryRun) {
-        log.info("Applying to cluster...");
-        await $`kubectl apply -f ${manifestPath} -f ${imageCachePath} -n ${options.namespace}`;
-        const result =
-            await $`kubectl get ksvc ${config.name} -n ${options.namespace} -o jsonpath='{.status.url}'`.text();
-        log.info({ url: result.replace(/'/g, "") }, "✨ Deployment complete!");
-    } else {
-        log.info("✅ Dry run complete - manifest generated");
-    }
+    log.info({ cr: crPath }, "Applying NextApp CR to cluster...");
+    await $`kubectl apply -f ${crPath} -n ${options.namespace}`;
+
+    // Wait briefly for the operator to begin reconciling, then read the URL.
+    const result =
+        await $`kubectl get nextapp ${config.name} -n ${options.namespace} -o jsonpath='{.status.url}'`.text();
+    log.info(
+        { url: result.replace(/'/g, "") },
+        "Deployment submitted — operator is reconciling",
+    );
 }
 
 try {

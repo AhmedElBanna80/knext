@@ -9,8 +9,8 @@
  * The operator reconciles everything else (ksvc, SA, PVC, KafkaSource).
  */
 
-import YAML from 'yaml';
-import type { KnativeNextConfig } from '../config';
+import YAML from "yaml";
+import type { KnativeNextConfig } from "../config";
 
 /**
  * Builds a NextApp CR object from a KnativeNextConfig and a resolved image ref.
@@ -22,112 +22,127 @@ import type { KnativeNextConfig } from '../config';
  * - NODE_COMPILE_CACHE wiring: operator reads cache.enableBytecodeCache
  */
 export function buildNextAppCRObject(
-  config: KnativeNextConfig,
-  image: string,
-  namespace: string,
+    config: KnativeNextConfig,
+    image: string,
+    namespace: string,
 ): Record<string, unknown> {
-  // Scaling — preserve minScale:0 (scale-to-zero invariant)
-  const minScale = config.scaling?.minScale ?? 0;
-  const maxScale = config.scaling?.maxScale ?? 10;
-  const scaling = {
-    minScale,
-    maxScale,
-    ...(config.scaling ? {} : {}),
-  };
+    // Scaling — preserve minScale:0 (scale-to-zero invariant)
+    const minScale = config.scaling?.minScale ?? 0;
+    const maxScale = config.scaling?.maxScale ?? 10;
+    const scaling = {
+        minScale,
+        maxScale,
+        ...(config.scaling ? {} : {}),
+    };
 
-  // Resources — from config.scaling (legacy field names match ResourcesSpec)
-  const resources =
-    config.scaling?.cpuRequest ||
-    config.scaling?.memoryRequest ||
-    config.scaling?.cpuLimit ||
-    config.scaling?.memoryLimit
-      ? {
-          cpuRequest: config.scaling.cpuRequest ?? '250m',
-          memoryRequest: config.scaling.memoryRequest ?? '512Mi',
-          cpuLimit: config.scaling.cpuLimit ?? '1000m',
-          memoryLimit: config.scaling.memoryLimit ?? '1Gi',
-        }
-      : undefined;
+    // Resources — from config.scaling (legacy field names match ResourcesSpec)
+    const resources =
+        config.scaling?.cpuRequest ||
+        config.scaling?.memoryRequest ||
+        config.scaling?.cpuLimit ||
+        config.scaling?.memoryLimit
+            ? {
+                  cpuRequest: config.scaling.cpuRequest ?? "250m",
+                  memoryRequest: config.scaling.memoryRequest ?? "512Mi",
+                  cpuLimit: config.scaling.cpuLimit ?? "1000m",
+                  memoryLimit: config.scaling.memoryLimit ?? "1Gi",
+              }
+            : undefined;
 
-  // Storage spec
-  const storage = config.storage
-    ? {
-        provider: config.storage.provider,
-        bucket: config.storage.bucket,
-        ...(config.storage.region ? { region: config.storage.region } : {}),
-        ...(config.storage.endpoint ? { endpoint: config.storage.endpoint } : {}),
-      }
-    : undefined;
+    // Storage spec
+    const storage = config.storage
+        ? {
+              provider: config.storage.provider,
+              bucket: config.storage.bucket,
+              ...(config.storage.region
+                  ? { region: config.storage.region }
+                  : {}),
+              ...(config.storage.endpoint
+                  ? { endpoint: config.storage.endpoint }
+                  : {}),
+          }
+        : undefined;
 
-  // Cache spec — enable bytecode cache when Redis is configured
-  // (operator uses cache.enableBytecodeCache to provision PVC + NODE_COMPILE_CACHE)
-  const cache = config.cache
-    ? {
-        provider: config.cache.provider,
-        url: config.cache.provider === 'redis' ? config.cache.url : '',
-        ...(config.cache.provider === 'redis' && config.cache.keyPrefix
-          ? { keyPrefix: config.cache.keyPrefix }
-          : {}),
-        // Enable bytecode cache by default when Redis is available —
-        // this is what triggers the PVC + NODE_COMPILE_CACHE env var in the operator
-        enableBytecodeCache: config.cache.provider === 'redis',
-      }
-    : undefined;
+    // Cache spec — enable bytecode cache when Redis is configured
+    // (operator uses cache.enableBytecodeCache to provision PVC + NODE_COMPILE_CACHE)
+    const cache = config.cache
+        ? {
+              provider: config.cache.provider,
+              url: config.cache.provider === "redis" ? config.cache.url : "",
+              ...(config.cache.provider === "redis" && config.cache.keyPrefix
+                  ? { keyPrefix: config.cache.keyPrefix }
+                  : {}),
+              // Enable bytecode cache by default when Redis is available —
+              // this is what triggers the PVC + NODE_COMPILE_CACHE env var in the operator
+              enableBytecodeCache: config.cache.provider === "redis",
+          }
+        : undefined;
 
-  // Revalidation spec
-  const revalidation =
-    config.queue && config.queue.provider === 'kafka'
-      ? {
-          queue: 'kafka',
-          kafkaBrokerUrl: config.queue.brokerUrl,
-        }
-      : undefined;
+    // Revalidation spec
+    const revalidation =
+        config.queue && config.queue.provider === "kafka"
+            ? {
+                  queue: "kafka",
+                  kafkaBrokerUrl: config.queue.brokerUrl,
+              }
+            : undefined;
 
-  // Secrets spec — map SecretsConfig → SecretsSpec
-  const secrets = config.secrets
-    ? {
-        ...(config.secrets.envFrom?.length ? { envFrom: config.secrets.envFrom } : {}),
-        ...(config.secrets.envMap
-          ? {
-              envMap: Object.fromEntries(
-                Object.entries(config.secrets.envMap).map(([k, v]) => [
-                  k,
-                  { secretName: v.name, secretKey: v.key ?? k },
-                ]),
-              ),
-            }
-          : {}),
-      }
-    : undefined;
+    // Secrets spec — map SecretsConfig → SecretsSpec
+    const secrets = config.secrets
+        ? {
+              ...(config.secrets.envFrom?.length
+                  ? { envFrom: config.secrets.envFrom }
+                  : {}),
+              ...(config.secrets.envMap
+                  ? {
+                        envMap: Object.fromEntries(
+                            Object.entries(config.secrets.envMap).map(
+                                ([k, v]) => [
+                                    k,
+                                    {
+                                        secretName: v.name,
+                                        secretKey: v.key ?? k,
+                                    },
+                                ],
+                            ),
+                        ),
+                    }
+                  : {}),
+          }
+        : undefined;
 
-  // Observability spec
-  const observability = config.observability?.enabled ? { enabled: true } : undefined;
+    // Observability spec
+    const observability = config.observability?.enabled
+        ? { enabled: true }
+        : undefined;
 
-  // Runtime
-  const runtime = config.runtime ?? undefined;
+    // Runtime
+    const runtime = config.runtime ?? undefined;
 
-  const spec: Record<string, unknown> = {
-    image,
-    scaling,
-    ...(resources ? { resources } : {}),
-    ...(storage ? { storage } : {}),
-    ...(cache ? { cache } : {}),
-    ...(revalidation ? { revalidation } : {}),
-    ...(config.secrets ? { secrets } : {}),
-    ...(observability ? { observability } : {}),
-    ...(config.healthCheckPath ? { healthCheckPath: config.healthCheckPath } : {}),
-    ...(runtime ? { runtime } : {}),
-  };
+    const spec: Record<string, unknown> = {
+        image,
+        scaling,
+        ...(resources ? { resources } : {}),
+        ...(storage ? { storage } : {}),
+        ...(cache ? { cache } : {}),
+        ...(revalidation ? { revalidation } : {}),
+        ...(config.secrets ? { secrets } : {}),
+        ...(observability ? { observability } : {}),
+        ...(config.healthCheckPath
+            ? { healthCheckPath: config.healthCheckPath }
+            : {}),
+        ...(runtime ? { runtime } : {}),
+    };
 
-  return {
-    apiVersion: 'apps.kn-next.dev/v1alpha1',
-    kind: 'NextApp',
-    metadata: {
-      name: config.name,
-      namespace,
-    },
-    spec,
-  };
+    return {
+        apiVersion: "apps.kn-next.dev/v1alpha1",
+        kind: "NextApp",
+        metadata: {
+            name: config.name,
+            namespace,
+        },
+        spec,
+    };
 }
 
 /**
@@ -135,19 +150,139 @@ export function buildNextAppCRObject(
  * Pure function — no I/O, no shell calls.
  */
 export function renderNextAppCR(
-  config: KnativeNextConfig,
-  image: string,
-  namespace: string,
+    config: KnativeNextConfig,
+    image: string,
+    namespace: string,
 ): string {
-  const crObject = buildNextAppCRObject(config, image, namespace);
-  return YAML.stringify(crObject);
+    const crObject = buildNextAppCRObject(config, image, namespace);
+    return YAML.stringify(crObject);
 }
 
 /**
- * ExecFn is the exec-boundary type injected into dryRunDeploy.
+ * ExecFn is the exec-boundary type injected into digest-resolution and deploy helpers.
  * In production this wraps bun's `$`; in tests it is a spy.
+ * The return value is cast to string — callers use `.trim()` on the result.
  */
 export type ExecFn = (cmd: string) => Promise<unknown>;
+
+/**
+ * ReadFileFn reads a file synchronously and returns its content as a string.
+ * Injected so tests can spy without touching the real filesystem.
+ * In production: `(p) => require('node:fs').readFileSync(p, 'utf-8')`
+ */
+export type ReadFileFn = (path: string) => string;
+
+/**
+ * validateCRImageRef mirrors the operator's validateImageRef rule (ADR-0001 / A1-digest).
+ *
+ * ACCEPT:  image contains "@sha256:" — digest-pinned
+ * REJECT:  everything else (tag-only, :latest, bare name)
+ *
+ * Throws with a message containing "@sha256:" so callers / tests can match it.
+ */
+export function validateCRImageRef(image: string): void {
+    if (image.includes("@sha256:")) {
+        return;
+    }
+    throw new Error(
+        `Image ref "${image}" is not digest-pinned. ` +
+            `The operator requires a ref containing @sha256: ` +
+            `(e.g. registry/name:tag@sha256:<hash>). ` +
+            `Use resolveDigest() after pushing to obtain the pinned ref.`,
+    );
+}
+
+/**
+ * resolveDigestFromMetadataFile reads the buildx metadata JSON written by
+ * `docker buildx build --metadata-file <path>` and extracts the
+ * `containerimage.digest` field (format: `sha256:<hex>`).
+ *
+ * Pure / synchronous — no shell calls, no bun, fully injectable.
+ *
+ * @param metadataFilePath - path to the buildx metadata JSON file
+ * @param readFileFn       - injected file-read fn (spy in tests, fs.readFileSync in prod)
+ * @returns                - digest string, e.g. "sha256:deadbeef..."
+ * @throws                 - if the file is unreadable, not valid JSON, or lacks the key
+ */
+export function resolveDigestFromMetadataFile(
+    metadataFilePath: string,
+    readFileFn: ReadFileFn,
+): string {
+    const raw = readFileFn(metadataFilePath);
+    // Throws if raw is not valid JSON — let it propagate so callers can catch + fallback.
+    const meta = JSON.parse(raw) as Record<string, unknown>;
+    const digest = meta["containerimage.digest"];
+    if (typeof digest !== "string" || !digest) {
+        throw new Error(
+            `buildx metadata at "${metadataFilePath}" has no containerimage.digest field. ` +
+                `Keys present: ${Object.keys(meta).join(", ")}`,
+        );
+    }
+    if (!digest.startsWith("sha256:")) {
+        throw new Error(
+            `containerimage.digest "${digest}" does not start with sha256: — ` +
+                `unexpected format in buildx metadata file.`,
+        );
+    }
+    return digest;
+}
+
+/**
+ * resolveDigest resolves the real @sha256: content-digest for a just-pushed image.
+ *
+ * Resolution priority (CLI-58 spec):
+ *   1. PRIMARY:  read `containerimage.digest` from the buildx metadata JSON file
+ *                (written by `docker buildx build --metadata-file <path>`)
+ *                → emits `taggedRef@sha256:<digest>` (tag + digest)
+ *   2. FALLBACK: `docker inspect --format '{{index .RepoDigests 0}}' <taggedRef>`
+ *                → returns the RepoDigest string (repo@sha256:<digest>)
+ *
+ * This is intentionally bun-free: all I/O is injected via execFn / readFileFn
+ * so tests run without Docker or a real filesystem.
+ *
+ * @param taggedRef        - mutable push target (e.g. "registry/name:timestamp")
+ * @param execFn           - injected exec boundary (spy in tests, bun `$` wrapper in prod)
+ * @param metadataFilePath - optional path to buildx --metadata-file output (PRIMARY path)
+ * @param readFileFn       - optional file-read fn required when metadataFilePath is given
+ * @returns                - digest-pinned ref containing "@sha256:"
+ */
+export async function resolveDigest(
+    taggedRef: string,
+    execFn: ExecFn,
+    metadataFilePath?: string,
+    readFileFn?: ReadFileFn,
+): Promise<string> {
+    // PRIMARY: metadata-file path — no shell call needed.
+    if (metadataFilePath && readFileFn) {
+        try {
+            const digest = resolveDigestFromMetadataFile(
+                metadataFilePath,
+                readFileFn,
+            );
+            // Compose `taggedRef@sha256:<digest>` so both tag and digest are present.
+            return `${taggedRef}@${digest}`;
+        } catch {
+            // Metadata file unavailable / corrupt — fall through to docker inspect.
+        }
+    }
+
+    // FALLBACK: docker inspect returns the full RepoDigest string, e.g.:
+    //   registry.example.com/my-app@sha256:deadbeef...
+    const raw = await execFn(
+        `docker inspect --format '{{index .RepoDigests 0}}' ${taggedRef}`,
+    );
+    const line = String(raw ?? "").trim();
+
+    if (!line.includes("@sha256:")) {
+        throw new Error(
+            `Could not resolve digest for image "${taggedRef}". ` +
+                `docker inspect returned: "${line}". ` +
+                `Ensure the image was pushed before calling resolveDigest().`,
+        );
+    }
+
+    return line;
+}
 
 /**
  * dryRunDeploy renders the NextApp CR YAML and returns it WITHOUT
@@ -160,13 +295,13 @@ export type ExecFn = (cmd: string) => Promise<unknown>;
  * @returns CR YAML string
  */
 export async function dryRunDeploy(
-  config: KnativeNextConfig,
-  image: string,
-  namespace: string,
-  execFn?: ExecFn,
+    config: KnativeNextConfig,
+    image: string,
+    namespace: string,
+    execFn?: ExecFn,
 ): Promise<string> {
-  // execFn is intentionally unused in dry-run mode.
-  // Its presence as a parameter allows tests to spy and assert 0 calls.
-  void execFn;
-  return renderNextAppCR(config, image, namespace);
+    // execFn is intentionally unused in dry-run mode.
+    // Its presence as a parameter allows tests to spy and assert 0 calls.
+    void execFn;
+    return renderNextAppCR(config, image, namespace);
 }

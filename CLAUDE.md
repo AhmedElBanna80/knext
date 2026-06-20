@@ -31,8 +31,9 @@
 - **Do NOT reverse-engineer Nitro/Vinext** (old epic #11 approach is superseded).
 - **Don't rewrite the runtime twice** — land the adapter migration before other runtime changes.
 - **Status:** the official-adapter + `output:'standalone'` migration **merged to `main` (PR #29)**;
-  cold-start bytecode caching via `NODE_COMPILE_CACHE`. The deprecated Vinext/Nitro runtime
-  (`node-server.ts`) is on its way out.
+  cold-start bytecode caching via `NODE_COMPILE_CACHE`. The Vinext/Nitro runtime coupling is
+  **gone from the tracked codebase** — `node-server.ts` is now the standalone-server runtime entry
+  (spawns `next build`'s `server.js` + a metrics sidecar), not a Nitro entry.
 
 ## 4. Control plane (ADR-0001)
 - The **Go operator is the single source of truth** for cluster state. The TS CLI must stop
@@ -85,8 +86,11 @@ defer bucket 1.
 - Real data plane = **GCS + Redis on GKE**; S3/Azure/MinIO are thin shell-outs; DynamoDB/Kafka are
   config/manifest-only — implement+test or trim the schema/docs.
 - **Image optimization missing** (biggest functional gap).
-- `packages/kn-next/src/adapters/node-server.ts` **still welded to Nitro** (`.output/server/index.mjs`,
-  lines ~13/30) — **not yet removed** on `main`; retire it to finish the migration.
+- **(RESOLVED 2026-06-20)** `packages/kn-next/src/adapters/node-server.ts` is **Nitro-free** — it
+  spawns the standalone `server.js` (`STANDALONE_SERVER_PATH`, default `.next/standalone/server.js`),
+  no `.output/server`/`index.mjs`. Enforced by `adapter-migration.test.ts` (asserts no `.output/server`).
+  The only remaining `nitro/runtime` references are **untracked local cruft** (`packages/admin/…`,
+  a stray `apps/file-manager/src/server/plugins/knext.ts`) — not in git, nothing to delete from the repo.
 - Tests light on core build/deploy/upload/cache paths (manifest gen is covered).
 - Operator gaps: status `Conditions` field **defined** (`nextapp_types.go:144`) but **not populated**
   by the reconciler (only `status.url` is set); no finalizer logic; happy-path reconcile;

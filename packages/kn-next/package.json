@@ -1,5 +1,5 @@
 {
-  "name": "@kn-next/core",
+  "name": "@knext/core",
   "version": "0.1.0",
   "description": "Knative Next.js configuration and CLI",
   "type": "module",
@@ -47,7 +47,7 @@
   },
   "dependencies": {
     "@google-cloud/storage": "^7.18.0",
-    "@knative-next/lib": "workspace:^",
+    "@knext/lib": "workspace:^",
     "ioredis": "^5.9.2",
     "kafkajs": "^2.2.4",
     "pino": "^9.6.0",

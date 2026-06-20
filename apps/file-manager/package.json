@@ -11,8 +11,8 @@
     "compat-smoke": "node scripts/compat-smoke.mjs"
   },
   "dependencies": {
-    "@knative-next/lib": "workspace:*",
-    "@knative-next/ui": "workspace:*",
+    "@knext/lib": "workspace:*",
+    "@knext/ui": "workspace:*",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/api-logs": "^0.212.0",
     "@opentelemetry/exporter-trace-otlp-grpc": "^0.208.0",
@@ -32,7 +32,7 @@
     "sharp": "^0.35.2"
   },
   "devDependencies": {
-    "@kn-next/core": "workspace:*",
+    "@knext/core": "workspace:*",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

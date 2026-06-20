@@ -73,9 +73,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # @knative-next/lib ships only dist/ — it MUST be built before the app.
-      - name: Build @knative-next/lib
-        run: pnpm --filter @knative-next/lib build
+      # @knext/lib ships only dist/ — it MUST be built before the app.
+      - name: Build @knext/lib
+        run: pnpm --filter @knext/lib build
 
       - name: Build file-manager via adapter
         run: pnpm --filter file-manager build

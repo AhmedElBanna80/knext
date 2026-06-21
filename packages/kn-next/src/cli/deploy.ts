@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * kn-next CLI — Knative Next.js Deployment Automation
  *
@@ -18,7 +18,6 @@
 
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { $ } from "bun";
 import type { KnativeNextConfig } from "../config";
 import { getAssetPrefix, uploadAssets } from "../utils/asset-upload";
 import { createLogger } from "../utils/logger";
@@ -27,6 +26,9 @@ import {
     resolveDigest,
     validateCRImageRef,
 } from "./cr-builder";
+// Portable shell helper (#68): Node-native, argv-array based, no shell — runs
+// on plain Node and Bun. Replaces `import { $ } from "bun"` / `Bun.spawn`.
+import { capture, run } from "./exec";
 import { loadConfig } from "./shared";
 
 const log = createLogger({ module: "deploy" });
@@ -123,7 +125,7 @@ async function deploy() {
         const assetPrefix = getAssetPrefix(config.storage);
         process.env.ASSET_PREFIX = assetPrefix;
         log.info({ assetPrefix }, "Running next build (output:standalone)...");
-        await $`npm run build`.quiet();
+        await run(["npm", "run", "build"], { quiet: true });
         log.info(
             "Next.js build complete — standalone output in .next/standalone/",
         );
@@ -169,7 +171,22 @@ async function deploy() {
             (async () => {
                 const repoRoot = resolve(process.cwd(), "../..");
                 // --metadata-file writes the buildx result JSON (includes containerimage.digest).
-                await $`docker buildx build --platform linux/amd64 -f ${process.cwd()}/Dockerfile -t ${taggedRef} --push --metadata-file ${metadataFilePath} ${repoRoot}`;
+                // argv array — no shell, no injection (taggedRef/paths are single tokens).
+                await run([
+                    "docker",
+                    "buildx",
+                    "build",
+                    "--platform",
+                    "linux/amd64",
+                    "-f",
+                    `${process.cwd()}/Dockerfile`,
+                    "-t",
+                    taggedRef,
+                    "--push",
+                    "--metadata-file",
+                    metadataFilePath,
+                    repoRoot,
+                ]);
                 log.info("Docker image built and pushed");
             })(),
         );
@@ -183,12 +200,9 @@ async function deploy() {
         log.info({ taggedRef }, "Resolving @sha256: digest...");
         const { readFileSync } = await import("node:fs");
         // ExecFn takes an ARGV array — no shell, no injection risk.
-        // Bun.spawn() bypasses sh entirely; each element is a separate argv token.
-        const execFn = async (argv: string[]): Promise<string> => {
-            const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-            await proc.exited;
-            return new Response(proc.stdout).text();
-        };
+        // capture() spawns via node:child_process with shell:false; each element
+        // is a separate argv token (works on Node and Bun).
+        const execFn = (argv: string[]): Promise<string> => capture(argv);
         const readFileFn = (p: string) => readFileSync(p, "utf-8");
         imageRef = await resolveDigest(
             taggedRef,
@@ -222,11 +236,20 @@ async function deploy() {
     writeFileSync(crPath, crYaml, "utf-8");
 
     log.info({ cr: crPath }, "Applying NextApp CR to cluster...");
-    await $`kubectl apply -f ${crPath} -n ${options.namespace}`;
+    await run(["kubectl", "apply", "-f", crPath, "-n", options.namespace]);
 
     // Wait briefly for the operator to begin reconciling, then read the URL.
-    const result =
-        await $`kubectl get nextapp ${config.name} -n ${options.namespace} -o jsonpath='{.status.url}'`.text();
+    // jsonpath has no surrounding shell quotes here — argv passes it verbatim.
+    const result = await capture([
+        "kubectl",
+        "get",
+        "nextapp",
+        config.name,
+        "-n",
+        options.namespace,
+        "-o",
+        "jsonpath={.status.url}",
+    ]);
     log.info(
         { url: result.replace(/'/g, "") },
         "Deployment submitted — operator is reconciling",

@@ -1,6 +1,9 @@
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
-import { $ } from "bun";
+// Portable shell helper (#68) — Node-native, argv-array based, runs on Node + Bun.
+// Replaces `import { $ } from "bun"`; this module is on the deploy CLI import
+// graph, so a top-level `bun` import would break `node dist/cli/deploy.js`.
+import { capture, run } from "../cli/exec";
 import type { KnativeNextConfig, StorageConfig } from "../config";
 import { createLogger } from "./logger";
 
@@ -34,6 +37,18 @@ function collectFiles(dir: string, baseDir: string): string[] {
 }
 
 /**
+ * Lists the immediate children of a directory as absolute paths.
+ *
+ * The Bun shell expanded `dir/*` via the shell glob. With an argv array there
+ * is no shell, so we expand the top-level glob here in Node and pass each entry
+ * as its own argv token — preserving the original `cp -r dir/* dest/` semantics
+ * (copy the contents of dir, not dir itself) without invoking a shell.
+ */
+function expandTopLevel(dir: string): string[] {
+    return readdirSync(dir).map((name) => join(dir, name));
+}
+
+/**
  * Uploads static assets to configured storage provider.
  * Assets include _next/static/* and public files.
  *
@@ -48,24 +63,51 @@ export async function uploadAssets(config: KnativeNextConfig): Promise<void> {
         "Syncing assets to storage",
     );
 
+    const bucket = config.storage.bucket;
+    const cacheControl = "Cache-Control:public, max-age=31536000, immutable";
+
     switch (config.storage.provider) {
         case "gcs": {
-            // Upload with cache-control headers for immutable _next/static assets
-            await $`gsutil -m -h "Cache-Control:public, max-age=31536000, immutable" cp -r ${assetsDir}/* gs://${config.storage.bucket}/`.quiet();
+            // Upload with cache-control headers for immutable _next/static assets.
+            // Glob expanded in Node (see expandTopLevel) — argv, no shell.
+            await run(
+                [
+                    "gsutil",
+                    "-m",
+                    "-h",
+                    cacheControl,
+                    "cp",
+                    "-r",
+                    ...expandTopLevel(assetsDir),
+                    `gs://${bucket}/`,
+                ],
+                { quiet: true },
+            );
             // Ensure bucket has public read access for browser fetches
-            await $`gsutil iam ch allUsers:objectViewer gs://${config.storage.bucket}`.quiet();
+            await run(
+                [
+                    "gsutil",
+                    "iam",
+                    "ch",
+                    "allUsers:objectViewer",
+                    `gs://${bucket}`,
+                ],
+                { quiet: true },
+            );
 
             // Post-upload verification: ensure all local files exist in GCS
             const localFiles = collectFiles(assetsDir, assetsDir);
-            const gcsListResult =
-                await $`gsutil ls -r "gs://${config.storage.bucket}/"`.text();
+            const gcsListResult = await capture([
+                "gsutil",
+                "ls",
+                "-r",
+                `gs://${bucket}/`,
+            ]);
             const gcsFiles = new Set(
                 gcsListResult
                     .split("\n")
                     .filter((line) => line.startsWith("gs://"))
-                    .map((line) =>
-                        line.replace(`gs://${config.storage.bucket}/`, ""),
-                    ),
+                    .map((line) => line.replace(`gs://${bucket}/`, "")),
             );
 
             const missing = localFiles.filter((f) => !gcsFiles.has(f));
@@ -77,8 +119,18 @@ export async function uploadAssets(config: KnativeNextConfig): Promise<void> {
                 );
                 for (const file of missing) {
                     const localPath = join(assetsDir, file);
-                    const gcsPath = `gs://${config.storage.bucket}/${file}`;
-                    await $`gsutil -h "Cache-Control:public, max-age=31536000, immutable" cp ${localPath} ${gcsPath}`.quiet();
+                    const gcsPath = `gs://${bucket}/${file}`;
+                    await run(
+                        [
+                            "gsutil",
+                            "-h",
+                            cacheControl,
+                            "cp",
+                            localPath,
+                            gcsPath,
+                        ],
+                        { quiet: true },
+                    );
                 }
                 log.info(
                     { count: missing.length },
@@ -88,14 +140,46 @@ export async function uploadAssets(config: KnativeNextConfig): Promise<void> {
             break;
         }
         case "s3":
-            await $`aws s3 sync ${assetsDir} s3://${config.storage.bucket} --cache-control "public, max-age=31536000, immutable"`.quiet();
+            await run(
+                [
+                    "aws",
+                    "s3",
+                    "sync",
+                    assetsDir,
+                    `s3://${bucket}`,
+                    "--cache-control",
+                    "public, max-age=31536000, immutable",
+                ],
+                { quiet: true },
+            );
             break;
         case "minio":
-            // MinIO uses S3-compatible CLI
-            await $`mc cp --recursive ${assetsDir}/* minio/${config.storage.bucket}/`.quiet();
+            // MinIO uses S3-compatible CLI. Glob expanded in Node — argv, no shell.
+            await run(
+                [
+                    "mc",
+                    "cp",
+                    "--recursive",
+                    ...expandTopLevel(assetsDir),
+                    `minio/${bucket}/`,
+                ],
+                { quiet: true },
+            );
             break;
         case "azure":
-            await $`az storage blob upload-batch -d ${config.storage.bucket} -s ${assetsDir}`.quiet();
+            await run(
+                [
+                    "az",
+                    "storage",
+                    "blob",
+                    "upload-batch",
+                    "-d",
+                    bucket,
+                    "-s",
+                    assetsDir,
+                ],
+                { quiet: true },
+            );
             break;
         default:
             throw new Error(

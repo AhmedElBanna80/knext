@@ -86,6 +86,61 @@ jobs:
           RUNTIME: ${{ matrix.runtime }}
         run: node scripts/compat-smoke.mjs
 
+  cli-node-smoke:
+    # #68 — the kn-next CLI must run on plain Node (un-block `npx kn-next`).
+    # Builds @knext/core to an EMITTED JS bin and runs `deploy --dry-run` on
+    # BOTH Node and Bun. The Node leg deliberately does NOT install Bun, so a
+    # green Node run proves the CLI no longer needs Bun. Mirrors the compat-smoke
+    # node+bun matrix. Asserts the dry-run prints a NextApp CR (no cluster).
+    name: kn-next CLI smoke (Node + Bun)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [node, bun]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      # Bun is installed ONLY for the bun leg. The node leg has no Bun on PATH,
+      # which is exactly what proves the CLI runs without it.
+      - name: Setup Bun
+        if: matrix.runtime == 'bun'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Emit the runnable JS bin (typecheck + esbuild bundle). No Bun required.
+      - name: Build @knext/core CLI (emit JS bin)
+        run: pnpm --filter @knext/core build
+
+      - name: Run `<runtime> <emitted-bin> deploy --dry-run` and assert a NextApp CR
+        working-directory: packages/kn-next/src/__tests__/fixtures/cli-68
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$GITHUB_WORKSPACE/packages/kn-next/dist/cli/deploy.js"
+          test -f "$BIN" || { echo "emitted bin missing: $BIN"; exit 1; }
+          echo "runtime=${{ matrix.runtime }}"
+          OUT="$(${{ matrix.runtime }} "$BIN" deploy --dry-run)"
+          echo "$OUT"
+          echo "$OUT" | grep -q 'kind: NextApp' \
+            || { echo 'FAIL: dry-run did not print a NextApp CR'; exit 1; }
+          echo "$OUT" | grep -q 'minScale: 0' \
+            || { echo 'FAIL: scale-to-zero (minScale: 0) missing from CR'; exit 1; }
+
   no-latest-guard:
     name: No :latest images in operator manifests
     runs-on: ubuntu-latest

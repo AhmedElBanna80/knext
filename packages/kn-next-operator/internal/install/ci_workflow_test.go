@@ -63,8 +63,10 @@ func TestCIRunsOperatorTestJob(t *testing.T) {
 	}
 
 	// The bundle-immunity tests must hard-fail (not skip) in CI when the bundle is
-	// missing, so a green check can never mean "skipped".
-	if !strings.Contains(js, "KNEXT_REQUIRE_BUNDLE") {
-		t.Errorf("jobs.operator-test must set KNEXT_REQUIRE_BUNDLE so a missing bundle hard-fails")
+	// missing, so a green check can never mean "skipped". requireBundle only fatals
+	// when KNEXT_REQUIRE_BUNDLE == "1", so assert the value — not just the key — or a
+	// stray KNEXT_REQUIRE_BUNDLE: '0' would silently disarm the gate yet pass here.
+	if !strings.Contains(js, `KNEXT_REQUIRE_BUNDLE: "1"`) {
+		t.Errorf(`jobs.operator-test must set KNEXT_REQUIRE_BUNDLE: '1' so a missing bundle hard-fails`)
 	}
 }

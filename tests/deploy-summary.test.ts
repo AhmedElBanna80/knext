@@ -55,4 +55,16 @@ describe('scripts/e2e-summary.mjs — summarize() (#89)', () => {
     expect(s.passed).toBe(46);
     expect(s.failed).toBe(0);
   });
+
+  it('coerces a non-numeric excluded value to 0 (artifact stays well-typed)', () => {
+    // CI passes --excluded as a string arg; a bad value must not poison the artifact.
+    const s = summarize('Tests: 1 passed, 1 total\n', {
+      ref: 'v16.0.3',
+      shard: '4/4',
+      // @ts-expect-error intentionally malformed input from the CLI boundary
+      excluded: 'not-a-number',
+    });
+    expect(s.excluded).toBe(0);
+    expect(Number.isNaN(s.excluded)).toBe(false);
+  });
 });

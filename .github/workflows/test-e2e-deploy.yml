@@ -1,0 +1,175 @@
+name: Compat suite (official Next.js deploy harness)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# #89 / ADR-0007 A3-2 — the AUTHORITATIVE (slow) compatibility gate.
+#
+# This runs the OFFICIAL Next.js adapter compatibility harness: it checks out
+# vercel/next.js at a PINNED ref, builds it, and runs `run-tests.js` in
+# NEXT_TEST_MODE=deploy against knext's lifecycle scripts (scripts/e2e-*.sh) +
+# the deploy manifest (test/deploy-tests-manifest.knext.json).
+#
+# HONESTY: this is an MVP SCAFFOLD. It runs a REAL but PARTIAL subset (modest
+# shard count, Node runtime only to start). It does NOT yet pass the full suite,
+# and its mere existence must NOT be read as "knext passes the official suite".
+# The compat-matrix official-suite row stays ❌ until a green nightly (a separate
+# graduation PR, ADR-0007 A3-3). The exclude-list (the manifest) is an honest
+# ledger that grows from OBSERVED failures, never a pre-emptive fake green.
+#
+# Deliberately NOT in ci.yml: heavyweight (clones+builds Next.js + Playwright).
+# Nightly + manual dispatch only — the fast per-PR gate is the compat-smoke job.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      nextjsRef:
+        description: 'vercel/next.js git ref to test against (pinned tag; do NOT use canary)'
+        required: false
+        default: 'v16.0.3'
+  schedule:
+    # 03:17 UTC nightly — off-peak; the run takes the better part of an hour.
+    - cron: '17 3 * * *'
+
+# Pin the Next.js ref so a failure is attributable to knext, not upstream churn.
+# Aligns with the in-repo next@16.0.3 (CLAUDE.md / ADR-0007 version-skew caveat).
+env:
+  NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.0.3' }}
+
+jobs:
+  build-next:
+    name: Build vercel/next.js (pinned)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout knext
+        uses: actions/checkout@v4
+        with:
+          path: knext
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install knext deps
+        working-directory: knext
+        run: pnpm install --frozen-lockfile
+
+      # Build the runtime + the adapter package so `npm pack @knext/core` ships a
+      # working adapter for NEXT_ADAPTER_PATH.
+      - name: Build @knext/lib + @knext/core
+        working-directory: knext
+        run: |
+          pnpm --filter @knext/lib build
+          pnpm --filter @knext/core build
+
+      - name: Pack @knext/core adapter tarball
+        working-directory: knext/packages/kn-next
+        run: |
+          npm pack
+          ls -1 *.tgz
+
+      - name: Checkout vercel/next.js (pinned ref)
+        uses: actions/checkout@v4
+        with:
+          repository: vercel/next.js
+          ref: ${{ env.NEXTJS_REF }}
+          path: next.js
+
+      - name: Setup Next.js build deps + Playwright
+        working-directory: next.js
+        run: |
+          corepack enable
+          pnpm install
+          pnpm playwright install chromium --with-deps
+
+      - name: Build Next.js
+        working-directory: next.js
+        run: pnpm build
+
+      # Cache the prepared knext + next.js trees for the shard jobs.
+      - name: Upload workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-workspace
+          path: |
+            knext
+            next.js
+          retention-days: 1
+          include-hidden-files: true
+
+  deploy-tests:
+    name: Deploy tests (shard ${{ matrix.shard }})
+    needs: build-next
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # MVP: a MODEST 4-way shard (the reference uses 16). Bump deliberately as
+        # the suite stabilizes; 4 keeps the nightly cost honest for the scaffold.
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    steps:
+      - name: Download workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: compat-workspace
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Make lifecycle scripts executable
+        working-directory: knext
+        run: chmod +x scripts/e2e-deploy.sh scripts/e2e-logs.sh scripts/e2e-cleanup.sh
+
+      - name: Run official deploy tests (knext adapter)
+        working-directory: next.js
+        env:
+          NEXT_TEST_MODE: deploy
+          # knext's lifecycle scripts (the deploy-script contract).
+          NEXT_TEST_DEPLOY_SCRIPT_PATH: ${{ github.workspace }}/knext/scripts/e2e-deploy.sh
+          NEXT_TEST_DEPLOY_LOGS_SCRIPT_PATH: ${{ github.workspace }}/knext/scripts/e2e-logs.sh
+          NEXT_TEST_CLEANUP_SCRIPT_PATH: ${{ github.workspace }}/knext/scripts/e2e-cleanup.sh
+          # The package dir e2e-deploy.sh `npm pack`s + installs into each temp app.
+          ADAPTER_DIR: ${{ github.workspace }}/knext/packages/kn-next
+          # Layer knext's exclude/include ledger on top of Next's deploy-eligible set.
+          NEXT_EXTERNAL_TESTS_FILTERS: ${{ github.workspace }}/knext/test/deploy-tests-manifest.knext.json
+          KNEXT_RUNTIME: node
+        # `|| true`: a partial-subset scaffold WILL have failures today; we still
+        # want the summary artifact emitted. The matrix row stays ❌ regardless.
+        run: |
+          node run-tests.js --type e2e -g ${{ matrix.shard }} 2>&1 | tee runner.log || true
+
+      - name: Compute excluded count from manifest
+        id: excl
+        working-directory: knext
+        run: |
+          COUNT=$(node -e "console.log(require('./test/deploy-tests-manifest.knext.json').rules.exclude.length)")
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize shard result
+        working-directory: knext
+        run: |
+          SAFE_SHARD="${{ matrix.shard }}"
+          SAFE_SHARD="${SAFE_SHARD/\//-}"
+          node scripts/e2e-summary.mjs \
+            --runner-log "${{ github.workspace }}/next.js/runner.log" \
+            --ref "${NEXTJS_REF}" \
+            --shard "${{ matrix.shard }}" \
+            --excluded "${{ steps.excl.outputs.count }}" \
+            --out "compat-suite-summary-${SAFE_SHARD}.json"
+
+      - name: Upload summary artifact (consumed by #41 matrix publisher)
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-suite-summary-${{ strategy.job-index }}
+          path: knext/compat-suite-summary-*.json
+          retention-days: 14

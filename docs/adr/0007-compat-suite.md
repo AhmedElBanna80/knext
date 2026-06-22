@@ -1,7 +1,7 @@
 # ADR-0007: Wire the official Next.js adapter compatibility suite into CI
 
-- Status: Proposed
-- Date: 2026-06-20
+- Status: Accepted
+- Date: 2026-06-20 (Accepted 2026-06-22, A3-2 scaffold landed via #89)
 - Backlog: A3-1 ("Wire the official adapter compat suite into a CI job, run on every PR;
   PR is red on failure"), A3-2, A3-3
 - Related: ADR-0006 (image optimization), `docs/research/adapter-bun-learnings.md`,
@@ -201,13 +201,28 @@ Port the reference workflow with knext substitutions:
   - [ ] Add the `compat-smoke` job to `.github/workflows/ci.yml` (Node+Bun matrix), **required** so
         the PR is red on failure.
   - [ ] Document in the job/README that this is a knext smoke suite, **not** the official suite.
-- **A3-2 (scheduled full harness):**
-  - [ ] Add `scripts/e2e-deploy.sh`, `e2e-logs.sh`, `e2e-cleanup.sh` (knext/standalone variant of the
-        reference) and `test/deploy-tests-manifest.knext.json` (start with `rules.exclude: []`,
-        populate as failures surface).
-  - [ ] Add `.github/workflows/test-e2e-deploy.yml` (port of the reference; **pinned** Next ref;
-        16-way shard; `schedule` + `workflow_dispatch`).
-  - [ ] Align in-repo `next` version with the pinned harness ref (16.2.x).
+- **A3-2 (scheduled full harness — MVP scaffold landed via #89):**
+  - [x] Extract the `NextAdapter` into `@knext/core` (`packages/kn-next/src/adapters/next-adapter.ts`,
+        package export `./adapter`) so the harness can point arbitrary fixture apps at it via
+        `NEXT_ADAPTER_PATH`. `apps/file-manager/next-adapter.ts` re-exports it (no behavior change).
+  - [x] Add `scripts/e2e-deploy.sh`, `e2e-logs.sh`, `e2e-cleanup.sh` (knext/standalone variant of the
+        reference) and `test/deploy-tests-manifest.knext.json`. The deploy script packs+installs the
+        adapter tarball, sets `NEXT_ADAPTER_PATH`, `next build`s, stages `.next/static`+`public` into
+        the standalone tree, boots `server.js` on a free port, persists `BUILD_ID`/`DEPLOYMENT_ID`/
+        port/pid to `.adapter-build.log`, and echoes the URL as the only stdout line. Covered by
+        `tests/e2e-deploy.contract.test.ts` + `tests/deploy-manifest.test.ts`.
+  - [x] Add `.github/workflows/test-e2e-deploy.yml` (port of the reference; **pinned** Next ref;
+        `schedule` + `workflow_dispatch`). **MVP deltas from the reference:** a **modest 4-way shard**
+        (not 16) and **Node runtime only** to start (`KNEXT_RUNTIME=bun` is a fast-follow); it emits a
+        per-shard `compat-suite-summary-*.json` artifact (`scripts/e2e-summary.mjs`, covered by
+        `tests/deploy-summary.test.ts`) that #41 consumes.
+  - **HONESTY:** this is a runnable **PARTIAL subset**, not a green full suite. The
+    `docs/compat-matrix.md` official-suite row **stays ❌** until a green nightly (graduation is a
+    separate PR, A3-3). The manifest exclude-list is an **honest ledger** that grows from OBSERVED
+    failures, never a pre-emptive fake green.
+  - [ ] **Version-skew caveat:** in-repo `next@16.0.3` vs the harness's typical `16.2.x`. The workflow
+        pins the ref to `v16.0.3` (`nextjsRef` dispatch input / `NEXTJS_REF` env) to keep results
+        attributable to knext; bump deliberately when the in-repo `next` moves.
 - **A3-2 (publish the matrix, done):**
   - [x] Publish `docs/compat-matrix.md` — an honest, evidence-gated supported/unsupported matrix,
         linked from the README, with a guard test (`tests/compat-matrix.test.ts`) that fails CI on

@@ -21,7 +21,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { KnativeNextConfig } from "../config";
-import { parseLiveBuildIds } from "../utils/asset-gc";
+import { parseLiveRevisionNames, resolveLiveBuildIds } from "../utils/asset-gc";
 import {
     getAssetPrefix,
     pruneOldBuilds,
@@ -167,12 +167,14 @@ async function deploy() {
     const baseConfig = await loadConfig();
     const config = applyOverrides(baseConfig, options);
 
-    // #93 skew protection (ADR-0011): pin this deploy's BUILD_ID. We pass it to
-    // Next as NEXT_DEPLOYMENT_ID so `next build` stamps it as the BUILD_ID *and*
-    // `deploymentId` in next.config — Next then appends `?dpl=<id>` to asset/RSC
-    // requests, keeping a browser on an old build requesting that build's assets.
-    // Reusing the image tag keeps the build-id, the image, and the static prefix
-    // (`_next/static/<buildId>/`) in lock-step. MUST be set BEFORE `next build`.
+    // #93 skew protection (ADR-0011): pin this deploy's BUILD_ID. We export
+    // NEXT_DEPLOYMENT_ID = the deploy tag BEFORE `next build`. next.config reads it
+    // BOTH as `deploymentId` (Next appends `?dpl=<id>` to asset/RSC requests) AND,
+    // crucially (defect-A fix), as `generateBuildId: () => NEXT_DEPLOYMENT_ID` so
+    // `.next/BUILD_ID` == this tag — otherwise BUILD_ID would be a random nanoid
+    // and the `_next/static/<id>/` upload prefix would NOT match the tag the GC
+    // prunes by. Reusing the image tag keeps build-id, image, and static prefix in
+    // lock-step. MUST be set BEFORE `next build`.
     const buildId = options.tag || `${Date.now()}`;
     process.env.NEXT_DEPLOYMENT_ID = buildId;
 
@@ -187,6 +189,33 @@ async function deploy() {
         log.info(
             "Next.js build complete — standalone output in .next/standalone/",
         );
+
+        // Defect-A guard: fail LOUDLY if `.next/BUILD_ID` is not the deploy tag.
+        // `_next/static/<BUILD_ID>/` is the upload prefix the GC prunes by; if Next
+        // ever ignores `generateBuildId` and falls back to a random nanoid, the GC
+        // would silently match nothing and the "just-deployed build is protected"
+        // guarantee would break. Better to abort the deploy than ship that.
+        try {
+            const builtId = readFileSync(
+                join(process.cwd(), ".next", "BUILD_ID"),
+                "utf-8",
+            ).trim();
+            if (builtId !== buildId) {
+                throw new Error(
+                    `.next/BUILD_ID "${builtId}" != deploy tag "${buildId}". ` +
+                        "Skew-protection asset retention requires BUILD_ID == NEXT_DEPLOYMENT_ID " +
+                        "(check next.config generateBuildId).",
+                );
+            }
+        } catch (err) {
+            // Only swallow a missing-file error (e.g. an app that does not write it);
+            // a real mismatch above must propagate and fail the deploy.
+            const code = (err as NodeJS.ErrnoException)?.code;
+            if (code !== "ENOENT") throw err;
+            log.warn(
+                ".next/BUILD_ID not found — skipping build-id lock-step check",
+            );
+        }
     }
 
     const imageTag = buildId;
@@ -274,10 +303,17 @@ async function deploy() {
         validateCRImageRef(imageRef);
     }
 
-    // Render the NextApp CR from config + resolved image.
+    // Render the NextApp CR from config + resolved image. Pass the buildId (== the
+    // deploy tag == .next/BUILD_ID, #93) so the operator stamps the
+    // `apps.kn-next.dev/build-id` revision label the asset GC resolves against.
     // The operator reconciles all cluster resources from this CR.
     // In dry-run mode imageRef is the mutable tag (acceptable for preview only).
-    const crYaml = renderNextAppCR(config, imageRef, options.namespace);
+    const crYaml = renderNextAppCR(
+        config,
+        imageRef,
+        options.namespace,
+        buildId,
+    );
     const crPath = join(process.cwd(), ".output", "nextapp-cr.yaml");
 
     if (options.dryRun) {
@@ -314,10 +350,14 @@ async function deploy() {
 
     // #93 skew-protection retention GC (ADR-0011). Reap old `_next/static/<id>/`
     // prefixes that are outside the retain window AND not currently serving
-    // traffic. The live set is read READ-ONLY from NextApp.Status.CurrentTraffic
-    // (ADR-0001: the CLI never mutates the cluster) so a #92 pinned/canary/
-    // rolled-back revision's build is NEVER reaped, even if older than the window.
-    // Best-effort: a GC failure must not fail a deploy that has already shipped.
+    // traffic. Everything below is READ-ONLY (ADR-0001: the CLI never mutates the
+    // cluster). Defect-B fix: the live set is the RESOLVED build-id of each live
+    // revision, looked up from the `apps.kn-next.dev/build-id` label the operator
+    // stamps onto every revision — NOT a substring of the revision name (which
+    // does not contain the build-id; the image is digest-pinned). FAIL-SAFE: if
+    // any live revision cannot be resolved to a build-id, we SKIP the GC entirely
+    // (over-keep, never over-delete). Best-effort: a GC failure never fails a
+    // deploy that has already shipped.
     if (!options.skipUpload) {
         try {
             const trafficJson = runCapture([
@@ -330,10 +370,34 @@ async function deploy() {
                 "-o",
                 "jsonpath={.status.currentTraffic}",
             ]);
-            const liveBuildIds = parseLiveBuildIds(
+            const liveRevisions = parseLiveRevisionNames(
                 trafficJson.replace(/^'|'$/g, ""),
             );
-            pruneOldBuilds(config, liveBuildIds, buildId);
+            // Resolve each live revision to its build-id via the operator-stamped
+            // label (read-only). The single-token jsonpath escapes the dotted/slashed
+            // label key. A missing label yields '' → resolveLiveBuildIds fails safe.
+            const resolved = resolveLiveBuildIds(liveRevisions, (rev) =>
+                runCapture([
+                    "kubectl",
+                    "get",
+                    "revision",
+                    rev,
+                    "-n",
+                    options.namespace,
+                    "-o",
+                    "jsonpath={.metadata.labels.apps\\.kn-next\\.dev/build-id}",
+                ])
+                    .replace(/^'|'$/g, "")
+                    .trim(),
+            );
+            if (resolved.ok) {
+                pruneOldBuilds(config, resolved.buildIds, buildId);
+            } else {
+                log.warn(
+                    { liveRevisions },
+                    "Asset retention GC skipped: a live revision has no resolvable build-id (fail-safe, over-keep)",
+                );
+            }
         } catch (err) {
             log.warn({ err }, "Asset retention GC skipped (non-fatal)");
         }

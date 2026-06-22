@@ -36,21 +36,26 @@ export interface SelectBuildsInput {
      */
     readonly timestamps: Readonly<Record<string, number>>;
     /**
-     * Build-ids (or revision-name tokens) that are LIVE — sourced READ-ONLY from
-     * `NextApp.Status.CurrentTraffic`. A remote build-id is considered live if it
-     * equals, or is a substring of, any live token (revision names embed the
-     * build-id). Never reaped regardless of the retain window.
+     * The RESOLVED build-ids of the revisions currently serving traffic. The
+     * caller (deploy.ts) reads `NextApp.Status.CurrentTraffic[].revisionName`
+     * and resolves each revision to its build-id via the
+     * `apps.kn-next.dev/build-id` label the operator stamps onto the revision
+     * (READ-ONLY, ADR-0001). Matched by EXACT equality below — never reaped
+     * regardless of the retain window.
+     *
+     * Defect B (over-DELETE) fix: matching must be exact. A substring match
+     * could (a) fail to protect a live build whose id is not a substring of any
+     * token, or (b) coincidentally "protect" the wrong build. Exact equality on
+     * resolved build-ids is the only correct, fail-safe contract.
      */
     readonly liveBuildIds: readonly string[];
     /** How many newest build-ids to retain. Clamped to >= 1. */
     readonly retain: number;
 }
 
-/** True if `buildId` is referenced by any live revision token. */
-function isLive(buildId: string, liveTokens: readonly string[]): boolean {
-    return liveTokens.some(
-        (token) => token === buildId || token.includes(buildId),
-    );
+/** True iff `buildId` EXACTLY equals a resolved live build-id (defect B fix). */
+function isLive(buildId: string, liveBuildIds: readonly string[]): boolean {
+    return liveBuildIds.includes(buildId);
 }
 
 /**
@@ -58,7 +63,7 @@ function isLive(buildId: string, liveTokens: readonly string[]): boolean {
  *
  * Guarantees:
  *   - keeps the newest `max(retain, 1)` build-ids,
- *   - keeps any build-id in {@link SelectBuildsInput.liveBuildIds},
+ *   - keeps any build-id EXACTLY in {@link SelectBuildsInput.liveBuildIds},
  *   - never returns the only/last build,
  *   - drops empty/falsy build-ids (never proposes an unscoped delete),
  *   - de-dupes the input and orders the result deterministically (oldest-first).
@@ -93,16 +98,23 @@ export function selectBuildsToDelete(input: SelectBuildsInput): string[] {
 }
 
 /**
- * Parses revision-name tokens out of the operator's traffic status JSON, as read
- * READ-ONLY via `kubectl get nextapp <n> -o jsonpath={.status.currentTraffic}`
+ * Parses the REVISION NAMES of the live traffic targets out of the operator's
+ * status JSON, as read READ-ONLY via
+ * `kubectl get nextapp <n> -o jsonpath={.status.currentTraffic}`
  * (ADR-0001: the CLI never mutates the cluster). Returns the `revisionName` of
- * every traffic target. Nil-safe: returns `[]` on empty/malformed/non-array
- * input so a parse failure can only ever make the GC MORE conservative (it never
- * fabricates a live set, and an empty live set just falls back to the retain
- * window — it never causes an over-delete because the window still protects the
- * newest builds).
+ * every traffic target.
+ *
+ * Defect B fix: this returns revision NAMES, not build-ids — a revision name
+ * does not contain the build-id (Knative auto-names `<app>-<NNNNN>`, the image
+ * is digest-pinned). deploy.ts resolves each name to its build-id via the
+ * `apps.kn-next.dev/build-id` label the operator stamps onto the revision.
+ *
+ * Nil-safe: returns `[]` on empty/malformed/non-array input. Combined with the
+ * fail-safe resolution in deploy.ts (skip GC if any resolution fails/empty),
+ * a failure can only ever make the GC MORE conservative — over-keep, never
+ * over-delete.
  */
-export function parseLiveBuildIds(currentTrafficJson: string): string[] {
+export function parseLiveRevisionNames(currentTrafficJson: string): string[] {
     const raw = currentTrafficJson?.trim();
     if (!raw) return [];
     let parsed: unknown;
@@ -126,4 +138,48 @@ export function parseLiveBuildIds(currentTrafficJson: string): string[] {
         }
     }
     return out;
+}
+
+/**
+ * Reads the build-id of a single live revision. deploy.ts wires this to
+ * `kubectl get revision <name> -n <ns> -o jsonpath={.metadata.labels.apps\.kn-next\.dev/build-id}`
+ * (READ-ONLY, ADR-0001). Returns the build-id, or `""` when the label is absent
+ * (revision predates the label) or the read failed and the caller swallowed it.
+ */
+export type RevisionBuildIdResolver = (revisionName: string) => string;
+
+/** Result of {@link resolveLiveBuildIds}: a discriminated, fail-safe union. */
+export type ResolveLiveResult =
+    | { readonly ok: true; readonly buildIds: string[] }
+    | { readonly ok: false };
+
+/**
+ * Resolves live revision NAMES to their build-ids via {@link RevisionBuildIdResolver},
+ * FAIL-SAFE (defect B). If ANY live revision cannot be resolved to a non-empty
+ * build-id — label missing, empty, or the resolver throws — returns `{ ok: false }`
+ * so the caller SKIPS the GC entirely (over-keep, never over-delete). Only when
+ * every live revision resolves to a non-empty build-id does it return
+ * `{ ok: true, buildIds }`. An empty input is `{ ok: true, buildIds: [] }`
+ * (nothing live to protect → window-only GC).
+ */
+export function resolveLiveBuildIds(
+    revisionNames: readonly string[],
+    resolve: RevisionBuildIdResolver,
+): ResolveLiveResult {
+    const buildIds: string[] = [];
+    for (const name of revisionNames) {
+        let id: string;
+        try {
+            id = resolve(name);
+        } catch {
+            // Read failed → we cannot prove this live build is safe → skip GC.
+            return { ok: false };
+        }
+        if (!id) {
+            // No build-id label → unresolvable live build → skip GC (fail-safe).
+            return { ok: false };
+        }
+        buildIds.push(id);
+    }
+    return { ok: true, buildIds };
 }

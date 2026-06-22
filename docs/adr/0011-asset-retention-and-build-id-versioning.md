@@ -35,25 +35,49 @@ build, so a query-string/`deploymentId` mechanism was missing.
    `<app>/_next/static/<BUILD_ID>/…`. Regression tests assert upload is additive (no prune flag on
    any provider) and that two build-ids coexist after a second deploy.
 
-2. **Client→build pinning via Next `deploymentId`.** `kn-next deploy` sets
-   `NEXT_DEPLOYMENT_ID = <BUILD_ID>` **before** `next build`; `next.config.ts` reads it into
-   `deploymentId`. Next then appends `?dpl=<id>` to asset/RSC requests and emits a skew signal, so a
-   browser on build A keeps requesting build A's assets. The object store **ignores the query
-   string** and resolves the content-hashed `_next/static/<A>/…` object, so even an un-pinned older
-   client still resolves its build's chunk as long as the prefix is retained. We reuse the image tag
-   as the build id, keeping build id ⇔ image ⇔ static prefix in lock-step.
+2. **Deterministic BUILD_ID + client→build pinning.** `kn-next deploy` sets
+   `NEXT_DEPLOYMENT_ID = <deploy tag>` **before** `next build`. `next.config.ts` reads it into BOTH:
+   - `deploymentId` — Next appends `?dpl=<id>` to asset/RSC requests and emits a skew signal, so a
+     browser on build A keeps requesting build A's assets; and
+   - `generateBuildId: () => process.env.NEXT_DEPLOYMENT_ID || null` — **this is load-bearing**
+     (defect A). Verified against Next 16 source: `deploymentId` ONLY sets the `?dpl=` query param;
+     the `_next/static/<BUILD_ID>/` directory is otherwise a **random nanoid** via
+     `generateBuildId(config.generateBuildId, nanoid)`. Without forcing `generateBuildId`, the
+     uploaded static prefix would be a random id that does NOT equal the deploy tag the GC prunes by,
+     so the "just-deployed build is protected" guarantee would silently fail. Forcing it makes
+     `.next/BUILD_ID` == `NEXT_DEPLOYMENT_ID` == the deploy tag == the `_next/static/<tag>/` prefix
+     (`null` falls back to Next's nanoid for local `next dev`). `deploy.ts` additionally reads
+     `.next/BUILD_ID` after the build and **fails the deploy** if it is not the tag — a guard against
+     Next ever changing this. Build id ⇔ image ⇔ static prefix stay in lock-step.
 
 3. **Bounded, build-id-aware, live-aware retention GC.** A pure function
    `selectBuildsToDelete({ remoteBuildIds, timestamps, liveBuildIds, retain })`
    (`packages/kn-next/src/utils/asset-gc.ts`) returns the build-ids safe to delete:
 
-   > **keep iff** (within the newest `retain` window) **OR** (in the live set).
+   > **keep iff** (within the newest `retain` window) **OR** (build-id EXACTLY in the live set).
 
-   `retain` defaults to `3`, configurable via `storage.assetRetention`. The **live set** is sourced
-   **READ-ONLY** from `NextApp.Status.CurrentTraffic` (populated by the operator's
-   `mapTrafficStatus`, #92) via `kubectl get nextapp <n> -o jsonpath={.status.currentTraffic}` — no
-   cluster mutation (ADR-0001). This guarantees a **#92 pinned / canary / rolled-back** build is
-   **never reaped, even when older than the window**. The deploy-time pruner
+   `retain` defaults to `3`, configurable via `storage.assetRetention`.
+
+   **Resolving the live set correctly (defect B).** A Knative revision name does NOT contain the
+   build-id — revisions are auto-named `<app>-<NNNNN>` and the deployed image is **digest-pinned**, so
+   the build-id cannot be recovered from the revision name or the image. An earlier design matched a
+   remote build-id if it was a **substring** of a live revision name; that is wrong and is an
+   **over-DELETE safety bug** — a genuinely live (rolled-back/canary) build older than the retain
+   window would not be recognized as live and would be **reaped**. The fix is a real, resolvable link:
+
+   - the operator stamps `apps.kn-next.dev/build-id: <buildId>` onto the Knative Service's **revision
+     (pod) template** (`Spec.Template.ObjectMeta.Labels`), which Knative propagates to every Revision
+     (CLI passes the tag as `spec.buildId` in the CR);
+   - `deploy.ts` reads `Status.CurrentTraffic[].revisionName` (READ-ONLY), then for each live
+     revision reads that **label** via
+     `kubectl get revision <name> -o jsonpath={.metadata.labels.apps\.kn-next\.dev/build-id}`
+     (READ-ONLY, ADR-0001) to recover the **exact** live build-id;
+   - `selectBuildsToDelete` matches the live set by **exact equality** (never substring).
+
+   **Fail-safe:** if ANY live revision cannot be resolved to a non-empty build-id (label missing /
+   read error), `resolveLiveBuildIds` returns `{ ok: false }` and `deploy.ts` **skips the GC
+   entirely** — over-keep, never over-delete. This guarantees a **#92 pinned / canary / rolled-back**
+   build is **never reaped, even when older than the window**. The deploy-time pruner
    (`pruneOldBuilds`) deletes strictly under `<app>/_next/static/<id>/`, best-effort (a GC failure
    never fails an already-shipped deploy). It never deletes the only/last build and refuses any
    delete URI not scoped to `_next/static/<id>/`.
@@ -77,19 +101,20 @@ build, so a query-string/`deploymentId` mechanism was missing.
 
 - Old clients keep working across a deploy for the retention window; storage is bounded to ~`retain`
   builds plus any live build.
-- A rollback (#92) that pins an *old* revision is safe: its build is in `CurrentTraffic` → kept.
+- A rollback (#92) that pins an *old* revision is safe: the operator-stamped `build-id` label on that
+  revision resolves to its exact build-id, which is in the live set → kept (even outside the window).
 - Storage-cost vs safety is one knob (`storage.assetRetention`).
-- The GC is conservative on failure: a listing/parse failure skips GC (keeps everything); the live
-  set can only ever *add* keeps, never cause an over-delete.
+- The GC fails CLOSED on uncertainty: a listing/parse failure, OR any live revision that cannot be
+  resolved to a build-id, skips GC (keeps everything). The live set is matched by **exact equality**,
+  so it can only ever *add* keeps — the corrected design can over-keep, never over-delete.
 
 ## Action items / what is NOT covered here (honest scope)
 
 - **Unit-tested now:** additive/no-prune lock, build-id-scoped keys, two-builds coexist, the pure GC
-  selection logic, the deploy-time prune argv scoping, `parseLiveBuildIds`, and `deploymentId`
-  wiring.
+  selection logic with **exact** live-set matching, the deploy-time prune argv scoping (gcs + azure),
+  `parseLiveRevisionNames`, the fail-safe `resolveLiveBuildIds`, `spec.buildId` CR rendering, and the
+  `deploymentId`/`generateBuildId` wiring. **Envtest:** the operator stamps
+  `apps.kn-next.dev/build-id` onto the revision template (and omits it when `Spec.BuildID` is empty).
 - **Deferred to nightly e2e (#89/#38 harness), NOT a PR gate:** actually serving an old client's
   chunks during a *live* canary in a real browser — that requires a cluster + browser and cannot be
   asserted in a unit test. This ADR does not claim that path is verified by the unit suite.
-- Stamping the BUILD_ID into the Knative revision name (so the live-set match is exact rather than
-  substring) is a possible follow-up; today `parseLiveBuildIds` returns whole revision-name tokens
-  and the GC matches build-ids by membership, which is conservative (over-keep, never over-delete).

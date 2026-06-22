@@ -502,9 +502,9 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// to a non-existent service and deliver revalidation events nowhere. When kafka is
 	// requested but opt-in is off, we record a non-fatal RevalidationDeferred condition
 	// (Ready stays True) below instead of creating a dangling source.
-	revalidationDeferred := false
-	if nextApp.Spec.Revalidation != nil && nextApp.Spec.Revalidation.Queue == "kafka" &&
-		nextApp.Spec.Revalidation.ProvisionKafkaSource != nil && *nextApp.Spec.Revalidation.ProvisionKafkaSource {
+	kafkaRequested := nextApp.Spec.Revalidation != nil && nextApp.Spec.Revalidation.Queue == "kafka"
+	revalidationDeferred := kafkaRequested && !ptr.Deref(nextApp.Spec.Revalidation.ProvisionKafkaSource, false)
+	if kafkaRequested && !revalidationDeferred {
 		// Unstructured to avoid Eventing proto deps.
 		topic := fmt.Sprintf("%s-revalidation", nextApp.Name)
 		kafkaSource := &unstructured.Unstructured{}
@@ -539,10 +539,6 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 				fmt.Sprintf("Failed to reconcile KafkaSource: %s", err.Error()))
 			return ctrl.Result{}, err
 		}
-	} else if nextApp.Spec.Revalidation != nil && nextApp.Spec.Revalidation.Queue == "kafka" {
-		// Kafka requested but provisioning not opted in: defer (do not create a
-		// KafkaSource pointing at the unbuilt {app}-revalidator consumer).
-		revalidationDeferred = true
 	}
 
 	// 6. Update Status: URL + conditions

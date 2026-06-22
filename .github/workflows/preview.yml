@@ -1,0 +1,184 @@
+name: Preview environments (per-PR)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Issue #91 / ADR-0013 — per-PR ephemeral preview environments.
+#
+# On a PR open/sync/reopen this builds the app and deploys an EPHEMERAL preview
+# under a NextApp CR named `<app>-pr-<n>` (the CLI `kn-next preview deploy`),
+# then upserts a sticky comment with the preview URL. On PR close it tears the
+# preview down (`kn-next preview destroy`) — the operator's external-cleanup
+# finalizer reaps the name-scoped asset prefix + Redis keyspace.
+#
+# GATING — this workflow is INERT until a cluster is wired up. The repo has no
+# KUBECONFIG / registry creds today, so EVERY job is guarded by BOTH:
+#   * the `preview` label being present on the PR, AND
+#   * a non-empty `vars.PREVIEW_ENABLED` repository variable.
+# Until both hold the jobs are skipped — the mechanism (operator + CLI) ships
+# and is exercised by unit + envtest; the live per-PR loop is cluster-gated.
+#
+# SECURITY (fork-PR caveat): we deliberately use `pull_request` (NOT
+# `pull_request_target`) so a fork PR runs with a read-only token and CANNOT
+# read repo secrets — a malicious fork must never exfiltrate cluster/registry
+# creds. Combined with the `preview` label gate (a maintainer must label),
+# previews only deploy for trusted, same-repo branches. Do NOT switch to
+# `pull_request_target` to "make fork previews work" — that reintroduces the
+# secret-exposure hole.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number to (re)deploy a preview for'
+        required: true
+      branch:
+        description: 'Git ref to build the preview from'
+        required: true
+
+# Least-privilege: only what the sticky-comment upsert needs.
+permissions:
+  contents: read
+  pull-requests: write
+
+# Serialize per-PR so a rapid push/close can't race deploy vs destroy.
+concurrency:
+  group: preview-${{ github.event.pull_request.number || github.event.inputs.pr }}
+  cancel-in-progress: true
+
+env:
+  # Where preview NextApp CRs land. The operator reconciles them.
+  PREVIEW_NAMESPACE: previews
+
+jobs:
+  deploy:
+    name: Deploy preview
+    # Gate: only when explicitly enabled. For a PR it must be open/sync/reopen AND
+    # carry the `preview` label; a manual workflow_dispatch is always allowed when
+    # enabled. `closed` is handled by the destroy job, never here.
+    if: >-
+      vars.PREVIEW_ENABLED != '' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request' &&
+          github.event.action != 'closed' &&
+          contains(github.event.pull_request.labels.*.name, 'preview')
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CLI (dist/cli/preview.js)
+        run: |
+          pnpm --filter @knext/lib build
+          pnpm --filter @knext/core build
+
+      - name: Configure cluster + registry access
+        # Cluster-gated: requires KUBECONFIG + registry creds that DO NOT exist
+        # in this repo yet. When provisioned, set them as repo secrets and the
+        # `vars.PREVIEW_ENABLED` variable; until then this whole job is skipped.
+        env:
+          KUBECONFIG_DATA: ${{ secrets.PREVIEW_KUBECONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_DATA" | base64 -d > "$HOME/.kube/config"
+
+      - name: Deploy preview
+        id: deploy
+        working-directory: packages/kn-next
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.event.inputs.branch }}
+        run: |
+          URL=$(node dist/cli/preview.js deploy \
+            --pr "$PR_NUMBER" \
+            --branch "$HEAD_REF" \
+            -n "$PREVIEW_NAMESPACE" | tail -n1)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Upsert sticky preview comment
+        if: steps.deploy.outputs.url != ''
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: knext-preview
+          number: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+          message: |
+            ### 🚀 knext preview deployed
+
+            | | |
+            |---|---|
+            | **Preview URL** | ${{ steps.deploy.outputs.url }} |
+            | **PR** | #${{ github.event.pull_request.number || github.event.inputs.pr }} |
+
+            This is an ephemeral, scale-to-zero environment (`<app>-pr-<n>`). It is
+            torn down automatically when the PR is closed.
+
+  destroy:
+    name: Destroy preview
+    # Gate: only on PR close, when previews are enabled.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      vars.PREVIEW_ENABLED != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build CLI (dist/cli/preview.js)
+        run: |
+          pnpm --filter @knext/lib build
+          pnpm --filter @knext/core build
+
+      - name: Configure cluster access
+        env:
+          KUBECONFIG_DATA: ${{ secrets.PREVIEW_KUBECONFIG }}
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_DATA" | base64 -d > "$HOME/.kube/config"
+
+      - name: Destroy preview
+        working-directory: packages/kn-next
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          node dist/cli/preview.js destroy --pr "$PR_NUMBER" -n "$PREVIEW_NAMESPACE"
+
+      - name: Update sticky comment (torn down)
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: knext-preview
+          number: ${{ github.event.pull_request.number }}
+          message: |
+            ### 🧹 knext preview torn down
+
+            The ephemeral preview for this PR has been deleted (NextApp CR removed;
+            the operator finalizer reaped its asset prefix).

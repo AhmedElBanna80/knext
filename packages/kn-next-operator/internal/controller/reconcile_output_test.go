@@ -647,6 +647,91 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 				"reverting to latest-ready must clear the prior pinned split")
 		})
 	})
+
+	// Preview environments (#91). Characterization: the operator already applies
+	// preview overrides from Spec.Preview — these tests lock that behavior in.
+	// A preview is EPHEMERAL (ADR-0013): the operator forces max-scale=1 /
+	// min-scale=0 / a 30s scale-to-zero retention window and stamps
+	// environment=preview / pr-id labels on the ksvc, EVEN WHEN the spec requests
+	// a larger scale (the preview override wins).
+	Context("Preview environment (#91)", func() {
+		It("does NOT stamp preview labels/annotations when Preview is unset (back-compat)", func() {
+			nn := reconcileOnce("preview-off", appsv1alpha1.NextAppSpec{Image: validImage})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+
+			Expect(ksvc.Labels).NotTo(HaveKey("environment"))
+			Expect(ksvc.Labels).NotTo(HaveKey("pr-id"))
+			annotations := ksvc.Spec.Template.Annotations
+			Expect(annotations).NotTo(HaveKey("autoscaling.knative.dev/scale-to-zero-pod-retention-period"))
+		})
+
+		It("stamps environment=preview / pr-id labels and forces the preview scaling overrides", func() {
+			nn := reconcileOnce("preview-on", appsv1alpha1.NextAppSpec{
+				Image: validImage,
+				Preview: &appsv1alpha1.PreviewSpec{
+					Enabled: true,
+					PRID:    "123",
+					Branch:  "feat/x",
+				},
+			})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+
+			By("stamping the preview identity labels on the ksvc")
+			Expect(ksvc.Labels).To(HaveKeyWithValue("environment", "preview"))
+			Expect(ksvc.Labels).To(HaveKeyWithValue("pr-id", "123"))
+
+			By("forcing the ephemeral scaling overrides")
+			annotations := ksvc.Spec.Template.Annotations
+			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/max-scale", "1"))
+			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/min-scale", "0"))
+			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/scale-to-zero-pod-retention-period", "30s"))
+		})
+
+		It("the preview override WINS over a Spec.Scaling request for a larger max-scale", func() {
+			nn := reconcileOnce("preview-override", appsv1alpha1.NextAppSpec{
+				Image: validImage,
+				Scaling: &appsv1alpha1.ScalingSpec{
+					MinScale: 3,
+					MaxScale: 10,
+				},
+				Preview: &appsv1alpha1.PreviewSpec{
+					Enabled: true,
+					PRID:    "456",
+					Branch:  "feat/y",
+				},
+			})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+
+			annotations := ksvc.Spec.Template.Annotations
+			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/max-scale", "1"),
+				"preview max-scale=1 must override Spec.Scaling.MaxScale=10")
+			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/min-scale", "0"),
+				"preview min-scale=0 must override Spec.Scaling.MinScale=3")
+		})
+
+		It("does not apply preview overrides when Preview.Enabled is false", func() {
+			nn := reconcileOnce("preview-disabled", appsv1alpha1.NextAppSpec{
+				Image: validImage,
+				Preview: &appsv1alpha1.PreviewSpec{
+					Enabled: false,
+					PRID:    "789",
+				},
+			})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+
+			Expect(ksvc.Labels).NotTo(HaveKey("environment"))
+			Expect(ksvc.Spec.Template.Annotations).NotTo(
+				HaveKey("autoscaling.knative.dev/scale-to-zero-pod-retention-period"))
+		})
+	})
 })
 
 // envValue returns the value of the named env var, or "" if absent.

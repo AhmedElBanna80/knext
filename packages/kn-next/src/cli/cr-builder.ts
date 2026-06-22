@@ -13,6 +13,21 @@ import YAML from "yaml";
 import type { KnativeNextConfig } from "../config";
 
 /**
+ * PreviewInput is the optional per-PR preview descriptor (#91). When present,
+ * the CR's spec.preview block is emitted as {enabled:true, prId, branch}, which
+ * switches the operator into preview mode (max-scale=1, min-scale=0, 30s
+ * scale-to-zero retention, environment=preview / pr-id labels).
+ *
+ * A preview is EPHEMERAL (ADR-0013): asset prefix / ksvc URL / finalizer scope
+ * are all isolated by the CR's name (`<app>-pr-<n>`), so no operator changes are
+ * needed for teardown — deleting the CR reaps exactly that preview's state.
+ */
+export interface PreviewInput {
+    prId: string;
+    branch: string;
+}
+
+/**
  * Builds a NextApp CR object from a KnativeNextConfig and a resolved image ref.
  * The image MUST be digest-pinned (the operator enforces this at reconcile time).
  *
@@ -26,6 +41,7 @@ export function buildNextAppCRObject(
     image: string,
     namespace: string,
     buildId?: string,
+    preview?: PreviewInput,
 ): Record<string, unknown> {
     // Scaling — preserve minScale:0 (scale-to-zero invariant)
     const minScale = config.scaling?.minScale ?? 0;
@@ -184,6 +200,18 @@ export function buildNextAppCRObject(
         // #93 skew protection: carry the deploy's BUILD_ID so the operator can stamp
         // the `apps.kn-next.dev/build-id` revision label the asset GC resolves against.
         ...(buildId ? { buildId } : {}),
+        // #91 per-PR preview: switch the operator into ephemeral preview mode.
+        // We deliberately do NOT emit spec.traffic on a preview (single revision,
+        // max-scale=1) — name-derived isolation handles everything else.
+        ...(preview
+            ? {
+                  preview: {
+                      enabled: true,
+                      prId: preview.prId,
+                      branch: preview.branch,
+                  },
+              }
+            : {}),
     };
 
     return {
@@ -206,8 +234,15 @@ export function renderNextAppCR(
     image: string,
     namespace: string,
     buildId?: string,
+    preview?: PreviewInput,
 ): string {
-    const crObject = buildNextAppCRObject(config, image, namespace, buildId);
+    const crObject = buildNextAppCRObject(
+        config,
+        image,
+        namespace,
+        buildId,
+        preview,
+    );
     return YAML.stringify(crObject);
 }
 

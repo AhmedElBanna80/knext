@@ -11,6 +11,8 @@
   "exports": {
     ".": "./src/config.ts",
     "./loader": "./src/loader.ts",
+    "./adapter": "./src/adapters/next-adapter.ts",
+    "./adapters/next-adapter": "./src/adapters/next-adapter.ts",
     "./adapters/node-server": "./src/adapters/node-server.ts",
     "./adapters/cache-handler": "./src/adapters/cache-handler.js",
     "./utils/logger": "./src/utils/logger.ts",
@@ -42,11 +44,22 @@
     "access": "public",
     "provenance": true
   },
+  "peerDependencies": {
+    "next": ">=16.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/bun": "^1.3.8",
     "@types/node": "^25.3.0",
     "@vitest/coverage-v8": "^4.0.18",
     "bun-types": "^1.3.9",
+    "next": "16.0.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "vitest": "^4.0.18"
   },
   "dependencies": {

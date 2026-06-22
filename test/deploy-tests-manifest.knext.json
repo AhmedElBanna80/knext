@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "$comment": [
+    "knext adapter deploy-test manifest (#89, ADR-0007 A3-2).",
+    "Layered onto Next's own test/deploy-tests-manifest.json via NEXT_EXTERNAL_TESTS_FILTERS.",
+    "Next's manifest selects which e2e tests are deploy-eligible; this file layers knext",
+    "include/exclude on top. THIS IS AN HONEST LEDGER, NOT A FAKE GREEN: knext does NOT yet",
+    "pass the official suite. Every exclusion below names a category knext does not support",
+    "today (architectural or upstream-gated, see CLAUDE.md §8 and docs/compat-matrix.md).",
+    "The exclude list must GROW FROM OBSERVED FAILURES in future commits — each a documented",
+    "ledger entry — and SHRINK toward zero as the verified-adapter scoreboard (ADR-0007 A3-3).",
+    "Do NOT pre-emptively exclude tests to manufacture a green run."
+  ],
+  "suites": ["e2e"],
+  "rules": {
+    "include": [],
+    "exclude": [
+      {
+        "test": "test/e2e/app-dir/edge-runtime-module-errors",
+        "category": "edge-runtime",
+        "rationale": "knext targets the Node/Bun standalone server (output:'standalone'); it has no edge (V8-isolate) runtime. The Edge Runtime is architecturally out of scope — knext matches Vercel's compute layer, not its global edge (CLAUDE.md §8 bucket 1). compat-matrix row: Edge Runtime ❌."
+      },
+      {
+        "test": "test/e2e/middleware-general",
+        "category": "edge-middleware",
+        "rationale": "Edge Middleware runs in the Edge Runtime, which knext does not provide. knext supports the (deprecated) Node middleware/proxy convention only; edge-middleware deploy tests assume the isolate runtime. Upstream-gated + architectural (CLAUDE.md §8). compat-matrix row: Edge Middleware ❌."
+      },
+      {
+        "test": "test/e2e/app-dir/ppr-full",
+        "category": "ppr",
+        "rationale": "Partial Prerendering (PPR) is not adapter-standardizable yet (CLAUDE.md §6 Tier C, upstream-gated); knext does not implement the PPR resume/stream contract. compat-matrix row: PPR ❌."
+      },
+      {
+        "test": "test/e2e/cache-components",
+        "category": "cache-components",
+        "rationale": "Cache Components ('use cache' / cacheLife) are an evolving upstream API not yet stabilized for adapters (CLAUDE.md §6 Tier C). knext's Redis cache-handler does not implement the Cache Components protocol. compat-matrix row: Cache Components ❌."
+      }
+    ]
+  }
+}

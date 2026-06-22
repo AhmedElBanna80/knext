@@ -151,6 +151,31 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/max-scale", "10"))
 		})
 
+		It("renders scale-to-zero-eligible annotations (min-scale 0, max-scale 1) for #39 activation", func() {
+			// A2-3 (#39): the activation path requires the revision to be eligible
+			// to scale to zero (min-scale 0) and to wake on demand. A single-replica
+			// ceiling (max-scale 1) makes the nightly scale-from-zero e2e
+			// deterministic — exactly one pod is woken by the activator. This is the
+			// deterministic per-PR gate that proves the operator maps the CR onto the
+			// autoscaling annotations the activator relies on.
+			nn := reconcileOnce("ksvc-scale-from-zero", appsv1alpha1.NextAppSpec{
+				Image: validImage,
+				Scaling: &appsv1alpha1.ScalingSpec{
+					MinScale: 0,
+					MaxScale: 1,
+				},
+			})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+
+			annotations := ksvc.Spec.Template.Annotations
+			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/min-scale", "0"),
+				"min-scale must be 0 so the revision is eligible to scale to zero")
+			Expect(annotations).To(HaveKeyWithValue("autoscaling.knative.dev/max-scale", "1"),
+				"max-scale must be 1 so exactly one pod is woken on activation")
+		})
+
 		It("stamps the build-id label onto the revision (pod) template when Spec.BuildID is set (#93)", func() {
 			nn := reconcileOnce("ksvc-buildid", appsv1alpha1.NextAppSpec{
 				Image:   validImage,
@@ -335,6 +360,57 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			env := ksvc.Spec.Template.Spec.Containers[0].Env
 			Expect(envValue(env, "NEXT_PUBLIC_RUM_ENABLED")).To(Equal("true"))
 			Expect(envValue(env, "NEXT_PUBLIC_RUM_SAMPLE_RATE")).To(BeEmpty())
+		})
+	})
+
+	Context("OTel tracing env propagation (#30)", func() {
+		It("does NOT set OTEL_TRACING_ENABLED when tracing is off", func() {
+			nn := reconcileOnce("tracing-off", appsv1alpha1.NextAppSpec{
+				Image:         validImage,
+				Observability: &appsv1alpha1.ObservabilitySpec{Enabled: true},
+			})
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+			env := ksvc.Spec.Template.Spec.Containers[0].Env
+			Expect(envValue(env, "OTEL_TRACING_ENABLED")).To(BeEmpty())
+			Expect(envValue(env, "OTEL_EXPORTER_OTLP_ENDPOINT")).To(BeEmpty())
+			Expect(envValue(env, "OTEL_TRACES_SAMPLER_ARG")).To(BeEmpty())
+		})
+
+		It("sets OTEL_TRACING_ENABLED, endpoint, and sampler arg when tracing is on", func() {
+			nn := reconcileOnce("tracing-on", appsv1alpha1.NextAppSpec{
+				Image: validImage,
+				Observability: &appsv1alpha1.ObservabilitySpec{
+					Enabled: true,
+					Tracing: &appsv1alpha1.TracingSpec{
+						Enabled:    true,
+						Endpoint:   "http://tempo.monitoring:4317",
+						SampleRate: "0.25",
+					},
+				},
+			})
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+			env := ksvc.Spec.Template.Spec.Containers[0].Env
+			Expect(envValue(env, "OTEL_TRACING_ENABLED")).To(Equal("true"))
+			Expect(envValue(env, "OTEL_EXPORTER_OTLP_ENDPOINT")).To(Equal("http://tempo.monitoring:4317"))
+			Expect(envValue(env, "OTEL_TRACES_SAMPLER_ARG")).To(Equal("0.25"))
+		})
+
+		It("omits endpoint and sampler env when unset, keeping the enable flag", func() {
+			nn := reconcileOnce("tracing-on-defaults", appsv1alpha1.NextAppSpec{
+				Image: validImage,
+				Observability: &appsv1alpha1.ObservabilitySpec{
+					Enabled: true,
+					Tracing: &appsv1alpha1.TracingSpec{Enabled: true},
+				},
+			})
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+			env := ksvc.Spec.Template.Spec.Containers[0].Env
+			Expect(envValue(env, "OTEL_TRACING_ENABLED")).To(Equal("true"))
+			Expect(envValue(env, "OTEL_EXPORTER_OTLP_ENDPOINT")).To(BeEmpty())
+			Expect(envValue(env, "OTEL_TRACES_SAMPLER_ARG")).To(BeEmpty())
 		})
 	})
 

@@ -21,6 +21,8 @@ export default defineConfig({
     'cli/rollback': 'src/cli/rollback.ts',
     // #91 per-PR preview environments (deploy/destroy)
     'cli/preview': 'src/cli/preview.ts',
+    // #30: k6 load-test entry (manual/nightly runbook, not a PR gate)
+    'cli/loadtest': 'src/cli/loadtest.ts',
   },
   format: ['esm'],
   platform: 'node',

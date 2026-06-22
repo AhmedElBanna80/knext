@@ -54,8 +54,13 @@ kubectl apply -f https://github.com/knative/serving/releases/download/knative-vX
 kubectl apply -f https://github.com/knative/serving/releases/download/knative-vX/serving-core.yaml
 kubectl apply -f https://github.com/knative-extensions/net-kourier/releases/download/knative-vX/kourier.yaml
 kubectl patch cm/config-network -n knative-serving --type merge \
-  -p '{"data":{"ingress-class":"kourier.knative.dev"}}'
+  -p '{"data":{"ingress-class":"kourier.ingress.networking.knative.dev"}}'
 ```
+The full controller-qualified `kourier.ingress.networking.knative.dev` is the correct
+ingress-class — the short `kourier.knative.dev` form does NOT match Kourier's class and
+leaves routes unprogrammed. The operator install bundle now ships this `config-network`
+ConfigMap declaratively (issue #45 / ADR-0009), so manual patching is only needed for a
+hand-rolled dev install.
 ⚠️ Match the Knative version to the cluster's k8s version (Knative ≤1.19 predates k8s 1.34).
 
 ## Debugging

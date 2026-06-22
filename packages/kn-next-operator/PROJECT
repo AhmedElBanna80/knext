@@ -18,4 +18,7 @@ resources:
   kind: NextApp
   path: github.com/AhmedElBanna80/Knative-open-nextjs/packages/kn-next-operator/api/v1alpha1
   version: v1alpha1
+  webhooks:
+    validation: true
+    webhookVersion: v1
 version: "3"

@@ -1,0 +1,29 @@
+# This patch mounts the webhook serving cert into the manager container and
+# exposes the webhook port. Applied via the [WEBHOOK] section of
+# config/default/kustomization.yaml.
+#
+# JSON6902 ops are used (matching manager_metrics_patch.yaml) so the webhook arg
+# is APPENDED to the base args (--leader-elect, --health-probe-bind-address=:8081)
+# rather than replacing the whole list — replacing it would silently disable
+# leader election (split-brain hazard with replicas>1).
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+- op: add
+  path: /spec/template/spec/containers/0/ports/-
+  value:
+    containerPort: 9443
+    name: webhook-server
+    protocol: TCP
+- op: add
+  path: /spec/template/spec/containers/0/volumeMounts/-
+  value:
+    name: webhook-certs
+    mountPath: /tmp/k8s-webhook-server/serving-certs
+    readOnly: true
+- op: add
+  path: /spec/template/spec/volumes/-
+  value:
+    name: webhook-certs
+    secret:
+      secretName: webhook-server-cert

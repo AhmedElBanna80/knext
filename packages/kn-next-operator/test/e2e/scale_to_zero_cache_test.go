@@ -59,6 +59,8 @@ import (
 )
 
 const (
+	// operatorNamespace is where `make deploy` installs the controller-manager.
+	operatorNamespace = "kn-next-operator-system"
 	// scaleAppNamespace is where the NextApp under test is deployed.
 	scaleAppNamespace = "kn-next-scale-test"
 	// scaleAppName is the NextApp / Knative Service name under test.
@@ -74,6 +76,26 @@ var _ = Describe("ScaleToZero bytecode cache (A2-2 / #38)", Ordered, func() {
 	SetDefaultEventuallyPollingInterval(2 * time.Second)
 
 	BeforeAll(func() {
+		// The operator MUST be running, or nothing reconciles the NextApp CR and
+		// the ksvc never becomes Ready. The shared BeforeSuite only builds + loads
+		// the manager image and installs CertManager — it does NOT deploy the
+		// manager — so the scale spec deploys it here before applying the CR.
+		By("installing the operator CRDs")
+		_, err := utils.Run(exec.Command("make", "install"))
+		Expect(err).NotTo(HaveOccurred(), "failed to install CRDs")
+
+		By("deploying the controller-manager")
+		_, err = utils.Run(exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage)))
+		Expect(err).NotTo(HaveOccurred(), "failed to deploy the controller-manager")
+
+		By("waiting for the controller-manager rollout to complete")
+		Eventually(func(g Gomega) {
+			out, err := utils.Kubectl("rollout", "status",
+				"deployment/kn-next-operator-controller-manager",
+				"-n", operatorNamespace, "--timeout=10s")
+			g.Expect(err).NotTo(HaveOccurred(), out)
+		}).Should(Succeed())
+
 		By("creating the scale-test namespace")
 		_, _ = utils.Kubectl("create", "ns", scaleAppNamespace)
 
@@ -85,6 +107,12 @@ var _ = Describe("ScaleToZero bytecode cache (A2-2 / #38)", Ordered, func() {
 	AfterAll(func() {
 		By("deleting the scale-test namespace")
 		_, _ = utils.Kubectl("delete", "ns", scaleAppNamespace, "--ignore-not-found")
+
+		By("undeploying the controller-manager")
+		_, _ = utils.Run(exec.Command("make", "undeploy"))
+
+		By("uninstalling the operator CRDs")
+		_, _ = utils.Run(exec.Command("make", "uninstall"))
 	})
 
 	It("reuses the bytecode cache across a scale-to-zero cold start", func() {

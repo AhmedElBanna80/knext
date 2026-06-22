@@ -71,7 +71,9 @@ spec:
         # this stays a clearly-fake all-zeros sha256 so the check-no-latest.sh guard
         # (which only requires a digest, never :latest) still passes.
         # The release job substitutes the real pushed digest into dist/install.yaml
-        # (see Makefile `set-operator-digest` / the workflow's digest-substitution step).
+        # (see the "Build installer + pin real digest" step in
+        # .github/workflows/operator-supply-chain.yml, which sed-pins the digest into
+        # config/manager/kustomization.yaml then runs `make build-installer`).
         # To set it manually after a push:
         #   docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/getknext-dev/kn-next-operator:<tag>
         image: ghcr.io/getknext-dev/kn-next-operator:v0.1.0@sha256:0000000000000000000000000000000000000000000000000000000000000000

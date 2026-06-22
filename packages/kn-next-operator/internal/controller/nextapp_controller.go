@@ -35,6 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
+	"github.com/AhmedElBanna80/knext/packages/kn-next-operator/internal/validation"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 )
 
@@ -85,23 +86,27 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// Enforce digest pinning — validateImageRef rejects :latest and tag-only refs.
-	// This was previously a warn-only check; A1-digest promotes it to a hard reject.
-	if err := validateImageRef(nextApp.Spec.Image); err != nil {
-		logger.Error(err, "Rejecting NextApp: image must be digest-pinned")
+	// Validate the full spec using the SAME function the admission webhook calls
+	// (internal/validation.ValidateNextAppSpec) so the two cannot drift. This
+	// enforces digest pinning (rejects :latest / tag-only refs), required image,
+	// non-negative scaling, MinScale <= MaxScale, and recognized provider/queue
+	// enums. The webhook rejects these at write time; the reconciler stays
+	// fail-closed as defense-in-depth for CRs that predate the webhook.
+	if err := validation.ValidateNextAppSpec(&nextApp.Spec); err != nil {
+		logger.Error(err, "Rejecting NextApp: spec failed validation")
 		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
 			Type:               ConditionDegraded,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: nextApp.Generation,
-			Reason:             "InvalidImage",
+			Reason:             "InvalidSpec",
 			Message:            err.Error(),
 		})
 		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
 			Type:               ConditionReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: nextApp.Generation,
-			Reason:             "InvalidImage",
-			Message:            "Image does not meet digest-pinning requirements",
+			Reason:             "InvalidSpec",
+			Message:            "Spec does not meet validation requirements",
 		})
 		_ = r.Status().Update(ctx, &nextApp)
 		return ctrl.Result{}, err

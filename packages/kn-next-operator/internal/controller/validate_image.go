@@ -17,49 +17,15 @@ limitations under the License.
 package controller
 
 import (
-	"fmt"
-	"strings"
+	"github.com/AhmedElBanna80/knext/packages/kn-next-operator/internal/validation"
 )
 
 // validateImageRef enforces digest-pinning for all NextApp images.
 //
-// Acceptance rules (ADR-0001 / A1-digest):
-//   - ACCEPT:  image contains "@sha256:" — digest-pinned (with or without a tag)
-//   - REJECT:  image ends with ":latest" — mutable, prevents rollbacks
-//   - REJECT:  image has no "@sha256:" suffix — tag-only refs are mutable
-//   - REJECT:  image has no tag separator at all (implicitly :latest)
-//
-// This replaces the inline validation in Reconcile that only WARNED on :latest.
+// The digest-pinning logic now lives in internal/validation so the admission
+// webhook and the reconciler share a single implementation and cannot drift.
+// This thin wrapper is retained for the reconciler's existing call sites and
+// tests; it delegates to validation.ValidateImageRef.
 func validateImageRef(image string) error {
-	// A digest-pinned image MUST contain "@sha256:" — accept immediately.
-	if strings.Contains(image, "@sha256:") {
-		return nil
-	}
-
-	// No "@sha256:" — image is either tagless (implicit :latest) or tag-only.
-	// Both are rejected: tags are mutable and cannot guarantee provenance.
-
-	if strings.HasSuffix(image, ":latest") {
-		return fmt.Errorf(
-			"image %q uses the :latest tag which is forbidden: "+
-				"use a digest-pinned ref (e.g. myapp:v1@sha256:<hash>)",
-			image,
-		)
-	}
-
-	if !strings.Contains(image, ":") {
-		// No tag separator at all — registry resolves to :latest.
-		return fmt.Errorf(
-			"image %q has no explicit tag or digest: "+
-				"use a digest-pinned ref (e.g. myapp:v1@sha256:<hash>)",
-			image,
-		)
-	}
-
-	// Has a tag but no @sha256: — tag-only ref, still mutable.
-	return fmt.Errorf(
-		"image %q has a tag but no digest pin (@sha256:): "+
-			"use a digest-pinned ref (e.g. %s@sha256:<hash>)",
-		image, image,
-	)
+	return validation.ValidateImageRef(image)
 }

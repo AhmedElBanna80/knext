@@ -37,6 +37,7 @@ import (
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 	"github.com/AhmedElBanna80/knext/packages/kn-next-operator/internal/controller"
+	webhookv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/internal/webhook/v1alpha1"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	// +kubebuilder:scaffold:imports
 )
@@ -186,6 +187,20 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "NextApp")
 		os.Exit(1)
+	}
+
+	// Register the NextApp validating admission webhook only when serving certs
+	// are configured. Without certs the webhook server cannot serve TLS, so we
+	// skip registration to keep `make run` / local development working. In a
+	// cluster, cert-manager mounts the cert and --webhook-cert-path is set, so
+	// the webhook is active and rejects invalid NextApps at admission time.
+	if len(webhookCertPath) > 0 {
+		if err := webhookv1alpha1.SetupNextAppWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "NextApp")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("Skipping NextApp webhook registration: no --webhook-cert-path configured")
 	}
 	// +kubebuilder:scaffold:builder
 

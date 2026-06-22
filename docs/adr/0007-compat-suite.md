@@ -208,6 +208,11 @@ Port the reference workflow with knext substitutions:
   - [ ] Add `.github/workflows/test-e2e-deploy.yml` (port of the reference; **pinned** Next ref;
         16-way shard; `schedule` + `workflow_dispatch`).
   - [ ] Align in-repo `next` version with the pinned harness ref (16.2.x).
+- **A3-2 (publish the matrix, done):**
+  - [x] Publish `docs/compat-matrix.md` — an honest, evidence-gated supported/unsupported matrix,
+        linked from the README, with a guard test (`tests/compat-matrix.test.ts`) that fails CI on
+        any overclaim (issue #41). Note: the matrix is gated on the per-PR `compat-smoke` checks; it
+        is **not** the official suite (#89) and says so explicitly.
 - **A3-3 (close the loop on the claim):**
   - [ ] Track the exclude-list shrinking to zero as the public "verified-adapter" scoreboard; surface
         it in docs.

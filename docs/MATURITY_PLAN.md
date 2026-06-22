@@ -27,8 +27,12 @@
 - **Stale docs** — `VINEXT_MIGRATION_PLAN.md`, vinext mentions in `ARCHITECTURE.md`.
 - **No compat-suite gate** — correctness is unverified.
 - **Image optimization dropped** — `sharp` removed (no `next/image` optimization) — a parity gap.
-- **Networking layer unproven** — Kourier failed to program ingress on k8s 1.34 during OKE
-  validation (port-forward/LB-to-pod used as workaround). Needs an ADR + a supported path.
+- **Networking layer** — Kourier appeared to "fail to program ingress on k8s 1.34" during OKE
+  validation, but the real root cause was an **unset `ingress-class`** in Knative Serving's
+  `config-network` ConfigMap, so Serving never wired routes to the installed Kourier ingress.
+  Now codified declaratively: the operator install bundle ships a `config-network` ConfigMap
+  setting `ingress-class: kourier.ingress.networking.knative.dev` (issue #45, ADR-0009),
+  replacing the manual `kubectl patch`.
 
 ## Phases (sequential; each gated by exit criteria)
 

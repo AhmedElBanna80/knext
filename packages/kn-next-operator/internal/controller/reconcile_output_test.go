@@ -30,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -324,12 +325,44 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 				"KafkaSource must not exist when revalidation is not configured")
 		})
 
-		It("IS created with the topic/brokers/sink when Revalidation queue is kafka", func() {
-			nn := reconcileOnce("kafka-on", appsv1alpha1.NextAppSpec{
+		It("is NOT created when queue is kafka but ProvisionKafkaSource is unset (consumer deferred, #95)", func() {
+			nn := reconcileOnce("kafka-deferred", appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Revalidation: &appsv1alpha1.RevalidationSpec{
 					Queue:          "kafka",
 					KafkaBrokerUrl: "kafka-broker:9092",
+				},
+			})
+
+			By("not provisioning a KafkaSource that points at the unbuilt revalidator sink")
+			ks := newKafkaSourceObj()
+			ksName := types.NamespacedName{Name: nn.Name + "-revalidation-source", Namespace: namespace}
+			err := k8sClient.Get(ctx, ksName, ks)
+			Expect(errors.IsNotFound(err)).To(BeTrue(),
+				"KafkaSource must not exist while the revalidator consumer is unbuilt and opt-in is off")
+
+			updated := &appsv1alpha1.NextApp{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+
+			By("surfacing a non-fatal RevalidationDeferred condition")
+			deferred := findCondition(updated.Status.Conditions, conditionTypeRevalidationDeferred)
+			Expect(deferred).NotTo(BeNil(), "RevalidationDeferred condition must be set")
+			Expect(deferred.Status).To(Equal(metav1.ConditionTrue))
+			Expect(deferred.Reason).To(Equal("ConsumerNotProvisioned"))
+
+			By("keeping Ready=True (the deferral is non-fatal)")
+			ready := findCondition(updated.Status.Conditions, conditionTypeReady)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("IS created with the topic/brokers/sink when kafka + ProvisionKafkaSource=true", func() {
+			nn := reconcileOnce("kafka-on", appsv1alpha1.NextAppSpec{
+				Image: validImage,
+				Revalidation: &appsv1alpha1.RevalidationSpec{
+					Queue:                "kafka",
+					KafkaBrokerUrl:       "kafka-broker:9092",
+					ProvisionKafkaSource: ptr.To(true),
 				},
 			})
 
@@ -400,6 +433,118 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			sa := &corev1.ServiceAccount{}
 			saName := types.NamespacedName{Name: name + "-sa", Namespace: namespace}
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, saName, sa))).To(BeTrue())
+		})
+	})
+
+	// Issue #92: rollback via Knative revision traffic split. The reconciler
+	// renders ksvc.Spec.Traffic from the CR's spec.traffic intent.
+	Context("Traffic split (#92 rollback)", func() {
+		It("leaves ksvc.Spec.Traffic nil when spec.traffic is unset (back-compat, byte-identical)", func() {
+			nn := reconcileOnce("traffic-default", appsv1alpha1.NextAppSpec{Image: validImage})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+			Expect(ksvc.Spec.Traffic).To(BeEmpty(),
+				"unset traffic must leave Knative to default 100%% latest-ready (no spec.traffic)")
+		})
+
+		It("pins 100%% to a named revision when spec.traffic.revisionName is set with no canary", func() {
+			nn := reconcileOnce("traffic-pinned", appsv1alpha1.NextAppSpec{
+				Image:   validImage,
+				Traffic: &appsv1alpha1.TrafficSpec{RevisionName: "traffic-pinned-00001"},
+			})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+			Expect(ksvc.Spec.Traffic).To(HaveLen(1))
+			t := ksvc.Spec.Traffic[0]
+			Expect(t.RevisionName).To(Equal("traffic-pinned-00001"))
+			Expect(t.LatestRevision).NotTo(BeNil())
+			Expect(*t.LatestRevision).To(BeFalse())
+			Expect(t.Percent).NotTo(BeNil())
+			Expect(*t.Percent).To(Equal(int64(100)))
+		})
+
+		It("splits canary 20%% to latest / 80%% to the pinned revision", func() {
+			nn := reconcileOnce("traffic-canary", appsv1alpha1.NextAppSpec{
+				Image:   validImage,
+				Traffic: &appsv1alpha1.TrafficSpec{RevisionName: "traffic-canary-00001", CanaryPercent: 20},
+			})
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+			Expect(ksvc.Spec.Traffic).To(HaveLen(2))
+
+			var pinned, latest *servingv1.TrafficTarget
+			for i := range ksvc.Spec.Traffic {
+				tt := &ksvc.Spec.Traffic[i]
+				if tt.RevisionName != "" {
+					pinned = tt
+				} else {
+					latest = tt
+				}
+			}
+			Expect(pinned).NotTo(BeNil())
+			Expect(latest).NotTo(BeNil())
+
+			Expect(pinned.RevisionName).To(Equal("traffic-canary-00001"))
+			Expect(pinned.LatestRevision).NotTo(BeNil())
+			Expect(*pinned.LatestRevision).To(BeFalse())
+			Expect(pinned.Percent).NotTo(BeNil())
+			Expect(*pinned.Percent).To(Equal(int64(80)))
+
+			Expect(latest.LatestRevision).NotTo(BeNil())
+			Expect(*latest.LatestRevision).To(BeTrue())
+			Expect(latest.Percent).NotTo(BeNil())
+			Expect(*latest.Percent).To(Equal(int64(20)))
+
+			Expect(*pinned.Percent + *latest.Percent).To(Equal(int64(100)))
+		})
+
+		It("clears a prior traffic split when spec.traffic transitions back to nil (no stale pin)", func() {
+			name := "traffic-transition"
+			nn := types.NamespacedName{Name: name, Namespace: namespace}
+			nextApp := &appsv1alpha1.NextApp{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Spec: appsv1alpha1.NextAppSpec{
+					Image:   validImage,
+					Traffic: &appsv1alpha1.TrafficSpec{RevisionName: name + "-00001"},
+				},
+			}
+			Expect(k8sClient.Create(ctx, nextApp)).To(Succeed())
+			DeferCleanup(func() {
+				cur := &appsv1alpha1.NextApp{}
+				if err := k8sClient.Get(ctx, nn, cur); err == nil {
+					Expect(k8sClient.Delete(ctx, cur)).To(Succeed())
+					cleanupReconciler := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+					Eventually(func() bool {
+						_, _ = cleanupReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+						return errors.IsNotFound(k8sClient.Get(ctx, nn, &appsv1alpha1.NextApp{}))
+					}, 10*time.Second, 100*time.Millisecond).Should(BeTrue())
+				}
+			})
+
+			reconciler := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			ksvc := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
+			Expect(ksvc.Spec.Traffic).To(HaveLen(1), "precondition: traffic pinned")
+
+			// Transition spec.traffic back to nil (latest-ready) and reconcile again.
+			cur := &appsv1alpha1.NextApp{}
+			Expect(k8sClient.Get(ctx, nn, cur)).To(Succeed())
+			cur.Spec.Traffic = nil
+			Expect(k8sClient.Update(ctx, cur)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+
+			ksvc2 := &servingv1.Service{}
+			Expect(k8sClient.Get(ctx, nn, ksvc2)).To(Succeed())
+			Expect(ksvc2.Spec.Traffic).To(BeEmpty(),
+				"reverting to latest-ready must clear the prior pinned split")
 		})
 	})
 })

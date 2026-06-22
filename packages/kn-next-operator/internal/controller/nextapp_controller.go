@@ -50,6 +50,12 @@ const (
 	ConditionReady = "Ready"
 	// ConditionDegraded indicates the reconciliation failed or the resource is unhealthy.
 	ConditionDegraded = "Degraded"
+	// ConditionRevalidationDeferred indicates that Kafka-based ISR revalidation was
+	// requested (spec.revalidation.queue == "kafka") but the operator did NOT
+	// provision a KafkaSource because the `{app}-revalidator` consumer is not yet
+	// built (issue #95) and opt-in (spec.revalidation.provisionKafkaSource) is off.
+	// It is informational/non-fatal — Ready stays True.
+	ConditionRevalidationDeferred = "RevalidationDeferred"
 )
 
 // Event reason constants — concise, stable strings surfaced via `kubectl describe nextapp`.
@@ -94,6 +100,7 @@ func (r *NextAppReconciler) emitEvent(obj runtime.Object, eventType, reason, mes
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=caching.internal.knative.dev,resources=images,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=sources.knative.dev,resources=kafkasources,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
@@ -478,6 +485,11 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 		ksvc.Spec.Template.Spec.Volumes = volumes
 
+		// Traffic split (issue #92): render the rollback/canary intent from
+		// spec.traffic. nil => clear any prior split so Knative reverts to
+		// 100% latest-ready (no stale pin on transition back).
+		ksvc.Spec.Traffic = buildTrafficTargets(&nextApp)
+
 		return ctrl.SetControllerReference(&nextApp, ksvc, r.Scheme)
 	})
 	if err != nil {
@@ -496,8 +508,19 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		return ctrl.Result{}, err
 	}
 
-	// 5. Create/Update KafkaSource if Revalidation is enabled using Unstructured to avoid Eventing proto deps
-	if nextApp.Spec.Revalidation != nil && nextApp.Spec.Revalidation.Queue == "kafka" {
+	// 5. Create/Update KafkaSource for ISR revalidation.
+	//
+	// We provision the KafkaSource ONLY when kafka is selected AND the operator is
+	// explicitly opted in via spec.revalidation.provisionKafkaSource=true. The sink
+	// the source targets — the `{app}-revalidator` Knative Service — is not yet built
+	// (design-now/build-later, issue #95). Provisioning by default would wire eventing
+	// to a non-existent service and deliver revalidation events nowhere. When kafka is
+	// requested but opt-in is off, we record a non-fatal RevalidationDeferred condition
+	// (Ready stays True) below instead of creating a dangling source.
+	kafkaRequested := nextApp.Spec.Revalidation != nil && nextApp.Spec.Revalidation.Queue == "kafka"
+	revalidationDeferred := kafkaRequested && !ptr.Deref(nextApp.Spec.Revalidation.ProvisionKafkaSource, false)
+	if kafkaRequested && !revalidationDeferred {
+		// Unstructured to avoid Eventing proto deps.
 		topic := fmt.Sprintf("%s-revalidation", nextApp.Name)
 		kafkaSource := &unstructured.Unstructured{}
 		kafkaSource.SetAPIVersion("sources.knative.dev/v1beta1")
@@ -533,10 +556,11 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		}
 	}
 
-	// 6. Update Status: URL + conditions
+	// 6. Update Status: URL + conditions + observed traffic split (#92)
 	if ksvc.Status.URL != nil {
 		nextApp.Status.URL = ksvc.Status.URL.String()
 	}
+	nextApp.Status.CurrentTraffic = mapTrafficStatus(ksvc.Status.Traffic)
 
 	// Reconcile succeeded — set Ready=True, Reconciling=False, Degraded=False.
 	apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
@@ -560,6 +584,29 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		Reason:             "ReconcileSuccess",
 		Message:            "No errors detected",
 	})
+
+	// Non-fatal RevalidationDeferred condition: surface (but don't fail on) a kafka
+	// revalidation request whose consumer hasn't been provisioned yet (issue #95).
+	if revalidationDeferred {
+		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+			Type:               ConditionRevalidationDeferred,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: nextApp.Generation,
+			Reason:             "ConsumerNotProvisioned",
+			Message: "revalidation.queue=kafka requested but no KafkaSource was provisioned: " +
+				"the {app}-revalidator consumer is design-now/build-later (#95). Set " +
+				"spec.revalidation.provisionKafkaSource=true once you deploy an external consumer.",
+		})
+	} else {
+		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
+			Type:               ConditionRevalidationDeferred,
+			Status:             metav1.ConditionFalse,
+			ObservedGeneration: nextApp.Generation,
+			Reason:             "NotDeferred",
+			Message:            "Kafka revalidation not deferred",
+		})
+	}
+
 	if err := r.Status().Update(ctx, &nextApp); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -568,6 +615,68 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		fmt.Sprintf("NextApp reconciled successfully (image %s)", nextApp.Spec.Image))
 	logger.Info("Successfully reconciled NextApp", "name", nextApp.Name, "url", nextApp.Status.URL)
 	return ctrl.Result{}, nil
+}
+
+// buildTrafficTargets renders the Knative Service spec.traffic block from the
+// NextApp's spec.traffic intent (issue #92 — rollback / canary).
+//
+// Semantics:
+//   - nil Traffic OR empty RevisionName => nil: emit no spec.traffic so Knative
+//     defaults to 100% of the latest-ready revision (byte-identical to pre-#92).
+//   - RevisionName set, CanaryPercent == 0 => one target: 100% to the pinned
+//     revision (a full rollback).
+//   - RevisionName set, CanaryPercent in 1..99 => two targets: (100-p)% to the
+//     pinned revision + p% to the latest-ready revision (a canary back toward
+//     latest). The sum is always 100.
+func buildTrafficTargets(app *appsv1alpha1.NextApp) []servingv1.TrafficTarget {
+	if app.Spec.Traffic == nil || app.Spec.Traffic.RevisionName == "" {
+		return nil
+	}
+	t := app.Spec.Traffic
+	canary := t.CanaryPercent
+	if canary <= 0 || canary >= 100 {
+		// Full pin: 100% to the named revision.
+		return []servingv1.TrafficTarget{
+			{
+				RevisionName:   t.RevisionName,
+				LatestRevision: ptr.To(false),
+				Percent:        ptr.To(int64(100)),
+			},
+		}
+	}
+	// Canary: (100-p)% pinned, p% latest-ready.
+	return []servingv1.TrafficTarget{
+		{
+			RevisionName:   t.RevisionName,
+			LatestRevision: ptr.To(false),
+			Percent:        ptr.To(int64(100 - canary)),
+		},
+		{
+			LatestRevision: ptr.To(true),
+			Percent:        ptr.To(int64(canary)),
+		},
+	}
+}
+
+// mapTrafficStatus mirrors the Knative Service's observed traffic distribution
+// into NextApp.Status.CurrentTraffic, nil-safe on the *Percent / *LatestRevision
+// pointers. Returns nil for an empty input so the status field stays omitted.
+func mapTrafficStatus(targets []servingv1.TrafficTarget) []appsv1alpha1.TrafficStatus {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]appsv1alpha1.TrafficStatus, 0, len(targets))
+	for _, t := range targets {
+		ts := appsv1alpha1.TrafficStatus{RevisionName: t.RevisionName}
+		if t.Percent != nil {
+			ts.Percent = *t.Percent
+		}
+		if t.LatestRevision != nil {
+			ts.LatestRevision = *t.LatestRevision
+		}
+		out = append(out, ts)
+	}
+	return out
 }
 
 // networkPolicyEnabled reports whether the in-cluster NetworkPolicy should be

@@ -86,6 +86,29 @@ type NextAppSpec struct {
 	// Security controls defense-in-depth network/auth hardening for the app.
 	// +optional
 	Security *SecuritySpec `json:"security,omitempty"`
+
+	// Traffic pins which Knative Revision serves traffic (issue #92 — rollback).
+	// nil => serve the latest-ready revision (DEFAULT, byte-identical back-compat).
+	// +optional
+	Traffic *TrafficSpec `json:"traffic,omitempty"`
+}
+
+// TrafficSpec expresses the desired Knative traffic target for rollback /
+// canary. When nil the operator emits no spec.traffic and Knative defaults to
+// 100% of the latest-ready revision (the pre-#92 behavior).
+type TrafficSpec struct {
+	// RevisionName pins traffic to a specific prior Knative Revision (e.g.
+	// "my-app-00002"). Empty => latest-ready (no pin).
+	// +optional
+	RevisionName string `json:"revisionName,omitempty"`
+
+	// CanaryPercent, when 1..99 and RevisionName is set, sends this percentage
+	// of traffic to the LATEST-ready revision and the remainder (100-p) to the
+	// pinned RevisionName — a canary back toward latest. 0 => 100% pinned.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	CanaryPercent int32 `json:"canaryPercent,omitempty"`
 }
 
 // SecuritySpec holds defense-in-depth controls reconciled by the operator.
@@ -142,6 +165,22 @@ type CacheSpec struct {
 type RevalidationSpec struct {
 	Queue          string `json:"queue,omitempty"`
 	KafkaBrokerUrl string `json:"kafkaBrokerUrl,omitempty"`
+
+	// ProvisionKafkaSource gates whether the operator provisions a Knative
+	// KafkaSource for `queue: kafka`.
+	//
+	// nil/false (DEFAULT) => no KafkaSource is provisioned. The `{app}-revalidator`
+	// consumer that the source would sink into is design-now/build-later (issue #95):
+	// provisioning the source by default would point eventing at a service that is
+	// never deployed (events delivered nowhere). When kafka is selected but this is
+	// not opted in, the operator surfaces a non-fatal `RevalidationDeferred` status
+	// condition instead.
+	//
+	// true => explicit opt-in. The operator provisions the KafkaSource; setting this
+	// asserts that you have deployed an external revalidator consumer for the
+	// `{app}-revalidation` topic yourself.
+	// +optional
+	ProvisionKafkaSource *bool `json:"provisionKafkaSource,omitempty"`
 }
 
 type ResourcesSpec struct {
@@ -197,6 +236,18 @@ type NextAppStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// CurrentTraffic reports the revision(s) currently serving traffic and their
+	// split, mirrored from the Knative Service status (issue #92).
+	// +optional
+	CurrentTraffic []TrafficStatus `json:"currentTraffic,omitempty"`
+}
+
+// TrafficStatus is one entry of the observed Knative traffic distribution.
+type TrafficStatus struct {
+	RevisionName   string `json:"revisionName,omitempty"`
+	Percent        int64  `json:"percent,omitempty"`
+	LatestRevision bool   `json:"latestRevision,omitempty"`
 }
 
 // +kubebuilder:object:root=true

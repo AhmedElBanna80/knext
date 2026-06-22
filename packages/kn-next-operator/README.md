@@ -11,19 +11,31 @@ The operator image is built, SBOM'd, Trivy-scanned (fail on HIGH/CRITICAL),
 cosign-signed, and pushed to `ghcr.io/getknext-dev/kn-next-operator` by
 [`.github/workflows/operator-supply-chain.yml`](../../.github/workflows/operator-supply-chain.yml).
 Each `main` build also publishes a digest-pinned `install.yaml` bundle (CRDs + RBAC +
-manager Deployment + webhook + cert-manager resources).
+manager Deployment + webhook + cert-manager resources + the Knative `config-network`
+ConfigMap that sets the Kourier ingress-class — issue #45 / ADR-0009).
 
 Install knext's control plane with a single apply:
 
 ```sh
-kubectl apply -f https://github.com/getknext-dev/knext/releases/latest/download/install.yaml
+kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/latest/download/install.yaml
 ```
 
+> Use `--server-side` so the bundle's `config-network` ConfigMap **merges** into the
+> one Knative Serving already owns (which holds other networking keys) instead of
+> clobbering it.
+>
 > The bundle's manager image is **digest-pinned** (`@sha256:…`); it never uses
 > `:latest` (enforced by `hack/check-no-latest.sh`).
 >
-> Prerequisite: [cert-manager](https://cert-manager.io) must be installed in the
-> cluster (the bundle includes the operator's `Issuer`/`Certificate` for its webhook).
+> Prerequisites:
+> - [cert-manager](https://cert-manager.io) must be installed in the cluster (the
+>   bundle includes the operator's `Issuer`/`Certificate` for its webhook).
+> - **Knative Serving + Kourier** must be installed. The bundle ships a
+>   `config-network` ConfigMap (`namespace: knative-serving`) that pins
+>   `ingress-class: kourier.ingress.networking.knative.dev` — the full
+>   controller-qualified form. Without it, Serving leaves the ingress-class unset and
+>   never wires routes to Kourier (this was the real cause of the OKE "Kourier broken
+>   on k8s 1.34" symptom — see ADR-0009).
 
 ### Verify the signature (optional)
 

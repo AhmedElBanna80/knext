@@ -18,6 +18,12 @@ resources:
 - ../crd
 - ../rbac
 - ../manager
+# [KNATIVE] Operator-managed config-network ConfigMap that sets the Kourier
+# ingress-class (issue #45). It must stay named config-network in the
+# knative-serving namespace; the config_network_repin transformer below re-pins
+# both name and namespace AFTER the top-level `namespace:`/`namePrefix:`
+# transformers rewrite every resource to kn-next-operator-{system,*}.
+- ../knative
 # [WEBHOOK] Validating admission webhook for NextApp (issue #77).
 - ../webhook
 # [CERTMANAGER] cert-manager provisions the webhook serving cert. 'WEBHOOK' components are required.
@@ -31,6 +37,11 @@ resources:
 # Only CR(s) which requires webhooks and are applied on namespaces labeled with 'webhooks: enabled' will
 # be able to communicate with the Webhook Server.
 #- ../network-policy
+
+# [KNATIVE] Runs after the built-in namespace/namePrefix transformers to re-pin the
+# config-network ConfigMap to its required name + namespace (issue #45).
+transformers:
+- config_network_repin.yaml
 
 # Uncomment the patches line if you enable Metrics
 patches:

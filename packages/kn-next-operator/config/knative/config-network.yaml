@@ -1,0 +1,25 @@
+# config-network: operator-managed Knative Serving network config (issue #45).
+#
+# This codifies the Kourier ingress-class fix DECLARATIVELY, replacing the manual
+# `kubectl patch configmap config-network -n knative-serving ...` step.
+#
+# Root cause (corrected): cluster traffic failed not because "Kourier is broken on
+# k8s 1.34" (an earlier, wrong diagnosis) but because Knative Serving's
+# config-network ConfigMap left `ingress-class` unset, so Serving never wired routes
+# to the installed Kourier ingress. Setting it explicitly fixes routing.
+#
+# The value MUST be the full controller-qualified form below — the short
+# `kourier.knative.dev` form is drift and does not match Kourier's ingress class.
+#
+# Apply with `kubectl apply --server-side` so this merges into any existing
+# config-network managed by the Knative Serving install (it owns other keys).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-network
+  namespace: knative-serving
+  labels:
+    app.kubernetes.io/name: knative-serving
+    app.kubernetes.io/component: networking
+data:
+  ingress-class: kourier.ingress.networking.knative.dev

@@ -8,26 +8,34 @@ layer actually proves, so nobody mistakes the per-PR gate for the real scale-to-
 
 | Layer | Where it runs | Proves | File |
 | --- | --- | --- | --- |
-| 1. Deterministic vitest gate | **per-PR CI** (existing vitest job) | The *mechanism*: a 2nd process on the same `NODE_COMPILE_CACHE` dir reuses bytecode (zero new/rewritten cache files) and the metrics route reports `kn_next_bytecode_cache_warm_start == 1`. | `apps/file-manager/bytecode-cache-reuse.test.ts` |
+| 1. Deterministic vitest gate | **per-PR CI** — dedicated `bytecode-cache-reuse` job in `ci.yml` that BUILDS the standalone output, then runs the test with `KNEXT_REQUIRE_STANDALONE=1` so a missing build hard-fails (a skip can never be a green pass) | The *mechanism*: a 2nd process on the same `NODE_COMPILE_CACHE` dir reuses bytecode (zero new/rewritten cache files) and the metrics route reports `kn_next_bytecode_cache_warm_start == 1`. | `apps/file-manager/bytecode-cache-reuse.test.ts` |
 | 2. kind + Knative e2e | **nightly / `workflow_dispatch`** (NOT PR CI) | The *real invariant*: cache survives an actual scale-to-zero cycle on a PVC. Depends on #59 (PVC wiring). | `packages/kn-next-operator/test/e2e/scale_to_zero_cache_test.go` (`//go:build e2e_scale`) |
 | 3. Manual procedure | **on demand**, real cluster | End-to-end human verification + optional cold-start timing. | this document |
 
-Plainly: **per-PR CI proves the mechanism (Layer 1).** The real scale-to-zero invariant is
-verified nightly / on dispatch (Layer 2) and by the manual procedure below (Layer 3). A true
-scale-to-zero cold-start timing test cannot run in standard PR CI — there is no persistent
-kind/Knative cluster, RWO-PVC scheduling across the scale cycle, and the timing sits within noise.
+Plainly: **per-PR CI proves the mechanism (Layer 1)** — the dedicated `bytecode-cache-reuse`
+job builds the standalone output and runs the test with `KNEXT_REQUIRE_STANDALONE=1`, so the
+test ACTUALLY EXECUTES on every PR and a skipped/absent build is a hard failure, never a silent
+green. The real scale-to-zero invariant is verified nightly / on dispatch (Layer 2) and by the
+manual procedure below (Layer 3). A true scale-to-zero cold-start timing test cannot run in
+standard PR CI — there is no persistent kind/Knative cluster, RWO-PVC scheduling across the
+scale cycle, and the timing sits within noise.
 
 ## Layer 1 — reproduce the per-PR gate locally
 
 ```bash
-# From repo root. Build the standalone output first (the test skips without it).
+# From repo root. Build the standalone output first (the test skips without it locally).
 cd apps/file-manager && npx next build --webpack && cd -
 npx vitest run apps/file-manager/bytecode-cache-reuse.test.ts
+
+# To reproduce the CI behaviour exactly (missing build => HARD FAIL, not skip):
+KNEXT_REQUIRE_STANDALONE=1 npx vitest run apps/file-manager/bytecode-cache-reuse.test.ts
 ```
 
 Expected: the reuse spec passes — cold run populates the cache, the warm run adds/rewrites
 **zero** compile-cache files, and the app `/api/metrics` route emits
-`kn_next_bytecode_cache_warm_start{app="..."} 1`. Without a build present the spec skips cleanly.
+`kn_next_bytecode_cache_warm_start{app="..."} 1`. Without a build present the spec skips cleanly
+**only when `KNEXT_REQUIRE_STANDALONE` is unset** (the local convenience path); with the flag set
+(as in CI) a missing build fails loudly so a green check can never mean "skipped".
 
 ## Layer 2 — nightly / dispatch e2e
 
@@ -37,6 +45,10 @@ Expected: the reuse spec passes — cold run populates the cache, the warm run a
 cd packages/kn-next-operator
 SCALE_TEST_IMAGE=<digest-pinned file-manager image> make test-e2e-scale
 ```
+
+The spec's `BeforeAll` installs the CRDs and runs `make deploy` to bring the controller-manager
+up (and waits for its rollout) before applying the NextApp CR — without a running operator
+nothing reconciles the CR and the ksvc never becomes Ready.
 
 > Dependency: the load-bearing assertions (`warm_start == 1`, stable PVC file count after a
 > cold start) only hold once **#59** wires `cache.enableBytecodeCache: true` into a PVC mounted

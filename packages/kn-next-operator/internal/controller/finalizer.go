@@ -80,6 +80,14 @@ type ExternalCleaner interface {
 // appStoragePrefix derives the app-scoped object-store key namespace. It MUST be
 // non-empty so a delete can never degrade to a bucket-wide wipe. The app name is
 // a DNS-1123 label (k8s-validated), safe to use as a prefix segment.
+//
+// CONTRACT (#74): this MUST stay in lock-step with the CLI uploader's
+// `appKeyPrefix()` (packages/kn-next/src/utils/asset-upload.ts), which uploads
+// every asset under `<name>/...` and serves it via `assetPrefix=<publicUrl>/<name>`.
+// If the two diverge, storage cleanup silently deletes nothing (the original
+// #74 bug: uploads went to the bucket root, so this `<name>/` prefix matched no
+// keys). The shared key scheme is: object key == `<app.Name>/` + relative asset
+// path (e.g. `shop/_next/static/chunks/main.js`).
 func appStoragePrefix(app *appsv1alpha1.NextApp) string {
 	return app.Name + "/"
 }

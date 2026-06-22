@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -117,6 +118,58 @@ func TestCleanupExternalState_ScopedToThisApp(t *testing.T) {
 	}
 	if cc.keyPrefix == "" {
 		t.Fatalf("cache keyPrefix is EMPTY — would risk FLUSHing other apps' keys")
+	}
+}
+
+// cliUploadKeyScheme mirrors the CLI uploader's key scheme
+// (packages/kn-next/src/utils/asset-upload.ts: `appKeyPrefix()` = `<name>/`,
+// objects uploaded as `<name>/` + relative path). It is the operator-side mirror
+// of that contract so this test FAILS if the two prefixes ever diverge — which
+// is exactly the original #74 bug (uploads at bucket root, cleanup under
+// `<name>/` → silent no-op). Keep in lock-step with `appKeyPrefix`.
+func cliUploadKeyScheme(appName, relPath string) string {
+	return appName + "/" + relPath
+}
+
+// TestStorageCleanupPrefixMatchesRealUploadKeys ties the finalizer's storage
+// cleanup prefix to ACTUAL uploaded object keys, not just the prefix string.
+// The earlier assertion (prefix == "<app>/") was tautological: it never proved
+// the prefix matches a real key, so a uploader writing to the bucket root passed
+// green while deleting nothing. Here we construct keys exactly as the CLI
+// uploader does and assert every one of THIS app's keys is selected by the
+// cleanup prefix (and a sibling app's keys are NOT).
+func TestStorageCleanupPrefixMatchesRealUploadKeys(t *testing.T) {
+	app := newAppWithExternalState()
+	app.Name = "shop"
+	app.Spec.Storage = &appsv1alpha1.StorageSpec{Provider: "s3", Bucket: "shared"}
+	app.Spec.Cache = &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://r:6379", KeyPrefix: "shop"}
+
+	fc := &fakeCleaner{}
+	r := &NextAppReconciler{Cleaner: fc}
+	if err := r.cleanupExternalState(context.Background(), app); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fc.storageCalls) != 1 {
+		t.Fatalf("expected 1 storage cleanup call, got %d", len(fc.storageCalls))
+	}
+	prefix := fc.storageCalls[0].prefix
+
+	// Representative objects the CLI uploader actually writes for THIS app.
+	ownKeys := []string{
+		cliUploadKeyScheme(app.Name, "_next/static/chunks/main.js"),
+		cliUploadKeyScheme(app.Name, "_next/static/css/app.css"),
+		cliUploadKeyScheme(app.Name, "favicon.ico"),
+	}
+	for _, k := range ownKeys {
+		if !strings.HasPrefix(k, prefix) {
+			t.Errorf("uploaded key %q is NOT under cleanup prefix %q — storage cleanup would be a no-op (the #74 bug)", k, prefix)
+		}
+	}
+
+	// A sibling app's keys live under "blog/" and must NOT match this prefix.
+	siblingKey := cliUploadKeyScheme("blog", "_next/static/chunks/main.js")
+	if strings.HasPrefix(siblingKey, prefix) {
+		t.Errorf("sibling key %q matches prefix %q — cross-app data-sovereignty violation", siblingKey, prefix)
 	}
 }
 

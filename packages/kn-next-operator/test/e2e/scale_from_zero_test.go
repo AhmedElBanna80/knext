@@ -64,9 +64,15 @@ const (
 	scaleFromZeroNamespace = "kn-next-scalefromzero-test"
 	// scaleFromZeroAppName is the NextApp / Knative Service name under test.
 	scaleFromZeroAppName = "scale-from-zero-app"
-	// scaleFromZeroImageDefault is the file-manager image (digest-pinned; the
-	// operator rejects :latest). Overridable via SCALE_TEST_IMAGE in the nightly
-	// workflow so it can point at a freshly built+pushed digest.
+	// scaleFromZeroImageDefault is an all-zeros placeholder digest that is
+	// DELIBERATELY UNPULLABLE. The activation spec needs a real file-manager image
+	// that serves /api/health, so the nightly workflow MUST set SCALE_TEST_IMAGE to
+	// a freshly built+pushed, digest-pinned image. If this default is ever used the
+	// ksvc ErrImagePulls and the spec fails at "ksvc not Ready" — the
+	// operator-e2e-nightly workflow guards against that by skipping the run when no
+	// SCALE_TEST_IMAGE is provided.
+	// TODO(#39): wire a publish job that sets vars.SCALE_TEST_IMAGE to the latest
+	// file-manager digest so the nightly schedule always has a real image.
 	scaleFromZeroImageDefault = "dev.local/file-manager@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 )
 

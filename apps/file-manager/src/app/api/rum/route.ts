@@ -1,0 +1,102 @@
+import { NextResponse } from 'next/server';
+import { observeWebVital } from '../_metrics/registry';
+import { createTokenBucketLimiter } from './rate-limit';
+import { parseBeacon, routeTemplateFor } from './validate';
+
+/**
+ * POST /api/rum — Web Vitals (RUM) ingest (#94).
+ *
+ * This is a mutating/ingest endpoint, documented as an explicit, justified
+ * exception in docs/security/mutating-endpoints.md. A browser beacon cannot
+ * carry the Bearer secret, so instead of being an open write primitive it is
+ * neutered by FOUR layers:
+ *   1. Same-origin / cluster-local — reachable only as broadly as the app
+ *      itself (operator NetworkPolicy, #90); no new external surface.
+ *   2. Fixed-schema lossy aggregator — the handler can ONLY observe() one of a
+ *      closed set of pre-declared histograms. It cannot create series, set
+ *      arbitrary values, write storage, or revalidate cache.
+ *   3. Server-enforced bounded label cardinality — metric/rating come from
+ *      closed allow-lists and route is mapped to a server-side template; no
+ *      user/session/IP/raw-URL ever becomes a label (see ./validate).
+ *   4. Rate-limit (in-process token bucket) + payload-size cap (413) + strict
+ *      shape validation (400).
+ *
+ * Responses: 204 (recorded), 400 (malformed/disallowed), 413 (oversized),
+ * 429 (rate-limited). There is intentionally NO GET handler.
+ */
+
+// Payload cap — a single Web Vitals beacon is tiny; reject anything larger.
+const MAX_BODY_BYTES = 2_048;
+
+// In-process limiter. Single shared key: this is a coarse global throttle on
+// the ingest sink (we deliberately do NOT key by client IP — that would be a
+// per-user label-ish signal and an unbounded key space).
+let limiter = createTokenBucketLimiter({
+  capacity: 200,
+  refillPerSecond: 50,
+  maxKeys: 16,
+});
+
+const LIMITER_KEY = 'rum';
+
+/** Test-only: reset the limiter so rate-limit assertions are deterministic. */
+export function __resetRumLimiterForTests(): void {
+  limiter = createTokenBucketLimiter({
+    capacity: 200,
+    refillPerSecond: 50,
+    maxKeys: 16,
+  });
+}
+
+export async function POST(request: Request): Promise<Response> {
+  // Layer 4: rate-limit first — cheapest rejection, protects everything below.
+  if (!limiter.allow(LIMITER_KEY)) {
+    return new NextResponse(null, { status: 429 });
+  }
+
+  // Layer 4: payload-size cap. Prefer the declared length; fall back to the
+  // actual read length so a lying/absent header can't bypass the cap.
+  const declared = Number(request.headers.get('content-length') ?? '0');
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return new NextResponse(null, { status: 413 });
+  }
+
+  let raw: string;
+  try {
+    raw = await request.text();
+  } catch {
+    return new NextResponse(null, { status: 400 });
+  }
+
+  if (raw.length > MAX_BODY_BYTES) {
+    return new NextResponse(null, { status: 413 });
+  }
+
+  // Layer 4: strict shape — malformed JSON → 400.
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return new NextResponse(null, { status: 400 });
+  }
+
+  // Layer 3: validate against closed allow-lists; null → reject.
+  const beacon = parseBeacon(body);
+  if (!beacon) {
+    return new NextResponse(null, { status: 400 });
+  }
+
+  // Layer 3: map the reported pathname to a bounded route template. Raw IDs,
+  // UUIDs and query strings can never become labels.
+  const route = routeTemplateFor(beacon.pathname);
+
+  // Layer 2: the only effect available — observe() one pre-declared histogram.
+  observeWebVital({
+    metric: beacon.metric,
+    route,
+    rating: beacon.rating,
+    value: beacon.value,
+  });
+
+  return new NextResponse(null, { status: 204 });
+}

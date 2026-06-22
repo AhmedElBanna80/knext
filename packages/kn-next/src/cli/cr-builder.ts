@@ -111,9 +111,26 @@ export function buildNextAppCRObject(
           }
         : undefined;
 
-    // Observability spec
+    // Observability spec — thread RUM (#94) into spec.observability.rum.
+    // RUM requires observability.enabled; default OFF when no rum block.
     const observability = config.observability?.enabled
-        ? { enabled: true }
+        ? {
+              enabled: true,
+              ...(config.observability.rum?.enabled
+                  ? {
+                        rum: {
+                            enabled: true,
+                            ...(typeof config.observability.rum.sampleRate ===
+                            "number"
+                                ? {
+                                      sampleRate:
+                                          config.observability.rum.sampleRate,
+                                  }
+                                : {}),
+                        },
+                    }
+                  : {}),
+          }
         : undefined;
 
     // Runtime

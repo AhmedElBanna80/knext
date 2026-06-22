@@ -21,7 +21,12 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { KnativeNextConfig } from "../config";
-import { getAssetPrefix, uploadAssets } from "../utils/asset-upload";
+import { parseLiveBuildIds } from "../utils/asset-gc";
+import {
+    getAssetPrefix,
+    pruneOldBuilds,
+    uploadAssets,
+} from "../utils/asset-upload";
 import { createLogger } from "../utils/logger";
 import {
     renderNextAppCR,
@@ -162,17 +167,29 @@ async function deploy() {
     const baseConfig = await loadConfig();
     const config = applyOverrides(baseConfig, options);
 
+    // #93 skew protection (ADR-0011): pin this deploy's BUILD_ID. We pass it to
+    // Next as NEXT_DEPLOYMENT_ID so `next build` stamps it as the BUILD_ID *and*
+    // `deploymentId` in next.config — Next then appends `?dpl=<id>` to asset/RSC
+    // requests, keeping a browser on an old build requesting that build's assets.
+    // Reusing the image tag keeps the build-id, the image, and the static prefix
+    // (`_next/static/<buildId>/`) in lock-step. MUST be set BEFORE `next build`.
+    const buildId = options.tag || `${Date.now()}`;
+    process.env.NEXT_DEPLOYMENT_ID = buildId;
+
     if (!options.skipBuild) {
         const assetPrefix = getAssetPrefix(config);
         process.env.ASSET_PREFIX = assetPrefix;
-        log.info({ assetPrefix }, "Running next build (output:standalone)...");
+        log.info(
+            { assetPrefix, buildId },
+            "Running next build (output:standalone)...",
+        );
         runQuiet(["npm", "run", "build"]);
         log.info(
             "Next.js build complete — standalone output in .next/standalone/",
         );
     }
 
-    const imageTag = options.tag || `${Date.now()}`;
+    const imageTag = buildId;
     // taggedRef is the mutable push target — used for docker build/push only.
     // The operator-facing CR image ref MUST be digest-pinned (see resolveDigest below).
     const taggedRef = `${config.registry}/${config.name}:${imageTag}`;
@@ -294,6 +311,33 @@ async function deploy() {
         { url: result.replace(/'/g, "") },
         "Deployment submitted — operator is reconciling",
     );
+
+    // #93 skew-protection retention GC (ADR-0011). Reap old `_next/static/<id>/`
+    // prefixes that are outside the retain window AND not currently serving
+    // traffic. The live set is read READ-ONLY from NextApp.Status.CurrentTraffic
+    // (ADR-0001: the CLI never mutates the cluster) so a #92 pinned/canary/
+    // rolled-back revision's build is NEVER reaped, even if older than the window.
+    // Best-effort: a GC failure must not fail a deploy that has already shipped.
+    if (!options.skipUpload) {
+        try {
+            const trafficJson = runCapture([
+                "kubectl",
+                "get",
+                "nextapp",
+                config.name,
+                "-n",
+                options.namespace,
+                "-o",
+                "jsonpath={.status.currentTraffic}",
+            ]);
+            const liveBuildIds = parseLiveBuildIds(
+                trafficJson.replace(/^'|'$/g, ""),
+            );
+            pruneOldBuilds(config, liveBuildIds, buildId);
+        } catch (err) {
+            log.warn({ err }, "Asset retention GC skipped (non-fatal)");
+        }
+    }
 }
 
 // Run only when invoked directly as the entry (not when imported, e.g. in tests).

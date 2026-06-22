@@ -9,6 +9,14 @@ const nextConfig: NextConfig = {
   // Asset prefix is injected by kn-next deploy from kn-next.config.ts storage settings.
   // In dev mode (next dev), ASSET_PREFIX is unset → assets serve locally.
   assetPrefix: process.env.ASSET_PREFIX || '',
+  // #93 skew protection (ADR-0011): pin every client to the build it loaded.
+  // `deploymentId` makes Next append `?dpl=<id>` to asset + RSC requests and emit
+  // a deployment-id mismatch signal, so a browser on build A keeps requesting
+  // build A's assets after the server rolls to B. The object store ignores the
+  // query string and serves the content-hashed `_next/static/<A>/...` chunk,
+  // which the retention GC keeps for the configured window. kn-next deploy sets
+  // NEXT_DEPLOYMENT_ID = the build's BUILD_ID; unset in `next dev` → no pinning.
+  deploymentId: process.env.NEXT_DEPLOYMENT_ID || undefined,
   output: 'standalone',
   // Ensure native node modules are traced into standalone output (not bundled).
   // pino-elasticsearch and thread-stream are excluded here to avoid Turbopack

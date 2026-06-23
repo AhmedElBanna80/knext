@@ -73,9 +73,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # @knext/lib ships only dist/ — it MUST be built before the app.
+      # @knext/lib and @knext/core both ship only dist/ — they MUST be built
+      # before the app. file-manager imports @knext/core/adapters/otel-config and
+      # the KnativeNextConfig type, and @knext/core's exports now resolve to
+      # ./dist/* (#114), so a missing core build breaks `next build`.
       - name: Build @knext/lib
         run: pnpm --filter @knext/lib build
+
+      - name: Build @knext/core
+        run: pnpm --filter @knext/core build
 
       - name: Build file-manager via adapter
         run: pnpm --filter file-manager build
@@ -110,9 +116,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # @knext/lib ships only dist/ — it MUST be built before the app.
+      # @knext/lib and @knext/core both ship only dist/ — they MUST be built
+      # before the app. @knext/core's exports now resolve to ./dist/* (#114), and
+      # file-manager imports it, so a missing core build breaks `next build`.
       - name: Build @knext/lib
         run: pnpm --filter @knext/lib build
+
+      - name: Build @knext/core
+        run: pnpm --filter @knext/core build
 
       - name: Build file-manager standalone (next build --webpack)
         run: pnpm --filter file-manager build

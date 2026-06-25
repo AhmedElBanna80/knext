@@ -4,7 +4,7 @@ The `NextApp` CRD is the unified interface for deploying Next.js applications (b
 
 ## API Version & Kind
 ```yaml
-apiVersion: kn-next.dev/v1alpha1
+apiVersion: apps.kn-next.dev/v1alpha1
 kind: NextApp
 ```
 

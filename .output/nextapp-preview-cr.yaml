@@ -1,0 +1,18 @@
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: my-app-pr-42
+  namespace: previews
+spec:
+  image: registry.example.com/my-app-pr-42:123@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1
+  scaling:
+    minScale: 0
+    maxScale: 10
+  storage:
+    provider: gcs
+    bucket: b
+  buildId: "123"
+  preview:
+    enabled: true
+    prId: "42"
+    branch: feat/x

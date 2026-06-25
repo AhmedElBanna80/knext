@@ -77,7 +77,7 @@ Secret. Each entry has exactly two fields — `secretName` and `secretKey` (both
 operator renders it as a `secretKeyRef` env var on the workload:
 
 ```yaml
-apiVersion: kn-next.dev/v1alpha1
+apiVersion: apps.kn-next.dev/v1alpha1
 kind: NextApp
 metadata:
   name: orders-zone

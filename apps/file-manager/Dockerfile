@@ -23,8 +23,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install curl for healthcheck
-RUN apk add --no-cache curl
+# Install curl for healthcheck, and vips for next/image optimization.
+# sharp's musl prebuilt does NOT bundle libvips on Alpine, so the runtime libvips
+# (provided by the `vips` apk package) must be present or `require('sharp')` throws
+# at load time and /_next/image 500s. (#66 AC#3: sharp verified in the image.)
+RUN apk add --no-cache curl vips
 
 # node:22-alpine already ships a non-root `node` user/group at uid/gid 1000;
 # recreating it fails ("group 'node' in use"). Reuse the existing user.
@@ -35,6 +38,12 @@ COPY --from=builder /app/apps/file-manager/.next/standalone ./
 COPY --from=builder /app/apps/file-manager/.next/static ./apps/file-manager/.next/static
 # Copy public assets
 COPY --from=builder /app/apps/file-manager/public ./apps/file-manager/public
+
+# Verify sharp's native (musl) runtime actually loads in THIS image — fail the
+# build now rather than 500ing at request time on /_next/image. The standalone
+# trace places sharp under the app's node_modules; resolve from there. (#66 AC#3.)
+RUN node -e "const{createRequire}=require('module');const r=createRequire('/app/apps/file-manager/server.js');const s=r('sharp');console.log('sharp ok: libvips '+s.versions.vips)" \
+    || (echo 'FATAL: sharp failed to load — next/image optimization is broken in this image (missing libvips/musl runtime?)' && exit 1)
 
 # Pre-create the compile-cache directory
 RUN mkdir -p apps/file-manager/.next/compile-cache && chown -R node:node apps/file-manager/.next

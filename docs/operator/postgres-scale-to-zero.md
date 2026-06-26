@@ -18,7 +18,8 @@ Related reading:
 - **[`.claude/rules/scs-zones.md`](../../.claude/rules/scs-zones.md)** — the data-sovereignty
   contract: a zone owns its own store, reaches it via `DATABASE_URL` from a Secret, and never
   connects to another zone's database.
-- The app-side pool half — see [App-side settings](#4-app-side-settings) below (issue #133 / PGS-1).
+- The app-side pool half — see [App-side settings](#4-app-side-settings) below — is the companion
+  work in **PGS-1 (#133)**, in review and not yet merged.
 
 ---
 
@@ -37,10 +38,14 @@ The bounding rule:
 peak_backend_conns ≈ maxScale × app_pool_max
 ```
 
-where `app_pool_max` is the per-instance `pg.Pool` max. With knext's bounded default of
-`app_pool_max = 5` (see §4) and the operator's default `maxScale: 10`, a single zone can demand up
-to **50** backend connections — and that is *one* zone. Several zones on one cluster overrun
-Postgres quickly.
+where `app_pool_max` is the per-instance `pg.Pool` max. With PGS-1's bounded pool (default
+`DB_POOL_MAX=5`, see §4 — companion work, in review) and the operator's default `maxScale: 10`, a
+single zone can demand up to **50** backend connections — and that is *one* zone. Several zones on
+one cluster overrun Postgres quickly.
+
+**Co-tenant caveat:** a pooler caps *one* zone's backend connections, but every zone's pooler still
+lands on the *same* shared Postgres. Size for the sum across all co-tenant zones:
+`Σ(default_pool_size across all zones' poolers) + reserved < cluster max_connections`.
 
 You bound `peak_backend_conns` from **two** sides, and you should use both:
 
@@ -173,14 +178,16 @@ scale-to-zero connection-storm protection**. Transaction mode is the right defau
 ## 4. App-side settings
 
 The pooler caps the *backend* side; the app must also bound the *client* side and release
-connections cleanly when an instance scales to zero. This is the app-side half of the recipe,
-landed in **issue #133 (PGS-1)** in `getDbPool()` (`packages/lib/src/clients.ts`):
+connections cleanly when an instance scales to zero. This app-side half is the companion work in
+**PGS-1 (#133)** — in review, **not yet merged**. (On `main` today, `getDbPool()` in
+`packages/lib/src/clients.ts` is still an unbounded `new Pool({ connectionString })` with no
+SIGTERM drain.) PGS-1 provides, in `getDbPool()`:
 
-- **Bounded per-instance pool.** `getDbPool()` sets a bounded `max` (default **5**, override with
-  the `DB_POOL_MAX` env var) — this is the `app_pool_max` in the bounding rule. Keep it small: with
-  a transaction pooler in front, the app only needs a handful of client connections per instance.
-- **SIGTERM drain.** On `SIGTERM` (Knative scale-down / revision rollout) the pool is drained so the
-  instance closes its connections instead of leaking them until timeout. This keeps
+- **A bounded per-instance pool** — a bounded `max` (default **5**, override with the `DB_POOL_MAX`
+  env var); this is the `app_pool_max` in the bounding rule. Keep it small: with a transaction
+  pooler in front, the app only needs a handful of client connections per instance.
+- **A SIGTERM drain** — on `SIGTERM` (Knative scale-down / revision rollout) the pool is drained so
+  the instance closes its connections instead of leaking them until timeout, keeping
   `peak_backend_conns` honest as instances churn.
 
 Even with a pooler, keep `DB_POOL_MAX` small: `max_client_conn` on the pooler must comfortably
@@ -299,6 +306,6 @@ The read replica is provisioned by the CNPG `Cluster` (set `spec.instances > 1`)
 | The `Pooler` (PgBouncer) | CloudNativePG (`postgresql.cnpg.io/v1`) | none — operated outside knext |
 | `DATABASE_URL` Secret value (→ pooler host) | cluster admin | **binds it** via `spec.secrets.envMap` |
 | Instance fan-out (`maxScale`/`containerConcurrency`) | knext | reconciled by the operator |
-| App-side pool `max` + SIGTERM drain | knext (`getDbPool`, #133/PGS-1) | shipped in `@knext/lib` |
+| App-side pool `max` + SIGTERM drain | knext (`getDbPool`) | companion work in **PGS-1 (#133)**, in review — not yet merged |
 
 knext binds the secret and writes this recipe. The cluster runs the database and the pooler.

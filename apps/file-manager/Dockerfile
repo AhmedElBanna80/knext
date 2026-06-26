@@ -47,8 +47,22 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # Drop privileges
 USER node
 
+# Runtime entry: boot the knext runtime (@knext/core node-server), NOT bare
+# `node server.js`. The runtime entry is the ONLY thing that (1) installs the
+# SIGTERM handler that forwards the signal so Next drains in-flight requests +
+# runs `after()` callbacks on scale-down (security.md graceful shutdown), and
+# (2) serves the Prometheus metrics sidecar on :9091. Bare-exec'ing server.js
+# bypasses both, so a real knext deploy must run the runtime entry — matching
+# how the operator-managed image runs. The entry then SPAWNS server.js itself.
+#
+# @knext/core is traced into the standalone bundle's node_modules, so the
+# package specifier resolves via its `exports` map (./internal/node-server).
+# The container layout puts server.js at apps/file-manager/server.js, so we tell
+# the runtime entry where it is via STANDALONE_SERVER_PATH (its default,
+# .next/standalone/server.js, is the single-app layout).
+#
 # NODE_COMPILE_CACHE: V8 bytecode cache for faster subsequent cold starts.
 # EXPORT so the value reaches the exec'd node process (a bare `${VAR:=default}` only sets a shell
 # variable, not an env var). The operator's externally-injected value (PVC path) still wins via
 # `:-`; the Dockerfile only supplies the fallback when the env var is unset at runtime.
-CMD ["sh", "-c", "export NODE_COMPILE_CACHE=\"${NODE_COMPILE_CACHE:-apps/file-manager/.next/compile-cache}\"; exec node apps/file-manager/server.js"]
+CMD ["sh", "-c", "export NODE_COMPILE_CACHE=\"${NODE_COMPILE_CACHE:-apps/file-manager/.next/compile-cache}\"; export STANDALONE_SERVER_PATH=\"${STANDALONE_SERVER_PATH:-apps/file-manager/server.js}\"; exec node -e \"import('@knext/core/internal/node-server')\""]

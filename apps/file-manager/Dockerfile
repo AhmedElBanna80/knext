@@ -17,6 +17,18 @@ RUN pnpm --filter "@knext/lib" build
 RUN pnpm --filter "@knext/core" build
 RUN pnpm --filter file-manager build
 
+# Produce a SELF-CONTAINED @knext/core for the runner. The container CMD boots the
+# knext runtime entry (`@knext/core/internal/node-server`), but Next's standalone
+# output is import-graph driven and NOTHING in app code imports node-server.js — so
+# neither node-server.js, its build chunks, NOR its hard runtime deps (prom-client,
+# pino) land in `.next/standalone`. Without this the image's CMD resolves
+# `@knext/core/internal/node-server` → MODULE_NOT_FOUND and crash-loops at boot.
+#
+# `pnpm deploy --prod` emits a flat, self-contained package dir (dist + a real
+# node_modules with prom-client/pino resolved) that we drop into the runner at
+# node_modules/@knext/core, so the package specifier resolves with its deps.
+RUN pnpm --filter "@knext/core" --prod deploy --legacy /knext-core-runtime
+
 # Build a clean, flat, production-only sharp install for THIS platform (musl) that
 # the runner stage can copy verbatim into the app's node_modules. We do NOT rely on
 # Next's standalone trace to carry sharp: Next's image optimizer require()s sharp
@@ -52,6 +64,11 @@ COPY --from=builder /app/apps/file-manager/.next/standalone ./
 COPY --from=builder /app/apps/file-manager/.next/static ./apps/file-manager/.next/static
 # Copy public assets
 COPY --from=builder /app/apps/file-manager/public ./apps/file-manager/public
+# Copy the self-contained knext runtime package (node-server entry + its prod deps:
+# prom-client, pino). Placed at node_modules/@knext/core so the CMD's
+# `@knext/core/internal/node-server` specifier resolves from /app with its own
+# nested node_modules — the standalone trace omits it (see builder stage).
+COPY --from=builder /knext-core-runtime ./node_modules/@knext/core
 
 # Place the flat musl sharp install — sharp itself, its @img native platform
 # packages, AND sharp's own runtime deps (detect-libc, semver, color, …) — into the
@@ -80,8 +97,24 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 # Drop privileges
 USER node
 
+# Runtime entry: boot the knext runtime (@knext/core node-server), NOT bare
+# `node server.js`. The runtime entry is the ONLY thing that (1) installs the
+# SIGTERM handler that forwards the signal so Next drains in-flight requests +
+# runs `after()` callbacks on scale-down (security.md graceful shutdown), and
+# (2) serves the Prometheus metrics sidecar on :9091. Bare-exec'ing server.js
+# bypasses both, so a real knext deploy must run the runtime entry — matching
+# how the operator-managed image runs. The entry then SPAWNS server.js itself.
+#
+# @knext/core is COPY'd into node_modules/@knext/core as a self-contained package
+# (the runner stage above — Next's standalone trace omits node-server.js + its
+# prom-client/pino deps), so the package specifier resolves via its `exports` map
+# (./internal/node-server) with its own nested node_modules.
+# The container layout puts server.js at apps/file-manager/server.js, so we tell
+# the runtime entry where it is via STANDALONE_SERVER_PATH (its default,
+# .next/standalone/server.js, is the single-app layout).
+#
 # NODE_COMPILE_CACHE: V8 bytecode cache for faster subsequent cold starts.
 # EXPORT so the value reaches the exec'd node process (a bare `${VAR:=default}` only sets a shell
 # variable, not an env var). The operator's externally-injected value (PVC path) still wins via
 # `:-`; the Dockerfile only supplies the fallback when the env var is unset at runtime.
-CMD ["sh", "-c", "export NODE_COMPILE_CACHE=\"${NODE_COMPILE_CACHE:-apps/file-manager/.next/compile-cache}\"; exec node apps/file-manager/server.js"]
+CMD ["sh", "-c", "export NODE_COMPILE_CACHE=\"${NODE_COMPILE_CACHE:-apps/file-manager/.next/compile-cache}\"; export STANDALONE_SERVER_PATH=\"${STANDALONE_SERVER_PATH:-apps/file-manager/server.js}\"; exec node -e \"import('@knext/core/internal/node-server')\""]

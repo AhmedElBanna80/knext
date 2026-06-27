@@ -65,6 +65,11 @@ const APP_DIR = __dirname;
 const IGNORE_SERVER = resolve(__dirname, '__fixtures__/ignore-sigterm-standalone-server.mjs');
 
 const PORT = 39188; // distinct from the drain e2e's port to avoid collisions
+// Distinct metrics port too: the drain e2e binds the default 9091. Without this
+// override, running both files in one vitest invocation makes the second runtime
+// entry die with EADDRINUSE on 9091 (the runtime exits early → nondeterministic).
+// METRICS_PORT is a real production knob in node-server.ts (default 9091).
+const METRICS_PORT = 9092;
 const GRACE_MS = 3000; // SHORT hard cap so the e2e is fast (default is 25s)
 
 // The CMD specifier the container boots — the EXACT string from the Dockerfile.
@@ -186,6 +191,7 @@ function spawnShippedRuntime(extraEnv: Record<string, string>): ReturnType<typeo
     cwd: runnerRoot,
     env: childEnv({
       PORT: String(PORT),
+      METRICS_PORT: String(METRICS_PORT), // distinct from the drain e2e's 9091
       STANDALONE_SERVER_PATH: IGNORE_SERVER,
       STORAGE_BUCKET: '', // disable image-cache sync side effects
       ...extraEnv,

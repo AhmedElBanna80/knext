@@ -17,16 +17,30 @@ RUN pnpm --filter "@knext/lib" build
 RUN pnpm --filter "@knext/core" build
 RUN pnpm --filter file-manager build
 
+# Build a clean, flat, production-only sharp install for THIS platform (musl) that
+# the runner stage can copy verbatim into the app's node_modules. We do NOT rely on
+# Next's standalone trace to carry sharp: Next's image optimizer require()s sharp
+# lazily at runtime, and with pnpm's symlinked store the node-file-trace step does
+# not reliably include sharp + its @img/sharp-* native platform packages — that is
+# exactly why `require('sharp')` failed in the runner before (#66). The builder is
+# already node:22-alpine (linux/musl), so `npm install` here resolves the correct
+# @img/sharp-linuxmusl-* prebuilt + bundled libvips for the runner's musl arch.
+# Pin to the same major as apps/file-manager/package.json ("sharp": "^0.35.2").
+RUN mkdir -p /sharp-runtime \
+    && cd /sharp-runtime \
+    && npm init -y >/dev/null 2>&1 \
+    && npm install --no-audit --no-fund --omit=dev sharp@^0.35.2 \
+    && node -e "const s=require('/sharp-runtime/node_modules/sharp');console.log('builder sharp ok: libvips '+s.versions.vips)"
+
 # Stage 2: Lean production image using Node.js standalone output
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 
-# Install curl for healthcheck, and vips for next/image optimization.
-# sharp's musl prebuilt does NOT bundle libvips on Alpine, so the runtime libvips
-# (provided by the `vips` apk package) must be present or `require('sharp')` throws
-# at load time and /_next/image 500s. (#66 AC#3: sharp verified in the image.)
+# Install curl for healthcheck. sharp 0.35's musl prebuilt (@img/sharp-linuxmusl-*)
+# bundles its own libvips, so the `vips` apk package is NOT strictly required; we keep
+# it as a defensive fallback for any code path that prefers a global libvips. (#66 AC#3.)
 RUN apk add --no-cache curl vips
 
 # node:22-alpine already ships a non-root `node` user/group at uid/gid 1000;
@@ -38,6 +52,16 @@ COPY --from=builder /app/apps/file-manager/.next/standalone ./
 COPY --from=builder /app/apps/file-manager/.next/static ./apps/file-manager/.next/static
 # Copy public assets
 COPY --from=builder /app/apps/file-manager/public ./apps/file-manager/public
+
+# Place the flat musl sharp install — sharp itself, its @img native platform
+# packages, AND sharp's own runtime deps (detect-libc, semver, color, …) — into the
+# app's node_modules so `require('sharp')` (resolved from server.js) finds it. This is
+# the fix for #66: the standalone trace alone does not carry sharp's native runtime.
+# We copy the WHOLE flat tree (not just sharp + @img) because sharp require()s
+# detect-libc at load time, which is a sibling in the flat install; copying only
+# sharp/@img leaves it with "Cannot find module 'detect-libc'". COPY merges into the
+# existing traced node_modules without clobbering the app's own modules.
+COPY --from=builder /sharp-runtime/node_modules/ ./apps/file-manager/node_modules/
 
 # Verify sharp's native (musl) runtime actually loads in THIS image — fail the
 # build now rather than 500ing at request time on /_next/image. The standalone

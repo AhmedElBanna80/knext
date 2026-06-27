@@ -72,6 +72,28 @@ corrected alongside this ADR.
   the right value; anyone on istio must not apply the kourier ingress-class. Track aligning the
   harness to net-kourier as follow-up.
 
+## Resolution / update (2026-06-27, PR #146)
+
+The open follow-up — that **Istio/Contour-default clusters must NOT apply the Kourier
+ingress-class**, and that swapping it was a manual, hand-run patch — is **RESOLVED**.
+
+PR #146 ships a **build-time `INGRESS_CLASS` override** so the ingress-class is selected
+declaratively at bundle-render time instead of being hand-patched per cluster:
+
+- `packages/kn-next-operator/hack/set-ingress-class.sh` rewrites the `config-network`
+  ConfigMap's `ingress-class` value in a rendered `install.yaml`.
+- `make build-installer INGRESS_CLASS=istio.ingress.networking.knative.dev` (or
+  `contour.ingress.networking.knative.dev`) bakes the cluster-appropriate class into the
+  bundle; with no `INGRESS_CLASS` set, the **Kourier default is preserved** (a no-op), so the
+  production OKE/kourier path is unchanged.
+- `docs/operator/multi-cloud-portability.md` documents the per-cloud ingress-class
+  prerequisite (Kourier vs Istio vs Contour) and the exact override invocation.
+
+This closes the "anyone on istio must not apply the kourier ingress-class" caveat in the
+Consequences above: portability is now a declarative build-time choice, not an out-of-band
+manual step — keeping ADR-0001 (no out-of-band cluster mutation). The ADR's **Status remains
+Accepted**; option (c) (declarative bundle ConfigMap) is unchanged, now with a portable default.
+
 ## Action items
 
 - [x] `config/knative/config-network.yaml` + `config/knative/kustomization.yaml`.
@@ -80,5 +102,8 @@ corrected alongside this ADR.
 - [x] Tests: source-manifest assertion + rendered-bundle namespace-immunity assertion.
 - [x] Docs: operator README prerequisite + `--server-side`; `docs/MATURITY_PLAN.md` root-cause fix;
       skill ingress-class drift fix.
-- [ ] Follow-up: align the e2e/kind harness to net-kourier (or document the istio dev path
-      explicitly), then re-evaluate option (b) if config drift is observed in practice.
+- [x] Follow-up (RESOLVED, PR #146): build-time `INGRESS_CLASS` override
+      (`hack/set-ingress-class.sh` + `make build-installer INGRESS_CLASS=...`, default Kourier)
+      lets Istio/Contour-default clusters render a portable bundle without a hand-run patch;
+      documented in `docs/operator/multi-cloud-portability.md`. Re-evaluate option (b) (a
+      self-healing reconciler) only if config drift is observed in practice.

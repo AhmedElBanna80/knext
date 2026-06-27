@@ -39,7 +39,16 @@ jobs:
   build-next:
     name: Build vercel/next.js (pinned)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # #147 step 1 — a COLD next.js v16.0.3 build (install + `turbo run build`,
+    # plus Playwright/chromium) was being cancelled at exactly +60min on a
+    # standard runner, so the deploy-tests shards never ran. The reference
+    # vercel/next.js deploy harness (build_reusable.yml) gives its build+run job
+    # `timeout_minutes: 180`; we raise ours to a realistic cold-build ceiling.
+    # Note we do NOT compile @next/swc from Rust source: `pnpm build` is just
+    # `turbo run build` (JS, `dependsOn: ["^build"]`, no build-native), and the
+    # native binary comes from the prebuilt npm postinstall during install —
+    # the same path the reference takes for deploy tests (skipNativeBuild: yes).
+    timeout-minutes: 120
     steps:
       - name: Checkout knext
         uses: actions/checkout@v4
@@ -95,10 +104,50 @@ jobs:
       # pnpm` explicitly (not bare `pnpm`) so it resolves next.js's 9.6.0 rather
       # than the action-setup 10.4.1 shim on PATH. The knext build steps above
       # stay on 10.4.1; never hardcode 9.6.0 here — let corepack honor upstream.
+      - name: Enable corepack (next.js per-project package manager)
+        working-directory: next.js
+        run: corepack enable
+
+      # #147 step 1 — resolve next.js's package store dir so we can persist it
+      # across runs. The reference harness leans on a Turbo REMOTE cache
+      # (vercel-only secret); we have no remote cache, so actions/cache is the
+      # substitute.
+      - name: Resolve package store path
+        id: pnpm-store
+        working-directory: next.js
+        run: echo "path=$(corepack pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      # Cache the pnpm content-addressable store keyed on NEXTJS_REF + the next.js
+      # lockfile, so a REPEAT run skips re-downloading every dependency (incl. the
+      # prebuilt @next/swc native binary). NEXTJS_REF is in the key so a ref bump
+      # invalidates it — the store for v16.0.3 is not valid for a different ref.
+      - name: Cache next.js pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: nextjs-pnpm-store-${{ env.NEXTJS_REF }}-${{ hashFiles('next.js/pnpm-lock.yaml') }}
+          restore-keys: |
+            nextjs-pnpm-store-${{ env.NEXTJS_REF }}-
+
+      # Cache the actual next.js BUILD OUTPUT (the `turbo run build` artifacts in
+      # each package's dist + the turbo local cache). On a hit, `corepack pnpm
+      # build` is a near-instant turbo cache replay instead of a cold compile.
+      # Keyed on NEXTJS_REF so the pinned-ref build is reused until the ref bumps.
+      - name: Cache next.js build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            next.js/.turbo
+            next.js/node_modules/.cache/turbo
+            next.js/packages/**/dist
+            next.js/packages/next/dist
+          key: nextjs-build-${{ env.NEXTJS_REF }}-${{ hashFiles('next.js/pnpm-lock.yaml') }}
+          restore-keys: |
+            nextjs-build-${{ env.NEXTJS_REF }}-
+
       - name: Setup Next.js build deps + Playwright
         working-directory: next.js
         run: |
-          corepack enable
           corepack pnpm install
           corepack pnpm playwright install chromium --with-deps
 

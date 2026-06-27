@@ -177,3 +177,86 @@ describe('compat-suite workflow pnpm pin (test-e2e-deploy.yml)', () => {
     ).toBe(true);
   });
 });
+
+// ── Build-perf regression guard (#147 step 1) ─────────────────────────────────
+// As of the 2026-06-27 dispatch, `build-next` reached the real next.js build but
+// hit the 60-minute job timeout while building next.js v16.0.3 from source and
+// was cancelled, so the 4 deploy-tests shards never executed. The fix raises the
+// build-next timeout to a realistic cold-build ceiling AND caches the pnpm store
+// + next.js build output keyed on NEXTJS_REF so repeat runs are fast. These guards
+// prevent that perf fix from silently regressing.
+
+/**
+ * Returns the body of the `build-next` job: every line from the `build-next:`
+ * key up to (but not including) the next sibling job key (`deploy-tests:`).
+ */
+function buildNextJobBlock(): string {
+  const lines = workflowText().split('\n');
+  let start = -1;
+  let jobIndent = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s+)build-next:\s*$/);
+    if (m) {
+      start = i;
+      jobIndent = m[1].length;
+      break;
+    }
+  }
+  expect(start, 'workflow must declare a build-next job').toBeGreaterThanOrEqual(0);
+  const out: string[] = [lines[start]];
+  for (let i = start + 1; i < lines.length; i++) {
+    const indent = lines[i].search(/\S/);
+    // A sibling job key (same indent, non-comment, ends with ':') ends the block.
+    if (indent === jobIndent && /^\s+\S.*:\s*$/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
+describe('compat-suite build-next perf guards (test-e2e-deploy.yml, #147)', () => {
+  it('raises the build-next timeout above the 60-minute cold-build cliff', () => {
+    const block = buildNextJobBlock();
+    const m = block.match(/^\s*timeout-minutes:\s*(\d+)/m);
+    expect(m, 'build-next must declare timeout-minutes').not.toBeNull();
+    const minutes = Number((m as RegExpMatchArray)[1]);
+    expect(
+      minutes,
+      'build-next timeout must exceed 60 min — a cold next.js build was being cancelled at +60',
+    ).toBeGreaterThan(60);
+  });
+
+  it('caches the pnpm store and the next.js build, keyed on NEXTJS_REF', () => {
+    const block = buildNextJobBlock();
+    // At least one actions/cache step in build-next.
+    expect(
+      /uses:\s*actions\/cache(?:@|\s|$)/.test(block),
+      'build-next must use actions/cache to avoid redoing the cold build every run',
+    ).toBe(true);
+    // Every concrete cache key in build-next must include NEXTJS_REF so a ref
+    // bump invalidates the cache (the build is only valid for one pinned ref).
+    // We collect inline `key:` values plus the continuation lines under a
+    // `restore-keys: |` block scalar (skipping the `|` line itself).
+    const blockLines = block.split('\n');
+    const keyValues: string[] = [];
+    for (let i = 0; i < blockLines.length; i++) {
+      const inline = blockLines[i].match(/^\s*key:\s*(\S.*)$/);
+      if (inline) keyValues.push(inline[1].trim());
+      if (/^\s*restore-keys:\s*\|\s*$/.test(blockLines[i])) {
+        const baseIndent = blockLines[i].search(/\S/);
+        for (let j = i + 1; j < blockLines.length; j++) {
+          if (blockLines[j].trim() === '') continue;
+          const indent = blockLines[j].search(/\S/);
+          if (indent <= baseIndent) break;
+          keyValues.push(blockLines[j].trim());
+        }
+      }
+    }
+    expect(keyValues.length, 'build-next cache step must declare a key').toBeGreaterThan(0);
+    for (const value of keyValues) {
+      expect(
+        /NEXTJS_REF/.test(value),
+        `cache key must include NEXTJS_REF so a ref bump invalidates it (got: "${value}")`,
+      ).toBe(true);
+    }
+  });
+});

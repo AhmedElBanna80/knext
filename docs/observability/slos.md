@@ -89,7 +89,7 @@ Alert: `KnextOperatorReconcileSlow` (p95 > 30s for 15m, warning).
 
 SLI:
 ```promql
-max by (namespace, name) (knext_nextapp_condition{type="Degraded",status="true"})
+max by (namespace, name) (knext_nextapp_condition{type="Degraded",status="True"})
 ```
 Alert: `KnextNextAppDegraded`.
 
@@ -124,7 +124,9 @@ spec:
               labelName: status
               path: [status, conditions]
               valueFrom: [status]
-              list: ["true", "false", "unknown"]
+              # Capitalized to match metav1.Condition.Status verbatim — KSM StateSet
+              # matching is case-sensitive (lowercase would keep the alert silent).
+              list: ["True", "False", "Unknown"]
         # also exposes labels: type, namespace, name
 ```
 Once the overlay is applied AND kube-state-metrics is pointed at this ConfigMap,

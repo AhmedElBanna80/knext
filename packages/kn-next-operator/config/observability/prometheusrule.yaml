@@ -65,11 +65,11 @@ spec:
       rules:
         # NextApp Degraded=True — the reconciler now populates status.conditions
         # (Ready / Degraded). kube-state-metrics exposes them as
-        # knext_nextapp_condition{type="Degraded",status="true"}.
+        # knext_nextapp_condition{type="Degraded",status="True"}.
         - alert: KnextNextAppDegraded
           expr: >-
             max by (namespace, name) (
-              knext_nextapp_condition{type="Degraded",status="true"}
+              knext_nextapp_condition{type="Degraded",status="True"}
             ) == 1
           for: 5m
           labels:

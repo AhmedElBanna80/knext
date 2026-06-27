@@ -76,4 +76,20 @@ describe('kube-state-metrics CustomResourceStateMetrics manifest (GAP 2)', () =>
     const { raw } = loadDocs(KUSTOMIZATION_PATH);
     expect(raw).toContain('kube-state-metrics-crd-config.yaml');
   });
+
+  it('lists condition status with metav1 capitalization (KSM matches case-sensitively)', () => {
+    const { docs } = loadDocs(MANIFEST_PATH);
+    const cm = docs.find((d) => d?.kind === 'ConfigMap');
+    const blob = Object.values(cm.data as Record<string, string>).join('\n');
+    const inner = parseAllDocuments(blob)
+      .map((d) => d.toJS())
+      .filter(Boolean);
+    const crsm = inner.find((d) => d?.kind === 'CustomResourceStateMetrics');
+    const stateSet = crsm.spec.resources[0].metrics[0].each.stateSet;
+    // The reconciler writes metav1.Condition.Status as "True"/"False"/"Unknown"
+    // (apimeta.SetStatusCondition). KSM StateSet matches the extracted value against
+    // `list` case-sensitively, so lowercase entries would never match and
+    // KnextNextAppDegraded{status="True"} would stay permanently at 0.
+    expect(stateSet.list).toEqual(['True', 'False', 'Unknown']);
+  });
 });

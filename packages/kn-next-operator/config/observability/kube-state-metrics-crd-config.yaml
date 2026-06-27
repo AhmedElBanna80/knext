@@ -49,10 +49,15 @@ data:
               each:
                 type: StateSet
                 stateSet:
-                  # status="true|false|unknown"; type="Ready|Degraded|Reconciling"
+                  # status="True|False|Unknown" (verbatim metav1.Condition.Status —
+                  # KSM StateSet matches the extracted value against `list`
+                  # case-sensitively, so these MUST match the capitalized values the
+                  # reconciler writes via apimeta.SetStatusCondition, or every series
+                  # stays 0 and KnextNextAppDegraded never fires);
+                  # type="Ready|Degraded|Reconciling"
                   labelName: status
                   labelsFromPath:
                     type: [type]
                   path: [status, conditions]
                   valueFrom: [status]
-                  list: ["true", "false", "unknown"]
+                  list: ["True", "False", "Unknown"]

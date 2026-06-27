@@ -4,89 +4,221 @@
 // repo's default `apps` project runs happy-dom, whose fetch enforces a
 // Same-Origin Policy that blocks those calls. Force the node environment so the
 // drain proof exercises real sockets, not a DOM fetch shim.
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * Container/process-level SIGTERM-drain e2e for the knext runtime entry.
+ * SHIPPED-PATH SIGTERM-drain e2e for the knext runtime entry.
  *
- * The unit test (packages/kn-next/.../shutdown.test.ts) proves gracefulShutdown's
- * logic with a child-process DOUBLE. It does NOT prove that the runtime entry,
- * run as the actual container process, forwards a real SIGTERM to a real child
- * and waits for in-flight requests to finish. That end-to-end path is the gap
- * that lets a regression (e.g. the Dockerfile bare-exec'ing server.js) silently
- * drop in-flight requests on scale-down — exactly what security.md forbids.
+ * Why this is NOT the source-tree e2e it replaces:
+ * The previous version spawned `packages/kn-next/dist/adapters/node-server.js`
+ * straight from the SOURCE TREE. On a dev machine that always resolves
+ * `prom-client`/`pino` via the workspace's hoisted node_modules, so it could
+ * NOT catch the real container bug: Next's standalone output is import-graph
+ * driven, NOTHING in app code imports node-server.js, so neither the runtime
+ * entry NOR its hard deps (prom-client, pino) are traced into `.next/standalone`.
+ * The shipped image's CMD — `node -e "import('@knext/core/internal/node-server')"`
+ * — therefore resolved to MODULE_NOT_FOUND and crash-looped at boot, while CI
+ * stayed green because no job ran that CMD against the real bundle.
  *
- * This test boots the REAL, BUILT @knext/core node-server runtime entry
- * (dist/adapters/node-server.js — the exact module the container's
- * `@knext/core/internal/node-server` specifier resolves to) as a child process,
- * points it at a fixture standalone server via STANDALONE_SERVER_PATH, issues a
- * slow in-flight request, sends SIGTERM to the runtime entry, and asserts:
- *   1. the in-flight request COMPLETES (200 "drained") — not dropped, and
- *   2. the runtime process exits cleanly (code 0).
+ * This test reproduces the REAL container resolution layout:
+ *   1. Build an ISOLATED runner dir OUTSIDE the workspace whose ONLY way to find
+ *      `@knext/core` is the package we place in it — so Node's module resolution
+ *      cannot escape upward into the repo's node_modules (the dev-machine false
+ *      positive the reviewers flagged). Without step 2 below, the CMD here fails
+ *      with `ERR_MODULE_NOT_FOUND: Cannot find package '@knext/core'` — exactly
+ *      the container crash-loop.
+ *   2. Replicate the Dockerfile's runtime COPY: `pnpm --filter @knext/core
+ *      --prod deploy` a self-contained @knext/core into
+ *      `<runner>/node_modules/@knext/core` (dist + a real node_modules with
+ *      prom-client/pino). This is the fix under test.
+ *   3. Run the EXACT Dockerfile CMD (`node -e import('@knext/core/internal/node-server')`)
+ *      from the runner root, pointed at a slow fixture server via
+ *      STANDALONE_SERVER_PATH, send SIGTERM mid-inflight-request, and assert the
+ *      request drains (200 "drained") + the process exits cleanly.
  *
- * This is a process-level (not full kind/pod) e2e — per the issue's AC4, the
- * deliverable when full pod infra is too heavy to land cleanly. It still runs
- * the genuine runtime entrypoint code (signal forwarding + drain), which is the
- * gap the unit test cannot cover.
+ * The runner intentionally does NOT copy the (huge) `.next/standalone` tree: the
+ * app server.js is replaced by the slow fixture via STANDALONE_SERVER_PATH, and
+ * the property under test is purely whether the runtime ENTRY (`@knext/core` +
+ * prom-client + pino) resolves from a container-shaped layout. We still GATE on
+ * the standalone build existing (below) so this only runs when an image could
+ * actually be built — i.e. it tracks the real shipped artifact.
  *
- * Skips (does not fail) when the dist build is absent, so it is non-blocking in
- * a source-only checkout; CI builds @knext/core before running it.
+ * RED proof (verified manually before the fix): without the deploy COPY, the
+ * isolated runner's CMD fails with `ERR_MODULE_NOT_FOUND: Cannot find package
+ * '@knext/core'`. The `resolves the runtime entry from the shipped bundle` case
+ * below FAILS (not skips) if that resolution gap ever returns.
  *
- * Written RED-first: a runtime entry that does not forward SIGTERM + wait for
- * the child to drain would have the in-flight request killed → this fails.
+ * Skips (does not fail) only when the standalone build is entirely absent — a
+ * source-only checkout. Under KNEXT_REQUIRE_STANDALONE=1 (CI) a missing build is
+ * a HARD failure, so a green check can never mean "skipped".
  */
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, '../..');
-// The BUILT runtime entry — exactly what `@knext/core/internal/node-server`
-// resolves to inside the standalone bundle the Dockerfile ships.
-const NODE_SERVER_DIST = resolve(REPO_ROOT, 'packages/kn-next/dist/adapters/node-server.js');
+const APP_DIR = __dirname;
 const SLOW_SERVER = resolve(__dirname, '__fixtures__/slow-standalone-server.mjs');
 
 const PORT = 39187; // unlikely-to-collide test port
 const METRICS_PORT = 9091;
 
+// The CMD specifier the container boots — the EXACT string from the Dockerfile.
+const RUNTIME_IMPORT = "import('@knext/core/internal/node-server')";
+
+/**
+ * Locate the standalone "tracing-root mirror" that contains the app's server.js.
+ * Next preserves paths relative to the auto-detected tracing root (the repo
+ * root, by lockfile), so the app entry lands at
+ * `.next/standalone/<rel>/apps/file-manager/server.js`. We search for it rather
+ * than hardcoding `<rel>` (which differs between a plain checkout and a git
+ * worktree).
+ */
+function findStandaloneMirrorRoot(): string | null {
+  const standaloneDir = resolve(APP_DIR, '.next/standalone');
+  if (!existsSync(standaloneDir)) return null;
+  // Candidate 1: single-app / repo-root layout → apps/file-manager/server.js
+  const direct = join(standaloneDir, 'apps/file-manager/server.js');
+  if (existsSync(direct)) return standaloneDir;
+  // Candidate 2: worktree/nested-root layout → <rel>/apps/file-manager/server.js
+  const found = spawnSync('find', [standaloneDir, '-path', '*/apps/file-manager/server.js'], {
+    encoding: 'utf8',
+  });
+  const line = found.stdout.split('\n').find((l) => l.trim().length > 0);
+  if (!line) return null;
+  // mirror root = the dir two levels above apps/file-manager/server.js
+  return resolve(dirname(line), '..', '..');
+}
+
+const requireStandalone = process.env.KNEXT_REQUIRE_STANDALONE === '1';
+const mirrorRoot = findStandaloneMirrorRoot();
+const skipReason =
+  mirrorRoot !== null ? null : 'standalone build not found — run `next build --webpack` first';
+
+if (requireStandalone && skipReason !== null) {
+  throw new Error(`KNEXT_REQUIRE_STANDALONE=1 but no standalone build present — ${skipReason}`);
+}
+
+// Assembled once: an isolated runner mirroring the Dockerfile runner stage.
+let runnerRoot: string | undefined;
 let child: ReturnType<typeof spawn> | undefined;
 
-// The runtime entry is plain Node; clear any harness NODE_OPTIONS preload so the
-// spawned `node` starts cleanly in any environment.
 function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  // The runtime entry is plain Node; clear any harness NODE_OPTIONS preload so
+  // the spawned `node` starts cleanly in any environment.
   const env = { ...process.env, ...extra };
   delete env.NODE_OPTIONS;
   return env;
 }
 
-afterEach(() => {
-  if (child && child.exitCode === null) {
-    child.kill('SIGKILL');
+beforeAll(() => {
+  if (skipReason !== null || mirrorRoot === null) return;
+
+  // 1. An isolated runner dir OUTSIDE the workspace. The CMD runs from here, so
+  //    `@knext/core` resolution cannot escape up into the repo node_modules —
+  //    the only @knext/core it can find is the one we deploy into it (step 2).
+  runnerRoot = mkdtempSync(join(tmpdir(), 'knext-shipped-runner-'));
+
+  // 2. Replicate the Dockerfile runtime COPY: a self-contained @knext/core with
+  //    its prod deps (prom-client, pino) at node_modules/@knext/core. We run the
+  //    SAME `pnpm deploy` the Dockerfile uses so the test exercises the actual
+  //    fix, not a hand-assembled stand-in.
+  const deployDir = mkdtempSync(join(tmpdir(), 'knext-core-deploy-'));
+  const repoRoot = resolve(APP_DIR, '../..');
+  const dep = spawnSync(
+    'pnpm',
+    ['--filter', '@knext/core', '--prod', 'deploy', '--legacy', deployDir],
+    { cwd: repoRoot, encoding: 'utf8', env: childEnv() },
+  );
+  if (
+    !existsSync(join(deployDir, 'dist/adapters/node-server.js')) ||
+    !existsSync(join(deployDir, 'node_modules/prom-client')) ||
+    !existsSync(join(deployDir, 'node_modules/pino'))
+  ) {
+    throw new Error(
+      `pnpm deploy did not produce a self-contained @knext/core ` +
+        `(node-server.js + prom-client + pino). stderr:\n${dep.stderr}`,
+    );
   }
-  child = undefined;
+  // verbatimSymlinks: KEEP pnpm's RELATIVE `.pnpm/…` symlinks intact. The default
+  // (false) rewrites them to ABSOLUTE paths pointing back at deployDir, which we
+  // then delete → dangling links → MODULE_NOT_FOUND for prom-client/pino. The
+  // Dockerfile `COPY` preserves them verbatim, so we must too.
+  cpSync(deployDir, join(runnerRoot, 'node_modules/@knext/core'), {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  rmSync(deployDir, { recursive: true, force: true });
+}, 180_000);
+
+afterAll(() => {
+  if (runnerRoot) rmSync(runnerRoot, { recursive: true, force: true });
 });
 
-function spawnRuntime(extraEnv: Record<string, string>): ReturnType<typeof spawn> {
-  return spawn('node', [NODE_SERVER_DIST], {
-    cwd: REPO_ROOT,
+// The runtime entry SPAWNS the fixture server as a grandchild. We launch it in
+// its own process group (`detached`) so teardown can SIGKILL the WHOLE group —
+// otherwise an orphaned fixture keeps the fixed metrics port (9091) bound and the
+// next case dies with EADDRINUSE. Wait for the ports to actually free before the
+// next case runs.
+async function killTree(): Promise<void> {
+  const proc = child;
+  child = undefined;
+  if (!proc || proc.pid == null) return;
+  if (proc.exitCode === null) {
+    try {
+      process.kill(-proc.pid, 'SIGKILL'); // negative pid → whole process group
+    } catch {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+  // Give the OS a moment to release the bound ports (3000-range + 9091).
+  await new Promise((r) => setTimeout(r, 500));
+}
+
+afterEach(async () => {
+  await killTree();
+});
+
+/**
+ * Spawn the EXACT Dockerfile CMD from the isolated runner root: boot the runtime
+ * entry by its published package specifier (NOT the dist file path), so the test
+ * proves resolution from the shipped bundle, not the source tree.
+ */
+function spawnShippedRuntime(extraEnv: Record<string, string>): ReturnType<typeof spawn> {
+  return spawn('node', ['-e', RUNTIME_IMPORT], {
+    cwd: runnerRoot,
     env: childEnv({
       PORT: String(PORT),
       STANDALONE_SERVER_PATH: SLOW_SERVER,
       STORAGE_BUCKET: '', // disable image-cache sync side effects
       ...extraEnv,
     }),
-    stdio: ['ignore', 'pipe', 'inherit'],
+    // Own process group so teardown can SIGKILL the runtime entry AND its spawned
+    // fixture grandchild together (see killTree). `child.kill('SIGTERM')` still
+    // targets only the group leader (the runtime entry), which is exactly the
+    // signal path under test — the entry must FORWARD it to drain the child.
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 
 function waitForListening(proc: ReturnType<typeof spawn>): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     const timeout = setTimeout(
-      () => reject(new Error('fixture server never reported LISTENING')),
+      () => reject(new Error(`runtime never reported LISTENING. stderr:\n${stderr}`)),
       25_000,
     );
     let buf = '';
+    let stderr = '';
+    proc.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString();
+    });
     proc.stdout?.on('data', (d: Buffer) => {
       buf += d.toString();
       if (buf.includes(`LISTENING:${PORT}`)) {
@@ -96,17 +228,37 @@ function waitForListening(proc: ReturnType<typeof spawn>): Promise<void> {
     });
     proc.once('exit', (code) => {
       clearTimeout(timeout);
-      reject(new Error(`runtime entry exited early (code ${code}) before listening`));
+      reject(
+        new Error(
+          `runtime entry exited early (code ${code}) before listening. ` + `stderr:\n${stderr}`,
+        ),
+      );
     });
   });
 }
 
-describe('SIGTERM drain e2e: knext runtime entry drains in-flight requests on scale-down', () => {
-  it.skipIf(!existsSync(NODE_SERVER_DIST))(
+describe('SIGTERM drain e2e (SHIPPED bundle): knext runtime entry drains in-flight requests', () => {
+  it.skipIf(skipReason !== null)(
+    'resolves the runtime entry from the shipped standalone bundle (no MODULE_NOT_FOUND)',
+    async () => {
+      // This is the regression the reviewers found: if @knext/core (or its hard
+      // deps) is missing from the shipped layout, the CMD crash-loops at boot.
+      // Booting it and reaching LISTENING proves the specifier + prom-client +
+      // pino all resolve from the bundle. A MODULE_NOT_FOUND would surface as an
+      // early exit here and FAIL (not skip) this test.
+      child = spawnShippedRuntime({});
+      await waitForListening(child);
+      expect(child.exitCode).toBeNull(); // still running → resolved & booted
+      child.kill('SIGTERM');
+    },
+    60_000,
+  );
+
+  it.skipIf(skipReason !== null)(
     'completes an in-flight request after SIGTERM and exits cleanly',
     async () => {
       let stdout = '';
-      child = spawnRuntime({ SHUTDOWN_GRACE_MS: '10000' });
+      child = spawnShippedRuntime({ SHUTDOWN_GRACE_MS: '10000' });
       child.stdout?.on('data', (d: Buffer) => {
         stdout += d.toString();
       });
@@ -138,13 +290,13 @@ describe('SIGTERM drain e2e: knext runtime entry drains in-flight requests on sc
       expect(stdout).toContain('SIGTERM-RECEIVED');
       expect(stdout).toContain('DRAINED-EXIT');
     },
-    40_000,
+    60_000,
   );
 
-  it.skipIf(!existsSync(NODE_SERVER_DIST))(
+  it.skipIf(skipReason !== null)(
     'serves the Prometheus metrics sidecar while the runtime entry is up',
     async () => {
-      child = spawnRuntime({});
+      child = spawnShippedRuntime({});
       await waitForListening(child);
 
       const res = await fetch(`http://127.0.0.1:${METRICS_PORT}/metrics`);
@@ -154,6 +306,6 @@ describe('SIGTERM drain e2e: knext runtime entry drains in-flight requests on sc
 
       child.kill('SIGTERM');
     },
-    40_000,
+    60_000,
   );
 });

@@ -12,8 +12,10 @@
 # guarantees. This guard closes that gap, analogous to hadolint DL3006/DL3007.
 #
 # A `FROM` line is COMPLIANT iff its image reference contains `@sha256:`.
-# The human-readable tag MAY (and should) be kept as a comment, e.g.
-#     FROM node:22-alpine@sha256:<digest> AS builder  # node:22-alpine
+# The human-readable tag MAY (and should) be kept as a FULL-LINE comment ABOVE
+# the FROM (Docker rejects trailing/inline comments on a FROM line), e.g.
+#     # node:22-alpine
+#     FROM node:22-alpine@sha256:<digest> AS builder
 # Build-stage aliases (`FROM builder`, `FROM <stage> AS ...`) and the special
 # `FROM scratch` are exempt — they do not pull an external base image.
 #

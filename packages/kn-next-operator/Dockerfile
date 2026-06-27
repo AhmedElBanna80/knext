@@ -13,11 +13,12 @@
 # DIGEST-PINNED in addition to the patched point release: the tag fixes the Go
 # stdlib version Trivy reads from the binary; the @sha256 digest fixes the exact
 # base bytes so an unreviewed upstream re-push of the same tag cannot change the
-# image we build + sign. Keep the tag in the trailing comment; refresh the digest
-# and comment together when bumping. Resolve with:
+# image we build + sign. The tag is kept in this comment block (Docker rejects
+# trailing/inline comments on a FROM line); refresh the digest and this comment
+# together when bumping. Resolve with:
 #   docker buildx imagetools inspect golang:1.25.11
 # Enforced by scripts/check-base-images-pinned.sh (CI: base-image-pin-guard).
-FROM golang:1.25.11@sha256:995e25c0e1868fa30a57236d5d8c2252b94b8716e53eae5895cd70dcce532cf0 AS builder  # golang:1.25.11
+FROM golang:1.25.11@sha256:995e25c0e1868fa30a57236d5d8c2252b94b8716e53eae5895cd70dcce532cf0 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -45,7 +46,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # image we sign are immutable. Keep the tag in the trailing comment; refresh with:
 #   docker buildx imagetools inspect gcr.io/distroless/static:nonroot
 # Enforced by scripts/check-base-images-pinned.sh (CI: base-image-pin-guard).
-FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240  # gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532

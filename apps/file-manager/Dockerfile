@@ -2,11 +2,12 @@
 #
 # Base image is DIGEST-PINNED (not the floating node:22-alpine tag) so the CVE
 # surface of the image we sign cannot change under us via an unreviewed upstream
-# push. Keep the human-readable tag in the trailing comment; refresh both the
-# digest and the comment together when bumping. Resolve a new digest with:
+# push. The human-readable tag is kept in this comment block (Docker rejects
+# trailing/inline comments on a FROM line); refresh both the digest and this
+# comment together when bumping. Resolve a new digest with:
 #   docker buildx imagetools inspect node:22-alpine
 # Enforced by scripts/check-base-images-pinned.sh (CI: base-image-pin-guard).
-FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS builder  # node:22-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS builder
 # Reproducible-build input (best effort): the CI supply-chain workflow passes the
 # commit time here. Declared so build-push-action doesn't warn on an unknown ARG.
 # NOT yet a full reproducibility guarantee — see docs/security/threat-model.md.
@@ -57,7 +58,7 @@ RUN mkdir -p /sharp-runtime \
 
 # Stage 2: Lean production image using Node.js standalone output.
 # Digest-pinned (same digest as the builder stage); see the builder FROM above.
-FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runner  # node:22-alpine
+FROM node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000

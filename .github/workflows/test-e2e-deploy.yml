@@ -142,26 +142,35 @@ jobs:
           restore-keys: |
             nextjs-pnpm-store-${{ env.NEXTJS_REF }}-
 
-      # Cache the actual next.js BUILD OUTPUT (the `turbo run build` artifacts in
-      # each package's dist + the turbo local cache). On a hit, the scoped
-      # `turbo run build --filter=next...` is a near-instant turbo cache replay
-      # instead of a cold compile. The `packages/**/dist` + `packages/next/dist`
-      # globs still cover the now-narrower scope (next + its workspace deps all
-      # emit under packages/*/dist). Keyed on NEXTJS_REF so the pinned-ref build
-      # is reused until the ref bumps. NOTE: actions/cache only SAVES on job
-      # SUCCESS — the first COMPLETING build (now within the 180-min ceiling) is
-      # what finally populates this so subsequent runs are fast.
-      - name: Cache next.js build output
-        uses: actions/cache@v4
+      # #147 — GHA-backed Turbo REMOTE cache (the real fix for the cold-build
+      # chicken-and-egg). The prior #148 build-output `actions/cache` only SAVED
+      # on job SUCCESS, but the cold next.js build was cancelled at the timeout
+      # every run, so that cache never populated → every run was a fresh ~3h cold
+      # miss. We REPLACE it with a turbo remote cache: turbo uploads each next.js
+      # package's build output INCREMENTALLY the moment its `build` task finishes,
+      # so a cancelled run still PERSISTS the tasks that completed, the next run
+      # RESUMES from them, and across a few dispatches the cache fills until one
+      # build completes — exactly the property `actions/cache` could not give us.
+      #
+      # Turbo 2.5.5 (next.js's root devDep) has NO native GitHub-Actions cache
+      # backend — it only speaks the Vercel/custom remote-cache HTTP API via
+      # TURBO_API/TURBO_TOKEN/TURBO_TEAM (the reference harness uses Vercel's,
+      # which is not available to us). This community action runs a tiny local
+      # server that proxies that HTTP API to GitHub Actions' built-in cache and
+      # `core.exportVariable`s TURBO_API/TURBO_TOKEN/TURBO_TEAM into $GITHUB_ENV,
+      # so the later `corepack pnpm turbo run build` step inherits them and uses
+      # the remote cache automatically (no --no-cache / no remoteCache disable).
+      #
+      # SUPPLY CHAIN (security.md): pinned by full commit SHA, tag in comment.
+      # NOTE: the GitHub Actions cache is capped at 10 GB/repo with LRU eviction.
+      # If next.js's build artifacts exceed that, eviction may prevent the cache
+      # fully warming across runs; the larger-runner alternative is tracked on
+      # #147 (graduation checklist item 1).
+      - name: Set up GHA-backed Turbo remote cache
+        # dtinth/setup-github-actions-caching-for-turbo v1.3.0
+        uses: dtinth/setup-github-actions-caching-for-turbo@cc723b4600e40a6b8815b65701d8614b91e2669e
         with:
-          path: |
-            next.js/.turbo
-            next.js/node_modules/.cache/turbo
-            next.js/packages/**/dist
-            next.js/packages/next/dist
-          key: nextjs-build-${{ env.NEXTJS_REF }}-${{ hashFiles('next.js/pnpm-lock.yaml') }}
-          restore-keys: |
-            nextjs-build-${{ env.NEXTJS_REF }}-
+          cache-prefix: nextjs-turbo-${{ env.NEXTJS_REF }}-
 
       - name: Setup Next.js build deps + Playwright
         working-directory: next.js
@@ -176,7 +185,9 @@ jobs:
       # create-next-app and the turbopack JS bench packages — the bulk of the
       # full-monorepo cold build that hit the 120-min timeout. The native
       # @next/swc binary still arrives via the prebuilt npm postinstall during
-      # install above (we never compile it from Rust here).
+      # install above (we never compile it from Rust here). This step inherits
+      # TURBO_API/TURBO_TOKEN/TURBO_TEAM from the remote-cache step above, so
+      # turbo reads/writes the GHA-backed remote cache per task — no --no-cache.
       - name: Build Next.js (scoped to `next` + workspace deps)
         working-directory: next.js
         run: corepack pnpm turbo run build --filter=next...

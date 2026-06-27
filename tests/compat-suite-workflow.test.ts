@@ -256,12 +256,74 @@ describe('compat-suite build-next perf guards (test-e2e-deploy.yml, #147)', () =
     ).toBe(false);
   });
 
-  it('caches the pnpm store and the next.js build, keyed on NEXTJS_REF', () => {
+  // ── Turbo remote-cache guard (#147) ───────────────────────────────────────
+  // ROOT CAUSE: actions/cache only SAVES build output on job SUCCESS, but the
+  // cold next.js build was cancelled at the timeout every run, so the #148
+  // build-output cache never populated (chicken-and-egg) and every run was a
+  // cold ~3h miss. FIX: give turbo a GHA-backed REMOTE cache so each next.js
+  // package's build output uploads INCREMENTALLY as its turbo task completes —
+  // a cancelled run still persists finished tasks, and subsequent runs resume,
+  // until one run completes the build. Turbo has no native GHA-cache backend
+  // (only Vercel/custom remote via TURBO_API/TOKEN/TEAM), so we use the
+  // community action that proxies turbo's remote-cache HTTP API to the GHA
+  // cache. Supply-chain rule: it MUST be pinned by commit SHA.
+  it('wires a GHA-backed turbo remote cache before the next.js build, SHA-pinned', () => {
     const block = buildNextJobBlock();
-    // At least one actions/cache step in build-next.
+
+    // The community turbo remote-cache action must be present and pinned by a
+    // 40-hex commit SHA (NOT a floating tag/branch) — supply-chain rule.
+    const m = block.match(
+      /uses:\s*dtinth\/setup-github-actions-caching-for-turbo@([0-9a-f]{40})\b/,
+    );
+    expect(
+      m,
+      'build-next must use dtinth/setup-github-actions-caching-for-turbo pinned by a 40-char commit SHA',
+    ).not.toBeNull();
+    const sha = (m as RegExpMatchArray)[1];
+    expect(sha.length, 'turbo cache action must be pinned by a full 40-char SHA').toBe(40);
+
+    // It must NOT be pinned by a floating ref (tag/branch/major like @v1, @main).
+    expect(
+      /setup-github-actions-caching-for-turbo@(?!.{40})\S+/.test(block),
+      'turbo cache action must not be pinned by a floating tag/branch (use a SHA)',
+    ).toBe(false);
+
+    // The remote-cache setup must come BEFORE the build step so the build
+    // inherits the TURBO_API/TURBO_TOKEN/TURBO_TEAM env the action exports.
+    const cacheIdx = block.indexOf('setup-github-actions-caching-for-turbo@');
+    // Match the actual scoped build COMMAND (with --filter), not prose mentions
+    // of `turbo run build` in surrounding comments.
+    const buildIdx = block.search(
+      /corepack\s+pnpm\s+turbo\s+run\s+build\b[^\n]*--filter[=\s]+next\.\.\./,
+    );
+    expect(cacheIdx, 'turbo cache step must exist').toBeGreaterThanOrEqual(0);
+    expect(buildIdx, 'scoped build step must exist').toBeGreaterThanOrEqual(0);
+    expect(
+      cacheIdx < buildIdx,
+      'the turbo remote-cache step must run BEFORE the next.js build so the build inherits TURBO_* env',
+    ).toBe(true);
+
+    // The build must NOT disable the cache (no `--no-cache`/`--force`), or the
+    // incremental remote upload that fixes the chicken-and-egg never happens.
+    const buildLine =
+      block
+        .split('\n')
+        .find((l) =>
+          /corepack\s+pnpm\s+turbo\s+run\s+build\b[^\n]*--filter[=\s]+next\.\.\./.test(l),
+        ) ?? '';
+    expect(
+      /--no-cache\b|--force\b/.test(buildLine),
+      'the next.js build must NOT pass --no-cache/--force (it would defeat the turbo remote cache)',
+    ).toBe(false);
+  });
+
+  it('caches the pnpm store keyed on NEXTJS_REF', () => {
+    const block = buildNextJobBlock();
+    // At least one actions/cache step in build-next (the pnpm content store, so
+    // a repeat run skips re-downloading every next.js dependency).
     expect(
       /uses:\s*actions\/cache(?:@|\s|$)/.test(block),
-      'build-next must use actions/cache to avoid redoing the cold build every run',
+      'build-next must use actions/cache for the pnpm store to avoid re-downloading deps every run',
     ).toBe(true);
     // Every concrete cache key in build-next must include NEXTJS_REF so a ref
     // bump invalidates the cache (the build is only valid for one pinned ref).

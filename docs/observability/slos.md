@@ -97,7 +97,14 @@ Alert: `KnextNextAppDegraded`.
 
 The reconciler populates `NextApp.status.conditions` (Ready / Degraded /
 Reconciling), but Prometheus only sees them if kube-state-metrics is configured
-to emit CRD conditions. Add this `CustomResourceStateMetrics` config to KSM:
+to emit CRD conditions. This `CustomResourceStateMetrics` config now ships as an
+applyable manifest — a ConfigMap at
+`packages/kn-next-operator/config/observability/kube-state-metrics-crd-config.yaml`,
+wired into the `config/observability` overlay. Apply it with
+`kubectl apply -k config/observability`, then point kube-state-metrics at the
+ConfigMap's `custom-resource-state.yaml` key (mount it +
+`--custom-resource-state-config-file`, plus get/list/watch RBAC on
+`nextapps.apps.kn-next.dev`). The embedded config:
 
 ```yaml
 kind: CustomResourceStateMetrics
@@ -120,5 +127,7 @@ spec:
               list: ["true", "false", "unknown"]
         # also exposes labels: type, namespace, name
 ```
-Until KSM is wired, `KnextNextAppDegraded` is inert (no series) — track the
+Once the overlay is applied AND kube-state-metrics is pointed at this ConfigMap,
+`knext_nextapp_condition` is emitted and `KnextNextAppDegraded` is live. If KSM
+is not yet running with this config, the alert has no series — track the
 condition via `kubectl get nextapp -o jsonpath` in the meantime (see runbook).

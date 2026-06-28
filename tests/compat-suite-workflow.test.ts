@@ -527,3 +527,149 @@ describe('compat-suite network-resilient harness install (test-e2e-deploy.yml, #
     ).toBeLessThan(16);
   });
 });
+
+// ── Playwright browser-download guards (#147 — THE root cause) ──────────────────
+// Definitive diagnosis (run 28310661064 install-step log): `corepack pnpm install`
+// RESOLVES all 3345 packages in ~3 SECONDS ("resolved 3345, reused 3337,
+// downloaded 0, added 0, done") — the pnpm install is NOT the bottleneck. Each
+// retry attempt then HANGS for 40 minutes in the `playwright-chromium` package's
+// POSTINSTALL, i.e. downloading the Chromium browser binary from Playwright's CDN,
+// which times out (the same network throttling failing Docker Hub pulls all
+// session), gets killed by the per-attempt timeout, and fails all 4 attempts
+// (`playwright-chromium install: Failed` / `ELIFECYCLE`). Every prior
+// "infra-bound / 180-min" conclusion was actually THIS browser download hanging.
+//
+// FIX: set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 on the Prepare install step so the
+// `playwright-chromium` postinstall does NOT fetch the browser — the install then
+// finishes in seconds (resolution only). The browser binary is only needed when a
+// test actually drives `next-webdriver`, so any chromium install belongs in the
+// SHARD job (where it is used), retry+timeout-wrapped and actions/cache-d — NOT in
+// the Prepare job's blocking install.
+
+describe('compat-suite Playwright browser-download fix (test-e2e-deploy.yml, #147)', () => {
+  /** The single build-next step block whose run: body installs the harness. */
+  function harnessInstallStep(): string {
+    return nextJsStepBlocks().find((b) => /corepack\s+pnpm\s+install\b/.test(b)) ?? '';
+  }
+
+  it('sets PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD on the Prepare harness install', () => {
+    const step = harnessInstallStep();
+    expect(step, 'expected a next.js step that runs corepack pnpm install').not.toBe('');
+    // The hang is playwright-chromium's postinstall downloading the browser. The
+    // env var must be present in the install step's env so pnpm skips that fetch.
+    const m = step.match(/PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\s*:\s*['"]?([^'"\s#]+)/);
+    expect(
+      m,
+      'the harness install step must set PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD so the chromium download (the real hang) is skipped',
+    ).not.toBeNull();
+    // A truthy value ("1" / "true") — not "0"/"false".
+    const value = (m as RegExpMatchArray)[1];
+    expect(
+      ['1', 'true'],
+      `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD must be truthy, got "${value}"`,
+    ).toContain(value);
+  });
+
+  it('does NOT run a blocking explicit browser install in the Prepare job', () => {
+    const block = buildNextJobBlock();
+    // The redundant `corepack pnpm playwright install chromium ...` that ran in the
+    // blocking Prepare install is exactly what hung; it must be gone from build-next.
+    expect(
+      /playwright\s+install\b/.test(block),
+      'build-next (Prepare) must NOT run an explicit `playwright install` — that browser download is the hang',
+    ).toBe(false);
+  });
+
+  it('if chromium is installed at all, it lives in the shard job, retry+timeout-wrapped and cached', () => {
+    const buildBlock = buildNextJobBlock();
+    const shardBlock = deployTestsJobBlock();
+    const shardInstallsBrowser = /playwright\s+install\b/.test(shardBlock);
+    // Prepare must never install the browser (asserted above); the only acceptable
+    // place for a browser install is the shard job that actually drives it.
+    expect(
+      /playwright\s+install\b/.test(buildBlock),
+      'the chromium install must not be in the Prepare job',
+    ).toBe(false);
+
+    if (shardInstallsBrowser) {
+      // If the shard installs chromium, it must be bounded: a per-attempt timeout,
+      // a retry loop, and an actions/cache keyed on the playwright version so the
+      // CDN download is not repeated every run and a hang is bounded + retried.
+      expect(
+        /timeout\s+\d+m[\s\S]*playwright\s+install\b/.test(shardBlock),
+        'the shard chromium install must be wrapped in a per-attempt `timeout <N>m`',
+      ).toBe(true);
+      expect(
+        /\b(for|while)\b/.test(shardBlock),
+        'the shard chromium install must use a retry loop (for/while)',
+      ).toBe(true);
+      expect(
+        /uses:\s*actions\/cache@/.test(shardBlock),
+        'the shard chromium install must be cached via actions/cache (keyed on the playwright version)',
+      ).toBe(true);
+    }
+  });
+});
+
+// ── Shard chromium-install must be NON-FATAL (#147 step 1 — the milestone fix) ──
+// THE milestone is "the 4 shards EXECUTE, not necessarily pass" (#147 step 1).
+// The shard chromium install hits the SAME throttled Playwright CDN this whole PR
+// diagnoses, so it can fail all retry attempts. If the install step then hard
+// `exit 1`s on exhaustion, the WHOLE shard job ABORTS at that step — and the
+// ~678/743 tests that DON'T need a browser never run. That defeats the milestone.
+//
+// The actual test-run step two steps later uses `|| true` precisely so a partial
+// scaffold still runs; the chromium install must mirror that resilience. On
+// exhaustion it must WARN and CONTINUE (exit 0) so the shard always proceeds to
+// run-tests.js — only the ~65 browser-driving tests then fail when chromium is
+// genuinely absent.
+
+describe('compat-suite shard chromium install is non-fatal (test-e2e-deploy.yml, #147)', () => {
+  /** The shard step block whose run: body installs the chromium browser. */
+  function shardChromiumStep(): string {
+    const lines = deployTestsJobBlock().split('\n');
+    const blocks: string[] = [];
+    let current: string[] = [];
+    const flush = () => {
+      if (current.length) blocks.push(current.join('\n'));
+      current = [];
+    };
+    for (const line of lines) {
+      if (/^\s*-\s+name:/.test(line)) flush();
+      current.push(line);
+    }
+    flush();
+    return blocks.find((b) => /playwright\s+install\b/.test(b)) ?? '';
+  }
+
+  it('the shard chromium install exists and is retry+timeout wrapped (precondition)', () => {
+    const step = shardChromiumStep();
+    expect(step, 'expected a shard step that runs playwright install').not.toBe('');
+    expect(
+      /timeout\s+\d+m[\s\S]*playwright\s+install\b/.test(step),
+      'the shard chromium install must be wrapped in a per-attempt timeout',
+    ).toBe(true);
+  });
+
+  it('does NOT hard `exit 1` when all chromium-install attempts are exhausted', () => {
+    const step = shardChromiumStep();
+    expect(step, 'expected a shard step that runs playwright install').not.toBe('');
+    // The CDN failing all attempts must NOT abort the shard. A literal `exit 1`
+    // anywhere in this step body would make a failed install fatal, skipping the
+    // ~678 non-browser tests. Forbid it — the step must warn-and-continue.
+    expect(
+      /\bexit\s+1\b/.test(step),
+      'the shard chromium install must be NON-FATAL: no `exit 1` on exhaustion — warn and continue so the non-browser tests still run',
+    ).toBe(false);
+  });
+
+  it('emits a CI warning when chromium is unavailable (so the failure is visible, not silent)', () => {
+    const step = shardChromiumStep();
+    // Non-fatal must not mean silent: surface the exhaustion as a GitHub warning
+    // annotation so the partial run is explained in the job summary.
+    expect(
+      /::warning::/.test(step),
+      'the shard chromium install must `echo "::warning::..."` on exhaustion so the partial run is visible',
+    ).toBe(true);
+  });
+});

@@ -3,35 +3,103 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Contract test for test/deploy-tests-manifest.knext.json (#89, ADR-0007 A3-2).
+ * Self-contained glob matcher (no `minimatch` runtime dep — it is not hoisted to
+ * the repo's top-level node_modules). Supports the subset the manifest uses:
+ * `**` (any path incl. `/`), `*` (any non-`/`), and brace alternation `{a,b}`
+ * (incl. the empty alternative in `{,x}`). This mirrors how next.js's
+ * get-test-filter.js minimatches the same globs against discovered test files —
+ * if these assertions pass, the real harness keeps/drops the same files.
+ */
+function globMatch(file: string, pattern: string): boolean {
+  // Expand brace alternations into a set of concrete patterns first.
+  const expanded = expandBraces(pattern);
+  return expanded.some((p) => new RegExp(`^${globToRegex(p)}$`).test(file));
+}
+
+function expandBraces(pattern: string): string[] {
+  const open = pattern.indexOf('{');
+  if (open === -1) return [pattern];
+  // Find the matching close brace for this (non-nested) group.
+  const close = pattern.indexOf('}', open);
+  if (close === -1) return [pattern];
+  const pre = pattern.slice(0, open);
+  const post = pattern.slice(close + 1);
+  const alts = pattern.slice(open + 1, close).split(',');
+  return alts.flatMap((alt) => expandBraces(`${pre}${alt}${post}`));
+}
+
+function globToRegex(glob: string): string {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        // `**/` collapses to zero-or-more path segments (minimatch: `a/**/b`
+        // matches `a/b`); a trailing `**` matches anything.
+        if (glob[i + 2] === '/') {
+          re += '(?:.*/)?';
+          i += 2;
+        } else {
+          re += '.*';
+          i++;
+        }
+      } else {
+        re += '[^/]*';
+      }
+    } else if ('.+^$()|[]\\'.includes(c)) {
+      re += `\\${c}`;
+    } else {
+      re += c;
+    }
+  }
+  return re;
+}
+
+/**
+ * Contract test for test/deploy-tests-manifest.knext.json (#89, ADR-0007 A3-2/A3-3, #147).
  *
- * The manifest is the HONEST, in-repo ledger of which Next.js deploy-mode e2e
- * tests knext currently excludes. The project honesty rule (CLAUDE.md §10,
- * .claude/rules/architecture.md) forbids a silent skip: every exclusion MUST
- * carry a non-empty rationale tied to a known-unsupported category. An EMPTY
- * exclude list would be a false "we pass everything" claim; an ALL-excluding
- * list would be a fake green. This test guards both ends.
+ * TWO jobs, both load-bearing:
+ *
+ *  1. HARNESS COMPATIBILITY (the A3-3 fix). vercel/next.js's run-tests.js consumes
+ *     this file via NEXT_EXTERNAL_TESTS_FILTERS → test/get-test-filter.js, which
+ *     ONLY understands `version === 2` (rule-based include/exclude with string
+ *     globs) or the legacy no-version full-list format. The previous `version: 1`
+ *     + object-shaped exclude list THREW `Unknown manifest version: 1` at module
+ *     load, so run-tests.js died before discovering a single test — every shard
+ *     reported passed:0 failed:0 (run 28314927507). These tests lock the manifest
+ *     to the shape the harness actually accepts AND to a non-empty include set
+ *     (an empty include selects ZERO tests under v2 semantics).
+ *
+ *  2. HONEST LEDGER (CLAUDE.md §10, .claude/rules/architecture.md). The honesty
+ *     rule forbids a silent skip: every knext-SPECIFIC exclusion must carry a
+ *     non-empty rationale tied to a known-unsupported category. Because the
+ *     harness's `rules.exclude` is a flat string-glob array (it cannot hold our
+ *     rationale objects), the ledger lives in a sidecar `$knextExclusions` array
+ *     (ignored by the harness) and every ledger glob must also appear in
+ *     `rules.exclude` so the ledger and the live filter never drift.
  */
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const MANIFEST_PATH = resolve(REPO_ROOT, 'test/deploy-tests-manifest.knext.json');
 
-interface ExcludeEntry {
+interface KnextExclusion {
   test: string;
   rationale: string;
   category: string;
 }
 interface Manifest {
   version: number;
-  suites: string[];
+  // v2 `suites` is an object map of file → {failed, flakey}; empty by default.
+  suites: Record<string, { failed?: string[]; flakey?: string[] }>;
   rules: {
     include: string[];
-    exclude: ExcludeEntry[];
+    exclude: string[];
   };
+  $knextExclusions: KnextExclusion[];
 }
 
 /**
- * Categories an exclusion may legitimately reference. These mirror the
+ * Categories a knext exclusion may legitimately reference. These mirror the
  * compat-matrix rows that are architecturally or upstream-gated (CLAUDE.md §8
  * "buckets"): things knext does NOT support today, by design or because the
  * feature is not adapter-standardizable yet.
@@ -44,34 +112,89 @@ const KNOWN_UNSUPPORTED_CATEGORIES = new Set([
   'image-optimization',
 ]);
 
-describe('test/deploy-tests-manifest.knext.json — honest exclusion ledger (#89)', () => {
+const manifest: Manifest = existsSync(MANIFEST_PATH)
+  ? JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'))
+  : ({} as Manifest);
+
+describe('test/deploy-tests-manifest.knext.json — harness-compatible v2 selection (#147)', () => {
   it('the manifest file exists', () => {
     expect(existsSync(MANIFEST_PATH)).toBe(true);
   });
 
-  const manifest: Manifest = existsSync(MANIFEST_PATH)
-    ? JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'))
-    : ({} as Manifest);
+  it('declares version 2 (the ONLY rule-based version get-test-filter.js accepts)', () => {
+    // version:1 (or any number that is not 2, and is not absent) makes
+    // get-test-filter.js throw `Unknown manifest version`, killing run-tests.js
+    // at module load — the exact bug that made every shard run 0 tests.
+    expect(manifest.version).toBe(2);
+  });
 
-  it('parses as JSON with {version, suites, rules:{include,exclude}}', () => {
-    expect(typeof manifest.version).toBe('number');
-    expect(Array.isArray(manifest.suites)).toBe(true);
-    expect(manifest.suites.length).toBeGreaterThan(0);
-    expect(manifest.rules).toBeTruthy();
+  it('shape matches the v2 filter: suites object + rules.{include,exclude} string arrays', () => {
+    // v2 reads `test.file in manifest.suites` (suites must be an OBJECT) and
+    // minimatches against rules.include / rules.exclude (arrays of STRING globs).
+    expect(
+      manifest.suites !== null &&
+        typeof manifest.suites === 'object' &&
+        !Array.isArray(manifest.suites),
+      'suites must be an object map (v2), not an array',
+    ).toBe(true);
     expect(Array.isArray(manifest.rules.include)).toBe(true);
     expect(Array.isArray(manifest.rules.exclude)).toBe(true);
+    for (const pat of [...manifest.rules.include, ...manifest.rules.exclude]) {
+      expect(typeof pat, `rules glob must be a string, got ${JSON.stringify(pat)}`).toBe('string');
+    }
   });
 
-  it('is neither an empty nor an all-excluding ledger (no false green)', () => {
-    // Not empty: an empty exclude list would falsely imply "we pass all deploy tests".
-    expect(manifest.rules.exclude.length).toBeGreaterThan(0);
+  it('include is NON-EMPTY (an empty include selects ZERO tests under v2)', () => {
+    // Under v2, a test is dropped unless it matches an include pattern. The old
+    // `include: []` is therefore an automatic 0-test run — the include MUST name
+    // the deploy-eligible base set (the e2e/production globs).
+    expect(manifest.rules.include.length).toBeGreaterThan(0);
+    // The deploy-eligible e2e base set must be present.
+    expect(
+      manifest.rules.include.some((p) => p.startsWith('test/e2e/')),
+      'include must select the deploy-eligible test/e2e/** base set',
+    ).toBe(true);
+  });
+
+  it('a representative deploy-eligible test is SELECTED (passed+failed > 0 is possible)', () => {
+    // Prove the filter actually keeps a normal e2e deploy test — if this fails,
+    // run-tests.js would again select 0 tests. navigation is a plain HTTP/render
+    // app-dir test with no architectural exclusion.
+    const file = 'test/e2e/app-dir/navigation/navigation.test.ts';
+    const included = manifest.rules.include.some((p) => globMatch(file, p));
+    const excluded = manifest.rules.exclude.some((p) => globMatch(file, p));
+    expect(included && !excluded, `${file} must be selected by the manifest`).toBe(true);
+  });
+
+  it('knext architectural exclusions ARE filtered out by the live rules', () => {
+    // The 4 architectural categories must be dropped by rules.exclude.
+    const archSamples = [
+      'test/e2e/middleware-general/index.test.ts',
+      'test/e2e/cache-components/cache-components.test.ts',
+      'test/e2e/app-dir/ppr-full/ppr-full.test.ts',
+      'test/e2e/app-dir/edge-runtime-module-errors/index.test.ts',
+    ];
+    for (const file of archSamples) {
+      expect(
+        manifest.rules.exclude.some((p) => globMatch(file, p)),
+        `${file} must be excluded by rules.exclude`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe('test/deploy-tests-manifest.knext.json — honest exclusion ledger (#89)', () => {
+  it('has a $knextExclusions ledger that is neither empty nor all-excluding', () => {
+    expect(Array.isArray(manifest.$knextExclusions)).toBe(true);
+    // Not empty: would falsely imply knext supports every deploy feature.
+    expect(manifest.$knextExclusions.length).toBeGreaterThan(0);
     // Not absurdly large: a giant exclude list = faking green by skipping everything.
-    expect(manifest.rules.exclude.length).toBeLessThan(50);
+    expect(manifest.$knextExclusions.length).toBeLessThan(50);
   });
 
-  it('EVERY exclude entry has a non-empty rationale (no silent skips)', () => {
-    for (const entry of manifest.rules.exclude) {
-      expect(typeof entry.test, `exclude entry missing "test": ${JSON.stringify(entry)}`).toBe(
+  it('EVERY ledger entry has a non-empty rationale (no silent skips)', () => {
+    for (const entry of manifest.$knextExclusions) {
+      expect(typeof entry.test, `ledger entry missing "test": ${JSON.stringify(entry)}`).toBe(
         'string',
       );
       expect(entry.test.trim().length, `empty test name: ${JSON.stringify(entry)}`).toBeGreaterThan(
@@ -79,17 +202,30 @@ describe('test/deploy-tests-manifest.knext.json — honest exclusion ledger (#89
       );
       expect(
         typeof entry.rationale === 'string' && entry.rationale.trim().length > 0,
-        `exclude entry "${entry.test}" has no rationale`,
+        `ledger entry "${entry.test}" has no rationale`,
       ).toBe(true);
     }
   });
 
-  it('every exclusion references a known-unsupported category', () => {
-    for (const entry of manifest.rules.exclude) {
+  it('every ledger entry references a known-unsupported category', () => {
+    for (const entry of manifest.$knextExclusions) {
       expect(
         KNOWN_UNSUPPORTED_CATEGORIES.has(entry.category),
-        `exclude "${entry.test}" cites unknown category "${entry.category}" — ` +
+        `ledger "${entry.test}" cites unknown category "${entry.category}" — ` +
           `only ${[...KNOWN_UNSUPPORTED_CATEGORIES].join(', ')} are honest exclusions`,
+      ).toBe(true);
+    }
+  });
+
+  it('every ledger glob also appears in rules.exclude (ledger & live filter cannot drift)', () => {
+    // The honest ledger documents WHY; rules.exclude is what the harness ACTS on.
+    // If a category is in the ledger it must be enforced, and vice-versa: no
+    // architectural exclusion may be silently dropped from the live filter.
+    const liveExcludes = new Set(manifest.rules.exclude);
+    for (const entry of manifest.$knextExclusions) {
+      expect(
+        liveExcludes.has(entry.test),
+        `ledger glob "${entry.test}" is not in rules.exclude — the ledger and the live filter have drifted`,
       ).toBe(true);
     }
   });

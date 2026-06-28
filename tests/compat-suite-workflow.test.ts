@@ -830,3 +830,85 @@ describe('compat-suite shard chromium install is non-fatal (test-e2e-deploy.yml,
     ).toBe(true);
   });
 });
+
+// ── A3-3: the shard must actually RUN real deploy tests (#147) ──────────────────
+// Run 28314927507 SUCCEEDED with `passed:0 failed:0 excluded:4` — i.e. the CI
+// infra worked end-to-end but the harness selected + ran ZERO tests. Root cause
+// (proven against vercel/next.js@v16.0.3 source) was TWO-fold:
+//
+//   1. SELECTION: the knext manifest declared `version: 1`. next.js's
+//      test/get-test-filter.js understands only the legacy (no-version) format
+//      and `version === 2`; any other number THROWS `Unknown manifest version`.
+//      run-tests.js calls getTestFilter() at MODULE LOAD (top-level), so the throw
+//      killed the whole run before a single test was discovered — `|| true`
+//      swallowed the non-zero exit and the summary parsed an empty log → 0/0.
+//      FIX: the manifest is now v2 with string-glob include/exclude (guarded by
+//      tests/deploy-manifest.test.ts).
+//
+//   2. LOADING: even once selected, jest cannot LOAD a deploy test module without
+//      the workspace `packages/next` BUILT — every test/e2e/**/*.test.ts imports
+//      e2e-utils / next-test-utils, which import `next/dist/*` + `next/constants`
+//      at module scope, and jest.config.js does `require('next/jest')`. In the
+//      prebuilt model `packages/next/dist` is absent (no source build). FIX: a
+//      shard step unpacks the PUBLISHED next tarball (which IS the built package)
+//      into next.js/packages/next so those module-scope imports resolve — no Rust,
+//      no source TS build.
+//
+// These guards lock in BOTH halves so a regression cannot silently return to 0/0.
+
+describe('compat-suite runs REAL deploy tests (test-e2e-deploy.yml, #147 A3-3)', () => {
+  it('points NEXT_EXTERNAL_TESTS_FILTERS at the knext v2 manifest', () => {
+    const block = deployTestsJobBlock();
+    expect(
+      /NEXT_EXTERNAL_TESTS_FILTERS\s*:[^\n]*deploy-tests-manifest\.knext\.json/.test(block),
+      'the run step must filter via the knext deploy manifest',
+    ).toBe(true);
+  });
+
+  it('hydrates the workspace next/dist from the prebuilt tarball BEFORE running tests', () => {
+    // Without a built packages/next, jest cannot load any deploy test module
+    // (e2e-utils/next-test-utils import next/dist/* at module scope; jest.config.js
+    // requires next/jest). The shard must unpack the prebuilt next.tgz into
+    // next.js/packages/next so those imports resolve.
+    const block = deployTestsJobBlock();
+    // It must reference the prebuilt tarball and the workspace packages/next dir,
+    // and untar into packages/next.
+    expect(
+      /next-prebuilt\/next\.tgz/.test(block),
+      'the shard must source the prebuilt next.tgz to hydrate workspace next/dist',
+    ).toBe(true);
+    expect(
+      /tar\s+x[a-z]*f[^\n]*next-prebuilt\/next\.tgz/.test(block),
+      'the shard must untar the prebuilt next.tgz',
+    ).toBe(true);
+    expect(
+      /packages\/next\/dist/.test(block),
+      'the hydrate step must populate packages/next/dist (the absent built artifact)',
+    ).toBe(true);
+  });
+
+  it('the hydrate step runs BEFORE the run-tests step (ordering)', () => {
+    const block = deployTestsJobBlock();
+    const hydrateIdx = block.search(/-\s+name:[^\n]*[Hh]ydrate[^\n]*next/);
+    const runIdx = block.search(/-\s+name:[^\n]*Run official deploy tests/);
+    expect(hydrateIdx, 'expected a hydrate step in the shard job').toBeGreaterThanOrEqual(0);
+    expect(runIdx, 'expected the run-tests step in the shard job').toBeGreaterThanOrEqual(0);
+    expect(
+      hydrateIdx < runIdx,
+      'the next/dist hydrate step must come BEFORE run-tests.js (jest loads modules at run time)',
+    ).toBe(true);
+  });
+
+  it('still runs run-tests.js with the prebuilt per-fixture install (NEXT_TEST_PKG_PATHS intact)', () => {
+    // The hydrate step is for the HARNESS code (jest module loads); each FIXTURE
+    // app still installs `next` from the same tarball via NEXT_TEST_PKG_PATHS. Both
+    // use the identical prebuilt artifact, so they stay version-consistent. Guard
+    // that #157–#161's prebuilt path is untouched.
+    const block = deployTestsJobBlock();
+    expect(/NEXT_TEST_PKG_PATHS\s*:/.test(block), 'NEXT_TEST_PKG_PATHS must remain set').toBe(true);
+    expect(
+      /node\s+run-tests\.js\s+--type\s+e2e/.test(block),
+      'the shard must still invoke run-tests.js --type e2e',
+    ).toBe(true);
+  });
+});

@@ -1334,39 +1334,46 @@ describe('compat-suite installs a jest --runTestsByPath shim (test-e2e-deploy.ym
     ).toBe(true);
   });
 
-  it('self-resolves jest via require.resolve (NOT readlink/cp of the cmd-shim wrapper)', () => {
+  it('delegates to the moved-aside original launcher (NOT JS require.resolve/readlink)', () => {
     const step = shimStep();
-    // In this pnpm layout .bin/jest is a cmd-shim SHELL wrapper, not a symlink to the
-    // JS CLI. Copying that wrapper aside and running it with node throws a SyntaxError
-    // (node parsing shell as JS). The shim must instead resolve jest's REAL JS entry at
-    // runtime via require.resolve('jest/bin/jest.js') (fallback jest-cli/bin/jest.js).
+    // Resolving jest from JS is fragile against pnpm (jest is NOT hoisted to
+    // next.js/node_modules/jest — it lives under .pnpm/...), so both
+    // require.resolve('jest/bin/jest.js') and the jest-cli fallback failed. The robust
+    // fix is a SHELL shim that delegates to the ORIGINAL launcher (a symlink OR cmd-shim
+    // wrapper) moved aside to jest.orig — it resolves jest.js itself, layout-agnostically.
     expect(
-      /require\.resolve\(\s*['"]jest\/bin\/jest\.js['"]/.test(step),
-      "the shim must require.resolve('jest/bin/jest.js') to find the real JS CLI",
+      /mv\s+"?\$BIN"?\s+"?\$ORIG"?/.test(step) ||
+        /mv\s+["']?node_modules\/\.bin\/jest["']?\s+["']?node_modules\/\.bin\/jest\.orig/.test(
+          step,
+        ),
+      'the shim step must `mv` the original launcher to jest.orig (move the entry itself, not follow it)',
     ).toBe(true);
     expect(
-      /require\.resolve\(\s*['"]jest-cli\/bin\/jest\.js['"]/.test(step),
-      "the shim must fall back to require.resolve('jest-cli/bin/jest.js')",
+      /exec\s+"\$\(dirname\s+"\$0"\)\/jest\.orig"/.test(step),
+      'the shell shim must exec "$(dirname "$0")/jest.orig" (delegate to the original launcher)',
     ).toBe(true);
-    // The broken approach (readlink/cp of the .bin entry) must be gone — it grabbed
-    // the shell wrapper and produced the SyntaxError.
+    // The fragile JS-resolution approaches must be GONE.
     expect(
-      /readlink\s+-f\s+"?\$BIN"?/.test(step) || /jest\.real/.test(step),
+      /require\.resolve/.test(step),
+      'the shim must NOT use require.resolve (fragile against pnpm non-hoisted layout)',
+    ).toBe(false);
+    expect(
+      /readlink\s+-f/.test(step) || /jest\.real/.test(step),
       'the shim step must NOT readlink/cp the .bin wrapper aside (that grabbed the shell cmd-shim)',
+    ).toBe(false);
+    expect(
+      /node\s+--check/.test(step) || /spawnSync/.test(step),
+      'the shim must NOT use the old JS shim (node --check / spawnSync) — it is a shell shim now',
     ).toBe(false);
   });
 
-  it('guards the resolved jest entry at runtime (accessSync + loud exit, not a silent SyntaxError)', () => {
+  it('is a POSIX `sh` shim (delegation), not a Node JS shim', () => {
     const step = shimStep();
-    // After resolving, the shim must accessSync the entry and exit 1 with a clear
-    // message if it is missing — so a bad resolve surfaces loudly.
+    // The shim body must be a shell script (#!/bin/sh) so it sidesteps Node module
+    // resolution entirely and just delegates to jest.orig.
     expect(
-      /accessSync\(\s*jestJs\s*\)/.test(step),
-      'the shim must accessSync the resolved jest JS entry before spawning',
-    ).toBe(true);
-    expect(
-      /A33:\s*real jest JS entry/.test(step),
-      'the shim must log "A33: real jest JS entry -> <path>" so CI proves it runs the .js, not a wrapper',
+      /#!\/bin\/sh/.test(step),
+      'the shim must be a POSIX `sh` script (#!/bin/sh), not a Node JS shim',
     ).toBe(true);
   });
 
@@ -1374,29 +1381,34 @@ describe('compat-suite installs a jest --runTestsByPath shim (test-e2e-deploy.ym
     const step = shimStep();
     // The shim must guard the injection on a `.test.` positional file path so
     // run-tests.js's other jest invocations (if any) are passed through untouched.
+    // The shell shim matches a `*.test.<ext>` case in its arg loop.
     expect(
-      /\\.test\\./.test(step),
-      'the shim must gate --runTestsByPath injection on a `.test.` positional (not inject unconditionally)',
+      /\*\.test\.[a-z]+/.test(step),
+      'the shim must gate --runTestsByPath injection on a `*.test.<ext>` positional (not inject unconditionally)',
     ).toBe(true);
   });
 
-  it('passes through all original args + env unchanged', () => {
+  it('passes through all original args unchanged (delegates "$@")', () => {
     const step = shimStep();
-    // The wrapper must forward argv and the process env, only PREPENDING the flag.
-    expect(/process\.argv/.test(step), 'the shim must forward the original argv').toBe(true);
+    // The shim must forward all original args to jest.orig, only PREPENDING the flag.
     expect(
-      /env:\s*process\.env/.test(step),
-      'the shim must pass through the original process env',
+      /exec\s+"\$\(dirname\s+"\$0"\)\/jest\.orig"\s+\$inject\s+"\$@"/.test(step),
+      'the shim must exec jest.orig with $inject then all original args ("$@")',
     ).toBe(true);
   });
 
   it('is idempotent (does not double-shim on a re-run)', () => {
     const step = shimStep();
-    // A marker/guard must prevent re-shimming an already-shimmed launcher (the shim
-    // body contains the `runTestsByPath shim` marker the step greps for).
+    // A guard must prevent re-shimming an already-shimmed launcher — if jest.orig
+    // already exists we have shimmed before, so skip (don't mv our own shim onto it).
     expect(
       /already\s+installed/.test(step),
       'the shim step must be idempotent (guard against double-shimming)',
+    ).toBe(true);
+    expect(
+      /\[\s+-e\s+"?\$ORIG"?\s+\]/.test(step) ||
+        /-e\s+["']?node_modules\/\.bin\/jest\.orig/.test(step),
+      'idempotency must key on the jest.orig sentinel existing',
     ).toBe(true);
   });
 
@@ -1406,42 +1418,34 @@ describe('compat-suite installs a jest --runTestsByPath shim (test-e2e-deploy.ym
       /echo\s+["'][^"']*shim installed/.test(step),
       'the shim step must log a clear "shim installed" line so the CI log proves it is active',
     ).toBe(true);
-  });
-
-  it('removes the .bin/jest wrapper before writing a fresh regular shim file', () => {
-    const step = shimStep();
-    // node_modules/.bin/jest is a cmd-shim shell wrapper. The step must `rm -f` it
-    // first so the shim is written as a fresh regular Node file at .bin/jest (a
-    // `cat > "$BIN"` onto a symlink would otherwise follow it and clobber the target).
     expect(
-      /rm\s+-f\s+"?\$BIN"?/.test(step),
-      'the shim step must `rm -f "$BIN"` (the cmd-shim wrapper) before writing the regular shim file',
+      /A33:\s*shell shim/.test(step),
+      'the shim step must log "A33: shell shim -> delegates to jest.orig" so CI proves the delegation',
     ).toBe(true);
   });
 
-  it('validates the written shim with node --check and fails the step if it is malformed', () => {
+  it('validates the written shim with `sh -n` and fails the step if it is malformed', () => {
     const step = shimStep();
-    // A malformed-shim regression (heredoc/interpolation mangling) must NEVER ship
-    // silently: the step must `node --check` the written shim and `exit 1` if it
-    // does not parse. This is the guard against the prior on-disk-corruption bug.
+    // A malformed-shim regression (heredoc mangling) must NEVER ship silently: the
+    // step must `sh -n` the written shim and `exit 1` if it does not parse.
     expect(
-      /node\s+--check\s+"?\$BIN"?/.test(step),
-      'the shim step must `node --check "$BIN"` to validate the written shim parses as JS',
+      /sh\s+-n\s+"?\$BIN"?/.test(step),
+      'the shim step must `sh -n "$BIN"` to validate the written shell shim parses',
     ).toBe(true);
     expect(
-      /node\s+--check[\s\S]*exit\s+1/.test(step),
-      'the shim step must `exit 1` (fail loudly) when node --check fails',
+      /sh\s+-n[\s\S]*exit\s+1/.test(step),
+      'the shim step must `exit 1` (fail loudly) when sh -n fails',
     ).toBe(true);
   });
 
-  it('writes the shim via a STRICTLY-quoted heredoc (no shell interpolation of the JS body)', () => {
+  it('writes the shim via a STRICTLY-quoted heredoc (no shell interpolation of the shim body)', () => {
     const step = shimStep();
-    // The JS body must be written with a single-quoted heredoc delimiter so the
-    // shell performs NO $/backtick/paren expansion on the shim source. The shim
-    // resolves jest.real at runtime via __dirname, so no shell var is baked in.
+    // The shim body must be written with a single-quoted heredoc delimiter so the
+    // shell performs NO $/backtick/paren expansion on the shim source. The shim uses
+    // only $0/$@/$a/$inject at its OWN runtime, so nothing is baked in at write time.
     expect(
       /<<\s*'[A-Z_]+'/.test(step),
-      "the shim must use a strictly-quoted heredoc (<<'DELIM') so the JS body is not shell-interpolated",
+      "the shim must use a strictly-quoted heredoc (<<'DELIM') so the shim body is not shell-interpolated",
     ).toBe(true);
   });
 

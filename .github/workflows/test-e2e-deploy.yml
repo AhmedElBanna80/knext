@@ -706,102 +706,77 @@ jobs:
       # and we will not patch run-tests.js source.
       #
       # FIX (a jest-BINARY shim, not a source patch): run-tests.js spawns the launcher
-      # `next.js/node_modules/.bin/jest`. In THIS pnpm layout that .bin entry is NOT a
-      # symlink to jest's JS CLI — it is a cmd-shim SHELL-SCRIPT wrapper (line 2 is
-      # `basedir=$(dirname ...)`). So a previous attempt that `readlink -f`'d + `cp`'d
-      # the .bin entry grabbed the SHELL WRAPPER, and running it through node threw
-      # `SyntaxError: missing ) after argument list` (node parsing shell as JS).
+      # `next.js/node_modules/.bin/jest`. Resolving jest's JS CLI from JS proved fragile
+      # against pnpm: in this layout `jest` is NOT hoisted to next.js/node_modules/jest
+      # (it lives under .pnpm/...), so BOTH require.resolve('jest/bin/jest.js') and the
+      # jest-cli fallback failed (`Cannot find module 'jest-cli/bin/jest.js'`). And the
+      # earlier readlink/cp approach grabbed the cmd-shim SHELL wrapper and fed it to
+      # node (`SyntaxError`).
       #
-      # CORRECT FIX: replace the .bin/jest launcher with a fresh regular Node shim that
-      # SELF-RESOLVES jest's real JS CLI at runtime via `require.resolve('jest/bin/jest.js')`
-      # (falling back to `jest-cli/bin/jest.js`) and runs THAT with node — never the
-      # wrapper. The shim INJECTS `--runTestsByPath` only when a `.test.` positional is
-      # present (run-tests.js's other jest calls, if any, are untouched), passes through
-      # ALL original args + env, and is idempotent (re-runs detect the existing shim).
+      # CORRECT FIX (layout-agnostic): a SHELL shim that DELEGATES to the moved-aside
+      # ORIGINAL launcher. `mv` moves the .bin/jest entry ITSELF (symlink or cmd-shim
+      # wrapper) to .bin/jest.orig WITHOUT following it — so jest.orig is the original
+      # launcher and its own internal `basedir=$(dirname "$0")` still resolves jest.js
+      # correctly (its RELATIVE path to jest.js is unchanged; it sits in the same .bin
+      # dir). The fresh shim at .bin/jest injects `--runTestsByPath` when a `.test.`
+      # positional is present, then `exec`s jest.orig — which finds jest.js exactly as
+      # run-tests.js expects. No JS resolution, no wrapper-mis-exec.
       #
-      # Ordered AFTER the harness-intact verify (jest must be installed to resolve)
-      # and BEFORE run-tests.js (the shim must be in place when the launcher is spawned).
+      # Ordered AFTER the harness-intact verify (jest must be installed) and BEFORE
+      # run-tests.js (the shim must be in place when the launcher is spawned).
       - name: Install jest --runTestsByPath shim (positional test paths run as literal files)
         working-directory: next.js
         run: |
           set -euo pipefail
           BIN="node_modules/.bin/jest"
+          ORIG="node_modules/.bin/jest.orig"
           if [ ! -e "$BIN" ]; then
             echo "::error::expected the jest launcher at next.js/$BIN" >&2
             exit 1
           fi
-          # Idempotency: if we already replaced .bin/jest with our shim, don't re-shim
-          # (matrix re-entry / re-run). Our shim contains this marker string.
-          if grep -q 'runTestsByPath shim' "$BIN" 2>/dev/null; then
-            echo "jest --runTestsByPath shim already installed (skipping)"
+          # Idempotency: if jest.orig already exists we have already shimmed (matrix
+          # re-entry / re-run) — don't move our own shim onto jest.orig.
+          if [ -e "$ORIG" ]; then
+            echo "jest --runTestsByPath shim already installed (jest.orig present; skipping)"
             exit 0
           fi
-          # Remove the cmd-shim wrapper and write a fresh REGULAR Node shim in its place.
-          # We do NOT copy the wrapper aside — the shim self-resolves jest's real JS CLI
-          # via require.resolve, so there is nothing to copy and no wrapper to mis-exec.
-          rm -f "$BIN"
-          # Write the shim via a STRICTLY-QUOTED heredoc ('SHIM') so the shell performs
-          # NO interpolation of $, backticks, or parens. The shim needs no shell vars
-          # baked in — it resolves jest at RUNTIME. The heredoc body sits at column 0.
+          # Move the ORIGINAL launcher (symlink/cmd-shim) aside, WITHOUT following it.
+          # `mv` relocates the entry itself; jest.orig still resolves jest.js via its own
+          # relative basedir because it stays in the same node_modules/.bin directory.
+          mv "$BIN" "$ORIG"
+          # Write a fresh POSIX `sh` shim at the launcher path. A SHELL shim (not JS)
+          # sidesteps pnpm module resolution entirely — it just delegates to jest.orig.
+          # STRICTLY-QUOTED heredoc ('SHIM') so the shell does NO interpolation of the
+          # shim body; it uses only $0/$@/$a at the shim's OWN runtime. Column 0 below.
           cat > "$BIN" <<'SHIM'
-          #!/usr/bin/env node
-          // runTestsByPath shim (knext #147 / A3-3): jest treats a positional test path
-          // as a testPathPattern REGEX; in this CI env that regex matches 0 of the
-          // candidate testMatch files even for a present, git-tracked file.
-          // --runTestsByPath makes positionals literal file paths instead. We inject it
-          // ONLY when a `.test.` positional is present, so run-tests.js's other jest
-          // calls (if any) are untouched. All original args + env pass through.
-          //
-          // We resolve jest's REAL JS CLI (NOT the cmd-shim shell wrapper at .bin/jest)
-          // via require.resolve, so node always parses JavaScript — never a shell script.
-          var spawnSync = require('child_process').spawnSync;
-          function resolveJestJs() {
-            var paths = [process.cwd(), __dirname];
-            try {
-              return require.resolve('jest/bin/jest.js', { paths: paths });
-            } catch (e) {
-              return require.resolve('jest-cli/bin/jest.js', { paths: paths });
-            }
-          }
-          var jestJs = resolveJestJs();
-          // Loud runtime guard: if the resolved entry is missing, fail with a clear
-          // error rather than a silent SyntaxError from running the wrong target.
-          try {
-            require('fs').accessSync(jestJs);
-          } catch (e) {
-            console.error('A33: could not access resolved jest JS entry: ' + jestJs);
-            process.exit(1);
-          }
-          console.error('A33: real jest JS entry -> ' + jestJs);
-          var argv = process.argv.slice(2);
-          function isTestPositional(a) {
-            return a.charAt(0) !== '-' && /\.test\.[cm]?[jt]sx?$/.test(a);
-          }
-          var hasTestPositional = argv.some(isTestPositional);
-          var alreadyByPath = argv.indexOf('--runTestsByPath') !== -1;
-          var finalArgs =
-            hasTestPositional && !alreadyByPath ? ['--runTestsByPath'].concat(argv) : argv;
-          var res = spawnSync(process.execPath, [jestJs].concat(finalArgs), {
-            stdio: 'inherit',
-            env: process.env,
-          });
-          if (res.error) {
-            throw res.error;
-          }
-          process.exit(res.status == null ? 1 : res.status);
+          #!/bin/sh
+          # knext A3-3 runTestsByPath shim: jest treats a positional test path as a
+          # testPathPattern REGEX; in this CI env that regex matches 0 of the candidate
+          # testMatch files even for a present, git-tracked file. --runTestsByPath makes
+          # positionals literal file paths instead. Inject it ONLY when a `.test.`
+          # positional is present (run-tests.js's other jest calls are untouched), then
+          # delegate to the original launcher (jest.orig), which resolves jest.js itself.
+          inject=""
+          for a in "$@"; do
+            case "$a" in
+              *.test.js|*.test.ts|*.test.jsx|*.test.tsx|*.test.cjs|*.test.mjs|*.test.cts|*.test.mts)
+                inject="--runTestsByPath"; break;;
+            esac
+          done
+          exec "$(dirname "$0")/jest.orig" $inject "$@"
           SHIM
           chmod +x "$BIN"
-          # CRITICAL: validate the written shim parses as JS before proceeding, so a
-          # malformed-shim regression (e.g. heredoc/interpolation mangling) can NEVER
-          # ship silently — fail the step loudly instead.
-          echo "::group::written jest shim (first 15 lines)"
-          head -n 15 "$BIN"
+          # CRITICAL: validate the written shim is a valid shell script before proceeding,
+          # so a malformed-shim regression (e.g. heredoc mangling) can NEVER ship silently.
+          echo "A33: shell shim -> delegates to jest.orig"
+          echo "::group::written jest shim (first 20 lines)"
+          head -n 20 "$BIN"
           echo "::endgroup::"
-          if ! node --check "$BIN"; then
-            echo "::error::the written jest shim is NOT valid JS (node --check failed)" >&2
+          if ! sh -n "$BIN"; then
+            echo "::error::the written jest shim is NOT valid shell (sh -n failed)" >&2
             exit 1
           fi
-          echo "jest --runTestsByPath shim installed + node --check OK (self-resolves jest via require.resolve)"
+          echo "jest --runTestsByPath shell shim installed + sh -n OK (delegates to jest.orig)"
 
       - name: Run official deploy tests (knext adapter)
         working-directory: next.js

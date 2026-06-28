@@ -692,6 +692,51 @@ jobs:
           fi
           node -e "require('./jest.config.js'); console.log('upstream next.js jest.config.js loads OK (rootDir untouched)')"
 
+      # === A3-3 TEMPORARY DEBUG (throwaway branch agent/compat-a33-jest-debug) ===
+      # Diagnostic only: capture jest's GROUND-TRUTH file-crawl / candidate set in CI,
+      # to explain why jest reports "Pattern: test/e2e/404-page-router/index.test.ts -
+      # 0 matches" in CI while a faithful local repro with the SAME config finds it.
+      # `|| true` everywhere so this never fails the job. Grep the log for the
+      # `A33DBG_*` markers below. REMOVE before merge (this is a debug-only branch).
+      - name: A3-3 jest resolution debug (TEMPORARY)
+        working-directory: next.js
+        run: |
+          set +e
+          echo "===== A33DBG_BEGIN ====="
+
+          echo "===== A33DBG_1_CHECKOUT ====="
+          echo "A33DBG_PWD=$(pwd)"
+          echo "A33DBG_HEAD=$(git rev-parse HEAD 2>&1)"
+          echo "A33DBG_SPARSE=$(git -C . sparse-checkout list 2>/dev/null || echo 'no sparse-checkout')"
+
+          echo "===== A33DBG_2_LS ====="
+          ls -la test/e2e/404-page-router/ 2>&1
+          if test -f test/e2e/404-page-router/index.test.ts; then echo "A33DBG_FILE=FILE_PRESENT"; else echo "A33DBG_FILE=FILE_ABSENT"; fi
+
+          echo "===== A33DBG_3_GITTRACKED ====="
+          A33_TRACKED=$(git ls-files test/e2e/404-page-router/index.test.ts 2>&1)
+          echo "A33DBG_GITLSFILES=[${A33_TRACKED}]"
+          if [ -z "${A33_TRACKED}" ]; then echo "A33DBG_TRACKED=UNTRACKED_LIKELY_BUG"; else echo "A33DBG_TRACKED=TRACKED"; fi
+
+          echo "===== A33DBG_4_SHOWCONFIG ====="
+          node_modules/.bin/jest --showConfig 2>&1 | head -120
+
+          echo "===== A33DBG_5_LISTTESTS ====="
+          echo "A33DBG_LISTTESTS_COUNT=$(node_modules/.bin/jest --listTests 2>/dev/null | grep -c '\.test\.')"
+          node_modules/.bin/jest --listTests 2>&1 | grep '404-page-router' || echo "A33DBG_LISTTESTS_404=404-page-router NOT in listTests candidate set"
+
+          echo "===== A33DBG_6_LISTTESTS_POSITIONAL ====="
+          node_modules/.bin/jest --listTests 'test/e2e/404-page-router/index.test.ts' 2>&1 | head -5
+
+          echo "===== A33DBG_7_VERSIONS ====="
+          echo "A33DBG_JEST_VERSION=$(node -e "console.log(require('jest/package.json').version)" 2>&1)"
+          echo "A33DBG_HASTEMAP_VERSION=$(node -e "console.log(require('jest-haste-map/package.json').version)" 2>&1)"
+          echo "A33DBG_WATCHMAN=$(which watchman || echo no-watchman)"
+
+          echo "===== A33DBG_END ====="
+          true
+        continue-on-error: true
+
       - name: Run official deploy tests (knext adapter)
         working-directory: next.js
         env:

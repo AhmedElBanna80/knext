@@ -1349,8 +1349,8 @@ describe('compat-suite installs a jest --runTestsByPath shim (test-e2e-deploy.ym
       'the shim step must `mv` the original launcher to jest.orig (move the entry itself, not follow it)',
     ).toBe(true);
     expect(
-      /exec\s+"\$\(dirname\s+"\$0"\)\/jest\.orig"/.test(step),
-      'the shell shim must exec "$(dirname "$0")/jest.orig" (delegate to the original launcher)',
+      /dir=\$\(dirname\s+"\$0"\)/.test(step) && /exec\s+"\$dir\/jest\.orig"/.test(step),
+      'the shell shim must resolve dir=$(dirname "$0") and exec "$dir/jest.orig" (delegate to the original launcher)',
     ).toBe(true);
     // The fragile JS-resolution approaches must be GONE.
     expect(
@@ -1388,12 +1388,49 @@ describe('compat-suite installs a jest --runTestsByPath shim (test-e2e-deploy.ym
     ).toBe(true);
   });
 
-  it('passes through all original args unchanged (delegates "$@")', () => {
+  it('passes through all original args, delegating to jest.orig (exec "$dir/jest.orig" ... "$@")', () => {
     const step = shimStep();
-    // The shim must forward all original args to jest.orig, only PREPENDING the flag.
+    // The shim must forward all (possibly absolutized) positional args to jest.orig,
+    // only PREPENDING the injected flag when set. It execs jest.orig with "$@".
     expect(
-      /exec\s+"\$\(dirname\s+"\$0"\)\/jest\.orig"\s+\$inject\s+"\$@"/.test(step),
-      'the shim must exec jest.orig with $inject then all original args ("$@")',
+      /exec\s+"\$dir\/jest\.orig"[^\n]*"\$@"/.test(step),
+      'the shim must exec "$dir/jest.orig" with the rebuilt args ("$@")',
+    ).toBe(true);
+  });
+
+  it('absolutizes each existing `.test.` positional (rootDir-relative resolution can not lose it)', () => {
+    const step = shimStep();
+    // Even with --runTestsByPath, jest can resolve a RELATIVE positional against
+    // rootDir ('test') → `test/test/e2e/...` (not found). The shim must rewrite each
+    // `.test.` positional to an absolute cwd-prefixed path, but ONLY when that file
+    // exists (so a non-existent/odd arg is left untouched). POSIX-safe arg rebuild.
+    expect(
+      /\[\s+-f\s+"\$\(pwd\)\/\$a"\s+\]/.test(step),
+      'the shim must only absolutize when the cwd-prefixed `.test.` file EXISTS ([ -f "$(pwd)/$a" ])',
+    ).toBe(true);
+    expect(
+      /a="\$\(pwd\)\/\$a"/.test(step),
+      'the shim must convert the relative `.test.` positional to "$(pwd)/$a" (absolute)',
+    ).toBe(true);
+    // Already-absolute paths must be left as-is (the `/*` case is a no-op).
+    expect(
+      /\/\*\)\s*:\s*;;/.test(step),
+      'the shim must leave already-absolute `.test.` paths untouched (the /*) no-op case)',
+    ).toBe(true);
+    // POSIX-safe rebuild: no bash arrays — a `set -- "$@" "$a"` rotation.
+    expect(
+      /set\s+--\s+"\$@"\s+"\$a"/.test(step),
+      'the shim must rebuild the positional list POSIX-safely via `set -- "$@" "$a"` (no arrays)',
+    ).toBe(true);
+  });
+
+  it('emits the A33_SHIM_EXEC debug line so CI shows the EXACT delegated command', () => {
+    const step = shimStep();
+    // If jest still reports "No tests found", this stderr line reveals exactly what
+    // jest.orig received (flags + absolutized paths) — invaluable for the next step.
+    expect(
+      /echo\s+"A33_SHIM_EXEC:[^\n]*"\s+>&2/.test(step),
+      'the shim must echo "A33_SHIM_EXEC: ..." to stderr before exec (the exact delegated command)',
     ).toBe(true);
   });
 

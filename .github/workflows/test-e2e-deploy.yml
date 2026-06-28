@@ -748,29 +748,60 @@ jobs:
           # sidesteps pnpm module resolution entirely — it just delegates to jest.orig.
           # STRICTLY-QUOTED heredoc ('SHIM') so the shell does NO interpolation of the
           # shim body; it uses only $0/$@/$a at the shim's OWN runtime. Column 0 below.
+          #
+          # Beyond injecting --runTestsByPath, the shim also ABSOLUTIZES each `.test.`
+          # positional. Even with --runTestsByPath, jest can resolve a RELATIVE positional
+          # against rootDir ('test' in next.js's jest.config.js) → `test/test/e2e/...`,
+          # which does not exist → "No tests found". Rewriting each existing `.test.`
+          # path to an absolute path (cwd-prefixed, only when that file exists) makes the
+          # path unambiguous regardless of jest's rootDir/cwd resolution.
           cat > "$BIN" <<'SHIM'
           #!/bin/sh
           # knext A3-3 runTestsByPath shim: jest treats a positional test path as a
           # testPathPattern REGEX; in this CI env that regex matches 0 of the candidate
           # testMatch files even for a present, git-tracked file. --runTestsByPath makes
-          # positionals literal file paths instead. Inject it ONLY when a `.test.`
-          # positional is present (run-tests.js's other jest calls are untouched), then
-          # delegate to the original launcher (jest.orig), which resolves jest.js itself.
+          # positionals literal file paths instead — and we ABSOLUTIZE each `.test.` path
+          # so jest's rootDir-relative resolution can't turn `test/e2e/X` into the
+          # non-existent `test/test/e2e/X`. We then delegate to the original launcher
+          # (jest.orig), which resolves jest.js itself. Non-`.test.` args pass untouched.
+          dir=$(dirname "$0")
           inject=""
-          for a in "$@"; do
+          # POSIX-safe arg rebuild (no arrays in sh): rotate the positional list once,
+          # converting each `.test.` positional to an absolute path (when it exists),
+          # preserving order + every other arg/flag exactly.
+          count=$#
+          i=0
+          while [ "$i" -lt "$count" ]; do
+            a=$1
+            shift
             case "$a" in
               *.test.js|*.test.ts|*.test.jsx|*.test.tsx|*.test.cjs|*.test.mjs|*.test.cts|*.test.mts)
-                inject="--runTestsByPath"; break;;
+                inject="--runTestsByPath"
+                case "$a" in
+                  /*) : ;;
+                  *) if [ -f "$(pwd)/$a" ]; then a="$(pwd)/$a"; fi ;;
+                esac
+                ;;
             esac
+            set -- "$@" "$a"
+            i=$((i + 1))
           done
-          exec "$(dirname "$0")/jest.orig" $inject "$@"
+          # One-time debug: show jest.orig the EXACT delegated command (invaluable if it
+          # still reports "No tests found").
+          echo "A33_SHIM_EXEC: $dir/jest.orig $inject $*" >&2
+          if [ -n "$inject" ]; then
+            exec "$dir/jest.orig" "$inject" "$@"
+          else
+            exec "$dir/jest.orig" "$@"
+          fi
           SHIM
           chmod +x "$BIN"
           # CRITICAL: validate the written shim is a valid shell script before proceeding,
           # so a malformed-shim regression (e.g. heredoc mangling) can NEVER ship silently.
           echo "A33: shell shim -> delegates to jest.orig"
-          echo "::group::written jest shim (first 20 lines)"
-          head -n 20 "$BIN"
+          echo "A33: shim will inject --runTestsByPath + absolutize .test. positionals"
+          echo "::group::written jest shim (first 30 lines)"
+          head -n 30 "$BIN"
           echo "::endgroup::"
           if ! sh -n "$BIN"; then
             echo "::error::the written jest shim is NOT valid shell (sh -n failed)" >&2

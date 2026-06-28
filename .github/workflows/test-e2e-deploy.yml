@@ -144,15 +144,66 @@ jobs:
         working-directory: next.js
         run: corepack enable
 
+      # #147 (the cold-install decider) — resolve next.js's pnpm content-addressable
+      # store dir so actions/cache can target it. #157 removed this along with the
+      # (correctly-removed) source build; re-add it so the heavyweight install can
+      # be cached. We must resolve via corepack so it honors next.js's pinned pnpm.
+      - name: Resolve next.js pnpm store path
+        id: pnpm-store
+        working-directory: next.js
+        run: echo "path=$(corepack pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      # Cache the pnpm content-addressable store keyed on NEXTJS_REF + the next.js
+      # lockfile, so a REPEAT run skips re-downloading every dependency. NEXTJS_REF
+      # is in the key so a ref bump invalidates it (the v16.0.3 store is not valid
+      # for a different ref); the lockfile hash invalidates it on a dep change.
+      # This is the pnpm STORE only — the turbo BUILD cache stays gone (no source
+      # build to persist).
+      - name: Cache next.js pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: nextjs-pnpm-store-${{ env.NEXTJS_REF }}-${{ hashFiles('next.js/pnpm-lock.yaml') }}
+          restore-keys: |
+            nextjs-pnpm-store-${{ env.NEXTJS_REF }}-
+
       # Install next.js's OWN deps so `run-tests.js` + the source `test/` harness
       # run. We do NOT build `next` here — the prebuilt tarball IS `next`, and the
       # prebuilt `@next/swc` native binary arrives from that tarball's
       # optionalDependencies during each fixture app's install (the harness handles
-      # it). This install is the only heavyweight step and is bounded (minutes).
+      # it).
+      #
+      # SLIM the cold install (#147): the deploy harness only imports ROOT
+      # devDependencies — run-tests.js (@actions/core, @vercel/kv, async-sema,
+      # glob, yargs), create-next-install (execa, fs-extra), and the test/lib
+      # helpers (cheerio, express, get-port, strip-ansi, playwright). It needs
+      # NONE of the monorepo's workspace packages (packages/*, apps/*, bench/*,
+      # turbopack/*) installed at THIS stage: create-next-install builds each
+      # fixture's temp app separately and (in prebuilt mode, via NEXT_TEST_PKG_PATHS)
+      # installs `next` from the tarball, skipping its source-pack `linkPackages`.
+      # So `--filter "{.}"` (the root project, no dependents) collapses the dep
+      # graph to just the root devDeps; --frozen-lockfile avoids a full cold
+      # re-resolve and --prefer-offline reuses the restored store. A cold,
+      # uncached, FULL-monorepo install of next.js exceeded the 180-min ceiling
+      # (#157 regression); this filtered+cached install converges in minutes.
+      #
+      # NEXT_SKIP_NATIVE_POSTINSTALL=1: next.js's root postinstall
+      # (scripts/install-native.mjs) otherwise runs a `pnpm add next@<ver>` to
+      # fetch all 8 @next/swc platform binaries — pure waste in prebuilt mode,
+      # where @next/swc arrives from the tarball during each fixture install.
+      #
+      # Playwright IS kept: 65 of the 743 e2e test files drive a browser via
+      # `next-webdriver` → `test/lib/browsers/playwright.ts`, and NEXT_TEST_MODE=deploy
+      # does NOT skip the browser, so deploy-eligible browser tests need chromium.
+      # (Caveat noted in the PR: the browser binary installs to ~/.cache/ms-playwright,
+      # OUTSIDE the uploaded `next.js` artifact, so the shard jobs still re-install
+      # it; wiring it into the shards is a separate follow-up, not this fix.)
       - name: Setup Next.js test-harness deps + Playwright
         working-directory: next.js
+        env:
+          NEXT_SKIP_NATIVE_POSTINSTALL: '1'
         run: |
-          corepack pnpm install
+          corepack pnpm install --frozen-lockfile --prefer-offline --filter "{.}"
           corepack pnpm playwright install chromium --with-deps
 
       # Cache the prepared knext + next.js trees + the prebuilt next tarball for

@@ -148,11 +148,15 @@ describe('compat-suite workflow pnpm pin (test-e2e-deploy.yml)', () => {
     );
 
     for (const block of blocks) {
-      // Collect the shell command lines inside this step's `run:` block.
+      // Collect the shell command lines inside this step's `run:` block. Exclude
+      // YAML metadata keys (`name:`, `id:`, `working-directory:`, `env:` keys,
+      // `uses:`) and comments — a step `name:` can legitimately contain the word
+      // "pnpm" (e.g. "Resolve next.js pnpm store path") without being a command.
       const cmdLines = block
         .split('\n')
         .map((l) => l.trim())
-        .filter((l) => /(^|\s)pnpm(\s|$)/.test(l) && !l.startsWith('#'));
+        .filter((l) => /(^|\s)pnpm(\s|$)/.test(l) && !l.startsWith('#'))
+        .filter((l) => !/^-?\s*(name|id|uses|working-directory|env|with|run):/.test(l));
 
       for (const cmd of cmdLines) {
         // Any pnpm invocation in a next.js step must go through corepack so it
@@ -299,6 +303,115 @@ describe('compat-suite prebuilt-next guards (test-e2e-deploy.yml, #147)', () => 
     expect(
       /corepack\s+pnpm\s+install\b/.test(block),
       'build-next must still `corepack pnpm install` the next.js harness deps',
+    ).toBe(true);
+  });
+});
+
+// ── Lean + cached harness-install guards (#147 — the cold-install decider) ─────
+// #157 removed BOTH the pnpm-store actions/cache AND the (correctly-removed)
+// source build. A COLD, uncached full-monorepo `corepack pnpm install` of
+// next.js then ran for the first time and exceeded the 180-min runner ceiling,
+// cancelling at exactly the timeout — so the deploy-tests shards still never ran.
+//
+// Two complementary fixes, both guarded here:
+//   1. RE-ADD the pnpm-store actions/cache (keyed on NEXTJS_REF + the next.js
+//      lockfile) so a repeat run skips re-downloading every dependency. The
+//      turbo BUILD cache stays gone (the prebuilt-next guards above enforce that).
+//   2. SLIM the cold install itself: the deploy-harness only imports ROOT
+//      devDependencies (run-tests.js: @actions/core/@vercel/kv/async-sema/glob/
+//      yargs; create-next-install: execa/fs-extra; the test/lib helpers:
+//      cheerio/express/get-port/strip-ansi/playwright). It needs NONE of the
+//      monorepo's workspace packages (packages/*, apps/*, bench/*, turbopack/*)
+//      installed at this stage — create-next-install builds each fixture's temp
+//      app SEPARATELY and (in prebuilt mode, NEXT_TEST_PKG_PATHS) installs `next`
+//      from the tarball, skipping linkPackages. So a `--filter` to the root
+//      project plus --frozen-lockfile --prefer-offline cuts the dep graph
+//      dramatically while keeping run-tests.js fully resolvable.
+
+describe('compat-suite lean+cached harness install (test-e2e-deploy.yml, #147)', () => {
+  it('re-adds the pnpm-store actions/cache keyed on NEXTJS_REF + the next.js lockfile', () => {
+    const block = buildNextJobBlock();
+    // An actions/cache step must exist in build-next.
+    expect(
+      /uses:\s*actions\/cache@/.test(block),
+      'build-next must re-add an actions/cache step for the next.js pnpm store',
+    ).toBe(true);
+    // Its key must be parameterized on NEXTJS_REF (so a ref bump invalidates it)
+    // AND the next.js pnpm lockfile (so a dep change invalidates it). This is the
+    // non-tautological assertion: both inputs must appear in the SAME cache key.
+    const keyLine = block
+      .split('\n')
+      .find((l) => /^\s*key:\s*/.test(l) && /pnpm/.test(l) && /NEXTJS_REF/.test(l));
+    expect(keyLine, 'the pnpm-store cache key must be keyed on env.NEXTJS_REF').toBeTruthy();
+    expect(
+      /hashFiles\(\s*['"]next\.js\/pnpm-lock\.yaml['"]\s*\)/.test(keyLine ?? ''),
+      'the pnpm-store cache key must include hashFiles of next.js/pnpm-lock.yaml',
+    ).toBe(true);
+  });
+
+  it('resolves the pnpm store path (the resolver the cache step needs)', () => {
+    const block = buildNextJobBlock();
+    expect(
+      /corepack\s+pnpm\s+store\s+path/.test(block),
+      'build-next must resolve `corepack pnpm store path` so actions/cache can target the store',
+    ).toBe(true);
+  });
+
+  it('caches the pnpm STORE, not the turbo build output (build cache stays gone)', () => {
+    const block = buildNextJobBlock();
+    // The cache must target the resolved store path, never the turbo build dirs
+    // that the (removed) source build needed. Guard against a build-cache regression.
+    expect(
+      /node_modules\/\.cache\/turbo/.test(block),
+      'build-next must NOT cache the turbo build output (the source build is gone)',
+    ).toBe(false);
+    expect(
+      /packages\/\*\*\/dist/.test(block),
+      'build-next must NOT cache next.js packages dist (the source build is gone)',
+    ).toBe(false);
+  });
+
+  it('runs a SLIM frozen + prefer-offline harness install (not a full cold resolve)', () => {
+    const block = buildNextJobBlock();
+    // The harness install must use --frozen-lockfile (no full re-resolution) and
+    // --prefer-offline (reuse the restored store) so the cold install converges.
+    const installLine = block
+      .split('\n')
+      .find((l) => /corepack\s+pnpm\s+install\b/.test(l) && !l.trim().startsWith('#'));
+    expect(installLine, 'expected a corepack pnpm install command line').toBeTruthy();
+    expect(
+      /--frozen-lockfile\b/.test(installLine ?? ''),
+      'the harness install must pass --frozen-lockfile (avoid a full cold re-resolve)',
+    ).toBe(true);
+    expect(
+      /--prefer-offline\b/.test(installLine ?? ''),
+      'the harness install must pass --prefer-offline (reuse the restored store)',
+    ).toBe(true);
+  });
+
+  it('filters the harness install to the root project (skips the monorepo workspace graph)', () => {
+    const block = buildNextJobBlock();
+    const installLine = block
+      .split('\n')
+      .find((l) => /corepack\s+pnpm\s+install\b/.test(l) && !l.trim().startsWith('#'));
+    // run-tests.js + create-next-install only import ROOT devDependencies; none
+    // of the workspace packages are needed at this stage. A --filter to the root
+    // project cuts the dep graph dramatically without breaking the harness.
+    expect(
+      /--filter\b/.test(installLine ?? ''),
+      'the harness install must --filter to the root project to skip workspace deps',
+    ).toBe(true);
+  });
+
+  it('skips the SWC native postinstall (prebuilt next supplies @next/swc per-fixture)', () => {
+    const block = buildNextJobBlock();
+    // next.js root postinstall (install-native.mjs) does a `pnpm add next@<ver>`
+    // to fetch all 8 SWC platform binaries — pure waste in prebuilt mode, where
+    // @next/swc arrives from the tarball during each fixture install. The script
+    // early-returns on NEXT_SKIP_NATIVE_POSTINSTALL.
+    expect(
+      /NEXT_SKIP_NATIVE_POSTINSTALL/.test(block),
+      'build-next should set NEXT_SKIP_NATIVE_POSTINSTALL to skip the wasteful SWC native postinstall',
     ).toBe(true);
   });
 });

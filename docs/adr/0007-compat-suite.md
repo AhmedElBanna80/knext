@@ -161,7 +161,16 @@ Port the reference workflow with knext substitutions:
 - `repository: vercel/next.js`, `ref: <PINNED tag matching our installed next, e.g. v16.2.x>`
   (pin — do **not** track `canary`; an upstream break must not look like a knext regression).
 - Build adapter step builds knext's adapter package.
-- `NEXT_EXTERNAL_TESTS_FILTERS: test/deploy-tests-manifest.json,<ws>/test/deploy-tests-manifest.knext.json`
+- `NEXT_EXTERNAL_TESTS_FILTERS: <ws>/test/deploy-tests-manifest.knext.json`
+  — **Correction (#147 A3-3):** the harness (`test/get-test-filter.js`) loads **exactly one**
+  manifest (it `require()`s a single resolved path — there is **no** comma-separated layering of
+  Next's manifest + knext's, as originally drafted here). So `deploy-tests-manifest.knext.json` is
+  the **complete** deploy-eligible selection: it must *mirror* Next's own
+  `test/deploy-tests-manifest.json` include/exclude base set and add knext's architectural
+  exclusions. It must also be **`version: 2`** (string-glob include/exclude) — any other numeric
+  version makes `get-test-filter.js` throw `Unknown manifest version`, which (called at
+  `run-tests.js` module load) silently runs **zero** tests. The honest rationale ledger lives in a
+  sidecar `$knextExclusions` field the harness ignores.
 - `NEXT_TEST_DEPLOY_SCRIPT_PATH` → `scripts/e2e-deploy.sh` (knext version: pack adapter, install into
   temp app, set `NEXT_ADAPTER_PATH`, `next build`, start **standalone** `server.js` on `$PORT`,
   TCP-probe, echo `http://localhost:$PORT` as the only stdout line).

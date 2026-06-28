@@ -1,40 +1,93 @@
 {
-  "version": 1,
+  "version": 2,
   "$comment": [
-    "knext adapter deploy-test manifest (#89, ADR-0007 A3-2).",
-    "Layered onto Next's own test/deploy-tests-manifest.json via NEXT_EXTERNAL_TESTS_FILTERS.",
-    "Next's manifest selects which e2e tests are deploy-eligible; this file layers knext",
-    "include/exclude on top. THIS IS AN HONEST LEDGER, NOT A FAKE GREEN: knext does NOT yet",
-    "pass the official suite. Every exclusion below names a category knext does not support",
-    "today (architectural or upstream-gated, see CLAUDE.md §8 and docs/compat-matrix.md).",
-    "The exclude list must GROW FROM OBSERVED FAILURES in future commits — each a documented",
-    "ledger entry — and SHRINK toward zero as the verified-adapter scoreboard (ADR-0007 A3-3).",
-    "Do NOT pre-emptively exclude tests to manufacture a green run."
+    "knext adapter deploy-test manifest (#89, ADR-0007 A3-2/A3-3, #147).",
+    "",
+    "Consumed by vercel/next.js's run-tests.js via NEXT_EXTERNAL_TESTS_FILTERS.",
+    "The harness (test/get-test-filter.js) loads EXACTLY ONE manifest path (it does",
+    "`require(path.resolve(env))` — NO comma-split, so the ADR-0007 'layer Next's",
+    "manifest + knext's' assumption does NOT hold for v16.0.3). Therefore THIS file",
+    "IS the complete deploy-eligible selection: it mirrors Next's own",
+    "test/deploy-tests-manifest.json include/exclude base set and ADDS knext's",
+    "architectural exclusions on top.",
+    "",
+    "version MUST be 2: get-test-filter.js only understands the legacy (no-version)",
+    "format and version===2; any other numeric version throws 'Unknown manifest",
+    "version'. The prior version:1 + object-shaped exclude list THREW at module load,",
+    "which is why every shard ran 0 tests (run 28314927507: passed:0 failed:0).",
+    "",
+    "v2 semantics: a test file is RUN iff it matches an `include` glob and matches no",
+    "`exclude` glob (or is listed verbatim in `suites`). `suites` maps a file to its",
+    "per-case {failed,flakey} exclusions; empty here — knext records per-case skips",
+    "only from OBSERVED failures, never pre-emptively.",
+    "",
+    "HONESTY: this is an HONEST LEDGER, NOT a fake green. knext does NOT yet pass the",
+    "official suite; the compat-matrix official-suite row stays ❌ until a real",
+    "green nightly (ADR-0007 A3-3). The `$knextExclusions` ledger below names every",
+    "knext-SPECIFIC architectural exclusion with a rationale; the architectural",
+    "globs in `rules.exclude` are derived from it. Next's own (upstream) excludes are",
+    "carried verbatim from its deploy-tests-manifest.json and are NOT knext debt.",
+    "The exclude list must GROW FROM OBSERVED FAILURES and SHRINK toward zero. Do NOT",
+    "pre-emptively exclude tests to manufacture a green run."
   ],
-  "suites": ["e2e"],
+  "suites": {},
   "rules": {
-    "include": [],
+    "include": ["test/e2e/**/*.test.{t,j}s{,x}", "test/production/**/*.test.{t,j}s{,x}"],
     "exclude": [
-      {
-        "test": "test/e2e/app-dir/edge-runtime-module-errors",
-        "category": "edge-runtime",
-        "rationale": "knext targets the Node/Bun standalone server (output:'standalone'); it has no edge (V8-isolate) runtime. The Edge Runtime is architecturally out of scope — knext matches Vercel's compute layer, not its global edge (CLAUDE.md §8 bucket 1). compat-matrix row: Edge Runtime ❌."
-      },
-      {
-        "test": "test/e2e/middleware-general",
-        "category": "edge-middleware",
-        "rationale": "Edge Middleware runs in the Edge Runtime, which knext does not provide. knext supports the (deprecated) Node middleware/proxy convention only; edge-middleware deploy tests assume the isolate runtime. Upstream-gated + architectural (CLAUDE.md §8). compat-matrix row: Edge Middleware ❌."
-      },
-      {
-        "test": "test/e2e/app-dir/ppr-full",
-        "category": "ppr",
-        "rationale": "Partial Prerendering (PPR) is not adapter-standardizable yet (CLAUDE.md §6 Tier C, upstream-gated); knext does not implement the PPR resume/stream contract. compat-matrix row: PPR ❌."
-      },
-      {
-        "test": "test/e2e/cache-components",
-        "category": "cache-components",
-        "rationale": "Cache Components ('use cache' / cacheLife) are an evolving upstream API not yet stabilized for adapters (CLAUDE.md §6 Tier C). knext's Redis cache-handler does not implement the Cache Components protocol. compat-matrix row: Cache Components ❌."
-      }
+      "test/e2e/cancel-request/stream-cancel.test.ts",
+      "test/e2e/new-link-behavior/material-ui.test.ts",
+      "test/e2e/react-dnd-compile/react-dnd-compile.test.ts",
+      "test/e2e/skip-trailing-slash-redirect/index.test.ts",
+      "test/e2e/app-dir/app-compilation/index.test.ts",
+      "test/e2e/app-dir/rsc-webpack-loader/rsc-webpack-loader.test.ts",
+      "test/e2e/swc-warnings/index.test.ts",
+      "test/e2e/third-parties/index.test.ts",
+      "test/e2e/app-dir/app-routes/app-custom-route-base-path.test.ts",
+      "test/e2e/app-dir/mdx/mdx.test.ts",
+      "test/e2e/app-dir/modularizeimports/modularizeimports.test.ts",
+      "test/e2e/app-dir/third-parties/basic.test.ts",
+      "test/e2e/app-dir/app-static/app-static-custom-handler.test.ts",
+      "test/e2e/app-dir/options-request/options-request.test.ts",
+      "test/e2e/app-dir/revalidate-dynamic/revalidate-dynamic.test.ts",
+      "test/e2e/app-dir/syntax-highlighter-crash/syntax-highlighter-crash.test.ts",
+      "test/e2e/new-link-behavior/stitches.test.ts",
+      "test/e2e/next-image-forward-ref/index.test.ts",
+      "test/e2e/react-compiler/react-compiler.test.ts",
+      "test/e2e/app-dir/i18n-hybrid/i18n-hybrid.test.ts",
+      "test/e2e/app-dir/metadata/metadata.test.ts",
+      "test/e2e/app-dir/rsc-basic/rsc-basic.test.ts",
+      "test/e2e/basepath/basepath.test.ts",
+      "test/e2e/postcss-config-cjs/index.test.ts",
+      "test/e2e/socket-io/index.test.ts",
+      "test/e2e/middleware-matcher/index.test.ts",
+      "test/e2e/next-script/index.test.ts",
+      "test/production/standalone-mode/**/*",
+      "test/e2e/app-dir/edge-runtime-module-errors/**/*",
+      "test/e2e/middleware-general/**/*",
+      "test/e2e/app-dir/ppr-full/**/*",
+      "test/e2e/cache-components/**/*"
     ]
-  }
+  },
+  "$knextExclusions": [
+    {
+      "test": "test/e2e/app-dir/edge-runtime-module-errors/**/*",
+      "category": "edge-runtime",
+      "rationale": "knext targets the Node/Bun standalone server (output:'standalone'); it has no edge (V8-isolate) runtime. The Edge Runtime is architecturally out of scope — knext matches Vercel's compute layer, not its global edge (CLAUDE.md §8 bucket 1). compat-matrix row: Edge Runtime ❌."
+    },
+    {
+      "test": "test/e2e/middleware-general/**/*",
+      "category": "edge-middleware",
+      "rationale": "Edge Middleware runs in the Edge Runtime, which knext does not provide. knext supports the (deprecated) Node middleware/proxy convention only; edge-middleware deploy tests assume the isolate runtime. Upstream-gated + architectural (CLAUDE.md §8). compat-matrix row: Edge Middleware ❌."
+    },
+    {
+      "test": "test/e2e/app-dir/ppr-full/**/*",
+      "category": "ppr",
+      "rationale": "Partial Prerendering (PPR) is not adapter-standardizable yet (CLAUDE.md §6 Tier C, upstream-gated); knext does not implement the PPR resume/stream contract. compat-matrix row: PPR ❌."
+    },
+    {
+      "test": "test/e2e/cache-components/**/*",
+      "category": "cache-components",
+      "rationale": "Cache Components ('use cache' / cacheLife) are an evolving upstream API not yet stabilized for adapters (CLAUDE.md §6 Tier C). knext's Redis cache-handler does not implement the Cache Components protocol. compat-matrix row: Cache Components ❌."
+    }
+  ]
 }

@@ -448,6 +448,58 @@ jobs:
         working-directory: knext
         run: chmod +x scripts/e2e-deploy.sh scripts/e2e-logs.sh scripts/e2e-cleanup.sh
 
+      # #147 / A3-3 — THE reason 0 tests ran was TWO-fold; this step fixes the
+      # second half. (1) The knext manifest used to `version: 1`, which made
+      # next.js's test/get-test-filter.js THROW `Unknown manifest version: 1` at
+      # run-tests.js module load — fixed by switching the manifest to v2. (2) Even
+      # with the manifest selecting tests, jest could not LOAD a single deploy
+      # test module: every test/e2e/**/*.test.ts imports `e2e-utils` /
+      # `next-test-utils`, which `import` from `next/dist/trace`, `next/constants`,
+      # and `next/dist/server/next` at MODULE SCOPE — and jest.config.js itself
+      # does `require('next/jest')`. All resolve to the WORKSPACE `packages/next`,
+      # whose `dist/` is ABSENT in the prebuilt model (we never build next from
+      # source — hence the `packages/next/dist/bin/next ENOENT` warnings).
+      #
+      # FIX (honest + cheap, no source build): the PUBLISHED next@<ref> tarball we
+      # already `npm pack`ed (next-prebuilt/next.tgz) IS the built `packages/next`
+      # at the same version — it contains dist/, jest.js, constants.js, etc. Unpack
+      # its `package/` payload INTO next.js/packages/next/ so those module-scope
+      # imports resolve from the prebuilt artifact. This is the SAME artifact the
+      # per-fixture install (NEXT_TEST_PKG_PATHS) uses, so the harness code under
+      # test and the fixture runtime stay version-consistent. Still NO Rust, no
+      # source TS build. (ADR-0007 A3-3 constraint: deploy test FILES require a
+      # built workspace `next` to LOAD; the prebuilt tarball satisfies that.)
+      - name: Hydrate workspace next/dist from the prebuilt tarball (so jest can load tests)
+        working-directory: next.js
+        run: |
+          set -euo pipefail
+          PKG_DIR="packages/next"
+          if [ ! -d "$PKG_DIR" ]; then
+            echo "::error::expected next.js source dir $PKG_DIR (the checked-out packages/next)" >&2
+            exit 1
+          fi
+          # Unpack the prebuilt tarball (npm tarballs root everything under package/).
+          tar xzf "${GITHUB_WORKSPACE}/next-prebuilt/next.tgz" -C "${RUNNER_TEMP}"
+          SRC="${RUNNER_TEMP}/package"
+          # Overlay the BUILT artifacts the harness imports at module scope. We copy
+          # dist/ plus the root JS entrypoints (jest.js, constants.js, etc.) WITHOUT
+          # clobbering the checked-out source package.json (its name/version already
+          # match the prebuilt tarball: next@${NEXTJS_REF#v}).
+          cp -R "${SRC}/dist" "${PKG_DIR}/dist"
+          for f in "${SRC}"/*.js; do
+            [ -e "$f" ] || continue
+            cp "$f" "${PKG_DIR}/$(basename "$f")"
+          done
+          # Sanity: the four module-scope imports the harness needs must now resolve.
+          node -e '
+            const path = require("path");
+            const base = path.resolve("packages/next");
+            for (const m of ["jest.js", "constants.js", "dist/trace/index.js", "dist/server/next.js"]) {
+              require("fs").accessSync(path.join(base, m));
+            }
+            console.log("prebuilt next/dist hydrated: harness imports resolve");
+          '
+
       - name: Run official deploy tests (knext adapter)
         working-directory: next.js
         env:
@@ -458,7 +510,10 @@ jobs:
           NEXT_TEST_CLEANUP_SCRIPT_PATH: ${{ github.workspace }}/knext/scripts/e2e-cleanup.sh
           # The package dir e2e-deploy.sh `npm pack`s + installs into each temp app.
           ADAPTER_DIR: ${{ github.workspace }}/knext/packages/kn-next
-          # Layer knext's exclude/include ledger on top of Next's deploy-eligible set.
+          # knext's v2 deploy-eligible selection: it mirrors Next's own
+          # test/deploy-tests-manifest.json include/exclude base set and adds the
+          # knext architectural exclusions (the harness loads exactly ONE manifest
+          # path — no comma-layering — so this file IS the complete selection).
           NEXT_EXTERNAL_TESTS_FILTERS: ${{ github.workspace }}/knext/test/deploy-tests-manifest.knext.json
           KNEXT_RUNTIME: node
           # #147 (round 4) — the prebuilt pivot. A JSON [[name, tarballPath]] map.

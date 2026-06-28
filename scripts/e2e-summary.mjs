@@ -18,6 +18,18 @@
  *      shard where a real deploy test FAILED (build "failed with code: 1") — a
  *      false-green. We MUST count these per-file markers so failures are honest.
  *
+ * HONESTY (A3-3, run 28317739829) — the inverse false-RED. A jest INFRA ABORT is
+ * NOT a test result. When jest cannot LOCATE the selected file it prints:
+ *     No tests found, exiting with code 1
+ * and run-tests.js then retries, gives up, and prints the SAME `<file> failed to
+ * pass within N retries` line a genuine assertion failure prints. The earlier
+ * parser counted that phantom as `failed:1` — a misleading FALSE-RED: it tallied a
+ * test that NEVER RAN (no `next build`, no server boot, no assertion) as a deploy
+ * failure. summarize() MUST distinguish "the deploy test ran and failed" from
+ * "jest never found the file / infra abort" and surface the latter as a SEPARATE
+ * `notRun` counter — never as `failed`. (Symmetric to the #164 false-green fix:
+ * the summary must tell the TRUTH about what actually executed.)
+ *
  * Usage (in CI, per shard):
  *   node scripts/e2e-summary.mjs \
  *     --runner-log <path> --ref <gitref> --shard <n/m> --excluded <count> \
@@ -32,7 +44,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
  * Parse jest-style runner output + run metadata into the summary artifact shape.
  * @param {string} runnerOutput raw stdout from run-tests.js
  * @param {{ref:string, shard:string, excluded:number}} meta
- * @returns {{passed:number, failed:number, excluded:number, ref:string, shard:string}}
+ * @returns {{passed:number, failed:number, notRun:number, excluded:number, ref:string, shard:string}}
  */
 export function summarize(runnerOutput, meta) {
   const text = String(runnerOutput ?? '');
@@ -47,28 +59,103 @@ export function summarize(runnerOutput, meta) {
   //   pass:  `Finished ${test.file} on retry ${i}/${n} in ${t}s`  ← "Finished"
   //          comes FIRST (capitalized), THEN the file path. NOT file-first.
   //   fail:  `${test.file} failed to pass within ${n} retries`    ← file first.
-  const runTestsPassed = countTestFiles(
+  const runTestsPassed = collectTestFiles(
     text,
     /\bFinished\s+(\S+\.test\.\S+)\s+on retry\s+\d+\/\d+/g,
   );
-  const runTestsFailed = countTestFiles(
+  const runTestsFailedAll = collectTestFiles(
     text,
     /(\S+\.test\.\S+)\s+failed to pass within\s+\d+\s+retries/g,
   );
 
+  // HONESTY (A3-3): partition the run-tests.js "failed to pass within …" files
+  // into REAL failures vs PHANTOM infra-aborts. A phantom is a file jest could
+  // never LOCATE: its `❌ <file> output` group contains jest's
+  //   `No tests found, exiting with code 1`
+  // (no `next build`, no server boot, no assertion). Those must NOT inflate
+  // `failed` — they are surfaced as `notRun`. A file with NO such marker in its
+  // output group ran for real and its failure is genuine.
+  const phantomFiles = filesWithNoTestsFound(text);
+  const runTestsNotRun = new Set();
+  const runTestsFailed = new Set();
+  for (const file of runTestsFailedAll) {
+    if (phantomFiles.has(file)) {
+      runTestsNotRun.add(file);
+    } else {
+      runTestsFailed.add(file);
+    }
+  }
+
   // Prefer whichever shape actually reported results. The two never co-occur in
   // a real run, but if both somehow appear, sum them — never silently drop a
   // failure (an under-count here is the false-green A3-3 exists to prevent).
-  const passed = jestPassed + runTestsPassed;
-  const failed = jestFailed + runTestsFailed;
+  const passed = jestPassed + runTestsPassed.size;
+  const failed = jestFailed + runTestsFailed.size;
+  const notRun = runTestsNotRun.size;
 
   return {
     passed,
     failed,
+    notRun,
     excluded: Number(meta?.excluded ?? 0) || 0,
     ref: String(meta?.ref ?? ''),
     shard: String(meta?.shard ?? ''),
   };
+}
+
+/**
+ * Identify the set of test FILES whose run-tests.js output group reported jest's
+ * `No tests found, exiting with code 1` — i.e. jest never located the file, so the
+ * "failure" is a phantom infra-abort, not a real deploy-test result.
+ *
+ * GROUND TRUTH (run 28318485456 — the fix the prior version got wrong): scope must
+ * follow run-tests.js's OWN output-group boundaries, NOT the last `.test.` token on
+ * any line. run-tests.js (CI, concurrent) interleaves files and brackets each
+ * file's captured child output between:
+ *   open:  `❌ <file> output:`  /  `##[group]❌ <file> output`        (run-tests.js:624/628)
+ *   close: `end of <file> output`                                     (run-tests.js:644/646)
+ * The `<file>` in BOTH boundaries is the SLASH form — the SAME key the
+ * `<file> failed to pass within N retries` failure marker uses. The previous tracker
+ * instead grabbed any `\S*.test.\w+` token, which (a) captured the UNDERSCORE-joined
+ * `JEST_JUNIT_OUTPUT_NAME=test_e2e_…_index.test.ts` echo (run-tests.js:555,
+ * `replaceAll('/','_')`) — a key that never matches the slash-form failure marker,
+ * so the phantom was mis-counted as a real `failed` — and (b) mis-attributed lines
+ * across the concurrent interleave. We now ONLY (re)scope on the group boundaries,
+ * and we credit a `No tests found` line ONLY while a group is OPEN (the abort always
+ * prints inside the failing file's own group), so neither the underscore echo nor
+ * interleaving can corrupt the attribution.
+ * @param {string} text
+ * @returns {Set<string>}
+ */
+function filesWithNoTestsFound(text) {
+  const phantom = new Set();
+  const lines = text.split('\n');
+  // run-tests.js output-group OPEN header (with or without the GHA ##[group] prefix
+  // and the trailing colon variant). Captures the SLASH-form file path.
+  const groupOpenRe = /❌\s+(\S+\.test\.(?:js|ts|jsx|tsx))\s+output\b/;
+  // run-tests.js output-group CLOSE marker.
+  const groupCloseRe = /^(?:.*\bend of\s+)(\S+\.test\.(?:js|ts|jsx|tsx))\s+output\b/;
+  const noTestsRe = /No tests found, exiting with code 1/;
+  let current = null;
+  for (const line of lines) {
+    // A close marker ends the current scope (after we've had a chance to credit a
+    // No-tests abort inside it). Match close BEFORE open: a single line is never
+    // both, but ordering keeps intent explicit.
+    const close = line.match(groupCloseRe);
+    if (close) {
+      current = null;
+      continue;
+    }
+    const open = line.match(groupOpenRe);
+    if (open) {
+      current = open[1];
+      continue;
+    }
+    if (current && noTestsRe.test(line)) {
+      phantom.add(current);
+    }
+  }
+  return phantom;
 }
 
 function matchCount(text, re) {
@@ -76,13 +163,13 @@ function matchCount(text, re) {
   return m ? Number(m[1]) : 0;
 }
 
-/** Count UNIQUE test-file paths captured by a global per-file marker regex. */
-function countTestFiles(text, re) {
+/** Collect the SET of UNIQUE test-file paths captured by a per-file marker regex. */
+function collectTestFiles(text, re) {
   const files = new Set();
   for (const m of text.matchAll(re)) {
     if (m[1]) files.add(m[1]);
   }
-  return files.size;
+  return files;
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────

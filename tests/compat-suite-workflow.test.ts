@@ -1176,3 +1176,101 @@ describe('compat-suite hydrates the prebuilt @next/swc native binary (test-e2e-d
     );
   });
 });
+
+// ── A3-3: the workflow must NOT override next.js's jest.config.js (#147, GROUND
+// TRUTH from run 28318485456) ────────────────────────────────────────────────────
+//
+// The PRIOR theory — that jest found 0 tests because next.js's `rootDir: 'test'`
+// made the harness's repo-root-relative positional (`test/e2e/<…>/index.test.ts`)
+// miss — was DISPROVEN. A shard step that overwrote jest.config.js with
+// `rootDir: '.'` SHIPPED and STILL produced `No tests found … - 0 matches` on every
+// shard. So rootDir was never the variable.
+//
+// GROUND TRUTH (vercel/next.js @ v16.0.3 source + jest@29.7.0 reproduction):
+//   • run-tests.js:301-304 globs with `cwd: __dirname` (next.js repo root) → each
+//     `test.file` is repo-root-relative `test/e2e/<…>`.
+//   • run-tests.js:520 passes it as a jest POSITIONAL; :600 spawns jest with no
+//     `cwd`, no `--config` → jest auto-discovers next.js/jest.config.js.
+//   • jest@29.7.0 matches the positional as a case-insensitive RegExp against the
+//     ABSOLUTE path (SearchSource.js + testPathPatternToRegExp). A faithful repro
+//     (real next/jest, the real 404-page-router fixture, full packages/next/src haste
+//     collisions, CI=1) shows BOTH the UPSTREAM `rootDir: 'test'` config AND the
+//     override `rootDir: '.'` config FIND and run the test — `--listTests` lists it.
+//     Neither rootDir is the lever; the override was unnecessary AND unproven.
+//
+// CORRECTION: stop overwriting upstream's jest.config.js. next.js itself runs exactly
+// these deploy tests with the upstream config (its `test-deploy-*` scripts). The
+// workflow keeps a fast "harness intact" check (the deploy test FILES + module-scope
+// import dirs must be present; a missing checkout is the only remaining honest
+// explanation for 0 tests) but MUST NOT rewrite next.js/jest.config.js.
+// FORBIDDEN (would be a false-green): --passWithNoTests or anything that turns
+// "no tests found" into a 0-exit. The success signal is real `[e2e-deploy]` markers
+// + `next build` in the log, not a suppressed abort or a config rewrite.
+describe('compat-suite does NOT override next.js jest.config.js (test-e2e-deploy.yml, #147 A3-3 ground truth)', () => {
+  /** The shard step that verifies the harness is intact (without rewriting config). */
+  function harnessStep(): string {
+    const block = deployTestsJobBlock();
+    const lines = block.split('\n');
+    const blocks: string[] = [];
+    let cur: string[] = [];
+    const flush = () => {
+      if (cur.length) blocks.push(cur.join('\n'));
+      cur = [];
+    };
+    for (const line of lines) {
+      if (/^\s*-\s+name:/.test(line)) flush();
+      cur.push(line);
+    }
+    flush();
+    return blocks.find((b) => /-\s+name:[^\n]*jest harness is intact/i.test(b)) ?? '';
+  }
+
+  it('has a shard step that verifies the next.js jest harness is intact', () => {
+    const step = harnessStep();
+    expect(step, 'expected a "jest harness is intact" verification step').not.toBe('');
+  });
+
+  it('does NOT overwrite next.js/jest.config.js (no `cat > jest.config.js` heredoc)', () => {
+    // The smoking gun of the reverted override was a heredoc redirect into the
+    // upstream config. It must be gone from the whole workflow.
+    expect(
+      /cat\s*>\s*jest\.config\.js/.test(workflowText()),
+      'the workflow must not rewrite next.js/jest.config.js (upstream rootDir stands)',
+    ).toBe(false);
+  });
+
+  it('does NOT force jest rootDir to the repo root anywhere in the workflow', () => {
+    // No `rootDir: '.'` injection — the prior (disproven) override is fully reverted.
+    expect(
+      /rootDir\s*:\s*['"]\.['"]/.test(workflowText()),
+      'the workflow must not pin jest rootDir to the repo root',
+    ).toBe(false);
+  });
+
+  it('verifies the selected deploy test FILES are actually present (checkout sanity)', () => {
+    const step = harnessStep();
+    // A missing fixture checkout is the one remaining honest cause of "0 tests";
+    // the step proves the e2e test tree + a representative test file exist.
+    expect(/test\s+-d\s+test\/e2e/.test(step), 'must assert test/e2e exists').toBe(true);
+    expect(
+      /test\s+-f\s+test\/e2e\/[\w./-]+\.test\.ts/.test(step),
+      'must assert a representative deploy test file exists',
+    ).toBe(true);
+  });
+
+  it('NEVER uses --passWithNoTests (that would convert a phantom abort to a false-green)', () => {
+    expect(
+      /--passWithNoTests/.test(workflowText()),
+      'the harness must not suppress "no tests found" into a pass',
+    ).toBe(false);
+  });
+
+  it('runs the harness-intact check BEFORE run-tests.js', () => {
+    const block = deployTestsJobBlock();
+    const checkIdx = block.search(/-\s+name:[^\n]*jest harness is intact/i);
+    const runIdx = block.search(/-\s+name:[^\n]*Run official deploy tests/);
+    expect(checkIdx, 'expected a harness-intact step').toBeGreaterThanOrEqual(0);
+    expect(runIdx, 'expected the run-tests step').toBeGreaterThanOrEqual(0);
+    expect(checkIdx < runIdx, 'the harness-intact check must come BEFORE run-tests.js').toBe(true);
+  });
+});

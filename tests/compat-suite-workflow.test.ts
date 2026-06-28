@@ -1381,6 +1381,45 @@ describe('compat-suite installs a jest --runTestsByPath shim (test-e2e-deploy.ym
     ).toBe(true);
   });
 
+  it('removes the symlink before writing a fresh regular shim file (does not clobber real jest)', () => {
+    const step = shimStep();
+    // node_modules/.bin/jest is a SYMLINK into node_modules/jest/bin/jest.js. A
+    // `cat > "$BIN"` would follow the link and overwrite the real jest, and the
+    // shim's __dirname would then resolve to jest/bin where jest.real is absent.
+    // The step must `rm -f` the symlink first so the shim is a fresh regular file
+    // at .bin/jest, with __dirname = .bin (where jest.real lives).
+    expect(
+      /rm\s+-f\s+"?\$BIN"?/.test(step),
+      'the shim step must `rm -f "$BIN"` (the symlink) before writing the regular shim file',
+    ).toBe(true);
+  });
+
+  it('validates the written shim with node --check and fails the step if it is malformed', () => {
+    const step = shimStep();
+    // A malformed-shim regression (heredoc/interpolation mangling) must NEVER ship
+    // silently: the step must `node --check` the written shim and `exit 1` if it
+    // does not parse. This is the guard against the prior on-disk-corruption bug.
+    expect(
+      /node\s+--check\s+"?\$BIN"?/.test(step),
+      'the shim step must `node --check "$BIN"` to validate the written shim parses as JS',
+    ).toBe(true);
+    expect(
+      /node\s+--check[\s\S]*exit\s+1/.test(step),
+      'the shim step must `exit 1` (fail loudly) when node --check fails',
+    ).toBe(true);
+  });
+
+  it('writes the shim via a STRICTLY-quoted heredoc (no shell interpolation of the JS body)', () => {
+    const step = shimStep();
+    // The JS body must be written with a single-quoted heredoc delimiter so the
+    // shell performs NO $/backtick/paren expansion on the shim source. The shim
+    // resolves jest.real at runtime via __dirname, so no shell var is baked in.
+    expect(
+      /<<\s*'[A-Z_]+'/.test(step),
+      "the shim must use a strictly-quoted heredoc (<<'DELIM') so the JS body is not shell-interpolated",
+    ).toBe(true);
+  });
+
   it('installs the shim AFTER the harness-intact verify (the real jest must exist)', () => {
     const block = deployTestsJobBlock();
     const harnessIdx = block.search(/-\s+name:[^\n]*jest harness is intact/i);

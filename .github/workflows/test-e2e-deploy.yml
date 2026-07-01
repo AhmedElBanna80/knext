@@ -813,19 +813,73 @@ jobs:
             echo "A33SWC_FALLBACK_SOURCE_MISSING"
           fi
 
-          # Run 28550001508 prime suspect: POISONED JEST HASTE CACHE. Resolved config
-          # is normal (no filter, projects:[], standard ignores) yet auto-config
-          # --listTests yields ZERO candidates (G_COUNT=0, exit 0) while the files
-          # exist on disk. cacheDirectory=/tmp/jest_rt, and the earlier A33DBG step
-          # runs jest with BROKEN SWC (the fallback plant happens here, later) — a
-          # config-load-crashed jest can write a bad/empty haste cache that later
-          # same-config-id invocations REUSE instead of re-crawling. The minimal
-          # config works because its different config id gets a fresh crawl. Clear
-          # the cache, then re-probe.
+          # Run post-28550001508 + cache-clear run: cache theory DISPROVEN (A2/A2NC/G2
+          # still empty post-clear). REAL root cause found in the resolved config:
+          # testPathIgnorePatterns ["/node_modules/", "/.next/"] are REGEXES and the
+          # dot in '/.next/' is UNESCAPED — injected by next/jest ITSELF
+          # (packages/next/src/build/jest/jest.ts:156 at v16.0.3; the repo's
+          # jest.config.js only has the properly-escaped modulePathIgnorePatterns).
+          # Workspace path is /home/runner/work/knext/knext/next.js/... and the
+          # segment /knext/ MATCHES /.next/ (slash + any-char 'k' + 'next' + slash):
+          # every file in the checkout is excluded BECAUSE THE REPO IS NAMED knext.
+          # Explains everything: local repro worked (clone path had no ?next/
+          # segment), minimal config works (no such ignore), and jest's explainer
+          # "testPathIgnorePatterns ... - 0 matches" = 0 files SURVIVE the ignore.
+
+          # 1. Prove the regex claim inline (fast, no jest).
+          echo "A33REGEX_PROOF:"
+          node -e "console.log('MATCH:', /\/.next\//.test('/home/runner/work/knext/knext/next.js/test/e2e/404-page-router/index.test.ts'))"
+
+          # 2. Show where the pattern actually lives: NOT in jest.config.js (upstream
+          # only sets escaped modulePathIgnorePatterns there) but in next/jest's
+          # compiled dist. Print both so the log carries the ground truth.
+          echo "A33UPSTREAM_PATTERN:"
+          grep -n "IgnorePatterns" jest.config.js || echo "no IgnorePatterns in jest.config.js"
+          A33_NEXTJEST=$(node -e "console.log(require.resolve('next/jest', { paths: [process.cwd()] }))" 2>/dev/null)
+          echo "A33_NEXTJEST_ENTRY=${A33_NEXTJEST:-RESOLVE_FAILED}"
+
+          # 3. PATCH: escape the dot in next/jest's injected '/.next/' patterns, in
+          # the resolved next/jest file chain (entry stub + its relative requires).
+          cat > /tmp/a33patch.js <<'PATCHEOF'
+          const fs = require('fs');
+          const path = require('path');
+          let entry;
+          try {
+            entry = require.resolve('next/jest', { paths: [process.cwd()] });
+          } catch (e) { console.log('A33PATCH_RESOLVE_FAIL:', e.message); process.exit(0); }
+          const cands = new Set([entry]);
+          // Follow the entry stub's relative requires (next/jest.js -> dist/build/jest/jest.js).
+          try {
+            for (const m of fs.readFileSync(entry, 'utf8').matchAll(/require\(['"](\.[^'"]+)['"]\)/g)) {
+              try { cands.add(require.resolve(path.join(path.dirname(entry), m[1]))); } catch {}
+            }
+          } catch {}
+          // Belt-and-suspenders: the known dist location relative to the package root.
+          for (const g of ['dist/build/jest/jest.js']) {
+            const p = path.join(path.dirname(entry), g);
+            if (fs.existsSync(p)) cands.add(p);
+          }
+          let patchedAny = false;
+          for (const f of cands) {
+            let s; try { s = fs.readFileSync(f, 'utf8'); } catch { continue; }
+            // Match the UNESCAPED string literal '/.next/' (single or double quoted).
+            // The escaped form '/\\.next/' has file-text backslashes and won't match.
+            const t = s.replace(/(['"])\/\.next\/\1/g, "'/\\\\.next/'");
+            if (t !== s) { fs.writeFileSync(f, t); patchedAny = true; console.log('A33PATCH_APPLIED:', f); }
+          }
+          if (!patchedAny) console.log('A33PATCH_NOOP (no unescaped /.next/ literal found in', [...cands].join(', '), ')');
+          PATCHEOF
+          node /tmp/a33patch.js
+          if [ -n "${A33_NEXTJEST}" ]; then
+            echo "A33PATCH_VERIFY:"
+            grep -n "next/" "$(dirname "${A33_NEXTJEST}")/dist/build/jest/jest.js" 2>/dev/null | grep -F ".next" | head -5 || echo "verify grep empty"
+          fi
+
+          # 4. Clear jest's cache so the patched config gets a fresh crawl.
           rm -rf /tmp/jest_* 2>/dev/null || true
           echo "A33CACHE_CLEARED"
 
-          # 1. Plant a trivial, dependency-free test we fully control.
+          # 5. Plant a trivial, dependency-free test we fully control.
           mkdir -p test/e2e/knext-smoke
           cat > test/e2e/knext-smoke/knext-smoke.test.ts <<'SMOKE'
           it('knext smoke: jest can run a test in this tree', () => { expect(1).toBe(1) })
@@ -833,28 +887,27 @@ jobs:
           echo "A33SMOKE_PLANTED"
           ls -la test/e2e/knext-smoke/ 2>&1
 
-          # 2a2. DECISIVE: auto config, plain positional, actually RUN the smoke test
-          # (this exact form printed "No tests found" pre-clear).
-          echo "===== A33SMOKE_A2 ====="
-          timeout 120 node_modules/.bin/jest --ci --runInBand --forceExit test/e2e/knext-smoke/knext-smoke.test.ts 2>&1 | tail -8 || echo "A33SMOKE_A2_RC=$?"
+          # 6a. DECISIVE: auto config, plain positional, actually RUN the smoke test.
+          # RC captured explicitly (a pipe to tail would mask timeout's exit 124).
+          echo "===== A33SMOKE_A3 ====="
+          timeout 120 node_modules/.bin/jest --ci --runInBand --forceExit test/e2e/knext-smoke/knext-smoke.test.ts > /tmp/a3.txt 2>&1
+          echo "A3_RC=$?"
+          echo "A3_OUT:"
+          tail -8 /tmp/a3.txt
 
-          # 2a2nc. Control: same but --no-cache (bypasses any cache reuse entirely).
-          echo "===== A33SMOKE_A2NC ====="
-          timeout 120 node_modules/.bin/jest --ci --no-cache --runInBand --forceExit test/e2e/knext-smoke/knext-smoke.test.ts 2>&1 | tail -8 || echo "A33SMOKE_A2NC_RC=$?"
+          # 6b. The REAL deploy test file, auto config, plain positional (raw capture).
+          echo "===== A33SMOKE_E3 ====="
+          timeout 120 node_modules/.bin/jest --ci --listTests test/e2e/404-page-router/index.test.ts > /tmp/e3.txt 2>&1
+          echo "E3_RC=$?"
+          echo "E3_OUT:"
+          head -6 /tmp/e3.txt
 
-          # 2e2. The REAL deploy test file, auto config, plain positional (raw capture).
-          echo "===== A33SMOKE_E2 ====="
-          timeout 120 node_modules/.bin/jest --ci --listTests test/e2e/404-page-router/index.test.ts > /tmp/e2.txt 2>&1
-          echo "E2_RC=$?"
-          echo "E2_OUT:"
-          head -6 /tmp/e2.txt
-
-          # 2g2. Auto-config full candidate inventory post-clear.
-          echo "===== A33SMOKE_G2 ====="
-          timeout 120 node_modules/.bin/jest --ci --listTests > /tmp/g2.txt 2>&1
-          echo "G2_RC=$?"
-          echo "G2_COUNT=$(grep -c '\.test\.' /tmp/g2.txt || true)"
-          echo "G2_404=$(grep -c '404-page-router' /tmp/g2.txt || true)"
+          # 6c. Auto-config full candidate inventory post-patch.
+          echo "===== A33SMOKE_G3 ====="
+          timeout 120 node_modules/.bin/jest --ci --listTests > /tmp/g3.txt 2>&1
+          echo "G3_RC=$?"
+          echo "G3_COUNT=$(grep -c '\.test\.' /tmp/g3.txt || true)"
+          echo "G3_404=$(grep -c '404-page-router' /tmp/g3.txt || true)"
 
           # 2d. Control: minimal plain config (different config id => fresh crawl).
           echo "===== A33SMOKE_D ====="

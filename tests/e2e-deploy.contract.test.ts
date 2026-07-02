@@ -71,6 +71,16 @@ fs.mkdirSync(path.join(nextDir, 'static'), { recursive: true });
 fs.mkdirSync(standalone, { recursive: true });
 fs.writeFileSync(path.join(nextDir, 'BUILD_ID'), 'fixture-build-' + Date.now());
 fs.writeFileSync(path.join(standalone, 'server.js'), ${JSON.stringify(FAKE_SERVER_JS)});
+// B5 (#147 round 2): record what the BUILD process saw, so the test can assert
+// the deploy script exported NEXT_DEPLOYMENT_ID into the build env (Next stamps
+// dpl= asset/image URLs and skew headers from it AT BUILD TIME).
+fs.writeFileSync(
+  path.join(nextDir, 'DEPLOYMENT_ID_AT_BUILD'),
+  String(process.env.NEXT_DEPLOYMENT_ID || ''),
+);
+// B4 (#147 round 2): build warnings land on both streams in real next builds.
+console.log('[fake-next] FAKE_BUILD_STDOUT_WARNING_MARKER');
+console.error('[fake-next] FAKE_BUILD_STDERR_WARNING_MARKER');
 console.log('[fake-next] build complete (fixture)');
 `;
 }
@@ -210,6 +220,52 @@ describe('scripts/e2e-deploy.sh — official deploy-script contract (#89)', () =
     const meta = readFileSync(join(appDir, '.adapter-build.log'), 'utf8');
     expect(meta).toContain(`BUILD_ID=${buildId}`);
     expect(meta).toContain(`DEPLOYMENT_ID=${deploymentId}`);
+  });
+
+  it('exports NEXT_DEPLOYMENT_ID into the `next build` environment (B5, #147 round 2)', () => {
+    // Triage of run 28564443662 (B5): the deploy script generated DEPLOYMENT_ID
+    // AFTER `next build` and exported it only to the runtime server, so Next
+    // never stamped `dpl=` into image/asset URLs (next-image: 5 assertion
+    // diffs) and `segment-cache/deployment-skew` aborted at build with
+    // "Neither NEXT_PUBLIC_BUILD_ID nor NEXT_DEPLOYMENT_ID is set".
+    const seenAtBuild = readFileSync(
+      join(appDir, '.next', 'DEPLOYMENT_ID_AT_BUILD'),
+      'utf8',
+    ).trim();
+    expect(seenAtBuild, 'NEXT_DEPLOYMENT_ID was not in the next build env').toBeTruthy();
+    // …and it must be the SAME id the deploy persisted for the harness/runtime,
+    // otherwise build-stamped dpl= URLs and served assets would skew apart.
+    const meta = readFileSync(join(appDir, '.adapter-build.log'), 'utf8');
+    expect(meta).toContain(`DEPLOYMENT_ID=${seenAtBuild}`);
+  });
+
+  it('captures `next build` output and e2e-logs.sh exposes it to the harness (B4, #147 round 2)', () => {
+    // Triage of run 28564443662 (B4): tests like next-config-warnings and
+    // app-middleware assert that `fetchCliOutputs()` (which runs THIS logs
+    // script) contains next-build warnings. We only emitted metadata + the
+    // server log, so every build-warning assertion failed.
+    const r = spawnSync('bash', [LOGS_SH], {
+      cwd: appDir,
+      env: { ...process.env },
+      encoding: 'utf8',
+      timeout: 20000,
+    });
+    expect(r.status).toBe(0);
+    const cliOutput = `${r.stdout}${r.stderr}`;
+    expect(cliOutput).toContain('FAKE_BUILD_STDOUT_WARNING_MARKER');
+    expect(cliOutput).toContain('FAKE_BUILD_STDERR_WARNING_MARKER');
+    // The harness-parseable id block must still LEAD stdout: parseIdsFromCliOuput
+    // takes the FIRST /BUILD_ID: (.+)/ match, so the build-log dump must not
+    // shadow it.
+    const firstBuildId = r.stdout.match(/BUILD_ID: (.+)/)?.[1]?.trim();
+    const meta = readFileSync(join(appDir, '.adapter-build.log'), 'utf8');
+    expect(meta).toContain(`BUILD_ID=${firstBuildId}`);
+  });
+
+  it('build output stays on stderr during deploy (stdout is the URL contract)', () => {
+    // The B4 capture must not leak build output onto deploy stdout — the
+    // harness reads stdout as the deployment URL.
+    expect(deployStdout).not.toContain('FAKE_BUILD_STDOUT_WARNING_MARKER');
   });
 
   it('e2e-cleanup.sh frees the port (server torn down)', async () => {

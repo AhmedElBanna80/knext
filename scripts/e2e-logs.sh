@@ -57,6 +57,22 @@ else
 fi
 
 echo ""
+echo "==== next build output (.adapter-next-build.log) ===="
+# #147 A3-3 fix round 2 (B4, triage of run 28564443662): harness tests assert
+# on `next build` warnings via fetchCliOutputs() → THIS script (e.g.
+# next-config-warnings, app-middleware's deprecated-middleware warning,
+# prerender's large-page-data warning). e2e-deploy.sh persists the full build
+# stream; print it AFTER the parseable id block (parseIdsFromCliOuput takes the
+# FIRST match, so a build line like "BUILD_ID: x" can never shadow the real ids).
+BUILD_LOG="$(meta BUILD_LOG)"
+BUILD_LOG="${BUILD_LOG:-${APP_DIR}/.adapter-next-build.log}"
+if [ -f "${BUILD_LOG}" ]; then
+  cat "${BUILD_LOG}"
+else
+  echo "(no next build log at ${BUILD_LOG} — build may not have run)"
+fi
+
+echo ""
 echo "==== knext standalone server log (.adapter-server.log) ===="
 # Prefer the SERVER_LOG path recorded in the metadata, else the default location.
 RECORDED_SERVER_LOG="$(grep -E '^SERVER_LOG=' "${LOG_FILE}" 2>/dev/null | head -n1 | cut -d= -f2- || true)"

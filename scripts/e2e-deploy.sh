@@ -51,7 +51,12 @@ free_port() {
 # rewritten `@knext/lib@^x` dep from the local lib tarball (@knext/lib is not on
 # npm yet — #53 is human-blocked).
 find_tarball() { # <dir> <name-prefix> → newest matching tarball path (or empty)
-  ls -1 "$1/$2"-*.tgz 2>/dev/null | sort | tail -n1
+  # `|| true`: under `set -euo pipefail` a failing pipeline (ls: no match) would
+  # otherwise kill the script AT the caller's `VAR="$(find_tarball ...)"`
+  # assignment -- making the explicit "adapter tarballs missing" diagnostic
+  # below unreachable (review finding on #171). Empty output IS the
+  # not-found signal; the caller checks it and fails LOUD.
+  ls -1 "$1/$2"-*.tgz 2>/dev/null | sort | tail -n1 || true
 }
 
 if [ "${KNEXT_E2E_SKIP_PACK:-0}" != "1" ]; then

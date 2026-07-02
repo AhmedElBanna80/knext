@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 /**
  * GUARD TESTS for #147 A3-3 fix round 1 (triage of baseline run 28558576615).
@@ -304,7 +304,12 @@ describe('scripts/e2e-deploy.sh installs an npm-installable dual tarball (#147 f
         timeout: 30000,
       });
       expect(r.status).not.toBe(0);
-      expect(`${r.stderr}`).toMatch(/tarball/i);
+      // The NAMED diagnostic must actually print. A looser /tarball/i match was
+      // satisfied by the harmless "using pre-packed tarballs from …" info line,
+      // which masked a DEAD diagnostic: under `set -euo pipefail` a failing
+      // find_tarball command substitution killed the script AT the assignment,
+      // so the explicit error below it never ran.
+      expect(`${r.stderr}`).toMatch(/ERROR: adapter tarballs missing/);
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
       rmSync(appDir, { recursive: true, force: true });
@@ -325,8 +330,4 @@ describe('install-smoke gate hardening — tarball manifests must be workspace:-
     expect(text).toMatch(/findWorkspaceProtocolDeps|workspace:/);
     expect(text).toMatch(/workspace-protocol\.mjs|findWorkspaceProtocolDeps/);
   });
-});
-
-afterAll(() => {
-  // best-effort: nothing persistent to clean beyond the per-test temp dirs above.
 });

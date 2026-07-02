@@ -272,35 +272,57 @@ jobs:
           fi
 
       # Hand off the prepared knext + next.js SOURCE trees + the prebuilt next
-      # tarball to the shard jobs.
+      # tarball to the shard jobs — as ONE TARBALL.
       #
-      # #147 (run 28314500989 — the Upload-workspace OOM): once #160 made the
-      # Prepare install finish in 26s, the NEXT blocker was this upload OOMing with
-      # `FATAL ERROR: ... JavaScript heap out of memory`. Cause: the next.js tree
-      # carries its full node_modules (3345 packages, hundreds of thousands of
-      # files); actions/upload-artifact globs + hashes EVERY file and exhausts the
-      # heap. FIX (Option A — don't ship node_modules): EXCLUDE `**/node_modules`
-      # so the artifact is SOURCE-ONLY (the source trees + next-prebuilt/next.tgz +
-      # the @knext/core adapter .tgz). Each deploy-tests shard then restores the
-      # SAME pnpm-store actions/cache the steps above warmed and RE-RUNS the same
-      # slim, offline, cache-hit install in next.js (seconds) to rebuild
-      # node_modules locally — see the shard's "Re-install next.js harness deps".
+      # #147 history of this handoff:
+      # • Round 8 (run 28314500989): uploading the raw trees OOM'd
+      #   actions/upload-artifact (it globs + hashes every file; next.js's
+      #   installed node_modules is 3345 packages). Fix then: `!**/node_modules`.
+      # • Round 11 (run 28556241980, REPRODUCED LOCALLY): the zip-based artifact
+      #   MATERIALIZES SYMLINKS into real copies. next.js's test corpus has
+      #   symlinks under jest's crawl roots (4× test/e2e/app-dir/next-condition/
+      #   fixtures/*/sym-linked-packages -> ../../packages); materialized, the
+      #   fixture package `my-cjs-package` exists twice → jest-haste-map "Haste
+      #   module naming collision" → v16.2.0's jest.config.js NEWLY sets
+      #   `haste: { throwOnModuleCollision: true }` (16.0.3 only warned) → jest
+      #   throws `Error: Duplicated files or mocks` ~1s into the crawl → every
+      #   `--listTests` / test run reports 0 tests. The blanket `!**/node_modules`
+      #   exclude ALSO silently dropped test-FIXTURE node_modules (part of the
+      #   corpus — e.g. next-condition's linked packages) — latent fixture
+      #   corruption.
       #
-      # NODE_OPTIONS belt-and-suspenders: even source-only, the upload still hashes
-      # a large tree; raise the old-space size so a borderline case can't OOM.
+      # FIX: tar the workspace. tar preserves symlinks + exec bits (the zip
+      # artifact does neither), one file cannot OOM the upload hasher, and the
+      # node_modules excludes become ANCHORED to the INSTALLED trees only, so
+      # fixture node_modules ride along. .git dirs are kept: run-tests.js runs
+      # `git clean/checkout <testDir>` between retries. The tarball is written
+      # to RUNNER_TEMP (tar-ing into the tree being read races "file changed as
+      # we read it").
+      - name: Pack workspace tarball (preserves symlinks + exec bits; installed node_modules excluded)
+        run: |
+          set -euo pipefail
+          tar czf "${RUNNER_TEMP}/compat-workspace.tgz" \
+            --exclude='./knext/node_modules' \
+            --exclude='./knext/apps/*/node_modules' \
+            --exclude='./knext/packages/*/node_modules' \
+            --exclude='./next.js/node_modules' \
+            ./knext ./next.js ./next-prebuilt
+          ls -la "${RUNNER_TEMP}/compat-workspace.tgz"
+          # Tripwire at the SOURCE side too: the collision-critical fixture
+          # symlink must be in the tarball AS a symlink (tar type 'l' listing
+          # shows '->'). If upstream restructures the fixture, update the probe.
+          if ! tar tvzf "${RUNNER_TEMP}/compat-workspace.tgz" \
+            './next.js/test/e2e/app-dir/next-condition/fixtures/middleware/sym-linked-packages' 2>/dev/null \
+            | grep -q ' -> '; then
+            echo "::warning::expected fixture symlink not found as a symlink in the workspace tarball; if upstream moved it, update the probe (shard tripwire will catch a real regression)"
+          fi
+
       - name: Upload workspace
         uses: actions/upload-artifact@v4
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
         with:
           name: compat-workspace
-          path: |
-            knext
-            next.js
-            next-prebuilt
-            !**/node_modules
+          path: ${{ runner.temp }}/compat-workspace.tgz
           retention-days: 1
-          include-hidden-files: true
 
   deploy-tests:
     name: Deploy tests (shard ${{ matrix.shard }})
@@ -329,6 +351,26 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: compat-workspace
+
+      # #147 Round 11 — the artifact is ONE tarball (see the Pack step): tar
+      # preserves the symlinks + exec bits the zip artifact destroyed. TRIPWIRE:
+      # assert the collision-critical fixture symlink SURVIVED transport — if a
+      # future transport change materializes symlinks again, fail HERE with the
+      # cause named, not 20 steps later as a cryptic 0-test jest-haste-map abort
+      # (`Duplicated files or mocks`, thrown because v16.2.0's jest.config.js
+      # sets haste.throwOnModuleCollision).
+      - name: Unpack workspace tarball (restores symlinks + exec bits)
+        run: |
+          set -euo pipefail
+          tar xzf compat-workspace.tgz
+          rm compat-workspace.tgz
+          test -d knext && test -d next.js && test -d next-prebuilt
+          SYMLINK_PROBE="next.js/test/e2e/app-dir/next-condition/fixtures/middleware/sym-linked-packages"
+          if [ ! -L "${SYMLINK_PROBE}" ]; then
+            echo "::error::${SYMLINK_PROBE} is not a symlink after unpack — the workspace transport materialized symlinks again; jest-haste-map will throw 'Duplicated files or mocks' (v16.2.0 haste.throwOnModuleCollision) and every shard will list 0 tests" >&2
+            exit 1
+          fi
+          echo "workspace unpacked; fixture symlink survived transport: $(readlink "${SYMLINK_PROBE}")"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -855,18 +897,34 @@ jobs:
       # manifest-selected deploy test file — or the shard aborts BEFORE wasting
       # a run on a vacuous 0-test invocation. Same spawn shape as run-tests.js
       # (cwd = next.js/, no --config, positional path).
+      #
+      # Run 28556241980: the gate FIRED (every shard aborted pre-run — working as
+      # designed), but its `2>/dev/null` swallowed jest's stderr, so the log said
+      # "matched 0" without the WHY — a blind CI cycle. The gate now CAPTURES
+      # jest's stderr + exit code and prints both on failure, so the next failing
+      # run carries its own diagnosis.
       - name: Gate — jest --listTests must match >0 (loud-fail, no silent 0-test runs)
         working-directory: next.js
         run: |
           set -euo pipefail
           PROBE="test/e2e/404-page-router/index.test.ts"
-          LIST="$(node_modules/.bin/jest --listTests "$PROBE" 2>/dev/null || true)"
+          GATE_ERR="$(mktemp)"
+          set +e
+          LIST="$(node_modules/.bin/jest --listTests "$PROBE" 2>"${GATE_ERR}")"
+          JEST_EXIT=$?
+          set -e
           COUNT="$(printf '%s\n' "$LIST" | grep -c '404-page-router' || true)"
           if [ "${COUNT}" -eq 0 ]; then
-            echo "::error::jest --listTests matched 0 files for ${PROBE} — the 3-layer discovery stack (manifest / hydrate closure / next-jest ignore patch) regressed; aborting before a vacuous 0-test run"
+            echo "::error::jest --listTests matched 0 files for ${PROBE} (jest exit ${JEST_EXIT}) — the discovery stack (manifest / hydrate closure / next-jest ignore patch) regressed; aborting before a vacuous 0-test run. jest stderr follows."
+            echo "::group::jest --listTests stderr (first 60 lines)"
+            head -n 60 "${GATE_ERR}" || true
+            echo "::endgroup::"
+            echo "::group::jest --listTests stdout (first 20 lines)"
+            printf '%s\n' "$LIST" | head -n 20 || true
+            echo "::endgroup::"
             exit 1
           fi
-          echo "jest discovery alive: ${COUNT} match(es) for ${PROBE}"
+          echo "jest discovery alive: ${COUNT} match(es) for ${PROBE} (jest exit ${JEST_EXIT})"
 
       - name: Run official deploy tests (knext adapter)
         working-directory: next.js

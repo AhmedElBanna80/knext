@@ -318,6 +318,40 @@ index.test.ts`); run-tests.js invocation contract unchanged (positional spawn, `
 `end of <file> output` group markers, file-first `failed to pass within N retries` FAIL marker) —
 only the PASS marker changed, which the dual-format summary parser already covers.
 
+### 3c. Branch run 28556241980: the gate fired — root cause = zip artifact × v16.2.0 `throwOnModuleCollision` (reproduced locally)
+
+The `--listTests` gate worked as designed (every shard aborted pre-run instead of a vacuous
+0-test run) but its `2>/dev/null` swallowed jest's stderr — fixed: the gate now captures jest's
+stderr + exit code and prints both on failure, so a failing run carries its own diagnosis.
+
+**Root cause (fully reproduced locally; faithful model: fresh v16.2.0 clone under a `/knext/knext/`
+path, slim root-filtered install, tarball hydrates, SWC plant, `/.next/` patch):**
+
+1. A healthy hydrated workspace at v16.2.0 **passes** `jest --listTests` (3.8s, probe listed) —
+   the harness model itself is sound at the new ref.
+2. Replaying the artifact transport's behavior — **materializing symlinks into real copies** —
+   makes the same command throw `Error: Duplicated files or mocks` from jest-haste-map in **1.16s**
+   (CI died in ~0.95s: exact match). next.js's test corpus has symlinks under jest's crawl roots
+   (4× `test/e2e/app-dir/next-condition/fixtures/*/sym-linked-packages -> ../../packages`);
+   materialized, the fixture package `my-cjs-package` exists twice ("Haste module naming
+   collision"), and **v16.2.0's jest.config.js newly sets `haste: { throwOnModuleCollision: true }`**
+   — at v16.0.3 the identical duplication was only a warning, which is why the older runs crawled.
+3. Adjacent findings from the same investigation: (a) v16.2.0's install now creates a **stub
+   `packages/next/dist/bin/next`** ("Local workspace has not been built yet"), so `dist` pre-exists —
+   the confirmed mechanism behind the 3b `cp -R` nesting ENOENT (the 3b fix stands, cause now
+   proven); (b) the old blanket `!**/node_modules` artifact exclude silently dropped test-FIXTURE
+   `node_modules` (part of the corpus, e.g. next-condition's linked packages) — latent fixture
+   corruption at run time.
+
+**Fix — tar transport:** the workspace handoff is now a single `compat-workspace.tgz`
+(tar preserves symlinks + exec bits; the zip artifact preserves neither; one file cannot OOM the
+upload hasher, retiring the Round-8 `NODE_OPTIONS` hedge). node_modules excludes are **anchored to
+the installed trees only** (`./next.js/node_modules`, knext's installed ones) so fixture
+node_modules ride along; `.git` is kept (run-tests.js runs `git clean/checkout` between retries).
+Tripwires on both sides: the Pack step warns if the probe fixture symlink is not stored as a
+symlink; the shard Unpack step **fails loudly** (`::error::` + exit 1) if the probe is not a
+symlink after transport.
+
 ### Follow-up recorded (not taken now)
 
 `get-test-filter.js@v16.2.0` **supports comma-separated manifest merging** (union of

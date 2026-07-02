@@ -611,26 +611,32 @@ describe('compat-suite Playwright browser-download fix (test-e2e-deploy.yml, #14
   });
 });
 
-// ── Workspace-handoff: don't ship node_modules in the artifact (#147 — OOM) ────
-// Run 28314500989: the Prepare install completed in 26 SECONDS (the Playwright
-// browser-download hang from #160 is gone), but the `Upload workspace` step
-// (actions/upload-artifact of knext + next.js + next-prebuilt) FAILED with
-// `FATAL ERROR: ... JavaScript heap out of memory`. Cause: the uploaded next.js
-// tree carries its full node_modules (3345 packages, hundreds of thousands of
-// files); actions/upload-artifact globs + hashes every file and OOMs.
+// ── Workspace-handoff: tar transport (symlinks + exec bits), no installed
+// node_modules (#147 — OOM, then the v16.2.0 haste-collision abort) ───────────
+// Round 8 (run 28314500989): uploading the raw trees OOM'd actions/upload-artifact
+// (it globs + hashes every file); fix was excluding `**/node_modules` and having
+// each shard re-run the slim cached install.
 //
-// FIX (Option A — don't ship node_modules): EXCLUDE `**/node_modules` from the
-// uploaded artifact (upload only the source trees + the prebuilt next.tgz + the
-// @knext/core adapter tarball). Each deploy-tests SHARD then RESTORES the same
-// pnpm-store actions/cache the Prepare job warmed (same key) and RE-RUNS the
-// SAME fast install in next.js — `corepack pnpm install --frozen-lockfile
-// --prefer-offline --filter "{.}"` with PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 — a
-// cache hit, so it finishes in seconds. The artifact stays source-only; each
-// shard rebuilds node_modules locally + fast.
+// Round 11 (run 28556241980, REPRODUCED LOCALLY): the zip-based artifact
+// MATERIALIZES SYMLINKS into real file copies. next.js's test corpus contains
+// symlinks under jest's crawl roots (e.g. 4× `test/e2e/app-dir/next-condition/
+// fixtures/*/sym-linked-packages -> ../../packages`); materialized, the same
+// fixture package.json (`my-cjs-package`) exists twice → jest-haste-map
+// `Haste module naming collision` → and v16.2.0's jest.config.js NEWLY sets
+// `haste: { throwOnModuleCollision: true }` (16.0.3 only warned) → jest throws
+// `Error: Duplicated files or mocks` ~1s into the crawl → `--listTests` lists 0.
+// The blanket `!**/node_modules` exclude ALSO silently dropped test-FIXTURE
+// node_modules (part of the corpus, e.g. next-condition's linked packages) —
+// a latent run-time corruption.
+//
+// FIX: hand off ONE TARBALL. tar preserves symlinks + exec bits (zip artifact
+// does neither), a single file cannot OOM the upload hasher, and the excludes
+// become ANCHORED (only the INSTALLED ./next.js/node_modules + knext's installed
+// node_modules) so fixture node_modules ride along. The shard unpacks and
+// asserts the collision-critical symlink SURVIVED transport (tripwire).
 
-describe('compat-suite workspace handoff excludes node_modules (test-e2e-deploy.yml, #147)', () => {
-  /** The build-next `Upload workspace` step block (the upload-artifact step). */
-  function uploadWorkspaceStep(): string {
+describe('compat-suite workspace handoff is a symlink-preserving tarball (test-e2e-deploy.yml, #147)', () => {
+  function buildNextSteps(): string[] {
     const lines = buildNextJobBlock().split('\n');
     const blocks: string[] = [];
     let current: string[] = [];
@@ -643,48 +649,117 @@ describe('compat-suite workspace handoff excludes node_modules (test-e2e-deploy.
       current.push(line);
     }
     flush();
+    return blocks;
+  }
+
+  /** The build-next step that tars the workspace. */
+  function packWorkspaceStep(): string {
+    return buildNextSteps().find((b) => /tar\s+c[a-z]*f[^\n]*compat-workspace\.tgz/.test(b)) ?? '';
+  }
+
+  /** The build-next `Upload workspace` step block (the upload-artifact step). */
+  function uploadWorkspaceStep(): string {
     return (
-      blocks.find(
+      buildNextSteps().find(
         (b) => /uses:\s*actions\/upload-artifact@/.test(b) && /compat-workspace/.test(b),
       ) ?? ''
     );
   }
 
-  it('the upload-workspace artifact EXCLUDES node_modules (the OOM cause)', () => {
-    const step = uploadWorkspaceStep();
-    expect(step, 'expected a build-next upload-artifact step for compat-workspace').not.toBe('');
-    // actions/upload-artifact excludes via a `!`-prefixed path line in the `path:`
-    // glob block. Hundreds of thousands of node_modules files are what OOM the
-    // upload — the artifact must explicitly exclude them.
+  it('packs the workspace as a tarball (symlinks + exec bits survive; zip materializes symlinks)', () => {
+    const step = packWorkspaceStep();
     expect(
-      /^\s*!.*node_modules/m.test(step),
-      'the upload-workspace step must exclude node_modules (e.g. `!**/node_modules`) — shipping it OOMs actions/upload-artifact',
-    ).toBe(true);
-  });
-
-  it('still uploads the source trees + the prebuilt next tarball + the adapter pack', () => {
-    const step = uploadWorkspaceStep();
-    // The handoff must still carry the knext + next.js source trees and the
-    // next-prebuilt/next.tgz so the shard can resolve NEXT_TEST_PKG_PATHS and the
-    // @knext/core adapter pack — only node_modules is dropped.
-    expect(/(^|\s)knext(\s|$)/m.test(step), 'must still upload the knext tree').toBe(true);
-    expect(/(^|\s)next\.js(\s|$)/m.test(step), 'must still upload the next.js source tree').toBe(
+      step,
+      'expected a build-next step that tars the workspace to compat-workspace.tgz',
+    ).not.toBe('');
+    // It must carry the three trees the shards need.
+    expect(/\.\/knext\b/.test(step), 'the tarball must include the knext tree').toBe(true);
+    expect(/\.\/next\.js\b/.test(step), 'the tarball must include the next.js source tree').toBe(
       true,
     );
     expect(
-      /next-prebuilt/.test(step),
-      'must still upload next-prebuilt (the prebuilt next.tgz the harness installs)',
+      /\.\/next-prebuilt\b/.test(step),
+      'the tarball must include next-prebuilt (the prebuilt next.tgz)',
     ).toBe(true);
   });
 
-  it('belt-and-suspenders: the upload step raises the Node heap (NODE_OPTIONS)', () => {
-    const step = uploadWorkspaceStep();
-    // Even with node_modules excluded, the upload still hashes a large source
-    // tree; bumping the old-space size guards against a borderline OOM.
+  it('excludes only the INSTALLED node_modules (anchored), never the test-fixture ones', () => {
+    const step = packWorkspaceStep();
+    // The OOM cause was the INSTALLED trees (3345 packages). But next.js's test
+    // corpus contains fixture node_modules that must ride along — a blanket
+    // `**/node_modules` exclude silently corrupts fixtures. Excludes must be
+    // ANCHORED to the installed locations.
     expect(
-      /NODE_OPTIONS[\s\S]*max-old-space-size/.test(step),
-      'the upload step should set NODE_OPTIONS=--max-old-space-size to harden against OOM',
+      /--exclude=['"]?\.\/next\.js\/node_modules['"]?/.test(step),
+      'must exclude the INSTALLED ./next.js/node_modules (anchored, top-level only)',
     ).toBe(true);
+    expect(
+      /--exclude=['"]?\.\/knext\/node_modules['"]?/.test(step),
+      'must exclude the installed ./knext/node_modules',
+    ).toBe(true);
+    expect(
+      /--exclude=['"]?\*\*\/node_modules['"]?/.test(step) ||
+        /--exclude=['"]?node_modules['"]?(\s|$)/m.test(step),
+      'must NOT blanket-exclude every node_modules (test fixtures carry node_modules that are part of the corpus)',
+    ).toBe(false);
+  });
+
+  it('uploads ONLY the single tarball (no raw-tree globs; the OOM is structurally impossible)', () => {
+    const step = uploadWorkspaceStep();
+    expect(step, 'expected a build-next upload-artifact step for compat-workspace').not.toBe('');
+    expect(
+      /compat-workspace\.tgz/.test(step),
+      'the artifact payload must be the single compat-workspace.tgz',
+    ).toBe(true);
+    // No raw-tree glob lines: hashing hundreds of thousands of files is what
+    // OOM'd the upload; a `!`-exclude line implies raw-tree globbing is back.
+    expect(
+      /^\s*!.*node_modules/m.test(step),
+      'no `!`-exclude glob lines — the payload is one tarball, not raw trees',
+    ).toBe(false);
+  });
+
+  it('the shard unpacks the tarball and tripwires on the collision-critical symlink', () => {
+    const lines = deployTestsJobBlock().split('\n');
+    const blocks: string[] = [];
+    let current: string[] = [];
+    const flush = () => {
+      if (current.length) blocks.push(current.join('\n'));
+      current = [];
+    };
+    for (const line of lines) {
+      if (/^\s*-\s+name:/.test(line)) flush();
+      current.push(line);
+    }
+    flush();
+    const unpack = blocks.find((b) => /tar\s+x[a-z]*f[^\n]*compat-workspace\.tgz/.test(b)) ?? '';
+    expect(unpack, 'expected a shard step that unpacks compat-workspace.tgz').not.toBe('');
+    // The tripwire: if the transport ever materializes symlinks again, fail HERE
+    // with the cause named — not 20 steps later as a cryptic 0-test jest abort.
+    expect(
+      /next\.js\/test\/e2e\/app-dir\/next-condition\/fixtures\/[\w/-]*sym-linked-packages/.test(
+        unpack,
+      ),
+      'the unpack step must name a concrete known fixture symlink to probe',
+    ).toBe(true);
+    expect(
+      /\[\s+!?\s*-L\s+["']?\$\{?SYMLINK_PROBE\}?["']?\s+\]|test\s+-L\s+/.test(unpack),
+      'the unpack step must assert the probe is still a SYMLINK (-L) after transport',
+    ).toBe(true);
+    expect(
+      /::error::[^\n]*symlink/i.test(unpack) && /\bexit\s+1\b/.test(unpack),
+      'a materialized symlink must fail the shard loudly (::error:: + exit 1)',
+    ).toBe(true);
+    // Ordering: unpack right after download, before any step that uses the trees.
+    const block = deployTestsJobBlock();
+    const downloadIdx = block.search(/uses:\s*actions\/download-artifact@/);
+    const unpackIdx = block.indexOf(unpack.trimStart().split('\n')[0]);
+    expect(downloadIdx, 'expected the download-artifact step').toBeGreaterThanOrEqual(0);
+    expect(unpackIdx, 'expected to locate the unpack step').toBeGreaterThanOrEqual(0);
+    expect(downloadIdx < unpackIdx, 'unpack must come AFTER the artifact download').toBe(true);
+    const reinstallIdx = block.search(/-\s+name:[^\n]*Re-install next\.js harness deps/);
+    expect(reinstallIdx, 'expected the re-install step').toBeGreaterThanOrEqual(0);
+    expect(unpackIdx < reinstallIdx, 'unpack must come BEFORE the next.js re-install').toBe(true);
   });
 
   it('the shard restores the pnpm store cache with the SAME key the Prepare job warms', () => {
@@ -1678,6 +1753,26 @@ describe('compat-suite full-shard execution + harness-version floor (test-e2e-de
     expect(
       /test\/e2e\/[\w./-]+\.test\.ts/.test(gate),
       'the gate must list a concrete known-present deploy test file',
+    ).toBe(true);
+    // Run 28556241980: the gate FIRED correctly, but its `2>/dev/null` swallowed
+    // jest's stderr — the log said "matched 0" without the WHY, costing a blind CI
+    // cycle. The gate must CAPTURE jest's stderr (+ exit code) and print both on
+    // failure, so the very next failing run carries its own diagnosis.
+    expect(
+      /2>\s*\/dev\/null/.test(gate),
+      'the gate must NOT discard jest stderr to /dev/null — capture and print it on failure',
+    ).toBe(false);
+    expect(
+      /2>\s*"?\$\{?GATE_ERR\}?"?/.test(gate),
+      'the gate must capture jest stderr to a file (GATE_ERR) for the failure dump',
+    ).toBe(true);
+    expect(
+      /head\s+-n?\s*\d+\s+"?\$\{?GATE_ERR\}?"?/.test(gate),
+      'on failure the gate must print the captured jest stderr into the log',
+    ).toBe(true);
+    expect(
+      /JEST_EXIT/.test(gate),
+      'the gate must record and report the jest exit code (distinguishes crash vs empty list)',
     ).toBe(true);
     // Ordering: after the /.next/ patch + haste-cache clear, before run-tests.js.
     const block = deployTestsJobBlock();

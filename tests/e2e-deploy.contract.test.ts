@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -11,8 +19,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * The official Next.js deploy-test harness invokes our deploy script per fixture app
  * (cwd = the app's temp dir) and reads exactly ONE stdout line — the deployment URL —
  * to drive its e2e tests. This test verifies that contract WITHOUT cloning
- * vercel/next.js, by shimming `next` on PATH so `next build` fabricates a minimal
- * standalone server. It exercises the REAL deploy-script logic: build invocation,
+ * vercel/next.js, by planting a fake `next` at the FIXTURE-LOCAL
+ * node_modules/.bin/next — the exact path the script must resolve — so the build
+ * fabricates a minimal standalone server. (#147 fix round 1 follow-up, branch run
+ * 28561839378: the script used to invoke a bare `next build`, which is NOT on
+ * PATH in the harness env → `next: command not found` (127) in every real test;
+ * an earlier version of this test shimmed `next` on PATH, which masked precisely
+ * that bug. The shim now lives where the harness install puts the real binary,
+ * so a bare-invocation regression fails HERE.) It exercises the REAL deploy-script logic: build invocation,
  * asset staging, server boot on a free port, TCP readiness probe, single-line URL
  * echo, and BUILD_ID/DEPLOYMENT_ID persistence to .adapter-build.log. cleanup then
  * frees the port.
@@ -24,9 +38,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const DEPLOY_SH = resolve(REPO_ROOT, 'scripts/e2e-deploy.sh');
 const CLEANUP_SH = resolve(REPO_ROOT, 'scripts/e2e-cleanup.sh');
+const LOGS_SH = resolve(REPO_ROOT, 'scripts/e2e-logs.sh');
 
 let appDir = '';
-let binDir = '';
 let deployStdout = '';
 let parsedPort = 0;
 
@@ -78,7 +92,6 @@ function tcpConnects(port: number, host = '127.0.0.1', timeoutMs = 3000): Promis
 describe('scripts/e2e-deploy.sh — official deploy-script contract (#89)', () => {
   beforeAll(() => {
     appDir = mkdtempSync(join(tmpdir(), 'knext-e2e-app-'));
-    binDir = mkdtempSync(join(tmpdir(), 'knext-e2e-bin-'));
 
     // minimal fixture app
     writeFileSync(
@@ -87,20 +100,23 @@ describe('scripts/e2e-deploy.sh — official deploy-script contract (#89)', () =
     );
     writeFileSync(join(appDir, 'next.config.js'), "module.exports = { output: 'standalone' };\n");
 
-    // PATH shim for `next`
-    const nextBin = join(binDir, 'next');
+    // Fixture-LOCAL `next` shim — at node_modules/.bin/next, the path the script
+    // resolves explicitly. Deliberately NOT a PATH shim: the harness env has no
+    // `next` on PATH, and a PATH shim here previously masked the bare-`next build`
+    // 127 bug (branch run 28561839378).
+    const nextBin = join(appDir, 'node_modules', '.bin', 'next');
+    mkdirSync(join(appDir, 'node_modules', '.bin'), { recursive: true });
     writeFileSync(nextBin, fakeNextScript(appDir));
     chmodSync(nextBin, 0o755);
 
-    // Run the deploy script with cwd = the fixture app, `next` shimmed on PATH.
-    // KNEXT_E2E_SKIP_PACK lets the contract test bypass the real `npm pack`/install
-    // of the adapter tarball (network + build heavy); the script still does
-    // everything else for real.
+    // Run the deploy script with cwd = the fixture app. KNEXT_E2E_SKIP_PACK lets
+    // the contract test bypass the real tarball install (network + build heavy);
+    // the script still does everything else for real — including resolving the
+    // fixture-local next binary.
     const out = execFileSync('bash', [DEPLOY_SH], {
       cwd: appDir,
       env: {
         ...process.env,
-        PATH: `${binDir}:${process.env.PATH}`,
         KNEXT_E2E_SKIP_PACK: '1',
         KNEXT_RUNTIME: 'node',
       },
@@ -119,7 +135,7 @@ describe('scripts/e2e-deploy.sh — official deploy-script contract (#89)', () =
         timeout: 20000,
       });
     }
-    for (const d of [appDir, binDir]) {
+    for (const d of [appDir]) {
       if (d && existsSync(d)) rmSync(d, { recursive: true, force: true });
     }
   });
@@ -151,6 +167,49 @@ describe('scripts/e2e-deploy.sh — official deploy-script contract (#89)', () =
     expect(log).toMatch(/DEPLOYMENT_ID=.+/);
     expect(log).toMatch(/PORT=\d+/);
     expect(log).toMatch(/PID=\d+/);
+  });
+
+  it("e2e-logs.sh output parses with the harness's REAL id regexes (next-deploy.ts@v16.2.0)", () => {
+    // GROUND TRUTH (vercel/next.js@v16.2.0, test/lib/next-modes/next-deploy.ts,
+    // parseIdsFromCliOuput(), lines 159-182): after fetching logs the harness
+    // combines stdout+stderr (line 123) and REQUIRES all three of
+    //   /BUILD_ID: (.+)/              (line 160 — throws "Failed to get buildId
+    //                                  from logs …" if absent; run 28563269411
+    //                                  failed EVERY test here: we printed the
+    //                                  equals-form `BUILD_ID=<id>`, no match)
+    //   /DEPLOYMENT_ID: (.+)/         (line 165)
+    //   /IMMUTABLE_ASSET_TOKEN: (.+)/ (line 171 — the literal string
+    //                                  "undefined" is accepted and mapped to
+    //                                  undefined at line 179; knext has no
+    //                                  Vercel-style skew token)
+    // This test runs the REAL logs script and applies the REAL regexes.
+    const r = spawnSync('bash', [LOGS_SH], {
+      cwd: appDir,
+      env: { ...process.env },
+      encoding: 'utf8',
+      timeout: 20000,
+    });
+    expect(r.status).toBe(0);
+    const cliOutput = `${r.stdout}${r.stderr}`;
+    const buildId = cliOutput.match(/BUILD_ID: (.+)/)?.[1]?.trim();
+    const deploymentId = cliOutput.match(/DEPLOYMENT_ID: (.+)/)?.[1]?.trim();
+    const immutableAssetToken = cliOutput.match(/IMMUTABLE_ASSET_TOKEN: (.+)/)?.[1]?.trim();
+    expect(
+      buildId,
+      `harness would throw: Failed to get buildId from logs\n${cliOutput}`,
+    ).toBeTruthy();
+    expect(deploymentId, 'harness would throw: Failed to get deploymentId from logs').toBeTruthy();
+    expect(
+      immutableAssetToken,
+      'harness would throw: Failed to get immutableAssetToken from logs',
+    ).toBeTruthy();
+    // knext has no immutable-asset token — the harness's documented escape is
+    // the literal string "undefined".
+    expect(immutableAssetToken).toBe('undefined');
+    // The parsed ids must equal what the deploy persisted, not decoration.
+    const meta = readFileSync(join(appDir, '.adapter-build.log'), 'utf8');
+    expect(meta).toContain(`BUILD_ID=${buildId}`);
+    expect(meta).toContain(`DEPLOYMENT_ID=${deploymentId}`);
   });
 
   it('e2e-cleanup.sh frees the port (server torn down)', async () => {

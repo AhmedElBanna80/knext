@@ -57,15 +57,46 @@ const adapter: NextAdapter = {
             middleware: outputs.middleware ? 1 : 0,
         };
 
-        const { routes } = ctx;
-        const routingCounts = {
-            headers: routes.headers.length,
-            redirects: routes.redirects.length,
-            rewritesBeforeFiles: routes.rewrites.beforeFiles.length,
-            rewritesAfterFiles: routes.rewrites.afterFiles.length,
-            rewritesFallback: routes.rewrites.fallback.length,
-            dynamicRoutes: routes.dynamicRoutes.length,
+        // Routing DIAGNOSTICS — tolerate both adapter-API ctx shapes (#147 fix
+        // round 1 follow-up). Ground truth, probed against real `next build`s:
+        //   v16.0.3: ctx.routes  { headers, redirects, rewrites:{beforeFiles,
+        //            afterFiles, fallback}, dynamicRoutes }
+        //   v16.2.0: ctx.routing { beforeMiddleware, beforeFiles, afterFiles,
+        //            dynamicRoutes, onMatch, fallback, ... } — ctx.routes is GONE.
+        // The old unconditional `routes.headers.length` crashed EVERY fixture
+        // build at 16.2.0 (`TypeError: ... reading 'headers'`), killing the
+        // whole compat run. Diagnostics must never kill a build: count whatever
+        // shape is present, defensively.
+        const len = (v: unknown): number => (Array.isArray(v) ? v.length : 0);
+        const ctxAny = ctx as unknown as {
+            routes?: Record<string, unknown> & {
+                rewrites?: Record<string, unknown>;
+            };
+            routing?: Record<string, unknown>;
         };
+        const routingCounts: Record<string, number> = {};
+        if (ctxAny.routes) {
+            const routes = ctxAny.routes;
+            routingCounts.headers = len(routes.headers);
+            routingCounts.redirects = len(routes.redirects);
+            routingCounts.rewritesBeforeFiles = len(
+                routes.rewrites?.beforeFiles,
+            );
+            routingCounts.rewritesAfterFiles = len(routes.rewrites?.afterFiles);
+            routingCounts.rewritesFallback = len(routes.rewrites?.fallback);
+            routingCounts.dynamicRoutes = len(routes.dynamicRoutes);
+        } else if (ctxAny.routing) {
+            for (const key of [
+                "beforeMiddleware",
+                "beforeFiles",
+                "afterFiles",
+                "dynamicRoutes",
+                "onMatch",
+                "fallback",
+            ]) {
+                routingCounts[key] = len(ctxAny.routing[key]);
+            }
+        }
 
         console.log("[knext-adapter] onBuildComplete fired");
         console.log(`  buildId      : ${buildId}`);
@@ -79,7 +110,9 @@ const adapter: NextAdapter = {
         for (const [key, count] of Object.entries(counts)) {
             console.log(`    ${key.padEnd(22)}: ${count}`);
         }
-        console.log("  routing counts (ctx.routes):");
+        console.log(
+            `  routing counts (${ctxAny.routes ? "ctx.routes" : ctxAny.routing ? "ctx.routing" : "none present"}):`,
+        );
         for (const [key, count] of Object.entries(routingCounts)) {
             console.log(`    ${key.padEnd(22)}: ${count}`);
         }

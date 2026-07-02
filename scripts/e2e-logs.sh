@@ -5,14 +5,50 @@
 # fixture app dir) when a test fails, to capture diagnostics. It is a SEPARATE
 # process from e2e-deploy.sh and shares state only via .adapter-build.log.
 #
-# Prints: the deployment metadata (.adapter-build.log) + the captured server
-# stdout/stderr (.adapter-server.log).
+# Prints: the harness-parseable id block FIRST, then the deployment metadata
+# (.adapter-build.log) + the captured server stdout/stderr (.adapter-server.log).
+#
+# #147 A3-3 fix round 1, follow-up 2 (branch run 28563269411): deployments fully
+# worked, and then EVERY test failed at `Failed to get buildId from logs …`.
+# GROUND TRUTH (vercel/next.js@v16.2.0, test/lib/next-modes/next-deploy.ts):
+# after running this script the harness combines stdout+stderr (line 123) and
+# parseIdsFromCliOuput() (lines 159-182) REQUIRES all three, colon+space form:
+#   /BUILD_ID: (.+)/              (line 160 — hard throw if absent)
+#   /DEPLOYMENT_ID: (.+)/         (line 165 — hard throw if absent)
+#   /IMMUTABLE_ASSET_TOKEN: (.+)/ (line 171 — hard throw if absent; the literal
+#                                  string "undefined" is accepted and mapped to
+#                                  undefined at line 179)
+# Our metadata dump printed the equals-form `BUILD_ID=<id>`, which those regexes
+# never match. So: emit the EXACT parseable block first (sourced from the
+# metadata e2e-deploy.sh persisted), then keep the human-useful dumps. knext has
+# no Vercel-style immutable-asset (skew) token → the documented "undefined"
+# escape. The regexes are unanchored first-match, so the block leads stdout.
 set -uo pipefail
 
 APP_DIR="$(pwd)"
 LOG_FILE="${APP_DIR}/.adapter-build.log"
 SERVER_LOG="${APP_DIR}/.adapter-server.log"
 
+meta() { # <KEY> → value of the KEY=... line in the metadata file (empty if absent)
+  grep -E "^$1=" "${LOG_FILE}" 2>/dev/null | head -n1 | cut -d= -f2-
+}
+
+BUILD_ID="$(meta BUILD_ID)"
+DEPLOYMENT_ID="$(meta DEPLOYMENT_ID)"
+if [ -n "${BUILD_ID}" ] && [ -n "${DEPLOYMENT_ID}" ]; then
+  echo "==== harness-parseable deployment ids (next-deploy.ts@v16.2.0 contract) ===="
+  echo "BUILD_ID: ${BUILD_ID}"
+  echo "DEPLOYMENT_ID: ${DEPLOYMENT_ID}"
+  echo "IMMUTABLE_ASSET_TOKEN: undefined"
+else
+  # HONESTY: no fake parseable ids. Without metadata the deploy did not persist
+  # (or never ran) — let the harness's own "Failed to get buildId from logs"
+  # throw carry THIS dump, which names the cause, instead of masking it behind
+  # a bogus "unknown" id that would fail assertions much further downstream.
+  echo "(no harness-parseable ids: ${LOG_FILE} is missing or incomplete — deploy may not have run)"
+fi
+
+echo ""
 echo "==== knext deployment metadata (.adapter-build.log) ===="
 if [ -f "${LOG_FILE}" ]; then
   cat "${LOG_FILE}"

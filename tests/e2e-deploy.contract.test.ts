@@ -38,6 +38,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const DEPLOY_SH = resolve(REPO_ROOT, 'scripts/e2e-deploy.sh');
 const CLEANUP_SH = resolve(REPO_ROOT, 'scripts/e2e-cleanup.sh');
+const LOGS_SH = resolve(REPO_ROOT, 'scripts/e2e-logs.sh');
 
 let appDir = '';
 let deployStdout = '';
@@ -166,6 +167,49 @@ describe('scripts/e2e-deploy.sh — official deploy-script contract (#89)', () =
     expect(log).toMatch(/DEPLOYMENT_ID=.+/);
     expect(log).toMatch(/PORT=\d+/);
     expect(log).toMatch(/PID=\d+/);
+  });
+
+  it("e2e-logs.sh output parses with the harness's REAL id regexes (next-deploy.ts@v16.2.0)", () => {
+    // GROUND TRUTH (vercel/next.js@v16.2.0, test/lib/next-modes/next-deploy.ts,
+    // parseIdsFromCliOuput(), lines 159-182): after fetching logs the harness
+    // combines stdout+stderr (line 123) and REQUIRES all three of
+    //   /BUILD_ID: (.+)/              (line 160 — throws "Failed to get buildId
+    //                                  from logs …" if absent; run 28563269411
+    //                                  failed EVERY test here: we printed the
+    //                                  equals-form `BUILD_ID=<id>`, no match)
+    //   /DEPLOYMENT_ID: (.+)/         (line 165)
+    //   /IMMUTABLE_ASSET_TOKEN: (.+)/ (line 171 — the literal string
+    //                                  "undefined" is accepted and mapped to
+    //                                  undefined at line 179; knext has no
+    //                                  Vercel-style skew token)
+    // This test runs the REAL logs script and applies the REAL regexes.
+    const r = spawnSync('bash', [LOGS_SH], {
+      cwd: appDir,
+      env: { ...process.env },
+      encoding: 'utf8',
+      timeout: 20000,
+    });
+    expect(r.status).toBe(0);
+    const cliOutput = `${r.stdout}${r.stderr}`;
+    const buildId = cliOutput.match(/BUILD_ID: (.+)/)?.[1]?.trim();
+    const deploymentId = cliOutput.match(/DEPLOYMENT_ID: (.+)/)?.[1]?.trim();
+    const immutableAssetToken = cliOutput.match(/IMMUTABLE_ASSET_TOKEN: (.+)/)?.[1]?.trim();
+    expect(
+      buildId,
+      `harness would throw: Failed to get buildId from logs\n${cliOutput}`,
+    ).toBeTruthy();
+    expect(deploymentId, 'harness would throw: Failed to get deploymentId from logs').toBeTruthy();
+    expect(
+      immutableAssetToken,
+      'harness would throw: Failed to get immutableAssetToken from logs',
+    ).toBeTruthy();
+    // knext has no immutable-asset token — the harness's documented escape is
+    // the literal string "undefined".
+    expect(immutableAssetToken).toBe('undefined');
+    // The parsed ids must equal what the deploy persisted, not decoration.
+    const meta = readFileSync(join(appDir, '.adapter-build.log'), 'utf8');
+    expect(meta).toContain(`BUILD_ID=${buildId}`);
+    expect(meta).toContain(`DEPLOYMENT_ID=${deploymentId}`);
   });
 
   it('e2e-cleanup.sh frees the port (server torn down)', async () => {

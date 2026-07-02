@@ -111,10 +111,91 @@ if [ "${KNEXT_E2E_SKIP_PACK:-0}" != "1" ]; then
     log "ERROR: adapter tarballs missing in ${TARBALLS_DIR} (need knext-lib-*.tgz + knext-core-*.tgz; pack with pnpm pack)"
     exit 1
   fi
-  log "installing adapter tarballs ${LIB_TGZ} + ${CORE_TGZ} into ${APP_DIR}"
-  # ONE install with BOTH tarballs: npm resolves @knext/core's @knext/lib dep
-  # from the local lib tarball instead of the (not-yet-published) registry.
-  npm install --no-save --no-audit --no-fund "${LIB_TGZ}" "${CORE_TGZ}" >&2
+
+  # ── B1 (#147 round 2, triage of run 28564443662 — 282/327 failures): pin the
+  # TypeScript that `next build`'s auto type-check resolves. The harness
+  # (vercel/next.js@v16.2.0 test/lib/next-modes/base.ts:248) installs
+  # `typescript: 'latest'` into EVERY fixture; `latest` now resolves to
+  # TypeScript 6.x, which turns the auto-generated tsconfig defaults
+  # (`moduleResolution=node10`, `baseUrl`) into hard deprecation ERRORS and
+  # aborts the build ("Failed to type check."). Upstream's own repo pins
+  # `typescript: 5.9.2` in its root package.json devDependencies (v16.2.0), so
+  # Next's own CI type-checks fixtures with TS 5 — MIRROR that exact pin.
+  # Conditional on purpose: a fixture that deliberately pins its own
+  # (non-"latest") typescript keeps it; pure-JS fixtures (no typescript
+  # requested or installed) skip the extra registry fetch entirely.
+  TS_SPEC="$(node -e 'try{const p=require(process.cwd()+"/package.json");const d=(p.dependencies&&p.dependencies.typescript)||(p.devDependencies&&p.devDependencies.typescript)||"";process.stdout.write(String(d))}catch(_){}')"
+  TS_PIN=""
+  if [ "${TS_SPEC}" = "latest" ]; then
+    TS_PIN="typescript@5.9.2"
+  elif [ -z "${TS_SPEC}" ] && [ -e "${APP_DIR}/node_modules/typescript" ]; then
+    TS_PIN="typescript@5.9.2"
+  fi
+  if [ -n "${TS_PIN}" ]; then
+    log "fixture requested typescript '${TS_SPEC:-<none, but installed>}' — pinning ${TS_PIN} (mirrors vercel/next.js@v16.2.0 devDependencies; TS 6.x aborts next build's type-check)"
+  fi
+
+  # ── B3 (#147 round 2, 12 files): fixtures ship hand-made packages inside
+  # their own node_modules/ (`node_modules/example`, scoped ones, …) as test
+  # material; npm's reify PRUNES every package not in its ideal tree — with
+  # --no-save, --no-package-lock, --install-links=false and every
+  # --install-strategy (verified empirically; scoped CHILDREN are pruned even
+  # when the scope dir survives, `.bin` entries survive). No install flag
+  # avoids it, so: snapshot package-level node_modules entries before the
+  # install and restore whatever the reify removed.
+  NM_DIR="${APP_DIR}/node_modules"
+  NM_SNAP=""
+  NM_ENTRIES=""
+  nm_package_entries() { # <node_modules dir> → package-level entries, one per line
+    (
+      cd "$1" 2>/dev/null || exit 0
+      for e in * @*/*; do
+        if [ -e "${e}" ] || [ -L "${e}" ]; then
+          case "${e}" in
+            @*/*) echo "${e}" ;; # scoped package (scope children get pruned individually)
+            @*) : ;;             # bare scope dir — children emitted by the @*/* glob
+            *) echo "${e}" ;;
+          esac
+        fi
+      done
+    )
+  }
+  if [ -d "${NM_DIR}" ]; then
+    NM_SNAP="$(mktemp -d "${APP_DIR}/.knext-nm-snap.XXXXXX")"
+    NM_ENTRIES="$(nm_package_entries "${NM_DIR}")"
+    while IFS= read -r entry; do
+      [ -n "${entry}" ] || continue
+      mkdir -p "${NM_SNAP}/$(dirname "${entry}")"
+      # -RP: preserve symlinks (pnpm layout) instead of dereferencing them.
+      cp -RP "${NM_DIR}/${entry}" "${NM_SNAP}/${entry}"
+    done <<EOF
+${NM_ENTRIES}
+EOF
+  fi
+
+  log "installing adapter tarballs ${LIB_TGZ} + ${CORE_TGZ}${TS_PIN:+ + ${TS_PIN}} into ${APP_DIR}"
+  # ONE install with BOTH tarballs (+ the TS pin when needed): npm resolves
+  # @knext/core's @knext/lib dep from the local lib tarball instead of the
+  # (not-yet-published) registry, and a single reify keeps the snapshot/restore
+  # window minimal.
+  # shellcheck disable=SC2086
+  npm install --no-save --no-audit --no-fund "${LIB_TGZ}" "${CORE_TGZ}" ${TS_PIN} >&2
+
+  # Restore fixture-shipped packages the reify pruned (B3).
+  if [ -n "${NM_SNAP}" ]; then
+    while IFS= read -r entry; do
+      [ -n "${entry}" ] || continue
+      if [ ! -e "${NM_DIR}/${entry}" ] && [ ! -L "${NM_DIR}/${entry}" ]; then
+        log "restoring fixture-shipped node_modules/${entry} (pruned by npm install reify)"
+        mkdir -p "${NM_DIR}/$(dirname "${entry}")"
+        cp -RP "${NM_SNAP}/${entry}" "${NM_DIR}/${entry}"
+      fi
+    done <<EOF
+${NM_ENTRIES}
+EOF
+    rm -rf "${NM_SNAP}"
+  fi
+
   # Resolve the installed adapter entry (package export "./adapter").
   NEXT_ADAPTER_PATH="$(node -e 'process.stdout.write(require.resolve("@knext/core/adapter"))')"
 else
@@ -139,8 +220,26 @@ if [ ! -x "${NEXT_BIN}" ]; then
   log "ERROR: fixture-local next binary not found/executable at ${NEXT_BIN} — the harness install did not provide next (NEXT_TEST_PKG_PATHS); a global fallback is deliberately refused"
   exit 1
 fi
-log "running next build (output:'standalone') via ${NEXT_BIN}"
-"${NEXT_BIN}" build >&2
+
+# ── B5 (#147 round 2): generate the deployment id BEFORE the build and export
+# NEXT_DEPLOYMENT_ID into the build env. Next stamps `dpl=` into image/asset
+# URLs and skew headers AT BUILD TIME (next-image asserted `…&dpl=knext-…` and
+# got no dpl; segment-cache/deployment-skew aborted with "Neither
+# NEXT_PUBLIC_BUILD_ID nor NEXT_DEPLOYMENT_ID is set"). The SAME id is handed
+# to the runtime server below so build-stamped URLs and the served deployment
+# never skew apart.
+DEPLOYMENT_ID="${NEXT_DEPLOYMENT_ID:-knext-$(date +%s)-$$}"
+export NEXT_DEPLOYMENT_ID="${DEPLOYMENT_ID}"
+
+# ── B4 (#147 round 2): persist the FULL `next build` output. Harness tests
+# assert on build warnings via fetchCliOutputs() → scripts/e2e-logs.sh, which
+# could only show metadata + the server log; capture the build stream here and
+# let e2e-logs.sh print it. tee's stdout is redirected to STDERR — deploy
+# stdout stays the single URL line. set -o pipefail (top of file) still fails
+# the script when `next build` fails.
+BUILD_LOG="${APP_DIR}/.adapter-next-build.log"
+log "running next build (output:'standalone') via ${NEXT_BIN} (deployment=${DEPLOYMENT_ID}, build log → ${BUILD_LOG})"
+"${NEXT_BIN}" build 2>&1 | tee "${BUILD_LOG}" >&2
 
 # ── 3. locate + stage the standalone server tree ──────────────────────────────
 # output:'standalone' emits server.js under .next/standalone (monorepo fixtures may
@@ -165,8 +264,8 @@ fi
 # ── 4. boot the standalone server on a free port ──────────────────────────────
 PORT="$(free_port)"
 BUILD_ID="$(cat "${APP_DIR}/.next/BUILD_ID" 2>/dev/null || echo "unknown")"
-# DEPLOYMENT_ID identifies this deployment to the harness (asset versioning / skew).
-DEPLOYMENT_ID="${NEXT_DEPLOYMENT_ID:-knext-${BUILD_ID}-$(date +%s)}"
+# DEPLOYMENT_ID identifies this deployment to the harness (asset versioning /
+# skew). Generated BEFORE the build (B5) — reused verbatim here.
 
 case "${RUNTIME}" in
   bun) SERVER_CMD="bun" ;;
@@ -191,6 +290,7 @@ SERVER_PID=$!
   echo "RUNTIME=${RUNTIME}"
   echo "SERVER_JS=${SERVER_JS}"
   echo "SERVER_LOG=${SERVER_LOG}"
+  echo "BUILD_LOG=${BUILD_LOG}"
 } >"${LOG_FILE}"
 
 # ── 6. TCP-probe readiness ────────────────────────────────────────────────────

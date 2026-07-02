@@ -493,6 +493,26 @@ jobs:
       # test and the fixture runtime stay version-consistent. Still NO Rust, no
       # source TS build. (ADR-0007 A3-3 constraint: deploy test FILES require a
       # built workspace `next` to LOAD; the prebuilt tarball satisfies that.)
+      #
+      # #147 A3-3 (run 28553944684 — the v16.2.0 hydrate ENOENT): after
+      # `cp -R SRC/dist PKG/dist` the old sanity check hit ENOENT on
+      # packages/next/dist/trace/index.js on ALL 16 shards — even though the
+      # published next@16.2.0 tarball (byte-identical, 33944550 bytes, to a local
+      # `npm pack next@16.2.0`) DOES contain dist/trace/index.js. This step was
+      # the only hydrate that (a) extracted into the SHARED ${RUNNER_TEMP} (any
+      # earlier tool can leave a package/ there) and (b) did NOT remove a
+      # pre-existing destination — `cp -R src/dist dst/dist` silently NESTS to
+      # dst/dist/dist when dst/dist already exists. Both hazards are now
+      # eliminated unconditionally (fresh mktemp extract dir; rm -rf the dest —
+      # the pattern the @next/env hydrate below always used), the tarball
+      # PAYLOAD is asserted before copying (a future published-layout change
+      # fails HERE, naming the tarball), and the post-copy sanity RESOLVES the
+      # real harness module specifiers via node resolution from the repo root
+      # (next.js's root depends on `next: workspace:*`, so this is the exact
+      # resolution jest performs at run time) instead of hardcoding a
+      # ref-specific file list. Verified at the v16.2.0 tag: jest.config.js
+      # requires next/jest; test/lib/e2e-utils imports next/dist/trace +
+      # next/constants; test/lib/next-test-utils imports next/dist/server/next.
       - name: Hydrate workspace next/dist from the prebuilt tarball (so jest can load tests)
         working-directory: next.js
         run: |
@@ -502,27 +522,47 @@ jobs:
             echo "::error::expected next.js source dir $PKG_DIR (the checked-out packages/next)" >&2
             exit 1
           fi
-          # Unpack the prebuilt tarball (npm tarballs root everything under package/).
-          tar xzf "${GITHUB_WORKSPACE}/next-prebuilt/next.tgz" -C "${RUNNER_TEMP}"
-          SRC="${RUNNER_TEMP}/package"
+          # Unpack the prebuilt tarball into a FRESH dir (npm tarballs root
+          # everything under package/). Never a shared temp path.
+          EXTRACT_DIR="$(mktemp -d)"
+          tar xzf "${GITHUB_WORKSPACE}/next-prebuilt/next.tgz" -C "${EXTRACT_DIR}"
+          SRC="${EXTRACT_DIR}/package"
+          # Assert the tarball payload BEFORE copying: if the published layout
+          # ever changes, fail here with the tarball named — not later as an
+          # opaque jest load crash.
+          for probe in jest.js constants.js dist/server/next.js dist/build/jest/jest.js; do
+            if [ ! -e "${SRC}/${probe}" ]; then
+              echo "::error::published next tarball (next-prebuilt/next.tgz) lacks ${probe} — the prebuilt dist layout changed; update this hydrate" >&2
+              exit 1
+            fi
+          done
           # Overlay the BUILT artifacts the harness imports at module scope. We copy
           # dist/ plus the root JS entrypoints (jest.js, constants.js, etc.) WITHOUT
           # clobbering the checked-out source package.json (its name/version already
-          # match the prebuilt tarball: next@${NEXTJS_REF#v}).
+          # match the prebuilt tarball: next@${NEXTJS_REF#v}). Remove any
+          # pre-existing dist first — cp -R would otherwise nest into it.
+          rm -rf "${PKG_DIR}/dist"
           cp -R "${SRC}/dist" "${PKG_DIR}/dist"
           for f in "${SRC}"/*.js; do
             [ -e "$f" ] || continue
             cp "$f" "${PKG_DIR}/$(basename "$f")"
           done
-          # Sanity: the four module-scope imports the harness needs must now resolve.
-          node -e '
-            const path = require("path");
-            const base = path.resolve("packages/next");
-            for (const m of ["jest.js", "constants.js", "dist/trace/index.js", "dist/server/next.js"]) {
-              require("fs").accessSync(path.join(base, m));
+          # Sanity (ref-agnostic): resolve the REAL module specifiers the harness
+          # imports at module scope, exactly as node/jest will (root
+          # node_modules/next -> the workspace packages/next symlink). On failure,
+          # dump the dist top level so the log pinpoints the residual cause.
+          if ! node -e '
+            const specs = ["next/jest", "next/constants", "next/dist/trace", "next/dist/server/next"];
+            for (const s of specs) {
+              console.log("resolves:", s, "->", require.resolve(s, { paths: [process.cwd()] }));
             }
             console.log("prebuilt next/dist hydrated: harness imports resolve");
-          '
+          '; then
+            echo "::error::harness import resolution failed after the next/dist hydrate; packages/next top level follows" >&2
+            ls -la "${PKG_DIR}" >&2 || true
+            ls "${PKG_DIR}/dist" >&2 || true
+            exit 1
+          fi
 
       # #147 / A3-3 — hydrate the @next/* HARNESS LOAD CLOSURE. Run 28316667494:
       # with the v2 manifest + the next/dist hydrate above (#162), the harness

@@ -290,6 +290,34 @@ on 0 matches, so a fourth discovery regression can never again masquerade as a q
 vacuous-ordering nit in `tests/compat-suite-workflow.test.ts` (index comparisons against a
 possibly `-1` `search()` result) is fixed with existence asserts.
 
+### 3b. Branch run 28553944684: the hydrate ENOENT + the v16.2.0 artifact sweep
+
+The first 16-shard branch run at v16.2.0 failed on every shard at the next/dist hydrate's sanity
+check (`ENOENT packages/next/dist/trace/index.js`). The "trace moved at 16.2.0" theory is **false**:
+the published `next@16.2.0` tarball (byte-identical to CI's, 33 944 550 bytes) **contains**
+`dist/trace/index.js`, and all four harness specifiers resolve against its payload. The step itself
+was the hazard — the only hydrate that extracted into the shared `${RUNNER_TEMP}` and did not
+remove a pre-existing destination (`cp -R src/dist dst/dist` silently nests to `dst/dist/dist` when
+`dst/dist` exists). Fixes (unconditional hygiene, so every variant of "something already existed"
+dies): fresh `mktemp -d` extract dir; `rm -rf` the destination `dist` first (the pattern the
+`@next/env` hydrate always used); pre-copy tarball-payload asserts (a future published-layout
+change fails loudly, naming the tarball); and the post-copy sanity now `require.resolve`s the
+**real harness module specifiers** (`next/jest`, `next/constants`, `next/dist/trace`,
+`next/dist/server/next` — the module-scope import set verified at the v16.2.0 tag) from the repo
+root, which is the exact resolution jest performs at run time (root `next: workspace:*`) — no more
+ref-specific hardcoded file lists. On residual failure the step dumps `packages/next`(+`/dist`) so
+the log pinpoints the cause.
+
+**v16.2.0 artifact sweep** (each verified against the real published artifact or the tag source):
+`@next/env@16.2.0` ships `dist/index.js` (hydrate valid); `@next/swc-linux-x64-gnu@16.2.0` ships
+`next-swc.linux-x64-gnu.node` (hydrate valid); the unescaped `'/.next/'` literal is **still present**
+at v16.2.0's published `dist/build/jest/jest.js` (2 occurrences — the patch step will APPLY, not
+NOOP; the `--listTests` gate backstops it); the harness-intact verify paths all exist at v16.2.0
+(`jest.config.js` with `rootDir: 'test'`, `test/jest-setup-after-env.ts`, `test/e2e/404-page-router/
+index.test.ts`); run-tests.js invocation contract unchanged (positional spawn, `❌ <file> output` /
+`end of <file> output` group markers, file-first `failed to pass within N retries` FAIL marker) —
+only the PASS marker changed, which the dual-format summary parser already covers.
+
 ### Follow-up recorded (not taken now)
 
 `get-test-filter.js@v16.2.0` **supports comma-separated manifest merging** (union of

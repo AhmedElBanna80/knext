@@ -887,6 +887,85 @@ describe('compat-suite runs REAL deploy tests (test-e2e-deploy.yml, #147 A3-3)',
     ).toBe(true);
   });
 
+  /** The shard step block that hydrates workspace next/dist from the prebuilt tarball. */
+  function nextDistHydrateStep(): string {
+    const lines = deployTestsJobBlock().split('\n');
+    const blocks: string[] = [];
+    let current: string[] = [];
+    const flush = () => {
+      if (current.length) blocks.push(current.join('\n'));
+      current = [];
+    };
+    for (const line of lines) {
+      if (/^\s*-\s+name:/.test(line)) flush();
+      current.push(line);
+    }
+    flush();
+    return blocks.find((b) => /-\s+name:[^\n]*Hydrate workspace next\/dist/.test(b)) ?? '';
+  }
+
+  it('the next/dist hydrate is hygienic: fresh extract dir + destination dist removed first', () => {
+    // Run 28553944684 (v16.2.0, all 16 shards): after `cp -R SRC/dist PKG/dist`
+    // the sanity check hit ENOENT on packages/next/dist/trace/index.js even though
+    // the published next@16.2.0 tarball (byte-identical to a local `npm pack`)
+    // DOES contain it. This step was the only hydrate that neither extracted into
+    // a fresh dir nor removed a pre-existing destination — `cp -R src/dist
+    // dst/dist` silently NESTS to dst/dist/dist when dst/dist already exists, and
+    // a shared ${RUNNER_TEMP}/package can be polluted by any earlier tool. Both
+    // hazards are eliminated unconditionally (the @next/env hydrate already
+    // rm -rf's its target first).
+    const step = nextDistHydrateStep();
+    expect(step, 'expected the next/dist hydrate step').not.toBe('');
+    expect(
+      /mktemp -d/.test(step),
+      'the hydrate must extract the tarball into a FRESH mktemp dir (never a shared temp path)',
+    ).toBe(true);
+    expect(
+      /rm\s+-rf\s+"\$\{PKG_DIR\}\/dist"/.test(step),
+      'the hydrate must remove any pre-existing packages/next/dist before cp -R (cp nests into an existing dir)',
+    ).toBe(true);
+  });
+
+  it('the next/dist hydrate asserts the tarball payload BEFORE copying (loud layout-change failure)', () => {
+    // If a future published next ever reshuffles its dist layout, the failure must
+    // name the tarball at the copy source — not surface later as a jest load crash.
+    const step = nextDistHydrateStep();
+    expect(
+      /\$\{SRC\}\/\$\{probe\}/.test(step),
+      'the hydrate must probe the extracted tarball payload before cp',
+    ).toBe(true);
+    expect(
+      /::error::[^\n]*tarball/.test(step),
+      'a payload miss must emit a ::error:: naming the tarball',
+    ).toBe(true);
+  });
+
+  it('the next/dist hydrate sanity check RESOLVES the real harness specifiers (ref-agnostic)', () => {
+    // The old sanity hardcoded file paths ("dist/trace/index.js", …) — a
+    // ref-specific assumption. The harness actually imports MODULE SPECIFIERS
+    // (next/jest via jest.config.js, next/constants + next/dist/trace via
+    // e2e-utils, next/dist/server/next via next-test-utils — verified at the
+    // v16.2.0 tag), and next.js's root depends on `next: workspace:*`, so
+    // `require.resolve(spec, {paths:[repo root]})` exercises the EXACT resolution
+    // jest performs at run time — a future ref bump fails on the true specifier,
+    // not a stale path list.
+    const step = nextDistHydrateStep();
+    expect(
+      /require\.resolve\(\s*s\s*,\s*\{\s*paths:\s*\[process\.cwd\(\)\]\s*\}\s*\)/.test(step),
+      'the sanity check must require.resolve the harness import specifiers from the next.js root',
+    ).toBe(true);
+    for (const spec of [
+      'next/jest',
+      'next/constants',
+      'next/dist/trace',
+      'next/dist/server/next',
+    ]) {
+      expect(step.includes(`"${spec}"`), `sanity must cover the harness specifier ${spec}`).toBe(
+        true,
+      );
+    }
+  });
+
   it('the hydrate step runs BEFORE the run-tests step (ordering)', () => {
     const block = deployTestsJobBlock();
     const hydrateIdx = block.search(/-\s+name:[^\n]*[Hh]ydrate[^\n]*next/);

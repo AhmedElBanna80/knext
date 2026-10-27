@@ -40,24 +40,6 @@
       "expires": "2026-11-03"
     },
     {
-      "id": "GHSA-673q-mjm6-r5xr",
-      "justification": "next@16.3.8: unauthenticated RCE in App Router `use cache` functions that return multiple typed arrays; no workaround. CLOSURES: examples/bun-exec and apps/file-manager (this file), plus apps/docs via the same gate. next@16.3.8 is the 1.3 line's pinned Next.js for these repo apps; no 16.3.x patch exists (fixed only in 16.4.1). None of these closures is deployed from integration/v1.3 (docs-deploy-oke.yml deploys only on refs/heads/main), and next is a peer of the published @getknext packages, not part of their bytes. Accepted SHORT-TERM, founder-approved 2026-11-13, so the 1.3.2 compiled-Bun fix (PR #65) can ship; the real fix is moving the 1.3 line to next 16.4.x (issue #66). Do NOT renew: at expiry, bump instead.",
-      "added": "2026-11-13",
-      "expires": "2026-11-27"
-    },
-    {
-      "id": "GHSA-2464-fhr4-w9xw",
-      "justification": "next@16.3.8: RCE in image optimization with SVG through sharp on glibc. MITIGATED in these closures by the advisory's own workaround: the root override pins sharp >=0.35.5 <1 and both lockfiles resolve sharp@0.35.5. CLOSURES: examples/bun-exec and apps/file-manager (this file), plus apps/docs via the same gate. next@16.3.8 is the 1.3 line's pinned Next.js for these repo apps; no 16.3.x patch exists (fixed only in 16.4.1). None of these closures is deployed from integration/v1.3 (docs-deploy-oke.yml deploys only on refs/heads/main), and next is a peer of the published @getknext packages, not part of their bytes. Accepted SHORT-TERM, founder-approved 2026-11-13, so the 1.3.2 compiled-Bun fix (PR #65) can ship; the real fix is moving the 1.3 line to next 16.4.x (issue #66). Do NOT renew: at expiry, bump instead.",
-      "added": "2026-11-13",
-      "expires": "2026-11-27"
-    },
-    {
-      "id": "GHSA-p3m5-59mp-jv5r",
-      "justification": "next@16.3.8: denial of service in App Router Server Actions (CPU exhaustion); no workaround. CLOSURES: examples/bun-exec and apps/file-manager (this file), plus apps/docs via the same gate. next@16.3.8 is the 1.3 line's pinned Next.js for these repo apps; no 16.3.x patch exists (fixed only in 16.4.1). None of these closures is deployed from integration/v1.3 (docs-deploy-oke.yml deploys only on refs/heads/main), and next is a peer of the published @getknext packages, not part of their bytes. Accepted SHORT-TERM, founder-approved 2026-11-13, so the 1.3.2 compiled-Bun fix (PR #65) can ship; the real fix is moving the 1.3 line to next 16.4.x (issue #66). Do NOT renew: at expiry, bump instead.",
-      "added": "2026-11-13",
-      "expires": "2026-11-27"
-    },
-    {
       "id": "GHSA-qr28-fpjm-wq7f",
       "justification": "Founder-approved 2026-11-13. decode-uri-component@0.2.2: quadratic-time decoding of malformed percent-encoded input (DoS). BUMP TRIED FIRST AND PROVEN BROKEN: the patched 0.5.1 is ESM-only, and its sole consumer query-string@7.1.3 does `const decodeComponent = require('decode-uri-component')` then calls it, so an override gives it a namespace object and query-string.parse throws `decodeComponent is not a function` (reproduced on Node 24.14 with the override applied). NOT REACHABLE: query-string is pulled in only by minio@8.0.6 (apps/file-manager's storage client; every minio 8.x pins query-string ^7.1.3), and minio calls only `qs.stringify` (dist/main/internal/client.js lines 830, 925, 963, 1480, 2587); decode-uri-component is used only on query-string's parse/parseUrl paths (index.js decode() at 231-233, callers at 177-195, 328-329, 435), never by stringify. CLOSURES: apps/file-manager and apps/docs (hoisted root lock). Re-check at expiry: drop when minio or query-string moves off decode-uri-component 0.2.x, or immediately if anything in the closure starts calling query-string.parse.",
       "added": "2026-11-13",

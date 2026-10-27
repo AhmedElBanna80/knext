@@ -458,6 +458,14 @@ never touch the cluster, so they still run even when nothing above is reachable:
   throwaway directory with `knext create --force <scratch-dir>` and copy the fresh
   `knext-node-entry.mjs` over yours (diff first if you made local edits). Apps that don't use this
   runtime combination, or that aren't run from their own directory, report `SKIP`.
+- **Next.js minor** — whether the Next.js your app resolves is on a minor the official
+  compatibility suite has credentialed. A supported but uncredentialed minor is a `WARN`, never a
+  failure.
+- **Next.js security advisories** — whether that Next.js is affected by a published critical or
+  high advisory that has a fix. An affected version is a `FAIL` that names each advisory by its
+  GHSA id and the version to upgrade to (for example, anything up to 16.4.0 must move to 16.4.1 or
+  later — see [Next.js security upgrades](/docs/upgrading#nextjs-security-upgrades)). Apps with no
+  resolvable Next.js get no row.
 
 ```bash
 knext doctor                                        # human-readable checklist

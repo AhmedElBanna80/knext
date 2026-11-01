@@ -66,6 +66,7 @@ every reason to a section.
 | App logs / DB connect | — | [9](#9--database-scale-zero-pg-wake-timeout) |
 | Unreachable pod / activator 503 | — | [10](#10--networkpolicy-blocks-the-activator) |
 | Webhook rejects every apply | `failurePolicy: Fail` | [11](#11--apply-rejected-admission-webhook-not-ready) |
+| Alert `KnextFunctionSecretsUnverified` / `KnextFunctionSecretsAccessDenied` | `SecretsUnverified` | [14](#14--function-held-as-secretsunverified-the-operator-cannot-read-a-secret) |
 
 ---
 
@@ -581,6 +582,30 @@ request-metrics protocol is prometheus, and the app metrics port therefore moved
   ```
 
   See the [upgrading page](https://knext-platform.dev/docs/upgrading) for the full ordered steps.
+
+## 14 — Function held as `SecretsUnverified` (the operator cannot read a Secret)
+
+A function whose Secret the operator cannot read is held: its `SovereigntyCompliant` condition is
+`Unknown` with reason `SecretsUnverified`, new rollouts wait, and a running function keeps serving.
+Two alerts, two causes:
+
+- **`KnextFunctionSecretsUnverified`** — a transient apiserver error (timeouts, 5xx). It is held
+  without limit and fires after 10 minutes. Check the API server's health; the hold clears on its
+  own at the next successful read.
+- **`KnextFunctionSecretsAccessDenied`** — the operator is **denied** (`Forbidden`), almost always a
+  missing or drifted Secret grant. After 10 minutes of denial the function is refused and removed,
+  so fix it inside that window.
+
+```bash
+# which functions are held, and which Secret each one names
+knext doctor
+kubectl get backendservice -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\t"}{.status.conditions[?(@.type=="SovereigntyCompliant")].message}{"\n"}{end}'
+# does the operator hold the grant? (expect "yes")
+kubectl auth can-i get secrets -n <namespace> --as=system:serviceaccount:<operator-namespace>:<operator-serviceaccount>
+```
+
+Restore the grant (re-apply the operator's RBAC from the release bundle), then confirm the
+condition returns to `Compliant` and the function rolls out.
 
 ## When none of these match
 

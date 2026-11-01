@@ -33,8 +33,7 @@ function ctxWith(
                 stdout: "",
                 stderr: 'error: the server doesn\'t have a resource type "backendservices"',
             };
-        if ("fail" in fns)
-            return { ok: false, stdout: "", stderr: fns.fail };
+        if ("fail" in fns) return { ok: false, stdout: "", stderr: fns.fail };
         return {
             ok: true,
             stderr: "",

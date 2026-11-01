@@ -9,14 +9,16 @@
  * removed. Neither says anything on its own, so this row lists them with the
  * `can-i` probe that finds the missing grant.
  *
- * Contributes NO row when nothing is unverified, the cluster is unreachable, or
- * the list cannot be read, which keeps every other report's row set unchanged.
+ * Contributes NO row when nothing is unverified or the BackendService CRD is not
+ * installed, which keeps every other report's row set unchanged. A list that
+ * fails for a real reason (RBAC denied, unreachable) is a WARN saying the check
+ * could not run: a silent pass would read green.
  * Read-only: one `get backendservices`, status only. KEEP the reason and the
  * hold in lockstep with the operator (backendservice_verdict.go:
  * ReasonSecretsUnverified, secretsDeniedHold).
  */
 
-import { safeJson } from "../kubectl";
+import { classifyKubectlFailure, infraFailure, safeJson } from "../kubectl";
 import { mk } from "../report";
 import type { CheckContext, CheckResult } from "../types";
 import { OPERATOR_NAMESPACE } from "../types";
@@ -47,7 +49,28 @@ export function unverifiedSecretsCheck(ctx: CheckContext): CheckResult[] {
         "-o",
         "json",
     ]);
-    if (!res.ok) return [];
+    if (!res.ok) {
+        // CRD not installed (no functions here): nothing to report. Anything
+        // else (RBAC denied, unreachable, odd) means the check did not run, and
+        // a silent [] would read green.
+        if (classifyKubectlFailure(res.stderr) === "not-found") return [];
+        const infra = infraFailure(res);
+        const cause = res.stderr
+            .replace(/[^\x20-\x7e\s]/g, "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 160);
+        return [
+            mk(
+                ID,
+                TITLE,
+                "warn",
+                `could not check whether function Secrets are verified: ${infra?.detail ?? `kubectl get backendservices failed: ${cause || "no error output"}`}`,
+                infra?.hint ??
+                    "make sure kubectl can list backendservices.apps.kn-next.dev cluster-wide, then re-run knext doctor",
+            ),
+        ];
+    }
     const items =
         safeJson<{ items?: BackendServiceItem[] }>(res.stdout)?.items ?? [];
 

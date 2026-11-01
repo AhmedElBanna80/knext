@@ -159,7 +159,7 @@ spec:
               rollouts are held; a running function keeps serving. Run
               `knext doctor` to list unverified functions and read the
               SovereigntyCompliant condition for the Secret names.
-            runbook_url: "https://github.com/getknext-dev/knext/blob/main/docs/security/threat-model.md"
+            runbook_url: "https://github.com/getknext-dev/knext/blob/main/docs/runbooks/troubleshooting.md#14--function-held-as-secretsunverified-the-operator-cannot-read-a-secret"
 
         # The Forbidden path is different: a denied read (403) is held for 10
         # minutes and then the function is REFUSED AND REMOVED. This pages well
@@ -180,7 +180,7 @@ spec:
               {{ $labels.namespace }}
               --as=system:serviceaccount:<operator-namespace>:<operator-serviceaccount>`
               and run `knext doctor`.
-            runbook_url: "https://github.com/getknext-dev/knext/blob/main/docs/security/threat-model.md"
+            runbook_url: "https://github.com/getknext-dev/knext/blob/main/docs/runbooks/troubleshooting.md#14--function-held-as-secretsunverified-the-operator-cannot-read-a-secret"
 
         # SLO: reconcile latency. A slow control loop delays scale-up and
         # rollbacks. p95 over 30s sustained is degraded.

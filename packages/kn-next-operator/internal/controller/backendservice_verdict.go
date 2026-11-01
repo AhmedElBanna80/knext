@@ -324,23 +324,13 @@ func computeBackendServiceVerdict(bs *appsv1alpha1.BackendService, o functionObs
 	// Unverified: observable (gauge) and, for a denial, announced before the
 	// hold runs out. The start of a transient hold is the SovereigntyCompliant
 	// transition, which status persists, so it survives an operator restart.
-	if o.undecided() {
-		rep := &unverifiedReport{reason: unverifiedReasonTransient, since: o.now}
-		if prev := apimeta.FindStatusCondition(bs.Status.Conditions, ConditionSovereigntyCompliant); prev != nil &&
-			prev.Status == metav1.ConditionUnknown && prev.Reason == ReasonSecretsUnverified {
-			rep.since = prev.LastTransitionTime.Time
-		}
-		if hasDenied(o.unverified) && o.deniedSince != nil {
-			rep.reason, rep.since = unverifiedReasonForbidden, o.deniedSince.Time
-			if bs.Status.SecretsDeniedSince == nil {
-				v.events = append(v.events, verdictEvent{corev1.EventTypeWarning, ReasonSecretsAccessDenied, fmt.Sprintf(
-					"the operator is denied (Forbidden) reading %s; the function is held as it is, and is refused "+
-						"and removed if the denial lasts %s. Fix the operator's Secret grant: "+
-						"kubectl auth can-i get secrets -n %s --as=system:serviceaccount:<operator-namespace>:<operator-serviceaccount>",
-					o.unverifiedNames(), secretsDeniedHold, bs.Namespace)})
-			}
-		}
-		v.unverified = rep
+	v.unverified = unverifiedReportFor(bs, o)
+	if o.undecided() && hasDenied(o.unverified) && o.deniedSince != nil && bs.Status.SecretsDeniedSince == nil {
+		v.events = append(v.events, verdictEvent{corev1.EventTypeWarning, ReasonSecretsAccessDenied, fmt.Sprintf(
+			"the operator is denied (Forbidden) reading %s; the function is held as it is, and is refused "+
+				"and removed if the denial lasts %s. Fix the operator's Secret grant: "+
+				"kubectl auth can-i get secrets -n %s --as=system:serviceaccount:<operator-namespace>:<operator-serviceaccount>",
+			o.unverifiedNames(), secretsDeniedHold, bs.Namespace)})
 	}
 
 	// JWKSTrusted — whether the zone's key set reaches the function. Evaluated
@@ -455,4 +445,26 @@ func computeBackendServiceVerdict(bs *appsv1alpha1.BackendService, o functionObs
 		v.requeueAfter = functionRevalidateAfter
 	}
 	return v
+}
+
+// unverifiedReportFor says whether, and since when, the function is held as
+// SecretsUnverified (nil when it is not). Pure, so Reconcile can publish the
+// gauge on every path that has observed the function, not only the one that
+// reaches the verdict. The start of a transient hold is the SovereigntyCompliant
+// transition, which status persists (so it survives an operator restart);
+// applyFunctionVerdict makes that transition time the start of THIS hold even
+// when the condition was already Unknown for another reason.
+func unverifiedReportFor(bs *appsv1alpha1.BackendService, o functionObservation) *unverifiedReport {
+	if !o.undecided() {
+		return nil
+	}
+	rep := &unverifiedReport{reason: unverifiedReasonTransient, since: o.now}
+	if prev := apimeta.FindStatusCondition(bs.Status.Conditions, ConditionSovereigntyCompliant); prev != nil &&
+		prev.Status == metav1.ConditionUnknown && prev.Reason == ReasonSecretsUnverified {
+		rep.since = prev.LastTransitionTime.Time
+	}
+	if hasDenied(o.unverified) && o.deniedSince != nil {
+		rep.reason, rep.since = unverifiedReasonForbidden, o.deniedSince.Time
+	}
+	return rep
 }

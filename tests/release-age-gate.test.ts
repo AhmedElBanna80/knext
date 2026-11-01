@@ -27,6 +27,9 @@ import {
  * the registry's own publish time, and fails closed when the registry cannot answer.
  */
 
+type Entry = ReturnType<typeof parseLockfile>[number];
+type LockEntry = Entry & { lockfile: string };
+
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const NOW = Date.parse('2026-10-17T12:00:00Z');
 const HOUR = 3_600_000;
@@ -43,7 +46,7 @@ const S512_REG = sri512('r');
 const S512_OK = sri512('k');
 const SRI512 = `sha512-${'A'.repeat(86)}==`;
 
-const entry = (over: Record<string, unknown> = {}): any => ({
+const entry = (over: Partial<LockEntry> = {}): LockEntry => ({
   lockfile: 'bun.lock',
   ecosystem: 'npm',
   name: 'left-pad',
@@ -52,8 +55,8 @@ const entry = (over: Record<string, unknown> = {}): any => ({
 });
 
 const run = (
-  entries: any[],
-  lookup: (e: any) => Promise<number>,
+  entries: LockEntry[],
+  lookup: (e) => Promise<number>,
   over: Record<string, unknown> = {},
 ) =>
   evaluateAges({
@@ -80,8 +83,8 @@ describe('readBunfig: the same number the install-time quarantine uses', () => {
 });
 
 describe('parseLockfile', () => {
-  const jsonc = (t: string) => Bun.JSONC.parse(t) as any;
-  const unresolved = (list: any[]) => list.filter((e) => e.unresolved);
+  const jsonc = Bun.JSONC.parse;
+  const unresolved = (list: Entry[]) => list.filter((e) => e.unresolved);
 
   describe('bun.lock', () => {
     it('registry versions, aliases resolved, local (workspace/file/link) skipped', () => {
@@ -247,7 +250,7 @@ exclude (
     });
     it('a replace pinned to a different old version does not drop the require', () => {
       const text = `require github.com/a/b v1.2.3\nreplace github.com/a/b v9.9.9 => github.com/fork/b v1.0.0\n`;
-      expect(parseLockfile('go.mod', text).map((e: any) => `${e.name}@${e.version}`)).toEqual([
+      expect(parseLockfile('go.mod', text).map((e) => `${e.name}@${e.version}`)).toEqual([
         'github.com/a/b@v1.2.3',
         'github.com/fork/b@v1.0.0',
       ]);
@@ -272,11 +275,11 @@ exclude (
 });
 
 describe('integrity: a source re-pinned to new bytes is a change', () => {
-  const jsonc = (t: string) => Bun.JSONC.parse(t) as any;
+  const jsonc = Bun.JSONC.parse;
   const tarball = (sha: string) =>
     `{"packages":{"t":["t@https://example.com/t-1.0.0.tgz",{},"${sha}"]}}`;
   const heads = (text: string) =>
-    parseLockfile('bun.lock', text, jsonc).map((e: any) => ({ ...e, lockfile: 'bun.lock' }));
+    parseLockfile('bun.lock', text, jsonc).map((e) => ({ ...e, lockfile: 'bun.lock' }));
 
   it('bun.lock: the integrity of an unresolved entry is read from the last string field', () => {
     const [shortForm] = heads(tarball(S512_OLD));
@@ -307,7 +310,7 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
         },
       });
     const mk = (i: string) =>
-      parseLockfile('package-lock.json', lock(i)).map((e: any) => ({
+      parseLockfile('package-lock.json', lock(i)).map((e) => ({
         ...e,
         lockfile: 'package-lock.json',
       }));
@@ -320,14 +323,14 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
     const lock = (rev: string) =>
       `[[package]]\nname = "time"\nversion = "0.1.0"\nsource = "git+https://github.com/o/r?rev=${rev}#${rev}"\n`;
     const mk = (rev: string) =>
-      parseLockfile('Cargo.lock', lock(rev)).map((e: any) => ({ ...e, lockfile: 'Cargo.lock' }));
+      parseLockfile('Cargo.lock', lock(rev)).map((e) => ({ ...e, lockfile: 'Cargo.lock' }));
     expect(changedEntries(mk('bbbb'), mk('aaaa'))).toHaveLength(1);
     expect(changedEntries(mk('aaaa'), mk('aaaa'))).toEqual([]);
   });
 
   it('go.mod replacements carry their version in the key: a new replacement version is a change', () => {
     const mk = (v: string) =>
-      parseLockfile('go.mod', `require a/b v1.0.0\nreplace a/b => c/d ${v}\n`).map((e: any) => ({
+      parseLockfile('go.mod', `require a/b v1.0.0\nreplace a/b => c/d ${v}\n`).map((e) => ({
         ...e,
         lockfile: 'go.mod',
       }));
@@ -462,7 +465,7 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
           ],
         },
       });
-      const [e] = parseLockfile('bun.lock', text, (t: string) => Bun.JSONC.parse(t) as any);
+      const [e] = parseLockfile('bun.lock', text, Bun.JSONC.parse);
       expect(isHashlessUrlSource(e)).toBe(false);
       // The same id without the hash is a short, ambiguous prefix: refused.
       const bare = JSON.stringify({
@@ -474,7 +477,7 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
           ],
         },
       });
-      const [b] = parseLockfile('bun.lock', bare, (t: string) => Bun.JSONC.parse(t) as any);
+      const [b] = parseLockfile('bun.lock', bare, Bun.JSONC.parse);
       expect(isHashlessUrlSource(b)).toBe(true);
     });
 
@@ -496,6 +499,102 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
       expect(isHashlessUrlSource(u(`git+ssh://git@github.com/o/r.git#${sha}`))).toBe(false);
     });
 
+    it('percent-escapes in an owner or repo segment are not a clean name', () => {
+      const sha = 'd'.repeat(40);
+      const u = (v: string) => entry({ unresolved: 'x', version: v });
+      for (const bad of [
+        `github:o/r%23main#${sha}`,
+        `github:o/r%40x#${sha}`,
+        `github:o/r%3Fx#${sha}`,
+        `github:o%23/r#${sha}`,
+        `gitlab:g/r%23main#${sha}`,
+        `bitbucket:o/r%40x#${sha}`,
+        `https://codeload.github.com/o/r%23x/tar.gz/${sha}`,
+        `https://codeload.github.com/o/r%40x/tar.gz/${sha}`,
+        `https://codeload.github.com/o/r%3Fx/tar.gz/${sha}`,
+      ]) {
+        expect(isHashlessUrlSource(u(bad))).toBe(true);
+      }
+    });
+
+    it('git+ssh refuses ? in the repo part; gitlab, bitbucket and nested gitlab groups are pinned', () => {
+      const sha = 'e'.repeat(40);
+      const u = (v: string) => entry({ unresolved: 'x', version: v });
+      expect(isHashlessUrlSource(u(`git+ssh://git@x.com/o/r?x.git#${sha}`))).toBe(true);
+      expect(isHashlessUrlSource(u(`gitlab:o/r#${sha}`))).toBe(false);
+      expect(isHashlessUrlSource(u(`bitbucket:o/r#${sha}`))).toBe(false);
+      expect(isHashlessUrlSource(u(`github:Some-Org/re.po_1#${sha}`))).toBe(false);
+      // gitlab nests groups (`gitlab:group/subgroup/project`); github and bitbucket do not.
+      expect(isHashlessUrlSource(u(`gitlab:g/s/r#${sha}`))).toBe(false);
+      expect(isHashlessUrlSource(u(`gitlab:g/s/t/r#${sha}`))).toBe(false);
+      expect(isHashlessUrlSource(u(`gitlab:g//r#${sha}`))).toBe(true);
+      expect(isHashlessUrlSource(u(`gitlab:g/s/r%23x#${sha}`))).toBe(true);
+      expect(isHashlessUrlSource(u(`github:g/s/r#${sha}`))).toBe(true);
+      expect(isHashlessUrlSource(u(`bitbucket:g/s/r#${sha}`))).toBe(true);
+    });
+
+    it('a commit sha is lowercase hex exactly: uppercase, trailing newline or space are refused', () => {
+      const u = (v: string) => entry({ unresolved: 'x', version: v });
+      const sha = 'f'.repeat(40);
+      for (const bad of [
+        `github:o/r#${'F'.repeat(40)}`,
+        `github:o/r#${sha}\n`,
+        `github:o/r#${sha} `,
+        `git+ssh://git@x.com/o/r.git#${sha}\n`,
+        `https://codeload.github.com/o/r/tar.gz/${sha}\n`,
+      ]) {
+        expect(isHashlessUrlSource(u(bad))).toBe(true);
+      }
+    });
+
+    it('an SRI list is hashed if ANY token is a valid sha256/384/512 SRI', () => {
+      const u = (integrity: string) =>
+        entry({ unresolved: 'x', version: 'https://example.com/t.tgz', integrity });
+      const sha1 = `sha1-${'A'.repeat(27)}=`;
+      for (const ok of [
+        `${SRI512} ${sha1}`,
+        `${sha1} ${SRI512}`,
+        `${sha1}   ${SRI384}\t${SRI256}`,
+      ]) {
+        expect(isHashlessUrlSource(u(ok))).toBe(false);
+      }
+      for (const bad of [
+        sha1,
+        `${sha1} ${sha1}`,
+        `sha512-AAAA ${sha1}`,
+        `sha512-AAAA sha384-BBBB`,
+        ' ',
+      ]) {
+        expect(isHashlessUrlSource(u(bad))).toBe(true);
+      }
+    });
+
+    it('a multi-hash integrity is read from package-lock.json and bun.lock as its valid SRI token', () => {
+      const multi = `${SRI512} sha1-${'A'.repeat(27)}=`;
+      const lock = (integrity: string) =>
+        JSON.stringify({
+          packages: {
+            'node_modules/t': {
+              version: '1.0.0',
+              resolved: 'https://example.com/t.tgz',
+              integrity,
+            },
+          },
+        });
+      const [p] = parseLockfile('package-lock.json', lock(multi));
+      expect(p.integrity).toBe(SRI512);
+      expect(isHashlessUrlSource(p)).toBe(false);
+      const [pb] = parseLockfile('package-lock.json', lock(`sha1-${'A'.repeat(27)}=`));
+      expect(pb.integrity).toBeUndefined();
+      expect(isHashlessUrlSource(pb)).toBe(true);
+      const bun = JSON.stringify({
+        packages: { t: ['t@https://example.com/t-1.0.0.tgz', {}, multi] },
+      });
+      const [b] = parseLockfile('bun.lock', bun, Bun.JSONC.parse);
+      expect(b.integrity).toBe(SRI512);
+      expect(isHashlessUrlSource(b)).toBe(false);
+    });
+
     it('a github: dependency resolved to a codeload tarball at a full commit is commit-addressed', () => {
       const sha = 'c'.repeat(40);
       const u = (v: string) => entry({ unresolved: 'x', version: v });
@@ -506,7 +605,7 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
 
     it('bun.lock: a git-style trailing id on a tarball entry is not an integrity hash', () => {
       const text = '{"packages":{"t":["t@https://example.com/t-1.0.0.tgz",{},"o-r-abc"]}}';
-      const [e] = parseLockfile('bun.lock', text, (t: string) => Bun.JSONC.parse(t) as any);
+      const [e] = parseLockfile('bun.lock', text, Bun.JSONC.parse);
       expect(e.integrity).toBeUndefined();
       expect(isHashlessUrlSource(e)).toBe(true);
     });
@@ -593,44 +692,51 @@ describe('changedEntries', () => {
 
 describe('registry lookups', () => {
   it('builds the right URL for each ecosystem', () => {
-    expect(registryUrl({ ecosystem: 'npm', name: 'left-pad', version: '1' } as any)).toBe(
+    expect(registryUrl({ ecosystem: 'npm', name: 'left-pad', version: '1' })).toBe(
       'https://registry.npmjs.org/left-pad',
     );
-    expect(registryUrl({ ecosystem: 'npm', name: '@s/pkg', version: '1' } as any)).toBe(
+    expect(registryUrl({ ecosystem: 'npm', name: '@s/pkg', version: '1' })).toBe(
       'https://registry.npmjs.org/@s%2Fpkg',
     );
-    expect(registryUrl({ ecosystem: 'crates', name: 'serde', version: '1.0.1' } as any)).toBe(
+    expect(registryUrl({ ecosystem: 'crates', name: 'serde', version: '1.0.1' })).toBe(
       'https://crates.io/api/v1/crates/serde/1.0.1',
     );
-    expect(
-      registryUrl({ ecosystem: 'go', name: 'github.com/Azure/x', version: 'v1.0.0' } as any),
-    ).toBe('https://proxy.golang.org/github.com/!azure/x/@v/v1.0.0.info');
+    expect(registryUrl({ ecosystem: 'go', name: 'github.com/Azure/x', version: 'v1.0.0' })).toBe(
+      'https://proxy.golang.org/github.com/!azure/x/@v/v1.0.0.info',
+    );
   });
   it('reads the publish time from each registry shape, and THROWS when it is absent', () => {
     expect(
-      publishTime({ ecosystem: 'npm', name: 'a', version: '1.0.0' } as any, {
-        time: { '1.0.0': '2026-10-01T00:00:00Z' },
-      }),
+      publishTime(
+        { ecosystem: 'npm', name: 'a', version: '1.0.0' },
+        {
+          time: { '1.0.0': '2026-10-01T00:00:00Z' },
+        },
+      ),
     ).toBe(Date.parse('2026-10-01T00:00:00Z'));
     expect(
-      publishTime({ ecosystem: 'crates', name: 'a', version: '1' } as any, {
-        version: { created_at: '2026-10-01T00:00:00Z' },
-      }),
+      publishTime(
+        { ecosystem: 'crates', name: 'a', version: '1' },
+        {
+          version: { created_at: '2026-10-01T00:00:00Z' },
+        },
+      ),
     ).toBe(Date.parse('2026-10-01T00:00:00Z'));
     expect(
-      publishTime({ ecosystem: 'go', name: 'a', version: 'v1' } as any, {
-        Time: '2026-10-01T00:00:00Z',
-      }),
+      publishTime(
+        { ecosystem: 'go', name: 'a', version: 'v1' },
+        {
+          Time: '2026-10-01T00:00:00Z',
+        },
+      ),
     ).toBe(Date.parse('2026-10-01T00:00:00Z'));
     expect(() =>
-      publishTime({ ecosystem: 'npm', name: 'a', version: '9.9.9' } as any, { time: {} }),
+      publishTime({ ecosystem: 'npm', name: 'a', version: '9.9.9' }, { time: {} }),
     ).toThrow(/no publish time/);
     expect(() =>
-      publishTime({ ecosystem: 'go', name: 'a', version: 'v1' } as any, { Time: 'garbage' }),
+      publishTime({ ecosystem: 'go', name: 'a', version: 'v1' }, { Time: 'garbage' }),
     ).toThrow();
-    expect(() =>
-      publishTime({ ecosystem: 'npm', name: 'a', version: '1.0.0' } as any, null),
-    ).toThrow();
+    expect(() => publishTime({ ecosystem: 'npm', name: 'a', version: '1.0.0' }, null)).toThrow();
   });
 });
 
@@ -908,8 +1014,8 @@ describe('the committed tree resolves everything to the public registry', () => 
 
   it('the hashless-URL rule flags a planted hashless tarball (non-vacuity of the rule)', () => {
     const planted = '{"packages":{"t":["t@https://example.com/t-1.0.0.tgz",{}]}}';
-    const found = parseLockfile('bun.lock', planted, (t: string) => Bun.JSONC.parse(t) as any);
-    expect(found.filter((e: any) => isHashlessUrlSource(e))).toHaveLength(1);
+    const found = parseLockfile('bun.lock', planted, Bun.JSONC.parse);
+    expect(found.filter((e) => isHashlessUrlSource(e))).toHaveLength(1);
   });
 
   it('the scan sees the tree (non-vacuity)', () => {

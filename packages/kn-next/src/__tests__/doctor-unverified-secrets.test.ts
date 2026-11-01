@@ -17,7 +17,10 @@ type Fn = {
     deniedSince?: string;
 };
 
-function ctxWith(fns: Fn[] | "fail", manager = true): CheckContext {
+function ctxWith(
+    fns: Fn[] | "fail" | { fail: string },
+    manager = true,
+): CheckContext {
     const kubectl: KubectlFn = (args) => {
         if (
             args.join(" ") !==
@@ -25,7 +28,13 @@ function ctxWith(fns: Fn[] | "fail", manager = true): CheckContext {
         )
             return { ok: false, stdout: "", stderr: "unexpected" };
         if (fns === "fail")
-            return { ok: false, stdout: "", stderr: "forbidden" };
+            return {
+                ok: false,
+                stdout: "",
+                stderr: 'error: the server doesn\'t have a resource type "backendservices"',
+            };
+        if ("fail" in fns)
+            return { ok: false, stdout: "", stderr: fns.fail };
         return {
             ok: true,
             stderr: "",
@@ -80,7 +89,7 @@ const unverified = (since = "2026-11-01T12:00:00Z") => ({
 });
 
 describe("doctor: unverified function Secrets", () => {
-    it("contributes NO row when nothing is unverified, the cluster is unreachable, or the list cannot be read", () => {
+    it("contributes NO row when nothing is unverified, the CRD is not installed, or the check is skipped", () => {
         expect(unverifiedSecretsCheck(ctxWith([]))).toEqual([]);
         expect(
             unverifiedSecretsCheck(
@@ -98,6 +107,27 @@ describe("doctor: unverified function Secrets", () => {
         expect(
             unverifiedSecretsCheck({ ...ctxWith([]), skipAll: true }),
         ).toEqual([]);
+    });
+
+    it("WARNS that the check could not run, and why, when the list fails for a real reason (RBAC denied)", () => {
+        const [row] = unverifiedSecretsCheck(
+            ctxWith({
+                fail: 'Error from server (Forbidden): backendservices.apps.kn-next.dev is forbidden: User "dev" cannot list resource "backendservices" in API group "apps.kn-next.dev" at the cluster scope',
+            }),
+        );
+        expect(row?.id).toBe("unverified-secrets");
+        expect(row?.status).toBe("warn");
+        expect(row?.detail).toMatch(/could not (be )?(run|check|list)/i);
+        expect(row?.detail).toContain("rbac");
+        expect(row?.hint).toContain("backendservices");
+    });
+
+    it("WARNS with the cause for an unclassified failure too, never a silent green", () => {
+        const [row] = unverifiedSecretsCheck(
+            ctxWith({ fail: "error: something odd happened" }),
+        );
+        expect(row?.status).toBe("warn");
+        expect(row?.detail).toContain("something odd happened");
     });
 
     it("WARN: names each unverified function, its Secret, and the RBAC probe with the operator's namespace and ServiceAccount", () => {

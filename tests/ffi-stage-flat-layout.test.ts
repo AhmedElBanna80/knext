@@ -17,9 +17,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { resolveStandaloneLayout } from '../../../kn-next/src/cli/standalone-layout';
+import { resolveStandaloneLayout } from '../packages/kn-next/src/cli/standalone-layout';
 
-const REPO = resolve(import.meta.dirname, '../../../..');
+const REPO = resolve(import.meta.dirname, '..');
 const SCRIPT = join(REPO, 'packages/ffi/scripts/stage-ffi-zone.sh');
 const tmpDirs: string[] = [];
 afterAll(() => {

@@ -528,6 +528,11 @@ describe('#2594 — no workflow pins, sets or asserts a next with a known adviso
       '          npm i "next@>=1.0.0 <16.4.1"',
     ],
     ['an upper bound in an env pin', '  NEXT_PIN: "<16.4.1"'],
+    // inclusive upper bound sitting exactly on the first affected release (10.0.0)
+    [
+      'an inclusive upper bound on the first affected release',
+      '          npm i "next@>=1.0.0 <=10.0.0"',
+    ],
   ];
   for (const [name, line] of UPPER_BOUNDS) {
     it(`flags ${name}`, () => {
@@ -541,6 +546,8 @@ describe('#2594 — no workflow pins, sets or asserts a next with a known adviso
       '          npm i "next@>16.4.1 <=16.4.9"',
       '          npm i "next@^16.4.1"',
       '          npm i "next@~16.4.1"',
+      // exclusive upper bound sitting exactly on the first affected release (10.0.0)
+      '          npm i "next@>=1.0.0 <10.0.0"',
     ]) {
       expect(workflowFlags('x.yml', line, []), line).toEqual([]);
     }

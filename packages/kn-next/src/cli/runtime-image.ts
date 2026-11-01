@@ -34,8 +34,8 @@
  * touches the cluster.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
     BUILDERS,
     DEFAULT_BUILDER_ID,
@@ -415,7 +415,7 @@ export function dockerBuildxArgs(opts: {
  * evaluator alone.
  */
 export function standaloneDockerignore(
-    opts: { nested?: boolean } = {},
+    opts: { nested?: boolean; coreHostModules?: string } = {},
 ): string {
     const base = `# knext standalone runtime build context (ADR-0055) — per-Dockerfile ignore.
 #
@@ -471,6 +471,19 @@ build
 *.tsbuildinfo
 knext-exec*
 
+# The supervisor's own package (@getknext/core) is copied whole by the COPY
+# lines below, and its node_modules is the HOST layout. A bun workspace nests
+# each dependency as a RELATIVE symlink into node_modules/.bun; Docker copies a
+# symlink verbatim, so inside the image it dangles and the supervisor
+# crash-loops (#2609: ENOENT reading /app/node_modules/@getknext/core/node_modules/pino).
+# Keep that host subtree out of the context. The standalone-deps stage installs
+# the supervisor's closure (pino, prom-client, @opentelemetry/api) with a real
+# package manager, so module resolution falls through to /app/node_modules.
+# The context is filtered on REAL paths, so a workspace link
+# (node_modules/@getknext/core -> packages/kn-next) needs the package's real
+# node_modules named too; the staged pattern below does that.
+**/node_modules/@getknext/core/node_modules
+
 # Test, coverage and editor noise.
 coverage
 .nyc_output
@@ -485,11 +498,17 @@ Dockerfile*
 .dockerignore
 docker-compose*.yml
 `;
-    if (!opts.nested) return base;
+    const withCore = opts.coreHostModules
+        ? `${base}
+# The supervisor package's real node_modules (a workspace link target).
+${opts.coreHostModules}
+`
+        : base;
+    if (!opts.nested) return withCore;
     // The context is a workspace root: the patterns above are anchored at it, so
     // the app's own Next cache (under its path) would otherwise be sent to the
     // builder. The image never COPYs it.
-    return `${base}
+    return `${withCore}
 # Workspace-root context: the app's Next cache is not at the context root.
 **/.next/cache
 `;
@@ -749,6 +768,30 @@ function coreSourceInContext(layout: StandaloneLayout): string {
 }
 
 /**
+ * The supervisor package's own `node_modules`, as a context-relative path, when
+ * the COPY source is a link whose target is another directory in the context
+ * (`node_modules/@getknext/core -> ../../packages/kn-next`, a workspace link).
+ * The builder filters the context on real paths, so the ignore has to name that
+ * directory; `**\/node_modules/@getknext/core/node_modules` only matches a
+ * package installed as a real directory. Null when the source is not a link, or
+ * resolves outside the context.
+ */
+function coreHostModulesIgnore(
+    contextRoot: string,
+    coreSrc: string,
+): string | null {
+    try {
+        const realRoot = realpathSync(contextRoot);
+        const realCore = realpathSync(join(contextRoot, coreSrc));
+        const rel = relative(realRoot, realCore).split(sep).join("/");
+        if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
+        return `${rel}/node_modules`;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Stage the standalone build context so `docker buildx build` yields a bootable
  * image. Writes, into the build context:
  *
@@ -846,19 +889,25 @@ export function stageStandaloneBuildContext(opts: {
     if (ffi) dockerfileText = insertFfiNativeCopy(dockerfileText);
 
     const layout = resolveStandaloneLayout(opts.cwd);
+    let coreSrcInContext = "node_modules/@getknext/core";
     if (layout.nested) {
         if (resolve(opts.buildContext) !== layout.root) {
             throw new UsageError(
                 `the Docker build context (${resolve(opts.buildContext)}) is not the tracing root (${layout.root}, from ${layout.configSource}) — the standalone tree mirrors that root, so the image would copy paths that are not in the context.`,
             );
         }
+        coreSrcInContext = coreSourceInContext(layout);
         dockerfileText = nestStandaloneDockerfile(dockerfileText, {
             contextPrefix: layout.contextPrefix,
-            coreSrc: coreSourceInContext(layout),
+            coreSrc: coreSrcInContext,
             ...(ffi ? { ffi: true } : {}),
         });
     }
 
+    const coreHostModules = coreHostModulesIgnore(
+        resolve(opts.buildContext),
+        coreSrcInContext,
+    );
     const dockerfile = join(opts.cwd, STANDALONE_DOCKERFILE_NAME);
     writeFileSync(dockerfile, dockerfileText, "utf8");
     writeFileSync(
@@ -878,7 +927,10 @@ export function stageStandaloneBuildContext(opts: {
     );
     writeFileSync(
         `${dockerfile}.dockerignore`,
-        standaloneDockerignore({ nested: layout.nested }),
+        standaloneDockerignore({
+            nested: layout.nested,
+            ...(coreHostModules ? { coreHostModules } : {}),
+        }),
         "utf8",
     );
     return { dockerfile };

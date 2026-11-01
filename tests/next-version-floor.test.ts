@@ -2,7 +2,10 @@ import { describe, expect, it } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { nextAdvisoriesFor } from '../packages/kn-next/src/next-advisories';
+import {
+  minorWithoutFixedRelease,
+  nextAdvisoriesFor,
+} from '../packages/kn-next/src/next-advisories';
 import { workspaceGlobs } from '../scripts/lib/workspace-globs.mjs';
 import { REPO_ROOT, WORKSPACE_DIRS, workspaceManifests } from './helpers/workspace-manifests';
 
@@ -213,45 +216,156 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  *
  * The kind e2e jobs stage a fixture, force its `next` with
  * `npm pkg set "dependencies.next=${NEXT_VERSION}"` and deploy it; the JS-closure
- * Trivy job pins `dependencies.next=X` before scanning. After the first round
- * bumped every manifest, three such workflow pins still put 16.3.8 back on main
- * (and 16.4.0 on v2), and v2's quoted `v !== '16.4.0'` assertions went red the
- * other way. So every NON-COMMENT workflow line is scanned for the four shapes
- * a literal `next` version takes there:
+ * Trivy job pins `dependencies.next=X` before scanning.
  *
- *   - `next@X.Y.Z`              (an install spec; `kn-next@`/`@next/` excluded)
- *   - `next=X.Y.Z`              (`npm pkg set dependencies.next=X`)
- *   - `NEXT_VERSION: X.Y.Z`     (the env the kind jobs install from)
- *   - a quoted `'X.Y.Z'` / `"X.Y.Z"` on a line that mentions `next`
- *     (a version assertion against `node_modules/next/package.json`)
+ * #2606: the first version of this scan recognised four spellings and let every
+ * other one through (`next@^16.3.8`, `next@v16.3.8`, `next@16.3`, `NEXT_PIN: X`,
+ * `next: [X]`, `echo NEXT_VERSION=X >> $GITHUB_ENV`), so a workflow edit written
+ * one of those ways could reinstall a vulnerable `next` with CI green. It now
+ * fails CLOSED: on EVERY non-comment line that mentions `next` (case-insensitive,
+ * `NEXTJS_REF` and `NEXT_PIN` included), EVERY `X.Y` / `X.Y.Z` token is a pin —
+ * ranges (`^ ~ >= <`) and a `v` prefix are just decoration around it — and is
+ * judged by `next-advisories.ts`, the table doctor fails on:
  *
- * and each hit is judged by `next-advisories.ts`, the table doctor fails on.
- * Comment lines are history (`# previously pinned to next@16.0.3`), not pins.
+ *   - `X.Y.Z` is advisory-checked at that exact version;
+ *   - `X.Y` is red when the whole line has no fixed release
+ *     (`minorWithoutFixedRelease`);
+ *   - a token it cannot compare (`16.x`, `16.*`, `^16`) is red, never green.
  *
- * WORKFLOW_HARNESS_PINS excuses a hit only by file AND exact version AND reason.
- * The compat-suite credential harness (`NEXTJS_REF`, `credentialedNextRef`, the
- * quarantine ledgers) is tracked separately in #2602; its refs are written
- * `vX.Y.Z`, which none of the four shapes match, so it needs no entry today.
- * An entry here must name a version actually present, so a stale excuse reds.
+ * Tokens that belong to another package on the same line (`kn-next@0.4.3`,
+ * `@next/env@16.0.0`) are not next's version and are stripped first. Comment
+ * lines are history, not pins.
+ *
+ * WORKFLOW_HARNESS_PINS excuses a hit only by exact file AND exact (trimmed)
+ * line content AND exact version, with a reason. It is not a blanket pass: an
+ * edit to the excused line un-excuses it, and an exclusion that no longer excuses
+ * a flagged pin (the line moved, was fixed, or was deleted) is itself red.
  */
-const WORKFLOW_HARNESS_PINS: { file: string; version: string; reason: string }[] = [];
+type HarnessPin = { file: string; text: string; version: string; reason: string };
 
-type WorkflowPin = { file: string; line: number; version: string; text: string };
+const WORKFLOW_HARNESS_PINS: HarnessPin[] = [
+  {
+    file: '.github/workflows/compat-credential-v1.3.yml',
+    text: "description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'",
+    version: '16.2.0',
+    reason:
+      'Prose in a workflow-input description or issue body that names the compat-suite tag floor for a human reader; it installs nothing and pins nothing.',
+  },
+  {
+    file: '.github/workflows/compat-credential-v1.3.yml',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal workflow-expression text being matched
+    text: "NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.3.8' }}",
+    version: '16.3.8',
+    reason:
+      'The vercel/next.js git tag the compat suite is checked out at (and the prebuilt next its fixtures install): a compat-harness ref, not a dependency of knext or of anything it deploys. The generated v1.3 credential lane is deliberately pinned at v16.3.8; moving it is a credential decision, tracked separately from this scan.',
+  },
+  {
+    file: '.github/workflows/compat-shipped-pin-early-warning.yml',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal workflow-expression text being matched
+    text: 'body="At least one leg (node/bun x turbopack/webpack) went red on the shipped-pin early-warning lane (#1376 option b). This is NON-credentialing — it tests the SCAFFOLD\'s shipped Next.js pin, not the v16.2.0 credential, and cannot affect any v1.0 credential streak. Open the run to see which leg(s) failed: ${RUN_URL}"',
+    version: '16.2.0',
+    reason:
+      'Prose in a workflow-input description or issue body that names the compat-suite tag floor for a human reader; it installs nothing and pins nothing.',
+  },
+  {
+    file: '.github/workflows/compat-vinext.yml',
+    text: "description: 'vercel/next.js git ref to test against (pinned tag >= v16.2.0; do NOT use canary)'",
+    version: '16.2.0',
+    reason:
+      'Prose in a workflow-input description or issue body that names the compat-suite tag floor for a human reader; it installs nothing and pins nothing.',
+  },
+  {
+    file: '.github/workflows/compat-vinext.yml',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal workflow-expression text being matched
+    text: "NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.2.0' }}",
+    version: '16.2.0',
+    reason:
+      'The vercel/next.js git tag the compat suite is checked out at (and the prebuilt next its fixtures install): a compat-harness ref, not a dependency of knext or of anything it deploys. The vinext lane stays on the v16.2.0 credential tag; moving it is a credential decision, tracked separately from this scan.',
+  },
+  {
+    file: '.github/workflows/test-e2e-deploy.yml',
+    text: "description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'",
+    version: '16.2.0',
+    reason:
+      'Prose in a workflow-input description or issue body that names the compat-suite tag floor for a human reader; it installs nothing and pins nothing.',
+  },
+  {
+    file: '.github/workflows/test-e2e-deploy.yml',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal workflow-expression text being matched
+    text: "NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.3.8' }}",
+    version: '16.3.8',
+    reason:
+      'The vercel/next.js git tag the compat suite is checked out at (and the prebuilt next its fixtures install): a compat-harness ref, not a dependency of knext or of anything it deploys. Inside the compat-window frozen set; moving it is a lead decision about what green means, tracked separately from this scan.',
+  },
+];
+
+type WorkflowPin = {
+  file: string;
+  line: number;
+  /** The token as comparable text: `16.3.8`, `16.3`, or the raw text when unparseable. */
+  version: string;
+  parseable: boolean;
+  text: string;
+};
+
+/** Spans that belong to a different package than `next`: `kn-next@0.4.3`, `@next/env@16.0.0`. */
+const OTHER_PACKAGE_SPEC = /(?:@next\/[\w.-]+|[\w.-]*[\w]-next|next-[\w.-]*[a-z])@\S*/gi;
+// `NextApp` is knext's CR kind, never the npm package, so it is not a mention on its own.
+const NEXT_MENTION = /(?<![a-z])next(?!app)/i;
+/** `16.3.8`, `v16.3`, `^16.x`, `16.*` — the operator and a `v` are not part of the token. */
+const VERSION_TOKEN = /(?<![\w.])v?(\d+)\.(\d+|[xX*])(?:\.(\d+|[xX*]))?(?![\w.]*\d)/g;
+/** `next@^16` / `next=~16`: a bare major, which no X.Y token catches. */
+const BARE_MAJOR = /(?<![\w@/-])next[@=][~^<>=v ]*(\d+)(?![\d.\w])/gi;
 
 function workflowNextPins(file: string, text: string): WorkflowPin[] {
   const pins: WorkflowPin[] = [];
   text.split('\n').forEach((raw, i) => {
     if (/^\s*#/.test(raw)) return;
-    const found = new Set<string>();
-    for (const m of raw.matchAll(/(?<![\w@/-])next@(\d+\.\d+\.\d+)/g)) found.add(m[1]);
-    for (const m of raw.matchAll(/(?<![\w-])next=(\d+\.\d+\.\d+)/g)) found.add(m[1]);
-    for (const m of raw.matchAll(/\bNEXT_VERSION:\s*['"]?(\d+\.\d+\.\d+)/g)) found.add(m[1]);
-    if (/(?<![a-z])next(?![a-z])/i.test(raw)) {
-      for (const m of raw.matchAll(/(['"])(\d+\.\d+\.\d+)\1/g)) found.add(m[2]);
+    const scanned = raw.replace(OTHER_PACKAGE_SPEC, ' ');
+    if (!NEXT_MENTION.test(scanned)) return;
+    const found = new Map<string, boolean>();
+    for (const m of scanned.matchAll(VERSION_TOKEN)) {
+      const [, major, minor, patch] = m;
+      const parseable = /^\d+$/.test(minor) && (patch === undefined || /^\d+$/.test(patch));
+      found.set(
+        parseable ? `${major}.${minor}${patch === undefined ? '' : `.${patch}`}` : m[0],
+        parseable,
+      );
     }
-    for (const version of found) pins.push({ file, line: i + 1, version, text: raw.trim() });
+    for (const m of scanned.matchAll(BARE_MAJOR)) found.set(m[0], false);
+    for (const [version, parseable] of found) {
+      pins.push({ file, line: i + 1, version, parseable, text: raw.trim() });
+    }
   });
   return pins;
+}
+
+/** What is wrong with one pin, or `undefined` when it is clear. */
+function judgePin(p: WorkflowPin): string | undefined {
+  if (!p.parseable) return `unparseable next version ${p.version}`;
+  const hits = (
+    /^\d+\.\d+$/.test(p.version)
+      ? minorWithoutFixedRelease(p.version)
+      : nextAdvisoriesFor(p.version).map((h) => h.id)
+  ).join(', ');
+  return hits ? `next ${p.version} (${hits})` : undefined;
+}
+
+const excuses = (ex: HarnessPin, p: WorkflowPin): boolean =>
+  ex.file === p.file && ex.text === p.text && ex.version === p.version;
+
+/** Every un-excused problem in one workflow file's text. */
+function workflowFlags(file: string, text: string, exclusions: HarnessPin[]): string[] {
+  return workflowNextPins(file, text).flatMap((p) => {
+    const why = judgePin(p);
+    if (why === undefined || exclusions.some((ex) => excuses(ex, p))) return [];
+    return [`${p.file}:${p.line}: ${why} — ${p.text}`];
+  });
+}
+
+/** Exclusions that excuse no flagged pin: the line moved, changed, was fixed, or is gone. */
+function staleExclusions(exclusions: HarnessPin[], pins: WorkflowPin[]): HarnessPin[] {
+  return exclusions.filter((ex) => !pins.some((p) => judgePin(p) !== undefined && excuses(ex, p)));
 }
 
 describe('#2594 — no workflow pins, sets or asserts a next with a known advisory', () => {
@@ -279,33 +393,106 @@ describe('#2594 — no workflow pins, sets or asserts a next with a known adviso
     ]);
   });
 
+  // #2606: every spelling below used to pass unflagged. Each is its own case so a
+  // mutation that drops one detector reds exactly that case.
+  const SPELLINGS: [string, string][] = [
+    ['range operator in an install spec', '          bun add next@^16.3.8'],
+    ['tilde in an npm pkg set', '          npm pkg set dependencies.next=~16.3.0'],
+    ['x.y install spec', '          bun add next@16.3'],
+    ['v-prefixed install spec', '          bun add next@v16.3.8'],
+    ['an env-style pin', '  NEXT_PIN: 16.3.8'],
+    ['a yaml flow sequence', '        next: [16.3.8]'],
+    ['an echo into GITHUB_ENV', '          echo NEXT_VERSION=16.3.8 >> $GITHUB_ENV'],
+    ['a ref with a v prefix', '  NEXTJS_REF: v16.3.8'],
+  ];
+  for (const [name, line] of SPELLINGS) {
+    it(`flags ${name}`, () => {
+      expect(workflowNextPins('x.yml', line).length).toBeGreaterThan(0);
+      expect(workflowFlags('x.yml', line, []).length).toBeGreaterThan(0);
+    });
+  }
+
+  it('does not flag a comment, another package, or a line that does not mention next', () => {
+    for (const line of [
+      '          # bun add next@16.3.8',
+      '          npx kn-next@0.4.3 deploy',
+      '          bun add @next/env@16.0.0',
+      "  VINEXT_VERSION: '1.0.1'",
+      '  node-version: 22.4',
+    ]) {
+      expect(workflowNextPins('x.yml', line), line).toEqual([]);
+    }
+  });
+
+  it('judges an X.Y token by whether the whole line has a fixed release', () => {
+    expect(workflowFlags('x.yml', 'bun add next@16.3', []).length).toBe(1);
+    expect(workflowFlags('x.yml', 'bun add next@16.4', [])).toEqual([]);
+    expect(workflowFlags('x.yml', 'bun add next@16.4.1', [])).toEqual([]);
+    expect(workflowFlags('x.yml', 'bun add next@^16.4.1', [])).toEqual([]);
+  });
+
+  it('turns a next version it cannot parse into a failure, not a pass', () => {
+    for (const line of ['bun add next@16.x', 'bun add next@16.*', 'bun add next@^16']) {
+      const flags = workflowFlags('x.yml', line, []);
+      expect(flags.length, line).toBe(1);
+      expect(flags[0], line).toContain('unparseable');
+    }
+  });
+
+  it('an exclusion matches exact file AND exact line AND version, and never anything wider', () => {
+    const line = '  NEXTJS_REF: v16.3.8';
+    const ex = { file: 'x.yml', text: line.trim(), version: '16.3.8', reason: 'r'.repeat(30) };
+    expect(workflowFlags('x.yml', line, [ex])).toEqual([]);
+    // same version, different line content
+    expect(workflowFlags('x.yml', '  NEXTJS_REF: v16.3.8 # edited', [ex]).length).toBe(1);
+    // same line content, different file
+    expect(workflowFlags('y.yml', line, [ex]).length).toBe(1);
+    // same line, a second version appears alongside the excused one
+    expect(
+      workflowFlags('x.yml', '  NEXTJS_REF: v16.3.8 next@16.3.0', [
+        { ...ex, text: '  NEXTJS_REF: v16.3.8 next@16.3.0'.trim() },
+      ]).length,
+    ).toBe(1);
+  });
+
+  it('a stale exclusion that matches no line reds', () => {
+    const ex = { file: 'x.yml', text: 'gone', version: '16.3.8', reason: 'r'.repeat(30) };
+    expect(staleExclusions([ex], workflowNextPins('x.yml', '  NEXTJS_REF: v16.3.8')).length).toBe(
+      1,
+    );
+    expect(
+      staleExclusions(
+        [{ ...ex, text: 'NEXTJS_REF: v16.3.8' }],
+        workflowNextPins('x.yml', '  NEXTJS_REF: v16.3.8'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('an exclusion on a pin that is already clear is stale too (the pin was fixed)', () => {
+    const fixed = '  NEXTJS_REF: v16.4.1';
+    const ex = { file: 'x.yml', text: fixed.trim(), version: '16.4.1', reason: 'r'.repeat(30) };
+    expect(staleExclusions([ex], workflowNextPins('x.yml', fixed)).length).toBe(1);
+  });
+
   it('the scan reaches the kind e2e jobs that stage and deploy a fixture', () => {
     expect(workflows).toContain('.github/workflows/standalone-deploy-kind-e2e.yml');
     expect(workflows).toContain('.github/workflows/supply-chain.yml');
     expect(pins.length).toBeGreaterThan(0);
   });
 
-  it('every harness exclusion names a version the scan still finds, with a reason', () => {
-    for (const ex of WORKFLOW_HARNESS_PINS) {
-      expect(ex.reason.length).toBeGreaterThan(20);
-      expect(
-        pins.some((p) => p.file === ex.file && p.version === ex.version),
-        `${ex.file} no longer carries next ${ex.version}; drop the exclusion`,
-      ).toBe(true);
-    }
+  it('every harness exclusion has a reason and still excuses a flagged pin', () => {
+    for (const ex of WORKFLOW_HARNESS_PINS) expect(ex.reason.length).toBeGreaterThan(20);
+    const stale = staleExclusions(WORKFLOW_HARNESS_PINS, pins);
+    expect(
+      stale.map((ex) => `${ex.file}: ${ex.version} — ${ex.text}`),
+      'these exclusions match no flagged pin (line edited, moved, fixed or deleted); drop or re-point them',
+    ).toEqual([]);
   });
 
   it('every non-excluded workflow pin is clear of the advisories knext doctor fails on', () => {
-    const bad = pins
-      .filter(
-        (p) => !WORKFLOW_HARNESS_PINS.some((ex) => ex.file === p.file && ex.version === p.version),
-      )
-      .flatMap((p) => {
-        const hits = nextAdvisoriesFor(p.version).map((h) => h.id);
-        return hits.length
-          ? [`${p.file}:${p.line}: next ${p.version} (${hits.join(', ')}) — ${p.text}`]
-          : [];
-      });
+    const bad = workflows.flatMap((f) =>
+      workflowFlags(f, readFileSync(resolve(REPO_ROOT, f), 'utf8'), WORKFLOW_HARNESS_PINS),
+    );
     expect(bad).toEqual([]);
   });
 });

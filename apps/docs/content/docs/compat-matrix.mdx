@@ -17,8 +17,8 @@ security advisories (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr) fixed in 16.4.1 â
 fast-moving main branch. The 14-consecutive-run count needed before any cell is
 considered fully credentialed **has not yet completed for any cell, and no credential run at
 v16.4.3 has counted yet**, so don't read anything on this page as "14 of 14, passing."
-**What is proven so far, all at v16.4.0 (the previous harness release on the same line; no run has
-been dispatched at v16.4.3 yet):** dispatched runs of the Turbopack build on the Node runtime
+**What is proven so far, all at v16.4.0 (the previous harness release on the same line; at v16.4.3
+only a single dispatch has run, on one cell, and it counted toward no credential):** dispatched runs of the Turbopack build on the Node runtime
 (16 shards each). The first passed 1160 of 1168 test files, and all eight failures were
 investigated:
 

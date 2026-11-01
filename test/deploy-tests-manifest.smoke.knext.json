@@ -161,7 +161,8 @@
       "test/e2e/app-dir/prerender-encoding/prerender-encoding.test.ts",
       "test/e2e/app-dir/use-cache-output-export/use-cache-output-export.test.ts",
       "test/e2e/middleware-src-node/middleware-src-node.test.ts",
-      "test/e2e/middleware-src/middleware-src.test.ts"
+      "test/e2e/middleware-src/middleware-src.test.ts",
+      "test/e2e/app-dir/otel-middleware-trace/otel-middleware-trace.test.ts"
     ]
   },
   "$knextQuarantines": [
@@ -409,6 +410,30 @@
       "evidence": "run 38161219571 (Next 16.4.0 smoke, NEXTJS_REF=v16.4.0, node x turbopack, shard 13): FINAL 3/3, 4 cases (RSC and SSR, plain and encoded), Expected `file:///vercel/path0/apps/web/app/import-meta-url-rsc/page.tsx` Received `file:///tmp/next-test-<id>/apps/web/app/import-meta-url-rsc/page.tsx`. run 38174324666 (node x webpack, shard 13): FINAL 3/3, 6 cases, the same two cases plus the two client-side cases (the webpack client bundle keeps the absolute path; turbopack's does not, test lines 104-108). Before the #2123 harness fix this file never reached its assertions (it failed at build). All four cells: run 38181750458 (bun x turbopack) shows the 4 turbopack-shaped cases, run 38186195085 (bun x webpack) the 6 webpack-shaped cases, both FINAL 3/3. RE-AUDITED at v16.4.3 (#2602 harness move) by source equivalence, not by a fresh run: the v16.4.0...v16.4.3 compare (26 commits, 264 files, 66 under test/) does not touch this test file or any file in its fixture directory, so the quarantined assertions are unchanged. No dispatch ran at v16.4.3, so this stamp does not claim the case passes or fails there. CAVEAT: the compare changes runtime code (react-server-dom bundles, server/lib, app-render, web, build templates), so an unchanged test file does not rule out a runtime effect; the first scheduled run at v16.4.3 confirms.",
       "provenance": "https://github.com/getknext-dev/knext/issues/2128 (the 16.4 triage listed these as the residual after the #2123 harness fix) + https://github.com/getknext-dev/knext/issues/2162 (C2 smoke runs R1 and R3). ADR-0007 section (h). Retire when upstream's sourceFileUrl stops assuming Vercel's checkout path for non-Vercel adapters, or at the first Next ref where it differs.",
       "reaudited": "v16.4.3"
+    },
+    {
+      "test": "test/e2e/app-dir/otel-middleware-trace/otel-middleware-trace.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": [
+        "traces a page rendered after NextResponse.next()",
+        "traces a route handler executed after NextResponse.next()",
+        "traces a rewritten page",
+        "traces a middleware redirect",
+        "traces a direct middleware response",
+        "traces a request the middleware does not match",
+        "traces /page with an incoming traceparent",
+        "traces /route-handler with an incoming traceparent",
+        "traces /rewrite with an incoming traceparent",
+        "still applies request header overrides set by middleware",
+        "respects a traceparent explicitly set by middleware",
+        "traces instrumentation registration in the triggering request"
+      ],
+      "mechanism": "Every failing assertion is a `toMatchInlineSnapshot` of the recorded span tree inside an `if (isNextDeploy)` branch (test lines ~164-1106), and those snapshots encode Vercel's platform topology: an outer `GET (Next.request)` span, render spans named per entrypoint (e.g. `GET /page/page`), the middleware and the render invoked as separate functions, and lazy per-function instrumentation registration. knext serves the middleware and the render from one `next start` process, so it produces the self-hosted span trees, which are exactly what the same test asserts in its non-deploy branches. The behaviour the test is about holds on knext: the content checks before each snapshot pass (status codes, no internal `x-middleware-*` headers, request-header overrides), an incoming `traceparent` is honoured as the trace root, and a middleware-set `traceparent` starts its own trace. All 12 cases fail in both describe variants ('otel-middleware-trace - proxy (nodejs runtime)' and 'otel-middleware-trace - middleware (edge runtime)'), 24 failures; the 6 skipped are the self-hosted-only block (`describe.skip` when deployed). File level: because the file is excluded, nothing in the suite covers traceparent propagation through middleware on knext; a knext-owned test is tracked on the child issue.",
+      "evidence": "run 41330321803 (NEXTJS_REF=v16.4.3, node x turbopack, shard 16/16, job 124919775154): 24 failed / 6 skipped / 30 total, identical on all three attempts (retry 0/2, 1/2 and 2/2), so FINAL 3/3. ONE cell only: the other three credential cells (node x webpack, bun x turbopack, bun x webpack) were not dispatched (dispatch cap), so the class is observed on a single cell and generalised from the mechanism, not from runs. The file does not exist at v16.4.0 (new upstream in v16.4.1-v16.4.3, backport 37d603bf4), so there is no earlier-ref evidence.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2627 (ADR-0007 section (h); precedent #1571 / #1624) + upstream backport vercel/next.js#100542 (the otel-middleware-trace test). Retire when upstream gives non-Vercel adapters a self-hosted snapshot branch, or when the isNextDeploy branch stops asserting `Next.request`; re-audit on the first dispatch at the next Next ref."
     }
   ],
   "$knextExclusions": [

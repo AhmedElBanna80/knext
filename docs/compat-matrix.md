@@ -35,12 +35,21 @@
 > No credential window runs at v16.4.3 yet, and the webpack and bun cells have not been dispatched
 > at v16.4.0 or v16.4.3. The v1.0 credential on `main` still runs v16.3.8 from the pinned rc tag.
 > The eight quarantine entries stamped at v16.3.8 were re-audited at v16.4.0 by source
-> equivalence, not by re-running them. All 17 quarantine entries and both upstream-runtime-defect
-> entries are now re-audited at v16.4.3 the same way: of their test files only
+> equivalence, not by re-running them. The 17 quarantine entries that existed at v16.4.0 and both
+> upstream-runtime-defect entries are now re-audited at v16.4.3 the same way: of their test files only
 > `use-cache-segment-configs` changed between v16.4.0 and v16.4.3, in a build-output line filter
 > that leaves the quarantined assertion untouched, and that file is excluded from dispatches. The
 > compare also changes runtime code and adds upstream tests, so the first scheduled run at v16.4.3
 > decides.
+>
+> One upstream test added in v16.4.1 to v16.4.3, `otel-middleware-trace`, is the first new file
+> quarantined at v16.4.3, from a single dispatch cell (node x turbopack; the other three credential
+> cells have not run it). All 24 of its failures are span-tree snapshots inside its
+> deployed-to-Vercel branch, which encodes Vercel's request topology (an outer request span, one
+> function per middleware and per render). knext serves both from one process and produces the
+> self-hosted tree the same test asserts for non-deploy runs. It is excluded at file level, so
+> nothing in the suite currently covers trace-context propagation through middleware on knext;
+> that coverage is tracked as follow-up work.
 >
 > **History (1.x line): the compat credential window ran against v16.3.8** (rc.2's
 > re-credential, #1560, 2026-09-30), which was the tag `knext create` scaffolded at the time,

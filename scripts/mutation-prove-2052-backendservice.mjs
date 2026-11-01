@@ -1067,7 +1067,7 @@ const MUTATIONS = [
     claim: 'the zone-function metrics are not registered',
     subject: 'metrics',
     anchor:
-      'metrics.Registry.MustRegister(backendServiceReconcileTotal, backendServiceRefusalsTotal)',
+      'metrics.Registry.MustRegister(backendServiceReconcileTotal, backendServiceRefusalsTotal, backendServiceSecretsUnverifiedSince)',
     replacement: '_ = metrics.Registry',
     test: unit('TestGoldenMatchesTheOperatorsRegisteredMetrics', './internal/metriccontract/'),
   },

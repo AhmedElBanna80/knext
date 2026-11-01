@@ -468,6 +468,12 @@ describe('#2594 — no workflow pins, sets or asserts a next with a known adviso
     ).toEqual([]);
   });
 
+  it('an exclusion on a pin that is already clear is stale too (the pin was fixed)', () => {
+    const fixed = '  NEXTJS_REF: v16.4.1';
+    const ex = { file: 'x.yml', text: fixed.trim(), version: '16.4.1', reason: 'r'.repeat(30) };
+    expect(staleExclusions([ex], workflowNextPins('x.yml', fixed)).length).toBe(1);
+  });
+
   it('the scan reaches the kind e2e jobs that stage and deploy a fixture', () => {
     expect(workflows).toContain('.github/workflows/standalone-deploy-kind-e2e.yml');
     expect(workflows).toContain('.github/workflows/supply-chain.yml');

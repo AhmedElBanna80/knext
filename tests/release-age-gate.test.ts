@@ -56,7 +56,7 @@ const entry = (over: Partial<LockEntry> = {}): LockEntry => ({
 
 const run = (
   entries: LockEntry[],
-  lookup: (e) => Promise<number>,
+  lookup: (e: LockEntry) => Promise<number>,
   over: Record<string, unknown> = {},
 ) =>
   evaluateAges({

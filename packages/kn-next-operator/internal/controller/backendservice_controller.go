@@ -108,12 +108,16 @@ func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	bs := &appsv1alpha1.BackendService{}
 	if err := r.Get(ctx, req.NamespacedName, bs); err != nil {
+		if apierrors.IsNotFound(err) {
+			setUnverifiedGauge(req.Namespace, req.Name, nil)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	observed := bs.Status.DeepCopy()
 
 	// Deletion: take the Knative Service down, then release the object.
 	if !bs.DeletionTimestamp.IsZero() {
+		setUnverifiedGauge(bs.Namespace, bs.Name, nil)
 		if controllerutil.ContainsFinalizer(bs, BackendServiceFinalizer) {
 			// Best effort, and it never blocks the delete: the children carry this
 			// object's controller ownerReference, so garbage collection removes
@@ -202,6 +206,7 @@ func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		obs.unverified = mergeUnverified(obs.unverified, runUnverified)
 	}
 	now := time.Now()
+	obs.now = now
 	obs.deniedSince = nextDeniedSince(bs.Status.SecretsDeniedSince, hasDenied(obs.unverified), now)
 	obs.violations, obs.unverified = escalateDeniedSecrets(obs.violations, obs.unverified, obs.deniedSince, now)
 
@@ -292,6 +297,7 @@ func (r *BackendServiceReconciler) applyFunctionVerdict(
 			r.Recorder.Event(bs, ev.eventType, ev.reason, ev.message)
 		}
 	}
+	setUnverifiedGauge(bs.Namespace, bs.Name, v.unverified)
 	if v.refusal != "" {
 		backendServiceRefusalsTotal.WithLabelValues(v.refusal).Inc()
 	}

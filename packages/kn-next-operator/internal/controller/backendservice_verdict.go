@@ -69,6 +69,7 @@ const (
 	ReasonCompliant               = "Compliant"
 	ReasonSecretNotAllowed        = "SecretNotAllowed"
 	ReasonSecretsUnverified       = "SecretsUnverified"
+	ReasonSecretsAccessDenied     = "SecretsAccessDenied"
 	ReasonSovereigntyViolation    = "SovereigntyViolation"
 	ReasonNoForeignDatabaseHost   = "NoForeignDatabaseHost"
 	ReasonForeignDatabaseHost     = "ForeignDatabaseHost"
@@ -126,6 +127,8 @@ type functionObservation struct {
 	// unverified are referenced Secrets whose metadata could not be read: no
 	// answer, so neither a violation nor a pass (#2498).
 	unverified []unverifiedSecret
+	// now is the time of this pass, so the verdict stays pure.
+	now time.Time
 	// deniedSince is when reads of this function's Secrets were first denied
 	// (nil while none is), already carried forward from status.
 	deniedSince *metav1.Time
@@ -220,6 +223,18 @@ func (o functionObservation) unverifiedNames() string {
 	return strings.Join(names, ", ")
 }
 
+// The reasons the unverified gauge carries.
+const (
+	unverifiedReasonTransient = "transient"
+	unverifiedReasonForbidden = "forbidden"
+)
+
+// unverifiedReport is what the unverified gauge publishes for one function.
+type unverifiedReport struct {
+	reason string
+	since  time.Time
+}
+
 // functionVerdict is the full status outcome of one pass.
 type functionVerdict struct {
 	// conditions are set in this order (the persisted order is part of the
@@ -233,6 +248,9 @@ type functionVerdict struct {
 	observedGeneration int64
 	// secretsDeniedSince is the status field's next value.
 	secretsDeniedSince *metav1.Time
+	// unverified is set while the function sits in SecretsUnverified: why and
+	// since when, for the gauge. nil when verified.
+	unverified *unverifiedReport
 	// refusal is the Ready reason when the function newly ENTERED a refusal
 	// this pass (a transition), for the refusals metric; "" otherwise.
 	refusal string
@@ -302,6 +320,28 @@ func computeBackendServiceVerdict(bs *appsv1alpha1.BackendService, o functionObs
 			"every Secret reference is the zone's own database Secret or marked for the zone")
 	}
 	v.conditions = append(v.conditions, sov)
+
+	// Unverified: observable (gauge) and, for a denial, announced before the
+	// hold runs out. The start of a transient hold is the SovereigntyCompliant
+	// transition, which status persists, so it survives an operator restart.
+	if o.undecided() {
+		rep := &unverifiedReport{reason: unverifiedReasonTransient, since: o.now}
+		if prev := apimeta.FindStatusCondition(bs.Status.Conditions, ConditionSovereigntyCompliant); prev != nil &&
+			prev.Status == metav1.ConditionUnknown && prev.Reason == ReasonSecretsUnverified {
+			rep.since = prev.LastTransitionTime.Time
+		}
+		if hasDenied(o.unverified) && o.deniedSince != nil {
+			rep.reason, rep.since = unverifiedReasonForbidden, o.deniedSince.Time
+			if bs.Status.SecretsDeniedSince == nil {
+				v.events = append(v.events, verdictEvent{corev1.EventTypeWarning, ReasonSecretsAccessDenied, fmt.Sprintf(
+					"the operator is denied (Forbidden) reading %s; the function is held as it is, and is refused "+
+						"and removed if the denial lasts %s. Fix the operator's Secret grant: "+
+						"kubectl auth can-i get secrets -n %s --as=system:serviceaccount:<operator-namespace>:<operator-serviceaccount>",
+					o.unverifiedNames(), secretsDeniedHold, bs.Namespace)})
+			}
+		}
+		v.unverified = rep
+	}
 
 	// JWKSTrusted — whether the zone's key set reaches the function. Evaluated
 	// only for a function that renders; a refused one mounts nothing.

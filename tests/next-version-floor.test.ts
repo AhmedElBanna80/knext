@@ -586,6 +586,15 @@ describe('#2594 — no workflow pins, sets or asserts a next with a known adviso
       workflowFlags('x.yml', '    next:\n      - 16.4.1\n    other:\n      - 16.3.8', []),
     ).toEqual([]);
     expect(workflowFlags('x.yml', '    node:\n      - 22.4\n      - 20.1', [])).toEqual([]);
+    // only the key's DIRECT children are pins: a job named `build-next` has a body of
+    // steps under it, and pnpm's `version: 10.4.1` in there is not next's version
+    expect(
+      workflowFlags(
+        'x.yml',
+        '  build-next:\n    runs-on: x\n    steps:\n      - uses: pnpm/action-setup@v6\n        with:\n          version: 10.4.1',
+        [],
+      ),
+    ).toEqual([]);
     // an excused block pin matches on its own line, file and version
     const ex = { file: 'x.yml', text: '- 16.3.8', version: '16.3.8', reason: 'r'.repeat(30) };
     expect(workflowFlags('x.yml', '    next:\n      - 16.3.8', [ex])).toEqual([]);

@@ -471,19 +471,6 @@ build
 *.tsbuildinfo
 knext-exec*
 
-# The supervisor's own package (@getknext/core) is copied whole by the COPY
-# lines below, and its node_modules is the HOST layout. A bun workspace nests
-# each dependency as a RELATIVE symlink into node_modules/.bun; Docker copies a
-# symlink verbatim, so inside the image it dangles and the supervisor
-# crash-loops (#2609: ENOENT reading /app/node_modules/@getknext/core/node_modules/pino).
-# Keep that host subtree out of the context. The standalone-deps stage installs
-# the supervisor's closure (pino, prom-client, @opentelemetry/api) with a real
-# package manager, so module resolution falls through to /app/node_modules.
-# The context is filtered on REAL paths, so a workspace link
-# (node_modules/@getknext/core -> packages/kn-next) needs the package's real
-# node_modules named too; the staged pattern below does that.
-**/node_modules/@getknext/core/node_modules
-
 # Test, coverage and editor noise.
 coverage
 .nyc_output
@@ -498,12 +485,25 @@ Dockerfile*
 .dockerignore
 docker-compose*.yml
 `;
-    const withCore = opts.coreHostModules
-        ? `${base}
-# The supervisor package's real node_modules (a workspace link target).
+    // Only a workspace-root (nested) build has a workspace link to resolve. The
+    // flat layout keeps its real `@getknext/core` exactly as it always shipped:
+    // excluding a flat app's own `node_modules` would silently swap the
+    // dependency versions its install resolved for the standalone-deps install.
+    const withCore =
+        opts.nested && opts.coreHostModules
+            ? `${base}
+# The supervisor package's own node_modules, by its REAL path (#2609). A bun
+# workspace nests each dependency as a RELATIVE symlink into node_modules/.bun;
+# Docker copies a symlink verbatim, so inside the image it dangles and the
+# supervisor crash-loops (ENOENT reading .../@getknext/core/node_modules/pino).
+# The standalone-deps stage installs the supervisor's closure (pino,
+# prom-client, @opentelemetry/api) with a real package manager, so resolution
+# falls through to /app/node_modules. Anchored at the context root: it names
+# only the COPY source's own node_modules, never a traced copy elsewhere under
+# .next/standalone.
 ${opts.coreHostModules}
 `
-        : base;
+            : base;
     if (!opts.nested) return withCore;
     // The context is a workspace root: the patterns above are anchored at it, so
     // the app's own Next cache (under its path) would otherwise be sent to the
@@ -768,13 +768,12 @@ function coreSourceInContext(layout: StandaloneLayout): string {
 }
 
 /**
- * The supervisor package's own `node_modules`, as a context-relative path, when
- * the COPY source is a link whose target is another directory in the context
- * (`node_modules/@getknext/core -> ../../packages/kn-next`, a workspace link).
- * The builder filters the context on real paths, so the ignore has to name that
- * directory; `**\/node_modules/@getknext/core/node_modules` only matches a
- * package installed as a real directory. Null when the source is not a link, or
- * resolves outside the context.
+ * The supervisor package's own `node_modules`, as a context-relative path. The
+ * COPY source may be a link whose target is another directory in the context
+ * (`node_modules/@getknext/core -> ../../packages/kn-next`, a workspace link);
+ * the builder filters the context on real paths, so the ignore names the REAL
+ * directory. For a real-directory install the real path is the COPY source
+ * itself. Null when the source resolves outside the context.
  */
 function coreHostModulesIgnore(
     contextRoot: string,
@@ -783,9 +782,18 @@ function coreHostModulesIgnore(
     try {
         const realRoot = realpathSync(contextRoot);
         const realCore = realpathSync(join(contextRoot, coreSrc));
-        const rel = relative(realRoot, realCore).split(sep).join("/");
-        if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
-        return `${rel}/node_modules`;
+        // A parent escape is `..` itself or `../…` (a segment, not a prefix): a
+        // directory literally named `..foo` is inside the context.
+        const rel = relative(realRoot, realCore);
+        if (
+            rel === "" ||
+            rel === ".." ||
+            rel.startsWith(`..${sep}`) ||
+            isAbsolute(rel)
+        ) {
+            return null;
+        }
+        return `${rel.split(sep).join("/")}/node_modules`;
     } catch {
         return null;
     }
@@ -904,10 +912,10 @@ export function stageStandaloneBuildContext(opts: {
         });
     }
 
-    const coreHostModules = coreHostModulesIgnore(
-        resolve(opts.buildContext),
-        coreSrcInContext,
-    );
+    // Nested (workspace-root) builds only: the flat layout's ignore is unchanged.
+    const coreHostModules = layout.nested
+        ? coreHostModulesIgnore(resolve(opts.buildContext), coreSrcInContext)
+        : null;
     const dockerfile = join(opts.cwd, STANDALONE_DOCKERFILE_NAME);
     writeFileSync(dockerfile, dockerfileText, "utf8");
     writeFileSync(

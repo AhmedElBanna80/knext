@@ -116,6 +116,32 @@ describe("next advisory table", () => {
         expect(minorWithoutFixedRelease("16.2", table)).toEqual([]);
     });
 
+    // An advisory introduced MID-line (16.3.2) still leaves that line's latest
+    // patch affected: `introduced <= X.Y.0` missed it and returned [], so doctor
+    // would have recommended 16.3.
+    it("reports a line whose advisory was introduced mid-line and fixed on the next minor", () => {
+        const table: readonly NextAdvisory[] = [
+            {
+                id: "GHSA-test-mid-line",
+                severity: "high",
+                summary: "introduced in 16.3.2, last affected 16.3.8",
+                ranges: [
+                    {
+                        introduced: "16.3.2",
+                        lastAffected: "16.3.8",
+                        fixed: "16.4.0",
+                    },
+                ],
+            },
+        ];
+        expect(minorWithoutFixedRelease("16.3", table)).toEqual([
+            "GHSA-test-mid-line",
+        ]);
+        // lines on either side of the affected one stay clear
+        expect(minorWithoutFixedRelease("16.2", table)).toEqual([]);
+        expect(minorWithoutFixedRelease("16.4", table)).toEqual([]);
+    });
+
     // A line that has its own fixed patch is never "without a fixed release".
     it("does not report a line whose fix ships on the same minor", () => {
         const table: readonly NextAdvisory[] = [

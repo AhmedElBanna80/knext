@@ -112,10 +112,12 @@ export function minorWithoutFixedRelease(
         if (
             advisory.ranges.some(
                 (r) =>
-                    // affected from the line's first release (X.Y.0) ...
-                    cmp(triple(r.introduced) as Triple, [maj, min, 0]) <= 0 &&
-                    // ... with the fix on a later minor: every release of
-                    // this line is then affected, whatever `lastAffected`
+                    // affected on this line or an earlier one — compared by
+                    // MINOR, so an advisory introduced mid-line (16.3.2) still
+                    // covers the line's latest patch ...
+                    cmpMinor(r.introduced) <= 0 &&
+                    // ... with the fix on a later minor: the line's latest
+                    // patch is then affected, whatever `lastAffected`
                     // says (it may be this line's own last patch).
                     cmpMinor(r.fixed) > 0,
             )

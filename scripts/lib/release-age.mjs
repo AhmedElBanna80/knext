@@ -122,7 +122,7 @@ function npmFromId(id, registry) {
 }
 
 /** A real subresource-integrity value, as bun and npm write it. */
-const SRI = /^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/;
+const SRI = /^(?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}|sha512-[A-Za-z0-9+/]{86}==)$/;
 
 /** A repository source (`github:o/r#…`, `git+ssh://…`). */
 const REPO_SPEC = /^(?:github:|gitlab:|bitbucket:|git(?:\+[a-z]+)?:\/\/|git\+)/;
@@ -321,10 +321,10 @@ export function changedEntries(head, base) {
 
 /** A repository source that pins a commit in its own spec (`github:o/r#sha`, `git+ssh://…#sha`). */
 const PINNED_REPO_SPEC =
-  /^(?:github:|gitlab:|bitbucket:|git(?:\+[a-z]+)?:\/\/|git\+).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  /^(?:github:|gitlab:|bitbucket:)[^/?#@]+\/[^/?#@]+#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\+[a-z]+)?:\/\/|git\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** `github:` deps resolve to a codeload tarball addressed by the full commit sha. */
 const COMMIT_TARBALL =
-  /^https:\/\/codeload\.github\.com\/[^/]+\/[^/]+\/tar\.gz\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  /^https:\/\/codeload\.github\.com\/[^/?#@]+\/[^/?#@]+\/tar\.gz\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
  * An npm dependency fetched from a URL (tarball, other registry, no resolved URL) whose

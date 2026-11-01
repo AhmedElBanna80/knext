@@ -34,6 +34,8 @@
  *       bytes under the same URL passes).
  *   H1-H3 a hashless URL dependency is excusable by an exception / stops failing /
  *       is not classified as hashless.
+ *   H11-H13 SRI length/padding is not enforced; the repo part of a github: pin or a
+ *       codeload tarball URL stops excluding ?, # and @.
  *   W1  the workflow gets a soft-fail flag.
  *   W2  the workflow's token gains a write scope.
  *   W3  the workflow stops fetching full history.
@@ -326,8 +328,8 @@ const MUTATIONS = [
     id: 'H4',
     claim: 'any #fragment (branch, tag, range) pins a repo spec, not only a full commit sha',
     subject: 'lib',
-    anchor: '|git\\+).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
-    replacement: `|git\\+).*#.+$/; /* ${M} */`,
+    anchor: '|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `|git\\+)[^#?]*#.+$/; /* ${M} */`,
   },
   {
     id: 'H5',
@@ -371,6 +373,30 @@ const MUTATIONS = [
     subject: 'lib',
     anchor: '} unresolved dependenc${',
     replacement: `} URL dependenc\${/* ${M} */ ''}\${`,
+  },
+  {
+    id: 'H11',
+    claim: 'an SRI value is accepted by charset alone, ignoring digest length and padding',
+    subject: 'lib',
+    anchor:
+      'const SRI = /^(?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}|sha512-[A-Za-z0-9+/]{86}==)$/;',
+    replacement: `const SRI = /^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/; /* ${M} */`,
+  },
+  {
+    id: 'H12',
+    claim: 'the repo part of a github:/gitlab:/bitbucket: pin is no longer one clean path segment',
+    subject: 'lib',
+    anchor:
+      '  /^(?:github:|gitlab:|bitbucket:)[^/?#@]+\\/[^/?#@]+#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `  /^(?:github:|gitlab:|bitbucket:).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
+  },
+  {
+    id: 'H13',
+    claim: 'the repo part of a codeload tarball URL accepts ?, # and @',
+    subject: 'lib',
+    anchor:
+      'codeload\\.github\\.com\\/[^/?#@]+\\/[^/?#@]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `codeload\\.github\\.com\\/[^/]+\\/[^/]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
   },
   {
     id: 'W1',

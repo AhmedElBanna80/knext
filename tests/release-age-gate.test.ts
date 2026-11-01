@@ -34,6 +34,14 @@ const DAY = 24 * HOUR;
 const MIN = 3 * 86400;
 const NO_EXC = { active: [], expired: [] };
 const TODAY = '2026-10-17';
+const SRI256 = `sha256-${'A'.repeat(43)}=`;
+const SRI384 = `sha384-${'A'.repeat(64)}`;
+const sri512 = (c: string) => `sha512-${c.repeat(86)}==`;
+const S512_OLD = sri512('o');
+const S512_NEW = sri512('n');
+const S512_REG = sri512('r');
+const S512_OK = sri512('k');
+const SRI512 = `sha512-${'A'.repeat(86)}==`;
 
 const entry = (over: Record<string, unknown> = {}): any => ({
   lockfile: 'bun.lock',
@@ -271,24 +279,24 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
     parseLockfile('bun.lock', text, jsonc).map((e: any) => ({ ...e, lockfile: 'bun.lock' }));
 
   it('bun.lock: the integrity of an unresolved entry is read from the last string field', () => {
-    const [shortForm] = heads(tarball('sha512-OLD'));
-    expect(shortForm.integrity).toBe('sha512-OLD');
+    const [shortForm] = heads(tarball(S512_OLD));
+    expect(shortForm.integrity).toBe(S512_OLD);
     const [registryForm] = parseLockfile(
       'bun.lock',
-      '{"packages":{"a":["a@1.0.0","https://npm.corp.example/",{},"sha512-REG"]}}',
+      `{"packages":{"a":["a@1.0.0","https://npm.corp.example/",{},"${S512_REG}"]}}`,
       jsonc,
     );
-    expect(registryForm.integrity).toBe('sha512-REG');
+    expect(registryForm.integrity).toBe(S512_REG);
   });
 
   it('bun.lock: re-pinning a tarball to new bytes under the SAME url is a changed entry', () => {
-    const changed = changedEntries(heads(tarball('sha512-NEW')), heads(tarball('sha512-OLD')));
+    const changed = changedEntries(heads(tarball(S512_NEW)), heads(tarball(S512_OLD)));
     expect(changed).toHaveLength(1);
-    expect(changed[0].integrity).toBe('sha512-NEW');
+    expect(changed[0].integrity).toBe(S512_NEW);
   });
 
   it('bun.lock: the same hash is not a change', () => {
-    expect(changedEntries(heads(tarball('sha512-OLD')), heads(tarball('sha512-OLD')))).toEqual([]);
+    expect(changedEntries(heads(tarball(S512_OLD)), heads(tarball(S512_OLD)))).toEqual([]);
   });
 
   it('package-lock.json: an integrity-only re-pin of a non-registry source is a changed entry', () => {
@@ -303,9 +311,9 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
         ...e,
         lockfile: 'package-lock.json',
       }));
-    expect(mk('sha512-OLD')[0].integrity).toBe('sha512-OLD');
-    expect(changedEntries(mk('sha512-NEW'), mk('sha512-OLD'))).toHaveLength(1);
-    expect(changedEntries(mk('sha512-OLD'), mk('sha512-OLD'))).toEqual([]);
+    expect(mk(S512_OLD)[0].integrity).toBe(S512_OLD);
+    expect(changedEntries(mk(S512_NEW), mk(S512_OLD))).toHaveLength(1);
+    expect(changedEntries(mk(S512_OLD), mk(S512_OLD))).toEqual([]);
   });
 
   it('Cargo git sources carry the revision in the key: a new rev is a change', () => {
@@ -338,14 +346,12 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
     const e = (integrity: string) =>
       entry({ name: 't', version: base.version, unresolved: 'x', integrity });
     const unscoped = loadExceptions({ allow: [base] }, TODAY);
-    const scoped = loadExceptions({ allow: [{ ...base, integrity: 'sha512-OLD' }] }, TODAY);
+    const scoped = loadExceptions({ allow: [{ ...base, integrity: S512_OLD }] }, TODAY);
     const look = async () => NOW;
-    expect((await run([e('sha512-OLD')], look, { exceptions: unscoped })).unresolved).toHaveLength(
-      1,
-    );
-    expect((await run([e('sha512-OLD')], look, { exceptions: scoped })).unresolved).toEqual([]);
+    expect((await run([e(S512_OLD)], look, { exceptions: unscoped })).unresolved).toHaveLength(1);
+    expect((await run([e(S512_OLD)], look, { exceptions: scoped })).unresolved).toEqual([]);
     // re-pinned to new bytes: the excepted hash no longer matches
-    expect((await run([e('sha512-NEW')], look, { exceptions: scoped })).unresolved).toHaveLength(1);
+    expect((await run([e(S512_NEW)], look, { exceptions: scoped })).unresolved).toHaveLength(1);
     // an entry with no hash at all is NOT excusable, even by an exception that names none
     const noHash = entry({ name: 't', version: base.version, unresolved: 'x' });
     const r = await run([noHash], look, { exceptions: unscoped });
@@ -383,15 +389,12 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
     });
 
     it('the same entry WITH an integrity hash and a matching exception is still allowed', async () => {
-      const scoped = loadExceptions(
-        { allow: [{ ...exc.active[0], integrity: 'sha512-OK' }] },
-        TODAY,
-      );
+      const scoped = loadExceptions({ allow: [{ ...exc.active[0], integrity: S512_OK }] }, TODAY);
       const e = entry({
         name: 't',
         version: tgz,
         unresolved: 'not a registry version',
-        integrity: 'sha512-OK',
+        integrity: S512_OK,
       });
       const r = await run([e], look, { exceptions: scoped });
       expect(r.hashless).toEqual([]);
@@ -422,9 +425,75 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
       for (const bad of ['junk', '   ', 'sha1-AAAA', 'sha512-', 'o-r-abc']) {
         expect(isHashlessUrlSource(u(bad))).toBe(true);
       }
-      for (const ok of ['sha256-AAAA', 'sha384-AB+/==', 'sha512-AbC123+/=']) {
+      for (const ok of [SRI256, SRI384, SRI512]) {
         expect(isHashlessUrlSource(u(ok))).toBe(false);
       }
+    });
+
+    it('an SRI value must have the digest length and padding of its algorithm', () => {
+      const u = (integrity: string) =>
+        entry({ unresolved: 'x', version: 'https://example.com/t.tgz', integrity });
+      for (const bad of [
+        'sha512-A',
+        'sha512-AAAA',
+        `sha512-${'A'.repeat(86)}=`, // wrong padding
+        `sha512-${'A'.repeat(88)}`, // no padding, too long
+        `sha512-${'A'.repeat(87)}==`, // too long
+        'sha256-AAAA',
+        `sha256-${'A'.repeat(44)}`,
+        `sha384-${'A'.repeat(63)}`,
+        `sha384-${'A'.repeat(65)}`,
+        `sha1-${'A'.repeat(27)}=`, // sha1 is not accepted at all
+      ]) {
+        expect(isHashlessUrlSource(u(bad))).toBe(true);
+      }
+    });
+
+    it("bun's own github: lock entry (short sha in the id, sha512 last) is not hashless", () => {
+      // Verified against bun's real output: the id carries a 7-char sha, and the
+      // trailing field is a full sha512.
+      const text = JSON.stringify({
+        packages: {
+          'is-plain-obj': [
+            'is-plain-obj@github:sindresorhus/is-plain-obj#666df7c',
+            {},
+            'sindresorhus-is-plain-obj-666df7c',
+            SRI512,
+          ],
+        },
+      });
+      const [e] = parseLockfile('bun.lock', text, (t: string) => Bun.JSONC.parse(t) as any);
+      expect(isHashlessUrlSource(e)).toBe(false);
+      // The same id without the hash is a short, ambiguous prefix: refused.
+      const bare = JSON.stringify({
+        packages: {
+          'is-plain-obj': [
+            'is-plain-obj@github:sindresorhus/is-plain-obj#666df7c',
+            {},
+            'sindresorhus-is-plain-obj-666df7c',
+          ],
+        },
+      });
+      const [b] = parseLockfile('bun.lock', bare, (t: string) => Bun.JSONC.parse(t) as any);
+      expect(isHashlessUrlSource(b)).toBe(true);
+    });
+
+    it('the repo part of a pin or codeload tarball is a single clean path segment', () => {
+      const sha = 'd'.repeat(40);
+      const u = (v: string) => entry({ unresolved: 'x', version: v });
+      for (const bad of [
+        `github:o/r#main#${sha}`,
+        `github:o/r?x#${sha}`,
+        `github:o/r@x#${sha}`,
+        `git+ssh://x/y.git#main#${sha}`,
+        `https://codeload.github.com/o/r?x/tar.gz/${sha}`,
+        `https://codeload.github.com/o/r@x/tar.gz/${sha}`,
+        `https://codeload.github.com/o/r#x/tar.gz/${sha}`,
+      ]) {
+        expect(isHashlessUrlSource(u(bad))).toBe(true);
+      }
+      expect(isHashlessUrlSource(u(`github:o/r#${sha}`))).toBe(false);
+      expect(isHashlessUrlSource(u(`git+ssh://git@github.com/o/r.git#${sha}`))).toBe(false);
     });
 
     it('a github: dependency resolved to a codeload tarball at a full commit is commit-addressed', () => {
@@ -456,7 +525,7 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
       const [bad] = parseLockfile('package-lock.json', lock('junk'));
       expect(bad.integrity).toBeUndefined();
       expect(isHashlessUrlSource(bad)).toBe(true);
-      const [good] = parseLockfile('package-lock.json', lock('sha512-AbC='));
+      const [good] = parseLockfile('package-lock.json', lock(SRI512));
       expect(isHashlessUrlSource(good)).toBe(false);
     });
 
@@ -473,7 +542,7 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
     it('classifies URL sources; a repo spec pins its commit in the spec and is not hashless', () => {
       const u = (version: string, over = {}) => entry({ unresolved: 'x', version, ...over });
       expect(isHashlessUrlSource(u(tgz))).toBe(true);
-      expect(isHashlessUrlSource(u(tgz, { integrity: 'sha512-A' }))).toBe(false);
+      expect(isHashlessUrlSource(u(tgz, { integrity: SRI512 }))).toBe(false);
       expect(isHashlessUrlSource(u('github:o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'))).toBe(
         false,
       );

@@ -533,7 +533,7 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
       expect(isHashlessUrlSource(u(`bitbucket:g/s/r#${sha}`))).toBe(true);
     });
 
-    it('git+ssh path: percent-escapes, empty segments and traversal are not a clean path', () => {
+    it('git+ssh path: percent-escapes and empty segments are not a clean path', () => {
       const sha = 'a'.repeat(40);
       const u = (v: string) => entry({ unresolved: 'x', version: v });
       for (const bad of [

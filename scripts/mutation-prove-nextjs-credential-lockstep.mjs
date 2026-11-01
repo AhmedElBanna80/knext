@@ -85,7 +85,7 @@ const MUTATIONS = [
     label: 'test-e2e-deploy.yml: bump the workflow_dispatch nextjsRef DEFAULT to a drifted value',
     subject: 'testE2eDeploy',
     anchor:
-      "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.4.0'",
+      "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.4.3'",
     replacement:
       "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.3.3'",
   },
@@ -111,44 +111,32 @@ const MUTATIONS = [
   {
     label: 'docs/compat-matrix.md: drift the cited vercel/next.js version from the manifest',
     subject: 'docsMatrixMd',
-    anchor: 'against `vercel/next.js` **v16.4.0**',
+    anchor: 'against `vercel/next.js` **v16.4.3**',
     replacement: 'against `vercel/next.js` **v16.3.3**',
   },
   {
     label: 'compat-matrix.mdx: drift the cited Next.js version from the manifest',
     subject: 'docsMatrixMdx',
-    anchor: 'the official suite now runs against Next.js v16.4.0.',
+    anchor: 'the official suite now runs against Next.js v16.4.3.',
     replacement: 'the official suite now runs against Next.js v16.3.3.',
   },
   {
-    // #2594: the docs legitimately claim a "newer Next.js release" today
-    // (scaffold 16.4.3, credential v16.4.0), so a docs-only edit can no longer
-    // reach the CONVERGED branch. Close the divergence everywhere the lockstep
-    // compares the shipped pin (manifest, scaffold, the three docker-e2e
-    // fixtures) and leave the docs' claim: only the stale claim can go red.
+    // #2602: the harness moved to the shipped 16.4.3, so the divergence is
+    // CLOSED and the docs must not claim a "newer" scaffold release. Re-add
+    // that stale claim to the callout (everything else converged) and require
+    // the converged branch of the docs check to go red.
     label:
-      'compat-matrix.mdx: keep claiming a "newer Next.js release" after the divergence closes (shippedNextPin back to the credentialed v16.4.0 everywhere)',
-    edits: [
-      {
-        subject: 'manifest',
-        anchor: '"shippedNextPin": "16.4.3",',
-        replacement: '"shippedNextPin": "16.4.0",',
-      },
-      { subject: 'scaffoldPkg', anchor: '"next": "16.4.3",', replacement: '"next": "16.4.0",' },
-      { subject: 'fixtureDrain', anchor: '"next": "16.4.3",', replacement: '"next": "16.4.0",' },
-      { subject: 'fixturePages', anchor: '"next": "16.4.3",', replacement: '"next": "16.4.0",' },
-      {
-        subject: 'fixtureVinextNode',
-        anchor: '"next": "16.4.3",',
-        replacement: '"next": "16.4.0",',
-      },
-    ],
+      'compat-matrix.mdx: claim a "newer Next.js release" than the credentialed one while credentialedNextRef equals shippedNextPin',
+    subject: 'docsMatrixMdx',
+    anchor: 'That is the patched release `knext create` scaffolds.',
+    replacement:
+      'That is a newer Next.js release than the credentialed one, which `knext create` scaffolds.',
   },
   {
     label:
-      'manifest: move credentialedNextRef away from the value the workflows carry (v16.4.0 -> v16.2.12)',
+      'manifest: move credentialedNextRef away from the value the workflows carry (v16.4.3 -> v16.2.12)',
     subject: 'manifest',
-    anchor: '"credentialedNextRef": "v16.4.0",',
+    anchor: '"credentialedNextRef": "v16.4.3",',
     replacement: '"credentialedNextRef": "v16.2.12",',
   },
 
@@ -183,7 +171,7 @@ const MUTATIONS = [
   // ── must carry a reason ──────────────────────────────────────────────────
   {
     label:
-      'scaffold pin + manifest moved TOGETHER to 16.5.0: the docs still cite 16.4.x -> the DERIVED check must catch it',
+      'scaffold pin + manifest moved TOGETHER to 16.5.0 (a new divergence the converged docs do not explain) -> the DERIVED divergence check must catch it',
     edits: [
       {
         subject: 'scaffoldPkg',

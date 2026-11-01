@@ -328,8 +328,8 @@ const WORKFLOW_HARNESS_PINS: HarnessPin[] = [
   },
   {
     file: '.github/workflows/test-e2e-deploy.yml',
-    text: "default: 'v16.3.8'",
-    version: '16.3.8',
+    text: "default: 'v16.4.0'",
+    version: '16.4.0',
     reason:
       'The `nextjsRef` workflow_dispatch input default: the vercel/next.js git tag the compat suite is checked out at, the same compat-harness ref as the NEXTJS_REF line it feeds, not a dependency of knext or of anything it deploys. Inside the compat-window frozen set; moving it is a lead decision about what green means, tracked separately from this scan.',
   },

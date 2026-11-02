@@ -193,7 +193,7 @@ def ready_in_text(r):
 def dist(name, xs):
     xs = sorted(xs)
     print(f"  {name}: n={len(xs)} min={xs[0]:.0f} p10={pct(xs, .1):.0f} p25={pct(xs, .25):.0f} "
-          f"med={pct(xs, .5):.0f} p75={pct(xs, .75):.0f} p90={pct(xs, .9):.0f} max={xs[-1]:.0f}")
+          f"med={pct(xs, .5):.0f} p75={pct(xs, .75):.0f} p90={pct(xs, .9):.0f} p95={pct(xs, .95):.0f} max={xs[-1]:.0f}")
 
 
 print("\n== Fix-round 1: what bound->'Ready in' is (all valid wakes)")
@@ -207,6 +207,13 @@ dist("'Ready in' -> queue-proxy first log (positive = qp later)",
      [qp_first_ms(r) - ready_in_ms(r) for r in trip])
 dist("bound -> user-container first log",
      [r["logs"]["user-container"][0]["t"] - r["watch"]["pod_bound"] for r in trip])
+
+print("\n== Body end vs first byte (resp_end - first_byte, ms)")
+body = [r["watch"]["resp_end"] - r["watch"]["first_byte"] for r in kept_all
+        if "resp_end" in r["watch"] and "first_byte" in r["watch"]]
+print(f"  n={len(body)} min={min(body):.2f} median={statistics.median(body):.2f} "
+      f"max={max(body):.2f}; wakes with body end > 1 ms after first byte: "
+      f"{sum(1 for x in body if x > 1)}")
 
 print("\n== Fix-round 2/3: podIP vs the other status fields, and podIP -> Ready")
 fields = ["cond_PodReadyToStartContainers", "pod_ip", "user-container_running", "queue-proxy_running"]
@@ -278,5 +285,5 @@ for a in ARMS[1:]:
                       [v for k2, v in zip(labels, vals) if k2 == "cpu-base"]))
         if abs(strat_stat(g)) >= abs(obs):
             ge += 1
-    print(f"  {a} - cpu-base: node-weighted median shift={obs:.0f} ms, "
+    print(f"  {a} - cpu-base: n-weighted mean of per-node median differences={obs:.0f} ms, "
           f"two-sided p={(ge + 1) / (N + 1):.2f}")

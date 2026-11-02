@@ -7,9 +7,9 @@ Two measurements on the OKE bench cluster, run back to back on the same two work
 
 ## Summary
 
-- **A: no benefit detected.** A 2-core CPU limit did not shorten cold starts in this sample, but with 20 wakes per arm the test has little power, so this is "no benefit detected", not "no effect". Hodges-Lehmann shift (the median of all pairwise differences) against `cpu-base`: +141 ms for `cpu-boost2` (95% bootstrap CI of the median difference −88 to +488 ms, p = 0.18) and +35 ms for `cpu-boost2req` (CI −199 to +438 ms, p = 0.81). The difference of the table medians is a different number: +223 and +172 ms. Both arms are nominally slower, not faster. The `cpu-boost2` interval excludes shifts below −88 ms; the `cpu-boost2req` interval excludes shifts below −199 ms. Smaller improvements, and any effect of a few hundred ms in the other direction, are not ruled out.
-- **B: the largest cold-start segment is the pod's IP and container state reaching the API after the containers have started.** The app's "Ready in" line is logged immediately at start (the line is "Ready in 0ms" on every wake). The pod's `podIP` appears in the API a median of 451 ms later (p90 952 ms), and the Ready condition a further median 45 ms after that. This lag does not change with the CPU setting.
-- **This data shows no application boot time worth trimming.** The ~600 ms between scheduler binding and the "Ready in" line is sandbox and container start, not app startup: the queue-proxy sidecar's first log line lands at bound + 619 ms (median), about 29 ms after "Ready in". This data cannot separate sandbox creation, pod networking and container runtime start from one another.
+- **A: no benefit detected.** A 2-core CPU limit did not shorten cold starts in this sample, but with 20 wakes per arm the test has little power, so this is "no benefit detected", not "no effect". Against `cpu-base`, the Hodges-Lehmann shift (the median of all 400 pairwise differences) is +141 ms for `cpu-boost2` and +35 ms for `cpu-boost2req`. The difference of table medians is +223 ms and +172 ms, with 95% bootstrap CIs of [−88, +488] ms and [−199, +438] ms. The intervals belong to the difference of table medians, not to the Hodges-Lehmann shifts, which have no interval in this report. Both arms are nominally slower, not faster. The `cpu-boost2` interval excludes differences below −88 ms; the `cpu-boost2req` interval excludes differences below −199 ms. Smaller improvements, and any effect of a few hundred ms in the other direction, are not ruled out.
+- **B: the two largest segments on the bind-to-Ready path are bound to "Ready in" (median 595 ms, p95 1002 ms) and "Ready in" to the pod Ready condition (median 503 ms, p95 1055 ms).** The first is sandbox and container start, which the logs cannot split further. The second is the pod's status reaching the API: `podIP` appears a median 451 ms after "Ready in" (p95 1020 ms), and the Ready condition follows in a later write, a median 45 ms after `podIP`. The medians do not add. The per-arm "Ready in" to Ready medians are 449, 620 and 469 ms; the data do not attribute that spread to the CPU setting.
+- **Application boot is not measured.** "Ready in" is logged at process start ("Ready in 0ms" on every wake), so app initialisation is not timed and could be part of the ~600 ms between scheduler binding and "Ready in", or come after it. The queue-proxy sidecar's first log line lands at bound + 619 ms (median), about 29 ms after "Ready in", which is consistent with sandbox and container start dominating. This data cannot separate sandbox creation, pod networking, container runtime start and app initialisation from one another.
 - **The lag is consistent with a periodic status write about once a second, but that is a hypothesis.** The distribution of queue-proxy first log to `podIP` is roughly uniform over 0–1 s. 59 wakes cannot distinguish a 1 s period from other periods of similar size. The kubelet source facts are below; nothing about the nodes' kubelet configuration was inspected.
 
 ## Setup
@@ -34,14 +34,14 @@ Total cold start, measured as the time from the request to the first response by
 | cpu-boost2 (limit 2) | 1500 | 2128 | 1552 | 1056 | 2165 |
 | cpu-boost2req (request 1, limit 2) | 1448 | 2132 | 1474 | 967 | 2220 |
 
-Two different quantities, both relative to `cpu-base`. The **Hodges-Lehmann shift** is the median of all 400 pairwise differences; the **difference of table medians** is simply the table's median minus the baseline's. The confidence interval is a 95% bootstrap interval for the difference of medians (10,000 resamples).
+Two different quantities, both relative to `cpu-base`. The **Hodges-Lehmann shift** is the median of all 400 pairwise differences; the **difference of table medians** is simply the table's median minus the baseline's. The confidence interval is a 95% bootstrap interval for the difference of table medians (10,000 resamples). The report gives no interval for the Hodges-Lehmann shift.
 
-| Arm | Hodges-Lehmann shift | Difference of table medians | 95% CI (median difference) | CI width | Mann-Whitney p |
+| Arm | Hodges-Lehmann shift | Difference of table medians | 95% bootstrap CI of the difference of table medians | CI width | Mann-Whitney p |
 |---|---|---|---|---|---|
 | cpu-boost2 | +141 ms | +223 ms | [−88, +488] | 575 ms | 0.18 |
 | cpu-boost2req | +35 ms | +172 ms | [−199, +438] | 637 ms | 0.81 |
 
-Power is the limit here: the intervals are 575 and 637 ms wide in total, so only large reductions are excluded (below −88 ms for `cpu-boost2`, below −199 ms for `cpu-boost2req`). A real improvement smaller than that would not show.
+Power is the limit here: the intervals for the difference of table medians are 575 and 637 ms wide, so only large reductions are excluded (below −88 ms for `cpu-boost2`, below −199 ms for `cpu-boost2req`). A real improvement smaller than that would not show.
 
 Within-node permutation test (arm labels shuffled inside each node, 5000 draws, n-weighted mean of the per-node median differences): `cpu-boost2` +169 ms (p = 0.19), `cpu-boost2req` +119 ms (p = 0.39). The script prints these.
 
@@ -54,7 +54,7 @@ Stratified by node (the arms were not balanced across nodes, so read these with 
 
 Node placement moves the medians by several hundred ms in both directions, which is larger than any arm effect. None of the node-stratified comparisons shows a consistent improvement from a higher limit.
 
-**Comparability with earlier reports.** This run's baseline (`cpu-base`, median 1276 ms) is faster than the roughly 1.65 to 2 s medians in the earlier OKE cold-start reports. The runs differ in measurable ways, so the numbers should not be compared across reports: (a) the instrument: the earlier reports timed with an in-pod `curl` or a `node` probe to the cluster-local service address and ended at the complete body, while this run used a watch-based harness that ends at the first response byte (the body ends within a fraction of a millisecond of the first byte here); (b) the app: this run uses a bench image (Bun runtime, Turbopack build, page of about 5 KB), the earlier ones a freshly scaffolded app from a different build; (c) the request path: this run's harness requests the public URL and does not record the route, while the earlier reports state a cluster-local path through the activator. `maxScale` is 1 in both this run and the 2026-11-01 report. Nothing here shows which of these differences, if any, explains the gap.
+**Comparability with earlier reports.** This run's baseline (`cpu-base`, median 1276 ms) is faster than the roughly 1.65 to 2 s medians in the earlier OKE cold-start reports. The runs differ in measurable ways, so the numbers should not be compared across reports: (a) the instrument: the earlier reports timed with an in-pod `curl` or a `node` probe to the cluster-local service address and ended at the complete body, while this run used a watch-based harness that ends at the first response byte (here the body end, from the `resp_end` field, is 0.10 to 0.20 ms after the first byte in all 60 wakes, checked by the analyzer); (b) the app: this run uses a bench image (Bun runtime, Turbopack build, page of about 5 KB), the earlier ones a freshly scaffolded app from a different build; (c) the request path: this run's harness requests the public URL and does not record the route, while the earlier reports state a cluster-local path through the activator. `maxScale` is 1 in both this run and the 2026-11-01 report. Nothing here shows which of these differences, if any, explains the gap.
 
 **Throttling:** not measured. Container cgroup `cpu.stat` (`nr_throttled`) was not readable without host access, and this run did not use a host-path reader. The node CPU capacity (3815m) was not the limiting factor in the sample: each arm's pod asked for at most 1 core.
 
@@ -73,11 +73,11 @@ Successive segments:
 
 | Segment | Median | p95 |
 |---|---|---|
-| Bound → app "Ready in" log line (sandbox and container start, not app startup) | ~600 | ~1000 |
-| "Ready in" → pod Ready condition (status reaching the API) | ~500 | ~1050 |
+| Bound → app "Ready in" log line (sandbox and container start; app boot not measured) | 595 | 1002 |
+| "Ready in" → pod Ready condition (status reaching the API) | 503 | 1055 |
 | Ready condition → first response byte | 97 | 118 |
 
-Per-arm, the same segments are flat across the CPU settings:
+Per-arm, the medians differ and do not follow the CPU settings in order. The middle arm (`cpu-boost2`) has the highest "Ready in" to Ready median, 620 ms, against 449 and 469 ms for the other two. The run does not show a cause for that spread:
 
 | Arm | Bound→"Ready in" median (container start) | "Ready in"→Ready median | First byte median |
 |---|---|---|---|
@@ -97,10 +97,10 @@ Distribution of the interval from the queue-proxy's first log line to the `podIP
 
 Reading the segments:
 
-- **The bound-to-"Ready in" segment (~600 ms) is not app startup.** Every wake logs "Ready in 0ms". The queue-proxy sidecar, which is not the app, logs its first line a median of 29 ms after "Ready in" (range −37 to +64 ms), so both containers start about 0.6 s after binding. That interval is sandbox creation, pod networking and container start. This data cannot say how it divides among them, and shows no app boot time worth trimming.
-- **`podIP`, `PodReadyToStartContainers` and both containers' running state land in a single API write in 60 of 60 wakes.** The Ready condition is a separate, later write: it follows `podIP` by 21 to 401 ms (median 45, p90 269, n = 59). So the pod's status reaches the API in two writes, not one.
-- **The first write lags the containers by a roughly uniform 0–1 s.** From "Ready in" to `podIP` the median is 451 ms (p90 952). That pattern is what a periodic status write about once a second would produce, and 59 wakes cannot distinguish a 1 s period from other periods of similar size. It is a hypothesis, not a finding. "Ready in" to Ready has a minimum of 291 ms, so the full gap is not a pure uniform lag; the Ready condition adds the 21 to 401 ms second write on top.
-- **What the data does not support about the probe.** The harness's own TCP timestamps for the app and queue-proxy ports are censored at the `podIP` time (see below), so the 40 to 45 ms between `podIP` and Ready is not a measurement of the readiness probe. The longest "Ready in" to Ready interval is 1095 ms across 59 wakes. The data does not show what triggers the Ready write.
+- **The bound-to-"Ready in" segment (median 595 ms) is not measured as app boot.** Every wake logs "Ready in 0ms" at process start, so app initialisation is outside what this data times. The queue-proxy sidecar, which is not the app, logs its first line a median of 29 ms after "Ready in" (range −37 to +64 ms), so both containers start about 0.6 s after binding. That interval is sandbox creation, pod networking and container start, and it may also include app initialisation. This data cannot say how it divides among them.
+- **`podIP`, `PodReadyToStartContainers` and both containers' running state are observed in one watch update in 60 of 60 wakes.** The Ready condition is a separate, later update: it follows `podIP` by 21 to 401 ms (median 45, p90 269, n = 59). So the pod's status reaches the API in two watch updates, not one.
+- **The first update lags the containers by a roughly uniform 0–1 s.** From "Ready in" to `podIP` the median is 451 ms (p90 952, p95 1020). That pattern is what a periodic status write about once a second would produce, and 59 wakes cannot distinguish a 1 s period from other periods of similar size. It is a hypothesis, not a finding. "Ready in" to Ready has a minimum of 291 ms, so the full gap is not a pure uniform lag; the Ready condition adds the 21 to 401 ms second write on top.
+- **What the data does not support about the probe.** The harness's own TCP timestamps for the app and queue-proxy ports are censored at the `podIP` time (see below), so the median 45 ms between `podIP` and Ready is not a measurement of the readiness probe. The longest "Ready in" to Ready interval is 1095 ms across 59 wakes. The data does not show what triggers the Ready write.
 
 ### Kubelet source facts (Kubernetes v1.34.0)
 

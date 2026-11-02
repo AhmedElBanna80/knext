@@ -194,6 +194,22 @@ describe(".git is never embedded", () => {
 });
 
 describe("literal-path candidates get the same checks (skipped and logged, never embedded)", () => {
+    it("a link with an ordinary name into .git is skipped", () => {
+        const root = app({ ".git/config": "[x]", "data/ok.json": "{}" });
+        symlinkSync(join(root, ".git/config"), join(root, "data/gitlink.txt"));
+        const plan = planAppData({
+            root,
+            includes: [],
+            candidates: [
+                join(root, "data/gitlink.txt"),
+                join(root, "data/ok.json"),
+            ],
+        });
+        expect(plan.files.map((f) => f.rel)).toEqual(["data/ok.json"]);
+        expect(plan.skipped.map((s) => s.rel)).toEqual(["data/gitlink.txt"]);
+        expect(plan.skipped[0].reason).toMatch(/\.git/);
+    });
+
     it("secret names, links to secrets and .git are skipped with their path", () => {
         const root = app({
             "vault/.env": "S=1",

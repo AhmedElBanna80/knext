@@ -172,6 +172,13 @@ describe("dataPathsMissing: an exact, NUL-delimited name in the executable", () 
             "data/a.json",
         ]);
     });
+    it("a name that only ends in NUL (quoted constant, then a terminator) is not an embedded file", () => {
+        const code = Buffer.from('x"/$bunfs/root/data/a.json\0y');
+        expect(dataPathsMissing(code, [{ rel: "data/a.json" }])).toEqual([
+            "data/a.json",
+        ]);
+    });
+
     it("a path that is the tail of another is not found", () => {
         expect(
             dataPathsMissing(nul("/$bunfs/root/x/data/a.json"), [

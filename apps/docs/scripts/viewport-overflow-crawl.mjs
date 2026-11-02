@@ -3,11 +3,15 @@
  * Rendered responsive-overflow crawl for the docs site.
  *
  * Loads EVERY docs page (derived from content/docs, plus the landing page) at
- * each viewport width and asserts `document.documentElement.scrollWidth <=
- * window.innerWidth`, i.e. the page never scrolls sideways. On failure it prints
- * the outermost elements whose right edge is past the viewport. Elements inside
- * an ancestor that scrolls on its own (overflow-x auto/scroll, such as a `pre`
- * or a table wrapper) are excluded, because that scrolling is intended.
+ * each viewport width and fails a check if EITHER:
+ *   (a) `document.documentElement.scrollWidth > window.innerWidth` (the page
+ *       scrolls sideways), OR
+ *   (b) an element's right edge is past the viewport and it is not inside a
+ *       horizontal scroller (overflow-x auto/scroll, such as a `pre` or table
+ *       wrapper, which scroll on purpose). (b) catches content CLIPPED by an
+ *       overflow:hidden ancestor, which (a) cannot see.
+ * On failure it prints the outermost offending elements.
+ * Default widths: 320,360,375,390,414,600,768,820,900,1000,1024,1100,1200,1280.
  *
  * This is NOT run in CI: it needs a real browser and a built site, and that
  * would slow Lint & Test materially. The static guard
@@ -39,7 +43,8 @@ const opt = (name, fallback) => {
   const hit = args.find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.slice(name.length + 3) : fallback;
 };
-const widths = opt('widths', '320,375,414,768,1280').split(',').map(Number);
+const DEFAULT_WIDTHS = [320, 360, 375, 390, 414, 600, 768, 820, 900, 1000, 1024, 1100, 1200, 1280];
+const widths = opt('widths', DEFAULT_WIDTHS.join(',')).split(',').map(Number);
 const jsonOut = opt('json', '');
 
 const CONTENT_DIR = resolve(import.meta.dirname, '../content/docs');
@@ -115,7 +120,8 @@ for (const width of widths) {
       res = { route, width, error: String(err).slice(0, 200) };
     }
     results.push(res);
-    const tag = res.error ? 'ERR' : res.overflow ? 'OVERFLOW' : 'ok';
+    const bad = res.error || res.overflow || res.offenderCount > 0;
+    const tag = res.error ? 'ERR' : bad ? 'OVERFLOW' : 'ok';
     console.log(
       `${tag}\t${width}\t${route}\t${res.sw ?? ''}/${res.iw ?? ''}\t${res.offenderCount ?? ''}`,
     );
@@ -124,7 +130,11 @@ for (const width of widths) {
 }
 await browser.close();
 
-const failing = results.filter((r) => r.error || r.overflow);
+// A check fails on ANY of: a navigation error, a page that scrolls sideways
+// (scrollWidth), or an element past the viewport that no horizontal scroller
+// contains. The third catches content CLIPPED by an overflow:hidden ancestor,
+// which scrollWidth alone cannot see.
+const failing = results.filter((r) => r.error || r.overflow || r.offenderCount > 0);
 console.log(
   `\nSUMMARY pages=${routes.size} widths=${widths.join(',')} checks=${results.length} failing=${failing.length}`,
 );

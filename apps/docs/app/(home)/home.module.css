@@ -208,7 +208,7 @@
 }
 .grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
   background: var(--line);
   border: 1px solid var(--line);
@@ -249,7 +249,7 @@
 /* code show */
 .codewrap {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 28px;
   align-items: start;
 }
@@ -323,14 +323,9 @@
 /* Narrow viewports: `minmax(0, 1fr)`, not bare `1fr`. A bare `1fr` track cannot
    shrink below its content's min-content width, so the 881px code block forced
    every column past the viewport and the page scrolled sideways at 320-980px.
-   The base desktop templates above are unchanged. */
+   The base templates above use minmax(0, 1fr) too, so no grid track in this
+   file is a bare 1fr. */
 @media (max-width: 1000px) {
-  .grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .codewrap {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
   /* Step list is a flex row with no wrap: its text and inline <code> runs are
      separate flex items, so one long step cannot wrap and pushes the page wide.
      Let steps wrap, and let a long identifier break, at narrow widths only. */

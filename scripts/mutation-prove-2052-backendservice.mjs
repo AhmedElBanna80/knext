@@ -1280,6 +1280,24 @@ const MUTATIONS = [
     test: envtest('spec.security.networkPolicy'),
   },
   {
+    id: 'O05',
+    claim: 'the opt-out deletes a same-named NetworkPolicy the function does not control',
+    subject: 'ctl',
+    anchor: '\tif !metav1.IsControlledBy(np, bs) {\n\t\treturn nil\n\t}\n',
+    replacement: '',
+    test: envtest('spec.security.networkPolicy'),
+  },
+  {
+    id: 'O06',
+    claim: 'an empty security block turns the policy off instead of meaning on',
+    subject: 'ctl',
+    anchor:
+      'bs.Spec.Security == nil || bs.Spec.Security.NetworkPolicy == nil {\n\t\treturn true\n\t}',
+    replacement:
+      'bs.Spec.Security == nil {\n\t\treturn true\n\t}\n\tif bs.Spec.Security.NetworkPolicy == nil {\n\t\treturn false\n\t}',
+    test: envtest('spec.security.networkPolicy'),
+  },
+  {
     id: 'O04',
     claim: 'the pure render still emits the NetworkPolicy when the function opted out',
     subject: 'render',

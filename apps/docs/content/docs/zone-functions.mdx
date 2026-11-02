@@ -134,7 +134,10 @@ spec:
 
 What is **not** in the digest is tuning that cannot change what runs or what it can read: `port`,
 `scaling`, `resources`, `protoVersion`, `language`, `wakeAhead` and `imagePullSecrets`. You can change
-those without touching the zone. The order of the entries in `env`, `envFrom` and `volumes` does
+those without touching the zone. `security` is also left out: it adds no code and widens nothing the
+function can read, but it can switch off the function's network policy, so a pinned zone's function can
+lose its network isolation without the pin moving. Treat write access to `backendservices` as able to
+remove that isolation. The order of the entries in `env`, `envFrom` and `volumes` does
 count, because the order of `env` decides how `$(VAR)` references expand and the order of `envFrom`
 decides which source wins when two define the same name; a tool that reorders them makes the pin
 mismatch, and the function is refused rather than run with a different environment.

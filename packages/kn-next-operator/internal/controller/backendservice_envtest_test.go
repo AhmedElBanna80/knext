@@ -337,6 +337,32 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	})
 
+	It("spec.security.networkPolicy=false leaves a same-named NetworkPolicy the function does not control untouched", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: ptr.To(false)}
+		})
+		foreign := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")},
+			Spec:       networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}},
+		}
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(foreign), &networkingv1.NetworkPolicy{})).To(Succeed(),
+			"the opt-out deletes only a policy this function controls")
+	})
+
+	It("spec.security.networkPolicy: an empty security block means ON", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{}
+		})
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")}, &networkingv1.NetworkPolicy{})).To(Succeed())
+	})
+
 	It("ignores a stray serviceAccountName: the apiserver prunes it and the pod uses the operator-owned ServiceAccount", func() {
 		ns := bsNamespace(ctx)
 		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})

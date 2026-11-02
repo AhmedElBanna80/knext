@@ -526,8 +526,9 @@ The Knative peers lose the app metrics port (9464), which they never needed. The
 the `BackendService` function policy (ADR-0004 Amendment 2 Decision 5).
 
 **Kourier only.** No flag for other ingress layers. Clusters on Istio, Contour or Gateway API turn
-the default policy off and write their own. `BackendService` has no opt-out yet, so functions on a
-non-Kourier layer with an enforcing CNI are unreachable; recorded as a known limit.
+the default policy off and write their own. `BackendService` has the same opt-out
+(`spec.security.networkPolicy: false`), so functions on a non-Kourier layer with an enforcing CNI
+turn the default policy off and write their own.
 
 **Enforcement, and what "proved" means here.** The claim is checked by the kind + Calico drill
 (`test/networkpolicy-enforcement-drill.sh`), not by the object tests, because envtest has no CNI and

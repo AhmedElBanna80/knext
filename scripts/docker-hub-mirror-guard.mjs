@@ -99,59 +99,98 @@ export const DEFERRAL_TRACKER = Object.freeze({
  */
 export const UNMIRRORED_BASELINE = Object.freeze({
   '.github/workflows/test-e2e-deploy.yml': Object.freeze([
-    'scripts/e2e-deploy.sh: docker run',
-    'scripts/e2e-deploy.sh: docker run',
-    'scripts/e2e-deploy.sh: docker run',
-    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run --rm --name "${CONTAINER_NAME}" --network host --user "$(id -u):$(id -g)" -e PORT="${PORT}" -e HOSTNAME="" -e NODE_ENV="production" -e NEXT_DEPLOYMENT_ID="${DEPLOYMENT_ID}" ${PUBLIC_ORIGIN_DOCKER_ARGS[@]+"${PUBLIC_ORIGIN_DOCKER_ARGS[@]}"} -v "${STANDALONE_ROOT}:${CONTAINER_ROOT}" -w "${CONTAINER_WORKDIR}" "${STANDALONE_BUN_IMAGE}" "./$(basename "${SERVER_BOOT_TARGET}")"',
+    'scripts/e2e-deploy.sh: docker run --rm --name "${ED_SUITE_CONTAINER}" --network host --user "$(id -u):$(id -g)" -e PORT="${PORT}" -e HOSTNAME="" -e NODE_ENV="production" -e NEXT_DEPLOYMENT_ID="${DEPLOYMENT_ID}" ${PUBLIC_ORIGIN_DOCKER_ARGS[@]+"${PUBLIC_ORIGIN_DOCKER_ARGS[@]}"} -v "${EMPTY_DIR}:${EMPTY_DIR}" -w "${EMPTY_DIR}" "${STANDALONE_BUN_IMAGE}" "./$(basename "${EMPTY_DIR_STAGED}")"',
+    'scripts/e2e-deploy.sh: docker run --rm --name "${EMPTY_DIR_CONTAINER}" --network host --user "${EMPTY_DIR_UID_GID}" -e PORT="${EMPTY_DIR_PORT}" -e HOSTNAME="" -e NODE_ENV="production" -e NEXT_DEPLOYMENT_ID="${DEPLOYMENT_ID}" -v "${EMPTY_DIR}:${EMPTY_DIR}" -w "${EMPTY_DIR}" "${STANDALONE_BUN_IMAGE}" "./$(basename "${EMPTY_DIR_STAGED}")"; then',
+    'scripts/e2e-deploy.sh: docker run --rm -e "KNEXT_COMPAT_MODE=${KNEXT_COMPAT_MODE:-}" -v "${STANDALONE_ROOT}:${STANDALONE_ROOT}" -v "${SCRIPT_DIR}/e2e-native-rebuild-musl.sh:/e2e-native-rebuild-musl.sh:ro" -v "${SCRIPT_DIR}/lib/musl-lockfile-lookup.sh:/lib/musl-lockfile-lookup.sh:ro" "${MUSL_LOCKFILE_MOUNTS[@]+"${MUSL_LOCKFILE_MOUNTS[@]}"}" "${STANDALONE_BUN_IMAGE}" sh /e2e-native-rebuild-musl.sh "${STANDALONE_ROOT}" /musl-native-lockfiles >&2',
   ]),
   '.github/workflows/compat-vinext.yml': Object.freeze([]),
   '.github/workflows/compat-credential-v1.3.yml': Object.freeze([
-    'scripts/e2e-deploy.sh: docker run',
-    'scripts/e2e-deploy.sh: docker run',
-    'scripts/e2e-deploy.sh: docker run',
-    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run --rm --name "${CONTAINER_NAME}" --network host --user "$(id -u):$(id -g)" -e PORT="${PORT}" -e HOSTNAME="" -e NODE_ENV="production" -e NEXT_DEPLOYMENT_ID="${DEPLOYMENT_ID}" ${PUBLIC_ORIGIN_DOCKER_ARGS[@]+"${PUBLIC_ORIGIN_DOCKER_ARGS[@]}"} -v "${STANDALONE_ROOT}:${CONTAINER_ROOT}" -w "${CONTAINER_WORKDIR}" "${STANDALONE_BUN_IMAGE}" "./$(basename "${SERVER_BOOT_TARGET}")"',
+    'scripts/e2e-deploy.sh: docker run --rm --name "${ED_SUITE_CONTAINER}" --network host --user "$(id -u):$(id -g)" -e PORT="${PORT}" -e HOSTNAME="" -e NODE_ENV="production" -e NEXT_DEPLOYMENT_ID="${DEPLOYMENT_ID}" ${PUBLIC_ORIGIN_DOCKER_ARGS[@]+"${PUBLIC_ORIGIN_DOCKER_ARGS[@]}"} -v "${EMPTY_DIR}:${EMPTY_DIR}" -w "${EMPTY_DIR}" "${STANDALONE_BUN_IMAGE}" "./$(basename "${EMPTY_DIR_STAGED}")"',
+    'scripts/e2e-deploy.sh: docker run --rm --name "${EMPTY_DIR_CONTAINER}" --network host --user "${EMPTY_DIR_UID_GID}" -e PORT="${EMPTY_DIR_PORT}" -e HOSTNAME="" -e NODE_ENV="production" -e NEXT_DEPLOYMENT_ID="${DEPLOYMENT_ID}" -v "${EMPTY_DIR}:${EMPTY_DIR}" -w "${EMPTY_DIR}" "${STANDALONE_BUN_IMAGE}" "./$(basename "${EMPTY_DIR_STAGED}")"; then',
+    'scripts/e2e-deploy.sh: docker run --rm -e "KNEXT_COMPAT_MODE=${KNEXT_COMPAT_MODE:-}" -v "${STANDALONE_ROOT}:${STANDALONE_ROOT}" -v "${SCRIPT_DIR}/e2e-native-rebuild-musl.sh:/e2e-native-rebuild-musl.sh:ro" -v "${SCRIPT_DIR}/lib/musl-lockfile-lookup.sh:/lib/musl-lockfile-lookup.sh:ro" "${MUSL_LOCKFILE_MOUNTS[@]+"${MUSL_LOCKFILE_MOUNTS[@]}"}" "${STANDALONE_BUN_IMAGE}" sh /e2e-native-rebuild-musl.sh "${STANDALONE_ROOT}" /musl-native-lockfiles >&2',
   ]),
   '.github/workflows/bun-base-build.yml': Object.freeze([
-    '.github/workflows/bun-base-build.yml: docker run',
+    '.github/workflows/bun-base-build.yml: docker run --rm -v "$PWD/out:/w:ro" -e HEAD="$head" "$ALPINE_IMAGE" sh -euc \'',
   ]),
 });
 
 /** A `mirror.gcr.io/<repo>[:tag][@sha256:...]` token inside shell text. */
 const MIRROR_REF_IN_TEXT = /mirror\.gcr\.io\/[\w./-]+(?::[\w.-]+)?(?:@sha256:[0-9a-f]{64})?/g;
 
+/** Pull-capable docker verbs: the long `image`/`container` forms and `create` (pulls a missing image) included. */
+const DOCKER_VERB = String.raw`\bdocker\s+(?:(?:image|container)\s+)?(?:build|buildx|pull|run|create|compose|load)\b`;
 /** A command/action that makes the runner or buildkit pull from a registry. */
-const PULLING =
-  /\bdocker\s+(?:build|buildx|pull|run|compose|load)\b|\bkind\s+create\b|docker\/build-push-action|docker\/setup-buildx-action|helm\/kind-action/;
+const PULLING = new RegExp(
+  `${DOCKER_VERB}|\\bkind\\s+create\\b|docker/build-push-action|docker/setup-buildx-action|helm/kind-action|\\buses:\\s*['"]?docker://`,
+);
 /** A script a job runs that itself pulls. */
-const PULLING_SCRIPT = /\bdocker\s+(?:build|buildx|pull|run|compose)\b|\bkind\s+create\b/;
-const SCRIPT_REF = /(?:^|[\s"'`(])((?:\.\/)?scripts\/[\w./-]+\.(?:sh|mjs|js|ts))/g;
+const PULLING_SCRIPT = new RegExp(`${DOCKER_VERB}|\\bkind\\s+create\\b`);
+const SCRIPT_REF = /(?:^|[\s"'`(])((?:\.\/)?scripts\/[\w./-]+\.(?:sh|mjs|js|ts)(?![\w]))/g;
 
 const PULL_TOKEN = new RegExp(PULLING.source, 'g');
 /** Any `scripts/<file>` reference, including `${{ github.workspace }}/knext/scripts/...`. */
-const ANY_SCRIPT_REF = /(?:^|[^\w.-])((?:\.\/)?scripts\/[\w./-]+\.(?:sh|mjs|js|ts))/g;
+const ANY_SCRIPT_REF = /(?:^|[^\w.-])((?:\.\/)?scripts\/[\w./-]+\.(?:sh|mjs|js|ts)(?![\w]))/g;
 
 const codeOnly = (text) =>
   text
     .split('\n')
-    .filter((l) => !/^\s*#/.test(l))
+    .filter((l) => !/^\s*(?:#|\/\/|\*|\/\*)/.test(l))
     .join('\n');
 
+/** Join shell `\` line continuations so a pull's image on the next line is part of its entry. */
+const joinContinuations = (text) => text.replace(/\\\n\s*/g, ' ');
+
+/** `services:` / `container:` images of a workflow, as `<kind>(<job>) <ref>` strings. */
+function containerImages(wfText) {
+  const out = [];
+  const doc = parse(wfText);
+  for (const [id, job] of Object.entries(doc?.jobs ?? {})) {
+    if (!job || typeof job !== 'object') continue;
+    if (job.container) {
+      out.push(`container(${id}) ${JSON.stringify(job.container.image ?? job.container)}`);
+    }
+    for (const [name, svc] of Object.entries(job.services ?? {})) {
+      out.push(`services(${id}.${name}) ${JSON.stringify(svc?.image)}`);
+    }
+  }
+  return out;
+}
+
 /**
- * Every pulling construct in a workflow and the scripts it references, as sorted
- * `<path>: <command>` entries with multiplicity (comment lines excluded).
+ * Every pulling construct in a workflow and the scripts it references (transitively, with
+ * cycle protection), as sorted `<path>: <command and the rest of its line>` entries with
+ * multiplicity (comment lines excluded). The entry carries the image token, so swapping the
+ * image at a baselined site is drift. `services:` / `container:` images are entries too.
+ * A referenced script that does not exist THROWS (fail closed).
  */
 export function pullSites(rel, repoRoot = REPO_ROOT) {
-  const wfText = codeOnly(readFileSync(join(repoRoot, rel), 'utf8'));
-  const paths = new Map([[rel, wfText]]);
-  for (const m of wfText.matchAll(ANY_SCRIPT_REF)) {
-    const p = m[1].replace(/^\.\//, '');
-    const abs = join(repoRoot, p);
-    if (!paths.has(p) && existsSync(abs)) paths.set(p, codeOnly(readFileSync(abs, 'utf8')));
+  const rawWf = readFileSync(join(repoRoot, rel), 'utf8');
+  const paths = new Map([[rel, joinContinuations(codeOnly(rawWf))]]);
+  const queue = [rel];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const m of paths.get(cur).matchAll(ANY_SCRIPT_REF)) {
+      const p = m[1].replace(/^\.\//, '');
+      if (paths.has(p)) continue;
+      const abs = join(repoRoot, p);
+      if (!existsSync(abs)) {
+        throw new Error(`${cur} references ${p}, which does not exist; cannot scan it for pulls`);
+      }
+      paths.set(p, joinContinuations(codeOnly(readFileSync(abs, 'utf8'))));
+      queue.push(p);
+    }
   }
   const out = [];
   for (const [p, text] of paths) {
-    for (const m of text.matchAll(PULL_TOKEN)) out.push(`${p}: ${m[0].replace(/\s+/g, ' ')}`);
+    for (const line of text.split('\n')) {
+      for (const m of line.matchAll(PULL_TOKEN)) {
+        out.push(`${p}: ${line.slice(m.index).replace(/\s+/g, ' ').trim()}`);
+      }
+    }
   }
+  if (/\.ya?ml$/.test(rel)) for (const c of containerImages(rawWf)) out.push(`${rel}: ${c}`);
   return out.sort();
 }
 

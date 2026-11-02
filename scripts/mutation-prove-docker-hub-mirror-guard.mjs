@@ -133,6 +133,81 @@ const MUTATIONS = [
     anchor: 'docker run --rm -v "$PWD/out:/w:ro"',
     replacement: 'echo --rm -v "$PWD/out:/w:ro"',
   },
+  {
+    label: '#2650 baseline: the image token is dropped from an entry (verb only)',
+    subject: 'guard',
+    anchor: "out.push(`${p}: ${line.slice(m.index).replace(/\\s+/g, ' ').trim()}`);",
+    replacement: "out.push(`${p}: ${m[0].replace(/\\s+/g, ' ')}`);",
+  },
+  {
+    label: '#2650 coverage: `docker create` is no longer a pull',
+    subject: 'guard',
+    anchor: '(?:build|buildx|pull|run|create|compose|load)',
+    replacement: '(?:build|buildx|pull|run|compose|load)',
+  },
+  {
+    label: '#2650 coverage: `docker image|container <verb>` long forms are no longer pulls',
+    subject: 'guard',
+    anchor: '\\s+(?:(?:image|container)\\s+)?(?:build|',
+    replacement: '\\s+(?:build|',
+  },
+  {
+    label: '#2650 coverage: `uses: docker://` is no longer a pull',
+    subject: 'guard',
+    anchor: '|\\\\buses:\\\\s*[\'"]?docker://`,',
+    replacement: '`,',
+  },
+  {
+    label: '#2650 coverage: workflow services: images are no longer tracked',
+    subject: 'guard',
+    anchor:
+      'if (/\\.ya?ml$/.test(rel)) for (const c of containerImages(rawWf)) out.push(`${rel}: ${c}`);',
+    replacement: '',
+  },
+  {
+    label: '#2650 coverage: workflow container: images are no longer tracked',
+    subject: 'guard',
+    anchor: '    if (job.container) {',
+    replacement: '    if (false) {',
+  },
+  {
+    label: '#2650 transitive: scripts referenced by a followed script are not followed',
+    subject: 'guard',
+    anchor: '      queue.push(p);',
+    replacement: '',
+  },
+  {
+    label: '#2650 fail closed: a referenced script that is missing is skipped, not an error',
+    subject: 'guard',
+    anchor: '      if (!existsSync(abs)) {',
+    replacement: '      if (!existsSync(abs)) continue;\n      if (false) {',
+  },
+  {
+    label: '#2650 entries: shell line continuations are not joined (image on the next line lost)',
+    subject: 'guard',
+    anchor: "text.replace(/\\\\\\n\\s*/g, ' ')",
+    replacement: 'text',
+  },
+  {
+    label: '#2650 refs: a .json under scripts/ is mistaken for a .js script reference',
+    subject: 'guard',
+    anchor:
+      'const ANY_SCRIPT_REF = /(?:^|[^\\w.-])((?:\\.\\/)?scripts\\/[\\w./-]+\\.(?:sh|mjs|js|ts)(?![\\w]))/g;',
+    replacement:
+      'const ANY_SCRIPT_REF = /(?:^|[^\\w.-])((?:\\.\\/)?scripts\\/[\\w./-]+\\.(?:sh|mjs|js|ts))/g;',
+  },
+  {
+    label: '#2650 refs: JS block-comment lines are scanned as code (false script refs)',
+    subject: 'guard',
+    anchor: '(?:#|\\/\\/|\\*|\\/\\*)',
+    replacement: '(?:#)',
+  },
+  {
+    label: '#2650 real file: a stale TODO(#2106) returns to a workflow under .github/',
+    subject: 'bunBase',
+    anchor: 'TODO(#2650): the smoke-test',
+    replacement: 'TODO(#2106): the smoke-test',
+  },
 ];
 
 declareMutations(MUTATIONS.length);

@@ -73,8 +73,12 @@ const MUTATIONS = [
     id: 'O6',
     subject: 'operator',
     claim: 'the publish job is confined to main (operator tags from other branches unpublished)',
-    anchor: "      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&",
-    replacement: "      github.ref == 'refs/heads/main' &&",
+    // One plain-scalar line: the harness appends its residue marker as a YAML
+    // comment, which would corrupt a folded (>-) scalar's text instead.
+    anchor:
+      "if: >-\n      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&\n      needs.operator-image-supply-chain.outputs.ready == 'true'",
+    replacement:
+      "if: github.ref == 'refs/heads/main' && needs.operator-image-supply-chain.outputs.ready == 'true'",
   },
   {
     id: 'O7',

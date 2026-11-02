@@ -547,15 +547,22 @@ t("partial", () => readFileSync(join(process.cwd(), "app", "da" + "ta.json"), "u
 });
 
 describe("self-contained: the post-compile check is wired", () => {
+    // A scan of the compile script, not a behavioural test: no real Bun drops a
+    // planned file, so the only way to prove the guard is there is to read it.
     const source = readFileSync(COMPILE, "utf8");
+    const GUARD =
+        /if \(SELF_CONTAINED && DATA_PLAN\.files\.length > 0\) \{\s*(?:\/\/[^\n]*\n\s*)*const dropped = dataPathsMissing\(readFileSync\(OUTFILE\), DATA_PLAN\.files\);\s*if \(dropped\.length > 0\) \{\s*rmSync\(OUTFILE, \{ force: true \}\);\s*console\.error\([^\n]*\);\s*process\.exit\(1\);\s*\}\s*\}/;
 
     it("every planned data file is verified inside the executable, and the binary is removed otherwise", () => {
-        const at = source.indexOf("dataPathsMissing(");
-        expect(at, "vinext-compile must call dataPathsMissing").toBeGreaterThan(
-            -1,
-        );
-        const block = source.slice(at, at + 700);
-        expect(block).toContain("rmSync(OUTFILE");
-        expect(block).toContain("process.exit(1)");
+        expect(source).toMatch(GUARD);
+    });
+
+    it("runs after the build succeeded and before the success log", () => {
+        const built = source.indexOf("if (!result.success)");
+        const guard = source.search(GUARD);
+        const wrote = source.indexOf("] wrote ${OUTFILE}");
+        expect(built).toBeGreaterThan(-1);
+        expect(guard).toBeGreaterThan(built);
+        expect(wrote).toBeGreaterThan(guard);
     });
 });

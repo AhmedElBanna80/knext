@@ -110,8 +110,10 @@ Auth is one factor; **network isolation** is the second. knext reconciles a defa
   Operator) and `knative-serving-ingress` (OpenShift Serverless). If your cluster uses a
   different Knative ingress layer (Istio, Contour, Gateway API), its gateway pods are not
   admitted and your app will be unreachable on a policy-enforcing CNI: turn the default policy
-  off (`spec.security.networkPolicy: false`) and write your own. Zone functions have no such
-  switch yet, so on a non-Kourier ingress layer with an enforcing CNI they cannot be reached.
+  off (`spec.security.networkPolicy: false`) and write your own. A zone function (a
+  `BackendService`) has the same switch with the same meaning:
+  `spec.security.networkPolicy: false` removes the function's policy. See
+  [Network](/docs/zone-functions#network) for when that is appropriate.
 - **Ports are restricted, and your app's own port is not among them.** The policy admits the
   Knative queue-proxy ports (`8012`/`8013`, plus `8112` for internal TLS), the queue-proxy
   metrics port (`9090`) and knext's app-metrics port (`9464`). Your app's container port is deliberately **excluded**: the

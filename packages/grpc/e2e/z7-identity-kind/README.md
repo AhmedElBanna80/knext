@@ -57,6 +57,12 @@ halves.
   runs the unmutated operator through every phase, which must pass. It needs a cluster that
   has had `PHASES="up images"` and takes about an hour. Its anchors are checked without a
   cluster by `tests/z7-identity-kind-e2e-lane.test.ts`.
+- Without a cluster, in the nightly sweep: `scripts/mutation-prove-2051-z7-operator-guards.mjs`
+  plants the same operator rules (the propagation bound not waited, the staged key not
+  published or projected into the zone's pod, the previous key dropped or retired early, a
+  subPath, env or shared JWKS, a signing key in a function's pod spec) and requires the
+  operator's own unit guards to go red. It proves the rules are guarded; only the hand run
+  above shows a live operator and kubelet honouring them.
 
 ## What it does not prove
 

@@ -37,6 +37,8 @@
  *       wholesale. A key set judged by the symlink itself reads as not mounted,
  *       and a change watched on the symlink is not seen until the interval.
  *       The in-place writes the other J* guards use cannot tell either apart.
+ *   R*  a key the JWKS dropped is no longer trusted (jwks.go): a reload that
+ *       accumulates keys keeps a retired key valid after the overlap.
  *   B*  a user id forged into a request header (auth.go): it never stands in
  *       for a missing token, and never replaces the token's subject.
  *   N*  negative control: a re-read interval shorter than the contract's
@@ -517,6 +519,19 @@ const ALL_MUTATIONS = [
     anchor: '\tnow := f.now()\n',
     replacement:
       '\tnow := f.now()\n\tif link, lerr := os.Lstat(f.path); lerr == nil {\n\t\tinfo = link\n\t}\n',
+  },
+  // ── R: a key the JWKS dropped is no longer trusted ────────────────────────
+  // The "fails after the overlap" half of rotation. J6/J7 only catch a verifier
+  // that never looks again; a verifier that DOES reload but accumulates keys
+  // across reloads trusts a retired key forever, and only this row sees it.
+  {
+    id: 'R1',
+    claim:
+      'a reload keeps the keys of the last read (a key the JWKS dropped stays trusted after the overlap)',
+    subject: 'jwks',
+    anchor: '\tkeys, err := parseJWKS(data)\n',
+    replacement:
+      '\tkeys, err := parseJWKS(data)\n\tif err == nil {\n\t\tfor kid, old := range f.cached {\n\t\t\tif _, ok := keys[kid]; !ok {\n\t\t\t\tkeys[kid] = old\n\t\t\t}\n\t\t}\n\t}\n',
   },
   // ── B: an identity forged into a request header ───────────────────────────
   {

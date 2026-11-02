@@ -42,6 +42,9 @@
  *       as not mounted, and a change watched on the symlink is not seen until
  *       the interval. The in-place writes the other J* guards use cannot tell
  *       either apart.
+ *   R*  a key the JWKS dropped is no longer trusted (src/auth/jwks.rs): a
+ *       reload that accumulates keys keeps a retired key valid after the
+ *       overlap.
  *   B*  a user id forged into a request header (src/auth.rs): it never stands
  *       in for a missing token, and never replaces the token's subject.
  *   N*  negative control: a re-read interval shorter than the contract's
@@ -475,6 +478,20 @@ const ALL_MUTATIONS = [
     anchor: '        let meta = std::fs::metadata(&self.path).map_err(|_| AuthError::NoJwks)?;\n',
     replacement:
       '        let meta = std::fs::symlink_metadata(&self.path).map_err(|_| AuthError::NoJwks)?;\n',
+  },
+  // ── R: a key the JWKS dropped is no longer trusted ────────────────────────
+  // The "fails after the overlap" half of rotation. J5/J6 only catch a verifier
+  // that never looks again; a verifier that DOES reload but accumulates keys
+  // across reloads trusts a retired key forever, and only this row sees it.
+  {
+    id: 'R1',
+    claim:
+      'a reload keeps the keys of the last read (a key the JWKS dropped stays trusted after the overlap)',
+    subject: 'jwks',
+    anchor:
+      '        *last = None;\n        let data = read_at_most(&self.path, MAX_JWKS_BYTES)?;\n        let keys = parse(&data).map(Arc::new);\n',
+    replacement:
+      '        let previous = last.take().and_then(|s| s.keys.ok());\n        let data = read_at_most(&self.path, MAX_JWKS_BYTES)?;\n        let keys = parse(&data).map(|mut fresh| {\n            if let Some(old) = &previous {\n                for (kid, key) in old.iter() {\n                    fresh.entry(kid.clone()).or_insert(*key);\n                }\n            }\n            Arc::new(fresh)\n        });\n',
   },
   // ── B: an identity forged into a request header ───────────────────────────
   {

@@ -26,6 +26,7 @@
  *   node scripts/mutation-prove-2659-nested-workflows.mjs
  */
 
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,7 +84,7 @@ const SCANNER_ROWS = [
   {
     id: 'N08',
     claim: 'an exclusion no longer clears its file',
-    anchor: 'if (Object.hasOwn(exclusions, file)) continue;',
+    anchor: 'if (!nestedDir && Object.hasOwn(exclusions, file)) continue;',
     replacement: 'void 0;',
   },
   {
@@ -116,6 +117,37 @@ const SCANNER_ROWS = [
     claim: 'a quoted "on" key is not recognised as the trigger',
     anchor: "const stripQuotes = (key) => key.replace(/^[\"']|[\"']$/g, '');",
     replacement: 'const stripQuotes = (key) => key;',
+  },
+  {
+    id: 'N14',
+    claim: 'an exclusion is checked before the nested-dir rule (a nested file can be excluded)',
+    anchor: 'if (!nestedDir && Object.hasOwn(exclusions, file)) continue;',
+    replacement: 'if (Object.hasOwn(exclusions, file)) continue;',
+  },
+  {
+    id: 'N15',
+    claim: 'a nested-dir key in the exclusion list is accepted',
+    anchor: 'if (NESTED_WORKFLOWS_DIR.test(file)) {',
+    replacement: 'if (false) {',
+  },
+  {
+    id: 'N16',
+    claim: 'a BOM-prefixed on: key is not recognised',
+    anchor: "const text = rawText.replace(/^\\uFEFF/, '');",
+    replacement: 'const text = rawText;',
+  },
+  {
+    id: 'N17',
+    claim: 'flow-style mappings ({on: push, jobs: ...}) are not recognised',
+    anchor: 'if (flow) {',
+    replacement: 'if (false) {',
+  },
+  {
+    id: 'N18',
+    claim:
+      'untracked working-tree files are scanned (the tracked-file list is no longer the source)',
+    anchor: "['ls-files', '-z']",
+    replacement: "['ls-files', '-z', '--cached', '--others']",
   },
 ];
 
@@ -188,8 +220,10 @@ for (const t of TREE_ROWS) {
   try {
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, t.body);
+    execFileSync('git', ['add', '-f', '--', t.file], { cwd: REPO_ROOT });
     status = runSpecExit(REPO_ROOT, SPEC);
   } finally {
+    execFileSync('git', ['rm', '-q', '--cached', '-f', '--', t.file], { cwd: REPO_ROOT });
     rmSync(abs, { force: true });
     // Remove the directories the plant created, only if they are now empty.
     for (let d = dirname(abs); d !== REPO_ROOT; d = dirname(d)) {

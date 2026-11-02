@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -49,6 +50,8 @@ function fixture(files: Record<string, string>): string {
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, body);
   }
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  execFileSync('git', ['add', '-A', '-f'], { cwd: root });
   return root;
 }
 
@@ -70,6 +73,15 @@ describe('isWorkflowShaped', () => {
   });
   it('ignores an indented on:/jobs: (nested data, not top-level keys)', () => {
     expect(isWorkflowShaped('data:\n  on: 1\n  jobs: 2\n')).toBe(false);
+  });
+  it('accepts a BOM-prefixed on: key', () => {
+    expect(isWorkflowShaped(`\uFEFF${WORKFLOW}`)).toBe(true);
+  });
+  it('accepts a flow-style mapping', () => {
+    expect(isWorkflowShaped('{on: push, jobs: {a: {runs-on: x}}}\n')).toBe(true);
+  });
+  it('rejects a flow-style mapping with no trigger', () => {
+    expect(isWorkflowShaped('{name: x, jobs: {a: {runs-on: x}}}\n')).toBe(false);
   });
   it('ignores keys that only appear in comments', () => {
     expect(isWorkflowShaped('# on: push\n# jobs:\nkind: ConfigMap\n')).toBe(false);
@@ -145,6 +157,27 @@ describe('scanForNestedWorkflows: exclusion list', () => {
     const root = fixture({ [rel]: 'kind: ConfigMap\n' });
     const res = scanForNestedWorkflows(root, { exclusions: { [rel]: 'was a template' } });
     expect(res.violations.map((v: { rule: string }) => v.rule)).toContain('exclusion-stale');
+  });
+});
+
+describe('scanForNestedWorkflows: nested dir can never be excluded', () => {
+  const nested = 'packages/a/.github/workflows/cd.yml';
+  it('flags a nested workflow even when listed in exclusions', () => {
+    const root = fixture({ [nested]: WORKFLOW });
+    const res = scanForNestedWorkflows(root, { exclusions: { [nested]: 'pretend it is fine' } });
+    const rules = res.violations.map((v: { rule: string }) => v.rule);
+    expect(rules).toContain('nested-workflow-dir');
+    expect(rules).toContain('exclusion-nested');
+  });
+  it('flags a BOM-prefixed workflow-shaped file', () => {
+    const root = fixture({ 'a/ci.yml': `\uFEFF${WORKFLOW}` });
+    expect(paths(root)).toEqual(['a/ci.yml']);
+  });
+  it('ignores untracked files (only tracked files are scanned)', () => {
+    const root = fixture({ 'x.txt': '' });
+    mkdirSync(join(root, 'p'), { recursive: true });
+    writeFileSync(join(root, 'p/untracked.yml'), WORKFLOW);
+    expect(paths(root)).toEqual([]);
   });
 });
 

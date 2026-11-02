@@ -22,15 +22,16 @@
  * YAML: a file that does not parse (a Helm-style template, say) must still be
  * caught rather than skipped.
  *
- * Not scanned: `.git`, `node_modules`, `.claude` (agent worktrees hold full
+ * Scanned: tracked files only (`git ls-files`). Not scanned: `.git`, `node_modules`, `.claude` (agent worktrees hold full
  * copies of the tree, so they would double-report), `dist`, `target`.
  *
  * The test is `tests/no-nested-workflows.test.ts`; the mutation proof is
  * `scripts/mutation-prove-2659-nested-workflows.mjs`.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { lstatSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -54,8 +55,27 @@ const NESTED_WORKFLOWS_DIR = /(^|\/)\.github\/workflows\//;
 const stripQuotes = (key) => key.replace(/^["']|["']$/g, '');
 
 /** True when the text has a top-level trigger key AND a top-level `jobs` key. */
-export function isWorkflowShaped(text) {
+export function isWorkflowShaped(rawText) {
+  const text = rawText.replace(/^\uFEFF/, '');
   const keys = new Set();
+  // Flow-style document: `{on: push, jobs: {...}}` - keys inside the top-level braces.
+  const flow = /^\s*\{([\s\S]*)\}\s*$/.exec(text.replace(/^(\s*#.*\n)+/, ''));
+  if (flow) {
+    let depth = 0;
+    let buf = '';
+    const take = () => {
+      const k = /^\s*(["']?[A-Za-z_][\w-]*["']?)\s*:/.exec(buf);
+      if (k) keys.add(stripQuotes(k[1]));
+      buf = '';
+    };
+    for (const ch of flow[1]) {
+      if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') depth--;
+      if (ch === ',' && depth === 0) take();
+      else buf += ch;
+    }
+    take();
+  }
   for (const line of text.split('\n')) {
     // A top-level key starts in column 0; comments, list items and indented data do not.
     const m = /^(["']?[A-Za-z_][\w-]*["']?)\s*:/.exec(line);
@@ -64,14 +84,23 @@ export function isWorkflowShaped(text) {
   return keys.has('on') && keys.has('jobs');
 }
 
-function walk(root, dir, out) {
-  for (const name of readdirSync(dir)) {
-    if (SKIP_DIRS.has(name)) continue;
-    const abs = join(dir, name);
-    const st = statSync(abs);
-    if (st.isDirectory()) walk(root, abs, out);
-    else if (st.isFile()) out.push(relative(root, abs).split('\\').join('/'));
+/** Tracked regular files; symlinks and deleted paths are skipped. */
+function trackedFiles(root) {
+  const out = execFileSync('git', ['ls-files', '-z'], {
+    cwd: root,
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const files = [];
+  for (const file of out.split('\0')) {
+    if (!file || file.split('/').some((seg) => SKIP_DIRS.has(seg))) continue;
+    try {
+      if (lstatSync(join(root, file)).isFile()) files.push(file);
+    } catch {
+      // tracked but deleted in the working tree
+    }
   }
+  return files;
 }
 
 /**
@@ -81,8 +110,7 @@ function walk(root, dir, out) {
  */
 export function scanForNestedWorkflows(root = REPO_ROOT, opts = {}) {
   const exclusions = opts.exclusions ?? INTENTIONAL_TEMPLATES;
-  const files = [];
-  walk(root, root, files);
+  const files = trackedFiles(root);
   const violations = [];
   let scanned = 0;
 
@@ -92,7 +120,9 @@ export function scanForNestedWorkflows(root = REPO_ROOT, opts = {}) {
     if (!nestedDir && !yamlish) continue;
     scanned++;
     if (file.startsWith(ROOT_WORKFLOWS)) continue;
-    if (Object.hasOwn(exclusions, file)) continue;
+    // A nested .github/workflows file can NEVER be excluded: it is dead text whatever
+    // the list says. Only workflow-shaped YAML elsewhere may be a justified template.
+    if (!nestedDir && Object.hasOwn(exclusions, file)) continue;
     if (nestedDir) {
       violations.push({
         file,
@@ -112,6 +142,13 @@ export function scanForNestedWorkflows(root = REPO_ROOT, opts = {}) {
 
   const present = new Set(files);
   for (const [file, reason] of Object.entries(exclusions)) {
+    if (NESTED_WORKFLOWS_DIR.test(file)) {
+      violations.push({
+        file,
+        rule: 'exclusion-nested',
+        detail: 'a nested .github/workflows file cannot be an intentional template',
+      });
+    }
     if (typeof reason !== 'string' || reason.trim() === '') {
       violations.push({
         file,

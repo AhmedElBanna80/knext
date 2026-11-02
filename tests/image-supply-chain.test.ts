@@ -9,7 +9,6 @@ import {
   type Finding,
   jobsOf,
   loadWorkflows,
-  type NonImageLane,
   operatorTagWorkflows,
   templateDirs,
   UNKNOWN,
@@ -33,7 +32,6 @@ import {
  *
  * KNOWN_GAPS is the one explicit, named exception list. The engine reds on a
  * gap that is not listed AND on a listed gap that no longer exists (stale).
- * NON_IMAGE_LANES likewise lists push-shaped jobs that publish no release image.
  *
  * Mutation-proved by `scripts/mutation-prove-2044-image-supply-chain.mjs`.
  */
@@ -59,15 +57,6 @@ const KNOWN_GAPS: readonly KnownGap[] = [
   },
 ];
 
-const NON_IMAGE_LANES: readonly NonImageLane[] = [
-  {
-    file: 'operator-e2e-nightly.yml',
-    job: 'scale-to-zero-cache',
-    reason:
-      'crane copy of an already-signed digest into the throwaway in-cluster kind registry for a test; publishes nothing to GHCR',
-  },
-];
-
 const key = (f: { subject: string; check: string }) => `${f.subject}|${f.check}`;
 
 /** Findings not excused by KNOWN_GAPS, plus listed gaps that no longer exist. */
@@ -85,7 +74,7 @@ function judge(findings: Finding[], gaps: readonly KnownGap[]): string[] {
 const wfs = loadWorkflows();
 const templates = templateDirs();
 const clone = <T>(x: T): T => structuredClone(x);
-const real = { nonLanes: NON_IMAGE_LANES };
+const real = {};
 
 function wfNamed(file: string, list: Workflow[] = wfs): Workflow {
   const w = list.find((x) => x.file === file);
@@ -131,15 +120,30 @@ describe('image publish lanes: the real workflows', () => {
     expect(trivyCoe('operator-supply-chain.yml').length).toBeGreaterThan(0);
   });
 
-  it('the allowlisted non-lane is really a push-shaped job (the list cannot go stale)', () => {
-    expect(names).toContain('operator-e2e-nightly.yml#scale-to-zero-cache');
-    expect(auditImageLanes(wfs, { nonLanes: [{ ...NON_IMAGE_LANES[0], job: 'gone' }] })).toEqual(
-      expect.arrayContaining([expect.objectContaining({ check: 'stale-non-lane' })]),
+  it('operator-e2e-nightly crane copy goes to the LOCAL registry: not a lane, with no allowlist', () => {
+    const wf = wfNamed('operator-e2e-nightly.yml');
+    const step = (jobsOf(wf)['scale-to-zero-cache'].steps as Array<Record<string, unknown>>).find(
+      (x) => /crane copy "\$\{RESOLVED_IMAGE\}"/.test(String(x.run ?? '')),
+    ) as Record<string, unknown>;
+    // The destination variable is assigned a localhost registry in the same step.
+    expect(String(step.run)).toMatch(/local_ref="localhost:5001\//);
+    expect(names).not.toContain('operator-e2e-nightly.yml#scale-to-zero-cache');
+  });
+
+  it('a GHCR push added to that job makes it a lane that reds', () => {
+    const m = withWf('operator-e2e-nightly.yml', (d) => {
+      d.jobs['scale-to-zero-cache'].steps.push({ run: 'crane push layout ghcr.io/x/y:1' });
+    });
+    expect(auditImageLanes(m).map((f) => f.subject)).toContain(
+      'operator-e2e-nightly.yml#scale-to-zero-cache',
     );
   });
 
-  it('without the allowlist the real tree is NOT clean (it is load-bearing)', () => {
-    expect(auditImageLanes(wfs).length).toBeGreaterThan(0);
+  it('the operator `ready` output equals `publish` (the premise the evaluator relies on)', () => {
+    const steps = jobsOf(wfNamed('operator-supply-chain.yml'))['operator-image-supply-chain']
+      .steps as Array<Record<string, unknown>>;
+    const handoff = steps.find((x) => x.id === 'handoff') as Record<string, unknown>;
+    expect(String(handoff.if ?? '')).toMatch(/steps\.channel\.outputs\.publish == 'true'/);
   });
 });
 
@@ -167,7 +171,7 @@ describe('operator tags: trigger shape', () => {
     const m = withWf(OP, (d) => {
       for (const j of Object.values<{ steps?: unknown[] }>(d.jobs))
         j.steps = (j.steps ?? []).filter(
-          (s) => !/crane push/.test(String((s as { run?: string }).run)),
+          (s) => !/crane\s+(push|tag)/.test(String((s as { run?: string }).run)),
         );
     });
     expect(checks(auditOperatorTags(m))).toContain('no-publish');
@@ -195,7 +199,8 @@ describe('operator and app lanes: removing a gate from the REAL workflows reds',
     it(`${file}: no SBOM step`, () => {
       const m = dropSteps(
         file,
-        (s) => /sbom-action/.test(s.uses ?? '') && !/download-syft/.test(s.uses),
+        (s) =>
+          /sbom-action/.test(s.uses ?? '') || /\b(syft|cyclonedx-npm)\b/.test(String(s.run ?? '')),
       );
       expect(checks(auditImageLanes(m, real))).toContain('sbom');
     });
@@ -222,7 +227,7 @@ const trivyStep = (extra: Any = {}, withExtra: Any = {}): Any => ({
   ...extra,
 });
 const sbomStep = (extra: Any = {}): Any => ({ uses: 'anchore/sbom-action@abc', ...extra });
-const pushStep = (extra: Any = {}): Any => ({ run: 'crane push oci ghcr.io/x/y:1', ...extra });
+const pushStep = (extra: Any = {}): Any => ({ run: 'crane push oci "$IMG:1"', ...extra });
 const signStep = (extra: Any = {}): Any => ({ run: 'cosign sign --yes "$IMG@$DIGEST"', ...extra });
 
 interface LaneOpts {
@@ -236,7 +241,7 @@ interface LaneOpts {
 const lane = (o: LaneOpts = {}): Workflow => ({
   file: 'fx.yml',
   doc: {
-    on: o.on ?? { workflow_dispatch: {} },
+    on: o.on ?? { push: { branches: ['main'] } },
     jobs: {
       scan: { steps: o.scan ?? [trivyStep(), sbomStep()], ...(o.scanJob ?? {}) },
       publish: {
@@ -307,13 +312,6 @@ describe('lane engine: both halves', () => {
     });
     it('comment prose that says `crane push` is not a lane', () => {
       expect(fx(noGates({ run: '# crane push later\necho ok' }))).toEqual([]);
-    });
-    it('the allowlist excuses only a named job, and a stale entry reds', () => {
-      const w = noGates(pushStep());
-      expect(fx(w, { nonLanes: [{ file: 'fx.yml', job: 'publish', reason: 'r' }] })).toEqual([]);
-      expect(checks(fx(w, { nonLanes: [{ file: 'fx.yml', job: 'nope', reason: 'r' }] }))).toContain(
-        'stale-non-lane',
-      );
     });
   });
 
@@ -395,12 +393,33 @@ describe('lane engine: both halves', () => {
     it('job-level continue-on-error on the scan job reds', () => {
       expect(checks(fx(lane({ scanJob: { 'continue-on-error': true } })))).toContain('trivy');
     });
-    it('a job-level if that disables the scan job on main reds', () => {
-      expect(checks(fx(lane({ scanJob: { if: "github.ref == 'refs/heads/dev'" } })))).toContain(
-        'trivy',
-      );
+    it('a job-level if that disables the UPSTREAM scan job also skips the push, so it is not a bypass', () => {
+      expect(fx(lane({ scanJob: { if: "github.ref == 'refs/heads/dev'" } }))).toEqual([]);
     });
-    it('a job-level if that depends on another job output is not treated as disabling', () => {
+    it('...unless the push job opts in to running after a skipped/failed need (always())', () => {
+      const w = lane({
+        scanJob: { if: "github.ref == 'refs/heads/dev'" },
+        pushJob: { if: 'always()' },
+      });
+      expect(checks(fx(w))).toContain('trivy');
+    });
+    it('a job `if` that is UNKNOWN on a DOWNSTREAM cosign job reds (it may be skipped after the push)', () => {
+      const w = lane({
+        push: [pushStep()],
+        extraJobs: {
+          sign: { needs: 'publish', if: "needs.x.outputs.y == 'z'", steps: [signStep()] },
+        },
+      });
+      expect(checks(fx(w))).toContain('cosign');
+    });
+    it('a job `if` provably true on every publishing ref on a downstream cosign job passes', () => {
+      const w = lane({
+        push: [pushStep()],
+        extraJobs: { sign: { needs: 'publish', if: 'always()', steps: [signStep()] } },
+      });
+      expect(fx(w)).toEqual([]);
+    });
+    it('a job-level if on an UPSTREAM scan job that depends on another job output passes (its skip skips the push)', () => {
       expect(fx(lane({ scanJob: { if: "needs.changes.outputs.relevant == 'true'" } }))).toEqual([]);
     });
   });
@@ -443,13 +462,13 @@ describe('lane engine: both halves', () => {
     });
     it('pushing a layout Trivy did not scan reds', () => {
       expect(
-        checks(fx(lane({ push: [pushStep({ run: 'crane push other ghcr.io/x:1' }), signStep()] }))),
+        checks(fx(lane({ push: [pushStep({ run: 'crane push other "$IMG:1"' }), signStep()] }))),
       ).toContain('tie-trivy');
     });
     it('pushing a layout derived from the scanned one by a named script passes', () => {
       const w = lane({
         scan: [{ run: 'bash build-index.sh oci oci-mp' }, trivyStep(), sbomStep()],
-        push: [pushStep({ run: 'crane push oci-mp ghcr.io/x:1-mp' }), signStep()],
+        push: [pushStep({ run: 'crane push oci-mp "$IMG:1-mp"' }), signStep()],
       });
       expect(fx(w)).toEqual([]);
     });
@@ -602,5 +621,370 @@ describe('judge: the known-gap list cannot go stale or hide a new gap', () => {
   });
   it('a listed gap that is present passes', () => {
     expect(judge([{ subject: 's', check: 'cosign', detail: 'd' }], [gap])).toEqual([]);
+  });
+});
+// ───────────────────────── round 3: contexts, Trivy bypasses, ties, more push forms ─────────────────────────
+
+const noGateLane = (step: Any, extra: Any = {}): Workflow => ({
+  file: 'fx.yml',
+  doc: {
+    on: { push: { branches: ['main'] } },
+    jobs: { publish: { steps: [step], ...extra } },
+  },
+});
+const lanesOf = (w: Workflow, o: Any = {}) =>
+  discoverImageLanes([w], { resolveAction: () => null, ...o }).lanes.length;
+
+describe('contexts: refs the workflow can run on are sampled', () => {
+  const bad = (name: string, expr: string, on: Any, kind: 'trivy' | 'sbom' | 'cosign') => {
+    const e = { 'continue-on-error': expr };
+    const build: Record<string, LaneOpts> = {
+      trivy: { scan: [trivyStep(e), sbomStep()] },
+      sbom: { scan: [trivyStep(), sbomStep(e)] },
+      cosign: { push: [pushStep(), signStep(e)] },
+    };
+    it(`${name}: ${kind} soft-fails -> red`, () => {
+      expect(checks(fx(lane({ ...build[kind], on })))).toContain(kind);
+    });
+  };
+  for (const kind of ['trivy', 'sbom', 'cosign'] as const) {
+    bad(
+      'an unfiltered `on: push` fires on a tag',
+      "${{ github.ref_type == 'tag' }}",
+      { push: null },
+      kind,
+    );
+    bad(
+      'a tag filter is sampled',
+      "${{ github.ref_type == 'tag' }}",
+      { push: { tags: ['v*'] } },
+      kind,
+    );
+    bad(
+      'release fires',
+      "${{ github.event_name == 'release' }}",
+      { release: { types: ['published'] } },
+      kind,
+    );
+    bad(
+      'schedule fires',
+      "${{ github.event_name == 'schedule' }}",
+      { schedule: [{ cron: '0 0 * * *' }] },
+      kind,
+    );
+    bad(
+      'workflow_run fires',
+      "${{ github.event_name == 'workflow_run' }}",
+      { workflow_run: {} },
+      kind,
+    );
+    bad('dispatch from a tag', "${{ github.ref_type == 'tag' }}", { workflow_dispatch: {} }, kind);
+    bad(
+      'dispatch from a release branch',
+      "${{ startsWith(github.ref, 'refs/heads/release/') }}",
+      { workflow_dispatch: {} },
+      kind,
+    );
+  }
+  it('an expression about a context that is not sampled (the actor) is unprovable -> red', () => {
+    const e = { 'continue-on-error': "${{ github.actor == 'dependabot[bot]' }}" };
+    expect(checks(fx(lane({ push: [pushStep(), signStep(e)], on: { push: null } })))).toContain(
+      'cosign',
+    );
+  });
+  it('the SAME tag-only expression passes when only main can run it (the sample is not noise)', () => {
+    const e = { 'continue-on-error': "${{ github.ref_type == 'tag' }}" };
+    expect(
+      fx(lane({ push: [pushStep(), signStep(e)], on: { push: { branches: ['main'] } } })),
+    ).toEqual([]);
+  });
+  it('a pull_request-only soft-fail does not count against a push that never runs on PRs', () => {
+    const e = { 'continue-on-error': "${{ github.event_name == 'pull_request' }}" };
+    const on = { push: { branches: ['main'] }, pull_request: {} };
+    expect(
+      fx(
+        lane({
+          push: [pushStep(), signStep(e)],
+          on,
+          pushJob: { if: "github.event_name == 'push'" },
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('Trivy: discarded exit status and non-image scans do not count', () => {
+  const cli = (run: string, extra: Any = {}): LaneOpts => ({
+    scan: [{ run, ...extra }, sbomStep()],
+  });
+  const base = 'trivy image --exit-code 1 --severity HIGH,CRITICAL oci';
+  for (const [label, run] of [
+    ['`|| true`', `${base} || true`],
+    ['`|| :`', `${base} || :`],
+    ['`; true`', `${base}; true`],
+    ['`|| exit 0`', `${base} || exit 0`],
+    ['a pipe with no pipefail', `${base} | tee out.txt`],
+    ['`set +e`', `set +e\n${base}`],
+  ] as const) {
+    it(`${label} reds`, () => {
+      expect(checks(fx(lane(cli(run))))).toContain('trivy');
+    });
+  }
+  it('a plain enforcing CLI call passes', () => {
+    expect(fx(lane(cli(base)))).toEqual([]);
+  });
+  it('a pipe is fine when pipefail is set, or when the step selects `shell: bash`', () => {
+    expect(fx(lane(cli(`set -o pipefail\n${base} | tee out.txt`)))).toEqual([]);
+    expect(fx(lane(cli(`${base} | tee out.txt`, { shell: 'bash' })))).toEqual([]);
+  });
+  for (const run of [
+    'trivy fs --exit-code 1 --severity HIGH,CRITICAL .',
+    'trivy config --exit-code 1 .',
+    'trivy repo --exit-code 1 .',
+    'trivy rootfs --exit-code 1 /',
+  ]) {
+    it(`\`${run}\` does not satisfy "image scanned"`, () => {
+      expect(checks(fx(lane(cli(run))))).toContain('trivy');
+    });
+  }
+  for (const t of ['fs', 'config', 'repo', 'rootfs', 'sbom']) {
+    it(`trivy-action scan-type: ${t} does not satisfy "image scanned"`, () => {
+      const w = lane({ scan: [trivyStep({}, { 'scan-type': t }), sbomStep()] });
+      expect(checks(fx(w))).toContain('trivy');
+    });
+  }
+  it('trivy-action with scan-type: image (or none) does', () => {
+    expect(fx(lane({ scan: [trivyStep({}, { 'scan-type': 'image' }), sbomStep()] }))).toEqual([]);
+  });
+});
+
+describe('ties for docker push and build-push-action, and cosign by name', () => {
+  const refStep = (ref: string): Any => trivyStep({}, { 'image-ref': ref, input: undefined });
+  const dockerLane = (scanRef: string, push: Any[]) =>
+    lane({ scan: [refStep(scanRef), sbomStep()], push });
+  const dpush = (name: string): Any => ({ run: `docker push ${name}` });
+  const sign = (name: string): Any => ({ run: `cosign sign --yes "${name}@$DIGEST"` });
+
+  it('docker push of the scanned literal name, signed by that name, passes', () => {
+    expect(fx(dockerLane('ghcr.io/x/y:1', [dpush('ghcr.io/x/y:1'), sign('ghcr.io/x/y')]))).toEqual(
+      [],
+    );
+  });
+  it('docker push of a literal name Trivy did not scan reds', () => {
+    const w = dockerLane('ghcr.io/x/y:1', [dpush('ghcr.io/x/other:1'), sign('ghcr.io/x/other')]);
+    expect(checks(fx(w))).toContain('tie-trivy');
+  });
+  it('build-push-action tags a literal name Trivy did not scan -> red; the scanned one -> pass', () => {
+    const bpa = (tag: string): Any => ({
+      uses: 'docker/build-push-action@abc',
+      with: { push: true, tags: tag },
+    });
+    expect(
+      checks(fx(dockerLane('ghcr.io/x/y:1', [bpa('ghcr.io/x/other:1'), sign('ghcr.io/x/other')]))),
+    ).toContain('tie-trivy');
+    expect(fx(dockerLane('ghcr.io/x/y:1', [bpa('ghcr.io/x/y:1'), sign('ghcr.io/x/y')]))).toEqual(
+      [],
+    );
+  });
+  it('variable names compare after normalisation (${{ env.IMAGE }} == ${IMAGE}); different variables are untied, not red', () => {
+    expect(
+      fx(
+        dockerLane('${{ env.IMAGE }}:${{ github.sha }}', [
+          dpush('"${IMAGE}:${GITHUB_SHA}"'),
+          sign('${IMAGE}'),
+        ]),
+      ),
+    ).toEqual([]);
+    expect(
+      checks(fx(dockerLane('${{ env.A }}:1', [dpush('"${B}:1"'), sign('${B}')]))),
+    ).not.toContain('tie-trivy');
+  });
+  it('cosign signing a DIFFERENT name than the one pushed reds (even at a digest)', () => {
+    const w = dockerLane('ghcr.io/x/y:1', [dpush('ghcr.io/x/y:1'), sign('other/img')]);
+    expect(checks(fx(w))).toContain('tie-cosign-name');
+  });
+  it('a pushed name that is never signed reds (two pushes, one signature)', () => {
+    const w = dockerLane('ghcr.io/x/y:1', [
+      dpush('ghcr.io/x/y:1'),
+      dpush('ghcr.io/x/z:1'),
+      sign('ghcr.io/x/y'),
+    ]);
+    expect(checks(fx(w))).toContain('tie-cosign-name');
+  });
+  it('signing every pushed name passes', () => {
+    const w = dockerLane('ghcr.io/x/y:1', [
+      dpush('ghcr.io/x/y:1'),
+      dpush('ghcr.io/x/y:2'),
+      sign('ghcr.io/x/y'),
+    ]);
+    expect(fx(w)).toEqual([]);
+  });
+  it('cosign sign-blob signs a file, not an image: it is not a cosign gate', () => {
+    const w = lane({ push: [pushStep(), { run: 'cosign sign-blob --yes SHA256SUMS' }] });
+    expect(checks(fx(w))).toContain('cosign');
+  });
+});
+
+describe('more ways to push an image are discovered', () => {
+  const forms: Array<[string, Any]> = [
+    ['buildah push', { run: 'buildah push img docker://ghcr.io/x:1' }],
+    ['ko publish', { run: 'ko publish ./cmd/app' }],
+    ['ko build', { run: 'ko build ./cmd/app' }],
+    ['regctl image copy', { run: 'regctl image copy a b' }],
+    ['docker image push', { run: 'docker image push ghcr.io/x:1' }],
+    [
+      '--output type=registry',
+      { run: 'docker buildx build --output type=registry,name=ghcr.io/x:1 .' },
+    ],
+    ['--output type=registry on any tool', { run: 'buildctl build --output type=registry,name=x' }],
+    ['bake-action with push', { uses: 'docker/bake-action@abc', with: { push: true } }],
+    [
+      'bake-action with a registry output',
+      { uses: 'docker/bake-action@abc', with: { set: '*.output=type=registry' } },
+    ],
+    ['gcloud builds submit --tag', { run: 'gcloud builds submit --tag gcr.io/p/i .' }],
+    ['crane tag', { run: 'crane tag ghcr.io/x@sha256:abc v1' }],
+    ['podman push', { run: 'podman push ghcr.io/x:1' }],
+  ];
+  for (const [label, step] of forms)
+    it(`${label} is a lane`, () => {
+      expect(lanesOf(noGateLane(step))).toBe(1);
+    });
+  it('bake-action without push is not a lane', () => {
+    expect(lanesOf(noGateLane({ uses: 'docker/bake-action@abc', with: {} }))).toBe(0);
+  });
+  it('gcloud builds submit without --tag or --config is not a lane', () => {
+    expect(lanesOf(noGateLane({ run: 'gcloud builds submit .' }))).toBe(0);
+  });
+  it('an echo that merely prints a push command is not a lane', () => {
+    expect(lanesOf(noGateLane({ run: 'echo "docker push ghcr.io/x:1"' }))).toBe(0);
+  });
+
+  describe('Cloud Build configs are read', () => {
+    const step = { run: 'gcloud builds submit . --config infra/cb.yaml' };
+    it('a config listing `images:` is a lane', () => {
+      expect(
+        lanesOf(noGateLane(step), { readScript: () => 'steps: []\nimages:\n  - gcr.io/p/i' }),
+      ).toBe(1);
+    });
+    it('a config with no images and no push step is not a lane', () => {
+      expect(lanesOf(noGateLane(step), { readScript: () => 'steps:\n  - name: ubuntu\n' })).toBe(0);
+    });
+    it('an unreadable config is assumed to push (fail closed)', () => {
+      expect(lanesOf(noGateLane(step), { readScript: () => null })).toBe(1);
+    });
+  });
+
+  describe('local destinations publish nothing; a non-local one beside them does', () => {
+    it('crane copy / docker push to localhost, or a variable assigned localhost, are not lanes', () => {
+      expect(lanesOf(noGateLane({ run: 'docker push localhost:5001/x:1' }))).toBe(0);
+      expect(
+        lanesOf(noGateLane({ run: 'ref="localhost:5001/x@$d"\ncrane copy "$SRC" "$ref"' })),
+      ).toBe(0);
+      expect(lanesOf(noGateLane({ run: 'docker push 127.0.0.1:5000/x:1' }))).toBe(0);
+    });
+    it('a variable with no local assignment, or assigned GHCR, is a lane', () => {
+      expect(lanesOf(noGateLane({ run: 'crane copy "$SRC" "$ref"' }))).toBe(1);
+      expect(lanesOf(noGateLane({ run: 'ref="ghcr.io/x@$d"\ncrane copy "$SRC" "$ref"' }))).toBe(1);
+    });
+    it('one local copy plus one GHCR push in the same step is a lane', () => {
+      expect(
+        lanesOf(
+          noGateLane({ run: 'crane copy a localhost:5001/x\ncrane push layout ghcr.io/x:1' }),
+        ),
+      ).toBe(1);
+    });
+  });
+});
+
+describe('repo-local scripts are read for pushes', () => {
+  const script = (body: string | null) => ({ readScript: () => body });
+  const invoke = (run: string, extra: Any = {}, job: Any = {}) =>
+    noGateLane({ run, ...extra }, job);
+  const findingsOf = (w: Workflow, body: string | null) =>
+    discoverImageLanes([w], { resolveAction: () => null, ...script(body) }).findings;
+
+  it('a script that pushes makes the invoking job a lane (bash, node, ./direct, source)', () => {
+    for (const run of ['bash hack/p.sh', 'node scripts/p.mjs', './hack/p.sh', 'source hack/p.sh']) {
+      expect(lanesOf(invoke(run), script('crane push layout ghcr.io/x:1'))).toBe(1);
+    }
+  });
+  it('a script that does not push does not', () => {
+    expect(lanesOf(invoke('bash hack/p.sh'), script('echo hi'))).toBe(0);
+  });
+  it('comment lines in the script are not code', () => {
+    expect(
+      lanesOf(invoke('bash hack/p.sh'), script('# crane push layout x\n// docker push y')),
+    ).toBe(0);
+  });
+  it('a script called by a script is followed', () => {
+    const read = (p: string) =>
+      p === 'a.sh' ? 'bash b.sh' : p === 'b.sh' ? 'docker push ghcr.io/x:1' : null;
+    expect(lanesOf(invoke('bash a.sh'), { readScript: read })).toBe(1);
+  });
+  it('the push inherits the invoker `if`, so a disabled invocation never runs', () => {
+    const out = fx(invoke('bash hack/p.sh', { if: 'false' }), {
+      readScript: () => 'crane push layout ghcr.io/x:1',
+    });
+    expect(checks(out)).toContain('never-runs');
+  });
+  it('an unreadable script in a CREDENTIALED job reds', () => {
+    const w = invoke('bash hack/p.sh', {}, { permissions: { packages: 'write' } });
+    expect(checks(findingsOf(w, null))).toContain('unresolved-script');
+  });
+  it('...also when the job logs in to a registry or runs cosign', () => {
+    for (const steps of [
+      [{ uses: 'docker/login-action@abc' }, { run: 'bash hack/p.sh' }],
+      [{ run: 'cosign version' }, { run: 'bash hack/p.sh' }],
+    ]) {
+      const w: Workflow = { file: 'fx.yml', doc: { on: {}, jobs: { j: { steps } } } };
+      expect(checks(findingsOf(w, null))).toContain('unresolved-script');
+    }
+  });
+  it('an unreadable script in a job with no registry credential cannot publish, so it is not a finding', () => {
+    expect(findingsOf(invoke('bash hack/p.sh'), null)).toEqual([]);
+  });
+  it('a script path built from a variable, in a credentialed job, reds', () => {
+    const w = invoke('bash "$DIR/p.sh"', {}, { permissions: { 'id-token': 'write' } });
+    expect(checks(findingsOf(w, 'echo'))).toContain('unresolved-script');
+  });
+  it('a script a step writes itself (run-time generated) is not looked up', () => {
+    const w = invoke(
+      'cat > gen.sh <<EOF\ncrane push x y\nEOF\nbash gen.sh',
+      {},
+      { permissions: { packages: 'write' } },
+    );
+    expect(findingsOf(w, null)).toEqual([]);
+  });
+  it('a script under a checkout `path:` resolves to this repo; one in another repo is skipped', () => {
+    const read = (p: string) => (p === 'scripts/p.sh' ? 'crane push layout ghcr.io/x:1' : null);
+    const mk = (repository?: string): Workflow => ({
+      file: 'fx.yml',
+      doc: {
+        on: {},
+        jobs: {
+          j: {
+            permissions: { packages: 'write' },
+            steps: [
+              {
+                uses: 'actions/checkout@abc',
+                with: { path: 'knext', ...(repository ? { repository } : {}) },
+              },
+              { run: 'bash knext/scripts/p.sh' },
+            ],
+          },
+        },
+      },
+    });
+    expect(lanesOf(mk(), { readScript: read })).toBe(1);
+    const other = discoverImageLanes([mk('vercel/next.js')], {
+      resolveAction: () => null,
+      readScript: read,
+    });
+    expect(other.lanes.length).toBe(0);
+    expect(other.findings).toEqual([]);
+  });
+  it('the real tree: no repo-local script a credentialed job invokes is unreadable', () => {
+    expect(discoverImageLanes(wfs).findings).toEqual([]);
   });
 });

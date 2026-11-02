@@ -121,28 +121,155 @@ const uses = (s: Step) => (typeof s.uses === 'string' ? s.uses : '');
 const withOf = (s: Step): Record<string, unknown> =>
   s.with && typeof s.with === 'object' ? (s.with as Record<string, unknown>) : {};
 
-export const isSbom = (s: Step) =>
-  /^anchore\/sbom-action@/.test(uses(s)) || /\b(syft|cyclonedx-npm)\b/.test(code(s));
-export const isTrivy = (s: Step) =>
-  /^aquasecurity\/trivy-action@/.test(uses(s)) || /\btrivy\s+(image|fs|config)\b/.test(code(s));
-export const isCosign = (s: Step) => /\bcosign\s+(sign|attest)\b/.test(code(s));
+// A script's text (synthetic `x-script` step) is read to find PUSHES; it never
+// satisfies a gate, because a mention of syft/trivy/cosign in a script is not
+// proof the step runs, in order, with its exit status honoured.
+const fromScript = (s: Step) => s['x-script'] !== undefined;
 
-const PUSH_RUN =
-  /\b(?:docker|podman)\s+push\b|\bcrane\s+(?:push|copy|cp)\b|\bdocker\s+(?:buildx\s+)?build\b[^\n]*--push\b|\bimagetools\s+create\b|\bskopeo\s+copy\b|\boras\s+push\b/;
+export const isSbom = (s: Step) =>
+  !fromScript(s) &&
+  (/^anchore\/sbom-action@/.test(uses(s)) || /\b(syft|cyclonedx-npm)\b/.test(code(s)));
+
+/** Only an IMAGE scan satisfies "image scanned": not fs, config, repo, rootfs, sbom or vm. */
+export const isTrivy = (s: Step) => {
+  if (fromScript(s)) return false;
+  if (/^aquasecurity\/trivy-action@/.test(uses(s))) {
+    const t = withOf(s)['scan-type'];
+    return t === undefined || String(t).trim().toLowerCase() === 'image';
+  }
+  return /\btrivy\s+image\b/.test(code(s));
+};
+// `cosign sign-blob` / `attest-blob` sign a FILE, not an image: not a match.
+export const isCosign = (s: Step) =>
+  !fromScript(s) && /\bcosign\s+(?:sign|attest)(?![\w-])/.test(code(s));
+
+/** A `trivy` run line whose exit status is discarded: `|| true`, `; true`, a pipe without pipefail, `set +e`. */
+function trivySwallowed(s: Step): boolean {
+  if (uses(s)) return false;
+  const text = code(s);
+  if (/\bset\s+\+e\b/.test(text)) return true;
+  const piped = !/pipefail/.test(text) && s.shell !== 'bash';
+  for (const line of text.split('\n')) {
+    const at = line.search(/\btrivy\s+image\b/);
+    if (at === -1) continue;
+    const rest = line.slice(at);
+    if (/\|\|/.test(rest) || /;\s*(?:true|:|exit\s+0)\b/.test(rest)) return true;
+    if (piped && /[^|]\|[^|]/.test(rest)) return true;
+  }
+  return false;
+}
+
+const PUSH_RUN = new RegExp(
+  [
+    String.raw`\b(?:docker|podman)\s+(?:image\s+)?push\b`,
+    String.raw`\bcrane\s+(?:push|copy|cp|append|mutate|tag|index)\b`,
+    String.raw`\bbuildah\s+(?:push|manifest\s+push)\b`,
+    String.raw`\bko\s+(?:publish|build|apply|resolve)\b`,
+    String.raw`\bregctl\s+(?:image|manifest|index|artifact)\s+(?:copy|import|put|create|push)\b`,
+    String.raw`\bgcloud\s+builds\s+submit\b[^\n]*--tag\b`,
+    String.raw`\bdocker\s+(?:buildx\s+)?(?:build|bake)\b[^\n]*(?:--push\b|--output[ =][^\n]*type=registry|--set[ =]\S*output=type=registry)`,
+    String.raw`--output[ =]\S*type=registry`,
+    String.raw`\bimagetools\s+create\b`,
+    String.raw`\bskopeo\s+copy\b`,
+    String.raw`\boras\s+push\b`,
+    String.raw`\bdocker\s+compose\s+push\b`,
+  ].join('|'),
+);
 const PUSH_ACTION =
   /(?:^|\/)(?:push-to-registry|ko-action|kaniko|buildah-build)\b|\/(?:push|publish)[\w-]*@/;
 
-/** Does this step publish an image to a registry? */
-export function pushesImage(s: Step): boolean {
-  if (/^docker\/build-push-action@/.test(uses(s))) {
-    const w = withOf(s);
-    const out = String(w.outputs ?? '');
-    if (/type=registry|push=true/.test(out)) return true;
-    const p = w.push;
-    return p !== undefined && p !== false && String(p).trim().toLowerCase() !== 'false';
+const LOCAL_HOST = /^(?:localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[::1\])(?::\d+)?(?:\/|$)/;
+
+/** Value a shell variable is assigned in `text`, or null. */
+function assignedValue(text: string, name: string): string | null {
+  const m = new RegExp(`(?:^|[\\s;])${escapeRe(name)}=("?)([^\\s"]+)\\1`, 'm').exec(text);
+  return m ? m[2] : null;
+}
+
+/**
+ * Destination of a `crane push|copy` / `docker push` command when it is
+ * provably the LOCAL registry (a literal localhost/127.x/0.0.0.0 host, or a
+ * variable the same run assigns one). Anything unreadable is NOT local.
+ */
+function localDestination(dest: string, text: string): boolean {
+  let d = dest.replace(/^["']|["']$/g, '');
+  const v = /^\$\{?([A-Za-z_]\w*)\}?/.exec(d);
+  if (v) {
+    const val = assignedValue(text, v[1]);
+    if (val === null) return false;
+    d = val;
   }
-  if (uses(s) && !uses(s).startsWith('./') && PUSH_ACTION.test(uses(s))) return true;
-  return PUSH_RUN.test(code(s));
+  return LOCAL_HOST.test(d);
+}
+
+/** One recognised image push: where it goes, and what layout it publishes. */
+export interface PushRef {
+  layout?: string;
+  name?: string;
+  kind: string;
+}
+
+/** Push commands in a run step, with destinations when they can be read. */
+function runPushes(s: Step): PushRef[] {
+  const text = code(s);
+  const out: PushRef[] = [];
+  for (const line of text.split('\n')) {
+    // Prose is not a command: skip lines that merely print.
+    if (/^\s*(?:echo|printf|logger)\b/.test(line)) continue;
+    if (!PUSH_RUN.test(line)) continue;
+    const crane = /\bcrane\s+(push|copy|cp)\s+((?:-\S+\s+)*)(\S+)(?:\s+(\S+))?/.exec(line);
+    if (crane) {
+      const [, verb, , a, b] = crane;
+      out.push(
+        verb === 'push' ? { kind: 'crane', layout: a, name: b } : { kind: 'crane', name: b },
+      );
+      continue;
+    }
+    const dock = /\b(?:docker|podman)\s+(?:image\s+)?push\s+((?:-\S+\s+)*)(\S+)/.exec(line);
+    if (dock) {
+      out.push({ kind: 'docker', name: dock[2] });
+      continue;
+    }
+    out.push({ kind: 'other' });
+  }
+  return out;
+}
+
+/** Image names a `docker/build-push-action` step tags (one per line or comma). */
+function actionTags(s: Step): string[] {
+  const t = withOf(s).tags;
+  return typeof t === 'string'
+    ? t
+        .split(/[\n,]/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+    : [];
+}
+
+/** Every image push in a step (run text, or a push-capable action). */
+export function pushRefs(s: Step): PushRef[] {
+  const u = uses(s);
+  if (/^docker\/build-push-action@/.test(u) || /^docker\/bake-action@/.test(u)) {
+    const w = withOf(s);
+    const out = `${String(w.outputs ?? '')} ${String(w.set ?? '')}`;
+    const p = w.push;
+    const pushes =
+      /type=registry|push=true/.test(out) ||
+      (p !== undefined && p !== false && String(p).trim().toLowerCase() !== 'false');
+    if (!pushes) return [];
+    const tags = actionTags(s);
+    return tags.length ? tags.map((name) => ({ kind: 'action', name })) : [{ kind: 'action' }];
+  }
+  if (u && !u.startsWith('./') && PUSH_ACTION.test(u)) return [{ kind: 'action' }];
+  const text = code(s);
+  const refs = runPushes(s);
+  // A push whose destination is provably the local registry publishes nothing.
+  return refs.filter((r) => !(r.name !== undefined && localDestination(r.name, text)));
+}
+
+/** Does this step publish an image to a (non-local) registry? */
+export function pushesImage(s: Step): boolean {
+  return pushRefs(s).length > 0;
 }
 
 /** Severities Trivy reports. Absent = Trivy's own default, which is all of them. */
@@ -317,49 +444,90 @@ export function evalExpr(input: unknown, ctx: Ctx): boolean | typeof UNKNOWN {
 
 // ───────────────────────── publishing contexts ─────────────────────────
 
-/** Output of hack/release-channel.sh for a ref, as `steps.channel.outputs.*` lookups. */
+const channelCache = new Map<string, Record<string, string>>();
+
+/**
+ * Output of hack/release-channel.sh for a ref, as `steps.channel.outputs.*`
+ * lookups. Also `needs.operator-image-supply-chain.outputs.ready`, which the
+ * operator workflow's handoff step sets only when `steps.channel.outputs.publish
+ * == 'true'` (asserted by the test file), so it equals `publish` here.
+ */
 export function channelVars(ref: string): Record<string, string> {
+  const hit = channelCache.get(ref);
+  if (hit) return hit;
   const script = resolve(REPO_ROOT, 'packages/kn-next-operator/hack/release-channel.sh');
-  if (!existsSync(script)) return {};
-  const r = spawnSync('bash', [script, ref, ref.replace(/^refs\/(heads|tags)\//, '')], {
-    encoding: 'utf8',
-  });
-  if (r.status !== 0) return {};
   const vars: Record<string, string> = {};
-  for (const line of r.stdout.split('\n')) {
-    const m = /^([a-z_]+)=(.*)$/.exec(line);
-    if (m) vars[`steps.channel.outputs.${m[1]}`] = m[2];
+  if (existsSync(script)) {
+    const r = spawnSync('bash', [script, ref, ref.replace(/^refs\/(heads|tags)\//, '')], {
+      encoding: 'utf8',
+    });
+    if (r.status === 0) {
+      for (const line of r.stdout.split('\n')) {
+        const m = /^([a-z_]+)=(.*)$/.exec(line);
+        if (m) vars[`steps.channel.outputs.${m[1]}`] = m[2];
+      }
+      const publish = vars['steps.channel.outputs.publish'];
+      if (publish !== undefined) vars['needs.operator-image-supply-chain.outputs.ready'] = publish;
+    }
   }
+  channelCache.set(ref, vars);
   return vars;
 }
 
 function onOf(wf: Workflow): Record<string, unknown> | null {
   const on = wf.doc.on ?? (wf.doc as Record<string, unknown>).true;
-  return on && typeof on === 'object' && !Array.isArray(on)
-    ? (on as Record<string, unknown>)
-    : null;
+  if (typeof on === 'string') return { [on]: {} };
+  if (Array.isArray(on)) return Object.fromEntries(on.map((e) => [String(e), {}]));
+  return on && typeof on === 'object' ? (on as Record<string, unknown>) : null;
 }
 
-/** Refs a workflow can publish from: main, each branch pattern it names, each tag pattern (sampled). */
+const TAG_SAMPLE = 'refs/tags/v1.0.0';
+
+/**
+ * Every (event, ref) a workflow can run on, sampled:
+ *  - `push`: each named branch/tag pattern; an UNFILTERED push also fires for any
+ *    branch and any tag, so a feature branch and a `v*` tag are sampled too;
+ *  - `workflow_dispatch` / `workflow_call` from main, a tag and a release branch;
+ *  - `schedule` (default branch), `release` (a tag), `workflow_run` (default
+ *    branch), `pull_request`, `merge_group`.
+ * An expression whose verdict depends on a context NOT sampled here is UNKNOWN
+ * to the evaluator, and an unprovable gate reds.
+ */
 export function candidateContexts(
   wf: Workflow,
   varsFor: (ref: string) => Record<string, string> = channelVars,
 ): Ctx[] {
-  const refs = new Set<string>(['refs/heads/main']);
-  const push = onOf(wf)?.push as Record<string, unknown> | undefined;
-  if (push && typeof push === 'object') {
-    for (const b of (push.branches as string[] | undefined) ?? [])
-      refs.add(`refs/heads/${String(b).replace(/\*+/g, 'x')}`);
-    for (const t of (push.tags as string[] | undefined) ?? [])
-      refs.add(`refs/tags/${String(t).replace(/\*+/g, '1.0.0')}`);
+  const on = onOf(wf) ?? {};
+  const out: Ctx[] = [];
+  const seen = new Set<string>();
+  const add = (event: string, ref: string) => {
+    if (seen.has(`${event} ${ref}`)) return;
+    seen.add(`${event} ${ref}`);
+    out.push({ event, ref, vars: varsFor(ref) });
+  };
+  const push = on.push as Record<string, unknown> | null | undefined;
+  add('push', 'refs/heads/main');
+  const filters = push && typeof push === 'object' ? push : {};
+  const branches = (filters.branches as string[] | undefined) ?? [];
+  const tags = (filters.tags as string[] | undefined) ?? [];
+  for (const b of branches) add('push', `refs/heads/${String(b).replace(/\*+/g, 'x')}`);
+  for (const t of tags) add('push', `refs/tags/${String(t).replace(/\*+/g, '1.0.0')}`);
+  const unfiltered = !('branches' in filters) && !('tags' in filters);
+  if (unfiltered || 'tags-ignore' in filters) add('push', TAG_SAMPLE);
+  if (unfiltered || 'branches-ignore' in filters) add('push', 'refs/heads/feature-x');
+  for (const ev of ['workflow_dispatch', 'workflow_call']) {
+    if (ev in on) {
+      add(ev, 'refs/heads/main');
+      add(ev, TAG_SAMPLE);
+      add(ev, 'refs/heads/release/1.x');
+    }
   }
-  const ctxs: Ctx[] = [...refs].map((ref) => ({ ref, event: 'push', vars: varsFor(ref) }));
-  ctxs.push({
-    ref: 'refs/heads/main',
-    event: 'workflow_dispatch',
-    vars: varsFor('refs/heads/main'),
-  });
-  return ctxs;
+  if ('schedule' in on) add('schedule', 'refs/heads/main');
+  if ('release' in on) add('release', TAG_SAMPLE);
+  if ('workflow_run' in on) add('workflow_run', 'refs/heads/main');
+  if ('pull_request' in on || 'pull_request_target' in on) add('pull_request', 'refs/pull/1/merge');
+  if ('merge_group' in on) add('merge_group', 'refs/heads/gh-readonly-queue/main/pr-1-abc');
+  return out;
 }
 
 // ───────────────────────── publish lanes ─────────────────────────
@@ -370,16 +538,118 @@ interface Located {
   step: Step;
 }
 
-/** Steps of a job with local composite actions expanded; throws on an unresolvable local action. */
+/** Reads a repo-relative script, or null when it cannot be read. */
+export type ScriptReader = (path: string) => string | null;
+
+export const fsScriptReader: ScriptReader = (path) => {
+  const p = resolve(REPO_ROOT, path);
+  if (!p.startsWith(REPO_ROOT) || !existsSync(p)) return null;
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+};
+
+const SCRIPT_INTERP =
+  /(?:^|[;&|(]\s*|\s)(?:bash|sh|zsh|node|bun|tsx|python3?|source|\.)\s+(?:-\S+\s+)*(["']?)([^\s"';&|)]+\.(?:sh|mjs|cjs|js|ts|py))\1/g;
+const SCRIPT_DIRECT = /(?:^|[;&|(]\s*)(\.\/[^\s"';&|)]+)/g;
+
+/** Repo-local scripts a run step invokes. `bad` lists ones whose path cannot be resolved. */
+function scriptsInvoked(
+  step: Step,
+  /** checkout `path:` dirs, mapped to whether they hold ANOTHER repository */
+  checkouts: Map<string, boolean>,
+  jobCwd: string,
+): { paths: string[][]; bad: string[] } {
+  const text = code(step);
+  const paths: string[][] = [];
+  const bad: string[] = [];
+  const cwd = typeof step['working-directory'] === 'string' ? step['working-directory'] : jobCwd;
+  const consider = (raw: string) => {
+    const p = raw
+      .replace(/\$\{?GITHUB_WORKSPACE\}?\//g, '')
+      .replace(/\$\{\{\s*github\.workspace\s*\}\}\//g, '');
+    if (p.startsWith('/') || p.startsWith('~') || p.includes('node_modules/')) return;
+    if (/\$|\{\{/.test(p)) {
+      bad.push(raw);
+      return;
+    }
+    // Written by this very step (generated at run time): nothing in the repo to read.
+    if (new RegExp(`(?:>|tee\\s+(?:-a\\s+)?)\\s*"?${escapeRe(p)}`).test(text)) return;
+    const first = p.replace(/^\.\//, '').split('/')[0];
+    // A script inside another repository's checkout is not this repo's to read.
+    if (checkouts.get(first) === true) return;
+    const cands = [resolve('/', cwd, p).slice(1), resolve('/', p).slice(1)];
+    // `cd some/dir` earlier in the same run changes where a relative script resolves.
+    for (const cd of text.matchAll(/(?:^|[;&|]\s*)cd\s+"?([^\s"';&|]+)/gm))
+      if (!/\$|\{\{/.test(cd[1])) cands.push(resolve('/', cd[1], p).slice(1));
+    // `knext/scripts/x` under a checkout with `path: knext` is `scripts/x` in this repo.
+    if (checkouts.get(first) === false)
+      cands.push(p.replace(/^\.\//, '').split('/').slice(1).join('/'));
+    paths.push([...new Set(cands)]);
+  };
+  for (const re of [SCRIPT_INTERP, SCRIPT_DIRECT]) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) consider(re === SCRIPT_INTERP ? m[2] : m[1]);
+  }
+  return { paths, bad };
+}
+
+/** Could this job push to a registry at all? It needs a credential: packages/id-token write, a login, cosign. */
+function credentialed(job: Job, wfDoc: Record<string, unknown> | undefined): boolean {
+  const perms = [job.permissions, wfDoc?.permissions];
+  for (const pm of perms) {
+    if (pm === 'write-all') return true;
+    if (pm && typeof pm === 'object') {
+      const o = pm as Record<string, unknown>;
+      if (o.packages === 'write' || o['id-token'] === 'write') return true;
+    }
+  }
+  const steps = Array.isArray(job.steps) ? (job.steps as Step[]) : [];
+  return steps.some(
+    (st) =>
+      /^docker\/login-action@/.test(uses(st)) ||
+      /\b(?:docker|podman|crane|regctl|skopeo|oras)\s+(?:auth\s+)?login\b|\bcosign\b/.test(
+        code(st),
+      ),
+  );
+}
+
+/**
+ * Steps of a job with local composite actions AND repo-local scripts expanded
+ * (a script's text becomes a synthetic step inheriting the invoker's `if` and
+ * `continue-on-error`). An unresolvable local action is always reported in
+ * `problems`; an unreadable script or a script path built from a variable is
+ * reported only for a CREDENTIALED job (one that could push at all) — a job with
+ * no registry credential cannot publish, whatever its scripts do.
+ */
 function expandedSteps(
   file: string,
   id: string,
   job: Job,
-  resolveAction: ActionResolver,
+  opts: LaneAuditOptions,
   problems: Finding[],
+  wfDoc?: Record<string, unknown>,
 ): Step[] {
+  const resolveAction = opts.resolveAction ?? fsActionResolver;
+  const scriptProblems = credentialed(job, wfDoc) ? problems : [];
+  const checkouts = new Map<string, boolean>();
+  for (const st of stepsOf(file, id, job)) {
+    if (/^actions\/checkout@/.test(uses(st)) && typeof withOf(st).path === 'string') {
+      const repo = withOf(st).repository;
+      checkouts.set(
+        String(withOf(st).path).replace(/\/$/, ''),
+        typeof repo === 'string' && !/getknext-dev\/knext|github\.repository/.test(repo),
+      );
+    }
+  }
+  const defaults = job.defaults as { run?: { 'working-directory'?: string } } | undefined;
+  const jobCwd = defaults?.run?.['working-directory'] ?? '';
+  const readScript = opts.readScript ?? fsScriptReader;
   const out: Step[] = [];
-  const walk = (steps: Step[], depth: number) => {
+  const subject = `${file}#${id}`;
+  const walk = (steps: Step[], depth: number, seen: Set<string>) => {
     for (const s of steps) {
       out.push(s);
       const u = uses(s);
@@ -387,40 +657,74 @@ function expandedSteps(
         const inner = resolveAction(u);
         if (inner === null)
           problems.push({
-            subject: `${file}#${id}`,
+            subject,
             check: 'unresolved',
             detail: `local action \`${u}\` cannot be resolved, so its steps cannot be scanned`,
           });
-        else if (depth < 5) walk(inner, depth + 1);
+        else if (depth < 5) walk(inner, depth + 1, seen);
+      }
+      if (typeof s.run === 'string' && depth < 5) {
+        // `gcloud builds submit --config F`: Cloud Build pushes whatever F lists under `images:`
+        // (or pushes in a step). Read F; an unreadable config is assumed to push (fail closed).
+        for (const cfg of code(s).matchAll(
+          /\bgcloud\s+builds\s+submit\b[^\n]*--config[ =]"?([^\s"]+)/g,
+        )) {
+          const rel = cfg[1].replace(/^\.\//, '');
+          const body = /\$|\{\{/.test(rel) ? null : readScript(rel);
+          const pushes =
+            body === null ||
+            /^images:/m.test(body) ||
+            PUSH_RUN.test(body.replace(/^\s*#.*$/gm, ''));
+          if (pushes)
+            out.push({ run: 'gcloud builds submit --tag cloudbuild:config', 'x-script': rel });
+        }
+        const { paths, bad } = scriptsInvoked(s, checkouts, jobCwd);
+        for (const b of bad)
+          scriptProblems.push({
+            subject,
+            check: 'unresolved-script',
+            detail: `script \`${b}\` has a path built from a variable, so it cannot be scanned for pushes`,
+          });
+        for (const cands of paths) {
+          if (cands.some((c) => seen.has(c))) continue;
+          const path = cands.find((c) => readScript(c) !== null) ?? cands[0];
+          const body = readScript(path);
+          if (body === null) {
+            scriptProblems.push({
+              subject,
+              check: 'unresolved-script',
+              detail: `repo-local script \`${cands[0]}\` cannot be read, so it cannot be scanned for pushes`,
+            });
+            continue;
+          }
+          const js = /\.(?:mjs|cjs|js|ts)$/.test(path);
+          const text = (js ? body.replace(/\/\*[\s\S]*?\*\//g, '') : body)
+            .split('\n')
+            .filter((l) => !/^\s*(#|\/\/)/.test(l))
+            .join('\n');
+          const syn: Step = { run: text, 'x-script': path };
+          if (s.if !== undefined) syn.if = s.if;
+          if (s['continue-on-error'] !== undefined)
+            syn['continue-on-error'] = s['continue-on-error'];
+          walk([syn], depth + 1, new Set([...seen, path]));
+        }
       }
     }
   };
-  walk(stepsOf(file, id, job), 0);
+  walk(stepsOf(file, id, job), 0, new Set());
   return out;
-}
-
-/**
- * Reviewed jobs that run a push-shaped command but do not publish a release
- * image. Keyed by workflow + job and carrying a reason; the audit reds on an
- * entry that matches no discovered lane, so this cannot outlive its job.
- */
-export interface NonImageLane {
-  file: string;
-  job: string;
-  reason: string;
 }
 
 export interface LaneAuditOptions {
   resolveAction?: ActionResolver;
+  readScript?: ScriptReader;
   varsFor?: (ref: string) => Record<string, string>;
-  nonLanes?: readonly NonImageLane[];
 }
 
 export function discoverImageLanes(
   wfs: Workflow[],
   opts: LaneAuditOptions = {},
 ): { lanes: Array<{ wf: Workflow; id: string }>; findings: Finding[] } {
-  const resolveAction = opts.resolveAction ?? fsActionResolver;
   const findings: Finding[] = [];
   const lanes: Array<{ wf: Workflow; id: string }> = [];
   for (const wf of wfs) {
@@ -436,7 +740,7 @@ export function discoverImageLanes(
           });
         continue; // a resolvable callee is scanned as a workflow in its own right
       }
-      const steps = expandedSteps(wf.file, id, job, resolveAction, findings);
+      const steps = expandedSteps(wf.file, id, job, opts, findings, wf.doc);
       if (steps.some(pushesImage)) lanes.push({ wf, id });
     }
   }
@@ -449,6 +753,8 @@ function gateProblems(
   step: Step,
   job: Job,
   ctxs: Ctx[],
+  /** The job's own `if` cannot disable the gate relative to the push (see `irrelevantJobIf`). */
+  jobIfIrrelevant = false,
 ): string[] {
   const out: string[] = [];
   for (const [label, coe] of [
@@ -474,10 +780,10 @@ function gateProblems(
       }
     }
   }
-  if (job.if !== undefined) {
+  if (job.if !== undefined && !jobIfIrrelevant) {
     for (const ctx of ctxs) {
-      if (evalExpr(job.if, ctx) === false) {
-        out.push(`job \`if\` is false on ${ctx.event} ${ctx.ref}`);
+      if (evalExpr(job.if, ctx) !== true) {
+        out.push(`job \`if\` is not provably true on ${ctx.event} ${ctx.ref}`);
         break;
       }
     }
@@ -490,63 +796,90 @@ function gateProblems(
       ? String(withOf(step)['exit-code']) === '1'
       : /--exit-code[ =]1\b/.test(code(step));
     if (!enforced) out.push('Trivy does not enforce exit-code 1');
+    if (trivySwallowed(step))
+      out.push('the Trivy exit status is discarded (`|| true`, `; true`, pipe, `set +e`)');
   }
   return out;
 }
 
-/** Layout/ref a push step publishes, when it can be read off the command. */
-function pushSource(step: Step): string | null {
-  const m = /\bcrane\s+(?:push|copy|cp)\s+(?:--?\S+\s+)*([^\s"')]+)/.exec(code(step));
-  return m ? m[1].replace(/^"|"$/g, '') : null;
+/** Normalise an image reference for comparison: no quotes, `$VAR` form, no digest, no tag. */
+export function normName(raw: string): string {
+  let n = raw.trim().replace(/^["']|["']$/g, '');
+  n = n.replace(/\$\{\{\s*env\.(\w+)\s*\}\}/g, '$$$1').replace(/\$\{(\w+)\}/g, '$$$1');
+  n = n.replace(/@.*$/, '');
+  n = n.replace(/:[^/]*$/, '');
+  return n;
+}
+const literalName = (n: string) => n !== '' && !/\$|\{\{/.test(n);
+
+/** Image names a Trivy step scans (not layout paths), when readable. */
+function scannedNames(step: Step): string[] {
+  if (uses(step)) {
+    const r = withOf(step)['image-ref'];
+    return typeof r === 'string' ? [normName(r)] : [];
+  }
+  const m = /\btrivy\s+image\b.*\s(\S+)\s*$/m.exec(code(step));
+  return m && !m[1].startsWith('-') ? [normName(m[1])] : [];
+}
+
+/** Layouts a Trivy step scans (`input:`), when readable. */
+function scannedLayouts(step: Step): string[] {
+  if (uses(step)) {
+    const r = withOf(step).input;
+    return typeof r === 'string' ? [r] : [];
+  }
+  const m = /\btrivy\s+image\b.*--input[ =](\S+)/m.exec(code(step));
+  return m ? [m[1]] : [];
 }
 
 /**
  * Audit every discovered publish lane. A lane is a job with a push step.
- * Needs, in the lane's own workflow: an enforcing Trivy gate in or upstream of
- * the push job; an SBOM step in, upstream or downstream of it; a cosign step in
- * or downstream of it and (in the same job) after the push. Gate steps must be
- * unable to be disabled on the lane's publishing contexts.
+ * Needs, in the lane's own workflow: an enforcing Trivy IMAGE gate in or
+ * upstream of the push job; an SBOM step in, upstream or downstream of it; a
+ * cosign step in or downstream of it and (in the same job) after the push. Gate
+ * steps must be unable to be disabled on the lane's publishing contexts.
+ * Local-registry pushes (`crane copy ... localhost:5001/...`) publish nothing and
+ * are not lanes; a non-local push added beside one makes the job a lane.
  */
 export function auditImageLanes(wfs: Workflow[], opts: LaneAuditOptions = {}): Finding[] {
-  const resolveAction = opts.resolveAction ?? fsActionResolver;
   const { lanes, findings } = discoverImageLanes(wfs, opts);
   const out: Finding[] = [...findings];
-  const nonLanes = opts.nonLanes ?? [];
-  for (const nl of nonLanes) {
-    if (!lanes.some((l) => l.wf.file === nl.file && l.id === nl.job))
-      out.push({
-        subject: `${nl.file}#${nl.job}`,
-        check: 'stale-non-lane',
-        detail: 'allowlisted non-lane matches no discovered push job',
-      });
-  }
   for (const { wf, id } of lanes) {
-    if (nonLanes.some((n) => n.file === wf.file && n.job === id)) continue;
     const subject = `${wf.file}#${id}`;
     const f = (check: string, detail: string) => out.push({ subject, check, detail });
     const jobs = jobsOf(wf);
     const ctxsAll = candidateContexts(wf, opts.varsFor);
-    const lanePushStep = expandedSteps(wf.file, id, jobs[id], resolveAction, []).filter(
-      pushesImage,
-    )[0];
-    // Contexts on which this push can run (UNKNOWN counts as can-run).
+    const ownSteps = expandedSteps(wf.file, id, jobs[id], opts, []);
+    const pushSteps = ownSteps.filter(pushesImage);
+    // Contexts on which a push can run (UNKNOWN counts as can-run).
     const ctxs = ctxsAll.filter(
       (c) =>
         evalExpr(jobs[id].if ?? true, c) !== false &&
-        evalExpr(lanePushStep.if ?? true, c) !== false,
+        pushSteps.some((p) => evalExpr(p.if ?? true, c) !== false),
     );
     if (!ctxs.length) {
       f('never-runs', 'the push step is disabled on every ref this workflow can publish from');
       continue;
     }
+    const upstreamIds = reach(jobs, id, 'upstream');
+    const pushIfSurvivesFailure = /\b(always|failure|cancelled)\s*\(/.test(
+      String(jobs[id].if ?? ''),
+    );
+    // A gate job's own `if` is irrelevant when it is the push job, or an upstream job whose
+    // skip also skips the push (a skipped `needs` skips its dependents unless the dependent
+    // opts in with always()/failure()).
+    const irrelevantJobIf = (jid: string) =>
+      jid === id || (upstreamIds.has(jid) && !pushIfSurvivesFailure);
     const collect = (ids: Set<string>) =>
       [...ids].flatMap((jid) =>
-        expandedSteps(wf.file, jid, jobs[jid], resolveAction, []).map(
+        expandedSteps(wf.file, jid, jobs[jid], opts, []).map(
           (step): Located => ({ id: jid, job: jobs[jid], step }),
         ),
       );
-    const up = collect(reach(jobs, id, 'upstream'));
+    const up = collect(upstreamIds);
     const down = collect(reach(jobs, id, 'downstream'));
+    const problemsOf = (kind: 'trivy' | 'sbom' | 'cosign', x: Located) =>
+      gateProblems(kind, x.step, x.job, ctxs, irrelevantJobIf(x.id));
     const gate = (
       kind: 'trivy' | 'sbom' | 'cosign',
       pool: Located[],
@@ -558,14 +891,16 @@ export function auditImageLanes(wfs: Workflow[], opts: LaneAuditOptions = {}): F
           kind,
           kind === 'cosign'
             ? 'no `cosign sign`/`cosign attest` in or after the push job'
-            : `no ${kind} step in or around the push job`,
+            : kind === 'trivy'
+              ? 'no Trivy IMAGE scan (`trivy image`, or trivy-action with scan-type image) in or before the push job'
+              : 'no SBOM step in or around the push job',
         );
         return [];
       }
-      const valid = cands.filter((x) => gateProblems(kind, x.step, x.job, ctxs).length === 0);
+      const valid = cands.filter((x) => problemsOf(kind, x).length === 0);
       if (!valid.length) {
         const x = cands[0];
-        f(kind, `\`${x.id}\`: ${gateProblems(kind, x.step, x.job, ctxs).join('; ')}`);
+        f(kind, `\`${x.id}\`: ${problemsOf(kind, x).join('; ')}`);
       }
       return valid;
     };
@@ -574,41 +909,61 @@ export function auditImageLanes(wfs: Workflow[], opts: LaneAuditOptions = {}): F
     const sign = gate('cosign', [...collect(new Set([id])), ...down], isCosign);
 
     // Ordering inside the push job: a cosign step in the same job runs after the push.
-    const own = expandedSteps(wf.file, id, jobs[id], resolveAction, []);
-    const pushAt = own.findIndex(pushesImage);
-    const signAt = own.findIndex(isCosign);
+    const pushAt = ownSteps.findIndex(pushesImage);
+    const signAt = ownSteps.findIndex(isCosign);
     if (signAt !== -1 && signAt < pushAt) f('cosign-order', 'cosign runs before the push step');
 
-    // ── ties ──
-    const src = pushSource(lanePushStep);
-    if (src && trivy.length) {
-      const scanned = trivy
-        .map((x) =>
-          uses(x.step)
-            ? String(withOf(x.step).input ?? withOf(x.step)['image-ref'] ?? '')
-            : (/\btrivy\s+image\b.*\s(\S+)\s*$/m.exec(code(x.step))?.[1] ?? ''),
-        )
-        .filter(Boolean);
-      const runs = collect(new Set([...reach(jobs, id, 'upstream')]))
-        .map((x) => code(x.step))
-        .join('\n');
-      const derived = scanned.some(
-        (s) => s && new RegExp(`${escapeRe(s)}\\b[^\\n]*\\b${escapeRe(src)}\\b`).test(runs),
-      );
-      // An unreadable scan target (variable, expression) is NOT tied: stated, not failed.
-      if (scanned.length > 0 && !scanned.includes(src) && !derived)
-        f(
-          'tie-trivy',
-          `pushes \`${src}\` but Trivy scans ${scanned.map((s) => `\`${s}\``).join(', ')} and no step derives \`${src}\` from it`,
+    // ── ties: scan <-> pushed image, signature <-> pushed image ──
+    const pushed = pushSteps.flatMap(pushRefs);
+    const runsUp = up.map((x) => code(x.step)).join('\n');
+    for (const p of pushed) {
+      if (trivy.length === 0) break;
+      if (p.layout) {
+        // crane push LAYOUT: the layout pushed must be the one Trivy scans, or be derived from it.
+        const layout = p.layout;
+        const scanned = trivy.flatMap((x) => scannedLayouts(x.step));
+        const derived = scanned.some(
+          (sc) =>
+            sc && new RegExp(`${escapeRe(sc)}\\b[^\\n]*\\b${escapeRe(layout)}\\b`).test(runsUp),
         );
+        if (scanned.length > 0 && !scanned.includes(layout) && !derived)
+          f(
+            'tie-trivy',
+            `pushes layout \`${layout}\` but Trivy scans ${scanned.map((x) => `\`${x}\``).join(', ')} and no step derives \`${layout}\` from it`,
+          );
+      } else if (p.name) {
+        // docker push / build-push-action: compare image NAMES when both are literal.
+        const names = trivy.flatMap((x) => scannedNames(x.step));
+        const n = normName(p.name);
+        if (literalName(n) && names.length > 0 && names.every(literalName) && !names.includes(n))
+          f(
+            'tie-trivy',
+            `pushes \`${n}\` but Trivy scans ${names.map((x) => `\`${x}\``).join(', ')}`,
+          );
+      }
     }
+    const pushedNames = pushed.filter((p) => p.name).map((p) => normName(p.name as string));
+    const signedNames: string[] = [];
     for (const x of sign) {
-      if (!isCosign(x.step)) continue;
-      const cmds = code(x.step)
+      for (const l of code(x.step)
         .split('\n')
-        .filter((l) => /\bcosign\s+(sign|attest)\b/.test(l));
-      if (cmds.some((l) => !/@\S*(?:digest|DIGEST|sha256)/i.test(l)))
-        f('tie-cosign', 'a cosign command does not address the image by digest (`ref@digest`)');
+        .filter((l) => /\bcosign\s+(?:sign|attest)(?![\w-])/.test(l))) {
+        if (!/@\S*(?:digest|DIGEST|sha256)/i.test(l))
+          f('tie-cosign', 'a cosign command does not address the image by digest (`ref@digest`)');
+        const last = l.trim().split(/\s+/).pop() ?? '';
+        if (last) signedNames.push(normName(last));
+      }
+    }
+    if (pushedNames.length && signedNames.length) {
+      for (const sn of signedNames)
+        if (!pushedNames.includes(sn))
+          f(
+            'tie-cosign-name',
+            `signs \`${sn}\` but the lane pushes ${pushedNames.map((n) => `\`${n}\``).join(', ')}`,
+          );
+      for (const pn of pushedNames)
+        if (!signedNames.includes(pn))
+          f('tie-cosign-name', `pushes \`${pn}\` but never signs that name`);
     }
   }
   return out;
@@ -642,7 +997,6 @@ export function auditOperatorTags(wfs: Workflow[], opts: LaneAuditOptions = {}):
         detail: 'no workflow publishes operator-v* tags',
       },
     ];
-  const resolveAction = opts.resolveAction ?? fsActionResolver;
   const out: Finding[] = [];
   for (const wf of lanes) {
     const f = (check: string, detail: string) => out.push({ subject: wf.file, check, detail });
@@ -654,7 +1008,7 @@ export function auditOperatorTags(wfs: Workflow[], opts: LaneAuditOptions = {}):
     const tagCtx = candidateContexts(wf, opts.varsFor).find((c) => c.ref.startsWith('refs/tags/'));
     const jobs = jobsOf(wf);
     const pushJobs = Object.entries(jobs).filter(([jid, job]) =>
-      expandedSteps(wf.file, jid, job, resolveAction, []).some(pushesImage),
+      expandedSteps(wf.file, jid, job, opts, []).some(pushesImage),
     );
     if (!pushJobs.length) f('no-publish', 'the operator-v* workflow has no image push step');
     for (const [jid, job] of pushJobs) {

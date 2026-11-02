@@ -81,6 +81,24 @@ describe("a declared directory and a glob over it agree", () => {
         );
     });
 
+    it("a pattern that names a dangling link exactly fails too", () => {
+        const root = app({ "data/a.json": "{}" });
+        symlinkSync("../nope", join(root, "data/gone.json"));
+        expect(() =>
+            planAppData({ root, includes: ["data/gone.json"] }),
+        ).toThrow(/dangling[\s\S]*data\/gone\.json/);
+    });
+
+    it("a dangling link inside an excluded directory is not an error", () => {
+        const root = app({ "data/a.json": "{}", "data/tmp/x": "1" });
+        symlinkSync("../nope", join(root, "data/tmp/gone.json"));
+        const plan = planAppData({
+            root,
+            rules: [{ includes: ["data/**"], excludes: ["data/tmp"] }],
+        });
+        expect(rels(plan)).toEqual(["data/a.json"]);
+    });
+
     it("a dangling link the pattern does not reach is ignored", () => {
         const root = app({ "data/a.json": "{}", "other/x": "1" });
         symlinkSync("../nope", join(root, "other/gone.json"));
@@ -206,6 +224,14 @@ describe("deriveTraceRules: route keys pick the excludes that apply", () => {
             "data/private/**",
             "data/tmp/**",
         ]);
+    });
+
+    it("a key covers a route when it matches any leading part of it, as Next's contains-match reads it", () => {
+        const rules = deriveTraceRules(
+            { "/api/x/y": ["d/**"] },
+            { "/api": ["d/p/**"] },
+        );
+        expect(rules[0].excludes).toEqual(["d/p/**"]);
     });
 
     it("'/**' and '/*' cover the root route", () => {

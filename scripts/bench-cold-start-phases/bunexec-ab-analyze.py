@@ -25,6 +25,8 @@ for r in rows:
         reason = "warm non-200"
     elif not r.get("evidence", {}).get("pod"):
         reason = "no pod evidence"
+    elif r.get("evidence", {}).get("events_invalid"):
+        reason = "events fetch failed (pull unknown)"
     if reason:
         invalid.append((rnd, arm, reason))
         continue

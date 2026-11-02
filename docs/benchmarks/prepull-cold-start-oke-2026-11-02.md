@@ -6,12 +6,15 @@ changes when image pre-pull is turned on (after: `imagePrewarm: true`).
 
 ## Verdict
 
-- **A pod that lands on a node without the image layer pays a real pull of about 2 s.**
+- **A pod that lands on a node without the image layer pays a real pull of about 2 s** (all
+  pulls were measured on one node, 10.0.1.118; see the node caveat below).
   Of the 27 `Pulled` events in the before arm, the 14 from the first pod to land on a node
   have a median of 2.3 s (IQR 1.9–2.8 s, p95 3.0 s). Bound-to-Ready for pulling pods is
   about **4 s, against about 2 s** for pods on a node that already has the image (1 s
   apiserver resolution).
-- **Pre-pull removes the pull from the scale-out path.** In the after arm 0 of 56 pods
+- **Pre-pull moves the pull off the scale-out path, to before it.** Each after-arm burst
+  first waited for the image to be cached on every node (median 8 s, up to 20 s after
+  deploy); a burst inside that window would still pay pulls. In the after arm 0 of 56 pods
   paid a pull, and bound-to-Ready was 2.0 s (p95 3.0 s). Caveat on that 0/56: the
   harness recorded no event count, so it cannot by itself rule out a silently failed
   events fetch (see "Limits of the 0 of 56 result").

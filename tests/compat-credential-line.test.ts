@@ -584,7 +584,23 @@ describe('the v1.3 workflow is DERIVED from the tag harness, provably', () => {
     expect(
       lineSubstitutions(SPEC).some((s: { from: string }) => s.from.includes('NEXTJS_REF')),
     ).toBe(false);
-    expect(source.sourceText).toContain(`NEXTJS_REF: ${v10.env.NEXTJS_REF}`);
+    // The one sanctioned gap: the 1.x lane moved its Next ref on main ahead of
+    // the new RC tag (the manifest's live `oneXRefTransition`, judged by
+    // tests/compat-1x-credential-nextjs-ref.test.ts). Then the CURRENT tag's
+    // ref is exactly the transition's `from`, never anything else.
+    const manifest = JSON.parse(
+      read(resolve(REPO_ROOT, '.github/compat-credentialed-next-version.json')),
+    ) as { oneXRefTransition?: { from: string; to: string } };
+    const t = manifest.oneXRefTransition;
+    const sourceRef =
+      /NEXTJS_REF: \$\{\{ github\.event\.inputs\.nextjsRef \|\| '([^']+)' \}\}/.exec(
+        source.sourceText,
+      )?.[1];
+    const v10Ref = /'([^']+)' \}\}/.exec(String(v10.env.NEXTJS_REF))?.[1];
+    const inTransition = t !== undefined && t.to === v10Ref && t.from === sourceRef;
+    if (!inTransition) {
+      expect(source.sourceText).toContain(`NEXTJS_REF: ${v10.env.NEXTJS_REF}`);
+    }
   });
 });
 

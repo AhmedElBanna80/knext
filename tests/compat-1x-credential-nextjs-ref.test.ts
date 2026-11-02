@@ -47,6 +47,8 @@ export type OneXInputs = {
   v13WorkflowText: string | undefined;
   /** `.github/compat-credentialed-next-version.json`, parsed. */
   manifest: unknown;
+  /** The clock the transition expiry is judged against (defaults to now). */
+  now?: Date;
 };
 
 export type OneXVerdict = {
@@ -131,38 +133,95 @@ export function checkOneXCredentialRef(inputs: OneXInputs): OneXVerdict {
   }
   const anchor = anchorEnv;
 
+  // The ref the 1.x lane must carry: the anchor, unless a live, well-formed
+  // `oneXRefTransition` moves the whole lane to `to` ahead of the pin PR.
+  const manifestObj =
+    inputs.manifest && typeof inputs.manifest === 'object'
+      ? (inputs.manifest as { credentialedNextRef?: unknown; oneXRefTransition?: unknown })
+      : {};
+  const expected = resolveTransition(
+    manifestObj.oneXRefTransition,
+    anchor,
+    inputs.now ?? new Date(),
+    violations,
+  );
+
   const text = inputs.e2eWorkflowText;
   const dispatch = dispatchDefault(text);
-  if (dispatch !== anchor) {
+  if (dispatch !== expected) {
     violations.push(
-      `${E2E_WORKFLOW} nextjsRef dispatch default is ${JSON.stringify(dispatch)}, but rcTag ${rcTag} is a 1.x window credentialed at ${anchor}`,
+      `${E2E_WORKFLOW} nextjsRef dispatch default is ${JSON.stringify(dispatch)}, but rcTag ${rcTag} is a 1.x window credentialed at ${expected}`,
     );
   }
   const env = envFallbackLiteral(text);
-  if (env !== anchor) {
+  if (env !== expected) {
     violations.push(
-      `${E2E_WORKFLOW} NEXTJS_REF env fallback is ${JSON.stringify(env)} (need exactly one 'NEXTJS_REF: \${{ github.event.inputs.nextjsRef || '<ref>' }}'), but rcTag ${rcTag} is a 1.x window credentialed at ${anchor}`,
+      `${E2E_WORKFLOW} NEXTJS_REF env fallback is ${JSON.stringify(env)} (need exactly one 'NEXTJS_REF: \${{ github.event.inputs.nextjsRef || '<ref>' }}'), but rcTag ${rcTag} is a 1.x window credentialed at ${expected}`,
     );
   }
   for (const { line, ref } of refLiteralsNamingNextjsRef(text)) {
-    if (ref !== anchor) {
+    if (ref !== expected) {
       violations.push(
-        `${E2E_WORKFLOW}:${line} gives NEXTJS_REF the ref ${ref}, but rcTag ${rcTag} is a 1.x window credentialed at ${anchor}`,
+        `${E2E_WORKFLOW}:${line} gives NEXTJS_REF the ref ${ref}, but rcTag ${rcTag} is a 1.x window credentialed at ${expected}`,
       );
     }
   }
 
-  const documented =
-    inputs.manifest && typeof inputs.manifest === 'object'
-      ? (inputs.manifest as { credentialedNextRef?: unknown }).credentialedNextRef
-      : undefined;
-  if (documented !== anchor) {
+  const documented = manifestObj.credentialedNextRef;
+  if (documented !== expected) {
     violations.push(
-      `${MANIFEST} credentialedNextRef is ${JSON.stringify(documented)}, but rcTag ${rcTag} is a 1.x window credentialed at ${anchor}`,
+      `${MANIFEST} credentialedNextRef is ${JSON.stringify(documented)}, but rcTag ${rcTag} is a 1.x window credentialed at ${expected}`,
     );
   }
 
   return { applies: true, anchor, violations };
+}
+
+/** `YYYY-MM-DD` that round-trips as a real calendar date (2026-02-30 does not). */
+function isRealDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const t = Date.parse(`${value}T00:00:00Z`);
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === value;
+}
+
+/**
+ * The ref the 1.x lane must carry. Pushes a violation and returns the anchor for
+ * every transition that is malformed, stale against the anchor, or expired, so
+ * a bad transition can only make the guard stricter, never quieter.
+ */
+function resolveTransition(raw: unknown, anchor: string, now: Date, violations: string[]): string {
+  if (raw === undefined) return anchor;
+  const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const wellFormed =
+    typeof t.from === 'string' &&
+    REF_RE.test(t.from) &&
+    typeof t.to === 'string' &&
+    REF_RE.test(t.to) &&
+    t.from !== t.to &&
+    isRealDate(t.expires) &&
+    typeof t.reason === 'string' &&
+    t.reason.trim() !== '';
+  if (!wellFormed) {
+    violations.push(
+      `${MANIFEST} oneXRefTransition is malformed (need { from: vX.Y.Z, to: vX.Y.Z (different), expires: real YYYY-MM-DD, reason: non-empty }) — failing closed`,
+    );
+    return anchor;
+  }
+  // The pin PR has landed: the lane is already at `to`, the normal rule holds.
+  if (anchor === t.to) return anchor;
+  if (t.from !== anchor) {
+    violations.push(
+      `${MANIFEST} oneXRefTransition transition \`from\` ${t.from} is not the committed 1.x anchor ${anchor} — a stale transition grants nothing`,
+    );
+    return anchor;
+  }
+  if ((t.expires as string) < now.toISOString().slice(0, 10)) {
+    violations.push(
+      `${MANIFEST} oneXRefTransition expired on ${t.expires}: regenerate ${V13_WORKFLOW} from the new tag (the pin PR) or renew the transition in a reviewed PR`,
+    );
+    return anchor;
+  }
+  return t.to as string;
 }
 
 const read = (p: string) => readFileSync(resolve(ROOT, p), 'utf8');
@@ -370,5 +429,110 @@ describe("#2317 — while rcTag is v1.x, main's credential NEXTJS_REF stays on t
   it('REF_LITERAL_RE sees the refs this file compares (self-test)', () => {
     expect('x v16.4.0 y'.match(REF_LITERAL_RE)).toEqual(['v16.4.0']);
     expect(isRcTag('v1.0.0-rc.6')).toBe(true);
+  });
+});
+
+/**
+ * The tag-then-pin TRANSITION. The v1.3 lane's `NEXTJS_REF` comes from the RC
+ * tag's own `test-e2e-deploy.yml`, so the only way the 1.x lane moves to a newer
+ * Next is: land the new ref in `test-e2e-deploy.yml` on main, cut a tag from that
+ * commit, then regenerate the v1.3 workflow from the tag (RELEASING.md). Between
+ * the first and the last step the anchor (the committed v1.3 lane) still carries
+ * the old ref, which this guard would call drift forever.
+ *
+ * `oneXRefTransition` in `.github/compat-credentialed-next-version.json` is the
+ * ONE sanctioned way through that gap: `{ from, to, expires, reason }`. It is
+ * honoured only while `from` still IS the anchor and `expires` has not passed, so
+ * it cannot outlive the pin PR that closes it, and it moves the whole 1.x lane
+ * (both workflow defaults and `credentialedNextRef`) to `to` together.
+ */
+describe('#2317 — the sanctioned tag-then-pin transition', () => {
+  const NEW_REF = 'v16.4.3';
+  const NOW = new Date('2026-11-03T00:00:00Z');
+  const transition = (over: Record<string, unknown> = {}) => ({
+    from: V1X_REF,
+    to: NEW_REF,
+    expires: '2026-11-12',
+    reason: 'founder-approved security move of the 1.x credential Next ref',
+    ...over,
+  });
+  const movedManifest = (t?: unknown) => ({
+    credentialedNextRef: NEW_REF,
+    ...(t === undefined ? {} : { oneXRefTransition: t }),
+  });
+  const moved = (over: Partial<OneXInputs> = {}): OneXInputs =>
+    fixture({
+      e2eWorkflowText: lane(NEW_REF, NEW_REF),
+      manifest: movedManifest(transition()),
+      now: NOW,
+      ...over,
+    });
+
+  it('the moved tree passes while the anchor still carries `from` and the transition is live', () => {
+    const v = checkOneXCredentialRef(moved());
+    expect(v.applies).toBe(true);
+    expect(v.violations).toEqual([]);
+  });
+
+  it('without a declared transition the same moved tree is red (the guard is not weakened)', () => {
+    const v = checkOneXCredentialRef(moved({ manifest: movedManifest() }));
+    expect(v.violations.some((m) => m.includes('dispatch default'))).toBe(true);
+    expect(v.violations.some((m) => m.includes('env fallback'))).toBe(true);
+    expect(v.violations.some((m) => m.includes('credentialedNextRef'))).toBe(true);
+  });
+
+  it('an EXPIRED transition is red on every site', () => {
+    const v = checkOneXCredentialRef(
+      moved({ manifest: movedManifest(transition({ expires: '2026-11-02' })) }),
+    );
+    expect(v.violations.some((m) => m.includes('dispatch default'))).toBe(true);
+    expect(v.violations.some((m) => m.includes('credentialedNextRef'))).toBe(true);
+    expect(v.violations.some((m) => m.includes('expired'))).toBe(true);
+  });
+
+  it('a transition whose `from` is not the anchor is red', () => {
+    const v = checkOneXCredentialRef(
+      moved({ manifest: movedManifest(transition({ from: 'v16.2.12' })) }),
+    );
+    expect(v.violations.some((m) => m.includes('transition `from`'))).toBe(true);
+  });
+
+  it('a malformed transition (no reason, bad date, bad ref) fails closed', () => {
+    for (const bad of [
+      transition({ reason: '' }),
+      transition({ expires: '2026-02-30' }),
+      transition({ expires: 'soon' }),
+      transition({ to: 'latest' }),
+      transition({ to: V1X_REF }),
+    ]) {
+      const v = checkOneXCredentialRef(moved({ manifest: movedManifest(bad) }));
+      expect(v.violations.length, JSON.stringify(bad)).toBeGreaterThan(0);
+    }
+  });
+
+  it('a transition does not excuse a half-move: one site left on the old ref is red', () => {
+    for (const text of [lane(NEW_REF, V1X_REF), lane(V1X_REF, NEW_REF)]) {
+      const v = checkOneXCredentialRef(moved({ e2eWorkflowText: text }));
+      expect(v.violations.length).toBeGreaterThan(0);
+    }
+    const v = checkOneXCredentialRef(
+      moved({ manifest: { credentialedNextRef: V1X_REF, oneXRefTransition: transition() } }),
+    );
+    expect(v.violations.some((m) => m.includes('credentialedNextRef'))).toBe(true);
+  });
+
+  it('a transition does not excuse an extra fallback on a third ref', () => {
+    const v = checkOneXCredentialRef(
+      moved({ e2eWorkflowText: lane(NEW_REF, NEW_REF, '    env:\n      NEXTJS_REF: v16.4.0') }),
+    );
+    expect(v.violations.some((m) => m.includes('v16.4.0'))).toBe(true);
+  });
+
+  it('once the pin PR regenerates the v1.3 lane at `to`, the normal rule applies and a leftover transition is harmless', () => {
+    const v = checkOneXCredentialRef(
+      moved({ v13WorkflowText: lane(NEW_REF, NEW_REF), now: new Date('2027-01-01T00:00:00Z') }),
+    );
+    expect(v.anchor).toBe(NEW_REF);
+    expect(v.violations).toEqual([]);
   });
 });

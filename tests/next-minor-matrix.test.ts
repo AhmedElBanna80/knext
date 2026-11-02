@@ -72,7 +72,10 @@ describe('next-minor matrix (#2286)', () => {
     // leg (16.3) guards the seed, the 16.4+ legs guard scopeWindowToBuild.
     const expected: string[] = [];
     for (let i = Math.max(3, Number(m?.[1])); i < Number(m?.[2]); i++) expected.push(`16.${i}`);
-    expect(minors).toEqual(expected);
+    // The FIRST leg is the credential pin (whatever minor it is on), the rest follow
+    // in any order: compare as a set of minors, not as a sequence.
+    const byMinor = (a: string, b: string) => Number(a.slice(3)) - Number(b.slice(3));
+    expect([...minors].sort(byMinor)).toEqual(expected);
     for (const v of NEXT_MATRIX_VERSIONS) expect(v).toMatch(/^16\.\d+\.\d+$/);
   });
 

@@ -65,4 +65,4 @@ export const SECURITY_FORCED_NEXT_MINORS: readonly {
  * without adding the minor here, or the reverse, fails
  * `tests/next-minor-matrix.test.ts`.
  */
-export const NEXT_MATRIX_VERSIONS: readonly string[] = ["16.3.8", "16.4.3"];
+export const NEXT_MATRIX_VERSIONS: readonly string[] = ["16.4.3", "16.3.8"];

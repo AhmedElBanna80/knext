@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { posix, resolve } from 'node:path';
 import {
   minorWithoutFixedRelease,
   NEXT_ADVISORIES,
@@ -279,14 +279,30 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  *     reads, is unresolvable: the value is computed at run time. (Backticks are a
  *     command substitution in shell and YAML, a template literal in JS.)
  *   - in a JS script, `'...next@' + v` / `'...dependencies.next=' + a + '.' + b`: a
- *     string that ends where a version goes, followed by `+` operands. An operand
- *     must be a string / number literal or a plain identifier a `const` / `let` / `var` sets in the
- *     file; a member access, call or index is unresolvable;
+ *     string that ends where a version goes, followed by `+` operands - or a variable
+ *     that holds such a string (`const p = 'next@'; ... p + v`). The statement may span
+ *     lines (`'next@'\n  + '15.0.0'`, a trailing `+`). An operand must be a string /
+ *     number literal or a plain identifier a JS assignment sets in the file; a member
+ *     access, call or index is unresolvable;
+ *   - a JS name's value is the union of EVERY assignment to it in the file, `v = '...'`
+ *     without a keyword included. An assignment whose value is not one string literal
+ *     (`v = pick()`, `v += '.0'`, `v = '15.0.' + patch`, a value on the next line, a
+ *     ternary) leaves the name unresolvable. Only in a JS script: JS embedded in a
+ *     workflow (`node -e`, github-script) is read for `const` / `let` / `var` only;
+ *   - a YAML alias (`*v`), anchor (`&v ...`) or tag (`!!str ...`) as the value of an env
+ *     key, an input default, a matrix key or a `with:` value is unresolvable when it is
+ *     read in a version position, and a next-named binding to an alias
+ *     (`NEXT_VERSION: *v`, also inside `{ ... }`) is unresolvable where it is written;
+ *   - a PACKAGE NAME behind a reference: `${{ env.P }}@X`, `${{ inputs.p }}@X`, `$P@X`,
+ *     `${P}@X`. When the reference spells `next` or `create-next-app`, `X` is judged as
+ *     `next@X`; one that cannot be resolved, before a version-looking tail, is a failure;
  *   - a pin read through an indirection is attributed to the line that WROTE it, so
  *     an exclusion on that line (not on every line that reads it) excuses it.
  *
  * What it scans: every workflow, every composite action under `.github/actions/**`
- * (action.yml / action.yaml), and every tracked script a workflow or action names
+ * (action.yml / action.yaml) and every one a `uses: ./<path>` line names wherever it
+ * lives (`packages/kn-next-action`; found through other actions too), and every
+ * tracked script a workflow or action names
  * (shell, mjs, cjs, js, ts; test files and package/app `src/` are not CI scripts).
  * A script is judged only where a version GOES - `next@X`, `dependencies.next=X`,
  * an assignment to a name that holds a next version - never the prose around it:
@@ -298,7 +314,11 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  * default and no caller value, a variable nothing in the file assigns, a value
  * computed by `$(...)` or backticks, a reference cycle, a matrix whose source is not
  * registered or is not the job it `needs`, a `with:` shape it cannot parse, a JS
- * concatenation operand it cannot resolve) is a FAILURE, never a pass.
+ * concatenation operand it cannot resolve, an alias / anchor / tag, a JS assignment
+ * that is not one string literal) is a FAILURE, never a pass. So is a local
+ * `uses: ./<path>` with no tracked `action.yml` to scan (the repo root, `..`, a
+ * missing directory), and a caller that spells an action's path some other way
+ * (`./a/../b`): the real-tree test requires none of the former.
  *
  * STILL NOT SEEN, so nobody assumes more: indirection ACROSS files other than the
  * `with:` of a composite action (a reusable workflow's `with:` into another
@@ -306,7 +326,10 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  * without one; a script argument whose value a workflow computes), a script that reads
  * its version from a file at run time (`readFileSync`), a version a JS object literal
  * carries (`{ next: '16.3.8' }`), JS strings built any way but `+` (`.concat()`,
- * `.join()`, `.replace()`, `util.format`, `path.join`), a reference that follows a
+ * `.join()`, `.replace()`, `util.format`, `path.join`; a prefix variable joined through
+ * a template literal, `${p}${v}` or `${p}` + v - the variable has to be directly against
+ * the `+`; a `//` note after a continued `+` is only dropped when it holds no quote),
+ * a package name on a different line from its `@version`, a reference that follows a
  * SPACE inside one quoted range (`"next@>=16.4.1 <$V"`), expression functions
  * (`format()`, `join()`, ...; their literal text is judged, they are not evaluated),
  * an env or shell variable reassigned between two jobs or steps of the same file
@@ -599,6 +622,43 @@ function scriptLiteralPins(file: string, text: string): WorkflowPin[] {
 }
 const SHELL_ASSIGN = /(?<![\w.$@/-])([A-Za-z_]\w*)=(?:"([^"]*)"|'([^']*)'|([^\s"'`;)&|]+))/g;
 const JS_ASSIGN = /\b(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`)/g;
+/**
+ * Any assignment to a bare name in JS, a keyword or a compound operator included
+ * (`v = x`, `v += x`, `let v = x`). `==`, `===`, `!=`, `<=`, `=>` and `obj.v = x` are not.
+ */
+const JS_ANY_ASSIGN =
+  /(?<![\w$.])(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*(\+|-|\*\*|\*|\/|%|\|\||&&|\?\?)?=(?![=>])/g;
+/** What must follow `=` for the value to be ONE string literal: the literal, then the end of the statement. */
+const JS_STRING_RHS =
+  /^\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`([^`]*)`)\s*(?=[;,)}\]]|\/\/|$)/;
+/**
+ * A JS script as statements: a line that ends in `+`, or is followed by a line that
+ * starts with `+`, is one statement with that line (`'next@'\n  + '15.0.0'`). Comment
+ * lines are dropped; the statement text is the lines joined by a single space.
+ */
+function jsStatements(text: string): { no: number; raw: string; text: string }[] {
+  const lines = text.split('\n');
+  const comment = commentLine(true);
+  const significant = (i: number) => !comment.test(lines[i]) && lines[i].trim() !== '';
+  const out: { no: number; raw: string; text: string }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!significant(i)) continue;
+    const start = i;
+    let cur = lines[i];
+    for (let joined = 0; joined < 40; joined++) {
+      let j = i + 1;
+      while (j < lines.length && !significant(j)) j++;
+      if (j >= lines.length) break;
+      // a trailing `// note` after the operator is not part of the code
+      const code = cur.replace(/\s\/\/[^'"`]*$/, '').trimEnd();
+      if (!/(?<!\+)\+$/.test(code) && !/^\+(?!\+)/.test(lines[j].trimStart())) break;
+      cur = `${code} ${lines[j].trim()}`;
+      i = j;
+    }
+    out.push({ no: start + 1, raw: lines[start], text: cur });
+  }
+  return out;
+}
 const MAX_ALTS = 64;
 const MAX_DEPTH = 8;
 
@@ -689,6 +749,8 @@ type Tables = {
   id: string;
   /** `KEY: v`, `KEY=v`, `const KEY = 'v'` anywhere in the file, by key name. */
   keyVals: Map<string, Part[]>;
+  /** JS names assigned a value that is not one string literal: they have no literal to judge. */
+  opaque: Map<string, Source>;
   inputDefaults: Map<string, Part[]>;
   /** In a shell / YAML file a backtick pair is a command substitution; in JS it is a template. */
   ticks: boolean;
@@ -812,6 +874,7 @@ function matrixOf(
 
 function buildTables(file: string, text: string, script: boolean): Tables {
   const keyVals = new Map<string, Part[]>();
+  const opaque = new Map<string, Source>();
   const inputDefaults = new Map<string, Part[]>();
   const add = (m: Map<string, Part[]>, k: string, s: string, no: number, raw: string) => {
     const part: Part = { s, file, line: no, text: raw.trim() };
@@ -819,16 +882,33 @@ function buildTables(file: string, text: string, script: boolean): Tables {
   };
   const comment = commentLine(script);
   const lines = text.split('\n');
+  const js = /\.(?:mjs|cjs|js|ts)$/.test(file);
   lines.forEach((raw, i) => {
     if (comment.test(raw) || raw.trim() === '') return;
     const no = i + 1;
     for (const m of raw.matchAll(SHELL_ASSIGN)) {
       add(keyVals, m[1], m[2] ?? m[3] ?? m[4] ?? '', no, raw);
     }
+    if (js) return;
     for (const m of raw.matchAll(JS_ASSIGN)) {
       add(keyVals, m[1], m[2] ?? m[3] ?? m[4] ?? '', no, raw);
     }
   });
+  if (js) {
+    // Every assignment to a name, keyword or not: the union is judged. One that is not a
+    // single string literal (a call, `+=`, `'15.0.' + patch`, a value on the next line)
+    // leaves the name with no literal to judge, which is a failure when it is read.
+    for (const st of jsStatements(text)) {
+      for (const m of st.text.matchAll(JS_ANY_ASSIGN)) {
+        const rhs = JS_STRING_RHS.exec(st.text.slice((m.index as number) + m[0].length));
+        if (m[2] === undefined && rhs) {
+          add(keyVals, m[1], rhs[1] ?? rhs[2] ?? rhs[3] ?? '', st.no, st.raw);
+        } else if (!opaque.has(m[1])) {
+          opaque.set(m[1], { file, line: st.no, text: st.raw.trim() });
+        }
+      }
+    }
+  }
   if (!script) {
     collectYamlKeyVals(lines, 0, lines.length, comment, (name, s, no, raw) =>
       add(keyVals, name, s, no, raw),
@@ -877,6 +957,7 @@ function buildTables(file: string, text: string, script: boolean): Tables {
   return {
     id: file,
     keyVals,
+    opaque,
     inputDefaults,
     ticks: !/\.(?:mjs|cjs|js|ts)$/.test(file),
     matrix,
@@ -974,6 +1055,12 @@ function resolveName(
   const trail = [...seen, scoped];
   const out: Resolution = { alts: [], unresolved: [] };
   const sources: { part: Part; ctx?: Ctx }[] = [];
+  const computed = kind === 'env' ? t.opaque.get(name) : undefined;
+  if (computed) {
+    out.unresolved.push(
+      `${key} (assigned a value that is not one string literal at ${computed.file}:${computed.line})`,
+    );
+  }
   if (kind === 'inputs') {
     for (const part of t.inputDefaults.get(name) ?? []) sources.push({ part });
     for (const w of opts.inputWith?.[name] ?? []) {
@@ -993,12 +1080,19 @@ function resolveName(
     for (const part of t.keyVals.get(name) ?? []) sources.push({ part });
   }
   if (sources.length === 0) {
-    out.unresolved.push(
-      kind === 'inputs' ? `${key} (no default, and no caller value is visible)` : key,
-    );
+    if (!computed) {
+      out.unresolved.push(
+        kind === 'inputs' ? `${key} (no default, and no caller value is visible)` : key,
+      );
+    }
     return out;
   }
   for (const { part, ctx } of sources) {
+    if (OPAQUE_YAML_VALUE.test(part.s.trim())) {
+      // An alias, anchor or tag names a value written elsewhere: there is no literal here to judge.
+      out.unresolved.push(`${key} (an alias, anchor or tag at ${part.file}:${part.line})`);
+      continue;
+    }
     const r = expandText(part.s, part, ctx?.tables ?? t, ctx?.opts ?? opts, trail);
     out.alts.push(...r.alts);
     out.unresolved.push(...r.unresolved);
@@ -1084,29 +1178,33 @@ const CONCAT_HEAD = /(["'`])((?:(?!\1)[^\\\n])*?)\1\s*\+\s*/g;
 const CONCAT_OPERAND =
   /\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`([^`]*)`|(\d+(?:\.\d+)*)|([A-Za-z_$][\w$]*(?:\s*(?:\.[A-Za-z_$][\w$]*|\[[^\]]*\]|\([^)]*\)))*))/y;
 
+/** `NEXT_VERSION: *v`, also inside `{ ..., NEXT_VERSION: *v }`: an alias, which names a value written elsewhere. */
+const ALIAS_BINDING = /(?:^\s*(?:-\s+)*|[{,]\s*)["']?([\w.-]+)["']?\s*:\s*(\*[^\s,}\]]*)/g;
+/** The packages whose `@X` is next's version: the one named `next`, and its scaffolder. */
+const NEXT_PACKAGE_NAME = /^(?:next|create-next-app)$/i;
+
 /** Pins reached through a reference that sits in a next version position. */
 function indirectPins(file: string, text: string, opts: ScanOpts): WorkflowPin[] {
   const script = isScriptFile(file);
+  const js = script && !/\.(?:sh|bash)$/.test(file);
   const entries = nextLineEntries(text, script);
-  if (entries.length === 0) return [];
   const fileTables = buildTables(file, text, script);
   const pins: WorkflowPin[] = [];
-  for (const { no, raw, blockChild } of entries) {
-    const tables = tablesAt(fileTables, no);
-    const scanned = preprocess(raw);
-    const origin: Source = { file, line: no, text: raw.trim() };
-    /** Judge what one resolved token spells, between the text before it and after it. */
-    const judge = (r: Resolution, lead: string, rest: string) => {
-      for (const u of r.unresolved) {
-        pins.push({
-          file,
-          line: no,
-          version: u,
-          parseable: false,
-          unresolved: true,
-          text: raw.trim(),
-        });
-      }
+  const unresolvedPin = (no: number, raw: string, what: string) =>
+    pins.push({
+      file,
+      line: no,
+      version: what,
+      parseable: false,
+      unresolved: true,
+      text: raw.trim(),
+    });
+  /** Judge what one resolved token spells, between the text before it and after it. */
+  const judgeAt =
+    (no: number, raw: string) =>
+    (r: Resolution, lead: string, rest: string): void => {
+      for (const u of r.unresolved) unresolvedPin(no, raw, u);
+      const origin: Source = { file, line: no, text: raw.trim() };
       for (const alt of r.alts) {
         const value = alt.map((p) => p.s).join('');
         for (const p of lineTokens(file, no, mask(lead) + value + mask(rest))) {
@@ -1117,6 +1215,18 @@ function indirectPins(file: string, text: string, opts: ScanOpts): WorkflowPin[]
         }
       }
     };
+  for (const { no, raw, blockChild } of entries) {
+    const tables = tablesAt(fileTables, no);
+    const scanned = preprocess(raw);
+    const origin: Source = { file, line: no, text: raw.trim() };
+    const judge = judgeAt(no, raw);
+    if (!script) {
+      for (const b of scanned.matchAll(ALIAS_BINDING)) {
+        if (holdsNextVersion(b[1])) {
+          unresolvedPin(no, raw, `${b[1]}: ${b[2]} (an alias names a value written elsewhere)`);
+        }
+      }
+    }
     const spans = spansOf(scanned, fileTables.ticks);
     const seenSpans = new Set<number>();
     spans.forEach((_sp, k) => {
@@ -1134,42 +1244,145 @@ function indirectPins(file: string, text: string, opts: ScanOpts): WorkflowPin[]
       if (!inPosition) return;
       judge(expandText(scanned.slice(a, b), origin, tables, opts, []), lead, scanned.slice(b));
     });
-    if (script && !/\.(?:sh|bash)$/.test(file)) {
-      // `run('npm i next@' + v)`: the string ends where the version goes, the operands that follow spell it.
-      for (const head of scanned.matchAll(CONCAT_HEAD)) {
-        if (!versionPositionPrefix(head[2], true)) continue;
-        const options: Alt[][] = [];
-        const unresolved: string[] = [];
-        let at = (head.index as number) + head[0].length;
-        for (;;) {
-          CONCAT_OPERAND.lastIndex = at;
-          const op = CONCAT_OPERAND.exec(scanned);
-          if (!op) {
-            unresolved.push(`${scanned.slice(at).trim() || '(nothing)'} (a concatenated operand)`);
-            break;
-          }
-          const literal = op[1] ?? op[2] ?? op[3] ?? op[4];
-          if (literal !== undefined) {
-            const r = expandText(literal, origin, tables, opts, []);
-            unresolved.push(...r.unresolved);
-            options.push(r.alts);
-          } else if (/^[A-Za-z_$][\w$]*$/.test(op[5])) {
-            const r = resolveName('env', op[5], tables, opts, []);
-            unresolved.push(...r.unresolved);
-            options.push(r.alts.length ? r.alts : [[]]);
-          } else {
-            unresolved.push(`${op[5]} (a concatenated operand)`);
-          }
-          at = (op.index as number) + op[0].length;
-          const more = /^\s*\+\s*/.exec(scanned.slice(at));
-          if (!more) break;
-          at += more[0].length;
-        }
-        judge({ alts: cartesian(options), unresolved }, head[2], '');
+  }
+  if (js) concatPins(file, text, fileTables, opts, judgeAt);
+  packageNamePins(file, text, fileTables, opts, script, judgeAt);
+  return pins;
+}
+
+type JudgeAt = (no: number, raw: string) => (r: Resolution, lead: string, rest: string) => void;
+
+/**
+ * `run('npm i next@' + v)`: a string that ends where the version goes, and the `+`
+ * operands that follow spell it. The statement may span lines, and the head may be a
+ * variable that holds such a string (`const p = 'next@'; ... p + v`).
+ */
+function concatPins(
+  file: string,
+  text: string,
+  fileTables: Tables,
+  opts: ScanOpts,
+  judgeAt: JudgeAt,
+): void {
+  const prefixVars = new Map<string, string[]>();
+  for (const [name, parts] of fileTables.keyVals) {
+    const prefixes = parts.map((p) => p.s).filter((s) => versionPositionPrefix(s, true));
+    if (prefixes.length) prefixVars.set(name, prefixes);
+  }
+  const prefixHead = prefixVars.size
+    ? new RegExp(
+        String.raw`(?<![\w$.])(${[...prefixVars.keys()].map((n) => n.replace(/\$/g, '\\$')).join('|')})(?![\w$])\s*\+\s*`,
+        'g',
+      )
+    : undefined;
+  for (const st of jsStatements(text)) {
+    const tables = tablesAt(fileTables, st.no);
+    const scanned = preprocess(st.text);
+    const origin: Source = { file, line: st.no, text: st.raw.trim() };
+    const heads: { lead: string; end: number }[] = [];
+    for (const h of scanned.matchAll(CONCAT_HEAD)) {
+      if (versionPositionPrefix(h[2], true)) {
+        heads.push({ lead: h[2], end: (h.index as number) + h[0].length });
       }
     }
+    for (const h of prefixHead ? scanned.matchAll(prefixHead) : []) {
+      for (const lead of prefixVars.get(h[1]) ?? []) {
+        heads.push({ lead, end: (h.index as number) + h[0].length });
+      }
+    }
+    for (const head of heads) {
+      const options: Alt[][] = [];
+      const unresolved: string[] = [];
+      let at = head.end;
+      for (;;) {
+        CONCAT_OPERAND.lastIndex = at;
+        const op = CONCAT_OPERAND.exec(scanned);
+        if (!op) {
+          unresolved.push(`${scanned.slice(at).trim() || '(nothing)'} (a concatenated operand)`);
+          break;
+        }
+        const literal = op[1] ?? op[2] ?? op[3] ?? op[4];
+        if (literal !== undefined) {
+          const r = expandText(literal, origin, tables, opts, []);
+          unresolved.push(...r.unresolved);
+          options.push(r.alts);
+        } else if (/^[A-Za-z_$][\w$]*$/.test(op[5])) {
+          const r = resolveName('env', op[5], tables, opts, []);
+          unresolved.push(...r.unresolved);
+          options.push(r.alts.length ? r.alts : [[]]);
+        } else {
+          unresolved.push(`${op[5]} (a concatenated operand)`);
+        }
+        at = (op.index as number) + op[0].length;
+        const more = /^\s*\+\s*/.exec(scanned.slice(at));
+        if (!more) break;
+        at += more[0].length;
+      }
+      judgeAt(st.no, st.raw)({ alts: cartesian(options), unresolved }, head.lead, '');
+    }
   }
-  return pins;
+}
+
+/**
+ * `${{ env.P }}@15.0.0`, `$P@15.0.0`: the PACKAGE NAME is a reference, and the version
+ * after the `@` is next's when that reference spells `next`. Every reference that is
+ * written directly against an `@` followed by a version is read, on any line - a name
+ * that cannot be resolved is a failure, since it may well be `next`.
+ */
+function packageNamePins(
+  file: string,
+  text: string,
+  fileTables: Tables,
+  opts: ScanOpts,
+  script: boolean,
+  judgeAt: JudgeAt,
+): void {
+  const comment = commentLine(script);
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    if (comment.test(raw) || raw.trim() === '') continue;
+    const no = i + 1;
+    const scanned = preprocess(raw);
+    const spans = spansOf(scanned, fileTables.ticks);
+    if (spans.length === 0) continue;
+    const tables = tablesAt(fileTables, no);
+    const origin: Source = { file, line: no, text: raw.trim() };
+    const judge = judgeAt(no, raw);
+    const seen = new Set<number>();
+    spans.forEach((_sp, k) => {
+      const [a, b] = tokenBounds(scanned, spans, k);
+      if (scanned[b] !== '@' || seen.has(a)) return;
+      seen.add(a);
+      const deco = /^[~^<>=v]*/.exec(scanned.slice(b + 1))?.[0] ?? '';
+      const from = b + 1 + deco.length;
+      let to = from;
+      for (;;) {
+        const nx = spans.find((sp) => sp.index === to);
+        if (nx) to = nx.index + nx.text.length;
+        else if (to < scanned.length && TOKEN_CHAR.test(scanned[to])) to++;
+        else break;
+      }
+      const tail = scanned.slice(from, to);
+      if (tail === '') return;
+      const name = expandText(scanned.slice(a, b), origin, tables, opts, []);
+      const digitTail = /^\d/.test(tail);
+      // `user@${{ env.HOST }}` is an address, not a spec: only a version-looking tail
+      // makes an UNRESOLVED name a failure.
+      if (name.unresolved.length && digitTail)
+        judge({ alts: [], unresolved: name.unresolved }, '', '');
+      const isNext = name.alts.some((alt) =>
+        NEXT_PACKAGE_NAME.test(
+          alt
+            .map((p) => p.s)
+            .join('')
+            .trim(),
+        ),
+      );
+      if (isNext)
+        judge(expandText(tail, origin, tables, opts, []), `next@${deco}`, scanned.slice(to));
+    });
+  }
 }
 /** Direct plus indirect pins of one file. */
 function allPins(file: string, text: string, opts: ScanOpts = {}): WorkflowPin[] {
@@ -1349,7 +1562,13 @@ function actionCallerInputs(
       for (const e of entries) give(e.key, e.value, no, shown);
     };
     lines.forEach((raw, i) => {
-      if (/^\s*#/.test(raw) || !/\buses\b/.test(raw) || !mentions.test(raw)) return;
+      if (/^\s*#/.test(raw) || !/\buses\b/.test(raw)) return;
+      if (!mentions.test(raw)) {
+        // The same action spelled some other way (`./a/../b`, `././b`): a caller this
+        // cannot match to the action is a caller it cannot judge.
+        if (localUses(raw).some((u) => u.dir === dir)) unparsed(i + 1, raw);
+        return;
+      }
       if (!strict.test(raw)) {
         // Not the plain `uses: ./dir` spelling: a flow-style step is parsed, anything else fails closed.
         const flow = /^\s*(?:-\s+)?(\{.*\})\s*(?:#.*)?$/.exec(raw);
@@ -1435,7 +1654,7 @@ function yamlTargets(yamls: YamlFile[], emitters = MATRIX_EMITTED()): ScanTarget
   }));
   const optsOf = (file: string): ScanOpts => targets.find((t) => t.file === file)?.opts ?? {};
   for (const t of targets) {
-    if (/^\.github\/actions\/.+\/action\.ya?ml$/.test(t.file)) {
+    if (/^.+\/action\.ya?ml$/.test(t.file)) {
       t.opts.inputWith = actionCallerInputs(t.file.replace(/\/action\.ya?ml$/, ''), yamls, optsOf);
     }
   }
@@ -1446,13 +1665,62 @@ function yamlTargets(yamls: YamlFile[], emitters = MATRIX_EMITTED()): ScanTarget
  * workflow, every composite action under `.github/actions/**` (with the `with:`
  * values its callers pass), and every script those name.
  */
+/** `uses: ./path` (the path may be quoted): a step or job that runs something from this checkout. */
+const LOCAL_USES = /(?<![\w-])["']?uses["']?\s*:\s*["']?(\.(?:\/[^\s"'#,}]*)?)(?=["'\s,}#]|$)/g;
+/** The local paths one line of YAML runs, as written and as a normalised checkout-relative dir (`.` = the root). */
+function localUses(raw: string): { written: string; dir: string }[] {
+  return [...raw.matchAll(LOCAL_USES)].map((m) => ({
+    written: m[1],
+    dir: posix.normalize(m[1]).replace(/(.)\/$/, '$1'),
+  }));
+}
+/**
+ * The workflows and composite actions to scan, DISCOVERED: every workflow, every
+ * action under `.github/actions/**`, and every action a `uses: ./<path>` line names
+ * wherever it lives (`packages/kn-next-action`). A local `uses:` path with no tracked
+ * `action.yml` to read is reported in `unscanned`, never skipped.
+ */
+function gatherYamls(
+  tracked: string[],
+  read: (f: string) => string,
+): { yamls: YamlFile[]; unscanned: string[] } {
+  const trackedSet = new Set(tracked);
+  const workflows = tracked.filter((f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f));
+  const actions = tracked.filter((f) => /^\.github\/actions\/.+\/action\.ya?ml$/.test(f));
+  const yamls = [...workflows, ...actions].map((file) => ({ file, text: read(file) }));
+  const have = new Set(yamls.map((y) => y.file));
+  const unscanned: string[] = [];
+  // `yamls` grows as actions are found: an action reached only through another is read too.
+  for (let n = 0; n < yamls.length; n++) {
+    const { file, text } = yamls[n];
+    text.split('\n').forEach((raw, i) => {
+      if (/^\s*#/.test(raw)) return;
+      for (const { written, dir } of localUses(raw)) {
+        if (have.has(dir)) continue; // a reusable workflow, already scanned
+        const root = dir === '.' || dir.startsWith('..');
+        const found = root
+          ? undefined
+          : [`${dir}/action.yml`, `${dir}/action.yaml`].find((f) => trackedSet.has(f));
+        if (found) {
+          if (!have.has(found)) {
+            have.add(found);
+            yamls.push({ file: found, text: read(found) });
+          }
+          continue;
+        }
+        unscanned.push(
+          `${file}:${i + 1}: uses: ${written} (a local path with no tracked action to scan)`,
+        );
+      }
+    });
+  }
+  return { yamls, unscanned: [...new Set(unscanned)] };
+}
 function scanTargets(): ScanTarget[] {
   const tracked = trackedFiles();
   const trackedSet = new Set(tracked);
   const read = (f: string) => readFileSync(resolve(REPO_ROOT, f), 'utf8');
-  const workflows = tracked.filter((f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f));
-  const actions = tracked.filter((f) => /^\.github\/actions\/.+\/action\.ya?ml$/.test(f));
-  const yamls = [...workflows, ...actions].map((file) => ({ file, text: read(file) }));
+  const { yamls } = gatherYamls(tracked, read);
   const targets = yamlTargets(yamls);
   for (const file of referencedScripts(yamls, trackedSet)) {
     targets.push({ file, text: read(file), opts: {} });
@@ -2665,5 +2933,320 @@ describe('#2630 — the rest of a version token and unbalanced substitutions', (
     ] as const) {
       expect(flagged(file, text).join('\n'), text).toContain('unresolvable');
     }
+  });
+});
+// Round 3 (#2630): the doc comment above states the scan's reach. Each shape in this
+// block is one of those claims made exact - it is either RED here, or it is listed under
+// STILL NOT SEEN there. Fixtures are written before the detector that turns them red.
+describe('#2630 round 3 - the documented reach is the real reach', () => {
+  const flagged = (file: string, text: string, opts: ScanOpts = {}) =>
+    workflowFlags(file, fx(text), [], opts);
+  const wf = (run: string) => `jobs:\n  b:\n    steps:\n      - run: ${run}`;
+  /** The whole discovery + scan path over an in-memory tree. */
+  const scanTree = (files: Record<string, string>) => {
+    const g = gatherYamls(Object.keys(files), (f) => fx(files[f]));
+    return {
+      unscanned: g.unscanned,
+      scanned: g.yamls.map((y) => y.file),
+      flags: yamlTargets(g.yamls, {}).flatMap((t) => workflowFlags(t.file, t.text, [], t.opts)),
+    };
+  };
+
+  describe('1. a JS concatenation that spans lines, or whose head is a variable', () => {
+    for (const [name, text] of [
+      ['a leading + on the next line', "const s = 'next@'\n  + '15.0.0';"],
+      ['a trailing + at the end of the line', "run('npm i next@' +\n  '15.0.0');"],
+      ['a variable operand on the next line', "const v = '15.0.0';\nrun('npm i next@'\n  + v);"],
+      ['a chain across three lines', "run('npm i next@'\n  + '15'\n  + '.0.0');"],
+      ['a prefix variable joined on the next line', "const p='next@'; const s = p\n + '15.0.0';"],
+      [
+        'a prefix variable on a line that does not mention next',
+        "const p = 'next@';\nrun(p + '15.0.0');",
+      ],
+      ['an npm path held in a variable', "const p = 'dependencies.next=';\nrun(p + '15.0.0');"],
+    ] as const) {
+      it(`flags ${name}`, () => {
+        const out = flagged('scripts/x.mjs', text);
+        expect(out.length, text).toBeGreaterThan(0);
+        expect(out.join('\n'), text).toContain('15.0.0');
+      });
+    }
+
+    it('passes the clear versions of the same shapes', () => {
+      for (const t of [
+        "const s = 'next@'\n  + '16.4.3';",
+        "run('npm i next@' +\n  '16.4.3');",
+        "const p='next@'; const s = p\n + '16.4.3';",
+        "const p = 'next@';\nconst v = '16.4.3';\nrun(p + v);",
+      ]) {
+        expect(flagged('scripts/x.mjs', t), t).toEqual([]);
+      }
+    });
+
+    it('fails an operand it cannot resolve on the next line', () => {
+      for (const t of [
+        "run('npm i next@'\n  + opts.version);",
+        "const p = 'next@';\nrun(p + getVersion());",
+      ]) {
+        expect(flagged('scripts/x.mjs', t).join('\n'), t).toContain('unresolvable');
+      }
+    });
+
+    it('does not take a joined line outside a version position for a pin', () => {
+      for (const t of [
+        "log('Next >= '\n  + '15.0.0');",
+        "const label = 'next version: ';\nlog(label + '15.0.0');",
+        "const a = 'x'\n  + '15.0.0';",
+      ]) {
+        expect(flagged('scripts/x.mjs', t), t).toEqual([]);
+      }
+    });
+  });
+
+  describe('2. a YAML alias, anchor or tag in an env or input-default table', () => {
+    const useIt = '      - run: npm i next@@{{ env.NEXT_VERSION }}';
+    for (const [name, text] of [
+      [
+        'an alias bound to a next-named env key',
+        `env:\n  X: &v 15.0.0\n  NEXT_VERSION: *v\njobs:\n  b:\n    steps:\n${useIt}`,
+      ],
+      [
+        'an alias to a CLEAR anchor (it cannot be followed, so it is not green)',
+        `env:\n  X: &v 16.4.3\n  NEXT_VERSION: *v\njobs:\n  b:\n    steps:\n${useIt}`,
+      ],
+      ['a tagged value', `env:\n  NEXT_VERSION: !!str 16.4.3\njobs:\n  b:\n    steps:\n${useIt}`],
+      [
+        'an alias read through a differently named env key',
+        'env:\n  X: &v 15.0.0\n  FW: *v\njobs:\n  b:\n    steps:\n      - run: npm i next@@{{ env.FW }}',
+      ],
+      [
+        'an alias as an input default',
+        'on:\n  workflow_dispatch:\n    inputs:\n      fw:\n        default: *v\njobs:\n  b:\n    steps:\n      - run: npm i next@@{{ inputs.fw }}',
+      ],
+      [
+        'an alias in an inline env flow mapping',
+        'env: { X: &v 15.0.0, NEXT_VERSION: *v }\njobs:\n  b:\n    steps:\n      - run: npm i next@@{{ env.NEXT_VERSION }}',
+      ],
+      ['a next-named binding to an alias, never read', 'env:\n  X: &v 16.4.3\n  NEXT_VERSION: *v'],
+      ['a next-named binding to an alias in a flow mapping', 'env: { NEXT_VERSION: *v }'],
+    ] as const) {
+      it(`fails closed on ${name}`, () => {
+        const out = flagged('x.yml', text);
+        expect(out.length, text).toBeGreaterThan(0);
+        expect(out.join('\n'), text).toContain('unresolvable');
+      });
+    }
+
+    it('does not judge an alias that never reaches a next position', () => {
+      const text =
+        'env:\n  X: &v 15.0.0\n  HOME_V: *v\njobs:\n  b:\n    steps:\n      - run: echo @{{ env.HOME_V }}';
+      expect(flagged('x.yml', text)).toEqual([]);
+    });
+  });
+
+  describe('3. a JS reassignment without a keyword', () => {
+    it('judges the union of every assignment, a bare one included', () => {
+      for (const t of [
+        "let v='16.4.1'; v='15.0.0'; run('npm i next@'+v);",
+        "let v = '16.4.1';\nif (x) {\n  v = '15.0.0';\n}\nrun('npm i next@' + v);",
+        'let v = "16.4.1";\nv = "15.0.0";\nrun(`npm i next@@{v}`);',
+      ]) {
+        const out = flagged('scripts/x.mjs', t);
+        expect(out.length, t).toBeGreaterThan(0);
+        expect(out.join('\n'), t).toContain('15.0.0');
+      }
+    });
+
+    it('fails closed on an assignment whose value is not one string literal', () => {
+      for (const t of [
+        "let v = '16.4.1';\nv = pick();\nrun('npm i next@' + v);",
+        "let v = '16.4.1';\nv += '.0';\nrun('npm i next@' + v);",
+        "const v = '15.0.' + patch;\nrun('npm i next@' + v);",
+        "let v = '16.4.1';\nv =\n  '15.0.0';\nrun('npm i next@' + v);",
+        "let v = '16.4.1';\nv = cond ? '15.0.0' : '16.4.1';\nrun('npm i next@' + v);",
+      ]) {
+        expect(flagged('scripts/x.mjs', t).join('\n'), t).toContain('unresolvable');
+      }
+    });
+
+    it('passes clear reassignments, and is not fooled by a comparison, an arrow or a property', () => {
+      for (const t of [
+        "let v='16.4.1'; v='16.4.3'; run('npm i next@'+v);",
+        "const v = '16.4.3';\nif (v == '15.0.0') run('npm i next@' + v);",
+        "const v = '16.4.3';\nif (v === '15.0.0') run('npm i next@' + v);",
+        "const v = '16.4.3';\nif (v !== '15.0.0' && v <= '15.0.0') run('npm i next@' + v);",
+        "const v = '16.4.3';\nconst f = (w) => w;\nobj.v = '15.0.0';\nrun('npm i next@' + v);",
+      ]) {
+        expect(flagged('scripts/x.mjs', t), t).toEqual([]);
+      }
+    });
+  });
+
+  describe('4. the package name itself sits behind a reference', () => {
+    const envP = (name: string) => `env:\n  P: ${name}\njobs:\n  b:\n    steps:\n`;
+    const inP = (name: string) =>
+      `on:\n  workflow_dispatch:\n    inputs:\n      p:\n        default: ${name}\njobs:\n  b:\n    steps:\n`;
+    for (const [name, build] of [
+      ['an env expression', (v: string) => `${envP('next')}      - run: npm i @{{ env.P }}@${v}`],
+      [
+        'an input expression',
+        (v: string) => `${inP('next')}      - run: npm i @{{ inputs.p }}@${v}`,
+      ],
+      [
+        'a quoted env expression',
+        (v: string) => `${envP('next')}      - run: npm i "@{{ env.P }}@${v}"`,
+      ],
+      ['a shell variable', (v: string) => `${envP('next')}      - run: npm i $P@${v}`],
+      ['a braced shell variable', (v: string) => `${envP('next')}      - run: npm i @{P}@${v}`],
+      [
+        'create-next-app',
+        (v: string) => `${envP('create-next-app')}      - run: npx @{{ env.P }}@${v} app`,
+      ],
+    ] as const) {
+      it(`flags ${name} holding next, and passes its clear version`, () => {
+        const bad = flagged('x.yml', build('15.0.0'));
+        expect(bad.length, name).toBeGreaterThan(0);
+        expect(bad.join('\n'), name).toContain('15.0.0');
+        expect(flagged('x.yml', build('16.4.3')), name).toEqual([]);
+      });
+    }
+
+    it('follows the version half of the spec through its own reference too', () => {
+      const text =
+        'env:\n  P: next\n  V: 15.0.0\njobs:\n  b:\n    steps:\n      - run: npm i @{{ env.P }}@@{{ env.V }}';
+      expect(flagged('x.yml', text).join('\n')).toContain('15.0.0');
+    });
+
+    it('does not judge a name that resolves to another package', () => {
+      const text =
+        'env:\n  P: react\njobs:\n  b:\n    steps:\n      - run: npm i @{{ env.P }}@15.0.0';
+      expect(flagged('x.yml', text)).toEqual([]);
+    });
+
+    it('fails closed on a package name it cannot resolve, before a version', () => {
+      for (const ref of ['secrets.PKG', 'env.NOPE', 'inputs.nope', 'steps.s.outputs.p']) {
+        expect(flagged('x.yml', wf(`npm i @{{ ${ref} }}@15.0.0`)).join('\n'), ref).toContain(
+          'unresolvable',
+        );
+      }
+    });
+
+    it('leaves a reference that is not followed by a version alone', () => {
+      for (const t of [
+        wf('git clone git@@{{ env.HOST }}:org/repo'),
+        wf('echo @{{ secrets.USER }}@example.com'),
+        wf('ssh deploy@@{{ env.HOST }}'),
+      ]) {
+        expect(flagged('x.yml', t), t).toEqual([]);
+      }
+    });
+  });
+
+  describe('5. a local composite action outside .github/actions', () => {
+    const caller = (path: string, quote = '') =>
+      `jobs:\n  c:\n    steps:\n      - uses: ${quote}${path}${quote}\n        with:\n          fw: 15.0.0`;
+    const action = (def: string) =>
+      [
+        'name: a',
+        'inputs:',
+        '  fw:',
+        `    default: ${def}`,
+        'runs:',
+        '  using: composite',
+        '  steps:',
+        '    - shell: bash',
+        '      run: bun add "next@@{{ inputs.fw }}"',
+      ].join('\n');
+
+    it('discovers the action from the uses: line and judges what its callers pass', () => {
+      for (const [path, q] of [
+        ['./tools/act', ''],
+        ['./tools/act/', ''],
+        ['./tools/act', '"'],
+        ['./tools/act', "'"],
+      ] as const) {
+        const r = scanTree({
+          '.github/workflows/c.yml': caller(path, q),
+          'tools/act/action.yml': action('16.4.3'),
+        });
+        expect(r.scanned, path).toContain('tools/act/action.yml');
+        expect(r.unscanned, path).toEqual([]);
+        expect(r.flags.join('\n'), path).toContain('15.0.0');
+      }
+    });
+
+    it('fails closed on a caller that spells the action path some other way', () => {
+      for (const path of ['./tools/act/../act', './././tools/act', './tools//act']) {
+        const r = scanTree({
+          '.github/workflows/c.yml': caller(path),
+          'tools/act/action.yml': action('16.4.3'),
+        });
+        expect(r.flags.join('\n'), path).toContain('unresolvable');
+      }
+    });
+
+    it('judges the action default when no caller passes the input', () => {
+      const r = scanTree({
+        '.github/workflows/c.yml': 'jobs:\n  c:\n    steps:\n      - uses: ./tools/act',
+        'tools/act/action.yaml': action('15.0.0'),
+      });
+      expect(r.scanned).toContain('tools/act/action.yaml');
+      expect(r.flags.join('\n')).toContain('15.0.0');
+    });
+
+    it('follows an action reached only through another action', () => {
+      const outer = [
+        'name: o',
+        'runs:',
+        '  using: composite',
+        '  steps:',
+        '    - uses: ./tools/inner',
+      ].join('\n');
+      const r = scanTree({
+        '.github/workflows/c.yml': 'jobs:\n  c:\n    steps:\n      - uses: ./.github/actions/o',
+        '.github/actions/o/action.yml': outer,
+        'tools/inner/action.yml': action('15.0.0'),
+      });
+      expect(r.scanned).toContain('tools/inner/action.yml');
+      expect(r.flags.join('\n')).toContain('15.0.0');
+    });
+
+    it('fails closed on a local uses: path that has no tracked action to scan', () => {
+      for (const path of ['./tools/missing', './', '.', './tools/act/extra']) {
+        const r = scanTree({
+          '.github/workflows/c.yml': `jobs:\n  c:\n    steps:\n      - uses: ${path}`,
+          'tools/act/action.yml': action('16.4.3'),
+        });
+        expect(r.unscanned.join('\n'), path).toContain(path);
+      }
+    });
+
+    it('does not take a reusable workflow, a comment, a remote action or a clear action for unscanned', () => {
+      const r = scanTree({
+        '.github/workflows/c.yml': [
+          '# uses: ./tools/commented',
+          'jobs:',
+          '  c:',
+          '    uses: ./.github/workflows/d.yml',
+          '  e:',
+          '    steps:',
+          '      - uses: actions/checkout@v4',
+          '      - uses: docker://alpine:3',
+          '      - uses: ./tools/act',
+          '        with:',
+          '          fw: 16.4.3',
+        ].join('\n'),
+        '.github/workflows/d.yml': 'on: workflow_call\njobs: {}',
+        'tools/act/action.yml': action('16.4.3'),
+      });
+      expect(r.unscanned).toEqual([]);
+      expect(r.flags).toEqual([]);
+    });
+  });
+
+  it('the real tree has no local action the scan cannot see, and reaches the ones outside .github', () => {
+    const g = gatherYamls(trackedFiles(), (f) => readFileSync(resolve(REPO_ROOT, f), 'utf8'));
+    expect(g.unscanned).toEqual([]);
+    expect(g.yamls.map((y) => y.file)).toContain('packages/kn-next-action/action.yml');
   });
 });

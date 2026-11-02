@@ -299,6 +299,28 @@ t("embedded", () => readFileSync(join(process.cwd(), "data/a.json"), "utf8"));`,
         expect(readFileSync(join(r.dir, "data/new.txt"), "utf8")).toBe("fresh");
     }, 180_000);
 
+    it("an entry with no fs import of its own (only require) still gets the alias", () => {
+        const app = baseApp("");
+        write(
+            join(app.work, ".output/server/index.mjs"),
+            `import { createRequire } from "node:module";
+const req = createRequire(import.meta.url);
+let out;
+try { out = req("node:fs").readFileSync(req("node:path").join(process.cwd(), "data/a.json"), "utf8").slice(0, 80); }
+catch (e) { out = "ERR " + e.code; }
+console.log("RESULT " + JSON.stringify({ viaRequire: out }));
+`,
+        );
+        write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+        write(
+            join(app.work, "next.config.mjs"),
+            'export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n',
+        );
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        expect(runAlone(b.exe).result.viaRequire).toContain(A_MARK);
+    }, 180_000);
+
     it("an app with no data to embed gets no fs facade and no alias (the entry is unchanged)", () => {
         const app = baseApp(
             't("x", () => readFileSync(new URL(import.meta.url), "utf8").length);',

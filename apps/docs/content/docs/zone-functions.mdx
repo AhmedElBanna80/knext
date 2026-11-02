@@ -485,7 +485,10 @@ If `SecretsUnverified` does not clear on its own:
 2. Check the API server's health, for example `kubectl get --raw='/readyz?verbose'`.
 3. Read the operator's logs for the error it reports for the Secret.
 
-The zone's `BackendBindings` condition is `True` when every `backends` entry is bound. Its
+The zone's `BackendBindings` condition is `True` when every `backends` entry is bound. It is
+`False` with the reason `BindingImageMismatch` or `BindingSpecMismatch` when a function is
+refused by the zone's own pin, and the message names the refused entry; the zone's pods and
+revisions are unchanged. Its
 `ZoneSigningKey` condition is present while the zone has a bound function: `True` with
 `KeyActive`, `RotationPropagating` or `RotationOverlap`, or `False` with
 `SigningKeySecretConflict`, `JWKSConfigMapConflict` or `SigningKeyInvalid`. Neither changes the

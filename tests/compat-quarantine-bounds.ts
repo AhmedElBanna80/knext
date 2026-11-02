@@ -1,7 +1,7 @@
 /**
  * SHARED compat-quarantine bound (v6-P1, ADR-0007 §g).
  *
- * Historically the number 15 lived as TWO independent literals that ADR-0007 §g
+ * Historically the number (then 15) lived as TWO independent literals that ADR-0007 §g
  * only PROSE-promised to keep in sync:
  *   - the per-mechanism-family SOFT BOUND in tests/deploy-manifest-lanes.test.ts
  *   - the file-level ≤15 family cap in tests/deploy-manifest.test.ts
@@ -10,7 +10,8 @@
  * If you change the value, you change BOTH consumers at once — that is the point.
  * Do NOT reintroduce a bare `15` literal in either consumer; import this instead.
  */
-export const FAMILY_QUARANTINE_CAP = 15;
+// 15 -> 16 on 2026-11-01 for ONE new vercel-infra-coupled file (ADR-0007 amendment 2026-11-01).
+export const FAMILY_QUARANTINE_CAP = 16;
 
 /**
  * The two consumers that MUST reference {@link FAMILY_QUARANTINE_CAP}. Named here
@@ -19,7 +20,7 @@ export const FAMILY_QUARANTINE_CAP = 15;
  */
 export const QUARANTINE_CAP_CALLSITES = [
   'tests/deploy-manifest-lanes.test.ts (PER_FAMILY_SOFT_BOUND — per-mechanism-family soft bound)',
-  'tests/deploy-manifest.test.ts (the ≤15 file-level family cap)',
+  'tests/deploy-manifest.test.ts (the file-level family cap)',
 ] as const;
 
 /** The message emitted if either consumer drifts off the shared constant. */

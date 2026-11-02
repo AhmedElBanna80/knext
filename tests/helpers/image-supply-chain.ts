@@ -448,9 +448,7 @@ const channelCache = new Map<string, Record<string, string>>();
 
 /**
  * Output of hack/release-channel.sh for a ref, as `steps.channel.outputs.*`
- * lookups. Also `needs.operator-image-supply-chain.outputs.ready`, which the
- * operator workflow's handoff step sets only when `steps.channel.outputs.publish
- * == 'true'` (asserted by the test file), so it equals `publish` here.
+ * lookups.
  */
 export function channelVars(ref: string): Record<string, string> {
   const hit = channelCache.get(ref);
@@ -466,8 +464,6 @@ export function channelVars(ref: string): Record<string, string> {
         const m = /^([a-z_]+)=(.*)$/.exec(line);
         if (m) vars[`steps.channel.outputs.${m[1]}`] = m[2];
       }
-      const publish = vars['steps.channel.outputs.publish'];
-      if (publish !== undefined) vars['needs.operator-image-supply-chain.outputs.ready'] = publish;
     }
   }
   channelCache.set(ref, vars);

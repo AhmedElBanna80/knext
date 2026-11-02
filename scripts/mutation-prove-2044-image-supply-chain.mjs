@@ -460,15 +460,6 @@ const MUTATIONS = [
     anchor: '/^images:/m.test(body) ||',
     replacement: 'false ||',
   },
-  {
-    id: 'E41',
-    subject: 'engine',
-    claim:
-      'the operator `ready` output is no longer modelled (dispatch from a tag then looks publishing)',
-    anchor:
-      "if (publish !== undefined) vars['needs.operator-image-supply-chain.outputs.ready'] = publish;",
-    replacement: 'void 0;',
-  },
 ];
 
 const prover = createGuardProver({

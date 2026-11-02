@@ -138,13 +138,6 @@ describe('image publish lanes: the real workflows', () => {
       'operator-e2e-nightly.yml#scale-to-zero-cache',
     );
   });
-
-  it('the operator `ready` output equals `publish` (the premise the evaluator relies on)', () => {
-    const steps = jobsOf(wfNamed('operator-supply-chain.yml'))['operator-image-supply-chain']
-      .steps as Array<Record<string, unknown>>;
-    const handoff = steps.find((x) => x.id === 'handoff') as Record<string, unknown>;
-    expect(String(handoff.if ?? '')).toMatch(/steps\.channel\.outputs\.publish == 'true'/);
-  });
 });
 
 describe('operator tags: trigger shape', () => {
@@ -513,6 +506,15 @@ describe('evalExpr (the small three-valued evaluator)', () => {
       true,
     );
   });
+  it('an unknown operand under && stays UNKNOWN, never false (a soft-fail cannot hide behind it)', () => {
+    expect(evalExpr("github.ref == 'refs/heads/main' && steps.x.outputs.y == 'z'", main)).toBe(
+      UNKNOWN,
+    );
+    const e = {
+      'continue-on-error': "${{ github.ref == 'refs/heads/main' && steps.x.outputs.y == 'z' }}",
+    };
+    expect(checks(fx(lane({ push: [pushStep(), signStep(e)] })))).toContain('cosign');
+  });
   it('resolves provided variables', () => {
     expect(
       evalExpr(
@@ -798,6 +800,14 @@ describe('ties for docker push and build-push-action, and cosign by name', () =>
     expect(
       checks(fx(dockerLane('${{ env.A }}:1', [dpush('"${B}:1"'), sign('${B}')]))),
     ).not.toContain('tie-trivy');
+  });
+  it('signing an extra name the lane never pushed reds (the pushed name IS signed)', () => {
+    const w = dockerLane('ghcr.io/x/y:1', [
+      dpush('ghcr.io/x/y:1'),
+      sign('ghcr.io/x/y'),
+      sign('someone/else'),
+    ]);
+    expect(checks(fx(w))).toContain('tie-cosign-name');
   });
   it('cosign signing a DIFFERENT name than the one pushed reds (even at a digest)', () => {
     const w = dockerLane('ghcr.io/x/y:1', [dpush('ghcr.io/x/y:1'), sign('other/img')]);

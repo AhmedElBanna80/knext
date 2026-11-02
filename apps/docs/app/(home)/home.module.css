@@ -280,6 +280,8 @@
   list-style: none;
   padding: 0;
 }
+/* A step's inline <code> is a flex item with an unbreakable min-content width;
+   let it wrap so a long identifier cannot widen the page at narrow viewports. */
 .steps li {
   padding: 12px 0;
   border-bottom: 1px dashed var(--line);
@@ -318,9 +320,31 @@
   color: var(--ink-dim);
 }
 
+/* Narrow viewports: `minmax(0, 1fr)`, not bare `1fr`. A bare `1fr` track cannot
+   shrink below its content's min-content width, so the 881px code block forced
+   every column past the viewport and the page scrolled sideways at 320-980px.
+   The base desktop templates above are unchanged. */
+@media (max-width: 1000px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .codewrap {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  /* Step list is a flex row with no wrap: its text and inline <code> runs are
+     separate flex items, so one long step cannot wrap and pushes the page wide.
+     Let steps wrap, and let a long identifier break, at narrow widths only. */
+  .steps li {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .steps code {
+    overflow-wrap: anywhere;
+  }
+}
 @media (max-width: 820px) {
   .grid,
   .codewrap {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }

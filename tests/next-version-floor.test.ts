@@ -948,8 +948,9 @@ function expandText(
 
 /** The versions the dynamic matrix of this scope is known to emit: only from a job that runs a registered emitter. */
 function emittedFor(t: Tables, opts: ScanOpts): string[] {
+  if (!t.matrix.dynamic) return [];
   const out = [...(opts.matrixVersions ?? [])];
-  for (const id of t.matrix.dynamic ?? []) {
+  for (const id of t.matrix.dynamic) {
     const job = t.jobs.find((j) => j.id === id);
     for (const [script, versions] of Object.entries(opts.matrixEmitters ?? {})) {
       if (job?.text.includes(script)) out.push(...versions);
@@ -2474,5 +2475,165 @@ describe('#2630 — indirection the first resolver let through', () => {
         'unresolvable',
       );
     });
+  });
+});
+describe('#2630 — edges of the per-job matrix, caller context and with: parsing', () => {
+  const flagged = (file: string, text: string, opts: ScanOpts = {}) =>
+    workflowFlags(file, fx(text), [], opts);
+  const scanFiles = (
+    files: Record<string, string>,
+    emitters: Record<string, string[]> = {},
+  ): string[] =>
+    yamlTargets(
+      Object.entries(files).map(([file, text]) => ({ file, text: fx(text) })),
+      emitters,
+    ).flatMap((t) => workflowFlags(t.file, t.text, [], t.opts));
+  const ACTION = '.github/actions/a/action.yml';
+  const action = [
+    'name: a',
+    'inputs:',
+    '  fw:',
+    '    default: 16.4.3',
+    'runs:',
+    '  using: composite',
+    '  steps:',
+    '    - shell: bash',
+    '      run: bun add "next@@{{ inputs.fw }}"',
+  ].join('\n');
+
+  it('an `outputs: matrix:` key is not a matrix', () => {
+    const text = [
+      'jobs:',
+      '  b:',
+      '    outputs:',
+      '      matrix: @{{ steps.m.outputs.matrix }}',
+      '    strategy:',
+      '      matrix:',
+      '        fw: [16.4.3]',
+      '    steps:',
+      '      - run: bun add "next@@{{ matrix.fw }}"',
+    ].join('\n');
+    // were `outputs.matrix` taken for a dynamic matrix, the override below would be emitted
+    expect(flagged('x.yml', text, { matrixVersions: ['16.3.8'] })).toEqual([]);
+  });
+
+  it('a fromJSON nested inside a matrix block makes it dynamic', () => {
+    const text = (src: string) =>
+      [
+        'jobs:',
+        '  plan:',
+        '    steps:',
+        '      - run: bun scripts/emit.mjs',
+        '  m:',
+        '    needs: plan',
+        '    strategy:',
+        '      matrix:',
+        '        fw: [16.4.3]',
+        `        include: @{{ fromJSON(needs.${src}.outputs.m) }}`,
+        '    steps:',
+        '      - run: bun add "next@@{{ matrix.fw }}"',
+      ].join('\n');
+    const opts = { matrixEmitters: { 'scripts/emit.mjs': ['16.3.8'] } };
+    expect(flagged('x.yml', text('plan'), opts).join('\n')).toContain('16.3.8');
+    expect(flagged('x.yml', text('plan'))).toEqual([]);
+  });
+
+  it('an inline flow-mapping matrix is read, and an unparseable one is dynamic', () => {
+    const text = (m: string) =>
+      `jobs:\n  b:\n    strategy:\n      matrix: ${m}\n    steps:\n      - run: bun add "next@@{{ matrix.fw }}"`;
+    expect(flagged('x.yml', text('{ fw: [16.3.8] }')).join('\n')).toContain('16.3.8');
+    expect(flagged('x.yml', text('{ fw: [16.4.3] }'))).toEqual([]);
+    expect(flagged('x.yml', text('*shared')).join('\n')).toContain('unresolvable');
+  });
+
+  it("a caller's dynamic matrix resolves through the caller's own emitters", () => {
+    const caller = [
+      'jobs:',
+      '  plan:',
+      '    steps:',
+      '      - run: bun scripts/emit.mjs',
+      '  c:',
+      '    needs: plan',
+      '    strategy:',
+      '      matrix: @{{ fromJSON(needs.plan.outputs.m) }}',
+      '    steps:',
+      '      - uses: ./.github/actions/a',
+      '        with:',
+      '          fw: @{{ matrix.mv }}',
+    ].join('\n');
+    const files = { [ACTION]: action, '.github/workflows/c.yml': caller };
+    expect(scanFiles(files, { 'scripts/emit.mjs': ['16.3.8'] }).join('\n')).toContain('16.3.8');
+    expect(scanFiles(files, { 'scripts/emit.mjs': ['16.4.3'] })).toEqual([]);
+    expect(scanFiles(files, {}).join('\n')).toContain('unresolvable');
+  });
+
+  it('follows with: through an action that calls another action with the same input name', () => {
+    const outer = [
+      'name: b',
+      'inputs:',
+      '  fw:',
+      '    default: 16.4.3',
+      'runs:',
+      '  using: composite',
+      '  steps:',
+      '    - uses: ./.github/actions/a',
+      '      with:',
+      '        fw: @{{ inputs.fw }}',
+    ].join('\n');
+    const wf = `jobs:\n  c:\n    steps:\n      - uses: ./.github/actions/b\n        with:\n          fw: 16.3.8`;
+    const out = scanFiles({
+      [ACTION]: action,
+      '.github/actions/b/action.yml': outer,
+      '.github/workflows/c.yml': wf,
+    });
+    expect(out.join('\n')).toContain('16.3.8');
+    expect(out.join('\n')).not.toContain('cycle');
+  });
+
+  it('fails closed on an alias value inside a parsed with: mapping', () => {
+    for (const body of [
+      '- uses: ./.github/actions/a\n  with: { fw: *v }',
+      '- uses: ./.github/actions/a\n  with:\n    fw: *v',
+      '- uses: ./.github/actions/a\n  with:\n    fw: !!str 16.3.8',
+    ]) {
+      const wf = `jobs:\n  c:\n    steps:\n${body
+        .split('\n')
+        .map((l) => `      ${l}`)
+        .join('\n')}`;
+      expect(
+        scanFiles({ [ACTION]: action, '.github/workflows/c.yml': wf }).join('\n'),
+        body,
+      ).toContain('unresolvable');
+    }
+  });
+
+  it('fails closed on a flow-style step that spans lines or names the action oddly', () => {
+    for (const body of [
+      '- { uses: ./.github/actions/a,\n    with: { fw: 16.3.8 } }',
+      '- { name: "uses ./.github/actions/a" }',
+    ]) {
+      const wf = `jobs:\n  c:\n    steps:\n${body
+        .split('\n')
+        .map((l) => `      ${l}`)
+        .join('\n')}`;
+      expect(
+        scanFiles({ [ACTION]: action, '.github/workflows/c.yml': wf }).join('\n'),
+        body,
+      ).toContain('unresolvable');
+    }
+  });
+
+  it('does not take a different action sharing a path prefix for this one', () => {
+    const wf =
+      'jobs:\n  c:\n    steps:\n      - uses: ./.github/actions/a-other\n        with: *shared';
+    expect(scanFiles({ [ACTION]: action, '.github/workflows/c.yml': wf })).toEqual([]);
+  });
+
+  it('judges a with: value passed to a quoted-path uses', () => {
+    const wf =
+      "jobs:\n  c:\n    steps:\n      - uses: './.github/actions/a/'\n        with:\n          fw: 16.3.8";
+    expect(scanFiles({ [ACTION]: action, '.github/workflows/c.yml': wf }).join('\n')).toContain(
+      '16.3.8',
+    );
   });
 });

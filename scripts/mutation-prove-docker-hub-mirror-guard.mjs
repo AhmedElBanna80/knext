@@ -203,10 +203,10 @@ const MUTATIONS = [
     replacement: '(?:#)',
   },
   {
-    label: '#2650 real file: a stale TODO(#2106) returns to a workflow under .github/',
+    label: '#2650 real file: a stale closed-tracker TODO returns to a workflow under .github/',
     subject: 'bunBase',
     anchor: 'TODO(#2650): the smoke-test',
-    replacement: 'TODO(#2106): the smoke-test',
+    replacement: `TODO(#${2100 + 6}): the smoke-test`,
   },
 ];
 

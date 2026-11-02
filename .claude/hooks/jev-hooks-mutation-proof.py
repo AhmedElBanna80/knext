@@ -107,8 +107,8 @@ MUTATIONS = [
     ("lib: header optional scheme word removed", LIB, "([A-Za-z]+[[:space:]]+)?", ""),
     ("lib: URL user:password@ not a literal secret", LIB, "|://[^/@[:space:]]+:[^/@[:space:]]+@", ""),
     ("lib: Authorization: Basic <anything> not a literal secret", LIB, "|authorization:[[:space:]]*basic[[:space:]]+[^[:space:]]+", ""),
-    # --- the suite itself must not hang on macOS (SIGPIPE is ignored there; macOS `yes` never exits) ---
-    ("suite: pipes the infinite `yes` producer again (hangs on macOS when SIGPIPE is ignored)", "jev-hooks.test.sh", "big=$(rep_text_bytes 'lorem ipsum dolor' 200000)", "big=$(yes 'lorem ipsum dolor' | head -c 200000)"),
+    # --- the suite itself must not hang on macOS (SIGPIPE is ignored there; an infinite `yes` producer behind a filter that ignores EPIPE, e.g. `tr`, never exits) ---
+    ("suite: feeds the infinite `yes` producer again (an EPIPE-ignoring filter makes it hang on macOS)", "jev-hooks.test.sh", "big=$(rep_text_bytes 'lorem ipsum dolor' 200000)", "big=$(yes 'lorem ipsum dolor' | head -c 200000)"),
     # --- pr-risk -----------------------------------------------------------------------------
     ("pr-risk: security weight dropped", "pr-risk.sh", ":-0.40}", ":-0.00}"),
     ("pr-risk: tests weight dropped", "pr-risk.sh", ":-0.25}", ":-0.00}"),
@@ -180,7 +180,7 @@ SMOKE = [
     "a failing git diff is read",
     "BEFORE the token checks",
     "goes back to a pipeline (SIGPIPE",
-    "pipes the infinite `yes` producer",
+    "feeds the infinite `yes` producer",
     "data URIs no longer exempt",
     "40-hex git SHAs no longer exempt",
 ]

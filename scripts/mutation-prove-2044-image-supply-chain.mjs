@@ -183,8 +183,8 @@ const MUTATIONS = [
     id: 'E1',
     subject: 'engine',
     claim: 'the cosign matcher stops recognising `cosign sign`/`attest`',
-    anchor: 'export const isCosign = (s: Step) => /\\bcosign\\s+(sign|attest)\\b/.test(code(s));',
-    replacement: 'export const isCosign = (s: Step) => /\\bcosign\\s+(nothing)\\b/.test(code(s));',
+    anchor: '!fromScript(s) && /\\bcosign\\s+(?:sign|attest)(?![\\w-])/.test(code(s));',
+    replacement: '!fromScript(s) && /\\bcosign\\s+(?:nothing)(?![\\w-])/.test(code(s));',
   },
   {
     id: 'E2',

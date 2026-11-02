@@ -2637,3 +2637,33 @@ describe('#2630 — edges of the per-job matrix, caller context and with: parsin
     );
   });
 });
+describe('#2630 — the rest of a version token and unbalanced substitutions', () => {
+  const flagged = (file: string, text: string, opts: ScanOpts = {}) =>
+    workflowFlags(file, fx(text), [], opts);
+
+  it('judges the literal text that follows a reference in the same token', () => {
+    const text = (tail: string) =>
+      `env:\n  MAJOR: 16\njobs:\n  b:\n    steps:\n      - run: bun add next@@{MAJOR}${tail}`;
+    expect(flagged('x.yml', text('.3.8')).join('\n')).toContain('16.3.8');
+    expect(flagged('x.yml', text('.4.1'))).toEqual([]);
+  });
+
+  it('fails a command substitution in a string a JS script hands to a shell', () => {
+    for (const line of [
+      "execSync('npm i next@$(cat .nextver)');",
+      'execSync("npm i next@$(cat .nextver)");',
+    ]) {
+      expect(flagged('scripts/x.mjs', line).join('\n'), line).toContain('unresolvable');
+    }
+  });
+
+  it('fails an unbalanced command substitution instead of dropping it', () => {
+    for (const [file, text] of [
+      ['x.yml', 'jobs:\n  b:\n    steps:\n      - run: bun add "next@$(cat f"'],
+      ['scripts/x.sh', 'bun add next@$(cat f'],
+      ['scripts/x.sh', 'NEXT_VERSION=$(cat f'],
+    ] as const) {
+      expect(flagged(file, text).join('\n'), text).toContain('unresolvable');
+    }
+  });
+});

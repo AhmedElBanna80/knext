@@ -40,6 +40,7 @@ export declare function assertPathFidelity(binaryPath: string, relpaths: string[
 
 export declare function unembeddedDynamicReport(
     serverOutputDir: string,
+    analyzerPath?: string,
 ): { file: string; computedSites: number; dynamicRequireBindings: string[] }[];
 
 export declare function detectCompileInclude(): Promise<{

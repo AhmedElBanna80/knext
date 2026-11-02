@@ -113,7 +113,9 @@ describe("analyzeServerModule (unit)", () => {
     it("counts declarations of a name (var list, function, parameters, catch), so a reused require name reads as ambiguous", () => {
         const a = analyzeServerModule(
             'import{createRequire as e}from"node:module";var t=1,u=e(import.meta.url);' +
-                "function u(e,r){}var f=(u,x)=>u(x);var g=u=>u;try{}catch(u){}" +
+                // The function is in a block: a top-level `var u` and `function u`
+                // is a SyntaxError in a module, which the parser now reads as unanalysable.
+                "{function u(e,r){}}var f=(u,x)=>u(x);var g=u=>u;try{}catch(u){}" +
                 "var o={m(u){return u(1)}};",
         );
         expect(a.requireBindings).toEqual(["u"]);
@@ -332,25 +334,34 @@ describe("analyzeServerModule (unit)", () => {
         // A `;`, `{` or `}` inside a `//` line comment is NOT a statement
         // boundary: the create below is the value of `const r = ...`
         // (#1877 round 3 review).
+        // The AST reads the code past the comment: the create is the value of
+        // `const r` (a binding, recognised under its name). The old scan could
+        // not tell a comment's `;` from a boundary, so it read these as handed on.
         it.each([
-            ["`;`", "const r = // note;\n e(import.meta.url);"],
-            ["`{`", "const r = // note {\n e(import.meta.url);"],
-            ["`}`", "const r = // note }\n e(import.meta.url);"],
-            [
-                "`;` after a sibling",
-                "const r = // x;\n a(), e(import.meta.url);",
-            ],
+            ["`;`", "const r = // note;\n e(import.meta.url);", "r"],
+            ["`{`", "const r = // note {\n e(import.meta.url);", "r"],
+            ["`}`", "const r = // note }\n e(import.meta.url);", "r"],
             [
                 "`;` with a quote before the comment",
                 "const r = '//'; const s = // x;\n e(import.meta.url);",
+                "s",
             ],
-        ])("a %s inside a line comment is not a statement boundary", (_label, code) => {
-            expect(analyzeServerModule(PRE + code).unrecognizedBinding).toBe(
-                true,
-            );
+        ])("a %s inside a line comment: the value of a recognised binding", (_label, code, name) => {
+            const a = analyzeServerModule(PRE + code);
+            expect(a.unrecognizedBinding).toBe(false);
+            expect(a.requireBindings).toContain(name);
         });
-        // A comment BETWEEN the boundary and the call is not skipped; the
-        // scan cannot prove the position, so it stays unrecognized (loud).
+        // The last element of a sequence assigned to `const r` IS handed on.
+        it("a create as the last element of a sequence after a line comment is handed on", () => {
+            expect(
+                analyzeServerModule(
+                    PRE + "const r = // x;\n a(), e(import.meta.url);",
+                ).unrecognizedBinding,
+            ).toBe(true);
+        });
+        // A comment BETWEEN a statement boundary and the call changes nothing:
+        // the AST sees a statement. The old scan could not prove the position
+        // past a comment and stayed loud.
         it.each([
             ["a line comment", "a(); // note\n e(import.meta.url);"],
             ["a block comment", "a(); /* x */\n e(import.meta.url);"],
@@ -358,9 +369,9 @@ describe("analyzeServerModule (unit)", () => {
                 "a `//` in a string earlier on the line",
                 'var u = "https://x.dev"; e(import.meta.url);',
             ],
-        ])("conservative: a create after %s stays unrecognized", (_label, code) => {
+        ])("a create after %s is a statement the AST proves discarded", (_label, code) => {
             expect(analyzeServerModule(PRE + code).unrecognizedBinding).toBe(
-                true,
+                false,
             );
         });
         it.each([

@@ -455,9 +455,10 @@ export function assertPathFidelity(binaryPath, relpaths) {
  * module load, so this reuses the two side-effect-free analyses it is built on.
  *
  * @param {string} serverOutputDir
+ * @param {string} [analyzerPath] the create-require-analyze script (#2614); see analyzeServerModule.
  * @returns {{ file: string, computedSites: number, dynamicRequireBindings: string[] }[]}
  */
-export function unembeddedDynamicReport(serverOutputDir) {
+export function unembeddedDynamicReport(serverOutputDir, analyzerPath) {
   const base = resolve(serverOutputDir);
   const files = [];
   walkFiles(base, base, files);
@@ -466,7 +467,7 @@ export function unembeddedDynamicReport(serverOutputDir) {
     if (!/\.[cm]?js$/.test(rel)) continue;
     const src = readFileSync(join(base, rel), 'utf8');
     const computedSites = computedRequireSites(src).length;
-    const analysis = analyzeServerModule(src);
+    const analysis = analyzeServerModule(src, analyzerPath);
     const dynamicRequireBindings = analysis.requireBindings
       .filter((b) => analysis.nonLiteralCallees.has(b))
       .sort();

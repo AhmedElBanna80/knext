@@ -316,7 +316,10 @@ function listServerOutputModules(dir) {
 function planRuntimeRequires() {
     const modules = new Map();
     for (const path of listServerOutputModules(dirname(ENTRY))) {
-        modules.set(path, analyzeServerModule(readFileSync(path, "utf8")));
+        modules.set(
+            path,
+            analyzeServerModule(readFileSync(path, "utf8"), CREATE_REQUIRE_ANALYZER),
+        );
     }
     const name = (path) => relative(dirname(ENTRY), path);
 
@@ -564,6 +567,19 @@ if (!ASSET_ANCHOR_ANALYZER) {
     );
     process.exit(1);
 }
+
+/**
+ * The createRequire analysis (create-require-analyze.mjs, #2614), spawned by
+ * entry-require-staticize.mjs. Passed EXPLICITLY to it: that module is bundled
+ * into a shared chunk in dist, so it cannot find its sibling from its own
+ * location. A missing file fails the build when a module needs it (the
+ * analyzer names the path it looked for).
+ */
+const CREATE_REQUIRE_ANALYZER =
+    [
+        join(compileHere, "create-require-analyze.js"),
+        join(compileHere, "create-require-analyze.mjs"),
+    ].find((c) => existsSync(c)) ?? join(compileHere, "create-require-analyze.mjs");
 
 /** How long one analyzer process may take before the build gives up on it. */
 const ASSET_ANCHOR_ANALYZER_TIMEOUT_MS = 120_000;

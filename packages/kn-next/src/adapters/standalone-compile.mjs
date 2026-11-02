@@ -174,6 +174,14 @@ if (!isInside(realpathSync(SERVER), ROOT)) {
 // fold-vs-sidecar decision). Disk mode's preload list — and therefore its
 // compiled output — is byte-identical to before this existed.
 const here = dirname(fileURLToPath(import.meta.url));
+// The createRequire analysis (#2614) for unembeddedDynamicReport. Passed
+// explicitly: compile-embed is bundled into a shared chunk in dist, where its
+// own sibling lookup would point at the wrong directory.
+const CREATE_REQUIRE_ANALYZER =
+    [
+        join(here, "create-require-analyze.js"),
+        join(here, "create-require-analyze.mjs"),
+    ].find((c) => existsSync(c)) ?? join(here, "create-require-analyze.mjs");
 // #1760: arp-primer.cjs is FIRST — this stage has NO supervisor
 // (`node-server.ts` never runs for the self-contained exec; see its own
 // ENTRYPOINT comment), so the compiled entry itself is the earliest point
@@ -937,7 +945,7 @@ if (SC) {
             `[knext standalone-compile] self-contained: ${SC.cls.unknownKinds.length} file(s) of a kind this build does not know were embedded as data (read with fs): ${SC.cls.unknownKinds.join(", ")}`,
         );
     }
-    const dynamic = unembeddedDynamicReport(join(realpathSync(dirname(SERVER)), SC.distDir, "server"));
+    const dynamic = unembeddedDynamicReport(join(realpathSync(dirname(SERVER)), SC.distDir, "server"), CREATE_REQUIRE_ANALYZER);
     const sites = dynamic.reduce((n, r) => n + r.computedSites + r.dynamicRequireBindings.length, 0);
     console.log(
         `[knext standalone-compile] self-contained: ${sites} computed require/import site(s) in ${dynamic.length} embedded chunk(s) resolve at runtime and can only reach what is embedded (KNEXT_STANDALONE_COMPILE_VERBOSE=1 lists them)`,

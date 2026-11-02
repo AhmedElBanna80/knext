@@ -189,8 +189,8 @@ MUTATIONS = [
     ("lib: PEM marker may start inside a dash run (a 120K dash run is quadratic: the screen hangs)", LIB, "JEV_PEM_RE='(^|[^-])---+", "JEV_PEM_RE='---+"),
     ("lib: the END search may start inside a dash run (quadratic after a marker)", LIB, "/(^|[^-])---+[ \\t\\r\\n]*end/", "/---+[ \\t\\r\\n]*end/"),
     ("lib: the redaction eats the character before the marker", LIB, '        if (substr(low, b, 1) != "-") b++ # the match began one character before the dashes\n', ''),
-    # --- the suite itself must not hang on macOS (SIGPIPE ignored there; macOS `yes` never exits) ---
-    ("suite: pipes the infinite `yes` producer again (hangs on macOS when SIGPIPE is ignored)", "jev-hooks.test.sh", '$(rep_lines "$LONGTOK" 1350)', '$(yes "$LONGTOK" | head -n 1350)'),
+    # --- the suite itself must not hang on macOS (SIGPIPE ignored there; an infinite `yes` producer behind a filter that ignores EPIPE, e.g. `tr`, never exits) ---
+    ("suite: feeds the infinite `yes` producer again (an EPIPE-ignoring filter makes it hang on macOS)", "jev-hooks.test.sh", '$(rep_lines "$LONGTOK" 1350)', '$(yes "$LONGTOK" | head -n 1350)'),
     # --- pr-risk -----------------------------------------------------------------------------
     ("pr-risk: security weight dropped", "pr-risk.sh", ":-0.40}", ":-0.00}"),
     ("pr-risk: tests weight dropped", "pr-risk.sh", ":-0.25}", ":-0.00}"),
@@ -279,7 +279,7 @@ SMOKE = [
     "redaction pass-1 grep error ignored",
     "redaction exempt-strip error ignored",
     "goes back to a pipeline (SIGPIPE",
-    "pipes the infinite `yes` producer",
+    "feeds the infinite `yes` producer",
     "LC_ALL=C dropped",
     "NUL bytes no longer skip",
     "Unicode spaces no longer normalised",

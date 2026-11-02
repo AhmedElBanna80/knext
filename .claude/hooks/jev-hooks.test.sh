@@ -18,13 +18,22 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCREEN="$HERE/jev-result-screen.sh"
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
 
-# REFUSE TO RUN a suite that feeds `yes` into a pipe. GitHub's macOS runners start jobs with SIGPIPE
-# ignored and macOS `yes` never exits on the resulting EPIPE, so `yes ... | head -c N` hung this
-# suite until the job timeout. Use rep_bytes / rep_lines / rep_text_bytes below. Checked first and
-# fatal, because the failure mode is a hang: a case-level FAIL would never be reached.
-for f in "$HERE/jev-hooks.test.sh" "$HERE/../skills/jev/pr-risk.test.sh"; do
-  if grep -nE '(\$\(|\||^)[[:space:]]*yes[[:space:]]' "$f" | grep -v '^[0-9]*:[[:space:]]*#'; then
-    echo "FAIL  $f pipes \`yes\` (infinite producer; hangs on macOS when SIGPIPE is ignored)" >&2
+# Rule: never feed an infinite producer (`yes`) through a filter that ignores EPIPE. GitHub's macOS
+# runners start jobs with SIGPIPE ignored; `yes | head -c/-n` still exits (yes gets EPIPE and quits),
+# but `yes ... | tr -d '\n' | head -c N` hung this suite until the job timeout, because `tr` ignores
+# the failed write and keeps draining an endless producer. Use rep_bytes / rep_lines /
+# rep_text_bytes below.
+# Checked first and fatal, because the failure mode is a hang: a case-level FAIL would never be
+# reached. Scans every *.test.sh under .claude/hooks plus the jev pr-risk suite, for `yes` in command
+# position (after start of line, | ; & ( { backtick, $(, command/exec/then/do/else, or as /usr/bin/yes).
+# Still missed: `yes` behind env/xargs/sudo, after a line-continuation, built via a variable, or an
+# infinite producer other than `yes` (e.g. `cat /dev/zero`). Quoted prose such as "...; yes" can
+# false-positive; reword it.
+YES_PAT='(^|[|;&({`]|(^|[[:space:]])(command|exec|then|do|else))[[:space:]]*(/usr/bin/)?yes([[:space:]|;&)]|$)'
+for f in "$HERE"/*.test.sh "$HERE/../skills/jev/pr-risk.test.sh"; do
+  [ -f "$f" ] || continue
+  if grep -nE "$YES_PAT" "$f" | grep -v '^[0-9]*:[[:space:]]*#'; then
+    echo "FAIL  $f uses \`yes\` (infinite producer; hangs on macOS when SIGPIPE is ignored and a filter such as tr ignores EPIPE)" >&2
     exit 1
   fi
 done
@@ -67,10 +76,10 @@ fail() { printf 'FAIL  %s\n' "$1"; fails=1; }
 calls() { [ -f "$FAKE_JEV_LOG" ] && wc -l <"$FAKE_JEV_LOG" | tr -d ' ' || echo 0; }
 reset() { rm -f "$FAKE_JEV_LOG" "$FAKE_JEV_SIZES" "$FAKE_JEV_SEEN"; export FAKE_JEV_MODE=ok; }
 
-# Bounded text generators. NEVER `yes | head`: GitHub's macOS runners start jobs with SIGPIPE
-# ignored, and BSD/macOS `yes` ignores the resulting EPIPE and spins forever, so `yes ... | head -c N`
-# never finished there and the job ran to its timeout (a hang, not slowness). These producers are
-# finite, so they end whatever the signal disposition is.
+# Bounded text generators. Never feed an infinite producer (`yes`) through a filter that ignores EPIPE:
+# with SIGPIPE ignored (GitHub's macOS runners), `yes ... | tr -d '\n' | head -c N` never finished
+# because `tr` keeps draining the endless producer, and the job ran to its timeout (a hang, not
+# slowness). These producers are finite, so they end whatever the signal disposition is.
 rep_bytes() { # <string> <bytes>: <string> repeated, cut to exactly <bytes> bytes, no newline added
   awk -v s="$1" -v n="$2" 'BEGIN { l = length(s); q = int(n / l); for (i = 0; i < q; i++) printf "%s", s; printf "%s", substr(s, 1, n - q * l) }'
 }

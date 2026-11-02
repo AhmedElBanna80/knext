@@ -926,11 +926,12 @@ jobs:
     # every smoke mutant still runs on both platforms, exactly once per platform.
     #
     # THE HANG (not slowness) that used to kill the macOS job: jev-hooks.test.sh built test text
-    # with `yes x | head -c N`. GitHub's macOS runners start jobs with SIGPIPE ignored, and macOS
-    # `yes` ignores the EPIPE and spins forever, so the pipeline never ended and the step ran to
-    # the job timeout (6 hours before #2607 bounded it). Ubuntu `yes` exits on EPIPE, which is why
-    # the ubuntu twin finished. The suite now uses finite generators and refuses to run if a
-    # `yes | ...` pipe comes back.
+    # with `yes x | tr -d '\n' | head -c N`. GitHub's macOS runners start jobs with SIGPIPE ignored,
+    # and `tr` ignores the failed write (EPIPE) and keeps draining the infinite `yes`, so the pipeline
+    # never ended and the step ran to the job timeout (6 hours before #2607 bounded it). (`yes | head`
+    # alone exits; the rule is never to feed an infinite producer through a filter that ignores
+    # EPIPE.) Ubuntu runs with SIGPIPE default, which is why the ubuntu twin finished. The suite now
+    # uses finite generators and refuses to run if an infinite `yes` producer comes back.
     strategy:
       fail-fast: false
       matrix:

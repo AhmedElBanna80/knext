@@ -323,6 +323,25 @@ t("afterDelete", () => readFileSync(p, "utf8"));`,
         expect(r.result.afterDelete).toContain(A_MARK);
     }, 180_000);
 
+    it("a symlink inside the app root is embedded once and read by the link's name and by the target's", () => {
+        const app = baseApp(
+            `t("viaLink", () => readFileSync(join(process.cwd(), "data/link.json"), "utf8"));
+t("viaTarget", () => readFileSync(join(process.cwd(), "real/a.json"), "utf8"));`,
+            'export default { outputFileTracingIncludes: { "/": ["./data/*"] } };\n',
+        );
+        write(join(app.work, "real/a.json"), `{"mark":"${A_MARK}"}\n`);
+        mkdirSync(join(app.work, "data"), { recursive: true });
+        symlinkSync(
+            join(app.work, "real/a.json"),
+            join(app.work, "data/link.json"),
+        );
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        const r = runAlone(b.exe);
+        expect(r.result.viaLink).toContain(A_MARK);
+        expect(r.result.viaTarget).toContain(A_MARK);
+    }, 180_000);
+
     it("the build machine's absolute path never shadows a runtime file", () => {
         const app = baseApp(
             `const abs = BUILD_ROOT + "/data/a.json";

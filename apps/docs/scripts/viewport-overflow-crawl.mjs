@@ -1,37 +1,33 @@
 #!/usr/bin/env node
+// biome-ignore-all lint/suspicious/noConsole: a CLI that reports to stdout by design
 /**
  * Rendered responsive-overflow crawl for the docs site.
  *
  * Loads EVERY docs page (derived from content/docs, plus the landing page) at
- * each viewport width and fails a check if EITHER:
- *   (a) `document.documentElement.scrollWidth > window.innerWidth` (the page
- *       scrolls sideways), OR
- *   (b) an element's right edge is past the viewport and it is not inside a
- *       horizontal scroller (overflow-x auto/scroll, such as a `pre` or table
- *       wrapper, which scroll on purpose). (b) catches content CLIPPED by an
- *       overflow:hidden ancestor, which (a) cannot see.
- * On failure it prints the outermost offending elements.
- * Default widths: 320,360,375,390,414,600,768,820,900,1000,1024,1100,1200,1280.
+ * each viewport width and fails a check on any of the offences in
+ * `viewport-probe.mjs`: the page scrolls sideways (`page-scroll`), an element is
+ * past the viewport (`past-viewport`), or text is clipped by an overflow:hidden/clip
+ * box (`clipped`). Horizontal scrollers (overflow-x auto, such as a `pre`) are
+ * excluded because they scroll on purpose.
  *
- * This is NOT run in CI: it needs a real browser and a built site, and that
- * would slow Lint & Test materially. The static guard
- * `apps/docs/responsive-layout.test.ts` runs in CI instead; it cannot see
- * layouts that are wide for reasons other than a bare `1fr` track, which this
- * crawl does.
+ * NOT RUN IN CI. It needs a real browser (Playwright + Chromium) and a built
+ * site; adding that to the docs job would cost minutes per run, so it is a manual
+ * check. CI runs `responsive-layout.test.ts` (static) instead, and the probe's own
+ * fixture (`viewport-probe-fixture.mjs`) is also manual.
  *
  * Setup (once, not committed to the lockfile):
  *   cd apps/docs && bun add --no-save playwright && bunx playwright install chromium
  * Run against a production build:
  *   cd apps/docs && bun run build && PORT=3100 bun .output/server/index.mjs &
  *   bun scripts/viewport-overflow-crawl.mjs http://localhost:3100
- * Options: --widths=320,375,414,768,1280   --json=out.json
+ * Options: --widths=a,b,c   --json=out.json
  *          CHROME=/path/to/chrome   (optional: use an existing Chromium binary)
  */
 
-// biome-ignore-all lint/suspicious/noConsole: a CLI that reports to stdout by design
 import { readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { chromium } from 'playwright';
+import { probeViewport } from './viewport-probe.mjs';
 
 const args = process.argv.slice(2);
 const base = args.find((a) => !a.startsWith('--'));
@@ -65,45 +61,6 @@ for (const file of mdxFiles(CONTENT_DIR)) {
   routes.add(rel ? `/docs/${rel}` : '/docs');
 }
 
-// Runs inside the page. Returns outermost offending elements past the viewport.
-const probe = () => {
-  const iw = window.innerWidth;
-  const sw = document.documentElement.scrollWidth;
-  const label = (el) => {
-    const id = el.id ? `#${el.id}` : '';
-    const cls =
-      typeof el.className === 'string' && el.className.trim()
-        ? `.${el.className.trim().split(/\s+/).slice(0, 2).join('.')}`
-        : '';
-    return `${el.tagName.toLowerCase()}${id}${cls}`;
-  };
-  const insideOwnScroller = (el) => {
-    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
-      const ox = getComputedStyle(p).overflowX;
-      if ((ox === 'auto' || ox === 'scroll') && p.scrollWidth > p.clientWidth) return true;
-    }
-    return false;
-  };
-  const offenders = [];
-  for (const el of document.body.querySelectorAll('*')) {
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0 || r.right <= iw + 0.5) continue;
-    if (insideOwnScroller(el)) continue;
-    const parent = el.parentElement;
-    if (parent && parent !== document.body && parent.getBoundingClientRect().right > iw + 0.5) {
-      continue; // report the outermost offender only
-    }
-    offenders.push({ el: label(el), right: Math.round(r.right), width: Math.round(r.width) });
-  }
-  return {
-    iw,
-    sw,
-    overflow: sw > iw,
-    offenders: offenders.slice(0, 15),
-    offenderCount: offenders.length,
-  };
-};
-
 const browser = await chromium.launch({ executablePath: process.env.CHROME || undefined });
 const results = [];
 for (const width of widths) {
@@ -115,13 +72,13 @@ for (const width of widths) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
       await page.waitForTimeout(400);
-      res = { route, width, ...(await page.evaluate(probe)) };
+      res = { route, width, ...(await page.evaluate(probeViewport)) };
     } catch (err) {
       res = { route, width, error: String(err).slice(0, 200) };
     }
     results.push(res);
     const bad = res.error || res.overflow || res.offenderCount > 0;
-    const tag = res.error ? 'ERR' : bad ? 'OVERFLOW' : 'ok';
+    const tag = res.error ? 'ERR' : bad ? 'FAIL' : 'ok';
     console.log(
       `${tag}\t${width}\t${route}\t${res.sw ?? ''}/${res.iw ?? ''}\t${res.offenderCount ?? ''}`,
     );
@@ -130,10 +87,7 @@ for (const width of widths) {
 }
 await browser.close();
 
-// A check fails on ANY of: a navigation error, a page that scrolls sideways
-// (scrollWidth), or an element past the viewport that no horizontal scroller
-// contains. The third catches content CLIPPED by an overflow:hidden ancestor,
-// which scrollWidth alone cannot see.
+// A check fails on a navigation error, a page-scroll, or any offence in the probe.
 const failing = results.filter((r) => r.error || r.overflow || r.offenderCount > 0);
 console.log(
   `\nSUMMARY pages=${routes.size} widths=${widths.join(',')} checks=${results.length} failing=${failing.length}`,

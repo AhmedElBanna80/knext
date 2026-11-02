@@ -1,0 +1,77 @@
+# INACTIVE TEMPLATE - this file does NOT run. GitHub only loads workflows from the
+# repository-root .github/workflows/, and this lives under docs/ on purpose.
+#
+# History: it was packages/scale-zero-pg/.github/workflows/cd.yml, carried over from the
+# standalone scale-zero-pg repository, and never ran in this monorepo. The gateway image
+# the manifests pin (deploy/10-gateway.yaml etc.) is therefore built BY HAND today - see
+# "Releasing an OCIR image" in docs/operations.md.
+#
+# To activate it, the founder must decide, because it PUBLISHES an image with a registry
+# credential:
+#   1. `git mv` it to .github/workflows/scale-zero-pg-gateway-cd.yml (the repo-root
+#      tests/no-nested-workflows.test.ts then also needs its INTENTIONAL_TEMPLATES
+#      entry removed - the guard reports a stale entry).
+#   2. Wire the secrets. The repo has OCIR_USER and OCIR_TOKEN (used by the docs deploy);
+#      this template reads OCIR_USERNAME / OCIR_TOKEN, and OCIR_USERNAME does not exist.
+#      Decide whether to reuse the docs credential (scope!) or mint a gateway-scoped one.
+#   3. Decide who records the pushed digest into the manifests (still a manual
+#      pin-and-roll; this workflow only builds and prints the digest).
+# Third-party actions below are pinned by full SHA with a version comment and the job
+# has least-privilege permissions, so the move is the only change needed.
+name: scale-zero-pg gateway cd
+on:
+  push:
+    branches: [main]
+    paths: ["packages/scale-zero-pg/gateway/**", ".github/workflows/scale-zero-pg-gateway-cd.yml"]
+    tags: ["v*"]
+  # Manual build from any branch (e.g. build+pin an image for a feature PR's live
+  # drill before merge). Pushes the immutable sha-<short> tag; the mutable `edge`
+  # tag is only pushed from main/tags so a feature build never clobbers it.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: login OCIR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: me-abudhabi-1.ocir.io
+          username: ${{ secrets.OCIR_USERNAME }}
+          password: ${{ secrets.OCIR_TOKEN }}
+      - name: resolve tags
+        id: meta
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          REPO=me-abudhabi-1.ocir.io/axfqznklsd2t/ks-pg/gateway
+          TAGS="$REPO:sha-${SHORT}"
+          # `edge` (mutable "latest main") only from main / a version tag - never
+          # from a feature-branch or manual build, so those don't clobber it.
+          if [[ "$GITHUB_REF" == refs/heads/main || "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAGS="$TAGS,$REPO:edge"
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAGS="$TAGS,$REPO:${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+      - name: build + push (amd64 - OKE nodes)
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: packages/scale-zero-pg/gateway
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+      - name: report pushed digest
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "PUSHED_TAGS=${TAGS}"
+          echo "PUSHED_DIGEST=${DIGEST}"
+          echo "pin manifests to  sha-${GITHUB_SHA::7}@${DIGEST}"

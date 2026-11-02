@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * Mutation proof for the image half of the R8 supply-chain guard (#2044):
- * operator tags (Trivy, cosign, SBOM, any branch) and function template images
- * (SBOM, cosign).
+ * Mutation proof for the image half of the R8 supply-chain guard (#2044): every
+ * workflow that publishes an image (found by behaviour, under any trigger) needs
+ * an enforcing HIGH+CRITICAL Trivy gate, an SBOM and cosign that cannot be
+ * disabled and are tied to the image; function template images need an SBOM and
+ * cosign.
  *
  * `.claude/rules/workflow.md`: "a guard that stays green when its subject is
  * removed is decoration." Each row removes one thing the guard protects, in the
@@ -70,9 +72,60 @@ const MUTATIONS = [
   {
     id: 'O6',
     subject: 'operator',
-    claim: 'the signing job is confined to main (operator tags from other branches unsigned)',
+    claim: 'the publish job is confined to main (operator tags from other branches unpublished)',
     anchor: "      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&",
     replacement: "      github.ref == 'refs/heads/main' &&",
+  },
+  {
+    id: 'O7',
+    subject: 'operator',
+    claim: 'the operator Trivy gate becomes continue-on-error: true',
+    anchor: "continue-on-error: ${{ steps.channel.outputs.publish != 'true' }}",
+    replacement: 'continue-on-error: true',
+  },
+  {
+    id: 'O8',
+    subject: 'operator',
+    claim: 'the operator Trivy gate narrows to LOW severity',
+    anchor: '          severity: HIGH,CRITICAL',
+    replacement: '          severity: LOW',
+  },
+  {
+    id: 'O9',
+    subject: 'operator',
+    claim: 'the operator pushes a layout Trivy never scanned',
+    anchor: 'crane push operator-oci "',
+    replacement: 'crane push operator-oci-other "',
+  },
+  // ── the app image lane (supply-chain.yml), found by behaviour ────────────
+  {
+    id: 'S1',
+    subject: 'app',
+    claim: 'the app image Trivy gate becomes continue-on-error: true',
+    anchor:
+      "while every line stays gated.\n        continue-on-error: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/integration/') }}",
+    replacement: 'while every line stays gated.\n        continue-on-error: true',
+  },
+  {
+    id: 'S2',
+    subject: 'app',
+    claim: 'the app image Trivy gate narrows to LOW severity',
+    anchor: '          input: image-oci\n          severity: HIGH,CRITICAL',
+    replacement: '          input: image-oci\n          severity: LOW',
+  },
+  {
+    id: 'S3',
+    subject: 'app',
+    claim: 'the app image pushes a layout Trivy never scanned',
+    anchor: 'crane push image-oci "',
+    replacement: 'crane push image-oci-other "',
+  },
+  {
+    id: 'S4',
+    subject: 'app',
+    claim: 'the app image is signed by mutable tag instead of digest',
+    anchor: 'cosign sign --yes "${IMAGE}@${DIGEST}"',
+    replacement: 'cosign sign --yes "${IMAGE}:${GITHUB_SHA}"',
   },
   // ── function templates ───────────────────────────────────────────────────
   {
@@ -121,58 +174,142 @@ const MUTATIONS = [
   {
     id: 'E2',
     subject: 'engine',
-    claim: 'Trivy enforcement accepts any exit-code',
-    anchor: "return String(withOf(s)['exit-code']) === '1';",
-    replacement: "return String(withOf(s)['exit-code']) !== 'undefined';",
+    claim: 'Trivy exit-code enforcement is not checked',
+    anchor: 'if (!enforced) out.push',
+    replacement: 'if (false) out.push',
   },
   {
     id: 'E3',
     subject: 'engine',
-    claim: 'the branch-only condition check never fires',
-    anchor: "if (typeof cond !== 'string') return false;",
-    replacement: 'return false;',
+    claim: 'continue-on-error is never judged',
+    anchor: 'if (v !== false) {',
+    replacement: 'if (false) {',
   },
   {
     id: 'E4',
     subject: 'engine',
-    claim: 'the upstream ordering walk is cut (cosign ordering no longer checked)',
-    anchor: '? needsOf(jobs[cur] ?? {})',
-    replacement: '? []',
+    claim: 'a step `if` is never judged',
+    anchor: 'if (evalExpr(step.if, ctx) !== true) {',
+    replacement: 'if (false) {',
   },
   {
     id: 'E5',
     subject: 'engine',
-    claim: 'the template cosign check is removed',
-    anchor: 'if (!steps.some(isCosign))',
-    replacement: 'if (false)',
+    claim: 'the Trivy severity floor is not checked',
+    anchor: 'if (sev && !(sev.includes',
+    replacement: 'if (false && sev && !(sev.includes',
   },
   {
     id: 'E6',
     subject: 'engine',
-    claim: 'the template SBOM check is removed',
-    anchor: 'if (!steps.some(isSbom))',
-    replacement: 'if (false)',
+    claim: 'the upstream ordering walk is cut (a push job need not wait for the scan)',
+    anchor: '? needsOf(jobs[cur] ?? {})',
+    replacement: '? []',
   },
   {
     id: 'E7',
+    subject: 'engine',
+    claim: 'template gate steps are accepted without being judged',
+    anchor: 'if (valid.length) continue;',
+    replacement: 'continue;',
+  },
+  {
+    id: 'E8',
     subject: 'engine',
     claim: 'the "no workflow builds this template" check is removed',
     anchor: 'if (!builders.length) {',
     replacement: 'if (false) {',
   },
   {
-    id: 'E8',
+    id: 'E9',
     subject: 'engine',
     claim: 'an empty workflow directory stops failing closed',
     anchor: 'if (files.length === 0) throw new Error(`no workflows found in ${dir}`);',
     replacement: 'void 0;',
   },
   {
-    id: 'E9',
+    id: 'E10',
+    subject: 'engine',
+    claim: 'an unresolvable reusable workflow is skipped instead of failing',
+    anchor: 'if (!local || !wfs.some((w) => w.file === local[1]))',
+    replacement: 'if (false)',
+  },
+  {
+    id: 'E11',
+    subject: 'engine',
+    claim: 'an unresolvable local action is skipped instead of failing',
+    anchor: 'if (inner === null)',
+    replacement: 'if (false)',
+  },
+  {
+    id: 'E12',
+    subject: 'engine',
+    claim: 'run-step pushes (docker/crane/--push) are no longer discovered',
+    anchor: 'return PUSH_RUN.test(code(s));',
+    replacement: 'return false;',
+  },
+  {
+    id: 'E13',
+    subject: 'engine',
+    claim: 'build-push-action pushes are no longer discovered',
+    anchor: 'if (/^docker\\/build-push-action@/.test(uses(s))) {\n    const w = withOf(s);',
+    replacement: 'if (false) {\n    const w = withOf(s);',
+  },
+  {
+    id: 'E14',
+    subject: 'engine',
+    claim: 'the pushed-layout tie to the Trivy scan is removed',
+    anchor: 'if (scanned.length > 0 && !scanned.includes(src) && !derived)',
+    replacement: 'if (false)',
+  },
+  {
+    id: 'E15',
+    subject: 'engine',
+    claim: 'cosign-before-push ordering is not checked',
+    anchor: 'if (signAt !== -1 && signAt < pushAt)',
+    replacement: 'if (false)',
+  },
+  {
+    id: 'E16',
+    subject: 'engine',
+    claim: 'the cosign-by-digest tie is removed',
+    anchor: 'if (cmds.some(',
+    replacement: 'if (false && cmds.some(',
+  },
+  {
+    id: 'E17',
+    subject: 'engine',
+    claim: 'a stale non-lane allowlist entry stops failing',
+    anchor: 'if (!lanes.some((l) => l.wf.file === nl.file && l.id === nl.job))',
+    replacement: 'if (false)',
+  },
+  {
+    id: 'E18',
     subject: 'engine',
     claim: 'a vacuous scan (no operator lane discovered) stops failing',
     anchor: 'if (lanes.length === 0)',
     replacement: 'if (false)',
+  },
+  {
+    id: 'E19',
+    subject: 'engine',
+    claim: 'a disabling job-level `if` is not judged',
+    anchor: 'if (evalExpr(job.if, ctx) === false) {',
+    replacement: 'if (false) {',
+  },
+  {
+    id: 'E20',
+    subject: 'engine',
+    claim: 'the operator tag-from-any-branch job check is removed',
+    anchor: 'if (tagCtx && evalExpr(job.if ?? true, tagCtx) === false)',
+    replacement: 'if (false)',
+  },
+  {
+    id: 'E21',
+    subject: 'engine',
+    claim: 'the evaluator treats an unknown operand as false (an unprovable gate passes as safe)',
+    anchor: 'if (x === UNKNOWN || y === UNKNOWN) return UNKNOWN;\n    return true;',
+    replacement: 'if (x === UNKNOWN || y === UNKNOWN) return false;\n    return true;',
   },
 ];
 
@@ -181,6 +318,7 @@ const prover = createGuardProver({
   spec: SPEC,
   subjects: {
     operator: '.github/workflows/operator-supply-chain.yml',
+    app: '.github/workflows/supply-chain.yml',
     gotpl: '.github/workflows/go-template.yml',
     rusttpl: '.github/workflows/rust-template.yml',
     engine: 'tests/helpers/image-supply-chain.ts',

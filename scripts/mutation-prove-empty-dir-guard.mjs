@@ -130,9 +130,11 @@ const FINGERPRINT_TARGET = resolve(REPO_ROOT, 'scripts/compat-window-fingerprint
 // (scripts/lib/e2e-read-base-path.mjs, review finding 2), same reasoning as
 // PROBE_TARGET above for why it is a separate snapshot target.
 const READ_BASE_PATH_TARGET = resolve(REPO_ROOT, 'scripts/lib/e2e-read-base-path.mjs');
+// #2615: the vinext lane's basePath reader (a separate file, like the above).
+const VINEXT_BASE_PATH_TARGET = resolve(REPO_ROOT, 'scripts/lib/e2e-vinext-base-path.mjs');
 const SPEC = 'tests/e2e-empty-dir.test.ts';
 
-declareMutations(58);
+declareMutations(67);
 
 const { command, args, runArgs } = resolveSpecRunner(REPO_ROOT, SPEC);
 
@@ -203,6 +205,9 @@ function proveFingerprint(label, anchor, replacement) {
 }
 function proveReadBasePath(label, anchor, replacement) {
   report(label, snapshot(READ_BASE_PATH_TARGET), anchor, replacement);
+}
+function proveVinextBasePath(label, anchor, replacement) {
+  report(label, snapshot(VINEXT_BASE_PATH_TARGET), anchor, replacement);
 }
 
 console.log('Baseline: the spec must be GREEN before anything is mutated.');
@@ -656,6 +661,73 @@ proveVinext(
   '#1521 round-3: vinext suite staging failure drops its removal',
   '    log "ERROR: KNEXT_SELF_CONTAINED=1 — staging the suite\'s empty dir failed"\n    rm -rf "${EMPTY_DIR}"\n',
   '    log "ERROR: KNEXT_SELF_CONTAINED=1 — staging the suite\'s empty dir failed"\n',
+);
+
+// ── #2615 — the vinext empty-dir probes: basePath, intentional-500 at `/`, native/ order ──
+
+// 59. "anyresponse" is not a mode any more: it falls through to non5xx, so a
+//     fixture that 500s at `/` on purpose is rejected again.
+proveProbe(
+  '#2615: ed_probe_http anyresponse no longer accepts any HTTP status',
+  "mode === 'anyresponse'",
+  "mode === 'never-matches'",
+);
+
+// 60. ed_check_or_die never switches `/` to the lenient mode under the static probe.
+prove(
+  '#2615: the static-probe lane keeps the strict non-5xx check at /',
+  '    extra_mode=anyresponse\n',
+  '    extra_mode=non5xx\n',
+);
+
+// 61. The lenient mode leaks to EVERY lane, including an explicit health path
+//     (the "widened into accepting everything" failure).
+prove(
+  '#2615: an explicit-health lane inherits the 500-tolerant mode at /',
+  'local binary_name extra_mode=non5xx',
+  'local binary_name extra_mode=anyresponse',
+);
+
+// 62. ed_boot_probe_kill ignores the mode ed_check_or_die chose.
+prove(
+  '#2615: ed_boot_probe_kill ignores ED_EXTRA_PROBE_MODE',
+  '"${ED_EXTRA_PROBE_MODE:-non5xx}"',
+  '"non5xx"',
+);
+
+// 63. A refused/dropped connection counts as alive: anyresponse becomes "anything".
+proveProbe(
+  '#2615: a connection error counts as a pass (probe accepts everything)',
+  "req.on('error', () => process.exit(1));",
+  "req.on('error', () => process.exit(0));",
+);
+
+// 64. The vinext lane stops feeding the fixture basePath to the static probe.
+proveVinext(
+  '#2615: the vinext lane never reads the fixture basePath',
+  'ED_STATIC_PROBE_BASE="$(bun "${ED__LIB_DIR}/e2e-vinext-base-path.mjs"',
+  'ED_UNUSED_BASE="$(bun "${ED__LIB_DIR}/e2e-vinext-base-path.mjs"',
+);
+
+// 65. The staged native/ tree is no longer handed to the self-contained compile.
+proveVinext(
+  '#2615: --native-dir is never forwarded to the self-contained compile',
+  '      VINEXT_COMPILE_ARGS+=(--native-dir "${APP_DIR}/native")\n',
+  '      : "${APP_DIR}"\n',
+);
+
+// 66. The compile runs BEFORE native/ is staged again.
+proveVinext(
+  '#2615: the compile runs before native/ is staged',
+  "# ── 5a. stage sharp's addon beside the binary (BEFORE the compile, #2615) ────\n",
+  "bun run \"${COMPILE_SCRIPT}\" --too-early\n  # ── 5a. stage sharp's addon beside the binary (BEFORE the compile, #2615) ────\n",
+);
+
+// 67. An unloadable next.config silently becomes an empty basePath.
+proveVinextBasePath(
+  '#2615: an unloadable next.config is swallowed as an empty basePath',
+  '  process.exit(1);\n}\n\nconst basePath',
+  '  process.exit(0);\n}\n\nconst basePath',
 );
 
 console.log(`\n${pass} caught, ${fail} undetected.`);

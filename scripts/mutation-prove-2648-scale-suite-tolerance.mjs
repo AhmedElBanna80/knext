@@ -298,9 +298,8 @@ const MUTATIONS = [
 // A real mutation of a real subject, distinct from the rows.
 const CANARY = {
   subject: 'lib',
-  anchor: "export const SCALE_SUITE_ISSUE_TITLE = 'Scale-to-zero e2e suite FAILED (tolerated)';",
-  replacement:
-    "export const SCALE_SUITE_ISSUE_TITLE = 'Scale-to-zero e2e suite FAILED (tolerated) ';",
+  anchor: 'const ISO_DATE = /^\\d{4}-\\d{2}-\\d{2}$/;',
+  replacement: 'const ISO_DATE = /^\\d{4}-\\d{2}-\\d{2}x$/;',
 };
 
 // Inline literal: the lane's subject-existence audit reads these from the call.

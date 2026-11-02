@@ -1275,8 +1275,8 @@ const MUTATIONS = [
     id: 'O03',
     claim: 'the opt-out never deletes the policy the operator rendered earlier',
     subject: 'ctl',
-    anchor: 'r.removeFunctionNetworkPolicy(ctx, bs, np); err != nil',
-    replacement: '*new(error); err != nil',
+    anchor: 'if err := r.removeFunctionNetworkPolicy(ctx, bs, np); err != nil {',
+    replacement: 'if err := *new(error); err != nil {',
     test: envtest('spec.security.networkPolicy'),
   },
   {

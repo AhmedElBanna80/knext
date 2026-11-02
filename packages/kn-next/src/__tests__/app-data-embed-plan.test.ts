@@ -107,6 +107,20 @@ describe("a declared directory and a glob over it agree", () => {
         ]);
     });
 
+    it("a glob selects only what it matches, not everything under its literal prefix", () => {
+        const root = app({
+            "data/a.json": "{}",
+            "data/b.txt": "t",
+            "data/sub/c.json": "{}",
+        });
+        expect(rels(planAppData({ root, includes: ["data/*.json"] }))).toEqual([
+            "data/a.json",
+        ]);
+        expect(
+            rels(planAppData({ root, includes: ["data/**/*.json"] })),
+        ).toEqual(["data/a.json", "data/sub/c.json"]);
+    });
+
     it("a link loop terminates", () => {
         const root = app({ "data/a.json": "{}" });
         symlinkSync("..", join(root, "data/loop"));
@@ -191,6 +205,20 @@ describe("outputFileTracingExcludes", () => {
             ],
         });
         expect(rels(two)).toEqual(["data/a.json", "other/o.json"]);
+    });
+
+    it("an excluded directory is not judged: a link in it that leaves the app root is not an error", () => {
+        const outside = app({ "o.json": "{}" });
+        const r = app({ "data/a.json": "{}", "data/tmp/x": "1" });
+        symlinkSync(outside, join(r, "data/tmp/out"));
+        const plan = planAppData({
+            root: r,
+            rules: [{ includes: ["data/**"], excludes: ["data/tmp"] }],
+        });
+        expect(rels(plan)).toEqual(["data/a.json"]);
+        expect(() => planAppData({ root: r, includes: ["data/**"] })).toThrow(
+            /outside the app root/,
+        );
     });
 
     it("an exclude that matches through a link's target removes the link's file too", () => {

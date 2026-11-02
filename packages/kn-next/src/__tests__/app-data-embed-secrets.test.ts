@@ -206,10 +206,10 @@ describe(".git is never embedded", () => {
             planAppData({ root, includes: ["./**/*"] }).files.map((f) => f.rel),
         ).toEqual(["data/a.json"]);
         expect(() => planAppData({ root, includes: [".git/config"] })).toThrow(
-            /never embedded[\s\S]*\.git\/config/,
+            /never embedded, but .\.git\/config. names it/,
         );
         expect(() => planAppData({ root, includes: [".git"] })).toThrow(
-            /never embedded/,
+            /never embedded, but .\.git. names it/,
         );
     });
 

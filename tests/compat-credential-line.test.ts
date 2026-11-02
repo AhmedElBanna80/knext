@@ -576,7 +576,6 @@ describe('the v1.3 workflow is DERIVED from the tag harness, provably', () => {
   it('runs the same 16-shard x 4-cell shape and the tag-declared NEXTJS_REF', () => {
     const { source } = derived();
     const wf = parse(committed) as any;
-    const v10 = parse(read(V10_WORKFLOW)) as any;
     expect(wf.env.COMPAT_SHARD_TOTAL).toBe('16');
     expect(wf.jobs['deploy-tests'].strategy.matrix.shard).toHaveLength(16);
     // NEXTJS_REF comes from the SOURCE (the tag's own YAML) untouched, except

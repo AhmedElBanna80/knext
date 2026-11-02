@@ -1283,8 +1283,8 @@ const MUTATIONS = [
     id: 'O05',
     claim: 'the opt-out deletes a same-named NetworkPolicy the function does not control',
     subject: 'ctl',
-    anchor: '\tif !metav1.IsControlledBy(np, bs) {\n\t\treturn nil\n\t}\n',
-    replacement: '',
+    anchor: 'if !metav1.IsControlledBy(np, bs) {\n\t\treturn nil',
+    replacement: 'if !metav1.IsControlledBy(np, bs) && false {\n\t\treturn nil',
     test: envtest('spec.security.networkPolicy'),
   },
   {

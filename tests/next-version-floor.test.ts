@@ -1464,6 +1464,25 @@ describe('#2630 — a next version reached through indirection is judged, not sk
       expect(flagged('x.yml', text).join('\n')).toContain('cycle');
     });
 
+    it('joins literal pieces around a reference into the version they spell', () => {
+      const text = (minor: string) =>
+        [
+          'on:',
+          '  workflow_call:',
+          '    inputs:',
+          '      minor:',
+          `        default: ${minor}`,
+          'env:',
+          '  FW: 16.@{{ inputs.minor }}.8',
+          'jobs:',
+          '  b:',
+          '    steps:',
+          '      - run: bun add next@$FW',
+        ].join('\n');
+      expect(flagged('x.yml', text('3')).join('\n')).toContain('next 16.3.8');
+      expect(flagged('x.yml', text('4').replace('.8', '.4'))).toEqual([]);
+    });
+
     it('judges a reference sitting under a key that mentions next', () => {
       const text = 'env:\n  FW: 16.3.8\nmatrix:\n  next:\n    - @{{ env.FW }}';
       expect(flagged('x.yml', text).length).toBeGreaterThan(0);

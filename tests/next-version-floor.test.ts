@@ -305,14 +305,6 @@ const WORKFLOW_HARNESS_PINS: HarnessPin[] = [
       'Prose in a workflow-input description or issue body that names the compat-suite tag floor for a human reader; it installs nothing and pins nothing.',
   },
   {
-    file: '.github/workflows/test-e2e-deploy.yml',
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: the literal workflow-expression text being matched
-    text: "NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.4.0' }}",
-    version: '16.4.0',
-    reason:
-      'The vercel/next.js git tag the compat suite is checked out at (and the prebuilt next its fixtures install): a compat-harness ref, not a dependency of knext or of anything it deploys. Inside the compat-window frozen set; moving it is a lead decision about what green means, tracked separately from this scan.',
-  },
-  {
     file: '.github/workflows/compat-credential-v1.3.yml',
     text: "default: 'v16.3.8'",
     version: '16.3.8',
@@ -325,13 +317,6 @@ const WORKFLOW_HARNESS_PINS: HarnessPin[] = [
     version: '16.2.0',
     reason:
       'The `nextjsRef` workflow_dispatch input default: the vercel/next.js git tag the compat suite is checked out at, the same compat-harness ref as the NEXTJS_REF line it feeds, not a dependency of knext or of anything it deploys. The vinext lane stays on the v16.2.0 credential tag; moving it is a credential decision, tracked separately from this scan.',
-  },
-  {
-    file: '.github/workflows/test-e2e-deploy.yml',
-    text: "default: 'v16.4.0'",
-    version: '16.4.0',
-    reason:
-      'The `nextjsRef` workflow_dispatch input default: the vercel/next.js git tag the compat suite is checked out at, the same compat-harness ref as the NEXTJS_REF line it feeds, not a dependency of knext or of anything it deploys. Inside the compat-window frozen set; moving it is a lead decision about what green means, tracked separately from this scan.',
   },
 ];
 

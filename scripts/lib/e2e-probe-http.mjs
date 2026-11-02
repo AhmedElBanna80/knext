@@ -31,10 +31,9 @@
  *   mode: "2xx3xx" (health path — despite the name, kept for call-site
  *         compatibility, the threshold is 2xx-ONLY; see the doc comment on
  *         ed_probe_http in e2e-empty-dir.sh) | "non5xx" (general route) |
- *         "anyresponse" (#2615: ANY complete HTTP response, 5xx included — a
- *         refused connection, a socket dropped mid-response and a hang still
- *         fail. Only meaningful AFTER a staged static asset has already been
- *         proven 2xx on the same server; see ed_check_or_die.)
+ *         "expect5xx" (#2615: a 5xx status ONLY — for `/` of a fixture
+ *         on the intentional-500 allowlist; a refused connection, a dropped
+ *         socket and a hang fail like every other mode. See ed_check_or_die.)
  */
 import http from 'node:http';
 
@@ -47,8 +46,8 @@ const req = http.get({ host: '127.0.0.1', port, path, timeout: 5000 }, (res) => 
   res.resume();
   res.on('end', () => {
     const ok =
-      mode === 'anyresponse'
-        ? status >= 100 && status < 600
+      mode === 'expect5xx'
+        ? status >= 500 && status < 600
         : mode === '2xx3xx'
           ? status >= 200 && status < 300
           : status < 500 || status >= 600;

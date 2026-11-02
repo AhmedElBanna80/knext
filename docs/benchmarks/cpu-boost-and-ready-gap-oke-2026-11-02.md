@@ -7,9 +7,10 @@ Two measurements on the OKE bench cluster, run back to back on the same two work
 
 ## Summary
 
-- **A: no measurable effect.** A 2-core CPU limit did not shorten cold starts in this sample. The median shift is +141 ms (95% CI −88 to +488 ms, p = 0.18) and the arm with a 1-core request shows +35 ms (CI −199 to +438 ms, p = 0.81). Neither arm is faster than the baseline, and the intervals exclude reductions larger than roughly 90 ms.
-- **B: the listening-to-Ready gap is kubelet status reporting, not the app or readiness probing.** The app logs "Ready in" a median of about 0.5 s before the pod's `podIP` and Ready condition reach the API. The gap is the same for every CPU setting. The largest single phase in a cold start is the scheduler-bound-to-IP segment (median 1.17 s), which splits roughly evenly between app startup inside the container (about 0.6 s) and that status lag (about 0.5 s).
-- **Candidate lever (not verified):** the lag looks like kubelet pod-status update latency, which is set at the node level (PLEG relist period, or the evented PLEG feature gate). Knative's config maps do not control it. Verifying it needs kubelet logs or node access, which this run did not have.
+- **A: no benefit detected.** A 2-core CPU limit did not shorten cold starts in this sample, but with 20 wakes per arm the test has little power, so this is "no benefit detected", not "no effect". Hodges-Lehmann shift (the median of all pairwise differences) against `cpu-base`: +141 ms for `cpu-boost2` (95% bootstrap CI of the median difference −88 to +488 ms, p = 0.18) and +35 ms for `cpu-boost2req` (CI −199 to +438 ms, p = 0.81). The difference of the table medians is a different number: +223 and +172 ms. Both arms are nominally slower, not faster. The `cpu-boost2` interval excludes shifts below −88 ms; the `cpu-boost2req` interval excludes shifts below −199 ms. Smaller improvements, and any effect of a few hundred ms in the other direction, are not ruled out.
+- **B: the largest cold-start segment is the pod's IP and container state reaching the API after the containers have started.** The app's "Ready in" line is logged immediately at start (the line is "Ready in 0ms" on every wake). The pod's `podIP` appears in the API a median of 451 ms later (p90 952 ms), and the Ready condition a further median 45 ms after that. This lag does not change with the CPU setting.
+- **This data shows no application boot time worth trimming.** The ~600 ms between scheduler binding and the "Ready in" line is sandbox and container start, not app startup: the queue-proxy sidecar's first log line lands at bound + 619 ms (median), about 29 ms after "Ready in". This data cannot separate sandbox creation, pod networking and container runtime start from one another.
+- **The lag is consistent with a periodic status write about once a second, but that is a hypothesis.** The distribution of queue-proxy first log to `podIP` is roughly uniform over 0–1 s. 59 wakes cannot distinguish a 1 s period from other periods of similar size. The kubelet source facts are below; nothing about the nodes' kubelet configuration was inspected.
 
 ## Setup
 
@@ -20,6 +21,7 @@ Two measurements on the OKE bench cluster, run back to back on the same two work
   - `cpu-boost2req`: request 1, limit 2.
 - Driver: `drive.py` with three arms, rotating the order each round, 20 rounds, 60 wakes total. Every round waits for all arms to reach zero pods, then wakes each arm once, serially. Each wake is one request from an in-cluster harness pod.
 - Node-clock offsets used to re-base timestamps: all under 0.3 ms (median 0.22 ms).
+- The scheduler-bound and pod-added timestamps come from API watches; the "Ready in" and queue-proxy lines carry the container runtime's log timestamps, re-based onto the harness clock.
 - Data: `docs/benchmarks/data/cpu-boost-oke-2026-11-02.jsonl` (one row per wake, with watch timestamps, container logs and events). Scripts: `scripts/bench-cold-start-phases/` (`cpu-boost-nextapps.yaml`, `phase-bench-2.yaml`, `cpu-boost-analyze.py`, and `drive.py` with its pod name made configurable via `PHASE_POD`).
 
 ## Measurement A: startup CPU
@@ -32,10 +34,16 @@ Total cold start, measured as the time from the request to the first response by
 | cpu-boost2 (limit 2) | 1500 | 2128 | 1552 | 1056 | 2165 |
 | cpu-boost2req (request 1, limit 2) | 1448 | 2132 | 1474 | 967 | 2220 |
 
-Hodges-Lehmann shift and 95% bootstrap CI (median difference), relative to `cpu-base`:
+Two different quantities, both relative to `cpu-base`. The **Hodges-Lehmann shift** is the median of all 400 pairwise differences; the **difference of table medians** is simply the table's median minus the baseline's. The confidence interval is a 95% bootstrap interval for the difference of medians (10,000 resamples).
 
-- `cpu-boost2`: +141 ms, CI [−88, +488], Mann-Whitney p = 0.18.
-- `cpu-boost2req`: +35 ms, CI [−199, +438], p = 0.81.
+| Arm | Hodges-Lehmann shift | Difference of table medians | 95% CI (median difference) | CI width | Mann-Whitney p |
+|---|---|---|---|---|---|
+| cpu-boost2 | +141 ms | +223 ms | [−88, +488] | 575 ms | 0.18 |
+| cpu-boost2req | +35 ms | +172 ms | [−199, +438] | 637 ms | 0.81 |
+
+Power is the limit here: the intervals are 575 and 637 ms wide in total, so only large reductions are excluded (below −88 ms for `cpu-boost2`, below −199 ms for `cpu-boost2req`). A real improvement smaller than that would not show.
+
+Within-node permutation test (arm labels shuffled inside each node, 5000 draws, n-weighted mean of the per-node median differences): `cpu-boost2` +169 ms (p = 0.19), `cpu-boost2req` +119 ms (p = 0.39). The script prints these.
 
 Stratified by node (the arms were not balanced across nodes, so read these with care):
 
@@ -45,6 +53,8 @@ Stratified by node (the arms were not balanced across nodes, so read these with 
 | 10.0.1.169 | 1409 (n=14) | 1280 (n=7) | 1582 (n=13) |
 
 Node placement moves the medians by several hundred ms in both directions, which is larger than any arm effect. None of the node-stratified comparisons shows a consistent improvement from a higher limit.
+
+**Comparability with earlier reports.** This run's baseline (`cpu-base`, median 1276 ms) is faster than the roughly 1.65 to 2 s medians in the earlier OKE cold-start reports. The runs differ in measurable ways, so the numbers should not be compared across reports: (a) the instrument: the earlier reports timed with an in-pod `curl` or a `node` probe to the cluster-local service address and ended at the complete body, while this run used a watch-based harness that ends at the first response byte (the body ends within a fraction of a millisecond of the first byte here); (b) the app: this run uses a bench image (Bun runtime, Turbopack build, page of about 5 KB), the earlier ones a freshly scaffolded app from a different build; (c) the request path: this run's harness requests the public URL and does not record the route, while the earlier reports state a cluster-local path through the activator. `maxScale` is 1 in both this run and the 2026-11-01 report. Nothing here shows which of these differences, if any, explains the gap.
 
 **Throttling:** not measured. Container cgroup `cpu.stat` (`nr_throttled`) was not readable without host access, and this run did not use a host-path reader. The node CPU capacity (3815m) was not the limiting factor in the sample: each arm's pod asked for at most 1 core.
 
@@ -63,40 +73,53 @@ Successive segments:
 
 | Segment | Median | p95 |
 |---|---|---|
-| Bound → app "Ready in" log line | ~600 | ~1000 |
-| "Ready in" → pod Ready condition | ~500 | ~1050 |
+| Bound → app "Ready in" log line (sandbox and container start, not app startup) | ~600 | ~1000 |
+| "Ready in" → pod Ready condition (status reaching the API) | ~500 | ~1050 |
 | Ready condition → first response byte | 97 | 118 |
 
 Per-arm, the same segments are flat across the CPU settings:
 
-| Arm | Bound→"Ready in" median | "Ready in"→Ready median | First byte median |
+| Arm | Bound→"Ready in" median (container start) | "Ready in"→Ready median | First byte median |
 |---|---|---|---|
 | cpu-base | 613 | 449 | 1276 |
 | cpu-boost2 | 587 | 620 | 1500 |
 | cpu-boost2req | 597 | 469 | 1454 (n=19) |
 
+Timing of the container-side events relative to the bind (median ms, n = 60 unless stated):
+
+| Event | Median | p90 |
+|---|---|---|
+| user container first log line | 473 | 877 |
+| app "Ready in" line | 595 | 997 |
+| queue-proxy first log line | 619 | 1022 |
+
+Distribution of the interval from the queue-proxy's first log line to the `podIP` appearing in the API (59 wakes with a Ready marker): min 32, p10 115, p25 240, median 441, p75 706, p90 958, max 1038 ms. In 100 ms bins from 0 the counts are 4, 9, 4, 9, 9, 1, 8, 3, 3, 7, 2. Split by node the medians are 387 ms (10.0.1.118, n = 26) and 456 ms (10.0.1.169, n = 34).
+
 Reading the segments:
 
-- **The app is not the bottleneck.** The app logs "Ready in" about 0.6 s after the scheduler binds the pod, the same for every arm.
-- **Readiness probing is not the bottleneck.** The queue-proxy readiness probe runs every 10 s in the revision's deployment, but the pod's Ready condition follows the queue-proxy's TCP accept by a median of about 40 ms. The probe is not what gates Ready here.
-- **The status lag is.** The pod's `podIP` and Ready condition appear together, a median of about 0.5 s after the app has logged "Ready in" (p95 about 1 s). This is the largest part of the listening-to-Ready gap.
-- **Candidate setting:** the lag is consistent with the kubelet's pod-lifecycle relist period (PLEG) or the evented PLEG feature gate, which govern how quickly the kubelet notices container state changes and publishes them. Both are node-level kubelet settings. The Knative config maps (`config-deployment`, `config-autoscaler`, `config-features`) do not set anything that controls it, and they were not changed. This is a hypothesis: the kubelet's own configuration and logs were not inspected.
+- **The bound-to-"Ready in" segment (~600 ms) is not app startup.** Every wake logs "Ready in 0ms". The queue-proxy sidecar, which is not the app, logs its first line a median of 29 ms after "Ready in" (range −37 to +64 ms), so both containers start about 0.6 s after binding. That interval is sandbox creation, pod networking and container start. This data cannot say how it divides among them, and shows no app boot time worth trimming.
+- **`podIP`, `PodReadyToStartContainers` and both containers' running state land in a single API write in 60 of 60 wakes.** The Ready condition is a separate, later write: it follows `podIP` by 21 to 401 ms (median 45, p90 269, n = 59). So the pod's status reaches the API in two writes, not one.
+- **The first write lags the containers by a roughly uniform 0–1 s.** From "Ready in" to `podIP` the median is 451 ms (p90 952). That pattern is what a periodic status write about once a second would produce, and 59 wakes cannot distinguish a 1 s period from other periods of similar size. It is a hypothesis, not a finding. "Ready in" to Ready has a minimum of 291 ms, so the full gap is not a pure uniform lag; the Ready condition adds the 21 to 401 ms second write on top.
+- **What the data does not support about the probe.** The harness's own TCP timestamps for the app and queue-proxy ports are censored at the `podIP` time (see below), so the 40 to 45 ms between `podIP` and Ready is not a measurement of the readiness probe. The longest "Ready in" to Ready interval is 1095 ms across 59 wakes. The data does not show what triggers the Ready write.
+
+### Kubelet source facts (Kubernetes v1.34.0)
+
+Read from the tagged source, not from the nodes:
+
+- In `pkg/kubelet/kubelet.go`, the generic pod lifecycle event generator (PLEG) relist period is a hard-coded constant, `genericPlegRelistPeriod = time.Second * 1`, not a kubelet configuration setting. Its comment says a longer period makes the kubelet take longer to detect container changes and update pod status, and that the relist itself can take longer than 1 s. https://github.com/kubernetes/kubernetes/blob/v1.34.0/pkg/kubelet/kubelet.go
+- With the `EventedPLEG` feature gate on, the generic relist period becomes 300 s and the kubelet relies on runtime events instead (same file). The gate is Alpha and off by default since 1.26 in v1.34 (`pkg/features/kube_features.go`). https://github.com/kubernetes/kubernetes/blob/v1.34.0/pkg/features/kube_features.go
+- **Not verified:** whether the OKE nodes use the default, whether their container runtime supports evented PLEG, and whether the relist period is what produces the lag seen here. Evented PLEG is not measured in this data. The kubelet's own sync and status-update paths are other candidates that this run did not examine.
+- The Knative config maps (`config-deployment`, `config-autoscaler`, `config-features`) were not changed and were not examined for anything that controls this lag.
 
 ## What is not shown
 
 - **Activator path:** the harness requests the public URL. It does not record which route served each wake, so the activator's involvement is not established by this data.
 - **Throttling:** not measured (see above).
-- **Probe-level detail:** the harness starts its TCP polling of the app port only after `podIP` appears, so its own app-port accept timestamp is censored at `podIP`. The app's "Ready in" log line is therefore the only real listen timestamp, and it is what the gap figures use.
-- **Sample size:** 20 wakes per arm. The 95% CIs are about ±300 ms wide, so effects smaller than that are not excluded. A CPU effect of a few hundred ms would not show here.
+- **Probe-level detail:** the harness starts its TCP polling of the app port only after `podIP` appears, so its own app-port accept timestamp is censored at `podIP`. The app's "Ready in" log line is therefore the only listen-side timestamp, and it is what the gap figures use. Note it is logged at process start ("Ready in 0ms"), not after any application initialisation.
+- **Sample size:** 20 wakes per arm. The 95% CIs are 575 and 637 ms wide in total, so effects smaller than the excluded range (see Measurement A) are not ruled out.
 - **Missing marker:** one `cpu-boost2req` wake (round 17) has a "Ready in" line but no Ready condition in the watch, so it is excluded from the Ready-gap segments (n=19). It is included in the total cold-start numbers.
 - **Image pulls:** the events show cached pulls (container start about 0.47 s after binding in the median), so this run does not include a cold image pull.
 - **Other tenants:** the cluster also hosts other bench apps and imagecache pods. Their load was not measured or controlled during the run.
-
-## Leftovers (not deleted)
-
-- NextApps `cpu-base`, `cpu-boost2`, `cpu-boost2req` in `bench-cells` (minScale 0; scaled to zero after the run).
-- Pod `phase-bench-2` in `bench-cells` (Running, sleep, pinned to 10.0.1.118). Created for this run because the earlier harness pod `phase-bench` had completed. The completed pod `phase-bench` was not touched.
-- Worktree `.claude/worktrees/bench-cpu-boost` on branch `bench/cpu-boost-ready-gap`.
 
 ## Reproduce
 

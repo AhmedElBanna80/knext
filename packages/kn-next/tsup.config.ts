@@ -155,6 +155,11 @@ export default defineConfig([
       // imports it into the lazy sharp facade by absolute path (and fails closed
       // when absent), so it must ship in dist beside vinext-compile.
       'adapters/sharp-native-extract': 'src/adapters/sharp-native-extract.mjs',
+      // The self-contained app-data alias: vinext-compile imports it into the
+      // compiled entry by absolute path (and fails closed when it is absent
+      // while data files are embedded), so it must ship in dist beside
+      // vinext-compile.
+      'adapters/app-data-alias': 'src/adapters/app-data-alias.mjs',
       // The Bun.serve deployed Cache-Control normalization (#1322). vinext-compile
       // injects an `import` of this after the sidecar resolver (and fails closed
       // when it is absent), so it must ship in dist beside vinext-compile.

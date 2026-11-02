@@ -221,6 +221,35 @@ dlopen-ing the unpacked native library from a noexec mount fails with "failed to
 shared object"). See [Security → Read-only root filesystem](/docs/security#read-only-root-filesystem)
 for when knext mounts volumes on other build shapes.
 
+The vinext binary also carries your app's own data files, so a read of one works from the empty
+directory. Two things put a file in:
+
+- **`outputFileTracingIncludes` in `next.config`.** Its globs are relative to the app root (an
+  absolute path inside the app root also works), for every route. A glob such as `./**/*.json`
+  does not descend into `node_modules`; name `node_modules` in the pattern to include a file there.
+- **A literal path in your server code.** `join(process.cwd(), 'content/post.md')`,
+  `` `${process.cwd()}/content/post.md` `` and `new URL('../data.json', import.meta.url)` are found
+  in the server output, and the file is embedded if it exists at build time. A path computed at
+  runtime is not found; list it in `outputFileTracingIncludes`.
+
+The app reads them as it always did, with `fs` or `fs/promises`, by a path relative to the working
+directory, by `process.cwd()` joined, or by the absolute path the app had on the build machine. Only
+the files that were embedded answer; any other path is a real `ENOENT`. `Bun.file()` and
+`createReadStream` do not see embedded files, and a write to the same path goes to the real disk.
+
+The build fails, naming the pattern, when an `outputFileTracingIncludes` entry cannot be embedded
+rather than dropping it: it matches no file, resolves (through a symlink) outside the app root,
+matches a file that looks like a secret (`.env*`, `*.pem`, `*.key`, `id_*`) unless the pattern names
+that exact file, matches a native addon, or matches a file of a package the build traced into
+`.output/server/node_modules` (for example a package listed in `serverExternalPackages`). The last
+one cannot work in this mode: the executable has no `node_modules` beside it and cannot resolve a
+package from inside itself, so bundle the package, read its files by a path inside the app, or build
+without `--self-contained`. A literal path that does not exist, is a directory, or looks like a
+secret is skipped and logged, not fatal.
+
+Every embedded file adds its size to the executable, once. The build log prints the count and total
+size, and warns above 64 MiB.
+
 Both targets support it; nothing else does — there, setting it changes nothing about what
 `knext build` produces, and the choice is only recorded in the build log. The value must be a
 boolean — `knext validate` rejects anything else.
@@ -255,7 +284,8 @@ default choice for a new one.
   only).** If your app hits this, `knext build` fails at build time and names the package — the
   build never produces an image, so you find out before you deploy, not at runtime.
 - **Files your app reads from disk at request time, when they are not produced by the build
-  itself, are not included in the executable.** Custom fonts loaded for generated images, static
+  itself, are not included in the executable.** (On the vinext target, files listed in
+  `outputFileTracingIncludes` or named by a literal path in server code are included; see above.) Custom fonts loaded for generated images, static
   files read directly from the filesystem, and per-route data files read outside the framework's
   own data-fetching functions are the common cases. If your app hits this, the affected route
   answers with a server error (occasionally the connection drops instead) rather than the page you

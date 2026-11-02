@@ -22,6 +22,7 @@ untreated control, so the treatment alternates ABAB on the same Knative Service.
 Cluster work is a queue of one: never run two drivers at once.
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -31,6 +32,9 @@ CTX = ["kubectl", "--context", "knext-oke-sa", "-n", "bench-cells"]
 HERE = pathlib.Path(__file__).resolve().parent
 DNS_JS = (HERE / "dns-probe.js").read_text()
 
+
+# Harness pod name; override with PHASE_POD (the 2026-11-02 run uses phase-bench-2).
+POD = os.environ.get("PHASE_POD", "phase-bench")
 
 TRANSIENT = ("Unable to connect", "context deadline exceeded", "i/o timeout", "EOF", "connection reset")
 
@@ -89,13 +93,13 @@ def wake(arm, treat, seq):
     timing does not depend on the workstation link."""
     out = f"/tmp/run-{seq}.json"
     env = f"HEAL=1 HEAL_BIN={'bun' if 'bun' in arm else 'node'} " if treat else ""
-    launch = ["exec", "phase-bench", "-c", "harness", "--", "sh", "-c",
+    launch = ["exec", POD, "-c", "harness", "--", "sh", "-c",
               f"[ -e {out} ] || {{ {env}nohup node /tmp/cold-cycle.mjs {arm} > {out} 2>&1 & }}"]
     kc(launch, check=False)  # idempotent: the [ -e ] guard never starts a second run
     t = time.time()
     while time.time() - t < 240:
         time.sleep(3)
-        raw = kc(["exec", "phase-bench", "-c", "harness", "--", "sh", "-c", f"cat {out} 2>/dev/null || echo MISSING"],
+        raw = kc(["exec", POD, "-c", "harness", "--", "sh", "-c", f"cat {out} 2>/dev/null || echo MISSING"],
                  check=False)
         if "MISSING" in raw and time.time() - t < 30:
             kc(launch, check=False)  # the first launch never reached the pod: re-issue
@@ -112,7 +116,7 @@ def main():
     rounds, arms, out = int(sys.argv[1]), sys.argv[2].split(","), sys.argv[3]
     do_dns = "--dns" in sys.argv
     heal_arm = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--heal=")), None)
-    kc(["cp", str(HERE / "cold-cycle.mjs"), "phase-bench:/tmp/cold-cycle.mjs", "-c", "harness"])
+    kc(["cp", str(HERE / "cold-cycle.mjs"), f"{POD}:/tmp/cold-cycle.mjs", "-c", "harness"])
     with open(out, "a") as f:
         for r in range(rounds):
             # Rotate the order each round (AB BA for two arms; ABC BCA CAB for

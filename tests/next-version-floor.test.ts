@@ -248,17 +248,40 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  * like a literal. A reference sitting in a next version position - after `next@`,
  * after `dependencies.next=`, bound to a name that holds a next version
  * (`NEXT_VERSION: ...`, `NEXTJS_REF=...`, `matrix.next`), or the `ref:` that reads
- * one - is expanded to every literal it can spell:
+ * one - is expanded to every literal it can spell. The unit is the whole version
+ * TOKEN the reference sits in (`next@16.$MINOR.$PATCH`, `next@"$MAJOR.$MINOR"`,
+ * `next@v${{ inputs.fw }}`): its pieces are joined and the result is judged, so a
+ * version only spells itself across several references.
  *
  *   - `${{ inputs.X }}` / `${{ github.event.inputs.X }}` to that input's `default:`
  *     (and, for a composite action, to every value a workflow passes through `with:`);
+ *     an input with no default and no caller value is unresolvable;
  *   - `${{ env.X }}`, `$X`, `${X}`, `${X#v}` to `X` set by an `env:` key (workflow,
- *     job or step level), a shell assignment, or a JS `const`; chains are followed
- *     (`A: ${{ env.B }}`), as are the literals inside an expression
+ *     job or step level), a shell assignment, or a JS `const`, anywhere in the same
+ *     file (the tables for these are file-wide, not per job or step); chains are
+ *     followed (`A: ${{ env.B }}`), as are the literals inside an expression
  *     (`inputs.X || '16.3.8'`);
- *   - `${{ matrix.X }}` to the static matrix values, or, for a `fromJSON(...)`
- *     matrix, to what the source script PRINTS (MATRIX_EMITTERS runs it; a source
- *     that is not registered there is unresolvable);
+ *   - `${{ matrix.X }}` to the static matrix values OF THE JOB THAT READS IT, or, for
+ *     a `fromJSON(...)` matrix, to what the source script PRINTS (MATRIX_EMITTERS
+ *     runs it) - but only when the `needs:` job that produces the matrix runs that
+ *     script. A job without a matrix, and a matrix from any other source, is
+ *     unresolvable: a static matrix in another job never stands in for it;
+ *   - a `with:` value a workflow passes into a composite action is resolved against
+ *     the CALLER's tables (its env, its inputs, the matrix of the calling job), never
+ *     the action's own. Block mappings (plain or quoted keys), inline flow mappings
+ *     `with: { k: v }`, `with:` written before `uses:` and flow-style steps are read;
+ *     any other `with:` shape (alias, merge key, explicit key, block-scalar or
+ *     next-line value, an expression for the whole map, a multi-line flow mapping) or
+ *     a `uses:` line that is not the plain spelling is UNPARSEABLE, which makes every
+ *     input of that action unresolvable;
+ *   - a command substitution, `$(...)` or backticks, anywhere in a version token
+ *     (`next@$(cat .nextver)`, `next@16.$(cat minor).0`) or in a value such a token
+ *     reads, is unresolvable: the value is computed at run time. (Backticks are a
+ *     command substitution in shell and YAML, a template literal in JS.)
+ *   - in a JS script, `'...next@' + v` / `'...dependencies.next=' + a + '.' + b`: a
+ *     string that ends where a version goes, followed by `+` operands. An operand
+ *     must be a string / number literal or a plain identifier a `const` / `let` / `var` sets in the
+ *     file; a member access, call or index is unresolvable;
  *   - a pin read through an indirection is attributed to the line that WROTE it, so
  *     an exclusion on that line (not on every line that reads it) excuses it.
  *
@@ -271,17 +294,25 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  * line that mentions next" would flag the guards themselves.
  *
  * Fail-closed: a reference in a version position that cannot be resolved (a
- * `secrets.*` / `vars.*` / `needs.*` / `steps.*` value, an input nobody defines, a
- * variable nothing assigns, a value computed by `$(...)`, a reference cycle, an
- * unregistered matrix source) is a FAILURE, never a pass.
+ * `secrets.*` / `vars.*` / `needs.*` / `steps.*` / `github.*` value, an input with no
+ * default and no caller value, a variable nothing in the file assigns, a value
+ * computed by `$(...)` or backticks, a reference cycle, a matrix whose source is not
+ * registered or is not the job it `needs`, a `with:` shape it cannot parse, a JS
+ * concatenation operand it cannot resolve) is a FAILURE, never a pass.
  *
  * STILL NOT SEEN, so nobody assumes more: indirection ACROSS files other than the
  * `with:` of a composite action (a reusable workflow's `with:` into another
- * workflow's `inputs:`; a script argument whose value a workflow computes), a spec
- * a shell assembles from parts (`next@"$MAJOR.$MINOR"` with the pieces set apart),
- * a script that reads its version from a file at run time, and a version a JS
- * object literal carries (`{ next: '16.3.8' }`). Scripts a script calls are reached
- * only when a workflow also names them.
+ * workflow's `inputs:` - such an input is judged at its default, or is unresolvable
+ * without one; a script argument whose value a workflow computes), a script that reads
+ * its version from a file at run time (`readFileSync`), a version a JS object literal
+ * carries (`{ next: '16.3.8' }`), JS strings built any way but `+` (`.concat()`,
+ * `.join()`, `.replace()`, `util.format`, `path.join`), a reference that follows a
+ * SPACE inside one quoted range (`"next@>=16.4.1 <$V"`), expression functions
+ * (`format()`, `join()`, ...; their literal text is judged, they are not evaluated),
+ * an env or shell variable reassigned between two jobs or steps of the same file
+ * (the union of every assignment in the file is judged), and a dynamic matrix whose
+ * producer job runs a registered script indirectly. Scripts a script calls are
+ * reached only when a workflow also names them.
  *
  * Tokens that belong to another package on the same line (`kn-next@0.4.3`,
  * `@next/env@16.0.0`) are not next's version and are stripped first. Comment
@@ -435,9 +466,14 @@ const piece = (s: string, o: Source): Part => ({ s, file: o.file, line: o.line, 
 
 type ScanOpts = {
   /** Values callers pass to a composite action's inputs through `with:`, by input name. */
-  inputWith?: Record<string, (Source & { value: string })[]>;
-  /** Versions the dynamic-matrix source (`fromJSON(...)`) of this file is known to emit. */
+  inputWith?: Record<string, (Source & { value: string; ctx?: Ctx })[]>;
+  /** Versions any dynamic matrix (`fromJSON(...)`) of this file is taken to emit (fixtures). */
   matrixVersions?: string[];
+  /**
+   * Registered matrix sources: script path -> the versions it prints. A dynamic
+   * matrix reads them only through the `needs.<job>` that RUNS the script.
+   */
+  matrixEmitters?: Record<string, string[]>;
 };
 
 const isScriptFile = (file: string): boolean => /\.(?:sh|bash|mjs|cjs|js|ts)$/.test(file);
@@ -585,52 +621,222 @@ function scalarItems(v: string): string[] {
   return [t];
 }
 
+/**
+ * The top-level comma-separated pieces of a flow-collection body. A comma inside a
+ * quote, a `${{ }}` expression or a nested `[ ]` / `{ }` does not split. `undefined`
+ * when the body is not closed on this line, which the callers treat as unparseable.
+ */
+function splitFlow(body: string): string[] | undefined {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === '"' || c === "'") {
+      const end = body.indexOf(c, i + 1);
+      if (end < 0) return undefined;
+      cur += body.slice(i, end + 1);
+      i = end;
+      continue;
+    }
+    if (body.startsWith('${{', i)) {
+      const end = body.indexOf('}}', i);
+      if (end < 0) return undefined;
+      cur += body.slice(i, end + 2);
+      i = end + 1;
+      continue;
+    }
+    if (c === '[' || c === '{') depth++;
+    if (c === ']' || c === '}') depth--;
+    if (depth < 0) return undefined;
+    if (c === ',' && depth === 0) {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += c;
+  }
+  if (depth !== 0) return undefined;
+  out.push(cur);
+  return out.map((p) => p.trim()).filter(Boolean);
+}
+
+/** The `key: value` entries of a one-line flow mapping `{ ... }`, or `undefined` when unparseable. */
+function flowEntries(s: string): { key: string; value: string }[] | undefined {
+  const t = stripYamlComment(s);
+  if (!t.startsWith('{') || !t.endsWith('}')) return undefined;
+  const parts = splitFlow(t.slice(1, -1));
+  if (!parts) return undefined;
+  const out: { key: string; value: string }[] = [];
+  for (const p of parts) {
+    const m = /^(?:"([^"]+)"|'([^']+)'|([\w-]+))\s*:\s*([\s\S]*)$/.exec(p);
+    if (!m) return undefined;
+    out.push({ key: m[1] ?? m[2] ?? m[3], value: m[4].trim() });
+  }
+  return out;
+}
+
+/** A matrix as one job sees it: its static keys, and whether it is built by `fromJSON(...)`. */
+type MatrixScope = {
+  keys: Map<string, Part[]>;
+  /** Set when the matrix (or part of it) is computed: the `needs.<job>` it reads, possibly none. */
+  dynamic?: string[];
+};
+type JobScope = { id: string; from: number; to: number; text: string; matrix: MatrixScope };
+
 type Tables = {
+  /** Identifies the file, so `inputs.fw` of two files is not mistaken for a cycle. */
+  id: string;
   /** `KEY: v`, `KEY=v`, `const KEY = 'v'` anywhere in the file, by key name. */
   keyVals: Map<string, Part[]>;
   inputDefaults: Map<string, Part[]>;
-  definedInputs: Set<string>;
+  /** In a shell / YAML file a backtick pair is a command substitution; in JS it is a template. */
+  ticks: boolean;
+  /** The matrix of the job being read (or of the whole file when it has no `jobs:`). */
+  matrix: MatrixScope;
+  jobs: JobScope[];
 };
+
+/** `key: value` / `- key: value` / `- scalar` lines of YAML, feeding `add` (lines `from` ..< `to`, 0-based). */
+function collectYamlKeyVals(
+  lines: string[],
+  from: number,
+  to: number,
+  comment: RegExp,
+  add: (name: string, s: string, no: number, raw: string) => void,
+): void {
+  let pending: { name: string; indent: number } | undefined;
+  for (let i = from; i < to; i++) {
+    const raw = lines[i];
+    if (comment.test(raw) || raw.trim() === '') continue;
+    const no = i + 1;
+    const indent = raw.length - raw.trimStart().length;
+    const seq = /^(\s*)-\s+(.+)$/.exec(raw);
+    if (pending && seq && indent >= pending.indent && !/^[\w.-]+\s*:(\s|$)/.test(seq[2])) {
+      for (const s of scalarItems(seq[2])) add(pending.name, s, no, raw);
+      continue;
+    }
+    if (pending && indent <= pending.indent) pending = undefined;
+    const kv = /^\s*(?:-\s+)*([A-Za-z_][\w.-]*)\s*:\s*(.*?)\s*$/.exec(raw);
+    if (!kv) continue;
+    const [, name, value] = kv;
+    if (value === '' || /^[|>][+-]?\d*$/.test(value)) {
+      pending = value === '' ? { name, indent } : undefined;
+      continue;
+    }
+    for (const s of scalarItems(value)) add(name, s, no, raw);
+  }
+}
+
+/** The job ranges (1-based, inclusive) under a top-level `jobs:` key; none when the file has no such key. */
+function parseJobs(lines: string[], comment: RegExp): { id: string; from: number; to: number }[] {
+  const head = lines.findIndex((l) => /^jobs\s*:\s*(?:#.*)?$/.test(l));
+  if (head < 0) return [];
+  const heads: { id: string; from: number; indent: number }[] = [];
+  let child: number | undefined;
+  let last = lines.length;
+  for (let i = head + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (comment.test(l) || l.trim() === '') continue;
+    const ind = l.length - l.trimStart().length;
+    if (ind === 0) {
+      last = i;
+      break;
+    }
+    child ??= ind;
+    const m = ind === child ? /^(?:"([^"]+)"|'([^']+)'|([\w.-]+))\s*:/.exec(l.trimStart()) : null;
+    if (m) heads.push({ id: m[1] ?? m[2] ?? m[3], from: i + 1, indent: ind });
+  }
+  return heads.map((h, k) => ({
+    id: h.id,
+    from: h.from,
+    to: k + 1 < heads.length ? heads[k + 1].from - 1 : last,
+  }));
+}
+
+/** The matrix declared in lines `from` ..< `to` (0-based): static keys, or the fact that it is computed. */
+function matrixOf(
+  file: string,
+  lines: string[],
+  from: number,
+  to: number,
+  comment: RegExp,
+): MatrixScope {
+  const keys = new Map<string, Part[]>();
+  let dynamic: string[] | undefined;
+  const markDynamic = (s: string) => {
+    dynamic = [...(dynamic ?? []), ...[...s.matchAll(/needs\.([\w-]+)/g)].map((m) => m[1])];
+  };
+  const add = (name: string, s: string, no: number, raw: string) => {
+    keys.set(name, [...(keys.get(name) ?? []), { s, file, line: no, text: raw.trim() }]);
+  };
+  const indentOf = (l: string) => l.length - l.trimStart().length;
+  for (let i = from; i < to; i++) {
+    const raw = lines[i];
+    if (comment.test(raw) || raw.trim() === '') continue;
+    const m = /^(\s*)matrix\s*:\s*(.*?)\s*$/.exec(raw);
+    if (!m) continue;
+    const base = m[1].length;
+    // Only `strategy.matrix` (or a bare top-level `matrix:`) is a matrix: `outputs: matrix:` is not.
+    let parent: string | undefined;
+    for (let j = i - 1; j >= from && base > 0; j--) {
+      if (comment.test(lines[j]) || lines[j].trim() === '') continue;
+      if (indentOf(lines[j]) < base) {
+        parent = /^\s*(?:-\s+)*["']?([\w-]+)/.exec(lines[j])?.[1];
+        break;
+      }
+    }
+    if (parent !== undefined && parent !== 'strategy') continue;
+    const inline = stripYamlComment(m[2]);
+    if (inline !== '') {
+      const entries = inline.startsWith('{') ? flowEntries(inline) : undefined;
+      if (!entries) markDynamic(inline);
+      for (const e of entries ?? [])
+        for (const s of scalarItems(e.value)) add(e.key, s, i + 1, raw);
+      continue;
+    }
+    let end = i + 1;
+    while (
+      end < to &&
+      (comment.test(lines[end]) || lines[end].trim() === '' || indentOf(lines[end]) > base)
+    ) {
+      end++;
+    }
+    collectYamlKeyVals(lines, i + 1, end, comment, add);
+    for (let j = i + 1; j < end; j++) {
+      if (!comment.test(lines[j]) && /fromJSON\s*\(/i.test(lines[j])) markDynamic(lines[j]);
+    }
+  }
+  return { keys, dynamic };
+}
 
 function buildTables(file: string, text: string, script: boolean): Tables {
   const keyVals = new Map<string, Part[]>();
   const inputDefaults = new Map<string, Part[]>();
-  const definedInputs = new Set<string>();
   const add = (m: Map<string, Part[]>, k: string, s: string, no: number, raw: string) => {
     const part: Part = { s, file, line: no, text: raw.trim() };
     m.set(k, [...(m.get(k) ?? []), part]);
   };
   const comment = commentLine(script);
   const lines = text.split('\n');
-  let pending: { name: string; indent: number } | undefined;
   lines.forEach((raw, i) => {
     if (comment.test(raw) || raw.trim() === '') return;
     const no = i + 1;
-    const indent = raw.length - raw.trimStart().length;
     for (const m of raw.matchAll(SHELL_ASSIGN)) {
       add(keyVals, m[1], m[2] ?? m[3] ?? m[4] ?? '', no, raw);
     }
     for (const m of raw.matchAll(JS_ASSIGN)) {
       add(keyVals, m[1], m[2] ?? m[3] ?? m[4] ?? '', no, raw);
     }
-    if (script) return;
-    const seq = /^(\s*)-\s+(.+)$/.exec(raw);
-    if (pending && seq && indent >= pending.indent && !/^[\w.-]+\s*:(\s|$)/.test(seq[2])) {
-      for (const s of scalarItems(seq[2])) add(keyVals, pending.name, s, no, raw);
-      return;
-    }
-    if (pending && indent <= pending.indent) pending = undefined;
-    const kv = /^\s*(?:-\s+)*([A-Za-z_][\w.-]*)\s*:\s*(.*?)\s*$/.exec(raw);
-    if (!kv) return;
-    const [, name, value] = kv;
-    if (value === '' || /^[|>][+-]?\d*$/.test(value)) {
-      pending = value === '' ? { name, indent } : undefined;
-      return;
-    }
-    for (const s of scalarItems(value)) add(keyVals, name, s, no, raw);
   });
+  if (!script) {
+    collectYamlKeyVals(lines, 0, lines.length, comment, (name, s, no, raw) =>
+      add(keyVals, name, s, no, raw),
+    );
+  }
   // `inputs:` → each direct child is an input; its `default:` is the in-tree value.
   lines.forEach((raw, i) => {
+    if (script) return;
     const head = /^(\s*)inputs:\s*$/.exec(raw);
     if (!head) return;
     const base = head[1].length;
@@ -644,10 +850,8 @@ function buildTables(file: string, text: string, script: boolean): Tables {
       if (ind <= base) break;
       child ??= ind;
       if (ind === child) {
-        const m = /^([\w-]+)\s*:/.exec(l.trimStart());
-        cur = m?.[1];
+        cur = /^([\w-]+)\s*:/.exec(l.trimStart())?.[1];
         grand = undefined;
-        if (cur) definedInputs.add(cur);
       } else if (cur) {
         grand ??= ind;
         const d = /^default\s*:\s*(.*?)\s*$/.exec(l.trimStart());
@@ -657,8 +861,40 @@ function buildTables(file: string, text: string, script: boolean): Tables {
       }
     }
   });
-  return { keyVals, inputDefaults, definedInputs };
+  const heads = script ? [] : parseJobs(lines, comment);
+  const jobs: JobScope[] = heads.map((h) => ({
+    ...h,
+    text: lines
+      .slice(h.from - 1, h.to)
+      .filter((l) => !comment.test(l))
+      .join('\n'),
+    matrix: matrixOf(file, lines, h.from - 1, h.to, comment),
+  }));
+  const matrix =
+    heads.length > 0 || script
+      ? { keys: new Map<string, Part[]>() }
+      : matrixOf(file, lines, 0, lines.length, comment);
+  return {
+    id: file,
+    keyVals,
+    inputDefaults,
+    ticks: !/\.(?:mjs|cjs|js|ts)$/.test(file),
+    matrix,
+    jobs,
+  };
 }
+
+/** The tables as the job containing 1-based line `no` sees them (its own matrix). */
+function tablesAt(t: Tables, no: number): Tables {
+  const job = t.jobs.find((j) => j.from <= no && no <= j.to);
+  return job ? { ...t, matrix: job.matrix } : t;
+}
+
+/** A caller's tables and options: where a `with:` value written in the caller is resolved. */
+type Ctx = { tables: Tables; opts: ScanOpts };
+
+/** Keyed under this name in `inputWith`: a `with:` the scan could not read. */
+const UNPARSED_WITH = '\u0000unparsed-with';
 
 type Resolution = { alts: Alt[]; unresolved: string[] };
 
@@ -670,6 +906,22 @@ function cartesian(options: Alt[][]): Alt[] {
   return acc;
 }
 
+/** A reference or command substitution inside a text, with where it sits. */
+type Span = { text: string; index: number };
+/** A command substitution computes its value at run time: there is no literal to judge. */
+const isCommand = (sp: Span): boolean => sp.text.startsWith('$(') || sp.text.startsWith('`');
+// Balanced to three levels; a lone `$(` is still a command substitution (it never reads as a variable).
+const CMD_SUB = String.raw`\$\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)|\$\(`;
+const SPAN_RE = new RegExp(`${REF_SPAN.source}|${CMD_SUB}`, 'g');
+const SPAN_TICKS_RE = new RegExp(`${REF_SPAN.source}|${CMD_SUB}|\`[^\`]*\``, 'g');
+
+function spansOf(s: string, ticks: boolean): Span[] {
+  return [...s.matchAll(ticks ? SPAN_TICKS_RE : SPAN_RE)].map((m) => ({
+    text: m[0],
+    index: m.index as number,
+  }));
+}
+
 /** Expand the refs inside one literal piece of text written at `origin`. */
 function expandText(
   s: string,
@@ -678,21 +930,32 @@ function expandText(
   opts: ScanOpts,
   seen: string[],
 ): Resolution {
-  const spans = [...s.matchAll(REF_SPAN)];
+  const spans = spansOf(s, t.ticks);
   if (spans.length === 0) return { alts: [[piece(s, origin)]], unresolved: [] };
   const unresolved: string[] = [];
   const options: Alt[][] = [];
   let at = 0;
-  for (const m of spans) {
-    const idx = m.index as number;
-    options.push([[piece(s.slice(at, idx), origin)]]);
-    const r = resolveSpan(m[0], origin, t, opts, seen);
+  for (const sp of spans) {
+    options.push([[piece(s.slice(at, sp.index), origin)]]);
+    const r = resolveSpan(sp.text, origin, t, opts, seen);
     unresolved.push(...r.unresolved);
     options.push(r.alts.length ? r.alts : [[]]);
-    at = idx + m[0].length;
+    at = sp.index + sp.text.length;
   }
   options.push([[piece(s.slice(at), origin)]]);
   return { alts: cartesian(options), unresolved };
+}
+
+/** The versions the dynamic matrix of this scope is known to emit: only from a job that runs a registered emitter. */
+function emittedFor(t: Tables, opts: ScanOpts): string[] {
+  const out = [...(opts.matrixVersions ?? [])];
+  for (const id of t.matrix.dynamic ?? []) {
+    const job = t.jobs.find((j) => j.id === id);
+    for (const [script, versions] of Object.entries(opts.matrixEmitters ?? {})) {
+      if (job?.text.includes(script)) out.push(...versions);
+    }
+  }
+  return out;
 }
 
 function resolveName(
@@ -703,36 +966,39 @@ function resolveName(
   seen: string[],
 ): Resolution {
   const key = `${kind}.${name}`;
-  if (seen.includes(key) || seen.length >= MAX_DEPTH) {
+  const scoped = `${t.id}:${key}`;
+  if (seen.includes(scoped) || seen.length >= MAX_DEPTH) {
     return { alts: [], unresolved: [`${key} (reference cycle or too deep)`] };
   }
-  const trail = [...seen, key];
-  const sources: Part[] = [];
-  let known = false;
-  if (kind === 'inputs') {
-    sources.push(...(t.inputDefaults.get(name) ?? []));
-    for (const w of opts.inputWith?.[name] ?? []) {
-      sources.push({ s: w.value, file: w.file, line: w.line, text: w.text });
-    }
-    known = t.definedInputs.has(name) || sources.length > 0;
-  } else {
-    sources.push(...(t.keyVals.get(name) ?? []));
-    if (kind === 'matrix') {
-      for (const v of opts.matrixVersions ?? []) {
-        sources.push({ s: v, file: '(dynamic matrix)', line: 0, text: `matrix emits ${v}` });
-      }
-    }
-    known = sources.length > 0;
-  }
-  if (!known) return { alts: [], unresolved: [key] };
+  const trail = [...seen, scoped];
   const out: Resolution = { alts: [], unresolved: [] };
-  for (const src of sources) {
-    // A command substitution computes its value at run time; there is no literal to judge.
-    if (/^\s*(?:\$\(|`)/.test(src.s)) {
-      out.unresolved.push(`${key} (computed by a command)`);
-      continue;
+  const sources: { part: Part; ctx?: Ctx }[] = [];
+  if (kind === 'inputs') {
+    for (const part of t.inputDefaults.get(name) ?? []) sources.push({ part });
+    for (const w of opts.inputWith?.[name] ?? []) {
+      sources.push({ part: { s: w.value, file: w.file, line: w.line, text: w.text }, ctx: w.ctx });
     }
-    const r = expandText(src.s, src, t, opts, trail);
+    for (const u of opts.inputWith?.[UNPARSED_WITH] ?? []) {
+      out.unresolved.push(`${key} (the with: at ${u.file}:${u.line} is not parseable)`);
+    }
+  } else if (kind === 'matrix') {
+    for (const part of t.matrix.keys.get(name) ?? []) sources.push({ part });
+    for (const v of emittedFor(t, opts)) {
+      sources.push({
+        part: { s: v, file: '(dynamic matrix)', line: 0, text: `matrix emits ${v}` },
+      });
+    }
+  } else {
+    for (const part of t.keyVals.get(name) ?? []) sources.push({ part });
+  }
+  if (sources.length === 0) {
+    out.unresolved.push(
+      kind === 'inputs' ? `${key} (no default, and no caller value is visible)` : key,
+    );
+    return out;
+  }
+  for (const { part, ctx } of sources) {
+    const r = expandText(part.s, part, ctx?.tables ?? t, ctx?.opts ?? opts, trail);
     out.alts.push(...r.alts);
     out.unresolved.push(...r.unresolved);
   }
@@ -747,6 +1013,9 @@ function resolveSpan(
   opts: ScanOpts,
   seen: string[],
 ): Resolution {
+  if (span.startsWith('$(') || span.startsWith('`')) {
+    return { alts: [], unresolved: [`${span} (computed by a command)`] };
+  }
   if (span.startsWith('${{')) {
     const inner = span.slice(3, -2);
     const operands = [...inner.matchAll(EXPR_OPERAND)].map((m) => m[0]);
@@ -774,30 +1043,59 @@ function resolveSpan(
 
 const mask = (s: string): string => s.replace(/\d/g, '#');
 
+/** Characters that continue a version token (a reference inside it is part of the same spec). */
+const TOKEN_CHAR = /[\w.\-+*#%]/;
+
+/**
+ * The extent of the version token a span sits in: back over the literal text and
+ * spans written directly against it, and forward the same way. `next@16.$MINOR.$PATCH`
+ * is one token with two spans, and the pieces only spell a version together.
+ */
+function tokenBounds(s: string, spans: Span[], k: number): [number, number] {
+  let a = spans[k].index;
+  let b = a + spans[k].text.length;
+  for (;;) {
+    const prev = spans.find((sp) => sp.index + sp.text.length === a);
+    if (prev) a = prev.index;
+    else if (a > 0 && TOKEN_CHAR.test(s[a - 1])) a--;
+    else break;
+  }
+  for (;;) {
+    const next = spans.find((sp) => sp.index === b);
+    if (next) b = next.index + next.text.length;
+    else if (b < s.length && TOKEN_CHAR.test(s[b])) b++;
+    else break;
+  }
+  return [a, b];
+}
+
+/** The names a span reads: `inputs.fw`, `NEXTJS_REF`. A command substitution reads none. */
+function spanNames(sp: Span): string[] {
+  if (isCommand(sp)) return [];
+  return sp.text.startsWith('${{')
+    ? [...sp.text.matchAll(EXPR_OPERAND)].map((o) => o[0])
+    : [/^\$\{?([A-Za-z_]\w*)/.exec(sp.text)?.[1] ?? sp.text];
+}
+
+/** A string literal followed by `+`: the head of a JS concatenation. */
+const CONCAT_HEAD = /(["'`])((?:(?!\1)[^\\\n])*?)\1\s*\+\s*/g;
+/** One operand of a concatenation: a string, a number, or an identifier with optional member / call / index tails. */
+const CONCAT_OPERAND =
+  /\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`([^`]*)`|(\d+(?:\.\d+)*)|([A-Za-z_$][\w$]*(?:\s*(?:\.[A-Za-z_$][\w$]*|\[[^\]]*\]|\([^)]*\)))*))/y;
+
 /** Pins reached through a reference that sits in a next version position. */
 function indirectPins(file: string, text: string, opts: ScanOpts): WorkflowPin[] {
   const script = isScriptFile(file);
   const entries = nextLineEntries(text, script);
   if (entries.length === 0) return [];
-  const tables = buildTables(file, text, script);
+  const fileTables = buildTables(file, text, script);
   const pins: WorkflowPin[] = [];
   for (const { no, raw, blockChild } of entries) {
+    const tables = tablesAt(fileTables, no);
     const scanned = preprocess(raw);
-    for (const m of scanned.matchAll(REF_SPAN)) {
-      const start = m.index as number;
-      const prefix = scanned.slice(0, start);
-      const names = m[0].startsWith('${{')
-        ? [...m[0].matchAll(EXPR_OPERAND)].map((o) => o[0])
-        : [/^\$\{?([A-Za-z_]\w*)/.exec(m[0])?.[1] ?? m[0]];
-      // By name too, in YAML: `ref: ${{ env.NEXTJS_REF }}`. Not in a script, where a
-      // JS variable called `next` is an iterator and `nextjsRef=${nextjsRef}` a log line.
-      const inPosition =
-        blockChild ||
-        versionPositionPrefix(prefix, script) ||
-        (!script && names.some(holdsNextVersion));
-      if (!inPosition) continue;
-      const origin: Source = { file, line: no, text: raw.trim() };
-      const r = resolveSpan(m[0], origin, tables, opts, []);
+    const origin: Source = { file, line: no, text: raw.trim() };
+    /** Judge what one resolved token spells, between the text before it and after it. */
+    const judge = (r: Resolution, lead: string, rest: string) => {
       for (const u of r.unresolved) {
         pins.push({
           file,
@@ -808,27 +1106,70 @@ function indirectPins(file: string, text: string, opts: ScanOpts): WorkflowPin[]
           text: raw.trim(),
         });
       }
-      const suffix = scanned.slice(start + m[0].length);
       for (const alt of r.alts) {
         const value = alt.map((p) => p.s).join('');
-        for (const p of lineTokens(file, no, mask(prefix) + value + mask(suffix))) {
+        for (const p of lineTokens(file, no, mask(lead) + value + mask(rest))) {
           // Attribute the token to the line that WROTE it, so an exclusion on that
           // line (not on every line that merely reads it) is what excuses it.
-          const src = alt.find((part) => part.s.includes(p.version)) ?? alt[0];
-          pins.push({
-            ...p,
-            file: src.file,
-            line: src.line,
-            text: src.text,
-            via: `${file}:${no}`,
-          });
+          const src = alt.find((part) => part.s.includes(p.version)) ?? alt[0] ?? origin;
+          pins.push({ ...p, file: src.file, line: src.line, text: src.text, via: `${file}:${no}` });
         }
+      }
+    };
+    const spans = spansOf(scanned, fileTables.ticks);
+    const seenSpans = new Set<number>();
+    spans.forEach((_sp, k) => {
+      if (seenSpans.has(k)) return;
+      const [a, b] = tokenBounds(scanned, spans, k);
+      const inToken = spans.filter((s2) => s2.index >= a && s2.index + s2.text.length <= b);
+      for (const s2 of inToken) seenSpans.add(spans.indexOf(s2));
+      const lead = scanned.slice(0, a);
+      // By name too, in YAML: `ref: ${{ env.NEXTJS_REF }}`. Not in a script, where a
+      // JS variable called `next` is an iterator and `nextjsRef=${nextjsRef}` a log line.
+      const inPosition =
+        blockChild ||
+        versionPositionPrefix(lead, script) ||
+        (!script && inToken.some((s2) => spanNames(s2).some(holdsNextVersion)));
+      if (!inPosition) return;
+      judge(expandText(scanned.slice(a, b), origin, tables, opts, []), lead, scanned.slice(b));
+    });
+    if (script && !/\.(?:sh|bash)$/.test(file)) {
+      // `run('npm i next@' + v)`: the string ends where the version goes, the operands that follow spell it.
+      for (const head of scanned.matchAll(CONCAT_HEAD)) {
+        if (!versionPositionPrefix(head[2], true)) continue;
+        const options: Alt[][] = [];
+        const unresolved: string[] = [];
+        let at = (head.index as number) + head[0].length;
+        for (;;) {
+          CONCAT_OPERAND.lastIndex = at;
+          const op = CONCAT_OPERAND.exec(scanned);
+          if (!op) {
+            unresolved.push(`${scanned.slice(at).trim() || '(nothing)'} (a concatenated operand)`);
+            break;
+          }
+          const literal = op[1] ?? op[2] ?? op[3] ?? op[4];
+          if (literal !== undefined) {
+            const r = expandText(literal, origin, tables, opts, []);
+            unresolved.push(...r.unresolved);
+            options.push(r.alts);
+          } else if (/^[A-Za-z_$][\w$]*$/.test(op[5])) {
+            const r = resolveName('env', op[5], tables, opts, []);
+            unresolved.push(...r.unresolved);
+            options.push(r.alts.length ? r.alts : [[]]);
+          } else {
+            unresolved.push(`${op[5]} (a concatenated operand)`);
+          }
+          at = (op.index as number) + op[0].length;
+          const more = /^\s*\+\s*/.exec(scanned.slice(at));
+          if (!more) break;
+          at += more[0].length;
+        }
+        judge({ alts: cartesian(options), unresolved }, head[2], '');
       }
     }
   }
   return pins;
 }
-
 /** Direct plus indirect pins of one file. */
 function allPins(file: string, text: string, opts: ScanOpts = {}): WorkflowPin[] {
   return [...workflowNextPins(file, text), ...indirectPins(file, text, opts)];
@@ -914,6 +1255,13 @@ const MATRIX_EMITTERS: Record<string, () => string[]> = {
     (buildMatrix() as { include: { next: string }[] }).include.map((e) => e.next),
 };
 
+/** What every registered matrix source prints, run once. */
+let emittedCache: Record<string, string[]> | undefined;
+const MATRIX_EMITTED = (): Record<string, string[]> =>
+  (emittedCache ??= Object.fromEntries(
+    Object.entries(MATRIX_EMITTERS).map(([script, emit]) => [script, emit()]),
+  ));
+
 type ScanTarget = { file: string; text: string; opts: ScanOpts };
 
 const SCRIPT_TOKEN = /[\w@+./-]+\.(?:mjs|cjs|js|ts|sh|bash)\b/g;
@@ -942,42 +1290,156 @@ function referencedScripts(yamls: { text: string }[], tracked: Set<string>): str
   return [...found].sort();
 }
 
-/** What every `uses: ./.github/actions/<dir>` step passes through `with:`, by input name. */
+/** The text of a YAML scalar line minus a trailing ` # comment` (quotes are not parsed: values here are versions). */
+const stripYamlComment = (v: string): string => v.replace(/\s+#.*$/, '').trim();
+
+/** Does `value` start with an alias, anchor or tag? None of them can be followed to a literal here. */
+const OPAQUE_YAML_VALUE = /^[*&!]/;
+
+/**
+ * What every `uses: ./.github/actions/<dir>` step passes through `with:`, by input
+ * name, with the CALLER's own tables so a value such as `${{ env.FW }}` or
+ * `${{ matrix.next }}` is resolved where it was written, not in the callee.
+ *
+ * Every shape of `with:` is either parsed or recorded under UNPARSED_WITH, which
+ * makes every input of the action unresolvable: a caller this cannot read is a
+ * caller it cannot judge, never a caller that passed nothing. Parsed: a block
+ * mapping (plain, `"quoted"` or `'quoted'` keys), an inline flow mapping
+ * `{ k: v, ... }`, `with:` written before `uses:`, and a flow-style step
+ * `- { uses: ..., with: { ... } }`. Everything else (an alias, a merge key, an
+ * explicit `? key`, a block-scalar or next-line value, an expression for the
+ * whole map, a flow mapping that spans lines) is unparsed.
+ */
 function actionCallerInputs(
   dir: string,
-  yamls: { file: string; text: string }[],
+  yamls: YamlFile[],
+  optsOf: (file: string) => ScanOpts,
 ): NonNullable<ScanOpts['inputWith']> {
   const out: NonNullable<ScanOpts['inputWith']> = {};
-  const uses = new RegExp(`\\buses:\\s*["']?\\./${dir.replaceAll('.', '\\.')}/?["']?\\s*(?:#.*)?$`);
+  const path = `./${dir}`;
+  const esc = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const strict = new RegExp(`\\buses:\\s*["']?${esc}/?["']?\\s*(?:#.*)?$`);
+  // The action's path as a whole word, in any position of a line that says `uses`.
+  const mentions = new RegExp(`${esc}/?(?=["'\\s,}#]|$)`);
   for (const { file, text } of yamls) {
     const lines = text.split('\n');
+    const base = buildTables(file, text, false);
+    const caller = (no: number): Ctx => ({ tables: tablesAt(base, no), opts: optsOf(file) });
+    const give = (key: string, value: string, no: number, shown: string) => {
+      for (const v of scalarItems(value)) {
+        out[key] = [
+          ...(out[key] ?? []),
+          { value: v, file, line: no, text: shown.trim(), ctx: caller(no) },
+        ];
+      }
+    };
+    const unparsed = (no: number, shown: string) => {
+      out[UNPARSED_WITH] = [
+        ...(out[UNPARSED_WITH] ?? []),
+        { value: '', file, line: no, text: shown.trim() },
+      ];
+    };
+    const giveEntries = (value: string, no: number, shown: string) => {
+      const entries = flowEntries(value);
+      if (!entries || entries.some((e) => OPAQUE_YAML_VALUE.test(e.value))) {
+        unparsed(no, shown);
+        return;
+      }
+      for (const e of entries) give(e.key, e.value, no, shown);
+    };
     lines.forEach((raw, i) => {
-      if (!uses.test(raw)) return;
+      if (/^\s*#/.test(raw) || !/\buses\b/.test(raw) || !mentions.test(raw)) return;
+      if (!strict.test(raw)) {
+        // Not the plain `uses: ./dir` spelling: a flow-style step is parsed, anything else fails closed.
+        const flow = /^\s*(?:-\s+)?(\{.*\})\s*(?:#.*)?$/.exec(raw);
+        const entries = flow ? flowEntries(flow[1]) : undefined;
+        const mine = entries?.find(
+          (e) => e.key === 'uses' && unquote(e.value).replace(/\/$/, '') === path,
+        );
+        if (!entries || !mine) {
+          unparsed(i + 1, raw);
+          return;
+        }
+        const w = entries.find((e) => e.key === 'with');
+        if (w) giveEntries(w.value, i + 1, raw);
+        return;
+      }
       const col = raw.indexOf('uses:');
-      let withCol = -1;
-      let child: number | undefined;
-      for (let j = i + 1; j < lines.length; j++) {
-        const l = lines[j];
-        if (l.trim() === '' || /^\s*#/.test(l)) continue;
-        const ind = l.length - l.trimStart().length;
-        if (withCol < 0) {
-          if (ind < col) break;
-          if (ind === col && /^with:\s*$/.test(l.trimStart())) withCol = ind;
-          continue;
+      const indentOf = (l: string) => l.length - l.trimStart().length;
+      const blank = (l: string) => l.trim() === '' || /^\s*#/.test(l);
+      // The step: from its `- ` line (which may be this one) to the next line at a shallower indent.
+      let start = i;
+      if (!/^\s*-\s+uses:/.test(raw)) {
+        for (let j = i - 1; j >= 0; j--) {
+          if (blank(lines[j])) continue;
+          if (indentOf(lines[j]) < col) {
+            start = j;
+            break;
+          }
         }
-        if (ind <= withCol) break;
-        child ??= ind;
-        const kv = ind === child ? /^([\w-]+)\s*:\s*(.*?)\s*$/.exec(l.trimStart()) : null;
-        if (!kv) continue;
-        for (const value of scalarItems(kv[2])) {
-          out[kv[1]] = [...(out[kv[1]] ?? []), { value, file, line: j + 1, text: l.trim() }];
+      }
+      let end = i + 1;
+      while (end < lines.length && (blank(lines[end]) || indentOf(lines[end]) >= col)) end++;
+      for (let k = start; k < end; k++) {
+        // On the `- ` line the first key sits after the dash.
+        const dash = /^(\s*-\s+)(.*)$/.exec(lines[k]);
+        const keyCol = dash && k === start ? dash[1].length : indentOf(lines[k]);
+        const body = dash && k === start ? dash[2] : lines[k].trimStart();
+        const w = /^["']?with["']?\s*:\s*(.*?)\s*$/.exec(body);
+        if (keyCol !== col || !w) continue;
+        const inline = stripYamlComment(w[1]);
+        if (inline.startsWith('{')) {
+          giveEntries(inline, k + 1, lines[k]);
+        } else if (inline !== '') {
+          unparsed(k + 1, lines[k]);
+        } else {
+          let child: number | undefined;
+          for (let j = k + 1; j < end; j++) {
+            if (blank(lines[j])) continue;
+            const ind = indentOf(lines[j]);
+            if (ind <= col) break;
+            child ??= ind;
+            const kv =
+              ind === child
+                ? /^(?:"([^"]+)"|'([^']+)'|([\w-]+))\s*:\s*(.*?)\s*$/.exec(lines[j].trimStart())
+                : null;
+            const v = kv ? stripYamlComment(kv[4]) : '';
+            // `key:` with nothing after it, a block scalar, an alias or a deeper line is a value
+            // this cannot read as one scalar.
+            if (!kv || v === '' || /^[|>][+-]?\d*$/.test(v) || OPAQUE_YAML_VALUE.test(v)) {
+              unparsed(j + 1, lines[j]);
+              continue;
+            }
+            give(kv[1] ?? kv[2] ?? kv[3], v, j + 1, lines[j]);
+          }
         }
+        break;
       }
     });
   }
   return out;
 }
 
+type YamlFile = { file: string; text: string };
+
+/**
+ * The scan targets of a set of workflow / composite-action files: each one's own
+ * tables plus, for an action, what its callers pass through `with:`.
+ */
+function yamlTargets(yamls: YamlFile[], emitters = MATRIX_EMITTED()): ScanTarget[] {
+  const targets: ScanTarget[] = yamls.map(({ file, text }) => ({
+    file,
+    text,
+    opts: /\bfromJSON\s*\(/i.test(text) ? { matrixEmitters: emitters } : {},
+  }));
+  const optsOf = (file: string): ScanOpts => targets.find((t) => t.file === file)?.opts ?? {};
+  for (const t of targets) {
+    if (/^\.github\/actions\/.+\/action\.ya?ml$/.test(t.file)) {
+      t.opts.inputWith = actionCallerInputs(t.file.replace(/\/action\.ya?ml$/, ''), yamls, optsOf);
+    }
+  }
+  return targets;
+}
 /**
  * Everything the indirection scan covers, DISCOVERED (never enumerated): every
  * workflow, every composite action under `.github/actions/**` (with the `with:`
@@ -990,18 +1452,7 @@ function scanTargets(): ScanTarget[] {
   const workflows = tracked.filter((f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f));
   const actions = tracked.filter((f) => /^\.github\/actions\/.+\/action\.ya?ml$/.test(f));
   const yamls = [...workflows, ...actions].map((file) => ({ file, text: read(file) }));
-  const targets: ScanTarget[] = yamls.map(({ file, text }) => {
-    const opts: ScanOpts = {};
-    if (/\bfromJSON\(/.test(text)) {
-      opts.matrixVersions = Object.entries(MATRIX_EMITTERS).flatMap(([script, emit]) =>
-        text.includes(script) ? emit() : [],
-      );
-    }
-    if (actions.includes(file)) {
-      opts.inputWith = actionCallerInputs(file.replace(/\/action\.ya?ml$/, ''), yamls);
-    }
-    return { file, text, opts };
-  });
+  const targets = yamlTargets(yamls);
   for (const file of referencedScripts(yamls, trackedSet)) {
     targets.push({ file, text: read(file), opts: {} });
   }
@@ -1588,6 +2039,438 @@ describe('#2630 — a next version reached through indirection is judged, not sk
     });
     it('fails a script that builds its next spec from something it cannot resolve', () => {
       expect(flagged('scripts/x.mjs', 'run(`bun add next@@{opts.version}`);').join('\n')).toContain(
+        'unresolvable',
+      );
+    });
+  });
+});
+/**
+ * #2630 round 2: shapes of indirection that went through the first resolver
+ * unjudged. Each case is its own `it` so a mutation that drops one detector reds
+ * exactly that case.
+ */
+describe('#2630 — indirection the first resolver let through', () => {
+  const flagged = (file: string, text: string, opts: ScanOpts = {}) =>
+    workflowFlags(file, fx(text), [], opts);
+  /** Run the whole-tree path (composite action callers included) over in-memory files. */
+  const scanFiles = (files: Record<string, string>): string[] =>
+    yamlTargets(Object.entries(files).map(([file, text]) => ({ file, text: fx(text) }))).flatMap(
+      (t) => workflowFlags(t.file, t.text, [], t.opts),
+    );
+  const step = (run: string) => `jobs:\n  b:\n    steps:\n      - run: ${run}`;
+
+  describe('1. a command substitution inside a version-position span', () => {
+    for (const [name, use] of [
+      ['$(...) straight after next@', 'npm install next@$(cat .nextver)'],
+      ['$(...) in a quoted spec', 'npm install "next@$(cat .nextver)"'],
+      ['$(...) after a v prefix', 'npm install "next@v$(cat .nextver)"'],
+      ['$(...) after a range operator', 'npm install "next@^$(cat .nextver)"'],
+      ['$(...) inside the version', 'npm install next@16.$(cat .minor).0'],
+      ['$(...) in an npm pkg set', 'npm pkg set "dependencies.next=$(cat .nextver)"'],
+      ['backticks straight after next@', 'npm install next@`cat .nextver`'],
+      ['backticks inside the version', 'npm install next@16.`cat .minor`.0'],
+      ['a nested $(...)', 'npm install next@$(echo $(cat .nextver))'],
+    ] as const) {
+      it(`fails ${name}`, () => {
+        const out = flagged('x.yml', step(use));
+        expect(out.length, use).toBeGreaterThan(0);
+        expect(out.join('\n'), use).toContain('unresolvable');
+      });
+    }
+
+    it('fails a command substitution assigned to a next-named env key or shell variable', () => {
+      expect(flagged('x.yml', 'env:\n  NEXT_VERSION: $(cat .nextver)').join('\n')).toContain(
+        'unresolvable',
+      );
+      expect(flagged('scripts/x.sh', 'NEXT_VER=$(cat .nextver)').join('\n')).toContain(
+        'unresolvable',
+      );
+      expect(flagged('scripts/x.sh', 'bun add next@`cat f`').join('\n')).toContain('unresolvable');
+    });
+
+    it('fails a command substitution in a value that a version position reads', () => {
+      const text =
+        'env:\n  FW: 16.$(cat .minor).0\njobs:\n  b:\n    steps:\n      - run: bun add next@$FW';
+      expect(flagged('x.yml', text).join('\n')).toContain('unresolvable');
+    });
+
+    it('does not take a command substitution outside a version position for a pin', () => {
+      for (const use of [
+        'echo "next is $(cat .nextver)"',
+        'echo "run `bun add next@16.4.3` first"',
+        'echo "kn-next@$(cat v) built"',
+        'docker run kn-next-operator:v$(cat v)',
+      ]) {
+        expect(flagged('x.yml', step(use)), use).toEqual([]);
+      }
+    });
+
+    it('does not treat a JS template literal as a command substitution', () => {
+      expect(flagged('scripts/x.mjs', "const v = '16.4.3';\nrun(`bun add next@@{v}`);")).toEqual(
+        [],
+      );
+    });
+  });
+
+  describe('2. an input with no default', () => {
+    const wf = (decl: string) =>
+      [
+        'on:',
+        '  workflow_dispatch:',
+        '    inputs:',
+        '      fw:',
+        ...decl.split('\n').map((l) => `        ${l}`),
+        'jobs:',
+        '  b:',
+        '    steps:',
+        '      - run: bun add "next@@{{ inputs.fw }}"',
+      ].join('\n');
+    for (const [name, decl] of [
+      ['description only', 'description: the framework'],
+      ['required and typed', 'required: true\ntype: string'],
+      ['a choice', 'type: choice\noptions:\n  - 16.3.8\n  - 16.4.3'],
+    ] as const) {
+      it(`fails an input with ${name} and no default`, () => {
+        const out = flagged('x.yml', wf(decl));
+        expect(out.length).toBeGreaterThan(0);
+        expect(out.join('\n')).toContain('unresolvable');
+        expect(out.join('\n')).toContain('inputs.fw');
+      });
+    }
+    it('still resolves an input that has a default', () => {
+      expect(flagged('x.yml', wf("description: d\ndefault: '16.4.3'"))).toEqual([]);
+      expect(flagged('x.yml', wf("description: d\ndefault: '16.3.8'")).length).toBeGreaterThan(0);
+    });
+    it('still fails an input that is never declared', () => {
+      expect(flagged('x.yml', step('bun add "next@@{{ inputs.fw }}"')).join('\n')).toContain(
+        'unresolvable',
+      );
+    });
+  });
+
+  describe('3. a matrix belongs to its job', () => {
+    const two = (aMatrix: string, bMatrix: string) =>
+      [
+        'jobs:',
+        '  a:',
+        '    strategy:',
+        `      matrix: ${aMatrix}`,
+        '    steps:',
+        '      - run: bun add "next@@{{ matrix.fw }}"',
+        '  b:',
+        '    needs: g',
+        '    strategy:',
+        `      matrix: ${bMatrix}`,
+        '    steps:',
+        '      - run: bun add "next@@{{ matrix.fw }}"',
+      ].join('\n');
+    const dyn = '@{{ fromJSON(needs.g.outputs.m) }}';
+
+    it("a static matrix in job A does not satisfy job B's unregistered fromJSON matrix", () => {
+      const out = flagged('x.yml', two('\n        fw: [16.4.1]', dyn));
+      expect(out.length).toBeGreaterThan(0);
+      expect(out.join('\n')).toContain('unresolvable');
+      expect(out.join('\n')).toContain('matrix.fw');
+    });
+
+    it("job A's vulnerable values are not read by job B, and vice versa", () => {
+      const out = flagged('x.yml', two('\n        fw: [16.3.8]', '\n        fw: [16.4.3]'));
+      expect(out.length).toBeGreaterThan(0);
+      for (const line of out) expect(line, line).toContain('16.3.8');
+      // only job A's read (line 7) is flagged; job B's read (line 14) sees only B's matrix
+      expect(out.join('\n')).toContain('read at x.yml:7');
+      expect(out.join('\n')).not.toContain('x.yml:14');
+      expect(flagged('x.yml', two('\n        fw: [16.4.3]', '\n        fw: [16.4.3]'))).toEqual([]);
+    });
+
+    it("job B's own vulnerable values are judged at the read in job B", () => {
+      const out = flagged('x.yml', two('\n        fw: [16.4.3]', '\n        fw: [16.3.8]'));
+      expect(out.length).toBeGreaterThan(0);
+    });
+
+    it('a job without any matrix cannot read matrix.X', () => {
+      const text = [
+        'jobs:',
+        '  a:',
+        '    strategy:',
+        '      matrix:',
+        '        fw: [16.4.3]',
+        '    steps:',
+        '      - run: echo hi',
+        '  b:',
+        '    steps:',
+        '      - run: bun add "next@@{{ matrix.fw }}"',
+      ].join('\n');
+      expect(flagged('x.yml', text).join('\n')).toContain('unresolvable');
+    });
+
+    it('a matrix key set in env does not stand in for a matrix key', () => {
+      const text = [
+        'env:',
+        '  ver: 16.4.3',
+        'jobs:',
+        '  b:',
+        '    steps:',
+        '      - run: bun add "next@@{{ matrix.ver }}"',
+      ].join('\n');
+      expect(flagged('x.yml', text).join('\n')).toContain('unresolvable');
+    });
+
+    it('resolves a dynamic matrix only against the emitter its own needs job runs', () => {
+      const text = (needs: string) =>
+        [
+          'jobs:',
+          '  plan:',
+          '    steps:',
+          '      - run: bun scripts/emit.mjs',
+          '  other:',
+          '    steps:',
+          '      - run: echo hi',
+          '  m:',
+          `    needs: ${needs}`,
+          '    strategy:',
+          `      matrix: @{{ fromJSON(needs.${needs}.outputs.m) }}`,
+          '    steps:',
+          '      - run: bun add "next@@{{ matrix.next }}"',
+        ].join('\n');
+      const opts = { matrixEmitters: { 'scripts/emit.mjs': ['16.3.8'] } };
+      expect(flagged('x.yml', text('plan'), opts).join('\n')).toContain('16.3.8');
+      expect(
+        flagged('x.yml', text('plan'), { matrixEmitters: { 'scripts/emit.mjs': ['16.4.3'] } }),
+      ).toEqual([]);
+      expect(flagged('x.yml', text('other'), opts).join('\n')).toContain('unresolvable');
+    });
+  });
+
+  describe('4. composite-action with: values resolve against the CALLER', () => {
+    const ACTION = '.github/actions/a/action.yml';
+    const action = [
+      'name: a',
+      'inputs:',
+      '  fw:',
+      '    default: 16.4.3',
+      'env:',
+      '  FW: 16.4.3',
+      'runs:',
+      '  using: composite',
+      '  steps:',
+      '    - shell: bash',
+      '      run: bun add "next@@{{ inputs.fw }}"',
+    ].join('\n');
+    const caller = (head: string, withLine: string) =>
+      [
+        head,
+        'jobs:',
+        '  c:',
+        '    strategy:',
+        '      matrix:',
+        '        mv: [16.3.8]',
+        '    steps:',
+        '      - uses: ./.github/actions/a',
+        '        with:',
+        `          fw: ${withLine}`,
+      ].join('\n');
+
+    it("resolves @{{ env.X }} against the caller's env, not the callee's", () => {
+      const out = scanFiles({
+        [ACTION]: action,
+        '.github/workflows/c.yml': caller('env:\n  FW: 16.3.8', '@{{ env.FW }}'),
+      });
+      expect(out.length).toBeGreaterThan(0);
+      expect(out.join('\n')).toContain('16.3.8');
+    });
+
+    it("an env value only the callee has does not satisfy the caller's reference", () => {
+      const out = scanFiles({
+        [ACTION]: action,
+        '.github/workflows/c.yml': caller('on: push', '@{{ env.FW }}'),
+      });
+      expect(out.join('\n')).toContain('unresolvable');
+    });
+
+    it("resolves @{{ matrix.X }} against the calling job's matrix", () => {
+      const out = scanFiles({
+        [ACTION]: action,
+        '.github/workflows/c.yml': caller('on: push', '@{{ matrix.mv }}'),
+      });
+      expect(out.join('\n')).toContain('16.3.8');
+    });
+
+    it("resolves @{{ inputs.X }} against the caller's input defaults", () => {
+      const head = 'on:\n  workflow_dispatch:\n    inputs:\n      pin:\n        default: 16.3.8';
+      const out = scanFiles({
+        [ACTION]: action,
+        '.github/workflows/c.yml': caller(head, '@{{ inputs.pin }}'),
+      });
+      expect(out.join('\n')).toContain('16.3.8');
+    });
+
+    it('fails a with: value it cannot resolve', () => {
+      for (const ref of ['@{{ secrets.NEXT_V }}', '@{{ steps.p.outputs.v }}', '@{{ vars.V }}']) {
+        const out = scanFiles({
+          [ACTION]: action,
+          '.github/workflows/c.yml': caller('on: push', ref),
+        });
+        expect(out.join('\n'), ref).toContain('unresolvable');
+      }
+    });
+
+    it('passes when the caller hands over a clear literal or a clear reference', () => {
+      expect(
+        scanFiles({ [ACTION]: action, '.github/workflows/c.yml': caller('on: push', '16.4.3') }),
+      ).toEqual([]);
+      expect(
+        scanFiles({
+          [ACTION]: action,
+          '.github/workflows/c.yml': caller('env:\n  FW: 16.4.3', '@{{ env.FW }}'),
+        }),
+      ).toEqual([]);
+    });
+  });
+
+  describe('5. every with: shape is parsed or fails closed', () => {
+    const ACTION = '.github/actions/a/action.yml';
+    const action = [
+      'name: a',
+      'inputs:',
+      '  fw:',
+      '    default: 16.4.3',
+      'runs:',
+      '  using: composite',
+      '  steps:',
+      '    - shell: bash',
+      '      run: bun add "next@@{{ inputs.fw }}"',
+    ].join('\n');
+    const wf = (stepBody: string) =>
+      `jobs:\n  c:\n    steps:\n${stepBody
+        .split('\n')
+        .map((l) => `      ${l}`)
+        .join('\n')}`;
+    const scan = (stepBody: string) =>
+      scanFiles({ [ACTION]: action, '.github/workflows/c.yml': wf(stepBody) });
+
+    for (const [name, body] of [
+      ['a plain key', '- uses: ./.github/actions/a\n  with:\n    fw: 16.3.8'],
+      ['a double-quoted key', '- uses: ./.github/actions/a\n  with:\n    "fw": 16.3.8'],
+      ['a single-quoted key', "- uses: ./.github/actions/a\n  with:\n    'fw': 16.3.8"],
+      ['a quoted value', "- uses: ./.github/actions/a\n  with:\n    fw: '16.3.8'"],
+      ['an inline flow mapping', '- uses: ./.github/actions/a\n  with: { fw: 16.3.8 }'],
+      [
+        'an inline flow mapping, quoted key',
+        '- uses: ./.github/actions/a\n  with: { "fw": "16.3.8" }',
+      ],
+      [
+        'an inline flow mapping among other keys',
+        '- uses: ./.github/actions/a\n  with: { other: "a, b", fw: 16.3.8, last: x }',
+      ],
+      ['with: before uses:', '- with:\n    fw: 16.3.8\n  uses: ./.github/actions/a'],
+      ['with: before uses: (flow)', '- with: { fw: 16.3.8 }\n  uses: ./.github/actions/a'],
+      ['a name: before uses:', '- name: s\n  uses: ./.github/actions/a\n  with:\n    fw: 16.3.8'],
+      ['a flow-style step', '- { uses: ./.github/actions/a, with: { fw: 16.3.8 } }'],
+      ['a quoted uses', '- uses: "./.github/actions/a"\n  with:\n    fw: 16.3.8'],
+    ] as const) {
+      it(`reads the value passed through ${name}`, () => {
+        const out = scan(body);
+        expect(out.length, body).toBeGreaterThan(0);
+        expect(out.join('\n'), body).toContain('16.3.8');
+      });
+    }
+
+    for (const [name, body] of [
+      ['an anchor / alias', '- uses: ./.github/actions/a\n  with: *shared'],
+      ['a merge key', '- uses: ./.github/actions/a\n  with:\n    <<: *shared'],
+      ['a block-scalar value', '- uses: ./.github/actions/a\n  with:\n    fw: |\n      16.3.8'],
+      ['a value on the next line', '- uses: ./.github/actions/a\n  with:\n    fw:\n      16.3.8'],
+      ['a multi-line flow mapping', '- uses: ./.github/actions/a\n  with: { fw:\n    16.3.8 }'],
+      [
+        'an expression for the whole map',
+        '- uses: ./.github/actions/a\n  with: @{{ fromJSON(env.W) }}',
+      ],
+      ['a flow entry without a key', '- uses: ./.github/actions/a\n  with: { 16.3.8 }'],
+      ['an explicit key', '- uses: ./.github/actions/a\n  with:\n    ? fw\n    : 16.3.8'],
+      ['an unparseable flow-style step', '- { uses: ./.github/actions/a, with: *w }'],
+    ] as const) {
+      it(`fails closed on ${name}`, () => {
+        const out = scan(body);
+        expect(out.length, body).toBeGreaterThan(0);
+        expect(out.join('\n'), body).toContain('unresolvable');
+      });
+    }
+
+    it('passes a well-formed with: that hands over a clear value', () => {
+      for (const body of [
+        '- uses: ./.github/actions/a\n  with:\n    fw: 16.4.3',
+        '- uses: ./.github/actions/a\n  with: { "fw": 16.4.3 }',
+        '- uses: ./.github/actions/a',
+        '- uses: ./.github/actions/a\n  with:\n    other: x',
+      ]) {
+        expect(scan(body), body).toEqual([]);
+      }
+    });
+
+    it('does not take a path that merely mentions the action for a caller', () => {
+      const w =
+        "on:\n  push:\n    paths:\n      - '.github/actions/a/**'\njobs:\n  c:\n    steps:\n      - run: echo hi";
+      expect(scanFiles({ [ACTION]: action, '.github/workflows/c.yml': w })).toEqual([]);
+    });
+  });
+
+  describe('6. JS string concatenation in scripts', () => {
+    for (const [name, text] of [
+      ['a const joined with +', "const v = '15.0.0';\nrun('npm i next@' + v);"],
+      ['double quotes', 'const v = "15.0.0";\nrun("npm i next@" + v);'],
+      ['a ^ range', "const v = '15.0.0';\nrun('npm i next@^' + v);"],
+      ['an npm pkg set', "const v = '15.0.0';\nrun('npm pkg set dependencies.next=' + v);"],
+      ['a literal on the right', "run('npm i next@' + '15.0.0');"],
+      ['a chain', "const a = '15';\nconst b = '0.0';\nrun('npm i next@' + a + '.' + b);"],
+      ['a template literal operand', "const a = '15';\nrun('npm i next@' + `@{a}.0.0`);"],
+      ['a template-literal head', "const v = '15.0.0';\nrun(`npm i next@` + v);"],
+    ] as const) {
+      it(`flags ${name}`, () => {
+        const out = flagged('scripts/x.mjs', text);
+        expect(out.length, text).toBeGreaterThan(0);
+        expect(out.join('\n'), text).toContain('15.0.0');
+      });
+    }
+
+    it('passes a concatenation of a clear version', () => {
+      expect(flagged('scripts/x.mjs', "const v = '16.4.3';\nrun('npm i next@' + v);")).toEqual([]);
+    });
+
+    it('fails a concatenated operand it cannot resolve', () => {
+      for (const operand of ['opts.version', 'getVersion()', 'argv[2]', 'unknownVar']) {
+        const out = flagged('scripts/x.mjs', `run('npm i next@' + ${operand});`);
+        expect(out.join('\n'), operand).toContain('unresolvable');
+      }
+    });
+
+    it('does not take a concatenation outside a version position for a pin', () => {
+      for (const t of [
+        "const v = '15.0.0';\nconsole.log('Next >= ' + v);",
+        "const v = '15.0.0';\nlog('next version: ' + v);",
+        "const v = '15.0.0';\nrun('npm i react@' + v + ' next');",
+      ]) {
+        expect(flagged('scripts/x.mjs', t), t).toEqual([]);
+      }
+    });
+
+    it('attributes the pin to the line that wrote the version', () => {
+      const out = flagged('scripts/x.mjs', "const v = '15.0.0';\nrun('npm i next@' + v);");
+      expect(out.join('\n')).toContain("const v = '15.0.0';");
+    });
+  });
+
+  describe('7. a spec assembled from parts', () => {
+    it('joins the pieces of next@"$MAJOR.$MINOR"', () => {
+      const text = (minor: string) =>
+        step(
+          `|\n          MAJOR=16\n          MINOR=${minor}\n          bun add next@"$MAJOR.$MINOR"`,
+        );
+      expect(flagged('x.yml', text('3.8')).join('\n')).toContain('16.3.8');
+      expect(flagged('x.yml', text('4.3'))).toEqual([]);
+    });
+    it('fails a piece nothing assigns', () => {
+      expect(flagged('x.yml', step('bun add next@"16.$MINOR"')).join('\n')).toContain(
         'unresolvable',
       );
     });

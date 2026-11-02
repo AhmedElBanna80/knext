@@ -110,8 +110,10 @@ const MUTATIONS = [
     id: 'S2',
     subject: 'app',
     claim: 'the app image Trivy gate narrows to LOW severity',
-    anchor: '          input: image-oci\n          severity: HIGH,CRITICAL',
-    replacement: '          input: image-oci\n          severity: LOW',
+    anchor:
+      "repo's OIDC identity. v0.36.0.\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n          input: image-oci\n          severity: HIGH,CRITICAL",
+    replacement:
+      "repo's OIDC identity. v0.36.0.\n        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0\n        with:\n          input: image-oci\n          severity: LOW",
   },
   {
     id: 'S3',

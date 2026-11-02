@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PUBLISH_LANES } from '../scripts/publish-lane-guard.mjs';
-import { evaluatePublishEnvironments } from '../scripts/verify-publish-environments.mjs';
+import {
+  evaluatePublishEnvironments,
+  manualChecks,
+} from '../scripts/verify-publish-environments.mjs';
 
 // #2035 (c)+(d): the environment settings are founder/admin actions, so the
 // code side is a read-only verifier that reds until they are configured.
@@ -10,7 +15,9 @@ const LANES = [...PUBLISH_LANES.keys()].map((r) => r.replace('refs/heads/', ''))
 const pol = (names: string[]) => names.map((name) => ({ name, type: 'branch' }));
 const env = (name: string, reviewers: boolean, custom = true) => ({
   name,
-  protection_rules: reviewers ? [{ type: 'required_reviewers' }] : [],
+  protection_rules: reviewers
+    ? [{ type: 'required_reviewers', reviewers: [{ type: 'User', reviewer: { login: 'a' } }] }]
+    : [],
   deployment_branch_policy: custom
     ? { custom_branch_policies: true, protected_branches: false }
     : null,
@@ -63,14 +70,84 @@ describe('evaluatePublishEnvironments', () => {
   });
 });
 
+describe('reviewer + secret checks', () => {
+  it('reds when the required reviewer is a team', () => {
+    const s = good();
+    s.environments[1].protection_rules = [
+      { type: 'required_reviewers', reviewers: [{ type: 'Team' }] },
+    ] as never;
+    expect(evaluatePublishEnvironments(s).join('\n')).toContain('not a user');
+  });
+  it('reds when a team sits beside the user', () => {
+    const s = good();
+    s.environments[1].protection_rules = [
+      { type: 'required_reviewers', reviewers: [{ type: 'User' }, { type: 'Team' }] },
+    ] as never;
+    expect(evaluatePublishEnvironments(s).join('\n')).toContain('team');
+  });
+  it('reds when a readable secret list lacks NPM_TOKEN', () => {
+    const s = { ...good(), secrets: { 'npm-publish': ['NPM_TOKEN'], 'npm-publish-latest': [] } };
+    expect(evaluatePublishEnvironments(s).join('\n')).toContain('NPM_TOKEN');
+  });
+  it('green with secrets present; unreadable secrets become manual checks, not OK', () => {
+    const s = {
+      ...good(),
+      secrets: { 'npm-publish': ['NPM_TOKEN'], 'npm-publish-latest': ['NPM_TOKEN'] },
+    };
+    expect(evaluatePublishEnvironments(s)).toEqual([]);
+    expect(manualChecks(s)).toEqual([]);
+    expect(manualChecks(good()).length).toBe(2);
+  });
+});
+
+const SCRIPT = join(process.cwd(), 'scripts/verify-publish-environments.mjs');
+function runCli(msg: string) {
+  const dir = mkdtempSync(join(tmpdir(), 'fakegh-'));
+  const envs = JSON.stringify({
+    environments: [{ name: 'npm-publish', protection_rules: [], deployment_branch_policy: null }],
+  });
+  writeFileSync(
+    join(dir, 'gh'),
+    `#!/bin/sh
+case "$2" in
+  *deployment-branch-policies) echo "gh: $FAKE_MSG" >&2; exit 1;;
+  *secrets) echo "gh: HTTP 403 Forbidden" >&2; exit 1;;
+  *) echo '${envs}';;
+esac
+`,
+  );
+  chmodSync(join(dir, 'gh'), 0o755);
+  return spawnSync('node', [SCRIPT], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_MSG: msg },
+  });
+}
+
+describe('CLI against a fake gh (fail-closed on API errors)', () => {
+  for (const msg of ['HTTP 401: Bad credentials', 'HTTP 403: Forbidden']) {
+    it(`exits 1 with a could-not-verify message on ${msg}`, () => {
+      const r = runCli(msg);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('could not verify (fail-closed)');
+    });
+  }
+  it('treats 404 on branch policies as a finding, not an API failure', () => {
+    const r = runCli('Not Found (HTTP 404)');
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('no custom branch policy');
+    expect(r.stderr).not.toContain('could not verify');
+  });
+});
+
 describe('CLI', () => {
   it('exits non-zero on a garbage state file (fails closed)', () => {
-    const r = spawnSync('node', [
-      'scripts/verify-publish-environments.mjs',
-      '--state',
-      'package.json',
-    ]);
-    expect(r.status).not.toBe(0);
+    const r = spawnSync(
+      'node',
+      ['scripts/verify-publish-environments.mjs', '--state', 'package.json'],
+      { encoding: 'utf8' },
+    );
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('FAIL state has no environments array');
   });
   it('is read-only: no mutating gh api verbs', () => {
     const src = readFileSync('scripts/verify-publish-environments.mjs', 'utf8');

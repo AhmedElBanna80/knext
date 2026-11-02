@@ -21,7 +21,20 @@ const MUTATIONS = [
   ],
   ['missing lane not flagged', 'if (!names.includes(want))', 'if (false)'],
   ['extra branch not flagged', 'if (!EXPECTED.includes(got) &&', 'if (false &&'],
-  ['non-branch type not flagged', "p.type && p.type !== 'branch'", 'false'],
+  ['non-branch type not flagged', "if (p.type !== 'branch')", 'if (false)'],
+  [
+    'absent policy type fails open',
+    "if (p.type !== 'branch')",
+    "if (p.type && p.type !== 'branch')",
+  ],
+  [
+    'API error swallowed instead of rethrown (policies)',
+    'if (!/Not Found|404/.test(String(err.stderr ?? err.message))) throw err;',
+    'void 0;',
+  ],
+  ['team reviewer not flagged', "rs.some((x) => x.type === 'Team')", 'false'],
+  ['non-user reviewer not flagged', "!rs.some((x) => x.type === 'User')", 'false'],
+  ['missing NPM_TOKEN not flagged', "!sec.includes('NPM_TOKEN')", 'false'],
   ['absent env not flagged', 'if (!e) {', 'if (false) {'],
 ];
 

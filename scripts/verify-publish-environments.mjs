@@ -28,6 +28,13 @@ import { PUBLISH_LANES } from './publish-lane-guard.mjs';
 const ENVS = ['npm-publish', 'npm-publish-latest'];
 const EXPECTED = [...PUBLISH_LANES.keys()].map((r) => r.replace(/^refs\/heads\//, ''));
 
+/** Items the API could not show; the founder must verify these by hand. */
+export function manualChecks(state) {
+  return ENVS.filter((n) => !Array.isArray(state?.secrets?.[n])).map(
+    (n) => `${n}: NPM_TOKEN environment secret presence not readable via API; check by hand`,
+  );
+}
+
 /** @returns {string[]} problems; empty = configured correctly. */
 export function evaluatePublishEnvironments(state) {
   const problems = [];
@@ -42,11 +49,21 @@ export function evaluatePublishEnvironments(state) {
     if (e.deployment_branch_policy?.custom_branch_policies !== true) {
       problems.push(`${name}: no custom branch policy (any ref may deploy)`);
     }
-    if (
-      name === 'npm-publish-latest' &&
-      !(e.protection_rules ?? []).some((r) => r.type === 'required_reviewers')
-    ) {
-      problems.push(`${name}: no required reviewer`);
+    if (name === 'npm-publish-latest') {
+      const rule = (e.protection_rules ?? []).find((r) => r.type === 'required_reviewers');
+      if (!rule) {
+        problems.push(`${name}: no required reviewer`);
+      } else {
+        const rs = rule.reviewers ?? [];
+        if (!rs.some((x) => x.type === 'User'))
+          problems.push(`${name}: required reviewer is not a user`);
+        if (rs.some((x) => x.type === 'Team'))
+          problems.push(`${name}: a team is a required reviewer (must be a user)`);
+      }
+    }
+    const sec = state.secrets?.[name];
+    if (Array.isArray(sec) && !sec.includes('NPM_TOKEN')) {
+      problems.push(`${name}: environment secret NPM_TOKEN is missing`);
     }
     const entries = state.policies?.[name];
     if (!Array.isArray(entries)) {
@@ -55,7 +72,7 @@ export function evaluatePublishEnvironments(state) {
     }
     const names = [];
     for (const p of entries) {
-      if (p.type && p.type !== 'branch') problems.push(`${name}: non-branch policy ${p.name}`);
+      if (p.type !== 'branch') problems.push(`${name}: non-branch policy ${p.name}`);
       if (/[*?[\]]/.test(p.name)) problems.push(`${name}: glob policy ${p.name}`);
       names.push(p.name);
     }
@@ -72,12 +89,18 @@ export function evaluatePublishEnvironments(state) {
 }
 
 function gh(path) {
-  return JSON.parse(execFileSync('gh', ['api', path, '--paginate'], { encoding: 'utf8' }));
+  return JSON.parse(
+    execFileSync('gh', ['api', path, '--paginate'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }),
+  );
 }
 
 function loadLive(repo) {
   const envs = gh(`repos/${repo}/environments`).environments ?? [];
   const policies = {};
+  const secrets = {};
   for (const name of ENVS) {
     if (!envs.some((e) => e.name === name)) continue;
     try {
@@ -89,8 +112,16 @@ function loadLive(repo) {
       if (!/Not Found|404/.test(String(err.stderr ?? err.message))) throw err;
       policies[name] = [];
     }
+    try {
+      secrets[name] = (gh(`repos/${repo}/environments/${name}/secrets`).secrets ?? []).map(
+        (x) => x.name,
+      );
+    } catch (err) {
+      // Names only, never values. Unreadable (403/404) => reported as a manual check.
+      if (!/Not Found|404|403|Forbidden/.test(String(err.stderr ?? err.message))) throw err;
+    }
   }
-  return { environments: envs, policies };
+  return { environments: envs, policies, secrets };
 }
 
 function main(argv) {
@@ -103,7 +134,14 @@ function main(argv) {
         : loadLive(r >= 0 ? argv[r + 1] : 'getknext-dev/knext');
     const problems = evaluatePublishEnvironments(state);
     for (const p of problems) console.error(`FAIL ${p}`);
-    if (problems.length === 0) console.log('publish environments: OK');
+    if (problems.length === 0) {
+      const manual = manualChecks(state);
+      if (manual.length === 0) console.log('publish environments: OK');
+      else {
+        console.log('publish environments: API checks OK, NOT FULLY VERIFIED:');
+        for (const m of manual) console.log(`MANUAL ${m}`);
+      }
+    }
     return problems.length === 0 ? 0 : 1;
   } catch (err) {
     console.error(`FAIL could not verify (fail-closed): ${err.message}`);

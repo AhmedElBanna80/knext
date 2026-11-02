@@ -317,8 +317,8 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  * concatenation operand it cannot resolve, an alias / anchor / tag, a JS assignment
  * that is not one string literal) is a FAILURE, never a pass. So is a local
  * `uses: ./<path>` with no tracked `action.yml` to scan (the repo root, `..`, a
- * missing directory), and a caller that spells an action's path some other way
- * (`./a/../b`): the real-tree test requires none of the former.
+ * missing directory): the real-tree test requires none. A path spelled some other
+ * way (`./a/../b`) is normalised first, so the action it names is still scanned.
  *
  * STILL NOT SEEN, so nobody assumes more: indirection ACROSS files other than the
  * `with:` of a composite action (a reusable workflow's `with:` into another
@@ -334,8 +334,12 @@ describe('#2594 — no tracked manifest or lockfile pins a next with a known adv
  * (`format()`, `join()`, ...; their literal text is judged, they are not evaluated),
  * an env or shell variable reassigned between two jobs or steps of the same file
  * (the union of every assignment in the file is judged), and a dynamic matrix whose
- * producer job runs a registered script indirectly. Scripts a script calls are
- * reached only when a workflow also names them.
+ * producer job runs a registered script indirectly, a package name and its `@`
+ * split across `+` operands (`'npm i next' + '@15.0.0'`), JSON text or a bracket
+ * assignment inside a script (`'{"next":"15.0.0"}'`, `deps['next'] = '15.0.0'`), a
+ * JS block comment between a head and its `+`, and a Dockerfile behind a local
+ * `runs: using: docker` action (Dockerfiles are not scanned). Scripts a script calls
+ * are reached only when a workflow also names them.
  *
  * Tokens that belong to another package on the same line (`kn-next@0.4.3`,
  * `@next/env@16.0.0`) are not next's version and are stripped first. Comment

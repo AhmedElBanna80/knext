@@ -3,7 +3,8 @@
  * CLI for the operator-e2e-nightly `scale-suite-tolerance` job (#2648).
  * See scripts/lib/scale-suite-tolerance.mjs.
  *
- * Env: OUTCOME (steps.<id>.outcome of the tolerated suite step), EVENT_NAME,
+ * Env: OUTCOME (steps.<id>.outcome of the tolerated suite step), JOB_RESULT
+ * (needs.<scale job>.result; distinguishes "suite never ran" from a failure), EVENT_NAME,
  * TOLERANCE_EXPIRES (YYYY-MM-DD), OWNER, RUN_URL, GITHUB_REPOSITORY, GH_TOKEN.
  * TODAY (YYYY-MM-DD) overrides the clock for tests only.
  *
@@ -12,6 +13,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
 import { decideScaleSuiteAction, reconcileScaleSuiteIssue } from './lib/scale-suite-tolerance.mjs';
 
 function gh(args) {
@@ -25,10 +27,28 @@ function main() {
   const owner = process.env.OWNER ?? '';
   const today = process.env.TODAY ?? new Date().toISOString().slice(0, 10);
 
-  const { expired, issue } = decideScaleSuiteAction({ outcome, expires, today, event });
+  const jobResult = process.env.JOB_RESULT ?? '';
+  const { expired, issue, notRun } = decideScaleSuiteAction({
+    outcome,
+    expires,
+    today,
+    event,
+    jobResult,
+  });
   console.log(
     `scale suite outcome=${outcome || 'unknown'} event=${event} -> issue action: ${issue}`,
   );
+
+  if (notRun) {
+    const msg = `The scale-to-zero suite did not execute this run (scale job result: ${jobResult}); no suite verdict exists. No tracking issue was opened or closed. The failing upstream job is reported by the nightly red alert.`;
+    console.log(`::warning::${msg}`);
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `### Scale-suite tolerance\n\n**Suite did not execute** (scale job: ${jobResult}). No verdict; tracking issue untouched.\n`,
+      );
+    }
+  }
 
   if (issue !== 'none') {
     const repo = process.env.GITHUB_REPOSITORY;

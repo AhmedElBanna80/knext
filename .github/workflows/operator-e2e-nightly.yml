@@ -490,6 +490,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EVENT_NAME: ${{ github.event_name }}
           OUTCOME: ${{ needs.scale-to-zero-cache.outputs.suite_outcome }}
+          JOB_RESULT: ${{ needs.scale-to-zero-cache.result }}
           OWNER: AhmedElBanna80
           TOLERANCE_EXPIRES: '2026-12-15'
         run: node scripts/scale-suite-tolerance.mjs

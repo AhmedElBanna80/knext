@@ -105,7 +105,13 @@ describe('every tolerated step has its OUTCOME read, never its masked conclusion
     expect(String(rec.if)).toContain('always()');
     expect(String(rec.run)).toContain('GITHUB_STEP_SUMMARY');
     expect(String(rec.run)).toContain('GITHUB_OUTPUT');
-    expect(JSON.stringify(job.outputs ?? {})).toContain(`steps.${rec.id}.outputs.`);
+    // The output KEY must map to this step's `suite_outcome` output, and that step must
+    // write the key from the suite outcome it was handed (not merely share a prefix).
+    expect(job.outputs?.suite_outcome).toBe(`\${{ steps.${rec.id}.outputs.suite_outcome }}`);
+    expect(String(rec.run)).toMatch(
+      /suite_outcome=\$\{?SUITE_OUTCOME\}?"?\s*>>\s*"?\$GITHUB_OUTPUT/,
+    );
+    expect(rec.env.SUITE_OUTCOME).toBe(`\${{ steps.${suiteId}.outcome }}`);
   });
 });
 
@@ -120,6 +126,10 @@ describe('the tolerance job surfaces the outcome, with an owner and an expiry', 
     expect([job.needs].flat()).toContain(SCALE_JOB);
     expect(String(job.if)).toContain('always()');
     expect(env).toContain(`needs.${SCALE_JOB}.outputs.`);
+  });
+
+  it('is told whether the scale job even ran (its result), so "did not execute" is distinguishable', () => {
+    expect(env).toMatch(new RegExp(`JOB_RESULT[^,]*needs\\.${SCALE_JOB}\\.result`));
   });
 
   it('has least privilege: issues:write only, plus contents:read; workflow default unchanged', () => {
@@ -179,18 +189,47 @@ describe('the tolerance job surfaces the outcome, with an owner and an expiry', 
 });
 
 describe('decideScaleSuiteAction (behaviour)', () => {
-  const base = { expires: '2026-12-15', today: '2026-11-02', event: 'schedule' };
+  const base = {
+    expires: '2026-12-15',
+    today: '2026-11-02',
+    event: 'schedule',
+    jobResult: 'success',
+  };
 
   it('failure on a scheduled run opens/updates the issue', () => {
     expect(decideScaleSuiteAction({ ...base, outcome: 'failure' })).toEqual({
       expired: false,
       issue: 'alert',
+      notRun: false,
     });
   });
-  it('cancelled and an unknown/empty outcome fail closed to an alert', () => {
+  it('cancelled and an unrecognised outcome fail closed to an alert', () => {
     expect(decideScaleSuiteAction({ ...base, outcome: 'cancelled' }).issue).toBe('alert');
-    expect(decideScaleSuiteAction({ ...base, outcome: '' }).issue).toBe('alert');
     expect(decideScaleSuiteAction({ ...base, outcome: 'wat' }).issue).toBe('alert');
+  });
+  it('empty outcome because the scale job did not execute: NOT a suite failure, no issue action, flagged notRun', () => {
+    for (const jobResult of ['failure', 'cancelled', 'skipped']) {
+      const d = decideScaleSuiteAction({ ...base, outcome: '', jobResult });
+      expect(d.issue, jobResult).toBe('none');
+      expect(d.notRun, jobResult).toBe(true);
+    }
+  });
+  it('empty outcome although the scale job SUCCEEDED (or its result is unknown) fails loud', () => {
+    expect(() => decideScaleSuiteAction({ ...base, outcome: '', jobResult: 'success' })).toThrow();
+    expect(() => decideScaleSuiteAction({ ...base, outcome: '', jobResult: '' })).toThrow();
+    expect(() =>
+      decideScaleSuiteAction({
+        ...base,
+        outcome: '',
+        jobResult: 'success',
+        event: 'workflow_dispatch',
+      }),
+    ).toThrow();
+  });
+  it('a recorded outcome is used even when the job later failed (the suite did run)', () => {
+    const d = decideScaleSuiteAction({ ...base, outcome: 'failure', jobResult: 'failure' });
+    expect(d.issue).toBe('alert');
+    expect(d.notRun).toBe(false);
   });
   it('success on a scheduled run marks recovery', () => {
     expect(decideScaleSuiteAction({ ...base, outcome: 'success' }).issue).toBe('recover');
@@ -256,6 +295,22 @@ describe('reconcileScaleSuiteIssue (fake gh)', () => {
     expect(b.calls.some((c) => c[1] === 'close' || c[1] === 'comment')).toBe(false);
   });
 
+  it('recover closes EVERY matching open issue, not only the first', () => {
+    const a = fake([
+      { number: 5, title: SCALE_SUITE_ISSUE_TITLE },
+      { number: 6, title: 'unrelated' },
+      { number: 7, title: SCALE_SUITE_ISSUE_TITLE },
+    ]);
+    reconcileScaleSuiteIssue({ ...args, gh: a.gh, issue: 'recover', outcome: 'success' });
+    for (const n of ['5', '7']) {
+      expect(
+        a.calls.some((c) => c[1] === 'close' && c.includes(n)),
+        n,
+      ).toBe(true);
+    }
+    expect(a.calls.some((c) => c[1] === 'close' && c.includes('6'))).toBe(false);
+  });
+
   it('issue "none" makes no gh call at all', () => {
     const a = fake([]);
     reconcileScaleSuiteIssue({ ...args, gh: a.gh, issue: 'none', outcome: 'skipped' });
@@ -276,6 +331,25 @@ describe('the CLI goes RED once the expiry has passed (executed, exit code)', ()
       encoding: 'utf8',
     });
   }
+  it('scale job did not execute (empty outcome, job failed): exit 0, visible warning, no gh/issue use', () => {
+    const r = run({
+      EVENT_NAME: 'schedule',
+      OUTCOME: '',
+      JOB_RESULT: 'failure',
+      TOLERANCE_EXPIRES: '2999-01-01',
+    });
+    expect(r.status).toBe(0);
+    expect(`${r.stdout}${r.stderr}`).toMatch(/::warning::.*did not (run|execute)/i);
+  });
+  it('empty outcome with a SUCCEEDED scale job -> exit 1 (fail loud)', () => {
+    const r = run({
+      EVENT_NAME: 'schedule',
+      OUTCOME: '',
+      JOB_RESULT: 'success',
+      TOLERANCE_EXPIRES: '2999-01-01',
+    });
+    expect(r.status).toBe(1);
+  });
   it('expired -> exit 1 and says so', () => {
     const r = run({ TOLERANCE_EXPIRES: '2000-01-01' });
     expect(r.status).toBe(1);

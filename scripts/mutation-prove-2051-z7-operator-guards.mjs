@@ -18,7 +18,8 @@
  *         F2 the JWKS reaches the function through env (configMapKeyRef);
  *         F3 the JWKS is inlined into an env value;
  *         F4 the zone's signing-key Secret is a volume of the function;
- *         F5 the zone's signing key reaches the function as an env secretKeyRef.
+ *         F5 the zone's signing key reaches the function as an env secretKeyRef;
+ *         F6 every function mounts one SHARED JWKS instead of its own zone's.
  *   O*  the rotation order (zone_signing_key.go): publish the new public key,
  *       wait the propagation bound, only then switch signing, retire the old key
  *       after the overlap, never project the staged key into the zone's pod.
@@ -153,6 +154,15 @@ const ALL_MUTATIONS = [
     anchor: '\t\tEnv:          functionIdentityEnv(bs),\n',
     replacement:
       '\t\tEnv:          append(functionIdentityEnv(bs), corev1.EnvVar{Name: "ZONE_KEY", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: ZoneSigningKeySecretName(bs.Spec.Zone)}, Key: "current.key"}}}),\n',
+    test: POD_SPEC,
+  },
+  {
+    id: 'F6',
+    claim:
+      "every function mounts one SHARED JWKS instead of its own zone's (a token from any zone verifies if its iss check is ever lost)",
+    subject: 'render',
+    anchor: 'Name: ZoneJWKSConfigMapName(bs.Spec.Zone)},',
+    replacement: 'Name: "knext-shared-jwks"},',
     test: POD_SPEC,
   },
   // ── O: the rotation order ─────────────────────────────────────────────────

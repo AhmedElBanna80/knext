@@ -1,0 +1,242 @@
+/**
+ * planAppData: declared directories and globs agree and fail closed; excludes
+ * follow outputFileTracingExcludes; route keys pick which excludes apply.
+ */
+import { afterAll, describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
+import {
+    mkdirSync,
+    mkdtempSync,
+    realpathSync,
+    rmSync,
+    symlinkSync,
+    writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { deriveTraceRules, planAppData } from "../adapters/app-data-embed.mjs";
+
+const temps: string[] = [];
+afterAll(() => {
+    for (const d of temps) rmSync(d, { recursive: true, force: true });
+});
+function app(files: Record<string, string>): string {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "knext-plan-")));
+    temps.push(root);
+    for (const [rel, body] of Object.entries(files)) {
+        mkdirSync(dirname(join(root, rel)), { recursive: true });
+        writeFileSync(join(root, rel), body);
+    }
+    return root;
+}
+const rels = (plan: ReturnType<typeof planAppData>) =>
+    plan.files.map((f) => f.rel);
+const names = (plan: ReturnType<typeof planAppData>) =>
+    plan.files.flatMap((f) => [f.rel, ...f.aliases]).sort();
+
+describe("a declared directory and a glob over it agree", () => {
+    it("a symlinked directory inside the root: both embed the files behind it", () => {
+        const root = app({ "data/a.json": "{}", "shared/x.json": "{}" });
+        symlinkSync("../shared", join(root, "data/sub"));
+        const viaDir = planAppData({ root, includes: ["data"] });
+        const viaGlob = planAppData({ root, includes: ["data/**"] });
+        expect(rels(viaDir)).toEqual(["data/a.json", "shared/x.json"]);
+        expect(names(viaDir)).toEqual([
+            "data/a.json",
+            "data/sub/x.json",
+            "shared/x.json",
+        ]);
+        expect(names(viaGlob)).toEqual(expect.arrayContaining(names(viaDir)));
+        expect(rels(viaGlob)).toEqual(rels(viaDir));
+    });
+
+    it("a symlinked directory that leaves the root fails the same way both ways", () => {
+        const outside = app({ "o.json": "{}" });
+        const root = app({ "data/a.json": "{}" });
+        symlinkSync(outside, join(root, "data/out"));
+        expect(() => planAppData({ root, includes: ["data"] })).toThrow(
+            /outside the app root/,
+        );
+        expect(() => planAppData({ root, includes: ["data/**"] })).toThrow(
+            /outside the app root/,
+        );
+    });
+
+    it("a dangling link fails the build, whether the pattern is a directory or a glob", () => {
+        const root = app({ "data/a.json": "{}" });
+        symlinkSync("../nope", join(root, "data/gone.json"));
+        for (const pattern of ["data", "data/**", "data/*", "data/*.json"]) {
+            expect(() => planAppData({ root, includes: [pattern] })).toThrow(
+                /dangling[\s\S]*data\/gone\.json/,
+            );
+        }
+    });
+
+    it("a directory holding only a dangling link is an error, not an empty plan", () => {
+        const root = app({});
+        mkdirSync(join(root, "data"));
+        symlinkSync("../nope", join(root, "data/gone.json"));
+        expect(() => planAppData({ root, includes: ["data"] })).toThrow(
+            /dangling[\s\S]*data\/gone\.json/,
+        );
+    });
+
+    it("a dangling link the pattern does not reach is ignored", () => {
+        const root = app({ "data/a.json": "{}", "other/x": "1" });
+        symlinkSync("../nope", join(root, "other/gone.json"));
+        expect(rels(planAppData({ root, includes: ["data/**"] }))).toEqual([
+            "data/a.json",
+        ]);
+    });
+
+    it("a link loop terminates", () => {
+        const root = app({ "data/a.json": "{}" });
+        symlinkSync("..", join(root, "data/loop"));
+        const plan = planAppData({ root, includes: ["data"] });
+        expect(rels(plan)).toContain("data/a.json");
+    });
+
+    it("a file that is not a regular file fails instead of vanishing", () => {
+        // a directory symlink resolving to a socket-like special is platform specific;
+        // a FIFO is portable on POSIX
+        const root = app({ "data/a.json": "{}" });
+        const made = spawnSync("mkfifo", [join(root, "data/pipe")]);
+        expect(made.status).toBe(0);
+        expect(() => planAppData({ root, includes: ["data"] })).toThrow(
+            /not a regular file[\s\S]*data\/pipe/,
+        );
+    });
+});
+
+describe("outputFileTracingExcludes", () => {
+    const root = () =>
+        app({
+            "data/a.json": "{}",
+            "data/private/b.json": "{}",
+            "data/private/deep/c.json": "{}",
+            "data/.env": "S=1",
+        });
+
+    it("an exclude removes its matches from the include's files", () => {
+        const plan = planAppData({
+            root: root(),
+            rules: [
+                {
+                    includes: ["data/**"],
+                    excludes: ["data/private/**", "data/.env"],
+                },
+            ],
+        });
+        expect(rels(plan)).toEqual(["data/a.json"]);
+    });
+
+    it("a bare directory exclude covers everything under it, as Next's contains-match does", () => {
+        const plan = planAppData({
+            root: root(),
+            rules: [
+                {
+                    includes: ["data/**"],
+                    excludes: ["./data/private", "data/.env"],
+                },
+            ],
+        });
+        expect(rels(plan)).toEqual(["data/a.json"]);
+    });
+
+    it("an excluded credential does not fail the build (it is not traced)", () => {
+        const plan = planAppData({
+            root: root(),
+            rules: [
+                {
+                    includes: ["data/**"],
+                    excludes: ["data/private/**", "data/.env"],
+                },
+            ],
+        });
+        expect(rels(plan)).not.toContain("data/.env");
+    });
+
+    it("without the exclude the same includes embed the private files", () => {
+        const plan = planAppData({
+            root: app({ "data/a.json": "{}", "data/private/b.json": "{}" }),
+            includes: ["data/**"],
+        });
+        expect(rels(plan)).toEqual(["data/a.json", "data/private/b.json"]);
+    });
+
+    it("an exclude of one rule does not remove what another rule includes", () => {
+        const two = planAppData({
+            root: app({ "data/a.json": "{}", "other/o.json": "{}" }),
+            rules: [
+                { includes: ["data/a.json"], excludes: [] },
+                { includes: ["other/**"], excludes: ["data/**"] },
+            ],
+        });
+        expect(rels(two)).toEqual(["data/a.json", "other/o.json"]);
+    });
+
+    it("an exclude that matches through a link's target removes the link's file too", () => {
+        const r = app({ "data/a.json": "{}", "private/p.json": "{}" });
+        symlinkSync("../private/p.json", join(r, "data/p.json"));
+        const plan = planAppData({
+            root: r,
+            rules: [{ includes: ["data/**"], excludes: ["private/**"] }],
+        });
+        expect(rels(plan)).toEqual(["data/a.json"]);
+    });
+});
+
+describe("deriveTraceRules: route keys pick the excludes that apply", () => {
+    it("an exclude whose key is the include's route applies", () => {
+        const rules = deriveTraceRules(
+            { "/": ["data/**"] },
+            { "/": ["data/private/**"] },
+        );
+        expect(rules).toEqual([
+            { includes: ["data/**"], excludes: ["data/private/**"] },
+        ]);
+    });
+
+    it("a wildcard exclude key covers the include's route", () => {
+        const rules = deriveTraceRules(
+            { "/api/x": ["data/**"] },
+            { "/api/*": ["data/private/**"], "/**": ["data/tmp/**"] },
+        );
+        expect(rules[0].excludes.sort()).toEqual([
+            "data/private/**",
+            "data/tmp/**",
+        ]);
+    });
+
+    it("'/**' and '/*' cover the root route", () => {
+        for (const key of ["/**", "/*", "/"]) {
+            expect(
+                deriveTraceRules({ "/": ["d/**"] }, { [key]: ["d/p/**"] })[0]
+                    .excludes,
+            ).toEqual(["d/p/**"]);
+        }
+    });
+
+    it("an exclude for a different route does not apply", () => {
+        const rules = deriveTraceRules(
+            { "/": ["data/**"] },
+            { "/admin/*": ["data/**"] },
+        );
+        expect(rules).toEqual([{ includes: ["data/**"], excludes: [] }]);
+    });
+
+    it("an include key that also matches another include key's route pools their globs", () => {
+        const rules = deriveTraceRules(
+            { "/api/x": ["a/**"], "/api/*": ["b/**"] },
+            {},
+        );
+        const forX = rules.find((r) => r.includes.includes("a/**"));
+        expect(forX?.includes.sort()).toEqual(["a/**", "b/**"]);
+    });
+
+    it("no excludes: one rule per include key, identical rules merged", () => {
+        expect(deriveTraceRules({ "/a": ["x"], "/b": ["x"] }, {})).toEqual([
+            { includes: ["x"], excludes: [] },
+        ]);
+    });
+});

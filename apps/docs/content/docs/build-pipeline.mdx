@@ -225,12 +225,20 @@ The vinext binary also carries your app's own data files, so a read of one works
 directory. Two things put a file in:
 
 - **`outputFileTracingIncludes` in `next.config`.** Its globs are relative to the app root (an
-  absolute path inside the app root also works), for every route. A glob such as `./**/*.json`
-  does not descend into `node_modules`; name `node_modules` in the pattern to include a file there.
+  absolute path inside the app root also works). A glob such as `./**/*.json` does not descend into
+  `node_modules`; name `node_modules` in the pattern to include a file there. A directory pattern
+  and a glob over the same directory select the same files, and both enter a symlinked directory
+  that stays inside the app root.
 - **A literal path in your server code.** `join(process.cwd(), 'content/post.md')`,
   `` `${process.cwd()}/content/post.md` `` and `new URL('../data.json', import.meta.url)` are found
   in the server output, and the file is embedded if it exists at build time. A path computed at
   runtime is not found; list it in `outputFileTracingIncludes`.
+
+`outputFileTracingExcludes` is honoured too: a match of an exclude is not embedded, and a bare
+directory in an exclude covers everything under it. Next applies excludes per route; a binary has no
+route list to apply them to, so each include's route key stands in for its routes, and an exclude
+applies to an include when the exclude's route key matches that include's key (`/` and `/**` both
+cover an include keyed `/`; `/admin/*` does not).
 
 The app reads them as it always did, with `fs` or `fs/promises`, by a path relative to the working
 directory, by `process.cwd()` joined, or by the absolute path the app had on the build machine.
@@ -246,41 +254,60 @@ source of `copyFile`, in their sync, callback and promise forms, and a `file:` U
 missing), `open`, `createReadStream`, `Bun.file()`, and anything that writes (a write goes to the
 real disk). Read the file with one of the covered calls.
 
-The build fails, naming the pattern, when an `outputFileTracingIncludes` entry cannot be embedded
-rather than dropping it: it matches no file, resolves (through a symlink) outside the app root,
-matches a file that looks like a secret, matches a native addon, or matches a file of a package the
-build traced into `.output/server/node_modules` (for example a package listed in
-`serverExternalPackages`). The last one cannot work in this mode: the executable has no
-`node_modules` beside it and cannot resolve a package from inside itself, so bundle the package,
-read its files by a path inside the app, or build without `--self-contained`. A literal path that
-does not exist, is a directory, or looks like a secret is skipped and logged, not fatal.
+The build fails, naming the pattern or path, when an `outputFileTracingIncludes` entry cannot be
+embedded rather than dropping it: it matches no file; resolves (through a symlink) outside the app
+root; is a symlink whose target does not exist, or a pipe, socket or device; matches a file that
+looks like a credential; matches a native addon; or matches a file of a package the build traced
+into `.output/server/node_modules` (for example a package listed in `serverExternalPackages`). The
+last one cannot work in this mode: the executable has no `node_modules` beside it and cannot
+resolve a package from inside itself, so bundle the package, read its files by a path inside the
+app, or build without `--self-contained`. A literal path that does not exist, is a directory, or
+looks like a credential is skipped and logged, not fatal.
 
 **Credential check.** The build refuses to embed a file that looks like a credential, so a broad
-glob does not carry one into an executable by accident. It looks at names, not contents: `.env*`,
-`.npmrc`, `.netrc` and similar, `id_*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`,
-`*.crt`, `*.cer`, names containing `credentials`, `secret` or `token`, service-account files,
-Terraform state and variables, `kubeconfig`, and anything under `.ssh`, `.aws`, `.kube`, `.gnupg`,
-`.gcloud`, `.azure` or `.docker`. Every match is judged by where it really points: a symlink with
-an ordinary name to one of these is refused, and so is a symlink that leaves the app root. Nothing
-under `.git` is ever embedded; a glob sweep skips it and a pattern that names it fails. This is a
-safeguard against accidents, not a guarantee: a secret stored under an ordinary name is not
-recognised, so do not list a directory that holds one. The one opt-out is deliberate and visible in
-the config: a pattern that is an exact file path (no glob, not a directory, not a symlink), such as
-`config/.env.public`, embeds that file even though its name matches.
+glob does not carry one into an executable by accident. It looks at names, never at contents. A
+file is refused when:
+
+- its name starts with `.env` (`.env`, `.envrc`, `.env.local`, `.env-local`, `.env_prod`), or is one
+  of `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.netrc`, `_netrc`, `.pypirc`, `.pgpass`, `.htpasswd`,
+  `htpasswd`, `.git-credentials`, `.gitconfig`, `.dockercfg`, `.my.cnf`, `.boto`, `.s3cfg`;
+- its name starts with `id_` or `kubeconfig`, or ends in `.pem`, `.key`, `.p12`, `.pfx`, `.jks`,
+  `.keystore`, `.p8`, `.crt`, `.cer`, `.der`, `.ppk`, `.kdbx`, `.gpg`, `.tfvars` or `.tfstate`, or is
+  a `service-account*.json`;
+- its name contains `secret`, `credential`, `password`, `passwd`, `token`, `apikey`/`api-key`/
+  `api_key` or `private-key`/`private_key`, in any letter case (`clientSecret.json`,
+  `apitoken.txt`, `mysecrets.json`); the ordinary words `tokenizer` and `secretary` are not counted;
+- any directory above it is `.ssh`, `.aws`, `.kube`, `.gnupg`, `.gcloud`, `.azure` or `.docker`
+  (compared without regard to letter case), starts with `.env`, or has a name containing one of the
+  words above (`secrets/db.json`). Directories below a `node_modules` are not judged, only the file
+  name.
+
+Every match is judged by where it really points: a symlink with an ordinary name whose target
+matches is refused, and so is a symlink that leaves the app root. Nothing under `.git` is ever
+embedded; a glob sweep skips it, and a pattern that names it, or a link into it, fails. Names such
+as `design-tokens/colors.json` match the word list and are refused too; the opt-out below is for
+them. This is a safeguard against accidents, not a guarantee: a secret stored under an ordinary
+name is not recognised, so do not list a directory that holds one. The one opt-out is deliberate and
+visible in the config: a pattern that is an exact file path (no glob, not a directory, not a
+symlink), such as `config/.env.public`, embeds that file even though its name matches.
 
 `next.config` is read by the compile step itself, in a separate process from the one that built the
-app. A config that cannot declare `outputFileTracingIncludes` (it names no such key and imports
-nothing but Node built-ins) is not run at all. Any other config is loaded once more to read the
-value. If it cannot be loaded, the build fails when the file mentions `outputFileTracingIncludes`
-or imports a local module (the value may live there); otherwise it prints a warning and goes on
-with no includes.
+app. A config that provably cannot declare `outputFileTracingIncludes` (no `require`, no
+`import(`, no file read, JSON parse or promise, the word "tracing" nowhere in it, and no import but
+Node built-ins) is not run at all. Any other config is loaded once more to read the value; a
+function, or a default export that is a promise, is awaited as Next does. If such a config cannot
+be loaded the build fails, whatever the file says, because embedding no includes would pass the
+build and fail the route. A config that assembles its includes in a way that avoids all of the
+above (a key spelled out of unrelated fragments in a file with no other sign of indirection) is not
+recognised.
 
 Every embedded file adds its size to the executable, once. The build log prints the count and total
 size, and warns above 64 MiB.
 
-Both targets support it; nothing else does — there, setting it changes nothing about what
-`knext build` produces, and the choice is only recorded in the build log. The value must be a
-boolean — `knext validate` rejects anything else.
+Self-contained mode is supported on the compiled standalone-on-Bun target and the vinext target,
+and on no other: elsewhere, setting it changes nothing about what `knext build` produces, and the
+choice is only recorded in the build log. The value must be a boolean — `knext validate` rejects
+anything else.
 
 #### What's measured so far
 

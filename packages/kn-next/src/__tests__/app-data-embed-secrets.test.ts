@@ -75,6 +75,24 @@ const SECRET_FILES = [
     ".kube/config",
     ".docker/config.json",
     ".gnupg/pubring.kbx",
+    // shapes a first version of the check let through
+    ".envrc",
+    ".env-local",
+    ".env_prod",
+    "clientSecret.json",
+    "apitoken.txt",
+    "secretKey.json",
+    "mysecrets.json",
+    "apiKey.json",
+    "db-password.txt",
+    ".gitconfig",
+    ".SSH/config",
+    ".AWS/credentials",
+    ".Docker/config.json",
+    "secrets/db.json",
+    "Secrets/db.json",
+    "private-tokens/list.json",
+    "creds/credentials/x.json",
 ];
 
 describe("a glob that reaches a secret-looking file fails the build and names it", () => {
@@ -106,6 +124,18 @@ describe("a glob that reaches a secret-looking file fails the build and names it
             "conf/secretary.txt",
             "conf/tokenizer.json",
         ]);
+    });
+
+    it("a credential-named directory under node_modules does not taint a package's own files", () => {
+        const root = app({
+            "node_modules/jsonwebtoken/data/words.json": "{}",
+        });
+        expect(
+            planAppData({
+                root,
+                includes: ["node_modules/jsonwebtoken/data/*.json"],
+            }).files.map((f) => f.rel),
+        ).toEqual(["node_modules/jsonwebtoken/data/words.json"]);
     });
 
     it("a directory pattern fails the same way", () => {

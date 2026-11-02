@@ -439,17 +439,119 @@ describe("self-contained: config shapes", () => {
         expect(runAlone(b.exe).result.cwdAbs).toContain(A_MARK);
     }, 180_000);
 
-    it("a next.config that cannot be loaded does not stop a build that has no includes to read", () => {
+    it("a next.config that might declare includes and cannot be loaded FAILS the build, whatever it does not say", () => {
         const app = baseApp(
             "",
-            'import "not-installed-pkg-xyz";\nthrow new Error("config boom");\n',
+            'import "not-installed-pkg-xyz";\nexport default {};\n',
         );
         const b = compile(app.work);
-        expect(b.status, String(b.stderr)).toBe(0);
+        expect(b.status).toBe(1);
         expect(String(b.stderr)).toMatch(
-            /could not load next\.config\.mjs[\s\S]*not-installed-pkg-xyz[\s\S]*does not mention outputFileTracingIncludes/,
+            /could not load next\.config\.mjs[\s\S]*not-installed-pkg-xyz/,
         );
     }, 120_000);
+
+    it("a computed require that cannot be loaded FAILS the build", () => {
+        const app = baseApp("");
+        write(
+            join(app.work, "next.config.cjs"),
+            "module.exports = require(`./missing-${'inc'}.cjs`);\n",
+        );
+        const b = compile(app.work);
+        expect(b.status).toBe(1);
+        expect(String(b.stderr)).toMatch(/could not load next\.config\.cjs/);
+    }, 120_000);
+
+    it("outputFileTracingExcludes removes files from the include; an exclude for another route does not apply", () => {
+        const PRIV = "KNEXT_DATA_PRIV_EXCLUDED_3a91";
+        const app = baseApp(
+            `t("kept", () => readFileSync(join(process.cwd(), "data", "a" + ".json"), "utf8"));
+t("pub", () => readFileSync(join(process.cwd(), "data", "pub", "c" + ".json"), "utf8"));
+t("private", () => readFileSync(join(process.cwd(), "data", "private", "b" + ".json"), "utf8"));`,
+            `export default {
+  outputFileTracingIncludes: { "/": ["./data/**/*"] },
+  outputFileTracingExcludes: { "/": ["./data/private/**"], "/admin/*": ["./data/pub/**"] },
+};\n`,
+        );
+        write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+        write(join(app.work, "data/pub/c.json"), `{"mark":"${B_MARK}"}\n`);
+        write(join(app.work, "data/private/b.json"), `{"mark":"${PRIV}"}\n`);
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        const r = runAlone(b.exe);
+        expect(r.result.kept).toContain(A_MARK);
+        expect(r.result.pub).toContain(B_MARK);
+        expect(r.result.private).toBe("ERR ENOENT");
+        expect(readFileSync(b.exe).indexOf(PRIV)).toBe(-1);
+        expect(readFileSync(b.exe).indexOf("data/private/b.json")).toBe(-1);
+    }, 180_000);
+
+    describe("a next.config that declares includes by indirection is still read", () => {
+        const READ = `t("a", () => readFileSync(join(process.cwd(), "data", "a" + ".json"), "utf8"));`;
+        const INC = '{ outputFileTracingIncludes: { "/": ["./data/a.json"] } }';
+        const shapes: Record<
+            string,
+            { file: string; source: string; extra?: Record<string, string> }
+        > = {
+            "require of path.join(__dirname, …)": {
+                file: "next.config.cjs",
+                source: 'const path = require("node:path");\nmodule.exports = require(path.join(__dirname, "inc.cjs"));\n',
+                extra: { "inc.cjs": `module.exports = ${INC};\n` },
+            },
+            "template-literal require": {
+                file: "next.config.cjs",
+                source: "module.exports = require(`./inc.cjs`);\n",
+                extra: { "inc.cjs": `module.exports = ${INC};\n` },
+            },
+            "computed import()": {
+                file: "next.config.mjs",
+                source: 'const f = "./inc.mjs";\nexport default (await import(f)).default;\n',
+                extra: { "inc.mjs": `export default ${INC};\n` },
+            },
+            "a key built at run time": {
+                file: "next.config.mjs",
+                source: 'const k = ["output", "File", "Tracing", "Includes"].join("");\nexport default { [k]: { "/": ["./data/a.json"] } };\n',
+            },
+            "JSON read through fs": {
+                file: "next.config.mjs",
+                source: 'import fs from "node:fs";\nexport default JSON.parse(fs.readFileSync(new URL("./inc.json", import.meta.url), "utf8"));\n',
+                extra: {
+                    "inc.json":
+                        '{"outputFileTracingIncludes":{"/":["./data/a.json"]}}',
+                },
+            },
+            "a default export that is a Promise": {
+                file: "next.config.mjs",
+                source: `export default Promise.resolve(${INC});\n`,
+            },
+            "an async function": {
+                file: "next.config.mjs",
+                source: `export default async () => (${INC});\n`,
+            },
+        };
+        for (const [name, shape] of Object.entries(shapes)) {
+            it(name, () => {
+                const app = baseApp(READ);
+                rmSync(join(app.work, "next.config.mjs"), { force: true });
+                write(join(app.work, shape.file), shape.source);
+                for (const [rel, body] of Object.entries(shape.extra ?? {})) {
+                    write(join(app.work, rel), body);
+                }
+                write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+                const b = compile(app.work);
+                expect(b.status, String(b.stderr)).toBe(0);
+                expect(runAlone(b.exe).result.a).toContain(A_MARK);
+            }, 180_000);
+        }
+
+        it("control: with no config the computed path is not embedded", () => {
+            const app = baseApp(READ);
+            write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+            const b = compile(app.work);
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(runAlone(b.exe).result.a).toBe("ERR ENOENT");
+        }, 120_000);
+    });
 
     it("a next.config that cannot declare includes is not executed a second time", () => {
         const app = baseApp(

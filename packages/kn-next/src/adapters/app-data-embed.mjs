@@ -34,7 +34,7 @@
  * app-data-alias.mjs has no upstream counterpart: Bun maps no real directory
  * onto `$bunfs`.
  */
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -53,27 +53,40 @@ const GLOB_META = /[*?[\]{}]/;
  * secret stored under an ordinary name is not recognised.
  */
 const SECRET_BASENAME = [
-  /^\.env(?:\..*)?$/i,
-  /^\.(?:npmrc|yarnrc(?:\.yml)?|netrc|pypirc|pgpass|htpasswd|git-credentials|dockercfg|my\.cnf|boto|s3cfg)$/i,
+  /^\.env/i, // .env .envrc .env-local .env_prod .env.local
+  /^\.(?:npmrc|yarnrc(?:\.yml)?|netrc|pypirc|pgpass|htpasswd|git-credentials|gitconfig|dockercfg|my\.cnf|boto|s3cfg)$/i,
   /^(?:_netrc|htpasswd)$/i,
-  /^id_.*/i,
+  /^id_/i,
   /\.(?:pem|key|p12|pfx|jks|keystore|p8|crt|cer|der|ppk|kdbx|gpg)$/i,
-  /^(?:.*[-_.])?credentials?(?:[-_.].*)?$/i,
-  /^(?:.*[-_.])?secrets?(?:[-_.].*)?$/i,
-  /^(?:.*[-_.])?tokens?(?:[-_.].*)?$/i,
   /^service[-_]?account.*\.json$/i,
   /\.(?:tfvars|tfstate)(?:\..*)?$/i,
-  /^kubeconfig(?:[-_.].*)?$/i,
+  /^kubeconfig/i,
 ];
-/** Directories whose contents are credentials or configuration for them. */
+/** A credential word anywhere in a name: `clientSecret.json`, `apitoken.txt`, `mysecrets.json`, `db-password.txt`. */
+const SECRET_WORD = /secret|credential|passw(?:or)?d|token|api[-_]?key|private[-_]?key/i;
+/** Ordinary words that contain one of the above; removed before the test (`tokenizer.json`, `secretary.txt`). */
+const BENIGN_WORD = /tokeniz\w*|secretar\w*/gi;
+/** Directories whose contents are credentials or configuration for them, compared case-insensitively. */
 const SECRET_DIRS = new Set(['.ssh', '.aws', '.kube', '.gnupg', '.gcloud', '.azure', '.docker']);
 
-/** Does this app-root-relative path (posix) look like a credential, by file or directory name? */
+const hasSecretWord = (name) => SECRET_WORD.test(name.replace(BENIGN_WORD, ''));
+
+/**
+ * Does this app-root-relative path (posix) look like a credential: its file name
+ * by pattern or credential word, or any directory above it (case-insensitive)
+ * that is a known credential directory or carries a credential word. Directories
+ * below a `node_modules` are not judged (a package's own folder layout is not the
+ * app's); its file name still is.
+ */
 function looksSecret(rel) {
   const parts = rel.split('/');
+  const name = parts[parts.length - 1];
+  const nm = parts.indexOf('node_modules');
+  const dirs = nm === -1 ? parts.slice(0, -1) : parts.slice(0, Math.min(nm, parts.length - 1));
   return (
-    parts.slice(0, -1).some((d) => SECRET_DIRS.has(d)) ||
-    SECRET_BASENAME.some((re) => re.test(parts[parts.length - 1]))
+    dirs.some((d) => SECRET_DIRS.has(d.toLowerCase()) || /^\.env/i.test(d) || hasSecretWord(d)) ||
+    SECRET_BASENAME.some((re) => re.test(name)) ||
+    hasSecretWord(name)
   );
 }
 const hasGitSegment = (rel) => rel.split('/').includes('.git');
@@ -83,86 +96,134 @@ const WARN_BYTES = 64 * 1024 * 1024;
 
 const toPosix = (p) => p.split(sep).join('/');
 
-const INCLUDES_KEY = /outputFileTracingIncludes/;
-/** Every module specifier a config source imports, requires or re-exports. */
+/** Every module specifier a config source imports, requires or re-exports (literal ones). */
 const SPECIFIER = /\b(?:from|import|require)\s*\(?\s*["']([^"'\n]+)["']/g;
 const BUILTIN_SPECIFIER = /^(?:node:|next(?:\/|$)|(?:fs|path|url|os|module)(?:\/|$))/;
+/**
+ * Anything that lets a config get its includes from somewhere else: a require or
+ * dynamic import (literal or not), reading a file, parsing JSON, a promise, the
+ * word "tracing" in any case (so a key assembled from pieces still counts).
+ */
+const INDIRECTION =
+  /tracing|\brequire\b|\bimport\s*\(|createRequire|readFile|JSON\.parse|\bPromise\b|\beval\b|\bFunction\s*\(/i;
 
 const specifiersOf = (text) => [...text.matchAll(SPECIFIER)].map((m) => m[1]);
 
-/** A relative import: the includes may live in the module it names. */
-const importsLocalModule = (text) => specifiersOf(text).some((spec) => spec.startsWith('.'));
-
-/** Could this config source declare `outputFileTracingIncludes`, directly or through something it imports? */
+/**
+ * Could this config source declare `outputFileTracingIncludes`, directly or
+ * through something it loads? Only a config that provably cannot is left unrun:
+ * no indirection token, and every import is a Node built-in or a Next type.
+ */
 function canDeclareIncludes(text) {
   return (
-    INCLUDES_KEY.test(text) ||
+    INDIRECTION.test(text) ||
     specifiersOf(text).some((spec) => spec.startsWith('.') || !BUILTIN_SPECIFIER.test(spec))
   );
 }
 
+/** Route-key match as Next's picomatch `contains` reads it: the key matches the route or any leading part of it. */
+function routeMatches(key, route) {
+  if (key === route) return true;
+  const glob = new Bun.Glob(key);
+  const segments = route.split('/').filter(Boolean);
+  if (glob.match(route)) return true;
+  for (let n = 1; n < segments.length; n++) {
+    if (glob.match(`/${segments.slice(0, n).join('/')}`)) return true;
+  }
+  return false;
+}
+
 /**
- * The app's `outputFileTracingIncludes` globs (every route's, flattened — a
- * binary has one filesystem, so the per-route scoping cannot be kept), read the
- * way Next.js reads them: top-level, replaced by the legacy `experimental` key
- * when that is present. No next.config → `[]`. A config that cannot declare
- * includes (names no such key, imports nothing but built-ins) is not run. A
- * config that might declare them and cannot be loaded THROWS when it mentions
- * the key or imports a local module (embedding nothing would be the silent drop
- * this exists to prevent); otherwise it warns and reads no includes. A
- * malformed value always throws.
+ * One rule per include route key: the globs of every include key that matches
+ * that route (a key matches itself), and the excludes of every exclude key that
+ * matches it. Next applies excludes per route to the files traced for that
+ * route; a binary serves every route from one filesystem, so a file is embedded
+ * if SOME include rule selects it and that rule's excludes do not remove it. The
+ * include keys stand in for routes (the compile has no route list). Identical
+ * rules are merged.
+ *
+ * @param {Record<string, string[]>} includes
+ * @param {Record<string, string[]>} excludes
+ * @returns {{ includes: string[], excludes: string[] }[]}
+ */
+export function deriveTraceRules(includes, excludes) {
+  const rules = new Map();
+  for (const route of Object.keys(includes)) {
+    const globs = new Set();
+    for (const [key, list] of Object.entries(includes)) {
+      if (routeMatches(key, route)) for (const g of list) globs.add(g);
+    }
+    const drops = new Set();
+    for (const [key, list] of Object.entries(excludes)) {
+      if (routeMatches(key, route)) for (const g of list) drops.add(g);
+    }
+    const rule = { includes: [...globs], excludes: [...drops] };
+    rules.set(JSON.stringify([rule.includes.slice().sort(), rule.excludes.slice().sort()]), rule);
+  }
+  return [...rules.values()];
+}
+
+function readTraceMap(config, key, name) {
+  const experimental = config.experimental;
+  const map =
+    experimental && typeof experimental === 'object' && key in experimental
+      ? experimental[key]
+      : config[key];
+  if (map === undefined || map === null) return {};
+  if (typeof map !== 'object' || Array.isArray(map)) {
+    throw new Error(`${name}: ${key} must be an object of route → glob[]`);
+  }
+  const out = {};
+  for (const [route, value] of Object.entries(map)) {
+    if (!Array.isArray(value) || !value.every((g) => typeof g === 'string')) {
+      throw new Error(`${name}: ${key}['${route}'] must be an array of glob strings`);
+    }
+    out[route] = value.map((g) => g.replace(/\\/g, '/'));
+  }
+  return out;
+}
+
+/**
+ * The app's `outputFileTracingIncludes` / `outputFileTracingExcludes`, as rules
+ * (see deriveTraceRules), read the way Next.js reads them: top level, replaced
+ * by the legacy `experimental` key when that is present; the config may be a
+ * function and its value (or a default export that is a promise) is awaited.
+ *
+ * No next.config → no rules. A config that provably cannot declare them (no
+ * indirection, only built-in imports) is not run at all. Any other config is
+ * loaded; if it cannot be loaded THIS THROWS, whatever the file says: it might
+ * have declared includes, and embedding nothing would be the silent drop this
+ * exists to prevent. A malformed value always throws.
  *
  * @param {string} root the app root
- * @returns {Promise<string[]>}
+ * @returns {Promise<{ includes: string[], excludes: string[] }[]>}
  */
-export async function readTraceIncludes(root, { warn = console.warn } = {}) {
+export async function readTraceRules(root) {
   const name = CONFIG_NAMES.find((n) => existsSync(join(root, n)));
   if (name === undefined) return [];
   const text = readFileSync(join(root, name), 'utf8');
-  // A config that cannot declare includes is not run at all: this is a separate
-  // process from the one that loaded it for the build, so loading it here is a
+  // A config that cannot declare includes is not run: this is a separate process
+  // from the one that loaded it for the build, so loading it here would be a
   // second execution of the user's config code.
   if (!canDeclareIncludes(text)) return [];
-  let loaded;
+  let config;
   try {
-    loaded = await import(pathToFileURL(join(root, name)).href);
-    let config = loaded.default ?? loaded;
+    const loaded = await import(pathToFileURL(join(root, name)).href);
+    config = loaded.default ?? loaded;
     if (typeof config === 'function') {
       config = await config('phase-production-build', { defaultConfig: {} });
     }
-    loaded = config;
+    config = await config; // `export default Promise.resolve({...})`, as Next awaits it
   } catch (err) {
-    const why = err instanceof Error ? err.message : String(err);
-    // Only a config that says it declares includes (or pulls in a local module that might)
-    // must be readable: failing every self-contained build over an unrelated config error
-    // would be worse than the silent drop this guards against.
-    if (INCLUDES_KEY.test(text) || importsLocalModule(text)) {
-      throw new Error(`could not load ${name} to read outputFileTracingIncludes: ${why}`);
-    }
-    warn(
-      `[knext compile] self-contained: could not load ${name} (${why}); it does not mention outputFileTracingIncludes ` +
-        'and imports no local module, so no includes were read',
+    throw new Error(
+      `could not load ${name} to read outputFileTracingIncludes: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return [];
   }
-  const config = loaded ?? {};
-  const experimental = config.experimental;
-  const map =
-    experimental && typeof experimental === 'object' && 'outputFileTracingIncludes' in experimental
-      ? experimental.outputFileTracingIncludes
-      : config.outputFileTracingIncludes;
-  if (map === undefined || map === null) return [];
-  if (typeof map !== 'object' || Array.isArray(map)) {
-    throw new Error(`${name}: outputFileTracingIncludes must be an object of route → glob[]`);
-  }
-  const globs = [];
-  for (const [route, value] of Object.entries(map)) {
-    if (!Array.isArray(value) || !value.every((g) => typeof g === 'string')) {
-      throw new Error(`${name}: outputFileTracingIncludes['${route}'] must be an array of glob strings`);
-    }
-    globs.push(...value);
-  }
-  return [...new Set(globs)];
+  config = config ?? {};
+  return deriveTraceRules(
+    readTraceMap(config, 'outputFileTracingIncludes', name),
+    readTraceMap(config, 'outputFileTracingExcludes', name),
+  );
 }
 
 /** Every `.js`/`.mjs`/`.cjs` file of the server output proper (never a traced `node_modules`). */
@@ -265,72 +326,126 @@ export function scanDataLiterals(source, cwdRoot, entryDir) {
   return [...found];
 }
 
-/** Every file under `dir` as absolute paths (a symlink is returned, not followed); never descends into `.git`. */
-function walkFiles(dir, out, skipNodeModules) {
+/**
+ * Every file under `dir` as absolute paths, following symlinked directories (a
+ * directory already on the current path is not entered again, so a link loop
+ * ends). A link whose target does not exist goes to `dangling`. Never descends
+ * into `.git`. Special files (a FIFO) are returned: the planner refuses them.
+ *
+ * Directory patterns and glob patterns both list through this, so what a
+ * declared directory embeds and what a glob over it embeds are the same files.
+ */
+function walkTree(dir, out, dangling, chain, skipNodeModules) {
+  let realDir;
+  try {
+    realDir = realpathSync(dir);
+  } catch {
+    return;
+  }
+  if (chain.has(realDir)) return;
+  const here = new Set(chain).add(realDir);
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === '.git') continue;
     if (skipNodeModules && entry.name === 'node_modules') continue;
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) walkFiles(path, out, skipNodeModules);
-    else if (entry.isFile() || entry.isSymbolicLink()) out.push(path);
+    if (entry.isDirectory()) {
+      walkTree(path, out, dangling, here, skipNodeModules);
+    } else if (entry.isSymbolicLink()) {
+      let target;
+      try {
+        target = statSync(path);
+      } catch {
+        dangling.push(path);
+        continue;
+      }
+      if (target.isDirectory()) walkTree(path, out, dangling, here, skipNodeModules);
+      else out.push(path);
+    } else {
+      out.push(path);
+    }
   }
 }
 
-function normalisePattern(root, pattern) {
+function normalisePattern(root, pattern, what = 'outputFileTracingIncludes') {
   const posix = pattern.split('\\').join('/');
   let rel;
   if (isAbsolute(pattern) || /^[A-Za-z]:\//.test(posix)) {
     rel = toPosix(relative(root, resolve(pattern)));
     if (rel.startsWith('..') || isAbsolute(rel) || rel === '') {
       throw new Error(
-        `outputFileTracingIncludes: '${pattern}' is outside the app root (${root}) — a binary can only carry the app's own files`,
+        `${what}: '${pattern}' is outside the app root (${root}) — a binary can only carry the app's own files`,
       );
     }
   } else {
     rel = posix.replace(/^\.\//, '');
   }
   if (rel.split('/').includes('..')) {
-    throw new Error(
-      `outputFileTracingIncludes: '${pattern}' contains '..' — it is outside the app root (${root})`,
-    );
+    throw new Error(`${what}: '${pattern}' contains '..' — it is outside the app root (${root})`);
   }
-  if (hasGitSegment(rel)) {
+  if (what === 'outputFileTracingIncludes' && hasGitSegment(rel)) {
     throw new Error(
-      `outputFileTracingIncludes: .git is never embedded, but '${pattern}' names it — a repository's history and config are not app data`,
+      `${what}: .git is never embedded, but '${pattern}' names it — a repository's history and config are not app data`,
     );
   }
   return rel;
 }
 
-function expandPattern(root, pattern, rel) {
+/**
+ * The files `rel` selects, and the dangling links it reaches.
+ *
+ * A literal path that exists wins over glob reading (Next names files
+ * `[id]/page.js`); a directory is walked. Otherwise the glob is matched against
+ * the same walk of its literal prefix directory, so a symlinked directory is
+ * entered by a glob exactly as by a directory pattern, and a dangling link that
+ * matches is reported, not skipped.
+ */
+function expandPattern(root, rel) {
   const abs = resolve(root, rel);
   const names = rel.split('/');
-  // A literal path that exists wins over glob reading (Next names files `[id]/page.js`).
+  const skipNodeModules = !names.includes('node_modules');
+  const files = [];
+  const dangling = [];
   if (existsSync(abs)) {
-    if (statSync(abs).isDirectory()) {
-      const files = [];
-      walkFiles(abs, files, !names.includes('node_modules'));
-      return files;
+    if (statSync(abs).isDirectory()) walkTree(abs, files, dangling, new Set(), skipNodeModules);
+    else files.push(abs);
+    return { files, dangling };
+  }
+  if (!GLOB_META.test(rel)) {
+    try {
+      lstatSync(abs);
+      dangling.push(abs); // exists as a link, but its target does not
+    } catch {}
+    return { files, dangling };
+  }
+  const firstMeta = names.findIndex((seg) => GLOB_META.test(seg));
+  const start = resolve(root, ...names.slice(0, firstMeta));
+  if (!existsSync(start) || !statSync(start).isDirectory()) return { files, dangling };
+  const glob = new Bun.Glob(rel);
+  const walked = [];
+  const walkedDangling = [];
+  walkTree(start, walked, walkedDangling, new Set(), skipNodeModules);
+  const matches = (p) => glob.match(toPosix(relative(root, p)));
+  return { files: walked.filter(matches), dangling: walkedDangling.filter(matches) };
+}
+
+/** An exclude, compiled: matches a path or any directory above it, as Next's `contains` match does. */
+function compileExcludes(root, excludes) {
+  const globs = excludes.flatMap((pattern) => {
+    try {
+      return [new Bun.Glob(normalisePattern(root, pattern, 'outputFileTracingExcludes'))];
+    } catch {
+      return []; // outside the app root: it cannot match anything we embed
     }
-    return [abs];
-  }
-  if (!GLOB_META.test(rel)) return [];
-  const out = [];
-  for (const hit of new Bun.Glob(rel).scanSync({
-    cwd: root,
-    dot: true,
-    onlyFiles: true,
-    followSymlinks: true,
-  })) {
-    const posix = toPosix(hit);
-    const segments = posix.split('/');
-    // A sweep never reaches into .git, and `./**/*.json` must not sweep node_modules;
-    // naming node_modules in the pattern opts in.
-    if (segments.includes('.git')) continue;
-    if (!names.includes('node_modules') && segments.includes('node_modules')) continue;
-    out.push(resolve(root, posix));
-  }
-  return out;
+  });
+  return (rel) => {
+    if (globs.length === 0) return false;
+    const parts = rel.split('/');
+    for (let n = 1; n <= parts.length; n++) {
+      const prefix = parts.slice(0, n).join('/');
+      if (globs.some((g) => g.match(prefix))) return true;
+    }
+    return false;
+  };
 }
 
 // @upstream-shim bun-declared-include-assets
@@ -350,7 +465,8 @@ function expandPattern(root, pattern, rel) {
  *
  * @param {{
  *   root: string,
- *   includes: string[],
+ *   includes?: string[],
+ *   rules?: { includes: string[], excludes: string[] }[],
  *   candidates?: string[],
  *   sidecarPackages?: Iterable<string>,
  * }} input
@@ -361,12 +477,13 @@ function expandPattern(root, pattern, rel) {
  *   warnings: string[],
  * }}
  */
-export function planAppData({ root, includes, candidates = [], sidecarPackages = [] }) {
+export function planAppData({ root, includes = [], rules = [], candidates = [], sidecarPackages = [] }) {
   const base = resolve(root);
   const realRoot = realpathSync(base);
   const sidecar = new Set(sidecarPackages);
   const byRel = new Map();
   const skipped = [];
+  const allRules = [...rules, ...(includes.length > 0 ? [{ includes, excludes: [] }] : [])];
 
   const relOf = (abs) => toPosix(relative(base, abs));
   const packageOf = (rel, prefix) => {
@@ -395,68 +512,97 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
   const gitHits = [];
   const secrets = [];
   const addons = [];
+  const special = [];
+  const danglingLinks = [];
   const inSidecar = new Map();
   const unmatched = [];
-  const exactFiles = new Set(
-    includes.filter((p) => !isAbsolute(p)).map((p) => p.split('\\').join('/').replace(/^\.\//, '')),
-  );
-  for (const p of includes) {
-    if (isAbsolute(p)) exactFiles.add(toPosix(relative(base, resolve(p))));
+  const exactFiles = new Set();
+  for (const rule of allRules) {
+    for (const p of rule.includes) {
+      exactFiles.add(
+        isAbsolute(p) ? toPosix(relative(base, resolve(p))) : p.split('\\').join('/').replace(/^\.\//, ''),
+      );
+    }
   }
 
-  for (const pattern of includes) {
-    const rel = normalisePattern(base, pattern);
-    const matches = expandPattern(base, pattern, rel);
-    for (const abs of matches) {
-      const fileRel = relOf(abs);
-      // Already carried: the public dir has its own embed, the rest of .output is code.
-      if (fileRel.startsWith('.output/')) {
-        const pkg = fileRel.startsWith('.output/server/node_modules/')
-          ? packageOf(fileRel, '.output/server/node_modules/')
-          : undefined;
-        if (pkg !== undefined) {
-          if (!inSidecar.has(pkg)) inSidecar.set(pkg, []);
-          inSidecar.get(pkg).push(fileRel);
-        }
-        continue;
+  for (const rule of allRules) {
+    const isExcluded = compileExcludes(base, rule.excludes);
+    for (const pattern of rule.includes) {
+      const rel = normalisePattern(base, pattern);
+      const { files: matches, dangling } = expandPattern(base, rel);
+      for (const abs of dangling) {
+        const linkRel = relOf(abs);
+        if (!isExcluded(linkRel)) danglingLinks.push(linkRel);
       }
-      let real;
-      try {
-        real = realpathSync(abs);
-      } catch {
-        continue;
-      }
-      const inside = relative(realRoot, real);
-      if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) {
-        escaped.push(fileRel);
-        continue;
-      }
-      const realRel = toPosix(inside);
-      if (hasGitSegment(fileRel) || hasGitSegment(realRel)) {
-        gitHits.push(via(fileRel, realRel));
-        continue;
-      }
-      if (!statSync(real).isFile()) continue;
-      const optedOut = fileRel === realRel && exactFiles.has(fileRel);
-      if ((looksSecret(fileRel) || looksSecret(realRel)) && !optedOut) {
-        secrets.push(via(fileRel, realRel));
-        continue;
-      }
-      if (NATIVE_ADDON.test(fileRel) || NATIVE_ADDON.test(realRel)) {
-        addons.push(via(fileRel, realRel));
-        continue;
-      }
-      if (fileRel.startsWith('node_modules/')) {
-        const pkg = packageOf(fileRel, 'node_modules/');
-        if (sidecar.has(pkg)) {
-          if (!inSidecar.has(pkg)) inSidecar.set(pkg, []);
-          inSidecar.get(pkg).push(fileRel);
+      for (const abs of matches) {
+        const fileRel = relOf(abs);
+        // Already carried: the public dir has its own embed, the rest of .output is code.
+        if (fileRel.startsWith('.output/')) {
+          const pkg = fileRel.startsWith('.output/server/node_modules/')
+            ? packageOf(fileRel, '.output/server/node_modules/')
+            : undefined;
+          if (pkg !== undefined) {
+            if (!inSidecar.has(pkg)) inSidecar.set(pkg, []);
+            inSidecar.get(pkg).push(fileRel);
+          }
           continue;
         }
+        // outputFileTracingExcludes: not traced, so not judged either.
+        if (isExcluded(fileRel)) continue;
+        let real;
+        try {
+          real = realpathSync(abs);
+        } catch {
+          danglingLinks.push(fileRel);
+          continue;
+        }
+        const inside = relative(realRoot, real);
+        if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) {
+          escaped.push(fileRel);
+          continue;
+        }
+        const realRel = toPosix(inside);
+        if (isExcluded(realRel)) continue;
+        if (hasGitSegment(fileRel) || hasGitSegment(realRel)) {
+          gitHits.push(via(fileRel, realRel));
+          continue;
+        }
+        if (!statSync(real).isFile()) {
+          special.push(via(fileRel, realRel));
+          continue;
+        }
+        const optedOut = fileRel === realRel && exactFiles.has(fileRel);
+        if ((looksSecret(fileRel) || looksSecret(realRel)) && !optedOut) {
+          secrets.push(via(fileRel, realRel));
+          continue;
+        }
+        if (NATIVE_ADDON.test(fileRel) || NATIVE_ADDON.test(realRel)) {
+          addons.push(via(fileRel, realRel));
+          continue;
+        }
+        if (fileRel.startsWith('node_modules/')) {
+          const pkg = packageOf(fileRel, 'node_modules/');
+          if (sidecar.has(pkg)) {
+            if (!inSidecar.has(pkg)) inSidecar.set(pkg, []);
+            inSidecar.get(pkg).push(fileRel);
+            continue;
+          }
+        }
+        record(fileRel, realRel, real, true);
       }
-      record(fileRel, realRel, real, true);
+      if (matches.length === 0 && dangling.length === 0) unmatched.push(pattern);
     }
-    if (matches.length === 0) unmatched.push(pattern);
+  }
+
+  if (danglingLinks.length > 0) {
+    throw new Error(
+      `outputFileTracingIncludes: these matches are dangling symlinks (their target does not exist): ${[...new Set(danglingLinks)].sort().join(', ')}`,
+    );
+  }
+  if (special.length > 0) {
+    throw new Error(
+      `outputFileTracingIncludes: these matches are not a regular file (a pipe, socket or device): ${special.sort().join(', ')}`,
+    );
   }
 
   if (unmatched.length > 0) {

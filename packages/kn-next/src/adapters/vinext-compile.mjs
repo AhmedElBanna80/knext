@@ -92,7 +92,7 @@ import {
     dataPathsMissing,
     discoverDataLiterals,
     planAppData,
-    readTraceIncludes,
+    readTraceRules,
     rewriteFsImports,
 } from "./app-data-embed.mjs";
 import { ALIASED_FS } from "./app-data-alias.mjs";
@@ -1317,7 +1317,7 @@ if (SELF_CONTAINED) {
     try {
         DATA_PLAN = planAppData({
             root: APP_ROOT,
-            includes: await readTraceIncludes(APP_ROOT),
+            rules: await readTraceRules(APP_ROOT),
             candidates: discoverDataLiterals({
                 serverDir: ENTRY_DIR,
                 cwdRoot: APP_ROOT,

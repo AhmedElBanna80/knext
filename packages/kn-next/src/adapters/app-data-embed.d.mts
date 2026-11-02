@@ -13,10 +13,14 @@ export type AppDataPlan = {
     warnings: string[];
 };
 
-export declare function readTraceIncludes(
-    root: string,
-    opts?: { warn?: (message: string) => void },
-): Promise<string[]>;
+export type TraceRule = { includes: string[]; excludes: string[] };
+
+export declare function readTraceRules(root: string): Promise<TraceRule[]>;
+
+export declare function deriveTraceRules(
+    includes: Record<string, string[]>,
+    excludes: Record<string, string[]>,
+): TraceRule[];
 
 export declare function serverOutputFiles(serverDir: string): string[];
 
@@ -24,7 +28,8 @@ export declare function scanDataLiterals(source: string, cwdRoot: string, entryD
 
 export declare function planAppData(input: {
     root: string;
-    includes: string[];
+    includes?: string[];
+    rules?: TraceRule[];
     candidates?: string[];
     sidecarPackages?: Iterable<string>;
 }): AppDataPlan;

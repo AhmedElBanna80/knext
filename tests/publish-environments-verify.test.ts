@@ -70,6 +70,14 @@ describe('evaluatePublishEnvironments', () => {
   });
 });
 
+describe('policy entry without a type', () => {
+  it('reds (fails closed) when a policy entry carries no type', () => {
+    const s = good();
+    s.policies['npm-publish'] = [...pol(LANES), { name: LANES[0] } as never];
+    expect(evaluatePublishEnvironments(s).join('\n')).toContain('non-branch');
+  });
+});
+
 describe('reviewer + secret checks', () => {
   it('reds when the required reviewer is a team', () => {
     const s = good();

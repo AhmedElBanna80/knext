@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 const FILE = 'scripts/verify-publish-environments.mjs';
 const TEST = 'tests/publish-environments-verify.test.ts';
 const MUTATIONS = [
-  ['reviewer rule no longer required', "name === 'npm-publish-latest' &&", 'false &&'],
+  ['reviewer rule no longer required', 'if (!rule) {', 'if (false) {'],
   [
     'custom-policy check dropped',
     'custom_branch_policies !== true',

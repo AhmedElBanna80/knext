@@ -75,7 +75,7 @@ describe('isWorkflowShaped', () => {
     expect(isWorkflowShaped('data:\n  on: 1\n  jobs: 2\n')).toBe(false);
   });
   it('accepts a BOM-prefixed on: key', () => {
-    expect(isWorkflowShaped(`\uFEFF${WORKFLOW}`)).toBe(true);
+    expect(isWorkflowShaped(`\uFEFFon: push\njobs:\n  a:\n    runs-on: x\n`)).toBe(true);
   });
   it('accepts a flow-style mapping', () => {
     expect(isWorkflowShaped('{on: push, jobs: {a: {runs-on: x}}}\n')).toBe(true);
@@ -170,7 +170,7 @@ describe('scanForNestedWorkflows: nested dir can never be excluded', () => {
     expect(rules).toContain('exclusion-nested');
   });
   it('flags a BOM-prefixed workflow-shaped file', () => {
-    const root = fixture({ 'a/ci.yml': `\uFEFF${WORKFLOW}` });
+    const root = fixture({ 'a/ci.yml': `\uFEFFon: push\njobs:\n  a:\n    runs-on: x\n` });
     expect(paths(root)).toEqual(['a/ci.yml']);
   });
   it('ignores untracked files (only tracked files are scanned)', () => {

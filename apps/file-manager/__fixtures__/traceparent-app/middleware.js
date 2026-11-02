@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 
 // Fixture for apps/file-manager/traceparent-middleware.test.ts. Middleware and
-// the route handler share ONE `next start` process (knext's topology, unlike
-// Vercel's separate functions), exercising the behaviours the quarantined
+// the route handler share ONE standalone-server process (unlike Vercel's
+// separate functions), exercising the behaviours the quarantined
 // upstream otel-middleware-trace case is about.
 const MW_TRACEPARENT = '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01';
 

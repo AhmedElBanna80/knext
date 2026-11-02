@@ -62,8 +62,12 @@ executable, the generated image, and the runtime. Three things are worth knowing
   compile-cache warm-up script and a compatibility shim, all copied into the image), and the
   generated `Dockerfile.standalone` into the app directory.
 - **`@getknext/core` must be installed in the workspace**, at the root or in the app. The image
-  copies it from wherever the install put it. A package manager that links instead of copying
-  (pnpm's default layout) needs a real copy, for example with `node-linker=hoisted` in `.npmrc`.
+  copies it from wherever the install put it, and leaves out that package's own `node_modules`
+  (its dependency links point into your workspace and would dangle inside the image), because the
+  image installs the supervisor's few runtime dependencies itself. This is what lets a Bun
+  workspace build an image that boots. A package manager that links the package itself instead of
+  copying it (pnpm's default layout) still needs a real copy, for example with
+  `node-linker=hoisted` in `.npmrc`.
 
 Files your server reads at runtime without importing them are traced only if Next knows about them.
 List them with `outputFileTracingIncludes`, relative to the app:

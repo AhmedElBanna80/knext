@@ -430,6 +430,8 @@ type Source = { file: string; line: number; text: string };
 type Part = Source & { s: string };
 /** One way a value can expand: the literal parts that, joined, spell it. */
 type Alt = Part[];
+/** A piece of text attributed to where it was written (never spread a Part: its own `s` would win). */
+const piece = (s: string, o: Source): Part => ({ s, file: o.file, line: o.line, text: o.text });
 
 type ScanOpts = {
   /** Values callers pass to a composite action's inputs through `with:`, by input name. */
@@ -677,19 +679,19 @@ function expandText(
   seen: string[],
 ): Resolution {
   const spans = [...s.matchAll(REF_SPAN)];
-  if (spans.length === 0) return { alts: [[{ s, ...origin }]], unresolved: [] };
+  if (spans.length === 0) return { alts: [[piece(s, origin)]], unresolved: [] };
   const unresolved: string[] = [];
   const options: Alt[][] = [];
   let at = 0;
   for (const m of spans) {
     const idx = m.index as number;
-    options.push([[{ s: s.slice(at, idx), ...origin }]]);
+    options.push([[piece(s.slice(at, idx), origin)]]);
     const r = resolveSpan(m[0], origin, t, opts, seen);
     unresolved.push(...r.unresolved);
     options.push(r.alts.length ? r.alts : [[]]);
     at = idx + m[0].length;
   }
-  options.push([[{ s: s.slice(at), ...origin }]]);
+  options.push([[piece(s.slice(at), origin)]]);
   return { alts: cartesian(options), unresolved };
 }
 
@@ -750,7 +752,7 @@ function resolveSpan(
     const operands = [...inner.matchAll(EXPR_OPERAND)].map((m) => m[0]);
     // The expression's own literals (`inputs.fw || '16.3.8'`) are version text too.
     const out: Resolution = {
-      alts: [[{ s: inner.replace(EXPR_OPERAND, ''), ...origin }]],
+      alts: [[piece(inner.replace(EXPR_OPERAND, ''), origin)]],
       unresolved: [],
     };
     for (const op of operands) {

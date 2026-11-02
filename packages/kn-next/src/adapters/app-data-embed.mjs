@@ -35,7 +35,7 @@
  * onto `$bunfs`.
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const CONFIG_NAMES = [
@@ -47,28 +47,82 @@ const CONFIG_NAMES = [
   'next.config.cts',
 ];
 const GLOB_META = /[*?[\]{}]/;
-/** `.env*`, `*.pem`, `*.key`, `id_*`: named exactly or not embedded (same rule as compile.include). */
-const SECRET_NAME = /^(?:\.env(?:\..*)?|id_.*|.*\.(?:pem|key))$/i;
+/**
+ * File names that look like credentials. A SAFEGUARD AGAINST ACCIDENTS (a broad
+ * glob, a link with an innocent name), not a guarantee: it matches names, so a
+ * secret stored under an ordinary name is not recognised.
+ */
+const SECRET_BASENAME = [
+  /^\.env(?:\..*)?$/i,
+  /^\.(?:npmrc|yarnrc(?:\.yml)?|netrc|pypirc|pgpass|htpasswd|git-credentials|dockercfg|my\.cnf|boto|s3cfg)$/i,
+  /^(?:_netrc|htpasswd)$/i,
+  /^id_.*/i,
+  /\.(?:pem|key|p12|pfx|jks|keystore|p8|crt|cer|der|ppk|kdbx|gpg)$/i,
+  /^(?:.*[-_.])?credentials?(?:[-_.].*)?$/i,
+  /^(?:.*[-_.])?secrets?(?:[-_.].*)?$/i,
+  /^(?:.*[-_.])?tokens?(?:[-_.].*)?$/i,
+  /^service[-_]?account.*\.json$/i,
+  /\.(?:tfvars|tfstate)(?:\..*)?$/i,
+  /^kubeconfig(?:[-_.].*)?$/i,
+];
+/** Directories whose contents are credentials or configuration for them. */
+const SECRET_DIRS = new Set(['.ssh', '.aws', '.kube', '.gnupg', '.gcloud', '.azure', '.docker']);
+
+/** Does this app-root-relative path (posix) look like a credential, by file or directory name? */
+function looksSecret(rel) {
+  const parts = rel.split('/');
+  return (
+    parts.slice(0, -1).some((d) => SECRET_DIRS.has(d)) ||
+    SECRET_BASENAME.some((re) => re.test(parts[parts.length - 1]))
+  );
+}
+const hasGitSegment = (rel) => rel.split('/').includes('.git');
 /** A native addon dlopens a real file; `$bunfs` cannot provide one. */
 const NATIVE_ADDON = /\.(?:node|so|dylib|dll)$/i;
 const WARN_BYTES = 64 * 1024 * 1024;
 
 const toPosix = (p) => p.split(sep).join('/');
 
+const INCLUDES_KEY = /outputFileTracingIncludes/;
+/** Every module specifier a config source imports, requires or re-exports. */
+const SPECIFIER = /\b(?:from|import|require)\s*\(?\s*["']([^"'\n]+)["']/g;
+const BUILTIN_SPECIFIER = /^(?:node:|next(?:\/|$)|(?:fs|path|url|os|module)(?:\/|$))/;
+
+const specifiersOf = (text) => [...text.matchAll(SPECIFIER)].map((m) => m[1]);
+
+/** A relative import: the includes may live in the module it names. */
+const importsLocalModule = (text) => specifiersOf(text).some((spec) => spec.startsWith('.'));
+
+/** Could this config source declare `outputFileTracingIncludes`, directly or through something it imports? */
+function canDeclareIncludes(text) {
+  return (
+    INCLUDES_KEY.test(text) ||
+    specifiersOf(text).some((spec) => spec.startsWith('.') || !BUILTIN_SPECIFIER.test(spec))
+  );
+}
+
 /**
  * The app's `outputFileTracingIncludes` globs (every route's, flattened — a
  * binary has one filesystem, so the per-route scoping cannot be kept), read the
  * way Next.js reads them: top-level, replaced by the legacy `experimental` key
- * when that is present. No next.config → `[]`. A config that exists but cannot
- * be loaded or has a malformed value THROWS: embedding nothing would be the
- * silent drop this exists to prevent.
+ * when that is present. No next.config → `[]`. A config that cannot declare
+ * includes (names no such key, imports nothing but built-ins) is not run. A
+ * config that might declare them and cannot be loaded THROWS when it mentions
+ * the key or imports a local module (embedding nothing would be the silent drop
+ * this exists to prevent); otherwise it warns and reads no includes. A
+ * malformed value always throws.
  *
  * @param {string} root the app root
  * @returns {Promise<string[]>}
  */
-export async function readTraceIncludes(root) {
+export async function readTraceIncludes(root, { warn = console.warn } = {}) {
   const name = CONFIG_NAMES.find((n) => existsSync(join(root, n)));
   if (name === undefined) return [];
+  const text = readFileSync(join(root, name), 'utf8');
+  // A config that cannot declare includes is not run at all: this is a separate
+  // process from the one that loaded it for the build, so loading it here is a
+  // second execution of the user's config code.
+  if (!canDeclareIncludes(text)) return [];
   let loaded;
   try {
     loaded = await import(pathToFileURL(join(root, name)).href);
@@ -78,9 +132,18 @@ export async function readTraceIncludes(root) {
     }
     loaded = config;
   } catch (err) {
-    throw new Error(
-      `could not load ${name} to read outputFileTracingIncludes: ${err instanceof Error ? err.message : String(err)}`,
+    const why = err instanceof Error ? err.message : String(err);
+    // Only a config that says it declares includes (or pulls in a local module that might)
+    // must be readable: failing every self-contained build over an unrelated config error
+    // would be worse than the silent drop this guards against.
+    if (INCLUDES_KEY.test(text) || importsLocalModule(text)) {
+      throw new Error(`could not load ${name} to read outputFileTracingIncludes: ${why}`);
+    }
+    warn(
+      `[knext compile] self-contained: could not load ${name} (${why}); it does not mention outputFileTracingIncludes ` +
+        'and imports no local module, so no includes were read',
     );
+    return [];
   }
   const config = loaded ?? {};
   const experimental = config.experimental;
@@ -202,9 +265,10 @@ export function scanDataLiterals(source, cwdRoot, entryDir) {
   return [...found];
 }
 
-/** Every regular file under `dir`, as absolute paths (a symlink is returned, not followed). */
+/** Every file under `dir` as absolute paths (a symlink is returned, not followed); never descends into `.git`. */
 function walkFiles(dir, out, skipNodeModules) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '.git') continue;
     if (skipNodeModules && entry.name === 'node_modules') continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) walkFiles(path, out, skipNodeModules);
@@ -228,6 +292,11 @@ function normalisePattern(root, pattern) {
   if (rel.split('/').includes('..')) {
     throw new Error(
       `outputFileTracingIncludes: '${pattern}' contains '..' — it is outside the app root (${root})`,
+    );
+  }
+  if (hasGitSegment(rel)) {
+    throw new Error(
+      `outputFileTracingIncludes: .git is never embedded, but '${pattern}' names it — a repository's history and config are not app data`,
     );
   }
   return rel;
@@ -254,17 +323,30 @@ function expandPattern(root, pattern, rel) {
     followSymlinks: true,
   })) {
     const posix = toPosix(hit);
-    // `./**/*.json` must not sweep node_modules; naming it in the pattern opts in.
-    if (!names.includes('node_modules') && posix.split('/').includes('node_modules')) continue;
+    const segments = posix.split('/');
+    // A sweep never reaches into .git, and `./**/*.json` must not sweep node_modules;
+    // naming node_modules in the pattern opts in.
+    if (segments.includes('.git')) continue;
+    if (!names.includes('node_modules') && segments.includes('node_modules')) continue;
     out.push(resolve(root, posix));
   }
   return out;
 }
 
+// @upstream-shim bun-declared-include-assets
 /**
  * The files to embed: every declared include plus every literal-path
  * candidate that is embeddable. Throws for a declared include that cannot be
  * embedded (see the module doc).
+ *
+ * Every match is judged by its REAL path (symlinks resolved): it must stay
+ * inside the app root, must not sit under `.git`, and neither its own name nor
+ * its target's may look like a credential. A link is embedded once, under its
+ * target's path, and answers to its own name through `aliases`.
+ *
+ * The one opt-out for the credential-name check: a pattern that is an exact
+ * file path (no glob, no directory) which is not a link. That is deliberate and
+ * visible in the config, and it cannot be reached by a broad glob or a link.
  *
  * @param {{
  *   root: string,
@@ -273,7 +355,7 @@ function expandPattern(root, pattern, rel) {
  *   sidecarPackages?: Iterable<string>,
  * }} input
  * @returns {{
- *   files: { rel: string, abs: string, size: number, declared: boolean }[],
+ *   files: { rel: string, abs: string, size: number, declared: boolean, aliases: string[] }[],
  *   totalBytes: number,
  *   skipped: { rel: string, reason: string }[],
  *   warnings: string[],
@@ -291,13 +373,36 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
     const parts = rel.slice(prefix.length).split('/');
     return parts[0]?.startsWith('@') ? `${parts[0]}/${parts[1]}` : parts[0];
   };
+  /** Record `logical` (a path under the app root) as embedded from `real`, once per real file. */
+  const record = (logical, realRel, real, declared) => {
+    const have = byRel.get(realRel);
+    if (have) {
+      if (logical !== realRel && !have.aliases.includes(logical)) have.aliases.push(logical);
+      have.declared = have.declared || declared;
+      return;
+    }
+    byRel.set(realRel, {
+      rel: realRel,
+      abs: real,
+      size: statSync(real).size,
+      declared,
+      aliases: logical === realRel ? [] : [logical],
+    });
+  };
+  const via = (logical, realRel) => (logical === realRel ? logical : `${logical} -> ${realRel}`);
 
   const escaped = [];
+  const gitHits = [];
   const secrets = [];
   const addons = [];
   const inSidecar = new Map();
   const unmatched = [];
-  const literals = new Set(includes.map((p) => p.split('\\').join('/').replace(/^\.\//, '')));
+  const exactFiles = new Set(
+    includes.filter((p) => !isAbsolute(p)).map((p) => p.split('\\').join('/').replace(/^\.\//, '')),
+  );
+  for (const p of includes) {
+    if (isAbsolute(p)) exactFiles.add(toPosix(relative(base, resolve(p))));
+  }
 
   for (const pattern of includes) {
     const rel = normalisePattern(base, pattern);
@@ -326,13 +431,19 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
         escaped.push(fileRel);
         continue;
       }
-      if (!statSync(real).isFile()) continue;
-      if (SECRET_NAME.test(basename(fileRel)) && !literals.has(fileRel)) {
-        secrets.push(fileRel);
+      const realRel = toPosix(inside);
+      if (hasGitSegment(fileRel) || hasGitSegment(realRel)) {
+        gitHits.push(via(fileRel, realRel));
         continue;
       }
-      if (NATIVE_ADDON.test(fileRel)) {
-        addons.push(fileRel);
+      if (!statSync(real).isFile()) continue;
+      const optedOut = fileRel === realRel && exactFiles.has(fileRel);
+      if ((looksSecret(fileRel) || looksSecret(realRel)) && !optedOut) {
+        secrets.push(via(fileRel, realRel));
+        continue;
+      }
+      if (NATIVE_ADDON.test(fileRel) || NATIVE_ADDON.test(realRel)) {
+        addons.push(via(fileRel, realRel));
         continue;
       }
       if (fileRel.startsWith('node_modules/')) {
@@ -343,7 +454,7 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
           continue;
         }
       }
-      byRel.set(fileRel, { rel: fileRel, abs, size: statSync(real).size, declared: true });
+      record(fileRel, realRel, real, true);
     }
     if (matches.length === 0) unmatched.push(pattern);
   }
@@ -358,10 +469,16 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
       `outputFileTracingIncludes: these matches resolve (through a symlink) outside the app root ${realRoot}: ${escaped.sort().join(', ')}`,
     );
   }
+  if (gitHits.length > 0) {
+    throw new Error(
+      `outputFileTracingIncludes: .git is never embedded, but these matches are under it: ${gitHits.sort().join(', ')}`,
+    );
+  }
   if (secrets.length > 0) {
     throw new Error(
       `outputFileTracingIncludes: refusing to embed files that look like secrets: ${secrets.sort().join(', ')} — ` +
-        'list a file by its exact path if it really belongs in the executable',
+        'this check matches names and is a safeguard, not a guarantee. If a file really belongs in the ' +
+        'executable, list it by its exact path (no glob, not through a link)',
     );
   }
   if (addons.length > 0) {
@@ -383,11 +500,10 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
 
   for (const abs of candidates) {
     const rel = relOf(abs);
-    const skip = (reason) => skipped.push({ rel, reason });
+    const skip = (reason, what = rel) => skipped.push({ rel: what, reason });
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
-    if (byRel.has(rel)) continue;
     const parts = rel.split('/');
-    if (parts[0] === '.output' || parts[0] === '.git' || parts.includes('node_modules')) {
+    if (parts[0] === '.output' || hasGitSegment(rel) || parts.includes('node_modules')) {
       skip('inside .output, .git or node_modules');
       continue;
     }
@@ -402,16 +518,23 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
       skip('resolves outside the app root');
       continue;
     }
+    const realRel = toPosix(inside);
     if (!statSync(real).isFile()) continue;
-    if (SECRET_NAME.test(basename(rel))) {
-      skip('looks like a secret: declare it in outputFileTracingIncludes to embed it');
+    if (hasGitSegment(realRel)) {
+      skip(`points into .git (${realRel}), which is never embedded`);
       continue;
     }
-    if (NATIVE_ADDON.test(rel)) {
+    if (looksSecret(rel) || looksSecret(realRel)) {
+      skip(
+        'looks like a secret: declare it in outputFileTracingIncludes by its exact path to embed it',
+      );
+      continue;
+    }
+    if (NATIVE_ADDON.test(rel) || NATIVE_ADDON.test(realRel)) {
       skip('a native addon cannot be embedded');
       continue;
     }
-    byRel.set(rel, { rel, abs, size: statSync(real).size, declared: false });
+    record(rel, realRel, real, false);
   }
 
   const files = [...byRel.values()].sort((a, b) => (a.rel < b.rel ? -1 : 1));
@@ -427,21 +550,35 @@ export function planAppData({ root, includes, candidates = [], sidecarPackages =
 }
 
 /**
- * Which planned files the compiled executable does NOT carry at
- * `/$bunfs/root/<rel>`. A bundler that dropped one would otherwise ship a
- * binary that answers 500 for it.
+ * Which planned files the compiled executable does NOT carry as an embedded
+ * file. A bundler that dropped one would otherwise ship a binary that answers
+ * 500 for it.
+ *
+ * The check is for the EXACT embedded name, `\0/$bunfs/root/<rel>\0`: the name
+ * as the executable's own file table stores it, delimited by NULs. A substring
+ * scan is not enough — the same path also appears as a quoted string in the
+ * bundled JavaScript (the constant the file import yields), and as the prefix of
+ * a longer name — and either would pass a binary whose file was dropped. Bun
+ * names a root-level file `/$bunfs/root/./x.json` and gives an extensionless
+ * file a trailing dot (`LICENSE.`).
  *
  * @param {Uint8Array} binary
  * @param {{ rel: string }[]} files
  */
 export function dataPathsMissing(binary, files) {
   const buf = Buffer.from(binary.buffer, binary.byteOffset, binary.byteLength);
-  // Bun names a root-level file `/$bunfs/root/./x.json`, a nested one `/$bunfs/root/a/x.json`.
+  const hasName = (name) => {
+    const needle = Buffer.from(name);
+    for (let at = buf.indexOf(needle); at !== -1; at = buf.indexOf(needle, at + 1)) {
+      if (at > 0 && buf[at - 1] === 0 && buf[at + needle.length] === 0) return true;
+    }
+    return false;
+  };
   return files
-    .filter(
-      (f) =>
-        buf.indexOf(`/$bunfs/root/${f.rel}`) === -1 && buf.indexOf(`/$bunfs/root/./${f.rel}`) === -1,
-    )
+    .filter((f) => {
+      const rels = [f.rel, `${f.rel}.`];
+      return !rels.some((r) => hasName(`/$bunfs/root/${r}`) || hasName(`/$bunfs/root/./${r}`));
+    })
     .map((f) => f.rel);
 }
 

@@ -134,15 +134,19 @@ describe("rewriteFsImports", () => {
     });
 });
 
-describe("dataPathsMissing", () => {
-    const bin = Buffer.from(
-        "xx /$bunfs/root/data/a.json yy /$bunfs/root/./my-data.json zz",
+describe("dataPathsMissing: an exact, NUL-delimited name in the executable", () => {
+    const nul = (...names: string[]) => Buffer.from(`\0${names.join("\0")}\0`);
+    const bin = nul(
+        "/$bunfs/root/data/a.json",
+        "/$bunfs/root/./my-data.json",
+        "/$bunfs/root/LICENSE.",
     );
     it("names the files the executable does not carry", () => {
         expect(
             dataPathsMissing(bin, [
                 { rel: "data/a.json" },
                 { rel: "my-data.json" },
+                { rel: "LICENSE" },
                 { rel: "data/gone.json" },
             ]),
         ).toEqual(["data/gone.json"]);
@@ -154,6 +158,26 @@ describe("dataPathsMissing", () => {
                 { rel: "b/c" },
             ]),
         ).toEqual(["a", "b/c"]);
+    });
+    it("a longer name that merely starts with the planned one does not count", () => {
+        expect(
+            dataPathsMissing(nul("/$bunfs/root/data/a.json.bak"), [
+                { rel: "data/a.json" },
+            ]),
+        ).toEqual(["data/a.json"]);
+    });
+    it("the path as a JavaScript string constant (quoted) is not an embedded file", () => {
+        const code = Buffer.from('var P="/$bunfs/root/data/a.json";var Q=1');
+        expect(dataPathsMissing(code, [{ rel: "data/a.json" }])).toEqual([
+            "data/a.json",
+        ]);
+    });
+    it("a path that is the tail of another is not found", () => {
+        expect(
+            dataPathsMissing(nul("/$bunfs/root/x/data/a.json"), [
+                { rel: "data/a.json" },
+            ]),
+        ).toEqual(["data/a.json"]);
     });
 });
 
@@ -273,16 +297,15 @@ describe("planAppData", () => {
 });
 
 describe("installEmbeddedDataAlias", () => {
+    const target = "/$bunfs/root/data/a.json";
+    const files = [{ rel: "data/a.json", path: target }];
+
     it("maps exactly the embedded paths — absolute, build-root, relative, normalised, URL — and nothing else", () => {
-        const root = app({ "data/a.json": "{}" });
-        const map = installEmbeddedDataAlias(
-            [{ rel: "data/a.json", path: "/$bunfs/root/data/a.json" }],
-            {
-                appRoot: "/build/machine/app",
-                cwd: root,
-            },
-        ) as (p: unknown) => unknown;
-        const target = "/$bunfs/root/data/a.json";
+        const root = app({});
+        const map = installEmbeddedDataAlias(files, {
+            appRoot: "/build/machine/app",
+            cwd: root,
+        }) as (p: unknown) => unknown;
         expect(map(join(root, "data/a.json"))).toBe(target);
         expect(map("/build/machine/app/data/a.json")).toBe(target);
         expect(map(join(root, "data/../data/a.json"))).toBe(target);
@@ -293,5 +316,35 @@ describe("installEmbeddedDataAlias", () => {
         expect(map(join(root, "data"))).toBe(join(root, "data"));
         expect(map(42)).toBe(42);
         expect(map("")).toBe("");
+    });
+
+    it("the real disk wins: a file that exists at the path is read as it is, the embedded copy is the fallback", () => {
+        const root = app({ "data/a.json": "runtime" });
+        const buildRoot = app({ "data/a.json": "runtime-on-build-path" });
+        const map = installEmbeddedDataAlias(files, {
+            appRoot: buildRoot,
+            cwd: root,
+        }) as (p: unknown) => unknown;
+        expect(map(join(root, "data/a.json"))).toBe(join(root, "data/a.json"));
+        expect(map(join(buildRoot, "data/a.json"))).toBe(
+            join(buildRoot, "data/a.json"),
+        );
+        expect(map(new URL(`file://${join(root, "data/a.json")}`))).toEqual(
+            new URL(`file://${join(root, "data/a.json")}`),
+        );
+        rmSync(join(root, "data/a.json"));
+        expect(map(join(root, "data/a.json"))).toBe(target);
+    });
+
+    it("a file written at runtime to a previously absent embedded path is read back, not the embedded copy", () => {
+        const root = app({});
+        const map = installEmbeddedDataAlias(files, {
+            appRoot: "/build/machine/app",
+            cwd: root,
+        }) as (p: unknown) => unknown;
+        expect(map(join(root, "data/a.json"))).toBe(target);
+        mkdirSync(join(root, "data"), { recursive: true });
+        writeFileSync(join(root, "data/a.json"), "fresh");
+        expect(map(join(root, "data/a.json"))).toBe(join(root, "data/a.json"));
     });
 });

@@ -299,6 +299,49 @@ t("embedded", () => readFileSync(join(process.cwd(), "data/a.json"), "utf8"));`,
         expect(readFileSync(join(r.dir, "data/new.txt"), "utf8")).toBe("fresh");
     }, 180_000);
 
+    it("a file written at runtime over an embedded path is read back as written, and the embedded copy is only the fallback", () => {
+        const app = baseApp(
+            `const p = join(process.cwd(), "data/a.json");
+t("before", () => readFileSync(p, "utf8"));
+fs.mkdirSync(join(process.cwd(), "data"), { recursive: true });
+fs.writeFileSync(p, "RUNTIME_VERSION");
+t("after", () => readFileSync(p, "utf8"));
+t("afterRel", () => readFileSync("data/a.json", "utf8"));
+out.afterPromise = await fs.promises.readFile(p, "utf8");
+fs.unlinkSync(p);
+t("afterDelete", () => readFileSync(p, "utf8"));`,
+            'export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n',
+        );
+        write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        const r = runAlone(b.exe);
+        expect(r.result.before).toContain(A_MARK);
+        expect(r.result.after).toBe("RUNTIME_VERSION");
+        expect(r.result.afterRel).toBe("RUNTIME_VERSION");
+        expect(r.result.afterPromise).toBe("RUNTIME_VERSION");
+        expect(r.result.afterDelete).toContain(A_MARK);
+    }, 180_000);
+
+    it("the build machine's absolute path never shadows a runtime file", () => {
+        const app = baseApp(
+            `const abs = BUILD_ROOT + "/data/a.json";
+t("embeddedFallback", () => readFileSync(abs, "utf8"));
+fs.mkdirSync(BUILD_ROOT + "/data", { recursive: true });
+fs.writeFileSync(abs, "RUNTIME_AT_BUILD_PATH");
+t("runtimeWins", () => readFileSync(abs, "utf8"));`,
+            'export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n',
+        );
+        write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        // the build tree is gone: the absolute path can only be answered by the executable
+        rmSync(join(app.work, "data"), { recursive: true, force: true });
+        const r = runAlone(b.exe);
+        expect(r.result.embeddedFallback).toContain(A_MARK);
+        expect(r.result.runtimeWins).toBe("RUNTIME_AT_BUILD_PATH");
+    }, 180_000);
+
     it("an entry with no fs import of its own (only require) still gets the alias", () => {
         const app = baseApp("");
         write(
@@ -377,13 +420,67 @@ describe("self-contained: config shapes", () => {
         expect(runAlone(b.exe).result.cwdAbs).toContain(A_MARK);
     }, 180_000);
 
-    it("a next.config that cannot be loaded FAILS the build instead of embedding nothing", () => {
-        const app = baseApp("", 'throw new Error("config boom");\n');
+    it("a next.config that cannot be loaded does not stop a build that has no includes to read", () => {
+        const app = baseApp(
+            "",
+            'import "not-installed-pkg-xyz";\nthrow new Error("config boom");\n',
+        );
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        expect(String(b.stderr)).toMatch(
+            /could not load next\.config\.mjs[\s\S]*not-installed-pkg-xyz[\s\S]*does not mention outputFileTracingIncludes/,
+        );
+    }, 120_000);
+
+    it("a next.config that cannot declare includes is not executed a second time", () => {
+        const app = baseApp(
+            "",
+            'import path from "node:path";\nconsole.log("CONFIG_RAN_MARK_7731");\nexport default { reactStrictMode: true };\n',
+        );
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        expect(String(b.stdout) + String(b.stderr)).not.toContain(
+            "CONFIG_RAN_MARK_7731",
+        );
+    }, 120_000);
+
+    it("a next.config that declares includes is executed (once) to read them", () => {
+        const app = baseApp(
+            "",
+            'console.log("CONFIG_RAN_MARK_9902");\nexport default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n',
+        );
+        write(join(app.work, "data/a.json"), "{}\n");
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        expect(String(b.stdout).split("CONFIG_RAN_MARK_9902").length - 1).toBe(
+            1,
+        );
+    }, 120_000);
+
+    it("a next.config that mentions outputFileTracingIncludes but cannot be loaded FAILS the build instead of embedding nothing", () => {
+        const app = baseApp(
+            "",
+            'const includes = { "/": ["./data/**/*"] };\nthrow new Error("config boom");\nexport default { outputFileTracingIncludes: includes };\n',
+        );
         const b = compile(app.work);
         expect(b.status).toBe(1);
         expect(String(b.stderr)).toMatch(
             /could not load next\.config\.mjs[\s\S]*config boom/,
         );
+    }, 120_000);
+
+    it("a next.config that pulls in another module and cannot be loaded FAILS the build (the includes may live there)", () => {
+        const app = baseApp(
+            "",
+            'import shared from "./shared-config.mjs";\nexport default { ...shared };\n',
+        );
+        write(
+            join(app.work, "shared-config.mjs"),
+            'throw new Error("shared boom");\n',
+        );
+        const b = compile(app.work);
+        expect(b.status).toBe(1);
+        expect(String(b.stderr)).toMatch(/could not load next\.config\.mjs/);
     }, 120_000);
 
     it("no next.config and no includes: builds, embeds no data", () => {
@@ -438,6 +535,37 @@ describe("self-contained: a declared include that cannot be embedded fails the b
         expect(String(b.stderr)).toMatch(
             /look like secrets: conf\/\.env\.production/,
         );
+    }, 120_000);
+
+    it("a symlink with an innocent name that points at a secret is refused, and the secret is not in the build", () => {
+        const b = failing('["./data/*"]', (work) => {
+            write(join(work, "vault/.env"), `TOKEN=${SECRET_PRIVATE_MARK}\n`);
+            mkdirSync(join(work, "data"), { recursive: true });
+            symlinkSync(
+                join(work, "vault/.env"),
+                join(work, "data/readme.txt"),
+            );
+        });
+        expect(b.status).toBe(1);
+        expect(String(b.stderr)).toMatch(
+            /look like secrets[\s\S]*data\/readme\.txt/,
+        );
+        expect(existsSync(b.exe)).toBe(false);
+    }, 120_000);
+
+    it("a broad sweep embeds the data and none of .git", () => {
+        const app = baseApp(
+            `t("a", () => readFileSync(join(process.cwd(), "data/a.json"), "utf8"));`,
+            'export default { outputFileTracingIncludes: { "/": ["./data/**/*", "./.git/**/*"] } };\n',
+        );
+        write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+        write(
+            join(app.work, ".git/config"),
+            `[remote] ${SECRET_PRIVATE_MARK}\n`,
+        );
+        const b = compile(app.work);
+        expect(b.status).toBe(1);
+        expect(String(b.stderr)).toMatch(/never embedded[\s\S]*\.git/);
     }, 120_000);
 
     it("a native addon cannot be embedded as data", () => {

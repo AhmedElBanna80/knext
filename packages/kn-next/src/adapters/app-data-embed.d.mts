@@ -1,4 +1,10 @@
-export type AppDataFile = { rel: string; abs: string; size: number; declared: boolean };
+export type AppDataFile = {
+    rel: string;
+    abs: string;
+    size: number;
+    declared: boolean;
+    aliases: string[];
+};
 
 export type AppDataPlan = {
     files: AppDataFile[];
@@ -7,7 +13,10 @@ export type AppDataPlan = {
     warnings: string[];
 };
 
-export declare function readTraceIncludes(root: string): Promise<string[]>;
+export declare function readTraceIncludes(
+    root: string,
+    opts?: { warn?: (message: string) => void },
+): Promise<string[]>;
 
 export declare function serverOutputFiles(serverDir: string): string[];
 

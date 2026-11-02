@@ -1152,6 +1152,7 @@ const selfContainedEmbed = {
             namespace: "knext-embedded",
         }));
         build.onLoad({ filter: /.*/, namespace: "knext-embedded" }, (args) => {
+            // @upstream-shim bun-esm-builtin-named-snapshot
             if (args.path === "fs-facade" || args.path === "fs-promises-facade") {
                 // `import { readFileSync } from "node:fs"` binds a snapshot of the
                 // builtin's exports, which patching the module object cannot reach
@@ -1185,11 +1186,15 @@ const selfContainedEmbed = {
                 return { contents: fileAssetModule(files, PUBLIC_DIR), loader: "js" };
             }
             if (args.path === "data") {
+                // Embedded under the file's REAL path; a link answers to its own name too.
+                const lines = DATA_PLAN.files.map(
+                    (f, i) => `import f${i} from ${JSON.stringify(f.abs)} with { type: "file" };`,
+                );
+                const rows = DATA_PLAN.files.flatMap((f, i) =>
+                    [f.rel, ...f.aliases].map((rel) => `{ rel: ${JSON.stringify(rel)}, path: f${i} }`),
+                );
                 return {
-                    contents: fileAssetModule(
-                        DATA_PLAN.files.map((f) => f.abs),
-                        APP_ROOT,
-                    ),
+                    contents: `${lines.join("\n")}\nexport default [${rows.join(", ")}];\n`,
                     loader: "js",
                 };
             }

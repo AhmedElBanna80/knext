@@ -918,4 +918,71 @@ export const REGISTRY: RetirementEntry[] = [
       }
     },
   },
+  {
+    id: 'bun-declared-include-assets',
+    upstream: 'oven-sh/bun#44059',
+    upstreamTitle: '--include embeds extra files',
+    issue: '#2616',
+    kind: 'shim',
+    shape: 'vinext',
+    against: 'bun',
+    // The self-contained vinext build embeds the app's declared
+    // `outputFileTracingIncludes` data files itself (app-data-embed.mjs, as
+    // `type: "file"` imports), because stock Bun has no `--compile --include`.
+    // Same oracle, with its controls, as `embed-extra-entrypoints`: red as soon as
+    // ANY landing shape of `--include` embeds, at which point the declared-include
+    // embed is re-expressed on it (the `process.cwd()` path alias stays: Bun maps no
+    // real directory onto `$bunfs`).
+    repro: async () => {
+      const detected = await detectCompileInclude();
+      if (!detected.conclusive) inconclusive('bun-declared-include-assets', detected.evidence);
+      return { stillBroken: !detected.landed, evidence: detected.evidence };
+    },
+  },
+  {
+    id: 'bun-esm-builtin-named-snapshot',
+    // No upstream issue exists for this behaviour (searched oven-sh/bun, 2026-11); the ref
+    // below is the nearest real one and the title check is against it. File a dedicated
+    // issue and repoint this entry — until then the PROBE, not the ref, is what retires the shim.
+    upstream: 'oven-sh/bun#44059',
+    upstreamTitle: '--include embeds extra files',
+    issue: '#2616',
+    kind: 'shim',
+    shape: 'vinext',
+    against: 'bun',
+    // `import { readFileSync } from "node:fs"` binds a SNAPSHOT of the builtin's exports
+    // on Bun: replacing `fs.readFileSync` afterwards does not reach it, so the embedded-data
+    // alias cannot be a plain monkey-patch for ESM named imports. vinext-compile routes the
+    // server output's fs imports through a facade that re-exports the patched functions.
+    // CONTROL: the default export sees the patch. PROBE: a named binding of the same module.
+    // Red (= delete the facade) once named exports follow a patched builtin.
+    repro: async () => {
+      const box = sandbox('esm-builtin-named-snapshot');
+      try {
+        box.write({
+          'main.mjs':
+            'import fs from "node:fs";\n' +
+            'fs.readFileSync = () => "patched";\n' +
+            'const control = fs.readFileSync("x");\n' +
+            'const { readFileSync } = await import("node:fs");\n' +
+            'let named; try { named = readFileSync("x"); } catch (e) { named = "snapshot"; }\n' +
+            'console.log("RESULT " + JSON.stringify({ control, named }));\n',
+        });
+        const { result } = box.run([bunOnPath(), 'main.mjs'], box.dir);
+        const { control, named } = JSON.parse(result) as { control: string; named: string };
+        if (control !== 'patched') {
+          inconclusive(
+            'bun-esm-builtin-named-snapshot',
+            `default export did not see the patch: ${control}`,
+          );
+        }
+        return {
+          stillBroken: named !== 'patched',
+          evidence: `default export → ${control}; named export after the same patch → ${named}`,
+        };
+      } finally {
+        box.dispose();
+      }
+    },
+  },
 ];

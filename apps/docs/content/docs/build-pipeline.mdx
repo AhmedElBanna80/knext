@@ -233,19 +233,47 @@ directory. Two things put a file in:
   runtime is not found; list it in `outputFileTracingIncludes`.
 
 The app reads them as it always did, with `fs` or `fs/promises`, by a path relative to the working
-directory, by `process.cwd()` joined, or by the absolute path the app had on the build machine. Only
-the files that were embedded answer; any other path is a real `ENOENT`. `Bun.file()` and
-`createReadStream` do not see embedded files, and a write to the same path goes to the real disk.
+directory, by `process.cwd()` joined, or by the absolute path the app had on the build machine.
+**The real disk wins:** a read goes to the embedded copy only when nothing exists at that path on
+the real filesystem. A file the app writes at runtime over an embedded name is read back as
+written, and the build machine's absolute path never shadows a file that exists there at runtime.
+Deleting a file that was embedded at build time uncovers the embedded copy. Only the files that
+were embedded answer; any other path is a real `ENOENT`.
+
+What is covered is reading by path: `readFile`, `access`, `stat`, `lstat`, `existsSync` and the
+source of `copyFile`, in their sync, callback and promise forms, and a `file:` URL passed to them.
+**Not covered:** `readdir` and `opendir` (a directory of embedded files lists as empty or as
+missing), `open`, `createReadStream`, `Bun.file()`, and anything that writes (a write goes to the
+real disk). Read the file with one of the covered calls.
 
 The build fails, naming the pattern, when an `outputFileTracingIncludes` entry cannot be embedded
 rather than dropping it: it matches no file, resolves (through a symlink) outside the app root,
-matches a file that looks like a secret (`.env*`, `*.pem`, `*.key`, `id_*`) unless the pattern names
-that exact file, matches a native addon, or matches a file of a package the build traced into
-`.output/server/node_modules` (for example a package listed in `serverExternalPackages`). The last
-one cannot work in this mode: the executable has no `node_modules` beside it and cannot resolve a
-package from inside itself, so bundle the package, read its files by a path inside the app, or build
-without `--self-contained`. A literal path that does not exist, is a directory, or looks like a
-secret is skipped and logged, not fatal.
+matches a file that looks like a secret, matches a native addon, or matches a file of a package the
+build traced into `.output/server/node_modules` (for example a package listed in
+`serverExternalPackages`). The last one cannot work in this mode: the executable has no
+`node_modules` beside it and cannot resolve a package from inside itself, so bundle the package,
+read its files by a path inside the app, or build without `--self-contained`. A literal path that
+does not exist, is a directory, or looks like a secret is skipped and logged, not fatal.
+
+**Credential check.** The build refuses to embed a file that looks like a credential, so a broad
+glob does not carry one into an executable by accident. It looks at names, not contents: `.env*`,
+`.npmrc`, `.netrc` and similar, `id_*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`,
+`*.crt`, `*.cer`, names containing `credentials`, `secret` or `token`, service-account files,
+Terraform state and variables, `kubeconfig`, and anything under `.ssh`, `.aws`, `.kube`, `.gnupg`,
+`.gcloud`, `.azure` or `.docker`. Every match is judged by where it really points: a symlink with
+an ordinary name to one of these is refused, and so is a symlink that leaves the app root. Nothing
+under `.git` is ever embedded; a glob sweep skips it and a pattern that names it fails. This is a
+safeguard against accidents, not a guarantee: a secret stored under an ordinary name is not
+recognised, so do not list a directory that holds one. The one opt-out is deliberate and visible in
+the config: a pattern that is an exact file path (no glob, not a directory, not a symlink), such as
+`config/.env.public`, embeds that file even though its name matches.
+
+`next.config` is read by the compile step itself, in a separate process from the one that built the
+app. A config that cannot declare `outputFileTracingIncludes` (it names no such key and imports
+nothing but Node built-ins) is not run at all. Any other config is loaded once more to read the
+value. If it cannot be loaded, the build fails when the file mentions `outputFileTracingIncludes`
+or imports a local module (the value may live there); otherwise it prints a warning and goes on
+with no includes.
 
 Every embedded file adds its size to the executable, once. The build log prints the count and total
 size, and warns above 64 MiB.

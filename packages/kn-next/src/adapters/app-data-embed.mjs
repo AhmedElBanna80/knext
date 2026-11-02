@@ -549,13 +549,9 @@ export function planAppData({ root, includes = [], rules = [], candidates = [], 
         }
         // outputFileTracingExcludes: not traced, so not judged either.
         if (isExcluded(fileRel)) continue;
-        let real;
-        try {
-          real = realpathSync(abs);
-        } catch {
-          danglingLinks.push(fileRel);
-          continue;
-        }
+        // Dangling links never get here (the walk reports them); if the file vanished since,
+        // the error propagates and the build fails rather than skipping it.
+        const real = realpathSync(abs);
         const inside = relative(realRoot, real);
         if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) {
           escaped.push(fileRel);

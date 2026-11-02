@@ -238,6 +238,10 @@ ed_probe_http() {
 
 # ed_boot_probe_kill <port> <health_path> <extra_path> <cmd...>
 #
+# <extra_path> is probed in the mode named by ED_EXTRA_PROBE_MODE (default
+# "non5xx"; "anyresponse" is set ONLY by ed_check_or_die when the 2xx check is
+# a staged static asset — see there, #2615).
+#
 # Runs <cmd...> in the background (PORT must already be exported by the
 # caller — the command reads it the same way it would in production), waits
 # up to 20s for a TCP accept, probes <health_path> (2xx/3xx required) then
@@ -298,7 +302,7 @@ ed_boot_probe_kill() {
     return 1
   fi
   local ok=0
-  if ed_probe_http "${port}" "${health_path}" "2xx3xx" && ed_probe_http "${port}" "${extra_path}" "non5xx"; then
+  if ed_probe_http "${port}" "${health_path}" "2xx3xx" && ed_probe_http "${port}" "${extra_path}" "${ED_EXTRA_PROBE_MODE:-non5xx}"; then
     ok=1
   else
     ed_log "ERROR: the empty-dir boot did not answer ${health_path} with 2xx/3xx and ${extra_path} with a non-5xx status"
@@ -420,7 +424,7 @@ ed_check_or_die() {
     ed_log "ERROR: ${label}: staging into ${fresh_dir} failed"
     return 1
   }
-  local binary_name
+  local binary_name extra_mode=non5xx
   binary_name="$(basename "${staged}")"
   ed_assert_clean "${fresh_dir}" "${binary_name}" || {
     ed_log "ERROR: ${label}: the staged directory is not clean — see above"
@@ -431,7 +435,16 @@ ed_check_or_die() {
       ed_log "ERROR: ${label}: could not pick a staged static file to probe"
       return 1
     }
-    ed_log "${label}: probing the staged static file ${health_path} (2xx) and ${extra_path} (non-5xx)"
+    # #2615: the static asset answering 2xx PROVES the binary boots and serves
+    # from the empty dir. `/` is then only a liveness check — a compat fixture
+    # may answer it 500 on purpose (global-error, rewrites-destination-query-
+    # array), which the old non-5xx check rejected as a boot failure. Any
+    # complete HTTP response is alive; a refused connection, a dropped socket
+    # or a hang still fails. This is deliberately NOT applied when the lane
+    # names its own health path (KNEXT_EMPTY_DIR_HEALTH_PATH): there `/` keeps
+    # the strict non-5xx meaning.
+    extra_mode=anyresponse
+    ed_log "${label}: probing the staged static file ${health_path} (2xx) and ${extra_path} (any HTTP response)"
   fi
 
   local -a hide_targets=()
@@ -473,7 +486,7 @@ ed_check_or_die() {
     if [ "${#hidden[@]}" -gt 0 ]; then
       trap 'ed_restore_hidden_paths "${hidden[@]}"' EXIT
     fi
-    cd "${fresh_dir}" && ed_boot_probe_kill "${port}" "${health_path}" "${extra_path}" "./$(basename "${staged}")"
+    cd "${fresh_dir}" && ED_EXTRA_PROBE_MODE="${extra_mode}" ed_boot_probe_kill "${port}" "${health_path}" "${extra_path}" "./$(basename "${staged}")"
   )
   local boot_status=$?
   # Belt-and-braces: the subshell's own EXIT trap already restored these, but

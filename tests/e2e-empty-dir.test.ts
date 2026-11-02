@@ -1374,12 +1374,9 @@ describe('#1515 — the empty-dir pre-check probe (stdout contract + per-lane he
     expect(r.status).not.toBe(0);
   });
 
-  it('a 5xx at / fails the probe even when the static file answers 200', () => {
-    const src = tempDir('ed-1515-root500-src-');
-    makeCompatFixture(src, 500);
-    const r = miniDeploy(src, join(tempDir('ed-1515-root500-dest-'), 'd'), '@static');
-    expect(r.status).not.toBe(0);
-  });
+  // (#2615 superseded the old "a 5xx at / fails even when the static file
+  // answers 200" case: fixtures that 500 at / on purpose are valid. Its
+  // truly-bad halves live in the #2615 (2) group below.)
 
   it('a missing static file fails the probe (2xx is required of the staged asset)', () => {
     const src = tempDir('ed-1515-nostatic-src-');
@@ -1940,5 +1937,247 @@ describe('#1521 round-2, finding 2c (R13) — the standalone pre-check threads E
   it('scripts/e2e-deploy.sh: ed_static_probe_path is called WITH the resolved basePath variable, never a hardcoded ""', () => {
     const src = readRepo('scripts/e2e-deploy.sh');
     expect(src).toContain('ed_static_probe_path "${EMPTY_DIR}" "${EMPTY_DIR_BASE_PATH}")"');
+  });
+});
+// ══ #2615 — the vinext empty-dir probes produced ~8 FALSE compat failures ══════
+//
+// Three harness (not product) defects, one test group each. Each group asserts
+// BOTH halves: the false failure now passes, and the truly-bad response still
+// fails — the probe was never widened into accepting everything.
+//   (1) basePath ignored   — the static probe asked `/data.txt` of an app that
+//       serves `<basePath>/data.txt` (5 fixtures);
+//   (2) intentional 500 at `/` — global-error / rewrites-destination-query-array
+//       500 on purpose, and the old non-5xx check on `/` rejected them (3);
+//   (3) native/ staged AFTER the compile that embeds it.
+
+/**
+ * A stand-in for a compiled compat fixture with the failure shapes under
+ * test. It serves `.output/public` under `basePath` (404 outside it, like
+ * Next), answers `/` with `rootStatus`, and can misbehave at `/`:
+ * `rootMode: 'drop'` destroys the socket (a crash mid-request), 'hang' never
+ * answers. `staticStatus` overrides what the static file answers.
+ */
+function makeProbeFixture(
+  dir: string,
+  opts: {
+    basePath?: string;
+    rootStatus?: number;
+    rootMode?: 'status' | 'drop' | 'hang';
+    staticStatus?: number;
+  } = {},
+): string {
+  const p = join(dir, 'knext-exec-e2e');
+  const base = opts.basePath ?? '';
+  writeFileSync(
+    p,
+    [
+      '#!/usr/bin/env node',
+      "const http = require('node:http');",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      'const port = Number(process.env.PORT);',
+      `const base = ${JSON.stringify(base)};`,
+      `const rootMode = ${JSON.stringify(opts.rootMode ?? 'status')};`,
+      'http.createServer((req, res) => {',
+      "  if (req.url === '/') {",
+      "    if (rootMode === 'drop') { req.socket.destroy(); return; }",
+      "    if (rootMode === 'hang') { return; }",
+      `    res.writeHead(${String(opts.rootStatus ?? 200)}); res.end('root'); return;`,
+      '  }',
+      '  if (!req.url.startsWith(base + "/")) { res.writeHead(404); res.end("outside basePath"); return; }',
+      '  const f = path.join(process.cwd(), ".output/public", decodeURIComponent(req.url.slice(base.length)));',
+      `  if (fs.existsSync(f) && fs.statSync(f).isFile()) { res.writeHead(${String(opts.staticStatus ?? 200)}); res.end(fs.readFileSync(f)); return; }`,
+      '  res.writeHead(404); res.end("not found");',
+      "}).listen(port, '127.0.0.1');",
+      '',
+    ].join('\n'),
+  );
+  chmodSync(p, 0o755);
+  mkdirSync(join(dir, '.output/public'), { recursive: true });
+  writeFileSync(join(dir, '.output/public/data.txt'), 'hello');
+  return p;
+}
+
+/** miniDeploy with an optional ED_STATIC_PROBE_BASE, as the vinext script sets it. */
+function probeDeploy(src: string, base: string, health = '@static') {
+  const dest = join(tempDir('ed-2615-dest-'), 'd');
+  return sh(`
+    PORT="$(${freePortExpr()})"
+    ${base ? `ED_STATIC_PROBE_BASE="${base}"` : ''}
+    ed_check_or_die "compat" "${dest}" "${src}/knext-exec-e2e" "${health}" / "\${PORT}" \\
+      "${src}/.output/public:.output/public"
+  `);
+}
+
+describe('#2615 (1) — the static probe honours the fixture basePath', () => {
+  it('a basePath fixture passes when the probe is told the basePath (it was probing /data.txt)', () => {
+    const src = tempDir('ed-2615-bp-ok-');
+    makeProbeFixture(src, { basePath: '/docs' });
+    const r = probeDeploy(src, '/docs');
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('probing the staged static file /docs/data.txt');
+  });
+
+  it('the SAME fixture still fails when the probe ignores the basePath (the false-failure shape is real, not masked)', () => {
+    const src = tempDir('ed-2615-bp-ignored-');
+    makeProbeFixture(src, { basePath: '/docs' });
+    expect(probeDeploy(src, '').status).not.toBe(0);
+  });
+
+  it('a WRONG basePath still fails: the static file must really be served at the claimed path', () => {
+    const src = tempDir('ed-2615-bp-wrong-');
+    makeProbeFixture(src, { basePath: '/docs' });
+    expect(probeDeploy(src, '/other').status).not.toBe(0);
+  });
+
+  it('a static file answering 500 under the right basePath still fails (2xx required of the asset)', () => {
+    const src = tempDir('ed-2615-bp-500-');
+    makeProbeFixture(src, { basePath: '/docs', staticStatus: 500 });
+    expect(probeDeploy(src, '/docs').status).not.toBe(0);
+  });
+});
+
+describe('#2615 (1b) — scripts/lib/e2e-vinext-base-path.mjs reads the fixture basePath', () => {
+  const HELPER = join(ROOT, 'scripts/lib/e2e-vinext-base-path.mjs');
+  const run = (appDir: string) =>
+    spawnSync(process.execPath, [HELPER, appDir], { encoding: 'utf8' });
+  const appWith = (file: string, body: string) => {
+    const d = tempDir('ed-2615-cfg-');
+    writeFileSync(join(d, file), body);
+    return d;
+  };
+
+  it('reads basePath from an ESM object config', () => {
+    const r = run(appWith('next.config.mjs', "export default { basePath: '/docs' };\n"));
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/docs' });
+  });
+
+  it('reads basePath from a CommonJS config (the harness renames next.config.js to .cjs)', () => {
+    const r = run(appWith('next.config.cjs', "module.exports = { basePath: '/cjs' };\n"));
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/cjs' });
+  });
+
+  it('reads basePath from an async function config', () => {
+    const r = run(
+      appWith('next.config.mjs', "export default async () => ({ basePath: '/fn' });\n"),
+    );
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/fn' });
+  });
+
+  it('a config without basePath, or no config at all, is a legitimate empty basePath', () => {
+    const none = run(appWith('next.config.mjs', 'export default {};\n'));
+    expect({ status: none.status, out: none.stdout }).toEqual({ status: 0, out: '' });
+    const absent = run(tempDir('ed-2615-nocfg-'));
+    expect({ status: absent.status, out: absent.stdout }).toEqual({ status: 0, out: '' });
+  });
+
+  it('a config that cannot be loaded fails LOUD, never a silent empty basePath', () => {
+    const r = run(appWith('next.config.mjs', "throw new Error('boom');\n"));
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('basePath');
+    expect(r.stdout).toBe('');
+  });
+
+  it('a non-string basePath fails loud', () => {
+    const r = run(appWith('next.config.mjs', 'export default { basePath: 42 };\n'));
+    expect(r.status).not.toBe(0);
+  });
+
+  it('e2e-deploy-vinext.sh feeds ED_STATIC_PROBE_BASE from it BEFORE the pre-check, failing closed', () => {
+    const src = readRepo('scripts/e2e-deploy-vinext.sh');
+    expect(src).toMatch(
+      /ED_STATIC_PROBE_BASE="\$\(bun "\$\{ED__LIB_DIR\}\/e2e-vinext-base-path\.mjs" "\$\{APP_DIR\}"\)" \|\| \{[\s\S]{0,400}?exit 1/,
+    );
+    expectInOrder(src, ['e2e-vinext-base-path.mjs', 'ed_check_or_die "vinext"']);
+  });
+});
+
+describe('#2615 (2) — an intentional 500 at / no longer fails the static-probe lane, a dead / still does', () => {
+  it('a fixture that 500s at / ON PURPOSE passes once the static asset proves serving works', () => {
+    const src = tempDir('ed-2615-root500-');
+    makeProbeFixture(src, { rootStatus: 500 });
+    expect(probeDeploy(src, '').status).toBe(0);
+  });
+
+  it('a 404 / redirect / 200 at / still pass (no regression of the old non-5xx set)', () => {
+    for (const rootStatus of [200, 307, 404]) {
+      const src = tempDir(`ed-2615-root${rootStatus}-`);
+      makeProbeFixture(src, { rootStatus });
+      expect(probeDeploy(src, '').status).toBe(0);
+    }
+  }, 30_000);
+
+  it('a server that DROPS the socket at / (crashes mid-request) still fails', () => {
+    const src = tempDir('ed-2615-rootdrop-');
+    makeProbeFixture(src, { rootMode: 'drop' });
+    expect(probeDeploy(src, '').status).not.toBe(0);
+  });
+
+  it('a server that never answers / still fails within the bounded probe time', () => {
+    const src = tempDir('ed-2615-roothang-');
+    makeProbeFixture(src, { rootMode: 'hang' });
+    expect(probeDeploy(src, '').status).not.toBe(0);
+  }, 30_000);
+
+  it('a 500-on-everything server still fails: the STATIC asset is what proves serving works', () => {
+    const src = tempDir('ed-2615-all500-');
+    makeProbeFixture(src, { rootStatus: 500, staticStatus: 500 });
+    expect(probeDeploy(src, '').status).not.toBe(0);
+  });
+
+  it('a lane with an EXPLICIT health path keeps non-5xx at /: a 500 there still fails', () => {
+    const src = tempDir('ed-2615-explicit-');
+    makeProbeFixture(src, { rootStatus: 500 });
+    // /data.txt answers 200, so the health half is satisfied; only the / mode decides.
+    expect(probeDeploy(src, '', '/data.txt').status).not.toBe(0);
+  });
+
+  it('ed_probe_http "anyresponse": any HTTP status passes; a refused connection fails; non5xx still rejects 5xx', () => {
+    const dir = tempDir('ed-2615-anyresp-');
+    makeServerFixture(dir, 'server.js', { status: 503, onlyStatus: true });
+    const r = sh(`
+      PORT="$(${freePortExpr()})"
+      export PORT
+      cd "${dir}"
+      ( exec node ./server.js ) >/dev/null 2>&1 &
+      pid=$!
+      for i in $(seq 1 50); do node -e "require('net').connect(\${PORT},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" 2>/dev/null && break; sleep 0.1; done
+      ed_probe_http "\${PORT}" /anything anyresponse; a=$?
+      ed_probe_http "\${PORT}" /anything non5xx; b=$?
+      kill $pid 2>/dev/null; wait $pid 2>/dev/null
+      ed_probe_http "\${PORT}" /anything anyresponse; c=$?
+      echo "$a $b $c"
+    `);
+    expect(r.stdout.trim()).toBe('0 1 1');
+  });
+
+  it('the 500-tolerant mode is chosen only inside the ED_STATIC_PROBE branch, never for an explicit health path', () => {
+    const lib = readRepo('scripts/lib/e2e-empty-dir.sh');
+    const staticBranch = block(
+      lib,
+      'if [ "${health_path}" = "${ED_STATIC_PROBE}" ]; then',
+      '\n  fi\n',
+    );
+    expect(staticBranch).toContain('extra_mode=anyresponse');
+    expect(lib.split('extra_mode=anyresponse').length - 1).toBe(1);
+  });
+});
+
+describe('#2615 (3) — native/ is staged BEFORE the compile that embeds it', () => {
+  const src = () => readRepo('scripts/e2e-deploy-vinext.sh');
+
+  it('the sharp staging loop runs before `bun run "${COMPILE_SCRIPT}"`', () => {
+    const s = src();
+    const stage = s.indexOf('mkdir -p "${APP_DIR}/native"');
+    const compile = s.indexOf('bun run "${COMPILE_SCRIPT}"');
+    expect(stage).toBeGreaterThan(0);
+    expect(compile).toBeGreaterThan(0);
+    expect(stage).toBeLessThan(compile);
+  });
+
+  it('under KNEXT_SELF_CONTAINED=1 the staged tree is handed to the compile via --native-dir (only when it exists)', () => {
+    expect(src()).toMatch(
+      /if \[ "\$\{KNEXT_SELF_CONTAINED:-0\}" = "1" \]; then\n\s+VINEXT_COMPILE_ARGS\+=\(--self-contained 1\)\n\s+if \[ -d "\$\{APP_DIR\}\/native" \]; then\n\s+VINEXT_COMPILE_ARGS\+=\(--native-dir "\$\{APP_DIR\}\/native"\)/,
+    );
   });
 });

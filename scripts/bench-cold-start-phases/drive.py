@@ -22,10 +22,10 @@ untreated control, so the treatment alternates ABAB on the same Knative Service.
 Cluster work is a queue of one: never run two drivers at once.
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
-import os
 import time
 
 CTX = ["kubectl", "--context", "knext-oke-sa", "-n", "bench-cells"]

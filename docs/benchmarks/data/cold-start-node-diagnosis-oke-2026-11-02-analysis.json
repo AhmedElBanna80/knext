@@ -1,5 +1,32 @@
 {
- "file": "/private/tmp/claude-501/cold-start/cpu-base-wakes.jsonl",
+ "ready_in_lines_count": {
+  "\u2713 Ready in 0ms": 24
+ },
+ "harness_tcp3000_first_try": [
+  25,
+  25
+ ],
+ "clock_offset_ms": {
+  "name": "clock_offset",
+  "n": 25,
+  "median": 0.2,
+  "p10": 0.2,
+  "p90": 0.3,
+  "min": 0.2,
+  "max": 0.3,
+  "mean": 0.2
+ },
+ "clock_rtt_ms": {
+  "name": "clock_rtt",
+  "n": 25,
+  "median": 0.9,
+  "p10": 0.9,
+  "p90": 1.0,
+  "min": 0.8,
+  "max": 1.0,
+  "mean": 0.9
+ },
+ "file": "docs/benchmarks/data/cold-start-node-diagnosis-oke-2026-11-02.jsonl",
  "rows": 25,
  "valid": 25,
  "segments": [
@@ -122,6 +149,36 @@
    "min": 105.5,
    "max": 151.7,
    "mean": 131.2
+  },
+  {
+   "name": "started_at_to_podip",
+   "n": 25,
+   "median": 1355.5,
+   "p10": 812.4,
+   "p90": 1876.0,
+   "min": 456.8,
+   "max": 2092.3,
+   "mean": 1326.6
+  },
+  {
+   "name": "bound_to_started_at",
+   "n": 25,
+   "median": 170.1,
+   "p10": -451.6,
+   "p90": 709.5,
+   "min": -529.3,
+   "max": 801.3,
+   "mean": 186.5
+  },
+  {
+   "name": "podip_to_app_tcp3000",
+   "n": 25,
+   "median": 6.4,
+   "p10": 6.1,
+   "p90": 7.0,
+   "min": 5.9,
+   "max": 7.2,
+   "mean": 6.4
   }
  ],
  "uniform_test_ready_in_to_podip_U0_1000": {

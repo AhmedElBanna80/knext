@@ -1935,7 +1935,18 @@ describe('#2594 — no workflow pins, sets or asserts a next with a known adviso
     // NEXT_NPM_VERSION="${NEXTJS_REF#v}" / next@${NEXT_NPM_VERSION}: read at one line, written at another
     const e2e = via('.github/workflows/test-e2e-deploy.yml');
     expect(e2e.length).toBeGreaterThan(0);
-    expect(e2e.some((p) => p.version === '16.4.0' && p.text.startsWith('NEXTJS_REF:'))).toBe(true);
+    // The expected version is read from the workflow's own NEXTJS_REF fallback, not
+    // hardcoded: the harness moves (#2626 moved it to 16.4.3), and a literal here
+    // would turn every harness move into a red guard for the wrong reason.
+    const nextjsRefFallback = readFileSync(
+      resolve(REPO_ROOT, '.github/workflows/test-e2e-deploy.yml'),
+      'utf8',
+    ).match(/NEXTJS_REF: \$\{\{ github\.event\.inputs\.nextjsRef \|\| 'v(\d+\.\d+\.\d+)' \}\}/);
+    expect(nextjsRefFallback, 'no NEXTJS_REF fallback to derive the version from').not.toBeNull();
+    const harnessVersion = (nextjsRefFallback as RegExpMatchArray)[1];
+    expect(e2e.some((p) => p.version === harnessVersion && p.text.startsWith('NEXTJS_REF:'))).toBe(
+      true,
+    );
     // next@${MATRIX_NEXT} <- matrix.next <- scripts/next-minor-matrix.mjs, via the emitter
     const emitted = via('.github/workflows/next-minor-matrix.yml').filter(
       (p) => p.file === '(dynamic matrix)',

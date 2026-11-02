@@ -17,6 +17,12 @@ import { NEXT_MATRIX_VERSIONS, NEXT_PEER_RANGE } from '../packages/kn-next/src/n
  * `.github/compat-credentialed-next-version.json`; this file ties both of them
  * to `next-compat.ts`, so a floor bump that forgets the harness (or the
  * reverse) fails here.
+ *
+ * The harness ref is not the bare floor: the floor (16.4.0) carries critical
+ * advisories fixed in 16.4.1, so the harness tests the patched release the
+ * first matrix leg runs (`NEXT_MATRIX_VERSIONS[0]`, 16.4.3). That leg must sit
+ * on the floor's minor and at or above the floor patch (first test below), so
+ * the harness can move patch by patch but never off the line or below the floor.
  */
 const ROOT = resolve(import.meta.dirname, '..');
 const WORKFLOW_PATH = resolve(ROOT, '.github/workflows/test-e2e-deploy.yml');
@@ -47,7 +53,11 @@ export function dispatchDefaultRef(text: string): string | undefined {
 }
 
 const floor = peerRangeFloor(NEXT_PEER_RANGE);
-const expectedRef = floor === undefined ? undefined : `v${floor}`;
+// The harness ref is the FIRST matrix leg (the release the cache-handler spec and
+// the scaffold run), not the bare floor: #2602 moved the harness to the patched
+// 16.4.3 while the peer floor stays 16.4.0. The first test below pins that leg to
+// the floor's minor (never below the floor), so the harness cannot leave the line.
+const expectedRef = `v${NEXT_MATRIX_VERSIONS[0]}`;
 const workflowText = readFileSync(WORKFLOW_PATH, 'utf8');
 
 describe("the compat harness tests this line's own Next floor (#2296)", () => {
@@ -67,30 +77,30 @@ describe("the compat harness tests this line's own Next floor (#2296)", () => {
 
   it("next-compat.ts declares a parseable floor, and the first matrix leg is on the floor's minor", () => {
     expect(floor, `cannot read a floor from NEXT_PEER_RANGE ${NEXT_PEER_RANGE}`).toBeDefined();
-    // #2594: the floor (16.4.0) is still the credential pin the harness tests,
-    // but it carries critical advisories fixed in 16.4.1, so the cache-handler
-    // spec leg (= the kn-next devDependency, next-minor-matrix.test.ts) runs the
-    // patched release users get. Same minor as the floor, never below it; the
-    // floor <-> NEXTJS_REF <-> manifest ties are the three tests below.
+    // The floor (16.4.0) carries critical advisories fixed in 16.4.1, so the first
+    // matrix leg (= the kn-next devDependency, next-minor-matrix.test.ts) runs the
+    // patched release users get, and the harness (NEXTJS_REF + the documented
+    // credentialedNextRef) tests that same release. Same minor as the floor, never
+    // below it; the leg <-> NEXTJS_REF <-> manifest ties are the three tests below.
     const [fMaj, fMin, fPatch] = (floor as string).split('.').map(Number);
     const [lMaj, lMin, lPatch] = NEXT_MATRIX_VERSIONS[0].split('.').map(Number);
     expect(`${lMaj}.${lMin}`).toBe(`${fMaj}.${fMin}`);
     expect(lPatch).toBeGreaterThanOrEqual(fPatch);
   });
 
-  it("test-e2e-deploy.yml's NEXTJS_REF env fallback is the next-compat.ts floor", () => {
+  it("test-e2e-deploy.yml's NEXTJS_REF env fallback is the first matrix leg, on the next-compat.ts floor's minor", () => {
     const ref = envFallbackRef(workflowText);
     expect(ref, 'no single NEXTJS_REF env fallback in test-e2e-deploy.yml').toBeDefined();
     expect(ref).toBe(expectedRef as string);
   });
 
-  it("test-e2e-deploy.yml's nextjsRef dispatch default is the next-compat.ts floor", () => {
+  it("test-e2e-deploy.yml's nextjsRef dispatch default is the first matrix leg, on the next-compat.ts floor's minor", () => {
     const ref = dispatchDefaultRef(workflowText);
     expect(ref, 'no nextjsRef dispatch default in test-e2e-deploy.yml').toBeDefined();
     expect(ref).toBe(expectedRef as string);
   });
 
-  it('the documented credentialedNextRef is the next-compat.ts floor', () => {
+  it("the documented credentialedNextRef is the first matrix leg, on the next-compat.ts floor's minor", () => {
     const manifest = JSON.parse(readFileSync(CREDENTIALED_VERSION_PATH, 'utf8')) as {
       credentialedNextRef: string;
     };

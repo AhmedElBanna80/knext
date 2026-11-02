@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Mutation proof for #2106's Docker Hub mirror guard
+ * Mutation proof for #2106's (baseline tracking: #2650) Docker Hub mirror guard
  * (`scripts/docker-hub-mirror-guard.mjs`, `tests/docker-hub-mirror-guard.test.ts`).
  *
  * Same shared harness/discipline as the other provers: `mutate` asserts the anchor
@@ -26,6 +26,7 @@ const PROOF = {
     guard: 'scripts/docker-hub-mirror-guard.mjs',
     ci: '.github/workflows/ci.yml',
     action: '.github/actions/docker-hub-mirror/action.yml',
+    bunBase: '.github/workflows/bun-base-build.yml',
   },
 };
 
@@ -101,6 +102,36 @@ const MUTATIONS = [
     subject: 'action',
     anchor: '{"registry-mirrors": ["https://mirror.gcr.io"]}',
     replacement: '{"x": ["https://mirror.gcr.io"]}',
+  },
+  {
+    label: '#2650 baseline: an ADDED pull in a deferred file is no longer drift',
+    subject: 'guard',
+    anchor: '    const added = multisetMinus(actual, want);',
+    replacement: '    const added = [];',
+  },
+  {
+    label: '#2650 baseline: a REMOVED (stale) baseline pull is no longer drift',
+    subject: 'guard',
+    anchor: '    const removed = multisetMinus(want, actual);',
+    replacement: '    const removed = [];',
+  },
+  {
+    label: '#2650 baseline: pull counting ignores multiplicity (set membership only)',
+    subject: 'guard',
+    anchor: '  return out.sort();\n}\n\n/** Multiset difference a - b. */',
+    replacement: '  return [...new Set(out)].sort();\n}\n\n/** Multiset difference a - b. */',
+  },
+  {
+    label: '#2650 real file: a new docker run alpine appears in a deferred file',
+    subject: 'bunBase',
+    anchor: 'docker run --rm -v "$PWD/out:/w:ro"',
+    replacement: 'docker run alpine true; docker run --rm -v "$PWD/out:/w:ro"',
+  },
+  {
+    label: '#2650 real file: the deferred pull is removed (stale baseline)',
+    subject: 'bunBase',
+    anchor: 'docker run --rm -v "$PWD/out:/w:ro"',
+    replacement: 'echo --rm -v "$PWD/out:/w:ro"',
   },
 ];
 

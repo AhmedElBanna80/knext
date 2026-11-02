@@ -844,3 +844,184 @@ func TestFullReplaySetAnswersResourceExhausted(t *testing.T) {
 		t.Fatalf("the handler ran %d times; want 2", n)
 	}
 }
+
+// kubeletVolume lays a ConfigMap volume out the way the kubelet's atomic
+// writer does, which is the layout a function pod really reads its JWKS from:
+//
+//	dir/jwks.json       -> ..data/jwks.json   (a symlink, made once)
+//	dir/..data          -> ..<generation>     (a symlink, replaced by a rename)
+//	dir/..<generation>/jwks.json              (the file, written once)
+//
+// An update writes a new generation directory, renames a fresh ..data symlink
+// over the old one, and removes the old generation. Nothing is rewritten in
+// place, so the file the verifier opens afterwards is a different file.
+type kubeletVolume struct {
+	t     *testing.T
+	dir   string
+	live  string
+	count int
+}
+
+func newKubeletVolume(t *testing.T) *kubeletVolume {
+	t.Helper()
+	return &kubeletVolume{t: t, dir: t.TempDir()}
+}
+
+// path is where the function mounts its JWKS: the symlink.
+func (k *kubeletVolume) path() string { return filepath.Join(k.dir, "jwks.json") }
+
+// publish makes data the volume's content, as of mtime.
+func (k *kubeletVolume) publish(data []byte, mtime time.Time) {
+	k.t.Helper()
+	must := func(err error) {
+		k.t.Helper()
+		if err != nil {
+			k.t.Fatal(err)
+		}
+	}
+	k.count++
+	generation := fmt.Sprintf("..2026_01_01_00_00_%02d.%d", k.count, 1000+k.count)
+	dir := filepath.Join(k.dir, generation)
+	must(os.Mkdir(dir, 0o755))
+	file := filepath.Join(dir, "jwks.json")
+	must(os.WriteFile(file, data, 0o644))
+	must(os.Chtimes(file, mtime, mtime))
+	staging := filepath.Join(k.dir, "..data_tmp")
+	must(os.Symlink(generation, staging))
+	must(os.Rename(staging, filepath.Join(k.dir, "..data")))
+	if k.live != "" {
+		must(os.RemoveAll(k.live))
+	}
+	k.live = dir
+	if k.count == 1 {
+		must(os.Symlink(filepath.Join("..data", "jwks.json"), k.path()))
+	}
+}
+
+// Warm-pod rotation on the layout a function pod really has. The tests above
+// rewrite the file in place, where a verifier that cannot follow a symlink, or
+// that watches the symlink instead of the file behind it, behaves exactly like
+// one that can. Here the mount is jwks.json -> ..data/jwks.json and an update
+// swaps ..data, so the verifier must (1) count a symlinked key set as mounted,
+// (2) see the swap with no restart and without waiting for the re-read
+// interval (the clock does not move), and (3) stop trusting a key that left.
+func TestWarmPodPicksUpANewKeyThroughAKubeletConfigMapVolume(t *testing.T) {
+	v := testvectors.Load(t)
+	c := v.Case(t, "rotation-next-before-propagation")
+	if len(v.JWKSBytes(t, "zone-a-overlap")) != len(v.JWKSBytes(t, "zone-a-rotating")) {
+		t.Fatal("the two JWK Sets must be the same size, so the modification time is the only signal")
+	}
+	vol := newKubeletVolume(t)
+	published := time.Now().Add(-time.Hour)
+	vol.publish(v.JWKSBytes(t, "zone-a-overlap"), published)
+	if info, err := os.Lstat(vol.path()); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the mounted JWKS must be a symlink, as in a ConfigMap volume: %v, %v", info, err)
+	}
+	verifier := auth.NewVerifier(auth.Config{
+		JWKSPath:   vol.path(),
+		Issuer:     v.Verifier.Issuer,
+		Audience:   v.Verifier.Audience,
+		MethodAuth: onlyMethod(c.Procedure, knextv1.Auth_AUTH_USER),
+		Now:        newClock(c.Now).Now,
+	})
+	previous := v.Token(t, "rotation-previous-during-overlap")
+	next := v.Token(t, "rotation-next-before-propagation")
+
+	// (1) A key set behind symlinks is a mounted key set: during the overlap,
+	// the previous key's token verifies.
+	if _, err := verifier.Verify(t.Context(), previous, c.Procedure); err != nil {
+		t.Fatalf("a token signed by a key in the mounted volume was refused: %v", err)
+	}
+	// Signing switched before the volume carried the new key: refused.
+	_, err := verifier.Verify(t.Context(), next, c.Procedure)
+	wantRefused(t, "a new-key token before the volume was updated", err, auth.ErrUnknownKID)
+
+	// (2) The kubelet swaps ..data. The clock has not moved, so only the change
+	// itself can make the verifier look again.
+	vol.publish(v.JWKSBytes(t, "zone-a-rotating"), published.Add(time.Minute))
+	if _, err := verifier.Verify(t.Context(), next, c.Procedure); err != nil {
+		t.Fatalf("the warm verifier did not pick up the swapped volume: %v", err)
+	}
+	// The key that stays current keeps verifying.
+	if _, err := verifier.Verify(t.Context(), v.Token(t, "valid-user-second-jti"), c.Procedure); err != nil {
+		t.Fatalf("the current key stopped verifying after the swap: %v", err)
+	}
+	// (3) The key that left the set is refused: the old generation is gone.
+	_, err = verifier.Verify(t.Context(), previous, c.Procedure)
+	wantRefused(t, "the previous key after the volume dropped it", err, auth.ErrUnknownKID)
+}
+
+// forgedIdentityHeaders are the headers a caller, or a gateway in front of the
+// function, might use to name a user. None of them is ever read.
+var forgedIdentityHeaders = []string{
+	"X-User-Id", "X-Knext-Sub", "X-Forwarded-User", "X-Forwarded-Email", "Remote-User",
+}
+
+// withForgedIdentity is a client context that carries every forged identity
+// header next to the given Authorization value (none at all when empty).
+func withForgedIdentity(t *testing.T, authorization string) context.Context {
+	t.Helper()
+	ctx, info := connect.NewClientContext(t.Context())
+	if authorization != "" {
+		info.RequestHeader().Set("Authorization", authorization)
+	}
+	for _, name := range forgedIdentityHeaders {
+		info.RequestHeader().Set(name, "admin")
+	}
+	return ctx
+}
+
+// A user id forged into a request header is not a token and does not stand in
+// for one: with no token, a token of another scheme, an empty or unreadable
+// bearer token, or a valid token that carries no user for an AUTH_USER RPC,
+// the call is refused before the handler runs, with the headers present. The
+// control differs in exactly one property: a valid token with the same headers
+// is served, as the token's user and not the header's.
+func TestForgedUserHeadersNeverStandInForAToken(t *testing.T) {
+	v := testvectors.Load(t)
+	valid := v.Case(t, "valid-user")
+	userless := v.Case(t, "user-empty-sub")
+
+	serve := func(c testvectors.Case) (examplev1connect.ExampleServiceClient, *callerRecorder) {
+		verifier, _ := vectorVerifier(t, v, c)
+		h := &callerRecorder{}
+		server := connect.NewServer(auth.NewInterceptor(verifier))
+		examplev1connect.RegisterExampleServiceHandler(server, h)
+		return examplev1connect.NewExampleServiceClient(connect.NewClient(connectinprocess.New(server))), h
+	}
+
+	// The control.
+	example, h := serve(valid)
+	if _, err := example.PutItem(withForgedIdentity(t, "Bearer "+v.Token(t, "valid-user")), &examplev1.PutItemRequest{Id: "a"}); err != nil {
+		t.Fatalf("the control (a valid token with forged headers) was refused: %v", err)
+	}
+	h.mu.Lock()
+	served := append([]auth.Caller(nil), h.callers...)
+	h.mu.Unlock()
+	if len(served) != 1 || served[0].Subject != valid.Sub {
+		t.Fatalf("the control was served as %+v; want the token's subject %q", served, valid.Sub)
+	}
+
+	for name, tc := range map[string]struct {
+		c             testvectors.Case
+		authorization string
+	}{
+		"no token":                        {valid, ""},
+		"a scheme that is not Bearer":     {valid, "Basic YWRtaW46YWRtaW4="},
+		"an empty bearer token":           {valid, "Bearer "},
+		"a bearer token that is no token": {valid, "Bearer admin"},
+		"a token with no user":            {userless, "Bearer " + v.Token(t, "user-empty-sub")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			example, h := serve(tc.c)
+			_, err := example.PutItem(withForgedIdentity(t, tc.authorization), &examplev1.PutItemRequest{Id: "user_id=admin"})
+			wantUnauthenticated(t, name+" with forged identity headers", err)
+			h.mu.Lock()
+			reached := len(h.callers)
+			h.mu.Unlock()
+			if reached != 0 {
+				t.Fatalf("a refused call reached the handler %d time(s)", reached)
+			}
+		})
+	}
+}

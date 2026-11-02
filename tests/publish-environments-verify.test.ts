@@ -57,7 +57,8 @@ describe('evaluatePublishEnvironments', () => {
   });
   it('reds on a tag-type policy', () => {
     const s = good();
-    s.policies['npm-publish'] = [...pol(LANES), { name: 'v1', type: 'tag' }];
+    // Named like a lane, so ONLY the type check can catch it.
+    s.policies['npm-publish'] = [...pol(LANES), { name: LANES[0], type: 'tag' }];
     expect(evaluatePublishEnvironments(s).length).toBeGreaterThan(0);
   });
 });

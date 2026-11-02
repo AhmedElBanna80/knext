@@ -3,7 +3,7 @@
 
     python3 burst-ab-analyze.py <run.jsonl>
 
-BEFORE = pb-off (imagePrewarm false), AFTER = pb-on (imagePrewarm true, ImageCacheReady awaited).
+BEFORE = imagePrewarm false, AFTER = imagePrewarm true (ImageCacheReady awaited).
 Trial metrics: pods started, pods that paid a real kubelet pull, per-pod bound->Ready (apiserver,
 1 s resolution), per-pod pull duration, burst request latency (median, p95, max). Paired ABBA
 differences per round (AFTER minus BEFORE) with Hodges-Lehmann shift, bootstrap 95% CI and a
@@ -30,7 +30,8 @@ def main():
     rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
     trials = {}
     for r in rows:
-        ok = "error" not in r["burst"] and all(x.get("code") == 200 for x in r["burst"]["res"]) and r["pods"]
+        ok = ("error" not in r["burst"] and all(x.get("code") == 200 for x in r["burst"]["res"]) and r["pods"]
+              and not any(p.get("events_invalid") for p in r["pods"]))
         trials.setdefault(r["arm"], {})[r["round"]] = (r, ok)
     for arm in ("off", "on"):
         tr = trials.get(arm, {})
@@ -46,6 +47,35 @@ def main():
                   [round(p["pull_duration_s"], 2) for p in pods if p["pull_duration_s"] is not None],
                   round(statistics.median(ms)) if ms else None, round(max(ms)) if ms else None,
                   "" if ok else "INVALID")
+
+    no_count = sum(1 for arm in trials.values() for r, _ in arm.values() for p in r["pods"] if "events_n" not in p)
+    if no_count:
+        print(f"\nNOTE: {no_count} pod rows carry no events_n; a failed events fetch cannot be ruled out for them.")
+
+    print("\n== pulls by node, and first vs later pod per node (creation order within a trial) ==")
+    for arm in ("off", "on"):
+        by_node = {}
+        first, later, first_rd, later_rd = [], [], [], []
+        for rnd, (r, ok) in trials.get(arm, {}).items():
+            seen = {}
+            for p in sorted(r["pods"], key=lambda p: (p["created"], p["pod"])):
+                idx = seen.get(p["node"], 0)
+                seen[p["node"]] = idx + 1
+                d = by_node.setdefault(p["node"], [0, 0])
+                d[1] += 1
+                if p["pulled_in_cycle"]:
+                    d[0] += 1
+                    if p["pull_duration_s"] is not None:
+                        (first if idx == 0 else later).append(p["pull_duration_s"] * 1000)
+                    b, rd = t(p["scheduled"]), t(p["ready"])
+                    if b and rd:
+                        (first_rd if idx == 0 else later_rd).append((rd - b).total_seconds())
+        print(f"{arm}: pulled/pods by node: " + ", ".join(f"{n}: {a}/{b}" for n, (a, b) in sorted(by_node.items())))
+        A.summary(f"  {arm} Pulled event, first pod per node ms", first)
+        A.summary(f"  {arm} Pulled event, later pod per node ms", later)
+        for lab, xs in (("first", first_rd), ("later", later_rd)):
+            if xs:
+                print(f"  {arm} bound->Ready, {lab} pulling pod per node: median={statistics.median(xs):.1f} s (n={len(xs)})")
 
     print("\n== per pod (bound -> Ready, apiserver 1 s resolution) ==")
     per = {"off": {"pulled": [], "cached": []}, "on": {"pulled": [], "cached": []}}

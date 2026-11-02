@@ -85,8 +85,14 @@ def main():
     rows = [json.loads(l) for l in open(path) if l.strip()]
     deploys = [r for r in rows if r.get("role") == "deploy"]
     wakes = [r for r in rows if r.get("role") != "deploy"]
-    invalid = [r for r in wakes if not ok_wake(r)]
-    wakes = [r for r in wakes if ok_wake(r)]
+    def usable(r):
+        return ok_wake(r) and not r.get("evidence", {}).get("events_invalid")
+
+    invalid = [r for r in wakes if not usable(r)]
+    wakes = [r for r in wakes if usable(r)]
+    no_count = sum(1 for r in wakes if "events_n" not in r.get("evidence", {}))
+    if no_count:
+        print(f"NOTE: {no_count} wake rows carry no events_n; a failed events fetch cannot be ruled out for them.")
     print(f"rounds(deploy rows)={len(deploys)} wake rows={len(wakes)} invalid wake rows={len(invalid)}")
     for r in invalid:
         print("  INVALID", r.get("round"), r.get("arm"), (r.get("error") or r.get("cold", {}).get("error") or "")[:120])
@@ -128,7 +134,7 @@ def main():
     U_cached = {k: v for k, v in U_all.items() if not v["pulled_in_cycle"]}
     W = [r for r in wakes if r["role"] == "all-layers-new"]
     print("\n== scale-from-zero wake, cold request ms (client-side, request sent -> body complete) ==")
-    summary("pp-p  PULLED (pre-pulled both nodes)", [wake_ms(r) for r in P.values()])
+    summary("pp-p  PRE-PULLED (image pulled onto both nodes before the wake)", [wake_ms(r) for r in P.values()])
     summary("pp-u  fresh revision, wake did NOT pull (cached on the node it landed)",
             [wake_ms(r) for r in U_cached.values()])
     summary("pp-u  wake that DID pull in-cycle (node without layer)", [wake_ms(r) for r in U_pulled.values()])
@@ -136,7 +142,7 @@ def main():
     print(f"  pp-u wakes landing on node without layer: {len(U_pulled)} of {len(U_all)}")
     print(f"  pp-w wakes pulled in-cycle: {sum(1 for r in W if r['pulled_in_cycle'])} of {len(W)}")
     print("  warm median (of 5 GETs per cycle), ms:")
-    summary("    pp-p", [warm_med(r) for r in P.values()])
+    summary("    pp-p pre-pulled", [warm_med(r) for r in P.values()])
     summary("    pp-u", [warm_med(r) for r in U_all.values()])
 
     # ---- paired ABBA comparisons (same round, alternating order) ----
@@ -156,12 +162,14 @@ def main():
         d = [x - y for x, y in zip(a, b)]
         print(f"== paired (n={len(rounds_u)}): pp-u wake that pulled minus pp-p pulled: "
               f"median diff={statistics.median(d):+.0f} ms  HL={hodges_lehmann(d):+.0f} ms ==")
-    if P and U_pulled == {} and pulls_for("pp-u"):
-        pm = statistics.median(wake_ms(r) for r in P.values())
+    if U_cached and U_pulled == {} and pulls_for("pp-u"):
+        # Base the estimate on the arm that actually had the image cached (pp-u, no in-cycle pull),
+        # not on the pre-pulled arm.
+        pm = statistics.median(wake_ms(r) for r in U_cached.values())
         pull_med = statistics.median(p["pull_duration_s"] * 1000 for p in pulls_for("pp-u")
                                      if p["pull_duration_s"] is not None)
-        print(f"\nModel (not a measurement): pulled wake median {pm:.0f} ms + pull median {pull_med:.0f} ms "
-              f"= {pm + pull_med:.0f} ms for a wake that must pull first.")
+        print(f"\nModel (not a measurement): cached wake median {pm:.0f} ms (pp-u, no in-cycle pull) + "
+              f"pull median {pull_med:.0f} ms = {pm + pull_med:.0f} ms for a wake that must pull first.")
     if P and W:
         wl = [wake_ms(r) for r in W if r["pulled_in_cycle"]]
         if wl:
@@ -169,7 +177,7 @@ def main():
             print(f"unpaired pp-w(pulled) vs pp-p: diff={c['diff']:+.0f} ms, MW p={c['p']:.3g}")
 
     print("\n== phase timestamps (apiserver, 1 s resolution) for pulled wakes vs cached wakes ==")
-    for label, group in (("pp-p", P.values()), ("pp-u cached", U_cached.values())):
+    for label, group in (("pp-p pre-pulled", P.values()), ("pp-u cached", U_cached.values())):
         cs, rd = [], []
         for r in group:
             e = r["evidence"]

@@ -197,8 +197,12 @@ def evidence(arm):
     cs = st.get("containerStatuses") or [{}]
     user = next((c for c in cs if c.get("name") == "user-container"), cs[0])
     started = (user.get("state", {}).get("running") or {}).get("startedAt")
-    evs = json.loads(kube(["get", "events", "--field-selector", f"involvedObject.name={name}", "-o", "json"],
-                          check=False).stdout or '{"items":[]}')
+    ev = kube(["get", "events", "--field-selector", f"involvedObject.name={name}", "-o", "json"], check=False)
+    events_invalid = ev.returncode != 0
+    try:
+        evs = json.loads(ev.stdout or '{"items":[]}')
+    except json.JSONDecodeError:
+        evs, events_invalid = {"items": []}, True
     events = [{"reason": e.get("reason"), "msg": e.get("message", "")[:220],
                "first": e.get("firstTimestamp"), "last": e.get("lastTimestamp"), "eventTime": e.get("eventTime")}
               for e in evs.get("items", [])]
@@ -222,6 +226,8 @@ def evidence(arm):
         "pull_events": events,
         "pulled_in_cycle": bool(pulling),
         "pull_duration_s": pull_dur,
+        "events_n": len(events),
+        "events_invalid": events_invalid,  # a failed fetch is not "no pull"
     }
 
 

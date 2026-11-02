@@ -101,8 +101,12 @@ def pods_detail(arm):
         name = pod["metadata"]["name"]
         st = pod["status"]
         conds = {c["type"]: c.get("lastTransitionTime") for c in st.get("conditions", [])}
-        evs = json.loads(P.kube(["get", "events", "--field-selector", f"involvedObject.name={name}", "-o", "json"],
-                                check=False).stdout or '{"items":[]}')
+        ev = P.kube(["get", "events", "--field-selector", f"involvedObject.name={name}", "-o", "json"], check=False)
+        events_invalid = ev.returncode != 0
+        try:
+            evs = json.loads(ev.stdout or '{"items":[]}')
+        except json.JSONDecodeError:
+            evs, events_invalid = {"items": []}, True
         pulling = [e.get("firstTimestamp") or e.get("eventTime") for e in evs.get("items", [])
                    if e.get("reason") == "Pulling"]
         dur = None
@@ -114,7 +118,9 @@ def pods_detail(arm):
         out.append({"pod": name, "node": st.get("hostIP"), "created": pod["metadata"]["creationTimestamp"],
                     "scheduled": conds.get("PodScheduled"), "ready": conds.get("Ready"),
                     "pulled_in_cycle": bool(pulling), "pulling_event": pulling[0] if pulling else None,
-                    "pull_duration_s": dur})
+                    "pull_duration_s": dur, "events_n": len(evs.get("items", [])),
+                    # a failed fetch is not "no pull": the row is marked invalid and the analyzer drops it
+                    "events_invalid": events_invalid})
     return out
 
 

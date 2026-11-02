@@ -23,8 +23,15 @@
  * in the v1.0 credential fingerprint set; editing them moves the fingerprints.
  * They are listed in DEFERRED_FROZEN and skipped, and the test asserts each is
  * STILL frozen, so the deferral cannot outlive the credential window silently.
- * TODO(#2106): apply the mirror to them once the credential window closes (the
+ * TODO(#2650): apply the mirror to them once the credential window closes (the
  * compat shards' Docker Hub pulls live in the frozen scripts/e2e-deploy*.sh).
+ *
+ * Skipping is not silence (#2650): every deferred file carries a pinned BASELINE of its
+ * known unmirrored pull sites (UNMIRRORED_BASELINE). `baselineDrift` is red when a NEW
+ * pull appears (a fresh anonymous Docker Hub pull in a file the scan skips) AND when a
+ * baselined pull disappears (stale baseline: the mirror work landed, so the deferral and
+ * its entry must go in the same change). DEFERRAL_TRACKER names the open tracking issue
+ * and each file's removal condition.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -39,7 +46,7 @@ export const MIRROR_ACTION = './.github/actions/docker-hub-mirror';
  * Derived copy of the frozen `test-e2e-deploy.yml` (its header declares it equals
  * derive(test-e2e-deploy.yml) plus declared substitutions, and a test enforces
  * that), whose pulls happen inside the frozen `scripts/e2e-deploy*.sh`. Editing it
- * alone would break the derivation. TODO(#2106): apply with the frozen pair.
+ * alone would break the derivation. TODO(#2650): apply with the frozen pair.
  */
 export const DEFERRED_DERIVED = Object.freeze(['.github/workflows/compat-credential-v1.3.yml']);
 
@@ -47,7 +54,7 @@ export const DEFERRED_DERIVED = Object.freeze(['.github/workflows/compat-credent
  * `bun-base-build.yml` pins an EXACT reviewed step order/run text for its
  * submit/download/verify/sign chain (`tests/bun-base-supply-chain.test.ts`); adding
  * a step is a signing-chain change that needs its own review. Its one pull is
- * `docker run alpine` in the verify step. TODO(#2106): mirror it under that review.
+ * `docker run alpine` in the verify step. TODO(#2650): mirror it under that review.
  */
 export const DEFERRED_PINNED = Object.freeze(['.github/workflows/bun-base-build.yml']);
 
@@ -68,6 +75,47 @@ export const DEFERRED_FROZEN = Object.freeze([
   '.github/workflows/compat-vinext.yml',
 ]);
 
+/** Open tracker for every DEFERRED_* / baseline entry below, and what closes it. */
+export const DEFERRAL_TRACKER = Object.freeze({
+  issue: 2650,
+  closes:
+    'the credential window closes and the frozen files are mirrored in the same change that updates the fingerprint; DEFERRED_FROZEN / DEFERRED_DERIVED and their UNMIRRORED_BASELINE entries are deleted; bun-base-build.yml (DEFERRED_PINNED) is mirrored under its signing-chain review',
+  removal: Object.freeze({
+    '.github/workflows/test-e2e-deploy.yml':
+      'while credential-frozen (enforced by tests/docker-hub-mirror-guard.test.ts); delete when the window closes and the mirror lands with the fingerprint update',
+    '.github/workflows/compat-vinext.yml':
+      'while credential-frozen (enforced by tests/docker-hub-mirror-guard.test.ts); delete when the window closes and the mirror lands with the fingerprint update',
+    '.github/workflows/compat-credential-v1.3.yml':
+      'while a generated derived copy (enforced by tests/docker-hub-mirror-guard.test.ts); re-derive with test-e2e-deploy.yml and delete',
+    '.github/workflows/bun-base-build.yml':
+      'while its step order is pinned by tests/bun-base-supply-chain.test.ts; delete when the verify step is mirrored under signing-chain review',
+  }),
+});
+
+/**
+ * Known unmirrored pull sites per deferred file, as `<path>: <command>` entries (one per
+ * occurrence, comment lines excluded) across the workflow and the scripts it references.
+ * Regenerate with `pullSites(file)`; changing an entry is a reviewed decision.
+ */
+export const UNMIRRORED_BASELINE = Object.freeze({
+  '.github/workflows/test-e2e-deploy.yml': Object.freeze([
+    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run',
+  ]),
+  '.github/workflows/compat-vinext.yml': Object.freeze([]),
+  '.github/workflows/compat-credential-v1.3.yml': Object.freeze([
+    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run',
+    'scripts/e2e-deploy.sh: docker run',
+  ]),
+  '.github/workflows/bun-base-build.yml': Object.freeze([
+    '.github/workflows/bun-base-build.yml: docker run',
+  ]),
+});
+
 /** A `mirror.gcr.io/<repo>[:tag][@sha256:...]` token inside shell text. */
 const MIRROR_REF_IN_TEXT = /mirror\.gcr\.io\/[\w./-]+(?::[\w.-]+)?(?:@sha256:[0-9a-f]{64})?/g;
 
@@ -77,6 +125,64 @@ const PULLING =
 /** A script a job runs that itself pulls. */
 const PULLING_SCRIPT = /\bdocker\s+(?:build|buildx|pull|run|compose)\b|\bkind\s+create\b/;
 const SCRIPT_REF = /(?:^|[\s"'`(])((?:\.\/)?scripts\/[\w./-]+\.(?:sh|mjs|js|ts))/g;
+
+const PULL_TOKEN = new RegExp(PULLING.source, 'g');
+/** Any `scripts/<file>` reference, including `${{ github.workspace }}/knext/scripts/...`. */
+const ANY_SCRIPT_REF = /(?:^|[^\w.-])((?:\.\/)?scripts\/[\w./-]+\.(?:sh|mjs|js|ts))/g;
+
+const codeOnly = (text) =>
+  text
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+
+/**
+ * Every pulling construct in a workflow and the scripts it references, as sorted
+ * `<path>: <command>` entries with multiplicity (comment lines excluded).
+ */
+export function pullSites(rel, repoRoot = REPO_ROOT) {
+  const wfText = codeOnly(readFileSync(join(repoRoot, rel), 'utf8'));
+  const paths = new Map([[rel, wfText]]);
+  for (const m of wfText.matchAll(ANY_SCRIPT_REF)) {
+    const p = m[1].replace(/^\.\//, '');
+    const abs = join(repoRoot, p);
+    if (!paths.has(p) && existsSync(abs)) paths.set(p, codeOnly(readFileSync(abs, 'utf8')));
+  }
+  const out = [];
+  for (const [p, text] of paths) {
+    for (const m of text.matchAll(PULL_TOKEN)) out.push(`${p}: ${m[0].replace(/\s+/g, ' ')}`);
+  }
+  return out.sort();
+}
+
+/** Multiset difference a - b. */
+function multisetMinus(a, b) {
+  const left = [...b];
+  const out = [];
+  for (const x of a) {
+    const i = left.indexOf(x);
+    if (i < 0) out.push(x);
+    else left.splice(i, 1);
+  }
+  return out;
+}
+
+/**
+ * Deferred files whose real pull sites differ from the pinned baseline.
+ * `added` = a new unmirrored pull; `removed` = a baselined pull that is gone (stale).
+ * @returns {{ file: string, added: string[], removed: string[] }[]}
+ */
+export function baselineDrift(repoRoot = REPO_ROOT, baseline = UNMIRRORED_BASELINE) {
+  const out = [];
+  for (const [file, expected] of Object.entries(baseline)) {
+    const actual = pullSites(file, repoRoot);
+    const want = [...expected].sort();
+    const added = multisetMinus(actual, want);
+    const removed = multisetMinus(want, actual);
+    if (added.length || removed.length) out.push({ file, added, removed });
+  }
+  return out;
+}
 
 function stepText(step) {
   return `${step.run ?? ''}\n${step.uses ?? ''}\n${JSON.stringify(step.with ?? {})}`;
@@ -201,6 +307,22 @@ export function findViolations(
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const v = findViolations();
+  for (const d of baselineDrift()) {
+    for (const a of d.added) {
+      v.push({
+        file: d.file,
+        job: '-',
+        reason: `new unmirrored pull not in the #${DEFERRAL_TRACKER.issue} baseline: ${a}`,
+      });
+    }
+    for (const r of d.removed) {
+      v.push({
+        file: d.file,
+        job: '-',
+        reason: `stale #${DEFERRAL_TRACKER.issue} baseline entry (pull gone; remove the deferral): ${r}`,
+      });
+    }
+  }
   for (const x of v) console.error(`::error file=${x.file}::${x.job}: ${x.reason}`);
   process.exit(v.length === 0 ? 0 : 1);
 }

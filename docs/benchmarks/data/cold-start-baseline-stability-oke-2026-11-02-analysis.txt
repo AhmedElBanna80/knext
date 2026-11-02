@@ -185,3 +185,35 @@
    pre-wake node_mem_ws: slow-mode median 5.495e+09 (n=14) vs fast-mode 6.801e+09 (n=20)
    .118: sequence lllllHHlllllHll; consecutive same-mode 10/14 (expected 9.5 if independent)
    .169: sequence llHHHlHHlHHHHlllHlHH; consecutive same-mode 10/19 (expected 9.9 if independent)
+
+
+##### D. SHAPE OF bound -> first user log, decomposition, multiplicity, pairing #####
+  n=79 target wakes. Empirical gap at the 650 ms cut: fast max 643, slow min 659 (15 ms). (Difference of the two medians is 441 ms; that is not a gap.)
+  three largest gaps between adjacent sorted values: 191 ms (664->855); 106 ms (537->643); 32 ms (487->519)
+  values between 600 and 700 ms: [643, 659, 662, 664]  (n=4); values 643-664 inclusive: 3
+  share of 'slower cluster' wakes under three cuts:
+   cut 500: all 37/79 = 47%; three-arm@118 2/6; three-arm@169 4/14; single-arm@169 15/24; balanced@118 3/15; balanced@169 13/20
+   cut 650: all 33/79 = 42%; three-arm@118 1/6; three-arm@169 3/14; single-arm@169 14/24; balanced@118 3/15; balanced@169 12/20
+   cut 760: all 30/79 = 38%; three-arm@118 1/6; three-arm@169 2/14; single-arm@169 13/24; balanced@118 3/15; balanced@169 11/20
+  Silverman critical-bandwidth test of one mode vs more (smoothed bootstrap, 200 resamples, seed 21): h_crit=169.0 ms, p=0.005. No Hartigan dip test was run.
+
+  decomposition (all 79 target wakes): the segment is part of the total. mean segment 627 ms of mean total 1645 ms = 38%; R^2 of total on the continuous segment alone = 0.51; R^2 of total on the slower-cluster indicator alone = 0.55
+
+  multiplicity: the share tests (three-arm@169 vs single-arm@169; vs balanced@169; balanced .169 vs .118) are uncorrected; about 4 mode tests and about 15 other tests were run, two mode tests share the three-arm@169 reference.
+   p=0.0432: Bonferroni(4) = 0.17, Bonferroni(19) = 0.82
+   p=0.0382: Bonferroni(4) = 0.15, Bonferroni(19) = 0.73
+   p=0.037: Bonferroni(4) = 0.15, Bonferroni(19) = 0.70
+
+  attribution on .169, single-arm vs three-arm: share 0.214 -> 0.583, change 0.369; same-node median difference 397 ms
+   change x 590 (slower minus faster, total) = 218 ms = 55% of 397
+   change x 507 (regression coefficient) = 187 ms = 47% of 397
+   the 1276 vs 1806 comparison also mixes nodes: three-arm has 6 of 20 wakes on .118, single-arm is all .169
+
+  balanced run node x slot counts: {('118', 0): 0, ('118', 1): 15, ('169', 0): 18, ('169', 1): 2}; the node row and the slot row of the balanced table are one contrast (.118 at slot 1: 15 of 15; .169 at slot 0: 18 of 20)
+
+  within-round pairs (target cpu-base vs companion cpu-boost2req, different config, so a proxy for noise only): n=35, both on same node in 6 rounds; sd target 347, sd companion 350, sd of within-round difference 492; Pearson r=+0.01, Spearman rho=-0.05 (p=0.770); sqrt(sd_a^2+sd_b^2)=493 is the difference sd if the two were independent
+  same-config within-round pairs, which are what the recommended protocol uses, were never collected: paired variance for that design is unmeasured.
+   proxy paired MDE (sd of within-round difference 492, n pairs=15): 356 ms
+   proxy paired MDE (sd of within-round difference 492, n pairs=20): 308 ms
+   proxy paired MDE (sd of within-round difference 492, n pairs=30): 251 ms
+   proxy paired MDE (sd of within-round difference 492, n pairs=40): 218 ms

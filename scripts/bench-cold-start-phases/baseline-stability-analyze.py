@@ -509,7 +509,118 @@ def modes():
         print(f"   .{n}: sequence {''.join('H' if v else 'l' for v in seq)}; consecutive same-mode {same}/{len(seq) - 1} "
               f"(expected {pe * (len(seq) - 1):.1f} if independent)")
 
+def n_modes(xs, h, grid):
+    dens = [sum(math.exp(-0.5 * ((g - x) / h) ** 2) for x in xs) for g in grid]
+    return sum(1 for i in range(1, len(dens) - 1) if dens[i] > dens[i - 1] and dens[i] >= dens[i + 1])
+
+
+def crit_bw(xs, grid):
+    lo, hi = 1.0, (max(xs) - min(xs))
+    for _ in range(12):
+        mid = (lo + hi) / 2
+        if n_modes(xs, mid, grid) <= 1:
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
+def silverman(xs, nboot=200, seed=21):
+    """Silverman (1981) critical-bandwidth test of H0: one mode, smoothed bootstrap."""
+    grid = [min(xs) - 50 + i * (max(xs) - min(xs) + 100) / 149 for i in range(150)]
+    h0 = crit_bw(xs, grid)
+    rnd = random.Random(seed)
+    m, v = st.mean(xs), st.pvariance(xs)
+    hit = 0
+    for _ in range(nboot):
+        b = [m + (rnd.choice(xs) - m + h0 * rnd.gauss(0, 1)) / math.sqrt(1 + h0 * h0 / v) for _ in xs]
+        if crit_bw(b, grid) > h0:
+            hit += 1
+    return h0, (hit + 1) / (nboot + 1)
+
+
+def shape():
+    print("\n\n##### D. SHAPE OF bound -> first user log, decomposition, multiplicity, pairing #####")
+    sets = {"three-arm": load("three-arm"), "single-arm": load("single-arm"), "balanced": load("balanced")}
+    allg = [r for g in sets.values() for r in g if "_hi" in r]
+    v = sorted(segs(r)["bound_to_first_user_log"] for r in allg)
+    fast_max = max(x for x in v if x <= MODE_SPLIT)
+    slow_min = min(x for x in v if x > MODE_SPLIT)
+    gaps = sorted(((v[i + 1] - v[i], v[i], v[i + 1]) for i in range(len(v) - 1)), reverse=True)
+    print(f"  n={len(v)} target wakes. Empirical gap at the {MODE_SPLIT:.0f} ms cut: fast max {fast_max:.0f}, slow min {slow_min:.0f} "
+          f"({slow_min - fast_max:.0f} ms). (Difference of the two medians is {med([x for x in v if x > MODE_SPLIT]) - med([x for x in v if x <= MODE_SPLIT]):.0f} ms; that is not a gap.)")
+    print("  three largest gaps between adjacent sorted values: " + "; ".join(f"{g:.0f} ms ({a:.0f}->{b:.0f})" for g, a, b in gaps[:3]))
+    print(f"  values between 600 and 700 ms: {[round(x) for x in v if 600 <= x <= 700]}  (n={sum(1 for x in v if 600 <= x <= 700)}); "
+          f"values 643-664 inclusive: {sum(1 for x in v if 643 <= x <= 664)}")
+    print("  share of 'slower cluster' wakes under three cuts:")
+    for cut in (500, 650, 760):
+        k = sum(1 for x in v if x > cut)
+        print(f"   cut {cut}: all {k}/{len(v)} = {k / len(v):.0%}", end="")
+        for name in ("three-arm", "single-arm", "balanced"):
+            for n in ("118", "169"):
+                g = [segs(r)["bound_to_first_user_log"] for r in sets[name] if r["_n"] == n and "_hi" in r]
+                if g:
+                    print(f"; {name}@{n} {sum(1 for x in g if x > cut)}/{len(g)}", end="")
+        print()
+    h0, p = silverman(v)
+    print(f"  Silverman critical-bandwidth test of one mode vs more (smoothed bootstrap, 200 resamples, seed 21): h_crit={h0:.1f} ms, p={p:.3f}. "
+          f"No Hartigan dip test was run.")
+    seg = [segs(r)["bound_to_first_user_log"] for r in allg]
+    tot = [r["_y"] for r in allg]
+    ssx = sum((a - st.mean(seg)) ** 2 for a in seg)
+    sxy = sum((a - st.mean(seg)) * (b - st.mean(tot)) for a, b in zip(seg, tot))
+    sst = sum((b - st.mean(tot)) ** 2 for b in tot)
+    ind = [1.0 if r["_hi"] else 0.0 for r in allg]
+    mi = st.mean(ind)
+    sxi = sum((a - mi) ** 2 for a in ind)
+    sxyi = sum((a - mi) * (b - st.mean(tot)) for a, b in zip(ind, tot))
+    print(f"\n  decomposition (all {len(allg)} target wakes): the segment is part of the total. mean segment {st.mean(seg):.0f} ms of mean total "
+          f"{st.mean(tot):.0f} ms = {st.mean(seg) / st.mean(tot):.0%}; R^2 of total on the continuous segment alone = {sxy * sxy / (ssx * sst):.2f}; "
+          f"R^2 of total on the slower-cluster indicator alone = {sxyi * sxyi / (sxi * sst):.2f}")
+    print("\n  multiplicity: the share tests (three-arm@169 vs single-arm@169; vs balanced@169; balanced .169 vs .118) are "
+          "uncorrected; about 4 mode tests and about 15 other tests were run, two mode tests share the three-arm@169 reference.")
+    for pv in (0.0432, 0.0382, 0.037):
+        print(f"   p={pv}: Bonferroni(4) = {min(1.0, 4 * pv):.2f}, Bonferroni(19) = {min(1.0, 19 * pv):.2f}")
+    ps = [r for r in sets["single-arm"] if "_hi" in r]
+    pt = [r for r in sets["three-arm"] if r["_n"] == "169" and "_hi" in r]
+    shs = sum(1 for r in ps if r["_hi"]) / len(ps)
+    sht = sum(1 for r in pt if r["_hi"]) / len(pt)
+    dsh = shs - sht
+    same_node = med([r["_y"] for r in sets["single-arm"]]) - med([r["_y"] for r in sets["three-arm"] if r["_n"] == "169"])
+    print(f"\n  attribution on .169, single-arm vs three-arm: share {sht:.3f} -> {shs:.3f}, change {dsh:.3f}; same-node median difference {same_node:.0f} ms")
+    for lab, eff in (("590 (slower minus faster, total)", 590.0), ("507 (regression coefficient)", 507.0)):
+        print(f"   change x {lab} = {dsh * eff:.0f} ms = {dsh * eff / same_node:.0%} of {same_node:.0f}")
+    print(f"   the 1276 vs 1806 comparison also mixes nodes: three-arm has {sum(1 for r in sets['three-arm'] if r['_n'] == '118')} of "
+          f"{len(sets['three-arm'])} wakes on .118, single-arm is all .169")
+    bal = sets["balanced"]
+    c = {(n, s_): sum(1 for r in bal if r["_n"] == n and r["slot"] == s_) for n in ("118", "169") for s_ in (0, 1)}
+    print(f"\n  balanced run node x slot counts: {c}; the node row and the slot row of the balanced table are one contrast "
+          f"(.118 at slot 1: {c[('118', 1)]} of {c[('118', 0)] + c[('118', 1)]}; .169 at slot 0: {c[('169', 0)]} of {c[('169', 0)] + c[('169', 1)]})")
+    rr = [json.loads(l) for l in (DATA / FILES["balanced"]).read_text().splitlines()]
+    byr = {}
+    for r in rr:
+        if r.get("code") == 200 and "error" not in r:
+            byr.setdefault(r["round"], {})[r["arm"]] = r
+    pr = [(d["cpu-base"]["watch"]["resp_end"], d["cpu-boost2req"]["watch"]["resp_end"], d["cpu-base"]["node"] == d["cpu-boost2req"]["node"])
+          for d in byr.values() if len(d) == 2]
+    a = [x for x, _, _ in pr]
+    b = [y for _, y, _ in pr]
+    rho, p = spearman(a, b)
+    diffs = [x - y for x, y in zip(a, b)]
+    mx, my = st.mean(a), st.mean(b)
+    pear = sum((x - mx) * (y - my) for x, y in zip(a, b)) / math.sqrt(sum((x - mx) ** 2 for x in a) * sum((y - my) ** 2 for y in b))
+    print(f"\n  within-round pairs (target cpu-base vs companion cpu-boost2req, different config, so a proxy for noise only): n={len(pr)}, "
+          f"both on same node in {sum(1 for *_, s in pr if s)} rounds; sd target {st.stdev(a):.0f}, sd companion {st.stdev(b):.0f}, "
+          f"sd of within-round difference {st.stdev(diffs):.0f}; Pearson r={pear:+.2f}, Spearman rho={rho:+.2f} (p={p:.3f}); "
+          f"sqrt(sd_a^2+sd_b^2)={math.sqrt(st.stdev(a) ** 2 + st.stdev(b) ** 2):.0f} is the difference sd if the two were independent")
+    print("  same-config within-round pairs, which are what the recommended protocol uses, were never collected: paired variance for that design is unmeasured.")
+    z = 1.96 + 0.84
+    sdd = st.stdev(diffs)
+    for n_per in (15, 20, 30, 40):
+        print(f"   proxy paired MDE (sd of within-round difference {sdd:.0f}, n pairs={n_per}): {z * sdd / math.sqrt(n_per):.0f} ms")
+
 
 offline()
 live()
 modes()
+shape()

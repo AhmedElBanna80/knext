@@ -1449,6 +1449,44 @@ describe('#2630 — a next version reached through indirection is judged, not sk
     });
   });
 
+  describe('positions and fail-closed edges', () => {
+    it('fails a value computed by a command, which has no literal to judge', () => {
+      const text =
+        'env:\n  FW: $(node -p "1+1")\njobs:\n  b:\n    steps:\n      - run: bun add next@$FW';
+      expect(flagged('x.yml', text).join('\n')).toContain('computed by a command');
+    });
+
+    it('fails a reference cycle instead of looping', () => {
+      const text =
+        'env:\n  A: @{B}\n  B: @{A}\njobs:\n  b:\n    steps:\n      - run: bun add next@$A';
+      expect(flagged('x.yml', text).join('\n')).toContain('cycle');
+    });
+
+    it('judges a reference sitting under a key that mentions next', () => {
+      const text = 'env:\n  FW: 16.3.8\nmatrix:\n  next:\n    - @{{ env.FW }}';
+      expect(flagged('x.yml', text).length).toBeGreaterThan(0);
+    });
+
+    it('does not take prose, or a next-named value that is not a version, for a position', () => {
+      for (const text of [
+        'env:\n  FW: 16.3.8\njobs:\n  b:\n    steps:\n      - run: echo "next: @{FW}"',
+        'env:\n  NEXT_TEST_NATIVE_DIR: @{{ steps.swc.outputs.dir }}',
+        'env:\n  BUILD_RESULT: @{{ needs.build-next.result }}',
+        '      - run: docker run kn-next-operator:v@{VERSION}',
+      ]) {
+        expect(flagged('x.yml', text), text).toEqual([]);
+      }
+    });
+
+    it('attributes a literal on the reading line to that line, not to the source it also reads', () => {
+      const text =
+        'env:\n  FW: 16.4.3\njobs:\n  b:\n    steps:\n      - run: echo next@16.3.8 && bun add next@$FW';
+      const out = flagged('x.yml', text);
+      expect(out.length).toBeGreaterThan(0);
+      for (const line of out) expect(line, line).not.toContain('FW: 16.4.3');
+    });
+  });
+
   describe('matrix', () => {
     it('flags a static matrix key read through matrix.X', () => {
       const text = [

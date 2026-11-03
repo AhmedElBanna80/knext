@@ -160,9 +160,17 @@ function isDiscarded(node, parents) {
  * bundler follows it. The load is dead under Bun: `createRedisClient()` in
  * packages/lib/src/redis/client.ts takes the `bunRedisAvailable(scope)` branch
  * and constructs `Bun.RedisClient`, returning before `loadRedisCtor()` is ever
- * reached, so a Bun-compiled binary never needs ioredis on disk. Nothing else
- * has that guarantee, so nothing else is exempt: `sharp`, a relative or absolute
- * path, `node:fs` all stay failures even when assembled the same way.
+ * reached on the createRedisClient path. Not every path is covered: the generic
+ * cache handler (adapters/cache-handler.js) loads ioredis with a computed
+ * `import()` when `KNEXT_CACHE_REDIS_CLIENT=ioredis` forces it under Bun, and that
+ * load fails in a compiled binary (the bundler turns it into a throw), loudly,
+ * with an in-memory fallback. Nothing else has even the createRedisClient
+ * guarantee, so nothing else is exempt: `sharp`, a relative or absolute path,
+ * `node:fs` all stay failures even when assembled the same way.
+ *
+ * The exemption goes by NAME, not by caller: it applies to a `createRequire(
+ * import.meta.url)` load of exactly this string in ANY module, including an app's
+ * own code. It does not check that the load sits behind the Bun guard.
  */
 export const FOLDED_RUNTIME_PACKAGE = "ioredis";
 
@@ -233,8 +241,9 @@ function patternNames(node, into) {
  *
  * That is acceptable ONLY because the sole value `foldSpecifier` lets through is
  * `FOLDED_RUNTIME_PACKAGE`: a wrong fold can at worst exempt a load that really
- * names ioredis, a package whose runtime load is guarded off under Bun. It is
- * not a sound constant propagator and must not be widened without scope analysis.
+ * names ioredis, which is reported by name (never silently dropped) but not
+ * failed. It is not a sound constant propagator and must not be widened without
+ * scope analysis.
  */
 function bindingFacts(ast) {
     const bound = new Map();

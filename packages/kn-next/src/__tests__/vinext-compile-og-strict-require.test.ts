@@ -108,6 +108,11 @@ describe("#2614: strict compile accepts the next/og shape and still refuses real
         ["a parent-relative path", "['../', '../secret'].join('')"],
         ["an absolute path", "['/etc/', 'x'].join('')"],
         ["node:fs", "['node', ':fs'].join('')"],
+        ["ioredis with a path suffix", "['io', 'redis/foo'].join('')"],
+        ["ioredis with a leading space", "[' io', 'redis'].join('')"],
+        ["ioredis with a trailing space", "['io', 'redis '].join('')"],
+        ["IOREDIS in capitals", "['IO', 'REDIS'].join('')"],
+        ["node:ioredis", "['node:', 'ioredis'].join('')"],
     ])("a literal-assembled name that is not ioredis (%s) still aborts the strict build", (_label, expr) => {
         const r = strictCompile(
             OG_DISCARDED +

@@ -104,6 +104,26 @@ describe("anything the analysis cannot fold stays a non-literal require (the str
             "const SPEC = ['node', ':fs'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
         ],
         [
+            "ioredis with a path suffix (startsWith / includes would accept it)",
+            "const SPEC = ['io', 'redis/foo'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "ioredis with a leading space (trim / endsWith would accept it)",
+            "const SPEC = [' io', 'redis'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "ioredis with a trailing space (trim / startsWith would accept it)",
+            "const SPEC = ['io', 'redis '].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "IOREDIS (a case-insensitive match would accept it)",
+            "const SPEC = ['IO', 'REDIS'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "node:ioredis (stripping node: / endsWith would accept it)",
+            "const SPEC = ['node:', 'ioredis'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
             "an inline folded name that is not ioredis",
             "export const f = () => createRequire(import.meta.url)(['sha', 'rp'].join(''));\n",
         ],

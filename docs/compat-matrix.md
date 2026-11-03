@@ -8,7 +8,10 @@
 > re-credential, #1560, 2026-09-30). **Divergence since #2594 (2026-10-27):** `knext create` now
 > scaffolds next 16.4.3 (the 16.4.x line), ahead of the credential, because GHSA-2464-fhr4-w9xw /
 > GHSA-673q-mjm6-r5xr (critical, unauthenticated RCE) and GHSA-p3m5-59mp-jv5r (high, DoS) affect
-> every 16.x through 16.4.0 and have no 16.3.x fix. Moving `NEXTJS_REF` restarts the credential
+> every 16.x through 16.4.0 and have no 16.3.x fix. **v1.3 lane (2026-11-02):** the parallel v1.3
+> credential lane tests `vercel/next.js` **v16.4.3** through a declared v1.3-only substitution in
+> `compat-credential-v1.3.yml` (`nextjsRefOverride`); the v1.0 lane and `test-e2e-deploy.yml` keep
+> v16.3.8, so no v1.0 window restarts. No run at v16.4.3 has counted yet. Moving `NEXTJS_REF` restarts the credential
 > windows and is a separate decision recorded on #2594. The history below is the v16.3.8
 > re-credential, which closed the deliberate v16.2.x/16.3.x divergence rc.1 opened. `NEXTJS_REF` in `test-e2e-deploy.yml` moved to
 > this ref in the same PR that re-audited the pre-existing quarantine ledger against it with real

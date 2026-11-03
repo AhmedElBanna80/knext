@@ -2426,9 +2426,11 @@ whenever you override an image.
 image's uid first: the repository's unit tests keep a hand-maintained table of
 every pinned digest and its uid and fail when a digest has no entry.
 
-The break-glass template (`deploy/compute-app.template.yaml`) carries the same
-fields. The base-tier manifests (`20-compute.yaml`, `25-compute-warm.yaml`,
-`26-compute-ro.yaml`) still set only the pod-level seccomp profile.
+The break-glass template (`deploy/compute-app.template.yaml`) and the base-tier
+manifests (`20-compute.yaml`, `25-compute-warm.yaml`, `26-compute-ro.yaml`, init
+containers included) carry the same fields, so the base tier is admitted under
+`restricted` too. The base-tier manifests are applied as written, so the uid is
+literal `1000` there; bump it with the image digest if a future image differs.
 
 ## Tenant isolation controls (issue #112 / #113 / #114)
 

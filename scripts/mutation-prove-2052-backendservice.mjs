@@ -1233,6 +1233,78 @@ const MUTATIONS = [
     replacement: '\t\tif false {\n',
     test: unit('TestRestrictedCheckerRejectsThePreviousRender'),
   },
+  // --- the default policy's peers: drop one, widen one ----------------------
+  {
+    id: 'R15',
+    claim: 'the function NetworkPolicy drops the autoscaler peer, so scale-up stalls silently',
+    subject: 'render',
+    anchor: 'autoscalerPeer(),',
+    replacement: '',
+    test: envtest('operator-owned ServiceAccount and the function NetworkPolicy'),
+  },
+  {
+    id: 'R16',
+    claim:
+      'the autoscaler peer is widened to the whole knative-serving namespace, admitting the entire control plane',
+    subject: 'peers',
+    anchor:
+      '\treturn podInNamespacePeer(knativeServingNamespace, map[string]string{\n\t\tknativePodLabelKey: autoscalerPodLabelValue,\n\t})\n',
+    replacement:
+      '\treturn networkingv1.NetworkPolicyPeer{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{namespaceMetadataNameLabel: knativeServingNamespace}}}\n',
+    test: unit('TestNetworkPolicyNoWholeNamespacePeers|TestNetworkPolicyPeerPortMatrix'),
+  },
+  // --- spec.security.networkPolicy on the function --------------------------
+  {
+    id: 'O01',
+    claim: 'the networkPolicy opt-out is ignored: an explicit false still renders the policy',
+    subject: 'ctl',
+    anchor: '\treturn *bs.Spec.Security.NetworkPolicy\n',
+    replacement: '\treturn true\n',
+    test: envtest('spec.security.networkPolicy'),
+  },
+  {
+    id: 'O02',
+    claim:
+      'the default flips: an unset networkPolicy renders no policy (secure by default is lost)',
+    subject: 'ctl',
+    anchor: 'bs.Spec.Security.NetworkPolicy == nil {\n\t\treturn true',
+    replacement: 'bs.Spec.Security.NetworkPolicy == nil {\n\t\treturn false',
+    test: envtest('spec.security.networkPolicy'),
+  },
+  {
+    id: 'O03',
+    claim: 'the opt-out never deletes the policy the operator rendered earlier',
+    subject: 'ctl',
+    anchor: 'if err := r.removeFunctionNetworkPolicy(ctx, bs, np); err != nil {',
+    replacement: 'if err := *new(error); err != nil {',
+    test: envtest('spec.security.networkPolicy'),
+  },
+  {
+    id: 'O05',
+    claim: 'the opt-out deletes a same-named NetworkPolicy the function does not control',
+    subject: 'ctl',
+    anchor: 'if !metav1.IsControlledBy(np, bs) {\n\t\treturn nil',
+    replacement: 'if !metav1.IsControlledBy(np, bs) && false {\n\t\treturn nil',
+    test: envtest('spec.security.networkPolicy'),
+  },
+  {
+    id: 'O06',
+    claim: 'an empty security block turns the policy off instead of meaning on',
+    subject: 'ctl',
+    anchor:
+      'bs.Spec.Security == nil || bs.Spec.Security.NetworkPolicy == nil {\n\t\treturn true\n\t}',
+    replacement:
+      'bs.Spec.Security == nil {\n\t\treturn true\n\t}\n\tif bs.Spec.Security.NetworkPolicy == nil {\n\t\treturn false\n\t}',
+    test: envtest('spec.security.networkPolicy'),
+  },
+  {
+    id: 'O04',
+    claim: 'the pure render still emits the NetworkPolicy when the function opted out',
+    subject: 'render',
+    anchor: 'if functionNetworkPolicyEnabled(bs) {',
+    replacement: 'if true {',
+    test: unit('TestFieldClassificationMatchesWhatTheOperatorRenders'),
+  },
 ];
 
 // A mutation that changes NOTHING about behaviour (the same conjunction, its

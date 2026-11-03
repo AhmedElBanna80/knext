@@ -293,7 +293,11 @@ func RenderFunctionObjects(bs *appsv1alpha1.BackendService, zoneRetention time.D
 	if err := buildFunctionKsvc(bs, zoneRetention, zoneJWKSAbsent, ksvc); err != nil {
 		return nil, err
 	}
-	return []client.Object{sa, ksvc, DesiredFunctionNetworkPolicy(bs.Name, bs.Spec.Zone, bs.Namespace)}, nil
+	objs := []client.Object{sa, ksvc}
+	if functionNetworkPolicyEnabled(bs) {
+		objs = append(objs, DesiredFunctionNetworkPolicy(bs.Name, bs.Spec.Zone, bs.Namespace))
+	}
+	return objs, nil
 }
 
 // functionResources parses the function's requests and limits with the

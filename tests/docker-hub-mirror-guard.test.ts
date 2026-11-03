@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { frozenFileSet } from '../scripts/compat-credential-freeze-guard.mjs';
 import {
+  baselineDrift,
+  DEFERRAL_TRACKER,
   DEFERRED_DERIVED,
   DEFERRED_FROZEN,
   DEFERRED_PINNED,
@@ -11,7 +13,9 @@ import {
   findViolations,
   imageRefOk,
   MIRROR_ACTION,
+  pullSites,
   REPO_ROOT,
+  UNMIRRORED_BASELINE,
 } from '../scripts/docker-hub-mirror-guard.mjs';
 
 /**
@@ -149,7 +153,7 @@ describe('docker-hub-mirror-guard (the real workflows)', () => {
 
   // Deferral markers live HERE, not in the workflows: three of the four deferred files
   // are frozen or derived and cannot carry a comment without moving a fingerprint.
-  // TODO(#2106): mirror test-e2e-deploy.yml + compat-vinext.yml (and re-derive
+  // TODO(#2650): mirror test-e2e-deploy.yml + compat-vinext.yml (and re-derive
   // compat-credential-v1.3.yml) once the credential window closes; mirror
   // bun-base-build.yml under its own signing-chain review.
   it('the full deferred set equals the expected list (a new deferral needs a reason)', () => {
@@ -193,5 +197,204 @@ describe('docker-hub-mirror-guard (the real workflows)', () => {
     expect(a).toContain('registry-mirrors');
     expect(a).toContain('mirror.gcr.io');
     expect(a).toContain('buildkitd');
+  });
+});
+
+/**
+ * #2650: the deferred files are skipped by the mirror scan, so a NEW Docker Hub pull added to
+ * one would be invisible. Each carries a pinned baseline of its known unmirrored pull sites;
+ * drift in EITHER direction is red (added = new anonymous pull; removed = stale baseline, the
+ * mirror work landed and the deferral must go).
+ */
+describe('deferred-file pull baseline (#2650, fixtures)', () => {
+  const F = '.github/workflows/test-e2e-deploy.yml';
+  const mk = (workflow: string, scripts: Record<string, string> = {}) => {
+    const root = fixture('name: x\non: push\njobs: {}\n', scripts);
+    writeFileSync(join(root, F), workflow);
+    return root;
+  };
+  const wf = (run: string) => job(`      - run: ${run}\n`);
+
+  it('pullSites counts every pulling construct, ignores comment lines', () => {
+    const root = mk(wf('docker run alpine true') + '      # docker run commented\n');
+    expect(pullSites(F, root)).toEqual([`${F}: docker run alpine true`]);
+  });
+
+  it('pullSites follows a referenced script, including a ${{ workspace }}/knext/ prefixed path', () => {
+    const root = mk(wf('bash "${{ github.workspace }}/knext/scripts/x.sh"'), {
+      'scripts/x.sh': 'docker run a\ndocker run b\n',
+    });
+    expect(pullSites(F, root)).toEqual([
+      'scripts/x.sh: docker run a',
+      'scripts/x.sh: docker run b',
+    ]);
+  });
+
+  it('greens when the actual pulls equal the baseline', () => {
+    const root = mk(wf('docker run alpine true'));
+    expect(baselineDrift(root, { [F]: [`${F}: docker run alpine true`] })).toEqual([]);
+  });
+
+  it('MUTATION: a new `docker run alpine` in a frozen file is red (added)', () => {
+    const root = mk(wf('echo hi; docker run alpine true'));
+    const d = baselineDrift(root, { [F]: [] });
+    expect(d.length).toBe(1);
+    expect(d[0].added).toEqual([`${F}: docker run alpine true`]);
+    expect(d[0].removed).toEqual([]);
+  });
+
+  it('a second pull beside an existing one is red (multiplicity, not set membership)', () => {
+    const two = `name: x\non: push\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: docker run a\n      - run: docker run a\n`;
+    const root = mk(two);
+    expect(baselineDrift(root, { [F]: [`${F}: docker run a`] })[0].added).toEqual([
+      `${F}: docker run a`,
+    ]);
+    expect(baselineDrift(root, { [F]: [`${F}: docker run a`, `${F}: docker run a`] })).toEqual([]);
+  });
+
+  it('a removed pull is red (stale baseline)', () => {
+    const root = mk(wf('echo hi'));
+    const d = baselineDrift(root, { [F]: [`${F}: docker run alpine`] });
+    expect(d.length).toBe(1);
+    expect(d[0].removed).toEqual([`${F}: docker run alpine`]);
+    expect(d[0].added).toEqual([]);
+  });
+
+  it('a pull added to a referenced script is red', () => {
+    const root = mk(wf('bash scripts/x.sh'), { 'scripts/x.sh': 'docker pull redis\n' });
+    expect(baselineDrift(root, { [F]: [] })[0].added).toEqual(['scripts/x.sh: docker pull redis']);
+  });
+
+  it('FINDING 1: swapping the image at a baselined site is red (image is in the entry)', () => {
+    const root = mk(wf('docker run alpine true'));
+    const d = baselineDrift(root, { [F]: [`${F}: docker run ubuntu true`] });
+    expect(d.length).toBe(1);
+    expect(d[0].added).toEqual([`${F}: docker run alpine true`]);
+    expect(d[0].removed).toEqual([`${F}: docker run ubuntu true`]);
+  });
+
+  const NEW_PULLS: Record<string, string> = {
+    'docker create': 'docker create redis:7',
+    'docker image pull': 'docker image pull redis:7',
+    'docker container run': 'docker container run redis:7',
+    'docker container create': 'docker container create redis:7',
+  };
+  for (const [label, cmd] of Object.entries(NEW_PULLS)) {
+    it(`FINDING 2: a new unmirrored ${label} in a frozen file is red`, () => {
+      const root = mk(wf(cmd));
+      expect(baselineDrift(root, { [F]: [] })[0].added.length).toBe(1);
+    });
+  }
+
+  it('FINDING 2: a new uses: docker://image step in a frozen file is red', () => {
+    const root = mk(job('      - uses: docker://redis:7\n'));
+    expect(baselineDrift(root, { [F]: [] })[0].added.length).toBe(1);
+  });
+
+  it('FINDING 2: a new services: image in a frozen file is red', () => {
+    const root = mk(
+      job('      - run: echo hi\n', '    services:\n      r:\n        image: redis:7\n'),
+    );
+    const d = baselineDrift(root, { [F]: [] });
+    expect(d[0].added.length).toBe(1);
+    expect(d[0].added[0]).toContain('redis:7');
+  });
+
+  it('FINDING 2: a new container: image in a frozen file is red', () => {
+    const root = mk(job('      - run: echo hi\n', '    container:\n      image: node:20\n'));
+    expect(baselineDrift(root, { [F]: [] })[0].added[0]).toContain('node:20');
+  });
+
+  it('FINDING 2: a continued docker run keeps its image (on the next line) in the entry', () => {
+    const root = mk(wf('|\n          docker run --rm \\\n            redis:7 true'));
+    expect(pullSites(F, root)[0]).toContain('redis:7');
+  });
+
+  it('FINDING 2: a dynamic image is red until listed in the baseline explicitly', () => {
+    const root = mk(wf('docker run "$IMG" true'));
+    expect(baselineDrift(root, { [F]: [] })[0].added).toEqual([`${F}: docker run "$IMG" true`]);
+    expect(baselineDrift(root, { [F]: [`${F}: docker run "$IMG" true`] })).toEqual([]);
+  });
+
+  it('FINDING 3: follows workflow -> a.sh -> b.sh transitively', () => {
+    const root = mk(wf('bash scripts/a.sh'), {
+      'scripts/a.sh': 'bash scripts/b.sh\n',
+      'scripts/b.sh': 'docker pull redis\n',
+    });
+    expect(baselineDrift(root, { [F]: [] })[0].added).toEqual(['scripts/b.sh: docker pull redis']);
+  });
+
+  it('FINDING 3: a script cycle terminates', () => {
+    const root = mk(wf('bash scripts/a.sh'), {
+      'scripts/a.sh': 'bash scripts/b.sh\n',
+      'scripts/b.sh': 'bash scripts/a.sh\ndocker pull redis\n',
+    });
+    expect(pullSites(F, root)).toEqual(['scripts/b.sh: docker pull redis']);
+  });
+
+  it('FINDING 3: a referenced script that does not exist fails (throws), not passes', () => {
+    const root = mk(wf('bash scripts/gone.sh'));
+    expect(() => baselineDrift(root, { [F]: [] })).toThrow(/scripts\/gone\.sh/);
+    const root2 = mk(wf('bash scripts/a.sh'), { 'scripts/a.sh': 'bash scripts/gone.sh\n' });
+    expect(() => pullSites(F, root2)).toThrow(/scripts\/gone\.sh/);
+  });
+
+  it('FINDING 3: a .json under scripts/ is data, not a script reference', () => {
+    const root = mk(wf('cat scripts/data/x.json'));
+    expect(pullSites(F, root)).toEqual([]);
+  });
+});
+
+describe('deferred-file tracking (#2650, the real tree)', () => {
+  it('the real deferred files match their pinned baseline (both halves)', () => {
+    expect(baselineDrift(REPO_ROOT)).toEqual([]);
+  });
+
+  it('the baseline covers exactly the deferred frozen/derived/pinned set', () => {
+    expect(Object.keys(UNMIRRORED_BASELINE).sort()).toEqual(
+      [...DEFERRED_FROZEN, ...DEFERRED_DERIVED, ...DEFERRED_PINNED].sort(),
+    );
+  });
+
+  it('the baseline is not vacuous: it pins the known pulls', () => {
+    const n = (f: string) => UNMIRRORED_BASELINE[f].length;
+    expect(n('.github/workflows/test-e2e-deploy.yml')).toBeGreaterThan(0);
+    expect(n('.github/workflows/compat-credential-v1.3.yml')).toBeGreaterThan(0);
+    expect(n('.github/workflows/bun-base-build.yml')).toBe(1);
+  });
+
+  it('every deferral names the open tracker and a removal condition', () => {
+    expect(DEFERRAL_TRACKER.issue).toBe(2650);
+    for (const f of Object.keys(UNMIRRORED_BASELINE)) {
+      expect(DEFERRAL_TRACKER.removal[f]).toBeTruthy();
+    }
+    expect(DEFERRAL_TRACKER.closes).toMatch(/DEFERRED_/);
+  });
+
+  it('the removal condition for each frozen file is enforced: it must still be credential-frozen', () => {
+    const frozen = frozenFileSet(REPO_ROOT);
+    for (const f of DEFERRED_FROZEN) expect(frozen.has(f)).toBe(true);
+  });
+
+  it('no TODO points at the closed tracker (guard or mutation prover)', () => {
+    for (const f of [
+      'scripts/docker-hub-mirror-guard.mjs',
+      'scripts/mutation-prove-docker-hub-mirror-guard.mjs',
+    ]) {
+      const text = readFileSync(join(REPO_ROOT, f), 'utf8');
+      expect(text).not.toMatch(/TODO\(#2106\)/);
+    }
+    const guard = readFileSync(join(REPO_ROOT, 'scripts/docker-hub-mirror-guard.mjs'), 'utf8');
+    for (const m of guard.matchAll(/TODO\(#(\d+)\)/g)) expect(m[1]).toBe('2650');
+  });
+
+  it('no TODO(#2106) survives anywhere under .github/ (workflows, actions)', () => {
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)],
+      );
+    for (const f of walk(join(REPO_ROOT, '.github'))) {
+      expect(readFileSync(f, 'utf8'), f).not.toMatch(/TODO\(#2106\)/);
+    }
   });
 });

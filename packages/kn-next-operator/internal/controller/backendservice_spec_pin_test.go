@@ -351,6 +351,9 @@ var specPinMutators = map[string]func(*appsv1alpha1.BackendServiceSpec){
 	},
 	"envFrom": func(s *appsv1alpha1.BackendServiceSpec) { s.EnvFrom = specEnvFromSecret("stripe").EnvFrom },
 	"volumes": func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes = specSecretVolume("stripe").Volumes },
+	"security": func(s *appsv1alpha1.BackendServiceSpec) {
+		s.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: ptr.To(false)}
+	},
 	"imagePullSecrets": func(s *appsv1alpha1.BackendServiceSpec) {
 		s.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "regcred"}}
 	},
@@ -527,6 +530,12 @@ func TestExcludedStructFieldsCarryOnlyScalars(t *testing.T) {
 			for j := 0; j < ft.NumField(); j++ {
 				switch ft.Field(j).Type.Kind() {
 				case reflect.String, reflect.Bool, reflect.Int, reflect.Int32, reflect.Int64:
+				case reflect.Ptr:
+					// security.networkPolicy is a *bool (nil = default-on); a pointer to a scalar is still a scalar.
+					if ft.Field(j).Type.Elem().Kind() != reflect.Bool {
+						t.Errorf("excluded field %q (%s) has %s of kind %s: only scalars may be excluded without "+
+							"another review; hash it or extend this guard deliberately", name, ex.Class, ft.Field(j).Name, ft.Field(j).Type.Kind())
+					}
 				default:
 					t.Errorf("excluded field %q (%s) has %s of kind %s: only scalars may be excluded without "+
 						"another review; hash it or extend this guard deliberately", name, ex.Class, ft.Field(j).Name, ft.Field(j).Type.Kind())

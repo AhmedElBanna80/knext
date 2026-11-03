@@ -26,9 +26,11 @@ import os
 import pathlib
 import subprocess
 import sys
+import os
 import time
 
 CTX = ["kubectl", "--context", "knext-oke-sa", "-n", "bench-cells"]
+POD = os.environ.get("PHASE_POD", "phase-bench")
 HERE = pathlib.Path(__file__).resolve().parent
 DNS_JS = (HERE / "dns-probe.js").read_text()
 
@@ -140,4 +142,5 @@ def main():
                       "ready", w.get("cond_Ready"), "qp_ok", w.get("qp_probe_ok"), row.get("error", "")[:120], flush=True)
 
 
-main()
+if __name__ == "__main__":
+    main()

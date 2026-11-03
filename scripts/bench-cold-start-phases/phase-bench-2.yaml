@@ -11,7 +11,8 @@ spec:
   restartPolicy: Never
   containers:
     - name: harness
-      image: node:24-alpine
+      # node:24-alpine, resolved 2026-11-02 with crane digest (multi-arch index)
+      image: node@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
       command: [sleep, "172800"]
       resources:
         requests: {cpu: 100m, memory: 128Mi}

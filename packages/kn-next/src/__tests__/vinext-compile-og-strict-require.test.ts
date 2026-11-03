@@ -113,17 +113,21 @@ describe("#2614: strict compile accepts the next/og shape and still refuses real
         ["ioredis with a trailing space", "['io', 'redis '].join('')"],
         ["IOREDIS in capitals", "['IO', 'REDIS'].join('')"],
         ["node:ioredis", "['node:', 'ioredis'].join('')"],
-    ])("a literal-assembled name that is not ioredis (%s) still aborts the strict build", (_label, expr) => {
-        const r = strictCompile(
-            OG_DISCARDED +
-                `const PKG = ${expr};\n` +
-                "export const load = () => createRequire(import.meta.url)(PKG);\n",
-        );
-        const out = r.stdout + r.stderr;
-        expect(r.status, out).toBe(1);
-        expect(out).toContain("non-literal package name");
-        expect(out).not.toContain("deliberately not bundled");
-    }, 150_000);
+    ])(
+        "a literal-assembled name that is not ioredis (%s) still aborts the strict build",
+        (_label, expr) => {
+            const r = strictCompile(
+                OG_DISCARDED +
+                    `const PKG = ${expr};\n` +
+                    "export const load = () => createRequire(import.meta.url)(PKG);\n",
+            );
+            const out = r.stdout + r.stderr;
+            expect(r.status, out).toBe(1);
+            expect(out).toContain("non-literal package name");
+            expect(out).not.toContain("deliberately not bundled");
+        },
+        150_000,
+    );
 
     it("a runtime load of a name the build cannot fold still aborts the strict build", () => {
         const r = strictCompile(

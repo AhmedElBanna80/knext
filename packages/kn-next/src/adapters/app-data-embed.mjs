@@ -36,6 +36,7 @@
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -123,96 +124,98 @@ function canDeclareIncludes(text) {
 }
 
 /**
- * A route key as a regular expression, the way Next's picomatch reads it with
- * `{ dot: true, contains: true }`: UNANCHORED (the key matches if it matches any
- * part of the route), `*` within a segment, `**` across segments, `?` one
- * character, `{a,b}` alternatives, `[..]` a character class and `(a|b)` a group
- * (so `[slug]` in a key is a class, not the text `[slug]`; write `\[slug\]`).
- * Anything else is literal. The shapes Next documents for route keys are
- * covered; picomatch's extglobs are not.
+ * Route keys that match every route under picomatch's `contains` reading. The
+ * minimal rule (no `next` to ask) knows only these, and keys equal to a route.
  */
-function routeKeyRegExp(key) {
-  const alternatives = (body) =>
-    body
-      .split(',')
-      .map((alt) => routeKeyRegExp(alt).source)
-      .join('|');
-  let re = '';
-  for (let i = 0; i < key.length; ) {
-    const c = key[i];
-    if (c === '\\' && i + 1 < key.length) {
-      re += `\\${key[i + 1]}`;
-      i += 2;
-    } else if (c === '*') {
-      if (key[i + 1] === '*') {
-        if (key[i + 2] === '/') {
-          re += '(?:.*/)?';
-          i += 3;
-        } else {
-          re += '.*';
-          i += 2;
-        }
-      } else {
-        re += '[^/]*';
-        i++;
-      }
-    } else if (c === '?') {
-      re += '[^/]';
-      i++;
-    } else if (c === '{' && key.indexOf('}', i) > i) {
-      const close = key.indexOf('}', i);
-      re += `(?:${alternatives(key.slice(i + 1, close))})`;
-      i = close + 1;
-    } else if (c === '[' && key.indexOf(']', i + 1) > i + 1) {
-      const close = key.indexOf(']', i + 1);
-      const body = key.slice(i + 1, close);
-      re += `[${body.startsWith('!') ? `^${body.slice(1)}` : body}]`;
-      i = close + 1;
-    } else if (c === '(' || c === ')' || c === '|') {
-      re += c;
-      i++;
-    } else {
-      re += c.replace(/[.+^$]/g, '\\$&');
-      i++;
-    }
-  }
+const ALL_ROUTES_KEYS = new Set(['*', '**', '/**', '**/*']);
+
+/**
+ * How `outputFileTracingIncludes` / `outputFileTracingExcludes` route keys are
+ * matched against routes. Next does it with `picomatch(key, { dot: true,
+ * contains: true })(route)` (collect-build-traces.js), and so do we: with the
+ * very module Next ships (`next/dist/compiled/picomatch`), taken from the `next`
+ * installed in the app, never one of ours and never a cached copy from outside a
+ * `node_modules` directory. A key that is exactly the route text always counts.
+ *
+ * Without that module the matcher is `minimal`: a key matches a route only when it is
+ * the same text, or one of the patterns that match every route (`*`, `**`, `/**`,
+ * `**\/*`). `deriveTraceRules` refuses an exclude key it would then have to guess at.
+ *
+ * @param {string} root the app root
+ * @returns {{ kind: 'picomatch' | 'minimal', matches: (key: string, route: string) => boolean }}
+ */
+export function loadRouteMatcher(root) {
   try {
-    return new RegExp(re);
+    const req = createRequire(join(root, 'package.json'));
+    const file = req.resolve('next/dist/compiled/picomatch');
+    if (!/[\\/]node_modules[\\/]/.test(file)) throw new Error('not an installed copy of next');
+    const loaded = req(file);
+    const picomatch = loaded.default ?? loaded;
+    if (typeof picomatch !== 'function') throw new Error('unexpected picomatch export');
+    const compiled = new Map();
+    return {
+      kind: 'picomatch',
+      matches(key, route) {
+        if (key === route) return true;
+        let isMatch = compiled.get(key);
+        if (isMatch === undefined) {
+          isMatch = picomatch(key, { dot: true, contains: true });
+          compiled.set(key, isMatch);
+        }
+        return isMatch(route);
+      },
+    };
   } catch {
-    return new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return MINIMAL_MATCHER;
   }
 }
 
-/** Does this `outputFileTracing*` route key select this route? (Next: `picomatch(key, { dot, contains })(route)`.) */
-function routeMatches(key, route) {
-  return routeKeyRegExp(key).test(route);
+const MINIMAL_MATCHER = {
+  kind: 'minimal',
+  matches: (key, route) => key === route || ALL_ROUTES_KEYS.has(key),
+};
+
+/** A minimal matcher cannot judge an exclude key that is neither a route nor an all-routes pattern: say so. */
+function assertJudgeable(matcher, includes, excludes) {
+  if (matcher.kind !== 'minimal') return;
+  const routes = Object.keys(includes).length > 0 ? Object.keys(includes) : ['/'];
+  for (const key of Object.keys(excludes)) {
+    if (!ALL_ROUTES_KEYS.has(key) && !routes.includes(key)) {
+      throw new Error(
+        `outputFileTracingExcludes['${key}'] cannot be applied: Next matches route keys with the picomatch it ` +
+          'ships, and `next` is not installed in this app, so only a key equal to an include key or one that ' +
+          `matches every route (${[...ALL_ROUTES_KEYS].join(', ')}) can be evaluated. Install next, or change the key`,
+      );
+    }
+  }
 }
 
 /**
- * One rule per include route key: the globs of every include key that matches
- * that route (a key matches itself), and the excludes of every exclude key that
- * matches it. Next applies includes and excludes per route; a binary serves
- * every route from one filesystem and the compile has no route list, so each
- * include key stands in for its routes and a file is embedded if SOME rule
- * selects it and that rule's excludes do not remove it. That differs from Next
- * only where a key selects some of the routes the include key covers and not
- * others; the files a rule embeds are then those Next would trace for the
- * include key's own route text. Identical rules are merged.
+ * One rule per include route key: the globs of that key (always kept) plus those
+ * of every other include key that matches that route, and the excludes of every
+ * exclude key that matches it. Next applies includes and excludes per route; a
+ * binary serves every route from one filesystem and the compile has no route
+ * list, so each include key stands in for the routes it covers and a file is
+ * embedded if SOME rule selects it and that rule's excludes do not remove it. That
+ * differs from Next only where an exclude selects some of the routes an include key
+ * covers and not others. Identical rules are merged.
  *
  * @param {Record<string, string[]>} includes
  * @param {Record<string, string[]>} excludes
+ * @param {{ kind: string, matches: (key: string, route: string) => boolean }} [matcher] defaults to the minimal rule
  * @returns {{ includes: string[], excludes: string[] }[]}
  */
-export function deriveTraceRules(includes, excludes) {
+export function deriveTraceRules(includes, excludes, matcher = MINIMAL_MATCHER) {
+  assertJudgeable(matcher, includes, excludes);
   const rules = new Map();
   for (const route of Object.keys(includes)) {
-    const globs = new Set();
+    const globs = new Set(includes[route]);
     for (const [key, list] of Object.entries(includes)) {
-      if (routeMatches(key, route)) for (const g of list) globs.add(g);
+      if (matcher.matches(key, route)) for (const g of list) globs.add(g);
     }
     const drops = new Set();
     for (const [key, list] of Object.entries(excludes)) {
-      if (routeMatches(key, route)) for (const g of list) drops.add(g);
+      if (matcher.matches(key, route)) for (const g of list) drops.add(g);
     }
     const rule = { includes: [...globs], excludes: [...drops] };
     rules.set(JSON.stringify([rule.includes.slice().sort(), rule.excludes.slice().sort()]), rule);
@@ -228,17 +231,18 @@ export function deriveTraceRules(includes, excludes) {
  *
  * @param {Record<string, string[]>} includes
  * @param {Record<string, string[]>} excludes
+ * @param {{ kind: string, matches: (key: string, route: string) => boolean }} [matcher]
  * @returns {string[]}
  */
-export function globalExcludes(includes, excludes) {
+export function globalExcludes(includes, excludes, matcher = MINIMAL_MATCHER) {
+  assertJudgeable(matcher, includes, excludes);
   const routes = Object.keys(includes).length > 0 ? Object.keys(includes) : ['/'];
   const out = new Set();
   for (const [key, list] of Object.entries(excludes)) {
-    if (routes.every((route) => routeMatches(key, route))) for (const g of list) out.add(g);
+    if (routes.every((route) => matcher.matches(key, route))) for (const g of list) out.add(g);
   }
   return [...out];
 }
-
 function readTraceMap(config, key, name) {
   const experimental = config.experimental;
   const map =
@@ -261,45 +265,138 @@ function readTraceMap(config, key, name) {
 
 /**
  * The script a child process runs to load the config and print the two maps.
- * A child, so the user's config runs with `NODE_ENV=production` (and Bun loads
- * `.env.production` for it), as under `next build`, without any of that reaching
- * the compile's own environment; the compile's working directory is the app root.
+ * A child, so the user's config runs in the environment `next build` gives it
+ * (see `configEnvironment`) without any of that reaching the compile's own
+ * environment; the compile's working directory is the app root.
  *
  * The function-form `defaultConfig` is Next's own (`next/dist/server/config-shared`)
- * when `next` resolves from the app, else the subset vinext hands to function
+ * when `next` is installed in the app, else the subset vinext hands to function
  * configs (`pageExtensions`, `compress`), plus empty `experimental` / `images`.
+ *
+ * The values are checked HERE, before they are serialised: JSON drops a function
+ * silently, and a dropped include is exactly the failure this exists to prevent.
+ * The process exits explicitly once the result is written, so a config that leaves
+ * a timer or a socket open cannot hold the build up.
  */
 const CONFIG_CHILD = `
 (async () => {
   const { createRequire } = require('node:module');
   const { pathToFileURL } = require('node:url');
   const { join } = require('node:path');
+  const { existsSync, readFileSync } = require('node:fs');
   const root = process.env.KNEXT_CFG_ROOT;
   const name = process.env.KNEXT_CFG_NAME;
+  const req = createRequire(join(root, 'package.json'));
+  const installed = (id) => {
+    const file = req.resolve(id);
+    if (!/[\\\\/]node_modules[\\\\/]/.test(file)) throw new Error('not an installed copy: ' + id);
+    return file;
+  };
+
+  // The .env files, as next build loads them: production files whatever NODE_ENV is (test: the test ones),
+  // with a value already in the environment winning over every file.
+  try {
+    const nextDir = require('node:path').dirname(installed('next/package.json'));
+    createRequire(join(nextDir, 'package.json'))('@next/env').loadEnvConfig(root, false, { info() {}, error() {} });
+  } catch {
+    const test = process.env.NODE_ENV === 'test';
+    const files = test ? ['.env.test.local', '.env.test', '.env'] : ['.env.production.local', '.env.local', '.env.production', '.env'];
+    for (const file of files) {
+      const path = join(root, file);
+      if (!existsSync(path)) continue;
+      for (const line of readFileSync(path, 'utf8').split(/\\r?\\n/)) {
+        const m = /^\\s*(?:export\\s+)?([\\w.-]+)\\s*=\\s*(.*?)\\s*$/.exec(line);
+        if (!m || m[1] in process.env) continue;
+        let v = m[2];
+        if (/^".*"$/.test(v)) v = v.slice(1, -1).replace(/\\\\n/g, '\\n');
+        else if (/^'.*'$/.test(v)) v = v.slice(1, -1);
+        else v = v.replace(/\\s+#.*$/, '');
+        process.env[m[1]] = v;
+      }
+    }
+  }
+
   const fallback = () => ({ pageExtensions: ['tsx', 'ts', 'jsx', 'js'], compress: true, experimental: {}, images: {} });
   let defaults;
   try {
-    const req = createRequire(join(root, 'package.json'));
-    // Only a real install: Bun resolves a missing package from its global auto-install cache,
-    // and defaults taken from whichever copy is cached would differ from machine to machine.
-    if (!/[\\\\/]node_modules[\\\\/]/.test(req.resolve('next/dist/server/config-shared'))) throw 0;
-    const shared = req('next/dist/server/config-shared');
+    const shared = req(installed('next/dist/server/config-shared'));
     try { defaults = structuredClone(shared.defaultConfig); } catch { defaults = { ...shared.defaultConfig }; }
   } catch {}
   if (!defaults || typeof defaults !== 'object') defaults = fallback();
+
   const loaded = await import(pathToFileURL(join(root, name)).href);
   let config = loaded.default ?? loaded;
   if (typeof config === 'function') config = await config('phase-production-build', { defaultConfig: defaults });
   config = (await config) ?? {};
-  const exp = config.experimental && typeof config.experimental === 'object' ? config.experimental : {};
-  const pick = (o, k) => (k in o ? { [k]: o[k] } : {});
-  const out = {
-    top: { ...pick(config, 'outputFileTracingIncludes'), ...pick(config, 'outputFileTracingExcludes') },
-    experimental: { ...pick(exp, 'outputFileTracingIncludes'), ...pick(exp, 'outputFileTracingExcludes') },
+
+  const kind = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+  const checked = (where, map) => {
+    if (map === undefined) return undefined;
+    if (map === null || typeof map !== 'object' || Array.isArray(map)) {
+      throw new Error(where + ' must be an object of route to glob list, not a ' + kind(map));
+    }
+    for (const [route, list] of Object.entries(map)) {
+      if (!Array.isArray(list)) throw new Error(where + "['" + route + "'] must be an array of glob strings, not a " + kind(list));
+      for (const glob of list) {
+        if (typeof glob !== 'string') throw new Error(where + "['" + route + "'] must hold glob strings, found a " + kind(glob));
+      }
+    }
+    return map;
   };
-  process.stdout.write('\\nKNEXT_TRACE_CONFIG ' + JSON.stringify(out) + '\\n');
+  const exp = config.experimental && typeof config.experimental === 'object' ? config.experimental : {};
+  const pick = (o, k, where) => (k in o ? { [k]: checked(where + '.' + k, o[k]) } : {});
+  const out = {
+    top: { ...pick(config, 'outputFileTracingIncludes', 'config'), ...pick(config, 'outputFileTracingExcludes', 'config') },
+    experimental: { ...pick(exp, 'outputFileTracingIncludes', 'experimental'), ...pick(exp, 'outputFileTracingExcludes', 'experimental') },
+  };
+  process.stdout.write('\\nKNEXT_TRACE_CONFIG ' + JSON.stringify(out) + '\\n', () => process.exit(0));
 })().catch((e) => { console.error(e && e.stack ? e.stack : String(e)); process.exit(2); });
 `;
+
+const ENV_FILE_LINE = /^\s*(?:export\s+)?([\w.-]+)\s*=\s*(.*?)\s*$/;
+
+/** KEY=VALUE pairs of a dotenv file as Bun reads them (quotes stripped, `#` comments); `{}` if absent. */
+function parseEnvFile(path) {
+  const out = {};
+  if (!existsSync(path)) return out;
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const m = ENV_FILE_LINE.exec(line);
+    if (!m) continue;
+    let v = m[2];
+    if (/^".*"$/.test(v)) v = v.slice(1, -1).replace(/\\n/g, '\n');
+    else if (/^'.*'$/.test(v)) v = v.slice(1, -1);
+    else v = v.replace(/\s+#.*$/, '');
+    out[m[1]] = v;
+  }
+  return out;
+}
+
+/**
+ * The environment the config child gets: what `next build` would have given the
+ * config. This process may have been started by Bun in the app root, and Bun
+ * loads the app's `.env*` files into its own environment at startup, for ITS
+ * NODE_ENV (development when unset); handing those on would let a development
+ * value hide the production one. So every variable whose value is exactly what
+ * those files hold is dropped, and the child loads the files `next build` loads,
+ * with whatever remains (the real shell environment) taking precedence.
+ * `NODE_ENV` is `production` when unset, as under `next build`; an explicit
+ * value is kept. (A variable exported by the shell to the same value a file
+ * holds is indistinguishable from one Bun loaded, and is re-read from the files.)
+ *
+ * @param {string} root
+ * @param {Record<string, string | undefined>} parentEnv
+ */
+export function configEnvironment(root, parentEnv = process.env) {
+  const env = { ...parentEnv };
+  const mode = parentEnv.NODE_ENV || 'development';
+  for (const file of ['.env', '.env.local', `.env.${mode}`, `.env.${mode}.local`]) {
+    for (const [key, value] of Object.entries(parseEnvFile(join(root, file)))) {
+      if (env[key] === value) delete env[key];
+    }
+  }
+  env.NODE_ENV = parentEnv.NODE_ENV || 'production';
+  return env;
+}
 
 /**
  * The app's `outputFileTracingIncludes` / `outputFileTracingExcludes`, read the
@@ -309,10 +406,10 @@ const CONFIG_CHILD = `
  *
  * No next.config → nothing. A config that provably cannot declare them (no
  * indirection, only built-in imports) is not run at all. Any other config is
- * loaded in a child process with `NODE_ENV=production` when NODE_ENV is unset;
- * if it cannot be loaded THIS THROWS, whatever the file says: it might have
- * declared includes, and embedding nothing would be the silent drop this exists
- * to prevent. A malformed value always throws.
+ * loaded in a child process in the environment `next build` gives it (see
+ * configEnvironment); if it cannot be loaded, or a value is not a glob list, THIS
+ * THROWS, whatever the file says: it might have declared includes, and embedding
+ * nothing would be the silent drop this exists to prevent.
  *
  * @param {string} root the app root
  * @returns {Promise<{
@@ -328,17 +425,12 @@ export async function readTraceRules(root) {
   // A config that cannot declare includes is not run: loading it here would be a
   // second execution of the user's config code.
   if (!canDeclareIncludes(text)) return none;
-  const run = spawnSync(process.execPath, ['-e', CONFIG_CHILD], {
+  const run = spawnSync(process.execPath, ['--no-env-file', '-e', CONFIG_CHILD], {
     cwd: root,
     encoding: 'utf8',
     timeout: 120_000,
     maxBuffer: 64 * 1024 * 1024,
-    env: {
-      ...process.env,
-      NODE_ENV: process.env.NODE_ENV || 'production',
-      KNEXT_CFG_ROOT: root,
-      KNEXT_CFG_NAME: name,
-    },
+    env: { ...configEnvironment(root), KNEXT_CFG_ROOT: root, KNEXT_CFG_NAME: name },
   });
   const line = String(run.stdout ?? '')
     .split('\n')
@@ -369,9 +461,10 @@ export async function readTraceRules(root) {
   };
   const includes = readTraceMap(config, 'outputFileTracingIncludes', name);
   const excludes = readTraceMap(config, 'outputFileTracingExcludes', name);
+  const matcher = loadRouteMatcher(root);
   return {
-    rules: deriveTraceRules(includes, excludes),
-    candidateExcludes: globalExcludes(includes, excludes),
+    rules: deriveTraceRules(includes, excludes, matcher),
+    candidateExcludes: globalExcludes(includes, excludes, matcher),
   };
 }
 

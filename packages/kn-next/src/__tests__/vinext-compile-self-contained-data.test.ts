@@ -59,6 +59,17 @@ function write(path: string, body: string | Uint8Array): void {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, body);
 }
+/** Make `next` resolvable from the fixture app (a link to the workspace's installed copy). */
+function installNext(work: string): void {
+    const nextDir = realpathSync(
+        resolve(
+            import.meta.dir,
+            "../../../../apps/file-manager/node_modules/next",
+        ),
+    );
+    mkdirSync(join(work, "node_modules"), { recursive: true });
+    symlinkSync(nextDir, join(work, "node_modules/next"));
+}
 
 const A_MARK = "KNEXT_DATA_A_5d3f1c";
 const B_MARK = "KNEXT_DATA_B_91ab7e";
@@ -482,6 +493,7 @@ t("private", () => readFileSync(join(process.cwd(), "data", "private", "b" + ".j
         write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
         write(join(app.work, "data/pub/c.json"), `{"mark":"${B_MARK}"}\n`);
         write(join(app.work, "data/private/b.json"), `{"mark":"${PRIV}"}\n`);
+        installNext(app.work);
         const b = compile(app.work);
         expect(b.status, String(b.stderr)).toBe(0);
         const r = runAlone(b.exe);
@@ -491,6 +503,184 @@ t("private", () => readFileSync(join(process.cwd(), "data", "private", "b" + ".j
         expect(readFileSync(b.exe).indexOf(PRIV)).toBe(-1);
         expect(readFileSync(b.exe).indexOf("data/private/b.json")).toBe(-1);
     }, 180_000);
+
+    describe("route keys that a hand-made matcher gets wrong", () => {
+        const READ = `t("a", () => readFileSync(join(process.cwd(), "data", "a" + ".json"), "utf8"));
+t("p", () => readFileSync(join(process.cwd(), "data", "p" + ".json"), "utf8"));`;
+        const setup = (
+            includes: string,
+            excludes: string,
+            withNext: boolean,
+        ) => {
+            const app = baseApp(
+                READ,
+                `export default { outputFileTracingIncludes: ${includes}, outputFileTracingExcludes: ${excludes} };\n`,
+            );
+            write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+            write(join(app.work, "data/p.json"), `{"mark":"${B_MARK}"}\n`);
+            if (withNext) installNext(app.work);
+            return app;
+        };
+        for (const key of [
+            "/blog/[slug]",
+            "/blog/\\\\[slug\\\\]",
+            "/(group)/x",
+            "/{api,admin}/*",
+        ]) {
+            for (const withNext of [false, true]) {
+                it(`an include keyed ${key} embeds its files (${withNext ? "next installed" : "no next"})`, () => {
+                    const app = setup(
+                        `{ ${JSON.stringify(key)}: ["./data/a.json"] }`,
+                        "{}",
+                        withNext,
+                    );
+                    const b = compile(app.work);
+                    expect(b.status, String(b.stderr)).toBe(0);
+                    expect(runAlone(b.exe).result.a).toContain(A_MARK);
+                }, 180_000);
+            }
+        }
+
+        it("`!` negation follows Next: the exclude applies to routes that do not match the rest of the key", () => {
+            const app = setup(
+                '{ "/": ["./data/**/*"] }',
+                '{ "!/admin/*": ["./data/p.json"] }',
+                true,
+            );
+            const b = compile(app.work);
+            expect(b.status, String(b.stderr)).toBe(0);
+            const r = runAlone(b.exe);
+            expect(r.result.a).toContain(A_MARK);
+            expect(r.result.p).toBe("ERR ENOENT");
+        }, 180_000);
+
+        it("`/api/**` reaches the `/api` route", () => {
+            const app = setup(
+                '{ "/api": ["./data/**/*"] }',
+                '{ "/api/**": ["./data/p.json"] }',
+                true,
+            );
+            const b = compile(app.work);
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(runAlone(b.exe).result.p).toBe("ERR ENOENT");
+        }, 180_000);
+
+        it("without next, a route-specific exclude key FAILS the build and says how to fix it", () => {
+            const app = setup(
+                '{ "/": ["./data/**/*"] }',
+                '{ "/admin/*": ["./data/p.json"] }',
+                false,
+            );
+            const b = compile(app.work);
+            expect(b.status).toBe(1);
+            expect(String(b.stderr)).toMatch(
+                /outputFileTracingExcludes\['\/admin\/\*'\][\s\S]*[Ii]nstall next/,
+            );
+        }, 120_000);
+
+        it("without next, an all-routes exclude key still applies", () => {
+            const app = setup(
+                '{ "/": ["./data/**/*"] }',
+                '{ "**": ["./data/p.json"] }',
+                false,
+            );
+            const b = compile(app.work);
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(runAlone(b.exe).result.p).toBe("ERR ENOENT");
+        }, 180_000);
+    });
+
+    it("a config that leaves a timer running does not hold the build up", () => {
+        const app = baseApp(
+            `t("a", () => readFileSync(join(process.cwd(), "data", "a" + ".json"), "utf8"));`,
+            'setInterval(() => {}, 1000);\nexport default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n',
+        );
+        write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+        const started = Date.now();
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        expect(Date.now() - started).toBeLessThan(60_000);
+        expect(runAlone(b.exe).result.a).toContain(A_MARK);
+    }, 100_000);
+
+    describe("a function where a glob list belongs is an error, not a silent no-include", () => {
+        const configs: Record<string, string> = {
+            "the map itself":
+                "export default { outputFileTracingIncludes: () => ({}) };\n",
+            "a route's value":
+                'export default { outputFileTracingIncludes: { "/": () => ["./data/a.json"] } };\n',
+            "a glob inside the list":
+                'export default { outputFileTracingIncludes: { "/": [() => "x"] } };\n',
+            "the legacy experimental map":
+                "export default { experimental: { outputFileTracingIncludes: () => ({}) } };\n",
+            "an exclude":
+                'export default { outputFileTracingIncludes: { "/": ["./data/a.json"] }, outputFileTracingExcludes: { "/": () => [] } };\n',
+        };
+        for (const [name, source] of Object.entries(configs)) {
+            it(name, () => {
+                const app = baseApp("", source);
+                write(join(app.work, "data/a.json"), "{}\n");
+                const b = compile(app.work);
+                expect(b.status).toBe(1);
+                expect(String(b.stderr)).toMatch(
+                    /outputFileTracing(Includes|Excludes)[\s\S]*(function|glob)/,
+                );
+            }, 120_000);
+        }
+    });
+
+    describe("the config sees the environment `next build` would give it", () => {
+        const WRITE_ENV = `import { writeFileSync } from "node:fs";
+writeFileSync(process.cwd() + "/seen-env.json", JSON.stringify({
+  NODE_ENV: process.env.NODE_ENV ?? null, PICK: process.env.PICK ?? null, BASE: process.env.BASE ?? null,
+  DEVONLY: process.env.DEVONLY ?? null, EXPLICIT: process.env.EXPLICIT ?? null, LOCAL: process.env.LOCAL ?? null,
+}));
+export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n`;
+        const setup = () => {
+            const app = baseApp("", WRITE_ENV);
+            write(join(app.work, "data/a.json"), "{}\n");
+            write(join(app.work, ".env"), "BASE=base\nPICK=base\n");
+            write(
+                join(app.work, ".env.production"),
+                "PICK=prod\nEXPLICIT=prod\n",
+            );
+            write(
+                join(app.work, ".env.development"),
+                "PICK=dev\nDEVONLY=dev\n",
+            );
+            write(join(app.work, ".env.local"), "LOCAL=local\n");
+            return app;
+        };
+        const seen = (work: string) =>
+            JSON.parse(readFileSync(join(work, "seen-env.json"), "utf8"));
+
+        it("NODE_ENV unset, compile started in the app root: production files win over the development ones Bun auto-loaded; a shell value wins over every file", () => {
+            const app = setup();
+            const b = compile(app.work, [], {
+                NODE_ENV: "",
+                EXPLICIT: "shell",
+            });
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(seen(app.work)).toEqual({
+                NODE_ENV: "production",
+                PICK: "prod",
+                BASE: "base",
+                DEVONLY: null,
+                EXPLICIT: "shell",
+                LOCAL: "local",
+            });
+        }, 180_000);
+
+        it("an explicit NODE_ENV is kept, and the production files still load (as `next build` loads them)", () => {
+            const app = setup();
+            const b = compile(app.work, [], { NODE_ENV: "development" });
+            expect(b.status, String(b.stderr)).toBe(0);
+            const env = seen(app.work);
+            expect(env.NODE_ENV).toBe("development");
+            expect(env.PICK).toBe("prod");
+            expect(env.DEVONLY).toBeNull();
+        }, 180_000);
+    });
 
     describe("a next.config that declares includes by indirection is still read", () => {
         const READ = `t("a", () => readFileSync(join(process.cwd(), "data", "a" + ".json"), "utf8"));`;
@@ -661,13 +851,6 @@ export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n`;
             expect(b.status, String(b.stderr)).toBe(0);
             expect(runAlone(b.exe).result.a).toContain(A_MARK);
         }, 180_000);
-
-        it("an explicit NODE_ENV is honoured, not overridden", () => {
-            const app = setup();
-            const b = compile(app.work, [], { NODE_ENV: "development" });
-            expect(b.status).toBe(1);
-            expect(String(b.stderr)).toMatch(/env missing in development/);
-        }, 120_000);
     });
 
     it("an outputFileTracingExcludes entry keyed '*' also removes a file the server code names by literal path", () => {

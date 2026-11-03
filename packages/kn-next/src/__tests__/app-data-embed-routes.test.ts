@@ -1,7 +1,9 @@
 /**
- * Route keys are read the way Next reads them (picomatch with `contains`), the
- * excludes that apply to every route reach literal-path candidates, and the
- * ordinary-word exemption in the credential check is exact.
+ * Route keys are matched with the picomatch Next ships (`next/dist/compiled/picomatch`,
+ * `{ dot: true, contains: true }`, as collect-build-traces does), never with a matcher of
+ * ours; without that module only a minimal rule is applied and anything it cannot judge
+ * fails the build. Also: the excludes that apply to every route reach literal-path
+ * candidates, and the ordinary-word exemption in the credential check is exact.
  */
 import { afterAll, describe, expect, it } from "bun:test";
 import {
@@ -12,11 +14,13 @@ import {
     symlinkSync,
     writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
     deriveTraceRules,
     globalExcludes,
+    loadRouteMatcher,
     planAppData,
 } from "../adapters/app-data-embed.mjs";
 
@@ -37,89 +41,224 @@ const rels = (plan: ReturnType<typeof planAppData>) =>
     plan.files.map((f) => f.rel);
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-describe("route keys are read the way Next reads them (picomatch, contains)", () => {
-    const routes = ["/", "/api/foo", "/**/*", "/blog/[slug]", "/(group)/page"];
+// An app that has next installed (the file-manager workspace app), and one that does not.
+const WITH_NEXT = resolve(import.meta.dir, "../../../../apps/file-manager");
+const real = loadRouteMatcher(WITH_NEXT);
+const none = loadRouteMatcher(app({}));
+// What Next itself computes, straight from the module it ships.
+const nextPicomatch = createRequire(join(WITH_NEXT, "package.json"))(
+    "next/dist/compiled/picomatch",
+) as (
+    glob: string,
+    opts: { dot: boolean; contains: boolean },
+) => (s: string) => boolean;
+const nextSays = (key: string, route: string) =>
+    nextPicomatch(key, { dot: true, contains: true })(route);
 
-    it("'*' as an exclude key applies to every route", () => {
-        for (const route of routes) {
-            const rules = deriveTraceRules(
-                { [route]: ["d/**"] },
-                { "*": ["d/p"] },
-            );
-            expect(rules[0].excludes).toEqual(["d/p"]);
+describe("the matcher is Next's own picomatch when next is installed in the app", () => {
+    it("is found, and answers exactly as Next's module does", () => {
+        expect(real.kind).toBe("picomatch");
+        const keys = [
+            "*",
+            "**",
+            "/**",
+            "/*",
+            "/**/*",
+            "/",
+            "/api/**",
+            "/api/*",
+            "!/admin/*",
+            "/blog/[slug]",
+            "/blog/\\[slug\\]",
+            "/(group)/x",
+            "/{api,admin}/*",
+            "api/*",
+        ];
+        const routes = [
+            "/",
+            "/api",
+            "/api/foo",
+            "/admin/x",
+            "/blog/[slug]",
+            "/(group)/x",
+            "/{api,admin}/*",
+            "/shop/api/x",
+        ];
+        for (const key of keys) {
+            for (const route of routes) {
+                expect(real.matches(key, route) || key === route).toBe(
+                    nextSays(key, route) || key === route,
+                );
+            }
         }
     });
 
-    it("'**' and '/**' apply to every route too", () => {
-        for (const key of ["**", "/**"]) {
+    it("`/api/**` matches `/api`, `!` negates, `/*` does not match the root (all as Next's module says)", () => {
+        expect(real.matches("/api/**", "/api")).toBe(true);
+        expect(real.matches("!/admin/*", "/")).toBe(true);
+        expect(real.matches("!/admin/*", "/admin/x")).toBe(false);
+        expect(real.matches("/*", "/")).toBe(false);
+        expect(real.matches("/*", "/api/foo")).toBe(true);
+    });
+
+    it("is not taken from a copy outside an installed node_modules, and absent next means the minimal rule", () => {
+        expect(none.kind).toBe("minimal");
+    });
+});
+
+describe("a key's own include globs are always kept", () => {
+    const keys = [
+        "/blog/[slug]",
+        "/blog/\\[slug\\]",
+        "/(group)/x",
+        "/{api,admin}/*",
+        "/**/*",
+        "/",
+    ];
+    for (const matcher of [real, none]) {
+        for (const key of keys) {
+            it(`${matcher.kind}: ${key}`, () => {
+                const rules = deriveTraceRules(
+                    { [key]: ["d/**"] },
+                    {},
+                    matcher,
+                );
+                expect(rules.flatMap((r) => r.includes)).toContain("d/**");
+            });
+        }
+    }
+
+    it("an exclude key equal to the route text counts, whatever picomatch makes of it", () => {
+        const rules = deriveTraceRules(
+            { "/blog/[slug]": ["d/**"] },
+            { "/blog/[slug]": ["d/p"] },
+            real,
+        );
+        expect(rules[0].excludes).toEqual(["d/p"]);
+    });
+});
+
+describe("excludes follow Next's matching of route keys", () => {
+    const routes = ["/", "/api/foo", "/blog/[slug]", "/(group)/page"];
+
+    it("'*' and '**' apply to every route", () => {
+        for (const key of ["*", "**"]) {
             for (const route of routes) {
                 expect(
                     deriveTraceRules(
                         { [route]: ["d/**"] },
                         { [key]: ["d/p"] },
+                        real,
                     )[0].excludes,
                 ).toEqual(["d/p"]);
             }
         }
     });
 
-    it("a specific key does not apply to an unrelated route", () => {
-        expect(
-            deriveTraceRules(
-                { "/api/foo": ["d/**"] },
-                { "/admin/*": ["d/p"] },
-            )[0].excludes,
-        ).toEqual([]);
+    it("`/**/*` and `/*` do not match the root route (Next's picomatch says so), but do match deeper ones", () => {
+        for (const key of ["/**/*", "/*"]) {
+            expect(
+                deriveTraceRules({ "/": ["d/**"] }, { [key]: ["d/p"] }, real)[0]
+                    .excludes,
+            ).toEqual([]);
+            expect(
+                deriveTraceRules(
+                    { "/api/foo": ["d/**"] },
+                    { [key]: ["d/p"] },
+                    real,
+                )[0].excludes,
+            ).toEqual(["d/p"]);
+        }
     });
 
-    it("brackets are a character class, as in picomatch: escaped brackets match the text, bare ones do not", () => {
+    it("`!` negation: applies to routes that do NOT match the rest", () => {
+        const inc = { "/": ["d/**"], "/admin/x": ["e/**"] };
+        const rules = deriveTraceRules(inc, { "!/admin/*": ["d/p"] }, real);
+        const forRoot = rules.find((r) => r.includes.includes("d/**"));
+        const forAdmin = rules.find((r) => r.includes.includes("e/**"));
+        expect(forRoot?.excludes).toEqual(["d/p"]);
+        expect(forAdmin?.excludes).toEqual([]);
+    });
+
+    it("`/api/**` reaches `/api`", () => {
         expect(
             deriveTraceRules(
-                { "/blog/[slug]": ["d/**"] },
-                { "/blog/\\[slug\\]": ["d/p"] },
-            )[0].excludes,
-        ).toEqual(["d/p"]);
-        expect(
-            deriveTraceRules(
-                { "/blog/[slug]": ["d/**"] },
-                { "/blog/[slug]": ["d/p"] },
-            )[0].excludes,
-        ).toEqual([]);
-        expect(
-            deriveTraceRules(
-                { "/blog/s": ["d/**"] },
-                { "/blog/[slug]": ["d/p"] },
+                { "/api": ["d/**"] },
+                { "/api/**": ["d/p"] },
+                real,
             )[0].excludes,
         ).toEqual(["d/p"]);
     });
 
-    it("a backslash makes the next character literal", () => {
-        expect(
-            deriveTraceRules({ "/x/a*b": ["d/**"] }, { "a\\*b": ["d/p"] })[0]
-                .excludes,
-        ).toEqual(["d/p"]);
-        expect(
-            deriveTraceRules({ "/x/aXb": ["d/**"] }, { "a\\*b": ["d/p"] })[0]
-                .excludes,
-        ).toEqual([]);
-    });
-
-    it("braces and a trailing wildcard", () => {
+    it("braces, groups and brackets are picomatch's", () => {
         expect(
             deriveTraceRules(
                 { "/api/foo": ["d/**"] },
                 { "/{api,admin}/*": ["d/p"] },
+                real,
+            )[0].excludes,
+        ).toEqual(["d/p"]);
+        expect(
+            deriveTraceRules(
+                { "/blog/[slug]": ["d/**"] },
+                { "/blog/\\[slug\\]": ["d/p"] },
+                real,
             )[0].excludes,
         ).toEqual(["d/p"]);
     });
 
-    it("a key matches inside a route (picomatch contains), not only at its start", () => {
+    it("a key that matches no include key's route does not apply", () => {
         expect(
             deriveTraceRules(
-                { "/shop/api/x": ["d/**"] },
-                { "api/*": ["d/p"] },
+                { "/api/foo": ["d/**"] },
+                { "/admin/*": ["d/p"] },
+                real,
             )[0].excludes,
-        ).toEqual(["d/p"]);
+        ).toEqual([]);
+    });
+});
+
+describe("without next's picomatch: a minimal rule, and a loud failure for anything else", () => {
+    it("exclude keys equal to an include key, or matching every route, are applied", () => {
+        for (const key of ["*", "**", "/**", "**/*", "/admin"]) {
+            const rules = deriveTraceRules(
+                { "/admin": ["d/**"], "/": ["e/**"] },
+                { [key]: ["d/p"] },
+                none,
+            );
+            expect(
+                rules.find((r) => r.includes.includes("d/**"))?.excludes,
+            ).toEqual(["d/p"]);
+        }
+        // an exact key applies to its own route only
+        const exact = deriveTraceRules(
+            { "/admin": ["d/**"], "/": ["e/**"] },
+            { "/admin": ["d/p"] },
+            none,
+        );
+        expect(
+            exact.find((r) => r.includes.includes("e/**"))?.excludes,
+        ).toEqual([]);
+    });
+
+    it("any other exclude key fails, naming it and the fix", () => {
+        expect(() =>
+            deriveTraceRules({ "/": ["d/**"] }, { "/admin/*": ["d/p"] }, none),
+        ).toThrow(
+            /outputFileTracingExcludes\['\/admin\/\*'\][\s\S]*[Ii]nstall next/,
+        );
+    });
+
+    it("includes alone need no matcher: every key's globs are kept", () => {
+        const rules = deriveTraceRules(
+            { "/a/[id]": ["x/**"], "/(g)/b": ["y/**"] },
+            {},
+            none,
+        );
+        expect(rules.flatMap((r) => r.includes).sort()).toEqual([
+            "x/**",
+            "y/**",
+        ]);
     });
 });
 
@@ -130,16 +269,23 @@ describe("globalExcludes: the excludes that apply to every known route", () => {
                 { "/": ["a"], "/api/foo": ["b"] },
                 {
                     "*": ["g1"],
-                    "/**": ["g2"],
+                    "**": ["g2"],
                     "/admin/*": ["no"],
                     "/api/*": ["no-some"],
                 },
+                real,
             ).sort(),
         ).toEqual(["g1", "g2"]);
     });
 
     it("with no include keys the root route stands in", () => {
-        expect(globalExcludes({}, { "*": ["g"], "/admin/*": ["no"] })).toEqual([
+        expect(
+            globalExcludes({}, { "*": ["g"], "/admin/*": ["no"] }, real),
+        ).toEqual(["g"]);
+    });
+
+    it("without next only the all-routes keys can be global", () => {
+        expect(globalExcludes({ "/": ["a"] }, { "**": ["g"] }, none)).toEqual([
             "g",
         ]);
     });

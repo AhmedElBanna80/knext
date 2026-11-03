@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { deriveTraceRules, planAppData } from "../adapters/app-data-embed.mjs";
+import { planAppData } from "../adapters/app-data-embed.mjs";
 
 const temps: string[] = [];
 afterAll(() => {
@@ -229,68 +229,5 @@ describe("outputFileTracingExcludes", () => {
             rules: [{ includes: ["data/**"], excludes: ["private/**"] }],
         });
         expect(rels(plan)).toEqual(["data/a.json"]);
-    });
-});
-
-describe("deriveTraceRules: route keys pick the excludes that apply", () => {
-    it("an exclude whose key is the include's route applies", () => {
-        const rules = deriveTraceRules(
-            { "/": ["data/**"] },
-            { "/": ["data/private/**"] },
-        );
-        expect(rules).toEqual([
-            { includes: ["data/**"], excludes: ["data/private/**"] },
-        ]);
-    });
-
-    it("a wildcard exclude key covers the include's route", () => {
-        const rules = deriveTraceRules(
-            { "/api/x": ["data/**"] },
-            { "/api/*": ["data/private/**"], "/**": ["data/tmp/**"] },
-        );
-        expect(rules[0].excludes.sort()).toEqual([
-            "data/private/**",
-            "data/tmp/**",
-        ]);
-    });
-
-    it("a key covers a route when it matches any leading part of it, as Next's contains-match reads it", () => {
-        const rules = deriveTraceRules(
-            { "/api/x/y": ["d/**"] },
-            { "/api": ["d/p/**"] },
-        );
-        expect(rules[0].excludes).toEqual(["d/p/**"]);
-    });
-
-    it("'/**' and '/*' cover the root route", () => {
-        for (const key of ["/**", "/*", "/"]) {
-            expect(
-                deriveTraceRules({ "/": ["d/**"] }, { [key]: ["d/p/**"] })[0]
-                    .excludes,
-            ).toEqual(["d/p/**"]);
-        }
-    });
-
-    it("an exclude for a different route does not apply", () => {
-        const rules = deriveTraceRules(
-            { "/": ["data/**"] },
-            { "/admin/*": ["data/**"] },
-        );
-        expect(rules).toEqual([{ includes: ["data/**"], excludes: [] }]);
-    });
-
-    it("an include key that also matches another include key's route pools their globs", () => {
-        const rules = deriveTraceRules(
-            { "/api/x": ["a/**"], "/api/*": ["b/**"] },
-            {},
-        );
-        const forX = rules.find((r) => r.includes.includes("a/**"));
-        expect(forX?.includes.sort()).toEqual(["a/**", "b/**"]);
-    });
-
-    it("no excludes: one rule per include key, identical rules merged", () => {
-        expect(deriveTraceRules({ "/a": ["x"], "/b": ["x"] }, {})).toEqual([
-            { includes: ["x"], excludes: [] },
-        ]);
     });
 });

@@ -19,14 +19,28 @@ export declare function readTraceRules(
     root: string,
 ): Promise<{ rules: TraceRule[]; candidateExcludes: string[] }>;
 
+export type RouteMatcher = {
+    kind: "picomatch" | "minimal";
+    matches: (key: string, route: string) => boolean;
+};
+
+export declare function loadRouteMatcher(root: string): RouteMatcher;
+
+export declare function configEnvironment(
+    root: string,
+    parentEnv?: Record<string, string | undefined>,
+): Record<string, string | undefined>;
+
 export declare function deriveTraceRules(
     includes: Record<string, string[]>,
     excludes: Record<string, string[]>,
+    matcher?: RouteMatcher,
 ): TraceRule[];
 
 export declare function globalExcludes(
     includes: Record<string, string[]>,
     excludes: Record<string, string[]>,
+    matcher?: RouteMatcher,
 ): string[];
 
 export declare function serverOutputFiles(serverDir: string): string[];

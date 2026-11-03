@@ -2,7 +2,15 @@ import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from 'bu
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -32,6 +40,9 @@ const DEPLOY_SH = resolve(REPO_ROOT, 'scripts/e2e-deploy.sh');
 const CLEANUP_SH = resolve(REPO_ROOT, 'scripts/e2e-cleanup.sh');
 
 const CANARY = '19.3.0-canary-fef12a01-20260413';
+// A canary of a React line next@16.4.3 does NOT support (below ^18.2.0): its base version
+// 18.0.0 is out of the peer range, so the install must keep failing.
+const OLD_CANARY = '18.0.0-canary-abcdef12-20240101';
 const NEXT_PEER_REACT = '^18.2.0 || 19.0.0-rc-de68d2f4-20241204 || ^19.0.0';
 
 const FAKE_SERVER_JS = `
@@ -77,6 +88,8 @@ const stubs: Stub[] = [
   { name: 'react-dom', version: CANARY, files: { 'index.js': 'module.exports = {};\n' } },
   { name: 'react', version: '18.0.0', files: { 'index.js': 'module.exports = {};\n' } },
   { name: 'react-dom', version: '18.0.0', files: { 'index.js': 'module.exports = {};\n' } },
+  { name: 'react', version: OLD_CANARY, files: { 'index.js': 'module.exports = {};\n' } },
+  { name: 'react-dom', version: OLD_CANARY, files: { 'index.js': 'module.exports = {};\n' } },
   { name: 'react', version: '17.0.2', files: { 'index.js': 'module.exports = {};\n' } },
   { name: 'react-dom', version: '17.0.2', files: { 'index.js': 'module.exports = {};\n' } },
   { name: 'react', version: '19.1.0', files: { 'index.js': 'module.exports = {};\n' } },
@@ -90,6 +103,9 @@ let registryDir = '';
 let server: ReturnType<typeof Bun.serve>;
 let registryUrl = '';
 const apps: string[] = [];
+let shimDir = '';
+let beFile = '';
+let markerSeq = 0;
 
 function pack(
   dir: string,
@@ -113,6 +129,42 @@ function pack(
 
 beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), 'knext-prerel-peer-'));
+  // A PATH shim in front of the real npm: `viewfail` makes `npm view` fail (peer range
+  // unreadable), `hang` makes `npm install` record the package.json it was handed and
+  // then sleep until it is killed. Everything else is the real npm.
+  const realNpm = Bun.which('npm');
+  if (!realNpm) throw new Error('npm not on PATH');
+  shimDir = join(work, 'shim');
+  mkdirSync(shimDir, { recursive: true });
+  writeFileSync(
+    join(shimDir, 'npm'),
+    [
+      '#!/bin/bash',
+      'if [ "$1" = view ] && [ "${KNEXT_TEST_NPM_MODE:-}" = viewfail ]; then exit 1; fi',
+      'if [ "$1" = install ] && [ "${KNEXT_TEST_NPM_MODE:-}" = hang ]; then',
+      '  cp package.json "$KNEXT_TEST_MARKERS/pkg-at-install.json"',
+      '  : > "$KNEXT_TEST_MARKERS/started"',
+      '  exec sleep 300',
+      'fi',
+      `exec "${realNpm}" "$@"`,
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  // BASH_ENV arms a pre-existing EXIT trap (+ INT/TERM/HUP traps are left alone) in the
+  // deploy script's own shell ONLY (children inherit the guard variable and skip it), so a
+  // test can prove the install's signal handling never clobbers an EXIT trap.
+  beFile = join(work, 'bash-env.sh');
+  writeFileSync(
+    beFile,
+    [
+      'if [ -z "${KNEXT_TEST_BE_DONE:-}" ]; then',
+      '  export KNEXT_TEST_BE_DONE=1',
+      '  trap \'echo ran >> "$KNEXT_TEST_MARKERS/exit-trap"\' EXIT',
+      'fi',
+      '',
+    ].join('\n'),
+  );
   tarballsDir = join(work, 'adapter-tarballs');
   registryDir = join(work, 'registry');
   mkdirSync(tarballsDir, { recursive: true });
@@ -208,13 +260,23 @@ afterAll(() => {
   server?.stop(true);
   for (const a of apps) {
     spawnSync('bash', [CLEANUP_SH], { cwd: a, env: { ...process.env }, timeout: 20_000 });
+    rmSync(a, { recursive: true, force: true });
   }
   if (work && existsSync(work)) rmSync(work, { recursive: true, force: true });
 });
 
-async function deploy(deps: Record<string, string>) {
-  const app = mkdtempSync(join(work, 'app-'));
+type DeployOpts = {
+  /** PATH-shim behaviour for npm (see beforeAll). */
+  npmMode?: 'viewfail' | 'hang';
+  /** With npmMode 'hang': send this signal to the script once npm install is running. */
+  killWith?: NodeJS.Signals;
+};
+
+async function deploy(deps: Record<string, string>, opts: DeployOpts = {}) {
+  const app = mkdtempSync(join(tmpdir(), 'knext-prerel-app-'));
   apps.push(app);
+  const markers = join(work, `markers-${markerSeq++}`);
+  mkdirSync(markers, { recursive: true });
   const pkgText = `${JSON.stringify({ name: 'fixture-app', version: '0.0.0', private: true, scripts: { build: 'next build' }, dependencies: deps }, null, 2)}\n`;
   writeFileSync(join(app, 'package.json'), pkgText);
   writeFileSync(join(app, 'next.config.js'), "module.exports = { output: 'standalone' };\n");
@@ -231,8 +293,25 @@ async function deploy(deps: Record<string, string>) {
         KNEXT_RUNTIME: 'node',
         NEXT_TEST_MODE: 'deploy',
         NEXT_PRIVATE_TEST_MODE: '',
+        ...(opts.npmMode
+          ? {
+              PATH: `${shimDir}:${process.env.PATH ?? ''}`,
+              KNEXT_TEST_NPM_MODE: opts.npmMode,
+              KNEXT_TEST_MARKERS: markers,
+              BASH_ENV: beFile,
+            }
+          : {}),
       },
     });
+    if (opts.killWith) {
+      const poll = setInterval(() => {
+        if (existsSync(join(markers, 'started'))) {
+          clearInterval(poll);
+          child.kill(opts.killWith);
+        }
+      }, 50);
+      child.on('close', () => clearInterval(poll));
+    }
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => {
@@ -252,6 +331,7 @@ async function deploy(deps: Record<string, string>) {
     stdout: r.stdout,
     stderr: r.stderr,
     app,
+    markers,
     pkgBefore: pkgText,
     pkgAfter: readFileSync(join(app, 'package.json'), 'utf8'),
   };
@@ -296,5 +376,79 @@ describe('e2e-deploy.sh installs fixtures that pin an exact React canary under n
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).not.toContain('reconciling');
     expect(r.pkgAfter).toBe(r.pkgBefore);
+  });
+});
+
+describe("the override is conditional on next's own peer range (fail closed)", () => {
+  it("a canary whose BASE version is outside next's peer range is NOT reconciled: 18.0.0-canary-x still ERESOLVEs", async () => {
+    const r = await deploy({ next: '16.4.3', react: OLD_CANARY, 'react-dom': OLD_CANARY });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('ERESOLVE');
+    expect(r.stderr).toContain('not reconciling react@');
+    expect(r.stderr).not.toContain('reconciling next');
+    expect(r.pkgAfter).toBe(r.pkgBefore);
+  });
+
+  it('an unreadable peer range (npm view fails) fails closed: no override, ERESOLVE as before', async () => {
+    const r = await deploy(
+      { next: '16.4.3', react: CANARY, 'react-dom': CANARY },
+      { npmMode: 'viewfail' },
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('ERESOLVE');
+    expect(r.stderr).toContain('could not read next@16.4.3 peerDependencies');
+    expect(r.pkgAfter).toBe(r.pkgBefore);
+  });
+
+  it('a fixture with no next dependency has no peer range to read: no override', async () => {
+    const r = await deploy({ react: CANARY, 'react-dom': CANARY });
+    expect(r.stderr).toContain('declares no next dependency');
+    expect(r.stderr).not.toContain('reconciling next');
+    expect(r.pkgAfter).toBe(r.pkgBefore);
+  });
+});
+
+describe('package.json is restored when the install is killed (signal safety)', () => {
+  for (const [signal, code] of [
+    ['SIGTERM', 143],
+    ['SIGINT', 130],
+    ['SIGHUP', 129],
+  ] as const) {
+    it(`${signal} mid-install restores the fixture package.json, removes the scratch copy and still runs a pre-existing EXIT trap`, async () => {
+      const r = await deploy(
+        { next: '16.4.3', react: CANARY, 'react-dom': CANARY },
+        { npmMode: 'hang', killWith: signal },
+      );
+      // The rewrite really was live while npm was hanging…
+      const during = JSON.parse(readFileSync(join(r.markers, 'pkg-at-install.json'), 'utf8'));
+      expect(during.overrides?.next?.react).toBe('$react');
+      // …and is gone afterwards, byte for byte.
+      expect(r.status).toBe(code);
+      expect(r.pkgAfter).toBe(r.pkgBefore);
+      expect(readdirSync(r.app).filter((f) => f.startsWith('.knext-pkg-orig.'))).toEqual([]);
+      // The EXIT trap armed before the install survived the INT/TERM/HUP handling.
+      expect(existsSync(join(r.markers, 'exit-trap'))).toBe(true);
+    });
+  }
+});
+
+describe('the install block never touches EXIT traps and puts the signal traps back', () => {
+  const src = readFileSync(DEPLOY_SH, 'utf8');
+  const start = src.indexOf('SAVED_SIGNAL_TRAPS="$(trap -p INT TERM HUP)"');
+  const end = src.indexOf('# Restore fixture-shipped packages the reify pruned');
+
+  it('saves INT/TERM/HUP, restores them after the wait, and never names EXIT', () => {
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const block = src.slice(start, end);
+    expect(block).toContain('wait "${NPM_PID}"');
+    expect(block).toContain('trap - INT TERM HUP');
+    expect(block).toContain('eval "${SAVED_SIGNAL_TRAPS}"');
+    const code = block
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .join('\n');
+    expect(code).not.toMatch(/\btrap\b[^\n]*\bEXIT\b/);
+    expect(code).not.toMatch(/\btrap\s+-\s*(\n|$)/);
   });
 });

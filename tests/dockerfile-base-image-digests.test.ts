@@ -52,7 +52,7 @@ describe('parseDockerfileRefs', () => {
         'FROM alpine:3.20',
         'FROM scratch',
         'FROM build',
-        'FROM ${BASE}',
+        `FROM \${BASE}`,
         `# FROM commented:1@${B}`,
       ].join('\n'),
       'x/Dockerfile',
@@ -112,7 +112,7 @@ describe('checkDockerfiles (fixtures, both halves)', () => {
   });
 
   it('FAILS an unparseable reference instead of skipping it', () => {
-    const root = fixture({ 'a/Dockerfile': 'ARG BASE\nFROM ${BASE}\n' });
+    const root = fixture({ 'a/Dockerfile': `ARG BASE\nFROM \${BASE}\n` });
     expect(reasons(checkDockerfiles(root, { exclusions: [], today: TODAY }))).toEqual([
       'unparseable',
     ]);
@@ -193,14 +193,14 @@ describe('the real tree', () => {
       (x: { key?: string }) => x.key === 'gcr.io/distroless/static:nonroot',
     );
     expect(users.length).toBeGreaterThanOrEqual(4);
-    expect(new Set(users.map((x: { digest: string }) => x.digest)).size).toBe(1);
+    expect(new Set(users.map((x: { digest?: string }) => x.digest)).size).toBe(1);
   });
 
   it('without ANY exclusion, the only digest-less FROM is the locally built bake-off image', () => {
     const r = checkDockerfiles(ROOT, { exclusions: [], today: new Date() });
     const unpinned = r.findings
       .filter((f: { reason: string }) => f.reason === 'unpinned')
-      .map((f: { image: string }) => f.image);
+      .map((f: { image?: string }) => f.image);
     expect(unpinned).toEqual(['scale-zero-pg/gateway:dev']);
   });
 });

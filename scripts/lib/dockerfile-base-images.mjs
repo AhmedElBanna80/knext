@@ -30,6 +30,34 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 /** `[registry/]path[:tag][@sha256:…]` — no variable expansion, no whitespace. */
 const IMAGE_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*(?:@sha256:[0-9a-f]{64})?$/;
 
+/**
+ * @typedef {{
+ *   file?: string,
+ *   image?: string,
+ *   covers: string[],
+ *   justification?: string,
+ *   added?: string,
+ *   expires?: string,
+ * }} Exclusion
+ * @typedef {{
+ *   file: string,
+ *   line: number,
+ *   image: string,
+ *   origin: string,
+ *   kind: string,
+ *   key?: string,
+ *   digest?: string,
+ * }} Ref
+ * @typedef {{
+ *   reason: string,
+ *   detail?: string,
+ *   file?: string,
+ *   line?: number,
+ *   image?: string,
+ *   entry?: Exclusion,
+ * }} Finding
+ */
+
 export const EXCLUSION_FILE = 'security/dockerfile-base-exclusions.json';
 export const KNOWN_CHECKS = [
   'unpinned',
@@ -85,7 +113,12 @@ function classify(image, file, line, stages, origin) {
   return { ...base, kind: 'pinned', key, digest: DIGEST.test(digest) ? digest : undefined };
 }
 
-/** Every external-image reference in one Dockerfile's text, in order. */
+/**
+ * Every external-image reference in one Dockerfile's text, in order.
+ * @param {string} text
+ * @param {string} file
+ * @returns {Ref[]}
+ */
 export function parseDockerfileRefs(text, file) {
   const refs = [];
   const stages = new Set();
@@ -135,6 +168,10 @@ export function exclusionProblem(entry) {
 
 export const isExpired = (entry, today) => Date.parse(entry.expires) < today.getTime();
 
+/**
+ * @param {string} root
+ * @returns {Exclusion[]}
+ */
 export function loadExclusions(root) {
   const path = resolve(root, EXCLUSION_FILE);
   if (!existsSync(path)) return [];
@@ -145,6 +182,10 @@ export function loadExclusions(root) {
  * Does an UNEXPIRED, well-formed exclusion cover `check` for this reference?
  * `ref` is `{ file, key?, image? }`; `image` may be written `repo:tag` or in
  * canonical `registry/path:tag` form.
+ * @param {Exclusion[]} exclusions
+ * @param {string} check
+ * @param {{ file?: string, key?: string, image?: string }} ref
+ * @param {Date} [today]
  */
 export function isExcluded(exclusions, check, ref, today = new Date()) {
   return exclusions.some((entry) => {
@@ -163,6 +204,9 @@ export function isExcluded(exclusions, check, ref, today = new Date()) {
 /**
  * Scan every Dockerfile under `root`.
  * Returns `{ files, refs, findings }`; an empty `findings` is the only pass.
+ * @param {string} root
+ * @param {{ exclusions?: Exclusion[], today?: Date }} [options]
+ * @returns {{ files: string[], refs: Ref[], findings: Finding[] }}
  */
 export function checkDockerfiles(root, { exclusions = [], today = new Date() } = {}) {
   const files = discoverDockerfiles(root);

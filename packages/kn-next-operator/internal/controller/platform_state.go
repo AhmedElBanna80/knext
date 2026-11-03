@@ -230,7 +230,7 @@ func effectiveHash(eff effectiveValues) string {
 		eff.targetBurstCapacity, eff.panicWindowPercentage, eff.panicThresholdPercentage,
 	})
 	if err != nil {
-		raw = []byte(fmt.Sprintf("%+v", eff))
+		raw = fmt.Appendf(nil, "%+v", eff)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:8])

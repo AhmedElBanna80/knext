@@ -383,7 +383,7 @@ func warningEventMessages(ctx context.Context, nn types.NamespacedName) string {
 	var b strings.Builder
 	for i := range events.Items {
 		e := events.Items[i]
-		if e.InvolvedObject.Name != nn.Name || e.InvolvedObject.Kind != "NextApp" {
+		if e.InvolvedObject.Name != nn.Name || e.InvolvedObject.Kind != lcNextApp {
 			continue
 		}
 		if e.Type != corev1.EventTypeWarning {

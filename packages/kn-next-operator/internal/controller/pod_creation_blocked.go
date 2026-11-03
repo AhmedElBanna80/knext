@@ -152,7 +152,7 @@ const (
 // LimitRange/quota message. Uses the uncached APIReader so a single-object GET
 // needs only `get` on deployments and starts no cluster-wide informer.
 func (r *NextAppReconciler) admissionStillRejecting(ctx context.Context, ns, deployment string) admissionConfirm {
-	var reader client.Reader = r.APIReader
+	var reader = r.APIReader
 	if reader == nil {
 		reader = r.Client
 	}

@@ -65,7 +65,7 @@ func TestReconcileChildFatalityMatchesAllowlist(t *testing.T) {
 	var reconcileFn *ast.FuncDecl
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "Reconcile" && fn.Body != nil {
+		if ok && fn.Name.Name == lcReconcile && fn.Body != nil {
 			reconcileFn = fn
 		}
 	}

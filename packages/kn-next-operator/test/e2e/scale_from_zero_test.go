@@ -1,5 +1,4 @@
 //go:build e2e_scale
-// +build e2e_scale
 
 /*
 Copyright 2026.
@@ -59,6 +58,13 @@ import (
 
 	"github.com/AhmedElBanna80/knext/packages/kn-next-operator/test/utils"
 )
+
+// onDemandPageMarker is the stable heading of the file-manager
+// `/cache-tests/on-demand` route (apps/file-manager/src/app/cache-tests/on-demand/page.tsx),
+// a `force-dynamic` server-rendered route. Serving it proves the woken pod runs
+// SSR per request, and it is the exact page whose tag-cached data the ISR
+// assertion busts.
+const onDemandPageMarker = "On-Demand Revalidation"
 
 const (
 	// scaleFromZeroNamespace is the dedicated namespace for the #39 spec — kept

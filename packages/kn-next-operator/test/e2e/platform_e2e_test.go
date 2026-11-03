@@ -1,5 +1,4 @@
 //go:build e2e_platform
-// +build e2e_platform
 
 /*
 Copyright 2026.

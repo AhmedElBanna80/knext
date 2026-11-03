@@ -74,16 +74,16 @@ const quantityValidationBudget = time.Second
 // returned within the budget. It deliberately does NOT wait for a straggler:
 // the failure mode under test is non-termination, so a leaked goroutine on the
 // failure path is the point, not an oversight.
-func validateWithin(t *testing.T, spec *appsv1alpha1.NextAppSpec, budget time.Duration) (returned bool, err error, elapsed time.Duration) {
+func validateWithin(t *testing.T, spec *appsv1alpha1.NextAppSpec, budget time.Duration) (returned bool, elapsed time.Duration, err error) {
 	t.Helper()
 	done := make(chan error, 1)
 	start := time.Now()
 	go func() { done <- ValidateNextAppSpec(spec) }()
 	select {
 	case err = <-done:
-		return true, err, time.Since(start)
+		return true, time.Since(start), err
 	case <-time.After(budget):
-		return false, nil, time.Since(start)
+		return false, time.Since(start), nil
 	}
 }
 
@@ -113,7 +113,7 @@ var pathologicalQuantities = []string{
 // ResourcesSpec rather than enumerating its four fields — a fifth quantity
 // field added without the bound is exactly how this class comes back.
 func TestPathologicalExponentIsRejectedPromptlyOnEveryResourceField(t *testing.T) {
-	rt := reflect.TypeOf(appsv1alpha1.ResourcesSpec{})
+	rt := reflect.TypeFor[appsv1alpha1.ResourcesSpec]()
 	if rt.NumField() == 0 {
 		t.Fatal("scanned no ResourcesSpec fields; the scan itself is broken")
 	}
@@ -121,7 +121,7 @@ func TestPathologicalExponentIsRejectedPromptlyOnEveryResourceField(t *testing.T
 		field := rt.Field(i)
 		for _, value := range pathologicalQuantities {
 			spec := specWithResourceField(t, i, value)
-			returned, err, elapsed := validateWithin(t, spec, quantityValidationBudget)
+			returned, elapsed, err := validateWithin(t, spec, quantityValidationBudget)
 			if !returned {
 				t.Errorf("spec.resources.%s=%q: ValidateNextAppSpec did NOT return within %v — "+
 					"this is the #635 wedge: a reconcile worker parked forever on user-controlled input",
@@ -145,7 +145,7 @@ func TestOversizedQuantityStringIsRejectedPromptly(t *testing.T) {
 	huge := strings.Repeat("9", 1_000_000)
 	for _, value := range []string{huge, huge + "Mi"} {
 		spec := specWithResourceField(t, 0, value)
-		returned, err, elapsed := validateWithin(t, spec, quantityValidationBudget)
+		returned, elapsed, err := validateWithin(t, spec, quantityValidationBudget)
 		if !returned {
 			t.Fatalf("a %d-character quantity did not validate within %v", len(value), quantityValidationBudget)
 		}
@@ -169,7 +169,7 @@ func TestLegitimateQuantitiesStayAcceptedAndPrompt(t *testing.T) {
 	}
 	for _, value := range legitimate {
 		spec := specWithResourceField(t, 0, value)
-		returned, err, elapsed := validateWithin(t, spec, quantityValidationBudget)
+		returned, elapsed, err := validateWithin(t, spec, quantityValidationBudget)
 		if !returned {
 			t.Errorf("legitimate quantity %q did not validate within %v", value, quantityValidationBudget)
 			continue

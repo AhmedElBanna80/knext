@@ -116,7 +116,7 @@ var _ = Describe("keyPrefix narrowing ratchets for existing NextApps (#2398)", f
 		Expect(err).NotTo(HaveOccurred())
 
 		const ns = "default"
-		image := "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+		image := validImage
 		mk := func(name, prefix string) *appsv1alpha1.NextApp {
 			return &appsv1alpha1.NextApp{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -184,7 +184,7 @@ var _ = Describe("keyPrefix narrowing ratchets for existing NextApps (#2398)", f
 
 		By("fixing the prefix is always admitted")
 		Expect(c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "legacy-glob"}, cur)).To(Succeed())
-		cur.Spec.Cache.KeyPrefix = "shop"
+		cur.Spec.Cache.KeyPrefix = sovNS
 		Expect(c.Update(ctx, cur)).To(Succeed())
 	})
 })

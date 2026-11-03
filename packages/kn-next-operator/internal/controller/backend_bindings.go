@@ -242,7 +242,7 @@ func conflictingController(bs *appsv1alpha1.BackendService, zone *appsv1alpha1.N
 	if ref == nil {
 		return ""
 	}
-	if ref.Kind == "NextApp" && ref.Name == zone.Name && ref.UID == zone.UID &&
+	if ref.Kind == lcNextApp && ref.Name == zone.Name && ref.UID == zone.UID &&
 		strings.HasPrefix(ref.APIVersion, appsv1alpha1.GroupVersion.Group+"/") {
 		return ""
 	}

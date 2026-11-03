@@ -148,7 +148,7 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 		cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: group}, Rules: rules}
 		crb := &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: group},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: group},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: group},
 			Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: group}},
 		}
 		for _, o := range []client.Object{cr, crb} {
@@ -169,7 +169,7 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 			t.Fatal(err)
 		}
 		zone := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: ns},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing"}},
@@ -177,7 +177,7 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 		}
 		bs := &appsv1alpha1.BackendService{
 			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-			Spec:       appsv1alpha1.BackendServiceSpec{Zone: "orders", Image: bsImage},
+			Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
 		}
 		for _, o := range []client.Object{zone, bs} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -195,7 +195,7 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 			Client: as, APIReader: as, Scheme: scheme, Recorder: record.NewFakeRecorder(256),
 			BackendServiceCRDPresent: true, Clock: clock.Now,
 		}
-		req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "orders"}}
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: sovZone}}
 		if _, err := r.Reconcile(ctx, req); err != nil {
 			return err
 		}
@@ -220,10 +220,10 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 		t.Fatalf("the zone signing key failed under the SHIPPED ClusterRole: %v", err)
 	}
 	sec := &corev1.Secret{}
-	if err := admin.Get(ctx, types.NamespacedName{Namespace: "shipped", Name: ZoneSigningKeySecretName("orders")}, sec); err != nil {
+	if err := admin.Get(ctx, types.NamespacedName{Namespace: "shipped", Name: ZoneSigningKeySecretName(sovZone)}, sec); err != nil {
 		t.Fatalf("no key Secret under the shipped role: %v", err)
 	}
-	if ref := metav1.GetControllerOf(sec); ref == nil || ref.Name != "orders" || ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
+	if ref := metav1.GetControllerOf(sec); ref == nil || ref.Name != sovZone || ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
 		t.Fatalf("want the zone's controller ownerReference with blockOwnerDeletion on the key, got %+v", sec.OwnerReferences)
 	}
 	keys, err := readSigningKeySecret(sec)
@@ -231,10 +231,10 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 		t.Fatalf("the rotation request did not stage a key under the shipped role (err %v)", err)
 	}
 	cm := &corev1.ConfigMap{}
-	if err := admin.Get(ctx, types.NamespacedName{Namespace: "shipped", Name: ZoneJWKSConfigMapName("orders")}, cm); err != nil {
+	if err := admin.Get(ctx, types.NamespacedName{Namespace: "shipped", Name: ZoneJWKSConfigMapName(sovZone)}, cm); err != nil {
 		t.Fatalf("no JWKS under the shipped role: %v", err)
 	}
-	if ref := metav1.GetControllerOf(cm); ref == nil || ref.Name != "orders" {
+	if ref := metav1.GetControllerOf(cm); ref == nil || ref.Name != sovZone {
 		t.Fatalf("want the zone's controller ownerReference on the JWKS, got %+v", cm.OwnerReferences)
 	}
 	if !jwksHasKid(cm.Data[ZoneJWKSFileName], keys.next.kid) {
@@ -243,14 +243,14 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 
 	// 2. Without the Secrets write verbs the pass fails: the grant is needed. The
 	//    returned error is redacted (it keeps no type), so match its message.
-	if err := run("nosecretcreate", without("secrets", "create"), false); err == nil || !strings.Contains(err.Error(), "forbidden") {
+	if err := run("nosecretcreate", without(lcSecrets, "create"), false); err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("without create on secrets the key cannot be created; got err=%v", err)
 	}
-	if err := run("nosecretupdate", without("secrets", "update"), true); err == nil || !strings.Contains(err.Error(), "forbidden") {
+	if err := run("nosecretupdate", without(lcSecrets, "update"), true); err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("without update on secrets the key cannot be rotated; got err=%v", err)
 	}
 	// 3. Without the ConfigMap verbs the JWKS cannot be published.
-	if err := run("noconfigmaps", without("configmaps", "get", "create", "update"), false); err == nil || !strings.Contains(err.Error(), "forbidden") {
+	if err := run("noconfigmaps", without(lcConfigmaps, "get", "create", "update"), false); err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("without the ConfigMap grant the JWKS cannot be published; got err=%v", err)
 	}
 }

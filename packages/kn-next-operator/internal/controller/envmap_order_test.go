@@ -35,7 +35,7 @@ func TestBuildKsvcEnv_EnvMapOrderIsDeterministic(t *testing.T) {
 	app := &appsv1alpha1.NextApp{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"},
 		Spec: appsv1alpha1.NextAppSpec{
-			Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+			Image: validImage,
 			Secrets: &appsv1alpha1.SecretsSpec{
 				EnvMap: map[string]appsv1alpha1.EnvMapEntry{
 					"API_TOKEN":    {SecretName: "global-tokens", SecretKey: "t"},
@@ -49,7 +49,7 @@ func TestBuildKsvcEnv_EnvMapOrderIsDeterministic(t *testing.T) {
 	}
 	r := &NextAppReconciler{}
 	first, _, _ := r.buildKsvcEnv(app)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		got, _, _ := r.buildKsvcEnv(app)
 		if !reflect.DeepEqual(first, got) {
 			t.Fatalf("env order changed between reconciles (iteration %d):\n first: %v\n  got: %v", i, names(first), names(got))

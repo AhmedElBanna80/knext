@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 )
 
@@ -62,10 +63,8 @@ func ExpectedKindContext() string {
 // BEFORE any cluster operation; the error names both contexts so the
 // operator of the suite sees exactly what would have been targeted (#271).
 func ResolveKindContext(expected, current string, contexts []string) (string, error) {
-	for _, c := range contexts {
-		if c == expected {
-			return expected, nil
-		}
+	if slices.Contains(contexts, expected) {
+		return expected, nil
 	}
 	if strings.TrimSpace(current) == "" {
 		current = "(none)"
@@ -75,7 +74,7 @@ func ResolveKindContext(expected, current string, contexts []string) (string, er
 			"(ambient current-context: %q). Refusing to fall back to the ambient context — it may be "+
 			"a real, shared cluster. Create the kind cluster (kind create cluster --name %s), or set "+
 			"KIND_CLUSTER to the right cluster name, or run against an existing cluster explicitly "+
-			"with %s=<context>.",
+			"with %s=<context>",
 		expected, current, strings.TrimPrefix(expected, kindContextPrefix), existingClusterEnv)
 }
 
@@ -127,14 +126,14 @@ func ResolveKindOnlyContext(envCtx, expected, current string, contexts []string)
 			"this suite is kind-only (it installs/uninstalls cert-manager and deploys/undeploys the "+
 				"operator on the TARGET cluster): %s=%q is not a %s* context (ambient current-context: %q). "+
 				"Refusing to mutate a possibly shared cluster. Unset %s to run in self-contained kind mode, "+
-				"or use the cli/rollback/gc suites for existing-cluster runs.",
+				"or use the cli/rollback/gc suites for existing-cluster runs",
 			existingClusterEnv, envCtx, kindContextPrefix, displayCurrent, existingClusterEnv)
 	}
 	if envCtx != current {
 		return "", fmt.Errorf(
 			"this suite is kind-only and refuses to run while %s=%q differs from the ambient "+
 				"current-context %q — the two must agree so the run cannot straddle clusters. "+
-				"Switch contexts (kubectl config use-context %s) or unset %s.",
+				"Switch contexts (kubectl config use-context %s) or unset %s",
 			existingClusterEnv, envCtx, displayCurrent, envCtx, existingClusterEnv)
 	}
 	if envCtx != expected {
@@ -142,7 +141,7 @@ func ResolveKindOnlyContext(envCtx, expected, current string, contexts []string)
 			"this suite is kind-only and derives its target from KIND_CLUSTER: %s=%q does not match the "+
 				"expected context %q (`kind-<KIND_CLUSTER>`, the cluster `kind load` targets) — a mismatch "+
 				"would load the manager image into one kind cluster and deploy to another. "+
-				"Set KIND_CLUSTER=%s or unset %s.",
+				"Set KIND_CLUSTER=%s or unset %s",
 			existingClusterEnv, envCtx, expected,
 			strings.TrimPrefix(envCtx, kindContextPrefix), existingClusterEnv)
 	}

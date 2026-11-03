@@ -508,7 +508,7 @@ func TestPlatform_LoweredBudgetHoldsTheLastGoodServiceAndNamesTheField(t *testin
 	}
 	// It is NOT the ordinary InvalidSpec failure: that would mark the app Degraded
 	// for something the app's author did not do.
-	if d := h.condition("db", ConditionDegraded); d != nil && d.Reason == "InvalidSpec" {
+	if d := h.condition("db", ConditionDegraded); d != nil && d.Reason == lcInvalidSpec {
 		t.Error("a platform-caused failure must not be reported as the app's InvalidSpec")
 	}
 	if !hasEvent(h.drainEvents(), corev1.EventTypeWarning, ReasonEffectiveSpecInvalid) {
@@ -561,7 +561,7 @@ func TestPlatform_AnAppInvalidOnItsOwnStillFailsAsInvalidSpec(t *testing.T) {
 	if err == nil {
 		t.Fatal("an app over even the built-in budget must be rejected as before")
 	}
-	if c := h.condition("bad", ConditionReady); c == nil || c.Reason != "InvalidSpec" {
+	if c := h.condition("bad", ConditionReady); c == nil || c.Reason != lcInvalidSpec {
 		t.Errorf("Ready = %+v, want reason InvalidSpec", c)
 	}
 }
@@ -609,15 +609,15 @@ func TestPlatform_ARequestAboveTheMergedLimitIsHeld(t *testing.T) {
 func TestPlatform_AnEditRollsAppsAtTheConfiguredRateNotAllAtOnce(t *testing.T) {
 	const apps = 5
 	var objs []client.Object
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		objs = append(objs, appNamed(fmt.Sprintf("app-%d", i), nil))
 	}
 	h := newPlatformHarness(t, objs...)
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		h.reconcile(fmt.Sprintf("app-%d", i))
 	}
 	versions := map[string]string{}
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		versions[fmt.Sprintf("app-%d", i)] = h.ksvc(fmt.Sprintf("app-%d", i)).ResourceVersion
 	}
 
@@ -629,7 +629,7 @@ func TestPlatform_AnEditRollsAppsAtTheConfiguredRateNotAllAtOnce(t *testing.T) {
 
 	rolled := func() []string {
 		var out []string
-		for i := 0; i < apps; i++ {
+		for i := range apps {
 			n := fmt.Sprintf("app-%d", i)
 			if h.ksvc(n).ResourceVersion != versions[n] {
 				out = append(out, n)
@@ -640,7 +640,7 @@ func TestPlatform_AnEditRollsAppsAtTheConfiguredRateNotAllAtOnce(t *testing.T) {
 
 	// Everyone is reconciled at once, as the platform watch would enqueue them.
 	requeues := map[string]time.Duration{}
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		n := fmt.Sprintf("app-%d", i)
 		requeues[n] = h.reconcile(n).RequeueAfter
 	}
@@ -670,7 +670,7 @@ func TestPlatform_AnEditRollsAppsAtTheConfiguredRateNotAllAtOnce(t *testing.T) {
 	seen := 1
 	for step := 0; step < 400 && seen < apps; step++ {
 		h.now = h.now.Add(5 * time.Second)
-		for i := 0; i < apps; i++ {
+		for i := range apps {
 			h.reconcile(fmt.Sprintf("app-%d", i))
 		}
 		if got := len(rolled()); got > seen {
@@ -694,7 +694,7 @@ func TestPlatform_AnEditRollsAppsAtTheConfiguredRateNotAllAtOnce(t *testing.T) {
 			t.Errorf("%d apps rolled within one minute of %v; the cap is 2 (%v)", inWindow, rollTimes[i], rollTimes)
 		}
 	}
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		n := fmt.Sprintf("app-%d", i)
 		if c := h.condition(n, ConditionPlatformDefaultsApplied); c.Reason != ReasonInherited {
 			t.Errorf("%s ended at %s, want Inherited", n, c.Reason)

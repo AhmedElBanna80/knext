@@ -89,7 +89,7 @@ func TestInstallBundlePinsRealOperatorDigest(t *testing.T) {
 
 func grepLines(content, needle string) string {
 	var out []string
-	for _, ln := range strings.Split(content, "\n") {
+	for ln := range strings.SplitSeq(content, "\n") {
 		if strings.Contains(ln, needle) {
 			out = append(out, "  "+ln)
 		}

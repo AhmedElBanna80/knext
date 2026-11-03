@@ -329,7 +329,7 @@ func TestDeniedWarningIsEmittedOnlyAfterStatusIsPersisted(t *testing.T) {
 			return c.SubResource(sub).Update(ctx, obj, opts...)
 		},
 	})
-	h.reader.err = apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "stripe-key", errors.New("rbac"))
+	h.reader.err = apierrors.NewForbidden(schema.GroupResource{Resource: lcSecrets}, "stripe-key", errors.New("rbac"))
 	if err := h.reconcile(); err == nil {
 		t.Fatal("a conflicting status write must surface")
 	}

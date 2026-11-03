@@ -267,7 +267,7 @@ func zoneDatabaseSecrets(app *appsv1alpha1.NextApp) []string {
 
 // ownerReferencesNextApp reports whether an ownerReference points at a NextApp.
 func ownerReferencesNextApp(ref metav1.OwnerReference) bool {
-	return ref.Kind == "NextApp" && strings.HasPrefix(ref.APIVersion, appsv1alpha1.GroupVersion.Group+"/")
+	return ref.Kind == lcNextApp && strings.HasPrefix(ref.APIVersion, appsv1alpha1.GroupVersion.Group+"/")
 }
 
 // checkFunctionSovereignty applies the allowlist to every Secret and ConfigMap
@@ -388,7 +388,7 @@ func checkSecretRefs(
 			m = lookup(ref.name)
 			meta[ref.name] = m
 		}
-		if other := foreignMark(m, zoneName, zone); other != "" {
+		if other := foreignMark(m, zoneName); other != "" {
 			out = append(out, sovereigntyViolation{ref.source, ref.name,
 				fmt.Sprintf("Secret %q is marked for zone %q, not zone %q", ref.name, other, zoneName)})
 			continue
@@ -467,7 +467,7 @@ func runningSecretRefs(ksvc *servingv1.Service) []objectRef {
 }
 
 // foreignMark returns the other zone a Secret is marked for, or "".
-func foreignMark(m secretMetadata, zoneName string, zone *appsv1alpha1.NextApp) string {
+func foreignMark(m secretMetadata, zoneName string) string {
 	if v, ok := m.labels[ZoneLabel]; ok && v != zoneName {
 		return v
 	}
@@ -529,7 +529,7 @@ var cnpgServiceSuffixes = []string{"-rw", "-ro"}
 //   - the cluster name equals, or is prefixed by "<zone>-", ANOTHER NextApp's
 //     name in the namespace, and that zone is the longest such match (so a
 //     zone "orders-archive" owns "orders-archive-db" even beside a zone
-//     "orders").
+//     sovZone).
 //
 // It reads only env[].value: a Secret's content, an IP address, an
 // ExternalName Service and a URL built at run time all get past it, which is
@@ -543,7 +543,8 @@ func lintForeignDatabaseHosts(
 	if zone != nil {
 		zoneName = zone.Name
 	}
-	zones := []string{zoneName}
+	zones := make([]string, 0, 1+len(others))
+	zones = append(zones, zoneName)
 	for i := range others {
 		zones = append(zones, others[i].Name)
 	}
@@ -592,7 +593,7 @@ func cnpgCluster(label string) (string, bool) {
 // where a host (bare, or inside a URL or DSN) appears.
 func hostTokens(value string) []string {
 	return strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.')
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '.'
 	})
 }
 

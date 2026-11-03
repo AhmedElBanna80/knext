@@ -74,7 +74,7 @@ func TestBaseSuiteGuardIsFirstStatementOfBeforeSuite(t *testing.T) {
 	// FIRST STATEMENT, not merely early: nothing but blank lines and comments
 	// may precede the line carrying the guard call inside the BeforeSuite body.
 	guardLineStart := strings.LastIndex(body[:guard], "\n") + 1
-	for _, line := range strings.Split(body[:guardLineStart], "\n") {
+	for line := range strings.SplitSeq(body[:guardLineStart], "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
 			continue

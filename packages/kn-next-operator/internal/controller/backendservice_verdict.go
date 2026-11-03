@@ -259,7 +259,7 @@ type functionVerdict struct {
 // computeBackendServiceVerdict computes conditions, transition-gated events
 // and the requeue. Messages are static for a given state, so a converged
 // object's status write is a no-op.
-func computeBackendServiceVerdict(bs *appsv1alpha1.BackendService, o functionObservation) functionVerdict {
+func computeBackendServiceVerdict(bs *appsv1alpha1.BackendService, o functionObservation) functionVerdict { //nolint:gocyclo // long branch-per-condition orchestrator; splitting is tracked debt, new functions stay under the limit
 	var v functionVerdict
 	gen := bs.Generation
 	v.observedGeneration = gen
@@ -407,7 +407,7 @@ func computeBackendServiceVerdict(bs *appsv1alpha1.BackendService, o functionObs
 		// wait for the Knative Service.
 		ready = cond(ConditionReady, metav1.ConditionFalse, ReasonJWKSUntrusted, jwks.Message)
 	case o.ksvc == nil || !o.ksvc.Status.GetCondition(servingv1.ServiceConditionReady).IsTrue():
-		reason, msg := "Pending", "the function's Knative Service has not reported Ready yet"
+		reason, msg := lcPending, "the function's Knative Service has not reported Ready yet"
 		if o.ksvc != nil {
 			if c := o.ksvc.Status.GetCondition(servingv1.ServiceConditionReady); c != nil {
 				if c.Reason != "" {

@@ -115,7 +115,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 		cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}, Rules: rules}
 		crb := &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: name},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: name},
 			Subjects:   []rbacv1.Subject{subject},
 		}
 		for _, o := range []client.Object{cr, crb} {
@@ -154,10 +154,10 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 	// role (the operator never deletes); granting it here, to the test identity
 	// only, makes a refused DELETE attributable to the policy and not to RBAC.
 	opRules := append(append([]rbacv1.PolicyRule{}, shipped.Rules...), rbacv1.PolicyRule{
-		APIGroups: []string{""}, Resources: []string{"secrets", "configmaps"}, Verbs: []string{"delete", "list"},
+		APIGroups: []string{""}, Resources: []string{lcSecrets, lcConfigmaps}, Verbs: []string{"delete", "list"},
 	})
 	roleFor("knext-vap-operator", opRules, saSubject(opNamespace, opSA))
-	everything := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets", "configmaps"}, Verbs: []string{"*"}}}
+	everything := []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{lcSecrets, lcConfigmaps}, Verbs: []string{"*"}}}
 	const otherNS = "team-a"
 	roleFor("knext-vap-tenant", everything, saSubject(otherNS, "builder"))
 	roleFor("knext-vap-lookalike", everything, saSubject(otherNS, opSA))
@@ -379,7 +379,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 		// Existing objects under the allowed names, owned in each wrong way. Each
 		// zone's name is its own, so the cases do not share an object.
 		wrongKind := zoneOwnerRef("zone-kind")
-		wrongKind.Kind, wrongKind.APIVersion = "ConfigMap", "v1"
+		wrongKind.Kind, wrongKind.APIVersion = lcConfigMap, "v1"
 		wrongGroup := zoneOwnerRef("zone-group")
 		wrongGroup.APIVersion = "example.com/v1"
 		// A near miss on the group: the check must anchor on the trailing slash.
@@ -555,7 +555,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 		zone := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: zoneNS},
+			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: zoneNS},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing"}},
@@ -563,7 +563,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 		}
 		bs := &appsv1alpha1.BackendService{
 			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: zoneNS},
-			Spec:       appsv1alpha1.BackendServiceSpec{Zone: "orders", Image: bsImage},
+			Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
 		}
 		for _, o := range []client.Object{zone, bs} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -582,7 +582,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 			Client: operator, APIReader: operator, Scheme: scheme, Recorder: record.NewFakeRecorder(256),
 			BackendServiceCRDPresent: true, Clock: clock.Now,
 		}
-		req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: zoneNS, Name: "orders"}}
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: zoneNS, Name: sovZone}}
 		if _, err := r.Reconcile(ctx, req); err != nil {
 			return err
 		}
@@ -607,7 +607,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 			t.Fatalf("the reconciler broke under the shipped policy: %v", err)
 		}
 		sec := &corev1.Secret{}
-		if err := admin.Get(ctx, types.NamespacedName{Namespace: "zone-ok", Name: ZoneSigningKeySecretName("orders")}, sec); err != nil {
+		if err := admin.Get(ctx, types.NamespacedName{Namespace: "zone-ok", Name: ZoneSigningKeySecretName(sovZone)}, sec); err != nil {
 			t.Fatalf("no key Secret under the policy: %v", err)
 		}
 		keys, err := readSigningKeySecret(sec)
@@ -615,7 +615,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 			t.Fatalf("the rotation did not stage a key under the policy (err %v)", err)
 		}
 		got := &corev1.ConfigMap{}
-		if err := admin.Get(ctx, types.NamespacedName{Namespace: "zone-ok", Name: ZoneJWKSConfigMapName("orders")}, got); err != nil {
+		if err := admin.Get(ctx, types.NamespacedName{Namespace: "zone-ok", Name: ZoneJWKSConfigMapName(sovZone)}, got); err != nil {
 			t.Fatalf("no JWKS under the policy: %v", err)
 		}
 		if !jwksHasKid(got.Data[ZoneJWKSFileName], keys.next.kid) {
@@ -665,7 +665,7 @@ func zoneOwnerRef(zone string) metav1.OwnerReference {
 	controller := true
 	return metav1.OwnerReference{
 		APIVersion: appsv1alpha1.GroupVersion.String(),
-		Kind:       "NextApp",
+		Kind:       lcNextApp,
 		Name:       zone,
 		UID:        types.UID("uid-" + zone),
 		Controller: &controller,

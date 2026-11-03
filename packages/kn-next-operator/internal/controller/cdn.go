@@ -42,7 +42,7 @@ const (
 	// set spec.cdn, so every other app's conditions stay byte-identical, #98).
 	ConditionCDNAdvisory = "CDNAdvisory"
 
-	// ReasonCDNInertOnVinext marks spec.cdn on build "vinext" (Beta): the vinext
+	// ReasonCDNInertOnVinext marks spec.cdn on build lcVinext (Beta): the vinext
 	// runtime has a different cache adapter and a Bun.serve seam, so the first
 	// cut renders no KNEXT_CDN_* env there (ADR-0068 D11).
 	ReasonCDNInertOnVinext = "CDNInertOnVinext"
@@ -96,7 +96,7 @@ func cdnEnvVars(app *appsv1alpha1.NextApp) []corev1.EnvVar {
 	}
 	env := []corev1.EnvVar{
 		{Name: "KNEXT_CDN_PROVIDER", Value: cdn.Provider},
-		{Name: "KNEXT_CDN_TAG_PREFIX", Value: cdnTagPrefix(app)},
+		{Name: lcKNEXTCDNTAGPREFIX, Value: cdnTagPrefix(app)},
 		{Name: "KNEXT_CDN_HTML_TTL_SECONDS", Value: strconv.Itoa(int(ttl))},
 		{Name: "KNEXT_CDN_SWR_SECONDS", Value: strconv.Itoa(int(cdn.StaleWhileRevalidateSeconds))},
 	}
@@ -167,7 +167,7 @@ func cdnAdvisory(app *appsv1alpha1.NextApp) (reason, message string, ok bool) {
 	if app.Spec.CDN == nil {
 		return "", "", false
 	}
-	if app.Spec.Build == "vinext" {
+	if app.Spec.Build == lcVinext {
 		return ReasonCDNInertOnVinext,
 			"spec.cdn is set but build is vinext (Beta): no KNEXT_CDN_* environment is rendered and the " +
 				"CDN tier is inert. The vinext runtime uses a different cache adapter and server seam; CDN " +

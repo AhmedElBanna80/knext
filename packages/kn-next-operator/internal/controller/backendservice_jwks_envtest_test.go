@@ -58,8 +58,8 @@ func jwksSpecConfigMap(ctx context.Context, ns, zone string, refs ...metav1.Owne
 
 func controllerRefTo(app *appsv1alpha1.NextApp) metav1.OwnerReference {
 	return metav1.OwnerReference{
-		APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "NextApp", Name: app.Name, UID: app.UID,
-		Controller: ptr.To(true), BlockOwnerDeletion: ptr.To(true),
+		APIVersion: appsv1alpha1.GroupVersion.String(), Kind: lcNextApp, Name: app.Name, UID: app.UID,
+		Controller: new(true), BlockOwnerDeletion: new(true),
 	}
 }
 
@@ -110,7 +110,7 @@ func (c cachedConfigMapTrap) Get(ctx context.Context, key client.ObjectKey, obj 
 	case *corev1.ConfigMap:
 		return errors.New("ConfigMap read through the cached client: it would start an informer (needs list/watch)")
 	case *metav1.PartialObjectMetadata:
-		if o.Kind == "ConfigMap" {
+		if o.Kind == lcConfigMap {
 			return errors.New("ConfigMap metadata read through the cached client: it would start an informer (needs list/watch)")
 		}
 	}
@@ -122,7 +122,7 @@ func (c cachedConfigMapTrap) Get(ctx context.Context, key client.ObjectKey, obj 
 type failingConfigMapReader struct{ client.Reader }
 
 func (f failingConfigMapReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if o, ok := obj.(*metav1.PartialObjectMetadata); ok && o.Kind == "ConfigMap" {
+	if o, ok := obj.(*metav1.PartialObjectMetadata); ok && o.Kind == lcConfigMap {
 		return errors.New("simulated apiserver failure")
 	}
 	return f.Reader.Get(ctx, key, obj, opts...)
@@ -133,17 +133,17 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 
 	setup := func() (ns string, zone *appsv1alpha1.NextApp) {
 		ns = bsNamespace(ctx)
-		zone = createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
+		zone = createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
 		return ns, zone
 	}
 
 	It("mounts the JWKS of a ConfigMap the zone's NextApp controls", func() {
 		ns, zone := setup()
-		jwksSpecConfigMap(ctx, ns, "orders", controllerRefTo(zone))
+		jwksSpecConfigMap(ctx, ns, sovZone, controllerRefTo(zone))
 		reconcileFunction(ctx, ns, "pricing")
 
-		expectJWKSMounted(ctx, ns, "orders", "pricing")
+		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 		c := functionCondition(getFunction(ctx, ns, "pricing"), ConditionJWKSTrusted)
 		Expect(c).NotTo(BeNil())
 		Expect(c.Status).To(Equal(metav1.ConditionTrue))
@@ -154,7 +154,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 		ns, _ := setup()
 		reconcileFunction(ctx, ns, "pricing")
 
-		expectJWKSMounted(ctx, ns, "orders", "pricing")
+		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 		bs := getFunction(ctx, ns, "pricing")
 		c := functionCondition(bs, ConditionJWKSTrusted)
 		Expect(c).NotTo(BeNil())
@@ -167,7 +167,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 	untrusted := func(name string, owners func(zone *appsv1alpha1.NextApp, ns string) []metav1.OwnerReference, wantDetail string) {
 		It(name, func() {
 			ns, zone := setup()
-			squatter := jwksSpecConfigMap(ctx, ns, "orders", owners(zone, ns)...)
+			squatter := jwksSpecConfigMap(ctx, ns, sovZone, owners(zone, ns)...)
 			r := newBSReconciler()
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
 			Expect(err).NotTo(HaveOccurred())
@@ -182,7 +182,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 			Expect(c).NotTo(BeNil())
 			Expect(c.Status).To(Equal(metav1.ConditionFalse))
 			Expect(c.Reason).To(Equal(ReasonJWKSUntrusted))
-			Expect(c.Message).To(ContainSubstring(ZoneJWKSConfigMapName("orders")))
+			Expect(c.Message).To(ContainSubstring(ZoneJWKSConfigMapName(sovZone)))
 			Expect(c.Message).To(ContainSubstring(wantDetail))
 			ready := functionCondition(bs, ConditionReady)
 			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
@@ -215,12 +215,12 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 
 	untrusted("does not mount a ConfigMap controlled by some other object", func(_ *appsv1alpha1.NextApp, _ string) []metav1.OwnerReference {
 		return []metav1.OwnerReference{{
-			APIVersion: "v1", Kind: "ConfigMap", Name: "elsewhere", UID: "uid-elsewhere", Controller: ptr.To(true),
+			APIVersion: "v1", Kind: lcConfigMap, Name: "elsewhere", UID: "uid-elsewhere", Controller: new(true),
 		}}
 	}, `ConfigMap "elsewhere"`)
 
 	untrusted("does not mount a ConfigMap controlled by another zone's NextApp", func(_ *appsv1alpha1.NextApp, ns string) []metav1.OwnerReference {
-		other := createZone(ctx, ns, "billing")
+		other := createZone(ctx, ns, sovOther)
 		return []metav1.OwnerReference{controllerRefTo(other)}
 	}, `NextApp "billing"`)
 
@@ -232,14 +232,14 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 
 	It("stops mounting a ConfigMap that a squatter replaced, and mounts again once it is gone", func() {
 		ns, zone := setup()
-		legit := jwksSpecConfigMap(ctx, ns, "orders", controllerRefTo(zone))
+		legit := jwksSpecConfigMap(ctx, ns, sovZone, controllerRefTo(zone))
 		reconcileFunction(ctx, ns, "pricing")
-		expectJWKSMounted(ctx, ns, "orders", "pricing")
+		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 
 		By("the zone's ConfigMap is deleted and a squatter takes the name")
 		Expect(k8sClient.Delete(ctx, legit)).To(Succeed())
 		squatter := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: ZoneJWKSConfigMapName("orders"), Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: ZoneJWKSConfigMapName(sovZone), Namespace: ns},
 			Data:       map[string]string{ZoneJWKSFileName: `{"keys":[]}`},
 		}
 		Expect(k8sClient.Create(ctx, squatter)).To(Succeed())
@@ -250,7 +250,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 		By("the squatter is removed: the optional mount returns (the operator will publish)")
 		Expect(k8sClient.Delete(ctx, squatter)).To(Succeed())
 		reconcileFunction(ctx, ns, "pricing")
-		expectJWKSMounted(ctx, ns, "orders", "pricing")
+		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 		bs := getFunction(ctx, ns, "pricing")
 		Expect(functionCondition(bs, ConditionJWKSTrusted).Reason).To(Equal(ReasonJWKSNotPublished))
 		Expect(functionCondition(bs, ConditionReady).Reason).NotTo(Equal(ReasonJWKSUntrusted))
@@ -258,33 +258,33 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 
 	It("reads the ConfigMap through the uncached reader, never the cache", func() {
 		ns, zone := setup()
-		jwksSpecConfigMap(ctx, ns, "orders", controllerRefTo(zone))
+		jwksSpecConfigMap(ctx, ns, sovZone, controllerRefTo(zone))
 		r := newBSReconciler()
 		r.Client = cachedConfigMapTrap{Client: k8sClient}
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
 		Expect(err).NotTo(HaveOccurred(), "the JWKS read must use APIReader: the role has no ConfigMap list/watch")
-		expectJWKSMounted(ctx, ns, "orders", "pricing")
+		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 	})
 
 	It("on a read failure returns the error and leaves what was rendered untouched (it learned nothing about ownership)", func() {
 		ns, zone := setup()
-		jwksSpecConfigMap(ctx, ns, "orders", controllerRefTo(zone))
+		jwksSpecConfigMap(ctx, ns, sovZone, controllerRefTo(zone))
 		reconcileFunction(ctx, ns, "pricing")
-		expectJWKSMounted(ctx, ns, "orders", "pricing")
+		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 
 		r := newBSReconciler()
 		r.APIReader = failingConfigMapReader{Reader: k8sClient}
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("simulated apiserver failure"))
-		expectJWKSMounted(ctx, ns, "orders", "pricing")
+		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 	})
 
 	It("does not read the ConfigMap, nor render, for a function that is refused", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders") // the zone does not list the function
-		createFunction(ctx, ns, "pricing", "orders")
-		jwksSpecConfigMap(ctx, ns, "orders")
+		createZone(ctx, ns, sovZone) // the zone does not list the function
+		createFunction(ctx, ns, "pricing", sovZone)
+		jwksSpecConfigMap(ctx, ns, sovZone)
 		r := newBSReconciler()
 		r.APIReader = failingConfigMapReader{Reader: k8sClient}
 		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})

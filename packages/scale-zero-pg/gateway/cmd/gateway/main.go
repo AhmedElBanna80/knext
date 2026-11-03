@@ -111,7 +111,15 @@ func main() {
 		roLnActive, roGwActive = roLn, roGw
 	}
 
-	metricsSrv := &http.Server{Addr: ":" + strconv.Itoa(metricsPort), Handler: gw.Metrics().HandlerWithPeerAuth(peerAuth)}
+	// Timeouts match the sibling servers. No WriteTimeout: a large /metrics
+	// response must not be truncated mid-scrape.
+	metricsSrv := &http.Server{
+		Addr:              ":" + strconv.Itoa(metricsPort),
+		Handler:           gw.Metrics().HandlerWithPeerAuth(peerAuth),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	go func() {
 		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Printf("[gw] metrics server: %v", err)

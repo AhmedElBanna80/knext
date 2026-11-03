@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-only snapshot of kubelet configz and metrics for each worker, via the API server
-# proxy. Makes no change to any node or cluster object. Usage:
+# proxy (the caller needs RBAC on nodes/proxy, and nodes list). Makes no change to any node or cluster object. Usage:
 #   scripts/bench-cold-start-phases/kubelet-snapshot.sh [context] [outdir]
 set -euo pipefail
 CTX="${1:-knext-oke-sa}"

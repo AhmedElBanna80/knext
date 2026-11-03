@@ -533,6 +533,46 @@ describe('integrity: a source re-pinned to new bytes is a change', () => {
       expect(isHashlessUrlSource(u(`bitbucket:g/s/r#${sha}`))).toBe(true);
     });
 
+    it('git+ssh path: percent-escapes and empty segments are not a clean path', () => {
+      const sha = 'a'.repeat(40);
+      const u = (v: string) => entry({ unresolved: 'x', version: v });
+      for (const bad of [
+        `git+ssh://git@github.com/o/r%23main.git#${sha}`,
+        `git+ssh://git@github.com/o/r%3Fx.git#${sha}`,
+        `git+ssh://git@github.com/o%40x/r.git#${sha}`,
+        `git+ssh://gitlab:g/s%23x/r#${sha}`,
+        `git+ssh://git@github.com//r.git#${sha}`,
+        `git+ssh://git@github.com/o/r/#${sha}`,
+        `git+ssh://git@github.com/o/r@x.git#${sha}`,
+        `git+ssh://git@github.com/o/r x.git#${sha}`,
+        `git+ssh://git@gi%74hub.com/o/r.git#${sha}`,
+        `git+ssh://${'git@'}github.com:22:33/o/r.git#${sha}`,
+      ]) {
+        expect(isHashlessUrlSource(u(bad))).toBe(true);
+      }
+    });
+
+    it('git+ssh keeps every real pinned form: authority, host alias, port, .git, nested gitlab', () => {
+      const sha = 'a'.repeat(40);
+      const u = (v: string) => entry({ unresolved: 'x', version: v });
+      for (const ok of [
+        `git+ssh://git@github.com/o/r.git#${sha}`,
+        `git+ssh://git@github.com/o/r#${sha}`,
+        `git+ssh://github.com/o/r.git#${sha}`,
+        `git+ssh://git@github.com:22/o/r.git#${sha}`,
+        `git+ssh://gitlab:g/r#${sha}`,
+        `git+ssh://gitlab:g/s/r#${sha}`,
+        `git+ssh://gitlab:g/s/t/r.git#${sha}`,
+        `git+ssh://bitbucket:o/r#${sha}`,
+        `git+ssh://git@gitlab.com:g/s/r.git#${sha}`,
+        `git+https://github.com/o/r.git#${sha}`,
+        `git://github.com/o/r.git#${sha}`,
+        `git+ssh://git@github.com/Some-Org/re.po_1.git#${'b'.repeat(64)}`,
+      ]) {
+        expect(isHashlessUrlSource(u(ok))).toBe(false);
+      }
+    });
+
     it('a commit sha is lowercase hex exactly: uppercase, trailing newline or space are refused', () => {
       const u = (v: string) => entry({ unresolved: 'x', version: v });
       const sha = 'f'.repeat(40);

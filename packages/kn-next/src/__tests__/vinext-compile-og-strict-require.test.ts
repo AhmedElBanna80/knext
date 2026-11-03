@@ -7,7 +7,7 @@
  * Both halves are asserted on the exit code and the named failure, never on a
  * log line alone.
  */
-import { afterAll, describe, expect, it } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
     mkdirSync,
@@ -21,11 +21,6 @@ import { dirname, join, resolve } from "node:path";
 
 const COMPILE = resolve(import.meta.dir, "../adapters/vinext-compile.mjs");
 
-const temps: string[] = [];
-afterAll(() => {
-    for (const t of temps) rmSync(t, { recursive: true, force: true });
-});
-
 const OG_IMPORT =
     'import { createRequire } from "module";\nvar require2 = createRequire("/");\n';
 
@@ -37,37 +32,39 @@ const OG_DISCARDED =
 
 /** Build `.output/server/index.mjs` from `body`, then compile it in strict mode. */
 function strictCompile(body: string) {
-    const root = realpathSync(
-        mkdtempSync(join(tmpdir(), "knext-2614-strict-")),
-    );
-    temps.push(root);
-    const serverDir = join(root, ".output", "server");
-    mkdirSync(serverDir, { recursive: true });
-    writeFileSync(join(serverDir, "package.json"), '{"type":"module"}\n');
-    writeFileSync(
-        join(serverDir, "index.mjs"),
-        OG_IMPORT + body + "export default {};\n",
-    );
-    const arch = process.arch === "arm64" ? "arm64" : "x64";
-    const target =
-        process.platform === "darwin"
-            ? `bun-darwin-${arch}`
-            : `bun-linux-${arch}`;
-    const env = { ...process.env, KNEXT_COMPILE_STRICT_REQUIRES: "1" };
-    return spawnSync(
-        "bun",
-        [
-            "run",
-            COMPILE,
-            "--entry",
+    const dir = mkdtempSync(join(tmpdir(), "knext-2614-strict-"));
+    try {
+        const root = realpathSync(dir);
+        const serverDir = join(root, ".output", "server");
+        mkdirSync(serverDir, { recursive: true });
+        writeFileSync(join(serverDir, "package.json"), '{"type":"module"}\n');
+        writeFileSync(
             join(serverDir, "index.mjs"),
-            "--outfile",
-            join(root, "knext-exec"),
-            "--target",
-            target,
-        ],
-        { encoding: "utf-8", timeout: 120_000, env, cwd: dirname(COMPILE) },
-    );
+            OG_IMPORT + body + "export default {};\n",
+        );
+        const arch = process.arch === "arm64" ? "arm64" : "x64";
+        const target =
+            process.platform === "darwin"
+                ? `bun-darwin-${arch}`
+                : `bun-linux-${arch}`;
+        const env = { ...process.env, KNEXT_COMPILE_STRICT_REQUIRES: "1" };
+        return spawnSync(
+            "bun",
+            [
+                "run",
+                COMPILE,
+                "--entry",
+                join(serverDir, "index.mjs"),
+                "--outfile",
+                join(root, "knext-exec"),
+                "--target",
+                target,
+            ],
+            { encoding: "utf-8", timeout: 120_000, env, cwd: dirname(COMPILE) },
+        );
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
 }
 
 describe("#2614: strict compile accepts the next/og shape and still refuses real gaps", () => {
@@ -113,17 +110,21 @@ describe("#2614: strict compile accepts the next/og shape and still refuses real
         ["ioredis with a trailing space", "['io', 'redis '].join('')"],
         ["IOREDIS in capitals", "['IO', 'REDIS'].join('')"],
         ["node:ioredis", "['node:', 'ioredis'].join('')"],
-    ])("a literal-assembled name that is not ioredis (%s) still aborts the strict build", (_label, expr) => {
-        const r = strictCompile(
-            OG_DISCARDED +
-                `const PKG = ${expr};\n` +
-                "export const load = () => createRequire(import.meta.url)(PKG);\n",
-        );
-        const out = r.stdout + r.stderr;
-        expect(r.status, out).toBe(1);
-        expect(out).toContain("non-literal package name");
-        expect(out).not.toContain("deliberately not bundled");
-    }, 150_000);
+    ])(
+        "a literal-assembled name that is not ioredis (%s) still aborts the strict build",
+        (_label, expr) => {
+            const r = strictCompile(
+                OG_DISCARDED +
+                    `const PKG = ${expr};\n` +
+                    "export const load = () => createRequire(import.meta.url)(PKG);\n",
+            );
+            const out = r.stdout + r.stderr;
+            expect(r.status, out).toBe(1);
+            expect(out).toContain("non-literal package name");
+            expect(out).not.toContain("deliberately not bundled");
+        },
+        150_000,
+    );
 
     it("a runtime load of a name the build cannot fold still aborts the strict build", () => {
         const r = strictCompile(

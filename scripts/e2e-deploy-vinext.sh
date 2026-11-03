@@ -527,6 +527,24 @@ if [ "${KNEXT_COMPILE}" != "0" ]; then
     exit 1
   fi
 
+  # ── 5a. stage sharp's addon beside the binary (BEFORE the compile, #2615) ────
+  # The compiled binary cannot dlopen a path inside its own virtual filesystem, so
+  # the addon has to be a real file next to the executable. Absent sharp is fine
+  # and silent — a fixture that never touches next/image pulls no @img packages.
+  # Staged BEFORE the compile below because a --self-contained compile EMBEDS this
+  # tree (--native-dir) and refuses to build a sharp-using fixture when it is
+  # missing; staged after, the compile always saw an absent native/.
+  for candidate in \
+    "${APP_DIR}/node_modules/@img" \
+    "${APP_DIR}/node_modules/.bun/node_modules/@img"; do
+    if [ -d "${candidate}" ]; then
+      mkdir -p "${APP_DIR}/native"
+      cp -RL "${candidate}"/* "${APP_DIR}/native/" 2>/dev/null || true
+      log "staged sharp native packages from ${candidate} → ${APP_DIR}/native"
+      break
+    fi
+  done
+
   KNEXT_EXEC="${APP_DIR}/knext-exec-e2e"
   log "compiling the single executable (bun, bytecode, minified) → ${KNEXT_EXEC}"
   # #1455 (F6): forward the mode, mirroring F5's `--self-contained` CLI flag
@@ -542,6 +560,9 @@ if [ "${KNEXT_COMPILE}" != "0" ]; then
   VINEXT_COMPILE_ARGS=()
   if [ "${KNEXT_SELF_CONTAINED:-0}" = "1" ]; then
     VINEXT_COMPILE_ARGS+=(--self-contained 1)
+    if [ -d "${APP_DIR}/native" ]; then
+      VINEXT_COMPILE_ARGS+=(--native-dir "${APP_DIR}/native")
+    fi
   fi
   if ! bun run "${COMPILE_SCRIPT}" --entry "${NITRO_ENTRY}" --outfile "${KNEXT_EXEC}" \
     "${VINEXT_COMPILE_ARGS[@]+"${VINEXT_COMPILE_ARGS[@]}"}" >&2; then
@@ -553,20 +574,6 @@ if [ "${KNEXT_COMPILE}" != "0" ]; then
     exit 1
   fi
 
-  # ── 6. stage sharp's addon beside the binary ────────────────────────────────
-  # The compiled binary cannot dlopen a path inside its own virtual filesystem, so
-  # the addon has to be a real file next to the executable. Absent sharp is fine
-  # and silent — a fixture that never touches next/image pulls no @img packages.
-  for candidate in \
-    "${APP_DIR}/node_modules/@img" \
-    "${APP_DIR}/node_modules/.bun/node_modules/@img"; do
-    if [ -d "${candidate}" ]; then
-      mkdir -p "${APP_DIR}/native"
-      cp -RL "${candidate}"/* "${APP_DIR}/native/" 2>/dev/null || true
-      log "staged sharp native packages from ${candidate} → ${APP_DIR}/native"
-      break
-    fi
-  done
 
   # ── 6c. the empty-dir lane check (#1455, ADR-0060 F6) ───────────────────────
   # Off by default; KNEXT_SELF_CONTAINED=1 is dispatch-only. Stages a FRESH
@@ -603,8 +610,22 @@ if [ "${KNEXT_COMPILE}" != "0" ]; then
     # binary at compile time (ADR-0060 §Context), producing a false pass.
     ED_HIDE_DURING_BOOT=("${APP_DIR}/node_modules" "${APP_DIR}/.output")
     # #1515: the 2xx check is a STAGED static file (ED_STATIC_PROBE) — the
-    # compat fixtures have no /api/health — and `/` stays non-5xx. A lane
-    # whose app has the route (file-manager) sets KNEXT_EMPTY_DIR_HEALTH_PATH.
+    # compat fixtures have no /api/health. A lane whose app has the route
+    # (file-manager) sets KNEXT_EMPTY_DIR_HEALTH_PATH, and `/` then stays
+    # non-5xx. Under the static probe `/` is non-5xx too, except for the
+    # allowlisted intentional-500 fixtures, found via ED_FIXTURE_DIR (#2615).
+    #
+    # #2615: the static file is served under the fixture's basePath, which
+    # vinext (unlike `next build`) records in no manifest — read it from the
+    # fixture's next.config. Fail closed: a silent "" would probe the wrong path.
+    if [ -z "${KNEXT_EMPTY_DIR_HEALTH_PATH:-}" ]; then
+      ED_STATIC_PROBE_BASE="$(bun "${ED__LIB_DIR}/e2e-vinext-base-path.mjs" "${APP_DIR}")" || {
+        log "ERROR: KNEXT_SELF_CONTAINED=1 — could not read the fixture's basePath from its next.config — refusing to probe with a silently-empty basePath"
+        rm -rf "${EMPTY_DIR}"
+        exit 1
+      }
+    fi
+    ED_FIXTURE_DIR="${APP_DIR}"
     if ! ed_check_or_die "vinext" "${EMPTY_DIR}" "${KNEXT_EXEC}" "${KNEXT_EMPTY_DIR_HEALTH_PATH:-${ED_STATIC_PROBE}}" / "${EMPTY_DIR_PORT}" \
       "${APP_DIR}/.output/public:.output/public" "${APP_DIR}/native:native"; then
       log "ERROR: KNEXT_SELF_CONTAINED=1 — the empty-dir lane check failed. Until V1 (#1460) embeds what this exec still loads from disk, this is EXPECTED for any real fixture — that is exactly why the mode defaults off and is dispatch-only (ADR-0060)."

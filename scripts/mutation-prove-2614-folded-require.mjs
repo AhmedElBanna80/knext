@@ -139,13 +139,15 @@ const FOLD = [
     subject: 'analyze',
     claim: 'the exact-name check strips a node: prefix (node:ioredis is exempted)',
     anchor: '    return folded === FOLDED_RUNTIME_PACKAGE ? folded : null;',
-    replacement: '    return folded?.replace(/^node:/, "") === FOLDED_RUNTIME_PACKAGE ? folded : null;',
+    replacement:
+      '    return folded?.replace(/^node:/, "") === FOLDED_RUNTIME_PACKAGE ? folded : null;',
   },
   {
     id: 'U01',
     subject: 'analyze',
     claim: 'a name changed by ++ is still folded',
-    anchor: '                if (node.argument.type === "Identifier") reassigned.add(node.argument.name);',
+    anchor:
+      '                if (node.argument.type === "Identifier") reassigned.add(node.argument.name);',
     replacement: '                void node.argument;',
   },
   {
@@ -220,14 +222,14 @@ const STANDALONE = [
     id: 'N01',
     subject: 'embed',
     claim: 'the unembedded report drops a folded-only module (the load vanishes without trace)',
-    anchor: "|| foldedRuntimeRequires.length > 0)",
+    anchor: '|| foldedRuntimeRequires.length > 0)',
     replacement: ')',
   },
   {
     id: 'N02',
     subject: 'embed',
     claim: 'the summary line names nothing',
-    anchor: "  if (byPackage.size === 0) return null;",
+    anchor: '  if (byPackage.size === 0) return null;',
     replacement: '  return null;',
   },
   {

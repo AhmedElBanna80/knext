@@ -113,12 +113,16 @@ def pod_evidence(arm, t_req):
     image_id = user.get("imageID", "")
     ev = kc(["get", "events", "--field-selector", f"involvedObject.name={pod['metadata']['name']}", "-o", "json"], check=False)
     pulls = []
+    events_invalid = ev.returncode != 0
+    events_n = 0
     try:
-        for e in json.loads(ev.stdout).get("items", []):
+        items = json.loads(ev.stdout).get("items", [])
+        events_n = len(items)
+        for e in items:
             if e.get("reason", "").startswith("Pull"):
                 pulls.append(e.get("message", "")[:160])
     except json.JSONDecodeError:
-        pass
+        events_invalid = True
     return {
         "pod": pod["metadata"]["name"],
         "node": pod["spec"].get("nodeName"),
@@ -128,6 +132,8 @@ def pod_evidence(arm, t_req):
         "container_started": started,
         "ready": conds.get("Ready"),
         "pull_events": pulls,
+        "events_n": events_n,
+        "events_invalid": events_invalid,
     }
 
 

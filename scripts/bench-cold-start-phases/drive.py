@@ -22,6 +22,7 @@ untreated control, so the treatment alternates ABAB on the same Knative Service.
 Cluster work is a queue of one: never run two drivers at once.
 """
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -33,6 +34,9 @@ POD = os.environ.get("PHASE_POD", "phase-bench")
 HERE = pathlib.Path(__file__).resolve().parent
 DNS_JS = (HERE / "dns-probe.js").read_text()
 
+
+# Harness pod name; override with PHASE_POD (the 2026-11-02 run uses phase-bench-2).
+POD = os.environ.get("PHASE_POD", "phase-bench")
 
 TRANSIENT = ("Unable to connect", "context deadline exceeded", "i/o timeout", "EOF", "connection reset")
 

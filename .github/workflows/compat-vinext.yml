@@ -264,6 +264,12 @@ jobs:
           ref: ${{ env.NEXTJS_REF }}
           path: next.js
 
+      # The empty-dir pre-check allowlists the few fixtures that 500 at `/` on
+      # purpose (#2615). An entry whose upstream fixture was renamed or changed
+      # is stale and must fail here, not linger as an exemption.
+      - name: Gate — the empty-dir intentional-500 allowlist still matches the pinned fixtures
+        run: bash knext/scripts/lib/e2e-verify-intentional-500.sh "${{ github.workspace }}/next.js"
+
       # The frozen-set digest (ADR-0039). Recorded, not asserted: this lane makes
       # no 14-night window claim yet, but a number without a harness identity is
       # unattributable a month later, and the ledger below requires it.

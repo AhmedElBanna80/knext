@@ -470,6 +470,11 @@ export const CREDENTIAL_CELLS = Object.freeze([
       'scripts/compat-vinext-ledger.mjs',
       'test/compat-vinext-ledger.json',
       'scripts/lib/musl-lockfile-lookup.sh',
+      // #2615 — the empty-dir intentional-500 allowlist gate compat-vinext.yml
+      // invokes via `bash knext/scripts/lib/e2e-verify-intentional-500.sh …`,
+      // a workflow `run:` subprocess the closure scanner cannot discover on
+      // its own (nothing sources or imports it).
+      'scripts/lib/e2e-verify-intentional-500.sh',
       ...MUSL_NATIVE_LOCKFILE_FILES,
     ]),
   }),

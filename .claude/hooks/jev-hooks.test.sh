@@ -18,6 +18,26 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCREEN="$HERE/jev-result-screen.sh"
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
 
+# Rule: never feed an infinite producer (`yes`) through a filter that ignores EPIPE. GitHub's macOS
+# runners start jobs with SIGPIPE ignored; `yes | head` still exits (yes gets EPIPE and quits), but
+# `yes ... | tr -d '\n' | head -c N` hangs, because `tr` ignores the failed write and keeps draining
+# an endless producer. This guard keeps infinite producers out of the suite because that hanging
+# shape is one edit away (latent: no file here has it today). Use rep_text_bytes below.
+# Checked first and fatal, because the failure mode is a hang: a case-level FAIL would never be
+# reached. Scans every *.test.sh under .claude/hooks plus the jev pr-risk suite, for `yes` in command
+# position (after start of line, | ; & ( { backtick, $(, command/exec/then/do/else, or as /usr/bin/yes).
+# Still missed: `yes` behind env/xargs/sudo, after a line-continuation, built via a variable, or an
+# infinite producer other than `yes` (e.g. `cat /dev/zero`). Quoted prose such as "...; yes" can
+# false-positive; reword it.
+YES_PAT='(^|[|;&({`]|(^|[[:space:]])(command|exec|then|do|else))[[:space:]]*(/usr/bin/)?yes([[:space:]|;&)]|$)'
+for f in "$HERE"/*.test.sh "$HERE/../skills/jev/pr-risk.test.sh"; do
+  [ -f "$f" ] || continue
+  if grep -nE "$YES_PAT" "$f" | grep -v '^[0-9]*:[[:space:]]*#'; then
+    echo "FAIL  $f uses \`yes\` (infinite producer; one edit from a macOS hang when SIGPIPE is ignored and a filter ignores EPIPE)" >&2
+    exit 1
+  fi
+done
+
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 FAKE="$TMP/fake-jev"
@@ -55,6 +75,14 @@ fail() { printf 'FAIL  %s\n' "$1"; fails=1; }
 
 calls() { [ -f "$FAKE_JEV_LOG" ] && wc -l <"$FAKE_JEV_LOG" | tr -d ' ' || echo 0; }
 reset() { rm -f "$FAKE_JEV_LOG" "$FAKE_JEV_SIZES" "$FAKE_JEV_SEEN"; export FAKE_JEV_MODE=ok; }
+
+# Bounded text generator. Never feed an infinite producer (`yes`) through a filter that ignores EPIPE:
+# with SIGPIPE ignored (GitHub's macOS runners), `yes ... | tr -d '\n' | head -c N` hangs because `tr`
+# keeps draining the endless producer (a hang, not slowness). This producer is finite, so it ends
+# whatever the signal disposition is.
+rep_text_bytes() { # <string> <bytes>: <string> as a line, repeated, cut to exactly <bytes> bytes
+  awk -v s="$1" -v n="$2" 'BEGIN { s = s "\n"; l = length(s); q = int(n / l); for (i = 0; i < q; i++) printf "%s", s; printf "%s", substr(s, 1, n - q * l) }'
+}
 
 # fixtures --------------------------------------------------------------------
 screen_json() { # <P(instructs an agent)>
@@ -173,16 +201,16 @@ echo "== result screen: a secret at the START of a large text still blocks the c
 # grep -q exits on the first match while printf is still writing: under pipefail that used to turn
 # a hit into a miss for any text bigger than the pipe buffer, i.e. the secret was SENT.
 reset; screen_json 0.99
-screen "ghp_ token first, then 30 KB of prose" Bash "gh pr view 12" "ghp_$L36 $(yes 'lorem ipsum dolor' | head -c 30000)" 0 no; silent "skip is silent"
+screen "ghp_ token first, then 30 KB of prose" Bash "gh pr view 12" "ghp_$L36 $(rep_text_bytes 'lorem ipsum dolor' 30000)" 0 no; silent "skip is silent"
 reset; screen_json 0.99
-screen "hex 32 first, then 30 KB of prose" Bash "gh pr view 12" "$H32 $(yes 'lorem ipsum dolor' | head -c 30000)" 0 no; silent "skip is silent"
+screen "hex 32 first, then 30 KB of prose" Bash "gh pr view 12" "$H32 $(rep_text_bytes 'lorem ipsum dolor' 30000)" 0 no; silent "skip is silent"
 
 echo "== literal-secret check: no broken-pipe noise when SIGPIPE is ignored =="
 # GitHub's macOS runners start jobs with SIGPIPE ignored. grep -q then closes the pipe while printf is
 # still writing, printf gets EPIPE instead of dying, and bash prints "printf: write error: Broken
 # pipe" to stderr. The hook's stderr reaches the session, and the "skip is silent" cases above only
 # caught it intermittently. Ignore SIGPIPE here so the case is deterministic on every runner.
-big="ghp_$L36 $(yes 'lorem ipsum dolor' | head -c 2000000)"
+big="ghp_$L36 $(rep_text_bytes 'lorem ipsum dolor' 2000000)"
 for i in 1 2 3; do
   err=$( (trap '' PIPE; . "$HERE/jev-hook-lib.sh"; printf '%s' "$big" | jev_has_literal_secret) 2>&1 >/dev/null ); rc=$?
   if [ "$rc" -eq 0 ] && [ -z "$err" ]; then pass "secret-first 2 MB text, SIGPIPE ignored (run $i): hit, silent"
@@ -245,7 +273,7 @@ screen "plain text with no signal is still screened" Bash "gh pr view 12" "pleas
 
 echo "== result screen: cap and fail-open =="
 reset; screen_json 0.1
-big=$(yes 'lorem ipsum dolor' | head -c 200000) # words, not one run: a long run is a credential signal
+big=$(rep_text_bytes 'lorem ipsum dolor' 200000) # words, not one run: a long run is a credential signal
 t0=$(date +%s)
 screen "oversize text is capped, still screened" Bash "gh pr view 12" "$big" 1 no
 el=$(( $(date +%s) - t0 ))

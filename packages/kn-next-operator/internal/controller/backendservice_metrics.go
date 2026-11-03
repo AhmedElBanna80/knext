@@ -53,7 +53,34 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	// backendServiceSecretsUnverifiedSince is one series per function currently
+	// held in SovereigntyCompliant=Unknown/SecretsUnverified, valued at the unix
+	// time the hold started, so an alert reads the duration as
+	// time() - value. reason: transient (held without limit) | forbidden (held
+	// for 10 minutes, then the function is refused and removed). No series means
+	// verified; a deleted function's series is removed.
+	backendServiceSecretsUnverifiedSince = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "knext_backendservice_secrets_unverified_since_timestamp_seconds",
+			Help: "Unix time since which a BackendService has been held as SecretsUnverified (the operator cannot read " +
+				"a referenced Secret), labeled by namespace, name and reason (transient | forbidden). Absent when verified.",
+		},
+		[]string{"namespace", "name", "reason"},
+	)
 )
+
+// setUnverifiedGauge publishes (or, with nil, clears) a function's unverified
+// series. It always drops the other reason's series first, so a transient hold
+// that becomes a denial replaces its series rather than doubling it.
+func setUnverifiedGauge(namespace, name string, rep *unverifiedReport) {
+	for _, reason := range []string{unverifiedReasonTransient, unverifiedReasonForbidden} {
+		backendServiceSecretsUnverifiedSince.DeleteLabelValues(namespace, name, reason)
+	}
+	if rep != nil {
+		backendServiceSecretsUnverifiedSince.WithLabelValues(namespace, name, rep.reason).Set(float64(rep.since.Unix()))
+	}
+}
 
 // backendServiceRefusalReasons is every reason the refusals counter carries.
 var backendServiceRefusalReasons = []string{
@@ -62,7 +89,7 @@ var backendServiceRefusalReasons = []string{
 }
 
 func init() {
-	metrics.Registry.MustRegister(backendServiceReconcileTotal, backendServiceRefusalsTotal)
+	metrics.Registry.MustRegister(backendServiceReconcileTotal, backendServiceRefusalsTotal, backendServiceSecretsUnverifiedSince)
 	for _, result := range []string{"success", "error"} {
 		backendServiceReconcileTotal.WithLabelValues(result).Add(0)
 	}

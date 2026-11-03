@@ -177,7 +177,8 @@ split pane). A future LLM agent should reproduce this structure; the roles are:
 lane TDDs + opens PR + stops → lead waits for CI green → lead spawns the 3 gate reviewers →
 each posts a sign-off comment → **lead merges ONLY when all 3 sign-off COMMENTS are posted**
 (reconcile from the PR comments, don't trust a bare idle-notification) → if the change is a
-manifest/image, lead does the **post-merge deploy** (CD builds on push to `gateway/**`; lead
+manifest/image, lead does the **post-merge deploy** (there is no gateway CD workflow - the image is built and
+pushed by hand per `docs/operations.md` "Releasing an OCIR image"; lead
 pins the new `sha-<short>@sha256:<digest>` in the deploy manifest + `kubectl rollout`) →
 lead tells the lane to run **loop step 6** (remove worktree + prune, delete branch, close
 pane) → lead verifies cleanup and sends a `shutdown_request` to each finished agent.

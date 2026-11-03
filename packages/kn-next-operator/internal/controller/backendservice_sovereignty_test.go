@@ -302,7 +302,7 @@ func TestSovereigntyRejectsSecretOwnedByAnotherZone(t *testing.T) {
 func TestSovereigntyDenyWinsOverSameZoneMark(t *testing.T) {
 	zone, others := sovFixture()
 	// The other zone's database Secret, relabelled for THIS zone and given an
-	// ownerReference to it: both marks say sovZone, and it is still refused.
+	// ownerReference to it: both marks say "orders", and it is still refused.
 	lookup := sovSecrets(map[string]secretMetadata{
 		sovForeignDB: {
 			labels: map[string]string{ZoneLabel: sovZone},
@@ -450,7 +450,7 @@ func TestDatabaseHostLintFlagsAnotherNamespace(t *testing.T) {
 }
 
 func TestDatabaseHostLintLongestZonePrefixWins(t *testing.T) {
-	// Zones sovZone (the other) and "orders-archive" (this one): the cluster
+	// Zones "orders" (the other) and "orders-archive" (this one): the cluster
 	// "orders-archive-db" belongs to the longer match, this zone.
 	zone := sovZoneApp("orders-archive", "uid-archive", "")
 	others := []appsv1alpha1.NextApp{sovZoneApp(sovZone, "uid-orders", "")}

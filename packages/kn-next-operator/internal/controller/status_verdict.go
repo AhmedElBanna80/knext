@@ -102,7 +102,7 @@ type statusVerdict struct {
 }
 
 // revalidationDeferred reports whether Kafka-based ISR revalidation was
-// requested (spec.revalidation.queue == lcKafka) but the operator must NOT
+// requested (spec.revalidation.queue == "kafka") but the operator must NOT
 // provision a KafkaSource, because the `{app}-revalidator` consumer the source
 // would sink into is not built (issue #95).
 //

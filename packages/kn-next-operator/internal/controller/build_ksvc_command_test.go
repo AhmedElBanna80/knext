@@ -35,10 +35,10 @@ import (
 //
 // The vinext+bun row is the one that regresses if anyone re-simplifies the
 // branch back to `if Runtime == "bun"`: the CLI's default config now emits
-// exactly build=lcVinext, runtime="bun" into the CR.
+// exactly build="vinext", runtime="bun" into the CR.
 //
 // #1522 added a SECOND way to reach the same "no server.js in this image"
-// property without setting Build to lcVinext: the self-contained standalone
+// property without setting Build to "vinext": the self-contained standalone
 // shape (spec.selfContained=true on the standalone bundlers). Its rows below
 // are what regress if that guard's `!nextApp.Spec.SelfContained` is dropped.
 func TestBuildDesiredKsvcCommandByArtifactShape(t *testing.T) {
@@ -57,7 +57,7 @@ func TestBuildDesiredKsvcCommandByArtifactShape(t *testing.T) {
 		// #1219: webpack is a SECOND spelling of the standalone shape (same
 		// `.next/standalone` artifact turbopack emits, just a different `next
 		// build` bundler flag). Nothing distinguishes it from "turbopack" in
-		// this decision — the branch tests `!= lcVinext`, not `== "turbopack"`
+		// this decision — the branch tests `!= "vinext"`, not `== "turbopack"`
 		// — so these two rows exist to catch the regression where someone
 		// narrows that to an enumerated allow-list.
 		//
@@ -75,7 +75,7 @@ func TestBuildDesiredKsvcCommandByArtifactShape(t *testing.T) {
 		// SelfContained:true gets the SAME nil-Command treatment as vinext,
 		// on the exact rows that would otherwise force `bun run server.js`.
 		// This is the row that regresses if the new guard is ever narrowed
-		// back to `Build != lcVinext && Runtime == "bun"` — the mutation this
+		// back to `Build != "vinext" && Runtime == "bun"` — the mutation this
 		// row mutation-proves against.
 		{"self-contained standalone under bun defers to the image", "", "bun", true, nil},
 		{"self-contained turbopack under bun defers to the image", "turbopack", "bun", true, nil},

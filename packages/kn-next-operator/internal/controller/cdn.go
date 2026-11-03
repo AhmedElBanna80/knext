@@ -42,7 +42,7 @@ const (
 	// set spec.cdn, so every other app's conditions stay byte-identical, #98).
 	ConditionCDNAdvisory = "CDNAdvisory"
 
-	// ReasonCDNInertOnVinext marks spec.cdn on build lcVinext (Beta): the vinext
+	// ReasonCDNInertOnVinext marks spec.cdn on build "vinext" (Beta): the vinext
 	// runtime has a different cache adapter and a Bun.serve seam, so the first
 	// cut renders no KNEXT_CDN_* env there (ADR-0068 D11).
 	ReasonCDNInertOnVinext = "CDNInertOnVinext"

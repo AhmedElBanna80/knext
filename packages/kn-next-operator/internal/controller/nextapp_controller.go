@@ -68,7 +68,7 @@ const (
 	// ConditionDegraded indicates the reconciliation failed or the resource is unhealthy.
 	ConditionDegraded = "Degraded"
 	// ConditionRevalidationDeferred indicates that Kafka-based ISR revalidation was
-	// requested (spec.revalidation.queue == lcKafka) but the operator did NOT
+	// requested (spec.revalidation.queue == "kafka") but the operator did NOT
 	// provision a KafkaSource because the `{app}-revalidator` consumer is not yet
 	// built (issue #95) and opt-in (spec.revalidation.provisionKafkaSource) is off.
 	// It is informational/non-fatal — Ready stays True.
@@ -958,7 +958,7 @@ func deepHealthPath(nextApp *appsv1alpha1.NextApp) string {
 
 // isSelfContainedShape reports whether nextApp compiles to ONE executable
 // with no `.next/standalone` tree and no `node_modules` — true vinext
-// (`Build == lcVinext`) and the standalone bundler's self-contained compile
+// (`Build == "vinext"`) and the standalone bundler's self-contained compile
 // (`SelfContained: true` on any other Build value) are the SAME shape for
 // this purpose (#1522, mirrors the containerCommand branch in
 // buildDesiredKsvc). Both ship via `Dockerfile.self-contained.hbs`, whose
@@ -1315,7 +1315,7 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 	timeoutSeconds := eff.timeoutSeconds
 
 	// Container command, by artifact shape (spec.build, spec.selfContained):
-	//   - lcVinext: the app is ONE compiled executable and the image's own CMD
+	//   - "vinext": the app is ONE compiled executable and the image's own CMD
 	//     runs it. Command stays nil — forcing `bun run server.js` here would
 	//     CrashLoop, because that file does not exist in a single-exec image.
 	//     Runtime is irrelevant to startup for this shape (bun is baked into
@@ -1332,7 +1332,7 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 	//     better.)
 	//   - absent / "turbopack" / "webpack", not self-contained: the Next
 	//     standalone tree (#1219: "webpack" is a second spelling of the same
-	//     shape, not a new branch — the check below is `!= lcVinext`, not
+	//     shape, not a new branch — the check below is `!= "vinext"`, not
 	//     `== "turbopack"`). Runtime "bun" execs `bun run server.js`;
 	//     "node"/absent uses the image default.
 	var containerCommand []string

@@ -134,7 +134,7 @@ type rbacRuleRef struct {
 
 // grantsCoreSecrets reports whether rule reaches core Secrets, including via
 // wildcards (apiGroups "*" or resources "*") — a wildcard is the obvious way
-// to sneak the grant back in past a string match on lcSecrets.
+// to sneak the grant back in past a string match on "secrets".
 func grantsCoreSecrets(rule rbacv1.PolicyRule) bool {
 	groupOK := false
 	for _, g := range rule.APIGroups {

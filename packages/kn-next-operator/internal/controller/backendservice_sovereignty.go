@@ -529,7 +529,7 @@ var cnpgServiceSuffixes = []string{"-rw", "-ro"}
 //   - the cluster name equals, or is prefixed by "<zone>-", ANOTHER NextApp's
 //     name in the namespace, and that zone is the longest such match (so a
 //     zone "orders-archive" owns "orders-archive-db" even beside a zone
-//     sovZone).
+//     "orders").
 //
 // It reads only env[].value: a Secret's content, an IP address, an
 // ExternalName Service and a URL built at run time all get past it, which is

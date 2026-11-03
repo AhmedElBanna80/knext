@@ -39,8 +39,8 @@ package controller
 //     not visible in the type. Each such site must be justified in
 //     dynamicWriteAllowlist, its object must be built inside the function, and
 //     the function must not mention a Secret or ConfigMap type.
-//  3. Kind and resource literals. A constant lcSecret / lcConfigMap / lcSecrets
-//     / lcConfigmaps anywhere in the operator's non-test source must sit in a
+//  3. Kind and resource literals. A constant "Secret" / "ConfigMap" / "secrets"
+//     / "configmaps" anywhere in the operator's non-test source must sit in a
 //     function that never writes (the two metadata-only reads), so an
 //     unstructured write cannot name one of the two kinds without reddening.
 //  4. Typed clientsets and apply configurations for either kind are not used.
@@ -78,7 +78,7 @@ const (
 type operatorWriter struct {
 	// Func is the function that makes the write, as the scan prints it.
 	Func string
-	// Resource is the plural core/v1 resource written: lcSecrets or lcConfigmaps.
+	// Resource is the plural core/v1 resource written: "secrets" or "configmaps".
 	Resource string
 	// Verbs are the write verbs that function uses on it.
 	Verbs []string
@@ -111,7 +111,7 @@ var dynamicWriteAllowlist = map[string]string{
 		"names no Secret or ConfigMap type, and the zone key and JWKS are written by the registered writers it calls",
 }
 
-// readOnlyKindUses lists the functions that may spell lcSecret / lcConfigMap as
+// readOnlyKindUses lists the functions that may spell "Secret" / "ConfigMap" as
 // a kind: both fetch metadata only, and the scan asserts they never write.
 var readOnlyKindUses = map[string]string{
 	"(*BackendServiceReconciler).secretMetadata":  "metadata-only GET of a Secret a function references",
@@ -132,7 +132,7 @@ type writeSite struct {
 	pos      string
 	fn       string
 	verb     string
-	resource string // lcSecrets, lcConfigmaps or lcDynamic
+	resource string // "secrets", "configmaps" or "dynamic"
 	local    bool   // dynamic only: the object variable is declared in the function
 }
 
@@ -346,8 +346,8 @@ func coreResource(typeName string) string {
 	return ""
 }
 
-// classifyObjectArg says what a write call's argument can be: lcSecrets,
-// lcConfigmaps, lcDynamic (an interface or a kind-erased object) or "".
+// classifyObjectArg says what a write call's argument can be: "secrets",
+// "configmaps", "dynamic" (an interface or a kind-erased object) or "".
 func classifyObjectArg(t types.Type) string {
 	if t == nil {
 		return ""

@@ -25,7 +25,7 @@ import (
 )
 
 // kafkaRevalidationRequested reports whether the app asks for kafka-backed ISR
-// revalidation at all (spec.revalidation.queue == lcKafka).
+// revalidation at all (spec.revalidation.queue == "kafka").
 func kafkaRevalidationRequested(app *appsv1alpha1.NextApp) bool {
 	return app.Spec.Revalidation != nil && app.Spec.Revalidation.Queue == lcKafka
 }

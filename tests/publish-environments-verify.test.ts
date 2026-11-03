@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PUBLISH_LANES } from '../scripts/publish-lane-guard.mjs';
 import {
   evaluatePublishEnvironments,
   manualChecks,
 } from '../scripts/verify-publish-environments.mjs';
+import { absTmpdir } from './helpers/abs-tmp';
 
 // #2035 (c)+(d): the environment settings are founder/admin actions, so the
 // code side is a read-only verifier that reds until they are configured.
@@ -110,25 +110,29 @@ describe('reviewer + secret checks', () => {
 
 const SCRIPT = join(process.cwd(), 'scripts/verify-publish-environments.mjs');
 function runCli(msg: string) {
-  const dir = mkdtempSync(join(tmpdir(), 'fakegh-'));
-  const envs = JSON.stringify({
-    environments: [{ name: 'npm-publish', protection_rules: [], deployment_branch_policy: null }],
-  });
-  writeFileSync(
-    join(dir, 'gh'),
-    `#!/bin/sh
+  const dir = mkdtempSync(join(absTmpdir(), 'fakegh-'));
+  try {
+    const envs = JSON.stringify({
+      environments: [{ name: 'npm-publish', protection_rules: [], deployment_branch_policy: null }],
+    });
+    writeFileSync(
+      join(dir, 'gh'),
+      `#!/bin/sh
 case "$2" in
   *deployment-branch-policies) echo "gh: $FAKE_MSG" >&2; exit 1;;
   *secrets) echo "gh: HTTP 403 Forbidden" >&2; exit 1;;
   *) echo '${envs}';;
 esac
 `,
-  );
-  chmodSync(join(dir, 'gh'), 0o755);
-  return spawnSync('node', [SCRIPT], {
-    encoding: 'utf8',
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_MSG: msg },
-  });
+    );
+    chmodSync(join(dir, 'gh'), 0o755);
+    return spawnSync('node', [SCRIPT], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FAKE_MSG: msg },
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 describe('CLI against a fake gh (fail-closed on API errors)', () => {

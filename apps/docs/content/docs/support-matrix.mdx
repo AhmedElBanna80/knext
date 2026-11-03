@@ -56,6 +56,11 @@ too, rather than left implied.
   is the tested configuration; re-validating EKS on the pinned version is part of the next EKS run.
 - Any Knative Serving install that satisfies the operator's Kubernetes client version above should
   work, but `knative-v1.16.0` is the only version CI actually exercises.
+- **Kourier is the supported ingress layer.** The default `NetworkPolicy` admits only the Kourier
+  gateway pods (in `kourier-system`, `knative-serving` or `knative-serving-ingress`). On a CNI that
+  enforces NetworkPolicy, Istio, Contour or Gateway API ingress needs the default policy turned off
+  and replaced with your own; zone functions cannot opt out yet. See
+  [Security](/docs/security#network-isolation).
 
 ## cert-manager
 
@@ -68,11 +73,13 @@ too, rather than left implied.
   declares it will work with. Next.js 16.0 through 16.3 are no longer supported from knext 2.0; stay
   on the 1.x line of knext to keep using them. The upper bound is widened one minor at a time as
   compatibility evidence lands; see [Versioning](/docs/versioning).
-- **The official compatibility suite runs against `v16.4.0`**. New apps scaffold 16.4.3 on the
-  same line, because 16.4.0 is affected by critical security advisories fixed in 16.4.1 — see
-  [Next.js security upgrades](/docs/upgrading#nextjs-security-upgrades). What is proven there so far is dispatched runs of the Turbopack build on the Node runtime.
-  The latest passed 1165 of 1166 test files, and the one failure is a test-setup gap, not a knext
-  defect. The other three cells have not yet been run at `v16.4.0`, and no cell has
+- **The official compatibility suite runs against `v16.4.3`**, the release new apps scaffold. The
+  peer floor, 16.4.0, is on the same line but is affected by critical security advisories fixed in
+  16.4.1 — see
+  [Next.js security upgrades](/docs/upgrading#nextjs-security-upgrades). What is proven so far is dispatched runs of the Turbopack build on the Node runtime,
+  made at `v16.4.0` before the suite moved to the patched release; at `v16.4.3` only a single
+  cell has been dispatched, and it counted toward no credential. The latest passed 1165 of 1166 test files, and the one failure is a test-setup gap, not a knext
+  defect. The other three cells have not yet been run on the 16.4 line, and no cell has
   started its 14-consecutive-run credential there. See
   [the compatibility credential](/docs/compat-suite) and the
   [Compatibility matrix](/docs/compat-matrix) for the exact counts and for what each cell has passed.

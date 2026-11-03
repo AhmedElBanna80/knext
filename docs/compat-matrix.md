@@ -4,15 +4,16 @@
 > real, on-disk evidence and a mechanical guard test (`tests/compat-matrix.test.ts`) fails CI if a
 > ✅ ("supported") row cannot be backed up. When in doubt we mark ⚠️, not ✅.
 >
-> **On the 2.x line the harness now runs against `vercel/next.js` **v16.4.0**** (#2296,
-> 2026-10-13), the floor `packages/kn-next/src/next-compat.ts` declares and the version
-> `knext create` scaffolded then, so the harness and the scaffold agreed. **Patch divergence since
-> #2594 (2026-10-27):** the scaffold and every app knext deploys now pin next 16.4.3 (still the
-> 16.4.x line) because GHSA-2464-fhr4-w9xw / GHSA-673q-mjm6-r5xr (critical) and
-> GHSA-p3m5-59mp-jv5r (high) affect 16.4.0; moving `NEXTJS_REF` to v16.4.3 restarts the credential
-> windows and is a separate decision recorded on #2594.
+> **On the 2.x line the harness now runs against `vercel/next.js` **v16.4.3**** (#2602,
+> 2026-11-01), the patched release `knext create` scaffolds and every app knext deploys pins, so
+> the harness and the scaffold agree again. It ran v16.4.0 from #2296 (2026-10-13) until then,
+> the floor `packages/kn-next/src/next-compat.ts` declares. The scaffold moved to 16.4.3 first
+> (#2594, 2026-10-27) because GHSA-2464-fhr4-w9xw / GHSA-673q-mjm6-r5xr (critical) and
+> GHSA-p3m5-59mp-jv5r (high) affect 16.4.0; that patch-only divergence closed when `NEXTJS_REF`
+> moved to v16.4.3, which restarts the credential windows. The peer range still starts at 16.4.0.
 > `tests/next-compat-e2e-deploy-ref.test.ts` reds if `test-e2e-deploy.yml`'s defaults drift from
-> that floor. **Evidence at v16.4.0 is two dispatched node × turbopack runs.** Run 38384745675
+> the first matrix leg (on the floor's minor, at or above the floor). **No dispatch has run at
+> v16.4.3 yet.** **Evidence at v16.4.0 is two dispatched node × turbopack runs.** Run 38384745675
 > passed 1160 of 1168 test files, and all eight reds are triaged in #2296:
 > - Five files pin a React prerelease (`gssp-redirect`, `gssp-redirect-base-path`,
 >   `router-hash-navigation`, `rewrite-with-browser-history`, `scroll-back-restoration`), and npm
@@ -31,10 +32,24 @@
 > **Confirm run 38392886692** ran on the PR branch with the ERESOLVE fix and the exclusions:
 > 1165 of 1166 passed. The one red is `transpile-packages-typescript-foreign` (#2316).
 >
-> No credential window runs at v16.4.0 yet, and the webpack and bun cells have not been dispatched
-> there. The v1.0 credential on `main` still runs v16.3.8 from the pinned rc tag. The eight
-> quarantine entries stamped at v16.3.8 were re-audited at v16.4.0 by source equivalence, not by
-> re-running them.
+> No credential window runs at v16.4.3 yet, and the webpack and bun cells have not been dispatched
+> at v16.4.0 or v16.4.3. The v1.0 credential on `main` still runs v16.3.8 from the pinned rc tag.
+> The eight quarantine entries stamped at v16.3.8 were re-audited at v16.4.0 by source
+> equivalence, not by re-running them. The 17 quarantine entries that existed at v16.4.0 and both
+> upstream-runtime-defect entries are now re-audited at v16.4.3 the same way: of their test files only
+> `use-cache-segment-configs` changed between v16.4.0 and v16.4.3, in a build-output line filter
+> that leaves the quarantined assertion untouched, and that file is excluded from dispatches. The
+> compare also changes runtime code and adds upstream tests, so the first scheduled run at v16.4.3
+> decides.
+>
+> One upstream test added in v16.4.1 to v16.4.3, `otel-middleware-trace`, is the first new file
+> quarantined at v16.4.3, from a single dispatch cell (node x turbopack; the other three credential
+> cells have not run it). All 24 of its failures are span-tree snapshots inside its
+> deployed-to-Vercel branch, which encodes Vercel's request topology (an outer request span, one
+> function per middleware and per render). knext serves both from one process and produces the
+> self-hosted tree the same test asserts for non-deploy runs. It is excluded at file level, so
+> nothing in the suite currently covers trace-context propagation through middleware on knext;
+> that coverage is tracked as follow-up work.
 >
 > **History (1.x line): the compat credential window ran against v16.3.8** (rc.2's
 > re-credential, #1560, 2026-09-30), which was the tag `knext create` scaffolded at the time,

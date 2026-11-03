@@ -877,6 +877,15 @@ const VERCEL_COUPLED_FILE_QUARANTINES: Record<
     observedRuns: ['38040527044', '38161219571', '38174324666', '38181750458', '38186195085'],
     observedRef: 'v16.4.0',
   },
+  // #2627 — new upstream in v16.4.1-v16.4.3 (backport of vercel/next.js#100542). Observed at
+  // v16.4.3 on ONE cell (node x turbopack, shard 16/16, FINAL 3/3): the whole file asserts
+  // Vercel's span topology in its `isNextDeploy` branches.
+  'test/e2e/app-dir/otel-middleware-trace/otel-middleware-trace.test.ts': {
+    childIssue: 2627,
+    observedRuns: ['41330321803'],
+    observedRef: 'v16.4.3',
+    upstreamRef: 'vercel/next.js#100542',
+  },
 };
 
 describe('deploy-tests-manifest — vercel-infra-coupled family (ADR-0007 §h, #1571)', () => {

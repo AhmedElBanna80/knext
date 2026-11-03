@@ -330,6 +330,25 @@ const MUTATIONS = [
     subject: 'defaultKust',
     anchor: '- ../admission',
     replacement: '# - ../admission',
+    // The overlay also reads the policy's NAME (the write-policy self-check's env value and
+    // role resourceNames are rewritten from it), so dropping the include alone leaves two
+    // replacements with no source and kustomize refuses to render ("nothing selected"): a
+    // broken overlay, not a bundle that lacks the policy. A real removal takes those two
+    // reads with it, so this row does too; the bundle then renders, without the policy.
+    also: [
+      {
+        anchor:
+          '- source:\n    kind: ValidatingAdmissionPolicy\n    group: admissionregistration.k8s.io\n    name: secret-configmap-writes\n    fieldPath: .metadata.name\n  targets:\n  - select:\n      kind: Deployment',
+        replacement:
+          '- source:\n    kind: ServiceAccount\n    version: v1\n    name: controller-manager\n    fieldPath: .metadata.name\n  targets:\n  - select:\n      kind: Deployment',
+      },
+      {
+        anchor:
+          '- source:\n    kind: ValidatingAdmissionPolicy\n    group: admissionregistration.k8s.io\n    name: secret-configmap-writes\n    fieldPath: .metadata.name\n  targets:\n  - select:\n      kind: ClusterRole',
+        replacement:
+          '- source:\n    kind: ServiceAccount\n    version: v1\n    name: controller-manager\n    fieldPath: .metadata.name\n  targets:\n  - select:\n      kind: ClusterRole',
+      },
+    ],
     test: BUNDLE,
   },
   {
@@ -508,6 +527,18 @@ function kustomizePath() {
   return which.status === 0 ? 'kustomize' : '';
 }
 
+/**
+ * Stop the prover with exit 2. THROWN, never process.exit() from inside a mutated section:
+ * process.exit skips the surrounding `finally`, which is the only thing that puts the mutated
+ * file back. A render failure under a mutated overlay once left kustomization.yaml modified,
+ * and every prover after it in the lane died on "working tree not clean".
+ */
+class ProverAbort extends Error {}
+process.on('uncaughtException', (e) => {
+  console.error(e instanceof ProverAbort ? e.message : e);
+  process.exit(e instanceof ProverAbort ? 2 : 1);
+});
+
 /** Run one command in the operator module; return its exit code. */
 function run(bin, args, env = {}, { showErrors = false } = {}) {
   const r = spawnSync(bin, args, {
@@ -519,8 +550,7 @@ function run(bin, args, env = {}, { showErrors = false } = {}) {
     timeout: 1_800_000,
   });
   if (r.error || r.status === null) {
-    console.error(`${NAME}: cannot run ${bin}: ${r.error?.message ?? r.signal}`);
-    process.exit(2);
+    throw new ProverAbort(`${NAME}: cannot run ${bin}: ${r.error?.message ?? r.signal}`);
   }
   if (showErrors && r.status !== 0) console.error(String(r.stderr ?? '').slice(-2000));
   return r.status;
@@ -542,8 +572,9 @@ function bundleExit(kustomize, test) {
   // A render that fails would "kill" the row for the wrong reason (a broken overlay,
   // not a failed assertion), so it stops the prover instead of scoring.
   if (renderBundle(kustomize) !== 0) {
-    console.error(`${NAME}: kustomize could not render config/default; the row proves nothing`);
-    process.exit(2);
+    throw new ProverAbort(
+      `${NAME}: kustomize could not render config/default; the row proves nothing`,
+    );
   }
   if (test.kind === 'bundle-apiserver') {
     return run(
@@ -587,10 +618,12 @@ for (const m of ROWS) {
     console.error(`${NAME}: ${m.id} names no subject ${m.subject}`);
     process.exit(2);
   }
-  const count = snapshot(path).bytes.toString('utf8').split(m.anchor).length - 1;
-  if (count !== 1) {
-    console.error(`${NAME}: ${m.id}'s anchor occurs ${count} times in ${path}; aborting`);
-    process.exit(2);
+  for (const anchor of [m.anchor, ...(m.also ?? []).map((e) => e.anchor)]) {
+    const count = snapshot(path).bytes.toString('utf8').split(anchor).length - 1;
+    if (count !== 1) {
+      console.error(`${NAME}: ${m.id}'s anchor occurs ${count} times in ${path}; aborting`);
+      process.exit(2);
+    }
   }
 }
 if (!envtestAssetsPresent()) {
@@ -656,6 +689,7 @@ for (const m of ROWS) {
   let code;
   try {
     mutate(snap, m.anchor, m.replacement);
+    for (const e of m.also ?? []) mutate(snap, e.anchor, e.replacement);
     built = buildsExit();
     code = built === 0 ? guardExit(m.test, KUSTOMIZE) : undefined;
   } finally {

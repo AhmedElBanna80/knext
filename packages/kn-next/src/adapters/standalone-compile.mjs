@@ -95,6 +95,7 @@ import { routeMarker, verifyBytecodeEmbedded, verifyBytecodeExec } from "./bytec
 import {
     detectCompileInclude,
     embedBuildOptions,
+    foldedRuntimeSummary,
     planEmbed,
     unembeddedDynamicReport,
 } from "./compile-embed.mjs";
@@ -947,8 +948,11 @@ if (SC) {
     }
     const dynamic = unembeddedDynamicReport(join(realpathSync(dirname(SERVER)), SC.distDir, "server"), CREATE_REQUIRE_ANALYZER);
     const sites = dynamic.reduce((n, r) => n + r.computedSites + r.dynamicRequireBindings.length, 0);
+    const computedChunks = dynamic.filter((r) => r.computedSites + r.dynamicRequireBindings.length > 0).length;
+    const folded = foldedRuntimeSummary(dynamic);
+    if (folded) console.warn(`[knext standalone-compile] self-contained: ${folded}`);
     console.log(
-        `[knext standalone-compile] self-contained: ${sites} computed require/import site(s) in ${dynamic.length} embedded chunk(s) resolve at runtime and can only reach what is embedded (KNEXT_STANDALONE_COMPILE_VERBOSE=1 lists them)`,
+        `[knext standalone-compile] self-contained: ${sites} computed require/import site(s) in ${computedChunks} embedded chunk(s) resolve at runtime and can only reach what is embedded (KNEXT_STANDALONE_COMPILE_VERBOSE=1 lists them)`,
     );
     if (process.env.KNEXT_STANDALONE_COMPILE_VERBOSE === "1") {
         for (const r of dynamic) console.log(`  dynamic: ${r.file} (${r.computedSites}${r.dynamicRequireBindings.length ? `, ${r.dynamicRequireBindings.join(",")}` : ""})`);

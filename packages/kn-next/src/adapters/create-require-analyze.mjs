@@ -10,10 +10,11 @@
  *     `(() => create(...))()` IIFE rolldown emits): `name` is that identifier.
  *   - `direct`   — called at once (`create(...)(spec)`): `dynamic` is true when
  *     the argument is not one plain string literal, else `spec` is its value.
- *     A dynamic call whose argument is a constant assembled from string literals
- *     (`['io', 'redis'].join('')`, directly or through a name the module binds
- *     once and never reassigns) also carries `folded`, the package name: a
- *     deliberate load of a known package, see `foldSpecifier`.
+ *     A dynamic call whose argument is the literal-join idiom (`['io',
+ *     'redis'].join('')`, directly or through a name the module binds once and
+ *     writes once) AND folds to exactly `FOLDED_RUNTIME_PACKAGE` also carries
+ *     `folded`, that package name. Any other folded value is an ordinary
+ *     non-literal direct require. See `foldSpecifier`.
  *   - `resolve`  — `create(...).resolve(...)`, an existence probe. Accounted for,
  *     never embedded and never strict-failed (Node's own `require.resolve`
  *     idiom, which callers catch).
@@ -153,11 +154,23 @@ function isDiscarded(node, parents) {
 }
 
 /**
+ * The ONE package a computed runtime require may name without failing a strict
+ * build: ioredis, loaded by `loadRedisCtor()` in packages/lib/src/redis/
+ * ioredis-ctor.ts with the specifier assembled (`['io', 'redis'].join('')`) so no
+ * bundler follows it. The load is dead under Bun: `createRedisClient()` in
+ * packages/lib/src/redis/client.ts takes the `bunRedisAvailable(scope)` branch
+ * and constructs `Bun.RedisClient`, returning before `loadRedisCtor()` is ever
+ * reached, so a Bun-compiled binary never needs ioredis on disk. Nothing else
+ * has that guarantee, so nothing else is exempt: `sharp`, a relative or absolute
+ * path, `node:fs` all stay failures even when assembled the same way.
+ */
+export const FOLDED_RUNTIME_PACKAGE = "ioredis";
+
+/**
  * `['io', 'redis'].join('')` -> "ioredis": the one idiom the repo uses to keep a
- * package name invisible to a bundler (@getknext/lib's ioredis loader). Only an
- * array of plain string literals joined with the empty string folds; anything
- * else (a variable element, another separator, a template with substitutions)
- * returns null and the call stays a non-literal require.
+ * package name invisible to a bundler. Only an array of plain string literals
+ * joined with the empty string folds; anything else (a variable element, another
+ * separator, a template with substitutions) returns null.
  */
 function foldJoin(node) {
     if (
@@ -177,7 +190,7 @@ function foldJoin(node) {
         if (part === null) return null;
         out += part;
     }
-    return out === "" ? null : out;
+    return out;
 }
 
 /** Every identifier a binding pattern introduces. */
@@ -209,9 +222,19 @@ function patternNames(node, into) {
  * declarator initialiser or a plain `name = value` assignment (bundler output
  * hoists `let a, b;` and assigns inside a lazy init function), and whether any
  * other write touches it (compound or destructuring assignment, `++`, a `for`
- * target). Scope-blind on purpose (a name bound twice anywhere is simply not
- * foldable), so it can only make the fold refuse, never accept a name that
- * could mean something else.
+ * target).
+ *
+ * What this is NOT: scope analysis. It counts binding sites by NAME across the
+ * whole module, so it cannot tell two functions' same-named locals apart (it
+ * refuses both, which is safe) but it also cannot see a name that resolves to
+ * something else, e.g. `{ const n = [...].join('') }` read as `n` from outside
+ * the block, a free global of that name defined in another function, `eval`, or
+ * a patched `Array.prototype.join`. Those would be folded wrongly.
+ *
+ * That is acceptable ONLY because the sole value `foldSpecifier` lets through is
+ * `FOLDED_RUNTIME_PACKAGE`: a wrong fold can at worst exempt a load that really
+ * names ioredis, a package whose runtime load is guarded off under Bun. It is
+ * not a sound constant propagator and must not be widened without scope analysis.
  */
 function bindingFacts(ast) {
     const bound = new Map();
@@ -280,17 +303,21 @@ function bindingFacts(ast) {
 }
 
 /**
- * The package name a dynamic `create(...)(arg)` argument is built from, when
- * `arg` is the literal-join idiom itself or a name bound exactly once and
- * written exactly once, with that idiom. Null for everything else.
+ * `FOLDED_RUNTIME_PACKAGE` when a dynamic `create(...)(arg)` argument is the
+ * literal-join idiom itself, or a name bound exactly once and written exactly
+ * once with that idiom, and the idiom folds to exactly that name. Null for
+ * everything else, including every other folded value.
  */
 function foldSpecifier(arg, facts) {
+    let folded;
     if (arg.type === "Identifier") {
         if (facts.bound.get(arg.name) !== 1 || facts.reassigned.has(arg.name)) return null;
         const writes = facts.writes.get(arg.name) ?? [];
-        return writes.length === 1 ? foldJoin(writes[0]) : null;
+        folded = writes.length === 1 ? foldJoin(writes[0]) : null;
+    } else {
+        folded = foldJoin(arg);
     }
-    return foldJoin(arg);
+    return folded === FOLDED_RUNTIME_PACKAGE ? folded : null;
 }
 
 /** Classify one `createRequire(import.meta.url)` call by where its value goes. */

@@ -29,6 +29,7 @@ import {
     assertPathFidelity,
     embedBuildOptions,
     embeddedPath,
+    foldedRuntimeSummary,
     planEmbed,
     unembeddedDynamicReport,
 } from "../adapters/compile-embed.mjs";
@@ -398,14 +399,85 @@ describe("unembeddedDynamicReport", () => {
                 file: "chunks/cjs.cjs",
                 computedSites: 1,
                 dynamicRequireBindings: [],
+                foldedRuntimeRequires: [],
             },
             {
                 file: "chunks/rolldown.mjs",
                 computedSites: 0,
                 dynamicRequireBindings: ["__require"],
+                foldedRuntimeRequires: [],
             },
-            { file: "index.mjs", computedSites: 1, dynamicRequireBindings: [] },
+            {
+                file: "index.mjs",
+                computedSites: 1,
+                dynamicRequireBindings: [],
+                foldedRuntimeRequires: [],
+            },
         ]);
+    });
+
+    const CREATE = 'import { createRequire } from "node:module";\n';
+
+    it("names a deliberate ioredis load (literal-assembled) instead of dropping it", () => {
+        const dir = tempDir("report-folded");
+        writeTree(dir, {
+            "chunks/redis.mjs":
+                CREATE +
+                "const S = ['io', 'redis'].join('');\nexport const l = () => createRequire(import.meta.url)(S);\n",
+        });
+        expect(unembeddedDynamicReport(dir)).toEqual([
+            {
+                file: "chunks/redis.mjs",
+                computedSites: 0,
+                dynamicRequireBindings: [],
+                foldedRuntimeRequires: ["ioredis"],
+            },
+        ]);
+    });
+
+    it("does not exempt any other literal-assembled name: it is a dynamic require", () => {
+        const dir = tempDir("report-folded-other");
+        writeTree(dir, {
+            "chunks/sharp.mjs":
+                CREATE +
+                "const S = ['sha', 'rp'].join('');\nexport const l = () => createRequire(import.meta.url)(S);\n",
+        });
+        const [row] = unembeddedDynamicReport(dir);
+        expect(row.foldedRuntimeRequires).toEqual([]);
+        expect(row.dynamicRequireBindings.length).toBe(1);
+    });
+});
+
+describe("standalone-compile reports a folded runtime require by name", () => {
+    it("feeds the unembedded report through foldedRuntimeSummary and logs it", () => {
+        // The standalone compile script runs at import (argv, a real server tree),
+        // so its output is not unit-testable; the real end-to-end is
+        // apps/file-manager/self-contained-e2e.test.ts. This pins the wiring: the
+        // report the script builds is the one the summary names, and the line is
+        // actually printed.
+        const src = readFileSync(
+            resolve(import.meta.dirname, "../adapters/standalone-compile.mjs"),
+            "utf8",
+        );
+        expect(src).toMatch(/foldedRuntimeSummary\(dynamic\)/);
+        expect(src).toMatch(/if \(folded\) console\.warn\(/);
+    });
+});
+
+describe("foldedRuntimeSummary", () => {
+    it("names each package and the files that load it, and is null when there is none", () => {
+        expect(foldedRuntimeSummary([])).toBeNull();
+        expect(
+            foldedRuntimeSummary([
+                { file: "a.mjs", foldedRuntimeRequires: [] },
+            ]),
+        ).toBeNull();
+        const line = foldedRuntimeSummary([
+            { file: "b.mjs", foldedRuntimeRequires: ["ioredis"] },
+            { file: "a.mjs", foldedRuntimeRequires: ["ioredis"] },
+        ]);
+        expect(line).toContain("ioredis (a.mjs, b.mjs)");
+        expect(line).toContain("deliberately not bundled");
     });
 });
 

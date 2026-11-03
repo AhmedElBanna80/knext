@@ -1,12 +1,13 @@
 /**
- * #2614 follow-up — a `createRequire(import.meta.url)(SPEC)` whose SPEC is a
- * module-level constant assembled from string literals
- * (`['io', 'redis'].join('')`, the idiom @getknext/lib uses so no bundler can
- * follow ioredis) is a DELIBERATE runtime load of a known package, not an
- * unknown one. It is reported by name, never embedded and never strict-failed.
+ * #2614 follow-up — `createRequire(import.meta.url)(SPEC)` where SPEC is the
+ * literal-join idiom (`['io', 'redis'].join('')`, how @getknext/lib hides ioredis
+ * from bundlers) AND folds to exactly `ioredis` is a DELIBERATE runtime load whose
+ * call is dead under Bun. It is reported by name, never embedded and never
+ * strict-failed.
  *
- * The exemption is as narrow as the idiom: a specifier the analysis cannot fold
- * to a string (an env read, a parameter, a name declared twice, a non-string
+ * The exemption is exactly that name. Every other folded value (`sharp`, a
+ * relative or absolute path, `node:fs`) and every specifier the analysis cannot
+ * fold (an env read, a parameter, a name bound or written twice, a non-string
  * element) is still a non-literal require and still fails the strict build.
  * Both halves are asserted.
  */
@@ -75,12 +76,72 @@ describe("anything the analysis cannot fold stays a non-literal require (the str
             "const SPEC = ['io', 'redis'].join('');\nexport const f = (SPEC) => createRequire(import.meta.url)(SPEC);\n",
         ],
         [
-            "a non-string array element",
-            "const SPEC = ['io', name].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+            "a non-string array element (would fold to ioredis if skipped)",
+            "const SPEC = ['io', name, 'redis'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
         ],
         [
             "a non-empty join separator",
             "const SPEC = ['io', 'redis'].join('/');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a folded name that is not ioredis (sharp)",
+            "const SPEC = ['sha', 'rp'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a folded relative path",
+            "const SPEC = ['./', 'plugins/x.js'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a folded parent-relative path",
+            "const SPEC = ['../', '../secret'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a folded absolute path",
+            "const SPEC = ['/etc/', 'x'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a folded builtin (node:fs)",
+            "const SPEC = ['node', ':fs'].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "an inline folded name that is not ioredis",
+            "export const f = () => createRequire(import.meta.url)(['sha', 'rp'].join(''));\n",
+        ],
+        [
+            "a name changed by ++",
+            "let SPEC = ['io', 'redis'].join('');\nSPEC++;\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name that is a for-of target",
+            "let SPEC = ['io', 'redis'].join('');\nfor (SPEC of xs) {}\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name that is a for-in target",
+            "let SPEC = ['io', 'redis'].join('');\nfor (SPEC in xs) {}\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name shadowed by a catch parameter",
+            "const SPEC = ['io', 'redis'].join('');\ntry { f(); } catch (SPEC) { g(SPEC); }\nexport const f2 = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name assigned through object destructuring",
+            "let SPEC = ['io', 'redis'].join('');\n({ SPEC } = obj);\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name assigned through array destructuring",
+            "let SPEC = ['io', 'redis'].join('');\n[SPEC] = arr;\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name re-declared by an object destructuring declaration",
+            "const SPEC = ['io', 'redis'].join('');\nfunction g(o) { const { SPEC } = o; return SPEC; }\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name re-declared by a renamed object-pattern property",
+            "const SPEC = ['io', 'redis'].join('');\nfunction g(o) { const { k: SPEC } = o; return SPEC; }\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
+            "a name re-declared by an object rest element",
+            "const SPEC = ['io', 'redis'].join('');\nfunction g(o) { const { ...SPEC } = o; return SPEC; }\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
         ],
         [
             "an empty array (folds to no package at all)",

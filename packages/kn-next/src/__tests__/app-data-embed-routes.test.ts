@@ -131,6 +131,19 @@ describe("a key's own include globs are always kept", () => {
         }
     }
 
+    it("another include key that covers this route contributes its globs to it, so an exclude aimed at that other key does not take them away here", () => {
+        const rules = deriveTraceRules(
+            { "/api/x": ["a/**"], "/api/*": ["b/**"] },
+            { "/api/\\*": ["b/**"] },
+            real,
+        );
+        const forX = rules.find((r) => r.includes.includes("a/**"));
+        expect(forX?.includes.sort()).toEqual(["a/**", "b/**"]);
+        expect(forX?.excludes).toEqual([]);
+        const forStar = rules.find((r) => !r.includes.includes("a/**"));
+        expect(forStar).toEqual({ includes: ["b/**"], excludes: ["b/**"] });
+    });
+
     it("an exclude key equal to the route text counts, whatever picomatch makes of it", () => {
         const rules = deriveTraceRules(
             { "/blog/[slug]": ["d/**"] },

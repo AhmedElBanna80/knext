@@ -93,6 +93,17 @@ describe("route keys are read the way Next reads them (picomatch, contains)", ()
         ).toEqual(["d/p"]);
     });
 
+    it("a backslash makes the next character literal", () => {
+        expect(
+            deriveTraceRules({ "/x/a*b": ["d/**"] }, { "a\\*b": ["d/p"] })[0]
+                .excludes,
+        ).toEqual(["d/p"]);
+        expect(
+            deriveTraceRules({ "/x/aXb": ["d/**"] }, { "a\\*b": ["d/p"] })[0]
+                .excludes,
+        ).toEqual([]);
+    });
+
     it("braces and a trailing wildcard", () => {
         expect(
             deriveTraceRules(
@@ -156,7 +167,9 @@ describe("literal-path candidates honour the global excludes", () => {
             "data/p/y.json",
             "data/x.json",
         ]);
-        expect(plan.skipped[0].reason).toMatch(/outputFileTracingExcludes/);
+        for (const s of plan.skipped) {
+            expect(s.reason).toBe("excluded by outputFileTracingExcludes");
+        }
     });
 
     it("a file a rule declares is judged by that rule's excludes, not by the candidate excludes", () => {

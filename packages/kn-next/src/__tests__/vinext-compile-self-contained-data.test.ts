@@ -427,16 +427,22 @@ describe("self-contained: absolute include patterns", () => {
 
 describe("self-contained: config shapes", () => {
     it("reads a function-exported config and the legacy experimental key", () => {
-        const app = baseApp(DECLARED_READS);
-        write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
-        write(join(app.work, "data/nested/b.txt"), `${B_MARK}\n`);
+        const app = baseApp(
+            `t("exp", () => readFileSync(join(process.cwd(), "data", "exp" + ".json"), "utf8"));
+t("top", () => readFileSync(join(process.cwd(), "data", "top" + ".json"), "utf8"));`,
+        );
+        write(join(app.work, "data/exp.json"), `{"mark":"${A_MARK}"}\n`);
+        write(join(app.work, "data/top.json"), `{"mark":"${B_MARK}"}\n`);
         write(
             join(app.work, "next.config.mjs"),
-            'export default async (phase) => ({ experimental: { outputFileTracingIncludes: { "/": ["./data/**/*"] } } });\n',
+            'export default async (phase) => ({ outputFileTracingIncludes: { "/": ["./data/top.json"] }, experimental: { outputFileTracingIncludes: { "/": ["./data/exp.json"] } } });\n',
         );
         const b = compile(app.work);
         expect(b.status, String(b.stderr)).toBe(0);
-        expect(runAlone(b.exe).result.cwdAbs).toContain(A_MARK);
+        const r = runAlone(b.exe);
+        // the legacy key replaces the top-level one, as Next reads it
+        expect(r.result.exp).toContain(A_MARK);
+        expect(r.result.top).toBe("ERR ENOENT");
     }, 180_000);
 
     it("a next.config that might declare includes and cannot be loaded FAILS the build, whatever it does not say", () => {
@@ -587,6 +593,22 @@ t("private", () => readFileSync(join(process.cwd(), "data", "private", "b" + ".j
   pageExtensions: [...defaultConfig.pageExtensions, "mdx"],
   outputFileTracingIncludes: { "/": ["./data/a.json"] },
 });\n`,
+            );
+            write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+            const b = compile(app.work);
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(runAlone(b.exe).result.a).toContain(A_MARK);
+        }, 180_000);
+
+        it("without an installed next, a fixed minimal default is used, never a copy from a global cache", () => {
+            const app = baseApp(READ);
+            write(
+                join(app.work, "next.config.mjs"),
+                `export default (phase, { defaultConfig }) => {
+  // a copy of Next from a global cache would have many experimental defaults
+  if (Object.keys(defaultConfig.experimental).length !== 0) throw new Error("not the minimal default");
+  return { pageExtensions: [...defaultConfig.pageExtensions, "mdx"], outputFileTracingIncludes: { "/": ["./data/a.json"] } };
+};\n`,
             );
             write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
             const b = compile(app.work);

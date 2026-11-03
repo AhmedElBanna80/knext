@@ -279,7 +279,11 @@ const CONFIG_CHILD = `
   const fallback = () => ({ pageExtensions: ['tsx', 'ts', 'jsx', 'js'], compress: true, experimental: {}, images: {} });
   let defaults;
   try {
-    const shared = createRequire(join(root, 'package.json'))('next/dist/server/config-shared');
+    const req = createRequire(join(root, 'package.json'));
+    // Only a real install: Bun resolves a missing package from its global auto-install cache,
+    // and defaults taken from whichever copy is cached would differ from machine to machine.
+    if (!/[\\\\/]node_modules[\\\\/]/.test(req.resolve('next/dist/server/config-shared'))) throw 0;
+    const shared = req('next/dist/server/config-shared');
     try { defaults = structuredClone(shared.defaultConfig); } catch { defaults = { ...shared.defaultConfig }; }
   } catch {}
   if (!defaults || typeof defaults !== 'object') defaults = fallback();

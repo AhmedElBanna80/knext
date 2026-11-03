@@ -303,8 +303,9 @@ app. A config that provably cannot declare `outputFileTracingIncludes` (no `requ
 Node built-ins) is not run at all. Any other config is loaded once more to read the value, in a
 child process of its own, as `next build` loads it: with `NODE_ENV=production` when `NODE_ENV` is
 unset (an explicit value is kept), so `.env.production` is in effect for it, and nothing it sets
-reaches the rest of the build. A function config receives Next's own `defaultConfig` when `next`
-resolves from the app, and otherwise `pageExtensions` and `compress`, the values configs read most;
+reaches the rest of the build. A function config receives Next's own `defaultConfig` when `next` is
+installed in the app, and otherwise `pageExtensions` and `compress` (plus empty `experimental` and
+`images`), the values configs read most;
 a function, or a default export that is a promise, is awaited as Next does. If such a config cannot
 be loaded the build fails, whatever the file says, because embedding no includes would pass the
 build and fail the route. A config that assembles its includes in a way that avoids all of the

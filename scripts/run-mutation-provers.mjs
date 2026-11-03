@@ -289,6 +289,44 @@ function restoreTreeAfterKill(before) {
   return `${notes.join(', ')} before the next prover`;
 }
 
+/** Tracked files that differ from HEAD (staged or not), as a Set; null when unreadable. */
+function modifiedTrackedFiles() {
+  const out = repoOut(['git', 'diff', '--name-only', '-z', 'HEAD']);
+  return out === null ? null : new Set(out.split('\0').filter(Boolean));
+}
+
+/**
+ * A prover that ENDS BY ITSELF can still leave a tracked file mutated (it exited
+ * non-zero from inside a mutated section, so its own restore never ran). The next
+ * prover's `baseline: working tree not clean` check then fails for a cause that is
+ * not its own: one leaky prover reddened the ten after it in a leg (11 of 40).
+ *
+ * So after EVERY prover, any tracked file that is modified now and was not before
+ * is residue: it is a finding naming the prover and the files (the leaky prover
+ * stays red), and, in CI, it is restored so the rest of the leg proves what it
+ * claims. Only the files this prover changed are touched. Outside CI the tree is
+ * left alone, as for a kill, and the finding says so.
+ */
+function residueFinding(proverRel, before) {
+  const after = modifiedTrackedFiles();
+  if (!before || !after) return null;
+  const residue = [...after].filter((f) => !before.has(f));
+  if (residue.length === 0) return null;
+  const list = residue.join(', ');
+  if (process.env.GITHUB_ACTIONS !== 'true' && process.env.KNEXT_LANE_RESTORE_AFTER_KILL !== '1') {
+    return `${proverRel} left tracked file(s) modified: ${list} — this is not CI so the tree was NOT restored; later provers will see a dirty tree`;
+  }
+  try {
+    execFileSync('git', ['checkout', 'HEAD', '--', ...residue], {
+      cwd: REPO_ROOT,
+      stdio: 'ignore',
+    });
+  } catch (error) {
+    return `${proverRel} left tracked file(s) modified: ${list} — RESTORE FAILED (${error.message}); later provers ran on a dirty tree`;
+  }
+  return `${proverRel} left tracked file(s) modified: ${list} — restored before the next prover`;
+}
+
 /**
  * Between-prover housekeeping and the resource TRIPWIRE.
  *
@@ -438,6 +476,7 @@ for (const prover of provers) {
   console.log(`\n${'═'.repeat(78)}\n▶ ${prover.relPath}\n${'═'.repeat(78)}`);
   const started = Date.now();
   const untrackedBefore = untrackedFiles();
+  const modifiedBefore = modifiedTrackedFiles();
   const tmpBefore = tmpEntries();
   const run = await runProver(prover.absPath, {
     cwd: REPO_ROOT,
@@ -460,6 +499,11 @@ for (const prover of provers) {
       `RESOURCE RUNAWAY: ${run.runaway} — killed with its process group after ${Math.round((Date.now() - started) / 1000)}s; ${note}`,
     );
     console.error(`\n   ${findings[0]}`);
+  }
+  const residue = residueFinding(prover.relPath, modifiedBefore);
+  if (residue) {
+    findings.push(residue);
+    console.error(`\n   ${residue}`);
   }
   results.push({ relPath: prover.relPath, summary, findings });
 

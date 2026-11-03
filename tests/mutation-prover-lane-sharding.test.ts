@@ -1473,6 +1473,90 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
     }, 30_000);
   });
 
+  describe('a prover that exits on its own with tracked residue does not redden the provers after it', () => {
+    // Run 41482129769: a prover exited 2 from inside a mutated section and left a
+    // tracked file modified; the ten provers after it died on "baseline: working
+    // tree not clean". The restore used to run only after a kill (timeout/runaway),
+    // never after a prover that ended by itself.
+    const tree = (leaky: string) => {
+      const dir = makeTree({
+        'mutation-prove-a-leaky.mjs': leaky,
+        'mutation-prove-b-after.mjs': `
+          import { readFileSync } from 'node:fs';
+          if (readFileSync('tracked.txt', 'utf8') !== 'original') {
+            console.error('baseline: working tree not clean');
+            process.exit(2);
+          }
+          console.log('::prover-summary:: ' + JSON.stringify({ declared: 1, run: 1 }));`,
+      });
+      writeFileSync(join(dir, 'tracked.txt'), 'original');
+      commitAll(dir);
+      return dir;
+    };
+    const leakThenExit = (code: number) => `
+      import { writeFileSync } from 'node:fs';
+      writeFileSync('tracked.txt', 'MUTATED');
+      console.log('::prover-summary:: ' + JSON.stringify({ declared: 1, run: 1 }));
+      process.exit(${code});`;
+    const env = { KNEXT_LANE_RESTORE_AFTER_KILL: '1' };
+
+    it('restores the file, names prover and file in a finding, and the next prover is green', () => {
+      const dir = tree(leakThenExit(2));
+      try {
+        const r = run(dir, [], env);
+        const out = `${r.stdout}${r.stderr}`;
+        expect(read(join(dir, 'tracked.txt'))).toBe('original');
+        expect(out).toMatch(/ok\s+1\/1\s+scripts\/mutation-prove-b-after\.mjs/);
+        expect(out).toMatch(/left tracked file\(s\) modified[^\n]*tracked\.txt/);
+        // the leaky prover itself is still a finding: the lane stays red for it
+        expect(r.status).not.toBe(0);
+        expect(out).toMatch(/FAIL\s+\S+\s+scripts\/mutation-prove-a-leaky\.mjs/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('a prover that exits 0 but leaves residue is a finding too (the tree would stay dirty)', () => {
+      const dir = tree(leakThenExit(0));
+      try {
+        const r = run(dir, [], env);
+        expect(read(join(dir, 'tracked.txt'))).toBe('original');
+        expect(r.status).not.toBe(0);
+        expect(`${r.stdout}${r.stderr}`).toMatch(
+          /left tracked file\(s\) modified[^\n]*tracked\.txt/,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('a prover that fails WITHOUT residue gets no residue finding', () => {
+      const dir = tree(
+        `console.log('::prover-summary:: ' + JSON.stringify({ declared: 1, run: 1 })); process.exit(1);`,
+      );
+      try {
+        const r = run(dir, [], env);
+        expect(`${r.stdout}${r.stderr}`).not.toMatch(/left tracked file\(s\) modified/);
+        expect(r.stdout).toMatch(/ok\s+1\/1\s+scripts\/mutation-prove-b-after\.mjs/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('outside CI (and without the opt-in) the tree is NOT touched, and the finding says so', () => {
+      const dir = tree(leakThenExit(2));
+      try {
+        const r = run(dir, [], { GITHUB_ACTIONS: '' });
+        expect(read(join(dir, 'tracked.txt'))).toBe('MUTATED');
+        expect(`${r.stdout}${r.stderr}`).toMatch(
+          /left tracked file\(s\) modified[^\n]*NOT restored/,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+  });
+
   it('declared != run in a shard still FAILS the shard (the count check survived the split)', () => {
     const dir = makeTree({ 'mutation-prove-a.mjs': ok(13, 4) });
     try {

@@ -29,10 +29,10 @@
  * `scripts/mutation-prove-2659-nested-workflows.mjs`.
  */
 
-import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitRun } from './guard-prover.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -86,11 +86,7 @@ export function isWorkflowShaped(rawText) {
 
 /** Tracked regular files; symlinks and deleted paths are skipped. */
 function trackedFiles(root) {
-  const out = execFileSync('git', ['ls-files', '-z'], {
-    cwd: root,
-    encoding: 'utf8',
-    maxBuffer: 256 * 1024 * 1024,
-  });
+  const out = gitRun(root, ['ls-files', '-z'], { maxBuffer: 256 * 1024 * 1024 });
   const files = [];
   for (const file of out.split('\0')) {
     if (!file || file.split('/').some((seg) => SKIP_DIRS.has(seg))) continue;

@@ -26,11 +26,10 @@
  *   node scripts/mutation-prove-2659-nested-workflows.mjs
  */
 
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertTreeClean, createGuardProver, runSpecExit } from './lib/guard-prover.mjs';
+import { assertTreeClean, createGuardProver, gitRun, runSpecExit } from './lib/guard-prover.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,6 +39,7 @@ const SCAN = 'scripts/lib/nested-workflow-scan.mjs';
 const SCANNER_ROWS = [
   {
     id: 'N01',
+    subject: 'scan',
     claim: 'the nested .github/workflows directory rule is gone',
     anchor:
       'const nestedDir = NESTED_WORKFLOWS_DIR.test(file) && !file.startsWith(ROOT_WORKFLOWS);',
@@ -47,48 +47,56 @@ const SCANNER_ROWS = [
   },
   {
     id: 'N02',
+    subject: 'scan',
     claim: 'no file is ever workflow-shaped',
     anchor: "return keys.has('on') && keys.has('jobs');",
     replacement: 'return false;',
   },
   {
     id: 'N03',
+    subject: 'scan',
     claim: 'a trigger alone makes a file workflow-shaped (jobs no longer required)',
     anchor: "return keys.has('on') && keys.has('jobs');",
     replacement: "return keys.has('on');",
   },
   {
     id: 'N04',
+    subject: 'scan',
     claim: 'jobs alone makes a file workflow-shaped (trigger no longer required)',
     anchor: "return keys.has('on') && keys.has('jobs');",
     replacement: "return keys.has('jobs');",
   },
   {
     id: 'N05',
+    subject: 'scan',
     claim: 'root workflows are no longer exempt (the scan flags the live CI)',
     anchor: 'if (file.startsWith(ROOT_WORKFLOWS)) continue;',
     replacement: 'void 0;',
   },
   {
     id: 'N06',
+    subject: 'scan',
     claim: 'agent worktrees (.claude) are walked',
     anchor: "['.git', 'node_modules', '.claude', 'dist', 'target']",
     replacement: "['.git', 'node_modules', 'dist', 'target']",
   },
   {
     id: 'N07',
+    subject: 'scan',
     claim: '.git is walked',
     anchor: "['.git', 'node_modules', '.claude', 'dist', 'target']",
     replacement: "['node_modules', '.claude', 'dist', 'target']",
   },
   {
     id: 'N08',
+    subject: 'scan',
     claim: 'an exclusion no longer clears its file',
     anchor: 'if (!nestedDir && Object.hasOwn(exclusions, file)) continue;',
     replacement: 'void 0;',
   },
   {
     id: 'N09',
+    subject: 'scan',
     claim: 'a stale exclusion (file gone or no longer a workflow) is never reported',
     anchor:
       "if (!present.has(file) || !isWorkflowShaped(readFileSync(join(root, file), 'utf8'))) {",
@@ -96,54 +104,63 @@ const SCANNER_ROWS = [
   },
   {
     id: 'N10',
+    subject: 'scan',
     claim: 'an exclusion without a reason is accepted',
     anchor: "if (typeof reason !== 'string' || reason.trim() === '') {",
     replacement: 'if (false) {',
   },
   {
     id: 'N11',
+    subject: 'scan',
     claim: 'template-suffixed YAML (.yml.example, .tmpl) is no longer scanned',
     anchor: 'const yamlish = YAML_NAME.test(file);',
     replacement: 'const yamlish = /\\.ya?ml$/.test(file);',
   },
   {
     id: 'N12',
+    subject: 'scan',
     claim: 'indented keys count as top-level keys',
     anchor: '/^(["\']?[A-Za-z_][\\w-]*["\']?)\\s*:/',
     replacement: '/^\\s*(["\']?[A-Za-z_][\\w-]*["\']?)\\s*:/',
   },
   {
     id: 'N13',
+    subject: 'scan',
     claim: 'a quoted "on" key is not recognised as the trigger',
     anchor: "const stripQuotes = (key) => key.replace(/^[\"']|[\"']$/g, '');",
     replacement: 'const stripQuotes = (key) => key;',
   },
   {
     id: 'N14',
+    subject: 'scan',
     claim: 'an exclusion is checked before the nested-dir rule (a nested file can be excluded)',
     anchor: 'if (!nestedDir && Object.hasOwn(exclusions, file)) continue;',
     replacement: 'if (Object.hasOwn(exclusions, file)) continue;',
   },
   {
     id: 'N15',
+    subject: 'scan',
     claim: 'a nested-dir key in the exclusion list is accepted',
     anchor: 'if (NESTED_WORKFLOWS_DIR.test(file)) {',
     replacement: 'if (false) {',
   },
   {
     id: 'N16',
+    subject: 'scan',
     claim: 'a BOM-prefixed on: key is not recognised',
     anchor: "const text = rawText.replace(/^\\uFEFF/, '');",
     replacement: 'const text = rawText;',
   },
   {
     id: 'N17',
+    subject: 'scan',
     claim: 'flow-style mappings ({on: push, jobs: ...}) are not recognised',
     anchor: 'if (flow) {',
     replacement: 'if (false) {',
   },
   {
     id: 'N18',
+    subject: 'scan',
     claim:
       'untracked working-tree files are scanned (the tracked-file list is no longer the source)',
     anchor: "['ls-files', '-z']",
@@ -193,7 +210,7 @@ const TREE_ROWS = [
 ];
 
 const prover = createGuardProver({ repoRoot: REPO_ROOT, spec: SPEC, subjects: { scan: SCAN } });
-const rows = SCANNER_ROWS.map((r) => ({ ...r, subject: 'scan' }));
+const rows = SCANNER_ROWS;
 
 console.log('=== mutation proof: nested-workflow guard (#2659) ===');
 prover.preflight(rows);
@@ -220,10 +237,10 @@ for (const t of TREE_ROWS) {
   try {
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, t.body);
-    execFileSync('git', ['add', '-f', '--', t.file], { cwd: REPO_ROOT });
+    gitRun(REPO_ROOT, ['add', '-f', '--', t.file]);
     status = runSpecExit(REPO_ROOT, SPEC);
   } finally {
-    execFileSync('git', ['rm', '-q', '--cached', '-f', '--', t.file], { cwd: REPO_ROOT });
+    gitRun(REPO_ROOT, ['rm', '-q', '--cached', '-f', '--', t.file]);
     rmSync(abs, { force: true });
     // Remove the directories the plant created, only if they are now empty.
     for (let d = dirname(abs); d !== REPO_ROOT; d = dirname(d)) {

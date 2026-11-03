@@ -1,0 +1,219 @@
+##### A. OFFLINE: committed data only #####
+
+== three-arm run, cpu-base only: n=20 median=1276 mean=1428 sd=307 min=1145 max=2293
+   node .118: n=6 median=1208 mean=1257 sd=146
+   node .169: n=14 median=1409 mean=1502 sd=328
+
+== single-arm run, cpu-base only: n=25 median=1806 mean=1821 sd=297 min=1229 max=2294
+   node .169: n=25 median=1806 mean=1821 sd=297
+
+  headline check: the 1276 ms figure is the median of cpu-base in the three-arm run: 1276 ms (n=20); the 1806 ms figure is the single-arm median: 1806 ms
+
+  -- Is it the node? (same node .169, three-arm vs single-arm) --
+  offline: single-arm@169 minus three-arm@169: median single@169=1806 (n=25, mean 1821, sd 297) three@169=1409 (n=14, mean 1502, sd 328) diff=+397 ms  95% CI [+165, +666]  perm p=0.007
+  offline: three-arm@169 minus three-arm@118: median 169=1409 (n=14, mean 1502, sd 328) 118=1208 (n=6, mean 1257, sd 146) diff=+201 ms  95% CI [-41, +403]  perm p=0.247
+  offline: single-arm@169 minus three-arm@118: median single@169=1806 (n=25, mean 1821, sd 297) three@118=1208 (n=6, mean 1257, sd 146) diff=+598 ms  95% CI [+379, +787]  perm p=0.001
+
+  -- Segments, same node .169 (median ms) --
+  offline segment wake_to_bound: single@169 minus three@169: median single=116 (n=25, mean 127, sd 40) three=95 (n=14, mean 90, sd 24) diff=+22 ms  95% CI [+7, +52]  perm p=0.004
+  offline segment bound_to_first_user_log: single@169 minus three@169: median single=865 (n=24, mean 702, sd 210) three=462 (n=14, mean 541, sd 158) diff=+404 ms  95% CI [-3, +437]  perm p=0.043
+  offline segment bound_to_podip: single@169 minus three@169: median single=1507 (n=25, mean 1513, sd 334) three=1162 (n=14, mean 1221, sd 358) diff=+345 ms  95% CI [+59, +638]  perm p=0.023
+  offline segment podip_to_end: single@169 minus three@169: median single=150 (n=25, mean 180, sd 75) three=157 (n=14, mean 190, sd 76) diff=-7 ms  95% CI [-40, +10]  perm p=0.446
+  offline segment total: single@169 minus three@169: median single=1806 (n=25, mean 1821, sd 297) three=1409 (n=14, mean 1502, sd 328) diff=+397 ms  95% CI [+165, +666]  perm p=0.007
+
+  -- Wake spacing --
+  [three-arm] zero-pod wait: median 92 s (min 84, max 132); gap between consecutive cpu-base wakes: median 2.1 min
+  [single-arm] zero-pod wait: median 90 s (min 69, max 95); gap between consecutive cpu-base wakes: median 1.9 min
+  three-arm: seconds since the previous wake on the same node vs cpu-base total: n=19, gap median 124 s, Spearman rho=+0.12 (p=0.618)
+
+  -- Arm order / round position (three-arm, cpu-base) --
+  offline: fwd order minus rev order: median fwd=1429 (n=10, mean 1506, sd 369) rev=1246 (n=10, mean 1351, sd 200) diff=+182 ms  95% CI [-177, +503]  perm p=0.285
+
+  -- Time trend --
+  time trend [three-arm cpu-base]: span=0.71 h, Spearman rho=-0.06 (perm p=0.797), OLS slope=-382 ms/h  95% CI [-996, +261]
+  time trend [single-arm cpu-base]: span=0.77 h, Spearman rho=-0.05 (perm p=0.817), OLS slope=-96 ms/h  95% CI [-597, +388]
+
+  -- Placement in the three-arm run (cpu-base): node by round slot --
+  (slot, node): count  -> {(0, '169'): 7, (1, '118'): 6, (2, '169'): 7}
+  Note: in the three-arm run the first-woken arm of a round lands on .169 and later arms alternate, so node and slot are confounded there; the single-arm run is all .169.
+
+
+##### B. LIVE: balanced run (this study) #####
+
+== balanced run, cpu-base target: n=35 median=1645 mean=1653 sd=342 min=1125 max=2295
+   node .118: n=15 median=1481 mean=1538 sd=338
+   node .169: n=20 median=1664 mean=1739 sd=320
+
+  wakes per node (target): .118=15  .169=20  (requirement: >=15 each)
+   cell node .118 / short: n=8
+   cell node .169 / short: n=10
+   cell node .118 / long: n=7
+   cell node .169 / long: n=10
+
+  -- Node effect --
+  live: node .169 minus .118: median 169=1664 (n=20, mean 1739, sd 320) 118=1481 (n=15, mean 1538, sd 338) diff=+182 ms  95% CI [-45, +503]  perm p=0.102
+
+  -- Node effect by segment (median ms) --
+  live segment wake_to_bound: .169 minus .118: median 169=112 (n=20, mean 142, sd 64) 118=73 (n=15, mean 80, sd 36) diff=+40 ms  95% CI [+21, +99]  perm p=0.000
+  live segment bound_to_first_user_log: .169 minus .118: median 169=870 (n=20, mean 710, sd 207) 118=435 (n=15, mean 518, sd 174) diff=+435 ms  95% CI [+37, +455]  perm p=0.000
+  live segment bound_to_podip: .169 minus .118: median 169=1406 (n=20, mean 1414, sd 370) 118=1165 (n=15, mean 1265, sd 378) diff=+241 ms  95% CI [-128, +515]  perm p=0.121
+  live segment podip_to_end: .169 minus .118: median 169=153 (n=20, mean 182, sd 63) 118=149 (n=15, mean 194, sd 100) diff=+4 ms  95% CI [-103, +18]  perm p=0.478
+  live segment total: .169 minus .118: median 169=1664 (n=20, mean 1739, sd 320) 118=1481 (n=15, mean 1538, sd 338) diff=+182 ms  95% CI [-45, +503]  perm p=0.102
+
+  -- Wake spacing effect --
+  live: long minus short (all): median long=1630 (n=17, mean 1643, sd 353) short=1650 (n=18, mean 1662, sd 332) diff=-20 ms  95% CI [-301, +304]  perm p=0.618
+  live: long minus short on .118: median long=1481 (n=7, mean 1527, sd 345) short=1507 (n=8, mean 1549, sd 332) diff=-26 ms  95% CI [-538, +393]  perm p=0.966
+  live: long minus short on .169: median long=1708 (n=10, mean 1725, sd 336) short=1655 (n=10, mean 1752, sd 302) diff=+53 ms  95% CI [-385, +362]  perm p=0.814
+  harness zero-pod wait: median 84 s; long-level extra idle 150 s
+
+  -- Slot (position in the round) --
+  live: slot0 minus slot1: median slot0=1655 (n=18, mean 1679, sd 279) slot1=1593 (n=17, mean 1625, sd 397) diff=+62 ms  95% CI [-152, +397]  perm p=0.280
+
+  -- Time trend --
+  time trend [balanced cpu-base]: span=2.62 h, Spearman rho=-0.05 (perm p=0.792), OLS slope=-20 ms/h  95% CI [-161, +93]
+  time trend [balanced cpu-base .118]: span=2.48 h, Spearman rho=+0.03 (perm p=0.930), OLS slope=+27 ms/h  95% CI [-194, +226]
+  time trend [balanced cpu-base .169]: span=2.62 h, Spearman rho=-0.09 (perm p=0.698), OLS slope=-29 ms/h  95% CI [-214, +111]
+
+  -- Background load (Spearman, per wake, target total vs reading on the node it landed on) --
+   bg_pre.node_cpu_nc [both]: n=34 rho=+0.03 p=0.875  (range 7.548e+07..1.59e+08)
+   bg_pre.node_cpu_nc [.118]: n=15 rho=-0.10 p=0.727  (range 7.548e+07..1.59e+08)
+   bg_pre.node_cpu_nc [.169]: n=19 rho=+0.04 p=0.860  (range 1.026e+08..1.397e+08)
+   bg_pre.psi_cpu_some_avg10 [both]: n=34 constant, no correlation computable
+   bg_pre.psi_cpu_some_avg10 [.118]: n=15 constant, no correlation computable
+   bg_pre.psi_cpu_some_avg10 [.169]: n=19 constant, no correlation computable
+   bg_pre.node_mem_ws [both]: n=34 rho=-0.21 p=0.225  (range 5.386e+09..6.863e+09)
+   bg_pre.node_mem_ws [.118]: n=15 rho=-0.46 p=0.082  (range 6.791e+09..6.863e+09)
+   bg_pre.node_mem_ws [.169]: n=19 rho=+0.43 p=0.063  (range 5.386e+09..5.566e+09)
+   bg_pre.n_running [both]: n=34 constant, no correlation computable
+   bg_pre.n_running [.118]: n=15 constant, no correlation computable
+   bg_pre.n_running [.169]: n=19 constant, no correlation computable
+   bg_pre.n_running_bench_cells [both]: n=34 rho=-0.29 p=0.101  (range 8..9)
+   bg_pre.n_running_bench_cells [.118]: n=15 constant, no correlation computable
+   bg_pre.n_running_bench_cells [.169]: n=19 constant, no correlation computable
+   bg_post.node_cpu_nc [both]: n=35 rho=+0.05 p=0.796  (range 9.198e+07..4.665e+08)
+   bg_post.node_cpu_nc [.118]: n=15 rho=+0.03 p=0.936  (range 9.198e+07..3.512e+08)
+   bg_post.node_cpu_nc [.169]: n=20 rho=+0.05 p=0.812  (range 1.079e+08..4.665e+08)
+   bg_post.psi_cpu_some_avg10 [both]: n=35 constant, no correlation computable
+   bg_post.psi_cpu_some_avg10 [.118]: n=15 constant, no correlation computable
+   bg_post.psi_cpu_some_avg10 [.169]: n=20 constant, no correlation computable
+   bg_post.node_mem_ws [both]: n=35 rho=-0.20 p=0.245  (range 5.471e+09..6.918e+09)
+   bg_post.node_mem_ws [.118]: n=15 rho=-0.34 p=0.225  (range 6.794e+09..6.918e+09)
+   bg_post.node_mem_ws [.169]: n=20 rho=+0.39 p=0.081  (range 5.471e+09..5.582e+09)
+   bg_post.n_running [both]: n=35 rho=-0.19 p=0.394  (range 33..34)
+   bg_post.n_running [.118]: n=15 constant, no correlation computable
+   bg_post.n_running [.169]: n=20 rho=-0.22 p=0.509  (range 33..34)
+   bg_post.n_running_bench_cells [both]: n=35 rho=-0.32 p=0.059  (range 8..10)
+   bg_post.n_running_bench_cells [.118]: n=15 constant, no correlation computable
+   bg_post.n_running_bench_cells [.169]: n=20 rho=-0.22 p=0.509  (range 8..9)
+
+  -- Per-node background level (median over wakes) --
+   .118 pre-wake node_cpu_nc: median 1.093e+08 (min 7.548e+07, max 1.59e+08, n=15)
+   .118 pre-wake psi_cpu_some_avg10: median 0 (min 0, max 0, n=15)
+   .118 pre-wake n_running: median 33 (min 33, max 33, n=15)
+   .118 pre-wake n_running_bench_cells: median 9 (min 9, max 9, n=15)
+   .169 pre-wake node_cpu_nc: median 1.12e+08 (min 1.026e+08, max 1.397e+08, n=19)
+   .169 pre-wake psi_cpu_some_avg10: median 0 (min 0, max 0, n=19)
+   .169 pre-wake n_running: median 33 (min 33, max 33, n=19)
+   .169 pre-wake n_running_bench_cells: median 8 (min 8, max 8, n=19)
+
+  -- Slot is confounded with node for the target arm --
+   target on .118 at slot 0: n=0
+   target on .118 at slot 1: n=15
+   target on .169 at slot 0: n=18
+   target on .169 at slot 1: n=2
+   (the target never lands on .118 at slot 0, so slot cannot be separated from node and is left out of the model)
+
+  -- Multi-factor model: total ~ intercept + node169 + long + hours (OLS, case-bootstrap 95% CI) --
+   [without start mode] n=35
+     intercept: +1558 ms  95% CI [+1329, +1847]
+     node .169 (vs .118): +200 ms  95% CI [-34, +422]
+     long spacing (vs short): -25 ms  95% CI [-259, +209]
+     per hour of run: -5 ms  95% CI [-142, +107]
+     R^2=0.09  residual sd=348 ms
+   [with start mode] n=35
+     intercept: +1489 ms  95% CI [+1276, +1715]
+     node .169 (vs .118): -9 ms  95% CI [-204, +188]
+     long spacing (vs short): +2 ms  95% CI [-159, +171]
+     per hour of run: -34 ms  95% CI [-145, +65]
+     slow start mode (vs fast): +507 ms  95% CI [+309, +704]
+     R^2=0.53  residual sd=254 ms
+
+  -- Cross-day check: this study's cpu-base vs the earlier runs, same node --
+  live@118 minus three-arm@118: median live=1481 (n=15, mean 1538, sd 338) three=1208 (n=6, mean 1257, sd 146) diff=+274 ms  95% CI [-3, +517]  perm p=0.262
+  live@169 minus three-arm@169: median live=1664 (n=20, mean 1739, sd 320) three=1409 (n=14, mean 1502, sd 328) diff=+255 ms  95% CI [+55, +571]  perm p=0.073
+  live@169 minus single-arm@169: median live=1664 (n=20, mean 1739, sd 320) single=1806 (n=25, mean 1821, sd 297) diff=-142 ms  95% CI [-320, +99]  perm p=0.215
+  live all minus three-arm all: median live=1645 (n=35, mean 1653, sd 342) three=1276 (n=20, mean 1428, sd 307) diff=+369 ms  95% CI [+80, +463]  perm p=0.003
+
+  -- Variance and protocol sizing --
+  total sd=347 ms; within-node sd=333 ms; robust within-node sd (1.4826*MAD)=329 ms
+  within-round target minus companion (config differs; use only for noise): n=35 sd=492 ms
+  consecutive same-node target wakes, difference sd=531 ms (n=33); implied per-wake sd if independent=376 ms
+   MDE (80% power, alpha .05, unpaired, per arm n=15, sd=333): 340 ms; paired on sd_diff=531: 384 ms
+   MDE (80% power, alpha .05, unpaired, per arm n=20, sd=333): 295 ms; paired on sd_diff=531: 333 ms
+   MDE (80% power, alpha .05, unpaired, per arm n=30, sd=333): 241 ms; paired on sd_diff=531: 272 ms
+   MDE (80% power, alpha .05, unpaired, per arm n=40, sd=333): 208 ms; paired on sd_diff=531: 235 ms
+
+
+##### C. START MODE: bound -> first user log is bimodal #####
+  split at 650 ms. Fast-mode and slow-mode medians (ms) of bound->first user log, then share of slow-mode wakes (Wilson 95%):
+  all target wakes: fast mode median 445 (n=46, range 409-643); slow mode median 886 (n=33, range 659-915); gap between modes 441 ms
+   three-arm@118: slow 1/6 = 17% [3%, 56%]; total median 1208 ms
+   three-arm@169: slow 3/14 = 21% [8%, 48%]; total median 1409 ms
+   single-arm@169: slow 14/24 = 58% [39%, 76%]; total median 1796 ms
+   balanced@118: slow 3/15 = 20% [7%, 45%]; total median 1481 ms
+   balanced@169: slow 12/20 = 60% [39%, 78%]; total median 1664 ms
+  modes: total, slow minus fast (all target wakes): median slow=1959 (n=33, mean 1953, sd 252) fast=1369 (n=46, mean 1424, sd 224) diff=+590 ms  95% CI [+363, +792]  perm p=0.000
+  mixture check: fast-mode total median 1369, slow-mode 1959. Within each mode, compare the runs:
+  modes: fast-mode single-arm minus three-arm: median single=1521 (n=10, mean 1564, sd 204) three=1244 (n=16, mean 1318, sd 186) diff=+277 ms  95% CI [+107, +547]  perm p=0.014
+  modes: fast-mode balanced minus three-arm: median balanced=1370 (n=20, mean 1438, sd 219) three=1244 (n=16, mean 1318, sd 186) diff=+127 ms  95% CI [-7, +374]  perm p=0.158
+  modes: slow-mode single-arm minus three-arm: median single=2011 (n=14, mean 1992, sd 223) three=1806 (n=4, mean 1870, sd 300) diff=+204 ms  95% CI [-342, +506]  perm p=0.333
+  modes: slow-mode balanced minus three-arm: median balanced=1886 (n=15, mean 1939, sd 258) three=1806 (n=4, mean 1870, sd 300) diff=+79 ms  95% CI [-458, +614]  perm p=0.755
+
+  -- Node and slow-mode share (balanced run) --
+  slow/fast .118=(3, 12)  .169=(12, 8)  Fisher exact p=0.037
+  three-arm@169 slow/fast=(3, 11) vs single-arm@169=(14, 10): Fisher p=0.0432
+  three-arm@169 vs balanced@169=(12, 8): Fisher p=0.0382
+  three-arm@118=(1, 5) vs balanced@118=(3, 12): Fisher p=1.0000
+
+  -- What predicts slow mode in the balanced run? (slow-mode vs fast-mode wakes) --
+   spacing long: slow-mode mean 0.47 vs fast-mode mean 0.50; rank corr -0.03 (p=1.000)
+   hours into run: slow-mode mean 1.48 vs fast-mode mean 1.41; rank corr +0.02 (p=0.912)
+   slot: slow-mode mean 0.33 vs fast-mode mean 0.60; rank corr -0.26 (p=0.177)
+   node .169: slow-mode mean 0.80 vs fast-mode mean 0.40; rank corr +0.40 (p=0.041)
+   harness zero-pod wait s: slow-mode mean 74.60 vs fast-mode mean 74.05; rank corr +0.04 (p=0.813)
+   pre-wake node_cpu_nc: slow-mode median 1.149e+08 (n=14) vs fast-mode 1.098e+08 (n=20)
+   pre-wake node_mem_ws: slow-mode median 5.495e+09 (n=14) vs fast-mode 6.801e+09 (n=20)
+   .118: sequence lllllHHlllllHll; consecutive same-mode 10/14 (expected 9.5 if independent)
+   .169: sequence llHHHlHHlHHHHlllHlHH; consecutive same-mode 10/19 (expected 9.9 if independent)
+
+
+##### D. SHAPE OF bound -> first user log, decomposition, multiplicity, pairing #####
+  n=79 target wakes. Empirical gap at the 650 ms cut: fast max 643, slow min 659 (15 ms). (Difference of the two medians is 441 ms; that is not a gap.)
+  three largest gaps between adjacent sorted values: 191 ms (664->855); 106 ms (537->643); 32 ms (487->519)
+  values between 600 and 700 ms: [643, 659, 662, 664]  (n=4); values 643-664 inclusive: 3
+  share of 'slower cluster' wakes under three cuts:
+   cut 500: all 37/79 = 47%; three-arm@118 2/6; three-arm@169 4/14; single-arm@169 15/24; balanced@118 3/15; balanced@169 13/20
+   cut 650: all 33/79 = 42%; three-arm@118 1/6; three-arm@169 3/14; single-arm@169 14/24; balanced@118 3/15; balanced@169 12/20
+   cut 760: all 30/79 = 38%; three-arm@118 1/6; three-arm@169 2/14; single-arm@169 13/24; balanced@118 3/15; balanced@169 11/20
+  Silverman critical-bandwidth test of one mode vs more (smoothed bootstrap, 200 resamples, seed 21): h_crit=169.0 ms, p=0.005. No Hartigan dip test was run.
+
+  decomposition (all 79 target wakes): the segment is part of the total. mean segment 627 ms of mean total 1645 ms = 38%; R^2 of total on the continuous segment alone = 0.51; R^2 of total on the slower-cluster indicator alone = 0.55
+
+  multiplicity: the share tests (three-arm@169 vs single-arm@169; vs balanced@169; balanced .169 vs .118) are uncorrected; about 4 mode tests and about 15 other tests were run, two mode tests share the three-arm@169 reference.
+   p=0.0432: Bonferroni(4) = 0.17, Bonferroni(19) = 0.82
+   p=0.0382: Bonferroni(4) = 0.15, Bonferroni(19) = 0.73
+   p=0.037: Bonferroni(4) = 0.15, Bonferroni(19) = 0.70
+
+  attribution on .169, single-arm vs three-arm: share 0.214 -> 0.583, change 0.369; same-node median difference 397 ms
+   change x 590 (slower minus faster, total) = 218 ms = 55% of 397
+   change x 507 (regression coefficient) = 187 ms = 47% of 397
+   the 1276 vs 1806 comparison also mixes nodes: three-arm has 6 of 20 wakes on .118, single-arm is all .169
+
+  balanced run node x slot counts: {('118', 0): 0, ('118', 1): 15, ('169', 0): 18, ('169', 1): 2}; the node row and the slot row of the balanced table are one contrast (.118 at slot 1: 15 of 15; .169 at slot 0: 18 of 20)
+
+  within-round pairs (target cpu-base vs companion cpu-boost2req, different config, so a proxy for noise only): n=35, both on same node in 6 rounds; sd target 347, sd companion 350, sd of within-round difference 492; Pearson r=+0.01, Spearman rho=-0.05 (p=0.770); sqrt(sd_a^2+sd_b^2)=493 is the difference sd if the two were independent
+  same-config within-round pairs, which are what the recommended protocol uses, were never collected: paired variance for that design is unmeasured.
+   proxy paired MDE (sd of within-round difference 492, n pairs=15): 356 ms
+   proxy paired MDE (sd of within-round difference 492, n pairs=20): 308 ms
+   proxy paired MDE (sd of within-round difference 492, n pairs=30): 251 ms
+   proxy paired MDE (sd of within-round difference 492, n pairs=40): 218 ms

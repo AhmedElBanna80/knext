@@ -155,6 +155,20 @@ scrape that is failing. It is keyed on a discovered target rather than a bare `a
 quiet on a cluster with no operator at all. `knext doctor` names the reason; see
 [Security](/docs/security#write-policy-enforced).
 
+### Functions whose Secrets cannot be verified
+
+A zone function whose Secret the operator cannot read is held, not removed, and nothing else says so.
+The operator publishes `knext_backendservice_secrets_unverified_since_timestamp_seconds` (labels
+`namespace`, `name`, `reason` of `transient` or `forbidden`; the value is when the hold started, and the
+series is absent once the function is verified). Two warnings read it:
+
+- `KnextFunctionSecretsUnverified`: a transient hold, which has no limit, has lasted over 10 minutes.
+- `KnextFunctionSecretsAccessDenied`: the operator has been denied access for over 3 minutes. After 10
+  minutes of denial the function is refused and removed, so this is the one to act on. Check the
+  operator's grant with `kubectl auth can-i get secrets -n <namespace> --as=system:serviceaccount:<operator-namespace>:<operator-service-account>`.
+
+`knext doctor` lists the same functions. See [Zone functions](/docs/zone-functions).
+
 ## NextApp health (control plane)
 
 **Objective:** no `NextApp` stays `Degraded=True`.

@@ -1,0 +1,18 @@
+# Harness pod for the 2026-11-02 cpu-boost / ready-gap runs (same spec as the
+# phase-bench pod in harness-rbac.yaml; drive.py selects it with PHASE_POD=phase-bench-2).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: phase-bench-2
+  namespace: bench-cells
+spec:
+  serviceAccountName: phase-bench
+  nodeName: 10.0.1.118
+  restartPolicy: Never
+  containers:
+    - name: harness
+      # node:24-alpine, resolved 2026-11-02 with crane digest (multi-arch index)
+      image: node@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
+      command: [sleep, "172800"]
+      resources:
+        requests: {cpu: 100m, memory: 128Mi}

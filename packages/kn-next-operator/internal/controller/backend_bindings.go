@@ -105,6 +105,13 @@ type zoneBinding struct {
 	functionZone       string
 	servedProtoVersion string
 	wakeAhead          bool
+	// imageMismatch / specMismatch: the BackendService is bound but the zone's
+	// own pin (backends[].image / .specDigest) refuses it, so the function's
+	// reconciler renders nothing for it. They are REPORTED on the zone and never
+	// change what the zone renders: the binding env stays exactly as it is, so a
+	// pin never rolls a zone revision.
+	imageMismatch bool
+	specMismatch  bool
 }
 
 // zoneBindings is the resolved zone half. The zero value means "no
@@ -214,6 +221,11 @@ func (r *NextAppReconciler) resolveZoneBindings(ctx context.Context, app *appsv1
 			zb.state = bindingBound
 			zb.servedProtoVersion = bs.Status.ServedProtoVersion
 			zb.wakeAhead = bs.Spec.WakeAhead == nil || *bs.Spec.WakeAhead
+			// The same two comparisons the function's reconciler makes (from
+			// the two specs alone), so the zone reports what the function
+			// enforces. Reporting only: state stays Bound and the env renders.
+			zb.imageMismatch = imagePinMismatch(entry.Image, bs.Spec.Image) != ""
+			zb.specMismatch = specPinMismatch(entry.SpecDigest, &bs.Spec) != ""
 		}
 		out.entries = append(out.entries, zb)
 	}
@@ -256,7 +268,10 @@ const (
 // backendBindingsCondition builds the BackendBindings condition. The message is
 // static for a given state, so a converged object's status write stays a no-op.
 // Reason precedence: a cross-zone entry (a refused binding attempt) first, then
-// a conflicting owner, then an env collision, then a missing function.
+// a conflicting owner, then an image-pin refusal, a spec-pin refusal, an env
+// collision, and last a missing function. A pin refusal is reported here but
+// changes nothing the zone renders (the env of a pin-refused function is still
+// rendered), so the pin can never roll a zone revision.
 func backendBindingsCondition(app *appsv1alpha1.NextApp, b zoneBindings, collisions []string) metav1.Condition {
 	c := metav1.Condition{Type: ConditionBackendBindings, ObservedGeneration: app.Generation}
 	if b.crdMissing {
@@ -266,7 +281,7 @@ func backendBindingsCondition(app *appsv1alpha1.NextApp, b zoneBindings, collisi
 			"no function can bind. Install the operator's BackendService CRD."
 		return c
 	}
-	var crossZone, conflicting, missing, bound []string
+	var crossZone, conflicting, imageMismatch, specMismatch, missing, bound []string
 	for _, e := range b.entries {
 		switch e.state {
 		case bindingCrossZone:
@@ -276,7 +291,14 @@ func backendBindingsCondition(app *appsv1alpha1.NextApp, b zoneBindings, collisi
 		case bindingFunctionNotFound:
 			missing = append(missing, fmt.Sprintf("%q names BackendService %q, which does not exist", e.name, e.service))
 		case bindingBound:
-			bound = append(bound, e.name)
+			switch {
+			case e.imageMismatch:
+				imageMismatch = append(imageMismatch, fmt.Sprintf("%q names BackendService %q, whose spec.image is not the digest this zone pins", e.name, e.service))
+			case e.specMismatch:
+				specMismatch = append(specMismatch, fmt.Sprintf("%q names BackendService %q, whose spec is not the digest this zone pins", e.name, e.service))
+			default:
+				bound = append(bound, e.name)
+			}
 		}
 	}
 	var problems []string
@@ -285,6 +307,12 @@ func backendBindingsCondition(app *appsv1alpha1.NextApp, b zoneBindings, collisi
 	}
 	if len(conflicting) > 0 {
 		problems = append(problems, "refused: "+strings.Join(conflicting, "; "))
+	}
+	if len(imageMismatch) > 0 {
+		problems = append(problems, "refused by the image pin, the function renders nothing: "+strings.Join(imageMismatch, "; "))
+	}
+	if len(specMismatch) > 0 {
+		problems = append(problems, "refused by the spec pin, the function renders nothing: "+strings.Join(specMismatch, "; "))
 	}
 	if len(collisions) > 0 {
 		problems = append(problems, "not rendered because spec.env or spec.secrets.envMap already sets them: "+
@@ -298,6 +326,10 @@ func backendBindingsCondition(app *appsv1alpha1.NextApp, b zoneBindings, collisi
 		c.Reason = ReasonCrossZoneBinding
 	case len(conflicting) > 0:
 		c.Reason = ReasonConflictingFunctionOwner
+	case len(imageMismatch) > 0:
+		c.Reason = ReasonBindingImageMismatch
+	case len(specMismatch) > 0:
+		c.Reason = ReasonBindingSpecMismatch
 	case len(collisions) > 0:
 		c.Reason = ReasonBindingEnvCollision
 	case len(missing) > 0:

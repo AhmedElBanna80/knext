@@ -59,6 +59,11 @@ function write(path: string, body: string | Uint8Array): void {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, body);
 }
+/** A symlink at `path` to `target`, parent created. Takes `path` as a parameter, like `write`. */
+function link(target: string, path: string): void {
+    mkdirSync(dirname(path), { recursive: true });
+    symlinkSync(target, path);
+}
 /** Make `next` resolvable from the fixture app (a link to the workspace's installed copy). */
 function installNext(work: string): void {
     const nextDir = realpathSync(
@@ -347,11 +352,7 @@ t("viaTarget", () => readFileSync(join(process.cwd(), "real/a.json"), "utf8"));`
             'export default { outputFileTracingIncludes: { "/": ["./data/*"] } };\n',
         );
         write(join(app.work, "real/a.json"), `{"mark":"${A_MARK}"}\n`);
-        mkdirSync(join(app.work, "data"), { recursive: true });
-        symlinkSync(
-            join(app.work, "real/a.json"),
-            join(app.work, "data/link.json"),
-        );
+        link(join(app.work, "real/a.json"), join(app.work, "data/link.json"));
         const b = compile(app.work);
         expect(b.status, String(b.stderr)).toBe(0);
         const r = runAlone(b.exe);

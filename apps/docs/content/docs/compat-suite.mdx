@@ -57,10 +57,14 @@ is the scope-and-methodology reference, not the scoreboard.
 ## The Next.js version under credential
 
 The credential runs against a **pinned Next.js release tag**, never `canary`, so an upstream
-regression is never mistaken for a knext defect. On the knext 2.x line the pinned tag is `v16.4.0`.
-That is the Next.js release `knext create` scaffolds and the minimum knext 2.0 supports, so the
-suite tests what a new app ships with. The pin moves whenever that minimum moves. Evidence at
-`v16.4.0` is still dispatched runs of one cell, not a credential; the
+regression is never mistaken for a knext defect. On the knext 2.x line the pinned tag is `v16.4.3`.
+That is the Next.js release `knext create` scaffolds, so the suite tests what a new app ships
+with. It is a patch release of the same 16.4 line as the minimum knext 2.0 supports. The pin
+moves whenever the scaffolded release moves to a new patch or minor. The evidence so far was
+gathered at `v16.4.0` (the previous pin on the same line) and is dispatched runs of one cell, not
+a credential. At `v16.4.3` only a single cell has been dispatched (Turbopack on Node), which surfaced
+one new upstream test that asserts Vercel's request-tracing topology; it is quarantined, not counted
+as a pass. The
 [compatibility matrix](/docs/compat-matrix) has the counts.
 
 ## It runs against published release-candidate packages, not `main`
@@ -146,7 +150,7 @@ credentialed Next.js version moves. It currently holds two distinct families:
 
 <Callout type="info">
 **Counts, kept honest by a CI check.** As of the current manifest, `bun-edge-fetch` quarantines 2
-entries (3 test cases) and `vercel-infra-coupled` quarantines 15 entries (39 test cases). These
+entries (3 test cases) and `vercel-infra-coupled` quarantines 16 entries (51 test cases). These
 numbers are asserted against the manifest by a docs test, so this page cannot silently drift from
 the ledger it describes.
 </Callout>

@@ -25,6 +25,11 @@ const nextConfig: NextConfig = {
   // line up. Returning null in dev falls back to Next's default nanoid.
   generateBuildId: () => process.env.KNEXT_BUILD_ID || process.env.NEXT_DEPLOYMENT_ID || null,
   output: 'standalone',
+  // #2609: this app sits in a bun workspace whose bun.lock is at the repo root,
+  // so Next's inferred tracing root is above the app. knext packages that nested
+  // standalone tree only for an EXPLICIT root, so name the workspace root here.
+  outputFileTracingRoot: path.join(import.meta.dirname, '..', '..'),
+  turbopack: { root: path.join(import.meta.dirname, '..', '..') },
   // Ensure native node modules are traced into standalone output (not bundled).
   // pino-elasticsearch and thread-stream are excluded here to avoid Turbopack
   // bundling their test files (pre-existing upstream issue).

@@ -309,3 +309,71 @@ func TestBackendBindingsConditionAbsentWithoutBackends(t *testing.T) {
 		t.Fatalf("a stale BackendBindings condition must be removed once spec.backends is empty")
 	}
 }
+
+// --- a function refused by the zone's pins is not "Bound" on the zone ----------
+//
+// The BackendService reconciler refuses a function whose image (or spec) is not
+// the one the zone pinned and renders nothing for it. The zone's BackendBindings
+// condition must say so too; the binding env, however, stays exactly as it is
+// (the pin must never roll a zone revision), so the entry's state stays Bound.
+
+func TestBackendBindingsConditionNamesImageMismatch(t *testing.T) {
+	app := zoneWithBackends(
+		appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing-fn", Image: pinA},
+		appsv1alpha1.BackendBinding{Name: "orders", Service: "orders-fn"},
+	)
+	b := zoneBindings{entries: []zoneBinding{
+		{name: "orders", service: "orders-fn", state: bindingBound},
+		{name: "pricing", service: "pricing-fn", state: bindingBound, imageMismatch: true},
+	}}
+	c := verdictConditionOrNil(bindingVerdict(app, b, nil), ConditionBackendBindings)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != ReasonBindingImageMismatch {
+		t.Fatalf("want BackendBindings False/%s, got %+v", ReasonBindingImageMismatch, c)
+	}
+	for _, want := range []string{`"pricing"`, `"pricing-fn"`} {
+		if !strings.Contains(c.Message, want) {
+			t.Errorf("message %q does not name %s", c.Message, want)
+		}
+	}
+	if strings.Contains(c.Message, `"orders"`) {
+		t.Errorf("message %q names the healthy binding", c.Message)
+	}
+}
+
+func TestBackendBindingsConditionNamesSpecMismatch(t *testing.T) {
+	app := zoneWithBackends(appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing-fn"})
+	b := zoneBindings{entries: []zoneBinding{{name: "pricing", service: "pricing-fn", state: bindingBound, specMismatch: true}}}
+	c := verdictConditionOrNil(bindingVerdict(app, b, nil), ConditionBackendBindings)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != ReasonBindingSpecMismatch ||
+		!strings.Contains(c.Message, `"pricing"`) {
+		t.Fatalf("want BackendBindings False/%s naming the binding, got %+v", ReasonBindingSpecMismatch, c)
+	}
+}
+
+// Image is the more specific reason, as on the function's own conditions; a
+// cross-zone entry (the zone does not even own the function) outranks both.
+func TestBackendBindingsConditionPinReasonPrecedence(t *testing.T) {
+	app := zoneWithBackends(appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing-fn"})
+	both := zoneBinding{name: "pricing", service: "pricing-fn", state: bindingBound, imageMismatch: true, specMismatch: true}
+	c := verdictConditionOrNil(bindingVerdict(app, zoneBindings{entries: []zoneBinding{both}}, nil), ConditionBackendBindings)
+	if c == nil || c.Reason != ReasonBindingImageMismatch {
+		t.Fatalf("image mismatch must outrank spec mismatch, got %+v", c)
+	}
+	cross := zoneBinding{name: "stolen", service: "billing-fn", state: bindingCrossZone, functionZone: "billing"}
+	c = verdictConditionOrNil(bindingVerdict(app, zoneBindings{entries: []zoneBinding{both, cross}}, nil), ConditionBackendBindings)
+	if c == nil || c.Reason != ReasonCrossZoneBinding || !strings.Contains(c.Message, `"pricing"`) {
+		t.Fatalf("cross-zone must outrank a pin mismatch and the message must still name it, got %+v", c)
+	}
+}
+
+// A refused-by-pin entry keeps rendering its env: refusing on the function's
+// side must not change a byte of the zone's Knative Service.
+func TestRenderBindingEnvIgnoresPinMismatch(t *testing.T) {
+	plain := zoneBindings{entries: []zoneBinding{{name: "pricing", service: "pricing-fn", state: bindingBound, wakeAhead: true}}}
+	refused := zoneBindings{entries: []zoneBinding{{
+		name: "pricing", service: "pricing-fn", state: bindingBound, wakeAhead: true, imageMismatch: true, specMismatch: true,
+	}}}
+	if got, want := renderBindingEnv("shop", nil, refused), renderBindingEnv("shop", nil, plain); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a pin mismatch changed the zone's rendered env:\n got %+v\nwant %+v", got, want)
+	}
+}

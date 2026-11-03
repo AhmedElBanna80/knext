@@ -242,6 +242,22 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 	})
 
 	t.Run("the operator is refused any other name, on every verb", func(t *testing.T) {
+		// The name rule's own refusal, told apart from the ownership rule's: an
+		// unowned object under a wrong name fails BOTH rules, so a bare policy denial
+		// would stay green if the name rule were loosened (the ownership rule alone
+		// still refuses). The message says which rule spoke.
+		nameDenial := func(err error) bool {
+			return isPolicyDenial(err) && strings.Contains(err.Error(), "it writes only the per-zone signing key and JWKS")
+		}
+		// A name that merely CONTAINS the suffix (the suffix is not at the end) is the
+		// name rule's to refuse, not the ownership rule's.
+		if err := operator.Create(ctx, secret(allowedSecret+"-copy")); !nameDenial(err) {
+			t.Errorf("operator created Secret %q (want the name-rule denial): %v", allowedSecret+"-copy", err)
+		}
+		if err := operator.Create(ctx, cm(allowedCM+"-copy")); !nameDenial(err) {
+			t.Errorf("operator created ConfigMap %q (want the name-rule denial): %v", allowedCM+"-copy", err)
+		}
+
 		// Create: a stranger's name, the other kind's suffix, a bare suffix with no
 		// zone, and a name that merely contains the suffix.
 		for _, name := range []string{"evil", "zone-a-knext-jwks", "knext-signing-key", allowedSecret + "-copy", "kube-root-ca.crt"} {

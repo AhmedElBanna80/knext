@@ -10,7 +10,7 @@
 # mode, with zero source changes.
 FROM scale-zero-pg/gateway:dev AS gw
 
-FROM alpine:3.20
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 RUN apk add --no-cache ca-certificates curl \
  && curl -fsSL -o /usr/local/bin/kubectl \
       https://dl.k8s.io/release/v1.29.2/bin/linux/arm64/kubectl \

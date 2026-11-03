@@ -139,6 +139,49 @@ spec:
               metrics scrape succeeds, and run `knext doctor`.
             runbook_url: "https://github.com/getknext-dev/knext/blob/main/docs/security/threat-model.md"
 
+        # A zone function whose Secret the operator cannot read is held as
+        # SovereigntyCompliant=Unknown/SecretsUnverified and its rollouts are held.
+        # The gauge's value is the unix time the hold began (absent when verified),
+        # so the duration is time() - value. Transient (non-403) errors are held
+        # WITHOUT limit: this fires after 10 minutes. `for` only de-flaps.
+        - alert: KnextFunctionSecretsUnverified
+          expr: >-
+            time() - knext_backendservice_secrets_unverified_since_timestamp_seconds{reason="transient"} > 600
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "function {{ $labels.namespace }}/{{ $labels.name }} has had unverifiable Secrets for over 10 minutes"
+            description: >-
+              The operator cannot read a Secret that BackendService
+              {{ $labels.namespace }}/{{ $labels.name }} references (apiserver
+              timeouts or errors), so it is held in SecretsUnverified and its
+              rollouts are held; a running function keeps serving. Run
+              `knext doctor` to list unverified functions and read the
+              SovereigntyCompliant condition for the Secret names.
+            runbook_url: "https://github.com/getknext-dev/knext/blob/main/docs/runbooks/troubleshooting.md#14--function-held-as-secretsunverified-the-operator-cannot-read-a-secret"
+
+        # The Forbidden path is different: a denied read (403) is held for 10
+        # minutes and then the function is REFUSED AND REMOVED. This pages well
+        # inside that window (after 3 minutes) so RBAC drift is fixed before it
+        # becomes an outage.
+        - alert: KnextFunctionSecretsAccessDenied
+          expr: >-
+            time() - knext_backendservice_secrets_unverified_since_timestamp_seconds{reason="forbidden"} > 180
+          labels:
+            severity: warning
+          annotations:
+            summary: "the operator is denied reading Secrets for function {{ $labels.namespace }}/{{ $labels.name }}"
+            description: >-
+              The operator has been denied (Forbidden) reading a Secret that
+              BackendService {{ $labels.namespace }}/{{ $labels.name }} references.
+              After 10 minutes of denial the function is refused and removed. Check
+              the operator's grant with `kubectl auth can-i get secrets -n
+              {{ $labels.namespace }}
+              --as=system:serviceaccount:<operator-namespace>:<operator-serviceaccount>`
+              and run `knext doctor`.
+            runbook_url: "https://github.com/getknext-dev/knext/blob/main/docs/runbooks/troubleshooting.md#14--function-held-as-secretsunverified-the-operator-cannot-read-a-secret"
+
         # SLO: reconcile latency. A slow control loop delays scale-up and
         # rollbacks. p95 over 30s sustained is degraded.
         - alert: KnextOperatorReconcileSlow

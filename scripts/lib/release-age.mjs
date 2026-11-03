@@ -122,7 +122,25 @@ function npmFromId(id, registry) {
 }
 
 /** A real subresource-integrity value, as bun and npm write it. */
-const SRI = /^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/;
+const SRI = /^(?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}|sha512-[A-Za-z0-9+/]{86}==)$/;
+
+/**
+ * The valid sha256/384/512 SRI among a whitespace-separated integrity list (npm writes
+ * `sha512-X sha1-Y` for packages with several digests), strongest first; undefined when
+ * none is valid. A sha1 or malformed token never counts, and never rescues a list.
+ *
+ * @param {unknown} value
+ * @returns {string | undefined}
+ */
+function validSri(value) {
+  if (typeof value !== 'string') return undefined;
+  const ok = value.split(/\s+/).filter((t) => SRI.test(t));
+  return (
+    ok.find((t) => t.startsWith('sha512-')) ??
+    ok.find((t) => t.startsWith('sha384-')) ??
+    ok.find((t) => t.startsWith('sha256-'))
+  );
+}
 
 /** A repository source (`github:o/r#…`, `git+ssh://…`). */
 const REPO_SPEC = /^(?:github:|gitlab:|bitbucket:|git(?:\+[a-z]+)?:\/\/|git\+)/;
@@ -146,9 +164,9 @@ function parseBunLock(text, parseJsoncFn) {
         .at(-1);
       // Only a repository spec may carry bun's own non-SRI id (`o-r-abc`) as its identity;
       // for any other source a trailing string that is not a real hash is not a hash.
-      if (integrity && (SRI.test(integrity) || REPO_SPEC.test(e.version))) {
-        e.integrity = integrity;
-      }
+      const sri = validSri(integrity);
+      if (sri) e.integrity = sri;
+      else if (integrity && REPO_SPEC.test(e.version)) e.integrity = integrity;
     }
     out.push(e);
   }
@@ -166,8 +184,8 @@ function parsePackageLock(text) {
     if (marker < 0 || e.inBundle) continue;
     const name = e.name ?? key.slice(marker + 'node_modules/'.length);
     const version = typeof e.version === 'string' ? e.version : '(none)';
-    const integrity =
-      typeof e.integrity === 'string' && SRI.test(e.integrity) ? { integrity: e.integrity } : {};
+    const sri = validSri(e.integrity);
+    const integrity = sri ? { integrity: sri } : {};
     if (typeof e.resolved !== 'string') {
       out.push({ ecosystem: 'npm', name, version, unresolved: 'no resolved URL', ...integrity });
     } else if (e.resolved.startsWith('file:')) {
@@ -321,10 +339,10 @@ export function changedEntries(head, base) {
 
 /** A repository source that pins a commit in its own spec (`github:o/r#sha`, `git+ssh://…#sha`). */
 const PINNED_REPO_SPEC =
-  /^(?:github:|gitlab:|bitbucket:|git(?:\+[a-z]+)?:\/\/|git\+).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\+[a-z]+)?:\/\/|git\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** `github:` deps resolve to a codeload tarball addressed by the full commit sha. */
 const COMMIT_TARBALL =
-  /^https:\/\/codeload\.github\.com\/[^/]+\/[^/]+\/tar\.gz\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  /^https:\/\/codeload\.github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/tar\.gz\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
  * An npm dependency fetched from a URL (tarball, other registry, no resolved URL) whose
@@ -339,7 +357,7 @@ export function isHashlessUrlSource(e) {
   return (
     e.ecosystem === 'npm' &&
     Boolean(e.unresolved) &&
-    !SRI.test(e.integrity ?? '') &&
+    !validSri(e.integrity) &&
     !(REPO_SPEC.test(e.version) && PINNED_REPO_SPEC.test(e.version)) &&
     !COMMIT_TARBALL.test(e.version)
   );

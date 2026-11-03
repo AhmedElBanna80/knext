@@ -12,6 +12,7 @@ import type { CheckContext, DoctorDeps } from "../cli/doctor/types";
 import {
     minorWithoutFixedRelease,
     NEXT_ADVISORIES,
+    type NextAdvisory,
     nextAdvisoriesFor,
 } from "../next-advisories";
 
@@ -86,6 +87,78 @@ describe("next advisory table", () => {
         expect(minorWithoutFixedRelease("12.3")).toEqual([RCE_IMAGE]);
         expect(minorWithoutFixedRelease("16.5")).toEqual([]);
         expect(minorWithoutFixedRelease("nope")).toEqual([]);
+    });
+
+    // An advisory that affects a line up to its LAST patch and is fixed only on
+    // the next minor leaves that whole line unfixed. The old `lastAffected`
+    // clause only ever removed results, so this returned [] and doctor would
+    // have recommended 16.3.x.
+    it("reports a line whose last patch is affected and whose fix is on the next minor", () => {
+        const table: readonly NextAdvisory[] = [
+            {
+                id: "GHSA-test-line-end",
+                severity: "high",
+                summary: "affects 16.3 through its last patch",
+                ranges: [
+                    {
+                        introduced: "16.3.0",
+                        lastAffected: "16.3.8",
+                        fixed: "16.4.0",
+                    },
+                ],
+            },
+        ];
+        expect(minorWithoutFixedRelease("16.3", table)).toEqual([
+            "GHSA-test-line-end",
+        ]);
+        // the line the fix ships on, and the one before the advisory began
+        expect(minorWithoutFixedRelease("16.4", table)).toEqual([]);
+        expect(minorWithoutFixedRelease("16.2", table)).toEqual([]);
+    });
+
+    // An advisory introduced MID-line (16.3.2) still leaves that line's latest
+    // patch affected: `introduced <= X.Y.0` missed it and returned [], so doctor
+    // would have recommended 16.3.
+    it("reports a line whose advisory was introduced mid-line and fixed on the next minor", () => {
+        const table: readonly NextAdvisory[] = [
+            {
+                id: "GHSA-test-mid-line",
+                severity: "high",
+                summary: "introduced in 16.3.2, last affected 16.3.8",
+                ranges: [
+                    {
+                        introduced: "16.3.2",
+                        lastAffected: "16.3.8",
+                        fixed: "16.4.0",
+                    },
+                ],
+            },
+        ];
+        expect(minorWithoutFixedRelease("16.3", table)).toEqual([
+            "GHSA-test-mid-line",
+        ]);
+        // lines on either side of the affected one stay clear
+        expect(minorWithoutFixedRelease("16.2", table)).toEqual([]);
+        expect(minorWithoutFixedRelease("16.4", table)).toEqual([]);
+    });
+
+    // A line that has its own fixed patch is never "without a fixed release".
+    it("does not report a line whose fix ships on the same minor", () => {
+        const table: readonly NextAdvisory[] = [
+            {
+                id: "GHSA-test-same-minor",
+                severity: "high",
+                summary: "fixed in 16.3.5",
+                ranges: [
+                    {
+                        introduced: "16.3.0",
+                        lastAffected: "16.3.4",
+                        fixed: "16.3.5",
+                    },
+                ],
+            },
+        ];
+        expect(minorWithoutFixedRelease("16.3", table)).toEqual([]);
     });
 
     it("returns nothing for a version it cannot parse", () => {

@@ -967,6 +967,10 @@ jobs:
             { echo "::error::this step modified the in-tree hook"; exit 1; }
           echo "OK: neutering deny() reddens the suite, and the in-tree hook is untouched"
       - name: Run the jev hook suite (offline, stubbed jev) and mutation-prove it
+        # Step-level bound: a hung suite (an infinite `yes` producer when SIGPIPE is ignored, as it
+        # is on GitHub's macOS runners) would otherwise sit until the job timeout. A healthy run,
+        # suite + prover, takes about 2-3 minutes on either OS.
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           # The jev result screen is an advisory layer ON TOP of the hook above; it fails

@@ -34,6 +34,10 @@
  *       bytes under the same URL passes).
  *   H1-H3 a hashless URL dependency is excusable by an exception / stops failing /
  *       is not classified as hashless.
+ *   H14-H16 a short bun-id sha pins a repo (bun's sha512 decision is I2); a multi-hash
+ *       list is judged by its first token / accepts a sha1 token.
+ *   H11-H13 SRI length/padding is not enforced; the repo part of a github: pin or a
+ *       codeload tarball URL stops excluding ?, # and @.
  *   W1  the workflow gets a soft-fail flag.
  *   W2  the workflow's token gains a write scope.
  *   W3  the workflow stops fetching full history.
@@ -277,8 +281,8 @@ const MUTATIONS = [
     id: 'I2',
     claim: 'bun.lock integrity is no longer read for unresolved entries',
     subject: 'lib',
-    anchor: '        e.integrity = integrity;',
-    replacement: '        void integrity;',
+    anchor: '      if (sri) e.integrity = sri;',
+    replacement: '      if (sri) void sri;',
   },
   {
     id: 'I3',
@@ -326,29 +330,29 @@ const MUTATIONS = [
     id: 'H4',
     claim: 'any #fragment (branch, tag, range) pins a repo spec, not only a full commit sha',
     subject: 'lib',
-    anchor: '|git\\+).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
-    replacement: `|git\\+).*#.+$/; /* ${M} */`,
+    anchor: '|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `|git\\+)[^#?]*#.+$/; /* ${M} */`,
   },
   {
     id: 'H5',
     claim: 'any non-empty integrity string counts as a hash (junk, whitespace)',
     subject: 'lib',
-    anchor: "!SRI.test(e.integrity ?? '') &&",
+    anchor: '!validSri(e.integrity) &&',
     replacement: `!e.integrity /* ${M} */ &&`,
   },
   {
     id: 'H6',
     claim: 'bun.lock accepts a non-SRI trailing id as the hash of a tarball entry',
     subject: 'lib',
-    anchor: 'if (integrity && (SRI.test(integrity) || REPO_SPEC.test(e.version))) {',
-    replacement: `if (integrity /* ${M} */) {`,
+    anchor: 'else if (integrity && REPO_SPEC.test(e.version)) e.integrity = integrity;',
+    replacement: `else if (integrity /* ${M} */) e.integrity = integrity;`,
   },
   {
     id: 'H7',
     claim: 'package-lock.json accepts a non-SRI integrity string as a hash',
     subject: 'lib',
-    anchor: "typeof e.integrity === 'string' && SRI.test(e.integrity) ?",
-    replacement: `typeof e.integrity === 'string' /* ${M} */ ?`,
+    anchor: 'const integrity = sri ? { integrity: sri } : {};',
+    replacement: `const integrity = typeof e.integrity === 'string' /* ${M} */ ? { integrity: e.integrity } : {};`,
   },
   {
     id: 'H8',
@@ -362,7 +366,7 @@ const MUTATIONS = [
     claim: 'the commit-tarball exemption accepts any host, not only codeload.github.com',
     subject: 'lib',
     anchor:
-      'https:\\/\\/codeload\\.github\\.com\\/[^/]+\\/[^/]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+      'https:\\/\\/codeload\\.github\\.com\\/[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
     replacement: `https:\\/\\/[^/]+\\/[^/]+\\/[^/]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
   },
   {
@@ -371,6 +375,54 @@ const MUTATIONS = [
     subject: 'lib',
     anchor: '} unresolved dependenc${',
     replacement: `} URL dependenc\${/* ${M} */ ''}\${`,
+  },
+  {
+    id: 'H11',
+    claim: 'an SRI value is accepted by charset alone, ignoring digest length and padding',
+    subject: 'lib',
+    anchor:
+      'const SRI = /^(?:sha256-[A-Za-z0-9+/]{43}=|sha384-[A-Za-z0-9+/]{64}|sha512-[A-Za-z0-9+/]{86}==)$/;',
+    replacement: `const SRI = /^sha(?:256|384|512)-[A-Za-z0-9+/=]+$/; /* ${M} */`,
+  },
+  {
+    id: 'H12',
+    claim:
+      'the owner/repo of a github:/gitlab:/bitbucket: pin is no longer a clean name (percent-escapes, ?, #, @)',
+    subject: 'lib',
+    anchor:
+      '  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `  /^(?:github:|gitlab:|bitbucket:).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
+  },
+  {
+    id: 'H13',
+    claim: 'the repo part of a codeload tarball URL accepts ?, # and @',
+    subject: 'lib',
+    anchor:
+      'codeload\\.github\\.com\\/[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `codeload\\.github\\.com\\/[^/]+\\/[^/]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
+  },
+  {
+    id: 'H14',
+    claim: 'a short (bun-id) sha pins a repo spec: the hex is widened to {7,64}',
+    subject: 'lib',
+    anchor:
+      '  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#[0-9a-f]{7,64}$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#[0-9a-f]{7,64}$/; /* ${M} */`,
+  },
+  {
+    id: 'H15',
+    claim:
+      'a multi-hash integrity is judged by its whole string / first token, not any valid SRI token',
+    subject: 'lib',
+    anchor: 'const ok = value.split(/\\s+/).filter((t) => SRI.test(t));',
+    replacement: `const ok = [value.split(/\\s+/)[0]].filter((t) => SRI.test(t)); /* ${M} */`,
+  },
+  {
+    id: 'H16',
+    claim: 'a sha1 token (or any non-SRI token) in a multi-hash list counts as a hash',
+    subject: 'lib',
+    anchor: 'const ok = value.split(/\\s+/).filter((t) => SRI.test(t));',
+    replacement: `const ok = value.split(/\\s+/).filter((t) => /^sha/.test(t)); /* ${M} */`,
   },
   {
     id: 'W1',

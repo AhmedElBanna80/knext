@@ -30,9 +30,8 @@ spec:
     metadata:
       labels: { app: compute, plane: compute }
     spec:
-      # Wake-critical path: keep hardening light. The compute image runs as the
-      # non-root `postgres` user by default; we only add seccomp here and leave
-      # uid/caps to the image so compute_ctl boot is never perturbed.
+      # Pod Security `restricted` on every container (see the per-container
+      # securityContext). The pod-level seccomp stays as defence in depth.
       securityContext:
         seccompProfile: { type: RuntimeDefault }
       # Fast drain: a Terminating compute holds the timeline (single-writer),
@@ -45,6 +44,16 @@ spec:
       initContainers:
         - name: wait-timeline
           image: docker.io/neondatabase/neon:8464@sha256:7a4f124917bb929964b2d696d710f19584f80bb9bd51b2af4a6e2425434c761f
+          # Pod Security `restricted`. Both images name their USER (neon / postgres,
+          # uid 1000:1000 in these digests), which the kubelet cannot verify as
+          # non-root, so the numeric id is spelled out (same as the rendered pods).
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
           envFrom:
             - configMapRef:
                 name: compute-config # TENANT_ID, TIMELINE_ID, PAGESERVER_HOST
@@ -67,6 +76,13 @@ spec:
           # PAIR (see docs/operations.md "Upgrades"). Never :latest here.
           image: docker.io/neondatabase/compute-node-v17:8464@sha256:13ab146d3e7bbabb25a8532f315ac443e7512351d1ede0bab586def5c70e26c3
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
           command: ["/bin/sh", "/compute-files/entrypoint.sh"]
           envFrom:
             - configMapRef:

@@ -508,6 +508,11 @@ The build also warns, naming the file, in two cases where it cannot know what to
 In both cases the binary throws `Cannot find module` if that code loads a package that was not bundled
 and is not deployed next to the binary.
 
+A package name assembled from string literals, such as `['io', 'redis'].join('')`, is a deliberate way
+to keep a bundler from following a package. The build reports it by name as "deliberately not bundled"
+and, unlike a name computed at runtime, does not fail a strict build. The binary throws if that code path
+runs and the package is not beside it, so guard such a load for the runtimes that reach it.
+
 To make these warnings a build failure (for example in CI), set `KNEXT_COMPILE_STRICT_REQUIRES=1` when
 you run `knext build`. Two limits apply:
 

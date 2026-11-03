@@ -90,6 +90,29 @@ describe("#2614: strict compile accepts the next/og shape and still refuses real
         );
     }, 150_000);
 
+    it("a deliberate runtime load of a literal-assembled package name (ioredis) passes strict and is named", () => {
+        const r = strictCompile(
+            OG_DISCARDED +
+                "const IOREDIS = ['io', 'redis'].join('');\n" +
+                "export const load = () => createRequire(import.meta.url)(IOREDIS);\n",
+        );
+        const out = r.stdout + r.stderr;
+        expect(r.status, out).toBe(0);
+        expect(out).toContain("ioredis");
+        expect(out).toContain("deliberately not bundled");
+    }, 150_000);
+
+    it("a runtime load of a name the build cannot fold still aborts the strict build", () => {
+        const r = strictCompile(
+            OG_DISCARDED +
+                "const PKG = process.env.PKG;\n" +
+                "export const load = () => createRequire(import.meta.url)(PKG);\n",
+        );
+        const out = r.stdout + r.stderr;
+        expect(r.status, out).toBe(1);
+        expect(out).toContain("non-literal package name");
+    }, 150_000);
+
     it("an unresolvable package required through the binding still aborts the strict build", () => {
         const r = strictCompile(
             OG_DISCARDED +

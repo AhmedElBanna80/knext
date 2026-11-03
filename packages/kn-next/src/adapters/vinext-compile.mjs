@@ -339,8 +339,16 @@ function planRuntimeRequires() {
     const dynamic = [];
     const ambiguousDynamic = [];
     const unrecognized = [];
+    // spec -> modules loading it by a literal-assembled constant name: known,
+    // deliberately not bundled (never embedded, never a strict failure).
+    const foldedRuntime = new Map();
     for (const [path, analysis] of modules) {
         if (analysis.unrecognizedBinding) unrecognized.push(name(path));
+        for (const spec of analysis.foldedRuntimeRequires) {
+            const users = foldedRuntime.get(spec) ?? new Set();
+            users.add(name(path));
+            foldedRuntime.set(spec, users);
+        }
         // name -> declarations that would make a hit on it NOT a require:
         // beyond the binding's own declaration where it is defined, any at all
         // where it is imported.
@@ -410,6 +418,7 @@ function planRuntimeRequires() {
         dynamic: [...new Set(dynamic)].sort(),
         ambiguousDynamic: [...new Set(ambiguousDynamic)].sort(),
         unrecognized,
+        foldedRuntime,
     };
 }
 
@@ -1571,6 +1580,14 @@ if (PLAN.ambiguousUnresolved.size > 0 || PLAN.ambiguousDynamic.length > 0) {
             `${parts.join("; ")}. The require's name is also declared by other code in that ` +
             "module (common in minified output), so this may be a false alarm; it does not " +
             "fail a KNEXT_COMPILE_STRICT_REQUIRES=1 build",
+    );
+}
+if (PLAN.foldedRuntime.size > 0) {
+    console.warn(
+        "[knext compile] WARNING: the server output loads package(s) at runtime by a name assembled " +
+            `from string literals, deliberately not bundled: ${describeSpecs(PLAN.foldedRuntime)} — ` +
+            "the binary throws if that code path runs and the package is not beside it " +
+            "(this does not fail a KNEXT_COMPILE_STRICT_REQUIRES=1 build)",
     );
 }
 if (PLAN.dynamic.length > 0) {

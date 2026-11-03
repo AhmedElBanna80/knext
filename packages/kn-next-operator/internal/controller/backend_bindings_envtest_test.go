@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -210,5 +211,88 @@ var _ = Describe("NextApp reconciler: rendering the zone's binding env", func() 
 			}
 		}
 		Expect(count).To(Equal(1))
+	})
+})
+
+// A function the zone's pin refuses is not "Bound" on the zone either: the
+// zone's BackendBindings condition names the refused binding. The zone's own
+// Knative Service does not move a byte (the pin must never roll a zone
+// revision), and the condition heals when the pin and the function agree again.
+var _ = Describe("NextApp reconciler: BackendBindings and the zone's pins", func() {
+	ctx := context.Background()
+
+	zoneBindingsCondition := func(ns string) *metav1.Condition {
+		app := &appsv1alpha1.NextApp{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "orders"}, app)).To(Succeed())
+		return apimeta.FindStatusCondition(app.Status.Conditions, ConditionBackendBindings)
+	}
+	setFunctionImage := func(ns, image string) {
+		bs := getFunction(ctx, ns, "pricing")
+		bs.Spec.Image = image
+		Expect(k8sClient.Update(ctx, bs)).To(Succeed())
+	}
+	// pinnedZone binds `pricing` to a function whose image carries the pinned digest.
+	pinnedZone := func() string {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing", Image: pinA})
+		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) { bs.Spec.Image = imageA })
+		return ns
+	}
+
+	It("names the function refused for BindingImageMismatch, leaves the zone's Knative Service untouched, and heals", func() {
+		ns := pinnedZone()
+		reconcileFunction(ctx, ns, "pricing")
+		reconcileZone(ctx, ns, "orders")
+		c := zoneBindingsCondition(ns)
+		Expect(c).NotTo(BeNil())
+		Expect(c.Status).To(Equal(metav1.ConditionTrue), "precondition: the matching function is bound")
+		before := zoneKsvc(ctx, ns, "orders")
+
+		By("a principal with only `update` on backendservices swaps the image")
+		setFunctionImage(ns, imageB)
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(functionCondition(getFunction(ctx, ns, "pricing"), ConditionReady).Reason).To(Equal(ReasonBindingImageMismatch))
+		reconcileZone(ctx, ns, "orders")
+
+		c = zoneBindingsCondition(ns)
+		Expect(c).NotTo(BeNil())
+		Expect(c.Status).To(Equal(metav1.ConditionFalse))
+		Expect(c.Reason).To(Equal(ReasonBindingImageMismatch))
+		Expect(c.Message).To(ContainSubstring(`"pricing"`))
+
+		after := zoneKsvc(ctx, ns, "orders")
+		Expect(after.Generation).To(Equal(before.Generation), "the pin must never roll a zone revision")
+		Expect(after.Spec.Template).To(Equal(before.Spec.Template), "the zone-render golden is identical")
+		Expect(zoneEnv(after)).To(HaveKey("PRICING_SERVICE_URL"))
+
+		By("restoring the pinned image heals the condition")
+		setFunctionImage(ns, imageA)
+		reconcileFunction(ctx, ns, "pricing")
+		reconcileZone(ctx, ns, "orders")
+		Expect(zoneBindingsCondition(ns).Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("names the function refused for BindingSpecMismatch", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", "orders")
+		digest, err := backendSpecDigest(&getFunction(ctx, ns, "pricing").Spec)
+		Expect(err).NotTo(HaveOccurred())
+		setZoneSpecPin(ctx, ns, digest)
+		reconcileFunction(ctx, ns, "pricing")
+		reconcileZone(ctx, ns, "orders")
+		Expect(zoneBindingsCondition(ns).Status).To(Equal(metav1.ConditionTrue), "precondition: the pinned spec is bound")
+
+		bs := getFunction(ctx, ns, "pricing")
+		bs.Spec.Env = append(bs.Spec.Env, corev1.EnvVar{Name: "EXTRA", Value: "1"})
+		Expect(k8sClient.Update(ctx, bs)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(functionCondition(getFunction(ctx, ns, "pricing"), ConditionReady).Reason).To(Equal(ReasonBindingSpecMismatch))
+		reconcileZone(ctx, ns, "orders")
+
+		c := zoneBindingsCondition(ns)
+		Expect(c.Status).To(Equal(metav1.ConditionFalse))
+		Expect(c.Reason).To(Equal(ReasonBindingSpecMismatch))
+		Expect(c.Message).To(ContainSubstring(`"pricing"`))
 	})
 })

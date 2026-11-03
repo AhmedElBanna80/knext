@@ -510,6 +510,14 @@ they apply whatever the state of the API server:
   It stays refused for as long as the denial lasts, without flipping back and forth. When access returns, the next pass
   renders the function again, as a new revision with a cold start.
 
+Two things tell you about it before it becomes an outage. Prometheus carries
+`knext_backendservice_secrets_unverified_since_timestamp_seconds{namespace,name,reason}`, one series per
+held function with `reason` `transient` or `forbidden`, valued at the Unix time the hold started. The
+`KnextFunctionSecretsUnverified` alert (warning) fires when a transient hold passes 10 minutes, and
+`KnextFunctionSecretsAccessDenied` (warning) fires after 3 minutes of denial, well inside the 10-minute
+window. The first denial also raises a `SecretsAccessDenied` Warning event on the function. And
+`knext doctor` lists the held functions, with the check below, as an "unverified-secrets" row.
+
 If `SecretsUnverified` does not clear on its own:
 
 1. Check the operator's permission to read Secrets:
@@ -517,7 +525,10 @@ If `SecretsUnverified` does not clear on its own:
 2. Check the API server's health, for example `kubectl get --raw='/readyz?verbose'`.
 3. Read the operator's logs for the error it reports for the Secret.
 
-The zone's `BackendBindings` condition is `True` when every `backends` entry is bound. Its
+The zone's `BackendBindings` condition is `True` when every `backends` entry is bound. It is
+`False` with the reason `BindingImageMismatch` or `BindingSpecMismatch` when a function is
+refused by the zone's own pin, and the message names the refused entry; the zone's pods and
+revisions are unchanged. Its
 `ZoneSigningKey` condition is present while the zone has a bound function: `True` with
 `KeyActive`, `RotationPropagating` or `RotationOverlap`, or `False` with
 `SigningKeySecretConflict`, `JWKSConfigMapConflict` or `SigningKeyInvalid`. Neither changes the
@@ -527,3 +538,4 @@ zone's `Ready`.
 | --- | --- |
 | `knext_backendservice_reconcile_total{result}` | Function reconcile loops, by `success` or `error`. |
 | `knext_backendservice_refusals_total{reason}` | Times a function was refused, by reason. Present at 0 from start-up. |
+| `knext_backendservice_secrets_unverified_since_timestamp_seconds{namespace,name,reason}` | Unix time since which a function has been held as `SecretsUnverified` (`reason` is `transient` or `forbidden`). No series while the function is verified. |

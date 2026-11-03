@@ -108,12 +108,16 @@ func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	bs := &appsv1alpha1.BackendService{}
 	if err := r.Get(ctx, req.NamespacedName, bs); err != nil {
+		if apierrors.IsNotFound(err) {
+			setUnverifiedGauge(req.Namespace, req.Name, nil)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	observed := bs.Status.DeepCopy()
 
 	// Deletion: take the Knative Service down, then release the object.
 	if !bs.DeletionTimestamp.IsZero() {
+		setUnverifiedGauge(bs.Namespace, bs.Name, nil)
 		if controllerutil.ContainsFinalizer(bs, BackendServiceFinalizer) {
 			// Best effort, and it never blocks the delete: the children carry this
 			// object's controller ownerReference, so garbage collection removes
@@ -202,8 +206,12 @@ func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		obs.unverified = mergeUnverified(obs.unverified, runUnverified)
 	}
 	now := time.Now()
+	obs.now = now
 	obs.deniedSince = nextDeniedSince(bs.Status.SecretsDeniedSince, hasDenied(obs.unverified), now)
 	obs.violations, obs.unverified = escalateDeniedSecrets(obs.violations, obs.unverified, obs.deniedSince, now)
+	// Published as soon as the function is observed, so an early error return
+	// below cannot strand a series that no longer describes it.
+	setUnverifiedGauge(bs.Namespace, bs.Name, unverifiedReportFor(bs, obs))
 
 	served, revision := bs.Status.ServedProtoVersion, bs.Status.ObservedRevision
 	// heldErr is returned AFTER the verdict is applied: an undecided pass reports
@@ -279,29 +287,42 @@ func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{RequeueAfter: verdict.requeueAfter}, nil
 }
 
-// applyFunctionVerdict emits the verdict's events, sets its conditions in
-// order and writes status only when it changed (the no-op guard).
+// applyFunctionVerdict sets the verdict's conditions in order, writes status
+// only when it changed (the no-op guard) and only then emits its events.
 func (r *BackendServiceReconciler) applyFunctionVerdict(
 	ctx context.Context,
 	bs *appsv1alpha1.BackendService,
 	observed *appsv1alpha1.BackendServiceStatus,
 	v functionVerdict,
 ) error {
+	if v.refusal != "" {
+		backendServiceRefusalsTotal.WithLabelValues(v.refusal).Inc()
+	}
+	for _, c := range v.conditions {
+		// SetStatusCondition moves LastTransitionTime on a Status change only. A
+		// condition that was Unknown for another reason (ZoneNotFound) and now
+		// becomes Unknown/SecretsUnverified keeps the old time, which the
+		// unverified gauge reads as the hold's start: drop it first so the
+		// transition into this hold is stamped now.
+		if prev := apimeta.FindStatusCondition(bs.Status.Conditions, c.Type); prev != nil &&
+			c.Reason == ReasonSecretsUnverified && prev.Status == c.Status && prev.Reason != c.Reason {
+			apimeta.RemoveStatusCondition(&bs.Status.Conditions, c.Type)
+		}
+		apimeta.SetStatusCondition(&bs.Status.Conditions, c)
+	}
+	if !apiequality.Semantic.DeepEqual(observed, &bs.Status) {
+		if err := r.Status().Update(ctx, bs); err != nil {
+			return err
+		}
+	}
+	// Events last: one announced before its status is persisted is emitted
+	// again by the next pass when the write conflicts.
 	for _, ev := range v.events {
 		if r.Recorder != nil {
 			r.Recorder.Event(bs, ev.eventType, ev.reason, ev.message)
 		}
 	}
-	if v.refusal != "" {
-		backendServiceRefusalsTotal.WithLabelValues(v.refusal).Inc()
-	}
-	for _, c := range v.conditions {
-		apimeta.SetStatusCondition(&bs.Status.Conditions, c)
-	}
-	if apiequality.Semantic.DeepEqual(observed, &bs.Status) {
-		return nil
-	}
-	return r.Status().Update(ctx, bs)
+	return nil
 }
 
 // secretMetadata returns a lookup that reads ONLY a Secret's metadata through

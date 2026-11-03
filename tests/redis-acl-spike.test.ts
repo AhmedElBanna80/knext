@@ -347,6 +347,12 @@ const NOT_REDIS_LINES: Record<string, Record<string, string>> = {
     'const SKIP_KEYS = new Set(["type", "start", "end", "loc", "range"]);':
       'AST property names, not a TYPE command tuple',
   },
+  'packages/kn-next/src/adapters/create-require-analyze.mjs': {
+    'const CREATE_REQUIRE_SOURCES = new Set(["module", "node:module"]);':
+      'the module specifiers `module` / `node:module`, not a MODULE command tuple',
+    'const SKIP_KEYS = new Set(["type", "start", "end"]);':
+      'AST property names, not a TYPE command tuple',
+  },
   'packages/kn-next/src/utils/logger.ts': {
     "* log.info({ imageTag: 'v1.0.0' }, 'Starting deployment');": 'a doc-comment example',
   },

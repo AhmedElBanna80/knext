@@ -397,6 +397,16 @@ The build also warns, naming the file, in two cases where it cannot know what to
 In both cases the binary throws `Cannot find module` if that code loads a package that was not bundled
 and is not deployed next to the binary.
 
+One computed name is exempt: `ioredis`, assembled as `['io', 'redis'].join('')`. `@getknext/lib` loads
+it that way on purpose so no bundler follows it, and its Redis client never reaches that load under Bun,
+which uses its built-in Redis client. A strict build does not fail for it, and the `knext build` log
+names it as "deliberately not bundled" when the server output has the form the build looks for: the
+vinext build, and a standalone build whose bundler keeps `createRequire(import.meta.url)`. A webpack
+standalone build rewrites that call, so the build does not name an `ioredis` load there. The exemption is
+by name and applies wherever the build finds that load, so it does not check that your own code guards
+it. The binary would throw if that code path ran without the package beside it. Any other computed
+name, including one assembled from string literals, is a non-literal require and fails a strict build.
+
 To make these warnings a build failure (for example in CI), set `KNEXT_COMPILE_STRICT_REQUIRES=1` when
 you run `knext build`. Two limits apply:
 

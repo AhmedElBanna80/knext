@@ -128,6 +128,12 @@ export default defineConfig([
       // (acorn) out of the compile script's node-builtins-only import closure;
       // it fails closed when absent, so it must ship in dist beside it.
       'adapters/asset-anchor-analyze': 'src/adapters/asset-anchor-analyze.mjs',
+      // The createRequire(import.meta.url) analysis behind the strict require
+      // check (#2614). entry-require-staticize SPAWNS it (`bun <path>`) beside
+      // itself, for the same reason as asset-anchor-analyze: acorn stays out of
+      // the compile script's node-builtins-only closure. It fails closed when
+      // absent, so it must ship in dist beside vinext-compile.
+      'adapters/create-require-analyze': 'src/adapters/create-require-analyze.mjs',
       // The compiled standalone-on-Bun build (`build: turbopack` + `runtime:
       // bun`): `next build`'s server.js -> a bytecode single executable.
       // Spawned as a SCRIPT (`bun run …`) like vinext-compile, for the same

@@ -75,7 +75,10 @@ export const DEFERRED_FROZEN = Object.freeze([
   '.github/workflows/compat-vinext.yml',
 ]);
 
-/** Open tracker for every DEFERRED_* / baseline entry below, and what closes it. */
+/**
+ * Open tracker for every DEFERRED_* / baseline entry below, and what closes it.
+ * @type {Readonly<{ issue: number, closes: string, removal: Readonly<Record<string, string>> }>}
+ */
 export const DEFERRAL_TRACKER = Object.freeze({
   issue: 2650,
   closes:
@@ -96,6 +99,9 @@ export const DEFERRAL_TRACKER = Object.freeze({
  * Known unmirrored pull sites per deferred file, as `<path>: <command>` entries (one per
  * occurrence, comment lines excluded) across the workflow and the scripts it references.
  * Regenerate with `pullSites(file)`; changing an entry is a reviewed decision.
+ * Typed as a record keyed by file, not by the literal's four keys: callers (and the
+ * guard tests) probe one deferred file at a time, and the literal type would reject that.
+ * @type {Readonly<Record<string, readonly string[]>>}
  */
 export const UNMIRRORED_BASELINE = Object.freeze({
   '.github/workflows/test-e2e-deploy.yml': Object.freeze([
@@ -209,6 +215,8 @@ function multisetMinus(a, b) {
 /**
  * Deferred files whose real pull sites differ from the pinned baseline.
  * `added` = a new unmirrored pull; `removed` = a baselined pull that is gone (stale).
+ * @param {string} [repoRoot]
+ * @param {Readonly<Record<string, readonly string[]>>} [baseline]
  * @returns {{ file: string, added: string[], removed: string[] }[]}
  */
 export function baselineDrift(repoRoot = REPO_ROOT, baseline = UNMIRRORED_BASELINE) {

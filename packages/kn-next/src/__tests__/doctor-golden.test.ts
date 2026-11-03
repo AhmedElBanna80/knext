@@ -60,6 +60,17 @@ function stubKubectl(table: Record<string, StubEntry>): KubectlFn {
     return (args) => {
         const key = args.join(" ");
         const hit = table[key];
+        if (
+            !hit &&
+            key === "kubectl get backendservices --all-namespaces -o json"
+        ) {
+            // Not part of what these suites pin: model the CRD as not installed.
+            return {
+                ok: false,
+                stdout: "",
+                stderr: 'error: the server doesn\'t have a resource type "backendservices"',
+            };
+        }
         if (!hit) {
             return { ok: false, stdout: "", stderr: `no stub for: ${key}` };
         }

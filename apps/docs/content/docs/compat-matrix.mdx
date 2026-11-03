@@ -9,15 +9,16 @@ description: Honest, evidence-gated status of what the knext adapter supports.
 
 <Callout type="warn">
 **Status: a credentialing window is currently in progress, not complete.**
-On the knext 2.x line the official suite now runs against Next.js v16.4.0.
-That is the minimum knext 2.0 supports. `knext create` scaffolds a newer Next.js release on the
-same 16.4.x line, 16.4.3, because 16.4.0 and every earlier release are affected by critical
+On the knext 2.x line the official suite now runs against Next.js v16.4.3.
+That is the patched release `knext create` scaffolds. It sits on the same 16.4.x line as the
+minimum knext 2.0 supports, 16.4.0, which (like every earlier release) is affected by critical
 security advisories (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr) fixed in 16.4.1 — see
 [Next.js security upgrades](/docs/upgrading#nextjs-security-upgrades). Every credential run executes against a published release-candidate build, not the
 fast-moving main branch. The 14-consecutive-run count needed before any cell is
 considered fully credentialed **has not yet completed for any cell, and no credential run at
-v16.4.0 has counted yet**, so don't read anything on this page as "14 of 14, passing."
-**What is proven at v16.4.0:** dispatched runs of the Turbopack build on the Node runtime
+v16.4.3 has counted yet**, so don't read anything on this page as "14 of 14, passing."
+**What is proven so far, all at v16.4.0 (the previous harness release on the same line; at v16.4.3
+only a single dispatch has run, on one cell, and it counted toward no credential):** dispatched runs of the Turbopack build on the Node runtime
 (16 shards each). The first passed 1160 of 1168 test files, and all eight failures were
 investigated:
 
@@ -31,7 +32,7 @@ investigated:
 The run after the harness change passed 1165 of 1166 test files. The one failure is the
 `file:`-dependency harness case above, so it is a test-setup gap, not a knext defect.
 
-The Webpack build and the Bun runtime have not yet been run at v16.4.0. Dispatched
+The Webpack build and the Bun runtime have not yet been run on the 16.4 line. Dispatched
 confirmation runs at v16.3.8, on the 1.x line, passed on all four cells (node/bun x
 turbopack/webpack): 16 shards each, 1101 of 1101 tests passing. Neither result is a substitute
 for the 14-run window. See

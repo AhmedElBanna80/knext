@@ -201,8 +201,65 @@ EOF
   # @getknext/core's @getknext/lib + @getknext/db deps from the local tarballs instead of
   # the (not-yet-published) registry, and a single reify keeps the
   # snapshot/restore window minimal.
+  # ── Exact-prerelease React pins vs next's `^19.0.0` peer (v1.3 lane, Next >= 16.4).
+  # Fixtures pin an EXACT React canary (`react@19.3.0-canary-fef12a01-20260413`,
+  # `-da9325b5-20260417`; test/e2e/gssp-redirect*, rewrite-with-browser-history,
+  # router-hash-navigation, scroll-back-restoration, …). next@16.4.3 peers
+  # `react@"^18.2.0 || 19.0.0-rc-de68d2f4-20241204 || ^19.0.0"`, and by semver a
+  # prerelease of 19.3.0 does NOT satisfy `^19.0.0`, so `npm install` aborts with
+  # ERESOLVE before the fixture builds (~10 files red for an install artifact, not a
+  # runtime result). Upstream's own harness reconciles exactly this pair by rewriting
+  # peers to exact versions (`prepareLocalPackages`); do the same, TARGETED: only a
+  # react / react-dom spec that is an exact prerelease gets next's own react /
+  # react-dom peer edge overridden to the fixture's pin (npm `overrides`, scoped under
+  # `next`, `$name` = the root dependency spec). NOT `--legacy-peer-deps`: that is a
+  # blanket flag which would also accept every other peer conflict (sass, a stable
+  # React that is genuinely out of range, …) and mask a real regression. Anything that
+  # is not an exact-prerelease react family pin resolves exactly as before.
+  # package.json is rewritten for the duration of the install ONLY and restored
+  # byte-for-byte afterwards (also when the install fails).
+  PKG_JSON="${APP_DIR}/package.json"
+  PKG_ORIG=""
+  PEER_PKG="$(node -e '
+    const fs = require("node:fs");
+    const file = process.argv[1];
+    let raw;
+    try { raw = fs.readFileSync(file, "utf8"); } catch { process.exit(0); }
+    let p;
+    try { p = JSON.parse(raw); } catch { process.exit(0); }
+    const PRE = /^\d+\.\d+\.\d+-[0-9A-Za-z.-]+$/;
+    const pinned = [];
+    for (const name of ["react", "react-dom"]) {
+      for (const sec of ["dependencies", "devDependencies", "optionalDependencies"]) {
+        const spec = p[sec] && p[sec][name];
+        if (typeof spec === "string" && PRE.test(spec)) { pinned.push(name); break; }
+      }
+    }
+    if (pinned.length === 0) process.exit(0);
+    const ov = p.overrides === undefined ? {} : p.overrides;
+    if (ov === null || typeof ov !== "object" || Array.isArray(ov)) process.exit(0);
+    if (ov.next !== undefined && (ov.next === null || typeof ov.next !== "object")) process.exit(0);
+    const nextOv = Object.assign({}, ov.next || {});
+    for (const name of pinned) if (nextOv[name] === undefined) nextOv[name] = "$" + name;
+    p.overrides = Object.assign({}, ov, { next: nextOv });
+    process.stdout.write(JSON.stringify(p, null, 2) + "\n");
+  ' "${PKG_JSON}" 2>/dev/null || true)"
+  if [ -n "${PEER_PKG}" ]; then
+    log "fixture pins an exact React prerelease — reconciling next's react/react-dom peer edge to the fixture's own pin for this install only (npm overrides under next; NOT --legacy-peer-deps)"
+    PKG_ORIG="$(mktemp "${APP_DIR}/.knext-pkg-orig.XXXXXX")"
+    cp -p "${PKG_JSON}" "${PKG_ORIG}"
+    printf '%s' "${PEER_PKG}" > "${PKG_JSON}"
+  fi
+  NPM_INSTALL_RC=0
   # shellcheck disable=SC2086
-  npm install --no-save --no-audit --no-fund "${LIB_TGZ}" "${DB_TGZ}" "${CORE_TGZ}" ${TS_PIN} >&2
+  npm install --no-save --no-audit --no-fund "${LIB_TGZ}" "${DB_TGZ}" "${CORE_TGZ}" ${TS_PIN} >&2 || NPM_INSTALL_RC=$?
+  if [ -n "${PKG_ORIG}" ]; then
+    cp -p "${PKG_ORIG}" "${PKG_JSON}"
+    rm -f "${PKG_ORIG}"
+  fi
+  if [ "${NPM_INSTALL_RC}" != "0" ]; then
+    exit "${NPM_INSTALL_RC}"
+  fi
 
   # Restore fixture-shipped packages the reify pruned (B3).
   if [ -n "${NM_SNAP}" ]; then

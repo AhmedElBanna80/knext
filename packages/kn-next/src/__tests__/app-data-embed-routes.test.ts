@@ -73,8 +73,11 @@ describe("the matcher is Next's own picomatch when next is installed in the app"
             "/(group)/x",
             "/{api,admin}/*",
             "api/*",
+            "*/x",
         ];
         const routes = [
+            "/.well-known/x",
+            "/.hidden",
             "/",
             "/api",
             "/api/foo",

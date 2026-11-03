@@ -636,8 +636,9 @@ writeFileSync(process.cwd() + "/seen-env.json", JSON.stringify({
   DEVONLY: process.env.DEVONLY ?? null, EXPLICIT: process.env.EXPLICIT ?? null, LOCAL: process.env.LOCAL ?? null,
 }));
 export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n`;
-        const setup = () => {
+        const setup = (withNext = false) => {
             const app = baseApp("", WRITE_ENV);
+            if (withNext) installNext(app.work);
             write(join(app.work, "data/a.json"), "{}\n");
             write(join(app.work, ".env"), "BASE=base\nPICK=base\n");
             write(
@@ -656,6 +657,23 @@ export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n`;
 
         it("NODE_ENV unset, compile started in the app root: production files win over the development ones Bun auto-loaded; a shell value wins over every file", () => {
             const app = setup();
+            const b = compile(app.work, [], {
+                NODE_ENV: "",
+                EXPLICIT: "shell",
+            });
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(seen(app.work)).toEqual({
+                NODE_ENV: "production",
+                PICK: "prod",
+                BASE: "base",
+                DEVONLY: null,
+                EXPLICIT: "shell",
+                LOCAL: "local",
+            });
+        }, 180_000);
+
+        it("with next installed, the files are loaded by Next's own loader and the result is the same", () => {
+            const app = setup(true);
             const b = compile(app.work, [], {
                 NODE_ENV: "",
                 EXPLICIT: "shell",

@@ -295,6 +295,74 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 		Expect(bs.Finalizers).To(ContainElement(BackendServiceFinalizer))
 	})
 
+	It("spec.security.networkPolicy: default renders the policy; false removes it and never renders it; true re-creates it", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", "orders")
+		npKey := types.NamespacedName{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")}
+
+		By("unset: the policy is rendered (default on)")
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{})).To(Succeed())
+
+		By("explicit false: the previously-rendered policy is deleted")
+		cur := getFunction(ctx, ns, "pricing")
+		cur.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: ptr.To(false)}
+		Expect(k8sClient.Update(ctx, cur)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{}))).To(BeTrue())
+		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue(), "opting out of the policy must not stop the function rendering")
+
+		By("still false after another reconcile: never re-rendered")
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{}))).To(BeTrue())
+
+		By("re-enabled: the policy is re-created")
+		cur = getFunction(ctx, ns, "pricing")
+		cur.Spec.Security.NetworkPolicy = ptr.To(true)
+		Expect(k8sClient.Update(ctx, cur)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{})).To(Succeed())
+	})
+
+	It("spec.security.networkPolicy=false on a fresh function never renders the policy", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: ptr.To(false)}
+		})
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
+		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")}, &networkingv1.NetworkPolicy{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("spec.security.networkPolicy=false leaves a same-named NetworkPolicy the function does not control untouched", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: ptr.To(false)}
+		})
+		foreign := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")},
+			Spec:       networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}},
+		}
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(foreign), &networkingv1.NetworkPolicy{})).To(Succeed(),
+			"the opt-out deletes only a policy this function controls")
+	})
+
+	It("spec.security.networkPolicy: an empty security block means ON", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{}
+		})
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")}, &networkingv1.NetworkPolicy{})).To(Succeed())
+	})
+
 	It("ignores a stray serviceAccountName: the apiserver prunes it and the pod uses the operator-owned ServiceAccount", func() {
 		ns := bsNamespace(ctx)
 		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})

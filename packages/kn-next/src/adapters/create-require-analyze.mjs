@@ -10,6 +10,10 @@
  *     `(() => create(...))()` IIFE rolldown emits): `name` is that identifier.
  *   - `direct`   — called at once (`create(...)(spec)`): `dynamic` is true when
  *     the argument is not one plain string literal, else `spec` is its value.
+ *     A dynamic call whose argument is a constant assembled from string literals
+ *     (`['io', 'redis'].join('')`, directly or through a name the module binds
+ *     once and never reassigns) also carries `folded`, the package name: a
+ *     deliberate load of a known package, see `foldSpecifier`.
  *   - `resolve`  — `create(...).resolve(...)`, an existence probe. Accounted for,
  *     never embedded and never strict-failed (Node's own `require.resolve`
  *     idiom, which callers catch).
@@ -148,8 +152,149 @@ function isDiscarded(node, parents) {
     return false;
 }
 
+/**
+ * `['io', 'redis'].join('')` -> "ioredis": the one idiom the repo uses to keep a
+ * package name invisible to a bundler (@getknext/lib's ioredis loader). Only an
+ * array of plain string literals joined with the empty string folds; anything
+ * else (a variable element, another separator, a template with substitutions)
+ * returns null and the call stays a non-literal require.
+ */
+function foldJoin(node) {
+    if (
+        node.type !== "CallExpression" ||
+        node.callee.type !== "MemberExpression" ||
+        node.callee.computed ||
+        node.callee.property.name !== "join" ||
+        node.callee.object.type !== "ArrayExpression" ||
+        node.arguments.length !== 1 ||
+        literalSpec(node.arguments[0]) !== ""
+    ) {
+        return null;
+    }
+    let out = "";
+    for (const el of node.callee.object.elements) {
+        const part = el === null ? null : literalSpec(el);
+        if (part === null) return null;
+        out += part;
+    }
+    return out === "" ? null : out;
+}
+
+/** Every identifier a binding pattern introduces. */
+function patternNames(node, into) {
+    if (!node) return;
+    switch (node.type) {
+        case "Identifier":
+            into.push(node.name);
+            break;
+        case "ObjectPattern":
+            for (const p of node.properties) {
+                patternNames(p.type === "RestElement" ? p.argument : p.value, into);
+            }
+            break;
+        case "ArrayPattern":
+            for (const el of node.elements) patternNames(el, into);
+            break;
+        case "RestElement":
+            patternNames(node.argument, into);
+            break;
+        case "AssignmentPattern":
+            patternNames(node.left, into);
+            break;
+    }
+}
+
+/**
+ * Per name: how many times the module binds it, every value written to it by a
+ * declarator initialiser or a plain `name = value` assignment (bundler output
+ * hoists `let a, b;` and assigns inside a lazy init function), and whether any
+ * other write touches it (compound or destructuring assignment, `++`, a `for`
+ * target). Scope-blind on purpose (a name bound twice anywhere is simply not
+ * foldable), so it can only make the fold refuse, never accept a name that
+ * could mean something else.
+ */
+function bindingFacts(ast) {
+    const bound = new Map();
+    const writes = new Map();
+    const reassigned = new Set();
+    const write = (name, value) => writes.set(name, [...(writes.get(name) ?? []), value]);
+    const bind = (name) => bound.set(name, (bound.get(name) ?? 0) + 1);
+    const stack = [ast];
+    while (stack.length > 0) {
+        const node = stack.pop();
+        const names = [];
+        switch (node.type) {
+            case "VariableDeclarator":
+                patternNames(node.id, names);
+                for (const n of names) bind(n);
+                if (node.id.type === "Identifier" && node.init) write(node.id.name, node.init);
+                break;
+            case "FunctionDeclaration":
+            case "FunctionExpression":
+            case "ArrowFunctionExpression":
+                if (node.id) names.push(node.id.name);
+                for (const p of node.params) patternNames(p, names);
+                for (const n of names) bind(n);
+                break;
+            case "ClassDeclaration":
+            case "ClassExpression":
+                if (node.id) bind(node.id.name);
+                break;
+            case "CatchClause":
+                patternNames(node.param, names);
+                for (const n of names) bind(n);
+                break;
+            case "ImportSpecifier":
+            case "ImportDefaultSpecifier":
+            case "ImportNamespaceSpecifier":
+                bind(node.local.name);
+                break;
+            case "AssignmentExpression":
+                if (node.operator === "=" && node.left.type === "Identifier") {
+                    write(node.left.name, node.right);
+                } else {
+                    patternNames(node.left, names);
+                    for (const n of names) reassigned.add(n);
+                }
+                break;
+            case "UpdateExpression":
+                if (node.argument.type === "Identifier") reassigned.add(node.argument.name);
+                break;
+            case "ForInStatement":
+            case "ForOfStatement":
+                if (node.left.type !== "VariableDeclaration") {
+                    patternNames(node.left, names);
+                    for (const n of names) reassigned.add(n);
+                }
+                break;
+        }
+        for (const key of Object.keys(node)) {
+            if (SKIP_KEYS.has(key)) continue;
+            const value = node[key];
+            for (const child of Array.isArray(value) ? value : [value]) {
+                if (child && typeof child.type === "string") stack.push(child);
+            }
+        }
+    }
+    return { bound, writes, reassigned };
+}
+
+/**
+ * The package name a dynamic `create(...)(arg)` argument is built from, when
+ * `arg` is the literal-join idiom itself or a name bound exactly once and
+ * written exactly once, with that idiom. Null for everything else.
+ */
+function foldSpecifier(arg, facts) {
+    if (arg.type === "Identifier") {
+        if (facts.bound.get(arg.name) !== 1 || facts.reassigned.has(arg.name)) return null;
+        const writes = facts.writes.get(arg.name) ?? [];
+        return writes.length === 1 ? foldJoin(writes[0]) : null;
+    }
+    return foldJoin(arg);
+}
+
 /** Classify one `createRequire(import.meta.url)` call by where its value goes. */
-function classify(call, parents) {
+function classify(call, parents, getFacts) {
     let value = call;
     let parent = parents.get(value);
 
@@ -187,7 +332,13 @@ function classify(call, parents) {
             const spec = literalSpec(parent.arguments[0]);
             if (spec !== null) return { kind: "direct", dynamic: false, spec };
         }
-        return { kind: "direct", dynamic: true, spec: null };
+        const folded =
+            parent.arguments.length === 1
+                ? foldSpecifier(parent.arguments[0], getFacts())
+                : null;
+        return folded === null
+            ? { kind: "direct", dynamic: true, spec: null }
+            : { kind: "direct", dynamic: true, spec: null, folded };
     }
 
     if (
@@ -257,9 +408,14 @@ export function analyzeCreateRequire(src) {
         }
     }
 
+    let facts = null;
+    const getFacts = () => {
+        facts ??= bindingFacts(ast);
+        return facts;
+    };
     return {
         aliases,
-        sites: calls.map((call) => classify(call, parents)),
+        sites: calls.map((call) => classify(call, parents, getFacts)),
         parseError: null,
     };
 }

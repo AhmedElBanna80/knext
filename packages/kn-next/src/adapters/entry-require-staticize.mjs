@@ -308,6 +308,7 @@ function analyzeCreateRequire(src, analyzerPath) {
  *   nonLiteralCallees: Set<string>,
  *   declarationCounts: Map<string, number>,
  *   unrecognizedBinding: boolean,
+ *   foldedRuntimeRequires: string[],
  * }}
  */
 export function analyzeServerModule(src, analyzerPath) {
@@ -321,6 +322,10 @@ export function analyzeServerModule(src, analyzerPath) {
     // lands in the SAME map the general scan adds to.
     const literalCalls = new Map();
     const nonLiteralCallees = new Set();
+    // Packages a DIRECT call loads by a constant assembled from string literals
+    // (`['io', 'redis'].join('')`): a deliberate runtime load of a known name.
+    // Reported, never embedded and never strict-failed (see create-require-analyze).
+    const foldedRuntimeRequires = new Set();
     let aliases = [];
     let unrecognizedBinding = false;
     if (src.includes("createRequire")) {
@@ -333,7 +338,9 @@ export function analyzeServerModule(src, analyzerPath) {
             if (site.kind === "binding") {
                 requireBindings.add(site.name);
             } else if (site.kind === "direct") {
-                if (site.dynamic) {
+                if (site.dynamic && typeof site.folded === "string") {
+                    foldedRuntimeRequires.add(site.folded);
+                } else if (site.dynamic) {
                     requireBindings.add(DIRECT_CALL_MARKER);
                     nonLiteralCallees.add(DIRECT_CALL_MARKER);
                 } else if (isBareNonBuiltin(site.spec)) {
@@ -447,6 +454,7 @@ export function analyzeServerModule(src, analyzerPath) {
         nonLiteralCallees,
         declarationCounts,
         unrecognizedBinding,
+        foldedRuntimeRequires: [...foldedRuntimeRequires].sort(),
     };
 }
 

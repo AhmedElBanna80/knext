@@ -43,7 +43,7 @@ const IMAGE_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*(?:@sha256:[0-9a-f]{64})?$/;
  *   file: string,
  *   line: number,
  *   image: string,
- *   origin: string,
+ *   origin: 'FROM' | 'COPY',
  *   kind: string,
  *   key?: string,
  *   digest?: string,
@@ -102,8 +102,8 @@ function normalizeKey(nameAndTag) {
 
 function classify(image, file, line, stages, origin) {
   const base = { file, line, image, origin };
-  if (origin === 'from' && image === 'scratch') return { ...base, kind: 'scratch' };
-  if (stages.has(image) || (origin === 'copy' && /^\d+$/.test(image))) {
+  if (origin === 'FROM' && image === 'scratch') return { ...base, kind: 'scratch' };
+  if (stages.has(image) || (origin === 'COPY' && /^\d+$/.test(image))) {
     return { ...base, kind: 'stage' };
   }
   if (!IMAGE_TOKEN.test(image)) return { ...base, kind: 'unparseable' };
@@ -130,17 +130,17 @@ export function parseDockerfileRefs(text, file) {
       const tokens = from[1].split(/\s+/).filter((t) => !t.startsWith('--'));
       const image = tokens[0];
       if (image === undefined) {
-        refs.push({ file, line: index + 1, image: '', origin: 'from', kind: 'unparseable' });
+        refs.push({ file, line: index + 1, image: '', origin: 'FROM', kind: 'unparseable' });
         continue;
       }
-      refs.push(classify(image, file, index + 1, stages, 'from'));
+      refs.push(classify(image, file, index + 1, stages, 'FROM'));
       const alias = /\bAS\s+([\w.-]+)/i.exec(from[1]);
       if (alias) stages.add(alias[1]);
       continue;
     }
     const copy = /^COPY\s+.*?--from=(\S+)/i.exec(line);
     if (copy && !stages.has(copy[1])) {
-      refs.push(classify(copy[1], file, index + 1, stages, 'copy'));
+      refs.push(classify(copy[1], file, index + 1, stages, 'COPY'));
     }
   }
   return refs.filter((r) => r.kind !== 'stage' && r.kind !== 'scratch');

@@ -31,7 +31,7 @@ const TODAY = new Date('2026-11-02T00:00:00Z');
 
 const dirs: string[] = [];
 afterEach(() => {
-  while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
+  for (const root of dirs.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function fixture(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), 'dfdigest-'));

@@ -29,6 +29,7 @@ import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FOLD_SPEC = 'packages/kn-next/src/__tests__/entry-require-staticize-folded-spec.test.ts';
 const COMPILE_SPEC = 'packages/kn-next/src/__tests__/vinext-compile-og-strict-require.test.ts';
+const EMBED_SPEC = 'packages/kn-next/src/__tests__/compile-embed.test.ts';
 
 // The analysis rows. Each anchor is a whole line (or two) so it occurs once.
 const FOLD = [
@@ -36,9 +37,9 @@ const FOLD = [
     id: 'F01',
     subject: 'analyze',
     claim: 'folding is accepted for a name written twice (any write that folds wins)',
-    anchor: '        return writes.length === 1 ? foldJoin(writes[0]) : null;',
+    anchor: '        folded = writes.length === 1 ? foldJoin(writes[0]) : null;',
     replacement:
-      '        return writes.length >= 1 ? (writes.map(foldJoin).find((f) => f !== null) ?? null) : null;',
+      '        folded = writes.length >= 1 ? (writes.map(foldJoin).find((f) => f === FOLDED_RUNTIME_PACKAGE) ?? null) : null;',
   },
   {
     id: 'F02',
@@ -51,7 +52,7 @@ const FOLD = [
   {
     id: 'F03',
     subject: 'analyze',
-    claim: 'folding is accepted for a name changed by a compound assignment or ++',
+    claim: 'the reassigned-name set is ignored (every write form other than a plain assignment)',
     anchor:
       '        if (facts.bound.get(arg.name) !== 1 || facts.reassigned.has(arg.name)) return null;',
     replacement: '        if (facts.bound.get(arg.name) !== 1) return null;',
@@ -71,18 +72,11 @@ const FOLD = [
     replacement: '        if (part === null) continue;\n        out += part;',
   },
   {
-    id: 'F06',
-    subject: 'analyze',
-    claim: 'an empty fold is accepted as a package name',
-    anchor: '    return out === "" ? null : out;',
-    replacement: '    return out;',
-  },
-  {
     id: 'F07',
     subject: 'analyze',
     claim: 'the inline literal-join argument no longer folds',
-    anchor: '    return foldJoin(arg);\n}',
-    replacement: '    return null;\n}',
+    anchor: '        folded = foldJoin(arg);',
+    replacement: '        folded = null;',
   },
   {
     id: 'F08',
@@ -97,6 +91,63 @@ const FOLD = [
     claim: 'a hoisted declaration assigned once is not counted as a write (writes stay empty)',
     anchor: '                    write(node.left.name, node.right);',
     replacement: '                    void node.right;',
+  },
+  {
+    id: 'X01',
+    subject: 'analyze',
+    claim: 'the exact-name check is removed (sharp, a path, node:fs fold and are exempted)',
+    anchor: '    return folded === FOLDED_RUNTIME_PACKAGE ? folded : null;',
+    replacement: '    return folded;',
+  },
+  {
+    id: 'U01',
+    subject: 'analyze',
+    claim: 'a name changed by ++ is still folded',
+    anchor: '                if (node.argument.type === "Identifier") reassigned.add(node.argument.name);',
+    replacement: '                void node.argument;',
+  },
+  {
+    id: 'U02',
+    subject: 'analyze',
+    claim: 'a for-in/for-of target is not counted as a write',
+    anchor: '                if (node.left.type !== "VariableDeclaration") {',
+    replacement: '                if (false) {',
+  },
+  {
+    id: 'U03',
+    subject: 'analyze',
+    claim: 'a catch parameter does not count as a second binding',
+    anchor: '            case "CatchClause":\n                patternNames(node.param, names);',
+    replacement: '            case "CatchClause":\n                void node.param;',
+  },
+  {
+    id: 'U04',
+    subject: 'analyze',
+    claim: 'object-pattern properties bind no names (destructured shadow or write unseen)',
+    anchor: 'p.type === "RestElement" ? p.argument : p.value',
+    replacement: 'null',
+  },
+  {
+    id: 'U05',
+    subject: 'analyze',
+    claim: 'an object rest element binds no name',
+    anchor: 'p.type === "RestElement" ? p.argument : p.value',
+    replacement: 'p.value',
+  },
+  {
+    id: 'U06',
+    subject: 'analyze',
+    claim: 'array-pattern elements bind no names',
+    anchor: '            for (const el of node.elements) patternNames(el, into);',
+    replacement: '            void node.elements;',
+  },
+  {
+    id: 'U07',
+    subject: 'analyze',
+    claim: 'a compound or destructuring assignment target is not counted as a write',
+    anchor:
+      '                } else {\n                    patternNames(node.left, names);\n                    for (const n of names) reassigned.add(n);\n                }',
+    replacement: '                } else {\n                    void node.left;\n                }',
   },
   {
     id: 'S01',
@@ -122,6 +173,37 @@ const FOLD = [
 ];
 
 // The compile-level rows: the build's exit code is the gate.
+const STANDALONE = [
+  {
+    id: 'N01',
+    subject: 'embed',
+    claim: 'the unembedded report drops a folded-only module (the load vanishes without trace)',
+    anchor: "|| foldedRuntimeRequires.length > 0)",
+    replacement: ')',
+  },
+  {
+    id: 'N02',
+    subject: 'embed',
+    claim: 'the summary line names nothing',
+    anchor: "  if (byPackage.size === 0) return null;",
+    replacement: '  return null;',
+  },
+  {
+    id: 'N03',
+    subject: 'standalone',
+    claim: 'the standalone compile never asks for the summary',
+    anchor: '    const folded = foldedRuntimeSummary(dynamic);',
+    replacement: '    const folded = null;',
+  },
+  {
+    id: 'N04',
+    subject: 'standalone',
+    claim: 'the standalone compile computes the summary but never prints it',
+    anchor: '    if (folded) console.warn(',
+    replacement: '    if (false) console.warn(',
+  },
+];
+
 const COMPILE = [
   {
     id: 'E01c',
@@ -174,19 +256,29 @@ const compile = createGuardProver({
   },
 });
 
+const embed = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: EMBED_SPEC,
+  subjects: {
+    embed: 'packages/kn-next/src/adapters/compile-embed.mjs',
+    standalone: 'packages/kn-next/src/adapters/standalone-compile.mjs',
+  },
+});
+
 console.log(
   '=== mutation proof: folded-specifier exemption of the strict require check (#2614) ===',
 );
 fold.preflight(FOLD);
 compile.preflight(COMPILE);
-declareMutations(FOLD.length + COMPILE.length);
+embed.preflight(STANDALONE);
+declareMutations(FOLD.length + COMPILE.length + STANDALONE.length);
 
 console.log(`\n=== analysis rows: ${FOLD_SPEC} ===`);
 fold.baseline();
 fold.proveCanSeeRed({
   subject: 'analyze',
-  anchor: '    return out === "" ? null : out;',
-  replacement: '    return "x";',
+  anchor: 'export const FOLDED_RUNTIME_PACKAGE = "ioredis";',
+  replacement: 'export const FOLDED_RUNTIME_PACKAGE = "ioredix";',
 });
 for (const m of FOLD) {
   fold.run({ ...m, expect: 'red' });
@@ -206,3 +298,16 @@ for (const m of COMPILE) {
   recordMutation();
 }
 compile.finish(COMPILE.length);
+
+console.log(`\n=== standalone-path rows: ${EMBED_SPEC} ===`);
+embed.baseline();
+embed.proveCanSeeRed({
+  subject: 'embed',
+  anchor: '  if (byPackage.size === 0) return null;',
+  replacement: '  return null;',
+});
+for (const m of STANDALONE) {
+  embed.run({ ...m, expect: 'red' });
+  recordMutation();
+}
+embed.finish(STANDALONE.length);

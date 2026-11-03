@@ -251,6 +251,10 @@ jobs:
     # SUITE step alone (real Knative scale-timing flake on shared runners), so
     # infra breakage fails LOUD while a scale hiccup stays non-paging (#670 cr#3).
     timeout-minutes: 45
+    # The suite step's OUTCOME (continue-on-error masks its conclusion), read by
+    # scale-suite-tolerance below (#2648).
+    outputs:
+      suite_outcome: ${{ steps.record-scale-outcome.outputs.suite_outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -402,7 +406,14 @@ jobs:
       # must not page. Infra failures (crane copy / pull / addressability) are NOT
       # tolerated — they fail the job loud (no job-level continue-on-error), so
       # this tolerance cannot swallow them (#670 cr#3).
+      #
+      # VISIBILITY (#2648): `continue-on-error` makes this step's `.conclusion`
+      # read `success` even when it failed, so the failure is read from
+      # `steps.scale-suite.outcome` below and surfaced by scale-suite-tolerance
+      # (job summary, a single tracking issue, recovery on success, and an
+      # expiry that reds the nightly). The tolerance itself is unchanged.
       - name: Run scale-to-zero e2e suite (activation #39)
+        id: scale-suite
         continue-on-error: true
         working-directory: packages/kn-next-operator
         env:
@@ -411,11 +422,78 @@ jobs:
           SCALE_TEST_IMAGE: ${{ steps.localimg.outputs.image }}
         run: make test-e2e-scale
 
+      # Read `.outcome`, never `.conclusion` (masked to success by
+      # continue-on-error). Always runs, so a failed or cancelled suite still
+      # reports. Values come in via env; the script is expression-free.
+      - name: Record the scale-suite outcome (job summary + output)
+        id: record-scale-outcome
+        if: always()
+        env:
+          SUITE_OUTCOME: ${{ steps.scale-suite.outcome }}
+        run: |
+          set -euo pipefail
+          echo "suite_outcome=${SUITE_OUTCOME}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Scale-to-zero e2e suite (e2e_scale)"
+            echo
+            echo "Suite step outcome: **${SUITE_OUTCOME}** (tolerated: this step is continue-on-error, so the job result alone would read success)."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Deliberately no warning annotation here (what let a missing
+          # precondition read green, #659); the tracking issue is the signal.
+          echo "scale-to-zero e2e suite outcome: ${SUITE_OUTCOME}"
+
       - name: Tear down kind cluster + registry
         if: always()
         run: |
           kind delete cluster --name kn-next-operator-test-e2e || true
           docker rm -f kind-registry || true
+
+  # The scale-suite failure TOLERANCE, made visible and time-boxed (#2648).
+  #
+  # ADR-0037 tolerates genuine Knative scale-timing flake in the suite step
+  # (continue-on-error). That left the failure with no reader, no owner and no
+  # expiry: the alert printed `e2e_scale=success` beside a failed suite. This
+  # job reads the step OUTCOME and, on a scheduled run, opens or updates ONE
+  # tracking issue ("Scale-to-zero e2e suite FAILED (tolerated)") on failure and
+  # closes it on the first pass. It does NOT make the workflow red on a flaky
+  # suite: the merge-gating decision is unchanged.
+  #
+  # OWNER + EXPIRY (tolerance tracked in #2648): the tolerance is owned by the
+  # handle below and EXPIRES the day after TOLERANCE_EXPIRES. Past that date this
+  # job exits non-zero on every run (and reaches nightly-red-alert), so the
+  # tolerance cannot outlive its review. To extend it, measure the flake rate
+  # over the intervening nightlies and consciously move the date; to retire it,
+  # drop continue-on-error from the suite step.
+  #
+  # No continue-on-error / no schedule-only `if:` on this job: the expiry check
+  # must run on every event; issue handling is scoped to schedule inside the
+  # script. SAFE TO FAIL: no pull_request/push trigger.
+  # Guarded by tests/operator-e2e-scale-suite-outcome.test.ts.
+  scale-suite-tolerance:
+    name: scale-suite tolerance — outcome, owner, expiry (#2648)
+    needs: scale-to-zero-cache
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Surface the scale-suite outcome; open/close the tracking issue; enforce the expiry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          OUTCOME: ${{ needs.scale-to-zero-cache.outputs.suite_outcome }}
+          JOB_RESULT: ${{ needs.scale-to-zero-cache.result }}
+          OWNER: AhmedElBanna80
+          TOLERANCE_EXPIRES: '2026-12-15'
+        run: node scripts/scale-suite-tolerance.mjs
 
   # CLI e2e (build tag `e2e_cli`): the REAL built kn-next CLI (plain Node — no
   # Bun) runs `doctor`, `db bind`, and `status` against a live kind + Knative +
@@ -702,12 +780,13 @@ jobs:
   # Schedule-only: a dispatched run's author is already watching it.
   nightly-red-alert:
     name: Nightly red alert (pinned issue)
-    needs: [scale-image-preflight, scale-to-zero-cache, cli-e2e, rollback-e2e, gc-e2e]
+    needs: [scale-image-preflight, scale-to-zero-cache, scale-suite-tolerance, cli-e2e, rollback-e2e, gc-e2e]
     if: >-
       always() &&
       github.event_name == 'schedule' &&
       (needs.scale-image-preflight.result == 'failure' || needs.scale-image-preflight.result == 'cancelled' ||
        needs.scale-to-zero-cache.result == 'failure' || needs.scale-to-zero-cache.result == 'cancelled' ||
+       needs.scale-suite-tolerance.result == 'failure' || needs.scale-suite-tolerance.result == 'cancelled' ||
        needs.cli-e2e.result == 'failure' || needs.cli-e2e.result == 'cancelled' ||
        needs.rollback-e2e.result == 'failure' || needs.rollback-e2e.result == 'cancelled' ||
        needs.gc-e2e.result == 'failure' || needs.gc-e2e.result == 'cancelled')
@@ -729,6 +808,8 @@ jobs:
           RESULTS: >-
             scale-image-preflight=${{ needs.scale-image-preflight.result }}
             e2e_scale=${{ needs.scale-to-zero-cache.result }}
+            e2e_scale_suite_outcome=${{ needs.scale-to-zero-cache.outputs.suite_outcome }}
+            scale_suite_tolerance=${{ needs.scale-suite-tolerance.result }}
             e2e_cli=${{ needs.cli-e2e.result }}
             e2e_rollback=${{ needs.rollback-e2e.result }}
             e2e_gc=${{ needs.gc-e2e.result }}

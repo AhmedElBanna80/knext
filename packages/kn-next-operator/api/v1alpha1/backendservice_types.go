@@ -142,6 +142,26 @@ type BackendServiceSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=8
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
+	// Security holds the function's defense-in-depth controls.
+	// +optional
+	Security *BackendServiceSecuritySpec `json:"security,omitempty"`
+}
+
+// BackendServiceSecuritySpec holds the security controls a function can toggle.
+type BackendServiceSecuritySpec struct {
+	// NetworkPolicy toggles the operator-owned Kubernetes NetworkPolicy that
+	// admits only the Knative activator, the Kourier gateway and the autoscaler
+	// to the function's pods. Same semantics as NextApp spec.security.networkPolicy:
+	// nil (unset) or true => the policy is reconciled (DEFAULT-ON); false => it is
+	// not reconciled and any previously-created one is deleted.
+	//
+	// Turning it off REMOVES the pod-level isolation. It exists for clusters whose
+	// ingress is not Kourier (Istio, Contour, Gateway API) and whose CNI enforces
+	// NetworkPolicy, where the default policy would make the function unreachable.
+	// Leave it unset unless that is your situation.
+	// +optional
+	NetworkPolicy *bool `json:"networkPolicy,omitempty"`
 }
 
 // FunctionScalingSpec bounds a function's 0→N autoscaling.

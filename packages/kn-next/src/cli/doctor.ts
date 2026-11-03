@@ -64,6 +64,7 @@ import { operatorVersionCheck } from "./doctor/checks/operator-version";
 import { redisPrefixCheck } from "./doctor/checks/redis-prefix";
 import { storageModeCheck } from "./doctor/checks/storage-mode";
 import { turbopackFragmentsCheck } from "./doctor/checks/turbopack-fragments";
+import { unverifiedSecretsCheck } from "./doctor/checks/unverified-secrets";
 import { cacheComponentsCheck } from "./doctor/checks/use-cache";
 import { vinextPatchesCheck } from "./doctor/checks/vinext-patches";
 import { writePolicyCheck } from "./doctor/checks/write-policy";
@@ -149,6 +150,7 @@ export async function runDoctor(
     checks.push(...operatorCheck(ctx)); // sets ctx.operatorImage + ctx.operatorManager
     checks.push(...operatorVersionCheck(ctx)); // reads ctx.operatorManager (#1947)
     checks.push(...writePolicyCheck(ctx)); // reads ctx.operatorManager: is the operator's Secret/ConfigMap write policy in force?
+    checks.push(...unverifiedSecretsCheck(ctx)); // no row unless a function is held as SecretsUnverified: can the operator read its Secrets?
     checks.push(...certManagerCheck(ctx));
     checks.push(...ingressCheck(ctx));
     checks.push(...(await operatorImageCheck(ctx))); // reads ctx.operatorImage

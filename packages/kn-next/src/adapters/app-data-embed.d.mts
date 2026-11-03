@@ -15,12 +15,19 @@ export type AppDataPlan = {
 
 export type TraceRule = { includes: string[]; excludes: string[] };
 
-export declare function readTraceRules(root: string): Promise<TraceRule[]>;
+export declare function readTraceRules(
+    root: string,
+): Promise<{ rules: TraceRule[]; candidateExcludes: string[] }>;
 
 export declare function deriveTraceRules(
     includes: Record<string, string[]>,
     excludes: Record<string, string[]>,
 ): TraceRule[];
+
+export declare function globalExcludes(
+    includes: Record<string, string[]>,
+    excludes: Record<string, string[]>,
+): string[];
 
 export declare function serverOutputFiles(serverDir: string): string[];
 
@@ -31,6 +38,7 @@ export declare function planAppData(input: {
     includes?: string[];
     rules?: TraceRule[];
     candidates?: string[];
+    candidateExcludes?: string[];
     sidecarPackages?: Iterable<string>;
 }): AppDataPlan;
 

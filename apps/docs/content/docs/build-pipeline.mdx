@@ -235,10 +235,16 @@ directory. Two things put a file in:
   runtime is not found; list it in `outputFileTracingIncludes`.
 
 `outputFileTracingExcludes` is honoured too: a match of an exclude is not embedded, and a bare
-directory in an exclude covers everything under it. Next applies excludes per route; a binary has no
-route list to apply them to, so each include's route key stands in for its routes, and an exclude
-applies to an include when the exclude's route key matches that include's key (`/` and `/**` both
-cover an include keyed `/`; `/admin/*` does not).
+directory in an exclude covers everything under it. Route keys are read as Next reads them, with
+`picomatch` and its `contains` option: a key matches if it matches any part of the route, `*` stays
+within a segment, `**` crosses segments, and brackets are a character class (escape them to match
+the text `[slug]`). So `*`, `**` and `/**` apply to every route, and `/admin/*` applies only to
+routes that contain `/admin/`. This is an approximation of Next in one respect: Next applies
+excludes per route, and a binary has no route list, so each include's route key stands in for its
+routes. An exclude then applies to everything an include key covers or to none of it, never to a
+part. A file the server code only names by literal path, with no include declaring it, is removed
+only by an exclude that applies to every route; a route-specific exclude does not remove it, because
+that code may run on any route.
 
 The app reads them as it always did, with `fs` or `fs/promises`, by a path relative to the working
 directory, by `process.cwd()` joined, or by the absolute path the app had on the build machine.
@@ -294,8 +300,12 @@ symlink), such as `config/.env.public`, embeds that file even though its name ma
 `next.config` is read by the compile step itself, in a separate process from the one that built the
 app. A config that provably cannot declare `outputFileTracingIncludes` (no `require`, no
 `import(`, no file read, JSON parse or promise, the word "tracing" nowhere in it, and no import but
-Node built-ins) is not run at all. Any other config is loaded once more to read the value; a
-function, or a default export that is a promise, is awaited as Next does. If such a config cannot
+Node built-ins) is not run at all. Any other config is loaded once more to read the value, in a
+child process of its own, as `next build` loads it: with `NODE_ENV=production` when `NODE_ENV` is
+unset (an explicit value is kept), so `.env.production` is in effect for it, and nothing it sets
+reaches the rest of the build. A function config receives Next's own `defaultConfig` when `next`
+resolves from the app, and otherwise `pageExtensions` and `compress`, the values configs read most;
+a function, or a default export that is a promise, is awaited as Next does. If such a config cannot
 be loaded the build fails, whatever the file says, because embedding no includes would pass the
 build and fail the route. A config that assembles its includes in a way that avoids all of the
 above (a key spelled out of unrelated fragments in a file with no other sign of indirection) is not

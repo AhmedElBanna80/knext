@@ -556,27 +556,116 @@ t("private", () => readFileSync(join(process.cwd(), "data", "private", "b" + ".j
     it("a next.config that cannot declare includes is not executed a second time", () => {
         const app = baseApp(
             "",
-            'import path from "node:path";\nconsole.log("CONFIG_RAN_MARK_7731");\nexport default { reactStrictMode: true };\n',
+            'import { appendFileSync } from "node:fs";\nappendFileSync(process.cwd() + "/config-ran.log", "ran\\n");\nexport default { reactStrictMode: true };\n',
         );
         const b = compile(app.work);
         expect(b.status, String(b.stderr)).toBe(0);
-        expect(String(b.stdout) + String(b.stderr)).not.toContain(
-            "CONFIG_RAN_MARK_7731",
-        );
+        expect(existsSync(join(app.work, "config-ran.log"))).toBe(false);
     }, 120_000);
 
     it("a next.config that declares includes is executed (once) to read them", () => {
         const app = baseApp(
             "",
-            'console.log("CONFIG_RAN_MARK_9902");\nexport default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n',
+            'import { appendFileSync } from "node:fs";\nappendFileSync(process.cwd() + "/config-ran.log", "ran\\n");\nexport default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n',
         );
         write(join(app.work, "data/a.json"), "{}\n");
         const b = compile(app.work);
         expect(b.status, String(b.stderr)).toBe(0);
-        expect(String(b.stdout).split("CONFIG_RAN_MARK_9902").length - 1).toBe(
-            1,
+        expect(readFileSync(join(app.work, "config-ran.log"), "utf8")).toBe(
+            "ran\n",
         );
     }, 120_000);
+
+    describe("a function-form next.config is given the defaults a real load gets", () => {
+        const READ = `t("a", () => readFileSync(join(process.cwd(), "data", "a" + ".json"), "utf8"));`;
+
+        it("a plugin-style config that spreads defaultConfig.pageExtensions loads", () => {
+            const app = baseApp(READ);
+            write(
+                join(app.work, "next.config.mjs"),
+                `export default (phase, { defaultConfig }) => ({
+  pageExtensions: [...defaultConfig.pageExtensions, "mdx"],
+  outputFileTracingIncludes: { "/": ["./data/a.json"] },
+});\n`,
+            );
+            write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+            const b = compile(app.work);
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(runAlone(b.exe).result.a).toContain(A_MARK);
+        }, 180_000);
+
+        it("Next's own defaultConfig is used when next resolves from the app", () => {
+            const app = baseApp(READ);
+            write(
+                join(app.work, "node_modules/next/package.json"),
+                '{"name":"next","version":"0.0.0"}',
+            );
+            write(
+                join(
+                    app.work,
+                    "node_modules/next/dist/server/config-shared.js",
+                ),
+                'exports.defaultConfig = { pageExtensions: ["tsx"], traceMarker: ["./data/a.json"] };\n',
+            );
+            write(
+                join(app.work, "next.config.mjs"),
+                'export default (phase, { defaultConfig }) => ({ outputFileTracingIncludes: { "/": defaultConfig.traceMarker } });\n',
+            );
+            write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+            const b = compile(app.work);
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(runAlone(b.exe).result.a).toContain(A_MARK);
+        }, 180_000);
+    });
+
+    describe("the config is loaded as `next build` loads it: NODE_ENV=production when unset", () => {
+        const READ = `t("a", () => readFileSync(join(process.cwd(), "data", "a" + ".json"), "utf8"));`;
+        const CONFIG = `if (process.env.KNEXT_ONLY_IN_ENV_PRODUCTION !== "yes") throw new Error("env missing in " + process.env.NODE_ENV);
+export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n`;
+        const setup = () => {
+            const app = baseApp(READ);
+            write(join(app.work, "next.config.mjs"), CONFIG);
+            write(
+                join(app.work, ".env.production"),
+                "KNEXT_ONLY_IN_ENV_PRODUCTION=yes\n",
+            );
+            write(join(app.work, "data/a.json"), `{"mark":"${A_MARK}"}\n`);
+            return app;
+        };
+
+        it("NODE_ENV unset: .env.production is in effect", () => {
+            const app = setup();
+            const b = compile(app.work, [], { NODE_ENV: "" });
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(runAlone(b.exe).result.a).toContain(A_MARK);
+        }, 180_000);
+
+        it("an explicit NODE_ENV is honoured, not overridden", () => {
+            const app = setup();
+            const b = compile(app.work, [], { NODE_ENV: "development" });
+            expect(b.status).toBe(1);
+            expect(String(b.stderr)).toMatch(/env missing in development/);
+        }, 120_000);
+    });
+
+    it("an outputFileTracingExcludes entry keyed '*' also removes a file the server code names by literal path", () => {
+        const app = baseApp(
+            `t("named", () => readFileSync(join(process.cwd(), "data/named.json"), "utf8"));
+t("kept", () => readFileSync(join(process.cwd(), "data", "k" + ".json"), "utf8"));`,
+            `export default {
+  outputFileTracingIncludes: { "/": ["./data/k.json"] },
+  outputFileTracingExcludes: { "*": ["./data/named.json"] },
+};\n`,
+        );
+        write(join(app.work, "data/k.json"), `{"mark":"${A_MARK}"}\n`);
+        write(join(app.work, "data/named.json"), `{"mark":"${B_MARK}"}\n`);
+        const b = compile(app.work);
+        expect(b.status, String(b.stderr)).toBe(0);
+        const r = runAlone(b.exe);
+        expect(r.result.kept).toContain(A_MARK);
+        expect(r.result.named).toBe("ERR ENOENT");
+        expect(readFileSync(b.exe).indexOf(B_MARK)).toBe(-1);
+    }, 180_000);
 
     it("a next.config that mentions outputFileTracingIncludes but cannot be loaded FAILS the build instead of embedding nothing", () => {
         const app = baseApp(

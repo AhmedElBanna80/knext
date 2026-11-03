@@ -1315,9 +1315,11 @@ let DATA_PLAN = { files: [], totalBytes: 0, skipped: [], warnings: [] };
 let DATA_ALIAS_FILE = "";
 if (SELF_CONTAINED) {
     try {
+        const traceRules = await readTraceRules(APP_ROOT);
         DATA_PLAN = planAppData({
             root: APP_ROOT,
-            rules: await readTraceRules(APP_ROOT),
+            rules: traceRules.rules,
+            candidateExcludes: traceRules.candidateExcludes,
             candidates: discoverDataLiterals({
                 serverDir: ENTRY_DIR,
                 cwdRoot: APP_ROOT,

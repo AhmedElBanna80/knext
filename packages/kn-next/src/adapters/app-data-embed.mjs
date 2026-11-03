@@ -35,6 +35,7 @@
  * onto `$bunfs`.
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -65,7 +66,7 @@ const SECRET_BASENAME = [
 /** A credential word anywhere in a name: `clientSecret.json`, `apitoken.txt`, `mysecrets.json`, `db-password.txt`. */
 const SECRET_WORD = /secret|credential|passw(?:or)?d|token|api[-_]?key|private[-_]?key/i;
 /** Ordinary words that contain one of the above; removed before the test (`tokenizer.json`, `secretary.txt`). */
-const BENIGN_WORD = /tokeniz\w*|secretar\w*/gi;
+const BENIGN_WORD = /tokeniz(?:er(?:s(?![a-z]))?|ation|ed|ing|e)?|secretar(?:y|ies|iat)/gi;
 /** Directories whose contents are credentials or configuration for them, compared case-insensitively. */
 const SECRET_DIRS = new Set(['.ssh', '.aws', '.kube', '.gnupg', '.gcloud', '.azure', '.docker']);
 
@@ -121,26 +122,82 @@ function canDeclareIncludes(text) {
   );
 }
 
-/** Route-key match as Next's picomatch `contains` reads it: the key matches the route or any leading part of it. */
-function routeMatches(key, route) {
-  if (key === route) return true;
-  const glob = new Bun.Glob(key);
-  const segments = route.split('/').filter(Boolean);
-  if (glob.match(route)) return true;
-  for (let n = 1; n < segments.length; n++) {
-    if (glob.match(`/${segments.slice(0, n).join('/')}`)) return true;
+/**
+ * A route key as a regular expression, the way Next's picomatch reads it with
+ * `{ dot: true, contains: true }`: UNANCHORED (the key matches if it matches any
+ * part of the route), `*` within a segment, `**` across segments, `?` one
+ * character, `{a,b}` alternatives, `[..]` a character class and `(a|b)` a group
+ * (so `[slug]` in a key is a class, not the text `[slug]`; write `\[slug\]`).
+ * Anything else is literal. The shapes Next documents for route keys are
+ * covered; picomatch's extglobs are not.
+ */
+function routeKeyRegExp(key) {
+  const alternatives = (body) =>
+    body
+      .split(',')
+      .map((alt) => routeKeyRegExp(alt).source)
+      .join('|');
+  let re = '';
+  for (let i = 0; i < key.length; ) {
+    const c = key[i];
+    if (c === '\\' && i + 1 < key.length) {
+      re += `\\${key[i + 1]}`;
+      i += 2;
+    } else if (c === '*') {
+      if (key[i + 1] === '*') {
+        if (key[i + 2] === '/') {
+          re += '(?:.*/)?';
+          i += 3;
+        } else {
+          re += '.*';
+          i += 2;
+        }
+      } else {
+        re += '[^/]*';
+        i++;
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+      i++;
+    } else if (c === '{' && key.indexOf('}', i) > i) {
+      const close = key.indexOf('}', i);
+      re += `(?:${alternatives(key.slice(i + 1, close))})`;
+      i = close + 1;
+    } else if (c === '[' && key.indexOf(']', i + 1) > i + 1) {
+      const close = key.indexOf(']', i + 1);
+      const body = key.slice(i + 1, close);
+      re += `[${body.startsWith('!') ? `^${body.slice(1)}` : body}]`;
+      i = close + 1;
+    } else if (c === '(' || c === ')' || c === '|') {
+      re += c;
+      i++;
+    } else {
+      re += c.replace(/[.+^$]/g, '\\$&');
+      i++;
+    }
   }
-  return false;
+  try {
+    return new RegExp(re);
+  } catch {
+    return new RegExp(key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  }
+}
+
+/** Does this `outputFileTracing*` route key select this route? (Next: `picomatch(key, { dot, contains })(route)`.) */
+function routeMatches(key, route) {
+  return routeKeyRegExp(key).test(route);
 }
 
 /**
  * One rule per include route key: the globs of every include key that matches
  * that route (a key matches itself), and the excludes of every exclude key that
- * matches it. Next applies excludes per route to the files traced for that
- * route; a binary serves every route from one filesystem, so a file is embedded
- * if SOME include rule selects it and that rule's excludes do not remove it. The
- * include keys stand in for routes (the compile has no route list). Identical
- * rules are merged.
+ * matches it. Next applies includes and excludes per route; a binary serves
+ * every route from one filesystem and the compile has no route list, so each
+ * include key stands in for its routes and a file is embedded if SOME rule
+ * selects it and that rule's excludes do not remove it. That differs from Next
+ * only where a key selects some of the routes the include key covers and not
+ * others; the files a rule embeds are then those Next would trace for the
+ * include key's own route text. Identical rules are merged.
  *
  * @param {Record<string, string[]>} includes
  * @param {Record<string, string[]>} excludes
@@ -161,6 +218,25 @@ export function deriveTraceRules(includes, excludes) {
     rules.set(JSON.stringify([rule.includes.slice().sort(), rule.excludes.slice().sort()]), rule);
   }
   return [...rules.values()];
+}
+
+/**
+ * The excludes that apply to EVERY known route (the include keys, or `/` when
+ * there are none): those are the ones that can safely remove a file the server
+ * code names by literal path, since that code may run on any route. A route-specific
+ * exclude does not remove a literal-path file.
+ *
+ * @param {Record<string, string[]>} includes
+ * @param {Record<string, string[]>} excludes
+ * @returns {string[]}
+ */
+export function globalExcludes(includes, excludes) {
+  const routes = Object.keys(includes).length > 0 ? Object.keys(includes) : ['/'];
+  const out = new Set();
+  for (const [key, list] of Object.entries(excludes)) {
+    if (routes.every((route) => routeMatches(key, route))) for (const g of list) out.add(g);
+  }
+  return [...out];
 }
 
 function readTraceMap(config, key, name) {
@@ -184,46 +260,115 @@ function readTraceMap(config, key, name) {
 }
 
 /**
- * The app's `outputFileTracingIncludes` / `outputFileTracingExcludes`, as rules
- * (see deriveTraceRules), read the way Next.js reads them: top level, replaced
- * by the legacy `experimental` key when that is present; the config may be a
- * function and its value (or a default export that is a promise) is awaited.
+ * The script a child process runs to load the config and print the two maps.
+ * A child, so the user's config runs with `NODE_ENV=production` (and Bun loads
+ * `.env.production` for it), as under `next build`, without any of that reaching
+ * the compile's own environment; the compile's working directory is the app root.
  *
- * No next.config → no rules. A config that provably cannot declare them (no
+ * The function-form `defaultConfig` is Next's own (`next/dist/server/config-shared`)
+ * when `next` resolves from the app, else the subset vinext hands to function
+ * configs (`pageExtensions`, `compress`), plus empty `experimental` / `images`.
+ */
+const CONFIG_CHILD = `
+(async () => {
+  const { createRequire } = require('node:module');
+  const { pathToFileURL } = require('node:url');
+  const { join } = require('node:path');
+  const root = process.env.KNEXT_CFG_ROOT;
+  const name = process.env.KNEXT_CFG_NAME;
+  const fallback = () => ({ pageExtensions: ['tsx', 'ts', 'jsx', 'js'], compress: true, experimental: {}, images: {} });
+  let defaults;
+  try {
+    const shared = createRequire(join(root, 'package.json'))('next/dist/server/config-shared');
+    try { defaults = structuredClone(shared.defaultConfig); } catch { defaults = { ...shared.defaultConfig }; }
+  } catch {}
+  if (!defaults || typeof defaults !== 'object') defaults = fallback();
+  const loaded = await import(pathToFileURL(join(root, name)).href);
+  let config = loaded.default ?? loaded;
+  if (typeof config === 'function') config = await config('phase-production-build', { defaultConfig: defaults });
+  config = (await config) ?? {};
+  const exp = config.experimental && typeof config.experimental === 'object' ? config.experimental : {};
+  const pick = (o, k) => (k in o ? { [k]: o[k] } : {});
+  const out = {
+    top: { ...pick(config, 'outputFileTracingIncludes'), ...pick(config, 'outputFileTracingExcludes') },
+    experimental: { ...pick(exp, 'outputFileTracingIncludes'), ...pick(exp, 'outputFileTracingExcludes') },
+  };
+  process.stdout.write('\\nKNEXT_TRACE_CONFIG ' + JSON.stringify(out) + '\\n');
+})().catch((e) => { console.error(e && e.stack ? e.stack : String(e)); process.exit(2); });
+`;
+
+/**
+ * The app's `outputFileTracingIncludes` / `outputFileTracingExcludes`, read the
+ * way Next.js reads them: top level, replaced by the legacy `experimental` key
+ * when that is present; the config may be a function and its value (or a default
+ * export that is a promise) is awaited.
+ *
+ * No next.config → nothing. A config that provably cannot declare them (no
  * indirection, only built-in imports) is not run at all. Any other config is
- * loaded; if it cannot be loaded THIS THROWS, whatever the file says: it might
- * have declared includes, and embedding nothing would be the silent drop this
- * exists to prevent. A malformed value always throws.
+ * loaded in a child process with `NODE_ENV=production` when NODE_ENV is unset;
+ * if it cannot be loaded THIS THROWS, whatever the file says: it might have
+ * declared includes, and embedding nothing would be the silent drop this exists
+ * to prevent. A malformed value always throws.
  *
  * @param {string} root the app root
- * @returns {Promise<{ includes: string[], excludes: string[] }[]>}
+ * @returns {Promise<{
+ *   rules: { includes: string[], excludes: string[] }[],
+ *   candidateExcludes: string[],
+ * }>}
  */
 export async function readTraceRules(root) {
+  const none = { rules: [], candidateExcludes: [] };
   const name = CONFIG_NAMES.find((n) => existsSync(join(root, n)));
-  if (name === undefined) return [];
+  if (name === undefined) return none;
   const text = readFileSync(join(root, name), 'utf8');
-  // A config that cannot declare includes is not run: this is a separate process
-  // from the one that loaded it for the build, so loading it here would be a
+  // A config that cannot declare includes is not run: loading it here would be a
   // second execution of the user's config code.
-  if (!canDeclareIncludes(text)) return [];
-  let config;
-  try {
-    const loaded = await import(pathToFileURL(join(root, name)).href);
-    config = loaded.default ?? loaded;
-    if (typeof config === 'function') {
-      config = await config('phase-production-build', { defaultConfig: {} });
-    }
-    config = await config; // `export default Promise.resolve({...})`, as Next awaits it
-  } catch (err) {
-    throw new Error(
-      `could not load ${name} to read outputFileTracingIncludes: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  if (!canDeclareIncludes(text)) return none;
+  const run = spawnSync(process.execPath, ['-e', CONFIG_CHILD], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 120_000,
+    maxBuffer: 64 * 1024 * 1024,
+    env: {
+      ...process.env,
+      NODE_ENV: process.env.NODE_ENV || 'production',
+      KNEXT_CFG_ROOT: root,
+      KNEXT_CFG_NAME: name,
+    },
+  });
+  const line = String(run.stdout ?? '')
+    .split('\n')
+    .reverse()
+    .find((l) => l.startsWith('KNEXT_TRACE_CONFIG '));
+  if (run.status !== 0 || line === undefined) {
+    const why =
+      run.error?.message ??
+      (String(run.stderr ?? '')
+        .trim()
+        .split('\n')
+        .slice(-6)
+        .join('\n') ||
+        `the config process exited ${run.status} without reporting`);
+    throw new Error(`could not load ${name} to read outputFileTracingIncludes: ${why}`);
   }
-  config = config ?? {};
-  return deriveTraceRules(
-    readTraceMap(config, 'outputFileTracingIncludes', name),
-    readTraceMap(config, 'outputFileTracingExcludes', name),
-  );
+  const { top, experimental } = JSON.parse(line.slice('KNEXT_TRACE_CONFIG '.length));
+  // The legacy `experimental` key replaces the top-level one when present, as Next reads it.
+  const config = {
+    outputFileTracingIncludes:
+      'outputFileTracingIncludes' in experimental
+        ? experimental.outputFileTracingIncludes
+        : top.outputFileTracingIncludes,
+    outputFileTracingExcludes:
+      'outputFileTracingExcludes' in experimental
+        ? experimental.outputFileTracingExcludes
+        : top.outputFileTracingExcludes,
+  };
+  const includes = readTraceMap(config, 'outputFileTracingIncludes', name);
+  const excludes = readTraceMap(config, 'outputFileTracingExcludes', name);
+  return {
+    rules: deriveTraceRules(includes, excludes),
+    candidateExcludes: globalExcludes(includes, excludes),
+  };
 }
 
 /** Every `.js`/`.mjs`/`.cjs` file of the server output proper (never a traced `node_modules`). */
@@ -468,6 +613,7 @@ function compileExcludes(root, excludes) {
  *   includes?: string[],
  *   rules?: { includes: string[], excludes: string[] }[],
  *   candidates?: string[],
+ *   candidateExcludes?: string[],
  *   sidecarPackages?: Iterable<string>,
  * }} input
  * @returns {{
@@ -477,7 +623,14 @@ function compileExcludes(root, excludes) {
  *   warnings: string[],
  * }}
  */
-export function planAppData({ root, includes = [], rules = [], candidates = [], sidecarPackages = [] }) {
+export function planAppData({
+  root,
+  includes = [],
+  rules = [],
+  candidates = [],
+  candidateExcludes = [],
+  sidecarPackages = [],
+}) {
   const base = resolve(root);
   const realRoot = realpathSync(base);
   const sidecar = new Set(sidecarPackages);
@@ -640,6 +793,8 @@ export function planAppData({ root, includes = [], rules = [], candidates = [], 
     );
   }
 
+  // An exclude that applies to every route also removes a file the server code merely names.
+  const candidateIsExcluded = compileExcludes(base, candidateExcludes);
   for (const abs of candidates) {
     const rel = relOf(abs);
     const skip = (reason, what = rel) => skipped.push({ rel: what, reason });
@@ -647,6 +802,10 @@ export function planAppData({ root, includes = [], rules = [], candidates = [], 
     const parts = rel.split('/');
     if (parts[0] === '.output' || hasGitSegment(rel) || parts.includes('node_modules')) {
       skip('inside .output, .git or node_modules');
+      continue;
+    }
+    if (candidateIsExcluded(rel)) {
+      if (!byRel.has(rel)) skip('excluded by outputFileTracingExcludes');
       continue;
     }
     let real;
@@ -661,6 +820,10 @@ export function planAppData({ root, includes = [], rules = [], candidates = [], 
       continue;
     }
     const realRel = toPosix(inside);
+    if (candidateIsExcluded(realRel)) {
+      if (!byRel.has(realRel)) skip('excluded by outputFileTracingExcludes (through a link)');
+      continue;
+    }
     if (!statSync(real).isFile()) continue;
     if (hasGitSegment(realRel)) {
       skip(`points into .git (${realRel}), which is never embedded`);

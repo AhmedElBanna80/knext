@@ -475,7 +475,10 @@ func TestKnativeServiceIsDeletedOnlyInsideRemoveRendered(t *testing.T) {
 					return true
 				}
 				deletes++
-				if fn.Name.Name != "removeRendered" {
+				// removeFunctionNetworkPolicy is the only other sanctioned Delete: it
+				// removes the NetworkPolicy alone (spec.security.networkPolicy=false)
+				// and never the Knative Service, so the function is not torn down.
+				if fn.Name.Name != "removeRendered" && fn.Name.Name != "removeFunctionNetworkPolicy" {
 					t.Errorf("%s: %s calls %s; a function is torn down only through removeRendered (see G1)", file, fn.Name.Name, sel.Sel.Name)
 				}
 				return true

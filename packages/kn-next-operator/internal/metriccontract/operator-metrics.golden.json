@@ -3,6 +3,7 @@
   "families": {
     "knext_backendservice_reconcile_total": "counter",
     "knext_backendservice_refusals_total": "counter",
+    "knext_backendservice_secrets_unverified_since_timestamp_seconds": "gauge",
     "knext_nextapp_image_prewarm_errors_total": "counter",
     "knext_nextapp_reconcile_duration_seconds": "histogram",
     "knext_nextapp_reconcile_errors_total": "counter",

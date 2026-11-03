@@ -26,6 +26,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import os
 import time
 
 CTX = ["kubectl", "--context", "knext-oke-sa", "-n", "bench-cells"]
@@ -138,4 +139,5 @@ def main():
                       "ready", w.get("cond_Ready"), "qp_ok", w.get("qp_probe_ok"), row.get("error", "")[:120], flush=True)
 
 
-main()
+if __name__ == "__main__":
+    main()

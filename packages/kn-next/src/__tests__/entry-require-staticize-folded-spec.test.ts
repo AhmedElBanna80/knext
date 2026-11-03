@@ -83,6 +83,10 @@ describe("anything the analysis cannot fold stays a non-literal require (the str
             "const SPEC = ['io', 'redis'].join('/');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
         ],
         [
+            "an empty array (folds to no package at all)",
+            "const SPEC = [].join('');\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
+        ],
+        [
             "a hoisted name assigned twice",
             "let SPEC;\nSPEC = ['io', 'redis'].join('');\nSPEC = process.env.PKG;\nexport const f = () => createRequire(import.meta.url)(SPEC);\n",
         ],

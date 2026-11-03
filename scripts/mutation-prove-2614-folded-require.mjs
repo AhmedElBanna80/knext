@@ -27,15 +27,8 @@ import { createGuardProver } from './lib/guard-prover.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ADAPTERS = 'packages/kn-next/src/adapters';
 const FOLD_SPEC = 'packages/kn-next/src/__tests__/entry-require-staticize-folded-spec.test.ts';
 const COMPILE_SPEC = 'packages/kn-next/src/__tests__/vinext-compile-og-strict-require.test.ts';
-
-const SUBJECTS = {
-  analyze: `${ADAPTERS}/create-require-analyze.mjs`,
-  staticize: `${ADAPTERS}/entry-require-staticize.mjs`,
-  compile: `${ADAPTERS}/vinext-compile.mjs`,
-};
 
 // The analysis rows. Each anchor is a whole line (or two) so it occurs once.
 const FOLD = [
@@ -162,8 +155,24 @@ const COMPILE = [
   },
 ];
 
-const fold = createGuardProver({ repoRoot: REPO_ROOT, spec: FOLD_SPEC, subjects: SUBJECTS });
-const compile = createGuardProver({ repoRoot: REPO_ROOT, spec: COMPILE_SPEC, subjects: SUBJECTS });
+const fold = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: FOLD_SPEC,
+  subjects: {
+    analyze: 'packages/kn-next/src/adapters/create-require-analyze.mjs',
+    staticize: 'packages/kn-next/src/adapters/entry-require-staticize.mjs',
+    compile: 'packages/kn-next/src/adapters/vinext-compile.mjs',
+  },
+});
+const compile = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: COMPILE_SPEC,
+  subjects: {
+    analyze: 'packages/kn-next/src/adapters/create-require-analyze.mjs',
+    staticize: 'packages/kn-next/src/adapters/entry-require-staticize.mjs',
+    compile: 'packages/kn-next/src/adapters/vinext-compile.mjs',
+  },
+});
 
 console.log(
   '=== mutation proof: folded-specifier exemption of the strict require check (#2614) ===',

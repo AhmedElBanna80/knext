@@ -403,27 +403,36 @@ The OKE acceptance suite (`CLAUDE.md` loop step 3). Run before requesting review
   (`_verify-alerting`, `_verify-cronjob-alerting`, `_verify-ksm-down`, `_verify-ha`);
   **ops** (`_verify-drift`, `_verify-base-admin`, `_verify-upgrade`, `_verify-extensions`,
   `_verify-writer-autoscaler`).
-- `deploy/_validate.sh` — manifest server-dry-run + contract checks. **Operator-local, not
-  run in CI**: it needs a live cluster (server-side dry-run) plus `kubectl` and mikefarah
-  `yq` v4 on PATH — see Prerequisites in `docs/operations.md`. Run it yourself before
-  applying manifests.
+- `deploy/_validate.sh` — manifest server-dry-run + contract checks. CI runs its static
+  contracts (`VALIDATE_STATIC=1`); the server-side dry-run needs a live cluster plus `kubectl`
+  and mikefarah `yq` v4 on PATH — see Prerequisites in `docs/operations.md`. Run it in full
+  yourself before applying manifests.
 - `deploy/_rehearse-upgrade.sh` — storage-plane upgrade rehearsal (a kill-criterion tripwire).
 
 ---
 
 ## 9. Build / test / deploy
 
-### CI — `.github/workflows/ci.yml` (push to main + all PRs)
-Jobs: **gateway** (Go 1.26 `gofmt` check, `go vet`, `go test ./...`, `docker build`) ·
-**manifests** (kind cluster + `deploy/_validate.sh` server dry-run) · **skctl** (Python round-trip
-+ version-guard on the safekeeper.control serializer, #22/#24) · **provision** (provision-app.sh
-name-validation, #79/#74) · **e2e** (heavy; opt-in via `[e2e]` in the commit message).
+### CI — the monorepo root `.github/workflows/scale-zero-pg.yml` (push to main + all PRs)
+Two jobs. **turbo run (affected)** runs this package's `build`, `lint`, `test`, `build:image`
+(`package.json`): Go `gofmt` + `go vet`, `go test ./...`, the Python/shell deploy-script tests
+(skctl, promdrift, verify-drift, provision-app, gen-secrets) and a gateway `docker build`.
+**deploy manifest contracts** runs `deploy/_validate.sh` with `VALIDATE_STATIC=1` (every static
+contract, including the `test_harden_pghba.sh` pg_hba transform proof; the server-side dry-run
+needs a cluster and is skipped). There is no kind-based e2e lane here; the heavy drills run on
+OKE (`deploy/_verify-*.sh`).
 
-### CD — `.github/workflows/cd.yml` (push to `gateway/**`, `v*` tags, or manual)
-Builds + pushes the gateway image (amd64) to OCIR
-`me-abudhabi-1.ocir.io/axfqznklsd2t/ks-pg/gateway`. Tags: immutable `sha-<short>@sha256:<digest>`
-always; mutable `edge` only from main / tags; `v*` on version tags. A feature build never clobbers
-`edge`.
+### Gateway image release — manual today
+No workflow builds or pushes the gateway image. The images the manifests pin are produced by the
+manual procedure in `docs/operations.md` ("Releasing an OCIR image"): build, push to OCIR
+`me-abudhabi-1.ocir.io/axfqznklsd2t/ks-pg/gateway`, record the digest OCIR assigned, bump the
+manifest pin, roll. An earlier CD workflow (`gateway/**` push, `sha-<short>` / `edge` / `v*` tags)
+was carried over from the standalone repo but never ran in the monorepo, because GitHub only
+loads workflows from the repository-root `.github/workflows/`. It is kept as an **inactive
+template**, `docs/release/gateway-cd.workflow.yml`; activating it publishes an image with a
+registry credential and is an open founder decision (the header of that file lists what to
+decide). The repo guard `tests/no-nested-workflows.test.ts` fails if a workflow is added anywhere
+other than the root workflows directory.
 
 ### The merged ≠ deployed "pin-and-roll" pattern
 **A merge to `gateway/**` builds an image; it does NOT deploy it.** Deploy is a *separate* commit

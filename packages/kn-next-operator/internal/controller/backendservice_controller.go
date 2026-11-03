@@ -525,6 +525,14 @@ func (r *BackendServiceReconciler) render(
 	}
 
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: FunctionNetworkPolicyName(bs.Name), Namespace: bs.Namespace}}
+	if !functionNetworkPolicyEnabled(bs) {
+		// Explicit opt-out: never render, and remove only a policy this
+		// BackendService controls (a foreign object of the same name is left).
+		if err := r.removeFunctionNetworkPolicy(ctx, bs, np); err != nil {
+			return nil, "", err
+		}
+		return ksvc, "", nil
+	}
 	desired := DesiredFunctionNetworkPolicy(bs.Name, bs.Spec.Zone, bs.Namespace)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = desired.Labels
@@ -537,6 +545,15 @@ func (r *BackendServiceReconciler) render(
 		return nil, "", err
 	}
 	return ksvc, "", nil
+}
+
+// functionNetworkPolicyEnabled reports whether the function's NetworkPolicy is
+// reconciled: default-on, off only on an explicit false (mirrors NextApp).
+func functionNetworkPolicyEnabled(bs *appsv1alpha1.BackendService) bool {
+	if bs.Spec.Security == nil || bs.Spec.Security.NetworkPolicy == nil {
+		return true
+	}
+	return *bs.Spec.Security.NetworkPolicy
 }
 
 // alreadyOwned turns controller-runtime's AlreadyOwnedError into a status
@@ -587,6 +604,21 @@ func (r *BackendServiceReconciler) removeRendered(ctx context.Context, bs *appsv
 		}
 	}
 	return nil
+}
+
+// removeFunctionNetworkPolicy deletes ONLY the function's NetworkPolicy, and only
+// when this BackendService controls it. It is the spec.security.networkPolicy
+// opt-out's teardown: the function itself keeps running, so it must not go
+// through removeRendered (which takes the Knative Service down too). It is the
+// second sanctioned Delete in the reconciler (see G4).
+func (r *BackendServiceReconciler) removeFunctionNetworkPolicy(ctx context.Context, bs *appsv1alpha1.BackendService, np *networkingv1.NetworkPolicy) error {
+	if err := r.Get(ctx, client.ObjectKeyFromObject(np), np); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !metav1.IsControlledBy(np, bs) {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, np))
 }
 
 // functionsOfZone lists the BackendServices naming a zone (namespace-scoped, from

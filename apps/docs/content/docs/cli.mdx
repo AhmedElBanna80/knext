@@ -502,6 +502,11 @@ determine"), never a pass. It never fails the run, because the missing safety ne
 outage; the operator publishes the same verdict as the `knext_operator_write_policy_enforced` gauge
 (see [Security](/docs/security#write-policy-enforced)).
 
+**Function Secrets.** When a zone function is held because the operator cannot read a Secret it
+references (`SecretsUnverified`), doctor warns and lists each function, whether the read is being denied
+or failing transiently, and the `kubectl auth can-i get secrets` check to run with the operator's own
+namespace and ServiceAccount. It adds no row when every function is verified.
+
 **Redis key prefixes.** When any `NextApp` uses a Redis cache, doctor compares the apps' key
 prefixes: `cache.keyPrefix`, a `REDIS_KEY_PREFIX` in `env`, or the per-app default the operator
 derives. It `WARN`s, naming the apps, when:

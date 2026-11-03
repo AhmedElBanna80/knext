@@ -450,11 +450,12 @@ describe("unembeddedDynamicReport", () => {
 
 describe("standalone-compile reports a folded runtime require by name", () => {
     it("feeds the unembedded report through foldedRuntimeSummary and logs it", () => {
-        // The standalone compile script runs at import (argv, a real server tree),
-        // so its output is not unit-testable; the real end-to-end is
-        // apps/file-manager/self-contained-e2e.test.ts. This pins the wiring: the
-        // report the script builds is the one the summary names, and the line is
-        // actually printed.
+        // A WIRING PIN ONLY. The standalone compile script runs at import (argv, a
+        // real server tree), so its output is not unit-testable here, and no test
+        // runs it and asserts the warning (apps/file-manager/self-contained-e2e.test.ts
+        // builds and boots the binary but never reads this line). This checks that
+        // the report the script builds is the one the summary names and that the
+        // line is printed; it cannot prove the line appears on a real build.
         const src = readFileSync(
             resolve(import.meta.dirname, "../adapters/standalone-compile.mjs"),
             "utf8",

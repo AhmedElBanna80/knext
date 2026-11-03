@@ -90,6 +90,35 @@ node -e '
   fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
 '
 
+# next.config.ts pins the tracing/turbopack root two directories above the app so
+# it builds nested inside this workspace. Out of the repo those same two `..`
+# land on the staging parent, which knext reads as a deliberate monorepo root:
+# the image would then carry native/ under .next/standalone/<dir>/ instead of
+# .next/standalone/native. The staged fixture is a standalone app, so it stays
+# flat: each pin is removed (exactly one occurrence, or this fails).
+# shellcheck disable=SC2016 # JavaScript, not shell: the template literal is node's.
+node -e '
+  const fs = require("node:fs");
+  const pins = [
+    "  outputFileTracingRoot: path.join(import.meta.dirname, \x27..\x27, \x27..\x27),\n",
+    "  turbopack: { root: path.join(import.meta.dirname, \x27..\x27, \x27..\x27) },\n",
+  ];
+  let cfg = fs.readFileSync("next.config.ts", "utf8");
+  for (const pin of pins) {
+    const hits = cfg.split(pin).length - 1;
+    if (hits !== 1) {
+      console.error(`stage-ffi-zone: expected exactly one ${JSON.stringify(pin)} in next.config.ts, found ${hits}`);
+      process.exit(1);
+    }
+    cfg = cfg.replace(pin, "");
+  }
+  fs.writeFileSync("next.config.ts", cfg);
+'
+if grep -qE 'outputFileTracingRoot|turbopack: \{ root' next.config.ts; then
+  echo "stage-ffi-zone: next.config.ts still pins a tracing root" >&2
+  exit 1
+fi
+
 case "${FFI_E2E_MUTATION:-none}" in
   none | wrong-triple | leak) ;;
   compat-check)

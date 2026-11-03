@@ -223,6 +223,47 @@ describe('PrometheusRule manifest', () => {
     expect(off?.annotations?.runbook_url ?? off?.annotations?.runbook).toBeTruthy();
   });
 
+  // A function whose Secret the operator cannot read is held as SecretsUnverified:
+  // transient errors without limit, a denied (403) read for 10 minutes and then
+  // the function is refused and removed. Both are silent without these alerts.
+  // The gauge's value is the unix time the hold began, so the duration is
+  // time() - value, and the threshold lives in the expression.
+  it('alerts on a transient SecretsUnverified hold older than 10 minutes', () => {
+    const { docs } = loadRule();
+    const rule = docs.find((d) => d?.kind === 'PrometheusRule');
+    const alerts: (Rule & { for?: string })[] = rule.spec.groups.flatMap(
+      (g: { rules: Rule[] }) => g.rules,
+    );
+    const a = alerts.find((x) => x.alert === 'KnextFunctionSecretsUnverified');
+    expect(a, 'KnextFunctionSecretsUnverified alert must exist').toBeDefined();
+    expect(a?.expr).toContain('knext_backendservice_secrets_unverified_since_timestamp_seconds');
+    expect(a?.expr).toMatch(/reason="transient"/);
+    expect(a?.expr).toMatch(/time\(\)\s*-/);
+    expect(a?.expr).toMatch(/>\s*600\b/);
+    expect(a?.labels?.severity).toBe('warning');
+    expect(a?.annotations?.runbook_url ?? a?.annotations?.runbook).toBeTruthy();
+    expect(a?.annotations?.description).toContain('knext doctor');
+  });
+
+  it('warns on a Forbidden SecretsUnverified hold long before the 10-minute teardown', () => {
+    const { docs } = loadRule();
+    const rule = docs.find((d) => d?.kind === 'PrometheusRule');
+    const alerts: (Rule & { for?: string })[] = rule.spec.groups.flatMap(
+      (g: { rules: Rule[] }) => g.rules,
+    );
+    const a = alerts.find((x) => x.alert === 'KnextFunctionSecretsAccessDenied');
+    expect(a, 'KnextFunctionSecretsAccessDenied alert must exist').toBeDefined();
+    expect(a?.expr).toContain('knext_backendservice_secrets_unverified_since_timestamp_seconds');
+    expect(a?.expr).toMatch(/reason="forbidden"/);
+    // The threshold in seconds must be well under the 600 s teardown.
+    const m = (a?.expr ?? '').match(/>\s*(\d+)\b/);
+    expect(m, 'a numeric duration threshold').not.toBeNull();
+    expect(Number(m?.[1])).toBeLessThanOrEqual(240);
+    expect(a?.labels?.severity).toBe('warning');
+    expect(a?.annotations?.runbook_url ?? a?.annotations?.runbook).toBeTruthy();
+    expect(a?.annotations?.description).toContain('kubectl auth can-i get secrets');
+  });
+
   // The alert above reads `== 0`, and PromQL over a series nobody emits returns
   // an empty vector: an operator that never publishes the gauge (an older
   // operator over a newer rule file, the monitor not started, a scrape that

@@ -9,6 +9,7 @@ import {
     mkdtempSync,
     realpathSync,
     rmSync,
+    symlinkSync,
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -116,7 +117,12 @@ describe("globalExcludes: the excludes that apply to every known route", () => {
         expect(
             globalExcludes(
                 { "/": ["a"], "/api/foo": ["b"] },
-                { "*": ["g1"], "/**": ["g2"], "/admin/*": ["no"] },
+                {
+                    "*": ["g1"],
+                    "/**": ["g2"],
+                    "/admin/*": ["no"],
+                    "/api/*": ["no-some"],
+                },
             ).sort(),
         ).toEqual(["g1", "g2"]);
     });
@@ -162,6 +168,20 @@ describe("literal-path candidates honour the global excludes", () => {
             candidates: [join(root, "data/x.json")],
         });
         expect(rels(plan)).toEqual(["data/x.json"]);
+        expect(plan.skipped).toEqual([]);
+    });
+
+    it("a link whose target is excluded is not embedded either", () => {
+        const root = app({ "private/p.json": "{}", "data/ok.json": "{}" });
+        symlinkSync("../private/p.json", join(root, "data/p.json"));
+        const plan = planAppData({
+            root,
+            includes: [],
+            candidateExcludes: ["private"],
+            candidates: [join(root, "data/p.json"), join(root, "data/ok.json")],
+        });
+        expect(rels(plan)).toEqual(["data/ok.json"]);
+        expect(plan.skipped.map((s) => s.rel)).toEqual(["data/p.json"]);
     });
 });
 

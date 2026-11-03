@@ -3,6 +3,8 @@
 
     python3 .claude/hooks/jev-hooks-mutation-proof.py           # every mutation
     python3 .claude/hooks/jev-hooks-mutation-proof.py --smoke   # one representative per guard family (CI)
+    python3 .claude/hooks/jev-hooks-mutation-proof.py --smoke --shard 2/3   # every 3rd mutant, from the 2nd (CI)
+    python3 .claude/hooks/jev-hooks-mutation-proof.py --smoke --shard 2/3 --list   # print the slice, run nothing
 
 For each guard in jev-result-screen.sh / jev-hook-lib.sh / pr-risk.sh: neuter the one thing it
 protects, run the owning suite, and require it to go RED. A guard whose removal leaves the suite
@@ -20,6 +22,7 @@ Rules, all from workflow.md / the block-dangerous-bash harness:
 """
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -186,6 +189,8 @@ MUTATIONS = [
     ("lib: PEM marker may start inside a dash run (a 120K dash run is quadratic: the screen hangs)", LIB, "JEV_PEM_RE='(^|[^-])---+", "JEV_PEM_RE='---+"),
     ("lib: the END search may start inside a dash run (quadratic after a marker)", LIB, "/(^|[^-])---+[ \\t\\r\\n]*end/", "/---+[ \\t\\r\\n]*end/"),
     ("lib: the redaction eats the character before the marker", LIB, '        if (substr(low, b, 1) != "-") b++ # the match began one character before the dashes\n', ''),
+    # --- the suite itself must not hang on macOS (SIGPIPE ignored there; an infinite `yes` producer behind a filter that ignores EPIPE, e.g. `tr`, never exits) ---
+    ("suite: feeds the infinite `yes` producer again (an EPIPE-ignoring filter makes it hang on macOS)", "jev-hooks.test.sh", '$(rep_lines "$LONGTOK" 1350)', '$(yes "$LONGTOK" | head -n 1350)'),
     # --- pr-risk -----------------------------------------------------------------------------
     ("pr-risk: security weight dropped", "pr-risk.sh", ":-0.40}", ":-0.00}"),
     ("pr-risk: tests weight dropped", "pr-risk.sh", ":-0.25}", ":-0.00}"),
@@ -222,12 +227,20 @@ for _label, _anchor, _repl in [
 
 
 def run_suite(work: Path, test: str) -> int:
-    return subprocess.run(
+    # Own session so a timeout kills the whole process group: killing only bash would orphan a
+    # spinning child (an infinite producer, a leaked sleep) onto the runner for the rest of the job.
+    p = subprocess.Popen(
         ["bash", str(work / test)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        timeout=300,
-    ).returncode
+        start_new_session=True,
+    )
+    try:
+        return p.wait(timeout=300)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        p.wait()
+        raise
 
 
 # CI cost: a suite run takes minutes on a hosted runner, so the full sweep would be too long for a
@@ -266,6 +279,7 @@ SMOKE = [
     "redaction pass-1 grep error ignored",
     "redaction exempt-strip error ignored",
     "goes back to a pipeline (SIGPIPE",
+    "feeds the infinite `yes` producer",
     "LC_ALL=C dropped",
     "NUL bytes no longer skip",
     "Unicode spaces no longer normalised",
@@ -275,9 +289,36 @@ SMOKE = [
 ]
 
 
+def parse_shard(argv):
+    """`--shard i/n` -> (i, n), 1-based; None when absent. A malformed spec ABORTS: a typo must not
+    silently run an empty (or the whole) slice and report green."""
+    if "--shard" not in argv:
+        return None
+    try:
+        i, n = argv[argv.index("--shard") + 1].split("/")
+        i, n = int(i), int(n)
+    except (IndexError, ValueError):
+        sys.exit("ABORT: --shard expects i/n, e.g. --shard 2/3")
+    if not 1 <= i <= n:
+        sys.exit(f"ABORT: --shard {i}/{n} is out of range (need 1 <= i <= n)")
+    return i, n
+
+
 def main() -> int:
-    smoke = "--smoke" in sys.argv[1:]
+    argv = sys.argv[1:]
+    smoke = "--smoke" in argv
     todo = [(i, m) for i, m in enumerate(MUTATIONS) if not smoke or any(k in m[0] for k in SMOKE)]
+    shard = parse_shard(argv)
+    if shard:
+        # Round-robin by position in the (declaration-ordered) selection: the slices are disjoint, their
+        # union is the whole selection, and neighbouring mutants (which share a file and a cost) spread out.
+        todo = todo[shard[0] - 1 :: shard[1]]
+        if not todo:
+            sys.exit(f"ABORT: shard {shard[0]}/{shard[1]} selected no mutation; refusing to report green on nothing")
+    if "--list" in argv:
+        for _, m in todo:
+            print(m[0])
+        return 0
     aborts, survivors, killed = [], [], 0
     with tempfile.TemporaryDirectory() as td:
         base = Path(td) / "base"
@@ -323,6 +364,8 @@ def main() -> int:
                 else:
                     aborts.append(line)
     suffix = f" (smoke subset of {len(MUTATIONS)})" if smoke else ""
+    if shard:
+        suffix += f" [shard {shard[0]}/{shard[1]}]"
     print(f"\n{killed}/{len(todo)} mutations killed{suffix}; survivors={len(survivors)} aborts={len(aborts)}")
     return 0 if not survivors and not aborts else 1
 

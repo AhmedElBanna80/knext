@@ -21,13 +21,13 @@ export declare function readTraceRules(
 
 export type RouteMatcher = {
     kind: "picomatch" | "minimal";
+    why?: string;
     matches: (key: string, route: string) => boolean;
 };
 
 export declare function loadRouteMatcher(root: string): RouteMatcher;
 
 export declare function configEnvironment(
-    root: string,
     parentEnv?: Record<string, string | undefined>,
 ): Record<string, string | undefined>;
 

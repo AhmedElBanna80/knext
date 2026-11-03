@@ -113,15 +113,21 @@ function baseApp(entryBody: string, config?: string): App {
     return { work };
 }
 
+/**
+ * Run the compile as `knext build` runs it (`bun run --no-env-file <script> …`, see compileArgv),
+ * unless `viaCli: false` runs the script directly, the way a hand-written script might.
+ */
 function compile(
     work: string,
     extra: string[] = [],
     env: Record<string, string> = {},
+    { viaCli = true }: { viaCli?: boolean } = {},
 ): ReturnType<typeof spawnSync> & { exe: string } {
     const exe = join(work, "knext-2616-exec");
     const r = spawnSync(
         process.execPath,
         [
+            ...(viaCli ? ["run", "--no-env-file"] : []),
             COMPILE,
             "--entry",
             join(work, ".output/server/index.mjs"),
@@ -868,6 +874,100 @@ export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n`;
             const b = compile(app.work, [], { NODE_ENV: "" });
             expect(b.status, String(b.stderr)).toBe(0);
             expect(runAlone(b.exe).result.a).toContain(A_MARK);
+        }, 180_000);
+    });
+
+    describe("a value from the real shell always survives into the config", () => {
+        const CONFIG = `import { writeFileSync } from "node:fs";
+const keys = ["DATABASE_URL", "FOO", "X", "PICK"];
+writeFileSync(process.cwd() + "/seen.json", JSON.stringify(Object.fromEntries(keys.map((k) => [k, process.env[k] ?? null]))));
+export default { outputFileTracingIncludes: { "/": ["./data/a.json"] } };\n`;
+        const app = (files: Record<string, string>) => {
+            const a = baseApp("", CONFIG);
+            write(join(a.work, "data/a.json"), "{}\n");
+            for (const [name, body] of Object.entries(files)) {
+                write(join(a.work, name), body);
+            }
+            return a;
+        };
+        const seen = (work: string) =>
+            JSON.parse(readFileSync(join(work, "seen.json"), "utf8"));
+
+        it("CI's DATABASE_URL equal to the .env.development entry, NODE_ENV unset", () => {
+            const a = app({
+                ".env.development": "DATABASE_URL=postgres://ci/db\n",
+            });
+            const b = compile(a.work, [], {
+                NODE_ENV: "",
+                DATABASE_URL: "postgres://ci/db",
+            });
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(seen(a.work).DATABASE_URL).toBe("postgres://ci/db");
+            // started as `knext build` starts it, so there is nothing to warn about
+            expect(String(b.stderr)).not.toMatch(/--no-env-file/);
+        }, 180_000);
+
+        it("NODE_ENV=test with the value also present in .env.local (a file test mode does not read)", () => {
+            const a = app({ ".env.local": "X=from-local\n" });
+            const b = compile(a.work, [], {
+                NODE_ENV: "test",
+                X: "from-local",
+            });
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(seen(a.work).X).toBe("from-local");
+        }, 180_000);
+
+        it("a shell FOO equal to the .env entry beats a different .env.production entry", () => {
+            const a = app({ ".env": "FOO=b\n", ".env.production": "FOO=c\n" });
+            const b = compile(a.work, [], { NODE_ENV: "", FOO: "b" });
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(seen(a.work).FOO).toBe("b");
+        }, 180_000);
+
+        it("a shell value that a file would have expanded to the same text", () => {
+            const a = app({ ".env.development": "FOO=http://$H/dev\n" });
+            const b = compile(a.work, [], {
+                NODE_ENV: "",
+                FOO: "http://host/dev",
+                H: "host",
+            });
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(seen(a.work).FOO).toBe("http://host/dev");
+        }, 180_000);
+
+        it("the same four hold with next installed (Next's own env loader)", () => {
+            const a = app({
+                ".env": "FOO=b\n",
+                ".env.production": "FOO=c\nPICK=prod\n",
+                ".env.development": "DATABASE_URL=postgres://ci/db\nPICK=dev\n",
+            });
+            installNext(a.work);
+            const b = compile(a.work, [], {
+                NODE_ENV: "",
+                FOO: "b",
+                DATABASE_URL: "postgres://ci/db",
+            });
+            expect(b.status, String(b.stderr)).toBe(0);
+            const s = seen(a.work);
+            expect(s.FOO).toBe("b");
+            expect(s.DATABASE_URL).toBe("postgres://ci/db");
+            expect(s.PICK).toBe("prod");
+        }, 180_000);
+
+        it("a compile that was NOT started with --no-env-file passes the environment on unchanged and says so", () => {
+            const a = app({
+                ".env.development": "PICK=dev\n",
+                ".env.production": "PICK=prod\n",
+            });
+            const b = compile(
+                a.work,
+                [],
+                { NODE_ENV: "", FOO: "shell" },
+                { viaCli: false },
+            );
+            expect(b.status, String(b.stderr)).toBe(0);
+            expect(seen(a.work).FOO).toBe("shell");
+            expect(String(b.stderr)).toMatch(/not started with --no-env-file/);
         }, 180_000);
     });
 

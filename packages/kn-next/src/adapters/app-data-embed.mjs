@@ -165,15 +165,35 @@ export function loadRouteMatcher(root) {
         return isMatch(route);
       },
     };
-  } catch {
-    return MINIMAL_MATCHER;
+  } catch (err) {
+    return minimalMatcher(whyNoPicomatch(root, err));
   }
 }
 
-const MINIMAL_MATCHER = {
-  kind: 'minimal',
-  matches: (key, route) => key === route || ALL_ROUTES_KEYS.has(key),
-};
+/** Why Next's picomatch could not be used: next missing, or present but its module not loadable from it. */
+function whyNoPicomatch(root, err) {
+  const req = createRequire(join(root, 'package.json'));
+  let nextPackage;
+  try {
+    nextPackage = req.resolve('next/package.json');
+  } catch {
+    return '`next` is not installed in this app';
+  }
+  if (!/[\\/]node_modules[\\/]/.test(nextPackage)) {
+    // e.g. Bun's global auto-install cache: not an install of this app
+    return '`next` is not installed in this app (a copy outside any node_modules directory is not used)';
+  }
+  return `\`next/dist/compiled/picomatch\` could not be loaded from ${nextPackage} (${err instanceof Error ? err.message : String(err)})`;
+}
+
+function minimalMatcher(why) {
+  return {
+    kind: 'minimal',
+    why,
+    matches: (key, route) => key === route || ALL_ROUTES_KEYS.has(key),
+  };
+}
+const MINIMAL_MATCHER = minimalMatcher('no matcher was given');
 
 /** A minimal matcher cannot judge an exclude key that is neither a route nor an all-routes pattern: say so. */
 function assertJudgeable(matcher, includes, excludes) {
@@ -183,7 +203,7 @@ function assertJudgeable(matcher, includes, excludes) {
     if (!ALL_ROUTES_KEYS.has(key) && !routes.includes(key)) {
       throw new Error(
         `outputFileTracingExcludes['${key}'] cannot be applied: Next matches route keys with the picomatch it ` +
-          'ships, and `next` is not installed in this app, so only a key equal to an include key or one that ' +
+          `ships, and it is not available here (${matcher.why}), so only a key equal to an include key or one that ` +
           `matches every route (${[...ALL_ROUTES_KEYS].join(', ')}) can be evaluated. Install next, or change the key`,
       );
     }
@@ -353,50 +373,26 @@ const CONFIG_CHILD = `
 })().catch((e) => { console.error(e && e.stack ? e.stack : String(e)); process.exit(2); });
 `;
 
-const ENV_FILE_LINE = /^\s*(?:export\s+)?([\w.-]+)\s*=\s*(.*?)\s*$/;
-
-/** KEY=VALUE pairs of a dotenv file as Bun reads them (quotes stripped, `#` comments); `{}` if absent. */
-function parseEnvFile(path) {
-  const out = {};
-  if (!existsSync(path)) return out;
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const m = ENV_FILE_LINE.exec(line);
-    if (!m) continue;
-    let v = m[2];
-    if (/^".*"$/.test(v)) v = v.slice(1, -1).replace(/\\n/g, '\n');
-    else if (/^'.*'$/.test(v)) v = v.slice(1, -1);
-    else v = v.replace(/\s+#.*$/, '');
-    out[m[1]] = v;
-  }
-  return out;
-}
-
 /**
- * The environment the config child gets: what `next build` would have given the
- * config. This process may have been started by Bun in the app root, and Bun
- * loads the app's `.env*` files into its own environment at startup, for ITS
- * NODE_ENV (development when unset); handing those on would let a development
- * value hide the production one. So every variable whose value is exactly what
- * those files hold is dropped, and the child loads the files `next build` loads,
- * with whatever remains (the real shell environment) taking precedence.
- * `NODE_ENV` is `production` when unset, as under `next build`; an explicit
- * value is kept. (A variable exported by the shell to the same value a file
- * holds is indistinguishable from one Bun loaded, and is re-read from the files.)
+ * The environment the config child gets. Everything the compile process has is
+ * the real shell environment, because `knext build` starts the compile with
+ * `bun run --no-env-file` (compileArgv): Bun loads no `.env` file into it. A shell
+ * value therefore always survives, and the child loads the files `next build` loads
+ * underneath it (never over it). `NODE_ENV` is `production` when unset, as under
+ * `next build`; an explicit value is kept.
  *
- * @param {string} root
+ * Nothing here tries to tell shell values from file values by comparing them: that
+ * cannot be done (a CI variable equal to a file's entry, a value a file would expand
+ * to the same text) and dropping a real shell value is worse than the leak it avoids.
+ *
  * @param {Record<string, string | undefined>} parentEnv
  */
-export function configEnvironment(root, parentEnv = process.env) {
-  const env = { ...parentEnv };
-  const mode = parentEnv.NODE_ENV || 'development';
-  for (const file of ['.env', '.env.local', `.env.${mode}`, `.env.${mode}.local`]) {
-    for (const [key, value] of Object.entries(parseEnvFile(join(root, file)))) {
-      if (env[key] === value) delete env[key];
-    }
-  }
-  env.NODE_ENV = parentEnv.NODE_ENV || 'production';
-  return env;
+export function configEnvironment(parentEnv = process.env) {
+  return { ...parentEnv, NODE_ENV: parentEnv.NODE_ENV || 'production' };
 }
+
+/** Was this process started so that Bun loaded no `.env` file into its environment? */
+const startedWithoutEnvFiles = () => process.execArgv.includes('--no-env-file');
 
 /**
  * The app's `outputFileTracingIncludes` / `outputFileTracingExcludes`, read the
@@ -425,12 +421,22 @@ export async function readTraceRules(root) {
   // A config that cannot declare includes is not run: loading it here would be a
   // second execution of the user's config code.
   if (!canDeclareIncludes(text)) return none;
+  if (
+    !startedWithoutEnvFiles() &&
+    readdirSync(root).some((f) => f === '.env' || f.startsWith('.env.'))
+  ) {
+    console.warn(
+      '[knext compile] WARNING: the compile process was not started with --no-env-file, so variables Bun ' +
+        "loaded from this app's .env files for itself are passed to next.config as if they came from the shell " +
+        '(`knext build` always starts it that way)',
+    );
+  }
   const run = spawnSync(process.execPath, ['--no-env-file', '-e', CONFIG_CHILD], {
     cwd: root,
     encoding: 'utf8',
     timeout: 120_000,
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...configEnvironment(root), KNEXT_CFG_ROOT: root, KNEXT_CFG_NAME: name },
+    env: { ...configEnvironment(), KNEXT_CFG_ROOT: root, KNEXT_CFG_NAME: name },
   });
   const line = String(run.stdout ?? '')
     .split('\n')

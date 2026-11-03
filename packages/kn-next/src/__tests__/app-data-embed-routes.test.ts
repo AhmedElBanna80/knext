@@ -106,6 +106,26 @@ describe("the matcher is Next's own picomatch when next is installed in the app"
 
     it("is not taken from a copy outside an installed node_modules, and absent next means the minimal rule", () => {
         expect(none.kind).toBe("minimal");
+        expect(none.why).toMatch(/`next` is not installed in this app/);
+    });
+
+    it("an installed next whose picomatch has moved is reported as that, not as 'not installed'", () => {
+        const root = app({
+            "node_modules/next/package.json":
+                '{"name":"next","version":"99.0.0"}',
+        });
+        const moved = loadRouteMatcher(root);
+        expect(moved.kind).toBe("minimal");
+        expect(moved.why).toMatch(
+            /next\/dist\/compiled\/picomatch.*could not be loaded/,
+        );
+        expect(moved.why).not.toMatch(/not installed/);
+        expect(() =>
+            deriveTraceRules({ "/": ["d/**"] }, { "/admin/*": ["d/p"] }, moved),
+        ).toThrow(/could not be loaded/);
+        expect(() =>
+            deriveTraceRules({ "/": ["d/**"] }, { "/admin/*": ["d/p"] }, none),
+        ).toThrow(/`next` is not installed in this app/);
     });
 });
 

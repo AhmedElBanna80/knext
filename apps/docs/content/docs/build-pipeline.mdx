@@ -311,9 +311,12 @@ Node built-ins) is not run at all. Any other config is loaded once more to read 
 child process of its own, in the environment `next build` would give it: `NODE_ENV=production` when
 `NODE_ENV` is unset (an explicit value is kept), the `.env` files `next build` loads (the production
 ones, whatever `NODE_ENV` is; the test ones for `NODE_ENV=test`), and a value already in your shell
-taking precedence over every file. Variables that the build tool itself loaded from your `.env*`
-files for its own mode are not passed on, so a development value cannot hide a production one.
-Nothing the config sets reaches the rest of the build, and the child is ended as soon as it has
+taking precedence over every file. A value from your shell always reaches the config unchanged,
+even when it equals what a file holds. For that to be true `knext build` starts the compile with
+`bun run --no-env-file`, so Bun loads none of your `.env*` files into the compile process itself;
+if you run the compile script some other way, Bun's own loading cannot be told apart from your
+shell, those values are passed on as shell values, and the build prints a warning when your app has
+`.env` files. Nothing the config sets reaches the rest of the build, and the child is ended as soon as it has
 reported, so a config that leaves a timer running does not hold the build up. A function config
 receives Next's own `defaultConfig` when `next` is installed in the app, and otherwise
 `pageExtensions` and `compress` (plus empty `experimental` and `images`), the values configs read

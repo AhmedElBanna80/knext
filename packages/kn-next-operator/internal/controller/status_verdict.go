@@ -1012,6 +1012,19 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 		v.removeConditions = append(v.removeConditions, ConditionZoneSigningKey)
 	}
 
+	// NetworkPolicyDisabled: spec.security.networkPolicy=false silently removes the
+	// app's pod-level isolation, so say so (Warning-class: Ready untouched). Appended
+	// LAST (#98 order), present only while opted out, removed only if previously
+	// reported, and the Warning event fires on entry only.
+	if cond, remove, ev := networkPolicyOptOutVerdict(!networkPolicyEnabled(app), "the app", app.Generation, app.Status.Conditions); cond != nil {
+		v.conditions = append(v.conditions, *cond)
+		if ev != nil {
+			v.events = append(v.events, *ev)
+		}
+	} else if remove {
+		v.removeConditions = append(v.removeConditions, ConditionNetworkPolicyDisabled)
+	}
+
 	return v
 }
 

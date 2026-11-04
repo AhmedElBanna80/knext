@@ -4,7 +4,7 @@
     python3 prepull-ab-incluster.py rounds <total_rounds> <out.jsonl>   # main P/U arms
     python3 prepull-ab-incluster.py worst  <total_rounds> <out.jsonl>   # all-layers-new arm W
 
-Arms (NextApps in bench-cells, all `build: vinext`, same app shape as bx-a):
+Arms (NextApps in the bench namespace, all `build: vinext`, same app shape as bx-a):
   pp-p  PULLED    the new image is pulled onto BOTH nodes (throwaway pull pods) before the
                   NextApp is patched to it, so the wake never pulls.
   pp-u  UNPULLED  a fresh image (the known base layers + one tiny unique top layer) is
@@ -38,16 +38,13 @@ _spec = importlib.util.spec_from_file_location("bunexec_ab_incluster", _helper_p
 H = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(H)
 
-NS = "bench-cells"
-KCTX = ["kubectl", "--context", "knext-oke-sa", "-n", NS]
+NS = H.NS
+KCTX = H.CTX
 REPO = "ghcr.io/getknext-dev/bench-bunexec"
 BASE_DIGEST = "sha256:89352fe217ad6ea8597b80607f1fa3f68f4c7c163ce6bc048acc6d382d40acab"
 BASE = f"{REPO}@{BASE_DIGEST}"
-NODES = ["10.0.1.118", "10.0.1.169"]
-SCRATCH = os.environ.get(
-    "PREPULL_SCRATCH",
-    "/private/tmp/claude-501/-Users-banna-alpheya-pocs-knext/5c15043a-4a40-4df4-8130-26cc77474d31/scratchpad/prepull",
-)
+NODES = sorted(H.AGENTS)  # node names from the configured agent map
+SCRATCH = os.environ.get("PREPULL_SCRATCH", H.CFG["scratch_dir"].rstrip("/") + "/prepull")
 LABEL_ARGS = ["--label", "dev.knext.app.id=bench-bunexec-e92fcf1e3"]
 DEPLOY_ORDER = ["pp-p", "pp-u"]
 

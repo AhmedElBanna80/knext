@@ -45,32 +45,12 @@
       "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
     },
     {
-      "path": "scripts/bench-cold-start-phases/cold-cycle.mjs",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
       "path": "scripts/bench-cold-start-phases/cpu-boost-analyze.py",
       "kind": "analyzer",
       "reason": "analyzer with no fixture test yet"
     },
     {
       "path": "scripts/bench-cold-start-phases/dns-probe.js",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/drive.py",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/gke/cold-cycle.mjs",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/gke/drive.py",
       "kind": "cluster-driver",
       "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
     },

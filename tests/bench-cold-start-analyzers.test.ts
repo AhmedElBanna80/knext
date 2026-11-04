@@ -42,7 +42,12 @@ function py(script: string, args: string[]): { out: string; code: number; err: s
   const r = spawnSync('python3', [join(ROOT, script), ...args], {
     encoding: 'utf8',
     // CPython would drop a __pycache__/ next to the imported modules (analyze, stats).
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    env: {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: '1',
+      // Never let a developer's local bench-config.json change an analyzer's output.
+      KNEXT_BENCH_CONFIG: join(FIXTURE, 'empty-config.json'),
+    },
   });
   return { out: r.stdout, code: r.status ?? -1, err: r.stderr };
 }
@@ -56,7 +61,12 @@ function withTmp<T>(fn: (dir: string) => T): T {
   }
 }
 
-const withLogs = [`--autoscaler=${AUTOSCALER}`, `--activator=${ACTIVATOR}`];
+// The harness no longer assumes a namespace, so the filter that drops other-ns lines is asked for.
+const withLogs = [
+  `--autoscaler=${AUTOSCALER}`,
+  `--activator=${ACTIVATOR}`,
+  '--namespace=bench-cells',
+];
 
 describe('analyze.py: phase tables', () => {
   const r = py(ANALYZE, [RUN]);
@@ -206,7 +216,14 @@ describe('stats.py: two-sample comparison', () => {
   });
 
   it('joins control-plane logs before computing a milestone metric', () => {
-    const r = py(STATS, [RUN, 'autoscaler_scale', 'base', 'var', `--autoscaler=${AUTOSCALER}`]);
+    const r = py(STATS, [
+      RUN,
+      'autoscaler_scale',
+      'base',
+      'var',
+      `--autoscaler=${AUTOSCALER}`,
+      '--namespace=bench-cells',
+    ]);
     // base joined {250, 20000}: median 10125. var joined {-50}: median -50.
     expect(r.out).toContain(
       'autoscaler_scale: base n=2 median 10125 | var n=1 median -50 | diff +10175 ms',

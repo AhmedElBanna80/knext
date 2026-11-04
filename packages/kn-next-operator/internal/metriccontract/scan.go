@@ -167,8 +167,8 @@ func scanArch(moduleRoot, mainDir, arch string) (map[string]Family, error) {
 		for _, imp := range bp.Imports {
 			if imp == modPath {
 				queue = append(queue, ".")
-			} else if strings.HasPrefix(imp, modPath+"/") {
-				queue = append(queue, filepath.FromSlash(strings.TrimPrefix(imp, modPath+"/")))
+			} else if after, ok := strings.CutPrefix(imp, modPath+"/"); ok {
+				queue = append(queue, filepath.FromSlash(after))
 			}
 		}
 		pkg, err := parsePackage(fset, dir, path.Join(modPath, filepath.ToSlash(rel)), bp.GoFiles)
@@ -215,7 +215,7 @@ func modulePath(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		if f := strings.Fields(line); len(f) == 2 && f[0] == "module" {
 			return strings.Trim(f[1], `"`), nil
 		}
@@ -339,14 +339,14 @@ func parsePackage(fset *token.FileSet, dir, importPath string, goFiles []string)
 }
 
 // importName is the name a file refers to an import path by ("" if absent).
-func importName(f *ast.File, path string) (string, error) {
+func importName(f *ast.File, importPath string) (string, error) {
 	for _, imp := range f.Imports {
-		if p, _ := strconv.Unquote(imp.Path.Value); p == path {
+		if p, _ := strconv.Unquote(imp.Path.Value); p == importPath {
 			if imp.Name == nil {
-				return defaultImportName(path), nil
+				return defaultImportName(importPath), nil
 			}
 			if imp.Name.Name == "." {
-				return "", fmt.Errorf("dot-import of %s is not supported by the metric scan", path)
+				return "", fmt.Errorf("dot-import of %s is not supported by the metric scan", importPath)
 			}
 			return imp.Name.Name, nil
 		}
@@ -355,8 +355,8 @@ func importName(f *ast.File, path string) (string, error) {
 }
 
 // pkgSel reports whether e is `<ident>.<sel>` where <ident> RESOLVES (by scope)
-// to the import of path; sel == "" matches any selector.
-func (p *pkg) pkgSel(e ast.Expr, path, sel string) bool {
+// to the import of importPath; sel == "" matches any selector.
+func (p *pkg) pkgSel(e ast.Expr, importPath, sel string) bool {
 	s, ok := e.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -366,7 +366,7 @@ func (p *pkg) pkgSel(e ast.Expr, path, sel string) bool {
 		return false
 	}
 	pn, ok := p.info.Uses[x].(*types.PkgName)
-	return ok && pn.Imported().Path() == path && (sel == "" || s.Sel.Name == sel)
+	return ok && pn.Imported().Path() == importPath && (sel == "" || s.Sel.Name == sel)
 }
 
 func (p *pkg) errorf(at ast.Node, format string, args ...any) error {

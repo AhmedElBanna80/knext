@@ -9,7 +9,7 @@ wake each arm once with a single in-cluster HTTP GET (`cold`), followed by 5 war
 each slot equally often.
 
 Timing happens inside a long-lived node process in the `agent-<node>` pod that already
-runs in bench-cells (kubectl exec, pods/exec RBAC only; no harness pod is created for
+runs in the bench namespace (kubectl exec, pods/exec RBAC only; no harness pod is created for
 the timed request). `kubectl exec` round trip is outside the timed interval: the node
 process measures request-sent -> response-body-complete with process.hrtime.
 
@@ -25,8 +25,13 @@ import subprocess
 import sys
 import time
 
-CTX = ["kubectl", "--context", "knext-oke-sa", "-n", "bench-cells"]
-AGENTS = {"10.0.1.118": "agent-118", "10.0.1.169": "agent-169"}
+import benchconfig
+
+# Cluster settings come from benchconfig (flag-free here: KNEXT_BENCH_* env or bench-config.json).
+CFG = benchconfig.resolve()
+NS = CFG["namespace"]
+CTX = ["kubectl"] + (["--context", CFG["context"]] if CFG["context"] else []) + (["-n", NS] if NS else [])
+AGENTS = CFG["agent_pods"]  # node name -> node-agent pod name
 TRANSIENT = ("Unable to connect", "context deadline exceeded", "i/o timeout", "EOF", "connection reset", "TLS handshake")
 
 PROBE_JS = r"""
@@ -84,11 +89,19 @@ def agent_for_node_ip(ip):
     return AGENTS[ip]
 
 
+def pick_agent():
+    """Alternate the probing source across the configured node agents."""
+    if not AGENTS:
+        raise SystemExit("no node agents configured: set agentPods in the bench config or KNEXT_BENCH_AGENT_PODS")
+    agents = [AGENTS[k] for k in sorted(AGENTS)]
+    return agents[int(time.time()) % len(agents)]
+
+
 def probe(arm):
     """Run one cold+warm probe from an in-cluster node agent. Returns (row, t_req_wall)."""
     # spread the probing source across both nodes to avoid a single-node source bias
-    agent = "agent-118" if int(time.time()) % 2 == 0 else "agent-169"
-    target = f"http://{arm}.bench-cells.svc.cluster.local/"
+    agent = pick_agent()
+    target = f"http://{arm}.{NS}.svc.cluster.local/"
     t_req = time.time()
     p = kc(["exec", agent, "--", "env", f"TARGET={target}", "node", "-e", PROBE_JS], check=False, timeout=300)
     out = [l for l in p.stdout.splitlines() if l.startswith("{")]
@@ -113,12 +126,16 @@ def pod_evidence(arm, t_req):
     image_id = user.get("imageID", "")
     ev = kc(["get", "events", "--field-selector", f"involvedObject.name={pod['metadata']['name']}", "-o", "json"], check=False)
     pulls = []
+    events_invalid = ev.returncode != 0
+    events_n = 0
     try:
-        for e in json.loads(ev.stdout).get("items", []):
+        items = json.loads(ev.stdout).get("items", [])
+        events_n = len(items)
+        for e in items:
             if e.get("reason", "").startswith("Pull"):
                 pulls.append(e.get("message", "")[:160])
     except json.JSONDecodeError:
-        pass
+        events_invalid = True
     return {
         "pod": pod["metadata"]["name"],
         "node": pod["spec"].get("nodeName"),
@@ -128,6 +145,8 @@ def pod_evidence(arm, t_req):
         "container_started": started,
         "ready": conds.get("Ready"),
         "pull_events": pulls,
+        "events_n": events_n,
+        "events_invalid": events_invalid,
     }
 
 

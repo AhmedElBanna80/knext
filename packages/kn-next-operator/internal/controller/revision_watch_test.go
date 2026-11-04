@@ -43,7 +43,7 @@ func TestRevisionToNextAppRequests_MapsViaServiceLabel(t *testing.T) {
 	rev := &servingv1.Revision{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "my-app-00007",
-			Namespace: "team-a",
+			Namespace: otherNS,
 			Labels: map[string]string{
 				serving.ServiceLabelKey: "my-app",
 			},
@@ -53,7 +53,7 @@ func TestRevisionToNextAppRequests_MapsViaServiceLabel(t *testing.T) {
 	got := r.revisionToNextAppRequests(context.Background(), rev)
 
 	want := []reconcile.Request{
-		{NamespacedName: types.NamespacedName{Name: "my-app", Namespace: "team-a"}},
+		{NamespacedName: types.NamespacedName{Name: "my-app", Namespace: otherNS}},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d request(s), got %d: %+v", len(want), len(got), got)
@@ -68,7 +68,7 @@ func TestRevisionToNextAppRequests_NoServiceLabel_NoEnqueue(t *testing.T) {
 	rev := &servingv1.Revision{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "orphan-00001",
-			Namespace: "team-a",
+			Namespace: otherNS,
 			// No serving.knative.dev/service label: not one of ours.
 		},
 	}
@@ -83,7 +83,7 @@ func TestRevisionToNextAppRequests_NonRevision_NoEnqueue(t *testing.T) {
 	r := &NextAppReconciler{}
 	// A non-Revision object must not panic and must enqueue nothing.
 	got := r.revisionToNextAppRequests(context.Background(), &servingv1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "team-a"},
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: otherNS},
 	})
 	if len(got) != 0 {
 		t.Fatalf("expected no requests for a non-Revision object, got %+v", got)

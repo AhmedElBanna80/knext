@@ -41,7 +41,7 @@ func redisApp(namespace, name, keyPrefix string) *appsv1alpha1.NextApp {
 	return &appsv1alpha1.NextApp{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: appsv1alpha1.NextAppSpec{
-			Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+			Image: validImage,
 			Cache: &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://shared:6379", KeyPrefix: keyPrefix},
 		},
 	}
@@ -65,8 +65,8 @@ var derivedPrefixShape = regexp.MustCompile(`^kn-[0-9a-f]{12}$`)
 
 func TestRedisKeyPrefix_DefaultIsDerivedPerApp(t *testing.T) {
 	apps := []*appsv1alpha1.NextApp{
-		redisApp("default", "shop", ""),
-		redisApp("team-b", "shop", ""), // same name, other namespace
+		redisApp("default", sovNS, ""),
+		redisApp("team-b", sovNS, ""), // same name, other namespace
 		redisApp("default", "blog", ""),
 	}
 	seen := map[string]string{}
@@ -89,18 +89,18 @@ func TestRedisKeyPrefix_DefaultIsDerivedPerApp(t *testing.T) {
 // Lockstep with the CLI's doctor (packages/kn-next/src/cli/doctor/checks/redis-prefix.ts,
 // defaultRedisKeyPrefix): both sides pin the same vector.
 func TestRedisKeyPrefix_DerivationVector(t *testing.T) {
-	ev, _ := renderedRedisPrefix(t, redisApp("default", "shop", ""))
-	if ev.Value != "kn-5be479caf0c0" {
+	ev, _ := renderedRedisPrefix(t, redisApp("default", sovNS, ""))
+	if ev.Value != lcKn5be479caf0c0 {
 		t.Fatalf("default/shop: REDIS_KEY_PREFIX = %q, want kn-5be479caf0c0 (kn- + sha256(\"default/shop\")[:12])", ev.Value)
 	}
-	ev, _ = renderedRedisPrefix(t, redisApp("team-b", "shop", ""))
+	ev, _ = renderedRedisPrefix(t, redisApp("team-b", sovNS, ""))
 	if ev.Value != "kn-d8bd7dc33539" {
 		t.Fatalf("team-b/shop: REDIS_KEY_PREFIX = %q, want kn-d8bd7dc33539", ev.Value)
 	}
 }
 
 func TestRedisKeyPrefix_ExplicitKeyPrefixWins(t *testing.T) {
-	ev, n := renderedRedisPrefix(t, redisApp("default", "shop", "legacy-shop"))
+	ev, n := renderedRedisPrefix(t, redisApp("default", sovNS, "legacy-shop"))
 	if n != 1 || ev.Value != "legacy-shop" {
 		t.Fatalf("explicit keyPrefix: got %d entries, value %q; want exactly one, legacy-shop", n, ev.Value)
 	}
@@ -109,14 +109,14 @@ func TestRedisKeyPrefix_ExplicitKeyPrefixWins(t *testing.T) {
 // A user who already sets REDIS_KEY_PREFIX through spec.env or an envMap Secret
 // keeps that value: the default yields, like KNEXT_PUBLIC_ORIGINS.
 func TestRedisKeyPrefix_UserEnvWins(t *testing.T) {
-	app := redisApp("default", "shop", "")
+	app := redisApp("default", sovNS, "")
 	app.Spec.Env = map[string]string{"REDIS_KEY_PREFIX": "mine"}
 	ev, n := renderedRedisPrefix(t, app)
 	if n != 1 || ev.Value != "mine" {
 		t.Fatalf("spec.env REDIS_KEY_PREFIX: got %d entries, value %q; want exactly one, mine", n, ev.Value)
 	}
 
-	app = redisApp("default", "shop", "")
+	app = redisApp("default", sovNS, "")
 	app.Spec.Secrets = &appsv1alpha1.SecretsSpec{EnvMap: map[string]appsv1alpha1.EnvMapEntry{
 		"REDIS_KEY_PREFIX": {SecretName: "s", SecretKey: "k"},
 	}}
@@ -140,13 +140,13 @@ func TestRedisKeyPrefix_UserEnvWins(t *testing.T) {
 
 func TestRedisKeyPrefix_NotRenderedWithoutRedis(t *testing.T) {
 	for _, provider := range []string{"", "memory"} {
-		app := redisApp("default", "shop", "")
+		app := redisApp("default", sovNS, "")
 		app.Spec.Cache.Provider = provider
 		if _, n := renderedRedisPrefix(t, app); n != 0 {
 			t.Fatalf("provider %q: REDIS_KEY_PREFIX rendered %d times, want 0", provider, n)
 		}
 	}
-	app := redisApp("default", "shop", "")
+	app := redisApp("default", sovNS, "")
 	app.Spec.Cache = nil
 	if _, n := renderedRedisPrefix(t, app); n != 0 {
 		t.Fatalf("no cache: REDIS_KEY_PREFIX rendered %d times, want 0", n)
@@ -156,13 +156,13 @@ func TestRedisKeyPrefix_NotRenderedWithoutRedis(t *testing.T) {
 // The finalizer reaps the keyspace the operator rendered, so an app on the
 // derived default leaves no keys behind — and only its own.
 func TestRedisKeyPrefix_FinalizerReapsDerivedPrefix(t *testing.T) {
-	app := redisApp("default", "shop", "")
+	app := redisApp("default", sovNS, "")
 	fc := &fakeCleaner{}
 	r := &NextAppReconciler{Cleaner: fc}
 	if err := r.cleanupExternalState(context.Background(), app); err != nil {
 		t.Fatalf("cleanupExternalState: %v", err)
 	}
-	if len(fc.cacheCalls) != 1 || fc.cacheCalls[0].keyPrefix != "kn-5be479caf0c0" {
+	if len(fc.cacheCalls) != 1 || fc.cacheCalls[0].keyPrefix != lcKn5be479caf0c0 {
 		t.Fatalf("cache cleanup calls = %+v, want one under kn-5be479caf0c0", fc.cacheCalls)
 	}
 
@@ -183,7 +183,7 @@ func TestRedisKeyPrefix_FinalizerReapsDerivedPrefix(t *testing.T) {
 // every legacy app's cache, so the finalizer never touches it — the runtime's
 // collapseSweepAllowed refuses the same prefix for the same reason.
 func TestRedisKeyPrefix_FinalizerNeverReapsSharedFallback(t *testing.T) {
-	app := redisApp("default", "shop", "kn-next")
+	app := redisApp("default", sovNS, "kn-next")
 	if got := operatorRedisKeyPrefix(app); got != "" {
 		t.Fatalf("operatorRedisKeyPrefix(keyPrefix=kn-next) = %q, want empty (the shared fallback is no app's to reap)", got)
 	}
@@ -207,10 +207,10 @@ func TestRedisKeyPrefix_FinalizerNeverReapsSharedFallback(t *testing.T) {
 // doctor (doctor-redis-prefix.test.ts), which resolves the same app to the same
 // vector.
 func TestRedisKeyPrefix_EmptyUserEnvIsUnset(t *testing.T) {
-	app := redisApp("default", "shop", "")
+	app := redisApp("default", sovNS, "")
 	app.Spec.Env = map[string]string{"REDIS_KEY_PREFIX": ""}
 	ev, n := renderedRedisPrefix(t, app)
-	if n != 1 || ev.Value != "kn-5be479caf0c0" {
+	if n != 1 || ev.Value != lcKn5be479caf0c0 {
 		t.Fatalf("spec.env REDIS_KEY_PREFIX=\"\": got %d entries, value %q; want exactly one, kn-5be479caf0c0", n, ev.Value)
 	}
 	fc := &fakeCleaner{}
@@ -218,7 +218,7 @@ func TestRedisKeyPrefix_EmptyUserEnvIsUnset(t *testing.T) {
 	if err := r.cleanupExternalState(context.Background(), app); err != nil {
 		t.Fatalf("cleanupExternalState: %v", err)
 	}
-	if len(fc.cacheCalls) != 1 || fc.cacheCalls[0].keyPrefix != "kn-5be479caf0c0" {
+	if len(fc.cacheCalls) != 1 || fc.cacheCalls[0].keyPrefix != lcKn5be479caf0c0 {
 		t.Fatalf("cache cleanup calls = %+v, want one under kn-5be479caf0c0", fc.cacheCalls)
 	}
 }
@@ -303,7 +303,7 @@ func assertReapedExactly(t *testing.T, keyPrefix string, left map[string]bool, g
 // A keyPrefix nested under the shared fallback ("kn-next:cache") would reap
 // every legacy app's ISR entries; the finalizer reaps nothing under kn-next:.
 func TestRedisKeyPrefix_ReapNestedUnderSharedFallbackDeletesNothing(t *testing.T) {
-	if got := operatorRedisKeyPrefix(redisApp("default", "shop", "kn-next:cache")); got != "" {
+	if got := operatorRedisKeyPrefix(redisApp("default", sovNS, "kn-next:cache")); got != "" {
 		t.Fatalf("operatorRedisKeyPrefix(kn-next:cache) = %q, want empty", got)
 	}
 	assertReapedExactly(t, "kn-next:cache", reapWithRealCleaner(t, "kn-next:cache"))

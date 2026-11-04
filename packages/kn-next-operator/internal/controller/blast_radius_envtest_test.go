@@ -168,7 +168,7 @@ var _ = Describe("Blast radius of a stored-malformed NextApp (#455)", func() {
 		Expect((&NextAppReconciler{
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
-			Recorder: mgr.GetEventRecorderFor("nextapp-controller"),
+			Recorder: mgr.GetEventRecorderFor("nextapp-controller"), //nolint:staticcheck // SA1019: legacy record.EventRecorder is what the reconcilers consume; events.k8s.io migration is tracked debt
 		}).SetupWithManager(mgr)).To(Succeed())
 
 		go func() {
@@ -383,7 +383,7 @@ func warningEventMessages(ctx context.Context, nn types.NamespacedName) string {
 	var b strings.Builder
 	for i := range events.Items {
 		e := events.Items[i]
-		if e.InvolvedObject.Name != nn.Name || e.InvolvedObject.Kind != "NextApp" {
+		if e.InvolvedObject.Name != nn.Name || e.InvolvedObject.Kind != lcNextApp {
 			continue
 		}
 		if e.Type != corev1.EventTypeWarning {

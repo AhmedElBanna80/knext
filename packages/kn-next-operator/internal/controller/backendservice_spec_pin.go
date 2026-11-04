@@ -120,6 +120,9 @@ var specPinExcludedFields = map[string]specPinExclusion{
 		"Autoscaling bounds (min, max, concurrency): availability and cost, not what runs or what it can read."},
 	"resources": {exclusionOperational,
 		"CPU and memory requests and limits: availability and cost, not what runs or what it can read."},
+	"security": {exclusionOperational,
+		"Only toggles the operator-owned NetworkPolicy (spec.security.networkPolicy); it adds no code and " +
+			"widens nothing the pod can read. Residual: a writer can remove the pod-level ingress isolation."},
 	"imagePullSecrets": {exclusionOperational,
 		"Set on the operator-owned ServiceAccount and used by the kubelet only to authenticate the pull of an " +
 			"image whose digest the pin fixes; the pod does not mount them (automount is off)."},

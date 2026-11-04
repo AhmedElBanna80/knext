@@ -60,7 +60,7 @@ var _ = Describe("NextApp Controller Events & Metrics", func() {
 				resource := &appsv1alpha1.NextApp{
 					ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
 					Spec: appsv1alpha1.NextAppSpec{
-						Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+						Image: validImage,
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())

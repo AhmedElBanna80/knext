@@ -120,7 +120,7 @@ type statusVerdict struct {
 // through the guard it already has. Building the consumer (the open ADR-0016
 // action item) is what makes this function consult the flag again.
 func revalidationDeferred(app *appsv1alpha1.NextApp) bool {
-	return app.Spec.Revalidation != nil && app.Spec.Revalidation.Queue == "kafka"
+	return app.Spec.Revalidation != nil && app.Spec.Revalidation.Queue == lcKafka
 }
 
 // provisionKafkaSourceRequested reports whether the app asks for the WITHDRAWN
@@ -273,7 +273,7 @@ func heldReadyMessage(app *appsv1alpha1.NextApp, gate platformGate, ksvcReady bo
 			"or the platform value, and the next reconcile applies the change",
 		app.Generation, gate.field, gate.detail)
 	if !ksvcReady {
-		reason := "Pending"
+		reason := lcPending
 		if ksvcReadyCond != nil && ksvcReadyCond.Reason != "" {
 			reason = ksvcReadyCond.Reason
 		}
@@ -288,7 +288,7 @@ func heldReadyMessage(app *appsv1alpha1.NextApp, gate platformGate, ksvcReady bo
 // condition, the pinned-revision verdict (with its three-valued check handling),
 // the ingress-programming stall, the RevalidationDeferred surface, and the
 // bounded requeues.
-func computeStatusVerdict(
+func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchestrator; splitting is tracked debt, new functions stay under the limit
 	app *appsv1alpha1.NextApp,
 	ksvc *servingv1.Service,
 	db databaseCheckState,
@@ -393,7 +393,7 @@ func computeStatusVerdict(
 	} else {
 		// Surface the ksvc's own reason/message so operators see the pull/crash
 		// detail (e.g. ImagePullBackOff / RevisionFailed) directly on the NextApp.
-		ksvcReason := "Pending"
+		ksvcReason := lcPending
 		ksvcMessage := "Knative Service has not reported Ready yet"
 		if ksvcReadyCond != nil {
 			if ksvcReadyCond.Reason != "" {

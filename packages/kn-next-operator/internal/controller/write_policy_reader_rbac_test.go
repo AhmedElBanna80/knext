@@ -41,7 +41,7 @@ func TestWritePolicyReaderRoleIsExactlyGetOnTheTwoNamedObjects(t *testing.T) {
 	for _, r := range loadRBACRules(t) {
 		hit := false
 		for _, g := range r.rule.APIGroups {
-			if g == "admissionregistration.k8s.io" || g == "*" {
+			if g == lcAdmissionregistrationK8sIo || g == "*" {
 				for _, res := range r.rule.Resources {
 					hit = hit || policyKinds[res] || res == "*"
 				}
@@ -58,7 +58,7 @@ func TestWritePolicyReaderRoleIsExactlyGetOnTheTwoNamedObjects(t *testing.T) {
 		t.Fatalf("want exactly one RBAC rule touching the admission policy kinds, found %d: %+v", len(grants), grants)
 	}
 	g := grants[0]
-	if g.kind != "ClusterRole" || g.name != "write-policy-reader" {
+	if g.kind != lcClusterRole || g.name != "write-policy-reader" {
 		t.Errorf("the grant must be the dedicated write-policy-reader ClusterRole, found %s/%s (%s)", g.kind, g.name, g.file)
 	}
 	if got := sortedVerbs(g.rule); got != "get" {
@@ -74,7 +74,7 @@ func TestWritePolicyReaderRoleIsExactlyGetOnTheTwoNamedObjects(t *testing.T) {
 	if len(got) != 2 || !got["validatingadmissionpolicies"] || !got["validatingadmissionpolicybindings"] {
 		t.Errorf("the grant must cover exactly the policy and its binding, got %v", g.rule.Resources)
 	}
-	if len(g.rule.APIGroups) != 1 || g.rule.APIGroups[0] != "admissionregistration.k8s.io" {
+	if len(g.rule.APIGroups) != 1 || g.rule.APIGroups[0] != lcAdmissionregistrationK8sIo {
 		t.Errorf("the grant must name the admissionregistration.k8s.io group only, got %v", g.rule.APIGroups)
 	}
 }

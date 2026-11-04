@@ -34,7 +34,7 @@ func TestRenderedBundleGivesTheSelfCheckTheRenderedPolicyName(t *testing.T) {
 	var manager *appsv1.Deployment
 	for i := range o.deployments {
 		for _, c := range o.deployments[i].Spec.Template.Spec.Containers {
-			if c.Name == "manager" {
+			if c.Name == lcManager {
 				manager = &o.deployments[i]
 			}
 		}
@@ -44,7 +44,7 @@ func TestRenderedBundleGivesTheSelfCheckTheRenderedPolicyName(t *testing.T) {
 	}
 	var envName string
 	for _, c := range manager.Spec.Template.Spec.Containers {
-		if c.Name != "manager" {
+		if c.Name != lcManager {
 			continue
 		}
 		for _, e := range c.Env {

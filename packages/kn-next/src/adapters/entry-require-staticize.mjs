@@ -54,7 +54,11 @@
  * traced into `.output/server/node_modules`. This module stays pure (no Bun or
  * Node filesystem APIs) so it is unit-testable.
  */
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { builtinModules } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const BUILTINS = new Set(builtinModules);
 
@@ -217,119 +221,130 @@ function isDefinitionHead(src, nameIndex, paren) {
     return close >= 0 && SAME_LINE_BRACE.test(src.slice(close + 1, close + 256));
 }
 
-/** The longest run of preceding sibling text `isDiscardedPosition` scans. */
-const MAX_SEQUENCE_SCAN = 4096;
+/**
+ * `analyzeCreateRequire(src)` (create-require-analyze.mjs) in a child process,
+ * run synchronously so `analyzeServerModule` keeps its synchronous contract.
+ * acorn is a third-party package, so it cannot be imported into this module
+ * (the compile script's node-builtins-only import closure — see
+ * create-require-analyze.mjs's header). A failure of the CHILD throws: a broken
+ * install must not read as a clean module. Fails closed when the analyzer file
+ * is absent, as asset-anchor-analyze.mjs does.
+ */
+const CREATE_REQUIRE_ANALYZER_TIMEOUT_MS = 120_000;
 
 /**
- * Whether the expression starting at `start` is in a position whose value is
- * DISCARDED at statement level: an expression statement on its own, or an
- * element of a statement-level comma sequence. Proven from the tokens before
- * it, scanning backwards over preceding sequence siblings to the statement
- * boundary:
- *   - start of source, `;`, `{` (a block or arrow body — never `${`, a
- *     template substitution whose value is used), or `}` ends the scan: the
- *     expression starts a statement.
- *   - `,` must be preceded by a plain call sibling `a.b(...)` (identifier
- *     chain + balanced parens holding no string, template, regex or comment
- *     — anything this scan cannot lex conservatively bails). Rolldown's real
- *     per-chunk init is exactly this: `{init_a(),init_b(),createRequire(x),…}`.
- *   - anything else — `return`, `=`, `:`, `(`, `[`, `?`, `=>`, a keyword, a
- *     non-call sibling — is NOT provably discarded.
- * Paired with a following `,`/`;`/`}`/end (the caller's `discardedRe`), an
- * element that is NOT last is discarded by the comma operator and a last one
- * is the value of an expression statement. Conservative by construction: a
- * false "not discarded" only costs a warning (an error under strict mode);
- * a false "discarded" would silently lose one.
- *
- * @param {string} src
- * @param {number} start
- * @returns {boolean}
+ * The analyzer beside THIS module's source. Correct only where this module is
+ * loaded from its own directory (the source tree, and tests). Once tsup bundles
+ * it into a shared chunk, `import.meta.url` names the chunk's directory, so a
+ * caller in a bundled entry must pass its own analyzer path instead.
  */
-function isDiscardedPosition(src, start) {
-    const isWs = (c) => c === " " || c === "\t" || c === "\n" || c === "\r";
-    const isIdent = (c) => c !== undefined && /[\w$]/.test(c);
-    const floor = Math.max(0, start - MAX_SEQUENCE_SCAN);
-    let i = start - 1;
-    const skipWs = () => {
-        while (i >= floor && isWs(src[i])) i--;
-    };
-    for (;;) {
-        skipWs();
-        if (i < 0) return true;
-        if (i < floor) return false;
-        const c = src[i];
-        if (c === ";" || c === "}" || c === "{") {
-            // A `;`/`{`/`}` inside a `//` comment is not a
-            // boundary (`const r = // note;\n e(x)` hands the value on).
-            if (!isOutsideLineComment(src, i)) return false;
-            return c !== "{" || src[i - 1] !== "$";
-        }
-        if (c !== ",") return false;
-        // A `,`: the previous sibling must be a plain call `a.b(...)`.
-        i--;
-        skipWs();
-        if (src[i] !== ")") return false;
-        let depth = 0;
-        for (; i >= floor; i--) {
-            const ch = src[i];
-            if (ch === '"' || ch === "'" || ch === "`" || ch === "/") return false;
-            if (ch === ")" || ch === "]" || ch === "}") depth++;
-            else if (ch === "(" || ch === "[" || ch === "{") {
-                depth--;
-                if (depth === 0) break;
-            }
-        }
-        if (i < floor) return false;
-        i--; // past the call's `(`
-        skipWs();
-        // The callee: an identifier chain `a.b.c`.
-        let sawIdent = false;
-        for (;;) {
-            const end = i;
-            while (i >= floor && isIdent(src[i])) i--;
-            if (i === end) return false;
-            const word = src.slice(i + 1, end + 1);
-            if (/^\d/.test(word) || SEQUENCE_STOP_WORDS.has(word)) return false;
-            sawIdent = true;
-            skipWs();
-            if (src[i] !== ".") break;
-            if (src[i - 1] === ".") return false; // `...spread`
-            i--;
-            skipWs();
-        }
-        if (!sawIdent) return false;
+function siblingCreateRequireAnalyzer() {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return (
+        [
+            join(here, "create-require-analyze.js"),
+            join(here, "create-require-analyze.mjs"),
+        ].find((candidate) => existsSync(candidate)) ?? join(here, "create-require-analyze.mjs")
+    );
+}
+function runCreateRequireAnalyzer(src, analyzerPath, extraArgs, isAnalysis) {
+    const analyzer = analyzerPath ?? siblingCreateRequireAnalyzer();
+    if (!existsSync(analyzer)) {
+        throw new Error(
+            `[knext compile] the createRequire analyzer is missing (${analyzer}) — the installed @getknext/core is incomplete`,
+        );
     }
+    // Both callers run under Bun (vinext-compile, compile-embed); outside Bun,
+    // fall back to the `bun` on PATH rather than handing node a bun-only flag.
+    const runtime = process.versions.bun ? process.execPath : "bun";
+    const child = spawnSync(runtime, ["--no-install", analyzer, ...extraArgs], {
+        input: src,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: CREATE_REQUIRE_ANALYZER_TIMEOUT_MS,
+    });
+    if (child.error !== undefined || child.status !== 0) {
+        const how =
+            child.error?.code === "ETIMEDOUT"
+                ? `timed out after ${CREATE_REQUIRE_ANALYZER_TIMEOUT_MS} ms`
+                : child.status === null
+                  ? `was killed by ${child.signal ?? child.error}`
+                  : `exited ${child.status}`;
+        const stderr = String(child.stderr ?? "").trim();
+        throw new Error(
+            `[knext compile] the createRequire analyzer (${analyzer}) ${how}` +
+                `${stderr ? ` (${stderr.split("\n").slice(-3).join(" | ")})` : ""} — refusing to ` +
+                "classify a module's requires without it; reinstall @getknext/core.",
+        );
+    }
+    let analysis;
+    try {
+        analysis = JSON.parse(child.stdout);
+    } catch {
+        throw new Error(
+            `[knext compile] the createRequire analyzer (${analyzer}) printed no JSON — reinstall @getknext/core.`,
+        );
+    }
+    if (!isAnalysis(analysis)) {
+        throw new Error(
+            `[knext compile] the createRequire analyzer (${analyzer}) printed JSON that is not an analysis — reinstall @getknext/core.`,
+        );
+    }
+    return analysis;
 }
 
 /**
- * Whether `src[at]` is provably NOT inside a `//` line comment: true only
- * when no `//` appears on its line before it. A `//` anywhere earlier on the
- * line — a real comment, or one inside a string or regex this cannot tell
- * apart (a line may begin inside a multi-line template, so lexing from the
- * line start is not reliable either) — answers false: cannot tell. Only line
- * comments need this: a `/* *\/` comment ends in `/`, which the scan meets
- * (and bails on) before any `;`/`{`/`}` inside it.
- *
- * @param {string} src
- * @param {number} at
- * @returns {boolean}
+ * Whether a module could create a require at all: it names `createRequire`, or it
+ * imports `module` / `node:module` (whose namespace carries `createRequire`).
+ * Only those modules pay for an analyzer process. Kept in step with the same
+ * pre-filter in create-require-analyze.mjs, which this module cannot import.
  */
-function isOutsideLineComment(src, at) {
-    const lineStart = src.lastIndexOf("\n", at - 1) + 1;
-    return !src.slice(lineStart, at).includes("//");
+const MODULE_IMPORT = /(?:\bfrom|\bimport)\s*\(?\s*["'](?:node:)?module["']/;
+function mentionsCreateRequire(src) {
+    return (
+        src.includes("createRequire") ||
+        src.includes("getBuiltinModule") ||
+        MODULE_IMPORT.test(src)
+    );
 }
 
-/** Words that, as a "callee", mean the call is not a plain sequence sibling. */
-const SEQUENCE_STOP_WORDS = new Set([
-    "return", "throw", "typeof", "void", "delete", "new", "await", "yield",
-    "in", "of", "instanceof", "case", "if", "while", "for", "switch", "catch",
-    "with", "function", "else", "do",
-]);
+function analyzeCreateRequire(src, analyzerPath) {
+    return runCreateRequireAnalyzer(
+        src,
+        analyzerPath,
+        [],
+        (a) => Array.isArray(a?.aliases) && Array.isArray(a?.sites),
+    );
+}
+
+/**
+ * Whether the module `src` does anything with the require bindings it IMPORTS
+ * from a sibling chunk (`names`: their local names) other than call them: copy,
+ * store, pass or re-export one, so a package it loads is invisible to the
+ * cross-chunk plan (#2666). True also for a module the parser cannot read.
+ *
+ * @param {string} src
+ * @param {string[]} names
+ * @param {string} [analyzerPath] the create-require-analyze script to spawn.
+ * @returns {boolean}
+ */
+export function importedRequireEscapes(src, names, analyzerPath) {
+    if (names.length === 0) return false;
+    const result = runCreateRequireAnalyzer(
+        src,
+        analyzerPath,
+        ["--imported", JSON.stringify(names)],
+        (a) => typeof a?.escapes === "boolean",
+    );
+    return result.escapes;
+}
 
 /**
  * Static facts about one server-output module.
  *
  * @param {string} src
+ * @param {string} [analyzerPath] the create-require-analyze script to spawn.
+ *   Callers in a bundled entry pass their own (see siblingCreateRequireAnalyzer).
  * @returns {{
  *   aliases: string[],
  *   requireBindings: string[],
@@ -339,142 +354,56 @@ const SEQUENCE_STOP_WORDS = new Set([
  *   nonLiteralCallees: Set<string>,
  *   declarationCounts: Map<string, number>,
  *   unrecognizedBinding: boolean,
+ *   foldedRuntimeRequires: string[],
  * }}
  */
-export function analyzeServerModule(src) {
-    // Local names of `createRequire` imported from `module` / `node:module`.
-    const aliases = new Set();
-    const importRe = new RegExp(
-        `import${GAP}\\{([^}]*)\\}${GAP}from${GAP}(["'])(?:node:)?module\\2`,
-        "g",
-    );
-    for (const m of src.matchAll(importRe)) {
-        for (const [imported, local] of parseSpecifierList(m[1])) {
-            if (imported === "createRequire") aliases.add(local);
-        }
-    }
-
-    // Bindings: `X = alias(import.meta.url)`, rolldown's
-    // `X = (() => alias(import.meta.url))()`, and the per-module-merge getter
-    // indirection (cluster C11 — see this file's header): `X =
-    // alias({get value(){return <ident>.url}}.value)`.
+export function analyzeServerModule(src, analyzerPath) {
+    // Local names of `createRequire` imported from `module` / `node:module`, and
+    // how each `createRequire(import.meta.url)` call's value is used, come from
+    // the acorn analysis in create-require-analyze.mjs (#2614). The parse runs
+    // only for a module that mentions createRequire at all.
     const requireBindings = new Set();
-    // The FULL span of every recognized `IDENT = <create-expr>` match
-    // (including the IIFE wrapper's own parens in that shape), so the
-    // classification loop below can tell "this occurrence is the one INSIDE
-    // a recognized assignment" apart from "this occurrence sits bare,
-    // without one" — a plain look at what comes right AFTER the bare
-    // create-expression cannot do that: the IIFE shape's create-expression
-    // is immediately followed by `)` (its own wrapper's close), the exact
-    // same character that follows a create-expression handed bare to an
-    // ENCLOSING call (`use(createRequire(x))`) — which must NOT be treated
-    // as recognized (#1877 round-2 review: that was flagged as recognized
-    // too, before this span check existed).
-    const bindingRanges = [];
-    // Populated here, before the general literal-call scan below, so a
-    // CREATE-AND-IMMEDIATELY-CALL site (no named binding at all — see
-    // DIRECT_CALL_MARKER below) lands in the SAME map the general scan adds
-    // to, under a marker no real identifier can ever spell.
+    // Populated before the general literal-call scan below, so a DIRECT call
+    // (`createRequire(...)(spec)`, no named binding — see DIRECT_CALL_MARKER)
+    // lands in the SAME map the general scan adds to.
     const literalCalls = new Map();
     const nonLiteralCallees = new Set();
-    for (const alias of aliases) {
-        const call = `${escapeRe(alias)}${GAP}\\(${GAP}import\\.meta\\.url${GAP}\\)`;
-        const getterCall =
-            `${escapeRe(alias)}${GAP}\\(${GAP}\\{${GAP}get${GAP}value${GAP}\\(${GAP}\\)` +
-            `${GAP}\\{${GAP}return${GAP}${IDENT}${GAP}\\.${GAP}url${GAP}\\}${GAP}\\}${GAP}\\.${GAP}value${GAP}\\)`;
-        const bindingRe = new RegExp(
-            `(?<![\\w$.])(${IDENT})${GAP}=${GAP}(?:\\(${GAP}\\(${GAP}\\)${GAP}=>${GAP}${call}${GAP}\\)${GAP}\\(${GAP}\\)|${call}|${getterCall})`,
-            "g",
-        );
-        for (const m of src.matchAll(bindingRe)) {
-            requireBindings.add(m[1]);
-            bindingRanges.push([m.index, m.index + m[0].length]);
-        }
-    }
-    // Every `alias(import.meta.url)` / `alias(getter-indirection)` call NOT
-    // already inside a `bindingRanges` span, classified by what immediately
-    // follows it. Real rolldown output (measured against the real
-    // file-manager build) creates and uses the require function in the SAME
-    // expression, with no named binding at all:
-    //   - `createRequire(getterShape)(` SPEC `)`         — direct call
-    //   - `createRequire(getterShape).resolve(` SPEC `)` — direct resolve
-    //   - `createRequire(getterShape)` alone, discarded in a comma/sequence
-    //     expression or a block's last statement — rolldown's per-chunk
-    //     module-init boilerplate sets one up defensively whether or not
-    //     THIS chunk ends up calling it — inert, nothing to embed, not a gap
-    // A shape matching none of these — including one HANDED to an enclosing
-    // call this analysis cannot see into (`use(createRequire(x))`) — is the
-    // one case left unaccounted for, and THAT is what `unrecognizedBinding`
-    // must mean.
-    let aliasCalls = 0;
-    let accountedFor = 0;
-    const literalArgRe = new RegExp(`^${GAP}(["'\`])([^"'\`$\\\\\\s]+)\\1${GAP}\\)`);
-    const invokeRe = new RegExp(`^${GAP}\\(`);
-    const resolveInvokeRe = new RegExp(`^${GAP}\\.${GAP}resolve${GAP}\\(`);
-    // Followed by `,`/`;`/`}` (or end of source) is NECESSARY for a discarded
-    // value but not sufficient: `return e(x);`, `use(e(x), 1)` and
-    // `{r: e(x)}` all hand the require on. `isDiscardedPosition` supplies the
-    // other half — see it. `)` and `]` never qualify: a bare create followed
-    // by either sits inside an enclosing call, group or array literal.
-    const discardedRe = new RegExp(`^(?:${GAP}[,;}]|$)`);
-    for (const alias of aliases) {
-        const call = `${escapeRe(alias)}${GAP}\\(${GAP}import\\.meta\\.url${GAP}\\)`;
-        const getterCall =
-            `${escapeRe(alias)}${GAP}\\(${GAP}\\{${GAP}get${GAP}value${GAP}\\(${GAP}\\)` +
-            `${GAP}\\{${GAP}return${GAP}${IDENT}${GAP}\\.${GAP}url${GAP}\\}${GAP}\\}${GAP}\\.${GAP}value${GAP}\\)`;
-        const anyCall = new RegExp(`(?<![\\w$.])(?:${call}|${getterCall})`, "g");
-        for (const m of src.matchAll(anyCall)) {
-            aliasCalls++;
-            if (bindingRanges.some(([s, e]) => m.index >= s && m.index < e)) {
-                accountedFor++;
-                continue;
-            }
-            const after = src.slice(m.index + m[0].length);
-            const invoke = invokeRe.exec(after);
-            if (invoke) {
-                accountedFor++;
-                const argStart = invoke[0].length;
-                const lit = literalArgRe.exec(after.slice(argStart));
-                if (lit) {
-                    const spec = lit[2];
-                    if (isBareNonBuiltin(spec)) {
-                        requireBindings.add(DIRECT_CALL_MARKER);
-                        const set = literalCalls.get(DIRECT_CALL_MARKER) ?? new Set();
-                        set.add(spec);
-                        literalCalls.set(DIRECT_CALL_MARKER, set);
-                    }
-                } else {
+    // Packages a DIRECT call loads by a constant assembled from string literals
+    // (`['io', 'redis'].join('')`): a deliberate runtime load of a known name.
+    // Reported, never embedded and never strict-failed (see create-require-analyze).
+    const foldedRuntimeRequires = new Set();
+    let aliases = [];
+    let unrecognizedBinding = false;
+    if (mentionsCreateRequire(src)) {
+        const created = analyzeCreateRequire(src, analyzerPath);
+        aliases = created.aliases;
+        // A module the parser cannot read may still create a require the
+        // analysis cannot see: report it, never treat it as clean.
+        if (created.parseError !== null) unrecognizedBinding = true;
+        for (const site of created.sites) {
+            if (site.kind === "binding") {
+                requireBindings.add(site.name);
+            } else if (site.kind === "direct") {
+                if (site.dynamic && typeof site.folded === "string") {
+                    foldedRuntimeRequires.add(site.folded);
+                } else if (site.dynamic) {
                     requireBindings.add(DIRECT_CALL_MARKER);
                     nonLiteralCallees.add(DIRECT_CALL_MARKER);
+                } else if (isBareNonBuiltin(site.spec)) {
+                    requireBindings.add(DIRECT_CALL_MARKER);
+                    const set = literalCalls.get(DIRECT_CALL_MARKER) ?? new Set();
+                    set.add(site.spec);
+                    literalCalls.set(DIRECT_CALL_MARKER, set);
                 }
-                continue;
+            } else if (site.kind === "handed") {
+                // Its value is handed on (returned, passed, stored): the require
+                // it makes cannot be verified.
+                unrecognizedBinding = true;
             }
-            // `.resolve(spec)` is an EXISTENCE PROBE, not a load: Node's own
-            // `require.resolve` idiom (`try { require.resolve(x) } catch {}`,
-            // measured verbatim in @getknext/lib's logger, probing for the
-            // optional, deliberately-production-absent `pino-pretty`) throws
-            // INSIDE the probe and is normally caught right there — unlike a
-            // bare call, the enclosing module does not crash merely because
-            // the target is missing. Treating it the same as a real call
-            // regressed the self-contained build (#1877 round 3): recognizing
-            // this shape at all made a correctly, intentionally unresolvable
-            // optional dependency's probe fail `--self-contained`/
-            // `KNEXT_COMPILE_STRICT_REQUIRES=1` the same way a REAL missing
-            // load would. So it is accounted for (never the unrecognized-
-            // binding error) but deliberately NOT fed into
-            // literalCalls/nonLiteralCallees: never embedded, never warned
-            // about, never strict-failed.
-            if (resolveInvokeRe.test(after)) {
-                accountedFor++;
-                continue;
-            }
-            if (discardedRe.test(after) && isDiscardedPosition(src, m.index)) {
-                accountedFor++;
-                continue;
-            }
+            // `resolve` (an existence probe, deliberately never embedded or
+            // strict-failed) and `discarded` (inert) need no more than this.
         }
     }
-    const recognized = accountedFor;
 
     // `export { a as b }` → a → [b]
     const exportsMap = new Map();
@@ -570,7 +499,8 @@ export function analyzeServerModule(src) {
         literalCalls,
         nonLiteralCallees,
         declarationCounts,
-        unrecognizedBinding: aliasCalls > recognized,
+        unrecognizedBinding,
+        foldedRuntimeRequires: [...foldedRuntimeRequires].sort(),
     };
 }
 

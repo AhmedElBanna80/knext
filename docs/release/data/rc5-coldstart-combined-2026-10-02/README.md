@@ -2,7 +2,8 @@
 
 Raw JSONL from the rc.4-vs-rc.5 (integration tip 5b52bbb8, pre-#1784) combined cold-start
 measurement. One JSON object per cold-start cycle, as emitted by
-`scripts/bench-cold-start-phases/{drive.py,gke/drive.py}` + `cold-cycle.mjs`.
+`scripts/bench-cold-start-phases/drive.py` + `cold-cycle.mjs` (the run used separate OKE and GKE
+copies of those two files; they are now one harness).
 
 ## Final, valid data (used in the published numbers)
 

@@ -221,9 +221,119 @@ dlopen-ing the unpacked native library from a noexec mount fails with "failed to
 shared object"). See [Security → Read-only root filesystem](/docs/security#read-only-root-filesystem)
 for when knext mounts volumes on other build shapes.
 
-Both targets support it; nothing else does — there, setting it changes nothing about what
-`knext build` produces, and the choice is only recorded in the build log. The value must be a
-boolean — `knext validate` rejects anything else.
+The vinext binary also carries your app's own data files, so a read of one works from the empty
+directory. Two things put a file in:
+
+- **`outputFileTracingIncludes` in `next.config`.** Its globs are relative to the app root (an
+  absolute path inside the app root also works). A glob such as `./**/*.json` does not descend into
+  `node_modules`; name `node_modules` in the pattern to include a file there. A directory pattern
+  and a glob over the same directory select the same files, and both enter a symlinked directory
+  that stays inside the app root.
+- **A literal path in your server code.** `join(process.cwd(), 'content/post.md')`,
+  `` `${process.cwd()}/content/post.md` `` and `new URL('../data.json', import.meta.url)` are found
+  in the server output, and the file is embedded if it exists at build time. A path computed at
+  runtime is not found; list it in `outputFileTracingIncludes`.
+
+`outputFileTracingExcludes` is honoured too: a match of an exclude is not embedded, and a bare
+directory in an exclude covers everything under it. Route keys are matched with the `picomatch`
+that Next ships (`next/dist/compiled/picomatch`, taken from the `next` installed in your app) and
+with the options Next uses, so `/api/**` matches `/api`, `!` negates, and `/*` does not match the
+root route; whatever that module says is what applies. A key that is exactly the text of a route
+always matches it, and an include's own globs are always kept, whatever its key looks like
+(`/blog/[slug]`, `/(group)/x`, `/{api,admin}/*`).
+
+Two approximations remain. Next applies excludes per route and a binary has no route list, so each
+include's route key stands in for the routes it covers: an exclude then applies to everything an
+include key covers or to none of it, never to a part. And a file the server code only names by
+literal path, with no include declaring it, is removed only by an exclude that applies to every
+route; a route-specific exclude does not remove it, because that code may run on any route.
+
+Without `next` installed in the app there is no picomatch to ask. Includes alone need no matching
+and work as they are. Excludes are then applied only when their key is exactly an include key's
+text or one of `*`, `**`, `/**`, `**/*` (which match every route); any other exclude key fails the
+build, naming the key, instead of being guessed at. Install `next`, or change the key.
+
+The app reads them as it always did, with `fs` or `fs/promises`, by a path relative to the working
+directory, by `process.cwd()` joined, or by the absolute path the app had on the build machine.
+**The real disk wins:** a read goes to the embedded copy only when nothing exists at that path on
+the real filesystem. A file the app writes at runtime over an embedded name is read back as
+written, and the build machine's absolute path never shadows a file that exists there at runtime.
+Deleting a file that was embedded at build time uncovers the embedded copy. Only the files that
+were embedded answer; any other path is a real `ENOENT`.
+
+What is covered is reading by path: `readFile`, `access`, `stat`, `lstat`, `existsSync` and the
+source of `copyFile`, in their sync, callback and promise forms, and a `file:` URL passed to them.
+**Not covered:** `readdir` and `opendir` (a directory of embedded files lists as empty or as
+missing), `open`, `createReadStream`, `Bun.file()`, and anything that writes (a write goes to the
+real disk). Read the file with one of the covered calls.
+
+The build fails, naming the pattern or path, when an `outputFileTracingIncludes` entry cannot be
+embedded rather than dropping it: it matches no file; resolves (through a symlink) outside the app
+root; is a symlink whose target does not exist, or a pipe, socket or device; matches a file that
+looks like a credential; matches a native addon; or matches a file of a package the build traced
+into `.output/server/node_modules` (for example a package listed in `serverExternalPackages`). The
+last one cannot work in this mode: the executable has no `node_modules` beside it and cannot
+resolve a package from inside itself, so bundle the package, read its files by a path inside the
+app, or build without `--self-contained`. A literal path that does not exist, is a directory, or
+looks like a credential is skipped and logged, not fatal.
+
+**Credential check.** The build refuses to embed a file that looks like a credential, so a broad
+glob does not carry one into an executable by accident. It looks at names, never at contents. A
+file is refused when:
+
+- its name starts with `.env` (`.env`, `.envrc`, `.env.local`, `.env-local`, `.env_prod`), or is one
+  of `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.netrc`, `_netrc`, `.pypirc`, `.pgpass`, `.htpasswd`,
+  `htpasswd`, `.git-credentials`, `.gitconfig`, `.dockercfg`, `.my.cnf`, `.boto`, `.s3cfg`;
+- its name starts with `id_` or `kubeconfig`, or ends in `.pem`, `.key`, `.p12`, `.pfx`, `.jks`,
+  `.keystore`, `.p8`, `.crt`, `.cer`, `.der`, `.ppk`, `.kdbx`, `.gpg`, `.tfvars` or `.tfstate`, or is
+  a `service-account*.json`;
+- its name contains `secret`, `credential`, `password`, `passwd`, `token`, `apikey`/`api-key`/
+  `api_key` or `private-key`/`private_key`, in any letter case (`clientSecret.json`,
+  `apitoken.txt`, `mysecrets.json`); the ordinary words `tokenizer` and `secretary` are not counted;
+- any directory above it is `.ssh`, `.aws`, `.kube`, `.gnupg`, `.gcloud`, `.azure` or `.docker`
+  (compared without regard to letter case), starts with `.env`, or has a name containing one of the
+  words above (`secrets/db.json`). Directories below a `node_modules` are not judged, only the file
+  name.
+
+Every match is judged by where it really points: a symlink with an ordinary name whose target
+matches is refused, and so is a symlink that leaves the app root. Nothing under `.git` is ever
+embedded; a glob sweep skips it, and a pattern that names it, or a link into it, fails. Names such
+as `design-tokens/colors.json` match the word list and are refused too; the opt-out below is for
+them. This is a safeguard against accidents, not a guarantee: a secret stored under an ordinary
+name is not recognised, so do not list a directory that holds one. The one opt-out is deliberate and
+visible in the config: a pattern that is an exact file path (no glob, not a directory, not a
+symlink), such as `config/.env.public`, embeds that file even though its name matches.
+
+`next.config` is read by the compile step itself, in a separate process from the one that built the
+app. A config that provably cannot declare `outputFileTracingIncludes` (no `require`, no
+`import(`, no file read, JSON parse or promise, the word "tracing" nowhere in it, and no import but
+Node built-ins) is not run at all. Any other config is loaded once more to read the value, in a
+child process of its own, in the environment `next build` would give it: `NODE_ENV=production` when
+`NODE_ENV` is unset (an explicit value is kept), the `.env` files `next build` loads (the production
+ones, whatever `NODE_ENV` is; the test ones for `NODE_ENV=test`), and a value already in your shell
+taking precedence over every file. A value from your shell always reaches the config unchanged,
+even when it equals what a file holds. For that to be true `knext build` starts the compile with
+`bun run --no-env-file`, so Bun loads none of your `.env*` files into the compile process itself;
+if you run the compile script some other way, Bun's own loading cannot be told apart from your
+shell, those values are passed on as shell values, and the build prints a warning when your app has
+`.env` files. Nothing the config sets reaches the rest of the build, and the child is ended as soon as it has
+reported, so a config that leaves a timer running does not hold the build up. A function config
+receives Next's own `defaultConfig` when `next` is installed in the app, and otherwise
+`pageExtensions` and `compress` (plus empty `experimental` and `images`), the values configs read
+most; a function, or a default export that is a promise, is awaited as Next does. If such a config
+cannot be loaded, or a value is not a list of glob strings (a function there is an error, not an
+empty list), the build fails, whatever the file says, because embedding no includes would pass the
+build and fail the route. A config that assembles its includes in a way that avoids all of the
+above (a key spelled out of unrelated fragments in a file with no other sign of indirection) is not
+recognised.
+
+Every embedded file adds its size to the executable, once. The build log prints the count and total
+size, and warns above 64 MiB.
+
+Self-contained mode is supported on the compiled standalone-on-Bun target and the vinext target,
+and on no other: elsewhere, setting it changes nothing about what `knext build` produces, and the
+choice is only recorded in the build log. The value must be a boolean — `knext validate` rejects
+anything else.
 
 #### What's measured so far
 
@@ -255,7 +365,8 @@ default choice for a new one.
   only).** If your app hits this, `knext build` fails at build time and names the package — the
   build never produces an image, so you find out before you deploy, not at runtime.
 - **Files your app reads from disk at request time, when they are not produced by the build
-  itself, are not included in the executable.** Custom fonts loaded for generated images, static
+  itself, are not included in the executable.** (On the vinext target, files listed in
+  `outputFileTracingIncludes` or named by a literal path in server code are included; see above.) Custom fonts loaded for generated images, static
   files read directly from the filesystem, and per-route data files read outside the framework's
   own data-fetching functions are the common cases. If your app hits this, the affected route
   answers with a server error (occasionally the connection drops instead) rather than the page you
@@ -397,6 +508,16 @@ The build also warns, naming the file, in two cases where it cannot know what to
 In both cases the binary throws `Cannot find module` if that code loads a package that was not bundled
 and is not deployed next to the binary.
 
+One computed name is exempt: `ioredis`, assembled as `['io', 'redis'].join('')`. `@getknext/lib` loads
+it that way on purpose so no bundler follows it, and its Redis client never reaches that load under Bun,
+which uses its built-in Redis client. A strict build does not fail for it, and the `knext build` log
+names it as "deliberately not bundled" when the server output has the form the build looks for: the
+vinext build, and a standalone build whose bundler keeps `createRequire(import.meta.url)`. A webpack
+standalone build rewrites that call, so the build does not name an `ioredis` load there. The exemption is
+by name and applies wherever the build finds that load, so it does not check that your own code guards
+it. The binary would throw if that code path ran without the package beside it. Any other computed
+name, including one assembled from string literals, is a non-literal require and fails a strict build.
+
 To make these warnings a build failure (for example in CI), set `KNEXT_COMPILE_STRICT_REQUIRES=1` when
 you run `knext build`. Two limits apply:
 
@@ -408,6 +529,16 @@ you run `knext build`. Two limits apply:
   example `ws` (`bufferutil`, `utf-8-validate`) or `pg` (`pg-native`). If your app does not install
   those, the build correctly warns that they cannot be bundled, and a strict build fails on that
   warning. Leave strict mode off for such apps, or install the optional packages.
+
+The build follows a `createRequire(import.meta.url)` binding through an alias (`const c = createRequire`),
+through `import * as m from "node:module"` and through
+`const { createRequire } = await import("node:module")`, and holds what it loads to the same standard
+as a direct call. It cannot follow a `require` that is then copied (`const s = require2`), stored in an
+object or array, passed to another function, returned, or re-exported as the default, or a
+`createRequire(url)` wrapped in a function whose argument it cannot see is `import.meta.url`. Each of
+those is reported as `unrecognised createRequire(import.meta.url) binding in …`: a warning by default,
+and a failure under `KNEXT_COMPILE_STRICT_REQUIRES=1`. Calling the binding, `require.resolve(…)` and a
+named export are understood.
 
 The same applies to packages you list in `serverExternalPackages` and to the packages Next.js keeps
 external by default (for example `typescript`, `sqlite3`, `prisma`). The binary carries a bundled

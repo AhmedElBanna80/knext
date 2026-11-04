@@ -58,13 +58,16 @@ Reproduction).
 **Instrument.** [`scripts/bench-cold-start-phases/`](../../scripts/bench-cold-start-phases/)'s
 existing in-cluster harness (`cold-cycle.mjs`, `drive.py`, `analyze.py`, `stats.py`), **reused
 unmodified** except for the one thing that is cluster-specific: OKE's node *names* were the node's
-own internal IP (`10.0.1.118`/`10.0.1.169`); GKE's node names are opaque
-(`gke-knext-coldstart-default-pool-<hash>-<suffix>`). The GKE-specific copies live in
+own internal IP; GKE's node names are opaque
+(`gke-knext-coldstart-default-pool-<hash>-<suffix>`). The run used GKE-specific copies of
+`cold-cycle.mjs` and `drive.py`; those copies have since been folded into the single harness
+(`cold-cycle.mjs`, `drive.py` in `scripts/bench-cold-start-phases/`), which now takes the kubectl
+context, namespace, harness pod and node-agent map as settings (see
+[`scripts/bench-cold-start-phases/README.md`](../../scripts/bench-cold-start-phases/README.md)) and
+finds the agent on any node by label. What stays GKE-specific is the manifests in
 [`scripts/bench-cold-start-phases/gke/`](../../scripts/bench-cold-start-phases/gke/):
-`cold-cycle.mjs` (the `AGENT_PODS` node-name→pod map, extended from 2 to 3 nodes),
-`node-agents.yaml` / `harness-rbac.yaml` (3 agent + 3 clock pods, one per real node, instead of 2),
-`drive.py` (kubectl context `knext-coldstart`, not `knext-oke-sa`). `analyze.py`/`stats.py` needed
-no changes (they are cell/node-generic).
+`node-agents.yaml` / `harness-rbac.yaml` (3 agent + 3 clock pods, one per real node, instead of 2).
+`analyze.py`/`stats.py` needed no changes (they are cell/node-generic).
 
 **Interleaving.** 11 rounds, both arms woken once per round, alternating order (A B, B A); 22
 wakes, 22 valid (0 excluded), every response HTTP 200 with the `items:50` marker. 2026-10-01

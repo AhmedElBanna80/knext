@@ -203,3 +203,6 @@ triage-shape-*/
 # guards a run that was killed before cleanup ran.
 packages/kn-next/src/__tests__/fixtures/.dev-edge-fence-work-*/
 packages/grpc/templates/
+
+# Local cluster settings for the cold-start bench harness (copy bench-config.example.json)
+scripts/bench-cold-start-phases/bench-config.json

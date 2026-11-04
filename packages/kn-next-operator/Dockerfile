@@ -19,7 +19,7 @@
 # together when bumping. Resolve with:
 #   docker buildx imagetools inspect golang:1.26.10
 # Enforced by scripts/check-base-images-pinned.sh (CI: base-image-pin-guard).
-FROM golang:1.26.10@sha256:24a707af49702fa44f02785475d02fb752f6982d3e9c0afb7696e1f0204e7ce9 AS builder
+FROM golang:1.26.10@sha256:670bb5aa5349ae03b8516764718486f4f16399134bdc9acd0c46a23f043ab05c AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -47,7 +47,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # image we sign are immutable. Keep the tag in the trailing comment; refresh with:
 #   docker buildx imagetools inspect gcr.io/distroless/static:nonroot
 # Enforced by scripts/check-base-images-pinned.sh (CI: base-image-pin-guard).
-FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
+FROM gcr.io/distroless/static:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532

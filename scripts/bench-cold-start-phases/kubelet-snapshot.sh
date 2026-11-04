@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Read-only snapshot of kubelet configz and metrics for each worker, via the API server
-# proxy. Makes no change to any node or cluster object. Usage:
+# proxy (the caller needs RBAC on nodes/proxy, and nodes list). Makes no change to any node or cluster object. Usage:
 #   scripts/bench-cold-start-phases/kubelet-snapshot.sh [context] [outdir]
 set -euo pipefail
-CTX="${1:-knext-oke-sa}"
-OUT="${2:-/tmp/kubelet-snapshot}"
+CTX="${1:-${KNEXT_BENCH_CONTEXT:-}}"
+OUT="${2:-${TMPDIR:-/tmp}/kubelet-snapshot}"
+[ -n "$CTX" ] || { echo "usage: kubelet-snapshot.sh <context> [outdir] (or set KNEXT_BENCH_CONTEXT)" >&2; exit 2; }
 mkdir -p "$OUT"
 for node in $(kubectl --context "$CTX" get nodes -o jsonpath='{.items[*].metadata.name}'); do
   kubectl --context "$CTX" get --raw "/api/v1/nodes/$node/proxy/configz" > "$OUT/configz-$node.json"

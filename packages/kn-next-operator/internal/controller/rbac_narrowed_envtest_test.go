@@ -52,7 +52,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -92,7 +91,7 @@ var _ = Describe("Operator reconciles under the shipped (narrowed) ClusterRole",
 		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
 		crb := &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: roleName},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: roleName},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: roleName},
 			Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: userGroup}},
 		}
 		Expect(k8sClient.Create(ctx, crb)).To(Succeed())
@@ -133,7 +132,7 @@ var _ = Describe("Operator reconciles under the shipped (narrowed) ClusterRole",
 						User:   userName,
 						Groups: []string{userGroup},
 						ResourceAttributes: &authorizationv1.ResourceAttributes{
-							Namespace: namespace, Verb: verb, Resource: "secrets",
+							Namespace: namespace, Verb: verb, Resource: lcSecrets,
 						},
 					},
 				}
@@ -147,7 +146,7 @@ var _ = Describe("Operator reconciles under the shipped (narrowed) ClusterRole",
 						User:   userName,
 						Groups: []string{userGroup},
 						ResourceAttributes: &authorizationv1.ResourceAttributes{
-							Namespace: namespace, Verb: verb, Resource: "secrets",
+							Namespace: namespace, Verb: verb, Resource: lcSecrets,
 						},
 					},
 				}
@@ -171,13 +170,13 @@ var _ = Describe("Operator reconciles under the shipped (narrowed) ClusterRole",
 			Metrics:                metricsserver.Options{BindAddress: "0"},
 			HealthProbeBindAddress: "0",
 			// Another spec in this process registers the "nextapp" controller.
-			Controller: ctrlconfig.Controller{SkipNameValidation: ptr.To(true)},
+			Controller: ctrlconfig.Controller{SkipNameValidation: new(true)},
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect((&NextAppReconciler{
 			Client:   mgr.GetClient(),
 			Scheme:   mgr.GetScheme(),
-			Recorder: mgr.GetEventRecorderFor("nextapp-controller"),
+			Recorder: mgr.GetEventRecorderFor("nextapp-controller"), //nolint:staticcheck // SA1019: legacy record.EventRecorder is what the reconcilers consume; events.k8s.io migration is tracked debt
 		}).SetupWithManager(mgr)).To(Succeed())
 		go func() {
 			defer close(mgrDone)

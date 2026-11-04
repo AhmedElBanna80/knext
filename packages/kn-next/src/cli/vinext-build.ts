@@ -171,6 +171,11 @@ export function compileArgv(
     return [
         compilerBin ?? "bun",
         "run",
+        // Bun must not load the app's `.env*` files into the compile process. The compile
+        // reads next.config in a child that gives it the environment `next build` would,
+        // and it can only pass the REAL shell environment on if Bun has not mixed file
+        // values into its own. (Nothing in the compile reads the app's .env files.)
+        "--no-env-file",
         compileScriptPath(),
         "--entry",
         entry,

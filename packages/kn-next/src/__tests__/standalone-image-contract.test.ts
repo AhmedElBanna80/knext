@@ -136,7 +136,7 @@ describe("Dockerfile.standalone.hbs — ADR-0055 image-owned start contract", ()
             "oven/bun:1.4.2-alpine@sha256:d888c0ae6c86d7866ff10c5aafdd9077b36aee6455b33dd270fb93c0dd5cef6f",
         );
         expect(dockerfile).toContain(
-            "node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1",
+            "node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85",
         );
         // Every external FROM carries a digest — none floats by tag.
         for (const line of dockerfile.split("\n")) {

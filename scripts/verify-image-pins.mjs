@@ -56,6 +56,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { discoverDockerfiles, isExcluded, loadExclusions } from './lib/dockerfile-base-images.mjs';
+
 /**
  * The operator's NON-TEST Go sources, DISCOVERED rather than enumerated: a list
  * is how the second pinned image gets missed.
@@ -268,8 +270,15 @@ export async function verifyImagePin(pin, { api = resolveTagDigest } = {}) {
   return undefined;
 }
 
-export async function verifyRepo(repoRoot, { api = resolveTagDigest } = {}) {
-  const files = discoverSources(repoRoot);
+export async function verifyRepo(
+  repoRoot,
+  { api = resolveTagDigest, exclusions = loadExclusions(repoRoot), today = new Date() } = {},
+) {
+  // Dockerfile base images are in scope too (#2660). A pin an UNEXPIRED, dated,
+  // justified `registry-resolution` exclusion names (security/dockerfile-base-
+  // exclusions.json) is skipped; expiry makes it a finding again.
+  const dockerfiles = discoverDockerfiles(repoRoot);
+  const files = [...discoverSources(repoRoot), ...dockerfiles];
   if (files.length === 0) {
     return {
       files,
@@ -284,6 +293,17 @@ export async function verifyRepo(repoRoot, { api = resolveTagDigest } = {}) {
   );
   const findings = [];
   for (const pin of pins) {
+    if (
+      dockerfiles.includes(pin.file) &&
+      isExcluded(
+        exclusions,
+        'registry-resolution',
+        { file: pin.file, image: pin.ref, digest: pin.digest },
+        today,
+      )
+    ) {
+      continue;
+    }
     const finding = await verifyImagePin(pin, { api });
     if (finding) findings.push(finding);
   }
@@ -308,7 +328,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
 
   const { files, pins, findings } = await verifyRepo(root);
   console.log(
-    `scanned ${files.length} operator + benchmark source file(s), ${pins.length} digest-pinned image(s)`,
+    `scanned ${files.length} operator + benchmark + Dockerfile source file(s), ${pins.length} digest-pinned image(s)`,
   );
   for (const pin of pins) {
     console.log(`  ${pin.file}:${pin.line}  ${pin.ref}`);

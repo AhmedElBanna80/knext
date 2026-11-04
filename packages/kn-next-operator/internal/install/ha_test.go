@@ -80,7 +80,7 @@ func TestManagerKeepsLeaderElectFlag(t *testing.T) {
 	for _, c := range containers {
 		cm, _ := c.(map[string]any)
 		name, _ := cm["name"].(string)
-		if name != "manager" {
+		if name != lcManager {
 			continue
 		}
 		args, _ := cm["args"].([]any)
@@ -105,7 +105,7 @@ func managerContainer(t *testing.T) map[string]any {
 	containers, _ := pspec["containers"].([]any)
 	for _, c := range containers {
 		cm, _ := c.(map[string]any)
-		if name, _ := cm["name"].(string); name == "manager" {
+		if name, _ := cm["name"].(string); name == lcManager {
 			return cm
 		}
 	}

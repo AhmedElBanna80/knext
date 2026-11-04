@@ -33,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
@@ -52,11 +51,11 @@ import (
 // (a fake client validates nothing), and that the operator starts and works with
 // and without the KnextPlatform CRD.
 
-func rawPlatform(name string, spec map[string]interface{}) *unstructured.Unstructured {
-	u := &unstructured.Unstructured{Object: map[string]interface{}{
+func rawPlatform(name string, spec map[string]any) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "platform.kn-next.dev/v1alpha1",
 		"kind":       "KnextPlatform",
-		"metadata":   map[string]interface{}{"name": name},
+		"metadata":   map[string]any{"name": name},
 	}}
 	if spec != nil {
 		u.Object["spec"] = spec
@@ -77,7 +76,7 @@ var _ = Describe("KnextPlatform CRD admission (ADR-0064 P0-1)", func() {
 
 	It("accepts the empty platform, named default", func() {
 		DeferCleanup(func() { deletePlatformIfPresent(ctx, "default") })
-		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]interface{}{}))).To(Succeed())
+		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]any{}))).To(Succeed())
 		got := rawPlatform("default", nil)
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "default"}, got)).To(Succeed())
 		// Nothing is defaulted into the stored object: an empty spec stays empty,
@@ -88,23 +87,23 @@ var _ = Describe("KnextPlatform CRD admission (ADR-0064 P0-1)", func() {
 
 	It("accepts a fully populated platform", func() {
 		DeferCleanup(func() { deletePlatformIfPresent(ctx, "default") })
-		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]interface{}{
+		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]any{
 			"profile": "fastColdStart",
-			"scaling": map[string]interface{}{"defaults": map[string]interface{}{
+			"scaling": map[string]any{"defaults": map[string]any{
 				"containerConcurrency": int64(40), "scaleDownDelay": "5m", "targetBurstCapacity": int64(-1),
 				"panicWindowPercentage": int64(20), "panicThresholdPercentage": int64(300),
 			}},
-			"resources": map[string]interface{}{"defaults": map[string]interface{}{
+			"resources": map[string]any{"defaults": map[string]any{
 				"cpuRequest": "500m", "cpuLimit": "2", "memoryRequest": "1Gi", "memoryLimit": "2Gi",
 			}},
-			"limits":   map[string]interface{}{"timeoutSeconds": int64(600)},
-			"database": map[string]interface{}{"connectionBudget": int64(160)},
-			"rollout":  map[string]interface{}{"maxAppsPerMinute": int64(5)},
+			"limits":   map[string]any{"timeoutSeconds": int64(600)},
+			"database": map[string]any{"connectionBudget": int64(160)},
+			"rollout":  map[string]any{"maxAppsPerMinute": int64(5)},
 		}))).To(Succeed())
 	})
 
 	It("is a singleton: any name but default is rejected by CEL", func() {
-		err := k8sClient.Create(ctx, rawPlatform("staging", map[string]interface{}{}))
+		err := k8sClient.Create(ctx, rawPlatform("staging", map[string]any{}))
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("singleton"))
 		Expect(err.Error()).To(ContainSubstring("default"))
@@ -119,29 +118,29 @@ var _ = Describe("KnextPlatform CRD admission (ADR-0064 P0-1)", func() {
 	})
 
 	DescribeTable("rejects an invalid field and names it",
-		func(spec map[string]interface{}, mention string) {
+		func(spec map[string]any, mention string) {
 			DeferCleanup(func() { deletePlatformIfPresent(ctx, "default") })
 			err := k8sClient.Create(ctx, rawPlatform("default", spec))
 			Expect(err).To(HaveOccurred(), "the CRD schema must reject this")
 			Expect(err.Error()).To(ContainSubstring(mention))
 		},
-		Entry("unknown profile", map[string]interface{}{"profile": "turbo"}, "profile"),
-		Entry("garbage cpu quantity", map[string]interface{}{"resources": map[string]interface{}{"defaults": map[string]interface{}{"cpuLimit": "banana"}}}, "cpuLimit"),
-		Entry("GB memory suffix", map[string]interface{}{"resources": map[string]interface{}{"defaults": map[string]interface{}{"memoryLimit": "1GB"}}}, "memoryLimit"),
-		Entry("zero timeout", map[string]interface{}{"limits": map[string]interface{}{"timeoutSeconds": int64(0)}}, "timeoutSeconds"),
-		Entry("timeout beyond an hour", map[string]interface{}{"limits": map[string]interface{}{"timeoutSeconds": int64(4000)}}, "timeoutSeconds"),
-		Entry("zero connection budget", map[string]interface{}{"database": map[string]interface{}{"connectionBudget": int64(0)}}, "connectionBudget"),
-		Entry("zero rollout rate", map[string]interface{}{"rollout": map[string]interface{}{"maxAppsPerMinute": int64(0)}}, "maxAppsPerMinute"),
-		Entry("zero concurrency", map[string]interface{}{"scaling": map[string]interface{}{"defaults": map[string]interface{}{"containerConcurrency": int64(0)}}}, "containerConcurrency"),
-		Entry("burst below -1", map[string]interface{}{"scaling": map[string]interface{}{"defaults": map[string]interface{}{"targetBurstCapacity": int64(-2)}}}, "targetBurstCapacity"),
-		Entry("panic window 0", map[string]interface{}{"scaling": map[string]interface{}{"defaults": map[string]interface{}{"panicWindowPercentage": int64(0)}}}, "panicWindowPercentage"),
-		Entry("panic window 101", map[string]interface{}{"scaling": map[string]interface{}{"defaults": map[string]interface{}{"panicWindowPercentage": int64(101)}}}, "panicWindowPercentage"),
-		Entry("panic threshold 100", map[string]interface{}{"scaling": map[string]interface{}{"defaults": map[string]interface{}{"panicThresholdPercentage": int64(100)}}}, "panicThresholdPercentage"),
+		Entry("unknown profile", map[string]any{"profile": "turbo"}, "profile"),
+		Entry("garbage cpu quantity", map[string]any{"resources": map[string]any{"defaults": map[string]any{"cpuLimit": "banana"}}}, "cpuLimit"),
+		Entry("GB memory suffix", map[string]any{"resources": map[string]any{"defaults": map[string]any{"memoryLimit": "1GB"}}}, "memoryLimit"),
+		Entry("zero timeout", map[string]any{"limits": map[string]any{"timeoutSeconds": int64(0)}}, "timeoutSeconds"),
+		Entry("timeout beyond an hour", map[string]any{"limits": map[string]any{"timeoutSeconds": int64(4000)}}, "timeoutSeconds"),
+		Entry("zero connection budget", map[string]any{"database": map[string]any{"connectionBudget": int64(0)}}, "connectionBudget"),
+		Entry("zero rollout rate", map[string]any{"rollout": map[string]any{"maxAppsPerMinute": int64(0)}}, "maxAppsPerMinute"),
+		Entry("zero concurrency", map[string]any{"scaling": map[string]any{"defaults": map[string]any{"containerConcurrency": int64(0)}}}, "containerConcurrency"),
+		Entry("burst below -1", map[string]any{"scaling": map[string]any{"defaults": map[string]any{"targetBurstCapacity": int64(-2)}}}, "targetBurstCapacity"),
+		Entry("panic window 0", map[string]any{"scaling": map[string]any{"defaults": map[string]any{"panicWindowPercentage": int64(0)}}}, "panicWindowPercentage"),
+		Entry("panic window 101", map[string]any{"scaling": map[string]any{"defaults": map[string]any{"panicWindowPercentage": int64(101)}}}, "panicWindowPercentage"),
+		Entry("panic threshold 100", map[string]any{"scaling": map[string]any{"defaults": map[string]any{"panicThresholdPercentage": int64(100)}}}, "panicThresholdPercentage"),
 	)
 
 	It("serves a status subresource the operator can write without touching spec", func() {
 		DeferCleanup(func() { deletePlatformIfPresent(ctx, "default") })
-		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]interface{}{"limits": map[string]interface{}{"timeoutSeconds": int64(600)}}))).To(Succeed())
+		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]any{"limits": map[string]any{"timeoutSeconds": int64(600)}}))).To(Succeed())
 
 		p := &platformv1alpha1.KnextPlatform{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "default"}, p)).To(Succeed())
@@ -166,9 +165,9 @@ var _ = Describe("the platform merge against a real API server", func() {
 
 	It("merges the platform, persists status.platform through the NextApp CRD schema, and tracks edits by generation", func() {
 		DeferCleanup(func() { deletePlatformIfPresent(ctx, "default") })
-		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]interface{}{
-			"limits":    map[string]interface{}{"timeoutSeconds": int64(600)},
-			"resources": map[string]interface{}{"defaults": map[string]interface{}{"cpuLimit": "2"}},
+		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]any{
+			"limits":    map[string]any{"timeoutSeconds": int64(600)},
+			"resources": map[string]any{"defaults": map[string]any{"cpuLimit": "2"}},
 		}))).To(Succeed())
 
 		app := &appsv1alpha1.NextApp{
@@ -255,7 +254,7 @@ func newStartupManager(cfg2 *rest.Config) (ctrl.Manager, *runtime.Scheme) {
 		// default that failure would land after any sensible assertion window, and
 		// "the manager started" would pass for a manager that is about to crash-loop.
 		Controller: config.Controller{
-			SkipNameValidation: ptr.To(true),
+			SkipNameValidation: new(true),
 			CacheSyncTimeout:   3 * time.Second,
 		},
 	})
@@ -303,7 +302,7 @@ var _ = Describe("operator start-up without the KnextPlatform CRD (ADR-0064 P0-3
 		app := &appsv1alpha1.NextApp{
 			ObjectMeta: metav1.ObjectMeta{Name: "startup-no-crd", Namespace: "default"},
 			Spec: appsv1alpha1.NextAppSpec{
-				Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+				Image: validImage,
 			},
 		}
 		Expect(c.Create(ctx, app)).To(Succeed())
@@ -349,7 +348,7 @@ var _ = Describe("operator with the KnextPlatform CRD: the watch drives the merg
 		app := &appsv1alpha1.NextApp{
 			ObjectMeta: metav1.ObjectMeta{Name: "platform-watch-app", Namespace: "default"},
 			Spec: appsv1alpha1.NextAppSpec{
-				Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+				Image: validImage,
 			},
 		}
 		Expect(c.Create(ctx, app)).To(Succeed())
@@ -378,8 +377,8 @@ var _ = Describe("operator with the KnextPlatform CRD: the watch drives the merg
 		}, 30*time.Second, 200*time.Millisecond).Should(Succeed())
 
 		By("creating the platform: the watch re-enqueues the app with no edit to the app")
-		Expect(c.Create(ctx, rawPlatform("default", map[string]interface{}{
-			"limits": map[string]interface{}{"timeoutSeconds": int64(600)},
+		Expect(c.Create(ctx, rawPlatform("default", map[string]any{
+			"limits": map[string]any{"timeoutSeconds": int64(600)},
 		}))).To(Succeed())
 
 		Eventually(func(g Gomega) {

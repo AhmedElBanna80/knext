@@ -33,7 +33,7 @@ import (
 // series is absent, which is NOT zero — the platform e2e relies on telling a
 // series that was never exported from one that reads 0.
 func MetricValue(exposition, series string) (float64, bool) {
-	for _, line := range strings.Split(exposition, "\n") {
+	for line := range strings.SplitSeq(exposition, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

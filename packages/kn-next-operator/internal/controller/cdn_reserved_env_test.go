@@ -131,8 +131,8 @@ func TestCDNReservedEnvIgnored_DoesNotDependOnSpecCDNOrBuild(t *testing.T) {
 	for name, mutate := range map[string]func(*appsv1alpha1.NextApp){
 		"no spec.cdn": func(a *appsv1alpha1.NextApp) {},
 		"spec.cdn":    func(a *appsv1alpha1.NextApp) { a.Spec.CDN = &appsv1alpha1.CDNSpec{Provider: "cloudflare"} },
-		"vinext": func(a *appsv1alpha1.NextApp) {
-			a.Spec.Build = "vinext"
+		lcVinext: func(a *appsv1alpha1.NextApp) {
+			a.Spec.Build = lcVinext
 			a.Spec.CDN = &appsv1alpha1.CDNSpec{Provider: "cloudflare"}
 		},
 	} {

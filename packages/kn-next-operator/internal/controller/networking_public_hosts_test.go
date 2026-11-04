@@ -148,7 +148,6 @@ var _ = Describe("NextApp spec.networking.publicHosts", func() {
 	// validation cannot disagree about a bound. An unreadable or hollow table
 	// fails the suite (it must never silently become an empty one).
 	for i, c := range loadPublicHostsCases() {
-		c := c
 		verb := "rejects"
 		if c.Valid {
 			verb = "accepts"

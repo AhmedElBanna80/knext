@@ -87,7 +87,9 @@ def main():
         "wake_to_bound", "bound_to_user_log", "bound_to_ready_in", "bound_to_qp_log",
         "ready_in_to_podip", "qp_log_to_podip", "podip_to_ready", "ready_to_first_byte",
         "ready_in_to_ready", "total_first_byte", "bound_to_podip", "user_log_to_qp_log",
+        "started_at_to_podip", "bound_to_started_at", "podip_to_app_tcp3000",
     ]}
+    ready_in_lines = []
     lag_ready_in_podip, lag_qp_podip = [], []
     readiness_fail_events = []
     for r in ok:
@@ -100,6 +102,18 @@ def main():
         ready = w.get("cond_Ready")
         fb = w.get("first_byte")
         seg["wake_to_bound"].append(bound)
+        # startedAt is the container status startedAt (RFC3339, 1 s resolution), re-based.
+        sa = (r.get("status") or {}).get("startedAt_user")
+        if sa is not None and podip is not None:
+            seg["started_at_to_podip"].append(podip - sa)
+        if sa is not None and bound is not None:
+            seg["bound_to_started_at"].append(sa - bound)
+        if w.get("app_tcp_3000") is not None and podip is not None:
+            seg["podip_to_app_tcp3000"].append(w["app_tcp_3000"] - podip)
+        for e in r.get("logs", {}).get("user-container", []) or []:
+            if isinstance(e, dict) and "Ready in" in str(e.get("line", "")):
+                ready_in_lines.append(str(e["line"]).strip())
+                break
         seg["total_first_byte"].append(fb)
         if bound is not None:
             seg["bound_to_user_log"].append(ul - bound if ul is not None else None)
@@ -123,7 +137,17 @@ def main():
             seg["ready_in_to_ready"].append(ready - ri)
         readiness_fail_events.append(event_count(r, "Unhealthy", "Readiness"))
 
+    ready_in_ms = {}
+    for l in ready_in_lines:
+        ready_in_ms[l] = ready_in_ms.get(l, 0) + 1
+    probe_first_try = sum(1 for r in ok if (r.get("probe_attempts") or {}).get("tcp3000") == 1)
+    # Re-basing: every t in the rows is ms after the harness request; container-log times
+    # are runtime timestamps shifted by the harness-measured clock offset (row["clock"]).
     out = {
+        "ready_in_lines_count": ready_in_ms,
+        "harness_tcp3000_first_try": [probe_first_try, len(ok)],
+        "clock_offset_ms": summ("clock_offset", [(r.get("clock") or {}).get("offset_ms") for r in ok]),
+        "clock_rtt_ms": summ("clock_rtt", [(r.get("clock") or {}).get("rtt_ms") for r in ok]),
         "file": path,
         "rows": len(rows),
         "valid": len(ok),
@@ -137,6 +161,9 @@ def main():
         json.dump(out, open(sys.argv[sys.argv.index("--json") + 1], "w"), indent=1)
     for s in out["segments"]:
         print(s)
+    print("ready_in lines", out["ready_in_lines_count"])
+    print("harness tcp3000 first try", out["harness_tcp3000_first_try"])
+    print("clock", out["clock_offset_ms"], out["clock_rtt_ms"])
     print("ks ready_in->podIP", out["uniform_test_ready_in_to_podip_U0_1000"])
     print("ks qp_log->podIP", out["uniform_test_qp_log_to_podip_U0_1000"])
     print("unhealthy", out["readiness_unhealthy_events_per_wake"], "wakes with any:", out["wakes_with_readiness_unhealthy"])

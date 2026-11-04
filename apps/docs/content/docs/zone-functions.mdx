@@ -134,7 +134,10 @@ spec:
 
 What is **not** in the digest is tuning that cannot change what runs or what it can read: `port`,
 `scaling`, `resources`, `protoVersion`, `language`, `wakeAhead` and `imagePullSecrets`. You can change
-those without touching the zone. The order of the entries in `env`, `envFrom` and `volumes` does
+those without touching the zone. `security` is also left out: it adds no code and widens nothing the
+function can read, but it can switch off the function's network policy, so a pinned zone's function can
+lose its network isolation without the pin moving. Treat write access to `backendservices` as able to
+remove that isolation. The order of the entries in `env`, `envFrom` and `volumes` does
 count, because the order of `env` decides how `$(VAR)` references expand and the order of `envFrom`
 decides which source wins when two define the same name; a tool that reorders them makes the pin
 mismatch, and the function is refused rather than run with a different environment.
@@ -408,11 +411,38 @@ The function's Knative Service is **cluster-local**: it has no public route. The
 writes a `NetworkPolicy` that admits only the Knative data path: the activator that wakes a
 function from zero and the Kourier gateway pods, on the queue-proxy serving ports, plus the Knative
 autoscaler on the queue-proxy metrics port. It stops a pod from dialling the function's pod
-directly. Kourier is the only supported ingress layer here, and the function policy cannot be
-turned off yet, so a function on a different ingress layer with an enforcing CNI is unreachable. Because every call arrives through those shared
+directly. Because every call arrives through those shared
 Knative components, the policy cannot tell your zone from another one; the per-call identity token
 is what does that. NetworkPolicy is enforced only by a CNI that supports it (Calico, Cilium);
 flannel enforces none.
+
+### Turning the policy off
+
+The policy names the Kourier gateway pods, so Kourier is the only ingress layer it supports. A
+function on Istio, Contour or Gateway API ingress, on a CNI that enforces NetworkPolicy, would be
+unreachable. For that case, and only that case, switch the policy off on the function:
+
+```yaml
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: BackendService
+metadata:
+  name: pricing
+spec:
+  zone: orders
+  image: registry.example.com/pricing@sha256:...
+  security:
+    networkPolicy: false
+```
+
+It works the same way as `spec.security.networkPolicy` on a `NextApp`. Left unset or `true`, the
+operator writes the policy. Set to `false`, it does not write the policy and deletes one it wrote
+earlier; setting it back to `true` writes it again. The function keeps running either way.
+
+**Turning it off removes the pod-level isolation.** Any pod that can reach the function's pod
+address can then dial it directly, bypassing the queue-proxy and its concurrency limit. The
+per-call identity token still decides who may call, but it is no longer backed by network
+isolation. Do this only when you replace the policy with one of your own that admits your
+ingress layer's pods, and leave it unset on a Kourier cluster.
 
 A bound function stays up a little longer than its zone after its own last call, so a zone that
 just called it does not find it cold on the next request.

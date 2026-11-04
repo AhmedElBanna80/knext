@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,19 +43,19 @@ import (
 const jwksZoneUID = types.UID("uid-orders-current")
 
 func jwksZone() *appsv1alpha1.NextApp {
-	return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: sovNS, UID: jwksZoneUID}}
+	return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS, UID: jwksZoneUID}}
 }
 
 func jwksConfigMap(refs ...metav1.OwnerReference) *metav1.PartialObjectMetadata {
 	return &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
-		Name: ZoneJWKSConfigMapName("orders"), Namespace: sovNS, OwnerReferences: refs,
+		Name: ZoneJWKSConfigMapName(sovZone), Namespace: sovNS, OwnerReferences: refs,
 	}}
 }
 
 func nextAppRef(name string, uid types.UID, controller bool) metav1.OwnerReference {
 	return metav1.OwnerReference{
-		APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "NextApp", Name: name, UID: uid,
-		Controller: ptr.To(controller),
+		APIVersion: appsv1alpha1.GroupVersion.String(), Kind: lcNextApp, Name: name, UID: uid,
+		Controller: new(controller),
 	}
 }
 
@@ -66,20 +67,20 @@ func TestClassifyZoneJWKS(t *testing.T) {
 		wantDetail string
 	}{
 		{"does not exist yet", nil, zoneJWKSAbsent, ""},
-		{"controlled by the zone's NextApp (name and UID)", jwksConfigMap(nextAppRef("orders", jwksZoneUID, true)), zoneJWKSControlled, ""},
+		{"controlled by the zone's NextApp (name and UID)", jwksConfigMap(nextAppRef(sovZone, jwksZoneUID, true)), zoneJWKSControlled, ""},
 		{"squatted: no ownerReference at all", jwksConfigMap(), zoneJWKSUntrusted, "no controller ownerReference"},
 		{"controlled by a different kind of object", jwksConfigMap(metav1.OwnerReference{
-			APIVersion: "v1", Kind: "ConfigMap", Name: "orders", UID: jwksZoneUID, Controller: ptr.To(true),
+			APIVersion: "v1", Kind: lcConfigMap, Name: sovZone, UID: jwksZoneUID, Controller: new(true),
 		}), zoneJWKSUntrusted, `ConfigMap "orders"`},
 		{"controlled by another kind in the zone's own API group that carries the zone's name and UID", jwksConfigMap(metav1.OwnerReference{
-			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "BackendService", Name: "orders", UID: jwksZoneUID, Controller: ptr.To(true),
+			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "BackendService", Name: sovZone, UID: jwksZoneUID, Controller: new(true),
 		}), zoneJWKSUntrusted, `BackendService "orders"`},
-		{"controlled by another zone's NextApp", jwksConfigMap(nextAppRef("billing", "uid-billing", true)), zoneJWKSUntrusted, `NextApp "billing"`},
+		{"controlled by another zone's NextApp", jwksConfigMap(nextAppRef(sovOther, "uid-billing", true)), zoneJWKSUntrusted, `NextApp "billing"`},
 		{"controlled by a NextApp of the same name but another UID (an earlier incarnation)",
-			jwksConfigMap(nextAppRef("orders", "uid-orders-previous", true)), zoneJWKSUntrusted, "different UID"},
-		{"the zone is an owner but not the controller", jwksConfigMap(nextAppRef("orders", jwksZoneUID, false)), zoneJWKSUntrusted, "no controller ownerReference"},
+			jwksConfigMap(nextAppRef(sovZone, "uid-orders-previous", true)), zoneJWKSUntrusted, "different UID"},
+		{"the zone is an owner but not the controller", jwksConfigMap(nextAppRef(sovZone, jwksZoneUID, false)), zoneJWKSUntrusted, "no controller ownerReference"},
 		{"a controller from a foreign API group that looks like the zone", jwksConfigMap(metav1.OwnerReference{
-			APIVersion: "example.com/v1", Kind: "NextApp", Name: "orders", UID: jwksZoneUID, Controller: ptr.To(true),
+			APIVersion: "example.com/v1", Kind: lcNextApp, Name: sovZone, UID: jwksZoneUID, Controller: new(true),
 		}), zoneJWKSUntrusted, `NextApp "orders"`},
 	}
 	for _, tc := range cases {
@@ -112,7 +113,7 @@ func renderWithJWKS(t *testing.T, state zoneJWKSState) *servingv1.Service {
 
 func jwksVolumes(ksvc *servingv1.Service) (vols []corev1.Volume, mounts []corev1.VolumeMount) {
 	for _, v := range ksvc.Spec.Template.Spec.Volumes {
-		if v.Name == FunctionJWKSVolumeName || (v.ConfigMap != nil && v.ConfigMap.Name == ZoneJWKSConfigMapName("orders")) {
+		if v.Name == FunctionJWKSVolumeName || (v.ConfigMap != nil && v.ConfigMap.Name == ZoneJWKSConfigMapName(sovZone)) {
 			vols = append(vols, v)
 		}
 	}
@@ -127,7 +128,7 @@ func jwksVolumes(ksvc *servingv1.Service) (vols []corev1.Volume, mounts []corev1
 func TestRenderMountsTheZoneJWKSUnlessUntrusted(t *testing.T) {
 	for _, state := range []zoneJWKSState{zoneJWKSAbsent, zoneJWKSControlled} {
 		vols, mounts := jwksVolumes(renderWithJWKS(t, state))
-		if len(vols) != 1 || vols[0].ConfigMap == nil || vols[0].ConfigMap.Name != ZoneJWKSConfigMapName("orders") {
+		if len(vols) != 1 || vols[0].ConfigMap == nil || vols[0].ConfigMap.Name != ZoneJWKSConfigMapName(sovZone) {
 			t.Fatalf("state %v: want the zone's JWKS ConfigMap volume, got %+v", state, vols)
 		}
 		// Optional even when the ConfigMap exists: if it is deleted later the
@@ -179,7 +180,7 @@ func acceptedObservation(state zoneJWKSState, detail string) functionObservation
 func jwksBS() *appsv1alpha1.BackendService {
 	return &appsv1alpha1.BackendService{
 		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: sovNS, Generation: 3},
-		Spec:       appsv1alpha1.BackendServiceSpec{Zone: "orders", Image: "img"},
+		Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: "img"},
 	}
 }
 
@@ -295,10 +296,8 @@ func TestVerdictUntrustedJWKSOutranksKnativeNotReady(t *testing.T) {
 }
 
 func TestRefusalsMetricCarriesTheJWKSReasonFromStartUp(t *testing.T) {
-	for _, r := range backendServiceRefusalReasons {
-		if r == ReasonJWKSUntrusted {
-			return
-		}
+	if slices.Contains(backendServiceRefusalReasons, ReasonJWKSUntrusted) {
+		return
 	}
 	t.Fatalf("backendServiceRefusalReasons lacks %q: the series would be absent until first used, which an alert reads as fine", ReasonJWKSUntrusted)
 }

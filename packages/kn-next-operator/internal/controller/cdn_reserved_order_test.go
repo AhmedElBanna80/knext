@@ -37,7 +37,7 @@ func TestCDNReservedEnvIgnored_OrderIsDeterministic(t *testing.T) {
 		"spec.secrets.envMap[KNEXT_CDN_A]", "spec.secrets.envMap[KNEXT_CDN_M]",
 		"spec.secrets.envMap[KNEXT_CDN_Q]", "spec.secrets.envMap[KNEXT_CDN_Z]",
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if got := cdnReservedEnvIgnored(app); !reflect.DeepEqual(got, want) {
 			t.Fatalf("iteration %d: got %v, want %v", i, got, want)
 		}

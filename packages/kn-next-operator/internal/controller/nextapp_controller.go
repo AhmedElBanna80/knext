@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,7 +40,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -378,7 +378,7 @@ func (r *NextAppReconciler) emitEvent(obj runtime.Object, eventType, reason, mes
 // get;list;watch only — no create/update/delete — least privilege.
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch
 
-func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
+func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) { //nolint:gocyclo // long branch-per-condition orchestrator; splitting is tracked debt, new functions stay under the limit
 	logger := logf.FromContext(ctx)
 
 	// Observe reconcile duration and tally the result on every return path.
@@ -462,14 +462,14 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			Type:               ConditionDegraded,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: nextApp.Generation,
-			Reason:             "InvalidSpec",
+			Reason:             lcInvalidSpec,
 			Message:            err.Error(),
 		})
 		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
 			Type:               ConditionReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: nextApp.Generation,
-			Reason:             "InvalidSpec",
+			Reason:             lcInvalidSpec,
 			Message:            "Spec does not meet validation requirements",
 		})
 		// Only write when the status actually changed (#98 no-op guard) so a
@@ -509,7 +509,7 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
-		sa.AutomountServiceAccountToken = ptr.To(false)
+		sa.AutomountServiceAccountToken = new(false)
 		// Own the pull secrets: set them from spec on every reconcile so an
 		// out-of-band `kubectl patch sa` is no longer required for a private
 		// registry, and drift is corrected rather than tolerated (#794, #952;
@@ -534,7 +534,7 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	imageCache.SetNamespace(nextApp.Namespace)
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, imageCache, func() error {
-		imageCache.Object["spec"] = map[string]interface{}{
+		imageCache.Object["spec"] = map[string]any{
 			"image": nextApp.Spec.Image,
 		}
 		labels := map[string]string{
@@ -740,9 +740,9 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			if active := latest.Status.GetCondition(servingv1.RevisionConditionActive); active != nil {
 				switch {
 				case active.IsTrue():
-					revisionActive = ptr.To(true)
+					revisionActive = new(true)
 				case active.IsFalse():
-					revisionActive = ptr.To(false)
+					revisionActive = new(false)
 				}
 			}
 		}
@@ -807,10 +807,7 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			// observed the latest spec. Otherwise a rollout would read stale-True
 			// while nodes still pin the previous digest.
 			if prewarmDS.Status.ObservedGeneration == prewarmDS.Generation {
-				ic.ready = prewarmDS.Status.UpdatedNumberScheduled
-				if prewarmDS.Status.NumberReady < ic.ready {
-					ic.ready = prewarmDS.Status.NumberReady
-				}
+				ic.ready = min(prewarmDS.Status.NumberReady, prewarmDS.Status.UpdatedNumberScheduled)
 			}
 		}
 	}
@@ -970,7 +967,7 @@ func deepHealthPath(nextApp *appsv1alpha1.NextApp) string {
 // EXEC) that has nothing to do with `writableCache` or `spec.storage`, so it
 // is handled as its own case below rather than folded into either.
 func isSelfContainedShape(nextApp *appsv1alpha1.NextApp) bool {
-	return nextApp.Spec.Build == "vinext" || nextApp.Spec.SelfContained
+	return nextApp.Spec.Build == lcVinext || nextApp.Spec.SelfContained
 }
 
 // buildWritableVolumes renders the emptyDir volumes + mounts the app
@@ -1162,7 +1159,7 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 
 	// Observability annotations — aligned with CLI
 	if nextApp.Spec.Observability != nil && nextApp.Spec.Observability.Enabled {
-		annotations["prometheus.io/scrape"] = "true"
+		annotations["prometheus.io/scrape"] = lcTrue
 		// 9464, NOT 9091: queue-proxy owns :9091 on a stock serving install
 		// (#951). In lockstep with the runtime entries' METRICS_PORT default,
 		// appMetricsPort below, and the shipped PodMonitor
@@ -1339,21 +1336,21 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 	//     `== "turbopack"`). Runtime "bun" execs `bun run server.js`;
 	//     "node"/absent uses the image default.
 	var containerCommand []string
-	if nextApp.Spec.Build != "vinext" && !nextApp.Spec.SelfContained && nextApp.Spec.Runtime == "bun" {
+	if nextApp.Spec.Build != lcVinext && !nextApp.Spec.SelfContained && nextApp.Spec.Runtime == "bun" {
 		containerCommand = []string{"bun", "run", "server.js"}
 	}
 
-	ksvc.Spec.Template.ObjectMeta.Annotations = annotations
+	ksvc.Spec.Template.Annotations = annotations
 
 	// Skew protection (#93): stamp the deploy's BUILD_ID onto the revision
 	// (pod) template as a label. Knative propagates template labels to every
 	// Revision, so the CLI's deploy-time asset GC can resolve a live revision
 	// back to its build-id (read-only) and never reap a live build's assets.
 	if nextApp.Spec.BuildID != "" {
-		if ksvc.Spec.Template.ObjectMeta.Labels == nil {
-			ksvc.Spec.Template.ObjectMeta.Labels = make(map[string]string)
+		if ksvc.Spec.Template.Labels == nil {
+			ksvc.Spec.Template.Labels = make(map[string]string)
 		}
-		ksvc.Spec.Template.ObjectMeta.Labels[appsv1alpha1.BuildIDLabel] = nextApp.Spec.BuildID
+		ksvc.Spec.Template.Labels[appsv1alpha1.BuildIDLabel] = nextApp.Spec.BuildID
 	}
 
 	ksvc.Spec.Template.Spec.ServiceAccountName = nextApp.Name + "-sa"
@@ -1368,7 +1365,7 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 			VolumeMounts: volumeMounts,
 			// Pod Security `restricted` by default; only runAsNonRoot has an
 			// opt-out (spec.security.runAsNonRoot). See pod_hardening.go.
-			SecurityContext: restrictedContainerSecurityContext(ptr.To(readOnlyRootFS), nextAppRunAsNonRoot(nextApp.Spec.Security)),
+			SecurityContext: restrictedContainerSecurityContext(new(readOnlyRootFS), nextAppRunAsNonRoot(nextApp.Spec.Security)),
 			Ports: []corev1.ContainerPort{
 				{ContainerPort: 3000},
 			},
@@ -1514,7 +1511,7 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 	// pod's OS hostname to the pod name; this env override does not touch
 	// it) and exports it as KNEXT_POD_NAME → otel host.name. Do NOT add a
 	// fieldRef env here; it would break deploys on stock Knative.
-	envVars = append(envVars, corev1.EnvVar{Name: "HOSTNAME", Value: "0.0.0.0"})
+	envVars = append(envVars, corev1.EnvVar{Name: lcHOSTNAME, Value: "0.0.0.0"})
 	envVars = append(envVars, corev1.EnvVar{Name: "NODE_ENV", Value: "production"})
 
 	// KNEXT_DB_POOL_MAX (#378, W3, ADR-0029): close the declared-vs-runtime
@@ -1575,7 +1572,7 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 		// vars are baked into the client bundle so the reporter no-ops
 		// unless enabled here. Default OFF (only set when Rum.Enabled).
 		if rum := nextApp.Spec.Observability.Rum; rum != nil && rum.Enabled {
-			envVars = append(envVars, corev1.EnvVar{Name: "NEXT_PUBLIC_RUM_ENABLED", Value: "true"})
+			envVars = append(envVars, corev1.EnvVar{Name: "NEXT_PUBLIC_RUM_ENABLED", Value: lcTrue})
 			if rum.SampleRate != "" {
 				envVars = append(envVars, corev1.EnvVar{Name: "NEXT_PUBLIC_RUM_SAMPLE_RATE", Value: rum.SampleRate})
 			}
@@ -1587,7 +1584,7 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 		// endpoint/sampler args are passed through only when set; the runtime
 		// applies a cluster-local default endpoint otherwise (ADR-0012).
 		if tracing := nextApp.Spec.Observability.Tracing; tracing != nil && tracing.Enabled {
-			envVars = append(envVars, corev1.EnvVar{Name: "OTEL_TRACING_ENABLED", Value: "true"})
+			envVars = append(envVars, corev1.EnvVar{Name: "OTEL_TRACING_ENABLED", Value: lcTrue})
 			if tracing.Endpoint != "" {
 				envVars = append(envVars, corev1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: tracing.Endpoint})
 			}
@@ -1796,8 +1793,8 @@ func buildTrafficTargets(app *appsv1alpha1.NextApp) []servingv1.TrafficTarget {
 		return []servingv1.TrafficTarget{
 			{
 				RevisionName:   t.RevisionName,
-				LatestRevision: ptr.To(false),
-				Percent:        ptr.To(int64(100)),
+				LatestRevision: new(false),
+				Percent:        new(int64(100)),
 			},
 		}
 	}
@@ -1805,12 +1802,12 @@ func buildTrafficTargets(app *appsv1alpha1.NextApp) []servingv1.TrafficTarget {
 	return []servingv1.TrafficTarget{
 		{
 			RevisionName:   t.RevisionName,
-			LatestRevision: ptr.To(false),
-			Percent:        ptr.To(int64(100 - canary)),
+			LatestRevision: new(false),
+			Percent:        new(int64(100 - canary)),
 		},
 		{
-			LatestRevision: ptr.To(true),
-			Percent:        ptr.To(int64(canary)),
+			LatestRevision: new(true),
+			Percent:        new(int64(canary)),
 		},
 	}
 }
@@ -1926,9 +1923,9 @@ func desiredIngressRules() []networkingv1.NetworkPolicyIngressRule {
 			// controller, so there this object is declarative-only and enforces
 			// nothing. Enforcement needs a policy-capable CNI (Calico/Cilium).
 			Ports: []networkingv1.NetworkPolicyPort{
-				{Port: ptr.To(intstr.FromInt32(queueProxyHTTPPort))},
-				{Port: ptr.To(intstr.FromInt32(queueProxyH2CPort))},
-				{Port: ptr.To(intstr.FromInt32(queueProxyHTTPSPort))},
+				{Port: new(intstr.FromInt32(queueProxyHTTPPort))},
+				{Port: new(intstr.FromInt32(queueProxyH2CPort))},
+				{Port: new(intstr.FromInt32(queueProxyHTTPSPort))},
 			},
 			From: append([]networkingv1.NetworkPolicyPeer{
 				activatorPeer(),
@@ -1944,7 +1941,7 @@ func desiredIngressRules() []networkingv1.NetworkPolicyIngressRule {
 		// pod access to the serving ports (8012/8013/8112) and app metrics (9464).
 		{
 			Ports: []networkingv1.NetworkPolicyPort{
-				{Port: ptr.To(intstr.FromInt32(queueProxyMetricsPort))},
+				{Port: new(intstr.FromInt32(queueProxyMetricsPort))},
 			},
 			From: []networkingv1.NetworkPolicyPeer{
 				autoscalerPeer(),
@@ -1974,8 +1971,8 @@ func desiredIngressRules() []networkingv1.NetworkPolicyIngressRule {
 		// assumption about the user's deployment.
 		{
 			Ports: []networkingv1.NetworkPolicyPort{
-				{Port: ptr.To(intstr.FromInt32(queueProxyMetricsPort))},
-				{Port: ptr.To(intstr.FromInt32(appMetricsPort))},
+				{Port: new(intstr.FromInt32(queueProxyMetricsPort))},
+				{Port: new(intstr.FromInt32(appMetricsPort))},
 			},
 			From: []networkingv1.NetworkPolicyPeer{
 				// An empty PodSelector matches all pods in the policy's own
@@ -2010,11 +2007,11 @@ func desiredIngressRules() []networkingv1.NetworkPolicyIngressRule {
 		// security control, which the architect gate blocked on.
 		{
 			Ports: []networkingv1.NetworkPolicyPort{
-				{Port: ptr.To(intstr.FromInt32(appMetricsPort))},
+				{Port: new(intstr.FromInt32(appMetricsPort))},
 			},
 			From: []networkingv1.NetworkPolicyPeer{
 				{NamespaceSelector: &metav1.LabelSelector{
-					MatchLabels: map[string]string{metricsScrapeNamespaceLabel: "true"},
+					MatchLabels: map[string]string{metricsScrapeNamespaceLabel: lcTrue},
 				}},
 			},
 		},
@@ -2107,9 +2104,7 @@ func (r *NextAppReconciler) reconcileNetworkPolicy(ctx context.Context, nextApp 
 		if np.Labels == nil {
 			np.Labels = make(map[string]string)
 		}
-		for k, v := range desired.Labels {
-			np.Labels[k] = v
-		}
+		maps.Copy(np.Labels, desired.Labels)
 		np.Spec = desired.Spec
 		return ctrl.SetControllerReference(nextApp, np, r.Scheme)
 	})
@@ -2187,13 +2182,7 @@ func warmScheduleRequeue(app *appsv1alpha1.NextApp, now time.Time) time.Duration
 	if !hasNext {
 		return 0
 	}
-	d := next.Sub(now)
-	if d < warmRequeueMin {
-		d = warmRequeueMin
-	}
-	if d > warmRequeueMax {
-		d = warmRequeueMax
-	}
+	d := min(max(next.Sub(now), warmRequeueMin), warmRequeueMax)
 	return d
 }
 

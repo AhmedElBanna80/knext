@@ -73,11 +73,10 @@ Knative Service was patched by hand; everything went through `NextApp` CRs.
 | `bc-bun-twin` / `bc-node-twin` | spec-identical twins of the baselines, woken only on a `c3-standard-4` node |
 
 **Instrument.** The in-cluster per-phase harness from the morning sitting
-([`scripts/bench-cold-start-phases/`](../../scripts/bench-cold-start-phases/), GKE copies in
-`gke/`), unchanged except: `gke/drive.py` can place an arm on one node pool (`arm@pool` cordons the
-other pools for that wake only) and reads `dns-probe.js` from the parent directory (the morning copy
-pointed at a file that only existed one level up), and `gke/cold-cycle.mjs` finds the phase agent of
-any node by label (for the new pool). Phases, clocks and statistics are as in the
+([`scripts/bench-cold-start-phases/`](../../scripts/bench-cold-start-phases/)), unchanged except:
+`drive.py` can place an arm on one node pool (`arm@pool` cordons the other pools for that wake only),
+and `cold-cycle.mjs` finds the phase agent of any node by label (for the new pool). The sitting ran
+GKE-specific copies of those two files; they are now the one shared harness. Phases, clocks and statistics are as in the
 [OKE doc's Method](cold-start-phase-breakdown-2026-10-01.md#method). New tooling:
 [`gke/compare.py`](../../scripts/bench-cold-start-phases/gke/compare.py) prints per-phase tables
 with **Holm correction across every p-value in one table family** (exact two-sided Mann-Whitney,

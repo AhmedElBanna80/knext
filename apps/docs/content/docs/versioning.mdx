@@ -251,7 +251,9 @@ PASS  Operator version  v1.3.0 (from label), image sha256:9f1c0a7d2b44…; compa
 
 It warns, without failing the preflight, when the operator is older than the CLI on the same major
 version, when the operator is an unreleased build, or when it predates operator versions and reports
-none. A different major version is not a warning: the operator keeps its own version line when
+none. It also warns when the CLI cannot read its own version (its `package.json` is missing or
+unreadable), reporting the CLI version as `unknown` rather than guessing; reinstall `@getknext/core`.
+A different major version is not a warning: the operator keeps its own version line when
 `@getknext/core` moves to 2.0, and the row says the pairing is decided by the CRD API version.
 The version is stamped on the manager Deployment, so you can also read it directly:
 

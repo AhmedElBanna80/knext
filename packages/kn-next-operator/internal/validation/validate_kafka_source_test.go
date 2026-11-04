@@ -19,8 +19,6 @@ package validation
 import (
 	"testing"
 
-	"k8s.io/utils/ptr"
-
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
 
@@ -59,21 +57,21 @@ func TestProvisionKafkaSourceIsNeverAValidationError(t *testing.T) {
 			name: "true with queue=kafka (the withdrawn opt-in) still validates",
 			revalidation: &appsv1alpha1.RevalidationSpec{
 				Queue:                "kafka",
-				ProvisionKafkaSource: ptr.To(true),
+				ProvisionKafkaSource: new(true),
 				KafkaBrokerUrl:       "kafka.default.svc:9092",
 			},
 		},
 		{
 			name: "true without a queue still validates",
 			revalidation: &appsv1alpha1.RevalidationSpec{
-				ProvisionKafkaSource: ptr.To(true),
+				ProvisionKafkaSource: new(true),
 			},
 		},
 		{
 			name: "false validates",
 			revalidation: &appsv1alpha1.RevalidationSpec{
 				Queue:                "kafka",
-				ProvisionKafkaSource: ptr.To(false),
+				ProvisionKafkaSource: new(false),
 			},
 		},
 		{
@@ -108,7 +106,7 @@ func TestProvisionKafkaSourceAcceptedOnBothAdmissionEntryPoints(t *testing.T) {
 		Image: kafkaTestImage,
 		Revalidation: &appsv1alpha1.RevalidationSpec{
 			Queue:                "kafka",
-			ProvisionKafkaSource: ptr.To(true),
+			ProvisionKafkaSource: new(true),
 		},
 	}
 	if err := ValidateNextAppSpecCreate(stored); err != nil {

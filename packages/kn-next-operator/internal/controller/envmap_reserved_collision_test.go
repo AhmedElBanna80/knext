@@ -54,7 +54,7 @@ func envMapCollisionApp(envMap map[string]appsv1alpha1.EnvMapEntry) *appsv1alpha
 	return &appsv1alpha1.NextApp{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"},
 		Spec: appsv1alpha1.NextAppSpec{
-			Image:   "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+			Image:   validImage,
 			Secrets: &appsv1alpha1.SecretsSpec{EnvMap: envMap},
 		},
 	}
@@ -76,17 +76,17 @@ func countNamed(vs []corev1.EnvVar, name string) int {
 // (queue-proxy routing, #178/#184), not just precedence, depends on it.
 func TestBuildKsvcEnv_HostnameCollision_OperatorAlwaysWins(t *testing.T) {
 	app := envMapCollisionApp(map[string]appsv1alpha1.EnvMapEntry{
-		"HOSTNAME":  {SecretName: "s", SecretKey: "k"},
+		lcHOSTNAME:  {SecretName: "s", SecretKey: "k"},
 		"UNRELATED": {SecretName: "s", SecretKey: "k2"},
 	})
 	r := &NextAppReconciler{}
 	env, _, report := r.buildKsvcEnv(app)
 
-	if got := countNamed(env, "HOSTNAME"); got != 1 {
+	if got := countNamed(env, lcHOSTNAME); got != 1 {
 		t.Fatalf("HOSTNAME appears %d times in the rendered env, want exactly 1 (the operator's own)", got)
 	}
 	for _, e := range env {
-		if e.Name == "HOSTNAME" {
+		if e.Name == lcHOSTNAME {
 			if e.ValueFrom != nil {
 				t.Fatalf("HOSTNAME is a SecretKeyRef (the dropped envMap entry survived instead of the operator's own plain value): %+v", e)
 			}
@@ -95,7 +95,7 @@ func TestBuildKsvcEnv_HostnameCollision_OperatorAlwaysWins(t *testing.T) {
 			}
 		}
 	}
-	if len(report.operatorWins) != 1 || report.operatorWins[0] != "HOSTNAME" {
+	if len(report.operatorWins) != 1 || report.operatorWins[0] != lcHOSTNAME {
 		t.Fatalf("report.operatorWins: got %v, want [HOSTNAME]", report.operatorWins)
 	}
 	if len(report.userWinsGrandfathered) != 0 || len(report.userWinsExempt) != 0 {
@@ -218,13 +218,13 @@ func TestComputeStatusVerdict_EnvMapCollision_OperatorWins_ConditionAndEvent(t *
 
 	v := computeStatusVerdict(app, readyKsvc(now), databaseCheckState{mode: databaseModeNone},
 		revisionCheck{}, imageCacheState{}, netpolEnforcementState{},
-		envMapCollisionReport{operatorWins: []string{"HOSTNAME"}}, privateExposureState{}, podCreationState{}, now)
+		envMapCollisionReport{operatorWins: []string{lcHOSTNAME}}, privateExposureState{}, podCreationState{}, now)
 
 	c := findVerdictCondition(t, v, ConditionEnvMapCollision)
 	if c.Status != metav1.ConditionTrue || c.Reason != ReasonEnvVarIgnored {
 		t.Fatalf("EnvMapCollision: got %+v, want True/%s", c, ReasonEnvVarIgnored)
 	}
-	if !strings.Contains(c.Message, "HOSTNAME") {
+	if !strings.Contains(c.Message, lcHOSTNAME) {
 		t.Fatalf("EnvMapCollision message %q does not name the collision", c.Message)
 	}
 	found := false
@@ -358,7 +358,7 @@ func TestComputeStatusVerdict_ExemptPlusOperatorWins_StillWarning(t *testing.T) 
 		revisionCheck{}, imageCacheState{}, netpolEnforcementState{},
 		envMapCollisionReport{
 			userWinsExempt: []string{"REDIS_URL"},
-			operatorWins:   []string{"HOSTNAME"},
+			operatorWins:   []string{lcHOSTNAME},
 		}, privateExposureState{}, podCreationState{}, now)
 
 	c := findVerdictCondition(t, v, ConditionEnvMapCollision)
@@ -366,7 +366,7 @@ func TestComputeStatusVerdict_ExemptPlusOperatorWins_StillWarning(t *testing.T) 
 		t.Fatalf("EnvMapCollision reason: got %s, want %s (operator-wins collision present, must not downgrade to informational)",
 			c.Reason, ReasonEnvVarIgnored)
 	}
-	if !strings.Contains(c.Message, "HOSTNAME") {
+	if !strings.Contains(c.Message, lcHOSTNAME) {
 		t.Fatalf("EnvMapCollision message %q does not name the operator-wins collision", c.Message)
 	}
 	found := false

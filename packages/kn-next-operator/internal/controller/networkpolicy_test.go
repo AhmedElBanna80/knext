@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -43,7 +42,7 @@ var _ = Describe("NextApp NetworkPolicy reconciliation", func() {
 		app := &appsv1alpha1.NextApp{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 			Spec: appsv1alpha1.NextAppSpec{
-				Image:    "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+				Image:    validImage,
 				Security: security,
 			},
 		}
@@ -115,7 +114,7 @@ var _ = Describe("NextApp NetworkPolicy reconciliation", func() {
 
 		By("owner-referencing the NextApp so it is GC'd on delete")
 		Expect(np.OwnerReferences).To(HaveLen(1))
-		Expect(np.OwnerReferences[0].Kind).To(Equal("NextApp"))
+		Expect(np.OwnerReferences[0].Kind).To(Equal(lcNextApp))
 		Expect(np.OwnerReferences[0].Name).To(Equal(nn.Name))
 	})
 
@@ -294,13 +293,13 @@ var _ = Describe("NextApp NetworkPolicy reconciliation", func() {
 			if peer.NamespaceSelector == nil {
 				continue
 			}
-			Expect(peer.NamespaceSelector.MatchLabels).To(HaveKeyWithValue(metricsScrapeNamespaceLabel, "true"),
+			Expect(peer.NamespaceSelector.MatchLabels).To(HaveKeyWithValue(metricsScrapeNamespaceLabel, lcTrue),
 				"an empty or wildcard selector here would admit EVERY namespace, turning a scoped grant into a blanket one")
 		}
 	})
 
 	It("creates the NetworkPolicy when Security.NetworkPolicy is explicitly true", func() {
-		nn := reconcileApp("np-explicit-true", &appsv1alpha1.SecuritySpec{NetworkPolicy: ptr.To(true)})
+		nn := reconcileApp("np-explicit-true", &appsv1alpha1.SecuritySpec{NetworkPolicy: new(true)})
 
 		np := &networkingv1.NetworkPolicy{}
 		Expect(k8sClient.Get(ctx, policyName(nn.Name), np)).To(Succeed())
@@ -308,7 +307,7 @@ var _ = Describe("NextApp NetworkPolicy reconciliation", func() {
 	})
 
 	It("does not create the NetworkPolicy when Security.NetworkPolicy is false", func() {
-		nn := reconcileApp("np-disabled", &appsv1alpha1.SecuritySpec{NetworkPolicy: ptr.To(false)})
+		nn := reconcileApp("np-disabled", &appsv1alpha1.SecuritySpec{NetworkPolicy: new(false)})
 
 		np := &networkingv1.NetworkPolicy{}
 		err := k8sClient.Get(ctx, policyName(nn.Name), np)
@@ -324,7 +323,7 @@ var _ = Describe("NextApp NetworkPolicy reconciliation", func() {
 		By("toggling NetworkPolicy off and re-reconciling")
 		app := &appsv1alpha1.NextApp{}
 		Expect(k8sClient.Get(ctx, nn, app)).To(Succeed())
-		app.Spec.Security = &appsv1alpha1.SecuritySpec{NetworkPolicy: ptr.To(false)}
+		app.Spec.Security = &appsv1alpha1.SecuritySpec{NetworkPolicy: new(false)}
 		Expect(k8sClient.Update(ctx, app)).To(Succeed())
 
 		reconciler := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -32,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,7 +96,7 @@ type BackendServiceReconciler struct {
 // (zone_signing_key_reconcile.go declares get;create;update on configmaps).
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get
 
-func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
+func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) { //nolint:gocyclo // long branch-per-condition orchestrator; splitting is tracked debt, new functions stay under the limit
 	logger := logf.FromContext(ctx)
 	defer func() {
 		if retErr != nil {
@@ -486,11 +486,9 @@ func (r *BackendServiceReconciler) render(
 		if sa.Labels == nil {
 			sa.Labels = map[string]string{}
 		}
-		for k, v := range functionLabels(bs) {
-			sa.Labels[k] = v
-		}
+		maps.Copy(sa.Labels, functionLabels(bs))
 		// No Role or RoleBinding is ever created for it, and no token is mounted.
-		sa.AutomountServiceAccountToken = ptr.To(false)
+		sa.AutomountServiceAccountToken = new(false)
 		sa.ImagePullSecrets = bs.Spec.ImagePullSecrets
 		return ctrl.SetControllerReference(bs, sa, r.Scheme)
 	}); err != nil {
@@ -525,6 +523,14 @@ func (r *BackendServiceReconciler) render(
 	}
 
 	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: FunctionNetworkPolicyName(bs.Name), Namespace: bs.Namespace}}
+	if !functionNetworkPolicyEnabled(bs) {
+		// Explicit opt-out: never render, and remove only a policy this
+		// BackendService controls (a foreign object of the same name is left).
+		if err := r.removeFunctionNetworkPolicy(ctx, bs, np); err != nil {
+			return nil, "", err
+		}
+		return ksvc, "", nil
+	}
 	desired := DesiredFunctionNetworkPolicy(bs.Name, bs.Spec.Zone, bs.Namespace)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = desired.Labels
@@ -537,6 +543,15 @@ func (r *BackendServiceReconciler) render(
 		return nil, "", err
 	}
 	return ksvc, "", nil
+}
+
+// functionNetworkPolicyEnabled reports whether the function's NetworkPolicy is
+// reconciled: default-on, off only on an explicit false (mirrors NextApp).
+func functionNetworkPolicyEnabled(bs *appsv1alpha1.BackendService) bool {
+	if bs.Spec.Security == nil || bs.Spec.Security.NetworkPolicy == nil {
+		return true
+	}
+	return *bs.Spec.Security.NetworkPolicy
 }
 
 // alreadyOwned turns controller-runtime's AlreadyOwnedError into a status
@@ -589,6 +604,21 @@ func (r *BackendServiceReconciler) removeRendered(ctx context.Context, bs *appsv
 	return nil
 }
 
+// removeFunctionNetworkPolicy deletes ONLY the function's NetworkPolicy, and only
+// when this BackendService controls it. It is the spec.security.networkPolicy
+// opt-out's teardown: the function itself keeps running, so it must not go
+// through removeRendered (which takes the Knative Service down too). It is the
+// second sanctioned Delete in the reconciler (see G4).
+func (r *BackendServiceReconciler) removeFunctionNetworkPolicy(ctx context.Context, bs *appsv1alpha1.BackendService, np *networkingv1.NetworkPolicy) error {
+	if err := r.Get(ctx, client.ObjectKeyFromObject(np), np); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !metav1.IsControlledBy(np, bs) {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, np))
+}
+
 // functionsOfZone lists the BackendServices naming a zone (namespace-scoped, from
 // the informer cache).
 func (r *BackendServiceReconciler) functionsOfZone(ctx context.Context, namespace, zone string) []reconcile.Request {
@@ -627,7 +657,7 @@ func (r *BackendServiceReconciler) zoneToFunctions(ctx context.Context, obj clie
 // Service changes (its retention decides theirs).
 func (r *BackendServiceReconciler) zoneKsvcToFunctions(ctx context.Context, obj client.Object) []reconcile.Request {
 	ref := metav1.GetControllerOf(obj)
-	if ref == nil || ref.Kind != "NextApp" {
+	if ref == nil || ref.Kind != lcNextApp {
 		return nil
 	}
 	return r.functionsOfZone(ctx, obj.GetNamespace(), ref.Name)

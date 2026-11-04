@@ -17,6 +17,7 @@ limitations under the License.
 package metriccontract
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -464,9 +465,7 @@ func init() {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			files := map[string]string{"cmd/main.go": mainImportsM}
-			for k, v := range tc.files {
-				files[k] = v
-			}
+			maps.Copy(files, tc.files)
 			fams, err := Scan(fixture(t, files), "cmd")
 			if err == nil {
 				t.Fatalf("Scan accepted it: %+v", fams)

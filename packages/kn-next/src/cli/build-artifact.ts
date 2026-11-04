@@ -26,14 +26,7 @@ import {
     readlinkSync,
     writeFileSync,
 } from "node:fs";
-import {
-    basename,
-    dirname,
-    join,
-    relative,
-    resolve as resolvePath,
-} from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, dirname, join, relative } from "node:path";
 import {
     BUILDERS,
     type BuildArtifact,
@@ -58,6 +51,7 @@ import {
     compileIncludeGlobs,
     wantsPatchedBun,
 } from "./compile-config";
+import { readCoreVersion } from "./core-version";
 import {
     assertFfiLibraryStaged,
     FFI_STAGED_REMEDY,
@@ -495,28 +489,6 @@ export function buildStampPathFor(execPath: string): string {
 }
 
 /**
- * Reads the knext CLI's own version from its package manifest. Works from
- * both the source layout (`src/cli/build-artifact.ts`) and the bundled
- * layout (`dist/cli/kn-next.js`) — package.json sits two directories up in
- * both cases, mirroring `deploy.ts`'s `getCliVersion`. A separate copy
- * (rather than an import) to avoid a `build-artifact.ts` → `deploy.ts` →
- * `build-artifact.ts` import cycle (`deploy.ts` already imports from this
- * file).
- */
-function getCliVersionForStamp(): string {
-    try {
-        const here = fileURLToPath(import.meta.url);
-        const pkgPath = resolvePath(here, "..", "..", "..", "package.json");
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
-            version?: string;
-        };
-        return pkg.version ?? "0.0.0";
-    } catch {
-        return "0.0.0";
-    }
-}
-
-/**
  * Every entry under `rootDir` as `{ relPath, kind }` pairs, in a stable
  * (sorted-by-relPath) order — `kind` is `"file"` for a regular file's
  * absolute path, or `"symlink"` for a symlink's TARGET string (read via
@@ -564,6 +536,12 @@ export interface BuildIdentityOptions {
     readonly builderId: string;
     /** The resolved runtime id (e.g. `"bun"`, `"node"`). */
     readonly runtimeId: string;
+    /**
+     * Where to start looking for `@getknext/core`'s `package.json` (a `file:`
+     * URL or path). Defaults to this module; a test seam for the unreadable and
+     * per-layout cases.
+     */
+    readonly versionFrom?: string;
 }
 
 /**
@@ -587,7 +565,16 @@ export function hashBuildIdentity(
 ): string {
     const roots = typeof rootDirs === "string" ? [rootDirs] : rootDirs;
     const hash = createHash("sha256");
-    hash.update(`knext-cli-version:${getCliVersionForStamp()}\n`);
+    // Fail closed: an unreadable CLI version must not hash as a made-up one, or
+    // every CLI version would stamp identically and a stale cached build would
+    // look fresh.
+    const cliVersion = readCoreVersion(opts.versionFrom);
+    if (cliVersion === undefined) {
+        throw new UsageError(
+            "cannot determine the knext CLI version (no readable @getknext/core package.json above the CLI), so the build identity cannot be computed — reinstall @getknext/core",
+        );
+    }
+    hash.update(`knext-cli-version:${cliVersion}\n`);
     hash.update(`builder:${opts.builderId}\n`);
     hash.update(`runtime:${opts.runtimeId}\n`);
     roots.forEach((rootDir, index) => {

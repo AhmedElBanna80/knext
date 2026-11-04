@@ -5,8 +5,8 @@
  * `loadConfig()` — no cluster/exec/asset mocking is needed to reach them, only
  * a `node:fs` `writeSync` spy (the sync-flush write these paths use, #68) and a
  * `process.exit` stub that unwinds the call instead of killing the test
- * process. `getCliVersion()`'s try/catch (both the happy path reading the real
- * package.json and the fallback when `readFileSync` throws) is exercised via
+ * process. `getCliVersion()` (the happy path reading the real package.json, and the
+ * `unknown` it prints when the shared reader cannot read it) is exercised via
  * `--version`, the only caller.
  */
 
@@ -109,7 +109,7 @@ describe("deploy — --version (getCliVersion + exit 0)", () => {
         expect(text.trim()).toMatch(/^\d+\.\d+\.\d+/);
     });
 
-    it("falls back to 0.0.0 when the package.json read throws", async () => {
+    it("prints `unknown` (never 0.0.0) when the package.json read throws", async () => {
         readFileSyncImpl = () => {
             throw new Error("ENOENT");
         };
@@ -120,10 +120,10 @@ describe("deploy — --version (getCliVersion + exit 0)", () => {
         expect(exit.code).toBe(0);
 
         expect(writeSyncCalls.length).toBe(1);
-        expect(writeSyncCalls[0][1].trim()).toBe("0.0.0");
+        expect(writeSyncCalls[0][1].trim()).toBe("unknown");
     });
 
-    it("falls back to 0.0.0 when package.json has no version field", async () => {
+    it("prints `unknown` (never 0.0.0) when package.json has no version field", async () => {
         readFileSyncImpl = () => "{}";
         setArgv(["deploy", "--version"]);
         const deploy = await importDeploy();
@@ -131,7 +131,7 @@ describe("deploy — --version (getCliVersion + exit 0)", () => {
         const exit = await expectProcessExit(deploy);
         expect(exit.code).toBe(0);
 
-        expect(writeSyncCalls[0][1].trim()).toBe("0.0.0");
+        expect(writeSyncCalls[0][1].trim()).toBe("unknown");
     });
 });
 

@@ -54,7 +54,7 @@ def snaps():
 def main():
     rounds, arms, out = int(sys.argv[1]), sys.argv[2].split(","), sys.argv[3]
     long_extra = int(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--long=")), "150"))
-    drive.kc(["cp", str(drive.HERE / "cold-cycle.mjs"), f"{drive.POD}:/tmp/cold-cycle.mjs", "-c", "harness"])
+    drive.install_harness()
     with open(out, "a") as f:
         for r in range(rounds):
             k = r % len(arms)

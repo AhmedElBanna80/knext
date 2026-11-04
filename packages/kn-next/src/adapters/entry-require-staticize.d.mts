@@ -15,6 +15,12 @@ export function analyzeServerModule(
     foldedRuntimeRequires: string[];
 };
 
+export function importedRequireEscapes(
+    src: string,
+    names: string[],
+    analyzerPath?: string,
+): boolean;
+
 export function wrapRequireBindings(
     src: string,
     aliases: string[],

@@ -530,6 +530,16 @@ you run `knext build`. Two limits apply:
   those, the build correctly warns that they cannot be bundled, and a strict build fails on that
   warning. Leave strict mode off for such apps, or install the optional packages.
 
+The build follows a `createRequire(import.meta.url)` binding through an alias (`const c = createRequire`),
+through `import * as m from "node:module"` and through
+`const { createRequire } = await import("node:module")`, and holds what it loads to the same standard
+as a direct call. It cannot follow a `require` that is then copied (`const s = require2`), stored in an
+object or array, passed to another function, returned, or re-exported as the default, or a
+`createRequire(url)` wrapped in a function whose argument it cannot see is `import.meta.url`. Each of
+those is reported as `unrecognised createRequire(import.meta.url) binding in …`: a warning by default,
+and a failure under `KNEXT_COMPILE_STRICT_REQUIRES=1`. Calling the binding, `require.resolve(…)` and a
+named export are understood.
+
 The same applies to packages you list in `serverExternalPackages` and to the packages Next.js keeps
 external by default (for example `typescript`, `sqlite3`, `prisma`). The binary carries a bundled
 copy of each one. When `.output/server/node_modules` is deployed **next to the executable**, the

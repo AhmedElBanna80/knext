@@ -247,7 +247,7 @@ function siblingCreateRequireAnalyzer() {
         ].find((candidate) => existsSync(candidate)) ?? join(here, "create-require-analyze.mjs")
     );
 }
-function analyzeCreateRequire(src, analyzerPath) {
+function runCreateRequireAnalyzer(src, analyzerPath, extraArgs, isAnalysis) {
     const analyzer = analyzerPath ?? siblingCreateRequireAnalyzer();
     if (!existsSync(analyzer)) {
         throw new Error(
@@ -257,7 +257,7 @@ function analyzeCreateRequire(src, analyzerPath) {
     // Both callers run under Bun (vinext-compile, compile-embed); outside Bun,
     // fall back to the `bun` on PATH rather than handing node a bun-only flag.
     const runtime = process.versions.bun ? process.execPath : "bun";
-    const child = spawnSync(runtime, ["--no-install", analyzer], {
+    const child = spawnSync(runtime, ["--no-install", analyzer, ...extraArgs], {
         input: src,
         encoding: "utf8",
         maxBuffer: 64 * 1024 * 1024,
@@ -285,12 +285,54 @@ function analyzeCreateRequire(src, analyzerPath) {
             `[knext compile] the createRequire analyzer (${analyzer}) printed no JSON — reinstall @getknext/core.`,
         );
     }
-    if (!Array.isArray(analysis?.aliases) || !Array.isArray(analysis?.sites)) {
+    if (!isAnalysis(analysis)) {
         throw new Error(
             `[knext compile] the createRequire analyzer (${analyzer}) printed JSON that is not an analysis — reinstall @getknext/core.`,
         );
     }
     return analysis;
+}
+
+/**
+ * Whether a module could create a require at all: it names `createRequire`, or it
+ * imports `module` / `node:module` (whose namespace carries `createRequire`).
+ * Only those modules pay for an analyzer process. Kept in step with the same
+ * pre-filter in create-require-analyze.mjs, which this module cannot import.
+ */
+const MODULE_IMPORT = /(?:\bfrom|\bimport)\s*\(?\s*["'](?:node:)?module["']/;
+function mentionsCreateRequire(src) {
+    return src.includes("createRequire") || MODULE_IMPORT.test(src);
+}
+
+function analyzeCreateRequire(src, analyzerPath) {
+    return runCreateRequireAnalyzer(
+        src,
+        analyzerPath,
+        [],
+        (a) => Array.isArray(a?.aliases) && Array.isArray(a?.sites),
+    );
+}
+
+/**
+ * Whether the module `src` does anything with the require bindings it IMPORTS
+ * from a sibling chunk (`names`: their local names) other than call them: copy,
+ * store, pass or re-export one, so a package it loads is invisible to the
+ * cross-chunk plan (#2666). True also for a module the parser cannot read.
+ *
+ * @param {string} src
+ * @param {string[]} names
+ * @param {string} [analyzerPath] the create-require-analyze script to spawn.
+ * @returns {boolean}
+ */
+export function importedRequireEscapes(src, names, analyzerPath) {
+    if (names.length === 0) return false;
+    const result = runCreateRequireAnalyzer(
+        src,
+        analyzerPath,
+        ["--imported", JSON.stringify(names)],
+        (a) => typeof a?.escapes === "boolean",
+    );
+    return result.escapes;
 }
 
 /**
@@ -328,7 +370,7 @@ export function analyzeServerModule(src, analyzerPath) {
     const foldedRuntimeRequires = new Set();
     let aliases = [];
     let unrecognizedBinding = false;
-    if (src.includes("createRequire")) {
+    if (mentionsCreateRequire(src)) {
         const created = analyzeCreateRequire(src, analyzerPath);
         aliases = created.aliases;
         // A module the parser cannot read may still create a require the

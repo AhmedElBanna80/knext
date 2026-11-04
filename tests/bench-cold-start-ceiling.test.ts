@@ -696,13 +696,13 @@ describe('the runbook states the safety procedure the harness and the analyzer i
   const rb = readFileSync(join(ROOT, RUNBOOK), 'utf8');
 
   it('reverts with install and mv, never cp over the running binary, and hashes /proc/<pid>/exe', () => {
-    expect(rb).not.toMatch(/sudo cp -p "\$KUBELET_PATH\.stock[^"]*" "\$KUBELET_PATH"/);
+    expect(rb).not.toMatch(/\bcp\b[^\n]*"\$(KP|KUBELET_PATH)[^"]*"\s+"\$(KP|KUBELET_PATH)"/);
     expect(rb).toContain('/proc/');
     expect(rb).toContain('/exe');
   });
 
   it('runs the wakes with the restore placement mode and one block label per kubelet', () => {
-    expect(rb).toContain('--place-mode=restore');
+    expect(rb).toMatch(/drive\.py 30[\s\S]*?--place-mode=restore[\s\S]*?--block=b1/);
     expect(rb).toContain('--block=b1');
     expect(rb).toContain('--block=b6');
   });

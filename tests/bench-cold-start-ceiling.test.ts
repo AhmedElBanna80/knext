@@ -206,6 +206,17 @@ define(
   }),
 );
 define(
+  'partial', // the wait moved down but is still about 250 ms: part of it is not the relist
+  generate({
+    ...EFFECT,
+    P: (t) => (t === 'relist100' ? { kind: 'free', widthS: 0.5 } : STOCK_LAT),
+  }),
+);
+define(
+  'worse', // the wait got longer under relist100
+  generate({ ...EFFECT, P: (t) => (t === 'relist100' ? { kind: 'free', widthS: 2 } : STOCK_LAT) }),
+);
+define(
   'noBaselineLock', // there is no 1 s lock to remove on P under the stock build
   generate({
     ...EFFECT,
@@ -395,6 +406,14 @@ describe('the verdict follows the reading table, not the median alone', () => {
     const r = results.lockUnseen;
     expect(verdict(r)).toBe('WAIT_REMOVED_LOCK_UNSEEN');
     expect(r.out).toMatch(/^b3\s+relist100\s+P\s+node-p\s+100ms\s.*\bno$/m);
+  });
+
+  it('a wait that moved down but stays over 150 ms is a partial floor', () => {
+    expect(verdict(results.partial)).toBe('FLOOR_WAIT_PARTIAL');
+  });
+
+  it('a wait that got longer under relist100 is reported as worse', () => {
+    expect(verdict(results.worse)).toBe('WAIT_WORSE');
   });
 
   it('no 1 s lock on P under the stock build leaves nothing to attribute', () => {

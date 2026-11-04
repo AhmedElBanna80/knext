@@ -113,6 +113,8 @@ elif "--field-selector" in joined:
 elif "get pods" in joined:
     print(json.dumps({"items": []}))
 elif " cat " in joined:
+    import time
+    time.sleep(float(os.environ.get("FAKE_SLEEP_CAT", "0")))
     print(json.dumps({"arm": "a1", "code": 200, "node": "n1", "marker": "ok", "watch": {"resp_end": 1}}))
 `;
 
@@ -120,7 +122,7 @@ type Run = { code: number; out: string; err: string; calls: string[][]; rows: un
 
 function runDrive(
   argv: string[],
-  opts: { env?: Record<string, string>; config?: object } = {},
+  opts: { env?: Record<string, string>; config?: object; timeout?: number } = {},
 ): Run {
   const dir = mkdtempSync(join(tmpdir(), 'bench-harness-'));
   try {
@@ -146,7 +148,7 @@ function runDrive(
     const r = spawnSync(
       'python3',
       [join(ROOT, DRIVE), ...argv.map((a) => a.replace('$OUT', outFile))],
-      { encoding: 'utf8', env, timeout: 60_000 },
+      { encoding: 'utf8', env, timeout: opts.timeout ?? 60_000 },
     );
     const calls = readFileSync(log, 'utf8')
       .split('\n')
@@ -279,9 +281,11 @@ describe('drive.py: --place-mode=restore leaves every cordon as it found it', ()
     extra: string[] = [],
     env: Record<string, string> = {},
     arms = 'a1@p1,a2@p2',
+    timeout?: number,
   ) =>
     runDrive(['1', arms, '$OUT', ...FAST, '--pool-label=pool', '--place-mode=restore', ...extra], {
       env: { FAKE_NODES: JSON.stringify(nodes), ...env },
+      timeout,
     });
   const cordonCalls = (r: Run) =>
     r.calls
@@ -376,6 +380,16 @@ describe('drive.py: --place-mode=restore leaves every cordon as it found it', ()
     expect(first.foreign_new_pods).toEqual(['other/stray']);
     const clean = run(P_COR);
     expect((clean.rows[0] as { foreign_new_pods: string[] }).foreign_new_pods).toEqual([]);
+  });
+
+  it('restores the cordons when it is terminated in the middle of a wake', () => {
+    // The wake is stuck in a slow kubectl; the test's timeout sends SIGTERM to the driver.
+    const r = run(P_COR, [], { FAKE_SLEEP_CAT: '5' }, 'a1@p1,a2@p2', 2000);
+    expect(r.code).toBe(143);
+    expect(r.rows).toHaveLength(0);
+    // The patched node was opened for its wake; the exit path put it and the control back.
+    expect(cordonCalls(r)).toContain('uncordon n1');
+    expect(endState(P_COR, cordonCalls(r))).toEqual({ n1: true, n2: false });
   });
 
   it('keeps the default all-pools mode unchanged', () => {

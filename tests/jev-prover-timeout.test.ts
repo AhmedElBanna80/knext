@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,8 +34,15 @@ spec = importlib.util.spec_from_file_location("prover", sys.argv[1])
 mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
 `;
 
+const tempDirs: string[] = [];
+afterAll(() => {
+  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+});
+
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'jev-prover-timeout-'));
+  const dir = mkdtempSync(join(tmpdir(), 'jev-prover-timeout-'));
+  tempDirs.push(dir);
+  return dir;
 }
 
 /** A work tree holding only the suite files the prover looks for, with the given bodies. */

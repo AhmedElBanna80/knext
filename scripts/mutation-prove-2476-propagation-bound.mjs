@@ -189,8 +189,8 @@ const GO_MUTATIONS = [
     id: 'F01',
     claim: "the flag's default is a copy of a number, not the controller's constant",
     subject: 'main',
-    anchor: '"zone-signing-key-propagation-bound", controller.DefaultZoneKeyPropagationBound,',
-    replacement: '"zone-signing-key-propagation-bound", 90*time.Second,',
+    anchor: '"zone-signing-key-propagation-bound",\n\t\tcontroller.DefaultZoneKeyPropagationBound,',
+    replacement: '"zone-signing-key-propagation-bound",\n\t\t90*time.Second,',
     test: {
       kind: 'go',
       args: ['-run', 'TestPropagationBoundFlagDefaultsToTheControllerConstant', './cmd'],

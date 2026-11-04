@@ -100,7 +100,7 @@ describe('ADR-0036 / ADR-0042 state corrections stay true (#869)', () => {
     // vinext gate this test exists to prove is unchanged.
     const controller = read('packages/kn-next-operator/internal/controller/nextapp_controller.go');
     expect(controller).toMatch(
-      /Spec\.Build != "vinext" && !nextApp\.Spec\.SelfContained && nextApp\.Spec\.Runtime == "bun"/,
+      /Spec\.Build != lcVinext && !nextApp\.Spec\.SelfContained && nextApp\.Spec\.Runtime == "bun"/,
     );
   });
 

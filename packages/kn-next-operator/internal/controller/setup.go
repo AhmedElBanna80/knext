@@ -57,7 +57,7 @@ func SetupControllers(mgr ctrl.Manager, cleaner ExternalCleaner, opts ...SetupOp
 		Client:                   mgr.GetClient(),
 		Scheme:                   mgr.GetScheme(),
 		APIReader:                mgr.GetAPIReader(),
-		Recorder:                 mgr.GetEventRecorderFor("nextapp-controller"),
+		Recorder:                 mgr.GetEventRecorderFor("nextapp-controller"), //nolint:staticcheck // SA1019: legacy record.EventRecorder is what the reconcilers consume; events.k8s.io migration is tracked debt
 		Cleaner:                  cleaner,
 		BackendServiceCRDPresent: functionsInstalled,
 		ZoneSigningKey:           o.zoneSigningKey,
@@ -70,7 +70,7 @@ func SetupControllers(mgr ctrl.Manager, cleaner ExternalCleaner, opts ...SetupOp
 			Client:    mgr.GetClient(),
 			Scheme:    mgr.GetScheme(),
 			APIReader: mgr.GetAPIReader(),
-			Recorder:  mgr.GetEventRecorderFor("backendservice-controller"),
+			Recorder:  mgr.GetEventRecorderFor("backendservice-controller"), //nolint:staticcheck // SA1019: legacy record.EventRecorder is what the reconcilers consume; events.k8s.io migration is tracked debt
 		}).SetupWithManager(mgr); err != nil {
 			return fmt.Errorf("BackendService controller: %w", err)
 		}

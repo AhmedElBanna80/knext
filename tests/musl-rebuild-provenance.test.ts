@@ -185,6 +185,26 @@ describe('provenance gate in the musl rebuild (#2713)', () => {
     expect(r.out).toMatch(/::warning::/);
   });
 
+  it('a local signal outranks a registry signal (link entry beats a registry _resolved)', () => {
+    const r = run({
+      lock: { packages: { 'node_modules/native-addon': { link: true } } },
+      tracedExtra: {
+        _resolved: 'https://registry.npmjs.org/native-addon/-/native-addon-1.0.0.tgz',
+      },
+    });
+    expect(r.fetched).toBe(false);
+    expect(r.kept).toBe(true);
+  });
+
+  it('a file: root-manifest spec outranks a registry lockfile record', () => {
+    const r = run({
+      lock: REGISTRY_LOCK,
+      rootPkg: { dependencies: { 'native-addon': 'file:native-addon' } },
+    });
+    expect(r.fetched).toBe(false);
+    expect(r.kept).toBe(true);
+  });
+
   it('a registry package with a committed lockfile pin still runs npm ci and replaces the tree', () => {
     for (const lock of [REGISTRY_LOCK, undefined]) {
       const r = run({ lock, pinned: true });

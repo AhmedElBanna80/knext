@@ -879,62 +879,53 @@ const VERCEL_COUPLED_FILE_QUARANTINES: Record<
 };
 
 describe('deploy-tests-manifest — static-export scope exclusion and harness-gap ledger (v16.4.3)', () => {
-  // Deliberate product scope: knext deploys a server (output:'standalone'), so a
-  // static export has no server to boot. The harness failure is the downstream
-  // `standalone server.js not found`, not the CLI refusal (assertNotStaticExport).
-  const STATIC_EXPORT_FILES = [
-    'test/e2e/app-dir/use-cache-output-export/use-cache-output-export.test.ts',
-    'test/e2e/middleware-src/middleware-src.test.ts',
-    'test/e2e/middleware-src-node/middleware-src-node.test.ts',
-  ];
-  // Harness gap, not product scope: the compat harness installs with npm and does not
-  // honour the fixture's declared package manager. Tracked by the linked issue.
-  const HARNESS_GAP_FILES = ['test/e2e/transpile-packages-typescript-foreign/index.test.ts'];
-  const HARNESS_GAP_ISSUE_URL = 'https://github.com/getknext-dev/knext/issues/2709';
+  // These guards SCAN every entry of each category, so a new static-export or
+  // harness-gap entry is held to the same bar whether or not anyone lists it here.
+  // Static-export: deliberate product scope (knext deploys a server only), never platform
+  // coupling. Harness-gap: tech debt, and it must link a knext tracking issue.
+  const HARNESS_GAP_ISSUE_LINK = /https:\/\/github\.com\/getknext-dev\/knext\/issues\/\d+/;
 
-  it('every static-export file is a DELIBERATE product scope exclusion, enforced at file level', () => {
-    for (const file of STATIC_EXPORT_FILES) {
-      const entry = manifest.$knextExclusions.find((e) => e.test === file);
-      expect(entry, `${file} must be in $knextExclusions`).toBeTruthy();
-      expect(entry?.category, `${file}: category`).toBe('static-export');
+  it('every static-export entry is a DELIBERATE product scope exclusion, enforced at file level', () => {
+    const entries = manifest.$knextExclusions.filter((e) => e.category === 'static-export');
+    expect(entries.length, 'at least one static-export entry must exist').toBeGreaterThan(0);
+    for (const entry of entries) {
       expect(
-        entry?.rationale ?? '',
-        `${file}: rationale must say it is a deliberate product scope exclusion`,
+        entry.rationale ?? '',
+        `${entry.test}: rationale must say it is a deliberate product scope exclusion`,
       ).toMatch(/deliberate product scope exclusion/i);
       expect(
-        entry?.rationale ?? '',
-        `${file}: rationale must cite the real harness failure`,
+        entry.rationale ?? '',
+        `${entry.test}: rationale must cite the real harness failure`,
       ).toMatch(/standalone server\.js not found/);
       expect(
-        manifest.rules.exclude.includes(file),
-        `${file} must be in rules.exclude verbatim`,
+        manifest.rules.exclude.includes(entry.test),
+        `${entry.test} must be in rules.exclude verbatim`,
       ).toBe(true);
     }
   });
 
-  it('static-export is NOT platform coupling: no static-export file carries a vercel-infra-coupled quarantine', () => {
+  it('static-export is NOT platform coupling: no static-export entry carries a vercel-infra-coupled quarantine', () => {
     const quarantines: KnextQuarantine[] =
       (manifest as unknown as { $knextQuarantines?: KnextQuarantine[] }).$knextQuarantines ?? [];
-    for (const file of STATIC_EXPORT_FILES) {
+    for (const entry of manifest.$knextExclusions.filter((e) => e.category === 'static-export')) {
       expect(
-        quarantines.some((q) => q.test === file),
-        `${file} must not be a §h quarantine`,
+        quarantines.some((q) => q.test === entry.test),
+        `${entry.test} must not be a §h quarantine`,
       ).toBe(false);
     }
   });
 
-  it('the transpile harness gap is ledgered as a harness-gap with its tech-debt issue, not as product or platform scope', () => {
-    for (const file of HARNESS_GAP_FILES) {
-      const entry = manifest.$knextExclusions.find((e) => e.test === file);
-      expect(entry, `${file} must be in $knextExclusions`).toBeTruthy();
-      expect(entry?.category, `${file}: category`).toBe('harness-gap');
+  it('every harness-gap entry links a knext tracking issue and is enforced at file level', () => {
+    const entries = manifest.$knextExclusions.filter((e) => e.category === 'harness-gap');
+    expect(entries.length, 'at least one harness-gap entry must exist').toBeGreaterThan(0);
+    for (const entry of entries) {
       expect(
-        entry?.rationale ?? '',
-        `${file}: rationale must link ${HARNESS_GAP_ISSUE_URL}`,
-      ).toContain(HARNESS_GAP_ISSUE_URL);
+        entry.rationale ?? '',
+        `${entry.test}: harness-gap rationale must link a knext tracking issue`,
+      ).toMatch(HARNESS_GAP_ISSUE_LINK);
       expect(
-        manifest.rules.exclude.includes(file),
-        `${file} must be in rules.exclude verbatim`,
+        manifest.rules.exclude.includes(entry.test),
+        `${entry.test} must be in rules.exclude verbatim`,
       ).toBe(true);
     }
   });

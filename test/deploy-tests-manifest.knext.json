@@ -485,13 +485,15 @@
       "family": "vercel-infra-coupled",
       "level": "file",
       "cases": [
-        "should encode special chars during RSC",
-        "should encode special chars during SSR",
-        "should work during RSC",
-        "should work during SSR"
+        "import.meta.url > should work during RSC",
+        "import.meta.url > should work during SSR",
+        "import.meta.url > non-url-safe characters > should encode special chars during RSC",
+        "import.meta.url > non-url-safe characters > should encode special chars during SSR",
+        "import.meta.url > should work on client-side (webpack only)",
+        "import.meta.url > non-url-safe characters > should encode special chars on client-side (webpack only)"
       ],
       "mechanism": "The helper `sourceFileUrl` (lines 43-47 of the v16.4.3 file) returns `file:///vercel/path0/apps/web/` when isNextDeploy is set, and all four failing cases compare import.meta.url against it. The received values are knext's real build paths (`file:///tmp/next-test-.../apps/web/app/...`), so the monorepo layout built and resolved apps/web. The mismatch is the Vercel build-root literal, not a layout failure.",
-      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts on all four cases, 'Expected: file:///vercel/path0/apps/web/... / Received: file:///tmp/next-test-...'. Observed at v16.4.0 on all four cells in the #2162 record: runs 38161219571, 38174324666, 38181750458, 38186195085.",
+      "evidence": "Measured: run 41754152861 (node x turbopack ONLY, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts on the 4 turbopack-shaped cases ('Expected: file:///vercel/path0/apps/web/... / Received: file:///tmp/next-test-...'). Not measured at v16.4.3 on any other cell. v16.4.0 record (#2162, not re-run): node x turbopack run 38161219571 shows the same 4 cases; node x webpack run 38174324666 shows 6 (the 4 plus the 2 client-side cases); bun x turbopack run 38181750458 shows the 4; bun x webpack run 38186195085 shows the 6.",
       "provenance": "https://github.com/getknext-dev/knext/issues/2128 (ADR-0007 section (h); the 16.4 triage residual after the harness fix, the file asserts Vercel's build root at upstream lines 43-47). Retire when upstream stops hard-coding the Vercel build root for non-Vercel adapters."
     }
   ],
@@ -514,7 +516,7 @@
     {
       "test": "test/e2e/app-dir/use-cache-output-export/use-cache-output-export.test.ts",
       "category": "static-export",
-      "rationale": "Deliberate product scope exclusion, NOT platform coupling. knext deploys a server (output: 'standalone') only. A static export (output: 'export') emits out/ and no .next/standalone/server.js, so there is nothing to boot, and the CLI refuses a static export up front (assertNotStaticExport, run by runProjectBuild). The compat harness builds with next build directly, so it fails in e2e-deploy.sh with 'standalone server.js not found under .next/standalone' (run 41754152861, node x turbopack, FINAL 3/3). This file is the VALID export case and cannot pass by design. Removal condition: knext gains a static-export serving path."
+      "rationale": "Deliberate product scope exclusion, NOT platform coupling. knext deploys a server (output: 'standalone') only. A static export (output: 'export') emits out/ and no .next/standalone/server.js, so there is nothing to boot, and the CLI refuses a static export after the next build (assertNotStaticExport, run by runProjectBuild, project-build.ts:355). The compat harness builds with next build directly, so it fails in e2e-deploy.sh with 'standalone server.js not found under .next/standalone' (run 41754152861, node x turbopack, FINAL 3/3). This file is the VALID export case and cannot pass by design. Removal condition: knext gains a static-export serving path."
     },
     {
       "test": "test/e2e/middleware-src/middleware-src.test.ts",

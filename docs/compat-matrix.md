@@ -30,11 +30,12 @@
 > fix's bytecode-liveness proof on the node cells. That is dispatched confirmation regardless, not
 > the 14 consecutive scheduled credential runs the v1.0 gate requires (three scheduled runs per
 > cell per day since ADR-0056 Amendment 5) — those start fresh at this
-> ref. Six upstream tests are evidence-quarantined at this ref (the
+> ref. Six upstream tests were evidence-quarantined at the v16.3.5 ref (the
 > `vercel-infra-coupled` family, ADR-0007 §h addendum): each fails deterministically because its
 > `deploy` branch encodes behaviour only Vercel's own infrastructure produces, and knext's result
 > matches the self-hosted expectation in every case — full per-test provenance is in the ADR
-> addendum and `.github/compat-credentialed-next-version.json`.
+> addendum and `.github/compat-credentialed-next-version.json`. At v16.4.3 the exclusions are
+> recorded in the bullet below; the manifest is not ref-scoped, so they do not carry over to other refs.
 >
 > **The last COMPLETED 14-run-eligible credential evidence is the rc.1 rehearsal, still at
 > `v16.2.12`.** re-credentialed 2026-09-27 (#1570) — the four credential cells each ran green
@@ -119,10 +120,21 @@ gate, not the official suite — the official suite has its own row, own workflo
   deploy tests cannot pass by design. The harness fails on `standalone server.js not found`.
   Eight files are **platform-coupled** (vercel-infra-coupled, file level): each failing assertion
   sits in a branch that expects the Vercel platform, such as its CDN headers, build-root paths,
-  or build-log formatting. One file is a **harness gap** (tech debt, not product scope): the
-  compat harness installs with npm and cannot reproduce the fixture's pnpm install mode. Two
-  files are **not** excluded: their failures cite no platform behaviour, so they stay red as
-  real failures until someone decides what they are.
+  or build-log formatting. One file is a **harness gap** (tech debt, tracked): the compat
+  harness installs with npm and cannot reproduce the fixture's pnpm install mode.
+  **Two files are still red and NOT excluded**: `cache-components-allow-otel-spans` (upstream
+  calls its deploy expectation a `next start` regression, which knext shares) and
+  `metadata-streaming-parallel-routes` (a `.failing` expectation that knext's passing body reds).
+  Excluding them would take the platform-coupled family to 16, one past its soft bound of 15, which
+  needs a reviewed ADR-0007 amendment, not a quieter exclusion. Until then the harness is not green.
+- **Exclusions are not ref-scoped.** The manifest is one global list. Of the lanes that run it,
+  only `compat-vinext.yml` checks out `main` (its default `NEXTJS_REF` is `v16.2.0`). The credential
+  lanes check out their pinned rc tag and read that tag's manifest. So any run that reads this
+  manifest at any ref loses the excluded cases. The cost of this change on node/turbopack at
+  v16.4.3, counting passing cases only: partial-fallback 10 of 13, prerender-encoding 3 of 5,
+  segment-cache/metadata 2 of 3, cached-navigations 19 of 20, non-root 6 of 10, transpile 1 of 2
+  (41 in total). The two still-red files are not excluded, so they cost nothing here.
+  Per-case entries would need an ADR-0007 amendment.
 - **Red-nightly procedure (mechanized, end to end).** Red **test results actually fail the
   workflow**: each shard's final "Fail shard on red results" gate exits 1 when its summary JSON
   carries `failed>0` or `notRun>0` (the run step's `|| true` only swallows the *step* exit so the

@@ -59,8 +59,8 @@ const MUTATIONS = [
       'must fall; a bare Node has no Bun global, so this would throw at runtime',
     subject: 'cli',
     validate: jsStillParses,
-    anchor: 'import { join, resolve } from "node:path";',
-    replacement: 'import { join, resolve } from "node:path"; const _v = Bun.version;',
+    anchor: 'import { join } from "node:path";',
+    replacement: 'import { join } from "node:path"; const _v = Bun.version;',
   },
   {
     id: 'M3',
@@ -89,8 +89,8 @@ const NEGATIVE = {
     'the sanctioned word "bun" appears as a bare string literal — not a module import or a global',
   subject: 'cli',
   validate: jsStillParses,
-  anchor: 'import { fileURLToPath } from "node:url";',
-  replacement: 'import { fileURLToPath } from "node:url"; const _rt = "bun";',
+  anchor: 'import { join } from "node:path";',
+  replacement: 'import { join } from "node:path"; const _rt = "bun";',
 };
 
 const ALL = [...MUTATIONS, NEGATIVE];

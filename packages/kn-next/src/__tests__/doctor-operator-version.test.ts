@@ -234,6 +234,17 @@ describe("doctor operator-version row (#1947)", () => {
         expect(row.detail).toMatch(/CRD API version/i);
     });
 
+    it("WARN: an unreadable CLI version is reported as `unknown`, not silently passed as if compatible", async () => {
+        const row = await versionRow(
+            deployment({ label: "1.0.0", image: `${REPO}:v1.0.0@${DIGEST}` }),
+            "unknown",
+        );
+        expect(row.status).toBe("warn");
+        expect(row.detail).toContain("version is unknown");
+        expect(row.detail).not.toContain("compatible with CLI");
+        expect(row.hint).toBeTruthy();
+    });
+
     it("WARN: an operator with no version label and a digest-only image is unversioned, with a pin hint", async () => {
         const row = await versionRow(deployment({}), "1.0.0");
         expect(row.status).toBe("warn");

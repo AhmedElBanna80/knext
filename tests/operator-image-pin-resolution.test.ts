@@ -229,6 +229,12 @@ describe('the check is actually wired to run', () => {
     'benchmarks/**/*.yaml',
     'benchmarks/**/*.yml',
     'benchmarks/**/*.sh',
+    // Dockerfile base images (#2660): mirrors `discoverDockerfiles`, plus the
+    // shared scan library and the exclusion list a diff could weaken.
+    '**/Dockerfile*',
+    '**/*.Dockerfile',
+    'security/dockerfile-base-exclusions.json',
+    'scripts/lib/dockerfile-base-images.mjs',
     'scripts/verify-image-pins.mjs',
     '.github/workflows/image-pin-resolution-nightly.yml',
   ];

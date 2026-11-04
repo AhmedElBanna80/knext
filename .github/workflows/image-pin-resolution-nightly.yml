@@ -35,7 +35,8 @@ name: Operator image pin resolution (nightly)
 # `scripts/verify-image-pins.mjs` and is unit-tested OFFLINE against an injected
 # transport by `tests/operator-image-pin-resolution.test.ts`.
 #
-# SCOPE: every image this repo RUNS on a cluster — the operator's Go sources AND
+# SCOPE: every Dockerfile base image (#2660), plus every image this repo RUNS on a
+# cluster — the operator's Go sources AND
 # the benchmark harnesses' YAML/shell. The latter is not incidental: the two most
 # privileged pins in the tree are a benchmark's PRIVILEGED hostPID `nsenter` pod
 # and its kaniko builder, which holds the registry PUSH credential.
@@ -58,6 +59,11 @@ on:
       - 'benchmarks/**/*.yaml'
       - 'benchmarks/**/*.yml'
       - 'benchmarks/**/*.sh'
+      # Dockerfile base images (#2660) — mirrors discoverDockerfiles().
+      - '**/Dockerfile*'
+      - '**/*.Dockerfile'
+      - 'security/dockerfile-base-exclusions.json'
+      - 'scripts/lib/dockerfile-base-images.mjs'
       - 'scripts/verify-image-pins.mjs'
       - '.github/workflows/image-pin-resolution-nightly.yml'
   workflow_dispatch: {}

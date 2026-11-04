@@ -146,10 +146,11 @@ describe("#1339 round-3 — compiled adapter script paths resolve from a REAL ts
                 skipViteBuild: true,
             });
 
-            // argv is ["bun", "run", <script>, ...] — see compileArgv.
+            // argv is ["bun", "run", "--no-env-file", <script>, ...] — see compileArgv.
             expect(capturedArgv[0]).toBe("bun");
             expect(capturedArgv[1]).toBe("run");
-            const scriptPath = capturedArgv[2];
+            expect(capturedArgv[2]).toBe("--no-env-file");
+            const scriptPath = capturedArgv[3];
 
             expect(
                 scriptPath,

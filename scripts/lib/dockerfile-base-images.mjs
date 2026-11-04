@@ -12,6 +12,14 @@
  *  - `scripts/verify-image-pins.mjs`, nightly: resolves each pin against the
  *    registry; an unreachable registry is a failure, never a pass.
  *
+ * Scope of the consistency check: `tag-digest-conflict` compares Dockerfile references only.
+ * Pins in workflows, templates and GitLab CI are held by their literal-digest tests and the
+ * nightly resolver, not by this scan.
+ *
+ * The reader follows Docker, not a regex: `ONBUILD` triggers, a leading `# escape=` directive,
+ * quoted/CSV `--mount` fields, case-insensitive stage names, numeric stage indexes (only when
+ * that stage exists) and heredoc bodies (never read as instructions).
+ *
  * A reference this scan cannot classify FAILS (`unparseable`) rather than being
  * skipped: a build-arg `FROM ${BASE}` is exactly the shape that escapes a
  * regex-only guard.
@@ -44,7 +52,7 @@ const IMAGE_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*(?:@sha256:[0-9a-f]{64})?$/;
  *   file: string,
  *   line: number,
  *   image: string,
- *   origin: 'FROM' | 'COPY' | 'RUN',
+ *   origin: 'FROM' | 'COPY' | 'RUN' | 'PARSER',
  *   kind: string,
  *   key?: string,
  *   digest?: string,
@@ -101,10 +109,19 @@ function normalizeKey(nameAndTag) {
   return `${registry}/${path}${tag}`;
 }
 
-function classify(image, file, line, stages, origin) {
+/**
+ * `ctx.names` holds lower-cased stage names (Docker matches them case-insensitively);
+ * `ctx.count` is how many stages have been opened so far, so a numeric `--from=N`
+ * is a stage index only when stage N already exists. Otherwise Docker reads it as
+ * an image named `N`, and so do we.
+ */
+function classify(image, file, line, ctx, origin) {
   const base = { file, line, image, origin };
   if (origin === 'FROM' && image === 'scratch') return { ...base, kind: 'scratch' };
-  if (stages.has(image) || (origin === 'COPY' && /^\d+$/.test(image))) {
+  if (
+    ctx.names.has(image.toLowerCase()) ||
+    (origin !== 'FROM' && /^\d+$/.test(image) && Number(image) < ctx.count)
+  ) {
     return { ...base, kind: 'stage' };
   }
   if (!IMAGE_TOKEN.test(image)) return { ...base, kind: 'unparseable' };
@@ -114,27 +131,128 @@ function classify(image, file, line, stages, origin) {
   return { ...base, kind: 'pinned', key, digest: DIGEST.test(digest) ? digest : undefined };
 }
 
+const PARSER_DIRECTIVE = /^#\s*([a-z]+)\s*=\s*(\S.*?)\s*$/i;
+const KNOWN_DIRECTIVES = new Set(['syntax', 'escape', 'check']);
+/** A heredoc word as BuildKit reads it: `<<EOF`, `<<-EOF`, `<<"EOF"`, `2<<'EOF'`; not `<<<`. */
+const HEREDOC_WORD = /^\d*<<-?(["']?)([^\s<"']+)\1$/;
+
+/** The delimiters of every heredoc started on this logical line (RUN / COPY / ADD only). */
+function heredocDelimiters(line) {
+  const body = line.replace(/^ONBUILD\s+/i, '');
+  if (!/^(?:RUN|COPY|ADD)\s/i.test(body)) return [];
+  return body
+    .split(/\s+/)
+    .map((word) => HEREDOC_WORD.exec(word)?.[2])
+    .filter((word) => word !== undefined);
+}
+
 /**
- * Instructions with backslash continuations joined, each tagged with the
+ * Instructions with escape-character continuations joined, each tagged with the
  * physical line it STARTS on. Blank and comment lines are dropped, including
- * inside a continuation (Docker ignores them there too).
+ * inside a continuation (Docker ignores them there too). Honours a leading
+ * `# escape=` parser directive, and skips heredoc bodies so their contents are not
+ * read as instructions. A construct it cannot read yields `{ error, number }`.
  */
 function* logicalLines(text) {
+  const raw = text.split('\n');
+  let escapeChar = '\\';
+  let directives = true;
   let pending = '';
   let start = 0;
-  for (const [index, raw] of text.split('\n').entries()) {
-    const trimmed = raw.trim();
+  for (let index = 0; index < raw.length; index++) {
+    const trimmed = raw[index].trim();
+    if (directives) {
+      const directive = PARSER_DIRECTIVE.exec(trimmed);
+      const name = directive?.[1].toLowerCase();
+      if (name !== undefined && KNOWN_DIRECTIVES.has(name)) {
+        if (name === 'escape') {
+          if (directive[2] === '\\' || directive[2] === '`') escapeChar = directive[2];
+          else yield { error: trimmed, number: index + 1 };
+        }
+        continue;
+      }
+      directives = false;
+    }
     if (trimmed === '' || trimmed.startsWith('#')) continue;
     if (pending === '') start = index + 1;
-    if (trimmed.endsWith('\\')) {
+    if (trimmed.endsWith(escapeChar)) {
       pending += `${trimmed.slice(0, -1)} `;
       continue;
     }
-    yield { line: (pending + trimmed).trim(), number: start };
+    const line = (pending + trimmed).trim();
     pending = '';
+    yield { line, number: start };
+    for (const delimiter of heredocDelimiters(line)) {
+      let closed = false;
+      while (++index < raw.length) {
+        if (raw[index].trim() === delimiter) {
+          closed = true;
+          break;
+        }
+      }
+      if (!closed) yield { error: `<<${delimiter}`, number: start };
+    }
   }
   if (pending !== '') yield { line: pending.trim(), number: start };
 }
+
+/**
+ * The leading `--flag` words of an instruction's arguments, whitespace-split with
+ * quotes kept in place (as BuildKit does, so a quoted mount field survives intact).
+ * `ok: false` when a quote is left open: the flags cannot be read.
+ */
+function leadingFlags(args) {
+  const flags = [];
+  let position = 0;
+  for (;;) {
+    while (position < args.length && /\s/.test(args[position])) position++;
+    if (!args.startsWith('--', position)) return { flags, ok: true };
+    let word = '';
+    let quote = '';
+    while (position < args.length && (quote !== '' || !/\s/.test(args[position]))) {
+      const ch = args[position++];
+      word += ch;
+      if (quote === '' && (ch === '"' || ch === "'")) quote = ch;
+      else if (ch === quote) quote = '';
+    }
+    if (quote !== '') return { flags, ok: false };
+    flags.push(word);
+  }
+}
+
+/** `--mount` value fields as Go's encoding/csv reads them (strict quotes); null when malformed. */
+function csvFields(value) {
+  const fields = [];
+  let position = 0;
+  for (;;) {
+    let field = '';
+    if (value[position] === '"') {
+      position++;
+      for (;;) {
+        if (position >= value.length) return null;
+        if (value[position] !== '"') field += value[position++];
+        else if (value[position + 1] === '"') {
+          field += '"';
+          position += 2;
+        } else {
+          position++;
+          break;
+        }
+      }
+      if (position < value.length && value[position] !== ',') return null;
+    } else {
+      while (position < value.length && value[position] !== ',') {
+        if (value[position] === '"') return null;
+        field += value[position++];
+      }
+    }
+    fields.push(field);
+    if (position >= value.length) return fields;
+    position++;
+  }
+}
+
+const unquote = (value) => /^(["'])(.*)\1$/.exec(value)?.[2] ?? value;
 
 /**
  * Every external-image reference in one Dockerfile's text, in order.
@@ -144,31 +262,58 @@ function* logicalLines(text) {
  */
 export function parseDockerfileRefs(text, file) {
   const refs = [];
-  const stages = new Set();
-  for (const { line, number } of logicalLines(text)) {
+  const ctx = { names: new Set(), count: 0 };
+  const unreadable = (number, image, origin) =>
+    refs.push({ file, line: number, image, origin, kind: 'unparseable' });
+  for (const item of logicalLines(text)) {
+    const { number } = item;
+    if (item.error !== undefined) {
+      unreadable(number, item.error, 'PARSER');
+      continue;
+    }
+    // ONBUILD triggers pull the same images when a child build fires them.
+    const line = item.line.replace(/^ONBUILD\s+/i, '');
     const from = /^FROM\s+(.*)$/i.exec(line);
     if (from) {
       const tokens = from[1].split(/\s+/).filter((t) => !t.startsWith('--'));
       const image = tokens[0];
       if (image === undefined) {
-        refs.push({ file, line: number, image: '', origin: 'FROM', kind: 'unparseable' });
-        continue;
+        unreadable(number, '', 'FROM');
+      } else {
+        refs.push(classify(image, file, number, ctx, 'FROM'));
       }
-      refs.push(classify(image, file, number, stages, 'FROM'));
       const alias = /\bAS\s+([\w.-]+)/i.exec(from[1]);
-      if (alias) stages.add(alias[1]);
+      if (alias) ctx.names.add(alias[1].toLowerCase());
+      ctx.count++;
       continue;
     }
-    const copy = /^COPY\s+.*?--from=(\S+)/i.exec(line);
-    if (copy && !stages.has(copy[1])) {
-      refs.push(classify(copy[1], file, number, stages, 'COPY'));
+    const copy = /^COPY\s+(.*)$/i.exec(line);
+    if (copy) {
+      const { flags, ok } = leadingFlags(copy[1]);
+      if (!ok) unreadable(number, copy[1].slice(0, 80), 'COPY');
+      for (const flag of flags) {
+        const source = /^--from=(.*)$/i.exec(flag);
+        if (source) refs.push(classify(unquote(source[1]), file, number, ctx, 'COPY'));
+      }
     }
     // `RUN --mount=type=bind,from=<image>` pulls an image exactly as COPY --from does.
-    if (/^RUN\s/i.test(line)) {
-      for (const mount of line.matchAll(/--mount=(\S+)/gi)) {
-        const source = /(?:^|,)from=([^,\s]+)/i.exec(mount[1]);
-        if (source && !stages.has(source[1])) {
-          refs.push(classify(source[1], file, number, stages, 'RUN'));
+    const run = /^RUN\s+(.*)$/i.exec(line);
+    if (run) {
+      const { flags, ok } = leadingFlags(run[1]);
+      if (!ok) unreadable(number, run[1].slice(0, 80), 'RUN');
+      for (const flag of flags) {
+        const mount = /^--mount=(.*)$/i.exec(flag);
+        if (!mount) continue;
+        const fields = csvFields(mount[1]);
+        if (fields === null) {
+          unreadable(number, mount[1], 'RUN');
+          continue;
+        }
+        for (const field of fields) {
+          const equals = field.indexOf('=');
+          if (equals !== -1 && field.slice(0, equals).trim().toLowerCase() === 'from') {
+            refs.push(classify(field.slice(equals + 1), file, number, ctx, 'RUN'));
+          }
         }
       }
     }

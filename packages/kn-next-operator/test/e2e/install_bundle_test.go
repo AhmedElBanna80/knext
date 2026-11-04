@@ -1,5 +1,4 @@
 //go:build e2e_bundle
-// +build e2e_bundle
 
 /*
 Copyright 2026.

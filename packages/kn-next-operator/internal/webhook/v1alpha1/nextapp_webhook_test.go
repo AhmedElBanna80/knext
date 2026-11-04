@@ -256,7 +256,7 @@ func TestDatabaseCollisionRatchet(t *testing.T) {
 	t.Run("UPDATE carrying a PRE-EXISTING collision forward is allowed (ratchet)", func(t *testing.T) {
 		oldApp := newNextApp(collisionSpec())
 		newSpec := collisionSpec()
-		newSpec.Image = "registry.example.com/app:v2@sha256:def456abc123" // unrelated change
+		newSpec.Image = image2 // unrelated change
 		_, err := v.ValidateUpdate(ctx, oldApp, newNextApp(newSpec))
 		if err != nil {
 			t.Fatalf("a stored collision CR must remain updatable (image bump), got err=%v", err)
@@ -324,7 +324,7 @@ func TestEnvMapReservedCollisionRatchet(t *testing.T) {
 	t.Run("UPDATE carrying a PRE-EXISTING collision forward is allowed (ratchet)", func(t *testing.T) {
 		oldApp := newNextApp(collisionSpec())
 		newSpec := collisionSpec()
-		newSpec.Image = "registry.example.com/app:v2@sha256:def456abc123" // unrelated change
+		newSpec.Image = image2 // unrelated change
 		_, err := v.ValidateUpdate(ctx, oldApp, newNextApp(newSpec))
 		if err != nil {
 			t.Fatalf("a stored collision CR must remain updatable (image bump), got err=%v", err)

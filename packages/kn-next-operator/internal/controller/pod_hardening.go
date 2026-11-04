@@ -18,7 +18,6 @@ package controller
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/ptr"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
@@ -52,12 +51,12 @@ import (
 func restrictedContainerSecurityContext(readOnlyRootFS *bool, runAsNonRoot bool) *corev1.SecurityContext {
 	sc := &corev1.SecurityContext{
 		ReadOnlyRootFilesystem:   readOnlyRootFS,
-		AllowPrivilegeEscalation: ptr.To(false),
+		AllowPrivilegeEscalation: new(false),
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 	if runAsNonRoot {
-		sc.RunAsNonRoot = ptr.To(true)
+		sc.RunAsNonRoot = new(true)
 	}
 	return sc
 }

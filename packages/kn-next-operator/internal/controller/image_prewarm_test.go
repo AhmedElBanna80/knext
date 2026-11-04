@@ -36,8 +36,8 @@ import (
 
 func prewarmApp() *appsv1alpha1.NextApp {
 	app := &appsv1alpha1.NextApp{}
-	app.Name = "shop"
-	app.Namespace = "prod"
+	app.Name = sovNS
+	app.Namespace = lcProd
 	app.Spec.Image = "registry.example.com/shop@sha256:" + strings.Repeat("a", 64)
 	app.Spec.Scaling = &appsv1alpha1.ScalingSpec{ImagePrewarm: true}
 	return app
@@ -53,8 +53,8 @@ func TestPrewarmHelperImage_DigestPinned(t *testing.T) {
 		t.Fatalf("prewarmHelperImage %q must be digest-pinned (@sha256:...), not a floating tag — operator images are digest-pinned per security.md", prewarmHelperImage)
 	}
 	// The digest must be a full 64-hex sha256, not a truncated placeholder.
-	idx := strings.Index(prewarmHelperImage, "@sha256:")
-	digest := prewarmHelperImage[idx+len("@sha256:"):]
+	_, after, _ := strings.Cut(prewarmHelperImage, "@sha256:")
+	digest := after
 	if len(digest) != 64 {
 		t.Fatalf("prewarmHelperImage digest %q must be 64 hex chars, got %d", digest, len(digest))
 	}
@@ -67,8 +67,8 @@ func TestPrewarmHelperImage_DigestPinned(t *testing.T) {
 // **glibc** build, which is dynamically linked against `/lib64/ld-linux-*`.
 func staticBusyboxVariant(ref string) bool {
 	tag := ref
-	if i := strings.Index(ref, "@"); i >= 0 {
-		tag = ref[:i]
+	if before, _, ok := strings.Cut(ref, "@"); ok {
+		tag = before
 	}
 	return strings.HasSuffix(tag, "-uclibc") || strings.HasSuffix(tag, "-musl")
 }
@@ -153,7 +153,7 @@ func TestBuildImagePrewarmDaemonSet_NameAndImage(t *testing.T) {
 	if ds.Name != "shop-imgcache" {
 		t.Fatalf("name: got %q, want shop-imgcache", ds.Name)
 	}
-	if ds.Namespace != "prod" {
+	if ds.Namespace != lcProd {
 		t.Fatalf("namespace: got %q, want prod", ds.Namespace)
 	}
 

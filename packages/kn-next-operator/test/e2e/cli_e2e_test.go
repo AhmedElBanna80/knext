@@ -1,5 +1,4 @@
 //go:build e2e_cli
-// +build e2e_cli
 
 /*
 Copyright 2026.

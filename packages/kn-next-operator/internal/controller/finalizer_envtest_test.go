@@ -60,7 +60,7 @@ var _ = Describe("NextApp deletion finalizer", func() {
 		app := &appsv1alpha1.NextApp{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
 			Spec: appsv1alpha1.NextAppSpec{
-				Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+				Image: validImage,
 				Storage: &appsv1alpha1.StorageSpec{
 					Provider: "s3",
 					Bucket:   "shared-bucket",
@@ -131,7 +131,7 @@ var _ = Describe("NextApp deletion finalizer", func() {
 		app := &appsv1alpha1.NextApp{
 			ObjectMeta: metav1.ObjectMeta{Name: failName, Namespace: "default"},
 			Spec: appsv1alpha1.NextAppSpec{
-				Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+				Image: validImage,
 				Storage: &appsv1alpha1.StorageSpec{
 					Provider: "s3",
 					Bucket:   "shared-bucket",

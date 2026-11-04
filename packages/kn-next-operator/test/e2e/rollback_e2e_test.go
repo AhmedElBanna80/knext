@@ -1,5 +1,4 @@
 //go:build e2e_rollback
-// +build e2e_rollback
 
 /*
 Copyright 2026.

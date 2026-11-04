@@ -52,8 +52,8 @@ const (
 
 func blockedRevision(reason, msg string, status corev1.ConditionStatus) *servingv1.Revision {
 	rev := &servingv1.Revision{}
-	rev.Name = "shop-00001"
-	rev.Namespace = "prod"
+	rev.Name = lcShop00001
+	rev.Namespace = lcProd
 	rev.Status.Conditions = duckConds(servingv1.RevisionConditionResourcesAvailable, status, reason, msg)
 	return rev
 }
@@ -98,13 +98,13 @@ func verdictWithPodCreation(app *appsv1alpha1.NextApp, pc podCreationState, now 
 
 func TestPodCreationBlocked_ConditionAndEventOnTransition(t *testing.T) {
 	now := time.Now()
-	pc := podCreationState{blocked: true, reason: ReasonLimitRangeRejected, revision: "shop-00001", message: limitRangeMsg}
+	pc := podCreationState{blocked: true, reason: ReasonLimitRangeRejected, revision: lcShop00001, message: limitRangeMsg}
 	v := verdictWithPodCreation(verdictApp(), pc, now)
 	c := findVerdictCondition(t, v, ConditionPodCreationBlocked)
 	if c.Status != metav1.ConditionTrue || c.Reason != ReasonLimitRangeRejected {
 		t.Fatalf("got %+v", c)
 	}
-	if !strings.Contains(c.Message, "maximum cpu usage per Container") || !strings.Contains(c.Message, "shop-00001") {
+	if !strings.Contains(c.Message, "maximum cpu usage per Container") || !strings.Contains(c.Message, lcShop00001) {
 		t.Fatalf("condition must carry revision + event message, got %q", c.Message)
 	}
 	if len(v.events) != 1 || v.events[0].eventType != corev1.EventTypeWarning || v.events[0].reason != ReasonLimitRangeRejected {
@@ -162,11 +162,11 @@ func TestDetectPodCreationBlocked_ReadsLatestCreatedRevision(t *testing.T) {
 	rev := blockedRevision("FailedCreate", quotaMsg, corev1.ConditionFalse)
 	r := &NextAppReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(rev).Build()}
 	ksvc := &servingv1.Service{}
-	ksvc.Status.LatestCreatedRevisionName = "shop-00001"
+	ksvc.Status.LatestCreatedRevisionName = lcShop00001
 	app := verdictApp()
 
 	st := r.detectPodCreationBlocked(context.Background(), app, ksvc)
-	if !st.blocked || st.reason != ReasonQuotaExceeded || st.revision != "shop-00001" {
+	if !st.blocked || st.reason != ReasonQuotaExceeded || st.revision != lcShop00001 {
 		t.Fatalf("got %+v", st)
 	}
 
@@ -185,7 +185,7 @@ func TestDetectPodCreationBlocked_ReadsLatestCreatedRevision(t *testing.T) {
 
 func TestPodCreationBlocked_UsedNumbersChurnIsQuiet(t *testing.T) {
 	now := time.Now()
-	first := podCreationState{blocked: true, reason: ReasonQuotaExceeded, revision: "shop-00001", message: quotaMsg}
+	first := podCreationState{blocked: true, reason: ReasonQuotaExceeded, revision: lcShop00001, message: quotaMsg}
 	v := verdictWithPodCreation(verdictApp(), first, now)
 	c := findVerdictCondition(t, v, ConditionPodCreationBlocked)
 
@@ -203,7 +203,7 @@ func TestPodCreationBlocked_UsedNumbersChurnIsQuiet(t *testing.T) {
 
 	// A different revision IS news.
 	other := drifted
-	other.revision = "shop-00002"
+	other.revision = lcShop00002
 	v3 := verdictWithPodCreation(app, other, now)
 	if len(v3.events) != 1 {
 		t.Fatalf("new revision must emit, got %+v", v3.events)
@@ -224,7 +224,7 @@ func TestPodCreationBlocked_StickyKeepsPriorVerdict(t *testing.T) {
 func rejectingDeployment(replicaFailure corev1.ConditionStatus, reason, msg string) *appsv1.Deployment {
 	d := &appsv1.Deployment{}
 	d.Name = "shop-00001-deployment"
-	d.Namespace = "prod"
+	d.Namespace = lcProd
 	d.Status.Conditions = []appsv1.DeploymentCondition{{
 		Type: appsv1.DeploymentReplicaFailure, Status: replicaFailure, Reason: reason, Message: msg,
 	}}
@@ -245,7 +245,7 @@ func TestDetectPodCreationBlocked_StaysBlockedAfterProgressDeadline(t *testing.T
 		Message: "revision shop-00001 cannot create pods — rejected: x.",
 	}}
 	ksvc := &servingv1.Service{}
-	ksvc.Status.LatestCreatedRevisionName = "shop-00001"
+	ksvc.Status.LatestCreatedRevisionName = lcShop00001
 	detect := func(rev *servingv1.Revision, ksvc *servingv1.Service, extra ...client.Object) podCreationState {
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rev).WithObjects(extra...).Build()
 		r := &NextAppReconciler{Client: c, APIReader: c}
@@ -291,9 +291,9 @@ func TestDetectPodCreationBlocked_StaysBlockedAfterProgressDeadline(t *testing.T
 	}
 	// A NEW latest revision -> not carried.
 	newRev := deadline()
-	newRev.Name = "shop-00002"
+	newRev.Name = lcShop00002
 	ksvc2 := &servingv1.Service{}
-	ksvc2.Status.LatestCreatedRevisionName = "shop-00002"
+	ksvc2.Status.LatestCreatedRevisionName = lcShop00002
 	st = detect(newRev, ksvc2, rejectingDeployment(corev1.ConditionTrue, "FailedCreate", quotaMsg))
 	if st.sticky || st.blocked {
 		t.Fatalf("new revision must not inherit the prior block, got %+v", st)
@@ -314,7 +314,7 @@ func TestDetectPodCreationBlocked_DeploymentReadErrorKeepsPriorVerdict(t *testin
 		Message: "revision shop-00001 cannot create pods — rejected: x.",
 	}}
 	ksvc := &servingv1.Service{}
-	ksvc.Status.LatestCreatedRevisionName = "shop-00001"
+	ksvc.Status.LatestCreatedRevisionName = lcShop00001
 	rev := blockedRevision("ProgressDeadlineExceeded", "Initial scale was never achieved", corev1.ConditionFalse)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rev).Build()
 	failing := interceptor.NewClient(c, interceptor.Funcs{

@@ -49,7 +49,7 @@ func grantsPlatformGroup(apiGroups []string) bool {
 func TestRBAC_OperatorReadsThePlatformAndWritesOnlyItsStatus(t *testing.T) {
 	var specVerbs, statusVerbs []string
 	for _, r := range loadRBACRules(t) {
-		if r.name != "manager-role" || !grantsPlatformGroup(r.rule.APIGroups) {
+		if r.name != lcManagerRole || !grantsPlatformGroup(r.rule.APIGroups) {
 			continue
 		}
 		for _, res := range r.rule.Resources {
@@ -101,7 +101,7 @@ func TestRBAC_PlatformAdminRoleIsThePlatformGroupAndNothingElse(t *testing.T) {
 			continue
 		}
 		found = true
-		if r.kind != "ClusterRole" {
+		if r.kind != lcClusterRole {
 			t.Errorf("knextplatform-admin-role is a %s; the platform is cluster-scoped, so it needs a ClusterRole", r.kind)
 		}
 		if len(r.rule.APIGroups) != 1 || r.rule.APIGroups[0] != platformGroup {

@@ -48,7 +48,7 @@ func TestRolloutLimiter_SpacesReRendersAtTheConfiguredRate(t *testing.T) {
 
 	// 10 per minute => one slot every 6s, the first one immediate.
 	var waits []time.Duration
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		waits = append(waits, l.reserve(nn(i), t0, 10))
 	}
 	want := []time.Duration{0, 6 * time.Second, 12 * time.Second, 18 * time.Second, 24 * time.Second}
@@ -65,13 +65,13 @@ func TestRolloutLimiter_NeverExceedsTheRateOverAnyMinuteWindow(t *testing.T) {
 	const apps, perMinute = 100, 10
 
 	slots := map[time.Duration]int{}
-	for i := 0; i < apps; i++ {
+	for i := range apps {
 		slots[l.reserve(nn(i), t0, perMinute)]++
 	}
 	// Collect the slot instants and check every 60s window holds <= perMinute.
 	var instants []time.Duration
 	for d, n := range slots {
-		for j := 0; j < n; j++ {
+		for range n {
 			instants = append(instants, d)
 		}
 	}
@@ -153,7 +153,7 @@ func TestRolloutLimiter_NonPositiveRateFallsBackToTheBuiltin(t *testing.T) {
 func TestRolloutLimiter_StaleReservationsAreForgotten(t *testing.T) {
 	var l rolloutLimiter
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		l.reserve(nn(i), t0, 10)
 	}
 	// An app deleted while waiting never comes back; its entry must not leak.

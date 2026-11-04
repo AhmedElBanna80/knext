@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -66,7 +66,7 @@ func isOptInMetricsScrapeRule(rule networkingv1.NetworkPolicyIngressRule) bool {
 	if len(p.NamespaceSelector.MatchExpressions) != 0 || len(p.NamespaceSelector.MatchLabels) != 1 {
 		return false
 	}
-	if p.NamespaceSelector.MatchLabels[metricsScrapeNamespaceLabel] != "true" {
+	if p.NamespaceSelector.MatchLabels[metricsScrapeNamespaceLabel] != lcTrue {
 		return false
 	}
 	got := extractStrictTCPPorts(nil, rule)
@@ -110,7 +110,7 @@ func extractStrictTCPPorts(t *testing.T, rule networkingv1.NetworkPolicyIngressR
 		}
 		out = append(out, p.Port.IntVal)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -191,7 +191,7 @@ func admittedPortsForPod(
 	for p := range portSet {
 		out = append(out, p)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -242,7 +242,7 @@ func TestNetworkPolicyPeersHaveNamespaceAndPodSelectorInOneElement(t *testing.T)
 	})
 
 	t.Run("NextApp default NetworkPolicy", func(t *testing.T) {
-		np := DesiredNetworkPolicy("orders", "shop")
+		np := DesiredNetworkPolicy(sovZone, sovNS)
 		checked := 0
 		for i, rule := range np.Spec.Ingress {
 			if isSameNamespaceMetricsRule(rule) || isOptInMetricsScrapeRule(rule) {
@@ -265,7 +265,7 @@ func TestNetworkPolicyPeersHaveNamespaceAndPodSelectorInOneElement(t *testing.T)
 	})
 
 	t.Run("BackendService function NetworkPolicy", func(t *testing.T) {
-		np := DesiredFunctionNetworkPolicy("pricing", "orders", "shop")
+		np := DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)
 		checked := 0
 		for i, rule := range np.Spec.Ingress {
 			if len(rule.From) == 0 {
@@ -297,8 +297,8 @@ func TestNetworkPolicyPeerPortMatrix(t *testing.T) {
 		name string
 		np   *networkingv1.NetworkPolicy
 	}{
-		{"NextApp", DesiredNetworkPolicy("orders", "shop")},
-		{"BackendService", DesiredFunctionNetworkPolicy("pricing", "orders", "shop")},
+		{lcNextApp, DesiredNetworkPolicy(sovZone, sovNS)},
+		{"BackendService", DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)},
 	}
 
 	for _, tc := range policies {
@@ -425,7 +425,7 @@ func TestNetworkPolicyNoWholeNamespacePeers(t *testing.T) {
 		t.Fatal("mutation control failed: empty PodSelector{} did not flag as whole-namespace")
 	}
 
-	npApp := DesiredNetworkPolicy("orders", "shop")
+	npApp := DesiredNetworkPolicy(sovZone, sovNS)
 	for i, rule := range npApp.Spec.Ingress {
 		if isOptInMetricsScrapeRule(rule) {
 			continue
@@ -437,7 +437,7 @@ func TestNetworkPolicyNoWholeNamespacePeers(t *testing.T) {
 		}
 	}
 
-	npFn := DesiredFunctionNetworkPolicy("pricing", "orders", "shop")
+	npFn := DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)
 	for i, rule := range npFn.Spec.Ingress {
 		for j, peer := range rule.From {
 			if selectsWholeNamespace(peer) {
@@ -523,7 +523,7 @@ func TestNetworkPolicyPodLabelsPinnedAgainstUpstreamDrift(t *testing.T) {
 	deployments := func(raw []byte) map[string]*appsv1.Deployment {
 		t.Helper()
 		out := map[string]*appsv1.Deployment{}
-		for _, doc := range strings.Split(string(raw), "\n---") {
+		for doc := range strings.SplitSeq(string(raw), "\n---") {
 			var head struct {
 				Kind string `json:"kind"`
 			}
@@ -585,8 +585,8 @@ func TestNetworkPolicyPodLabelsPinnedAgainstUpstreamDrift(t *testing.T) {
 		name string
 		np   *networkingv1.NetworkPolicy
 	}{
-		{"NextApp", DesiredNetworkPolicy("orders", "shop")},
-		{"BackendService", DesiredFunctionNetworkPolicy("pricing", "orders", "shop")},
+		{lcNextApp, DesiredNetworkPolicy(sovZone, sovNS)},
+		{"BackendService", DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)},
 	} {
 		seen := map[string]bool{}
 		for _, rule := range tc.np.Spec.Ingress {

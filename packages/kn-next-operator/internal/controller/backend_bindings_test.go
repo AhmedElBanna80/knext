@@ -106,7 +106,7 @@ func TestSharedBindingEnvFixture(t *testing.T) {
 
 func TestBindingEnvNames(t *testing.T) {
 	for name, want := range map[string]string{
-		"orders":       "ORDERS",
+		sovZone:        "ORDERS",
 		"user-profile": "USER_PROFILE",
 		"a2-b3-c4":     "A2_B3_C4",
 	} {
@@ -126,14 +126,14 @@ func TestBindingEnvNames(t *testing.T) {
 // arrive in, so a reconcile with no change rolls no revision.
 func TestBindingEnvIsDeterministic(t *testing.T) {
 	entries := []zoneBinding{
-		{name: "zeta", service: "z", state: bindingBound, servedProtoVersion: "1.0.0", wakeAhead: true},
-		{name: "alpha", service: "a", state: bindingBound, servedProtoVersion: "1.0.0", wakeAhead: true},
+		{name: "zeta", service: "z", state: bindingBound, servedProtoVersion: lcV100, wakeAhead: true},
+		{name: "alpha", service: "a", state: bindingBound, servedProtoVersion: lcV100, wakeAhead: true},
 		{name: "mid", service: "m", state: bindingBound, wakeAhead: true},
 		{name: "beta", service: "b", state: bindingBound, servedProtoVersion: "2.0.0", wakeAhead: false},
 	}
 	first := renderBindingEnv("ns", nil, zoneBindings{entries: entries})
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		shuffled := append([]zoneBinding(nil), entries...)
 		rng.Shuffle(len(shuffled), func(a, b int) { shuffled[a], shuffled[b] = shuffled[b], shuffled[a] })
 		got := renderBindingEnv("ns", nil, zoneBindings{entries: shuffled})
@@ -160,13 +160,13 @@ func TestBindingEnvCollisionKeepsExistingValueAndReportsName(t *testing.T) {
 		{Name: WakeFunctionsEnv, Value: "something-else"},
 	}
 	b := zoneBindings{entries: []zoneBinding{
-		{name: "orders", service: "orders-fn", state: bindingBound, servedProtoVersion: "1.0.0", wakeAhead: true},
+		{name: sovZone, service: "orders-fn", state: bindingBound, servedProtoVersion: lcV100, wakeAhead: true},
 	}}
-	got := renderBindingEnv("shop", existing, b)
+	got := renderBindingEnv(sovNS, existing, b)
 	if envValue(got.env, "ORDERS_SERVICE_URL") != "" || envValue(got.env, WakeFunctionsEnv) != "" {
 		t.Fatalf("a colliding variable was rendered over the zone's own entry: %v", got.env)
 	}
-	if envValue(got.env, "ORDERS_SERVICE_PROTO_VERSION") != "1.0.0" {
+	if envValue(got.env, "ORDERS_SERVICE_PROTO_VERSION") != lcV100 {
 		t.Fatalf("a non-colliding binding variable must still render: %v", got.env)
 	}
 	want := []string{"KNEXT_WAKE_FUNCTIONS", "ORDERS_SERVICE_URL"}
@@ -176,7 +176,7 @@ func TestBindingEnvCollisionKeepsExistingValueAndReportsName(t *testing.T) {
 }
 
 func TestNoBindingsRenderNothing(t *testing.T) {
-	got := renderBindingEnv("shop", []corev1.EnvVar{{Name: "A", Value: "1"}}, zoneBindings{})
+	got := renderBindingEnv(sovNS, []corev1.EnvVar{{Name: "A", Value: "1"}}, zoneBindings{})
 	if got.env != nil || got.collisions != nil {
 		t.Fatalf("no bindings must render nothing at all (nil, not empty): %+v", got)
 	}
@@ -187,20 +187,20 @@ func TestNoBindingsRenderNothing(t *testing.T) {
 func TestApplyBindingEnvAppendsOnlyToTheZoneContainer(t *testing.T) {
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{
-		Image: "img", Env: []corev1.EnvVar{{Name: "HOSTNAME", Value: "0.0.0.0"}},
+		Image: "img", Env: []corev1.EnvVar{{Name: lcHOSTNAME, Value: "0.0.0.0"}},
 	}}
 	before := ksvc.DeepCopy()
-	if c := applyBindingEnv(ksvc, "shop", zoneBindings{}); c != nil {
+	if c := applyBindingEnv(ksvc, sovNS, zoneBindings{}); c != nil {
 		t.Fatalf("collisions with no bindings: %v", c)
 	}
 	if !reflect.DeepEqual(before, ksvc) {
 		t.Fatalf("no binding changed the Knative Service")
 	}
-	applyBindingEnv(ksvc, "shop", zoneBindings{entries: []zoneBinding{
-		{name: "orders", service: "orders-fn", state: bindingBound, wakeAhead: true},
+	applyBindingEnv(ksvc, sovNS, zoneBindings{entries: []zoneBinding{
+		{name: sovZone, service: "orders-fn", state: bindingBound, wakeAhead: true},
 	}})
 	env := ksvc.Spec.Template.Spec.Containers[0].Env
-	if len(env) != 3 || env[0].Name != "HOSTNAME" || envValue(env, "ORDERS_SERVICE_URL") == "" {
+	if len(env) != 3 || env[0].Name != lcHOSTNAME || envValue(env, "ORDERS_SERVICE_URL") == "" {
 		t.Fatalf("binding env not appended after the existing env: %v", env)
 	}
 }
@@ -218,7 +218,7 @@ func verdictConditionOrNil(v statusVerdict, condType string) *metav1.Condition {
 }
 
 func zoneWithBackends(entries ...appsv1alpha1.BackendBinding) *appsv1alpha1.NextApp {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "shop", Generation: 3}}
+	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS, Generation: 3}}
 	app.Spec.Backends = entries
 	return app
 }
@@ -240,12 +240,12 @@ func TestBackendBindingsConditionReportsEveryFailure(t *testing.T) {
 	app := zoneWithBackends(
 		appsv1alpha1.BackendBinding{Name: "ghost", Service: "ghost"},
 		appsv1alpha1.BackendBinding{Name: "stolen", Service: "billing-fn"},
-		appsv1alpha1.BackendBinding{Name: "orders", Service: "orders-fn"},
+		appsv1alpha1.BackendBinding{Name: sovZone, Service: "orders-fn"},
 	)
 	b := zoneBindings{entries: []zoneBinding{
 		{name: "ghost", service: "ghost", state: bindingFunctionNotFound},
-		{name: "orders", service: "orders-fn", state: bindingBound},
-		{name: "stolen", service: "billing-fn", state: bindingCrossZone, functionZone: "billing"},
+		{name: sovZone, service: "orders-fn", state: bindingBound},
+		{name: "stolen", service: "billing-fn", state: bindingCrossZone, functionZone: sovOther},
 	}}
 	v := bindingVerdict(app, b, []string{"ORDERS_SERVICE_URL"})
 	c := verdictConditionOrNil(v, ConditionBackendBindings)
@@ -267,8 +267,8 @@ func TestBackendBindingsConditionReportsEveryFailure(t *testing.T) {
 }
 
 func TestBackendBindingsConditionCollisionAlone(t *testing.T) {
-	app := zoneWithBackends(appsv1alpha1.BackendBinding{Name: "orders", Service: "orders-fn"})
-	v := bindingVerdict(app, zoneBindings{entries: []zoneBinding{{name: "orders", service: "orders-fn", state: bindingBound}}},
+	app := zoneWithBackends(appsv1alpha1.BackendBinding{Name: sovZone, Service: "orders-fn"})
+	v := bindingVerdict(app, zoneBindings{entries: []zoneBinding{{name: sovZone, service: "orders-fn", state: bindingBound}}},
 		[]string{"ORDERS_SERVICE_URL"})
 	c := verdictConditionOrNil(v, ConditionBackendBindings)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != ReasonBindingEnvCollision ||
@@ -278,7 +278,7 @@ func TestBackendBindingsConditionCollisionAlone(t *testing.T) {
 }
 
 func TestBackendBindingsConditionCRDMissing(t *testing.T) {
-	app := zoneWithBackends(appsv1alpha1.BackendBinding{Name: "orders", Service: "orders-fn"})
+	app := zoneWithBackends(appsv1alpha1.BackendBinding{Name: sovZone, Service: "orders-fn"})
 	v := bindingVerdict(app, zoneBindings{crdMissing: true}, nil)
 	c := verdictConditionOrNil(v, ConditionBackendBindings)
 	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != ReasonBackendServiceCRDMissing {
@@ -320,10 +320,10 @@ func TestBackendBindingsConditionAbsentWithoutBackends(t *testing.T) {
 func TestBackendBindingsConditionNamesImageMismatch(t *testing.T) {
 	app := zoneWithBackends(
 		appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing-fn", Image: pinA},
-		appsv1alpha1.BackendBinding{Name: "orders", Service: "orders-fn"},
+		appsv1alpha1.BackendBinding{Name: sovZone, Service: "orders-fn"},
 	)
 	b := zoneBindings{entries: []zoneBinding{
-		{name: "orders", service: "orders-fn", state: bindingBound},
+		{name: sovZone, service: "orders-fn", state: bindingBound},
 		{name: "pricing", service: "pricing-fn", state: bindingBound, imageMismatch: true},
 	}}
 	c := verdictConditionOrNil(bindingVerdict(app, b, nil), ConditionBackendBindings)
@@ -359,7 +359,7 @@ func TestBackendBindingsConditionPinReasonPrecedence(t *testing.T) {
 	if c == nil || c.Reason != ReasonBindingImageMismatch {
 		t.Fatalf("image mismatch must outrank spec mismatch, got %+v", c)
 	}
-	cross := zoneBinding{name: "stolen", service: "billing-fn", state: bindingCrossZone, functionZone: "billing"}
+	cross := zoneBinding{name: "stolen", service: "billing-fn", state: bindingCrossZone, functionZone: sovOther}
 	c = verdictConditionOrNil(bindingVerdict(app, zoneBindings{entries: []zoneBinding{both, cross}}, nil), ConditionBackendBindings)
 	if c == nil || c.Reason != ReasonCrossZoneBinding || !strings.Contains(c.Message, `"pricing"`) {
 		t.Fatalf("cross-zone must outrank a pin mismatch and the message must still name it, got %+v", c)
@@ -373,7 +373,7 @@ func TestRenderBindingEnvIgnoresPinMismatch(t *testing.T) {
 	refused := zoneBindings{entries: []zoneBinding{{
 		name: "pricing", service: "pricing-fn", state: bindingBound, wakeAhead: true, imageMismatch: true, specMismatch: true,
 	}}}
-	if got, want := renderBindingEnv("shop", nil, refused), renderBindingEnv("shop", nil, plain); !reflect.DeepEqual(got, want) {
+	if got, want := renderBindingEnv(sovNS, nil, refused), renderBindingEnv(sovNS, nil, plain); !reflect.DeepEqual(got, want) {
 		t.Fatalf("a pin mismatch changed the zone's rendered env:\n got %+v\nwant %+v", got, want)
 	}
 }

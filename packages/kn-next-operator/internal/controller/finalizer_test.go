@@ -70,7 +70,7 @@ func newAppWithExternalState() *appsv1alpha1.NextApp {
 
 func TestCleanupExternalState_ScopedToThisApp(t *testing.T) {
 	app := newAppWithExternalState()
-	app.Name = "shop"
+	app.Name = sovNS
 	app.Namespace = "default"
 	app.Spec.Storage = &appsv1alpha1.StorageSpec{
 		Provider: "s3",
@@ -81,7 +81,7 @@ func TestCleanupExternalState_ScopedToThisApp(t *testing.T) {
 	app.Spec.Cache = &appsv1alpha1.CacheSpec{
 		Provider:  "redis",
 		URL:       "redis://redis:6379",
-		KeyPrefix: "shop",
+		KeyPrefix: sovNS,
 	}
 
 	fc := &fakeCleaner{}
@@ -113,7 +113,7 @@ func TestCleanupExternalState_ScopedToThisApp(t *testing.T) {
 		t.Fatalf("expected 1 cache cleanup call, got %d", len(fc.cacheCalls))
 	}
 	cc := fc.cacheCalls[0]
-	if cc.keyPrefix != "shop" {
+	if cc.keyPrefix != sovNS {
 		t.Errorf("cache keyPrefix = %q, want shop (this app only)", cc.keyPrefix)
 	}
 	if cc.keyPrefix == "" {
@@ -140,9 +140,9 @@ func cliUploadKeyScheme(appName, relPath string) string {
 // cleanup prefix (and a sibling app's keys are NOT).
 func TestStorageCleanupPrefixMatchesRealUploadKeys(t *testing.T) {
 	app := newAppWithExternalState()
-	app.Name = "shop"
+	app.Name = sovNS
 	app.Spec.Storage = &appsv1alpha1.StorageSpec{Provider: "s3", Bucket: "shared"}
-	app.Spec.Cache = &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://r:6379", KeyPrefix: "shop"}
+	app.Spec.Cache = &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://r:6379", KeyPrefix: sovNS}
 
 	fc := &fakeCleaner{}
 	r := &NextAppReconciler{Cleaner: fc}
@@ -223,9 +223,9 @@ func TestCleanupExternalState_NoStorageOrCache(t *testing.T) {
 // CR in Terminating — it logs/records and returns nil (best-effort, bounded).
 func TestCleanupExternalState_BestEffortOnUnreachable(t *testing.T) {
 	app := newAppWithExternalState()
-	app.Name = "shop"
+	app.Name = sovNS
 	app.Spec.Storage = &appsv1alpha1.StorageSpec{Provider: "s3", Bucket: "b"}
-	app.Spec.Cache = &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://down:6379", KeyPrefix: "shop"}
+	app.Spec.Cache = &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://down:6379", KeyPrefix: sovNS}
 
 	fc := &fakeCleaner{
 		storageErr: errors.New("dial tcp: connection refused"),

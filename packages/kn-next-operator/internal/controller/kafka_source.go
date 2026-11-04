@@ -27,7 +27,7 @@ import (
 // kafkaRevalidationRequested reports whether the app asks for kafka-backed ISR
 // revalidation at all (spec.revalidation.queue == "kafka").
 func kafkaRevalidationRequested(app *appsv1alpha1.NextApp) bool {
-	return app.Spec.Revalidation != nil && app.Spec.Revalidation.Queue == "kafka"
+	return app.Spec.Revalidation != nil && app.Spec.Revalidation.Queue == lcKafka
 }
 
 // buildKafkaSource builds the Knative `KafkaSource` for an app's ISR-revalidation
@@ -55,18 +55,18 @@ func buildKafkaSource(app *appsv1alpha1.NextApp) *unstructured.Unstructured {
 		broker = app.Spec.Revalidation.KafkaBrokerUrl
 	}
 
-	ks.Object["spec"] = map[string]interface{}{
+	ks.Object["spec"] = map[string]any{
 		"consumerGroup": app.Name + "-revalidation",
-		"bootstrapServers": []interface{}{
+		"bootstrapServers": []any{
 			broker,
 		},
-		"topics": []interface{}{
+		"topics": []any{
 			fmt.Sprintf("%s-revalidation", app.Name),
 		},
-		"sink": map[string]interface{}{
-			"ref": map[string]interface{}{
+		"sink": map[string]any{
+			"ref": map[string]any{
 				"apiVersion": "serving.knative.dev/v1",
-				"kind":       "Service",
+				"kind":       lcService,
 				"name":       app.Name + "-revalidator",
 			},
 		},

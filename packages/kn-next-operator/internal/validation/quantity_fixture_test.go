@@ -433,7 +433,7 @@ func parseQuantityInSubprocess(t *testing.T, value string) quantityParseOutcome 
 	if err != nil {
 		t.Fatalf("child parse process for %q failed (%v): %s", value, err, out)
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "KNEXT_PARSE_RESULT") {
 			continue
@@ -483,7 +483,7 @@ func TestQuantityFixtureMatchesValidator(t *testing.T) {
 // field gets missed, and the reconciler parses whatever the CR carries.
 func TestEveryResourcesFieldIsQuantityChecked(t *testing.T) {
 	const malformed = "0.5 CPU"
-	rt := reflect.TypeOf(appsv1alpha1.ResourcesSpec{})
+	rt := reflect.TypeFor[appsv1alpha1.ResourcesSpec]()
 	checked := 0
 	for i := 0; i < rt.NumField(); i++ {
 		field := rt.Field(i)

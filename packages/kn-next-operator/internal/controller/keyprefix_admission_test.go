@@ -107,13 +107,13 @@ var _ = Describe("NextApp spec.cache.keyPrefix admission (#2398)", func() {
 	// unstructured object to reach the schema at all.
 	It(`ADMITS an explicit keyPrefix: "" sent over the wire (empty is unset)`, func() {
 		name := "keyprefix-ok-explicit-empty"
-		u := &unstructured.Unstructured{Object: map[string]interface{}{
+		u := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "apps.kn-next.dev/v1alpha1",
-			"kind":       "NextApp",
-			"metadata":   map[string]interface{}{"name": name, "namespace": namespace},
-			"spec": map[string]interface{}{
+			"kind":       lcNextApp,
+			"metadata":   map[string]any{"name": name, "namespace": namespace},
+			"spec": map[string]any{
 				"image": validImage,
-				"cache": map[string]interface{}{"provider": "redis", "url": "redis://redis:6379", "keyPrefix": ""},
+				"cache": map[string]any{"provider": "redis", "url": "redis://redis:6379", "keyPrefix": ""},
 			},
 		}}
 		Expect(k8sClient.Create(ctx, u)).To(Succeed())

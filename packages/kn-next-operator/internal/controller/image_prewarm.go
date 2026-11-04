@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -118,10 +117,10 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 	}
 
 	containerSC := &corev1.SecurityContext{
-		RunAsNonRoot:             ptr.To(true),
-		RunAsUser:                ptr.To(prewarmNonRootUID),
-		ReadOnlyRootFilesystem:   ptr.To(true),
-		AllowPrivilegeEscalation: ptr.To(false),
+		RunAsNonRoot:             new(true),
+		RunAsUser:                new(prewarmNonRootUID),
+		ReadOnlyRootFilesystem:   new(true),
+		AllowPrivilegeEscalation: new(false),
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 	}
 
@@ -141,16 +140,16 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					// No API access needed: never mount a SA token.
-					AutomountServiceAccountToken: ptr.To(false),
+					AutomountServiceAccountToken: new(false),
 					// The pin process is a bare `busybox sleep` (PID 1, no SIGTERM
 					// handler), so the default 30s grace would delay every digest
 					// rollout / disable by 30s per node. Drop it to 1s.
-					TerminationGracePeriodSeconds: ptr.To(int64(1)),
+					TerminationGracePeriodSeconds: new(int64(1)),
 					// Pull the app image on EVERY node, tainted ones included.
 					Tolerations:      []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					ImagePullSecrets: pullSecrets,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot:   ptr.To(true),
+						RunAsNonRoot:   new(true),
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
 					Volumes: []corev1.Volume{

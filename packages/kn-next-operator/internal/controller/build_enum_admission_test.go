@@ -92,7 +92,7 @@ var _ = Describe("NextApp spec.build admission (#1219)", func() {
 	// The pre-existing values are unaffected — widening the enum is additive,
 	// not a rewrite. Both prior values asserted so neither can silently regress.
 	It("still admits the pre-existing values, turbopack and vinext", func() {
-		for _, build := range []string{"turbopack", "vinext"} {
+		for _, build := range []string{"turbopack", lcVinext} {
 			name := "build-enum-" + build
 			nn := types.NamespacedName{Name: name, Namespace: namespace}
 			nextApp := &appsv1alpha1.NextApp{

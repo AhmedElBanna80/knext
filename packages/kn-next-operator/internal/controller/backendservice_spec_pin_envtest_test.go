@@ -51,7 +51,7 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 	}
 	createStripe := func(ns string) {
 		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "stripe", Namespace: ns, Labels: map[string]string{ZoneLabel: "orders"},
+			Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
 		}})).To(Succeed())
 	}
 	digestOfLive := func(ns string) string {
@@ -63,8 +63,8 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 	// it is stored. A pin of "" leaves the zone with the name-only binding.
 	setup := func(pinLive bool, mut ...func(*appsv1alpha1.BackendService)) string {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders", append([]func(*appsv1alpha1.BackendService){usesZoneDB}, mut...)...)
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, append([]func(*appsv1alpha1.BackendService){usesZoneDB}, mut...)...)
 		if pinLive {
 			setZoneSpecPin(ctx, ns, digestOfLive(ns))
 		}
@@ -142,7 +142,7 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 		pin := digestOfLive(ns)
 
 		editFunction(ns, func(bs *appsv1alpha1.BackendService) {
-			bs.Spec.EnvFrom = append(bs.Spec.EnvFrom, specEnvFromSecret("stripe").EnvFrom...)
+			bs.Spec.EnvFrom = append(bs.Spec.EnvFrom, specEnvFromSecret(lcStripe).EnvFrom...)
 		})
 		reconcileFunction(ctx, ns, "pricing")
 
@@ -325,7 +325,7 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 
 	It("a transient Secret read error with a MATCHING spec leaves a running function as it is", func() {
 		ns := setup(false, func(bs *appsv1alpha1.BackendService) {
-			bs.Spec.EnvFrom = append(bs.Spec.EnvFrom, specEnvFromSecret("stripe").EnvFrom...)
+			bs.Spec.EnvFrom = append(bs.Spec.EnvFrom, specEnvFromSecret(lcStripe).EnvFrom...)
 		})
 		createStripe(ns)
 		setZoneSpecPin(ctx, ns, digestOfLive(ns))
@@ -342,7 +342,7 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 
 	It("a changed spec is refused while Secret reads fail too: the mismatch is decided from the specs", func() {
 		ns := setup(false, func(bs *appsv1alpha1.BackendService) {
-			bs.Spec.EnvFrom = append(bs.Spec.EnvFrom, specEnvFromSecret("stripe").EnvFrom...)
+			bs.Spec.EnvFrom = append(bs.Spec.EnvFrom, specEnvFromSecret(lcStripe).EnvFrom...)
 		})
 		createStripe(ns)
 		setZoneSpecPin(ctx, ns, digestOfLive(ns))
@@ -360,14 +360,14 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 
 func setZoneSpecPin(ctx context.Context, ns, pin string) {
 	zone := &appsv1alpha1.NextApp{}
-	Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "orders"}, zone)).To(Succeed())
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: sovZone}, zone)).To(Succeed())
 	zone.Spec.Backends[0].SpecDigest = pin
 	Expect(k8sClient.Update(ctx, zone)).To(Succeed())
 }
 
 func setZoneImagePin(ctx context.Context, ns, pin string) {
 	zone := &appsv1alpha1.NextApp{}
-	Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "orders"}, zone)).To(Succeed())
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: sovZone}, zone)).To(Succeed())
 	zone.Spec.Backends[0].Image = pin
 	Expect(k8sClient.Update(ctx, zone)).To(Succeed())
 }
@@ -378,7 +378,7 @@ var _ = Describe("NextApp CRD: the backends[].specDigest pin", func() {
 	create := func(pin string) error {
 		ns := bsNamespace(ctx)
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: ns},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing", SpecDigest: pin}},
@@ -386,7 +386,7 @@ var _ = Describe("NextApp CRD: the backends[].specDigest pin", func() {
 		}
 		err := k8sClient.Create(ctx, app)
 		if err == nil {
-			DeferCleanup(deleteAndFinalize, ctx, types.NamespacedName{Namespace: ns, Name: "orders"})
+			DeferCleanup(deleteAndFinalize, ctx, types.NamespacedName{Namespace: ns, Name: sovZone})
 		}
 		return err
 	}

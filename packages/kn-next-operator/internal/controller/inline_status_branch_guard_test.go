@@ -123,7 +123,7 @@ func TestInlineStatusConditionBranchesStayExactlyOne(t *testing.T) {
 		switch {
 		case s.enclosingFunc == "applyStatusVerdict":
 			inApply++
-		case s.enclosingFunc == "Reconcile" && s.inValidation:
+		case s.enclosingFunc == lcReconcile && s.inValidation:
 			inValidation++
 		default:
 			offenders = append(offenders, s)

@@ -20,8 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/utils/ptr"
-
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
 
@@ -222,7 +220,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "targetBurstCapacity -1 (always-activator) accepted (#411)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: ptr.To(int32(-1))},
+				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: new(int32(-1))},
 			},
 			wantErr: false,
 		},
@@ -230,7 +228,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "targetBurstCapacity 0 accepted (#411)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: ptr.To(int32(0))},
+				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: new(int32(0))},
 			},
 			wantErr: false,
 		},
@@ -238,7 +236,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "targetBurstCapacity 200 accepted (#411)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: ptr.To(int32(200))},
+				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: new(int32(200))},
 			},
 			wantErr: false,
 		},
@@ -246,7 +244,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "targetBurstCapacity -2 rejected (#411)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: ptr.To(int32(-2))},
+				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: new(int32(-2))},
 			},
 			wantErr: true,
 			errHas:  "targetBurstCapacity",
@@ -265,7 +263,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicWindowPercentage 1 accepted (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: ptr.To(int32(1))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: new(int32(1))},
 			},
 			wantErr: false,
 		},
@@ -273,7 +271,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicWindowPercentage 50 accepted (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: ptr.To(int32(50))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: new(int32(50))},
 			},
 			wantErr: false,
 		},
@@ -281,7 +279,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicWindowPercentage 100 accepted (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: ptr.To(int32(100))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: new(int32(100))},
 			},
 			wantErr: false,
 		},
@@ -289,7 +287,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicWindowPercentage 0 rejected (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: ptr.To(int32(0))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: new(int32(0))},
 			},
 			wantErr: true,
 			errHas:  "panicWindowPercentage",
@@ -298,7 +296,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicWindowPercentage 101 rejected (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: ptr.To(int32(101))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: new(int32(101))},
 			},
 			wantErr: true,
 			errHas:  "panicWindowPercentage",
@@ -310,7 +308,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicThresholdPercentage 110 accepted (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: ptr.To(int32(110))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: new(int32(110))},
 			},
 			wantErr: false,
 		},
@@ -318,7 +316,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicThresholdPercentage 200 accepted (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: ptr.To(int32(200))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: new(int32(200))},
 			},
 			wantErr: false,
 		},
@@ -326,7 +324,7 @@ func TestValidateNextAppSpec(t *testing.T) {
 			name: "panicThresholdPercentage 109 rejected (#413)",
 			spec: &appsv1alpha1.NextAppSpec{
 				Image:   digestImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: ptr.To(int32(109))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: new(int32(109))},
 			},
 			wantErr: true,
 			errHas:  "panicThresholdPercentage",

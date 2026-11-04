@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -32,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,7 +96,7 @@ type BackendServiceReconciler struct {
 // (zone_signing_key_reconcile.go declares get;create;update on configmaps).
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get
 
-func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) {
+func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, retErr error) { //nolint:gocyclo // long branch-per-condition orchestrator; splitting is tracked debt, new functions stay under the limit
 	logger := logf.FromContext(ctx)
 	defer func() {
 		if retErr != nil {
@@ -486,11 +486,9 @@ func (r *BackendServiceReconciler) render(
 		if sa.Labels == nil {
 			sa.Labels = map[string]string{}
 		}
-		for k, v := range functionLabels(bs) {
-			sa.Labels[k] = v
-		}
+		maps.Copy(sa.Labels, functionLabels(bs))
 		// No Role or RoleBinding is ever created for it, and no token is mounted.
-		sa.AutomountServiceAccountToken = ptr.To(false)
+		sa.AutomountServiceAccountToken = new(false)
 		sa.ImagePullSecrets = bs.Spec.ImagePullSecrets
 		return ctrl.SetControllerReference(bs, sa, r.Scheme)
 	}); err != nil {
@@ -659,7 +657,7 @@ func (r *BackendServiceReconciler) zoneToFunctions(ctx context.Context, obj clie
 // Service changes (its retention decides theirs).
 func (r *BackendServiceReconciler) zoneKsvcToFunctions(ctx context.Context, obj client.Object) []reconcile.Request {
 	ref := metav1.GetControllerOf(obj)
-	if ref == nil || ref.Kind != "NextApp" {
+	if ref == nil || ref.Kind != lcNextApp {
 		return nil
 	}
 	return r.functionsOfZone(ctx, obj.GetNamespace(), ref.Name)

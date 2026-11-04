@@ -259,7 +259,7 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 			Expect(k8sClient.Get(ctx, nn, fetched)).To(Succeed())
 			degraded := apimeta.FindStatusCondition(fetched.Status.Conditions, ConditionDegraded)
 			if degraded != nil {
-				Expect(degraded.Reason).NotTo(Equal("InvalidSpec"),
+				Expect(degraded.Reason).NotTo(Equal(lcInvalidSpec),
 					"a stored collision CR must never be failed closed as InvalidSpec")
 			}
 		})
@@ -300,7 +300,7 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 				Database: &appsv1alpha1.DatabaseSpec{SecretRef: ref("shop-db")},
 				Secrets: &appsv1alpha1.SecretsSpec{
 					EnvMap: map[string]appsv1alpha1.EnvMapEntry{
-						"STRIPE_KEY": {SecretName: "stripe", SecretKey: "key"},
+						"STRIPE_KEY": {SecretName: lcStripe, SecretKey: "key"},
 					},
 				},
 			})

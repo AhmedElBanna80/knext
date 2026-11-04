@@ -45,6 +45,19 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # Test code and the e2e/test support tree: long diagnostic strings, table
+      # builders that are clearer appended than preallocated, one-fixture helpers
+      # (unparam), and ginkgo/table-driven suites whose cyclomatic count is the
+      # number of cases. Production code stays under every one of these linters.
+      - linters:
+          - gocyclo
+          - lll
+          - prealloc
+          - unparam
+        path: _test\.go
+      - linters:
+          - lll
+        path: test/
     paths:
       - third_party$
       - builtin$

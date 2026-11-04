@@ -92,11 +92,11 @@ type operatorWriter struct {
 // operatorWriters is the registry the scan is held to, in both directions.
 var operatorWriters = []operatorWriter{
 	{
-		Func: "(*NextAppReconciler).writeSigningKeySecret", Resource: "secrets",
+		Func: "(*NextAppReconciler).writeSigningKeySecret", Resource: lcSecrets,
 		Verbs: []string{"Create", "Update"}, NameFunc: "ZoneSigningKeySecretName", Name: ZoneSigningKeySecretName,
 	},
 	{
-		Func: "(*NextAppReconciler).writeJWKSConfigMap", Resource: "configmaps",
+		Func: "(*NextAppReconciler).writeJWKSConfigMap", Resource: lcConfigmaps,
 		Verbs: []string{"Create", "Update"}, NameFunc: "ZoneJWKSConfigMapName", Name: ZoneJWKSConfigMapName,
 	},
 }
@@ -239,10 +239,10 @@ func (s *operatorScan) scanFunc(p *packages.Package, fd *ast.FuncDecl) {
 // scanSecretLiteral records the Type of a core/v1 Secret composite literal.
 func (s *operatorScan) scanSecretLiteral(p *packages.Package, fn string, lit *ast.CompositeLit) {
 	tv, ok := p.TypesInfo.Types[lit]
-	if !ok || classifyObjectArg(tv.Type) != "secrets" {
+	if !ok || classifyObjectArg(tv.Type) != lcSecrets {
 		return
 	}
-	if named, ok := tv.Type.(*types.Named); !ok || named.Obj().Name() != "Secret" {
+	if named, ok := tv.Type.(*types.Named); !ok || named.Obj().Name() != lcSecret {
 		return
 	}
 	got := "(unset)"
@@ -270,7 +270,7 @@ func (s *operatorScan) scanSecretTypeAssign(p *packages.Package, as *ast.AssignS
 		if !ok || sel.Sel.Name != "Type" {
 			continue
 		}
-		if classifyObjectArg(p.TypesInfo.TypeOf(sel.X)) == "secrets" {
+		if classifyObjectArg(p.TypesInfo.TypeOf(sel.X)) == lcSecrets {
 			s.secretTypeAssigns = append(s.secretTypeAssigns, p.Fset.Position(as.Pos()).String())
 		}
 	}
@@ -305,7 +305,7 @@ func (s *operatorScan) scanLiteral(p *packages.Package, fn string, lit *ast.Basi
 		return
 	}
 	switch v := constant.StringVal(tv.Value); v {
-	case "Secret", "ConfigMap", "secrets", "configmaps":
+	case lcSecret, lcConfigMap, lcSecrets, lcConfigmaps:
 		s.kindLiterals = append(s.kindLiterals, literalSite{pos: p.Fset.Position(lit.Pos()).String(), fn: fn, value: v})
 	}
 }
@@ -329,7 +329,7 @@ func (s *operatorScan) scanSelector(p *packages.Package, fn string, sel *ast.Sel
 		}
 	case "k8s.io/client-go/applyconfigurations/core/v1":
 		switch obj.Name() {
-		case "Secret", "ConfigMap", "SecretApplyConfiguration", "ConfigMapApplyConfiguration":
+		case lcSecret, lcConfigMap, "SecretApplyConfiguration", "ConfigMapApplyConfiguration":
 			s.clientsetUses = append(s.clientsetUses, p.Fset.Position(sel.Pos()).String()+" "+obj.Name())
 		}
 	}
@@ -338,10 +338,10 @@ func (s *operatorScan) scanSelector(p *packages.Package, fn string, sel *ast.Sel
 // coreResource maps a core/v1 type name to the plural resource it serves.
 func coreResource(typeName string) string {
 	switch typeName {
-	case "Secret", "SecretList":
-		return "secrets"
-	case "ConfigMap", "ConfigMapList":
-		return "configmaps"
+	case lcSecret, "SecretList":
+		return lcSecrets
+	case lcConfigMap, "ConfigMapList":
+		return lcConfigmaps
 	}
 	return ""
 }
@@ -368,20 +368,20 @@ func classifyObjectArg(t types.Type) string {
 		case corev1PkgPath:
 			return coreResource(named.Obj().Name())
 		case "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured":
-			return "dynamic"
+			return lcDynamic
 		case "k8s.io/apimachinery/pkg/apis/meta/v1":
 			if strings.HasPrefix(named.Obj().Name(), "PartialObjectMetadata") {
-				return "dynamic"
+				return lcDynamic
 			}
 		}
 	}
 	if iface, ok := t.Underlying().(*types.Interface); ok {
 		if iface.Empty() {
-			return "dynamic"
+			return lcDynamic
 		}
 		hasKind, hasCopy := false, false
-		for i := 0; i < iface.NumMethods(); i++ {
-			switch iface.Method(i).Name() {
+		for method := range iface.Methods() {
+			switch method.Name() {
 			case "GetObjectKind":
 				hasKind = true
 			case "DeepCopyObject":
@@ -389,7 +389,7 @@ func classifyObjectArg(t types.Type) string {
 			}
 		}
 		if hasKind && hasCopy {
-			return "dynamic"
+			return lcDynamic
 		}
 	}
 	return ""
@@ -420,7 +420,7 @@ func (s *operatorScan) scanCall(p *packages.Package, fn string, body *ast.BlockS
 		}
 		s.funcWrites[fn] = true
 		site := writeSite{pos: p.Fset.Position(call.Pos()).String(), fn: fn, verb: callee.Name(), resource: kind}
-		if kind == "dynamic" {
+		if kind == lcDynamic {
 			site.local = argDeclaredIn(p, arg, body)
 		}
 		s.writes = append(s.writes, site)
@@ -484,7 +484,7 @@ func (s *operatorScan) scanObjectMeta(p *packages.Package, fn string, lit *ast.C
 func (s *operatorScan) typedWriters() map[string]map[string]bool {
 	out := map[string]map[string]bool{}
 	for _, w := range s.writes {
-		if w.resource != "secrets" && w.resource != "configmaps" {
+		if w.resource != lcSecrets && w.resource != lcConfigmaps {
 			continue
 		}
 		key := w.fn + " " + w.resource
@@ -558,7 +558,7 @@ func TestOperatorDynamicWritesAreJustifiedAndClosed(t *testing.T) {
 	scan := scanOperatorWrites(t)
 	seen := map[string]bool{}
 	for _, w := range scan.writes {
-		if w.resource != "dynamic" {
+		if w.resource != lcDynamic {
 			continue
 		}
 		seen[w.fn] = true
@@ -625,7 +625,7 @@ func loadShippedWritePolicy(t *testing.T) (*admissionregistrationv1.ValidatingAd
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, doc := range strings.Split(string(raw), "\n---") {
+		for doc := range strings.SplitSeq(string(raw), "\n---") {
 			var head struct {
 				Kind string `json:"kind"`
 			}
@@ -701,7 +701,7 @@ func TestPolicyAllowListEqualsWhatTheOperatorWrites(t *testing.T) {
 	for r := range want {
 		sort.Strings(want[r])
 	}
-	for resource, variable := range map[string]string{"secrets": "allowedSecretSuffixes", "configmaps": "allowedConfigMapSuffixes"} {
+	for resource, variable := range map[string]string{lcSecrets: "allowedSecretSuffixes", lcConfigmaps: "allowedConfigMapSuffixes"} {
 		got := policyAllowList(t, policy, variable)
 		if strings.Join(got, "|") != strings.Join(want[resource], "|") {
 			t.Errorf("the policy allows %s names ending %v, the operator writes %v: they must match "+
@@ -724,7 +724,7 @@ func TestOperatorWritesOnlyOpaqueSecrets(t *testing.T) {
 	writerTypes := map[string]bool{}
 	sawWriter := false
 	for _, w := range operatorWriters {
-		if w.Resource != "secrets" {
+		if w.Resource != lcSecrets {
 			continue
 		}
 		sawWriter = true
@@ -783,7 +783,7 @@ func TestOperatorCannotEditItsOwnWritePolicy(t *testing.T) {
 		scanned++
 		groupHit := false
 		for _, g := range r.rule.APIGroups {
-			groupHit = groupHit || g == "admissionregistration.k8s.io" || g == "*"
+			groupHit = groupHit || g == lcAdmissionregistrationK8sIo || g == "*"
 		}
 		resourceHit := false
 		for _, res := range r.rule.Resources {

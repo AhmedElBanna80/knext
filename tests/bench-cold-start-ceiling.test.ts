@@ -206,6 +206,13 @@ define(
   }),
 );
 define(
+  'smallMove', // the wait moved a little, within noise: the median is below 0, its interval is not
+  generate({
+    ...EFFECT,
+    P: (t) => (t === 'relist100' ? { kind: 'free', widthS: 0.8 } : STOCK_LAT),
+  }),
+);
+define(
   'partial', // the wait moved down but is still about 250 ms: part of it is not the relist
   generate({
     ...EFFECT,
@@ -406,6 +413,17 @@ describe('the verdict follows the reading table, not the median alone', () => {
     const r = results.lockUnseen;
     expect(verdict(r)).toBe('WAIT_REMOVED_LOCK_UNSEEN');
     expect(r.out).toMatch(/^b3\s+relist100\s+P\s+node-p\s+100ms\s.*\bno$/m);
+  });
+
+  it('a wait difference in differences that is negative but includes 0 is not read as a move', () => {
+    const r = results.smallMove;
+    const m = r.out.match(/^wait DiD \(relist100 - stock\): (-?\d+) \[(-?\d+), (-?\d+)\]$/m);
+    expect(m).not.toBeNull();
+    const [, d, lo, hi] = m as RegExpMatchArray;
+    expect(Number(d)).toBeLessThan(0);
+    expect(Number(lo)).toBeLessThan(0);
+    expect(Number(hi)).toBeGreaterThan(0);
+    expect(verdict(r)).toBe('FLOOR_WAIT_UNMOVED');
   });
 
   it('a wait that moved down but stays over 150 ms is a partial floor', () => {

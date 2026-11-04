@@ -280,6 +280,46 @@ describe('a spec writes its scratch OUTSIDE the checkout (#918)', () => {
     ).toEqual([]);
   });
 
+  it('classifies a binding on its CODE, not on text inside a string literal', () => {
+    // A fixture body that merely MENTIONS `process.cwd()` in a string used to
+    // mark the whole binding repo-rooted, so every later write through
+    // `app.work` (really under `tmpdir()`) was reported. Aliasing did not help.
+    for (const quote of ["'", '"', '`']) {
+      expect(
+        repoRootedWrites(
+          `const app = baseApp({ body: ${quote}run in process.cwd() now${quote} });\n` +
+            'writeFileSync(app.work, body);',
+        ),
+        `${quote} literal`,
+      ).toEqual([]);
+    }
+    // …including the other REPO_ROOTED spellings, and a template's static text.
+    expect(
+      repoRootedWrites(
+        "const app = baseApp({ a: '__dirname', b: `import.meta.url ${tmpdir()}` });\n" +
+          'writeFileSync(app.work, body);',
+      ),
+    ).toEqual([]);
+  });
+
+  it('still flags a real repo-rooted initializer, bare or inside a template hole', () => {
+    expect(
+      repoRootedWrites("const app = join(process.cwd(), 'x');\nwriteFileSync(app, body);"),
+    ).toHaveLength(1);
+    // The interpolated EXPRESSION is code even though it sits in a template.
+    expect(
+      repoRootedWrites(
+        'const app = baseApp(`${join(process.cwd(), "x")}/work`);\nwriteFileSync(app, body);',
+      ),
+    ).toHaveLength(1);
+    expect(
+      repoRootedWrites(
+        "const app = baseApp({ body: 'process.cwd()', root: process.cwd() });\n" +
+          'writeFileSync(app.work, body);',
+      ),
+    ).toHaveLength(1);
+  });
+
   it('acquits a template whose ROOT is the hole', () => {
     expect(
       repoRootedWrites(

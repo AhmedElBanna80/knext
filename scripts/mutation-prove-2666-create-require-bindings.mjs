@@ -29,12 +29,6 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const UNIT_SPEC = 'packages/kn-next/src/__tests__/entry-require-staticize-bindings.test.ts';
 const COMPILE_SPEC = 'packages/kn-next/src/__tests__/vinext-compile-bindings-strict.test.ts';
 
-const SUBJECTS = {
-  analyze: 'packages/kn-next/src/adapters/create-require-analyze.mjs',
-  staticize: 'packages/kn-next/src/adapters/entry-require-staticize.mjs',
-  compile: 'packages/kn-next/src/adapters/vinext-compile.mjs',
-};
-
 // The analysis rows. Each anchor is a whole line so it occurs once.
 const UNIT = [
   {
@@ -201,8 +195,24 @@ const COMPILE = [
   },
 ];
 
-const unit = createGuardProver({ repoRoot: REPO_ROOT, spec: UNIT_SPEC, subjects: SUBJECTS });
-const compile = createGuardProver({ repoRoot: REPO_ROOT, spec: COMPILE_SPEC, subjects: SUBJECTS });
+const unit = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: UNIT_SPEC,
+  subjects: {
+    analyze: 'packages/kn-next/src/adapters/create-require-analyze.mjs',
+    staticize: 'packages/kn-next/src/adapters/entry-require-staticize.mjs',
+    compile: 'packages/kn-next/src/adapters/vinext-compile.mjs',
+  },
+});
+const compile = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: COMPILE_SPEC,
+  subjects: {
+    analyze: 'packages/kn-next/src/adapters/create-require-analyze.mjs',
+    staticize: 'packages/kn-next/src/adapters/entry-require-staticize.mjs',
+    compile: 'packages/kn-next/src/adapters/vinext-compile.mjs',
+  },
+});
 
 console.log(
   '=== mutation proof: createRequire binding tracking of the strict require check (#2666) ===',

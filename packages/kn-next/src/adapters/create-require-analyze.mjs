@@ -382,7 +382,9 @@ function classify(call, parents, getFacts) {
             if (spec !== null) return { kind: "direct", dynamic: false, spec };
         }
         const folded =
-            parent.arguments.length === 1 ? foldSpecifier(parent.arguments[0], getFacts()) : null;
+            parent.arguments.length === 1
+                ? foldSpecifier(parent.arguments[0], getFacts())
+                : null;
         return folded === null
             ? { kind: "direct", dynamic: true, spec: null }
             : { kind: "direct", dynamic: true, spec: null, folded };

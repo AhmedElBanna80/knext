@@ -75,6 +75,52 @@ describe('parseDockerfileRefs', () => {
   });
 });
 
+describe('parseDockerfileRefs: references the line-by-line reader used to miss (#2665)', () => {
+  const kinds = (text: string) =>
+    parseDockerfileRefs(text, 'x/Dockerfile').map((r: { kind: string }) => r.kind);
+
+  it('reads a COPY --from=<image> whose flag sits on a continuation line', () => {
+    const text = `FROM alpine:3.22@${A}\nCOPY \\\n  --chown=1:1 \\\n  --from=busybox:1.36 \\\n  /x /x\n`;
+    expect(kinds(text)).toEqual(['pinned', 'unpinned']);
+  });
+
+  it('reports the line where the instruction STARTS', () => {
+    const text = `FROM alpine:3.22@${A}\nCOPY \\\n  --from=busybox:1.36 /x /x\n`;
+    expect(parseDockerfileRefs(text, 'x/Dockerfile')[1]).toMatchObject({ line: 2, origin: 'COPY' });
+  });
+
+  it('reads RUN --mount=type=bind,from=<image> and ignores a stage name', () => {
+    const text =
+      `FROM alpine:3.22@${A} AS tools\n` +
+      'RUN --mount=type=bind,from=busybox:1.36,target=/b true\n' +
+      'RUN --mount=type=bind,from=tools,target=/t true\n';
+    const refs = parseDockerfileRefs(text, 'x/Dockerfile');
+    expect(refs.map((r: { kind: string }) => r.kind)).toEqual(['pinned', 'unpinned']);
+    expect(refs[1]).toMatchObject({ origin: 'RUN', image: 'busybox:1.36' });
+  });
+
+  it('accepts both new shapes once they carry a digest', () => {
+    const text =
+      `FROM alpine:3.22@${A}\n` +
+      `COPY \\\n  --from=busybox:1.36@${B} /x /x\n` +
+      `RUN --mount=type=bind,from=busybox:1.36@${B},target=/b true\n`;
+    expect(kinds(text)).toEqual(['pinned', 'pinned', 'pinned']);
+  });
+
+  it('checkDockerfiles FAILS both shapes unless pinned', () => {
+    const cont = fixture({
+      'a/Dockerfile': `FROM alpine:3.22@${A}\nCOPY \\\n --from=busybox:1.36 /x /x\n`,
+    });
+    const mount = fixture({
+      'a/Dockerfile': `FROM alpine:3.22@${A}\nRUN --mount=type=bind,from=busybox:1.36,target=/b true\n`,
+    });
+    expect(reasons(checkDockerfiles(cont, { exclusions: [], today: TODAY }))).toEqual(['unpinned']);
+    expect(reasons(checkDockerfiles(mount, { exclusions: [], today: TODAY }))).toEqual([
+      'unpinned',
+    ]);
+  });
+});
+
 describe('checkDockerfiles (fixtures, both halves)', () => {
   it('passes a consistent tree and reports what it scanned', () => {
     const root = fixture({
@@ -177,7 +223,64 @@ describe('checkDockerfiles (fixtures, both halves)', () => {
   });
 });
 
+describe('an exclusion cannot mask a digest other than the one it names (#2665)', () => {
+  const entry = (over: object) => ({
+    file: 'a/Dockerfile',
+    digest: A,
+    covers: ['registry-resolution'],
+    justification: 'tag drifted; bump pending',
+    added: '2026-11-01',
+    expires: '2026-12-01',
+    ...over,
+  });
+  const api = async () => ({ status: 200, digest: B });
+  const rootWith = (digest: string) => fixture({ 'a/Dockerfile': `FROM ${DS}@${digest}\n` });
+  const mismatch = ['digest-mismatch'];
+
+  it('suppresses the drift of the exact file + digest it names', async () => {
+    const r = await verifyRepo(rootWith(A), { api, exclusions: [entry({})], today: TODAY });
+    expect(r.findings).toEqual([]);
+  });
+
+  it('does NOT suppress the same file once re-pinned to a different (wrong) digest', async () => {
+    const r = await verifyRepo(rootWith(`sha256:${'c'.repeat(64)}`), {
+      api,
+      exclusions: [entry({})],
+      today: TODAY,
+    });
+    expect(r.findings.map((f: { reason: string }) => f.reason)).toEqual(mismatch);
+  });
+
+  it('does NOT suppress the same digest in a different file', async () => {
+    const r = await verifyRepo(rootWith(A), {
+      api,
+      exclusions: [entry({ file: 'z/Dockerfile' })],
+      today: TODAY,
+    });
+    expect(r.findings.map((f: { reason: string }) => f.reason)).toEqual(mismatch);
+  });
+
+  it('a registry-resolution exclusion without `file` + `digest` is invalid and suppresses nothing', async () => {
+    for (const bad of [{ digest: undefined }, { file: undefined, image: DS }]) {
+      const r = await verifyRepo(rootWith(A), { api, exclusions: [entry(bad)], today: TODAY });
+      expect(r.findings.map((f: { reason: string }) => f.reason)).toEqual(mismatch);
+      const c = checkDockerfiles(rootWith(A), { exclusions: [entry(bad)], today: TODAY });
+      expect(reasons(c)).toContain('exclusion-invalid');
+    }
+  });
+});
+
 describe('the real tree', () => {
+  it('every committed exclusion names an exact file, and registry ones a digest', () => {
+    const allow = loadExclusions(ROOT) as { file?: string; digest?: string; covers: string[] }[];
+    for (const e of allow) {
+      expect(e.file).toBeTruthy();
+      if (e.covers.includes('registry-resolution')) {
+        expect(e.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+      }
+    }
+  });
+
   it('every Dockerfile reference is digest-pinned and tag-consistent', () => {
     const r = checkDockerfiles(ROOT, { exclusions: loadExclusions(ROOT), today: new Date() });
     expect(r.findings).toEqual([]);
@@ -238,7 +341,8 @@ describe('nightly resolution covers Dockerfiles (run-time half)', () => {
     const root = nightlyRoot();
     const api = async () => ({ status: 200, digest: B });
     const exclusion = {
-      image: DS,
+      file: 'a/Dockerfile',
+      digest: A,
       covers: ['registry-resolution'],
       justification: 'tag drifted; bump pending',
       added: '2026-11-01',
@@ -252,12 +356,6 @@ describe('nightly resolution covers Dockerfiles (run-time half)', () => {
       today: TODAY,
     });
     expect(dead.findings.map((f: { reason: string }) => f.reason)).toContain('digest-mismatch');
-    const other = await verifyRepo(root, {
-      api,
-      exclusions: [{ ...exclusion, image: 'alpine:3.22' }],
-      today: TODAY,
-    });
-    expect(other.findings.map((f: { reason: string }) => f.reason)).toContain('digest-mismatch');
   });
 });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Two-sample comparison used by the per-phase benchmark (stdlib only).
 
-    python3 stats.py run.jsonl <metric> <groupA> <groupB> [--node=<ip>]
+    python3 stats.py run.jsonl <metric> <groupA> <groupB> [--node=<name>] [--namespace=<ns>] [--config=<file>]
 
 <metric> is a phase from analyze.py's milestone names, as `a..b` (b minus a) or a
 single milestone (time after the request). A group is `arm` or `arm[treatment]`.
@@ -67,6 +67,7 @@ def compare(a, b):
 def main():
     path, metric, ga, gb = sys.argv[1:5]
     node = next((x.split("=", 1)[1] for x in sys.argv if x.startswith("--node=")), None)
+    analyze.set_namespace()
     for x in sys.argv:
         if x.startswith("--activator="):
             analyze.load_cp("activator", x.split("=", 1)[1])

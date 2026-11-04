@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Per-phase scale-from-zero instrument — ONE cold cycle per invocation.
 //
-//   node cold-cycle.mjs <ksvc-name>          (run inside the `phase-bench` pod)
+//   node cold-cycle.mjs <ksvc-name>          (run inside the harness pod; drive.py starts it)
 //
 // Prints one JSON object on stdout. Every `t_*` value is milliseconds since the
 // request was sent (t = 0), on THIS pod's wall clock, sampled with
@@ -27,11 +27,32 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 
-const NS = process.env.NS ?? 'bench-cells';
-const ARM = process.argv[2];
-const HEALTH = process.env.HEALTH_PATH ?? '/api/health';
-if (!ARM) throw new Error('usage: cold-cycle.mjs <ksvc>');
 const SA = '/var/run/secrets/kubernetes.io/serviceaccount';
+const PRINT_CONFIG = process.argv.includes('--print-config');
+const ARM = process.argv.slice(2).find((a) => !a.startsWith('--'));
+const HEALTH = process.env.HEALTH_PATH ?? '/api/health';
+// Settings come from the environment (drive.py sets them from its flags / config file).
+// NS defaults to the namespace this pod runs in. AGENT_PODS optionally maps node name ->
+// node-agent pod; otherwise the agent is the pod labelled AGENT_LABEL that runs on that node.
+const NS =
+  process.env.NS ??
+  (fs.existsSync(`${SA}/namespace`) ? fs.readFileSync(`${SA}/namespace`, 'utf8').trim() : null);
+const AGENT_PODS = process.env.AGENT_PODS ? JSON.parse(process.env.AGENT_PODS) : {};
+const AGENT_LABEL = process.env.AGENT_LABEL ?? 'app=phase-agent';
+if (PRINT_CONFIG) {
+  // Parsing check with no cluster: print the resolved settings and exit.
+  console.log(
+    JSON.stringify({
+      arm: ARM ?? null,
+      namespace: NS,
+      agentPods: AGENT_PODS,
+      agentLabel: AGENT_LABEL,
+    }),
+  );
+  process.exit(0);
+}
+if (!ARM) throw new Error('usage: cold-cycle.mjs <ksvc>');
+if (!NS) throw new Error('namespace unknown: set NS (not running in a pod?)');
 const TOKEN = fs.readFileSync(`${SA}/token`, 'utf8');
 const CA = fs.readFileSync(`${SA}/ca.crt`);
 const API = {
@@ -39,10 +60,18 @@ const API = {
   port: Number(process.env.KUBERNETES_SERVICE_PORT),
 };
 // node-agents.yaml: one agent per worker node (clock + same-node TCP poll).
-const AGENT_PODS = { '10.0.1.118': 'agent-118', '10.0.1.169': 'agent-169' };
+async function agentPodFor(nodeName) {
+  if (AGENT_PODS[nodeName]) return AGENT_PODS[nodeName];
+  const list = await apiGet(
+    `/api/v1/namespaces/${NS}/pods?labelSelector=${encodeURIComponent(AGENT_LABEL)}`,
+  );
+  const hit = list.items.find((p) => p.spec.nodeName === nodeName);
+  if (hit) AGENT_PODS[nodeName] = hit.metadata.name;
+  return hit?.metadata.name ?? null;
+}
 const agentIps = {};
 async function agentIp(nodeName) {
-  const pod = AGENT_PODS[nodeName];
+  const pod = await agentPodFor(nodeName);
   if (!pod) return null;
   agentIps[pod] ??= (await apiGet(`/api/v1/namespaces/${NS}/pods/${pod}`)).status.podIP;
   return agentIps[pod];

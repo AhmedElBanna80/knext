@@ -88,11 +88,28 @@ args = sys.argv[1:]
 with open(os.environ["FAKE_KUBECTL_LOG"], "a") as f:
     f.write(json.dumps(args) + "\\n")
 joined = " ".join(args)
+label = os.environ.get("FAKE_POOL_LABEL", "pool")
+if args[-2:-1] in (["cordon"], ["uncordon"]) and os.environ.get("FAKE_CORDON_FAIL") == args[-1]:
+    sys.stderr.write("forbidden\\n")
+    sys.exit(1)
 if "get nodes" in joined:
+    nodes = json.loads(os.environ.get("FAKE_NODES", "null")) or [
+        {"name": "n1", "pool": "p1"}, {"name": "n2", "pool": "p2"}]
     print(json.dumps({"items": [
-        {"metadata": {"name": "n1", "labels": {os.environ.get("FAKE_POOL_LABEL", "pool"): "p1"}}},
-        {"metadata": {"name": "n2", "labels": {os.environ.get("FAKE_POOL_LABEL", "pool"): "p2"}}},
-    ]}))
+        {"metadata": {"name": n["name"], "labels": {label: n["pool"]}},
+         "spec": {"unschedulable": True} if n.get("cordoned") else {}} for n in nodes]}))
+elif "--field-selector" in joined:
+    node = joined.split("spec.nodeName=")[1].split()[0]
+    seen = sum(1 for l in open(os.environ["FAKE_KUBECTL_LOG"]) if "spec.nodeName=" + node in l)
+    items = [{"metadata": {"namespace": "kube-system", "name": "dns-1", "labels": {}}}]
+    if os.environ.get("FAKE_NEW_POD", "").startswith(node + ":") and seen > 1:
+        ns, nm = os.environ["FAKE_NEW_POD"].split(":", 1)[1].split("/")
+        items.append({"metadata": {"namespace": ns, "name": nm, "labels": {}}})
+    items.append({"metadata": {"namespace": "bench", "name": "a1-pod",
+                               "labels": {"serving.knative.dev/service": "a1"}}})
+    items.append({"metadata": {"namespace": "kube-system", "name": "ds-" + str(seen),
+                               "labels": {}, "ownerReferences": [{"kind": "DaemonSet"}]}})
+    print(json.dumps({"items": items}))
 elif "get pods" in joined:
     print(json.dumps({"items": []}))
 elif " cat " in joined:
@@ -252,6 +269,119 @@ describe('drive.py: settings come from flags, env or a config file', () => {
   it('does not touch node scheduling when no arm names a pool', () => {
     const r = runDrive(base());
     expect(flat(r.calls).some((l) => /cordon|get nodes/.test(l))).toBe(false);
+  });
+});
+
+describe('drive.py: --place-mode=restore leaves every cordon as it found it', () => {
+  type N = { name: string; pool: string; cordoned?: boolean };
+  const run = (
+    nodes: N[],
+    extra: string[] = [],
+    env: Record<string, string> = {},
+    arms = 'a1@p1,a2@p2',
+  ) =>
+    runDrive(['1', arms, '$OUT', ...FAST, '--pool-label=pool', '--place-mode=restore', ...extra], {
+      env: { FAKE_NODES: JSON.stringify(nodes), ...env },
+    });
+  const cordonCalls = (r: Run) =>
+    r.calls
+      .filter((c) => c.some((a) => a === 'cordon' || a === 'uncordon'))
+      .map((c) => c.slice(-2).join(' '));
+  // Replays the cordon calls over the starting state and returns the end state.
+  const endState = (nodes: N[], calls: string[]) => {
+    const st = new Map(nodes.map((n) => [n.name, !!n.cordoned]));
+    for (const c of calls) {
+      const [verb, name] = c.split(' ');
+      st.set(name, verb === 'cordon');
+    }
+    return Object.fromEntries(st);
+  };
+  const P_COR: N[] = [
+    { name: 'n1', pool: 'p1', cordoned: true },
+    { name: 'n2', pool: 'p2' },
+  ];
+
+  it('runs both wakes and ends with the node that started cordoned still cordoned', () => {
+    const r = run(P_COR);
+    expect(r.code).toBe(0);
+    expect(r.rows).toHaveLength(2);
+    expect(endState(P_COR, cordonCalls(r))).toEqual({ n1: true, n2: false });
+  });
+
+  it('never leaves the patched node open while the control is also open', () => {
+    const r = run(P_COR);
+    const st = new Map(P_COR.map((n) => [n.name, !!n.cordoned]));
+    let sawOpen = false;
+    for (const c of cordonCalls(r)) {
+      const [verb, name] = c.split(' ');
+      st.set(name, verb === 'cordon');
+      // n1 is the patched node: whenever it is open, the control must be cordoned.
+      if (st.get('n1') === false) {
+        expect(st.get('n2')).toBe(true);
+        sawOpen = true;
+      }
+    }
+    expect(sawOpen).toBe(true);
+  });
+
+  it('puts the cordons back between wakes, so the patched node is closed once its wake ends', () => {
+    const r = run(P_COR);
+    const lines = cordonCalls(r);
+    const open = lines.indexOf('uncordon n1');
+    expect(open).toBeGreaterThanOrEqual(0);
+    expect(lines.indexOf('cordon n1', open)).toBeGreaterThan(open);
+  });
+
+  it('never touches a node outside the arms pools, even one cordoned by someone else', () => {
+    const nodes: N[] = [...P_COR, { name: 'n3', pool: 'p3', cordoned: true }];
+    const r = run(nodes);
+    expect(r.code).toBe(0);
+    expect(cordonCalls(r).some((l) => l.endsWith(' n3'))).toBe(false);
+    expect(endState(nodes, cordonCalls(r))).toEqual({ n1: true, n2: false, n3: true });
+  });
+
+  it('refuses before any wake when a node outside the arms pools is schedulable', () => {
+    const r = run([...P_COR, { name: 'n3', pool: 'p3' }]);
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('n3');
+    expect(cordonCalls(r)).toEqual([]);
+    expect(flat(r.calls).some((l) => l.includes('nohup'))).toBe(false);
+  });
+
+  it('refuses an arm without a pool, because restore mode pins by pool', () => {
+    const r = run(P_COR, [], {}, 'a1@p1,a2');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('arm@pool');
+  });
+
+  it('stops with a non-zero exit and no wake when a cordon is refused, and undoes what it changed', () => {
+    const r = run(P_COR, [], { FAKE_CORDON_FAIL: 'n1' });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('cannot uncordon n1');
+    expect(r.rows).toHaveLength(0);
+    // The refused call is in the log but changed nothing, so it is left out of the replay.
+    const applied = cordonCalls(r).filter((l) => l !== 'uncordon n1');
+    expect(cordonCalls(r)).toContain('cordon n2');
+    expect(endState(P_COR, applied)).toEqual({ n1: true, n2: false });
+  });
+
+  it('tags every row with the block label', () => {
+    const r = run(P_COR, ['--block=b3']);
+    expect(r.rows.map((x) => (x as { block: string }).block)).toEqual(['b3', 'b3']);
+  });
+
+  it('records pods that appeared on the woken node and are not the arm, a DaemonSet or already there', () => {
+    const r = run(P_COR, [], { FAKE_NEW_POD: 'n1:other/stray' });
+    const first = r.rows[0] as { foreign_new_pods: string[] };
+    expect(first.foreign_new_pods).toEqual(['other/stray']);
+    const clean = run(P_COR);
+    expect((clean.rows[0] as { foreign_new_pods: string[] }).foreign_new_pods).toEqual([]);
+  });
+
+  it('keeps the default all-pools mode unchanged', () => {
+    const r = runDrive(['1', 'a1@p1', '$OUT', ...FAST]);
+    expect(r.code).toBe(0);
+    expect(r.rows[0]).not.toHaveProperty('foreign_new_pods');
   });
 });
 

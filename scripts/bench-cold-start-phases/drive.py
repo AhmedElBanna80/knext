@@ -24,6 +24,19 @@ are cordoned for the wake (running pods are untouched; DaemonSets tolerate
 cordons) and everything is uncordoned when the run ends. The pool is read from
 the node label named by --pool-label.
 
+--place-mode=restore changes that for a run that must not disturb the cluster's cordons (for example
+one node of the pool is running a patched kubelet and has to stay closed to other workloads):
+  - it reads every node's cordon state first and puts each managed node back to exactly that state
+    after every wake and when the run ends, so a node that started cordoned ends cordoned and a cordon
+    set by anyone else is kept; nothing is ever uncordoned just because the run finished;
+  - it manages only the nodes of the pools the arms name, and refuses to start if any other node is
+    schedulable (the wake could land there), without touching it;
+  - every arm must be written arm@pool, and a refused cordon aborts the run (no wake is made on a
+    guess about where the pod would land);
+  - after each wake it lists the pods that appeared on the woken node since the start and are neither
+    the arms' own pods nor DaemonSet pods, and writes them to the row as foreign_new_pods.
+--block=<label> tags every row with a block label (the ceiling test runs one block per kubelet binary).
+
 Settings (cluster-specific; nothing is hard-coded). Precedence: flag, then
 KNEXT_BENCH_* environment variable, then the JSON config file, then default.
 See benchconfig.py and bench-config.example.json.
@@ -47,6 +60,7 @@ import argparse
 import json
 import pathlib
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -83,12 +97,12 @@ def scratch(name):
     return f"{CFG['scratch_dir'].rstrip('/')}/{name}"
 
 
-def kc(args, check=True, timeout=180, tries=5):
+def kc(args, check=True, timeout=180, tries=5, base=None):
     """kubectl with retries: the workstation's path to the apiserver drops
     connections intermittently. Only the idempotent calls go through here; the
     timed harness exec does not retry (see wake)."""
     for i in range(tries):
-        p = subprocess.run(CTX + args, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run((base or CTX) + args, capture_output=True, text=True, timeout=timeout)
         if p.returncode == 0 or not any(m in p.stderr for m in TRANSIENT):
             break
         time.sleep(3 * (i + 1))
@@ -207,6 +221,94 @@ def place(pool):
             subprocess.run(BASE + [verb, n], capture_output=True, text=True)
 
 
+# --place-mode=restore state. REST is what the run found; NOW is what this process last set or found.
+PLACE_MODE = "all"
+MANAGED = {}  # node -> pool, only the nodes of the pools the arms name
+REST = {}  # node -> cordoned at the start of the run
+NOW = {}  # node -> cordoned now, as far as this process knows
+SEEN_PODS = {}  # node -> {"ns/name"} present at the start
+
+
+def set_cordon(node, want):
+    """Cordon or uncordon `node` unless it is already as wanted. Returns the error text, or None."""
+    if NOW.get(node) == want:
+        return None
+    verb = "cordon" if want else "uncordon"
+    p = subprocess.run(BASE + [verb, node], capture_output=True, text=True)
+    if p.returncode != 0:
+        return f"cannot {verb} {node}: {p.stderr.strip()}"
+    NOW[node] = want
+    return None
+
+
+def node_pods(node):
+    j = json.loads(kc(["get", "pods", "-A", "--field-selector", f"spec.nodeName={node}", "-o", "json"],
+                      base=BASE))
+    return j["items"]
+
+
+def restore_begin(arms):
+    """Snapshot cordon state and pods of the managed nodes; refuse if the pin cannot hold."""
+    if any("@" not in x for x in arms):
+        raise SystemExit("--place-mode=restore pins by pool: every arm must be written arm@pool")
+    pools = {x.partition("@")[2] for x in arms}
+    j = json.loads(kc(["get", "nodes", "-o", "json"], base=BASE))
+    open_outside = []
+    for n in j["items"]:
+        name = n["metadata"]["name"]
+        pool = n["metadata"]["labels"].get(CFG["pool_label"], "?")
+        cordoned = bool(n.get("spec", {}).get("unschedulable"))
+        if pool in pools:
+            MANAGED[name] = pool
+            REST[name] = NOW[name] = cordoned
+        elif not cordoned:
+            open_outside.append(name)
+    if open_outside:
+        raise SystemExit("node(s) outside the arms' pools are schedulable, so a wake could land there: "
+                         + ", ".join(open_outside) + ". Nothing was changed; cordon them first, by hand.")
+    missing = pools - set(MANAGED.values())
+    if missing:
+        raise SystemExit("no node carries pool " + ", ".join(sorted(missing)))
+    for name in MANAGED:
+        SEEN_PODS[name] = {f"{p['metadata']['namespace']}/{p['metadata']['name']}" for p in node_pods(name)}
+
+
+def place_restore(pool):
+    """Cordons first, then the uncordon, so the pool being woken is never open alongside another."""
+    for want in (True, False):
+        for name, p in MANAGED.items():
+            if (p != pool) == want:
+                err = set_cordon(name, want)
+                if err:
+                    raise SystemExit(err)
+
+
+def rest():
+    """Put every managed node back to the state it had at the start. Reports every failure."""
+    failed = []
+    for want in (True, False):
+        for name, was in REST.items():
+            if was == want:
+                err = set_cordon(name, want)
+                if err:
+                    failed.append(err)
+    if failed:
+        print("RESTORE FAILED, fix by hand: " + "; ".join(failed), file=sys.stderr, flush=True)
+        raise SystemExit(1)
+
+
+def foreign_new_pods(node, arm_names):
+    out = []
+    for p in node_pods(node):
+        key = f"{p['metadata']['namespace']}/{p['metadata']['name']}"
+        owners = {o.get("kind") for o in p["metadata"].get("ownerReferences") or []}
+        svc = (p["metadata"].get("labels") or {}).get("serving.knative.dev/service")
+        if key in SEEN_PODS.get(node, ()) or "DaemonSet" in owners or svc in arm_names:
+            continue
+        out.append(key)
+    return sorted(out)
+
+
 def parse_args(argv):
     ap = argparse.ArgumentParser(prog="drive.py", description="Interleaved per-phase cold-start driver.")
     ap.add_argument("rounds", type=int)
@@ -223,27 +325,38 @@ def parse_args(argv):
     ap.add_argument("--agent-pods", dest="agent_pods")
     ap.add_argument("--agent-label", dest="agent_label")
     ap.add_argument("--pool-label", dest="pool_label")
+    ap.add_argument("--place-mode", dest="place_mode", choices=("all", "restore"), default="all")
+    ap.add_argument("--block", default=None, help="label written to every row")
     ap.add_argument("--settle", type=float, default=10)
     ap.add_argument("--poll-interval", dest="poll", type=float, default=3)
     return ap.parse_args(argv)
 
 
 def main(argv=None):
-    global SETTLE, POLL
+    global SETTLE, POLL, PLACE_MODE
     a = parse_args(sys.argv[1:] if argv is None else argv)
     cli = {k: getattr(a, k) for k in ("context", "namespace", "pod", "container", "scratch_dir",
                                       "agent_pods", "agent_label", "pool_label")}
     configure(cli, config_path=a.config)
     SETTLE, POLL = a.settle, a.poll
+    PLACE_MODE = a.place_mode
     arms = a.arms.split(",")
+    if PLACE_MODE == "restore":
+        # A SIGTERM must run the restore below, as Ctrl-C does.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     try:
-        run(a.rounds, arms, a.out, a.dns, a.heal)
+        if PLACE_MODE == "restore":
+            restore_begin(arms)
+        run(a.rounds, arms, a.out, a.dns, a.heal, block=a.block)
     finally:
-        if any("@" in x for x in arms):
+        if PLACE_MODE == "restore":
+            if MANAGED:
+                rest()
+        elif any("@" in x for x in arms):
             place(None)
 
 
-def run(rounds, arms, out, do_dns=False, heal_arm=None):
+def run(rounds, arms, out, do_dns=False, heal_arm=None, block=None):
     install_harness()
     with open(out, "a") as f:
         for r in range(rounds):
@@ -257,13 +370,21 @@ def run(rounds, arms, out, do_dns=False, heal_arm=None):
             for spec in order:
                 arm, _, pool = spec.partition("@")
                 if pool:
-                    place(pool)
+                    place_restore(pool) if PLACE_MODE == "restore" else place(pool)
                 treat = arm == heal_arm and r % 2 == 1
                 row = wake(arm, treat, f"{int(time.time())}-{arm}")
                 if pool:
                     row["arm"] = spec
                     row["pool"] = pool
                     wait_zero_or_bound(arm)
+                    if PLACE_MODE == "restore":
+                        node = row.get("node")
+                        if node in MANAGED:
+                            row["foreign_new_pods"] = foreign_new_pods(
+                                node, {x.split("@")[0] for x in arms})
+                        rest()
+                if block is not None:
+                    row["block"] = block
                 row.update(round=r + 1, order="fwd" if r % 2 == 0 else "rev", waited_s=waited,
                            treatment="heal" if treat else "none")
                 if do_dns and "error" not in row:

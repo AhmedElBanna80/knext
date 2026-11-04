@@ -37,6 +37,8 @@ revision name alone.
 cp bench-config.example.json bench-config.json   # edit context, namespace, agent map
 python3 drive.py 11 arm-a,arm-b out.jsonl
 python3 drive.py 11 arm-a@pool-1,arm-a@pool-2 out.jsonl   # pin an arm to a node pool
+python3 drive.py 30 a@pool-1,b@pool-2 out.jsonl --place-mode=restore --block=b1
+                                  # pin by cordon, but leave every cordon as found; label the rows
 python3 analyze.py out.jsonl --autoscaler=autoscaler.jsonl --activator=activator.jsonl
 ```
 

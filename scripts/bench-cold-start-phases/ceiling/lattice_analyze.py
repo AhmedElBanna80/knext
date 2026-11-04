@@ -1,20 +1,49 @@
 #!/usr/bin/env python3
-"""Analyzer for the kubelet ceiling test: does a 100 ms relist remove the cycle lock, move the median,
-and change the slower cluster?
+"""Analyzer for the kubelet ceiling test: does a 100 ms relist remove the pod-IP wait, and is the
+cycle lock the relist's?
 
-Offline and read-only: it reads harness JSONL (drive.py rows) and makes no cluster call. The input is a
-paired run: one `patched` wake and one `control` wake per `round`. Usage:
+Offline and read-only: it reads harness JSONL (drive.py rows) and makes no cluster call. The design is
+in RUNBOOK.md beside it. One patched worker P and one untouched control worker S are woken in pairs
+(one wake on P, one on S, per round), in six blocks, each block run under a different kubelet on P:
 
-  python3 lattice_analyze.py paired.jsonl [--patched-arm=patched] [--control-arm=control]
-                                          [--perms=100] [--boot=2000] [--seed=1]
+  b1 oke -> b2 stock -> b3 relist100 -> b4 stock -> b5 relist100 -> b6 oke
+
+`oke` is the binary OKE ships, `stock` is our own build of the same version, `relist100` is our build
+with the relist constant at 100 ms. S keeps its OKE binary in every block and is the concurrent drift
+control. Rows carry the block label (`drive.py --block=b1`).
+
+  python3 lattice_analyze.py rows.jsonl [--p-arm=p] [--s-arm=s] [--blocks=b1:oke,b2:stock,...]
+                                        [--perms=100] [--boot=2000] [--seed=1]
+
+The primary quantity is the WAIT: pod IP time minus the queue-proxy's first log, per wake. The stock
+relist makes it 0-1000 ms; a 100 ms relist should make it about 150 ms or less. It is judged as a
+difference in differences against S: median(P - S over pairs) under relist100 minus the same under
+stock, with a bootstrap interval resampled within each block. The cycle lock (Rayleigh statistic of
+pod-IP arrival times against a per-group shuffled null) is secondary and is tested per block and per
+arm, never pooled across blocks: every kubelet restart resets the lattice phase, and over a long span a
+slowly drifting period smears the peak. The period scan grid is set from the span of each group.
 
 Exit codes: 0 analysis printed (whatever the verdict); 2 unreadable or malformed input, or a bad flag;
-3 sample too small to judge, refused with nothing judged from it.
+3 a block missing or too few complete pairs in a block, refused with nothing judged from it; 4 more than
+10% of the wakes in some block unusable (failed, no node, no first byte or IP, no logs).
 
-The pre-registered reading that this file implements is in RUNBOOK.md beside it. Every number printed
-comes with a bootstrap interval or a permutation null; nothing is judged from a single wake.
+VERDICT is one of the rows of the reading table in RUNBOOK.md section 8, first match wins:
+  INVALID_NODES               P or S rows on more than one node, or P and S on the same node
+  INVALID_LOCK_PERSISTS       the 1 s lock persists on P under relist100 (binary not running, or the
+                              relist is not the lock's source); any wait move is reported, not attributed
+  NO_BASELINE_LOCK            no 1 s lock on P under the stock build, so there is no lock to remove
+  CARRYOVER                   blocks of one treatment differ (99% interval excludes 0): not exchangeable
+  FLOOR_WAIT_UNMOVED          lock gone, but the wait difference in differences includes 0
+  WAIT_WORSE                  the wait got longer under relist100
+  FLOOR_WAIT_PARTIAL          wait moved down, but P's relist100 wait is not at or under 150 ms
+  WAIT_REMOVED_LOCK_UNSEEN    wait collapsed and 1 s lock gone, but no 100 ms lock detected
+  RELIST_IS_WAIT_GOAL_MET_ONCE   all of the above plus a 100 ms lock; goal interval under 1000 ms
+  RELIST_IS_WAIT_FLOOR        all of the above plus a 100 ms lock; goal interval not under 1000 ms
+There is no PASS: first-byte medians vary 1276-1806 ms from run to run with no change, so one run cannot
+pass the goal. A run that does not reach the goal is reported as a floor.
 """
 import argparse
+import cmath
 import json
 import math
 import random
@@ -22,14 +51,18 @@ import statistics
 import sys
 from datetime import datetime
 
-MIN_PAIRS = 30  # protocol: at least 30 wakes per arm
-MIN_PER_NODE = 15  # protocol: at least 15 wakes per arm per node
+MIN_BLOCK_PAIRS = 24  # planned 30 per block; below this a block is refused
+MAX_FAILED_FRACTION = 0.10  # the runbook's abort threshold, per block
 GOAL_MS = 1000.0  # the sub-second median goal
+WAIT_COLLAPSE_MS = 150.0  # the 100 ms relist should bring the wait to about this or below
 SLOW_CUT_MS = 650.0  # bound -> user first log; the cut that split the 2026-11-02 clusters
 BAND_1S = (0.990, 1.020)  # stock relist: measured cycle 1.0031-1.0038 s
 BAND_100MS = (0.095, 0.110)  # patched relist: 100 ms period plus a few ms of relist work
 ALPHA = 0.05
 MIN_PERMS = 20  # p < 0.05 is unreachable with fewer shuffles
+OVERSAMPLE = 4  # period grid points per resolution cell (1/span in frequency)
+MIN_LOCK_N = 10
+DEFAULT_BLOCKS = "b1:oke,b2:stock,b3:relist100,b4:stock,b5:relist100,b6:oke"
 
 
 class InputError(Exception):
@@ -37,6 +70,10 @@ class InputError(Exception):
 
 
 class SampleError(Exception):
+    pass
+
+
+class FailureRateError(Exception):
     pass
 
 
@@ -52,9 +89,23 @@ def parse_wall(text):
     return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
 
 
-def load_rows(path, patched, control):
-    rows = []
-    skipped = {"no_first_byte_or_ip": 0, "no_user_or_queue_proxy_log": 0}
+def parse_blocks(text):
+    design = []
+    for part in text.split(","):
+        label, _, treat = part.partition(":")
+        if not label or not treat or any(label == b for b, _ in design):
+            raise InputError(f"bad --blocks entry {part!r}; expected label:treatment, labels unique")
+        design.append((label, treat))
+    treats = {t for _, t in design}
+    if not {"stock", "relist100"} <= treats:
+        raise InputError("--blocks must contain at least one stock and one relist100 block")
+    return design
+
+
+def load_rows(path, p_arm, s_arm, design):
+    """Returns (usable rows, failed count per block, total wakes per block, failure reasons)."""
+    labels = {b for b, _ in design}
+    rows, failed, total, reasons = [], {}, {}, {}
     try:
         fh = open(path, encoding="utf-8")
     except OSError as e:
@@ -67,99 +118,126 @@ def load_rows(path, patched, control):
                 r = json.loads(line)
             except json.JSONDecodeError as e:
                 raise InputError(f"{path}:{n}: not JSON ({e.msg})")
+            if not isinstance(r, dict):
+                raise InputError(f"{path}:{n}: not a JSON object")
             arm = r.get("arm")
-            if arm not in (patched, control):
-                raise InputError(f"{path}:{n}: arm {arm!r} is neither {patched!r} nor {control!r}")
+            if arm not in (p_arm, s_arm):
+                raise InputError(f"{path}:{n}: arm {arm!r} is neither {p_arm!r} nor {s_arm!r}")
+            block = r.get("block")
+            if block not in labels:
+                raise InputError(f"{path}:{n}: block {block!r} is not one of {sorted(labels)}")
             if not isinstance(r.get("round"), int):
                 raise InputError(f"{path}:{n}: missing integer round")
+            total[block] = total.get(block, 0) + 1
+
+            def fail(why):
+                failed[block] = failed.get(block, 0) + 1
+                reasons[why] = reasons.get(why, 0) + 1
+
+            # drive.py writes an error row (no node, no watch) when a wake produced no result.
+            if r.get("error"):
+                fail("wake_error")
+                continue
             node = r.get("node")
             if not node:
-                raise InputError(f"{path}:{n}: missing node")
+                fail("no_node")
+                continue
             try:
                 wall = parse_wall(r["wall_start"])
             except (KeyError, TypeError, ValueError):
-                raise InputError(f"{path}:{n}: missing or bad wall_start")
+                fail("bad_wall_start")
+                continue
             w = r.get("watch") or {}
             if any(w.get(k) is None for k in ("pod_bound", "pod_ip", "first_byte")):
-                skipped["no_first_byte_or_ip"] += 1
+                fail("no_first_byte_or_ip")
                 continue
             logs = r.get("logs") or {}
             user = [x for x in (logs.get("user-container") or []) if "t" in x]
             qp = [x for x in (logs.get("queue-proxy") or []) if "t" in x]
             if not user or not qp:
-                skipped["no_user_or_queue_proxy_log"] += 1
+                fail("no_user_or_queue_proxy_log")
                 continue
+            ip, qp0 = float(w["pod_ip"]), float(qp[0]["t"])
             rows.append({
-                "arm": arm, "node": node, "round": r["round"], "wall": wall,
-                "bound": float(w["pod_bound"]), "uf": float(user[0]["t"]),
-                "ip": float(w["pod_ip"]), "fb": float(w["first_byte"]),
+                "arm": arm, "node": node, "block": block, "round": r["round"], "wall": wall,
+                "bound": float(w["pod_bound"]), "uf": float(user[0]["t"]), "ip": ip,
+                "fb": float(w["first_byte"]), "wait": ip - qp0,
+                "foreign": len(r.get("foreign_new_pods") or []),
             })
-    return rows, skipped
+    return rows, failed, total, reasons
 
 
-def pair_rows(rows, patched, control):
-    by_round = {}
+def pair_rows(rows, p_arm, s_arm):
+    """Pairs by (block, round); a round with no usable row on one side is not a pair."""
+    by = {}
     for r in rows:
-        by_round.setdefault(r["round"], {}).setdefault(r["arm"], []).append(r)
-    pairs, unpaired = [], 0
-    for rnd in sorted(by_round):
-        p = by_round[rnd].get(patched, [])
-        c = by_round[rnd].get(control, [])
-        if len(p) == 1 and len(c) == 1:
-            pairs.append((p[0], c[0]))
+        by.setdefault((r["block"], r["round"]), {}).setdefault(r["arm"], []).append(r)
+    pairs, unpaired = {}, {}
+    for key in sorted(by, key=lambda k: (k[0], k[1])):
+        p, s = by[key].get(p_arm, []), by[key].get(s_arm, [])
+        if len(p) == 1 and len(s) == 1:
+            pairs.setdefault(key[0], []).append((p[0], s[0]))
         else:
-            unpaired += 1
+            unpaired[key[0]] = unpaired.get(key[0], 0) + 1
     return pairs, unpaired
 
 
-def gate(pairs):
-    if len(pairs) < MIN_PAIRS:
-        raise SampleError(f"{len(pairs)} complete pairs; the protocol needs at least {MIN_PAIRS}")
-    counts = {}
-    for p, c in pairs:
-        for r in (p, c):
-            counts[(r["arm"], r["node"])] = counts.get((r["arm"], r["node"]), 0) + 1
-    short = {k: v for k, v in counts.items() if v < MIN_PER_NODE}
-    if short:
-        worst = min(short, key=short.get)
-        raise SampleError(f"{worst[0]} on {worst[1]} has {short[worst]} wakes; need {MIN_PER_NODE} per node")
+def gate(design, pairs, failed, total):
+    for label, _ in design:
+        if label not in total:
+            raise SampleError(f"block {label} has no wakes")
+    for label, _ in design:
+        if failed.get(label, 0) > MAX_FAILED_FRACTION * total[label]:
+            raise FailureRateError(
+                f"block {label}: {failed[label]} of {total[label]} wakes unusable, "
+                f"over the {MAX_FAILED_FRACTION:.0%} limit")
+    for label, _ in design:
+        n = len(pairs.get(label, []))
+        if n < MIN_BLOCK_PAIRS:
+            raise SampleError(f"block {label} has {n} complete pairs; the protocol needs at least "
+                              f"{MIN_BLOCK_PAIRS} (30 planned)")
 
 
-def lock_scan(ts, lo, hi, steps=2000, refine=100):
-    """Best Rayleigh statistic R (0..1) for arrival times ts over periods in [lo, hi], and its period."""
+def lock_scan(ts, lo, hi, oversample=OVERSAMPLE):
+    """Best Rayleigh statistic R (0..1) for arrival times ts over periods in [lo, hi], and its period.
+
+    The scan is uniform in frequency with spacing 1/(oversample * span): a peak is about 1/span wide, so
+    a fixed period grid that is fine at a short span misses it at a long one."""
     t0 = min(ts)
     xs = [t - t0 for t in ts]
     n = len(xs)
-
-    def r_at(period):
-        w = 2 * math.pi / period
-        c = s = 0.0
-        for x in xs:
-            a = w * x
-            c += math.cos(a)
-            s += math.sin(a)
-        return math.hypot(c, s) / n
-
-    best_r, best_p = -1.0, lo
-    for i in range(steps + 1):
-        p = lo + (hi - lo) * i / steps
-        r = r_at(p)
+    span = max(xs)
+    if span <= 0:
+        return 0.0, lo
+    f_lo, f_hi = 1.0 / hi, 1.0 / lo
+    steps = max(1, int(math.ceil((f_hi - f_lo) * oversample * span)))
+    df = (f_hi - f_lo) / steps
+    tau = 2j * math.pi
+    z = [cmath.exp(tau * f_lo * x) for x in xs]
+    e = [cmath.exp(tau * df * x) for x in xs]
+    best_r, best_f = abs(sum(z)) / n, f_lo
+    for j in range(1, steps + 1):
+        z = [a * b for a, b in zip(z, e)]
+        r = abs(sum(z)) / n
         if r > best_r:
-            best_r, best_p = r, p
-    step = (hi - lo) / steps
-    for i in range(refine + 1):
-        p = best_p - step + 2 * step * i / refine
-        r = r_at(p)
+            best_r, best_f = r, f_lo + j * df
+    for i in range(65):  # refine inside one grid step either side of the best point
+        f = best_f - df + 2 * df * i / 64
+        if f < f_lo or f > f_hi:
+            continue
+        r = abs(sum(cmath.exp(tau * f * x) for x in xs)) / n
         if r > best_r:
-            best_r, best_p = r, p
-    return best_r, best_p
+            best_r, best_f = r, f
+    return best_r, 1.0 / best_f
 
 
 def lock_test(rows, band, perms, seed):
     """Is there a cycle lock in one group's pod-IP arrivals? Compared with a per-group shuffled null."""
     walls = [r["wall"] for r in rows]
     offs = [r["ip"] / 1000.0 for r in rows]
-    obs, period = lock_scan([w + o for w, o in zip(walls, offs)], *band)
+    arr = [w + o for w, o in zip(walls, offs)]
+    obs, period = lock_scan(arr, *band)
+    span = max(arr) - min(arr)
     rng = random.Random(seed)
     null = []
     for _ in range(perms):
@@ -168,24 +246,127 @@ def lock_test(rows, band, perms, seed):
         null.append(lock_scan([w + o for w, o in zip(walls, sh)], *band)[0])
     p95 = pct(null, 0.95)
     p = (1 + sum(1 for v in null if v >= obs)) / (1 + len(null))
-    return {"R": obs, "period": period, "null_p95": p95, "p": p, "locked": obs > p95 and p < ALPHA}
+    return {"R": obs, "period": period, "null_p95": p95, "p": p, "span": span,
+            "locked": len(rows) >= MIN_LOCK_N and obs > p95 and p < ALPHA}
 
 
-def boot_ci(stat, n, boot, seed):
-    rng = random.Random(seed)
-    vals = [stat([rng.randrange(n) for _ in range(n)]) for _ in range(boot)]
-    return pct(vals, 0.025), pct(vals, 0.975)
+def is_subharmonic(t1, t100):
+    """Is a 100 ms lock just the k-th sub-harmonic of a locked 1 s lattice (the same lattice)?
+
+    A 1 s lattice has exact sub-harmonics at 1 s / k, and 1 s / 10 falls inside the 100 ms band. The match
+    tolerance is the measured resolution of the two periods (about period^2 / span each, three times
+    over), capped at 1% of the 1 s period; a fixed 1% would also swallow a genuine 100 ms lock whose
+    period is within 10 ms of a tenth of the 1 s one."""
+    if not (t1["locked"] and t100["locked"]) or t100["period"] <= 0:
+        return False
+    k = round(t1["period"] / t100["period"])
+    if k < 1:
+        return False
+    span = max(min(t1["span"], t100["span"]), 1e-9)
+    tol = 3.0 * (t1["period"] ** 2 + k * t100["period"] ** 2) / span
+    tol = min(tol, 0.01 * t1["period"])
+    return abs(k * t100["period"] - t1["period"]) < tol
 
 
 def fmt_ci(ci):
     return f"[{ci[0]:.0f}, {ci[1]:.0f}]"
 
 
+def med(v):
+    return statistics.median(v)
+
+
+def bootstrap(by_block, design, boot, seed):
+    """One joint resample per iteration, within each block, of the pairs. Returns name -> list of values.
+
+    by_block[label] = dict of aligned lists over the block's pairs: wp, ws, fp, fs, sp, ss (slow flags)."""
+    rng = random.Random(seed)
+    treats = []
+    for _, t in design:
+        if t not in treats:
+            treats.append(t)
+    out = {}
+
+    def put(name, v):
+        out.setdefault(name, []).append(v)
+
+    for _ in range(boot):
+        diffs_w, diffs_f, pw, pf, sl = {}, {}, {}, {}, {}
+        per_block = {}
+        for label, t in design:
+            b = by_block[label]
+            n = len(b["wp"])
+            idx = [rng.randrange(n) for _ in range(n)]
+            dw = [b["wp"][i] - b["ws"][i] for i in idx]
+            df_ = [b["fp"][i] - b["fs"][i] for i in idx]
+            per_block[label] = (med(dw), med(df_))
+            diffs_w.setdefault(t, []).extend(dw)
+            diffs_f.setdefault(t, []).extend(df_)
+            pw.setdefault(t, []).extend(b["wp"][i] for i in idx)
+            pf.setdefault(t, []).extend(b["fp"][i] for i in idx)
+            sl.setdefault(t, []).extend(int(b["sp"][i]) - int(b["ss"][i]) for i in idx)
+            put(f"block_wait_delta:{label}", per_block[label][0])
+            put(f"block_fb_delta:{label}", per_block[label][1])
+        for t in treats:
+            put(f"wait_delta:{t}", med(diffs_w[t]))
+            put(f"fb_delta:{t}", med(diffs_f[t]))
+            put(f"p_wait:{t}", med(pw[t]))
+            put(f"p_fb:{t}", med(pf[t]))
+            put(f"slow_delta:{t}", sum(sl[t]) / len(sl[t]))
+        put("did_wait", med(diffs_w["relist100"]) - med(diffs_w["stock"]))
+        put("did_fb", med(diffs_f["relist100"]) - med(diffs_f["stock"]))
+        put("did_slow", sum(sl["relist100"]) / len(sl["relist100"]) - sum(sl["stock"]) / len(sl["stock"]))
+        if "oke" in treats:
+            put("build_wait", med(diffs_w["stock"]) - med(diffs_w["oke"]))
+            put("build_fb", med(diffs_f["stock"]) - med(diffs_f["oke"]))
+        for t in treats:
+            labels = [b for b, tt in design if tt == t]
+            if len(labels) >= 2:
+                put(f"carry:{t}", per_block[labels[-1]][0] - per_block[labels[0]][0])
+    return out
+
+
+def ci95(vals):
+    return pct(vals, 0.025), pct(vals, 0.975)
+
+
+def ci99(vals):
+    return pct(vals, 0.005), pct(vals, 0.995)
+
+
+def reading(verdict):
+    return {
+        "INVALID_NODES": "P or S rows span more than one node, or P and S share a node; the arms are "
+                         "not what the design says. Nothing is judged.",
+        "INVALID_LOCK_PERSISTS": "the 1 s lock persists on P under relist100: the binary is not running "
+                                 "or the relist is not the lock's source. Any move in the wait is "
+                                 "reported, not attributed to the relist.",
+        "NO_BASELINE_LOCK": "no 1 s lock on P under the stock build, so there is no lock to remove. "
+                            "Wait results are reported, not attributed.",
+        "CARRYOVER": "blocks of one treatment differ by more than chance (99% interval excludes 0): "
+                     "the blocks are not exchangeable, so the contrast is order-confounded.",
+        "FLOOR_WAIT_UNMOVED": "the 1 s lock is gone but the wait did not move (difference in "
+                              "differences includes 0): the wait is elsewhere in the pod path.",
+        "WAIT_WORSE": "the wait got longer under relist100 (difference in differences above 0).",
+        "FLOOR_WAIT_PARTIAL": "the wait moved down but P's relist100 wait is not at or under "
+                              f"{WAIT_COLLAPSE_MS:.0f} ms: part of the wait is not the relist.",
+        "WAIT_REMOVED_LOCK_UNSEEN": "the wait collapsed and the 1 s lock is gone, but no 100 ms lock "
+                                    "was detected: the wait is attributed to the relist constant, "
+                                    "the lock mechanism is not confirmed.",
+        "RELIST_IS_WAIT_GOAL_MET_ONCE": "the relist is the wait (lock moved from 1 s to 100 ms, wait "
+                                        "collapsed) and the goal interval is under 1000 ms in this "
+                                        "run. One run is not a pass.",
+        "RELIST_IS_WAIT_FLOOR": "the relist is the wait (lock moved from 1 s to 100 ms, wait "
+                                "collapsed) but the goal interval is not under 1000 ms: a floor.",
+    }[verdict]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("jsonl")
-    ap.add_argument("--patched-arm", default="patched")
-    ap.add_argument("--control-arm", default="control")
+    ap.add_argument("--p-arm", default="p")
+    ap.add_argument("--s-arm", default="s")
+    ap.add_argument("--blocks", default=DEFAULT_BLOCKS)
     ap.add_argument("--perms", type=int, default=100)
     ap.add_argument("--boot", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=1)
@@ -196,96 +377,172 @@ def main(argv=None):
         ap.error("--boot must be at least 100")
 
     try:
-        rows, skipped = load_rows(args.jsonl, args.patched_arm, args.control_arm)
+        design = parse_blocks(args.blocks)
+        rows, failed, total, reasons = load_rows(args.jsonl, args.p_arm, args.s_arm, design)
     except InputError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    pairs, unpaired = pair_rows(rows, args.patched_arm, args.control_arm)
+    pairs, unpaired = pair_rows(rows, args.p_arm, args.s_arm)
     try:
-        gate(pairs)
+        gate(design, pairs, failed, total)
     except SampleError as e:
         print(f"refused: {e}. Nothing is judged from this sample.", file=sys.stderr)
         return 3
+    except FailureRateError as e:
+        print(f"refused: {e}. Nothing is judged from this sample.", file=sys.stderr)
+        return 4
 
-    pr = [p for p, _ in pairs]
-    cr = [c for _, c in pairs]
-    pf = [p["fb"] for p in pr]
-    cf = [c["fb"] for c in cr]
-    n = len(pairs)
+    treat_of = dict(design)
     print(f"ceiling analysis: {args.jsonl}")
-    print(f"rows read {len(rows)}, skipped {skipped}; pairs {n}, unpaired rounds {unpaired}")
-    print(f"gate: pairs >= {MIN_PAIRS} and >= {MIN_PER_NODE} wakes per arm per node, passed")
+    print(f"rows read {sum(total.values())}, unusable {sum(failed.values())} {reasons}; "
+          f"usable pairs {sum(len(v) for v in pairs.values())}, unpaired rounds {sum(unpaired.values())}")
+    print(f"gate: every block >= {MIN_BLOCK_PAIRS} complete pairs and <= {MAX_FAILED_FRACTION:.0%} "
+          "unusable wakes, passed")
+    print(f"{'block':7s}{'treatment':11s}{'pairs':>6s}{'unusable':>9s}  P node / S node")
 
-    groups = {}
-    for r in pr + cr:
-        groups.setdefault((r["arm"], r["node"]), []).append(r)
-    print("\n== cycle lock (arrival = wall_start + pod_ip; per-group shuffled null, "
-          f"perms={args.perms}, alpha={ALPHA})")
-    print(f"{'arm':9s}{'node':18s}{'band':8s}{'R':>7s}{'period':>10s}{'null_p95':>10s}{'p':>8s}  locked")
-    lock_summary = {}
-    for (arm, node), rs in sorted(groups.items()):
-        t1 = lock_test(rs, BAND_1S, args.perms, args.seed)
-        t100 = lock_test(rs, BAND_100MS, args.perms, args.seed)
-        # A 1 s lattice has exact sub-harmonics at P/k, and P/10 falls inside the 100 ms band. A
-        # 100 ms "lock" that is such a sub-harmonic of a locked 1 s lock is the same lattice, not a new one.
-        alias = False
-        if t1["locked"] and t100["locked"] and t100["period"] > 0:
-            k = round(t1["period"] / t100["period"])
-            alias = k >= 1 and abs(t100["period"] * k / t1["period"] - 1) < 0.01
-        t100_locked = t100["locked"] and not alias
-        for label, t, locked in (("1s", t1, t1["locked"]), ("100ms", t100, t100_locked)):
-            lock_summary[(arm, label)] = locked
-            note = " (sub-harmonic of the 1s lock)" if (label == "100ms" and alias) else ""
-            print(f"{arm:9s}{node:18s}{label:8s}{t['R']:7.3f}{t['period']:10.5f}"
-                  f"{t['null_p95']:10.3f}{t['p']:8.3f}  {'yes' if locked else 'no'}{note}")
+    p_nodes, s_nodes = set(), set()
+    by_block = {}
+    for label, t in design:
+        prs = pairs[label]
+        pn = {p["node"] for p, _ in prs}
+        sn = {s["node"] for _, s in prs}
+        p_nodes |= pn
+        s_nodes |= sn
+        print(f"{label:7s}{t:11s}{len(prs):6d}{failed.get(label, 0):9d}  "
+              f"{','.join(sorted(pn))} / {','.join(sorted(sn))}")
+        by_block[label] = {
+            "wp": [p["wait"] for p, _ in prs], "ws": [s["wait"] for _, s in prs],
+            "fp": [p["fb"] for p, _ in prs], "fs": [s["fb"] for _, s in prs],
+            "sp": [(p["uf"] - p["bound"]) >= SLOW_CUT_MS for p, _ in prs],
+            "ss": [(s["uf"] - s["bound"]) >= SLOW_CUT_MS for _, s in prs],
+        }
+    nodes_ok = len(p_nodes) == 1 and len(s_nodes) == 1 and not (p_nodes & s_nodes)
+    foreign_p = sum(1 for r in rows if r["arm"] == args.p_arm and r["foreign"])
+    foreign_s = sum(1 for r in rows if r["arm"] == args.s_arm and r["foreign"])
+    print(f"nodes: P {sorted(p_nodes)}, S {sorted(s_nodes)} -> {'ok' if nodes_ok else 'INVALID'}")
+    if foreign_p or foreign_s:
+        print(f"WARNING: other workloads appeared on the woken node: {foreign_p} wakes on P, "
+              f"{foreign_s} on S (the runbook aborts on any on P)")
 
-    print(f"\n== first byte, paired (ms; intervals are {args.boot}-resample bootstraps over pairs)")
-    med_p = pct(pf, 0.5)
-    med_c = pct(cf, 0.5)
-    deltas = [a - b for a, b in zip(pf, cf)]
-    ci_med_p = boot_ci(lambda idx: statistics.median(pf[i] for i in idx), n, args.boot, args.seed)
-    ci_delta = boot_ci(lambda idx: statistics.median(deltas[i] for i in idx), n, args.boot, args.seed + 1)
-    ci_d95 = boot_ci(
-        lambda idx: pct([pf[i] for i in idx], 0.95) - pct([cf[i] for i in idx], 0.95),
-        n, args.boot, args.seed + 2)
-    print(f"{args.patched_arm:9s} median {med_p:7.0f} {fmt_ci(ci_med_p)}   p95 {pct(pf, 0.95):7.0f}")
-    print(f"{args.control_arm:9s} median {med_c:7.0f}               p95 {pct(cf, 0.95):7.0f}")
-    print(f"paired median delta ({args.patched_arm} - {args.control_arm}): "
-          f"{statistics.median(deltas):.0f} {fmt_ci(ci_delta)}")
-    print(f"paired p95 delta: {pct(pf, 0.95) - pct(cf, 0.95):.0f} {fmt_ci(ci_d95)}")
+    print("\n== cycle lock, per block and arm (arrival = wall_start + pod_ip; per-group shuffled null, "
+          f"perms={args.perms}, alpha={ALPHA}); never pooled across blocks: a kubelet restart resets the "
+          "phase")
+    print(f"{'block':6s}{'treat':10s}{'arm':4s}{'node':14s}{'band':7s}{'R':>6s}{'period':>9s}"
+          f"{'null_p95':>9s}{'p':>7s}  locked")
+    l1_p, l100_p, l1_s = {}, {}, {}
+    for label, t in design:
+        for tag, getter in (("P", lambda pr: pr[0]), ("S", lambda pr: pr[1])):
+            grp = [getter(pr) for pr in pairs[label]]
+            node = grp[0]["node"]
+            t1 = lock_test(grp, BAND_1S, args.perms, args.seed)
+            results = [("1s", t1, t1["locked"], "")]
+            if tag == "P":
+                t100 = lock_test(grp, BAND_100MS, args.perms, args.seed)
+                alias = is_subharmonic(t1, t100)
+                results.append(("100ms", t100, t100["locked"] and not alias,
+                                " (sub-harmonic of the 1s lock)" if alias else ""))
+                l100_p[label] = t100["locked"] and not alias
+                l1_p[label] = t1["locked"]
+            else:
+                l1_s[label] = t1["locked"]
+            for band, tt, locked, note in results:
+                print(f"{label:6s}{t:10s}{tag:4s}{node:14.14s}{band:7s}{tt['R']:6.3f}{tt['period']:9.5f}"
+                      f"{tt['null_p95']:9.3f}{tt['p']:7.3f}  {'yes' if locked else 'no'}{note}")
 
-    slow_p = [(p["uf"] - p["bound"]) >= SLOW_CUT_MS for p in pr]
-    slow_c = [(c["uf"] - c["bound"]) >= SLOW_CUT_MS for c in cr]
-    sh_p = sum(slow_p) / n
-    sh_c = sum(slow_c) / n
-    diff = sh_p - sh_c
-    ci_share = boot_ci(
-        lambda idx: sum(slow_p[i] for i in idx) / len(idx) - sum(slow_c[i] for i in idx) / len(idx),
-        n, args.boot, args.seed + 3)
-    if ci_share[0] > 0 or ci_share[1] < 0:
-        share_reading = "changed (interval excludes 0)"
+    boots = bootstrap(by_block, design, args.boot, args.seed)
+    treats = []
+    for _, t in design:
+        if t not in treats:
+            treats.append(t)
+    print(f"\n== wait = pod IP minus queue-proxy first log (ms); intervals are {args.boot}-resample "
+          "bootstraps over pairs, resampled within each block")
+    for label, t in design:
+        b = by_block[label]
+        print(f"{label:6s}{t:10s} P median {med(b['wp']):6.0f}   S median {med(b['ws']):6.0f}   "
+              f"P-S delta {med([x - y for x, y in zip(b['wp'], b['ws'])]):6.0f} "
+              f"{fmt_ci(ci95(boots[f'block_wait_delta:{label}']))}")
+    for t in treats:
+        print(f"wait P-S  {t:10s}{med(boots[f'wait_delta:{t}']):7.0f} {fmt_ci(ci95(boots[f'wait_delta:{t}']))}"
+              f"   P wait median {med(boots[f'p_wait:{t}']):5.0f} {fmt_ci(ci95(boots[f'p_wait:{t}']))}")
+    did_w = ci95(boots["did_wait"])
+    p_rel_w = ci95(boots["p_wait:relist100"])
+    print(f"wait DiD (relist100 - stock): {statistics.median(boots['did_wait']):.0f} {fmt_ci(did_w)}")
+    if "build_wait" in boots:
+        print(f"wait build effect (stock - oke): {statistics.median(boots['build_wait']):.0f} "
+              f"{fmt_ci(ci95(boots['build_wait']))}")
+    carry_flag = False
+    for t in treats:
+        if f"carry:{t}" in boots:
+            c = ci99(boots[f"carry:{t}"])
+            bad = c[0] > 0 or c[1] < 0
+            carry_flag = carry_flag or bad
+            print(f"carryover {t} (last block - first block, P-S wait delta): "
+                  f"{statistics.median(boots[f'carry:{t}']):.0f} {fmt_ci(c)} 99% -> "
+                  f"{'DIFFERS' if bad else 'no detectable difference'}")
+
+    print("\n== first byte (ms)")
+    for t in treats:
+        print(f"fb P-S  {t:10s}{med(boots[f'fb_delta:{t}']):7.0f} {fmt_ci(ci95(boots[f'fb_delta:{t}']))}"
+              f"   P median {med(boots[f'p_fb:{t}']):5.0f} {fmt_ci(ci95(boots[f'p_fb:{t}']))}")
+    print(f"first byte DiD (relist100 - stock): {statistics.median(boots['did_fb']):.0f} "
+          f"{fmt_ci(ci95(boots['did_fb']))}")
+    for t in treats:
+        pf = [p["fb"] for lb, tt in design if tt == t for p, _ in pairs[lb]]
+        sf = [s["fb"] for lb, tt in design if tt == t for _, s in pairs[lb]]
+        print(f"p95 {t:10s} P {pct(pf, 0.95):6.0f}  S {pct(sf, 0.95):6.0f}   descriptive only: "
+              f"n={len(pf)} pairs, the tail is too thin to judge")
+    ci_share = ci95(boots["did_slow"])
+    print(f"slower cluster (bound -> user first log >= {SLOW_CUT_MS:.0f} ms), share DiD "
+          f"(relist100 - stock): {statistics.mean(boots['did_slow']):+.3f} "
+          f"[{ci_share[0]:+.3f}, {ci_share[1]:+.3f}] -> "
+          f"{'changed (interval excludes 0)' if ci_share[0] > 0 or ci_share[1] < 0 else 'no detectable change (this n cannot show equality)'}")
+
+    stock_b = [b for b, t in design if t == "stock"]
+    relist_b = [b for b, t in design if t == "relist100"]
+    baseline = all(l1_p[b] for b in stock_b)
+    persists = any(l1_p[b] for b in relist_b)
+    lock100 = all(l100_p[b] for b in relist_b)
+    s_locked = sum(1 for v in l1_s.values() if v)
+    went_down, went_up = did_w[1] < 0, did_w[0] > 0
+    collapsed = p_rel_w[1] <= WAIT_COLLAPSE_MS
+    goal_ci = ci95(boots["p_fb:relist100"])
+    goal_met = goal_ci[1] < GOAL_MS
+
+    if not nodes_ok:
+        verdict = "INVALID_NODES"
+    elif persists:
+        verdict = "INVALID_LOCK_PERSISTS"
+    elif not baseline:
+        verdict = "NO_BASELINE_LOCK"
+    elif carry_flag:
+        verdict = "CARRYOVER"
+    elif went_up:
+        verdict = "WAIT_WORSE"
+    elif not went_down:
+        verdict = "FLOOR_WAIT_UNMOVED"
+    elif not collapsed:
+        verdict = "FLOOR_WAIT_PARTIAL"
+    elif not lock100:
+        verdict = "WAIT_REMOVED_LOCK_UNSEEN"
     else:
-        share_reading = "no detectable change (interval includes 0; this n cannot show equality)"
-    print(f"\n== slower cluster (bound -> user first log >= {SLOW_CUT_MS:.0f} ms)")
-    print(f"share slow: {args.patched_arm} {sh_p:.3f}, {args.control_arm} {sh_c:.3f}, "
-          f"difference {diff:+.3f} [{ci_share[0]:+.3f}, {ci_share[1]:+.3f}] -> {share_reading}")
+        verdict = "RELIST_IS_WAIT_GOAL_MET_ONCE" if goal_met else "RELIST_IS_WAIT_FLOOR"
 
     print("\n== verdict")
-    print(f"goal: median first byte under {GOAL_MS:.0f} ms, judged on the {args.patched_arm} median's "
-          "bootstrap 95% interval")
-    if ci_med_p[1] < GOAL_MS:
-        verdict = "PASS"
-    elif ci_med_p[0] > GOAL_MS:
-        verdict = "FAIL"
-    else:
-        verdict = "INCONCLUSIVE"
-    print(f"lock: 1s band on {args.control_arm} {'present' if lock_summary.get((args.control_arm, '1s')) else 'absent'}; "
-          f"1s band on {args.patched_arm} {'present' if lock_summary.get((args.patched_arm, '1s')) else 'absent'}; "
-          f"100ms band on {args.patched_arm} {'present' if lock_summary.get((args.patched_arm, '100ms')) else 'absent'}")
-    print(f"VERDICT: {verdict} (patched median {med_p:.0f} ms, interval {fmt_ci(ci_med_p)})")
-    if verdict == "FAIL":
-        print("report as a floor: under this change the goal is not met on this node; "
-              "the patched median is the floor, not a shipped default.")
+    print(f"1s lock on P: stock blocks {'all' if baseline else 'not all'} locked, relist100 blocks "
+          f"{'locked in some' if persists else 'none locked'}; 100ms lock on P in relist100 blocks: "
+          f"{'all' if lock100 else 'not all'}; 1s lock on S in {s_locked} of {len(l1_s)} blocks")
+    print(f"wait: DiD {fmt_ci(did_w)} ({'down' if went_down else 'up' if went_up else 'includes 0'}); "
+          f"P relist100 wait upper bound {p_rel_w[1]:.0f} ms vs {WAIT_COLLAPSE_MS:.0f} ms "
+          f"({'collapsed' if collapsed else 'not collapsed'})")
+    print(f"goal criterion: P relist100 median first byte interval {fmt_ci(goal_ci)}, under "
+          f"{GOAL_MS:.0f} ms: {'met in this run' if goal_met else 'not met'}")
+    print(f"VERDICT: {verdict}")
+    print(f"reading: {reading(verdict)}")
+    if verdict not in ("INVALID_NODES", "INVALID_LOCK_PERSISTS", "NO_BASELINE_LOCK", "CARRYOVER") \
+            and not goal_met:
+        print("report as a floor: the goal is not met on this node under this change; the relist100 "
+              "median is the floor, not a shipped default.")
+    print("one run is not a pass: first-byte medians vary 1276-1806 ms run to run with no change.")
     return 0
 
 

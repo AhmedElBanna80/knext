@@ -3,7 +3,7 @@
 
     python3 burst-ab-incluster.py <total_rounds> <out.jsonl>
 
-Arms (NextApps in bench-cells, same fresh unique-top-layer image per trial, both `build: vinext`):
+Arms (NextApps in the bench namespace, same fresh unique-top-layer image per trial, both `build: vinext`):
   pb-off  BEFORE  scaling.imagePrewarm=false  (kubelet pulls on whichever node a pod lands)
   pb-on   AFTER   scaling.imagePrewarm=true   (operator DaemonSet <app>-imgcache pins the image on
                                                every node; the burst waits for ImageCacheReady=True)
@@ -31,7 +31,7 @@ P = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(P)
 H = P.H  # bunexec helper: pods, wait_zero, kc
 
-NS = "bench-cells"
+NS = H.NS
 ARMS = {"off": "pb-off", "on": "pb-on"}
 N_BURST = int(os.environ.get("BURST_N", "12"))
 MAX_SCALE = 4
@@ -125,8 +125,8 @@ def pods_detail(arm):
 
 
 def burst(arm):
-    agent = "agent-118" if int(time.time()) % 2 == 0 else "agent-169"
-    target = f"http://{ARMS[arm]}.bench-cells.svc.cluster.local/"
+    agent = H.pick_agent()
+    target = f"http://{ARMS[arm]}.{NS}.svc.cluster.local/"
     p = H.kc(["exec", agent, "--", "env", f"TARGET={target}", f"N={N_BURST}", "node", "-e", BURST_JS],
              check=False, timeout=900)
     lines = [l for l in p.stdout.splitlines() if l.startswith("{")]

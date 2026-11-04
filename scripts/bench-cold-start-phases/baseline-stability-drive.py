@@ -21,7 +21,8 @@ import time
 
 import drive
 
-NODES = ["10.0.1.118", "10.0.1.169"]
+NODES = sorted(drive.CFG["agent_pods"])  # node names from the configured agent map
+NS = drive.CFG["namespace"]
 
 
 def snap(node):
@@ -41,8 +42,8 @@ def snap(node):
         "psi_cpu_some_avg10": cpu.get("psi", {}).get("some", {}).get("avg10"),
         "node_mem_ws": s["node"]["memory"].get("workingSetBytes"),
         "n_running": len(running),
-        "n_running_bench_cells": sum(1 for ns, _ in running if ns == "bench-cells"),
-        "running_bench_cells": sorted(n for ns, n in running if ns == "bench-cells"),
+        "n_running_bench_cells": sum(1 for ns, _ in running if ns == NS),
+        "running_bench_cells": sorted(n for ns, n in running if ns == NS),
         "top_cpu": [[n, c] for c, n in per_pod[:5]],
     }
 

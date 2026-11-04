@@ -54,9 +54,18 @@ describe('one harness, no diverging copy', () => {
   });
 
   it('keeps cluster-specific literals out of the harness code', () => {
-    const scanned = [DRIVE, COLD_CYCLE, BENCHCONFIG, ANALYZE, VERIFY_ARMS];
+    // Scan the directory, not a list: a literal added to any harness script must go red.
+    // Code files only; the YAML manifests under it are example cluster objects.
+    const scanned = walk(DIR)
+      .filter((p) => /\.(py|sh|mjs|js)$/.test(p))
+      .map((p) => relative(ROOT, p));
+    expect(scanned.length).toBeGreaterThanOrEqual(20);
+    for (const f of [DRIVE, COLD_CYCLE, BENCHCONFIG, ANALYZE, VERIFY_ARMS]) {
+      expect(scanned).toContain(f);
+    }
     const forbidden: Array<[string, RegExp]> = [
-      ['an IPv4 address', /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/],
+      // Loopback and the unspecified bind address are not cluster literals.
+      ['an IPv4 address', /\b(?!127\.0\.0\.1\b|0\.0\.0\.0\b)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/],
       ['a kubectl context name', /knext-oke-sa|knext-coldstart/],
       ['the bench namespace', /bench-cells/],
       ['a node-agent pod name', /\bagent-(?:118|169|1ws1|c8bn|fm3s)\b/],

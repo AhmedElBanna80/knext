@@ -1,5 +1,5 @@
 {
-  "$schema-note": "Dated + justified exclusions for the Dockerfile base-image checks: tests/dockerfile-base-image-digests.test.ts (PR time: digest present, parseable, one repo:tag -> one digest) and scripts/verify-image-pins.mjs (nightly: digest still what the tag resolves to at the registry). Each entry MUST carry `file` and/or `image`, `covers` (any of: unpinned, unparseable, tag-digest-conflict, registry-resolution), `justification`, `added` and `expires` (ISO dates). Past `expires` the entry stops suppressing AND is itself a finding, so an exclusion cannot silently become permanent. Bump the pin FIRST; exclude only when it cannot be pinned or resolved.",
+  "$schema-note": "Dated + justified exclusions for the Dockerfile base-image checks: tests/dockerfile-base-image-digests.test.ts (PR time: digest present, parseable, one repo:tag -> one digest) and scripts/verify-image-pins.mjs (nightly: digest still what the tag resolves to at the registry). Each entry MUST carry `file` and/or `image`, `covers` (any of: unpinned, unparseable, tag-digest-conflict, registry-resolution), `justification`, `added` and `expires` (ISO dates). Past `expires` the entry stops suppressing AND is itself a finding, so an exclusion cannot silently become permanent. Bump the pin FIRST; exclude only when it cannot be pinned or resolved. A `registry-resolution` entry MUST name the exact `file` AND the exact `digest` it tolerates; it cannot excuse any other digest on the same tag.",
   "allow": [
     {
       "file": "packages/scale-zero-pg/bakeoff/gateway-exec.Dockerfile",
@@ -12,37 +12,18 @@
     {
       "file": "scripts/bench-cold-start-phases/gke/variants/Dockerfile.variants",
       "covers": ["registry-resolution"],
-      "justification": "Benchmark variants build FROM a private Artifact Registry baseline referenced digest-only; the nightly has no credential for it and the digest is the experiment's fixed control, not a moving tag.",
+      "justification": "Benchmark variants build FROM a private Artifact Registry baseline (bc-bun-turbopack) referenced digest-only; the nightly has no credential for it and the digest is the experiment's fixed control, not a moving tag. Bound to this exact digest: a different digest in this file is NOT excused.",
       "added": "2026-11-02",
-      "expires": "2027-05-02"
+      "expires": "2027-05-02",
+      "digest": "sha256:386c1c369a3a2f579af92165cabd0d9399f058415605bdf24ed44c9fdf778dcb"
     },
     {
-      "image": "alpine:3.22",
+      "file": "scripts/bench-cold-start-phases/gke/variants/Dockerfile.variants",
       "covers": ["registry-resolution"],
-      "justification": "Found drifted by the first Dockerfile registry resolution: the pinned digest is no longer what alpine:3.22 serves. Re-pinning changes the base layer of shipped images and needs a build plus Trivy re-run that the change introducing this check could not do; the bump is follow-up work. Expires so the drift cannot be forgotten.",
+      "justification": "Benchmark variants build FROM a private Artifact Registry baseline (bc-node-turbopack) referenced digest-only; the nightly has no credential for it and the digest is the experiment's fixed control, not a moving tag. Bound to this exact digest: a different digest in this file is NOT excused.",
       "added": "2026-11-02",
-      "expires": "2026-12-02"
-    },
-    {
-      "image": "node:24-alpine",
-      "covers": ["registry-resolution"],
-      "justification": "Found drifted by the first Dockerfile registry resolution: the pinned digest is no longer what node:24-alpine serves. Re-pinning changes the base layer of shipped images and needs a build plus Trivy re-run that the change introducing this check could not do; the bump is follow-up work. Expires so the drift cannot be forgotten.",
-      "added": "2026-11-02",
-      "expires": "2026-12-02"
-    },
-    {
-      "image": "golang:1.26.10",
-      "covers": ["registry-resolution"],
-      "justification": "Found drifted by the first Dockerfile registry resolution: the pinned digest is no longer what golang:1.26.10 serves. Re-pinning changes the base layer of shipped images and needs a build plus Trivy re-run that the change introducing this check could not do; the bump is follow-up work. Expires so the drift cannot be forgotten.",
-      "added": "2026-11-02",
-      "expires": "2026-12-02"
-    },
-    {
-      "image": "rust:1.99.1-alpine3.23",
-      "covers": ["registry-resolution"],
-      "justification": "Found drifted by the first Dockerfile registry resolution: the pinned digest is no longer what rust:1.99.1-alpine3.23 serves. Re-pinning changes the base layer of shipped images and needs a build plus Trivy re-run that the change introducing this check could not do; the bump is follow-up work. Expires so the drift cannot be forgotten.",
-      "added": "2026-11-02",
-      "expires": "2026-12-02"
+      "expires": "2027-05-02",
+      "digest": "sha256:c8d290ee1010d325112e9e214f26c52f12f76014e15321203eeb2040a1002d77"
     }
   ]
 }

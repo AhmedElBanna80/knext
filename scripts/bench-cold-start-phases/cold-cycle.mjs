@@ -42,7 +42,12 @@ const AGENT_LABEL = process.env.AGENT_LABEL ?? 'app=phase-agent';
 if (PRINT_CONFIG) {
   // Parsing check with no cluster: print the resolved settings and exit.
   console.log(
-    JSON.stringify({ arm: ARM ?? null, namespace: NS, agentPods: AGENT_PODS, agentLabel: AGENT_LABEL }),
+    JSON.stringify({
+      arm: ARM ?? null,
+      namespace: NS,
+      agentPods: AGENT_PODS,
+      agentLabel: AGENT_LABEL,
+    }),
   );
   process.exit(0);
 }

@@ -35,6 +35,8 @@ export interface WaitForHttpOkOptions {
     deadlineMs?: number;
     /** Pause between probes. Default 250 ms. */
     intervalMs?: number;
+    /** Per-probe timeout. Default 5 s. */
+    probeTimeoutMs?: number;
     /** The spawned server's combined stdout/stderr, appended to failures. */
     log?: () => string;
     /** Returns a description once the server process has exited, else null. */
@@ -51,7 +53,11 @@ export async function waitForHttpOk(
     url: string,
     opts: WaitForHttpOkOptions = {},
 ): Promise<Response> {
-    const { deadlineMs = 60_000, intervalMs = 250 } = opts;
+    const {
+        deadlineMs = 60_000,
+        intervalMs = 250,
+        probeTimeoutMs = 5000,
+    } = opts;
     const now = opts.now ?? Date.now;
     const sleep =
         opts.sleep ??
@@ -84,7 +90,7 @@ export async function waitForHttpOk(
         try {
             const res = await probe(url, {
                 signal: AbortSignal.timeout(
-                    Math.max(1, Math.min(5000, deadline - now())),
+                    Math.max(1, Math.min(probeTimeoutMs, deadline - now())),
                 ),
             });
             if (res.status === 200) return res;

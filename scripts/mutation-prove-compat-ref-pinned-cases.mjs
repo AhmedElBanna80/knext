@@ -35,13 +35,20 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REF_SPEC = 'tests/compat-ref-pinned-cases.test.ts';
 const MANIFEST_SPEC = 'tests/deploy-manifest.test.ts';
 const DOCS_SPEC = 'apps/docs/content-hygiene.test.ts';
+const SCOPE_SPEC = 'tests/compat-manifest-for-ref.test.ts';
+const VERIFY_WF_SPEC = 'tests/compat-ref-pinned-cases-verify-workflow.test.ts';
+const SCOPE = resolve(REPO_ROOT, 'scripts/compat-manifest-for-ref.mjs');
+const WF_E2E = resolve(REPO_ROOT, '.github/workflows/test-e2e-deploy.yml');
+const WF_VINEXT = resolve(REPO_ROOT, '.github/workflows/compat-vinext.yml');
+const WF_V13 = resolve(REPO_ROOT, '.github/workflows/compat-credential-v1.3.yml');
+const WF_VERIFY = resolve(REPO_ROOT, '.github/workflows/compat-ref-pinned-cases-verify.yml');
 const LIB = resolve(REPO_ROOT, 'scripts/lib/ref-pinned-cases.mjs');
 const SNAP = resolve(REPO_ROOT, 'scripts/compat-ref-pinned-cases-snapshot.mjs');
 const MANIFEST = resolve(REPO_ROOT, 'test/deploy-tests-manifest.knext.json');
 const DOCS = resolve(REPO_ROOT, 'apps/docs/content/docs/compat-suite.mdx');
 const ADR = resolve(REPO_ROOT, 'docs/adr/0007-compat-suite.md');
 
-declareMutations(38);
+declareMutations(52);
 
 const RUNNER = resolveSpecRunner(REPO_ROOT, REF_SPEC);
 
@@ -79,7 +86,7 @@ function prove(label, target, anchor, replacement, { specs = [REF_SPEC], comment
   }
 }
 
-const ALL_SPECS = [REF_SPEC, MANIFEST_SPEC, DOCS_SPEC];
+const ALL_SPECS = [REF_SPEC, MANIFEST_SPEC, DOCS_SPEC, SCOPE_SPEC, VERIFY_WF_SPEC];
 console.log('Baseline: every spec must be GREEN (exit 0) before anything is mutated.');
 if (specsExit(ALL_SPECS) !== 0) {
   console.error('FATAL: the specs are not green to begin with');
@@ -114,13 +121,13 @@ console.log('   ok baseline green\n');
 prove(
   'the ref pin is ignored',
   LIB,
-  '} else if (!refPinAdmissible(e.nextjsRef, defaultRef, shippedRef)) {',
+  '} else if (!refPinAdmissible(e.nextjsRef, laneRefs, shippedRef)) {',
   '} else if (false) {',
 );
 prove(
   'the pin stays admissible after the default moves past the shipped pin',
   LIB,
-  'return ref === shippedRef && numericRefCompare(shippedRef, defaultRef) > 0;',
+  'return ref === shippedRef && laneRefs.every((lane) => numericRefCompare(shippedRef, lane) > 0);',
   'return ref === shippedRef;',
 );
 prove('a "reaudited" escape is allowed', LIB, "if ('reaudited' in e) {", 'if (false) {');
@@ -359,6 +366,109 @@ prove(
   ADR,
   '**10 files and 20 cases**',
   '**12 files and 30 cases**',
+);
+
+// ── review round 2: run-time scoping, --verify, and the v1.3 lane ───────────
+// Stale ref still deselecting: the filter keeps every entry whatever the ref.
+prove(
+  'RUN TIME: a ledgered entry measured at another ref still deselects',
+  SCOPE,
+  'if (e.nextjsRef === ref) {',
+  'if (true) {',
+  {
+    specs: [SCOPE_SPEC],
+  },
+);
+// Missing / unparseable ref: the filter no longer refuses.
+prove(
+  'RUN TIME: a missing or unparseable NEXTJS_REF no longer fails the filter',
+  SCOPE,
+  "if (typeof ref !== 'string' || !SCOPE_REF_SHAPE.test(ref)) {",
+  'if (false) {',
+  { specs: [SCOPE_SPEC] },
+);
+prove(
+  'RUN TIME: an entry with no parseable ref no longer fails the filter',
+  SCOPE,
+  "if (typeof e.nextjsRef !== 'string' || !REF_SHAPE.test(e.nextjsRef)) {",
+  'if (false) {',
+  { specs: [SCOPE_SPEC] },
+);
+prove(
+  'RUN TIME: a failed filter leaves a stale copy behind',
+  SCOPE,
+  'rmSync(outPath, { force: true });',
+  'void 0;',
+  { specs: [SCOPE_SPEC] },
+);
+const RAW_FILTER = 'NEXT_EXTERNAL_TESTS_FILTERS: ${{ runner.temp }}/knext-deploy-manifest.json';
+prove(
+  'WIRING: test-e2e-deploy.yml hands the harness the RAW manifest again',
+  WF_E2E,
+  RAW_FILTER,
+  'NEXT_EXTERNAL_TESTS_FILTERS: ${{ github.workspace }}/knext/test/${{ env.KNEXT_DEPLOY_MANIFEST }}',
+  { specs: [SCOPE_SPEC] },
+);
+prove(
+  'WIRING: compat-vinext.yml hands the harness the RAW manifest again',
+  WF_VINEXT,
+  RAW_FILTER,
+  'NEXT_EXTERNAL_TESTS_FILTERS: ${{ github.workspace }}/knext/test/deploy-tests-manifest.knext.json',
+  { specs: [SCOPE_SPEC] },
+);
+prove(
+  'WIRING: a checkout with the ledger but no script no longer fails closed (e2e)',
+  WF_E2E,
+  `elif grep -Eq '"[$]knextRefPinnedCases"[[:space:]]*:' "\${SCOPE_SOURCE_MANIFEST}"; then`,
+  'elif false; then',
+  { specs: [SCOPE_SPEC] },
+);
+prove(
+  'WIRING: a checkout with the ledger but no script no longer fails closed (vinext)',
+  WF_VINEXT,
+  `elif grep -Eq '"[$]knextRefPinnedCases"[[:space:]]*:' "\${SCOPE_SOURCE_MANIFEST}"; then`,
+  'elif false; then',
+  { specs: [SCOPE_SPEC] },
+);
+// v1.3 bump: the lane that runs 16.4.3 moves, the entries must go red.
+prove(
+  'BAR 1: the v1.3 credential lane is bumped to another ref',
+  WF_V13,
+  "NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.4.3' }}",
+  "NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.4.4' }}",
+);
+prove(
+  'BAR 1: the v1.3 workflow is dropped from the lanes bar 1 reads',
+  LIB,
+  "  '.github/workflows/compat-credential-v1.3.yml',\n",
+  '',
+);
+// --verify
+prove(
+  '--verify: a difference between snapshot and upstream no longer fails',
+  SNAP,
+  'if (drift.length > 0) return',
+  'if (false) return',
+);
+prove(
+  '--verify: an unreachable upstream no longer fails',
+  SNAP,
+  'return { code: 1, lines: [`cannot build the upstream snapshot: ${err.message}`] };',
+  'return { code: 0, lines: [`cannot build the upstream snapshot: ${err.message}`] };',
+);
+prove(
+  'VERIFY WORKFLOW: --verify exit is swallowed',
+  WF_VERIFY,
+  'run: node scripts/compat-ref-pinned-cases-snapshot.mjs --verify',
+  'run: node scripts/compat-ref-pinned-cases-snapshot.mjs --verify || true',
+  { specs: [VERIFY_WF_SPEC] },
+);
+prove(
+  'VERIFY WORKFLOW: it no longer runs on a ledger change',
+  WF_VERIFY,
+  "      - 'test/deploy-tests-manifest.knext.json'\n",
+  '',
+  { specs: [VERIFY_WF_SPEC] },
 );
 
 console.log(`\n${pass} caught, ${fail} undetected.`);

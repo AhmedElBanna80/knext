@@ -157,12 +157,16 @@ A file that fails only some of its cases should not lose the cases that pass. Fo
 is deterministic (it fails the same way every run, so it is not a flake) knext deselects the
 individual case, never the file, and only under bars that are each checked by CI:
 
-- **Pinned to a version.** The entry names the exact Next.js version it was measured at, and CI
-  rejects it at any other version. Bumping the credentialed version forces every entry to be
-  re-measured or removed.
+- **Pinned to a version.** The entry names the exact Next.js version it was measured at. Before the
+  tests run, the harness drops the entry's deselections at any other version, so those cases run
+  there, and a missing or unreadable version fails the step. CI also rejects an entry once no test
+  lane runs its version, so bumping the credentialed version forces every entry to be re-measured or
+  removed. A lane pinned to an older release candidate has no such entries to scope; a lane gains
+  the step when its candidate is cut from a build that includes it.
 - **Exact case names that must still exist.** The entry lists full test names, and CI checks each
-  against a snapshot of the upstream test file at that version. A name that has disappeared
-  upstream fails the check.
+  against a snapshot of the upstream test file at that version. A separate job re-fetches the
+  upstream files on every change to the list and nightly, and fails if the snapshot differs or
+  upstream cannot be reached. A name that has disappeared upstream fails the check.
 - **Cited and categorised.** The entry cites the upstream file line it rests on and a mechanism
   category (a Vercel-only header, an upstream expected-failure marker, a harness gap, and so on),
   with a written reason.
@@ -171,7 +175,9 @@ individual case, never the file, and only under bars that are each checked by CI
 - **Capped.** Files and cases are both counted, with a hard ceiling of 10 files and 20 cases.
 
 A deselected case is not run, so one that starts passing is not reported until the version moves
-and the entry is re-measured.
+and the entry is re-measured. These checks establish form, not truth: that a citation is on the line
+it names, not that the failure is really what the entry says. Review of each entry is what guards
+that.
 
 <Callout type="info">
 **Counts, kept honest by a CI check.** The per-case list currently holds 9 files (19 test cases),
@@ -182,8 +188,9 @@ Bun/Turbopack cells were not measured at that version and no entry claims them.
 One entry is a **known gap in Bun support**, not a Vercel-specific behavior: the fixture's native
 addon uses the V8 C++ API, and the Bun runtime loads it with a different native-module ABI version
 than Node. Those 2 cases are deselected so the Bun cell is not red. This is not a claim that
-V8-API native addons work on Bun. Because one manifest serves every cell, the Node cells also stop
-running those 2 passing cases.
+V8-API native addons work on Bun. Because one manifest serves every cell, the Node/Turbopack cell,
+which was measured passing, also stops running those 2 cases; the Node/webpack cell was not
+measured.
 
 No ledger above is used to manufacture a green run — they exist to keep the nightly signal
 honest, and they shrink toward zero over time rather than growing pre-emptively.

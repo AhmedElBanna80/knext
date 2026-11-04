@@ -56,6 +56,30 @@ export const REF_PINNED_CASE_CAP = 20;
 
 export const MIN_MECHANISM_CHARS = 60;
 
+/**
+ * Every workflow that runs the official harness (`NEXT_TEST_MODE: deploy`). Bar 1 reads the default
+ * `NEXTJS_REF` of ALL of them: the v1.3 credential lane is the one that runs the newest ref, so a
+ * bar that read only test-e2e-deploy.yml let that lane move while the entries stayed admissible.
+ * tests/compat-ref-pinned-cases.test.ts scans .github/workflows so a new harness lane cannot be missed.
+ */
+export const HARNESS_LANE_WORKFLOWS = [
+  '.github/workflows/test-e2e-deploy.yml',
+  '.github/workflows/compat-credential-v1.3.yml',
+  '.github/workflows/compat-vinext.yml',
+];
+
+const LANE_REF_DEFAULT =
+  /NEXTJS_REF:\s*\$\{\{\s*github\.event\.inputs\.nextjsRef\s*\|\|\s*'([^']+)'\s*\}\}/;
+
+/** The default `NEXTJS_REF` a lane workflow runs when no ref is dispatched. Throws if it cannot be read. */
+export function laneDefaultRef(workflowSource, name = 'workflow') {
+  const m = workflowSource.match(LANE_REF_DEFAULT);
+  if (!m || !REF_SHAPE.test(m[1])) {
+    throw new Error(`${name}: cannot read a vX.Y.Z default NEXTJS_REF`);
+  }
+  return m[1];
+}
+
 /** jest's full test name: describe path and title, joined by single spaces. */
 export function caseName(c) {
   return [...(c.path ?? []), c.title].join(' ');
@@ -69,9 +93,9 @@ function numericRefCompare(a, b) {
 }
 
 /** True iff `ref` is the workflow default, or the shipped pin while that pin is ahead of the default. */
-export function refPinAdmissible(ref, defaultRef, shippedRef) {
-  if (ref === defaultRef) return true;
-  return ref === shippedRef && numericRefCompare(shippedRef, defaultRef) > 0;
+export function refPinAdmissible(ref, laneRefs, shippedRef) {
+  if (laneRefs.includes(ref)) return true;
+  return ref === shippedRef && laneRefs.every((lane) => numericRefCompare(shippedRef, lane) > 0);
 }
 
 /** Does a source string literal (which may hold jest %s placeholders) produce this describe text? */
@@ -108,7 +132,8 @@ const PROVENANCE_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(issues|pull)\
  * @param {object} p.suites                the manifest `suites` map
  * @param {string[]} p.rulesExclude        the manifest `rules.exclude`
  * @param {object} p.snapshot              parsed test/compat-ref-pinned-cases.upstream.json
- * @param {string} p.defaultRef            test-e2e-deploy.yml default NEXTJS_REF
+ * @param {string[]} p.laneRefs            the default NEXTJS_REF of EVERY workflow that runs the harness
+ *                                         (test-e2e-deploy.yml, compat-credential-v1.3.yml, compat-vinext.yml)
  * @param {string} p.shippedRef            .github/compat-credentialed-next-version.json shipped pin, as vX.Y.Z
  * @param {Set<string>} p.upstreamMirror   suites files that are verbatim upstream mirrors
  * @returns {string[]} error messages; empty means admissible
@@ -118,7 +143,7 @@ export function validateRefPinnedCases({
   suites,
   rulesExclude,
   snapshot,
-  defaultRef,
+  laneRefs,
   shippedRef,
   upstreamMirror,
 }) {
@@ -143,9 +168,9 @@ export function validateRefPinnedCases({
     // Bar 1: the ref pin.
     if (typeof e.nextjsRef !== 'string' || !REF_SHAPE.test(e.nextjsRef)) {
       errs.push(`${where}: nextjsRef must be vX.Y.Z`);
-    } else if (!refPinAdmissible(e.nextjsRef, defaultRef, shippedRef)) {
+    } else if (!refPinAdmissible(e.nextjsRef, laneRefs, shippedRef)) {
       errs.push(
-        `${where}: pinned at ${e.nextjsRef} but the workflow default is ${defaultRef} and the shipped pin is ${shippedRef}. ` +
+        `${where}: pinned at ${e.nextjsRef} but no lane runs it (lane defaults: ${laneRefs.join(', ')}) and the shipped pin is ${shippedRef}. ` +
           'A ref-pinned entry stops being admissible at any other ref: re-measure it at the new ref or remove it.',
       );
     }

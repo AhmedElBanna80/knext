@@ -132,24 +132,34 @@ gate, not the official suite — the official suite has its own row, own workflo
     Vercel build root (`non-root-project-monorepo`), upstream `@gate` pragmas that expect a deploy
     to fail while knext's result passes (`prerender-encoding`, `segment-cache/metadata`,
     `metadata-streaming-parallel-routes`), a `next start` regression upstream names in its own TODO
-    (`cache-components-allow-otel-spans`), a harness package-manager gap
+    (`cache-components-allow-otel-spans`; that knext matches `next start` is an earlier finding, not
+    re-measured here), a harness package-manager gap
     (`transpile-packages-typescript-foreign`), and a **Bun gap**.
   - **The Bun gap, stated plainly.** `prerender-native-module` (2 cases) fails on the Bun cell
     because the fixture's native addon uses the V8 C++ API and the Bun runtime loads it with a
     different ABI version (Node 24's 137 against Bun 1.4.2's 147). It is deselected so the Bun cell
     is not red. **It is not a claim that V8-API native addons work on Bun.** The manifest cannot scope
-    a deselection to one runtime, so the Node cells also stop running those 2 passing cases.
+    a deselection to one runtime, so node/turbopack, which was measured passing, also stops running
+    those 2 cases; node/webpack was not measured.
   - **What a deselected case does at the same ref.** The runner does not run it, so a case that
-    starts passing is silent. A ref bump is what re-exposes it: an entry is only admissible at the
-    default or shipped ref, so a bump turns CI red until each entry is re-measured or removed.
+    starts passing is silent. A ref bump is what re-exposes it: an entry is only admissible at a
+    lane's default ref or the shipped ref, so a bump turns CI red until each entry is re-measured
+    or removed. The guards check form, not truth: human review is the defence that an entry's
+    mechanism is real.
   - **Passing cases lost, on the cells that were measured:** node/turbopack 4 (2 client-side cases
-    in `non-root-project-monorepo` that fail only on webpack, and the 2 Bun-gap cases above),
-    bun/webpack 0. The earlier file-level version of this change lost 41 and 39.
-- **Exclusions are not ref-scoped at run time.** The manifest is one global list and the runner
-  has no notion of a ref. Of the lanes that run it, only `compat-vinext.yml` checks out `main` (its
-  default `NEXTJS_REF` is `v16.2.0`); the credential lanes check out their pinned rc tag and read
-  that tag's manifest. So a run that reads this manifest at another ref still deselects these
-  names. The pin is enforced in CI (an entry is inadmissible at any other ref), not by the runner.
+    in `non-root-project-monorepo` that fail on bun/webpack but pass on node/turbopack, and the 2
+    Bun-gap cases above; runtime and builder are confounded in these two cells), bun/webpack 0. The
+    earlier file-level version of this change lost 41 and 39.
+- **Ref scope of the per-case entries, exactly.** The runner has no notion of a ref, so a step
+  before the tests (`scripts/compat-manifest-for-ref.mjs`) writes a copy of the manifest without the
+  per-case deselections whose ref differs from `NEXTJS_REF`; a missing or unparseable ref fails the
+  step. `test-e2e-deploy.yml` (early-warning crons, dispatches, and the v1.0 credential nights) and
+  `compat-vinext.yml` carry it. The v1.3 credential workflow is generated from its pinned release
+  candidate tag, so it gets the step when that pin moves to a candidate cut from a `main` that has
+  it. The candidates pinned today predate the per-case entries, so their manifests deselect nothing
+  of this kind. A separate CI job re-fetches the pinned upstream files on every pull request that
+  touches the entries, and nightly, and fails if the committed snapshot differs or upstream is
+  unreachable. The constraint that remains: the manifest is one file for every cell at one ref.
 - **Red-nightly procedure (mechanized, end to end).** Red **test results actually fail the
   workflow**: each shard's final "Fail shard on red results" gate exits 1 when its summary JSON
   carries `failed>0` or `notRun>0` (the run step's `|| true` only swallows the *step* exit so the

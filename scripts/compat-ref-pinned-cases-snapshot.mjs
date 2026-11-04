@@ -86,6 +86,23 @@ export async function fetchFromGitHub(
   return { sha: body.sha, source: Buffer.from(body.content, 'base64').toString('utf8') };
 }
 
+/**
+ * The `--verify` decision, with the network injected so it can be tested: rebuild from upstream and
+ * compare with the committed snapshot. Any failure to rebuild (unreachable, rate-limited, a missing
+ * file, an empty ledger) is `code: 1`; so is any difference. Only an exact match is `code: 0`.
+ */
+export async function verifySnapshot(ledger, committed, fetchFile) {
+  let rebuilt;
+  try {
+    rebuilt = await buildSnapshot(ledger, fetchFile);
+  } catch (err) {
+    return { code: 1, lines: [`cannot build the upstream snapshot: ${err.message}`] };
+  }
+  const drift = diffSnapshots(committed, rebuilt);
+  if (drift.length > 0) return { code: 1, lines: drift.map((d) => `DRIFT ${d}`) };
+  return { code: 0, lines: [`snapshot matches upstream at ${rebuilt.ref}`] };
+}
+
 async function main(argv) {
   const mode = argv[2];
   if (mode !== '--write' && mode !== '--verify') {
@@ -93,6 +110,15 @@ async function main(argv) {
     return 2;
   }
   const ledger = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')).$knextRefPinnedCases ?? [];
+  if (mode === '--verify') {
+    const verdict = await verifySnapshot(
+      ledger,
+      JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8')),
+      fetchFromGitHub,
+    );
+    for (const line of verdict.lines) (verdict.code === 0 ? console.log : console.error)(line);
+    return verdict.code;
+  }
   let rebuilt;
   try {
     rebuilt = await buildSnapshot(ledger, fetchFromGitHub);
@@ -100,17 +126,11 @@ async function main(argv) {
     console.error(`cannot build the upstream snapshot: ${err.message}`);
     return 1;
   }
-  if (mode === '--write') {
-    writeFileSync(SNAPSHOT_PATH, `${JSON.stringify(rebuilt, null, 2)}\n`);
-    console.log(
-      `wrote ${SNAPSHOT_PATH} for ${rebuilt.ref} (${Object.keys(rebuilt.files).length} files)`,
-    );
-    return 0;
-  }
-  const drift = diffSnapshots(JSON.parse(readFileSync(SNAPSHOT_PATH, 'utf8')), rebuilt);
-  for (const d of drift) console.error(`DRIFT ${d}`);
-  if (drift.length === 0) console.log(`snapshot matches upstream at ${rebuilt.ref}`);
-  return drift.length === 0 ? 0 : 1;
+  writeFileSync(SNAPSHOT_PATH, `${JSON.stringify(rebuilt, null, 2)}\n`);
+  console.log(
+    `wrote ${SNAPSHOT_PATH} for ${rebuilt.ref} (${Object.keys(rebuilt.files).length} files)`,
+  );
+  return 0;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

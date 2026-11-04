@@ -13,19 +13,22 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildSnapshot,
   diffSnapshots,
   fetchFromGitHub,
+  verifySnapshot,
 } from '../scripts/compat-ref-pinned-cases-snapshot.mjs';
 import {
   CELLS,
   caseName,
   extractLines,
   extractTitleLiterals,
+  HARNESS_LANE_WORKFLOWS,
+  laneDefaultRef,
   literalProduces,
   MECHANISM_CATEGORIES,
   passingCasesLostPerCell,
@@ -87,7 +90,7 @@ function ctx(ledger: Entry[] = [entry()], over: Record<string, unknown> = {}) {
         ]),
       ),
     },
-    defaultRef: 'v16.3.8',
+    laneRefs: ['v16.3.8', 'v16.2.0'],
     shippedRef: REF,
     upstreamMirror: new Set<string>(),
     ...over,
@@ -102,19 +105,24 @@ describe('ref-pinned per-case ledger — Part A: every bar can go red', () => {
   });
 
   describe('bar 1: the ref pin', () => {
-    it('refPinAdmissible: default, or the shipped pin while ahead of the default, and nothing else', () => {
-      expect(refPinAdmissible('v16.3.8', 'v16.3.8', 'v16.4.3')).toBe(true);
-      expect(refPinAdmissible('v16.4.3', 'v16.3.8', 'v16.4.3')).toBe(true);
-      expect(refPinAdmissible('v16.4.0', 'v16.3.8', 'v16.4.3')).toBe(false);
+    it('refPinAdmissible: a lane default, or the shipped pin while ahead of EVERY lane, and nothing else', () => {
+      expect(refPinAdmissible('v16.3.8', ['v16.3.8'], 'v16.4.3')).toBe(true);
+      expect(refPinAdmissible('v16.4.3', ['v16.3.8'], 'v16.4.3')).toBe(true);
+      expect(refPinAdmissible('v16.4.0', ['v16.3.8'], 'v16.4.3')).toBe(false);
+      // The v1.3 lane runs the pinned ref: any lane's default admits it.
+      expect(refPinAdmissible('v16.4.3', ['v16.3.8', 'v16.4.3', 'v16.2.0'], 'v16.4.3')).toBe(true);
+      // The v1.3 lane moved to 16.4.4 while the shipped pin stayed 16.4.3: the pin is no longer
+      // ahead of every lane, so it is no longer admissible.
+      expect(refPinAdmissible('v16.4.3', ['v16.3.8', 'v16.4.4', 'v16.2.0'], 'v16.4.3')).toBe(false);
       // The default moved past the shipped pin: the shipped-pin allowance is gone.
-      expect(refPinAdmissible('v16.4.3', 'v16.5.0', 'v16.4.3')).toBe(false);
+      expect(refPinAdmissible('v16.4.3', ['v16.5.0'], 'v16.4.3')).toBe(false);
     });
     it('reds when the pin is neither the workflow default nor the shipped pin', () => {
       const c = ctx([entry({ nextjsRef: 'v16.4.0' })]);
       expect(errs(c).join('\n')).toMatch(/pinned at v16\.4\.0/);
     });
     it('reds on a bump: the entry is still pinned at the old ref after the default moved', () => {
-      const c = ctx([entry()], { defaultRef: 'v16.5.0', shippedRef: 'v16.5.0' });
+      const c = ctx([entry()], { laneRefs: ['v16.5.0'], shippedRef: 'v16.5.0' });
       expect(errs(c).join('\n')).toMatch(/stops being admissible at any other ref/);
     });
     it('has no "reaudited" escape', () => {
@@ -352,18 +360,132 @@ describe('ref-pinned per-case ledger — upstream snapshot tooling', () => {
   });
 });
 
+describe('ref-pinned per-case ledger — the FORGED-CASE scenario (--verify is the defence)', () => {
+  // The offline validator checks the ledger against a COMMITTED snapshot, and a committed file is
+  // editable: forge a case, forge the snapshot title to match, and every offline check is happy.
+  // `--verify` re-fetches upstream, so the forgery is the one thing it cannot be fooled by.
+  const manifest = JSON.parse(read('test/deploy-tests-manifest.knext.json'));
+  const snapshot = JSON.parse(read('test/compat-ref-pinned-cases.upstream.json'));
+  const ledger = manifest.$knextRefPinnedCases as Entry[];
+  const laneRefs = HARNESS_LANE_WORKFLOWS.map((w) => laneDefaultRef(read(w), w));
+  const shippedRef = `v${JSON.parse(read('.github/compat-credentialed-next-version.json')).shippedNextPin}`;
+
+  /** A stand-in for upstream that reproduces exactly what the REAL snapshot says upstream holds. */
+  function upstreamFrom(snap: typeof snapshot) {
+    return async (path: string) => {
+      const f = snap.files[path];
+      const lines: string[] = [];
+      for (const [n, text] of Object.entries(f.lines as Record<string, string>)) {
+        lines[Number(n) - 1] = text;
+      }
+      let at = 0;
+      for (const lit of f.literals as string[]) {
+        while (lines[at] !== undefined) at += 1;
+        lines[at] = `it('${lit.replace(/'/g, "\\'")}', () => {})`;
+      }
+      return { sha: f.blob as string, source: Array.from(lines, (l) => l ?? '').join('\n') };
+    };
+  }
+
+  const forged = (() => {
+    const fl = JSON.parse(JSON.stringify(ledger)) as Entry[];
+    const fs = JSON.parse(JSON.stringify(snapshot));
+    const suites = JSON.parse(JSON.stringify(manifest.suites));
+    const e = fl[0];
+    const c = {
+      path: e.cases[0].path,
+      title: 'a forged deterministic case',
+      cells: ['node-turbopack'],
+    };
+    e.cases.push(c);
+    (e.measured as Record<string, { failed: number }>)['node-turbopack'].failed += 1;
+    fs.files[e.test].literals.push(c.title);
+    suites[e.test].failed.push(caseName(c));
+    return { fl, fs, suites };
+  })();
+
+  it('CONTROL: the real ledger verifies against an upstream that matches the real snapshot', async () => {
+    const v = await verifySnapshot(ledger as never, snapshot, upstreamFrom(snapshot));
+    expect(v.code, v.lines.join('\n')).toBe(0);
+  });
+
+  it('the forgery passes EVERY offline check (this is the hole)', () => {
+    const found = validateRefPinnedCases({
+      ledger: forged.fl,
+      suites: forged.suites,
+      rulesExclude: manifest.rules.exclude,
+      snapshot: forged.fs,
+      laneRefs,
+      shippedRef,
+      upstreamMirror: new Set<string>(UPSTREAM_MIRROR_SUITES),
+    } as never);
+    expect(found).toEqual([]);
+  });
+
+  it('--verify REJECTS the forgery: upstream does not hold the forged title', async () => {
+    const v = await verifySnapshot(forged.fl as never, forged.fs, upstreamFrom(snapshot));
+    expect(v.code).toBe(1);
+    expect(v.lines.join('\n')).toMatch(/DRIFT .*differs from upstream/);
+  });
+
+  it('--verify fails CLOSED when upstream cannot be reached', async () => {
+    const v = await verifySnapshot(ledger as never, snapshot, async () => {
+      throw new Error('GET answered 503');
+    });
+    expect(v.code).toBe(1);
+    expect(v.lines.join('\n')).toMatch(/cannot build the upstream snapshot: GET answered 503/);
+  });
+
+  it('--verify fails closed on an empty ledger (nothing to verify is not a pass)', async () => {
+    const v = await verifySnapshot([], snapshot, upstreamFrom(snapshot));
+    expect(v.code).toBe(1);
+  });
+});
+
 describe('ref-pinned per-case ledger — Part B: the real manifest', () => {
   const manifest = JSON.parse(read('test/deploy-tests-manifest.knext.json'));
   const snapshot = JSON.parse(read('test/compat-ref-pinned-cases.upstream.json'));
   const ledger: Entry[] = manifest.$knextRefPinnedCases ?? [];
 
-  const defaultRef = read('.github/workflows/test-e2e-deploy.yml').match(
-    /NEXTJS_REF:\s*\$\{\{\s*github\.event\.inputs\.nextjsRef\s*\|\|\s*'([^']+)'\s*\}\}/,
-  )?.[1] as string;
+  const laneRefs = HARNESS_LANE_WORKFLOWS.map((w) => laneDefaultRef(read(w), w));
   const shippedRef = `v${JSON.parse(read('.github/compat-credentialed-next-version.json')).shippedNextPin}`;
 
   // The verbatim upstream mirror: these `failed` lists are upstream's own, not knext's.
   const upstreamMirror = new Set<string>(UPSTREAM_MIRROR_SUITES);
+
+  it('bar 1 reads EVERY workflow that runs the harness, including the v1.3 credential lane', () => {
+    const onDisk = readdirSync(resolve(ROOT, '.github/workflows'))
+      .filter((f) => /\.ya?ml$/.test(f))
+      .map((f) => `.github/workflows/${f}`)
+      .filter((f) => /NEXT_TEST_MODE:\s*deploy/.test(read(f)))
+      .sort();
+    expect(onDisk).toEqual([...HARNESS_LANE_WORKFLOWS].sort());
+    expect(HARNESS_LANE_WORKFLOWS).toContain('.github/workflows/compat-credential-v1.3.yml');
+    expect(laneRefs.length).toBe(HARNESS_LANE_WORKFLOWS.length);
+  });
+
+  it('laneDefaultRef refuses a workflow whose default it cannot read', () => {
+    expect(() => laneDefaultRef('NEXTJS_REF: nothing', 'x.yml')).toThrow(/cannot read/);
+    expect(laneDefaultRef("NEXTJS_REF: ${{ github.event.inputs.nextjsRef || 'v16.4.3' }}")).toBe(
+      'v16.4.3',
+    );
+  });
+
+  it('a v1.3 lane bumped past the pinned entries turns the real ledger RED', () => {
+    const bumped = HARNESS_LANE_WORKFLOWS.map((w, i) =>
+      w.includes('v1.3') ? 'v16.4.4' : laneRefs[i],
+    );
+    const found = validateRefPinnedCases({
+      ledger,
+      suites: manifest.suites,
+      rulesExclude: manifest.rules.exclude,
+      snapshot,
+      laneRefs: bumped,
+      shippedRef,
+      upstreamMirror,
+    } as never);
+    expect(found.join('\n')).toMatch(/no lane runs it/);
+  });
 
   it('has entries (the amendment is exercised by real data)', () => {
     expect(ledger.length).toBeGreaterThan(0);
@@ -375,7 +497,7 @@ describe('ref-pinned per-case ledger — Part B: the real manifest', () => {
       suites: manifest.suites,
       rulesExclude: manifest.rules.exclude,
       snapshot,
-      defaultRef,
+      laneRefs,
       shippedRef,
       upstreamMirror,
     } as never);
@@ -462,6 +584,23 @@ describe('ref-pinned per-case ledger — Part C: the ADR amendment states the ba
     expect(amendment).toMatch(/--testNamePattern/);
     expect(amendment).toMatch(/does not run/i);
     expect(amendment).toMatch(/silent/i);
+  });
+  it('does not overclaim: the guards check form, human review is the defence for truth', () => {
+    expect(amendment).toMatch(/They do \*\*not\*\* prove truth/);
+    expect(amendment).toMatch(/human review/i);
+    expect(amendment).not.toMatch(/\| yes, by guard \|/);
+  });
+  it('states what is enforced at run time and where, including the generated v1.3 lane', () => {
+    expect(amendment).toContain('scripts/compat-manifest-for-ref.mjs');
+    expect(amendment).toMatch(/fails closed/i);
+    expect(amendment).toContain('compat-credential-v1.3.yml');
+    expect(amendment).toMatch(/generated/i);
+  });
+  it('says only what was measured: no "webpack only" cause, node x webpack unmeasured, next-start caveat', () => {
+    expect(amendment).not.toMatch(/fail only on webpack/);
+    expect(amendment).toMatch(/confounded/);
+    expect(amendment).toMatch(/node x\s+webpack was not measured/);
+    expect(amendment).toMatch(/not re-measured\*\*/);
   });
   it('keeps the flakey rules untouched and the options table has a trade-off column', () => {
     expect(amendment).toMatch(/`flakey` handling is unchanged/);

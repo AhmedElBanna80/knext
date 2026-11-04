@@ -137,6 +137,32 @@ const UNIT = [
     anchor: '    return result.escapes;',
     replacement: '    return false;',
   },
+  {
+    id: 'U15',
+    subject: 'analyze',
+    claim:
+      'an optional call through a made require (`r?.("pkg")`) is accepted as an understood use',
+    anchor:
+      '    if (parent.type === "CallExpression" && parent.callee === ref.node) return !parent.optional;',
+    replacement:
+      '    if (parent.type === "CallExpression" && parent.callee === ref.node) return true;',
+  },
+  {
+    id: 'U16',
+    subject: 'analyze',
+    claim: 'a creator under `default` of a dynamic import of `module` is no longer reported',
+    anchor:
+      '                    sites.push({ kind: "handed" }); // `default` re-exposes the module, not followed',
+    replacement: '                    void 0;',
+  },
+  {
+    id: 'U17',
+    subject: 'analyze',
+    claim: '`getBuiltinModule("node:module")` is no longer reported',
+    anchor:
+      '        if (spec === null || CREATE_REQUIRE_SOURCES.has(spec)) sites.push({ kind: "handed" });',
+    replacement: '        void spec;',
+  },
 ];
 
 // The compile-script rows.

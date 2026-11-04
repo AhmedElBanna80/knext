@@ -301,7 +301,11 @@ function runCreateRequireAnalyzer(src, analyzerPath, extraArgs, isAnalysis) {
  */
 const MODULE_IMPORT = /(?:\bfrom|\bimport)\s*\(?\s*["'](?:node:)?module["']/;
 function mentionsCreateRequire(src) {
-    return src.includes("createRequire") || MODULE_IMPORT.test(src);
+    return (
+        src.includes("createRequire") ||
+        src.includes("getBuiltinModule") ||
+        MODULE_IMPORT.test(src)
+    );
 }
 
 function analyzeCreateRequire(src, analyzerPath) {

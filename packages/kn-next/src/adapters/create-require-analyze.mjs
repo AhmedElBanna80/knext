@@ -452,6 +452,8 @@ function buildScopes(ast) {
     const declarators = [];
     /** Every dynamic `import(...)`. */
     const dynamicImports = [];
+    /** Every `x.getBuiltinModule(...)` call. */
+    const builtinModuleCalls = [];
 
     const newScope = (parent, isFunction) => ({ parent, isFunction, names: new Map() });
     const functionScopeOf = (scope) => {
@@ -715,6 +717,15 @@ function buildScopes(ast) {
             case "ExportDefaultDeclaration":
                 visit(node.declaration, scope);
                 return;
+            case "CallExpression":
+                if (
+                    node.callee.type === "MemberExpression" &&
+                    !node.callee.computed &&
+                    node.callee.property.name === "getBuiltinModule"
+                ) {
+                    builtinModuleCalls.push(node);
+                }
+                break;
             case "ImportExpression":
                 dynamicImports.push(node);
                 visit(node.source, scope);
@@ -745,7 +756,7 @@ function buildScopes(ast) {
         else if (ref.role === "writeOther") binding.otherWrite = true;
         else binding.refs.push(ref);
     }
-    return { declOf, refBinding, declarators, dynamicImports };
+    return { declOf, refBinding, declarators, dynamicImports, builtinModuleCalls };
 }
 
 /** The Binding an identifier node declares or references. */
@@ -818,7 +829,9 @@ function isUnderstoodRequireUse(ref, parents, allowExport) {
     if (ref.role === "export") return allowExport;
     const parent = parents.get(ref.node);
     if (!parent) return false;
-    if (parent.type === "CallExpression" && parent.callee === ref.node) return true;
+    // An optional call (`r?.("pkg")`) is not followed: the literal scan reads only
+    // plain `r("pkg")`, so the package would be silently left out.
+    if (parent.type === "CallExpression" && parent.callee === ref.node) return !parent.optional;
     if (parent.type === "UnaryExpression" && parent.operator === "typeof") return true;
     return (
         parent.type === "MemberExpression" &&
@@ -836,7 +849,11 @@ function requireBindingEscapes(binding, parents, allowExport) {
 /** Cheap pre-filter: does a module mention `createRequire` or import `module` at all? */
 const MODULE_IMPORT = /(?:\bfrom|\bimport)\s*\(?\s*["'](?:node:)?module["']/;
 function mentionsCreateRequire(src) {
-    return src.includes("createRequire") || MODULE_IMPORT.test(src);
+    return (
+        src.includes("createRequire") ||
+        src.includes("getBuiltinModule") ||
+        MODULE_IMPORT.test(src)
+    );
 }
 
 /**
@@ -910,6 +927,10 @@ function analyzeParsed(ast) {
                     continue;
                 }
                 const key = p.computed ? null : (p.key.name ?? p.key.value);
+                if (key === "default") {
+                    sites.push({ kind: "handed" }); // `default` re-exposes the module, not followed
+                    continue;
+                }
                 if (key !== "createRequire") continue;
                 const target = p.value.type === "AssignmentPattern" ? p.value.left : p.value;
                 if (target.type === "Identifier") creators.add(scopes.declOf.get(target));
@@ -925,6 +946,13 @@ function analyzeParsed(ast) {
         if (spec !== null && CREATE_REQUIRE_SOURCES.has(spec) && !handledImports.has(imp)) {
             sites.push({ kind: "handed" });
         }
+    }
+
+    // `process.getBuiltinModule("node:module")` hands out the namespace without an
+    // import: not followed, so reported (a computed specifier too).
+    for (const call of scopes.builtinModuleCalls) {
+        const spec = call.arguments.length >= 1 ? literalSpec(call.arguments[0]) : null;
+        if (spec === null || CREATE_REQUIRE_SOURCES.has(spec)) sites.push({ kind: "handed" });
     }
 
     // `const c = e`: an alias of a tracked binding is tracked. Set iteration

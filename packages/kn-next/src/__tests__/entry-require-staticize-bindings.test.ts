@@ -401,3 +401,37 @@ describe("#2666: the analysis stays fast and bounded", () => {
         expect(analyzeServerModule(src).unrecognizedBinding).toBe(true);
     });
 });
+
+describe("#2666: optional calls and builtin-module accessors are never silent", () => {
+    it("an optional call through a made require is reported, not dropped", () => {
+        const src = `${IMPORT}const r = e(import.meta.url);\nexport const l = () => r?.("pkg-a");\n`;
+        expect(analyzeServerModule(src).unrecognizedBinding).toBe(true);
+    });
+
+    it("a plain call through a made require is still followed (other half)", () => {
+        const src = `${IMPORT}const r = e(import.meta.url);\nexport const l = () => r("pkg-a");\n`;
+        const a = analyzeServerModule(src);
+        expect(a.unrecognizedBinding).toBe(false);
+        expect(a.literalCalls.get("r")).toEqual(new Set(["pkg-a"]));
+    });
+
+    it("the direct optional form stays recorded", () => {
+        const src = `${IMPORT}export const l = () => e(import.meta.url)?.("pkg-a");\n`;
+        expect(directSpecs(src)).toEqual(["pkg-a"]);
+    });
+
+    it("a creator under `default` of a dynamic import is reported", () => {
+        const src = `const { default: { createRequire: c } } = await import("node:module");\nexport const l = () => c(import.meta.url)("pkg-a");\n`;
+        expect(analyzeServerModule(src).unrecognizedBinding).toBe(true);
+    });
+
+    it("`process.getBuiltinModule('node:module').createRequire` is reported", () => {
+        const src = `export const l = () => process.getBuiltinModule("node:module").createRequire(import.meta.url)("pkg-a");\n`;
+        expect(analyzeServerModule(src).unrecognizedBinding).toBe(true);
+    });
+
+    it("`process.getBuiltinModule` of an unrelated builtin is quiet (other half)", () => {
+        const src = `export const l = () => process.getBuiltinModule("node:fs");\nconst createRequire = 1;\n`;
+        expect(analyzeServerModule(src).unrecognizedBinding).toBe(false);
+    });
+});

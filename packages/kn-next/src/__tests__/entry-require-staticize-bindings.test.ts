@@ -435,3 +435,57 @@ describe("#2666: optional calls and builtin-module accessors are never silent", 
         expect(analyzeServerModule(src).unrecognizedBinding).toBe(false);
     });
 });
+/**
+ * The three shapes the real file-manager vinext bundle contains (CI red on the
+ * self-contained e2e): each is a use that cannot hide a package, so reporting it
+ * made every strict build of a real app fail. Both halves asserted: the benign
+ * form is quiet, the look-alike that does hide a load is still reported.
+ */
+describe('#2666: shapes real bundles contain are understood, their look-alikes are not', () => {
+  const MADE = `${IMPORT}var r = e(import.meta.url);\n`;
+
+  it('reading `r.main` (the require.main probe) is understood', () => {
+    const src = `${MADE}export const m = r.main === void 0;\n`;
+    expect(analyzeServerModule(src).unrecognizedBinding).toBe(false);
+  });
+
+  it.each([
+    ['`r.main.require(...)` loads through it', "export const l = r.main.require('pkg-a');"],
+    ['`r.main` is passed on', 'use(r.main);'],
+    ['`r[name]` is a computed read', "export const l = r['main'];"],
+  ])('%s is still reported', (_label, use) => {
+    expect(analyzeServerModule(`${MADE}${use}\n`).unrecognizedBinding).toBe(true);
+  });
+
+  const POLYFILL =
+    "k = (ew => typeof r < 'u' ? r : typeof Proxy < 'u' ? new Proxy(ew, { get: (ew, tw) => (typeof r < 'u' ? r : ew)[tw] }) : ew)(function (ew) { if (typeof r < 'u') return r.apply(this, arguments); throw Error('Dynamic require of ' + ew); });\n";
+
+  it("the bundler's `__require` feature-detect polyfill forwards the binding: it is followed, not reported", () => {
+    const src = `${MADE}var k;\n${POLYFILL}export const l = () => k('pkg-a');\n`;
+    const a = analyzeServerModule(src);
+    expect(a.unrecognizedBinding).toBe(false);
+    expect(a.literalCalls.get('k')).toEqual(new Set(['pkg-a']));
+  });
+
+  it('a forwarded binding that is then handed on is still reported', () => {
+    const src = `${MADE}var k;\n${POLYFILL}use(k);\n`;
+    expect(analyzeServerModule(src).unrecognizedBinding).toBe(true);
+  });
+
+  it('the binding passed into a call that is not the polyfill shape is still reported', () => {
+    const src = `${MADE}var k;\nk = wrap(typeof r < 'u' ? r : null);\nexport const l = () => k('pkg-a');\n`;
+    expect(analyzeServerModule(src).unrecognizedBinding).toBe(true);
+  });
+
+  it("`const [{ createRequire: c }, p] = await Promise.all([import('node:module'), import('node:path')])` is followed", () => {
+    const src = `export async function f() {\n  const [{ createRequire: c }, p] = await Promise.all([import('node:module'), import('node:path')]);\n  return c(import.meta.url)('pkg-a');\n}\n`;
+    const a = analyzeServerModule(src);
+    expect(a.unrecognizedBinding).toBe(false);
+    expect(directSpecs(src)).toEqual(['pkg-a']);
+  });
+
+  it('a Promise.all import of module whose result is not destructured is still reported', () => {
+    const src = `export async function f() {\n  const all = await Promise.all([import('node:module')]);\n  return all;\n}\n`;
+    expect(analyzeServerModule(src).unrecognizedBinding).toBe(true);
+  });
+});

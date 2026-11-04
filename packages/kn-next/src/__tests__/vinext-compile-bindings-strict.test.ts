@@ -39,8 +39,9 @@ function compile(files: Record<string, string>, strict: boolean) {
             process.platform === "darwin"
                 ? `bun-darwin-${arch}`
                 : `bun-linux-${arch}`;
-        const env: Record<string, string | undefined> = { ...process.env };
-        env.KNEXT_COMPILE_STRICT_REQUIRES = strict ? "1" : undefined;
+        const env: NodeJS.ProcessEnv = { ...process.env };
+        if (strict) env.KNEXT_COMPILE_STRICT_REQUIRES = "1";
+        else delete env.KNEXT_COMPILE_STRICT_REQUIRES;
         return spawnSync(
             "bun",
             [

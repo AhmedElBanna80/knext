@@ -833,12 +833,86 @@ function isUnderstoodRequireUse(ref, parents, allowExport) {
     // plain `r("pkg")`, so the package would be silently left out.
     if (parent.type === "CallExpression" && parent.callee === ref.node) return !parent.optional;
     if (parent.type === "UnaryExpression" && parent.operator === "typeof") return true;
+    if (
+        parent.type === "MemberExpression" &&
+        parent.object === ref.node &&
+        !parent.computed &&
+        parent.property.name === "main"
+    ) {
+        // `require.main` (`require.main === module`, `require.main === void 0`) is
+        // a probe, not a load; `require.main.require(...)` and passing it on are.
+        const user = parents.get(parent);
+        return !(
+            (user?.type === "MemberExpression" && user.object === parent) ||
+            (user?.type === "CallExpression" && user.callee === parent) ||
+            (user?.type === "CallExpression" && user.arguments.includes(parent))
+        );
+    }
     return (
         parent.type === "MemberExpression" &&
         parent.object === ref.node &&
         !parent.computed &&
         (parent.property.name === "resolve" || parent.property.name === "cache")
     );
+}
+
+/**
+ * The feature-detect shim bundlers wrap a require in (`__require`):
+ * `K = (p => typeof R < "u" ? R : typeof Proxy < "u" ? new Proxy(p, {...}) : p)(
+ * function (n) { if (typeof R < "u") return R.apply(this, arguments); throw ... })`.
+ * R is only FORWARDED into K, so K is the same require under another name. Returns
+ * the identifier node of K when every use of R that is not already understood sits
+ * inside one such initialiser, else null (R is then reported as before).
+ */
+function forwardedTo(binding, parents, scopes, allowExport) {
+    const stray = binding.refs.filter((r) => !isUnderstoodRequireUse(r, parents, allowExport));
+    if (stray.length === 0) return null;
+    const isForward = (ref) => {
+        const parent = parents.get(ref.node);
+        if (parent?.type === "ConditionalExpression") {
+            return parent.consequent === ref.node || parent.alternate === ref.node;
+        }
+        if (
+            parent?.type === "MemberExpression" &&
+            parent.object === ref.node &&
+            !parent.computed &&
+            parent.property.name === "apply"
+        ) {
+            const call = parents.get(parent);
+            return call?.type === "CallExpression" && call.callee === parent;
+        }
+        return false;
+    };
+    if (!stray.every(isForward)) return null;
+    // The outermost expression all of them share must be the initialiser of K.
+    const chain = (node) => {
+        const out = [];
+        for (let n = node; n; n = parents.get(n)) out.push(n);
+        return out;
+    };
+    const first = chain(stray[0].node);
+    for (const candidate of first) {
+        if (candidate.type !== "CallExpression" || candidate.callee.type !== "ArrowFunctionExpression") {
+            continue;
+        }
+        if (candidate.arguments.length !== 1 || candidate.arguments[0].type !== "FunctionExpression") {
+            continue;
+        }
+        const inside = (node) => chain(node).includes(candidate);
+        if (!stray.every((r) => inside(r.node))) continue;
+        const holder = parents.get(candidate);
+        let id = null;
+        if (holder?.type === "VariableDeclarator" && holder.init === candidate) id = holder.id;
+        else if (
+            holder?.type === "AssignmentExpression" &&
+            holder.operator === "=" &&
+            holder.right === candidate
+        ) {
+            id = holder.left;
+        }
+        if (id?.type === "Identifier" && bindingOf(id, scopes) !== null) return id;
+    }
+    return null;
 }
 
 /** Whether a made require has any use the build does not understand. */
@@ -912,16 +986,40 @@ function analyzeParsed(ast) {
 
     // `await import("node:module")`, destructured or bound whole.
     const handledImports = new Set();
+    // Pairs of (pattern, import expression) the pattern receives: the whole
+    // declarator for `await import(...)`, one element each for
+    // `const [{ createRequire: c }, p] = await Promise.all([import(...), ...])`.
+    const importBindings = [];
     for (const declarator of scopes.declarators) {
         const init = declarator.init;
-        if (init?.type !== "AwaitExpression" || init.argument.type !== "ImportExpression") continue;
-        const spec = literalSpec(init.argument.source);
+        if (init?.type !== "AwaitExpression") continue;
+        if (init.argument.type === "ImportExpression") {
+            importBindings.push([declarator.id, init.argument]);
+        } else if (
+            init.argument.type === "CallExpression" &&
+            init.argument.callee.type === "MemberExpression" &&
+            !init.argument.callee.computed &&
+            init.argument.callee.object.type === "Identifier" &&
+            init.argument.callee.object.name === "Promise" &&
+            init.argument.callee.property.name === "all" &&
+            init.argument.arguments.length === 1 &&
+            init.argument.arguments[0].type === "ArrayExpression" &&
+            declarator.id.type === "ArrayPattern"
+        ) {
+            const items = init.argument.arguments[0].elements;
+            declarator.id.elements.forEach((el, i) => {
+                if (el && items[i]?.type === "ImportExpression") importBindings.push([el, items[i]]);
+            });
+        }
+    }
+    for (const [id, importNode] of importBindings) {
+        const spec = literalSpec(importNode.source);
         if (spec === null || !CREATE_REQUIRE_SOURCES.has(spec)) continue;
-        handledImports.add(init.argument);
-        if (declarator.id.type === "Identifier") {
-            namespaces.add(scopes.declOf.get(declarator.id));
-        } else if (declarator.id.type === "ObjectPattern") {
-            for (const p of declarator.id.properties) {
+        handledImports.add(importNode);
+        if (id.type === "Identifier") {
+            namespaces.add(scopes.declOf.get(id));
+        } else if (id.type === "ObjectPattern") {
+            for (const p of id.properties) {
                 if (p.type === "RestElement") {
                     sites.push({ kind: "handed" });
                     continue;
@@ -1038,9 +1136,21 @@ function analyzeParsed(ast) {
                 const idNode =
                     holder?.type === "VariableDeclarator" ? holder.id : (holder?.left ?? null);
                 const made = idNode ? bindingOf(idNode, scopes) : null;
-                if (made !== null && !checkedBindings.has(made)) {
-                    checkedBindings.add(made);
-                    if (requireBindingEscapes(made, parents, true)) sites.push({ kind: "handed" });
+                // Worklist: a require forwarded into another name (the bundler's
+                // `__require` shim) is that name's require, checked the same way.
+                let pending = made;
+                while (pending !== null && !checkedBindings.has(pending)) {
+                    checkedBindings.add(pending);
+                    const target = forwardedTo(pending, parents, scopes, true);
+                    if (target !== null) {
+                        sites.push({ kind: "binding", name: target.name });
+                        pending = bindingOf(target, scopes);
+                    } else {
+                        if (requireBindingEscapes(pending, parents, true)) {
+                            sites.push({ kind: "handed" });
+                        }
+                        pending = null;
+                    }
                 }
             }
         } else if (call.arguments.some((a) => mayDeriveFromImportMeta(a, scopes))) {

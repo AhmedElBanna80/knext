@@ -45,26 +45,186 @@ const CLI_DIR = /(^|\/)cli\//;
  * @typedef {{ files: string[], externals: string[], violations: ClosureViolation[] }} ClosureResult
  */
 
-/** Strip comments so a commented-out import never enters the closure. */
-function stripComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+/** Keywords after which a `/` starts a regex literal rather than a division. */
+const REGEX_AFTER_KEYWORD = new Set([
+  'return',
+  'typeof',
+  'instanceof',
+  'in',
+  'of',
+  'new',
+  'delete',
+  'void',
+  'throw',
+  'case',
+  'do',
+  'else',
+  'yield',
+  'await',
+]);
+
+const WORD_CHAR = /[A-Za-z0-9_$]/;
+
+/**
+ * Lex source into `{ type, value }` tokens: `word`, `string`, `punct`. Comments and
+ * template text are consumed and emit nothing but an operand placeholder (a template's
+ * `${ }` expressions ARE lexed as code); regex literals likewise. Anything it cannot
+ * terminate throws: a scanner that guesses past an unterminated construct is how a real
+ * import gets silently dropped from the closure.
+ */
+function tokenize(source, file) {
+  const tokens = [];
+  // An operand placeholder (a finished template or regex), and the "(" a `${` opens.
+  const OPERAND = { type: 'string', value: '' };
+  const EXPR_OPEN = { type: 'punct', value: '(' };
+  const braceStack = []; // 'brace' | 'template', for `${ ... }` nesting
+  const n = source.length;
+  let i = 0;
+  const fail = (what, at) => {
+    const line = source.slice(0, at).split('\n').length;
+    throw new Error(
+      `adapter closure: unterminated ${what} at ${file}:${line}. Refusing to guess: the scanner cannot tell what imports follow it.`,
+    );
+  };
+  const regexAllowed = () => {
+    const prev = tokens[tokens.length - 1];
+    if (!prev) return true;
+    if (prev.type === 'string') return false;
+    if (prev.type === 'word') return REGEX_AFTER_KEYWORD.has(prev.value);
+    return !(prev.value === ')' || prev.value === ']');
+  };
+  /**
+   * Consume template text from `i` (just after a backtick or the `}` closing a `${`).
+   * Returns true when the template closed, false when it stopped at a `${` expression.
+   */
+  const lexTemplateText = (startAt) => {
+    while (i < n) {
+      const c = source[i];
+      if (c === '\\') {
+        i += 2;
+      } else if (c === '`') {
+        i++;
+        return true;
+      } else if (c === '$' && source[i + 1] === '{') {
+        i += 2;
+        braceStack.push('template');
+        return false;
+      } else {
+        i++;
+      }
+    }
+    fail('template literal', startAt);
+  };
+
+  while (i < n) {
+    const c = source[i];
+    if (/\s/.test(c)) {
+      i++;
+    } else if (c === '/' && source[i + 1] === '/') {
+      while (i < n && source[i] !== '\n') i++;
+    } else if (c === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      if (close === -1) fail('block comment', i);
+      i = close + 2;
+    } else if (c === '"' || c === "'") {
+      const startAt = i;
+      let value = '';
+      i++;
+      for (;;) {
+        if (i >= n || source[i] === '\n') fail('string literal', startAt);
+        const d = source[i];
+        if (d === c) {
+          i++;
+          break;
+        }
+        if (d === '\\') {
+          value += source[i + 1] ?? '';
+          i += 2;
+        } else {
+          value += d;
+          i++;
+        }
+      }
+      tokens.push({ type: 'string', value });
+    } else if (c === '`') {
+      const startAt = i;
+      i++;
+      tokens.push(lexTemplateText(startAt) ? OPERAND : EXPR_OPEN);
+    } else if (c === '/' && regexAllowed()) {
+      const startAt = i;
+      i++;
+      let inClass = false;
+      for (;;) {
+        if (i >= n || source[i] === '\n') fail('regex literal', startAt);
+        const d = source[i];
+        if (d === '\\') {
+          i += 2;
+        } else if (d === '[') {
+          inClass = true;
+          i++;
+        } else if (d === ']') {
+          inClass = false;
+          i++;
+        } else if (d === '/' && !inClass) {
+          i++;
+          break;
+        } else {
+          i++;
+        }
+      }
+      while (i < n && /[a-z]/i.test(source[i])) i++; // flags
+      tokens.push(OPERAND); // so a following `/` is division
+    } else if (WORD_CHAR.test(c) || c.charCodeAt(0) > 127) {
+      let j = i + 1;
+      while (j < n && (WORD_CHAR.test(source[j]) || source.charCodeAt(j) > 127)) j++;
+      tokens.push({ type: 'word', value: source.slice(i, j) });
+      i = j;
+    } else if (c === '}' && braceStack[braceStack.length - 1] === 'template') {
+      braceStack.pop();
+      const startAt = i;
+      i++;
+      tokens.push(lexTemplateText(startAt) ? OPERAND : EXPR_OPEN);
+    } else {
+      if (c === '{') braceStack.push('brace');
+      if (c === '}') braceStack.pop();
+      tokens.push({ type: 'punct', value: c });
+      i++;
+    }
+  }
+  if (braceStack.includes('template')) fail('template literal expression', n);
+  return tokens;
 }
 
-/** Every module specifier the file references, static or dynamic. */
-function specifiersOf(source) {
-  const code = stripComments(source);
+/**
+ * Every module specifier the file references, static or dynamic.
+ *
+ * Token-based rather than regex-over-raw-source: a string literal `'from'`, quoted
+ * `import`/`require` text, template text, comments and regex literals can never
+ * produce a specifier. Throws on a construct it cannot terminate.
+ *
+ * @param {string} source
+ * @param {string} [file] used only in error messages
+ * @returns {string[]}
+ */
+export function specifiersOf(source, file = '<source>') {
+  const tokens = tokenize(source, file);
   const found = new Set();
-  const patterns = [
-    /\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']/g,
-    /\brequire\s*\(\s*["']([^"']+)["']/g,
-  ];
-  for (const re of patterns) {
-    let m = re.exec(code);
-    while (m !== null) {
-      found.add(m[1]);
-      m = re.exec(code);
+  const isSpecifier = (t) => t?.type === 'string' && t.value !== '';
+  for (let k = 0; k < tokens.length; k++) {
+    const t = tokens[k];
+    if (t.type !== 'word') continue;
+    const prev = tokens[k - 1];
+    if (prev?.type === 'punct' && prev.value === '.') continue; // member access, e.g. `x.from`
+    const next = tokens[k + 1];
+    if ((t.value === 'from' || t.value === 'import') && isSpecifier(next)) {
+      found.add(next.value);
+    } else if (
+      (t.value === 'import' || t.value === 'require') &&
+      next?.type === 'punct' &&
+      next.value === '(' &&
+      isSpecifier(tokens[k + 2])
+    ) {
+      found.add(tokens[k + 2].value);
     }
   }
   return [...found];
@@ -145,7 +305,7 @@ export function computeAdapterClosure(entryFile, { packageRoot }) {
     if (/\.json$/.test(file)) continue;
 
     const source = readFileSync(file, 'utf8');
-    for (const specifier of specifiersOf(source)) {
+    for (const specifier of specifiersOf(source, file)) {
       if (specifier.startsWith('node:') || BUILTINS.has(specifier)) continue;
 
       if (specifier.startsWith('.') || isAbsolute(specifier)) {

@@ -48,7 +48,7 @@ afterAll(() => {
         } catch {}
         rmSync(d, { recursive: true, force: true });
     }
-});
+}, 120_000);
 function temp(prefix: string): string {
     // realpath: macOS tmpdir is a /var -> /private/var symlink.
     const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));

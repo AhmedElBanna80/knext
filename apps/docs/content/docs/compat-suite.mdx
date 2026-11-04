@@ -138,13 +138,14 @@ credentialed Next.js version moves. It currently holds two distinct families:
   This is a Bun runtime limitation, independent of the Next.js version under test.
 - **`vercel-infra-coupled`** — tests whose deploy-mode assertion encodes behavior that only
   Vercel's own hosting infrastructure produces (for example, a response header set by Vercel's own
-  CDN), not anything a self-hosted deployment can or should reproduce. Each entry in this family is
-  checked case-by-case: knext's actual result is confirmed to match the correct self-hosted
-  expectation before the entry is quarantined.
+  CDN), not anything a self-hosted deployment can or should reproduce. Older entries in this family
+  were checked case-by-case against knext's result. Entries added at Next 16.4.3 were classified
+  from the failing assertion and its deploy branch in the upstream test source; a self-hosted match
+  was not re-run for them.
 
 <Callout type="info">
 **Counts, kept honest by a CI check.** As of the current manifest, `bun-edge-fetch` quarantines 2
-entries (3 test cases) and `vercel-infra-coupled` quarantines 6 entries (21 test cases). These
+entries (3 test cases) and `vercel-infra-coupled` quarantines 14 entries (49 test cases). These
 numbers are asserted against the manifest by a docs test, so this page cannot silently drift from
 the ledger it describes.
 </Callout>

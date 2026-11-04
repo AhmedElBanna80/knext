@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -83,24 +83,56 @@ describe('one harness, no diverging copy', () => {
 // ------------------------------------------------------------------ fake kubectl
 
 const FAKE_KUBECTL = `#!/usr/bin/env python3
+# A stateful fake: cordon state lives in a file next to the call log, so the driver's reads see its writes.
+#   FAKE_NODES      [{name, pool, cordoned}]       the nodes (default n1/p1 and n2/p2, both open)
+#   FAKE_AFTER      [{when, nth, node, cordoned}]  after the nth call containing 'when', someone else sets a cordon
+#   FAKE_LOSE       'cordon n2'                    the call takes effect but reports failure (a lost response)
+#   FAKE_IGNORE     'cordon n2'                    the call reports success but changes nothing
+#   FAKE_CORDON_FAIL n1                            cordon/uncordon of that node fails
 import json, os, sys
 args = sys.argv[1:]
-with open(os.environ["FAKE_KUBECTL_LOG"], "a") as f:
+LOG = os.environ["FAKE_KUBECTL_LOG"]
+with open(LOG, "a") as f:
     f.write(json.dumps(args) + "\\n")
 joined = " ".join(args)
 label = os.environ.get("FAKE_POOL_LABEL", "pool")
-if args[-2:-1] in (["cordon"], ["uncordon"]) and os.environ.get("FAKE_CORDON_FAIL") == args[-1]:
-    sys.stderr.write("forbidden\\n")
-    sys.exit(1)
-if "get nodes" in joined:
-    nodes = json.loads(os.environ.get("FAKE_NODES", "null")) or [
-        {"name": "n1", "pool": "p1"}, {"name": "n2", "pool": "p2"}]
-    print(json.dumps({"items": [
-        {"metadata": {"name": n["name"], "labels": {label: n["pool"]}},
-         "spec": {"unschedulable": True} if n.get("cordoned") else {}} for n in nodes]}))
+nodes = json.loads(os.environ.get("FAKE_NODES", "null")) or [
+    {"name": "n1", "pool": "p1"}, {"name": "n2", "pool": "p2"}]
+STATE = LOG + ".state"
+state = json.load(open(STATE)) if os.path.exists(STATE) else {n["name"]: bool(n.get("cordoned")) for n in nodes}
+calls = [l for l in open(LOG)]
+
+def node_obj(n):
+    return {"metadata": {"name": n["name"], "labels": {label: n["pool"]}},
+            "spec": {"unschedulable": True} if state[n["name"]] else {}}
+
+def finish(code=0):
+    for h in json.loads(os.environ.get("FAKE_AFTER", "[]")):
+        if sum(1 for l in calls if h["when"] in " ".join(json.loads(l))) == h["nth"] and h["when"] in joined:
+            state[h["node"]] = h["cordoned"]
+    json.dump(state, open(STATE, "w"))
+    sys.exit(code)
+
+verb = args[-2] if len(args) >= 2 else ""
+if verb in ("cordon", "uncordon"):
+    node = args[-1]
+    if os.environ.get("FAKE_CORDON_FAIL") == node:
+        sys.stderr.write("forbidden\\n")
+        finish(1)
+    if os.environ.get("FAKE_IGNORE") != verb + " " + node:
+        state[node] = verb == "cordon"
+    if os.environ.get("FAKE_LOSE") == verb + " " + node:
+        sys.stderr.write("connection reset\\n")
+        finish(1)
+    finish(0)
+elif "get nodes" in joined:
+    print(json.dumps({"items": [node_obj(n) for n in nodes]}))
+elif "get node " in joined:
+    name = args[args.index("node") + 1]
+    print(json.dumps(node_obj(next(n for n in nodes if n["name"] == name))))
 elif "--field-selector" in joined:
     node = joined.split("spec.nodeName=")[1].split()[0]
-    seen = sum(1 for l in open(os.environ["FAKE_KUBECTL_LOG"]) if "spec.nodeName=" + node in l)
+    seen = sum(1 for l in calls if "spec.nodeName=" + node in l)
     items = [{"metadata": {"namespace": "kube-system", "name": "dns-1", "labels": {}}}]
     if os.environ.get("FAKE_NEW_POD", "").startswith(node + ":") and seen > 1:
         ns, nm = os.environ["FAKE_NEW_POD"].split(":", 1)[1].split("/")
@@ -115,14 +147,28 @@ elif "get pods" in joined:
 elif " cat " in joined:
     import time
     time.sleep(float(os.environ.get("FAKE_SLEEP_CAT", "0")))
-    print(json.dumps({"arm": "a1", "code": 200, "node": "n1", "marker": "ok", "watch": {"resp_end": 1}}))
+    print(os.environ.get("FAKE_CAT_JSON") or json.dumps(
+        {"arm": "a1", "code": 200, "node": "n1", "marker": "ok", "watch": {"resp_end": 1}}))
+finish(0)
 `;
 
-type Run = { code: number; out: string; err: string; calls: string[][]; rows: unknown[] };
+type Run = {
+  code: number;
+  out: string;
+  err: string;
+  calls: string[][];
+  rows: unknown[];
+  state: Record<string, boolean>;
+};
 
 function runDrive(
   argv: string[],
-  opts: { env?: Record<string, string>; config?: object; timeout?: number } = {},
+  opts: {
+    env?: Record<string, string>;
+    config?: object;
+    timeout?: number;
+    killSignal?: NodeJS.Signals;
+  } = {},
 ): Run {
   const dir = mkdtempSync(join(tmpdir(), 'bench-harness-'));
   try {
@@ -140,6 +186,7 @@ function runDrive(
     const env: Record<string, string> = {
       PATH: `${bin}:${process.env.PATH}`,
       HOME: dir,
+      TMPDIR: dir,
       PYTHONDONTWRITEBYTECODE: '1',
       FAKE_KUBECTL_LOG: log,
       KNEXT_BENCH_CONFIG: cfgPath,
@@ -148,7 +195,7 @@ function runDrive(
     const r = spawnSync(
       'python3',
       [join(ROOT, DRIVE), ...argv.map((a) => a.replace('$OUT', outFile))],
-      { encoding: 'utf8', env, timeout: opts.timeout ?? 60_000 },
+      { encoding: 'utf8', env, timeout: opts.timeout ?? 60_000, killSignal: opts.killSignal },
     );
     const calls = readFileSync(log, 'utf8')
       .split('\n')
@@ -160,7 +207,9 @@ function runDrive(
           .filter(Boolean)
           .map((l) => JSON.parse(l))
       : [];
-    return { code: r.status ?? -1, out: r.stdout, err: r.stderr, calls, rows };
+    const statePath = `${log}.state`;
+    const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {};
+    return { code: r.status ?? -1, out: r.stdout, err: r.stderr, calls, rows, state };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -390,6 +439,141 @@ describe('drive.py: --place-mode=restore leaves every cordon as it found it', ()
     // The patched node was opened for its wake; the exit path put it and the control back.
     expect(cordonCalls(r)).toContain('uncordon n1');
     expect(endState(P_COR, cordonCalls(r))).toEqual({ n1: true, n2: false });
+  });
+
+  // Runs the driver with the P_COR nodes and any extra flags, env and rounds.
+  const go = (
+    o: {
+      rounds?: string;
+      extra?: string[];
+      env?: Record<string, string>;
+      timeout?: number;
+      killSignal?: NodeJS.Signals;
+    } = {},
+  ) =>
+    runDrive(
+      [
+        o.rounds ?? '1',
+        'a1@p1,a2@p2',
+        '$OUT',
+        ...FAST,
+        '--pool-label=pool',
+        '--place-mode=restore',
+        ...(o.extra ?? []),
+      ],
+      {
+        env: { FAKE_NODES: JSON.stringify(P_COR), ...o.env },
+        timeout: o.timeout,
+        killSignal: o.killSignal,
+      },
+    );
+  // Fires at round 2's zero-pod check of a1 (the third a1 query): between two wakes, nodes at rest.
+  const AT_REST = { when: 'service=a1', nth: 3 };
+
+  it('stops, and leaves the control cordoned, when someone else cordons it between wakes', () => {
+    const r = go({
+      rounds: '2',
+      env: { FAKE_AFTER: JSON.stringify([{ ...AT_REST, node: 'n2', cordoned: true }]) },
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('changed by someone else');
+    expect(r.err).toContain('n2 is cordoned');
+    expect(r.state.n2).toBe(true); // never uncordoned by the run
+    expect(r.rows).toHaveLength(2); // only round 1 was made
+  });
+
+  it('stops, and does not re-cordon the patched node, when someone else uncordons it at rest', () => {
+    const r = go({
+      rounds: '2',
+      env: { FAKE_AFTER: JSON.stringify([{ ...AT_REST, node: 'n1', cordoned: false }]) },
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('changed by someone else');
+    expect(r.err).toContain('n1 is open');
+    expect(r.state.n1).toBe(false); // left as the other party left it, not silently restored
+    expect(r.rows).toHaveLength(2);
+  });
+
+  it('counts a cordon whose response was lost but took effect as done', () => {
+    const r = go({ env: { FAKE_LOSE: 'uncordon n1' } });
+    expect(r.code).toBe(0);
+    expect(r.rows).toHaveLength(2);
+    expect(r.state).toEqual({ n1: true, n2: false });
+  });
+
+  it('does not report a cordon as done when the call succeeded but changed nothing', () => {
+    const r = go({ env: { FAKE_IGNORE: 'cordon n2' } });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('cannot cordon n2');
+    expect(r.rows).toHaveLength(0);
+  });
+
+  it('refuses to start when the nodes are not in the state the operator says they should be', () => {
+    const ok = go({ extra: ['--expect-state=n1:cordoned,n2:open'] });
+    expect(ok.code).toBe(0);
+    const bad = go({ extra: ['--expect-state=n1:open,n2:open'] });
+    expect(bad.code).not.toBe(0);
+    expect(bad.err).toContain('may have died mid-wake');
+    expect(cordonCalls(bad)).toEqual([]);
+    expect(bad.rows).toHaveLength(0);
+  });
+
+  it('restores the cordons on SIGHUP as it does on SIGTERM', () => {
+    const r = go({ env: { FAKE_SLEEP_CAT: '5' }, timeout: 2000, killSignal: 'SIGHUP' });
+    expect(r.code).toBe(129);
+    expect(r.state).toEqual({ n1: true, n2: false });
+  });
+
+  it('refuses to run next to another restore-mode driver (one lock per workstation)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-lock-'));
+    const lock = join(dir, 'drive.lock');
+    const holder = spawn(
+      'python3',
+      [
+        '-c',
+        `import fcntl, sys, time\nf = open(sys.argv[1], 'w')\nfcntl.flock(f, fcntl.LOCK_EX)\ntime.sleep(8)`,
+        lock,
+      ],
+      { stdio: 'ignore' },
+    );
+    try {
+      Bun.sleepSync(500);
+      const r = go({ extra: [`--lock-file=${lock}`] });
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('another restore-mode driver');
+      expect(cordonCalls(r)).toEqual([]);
+    } finally {
+      holder.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('stops at once, with a message, when a foreign pod appears on a named pool, and restores', () => {
+    const r = go({
+      extra: ['--abort-on-foreign=p1'],
+      env: { FAKE_NEW_POD: 'n1:other/stray' },
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('FOREIGN POD on pool p1: other/stray');
+    expect(r.err).toContain('stopping: foreign pod');
+    expect(r.rows).toHaveLength(1); // the wake is on disk before the stop
+    expect(r.state).toEqual({ n1: true, n2: false });
+    // Not named: it is printed but the run goes on.
+    const other = go({ extra: ['--abort-on-foreign=p2'], env: { FAKE_NEW_POD: 'n1:other/stray' } });
+    expect(other.code).toBe(0);
+    expect(other.err).toContain('FOREIGN POD on pool p1');
+  });
+
+  it('stops mid-run when failed wakes pass the fraction of the planned wakes', () => {
+    const fail = '{"arm":"a1","error":"harness produced no result in 240 s"}';
+    const r = go({ extra: ['--abort-failed-fraction=0.1'], env: { FAKE_CAT_JSON: fail } });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('stopping: 1 failed wakes of 2 planned');
+    expect(r.rows).toHaveLength(1);
+    expect(r.state).toEqual({ n1: true, n2: false });
+    const good = '{"arm":"a1","node":"n1","watch":{"first_byte":5}}';
+    const ok = go({ extra: ['--abort-failed-fraction=0.1'], env: { FAKE_CAT_JSON: good } });
+    expect(ok.code).toBe(0);
   });
 
   it('keeps the default all-pools mode unchanged', () => {

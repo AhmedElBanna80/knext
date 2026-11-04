@@ -18,6 +18,8 @@ const ANALYZER = 'scripts/bench-cold-start-phases/ceiling/lattice_analyze.py';
 const PATCH = 'scripts/bench-cold-start-phases/ceiling/kubelet-patch.diff';
 const BUILD = 'scripts/bench-cold-start-phases/ceiling/build.sh';
 const RUNBOOK = 'scripts/bench-cold-start-phases/ceiling/RUNBOOK.md';
+const MANIFEST = 'scripts/bench-cold-start-phases/ceiling/ceiling-setup.example.yaml';
+const DRIVE = 'scripts/bench-cold-start-phases/drive.py';
 
 type Run = { out: string; err: string; code: number };
 
@@ -69,7 +71,7 @@ type Lat =
 type Row = Record<string, unknown>;
 type Scn = {
   design?: [string, string][];
-  P: (treat: string) => Lat;
+  P: (treat: string, block: string) => Lat;
   S: Lat;
   qp0: (treat: string) => number;
   nodes?: { p: string; s: string };
@@ -81,8 +83,8 @@ const DESIGN: [string, string][] = [
   ['b1', 'oke'],
   ['b2', 'stock'],
   ['b3', 'relist100'],
-  ['b4', 'stock'],
-  ['b5', 'relist100'],
+  ['b4', 'relist100'],
+  ['b5', 'stock'],
   ['b6', 'oke'],
 ];
 const T0 = 1_800_000_000;
@@ -120,7 +122,7 @@ function generate(scn: Scn): Row[] {
         const base = bi * BLOCK_S + (r - 1) * 60 + (arm === 's' ? 30 : 0);
         const wall = base + next() * 3;
         const qp0 = scn.qp0(treat) + (next() - 0.5) * 40;
-        const lat = arm === 'p' ? scn.P(treat) : scn.S;
+        const lat = arm === 'p' ? scn.P(treat, block) : scn.S;
         const ready = wall + qp0 / 1000;
         let arrival: number;
         if (lat.kind === 'free') arrival = ready + next() * lat.widthS;
@@ -136,6 +138,7 @@ function generate(scn: Scn): Row[] {
           round: r,
           node: arm === 'p' ? nodes.p : nodes.s,
           wall_start: new Date((T0 + wall) * 1000).toISOString(),
+          clock: { offset_ms: 0.4, rtt_ms: 1.2 },
           watch: {
             pod_bound: 100,
             pod_ip: ip,
@@ -175,7 +178,7 @@ function write(dir: string, name: string, rows: Row[]): string {
 }
 
 const dir = mkdtempSync(join(tmpdir(), 'ceiling-analyzer-'));
-const FAST = ['--boot=300', '--perms=20'];
+const FAST = ['--boot=300', '--perms=40'];
 
 const scenarios: Record<string, { rows: Row[]; args?: string[] }> = {};
 const results: Record<string, Run> = {};
@@ -191,9 +194,9 @@ define('effect', generate(EFFECT));
 define('effectFloor', generate({ ...EFFECT, qp0: () => 900, seed: 12 }));
 define(
   'noEffect', // the patched build changed nothing: P is still on the 1 s lattice in every block
-  generate({ ...EFFECT, P: () => STOCK_LAT }),
+  generate({ ...EFFECT, P: () => STOCK_LAT, qp0: () => 300 }),
 );
-define('sameNode', generate({ ...EFFECT, nodes: { p: 'node-x', s: 'node-x' } }));
+define('sameNode', generate({ ...EFFECT, qp0: () => 300, nodes: { p: 'node-x', s: 'node-x' } }));
 define(
   'waitUnmoved', // the 1 s lock is gone but the wait is as long as ever
   generate({ ...EFFECT, P: (t) => (t === 'relist100' ? { kind: 'free', widthS: 1 } : STOCK_LAT) }),
@@ -210,6 +213,14 @@ define(
   generate({
     ...EFFECT,
     P: (t) => (t === 'relist100' ? { kind: 'free', widthS: 0.8 } : STOCK_LAT),
+  }),
+);
+define(
+  'mixedLock', // the 1 s lock is back in one relist100 block only
+  generate({
+    ...EFFECT,
+    qp0: () => 300,
+    P: (t, b) => (t === 'relist100' ? (b === 'b4' ? STOCK_LAT : R100_LAT) : STOCK_LAT),
   }),
 );
 define(
@@ -276,6 +287,31 @@ define(
         ? errorRow('p', 'b3', r.round as number)
         : r,
     );
+  // Clock offsets: no agent on the node (the harness then used offset 0), or a slow round trip.
+  const clockOf = (block: string, n: number, clock: unknown) =>
+    rows.map((r) =>
+      r.block === block && r.arm === 'p' && (r.round as number) <= n ? { ...r, clock } : r,
+    );
+  define('noClock', clockOf('b2', 3, null));
+  define('slowClock', clockOf('b3', 7, { offset_ms: 0.4, rtt_ms: 80 }));
+  // A partial file: three blocks written so far, the third with 7 failed wakes of 60.
+  define(
+    'partialFail',
+    limit(7).filter((r) => ['b1', 'b2', 'b3'].includes(r.block as string)),
+  );
+  // P alone drifts +100 ms per block (a linear trend): the ABBA order must cancel it in the DiD.
+  define(
+    'linearDrift',
+    rows.map((r) => {
+      if (r.arm !== 'p') return r;
+      const bi = Number((r.block as string).slice(1)) - 1;
+      const w = r.watch as { pod_ip: number; first_byte: number };
+      return {
+        ...r,
+        watch: { ...w, pod_ip: w.pod_ip + 100 * bi, first_byte: w.first_byte + 100 * bi },
+      };
+    }),
+  );
   define('failAtLimit', limit(6));
   define('failOverLimit', limit(7));
   // File order: blocks written in the order they were run, then reversed.
@@ -302,7 +338,7 @@ beforeAll(async () => {
   results.swapped = await analyzeAsync([
     join(dir, 'effect.jsonl'),
     ...FAST,
-    '--blocks=b1:oke,b2:relist100,b3:stock,b4:relist100,b5:stock,b6:oke',
+    '--blocks=b1:oke,b2:relist100,b3:stock,b4:stock,b5:relist100,b6:oke',
   ]);
 }, 240_000);
 
@@ -324,19 +360,19 @@ describe('the analyzer on a patched run that works (known answer)', () => {
 
   it('finds the 1 s lock on P under oke and stock, off the scan grid, and not under relist100', () => {
     const r = results.effect;
-    for (const b of ['b1', 'b2', 'b4', 'b6'])
+    for (const b of ['b1', 'b2', 'b5', 'b6'])
       expect(r.out).toMatch(new RegExp(`^${b}\\s+\\w+\\s+P\\s+node-p\\s+1s\\s.*\\byes$`, 'm'));
-    for (const b of ['b3', 'b5'])
+    for (const b of ['b3', 'b4'])
       expect(r.out).toMatch(new RegExp(`^${b}\\s+relist100\\s+P\\s+node-p\\s+1s\\s.*\\bno$`, 'm'));
   });
 
   it('finds the 100 ms lock on P under relist100 only, and S locked at 1 s in every block', () => {
     const r = results.effect;
-    for (const b of ['b3', 'b5'])
+    for (const b of ['b3', 'b4'])
       expect(r.out).toMatch(
         new RegExp(`^${b}\\s+relist100\\s+P\\s+node-p\\s+100ms\\s.*\\byes$`, 'm'),
       );
-    for (const b of ['b1', 'b2', 'b4', 'b6'])
+    for (const b of ['b1', 'b2', 'b5', 'b6'])
       expect(r.out).toMatch(new RegExp(`^${b}\\s+\\w+\\s+P\\s+node-p\\s+100ms\\s.*\\bno`, 'm'));
     for (const b of ['b1', 'b2', 'b3', 'b4', 'b5', 'b6'])
       expect(r.out).toMatch(new RegExp(`^${b}\\s+\\w+\\s+S\\s+node-s\\s+1s\\s.*\\byes$`, 'm'));
@@ -398,6 +434,23 @@ describe('the verdict follows the reading table, not the median alone', () => {
     expect(r.out).toMatch(/^b3\s+relist100\s+P\s+node-p\s+1s\s.*\byes$/m);
   });
 
+  it('an invalid run does not print a goal criterion, even when the numbers would meet it', () => {
+    for (const name of ['noEffect', 'sameNode', 'mixedLock']) {
+      const r = results[name];
+      expect(r.out).toContain(
+        'goal criterion: not evaluated (the run is invalid or the contrast is not attributable)',
+      );
+      expect(r.out).not.toContain('met in this run');
+    }
+  });
+
+  it('one relist100 block with the 1 s lock back is INCONCLUSIVE_LOCK_MIXED, not a condemned binary', () => {
+    const r = results.mixedLock;
+    expect(verdict(r)).toBe('INCONCLUSIVE_LOCK_MIXED');
+    expect(r.out).toMatch(/^b4\s+relist100\s+P\s+node-p\s+1s\s.*\byes$/m);
+    expect(r.out).toMatch(/^b3\s+relist100\s+P\s+node-p\s+1s\s.*\bno$/m);
+  });
+
   it('arms on one node are INVALID_NODES, whatever the numbers say', () => {
     const r = results.sameNode;
     expect(r.code).toBe(0);
@@ -424,6 +477,11 @@ describe('the verdict follows the reading table, not the median alone', () => {
     expect(Number(lo)).toBeLessThan(0);
     expect(Number(hi)).toBeGreaterThan(0);
     expect(verdict(r)).toBe('FLOOR_WAIT_UNMOVED');
+  });
+
+  it('a linear drift on P alone (+100 ms per block) cancels in the difference in differences (ABBA)', () => {
+    const did = (r: Run) => Number(r.out.match(/^wait DiD \(relist100 - stock\): (-?\d+) /m)?.[1]);
+    expect(Math.abs(did(results.linearDrift) - did(results.effect))).toBeLessThan(40);
   });
 
   it('a wait that moved down but stays over 150 ms is a partial floor', () => {
@@ -480,6 +538,30 @@ describe('error rows and failure rate', () => {
     expect(r.err).toContain('block b3');
     expect(r.err).toContain('7 of 60');
     expect(r.out).toBe('');
+  });
+});
+
+describe('clock offsets and partial files', () => {
+  it('prints the clock offset round trip per arm', () => {
+    expect(results.effect.out).toMatch(/^clock offset round trip, P: median 1\.2 ms, max 1\.2 ms/m);
+  });
+
+  it('treats a wake with no clock offset (the harness used 0) as unusable and counts it', () => {
+    const r = results.noClock;
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("'no_clock_offset': 3");
+  });
+
+  it('treats a wake whose offset round trip is over 50 ms as unusable, and refuses past 10%', () => {
+    const r = results.slowClock;
+    expect(r.code).toBe(4);
+    expect(r.err).toContain('7 of 60');
+  });
+
+  it('applies the 10% limit to a partial file before it complains about the missing blocks', () => {
+    const r = results.partialFail;
+    expect(r.code).toBe(4);
+    expect(r.err).toContain('block b3');
   });
 });
 
@@ -543,7 +625,7 @@ describe('refusals and input errors', () => {
     expect(bad.err).toContain('relist100');
     const perms = analyze([join(dir, 'effect.jsonl'), '--perms=5']);
     expect(perms.code).toBe(2);
-    expect(perms.err).toContain('--perms must be at least 20');
+    expect(perms.err).toContain('--perms must be at least 40');
   });
 });
 
@@ -700,6 +782,15 @@ describe('the stock-to-patched patch is one constant and the build is pinned', (
     expect(build).toContain('*" $GO_TOOLCHAIN "*) ;;');
   });
 
+  it('refuses an arm64 build into the default output directory, which holds the amd64 SHA256SUMS', () => {
+    const r = spawnSync('bash', [join(ROOT, BUILD)], {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH ?? '', KUBELET_CEILING_GOARCH: 'arm64', TMPDIR: dir },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('needs an explicit output directory');
+  });
+
   it('refuses a target architecture it does not know, before cloning anything', () => {
     const r = spawnSync('bash', [join(ROOT, BUILD), join(dir, 'never-created')], {
       encoding: 'utf8',
@@ -710,29 +801,130 @@ describe('the stock-to-patched patch is one constant and the build is pinned', (
   });
 });
 
-describe('the runbook states the safety procedure the harness and the analyzer implement', () => {
+describe('the runbook states the procedure the harness, the analyzer and the build implement', () => {
   const rb = readFileSync(join(ROOT, RUNBOOK), 'utf8');
+  const drive = readFileSync(join(ROOT, DRIVE), 'utf8');
+  const analyzer = readFileSync(join(ROOT, ANALYZER), 'utf8');
+  const revert = rb.match(/revert\.sh >\/dev\/null <<'EOF'\n([\s\S]*?)\nEOF/)?.[1] ?? '';
+  const at = (needle: string) => revert.indexOf(needle);
 
-  it('reverts with install and mv, never cp over the running binary, and hashes /proc/<pid>/exe', () => {
+  it('never writes over the running kubelet, and proves the process by exe hash and arguments', () => {
     expect(rb).not.toMatch(/\bcp\b[^\n]*"\$(KP|KUBELET_PATH)[^"]*"\s+"\$(KP|KUBELET_PATH)"/);
-    expect(rb).toContain('/proc/');
-    expect(rb).toContain('/exe');
+    expect(rb).toContain('/proc/"$(kpid)"/exe');
+    expect(rb).toContain('/proc/"$(kpid)"/cmdline');
+    expect(rb).toContain('OKE_ARGS');
+    expect(rb).toMatch(/`args_sum` must\s+equal `\$OKE_ARGS` in every block/);
   });
 
-  it('runs the wakes with the restore placement mode and one block label per kubelet', () => {
-    expect(rb).toMatch(/drive\.py 30[\s\S]*?--place-mode=restore[\s\S]*?--block=b1/);
-    expect(rb).toContain('--block=b1');
+  it('the revert script removes the kubelet drop-in, then the CRI-O one, reloads, and restarts', () => {
+    expect(revert).not.toBe('');
+    const rmKubelet = at('rm -f /run/systemd/system/kubelet.service.d/99-ceiling.conf');
+    const rmCrio = at('rm -f /etc/crio/crio.conf.d/99-ceiling-debug.conf');
+    const reloadCrio = at('systemctl reload crio');
+    const reload = at('systemctl daemon-reload');
+    const restart = at('systemctl restart kubelet');
+    for (const n of [rmKubelet, rmCrio, reloadCrio, reload, restart])
+      expect(n).toBeGreaterThanOrEqual(0);
+    expect(rmKubelet).toBeLessThan(reload);
+    expect(rmCrio).toBeLessThan(reloadCrio);
+    expect(reload).toBeLessThan(restart);
+  });
+
+  it('arms the timer through an explicit interpreter, and fire-tests it before block 1', () => {
+    expect(rb).toMatch(
+      /systemd-run --unit=ceiling-revert --on-active=\d+m \/bin\/sh \/var\/lib\/ceiling\/revert\.sh/,
+    );
+    expect(rb).toMatch(
+      /systemd-run --unit=ceiling-revert-test --on-active=\d+s \/bin\/sh \/var\/lib\/ceiling\/revert\.sh/,
+    );
+    expect(rb).toContain('Do not start block 1 without it');
+    expect(rb).toContain('The run does not start on an untested net.');
+    expect(rb.indexOf('Fire test')).toBeLessThan(rb.indexOf('## 6. The block loop'));
+    expect(rb).toContain('chcon --reference="$KP"');
+  });
+
+  it('the block order in the runbook is the analyzer default: ABBA, a restart before every block but b1', () => {
+    expect(analyzer).toContain(
+      'DEFAULT_BLOCKS = "b1:oke,b2:stock,b3:relist100,b4:relist100,b5:stock,b6:oke"',
+    );
+    expect(rb).toMatch(
+      /`b1` oke, `b2` stock, `b3` relist100, `b4`\s+relist100, `b5` stock, `b6` oke/,
+    );
+    expect(rb).toContain('Select X and restart, in every block but `b1`');
+  });
+
+  it('every driver flag in the runbook command exists in drive.py, and the safety flags are used', () => {
+    const cmd = rb.match(/drive\.py 30[\s\S]*?--block=b1/)?.[0] ?? '';
+    expect(cmd).not.toBe('');
+    const flags = [...cmd.matchAll(/ (--[a-z-]+)/g)].map((m) => m[1]);
+    for (const f of [
+      '--place-mode',
+      '--pool-label',
+      '--namespace',
+      '--expect-state',
+      '--abort-on-foreign',
+      '--abort-failed-fraction',
+      '--block',
+    ]) {
+      expect(flags).toContain(f);
+      expect(drive).toContain(`"${f}"`);
+    }
+    expect(cmd).toContain('--place-mode=restore');
+    expect(cmd).toContain('--abort-failed-fraction=0.10');
     expect(rb).toContain('--block=b6');
   });
 
+  it('every analyzer flag in the runbook command exists in the analyzer', () => {
+    const cmd = rb.match(/lattice_analyze\.py ceiling-rows[\s\S]*?--boot=2000/)?.[0] ?? '';
+    expect(cmd).not.toBe('');
+    for (const f of [...cmd.matchAll(/ (--[a-z-]+)/g)].map((m) => m[1]))
+      expect(analyzer).toContain(`"${f}"`);
+  });
+
+  it('lists every approval beyond one patched worker, including the cordon toggles and the repeat runs', () => {
+    for (const a of ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11'])
+      expect(rb).toContain(`| ${a} |`);
+    expect(rb).toContain('no field to pin a pod to a node');
+    expect(rb).toContain('Repeating the whole run at least three times');
+  });
+
+  it('keeps stale statements out', () => {
+    expect(rb).not.toContain('in the same round, 60 s apart');
+    expect(rb).not.toMatch(/restarted four times/);
+    expect(rb).toContain("`pod_ip` is **the harness's own watch time**");
+  });
+
   it('never tells the operator to delete anything or to drain', () => {
-    expect(rb).not.toMatch(/^\s*(sudo )?kubectl delete/m);
+    expect(rb).not.toMatch(/^\s*(sudo )?kubectl del/m);
     expect(rb).not.toMatch(/^\s*kubectl drain/m);
-    expect(rb).not.toMatch(/^\s*kind delete/m);
+    expect(rb).not.toMatch(/^\s*kind del/m);
   });
 
   it('keeps the H3 arithmetic consistent: 1640 - 550 is not under 1000', () => {
     expect(rb).toContain('1640');
+    expect(rb).toMatch(/not\s+below 1000/);
     expect(rb).not.toMatch(/bootstrap interval lies below 1000/);
+  });
+});
+
+describe('the setup manifest is a template with no cluster literal', () => {
+  const m = readFileSync(join(ROOT, MANIFEST), 'utf8');
+
+  it('has no IPv4 address and no node name except the placeholder', () => {
+    expect(m).not.toMatch(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
+    expect(m.match(/^\s*nodeName:.*$/gm)).toEqual(['  nodeName: <S node>']);
+    expect(m).not.toMatch(/image:.*:latest/);
+  });
+
+  it('creates ceil-p and ceil-s as NextApps with identical specs, and a harness pinned to S', () => {
+    const docs = m.split(/^---$/m);
+    const apps = docs.filter((d) => /kind: NextApp/.test(d));
+    expect(apps).toHaveLength(2);
+    const spec = (d: string) => d.slice(d.indexOf('spec:'));
+    expect(spec(apps[0])).toBe(spec(apps[1]));
+    expect(apps.map((d) => d.match(/name: (ceil-[ps])/)?.[1])).toEqual(['ceil-p', 'ceil-s']);
+    expect(docs.some((d) => /name: ceil-harness/.test(d) && /nodeName: <S node>/.test(d))).toBe(
+      true,
+    );
   });
 });

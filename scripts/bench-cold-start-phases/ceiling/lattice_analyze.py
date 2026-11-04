@@ -6,7 +6,10 @@ Offline and read-only: it reads harness JSONL (drive.py rows) and makes no clust
 in RUNBOOK.md beside it. One patched worker P and one untouched control worker S are woken in pairs
 (one wake on P, one on S, per round), in six blocks, each block run under a different kubelet on P:
 
-  b1 oke -> b2 stock -> b3 relist100 -> b4 stock -> b5 relist100 -> b6 oke
+  b1 oke -> b2 stock -> b3 relist100 -> b4 relist100 -> b5 stock -> b6 oke
+
+The two treatments are in ABBA order so a linear drift on P alone cancels in their difference; an ABAB
+order would leave one block's worth of drift in it.
 
 `oke` is the binary OKE ships, `stock` is our own build of the same version, `relist100` is our build
 with the relist constant at 100 ms. S keeps its OKE binary in every block and is the concurrent drift
@@ -25,13 +28,23 @@ slowly drifting period smears the peak. The period scan grid is set from the spa
 
 Exit codes: 0 analysis printed (whatever the verdict); 2 unreadable or malformed input, or a bad flag;
 3 a block missing or too few complete pairs in a block, refused with nothing judged from it; 4 more than
-10% of the wakes in some block unusable (failed, no node, no first byte or IP, no logs).
+10% of the wakes in some block unusable (failed, no node, no first byte or IP, no logs, no clock offset or
+one with a round trip over 50 ms). The 10% check runs before the missing-block check, so it also fires on
+a partial file.
 
-VERDICT is one of the rows of the reading table in RUNBOOK.md section 8, first match wins:
+The wait is only as good as the clock offset: pod IP is read on the harness clock, the queue-proxy log on
+the node's clock re-based by the offset the harness measured. cold-cycle.mjs falls back to offset 0 when it
+finds no agent on the node; such rows, and rows whose offset round trip is over 50 ms, are unusable.
+
+VERDICT is one of the rows of the reading table in RUNBOOK.md section 10, first match wins, in this order:
   INVALID_NODES               P or S rows on more than one node, or P and S on the same node
-  INVALID_LOCK_PERSISTS       the 1 s lock persists on P under relist100 (binary not running, or the
-                              relist is not the lock's source); any wait move is reported, not attributed
+  INVALID_LOCK_PERSISTS       the 1 s lock persists on P in ALL relist100 blocks, each at alpha / (number of
+                              relist100 blocks) (binary not running, or the relist is not the lock's
+                              source); any wait move is reported, not attributed
   NO_BASELINE_LOCK            no 1 s lock on P under the stock build, so there is no lock to remove
+  INCONCLUSIVE_LOCK_MIXED     the 1 s lock persists in some relist100 blocks but not all: one block does
+                              not condemn the binary (a working patch trips one of two blocks about 5% of
+                              the time even with the corrected alpha)
   CARRYOVER                   blocks of one treatment differ (99% interval excludes 0): not exchangeable
   FLOOR_WAIT_UNMOVED          lock gone, but the wait difference in differences includes 0
   WAIT_WORSE                  the wait got longer under relist100
@@ -59,10 +72,11 @@ SLOW_CUT_MS = 650.0  # bound -> user first log; the cut that split the 2026-11-0
 BAND_1S = (0.990, 1.020)  # stock relist: measured cycle 1.0031-1.0038 s
 BAND_100MS = (0.095, 0.110)  # patched relist: 100 ms period plus a few ms of relist work
 ALPHA = 0.05
-MIN_PERMS = 20  # p < 0.05 is unreachable with fewer shuffles
+MIN_PERMS = 40  # p <= 0.05 / 2 (two relist100 blocks) is unreachable with fewer shuffles
+MAX_CLOCK_RTT_MS = 50.0  # offset error is at most half of this
 OVERSAMPLE = 4  # period grid points per resolution cell (1/span in frequency)
 MIN_LOCK_N = 10
-DEFAULT_BLOCKS = "b1:oke,b2:stock,b3:relist100,b4:stock,b5:relist100,b6:oke"
+DEFAULT_BLOCKS = "b1:oke,b2:stock,b3:relist100,b4:relist100,b5:stock,b6:oke"
 
 
 class InputError(Exception):
@@ -157,12 +171,21 @@ def load_rows(path, p_arm, s_arm, design):
             if not user or not qp:
                 fail("no_user_or_queue_proxy_log")
                 continue
+            clock = r.get("clock")
+            if not isinstance(clock, dict) or not all(
+                    isinstance(clock.get(k), (int, float)) and not isinstance(clock.get(k), bool)
+                    for k in ("offset_ms", "rtt_ms")):
+                fail("no_clock_offset")  # cold-cycle.mjs used offset 0: raw clock skew is in the wait
+                continue
+            if clock["rtt_ms"] > MAX_CLOCK_RTT_MS:
+                fail("clock_rtt_too_large")
+                continue
             ip, qp0 = float(w["pod_ip"]), float(qp[0]["t"])
             rows.append({
                 "arm": arm, "node": node, "block": block, "round": r["round"], "wall": wall,
                 "bound": float(w["pod_bound"]), "uf": float(user[0]["t"]), "ip": ip,
                 "fb": float(w["first_byte"]), "wait": ip - qp0,
-                "foreign": len(r.get("foreign_new_pods") or []),
+                "foreign": len(r.get("foreign_new_pods") or []), "rtt": float(clock["rtt_ms"]),
             })
     return rows, failed, total, reasons
 
@@ -183,14 +206,15 @@ def pair_rows(rows, p_arm, s_arm):
 
 
 def gate(design, pairs, failed, total):
+    # The failure rate first: a partial file (a block still to run) must still trip it.
     for label, _ in design:
-        if label not in total:
-            raise SampleError(f"block {label} has no wakes")
-    for label, _ in design:
-        if failed.get(label, 0) > MAX_FAILED_FRACTION * total[label]:
+        if label in total and failed.get(label, 0) > MAX_FAILED_FRACTION * total[label]:
             raise FailureRateError(
                 f"block {label}: {failed[label]} of {total[label]} wakes unusable, "
                 f"over the {MAX_FAILED_FRACTION:.0%} limit")
+    for label, _ in design:
+        if label not in total:
+            raise SampleError(f"block {label} has no wakes")
     for label, _ in design:
         n = len(pairs.get(label, []))
         if n < MIN_BLOCK_PAIRS:
@@ -341,6 +365,9 @@ def reading(verdict):
         "INVALID_LOCK_PERSISTS": "the 1 s lock persists on P under relist100: the binary is not running "
                                  "or the relist is not the lock's source. Any move in the wait is "
                                  "reported, not attributed to the relist.",
+        "INCONCLUSIVE_LOCK_MIXED": "the 1 s lock persists in some relist100 blocks but not all: one "
+                                   "block does not condemn the binary and the others do not clear it. "
+                                   "Check the relist metric for each block, then repeat.",
         "NO_BASELINE_LOCK": "no 1 s lock on P under the stock build, so there is no lock to remove. "
                             "Wait results are reported, not attributed.",
         "CARRYOVER": "blocks of one treatment differ by more than chance (99% interval excludes 0): "
@@ -372,7 +399,7 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=1)
     args = ap.parse_args(argv)
     if args.perms < MIN_PERMS:
-        ap.error(f"--perms must be at least {MIN_PERMS} (p < 0.05 is unreachable below that)")
+        ap.error(f"--perms must be at least {MIN_PERMS} (p <= 0.05 divided by the two relist100 blocks is unreachable below that)")
     if args.boot < 100:
         ap.error("--boot must be at least 100")
 
@@ -419,6 +446,10 @@ def main(argv=None):
     nodes_ok = len(p_nodes) == 1 and len(s_nodes) == 1 and not (p_nodes & s_nodes)
     foreign_p = sum(1 for r in rows if r["arm"] == args.p_arm and r["foreign"])
     foreign_s = sum(1 for r in rows if r["arm"] == args.s_arm and r["foreign"])
+    for tag, arm in (("P", args.p_arm), ("S", args.s_arm)):
+        rt = sorted(r["rtt"] for r in rows if r["arm"] == arm)
+        print(f"clock offset round trip, {tag}: median {med(rt):.1f} ms, max {rt[-1]:.1f} ms "
+              f"(offset error is at most half of it; rows over {MAX_CLOCK_RTT_MS:.0f} ms are unusable)")
     print(f"nodes: P {sorted(p_nodes)}, S {sorted(s_nodes)} -> {'ok' if nodes_ok else 'INVALID'}")
     if foreign_p or foreign_s:
         print(f"WARNING: other workloads appeared on the woken node: {foreign_p} wakes on P, "
@@ -429,7 +460,7 @@ def main(argv=None):
           "phase")
     print(f"{'block':6s}{'treat':10s}{'arm':4s}{'node':14s}{'band':7s}{'R':>6s}{'period':>9s}"
           f"{'null_p95':>9s}{'p':>7s}  locked")
-    l1_p, l100_p, l1_s = {}, {}, {}
+    l1_p, l100_p, l1_s, p1_p = {}, {}, {}, {}
     for label, t in design:
         for tag, getter in (("P", lambda pr: pr[0]), ("S", lambda pr: pr[1])):
             grp = [getter(pr) for pr in pairs[label]]
@@ -443,6 +474,7 @@ def main(argv=None):
                                 " (sub-harmonic of the 1s lock)" if alias else ""))
                 l100_p[label] = t100["locked"] and not alias
                 l1_p[label] = t1["locked"]
+                p1_p[label] = t1["p"]
             else:
                 l1_s[label] = t1["locked"]
             for band, tt, locked, note in results:
@@ -455,7 +487,9 @@ def main(argv=None):
         if t not in treats:
             treats.append(t)
     print(f"\n== wait = pod IP minus queue-proxy first log (ms); intervals are {args.boot}-resample "
-          "bootstraps over pairs, resampled within each block")
+          "bootstraps over pairs, resampled within each block. The blocks themselves are treated as fixed: "
+          "block-to-block variance is not resampled, so intervals are narrower than a random-block model "
+          "would give")
     for label, t in design:
         b = by_block[label]
         print(f"{label:6s}{t:10s} P median {med(b['wp']):6.0f}   S median {med(b['ws']):6.0f}   "
@@ -500,7 +534,12 @@ def main(argv=None):
     stock_b = [b for b, t in design if t == "stock"]
     relist_b = [b for b, t in design if t == "relist100"]
     baseline = all(l1_p[b] for b in stock_b)
-    persists = any(l1_p[b] for b in relist_b)
+    # Persistence is judged at alpha divided by the number of relist100 blocks (any() of k tests at alpha
+    # would flag a working patch about 10% of the time with k = 2) and needs every block: one block does
+    # not condemn the binary.
+    strict = [b for b in relist_b if l1_p[b] and p1_p[b] <= ALPHA / len(relist_b)]
+    persists = len(strict) == len(relist_b)
+    mixed = bool(strict) and not persists
     lock100 = all(l100_p[b] for b in relist_b)
     s_locked = sum(1 for v in l1_s.values() if v)
     went_down, went_up = did_w[1] < 0, did_w[0] > 0
@@ -514,6 +553,8 @@ def main(argv=None):
         verdict = "INVALID_LOCK_PERSISTS"
     elif not baseline:
         verdict = "NO_BASELINE_LOCK"
+    elif mixed:
+        verdict = "INCONCLUSIVE_LOCK_MIXED"
     elif carry_flag:
         verdict = "CARRYOVER"
     elif went_up:
@@ -534,12 +575,16 @@ def main(argv=None):
     print(f"wait: DiD {fmt_ci(did_w)} ({'down' if went_down else 'up' if went_up else 'includes 0'}); "
           f"P relist100 wait upper bound {p_rel_w[1]:.0f} ms vs {WAIT_COLLAPSE_MS:.0f} ms "
           f"({'collapsed' if collapsed else 'not collapsed'})")
-    print(f"goal criterion: P relist100 median first byte interval {fmt_ci(goal_ci)}, under "
-          f"{GOAL_MS:.0f} ms: {'met in this run' if goal_met else 'not met'}")
+    unattributable = verdict in ("INVALID_NODES", "INVALID_LOCK_PERSISTS", "NO_BASELINE_LOCK",
+                                 "INCONCLUSIVE_LOCK_MIXED", "CARRYOVER")
+    if unattributable:
+        print("goal criterion: not evaluated (the run is invalid or the contrast is not attributable)")
+    else:
+        print(f"goal criterion: P relist100 median first byte interval {fmt_ci(goal_ci)}, under "
+              f"{GOAL_MS:.0f} ms: {'met in this run' if goal_met else 'not met'}")
     print(f"VERDICT: {verdict}")
     print(f"reading: {reading(verdict)}")
-    if verdict not in ("INVALID_NODES", "INVALID_LOCK_PERSISTS", "NO_BASELINE_LOCK", "CARRYOVER") \
-            and not goal_met:
+    if not unattributable and not goal_met:
         print("report as a floor: the goal is not met on this node under this change; the relist100 "
               "median is the floor, not a shipped default.")
     print("one run is not a pass: first-byte medians vary 1276-1806 ms run to run with no change.")

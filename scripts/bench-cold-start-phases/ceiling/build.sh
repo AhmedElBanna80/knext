@@ -14,7 +14,8 @@
 # the build then checks that `go version` reports exactly that toolchain; a different toolchain gives
 # a different checksum, so the checksums in RUNBOOK.md only hold for the default.
 # KUBELET_CEILING_GOARCH (default amd64) selects the target architecture, for a rehearsal on an
-# arm64 kind node; the amd64 file names and checksums are unchanged.
+# arm64 kind node; the amd64 file names and checksums are unchanged. A non-amd64 build REQUIRES an explicit
+# outdir, so it can never overwrite the amd64 SHA256SUMS in the default one.
 # CGO is off, so the binary is not byte-identical to an upstream release build (see RUNBOOK.md).
 set -euo pipefail
 
@@ -25,6 +26,10 @@ REPO="https://github.com/kubernetes/kubernetes.git"
 GO_TOOLCHAIN="${GO_TOOLCHAIN:-go1.25.12}"
 ARCH="${KUBELET_CEILING_GOARCH:-amd64}"
 case "$ARCH" in amd64|arm64) ;; *) echo "KUBELET_CEILING_GOARCH must be amd64 or arm64, got $ARCH" >&2; exit 1 ;; esac
+if [ "$ARCH" != amd64 ] && [ "$#" -eq 0 ]; then
+  echo "KUBELET_CEILING_GOARCH=$ARCH needs an explicit output directory: the default one holds the amd64 SHA256SUMS" >&2
+  exit 1
+fi
 OUT="${1:-${TMPDIR:-/tmp}/kubelet-ceiling-build}"
 WORK="${KUBELET_CEILING_WORK:-$OUT/src}"
 

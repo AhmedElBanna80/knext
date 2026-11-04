@@ -3,6 +3,11 @@
 
     python3 analyze.py run.jsonl [--by-node] [--by-treatment] [--rows]
                        [--activator=activator.jsonl] [--autoscaler=autoscaler.jsonl]
+                       [--namespace=<ns>] [--config=<file>]
+
+--namespace keeps only control-plane log lines about that namespace's revisions
+(default: the namespace from KNEXT_BENCH_NAMESPACE or the bench config file; with
+none set, no filtering, and lines are joined to a cycle by revision name alone).
 
 Milestones (ms after the request was sent, harness clock; node-side stamps are
 re-based with the per-cycle measured clock offset):
@@ -26,6 +31,9 @@ import json
 import statistics
 import sys
 
+import benchconfig
+
+NAMESPACE = None
 CP = {"activator": [], "autoscaler": []}
 
 
@@ -38,7 +46,7 @@ def load_cp(kind, path):
         except json.JSONDecodeError:
             continue
         key = j.get("knative.dev/key", "")
-        if "bench-cells/" not in key:
+        if "/" not in key or (NAMESPACE and not key.startswith(NAMESPACE + "/")):
             continue
         base, _, frac = j.get("timestamp", "").rstrip("Z").partition(".")
         t = datetime.datetime.strptime(base, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc).timestamp()
@@ -133,7 +141,18 @@ def table(rows, title):
                   f"{s['min']:.0f}–{s['max']:.0f}" + ("" if s["n"] == len(rows) else f" (n={s['n']})") + " |")
 
 
+def flag(name, argv=None):
+    return next((a.split("=", 1)[1] for a in (argv or sys.argv) if a.startswith(f"--{name}=")), None)
+
+
+def set_namespace(argv=None):
+    """Resolve the namespace filter for load_cp from --namespace / --config / env / config file."""
+    global NAMESPACE
+    NAMESPACE = benchconfig.resolve({"namespace": flag("namespace", argv)}, config_path=flag("config", argv))["namespace"]
+
+
 def main():
+    set_namespace()
     for a in sys.argv:
         if a.startswith("--activator="):
             load_cp("activator", a.split("=", 1)[1])

@@ -295,7 +295,12 @@ export async function verifyRepo(
   for (const pin of pins) {
     if (
       dockerfiles.includes(pin.file) &&
-      isExcluded(exclusions, 'registry-resolution', { file: pin.file, image: pin.ref }, today)
+      isExcluded(
+        exclusions,
+        'registry-resolution',
+        { file: pin.file, image: pin.ref, digest: pin.digest },
+        today,
+      )
     ) {
       continue;
     }

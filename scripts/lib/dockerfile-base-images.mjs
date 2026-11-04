@@ -34,6 +34,7 @@ const IMAGE_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*(?:@sha256:[0-9a-f]{64})?$/;
  * @typedef {{
  *   file?: string,
  *   image?: string,
+ *   digest?: string,
  *   covers: string[],
  *   justification?: string,
  *   added?: string,
@@ -43,7 +44,7 @@ const IMAGE_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*(?:@sha256:[0-9a-f]{64})?$/;
  *   file: string,
  *   line: number,
  *   image: string,
- *   origin: 'FROM' | 'COPY',
+ *   origin: 'FROM' | 'COPY' | 'RUN',
  *   kind: string,
  *   key?: string,
  *   digest?: string,
@@ -114,6 +115,28 @@ function classify(image, file, line, stages, origin) {
 }
 
 /**
+ * Instructions with backslash continuations joined, each tagged with the
+ * physical line it STARTS on. Blank and comment lines are dropped, including
+ * inside a continuation (Docker ignores them there too).
+ */
+function* logicalLines(text) {
+  let pending = '';
+  let start = 0;
+  for (const [index, raw] of text.split('\n').entries()) {
+    const trimmed = raw.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+    if (pending === '') start = index + 1;
+    if (trimmed.endsWith('\\')) {
+      pending += `${trimmed.slice(0, -1)} `;
+      continue;
+    }
+    yield { line: (pending + trimmed).trim(), number: start };
+    pending = '';
+  }
+  if (pending !== '') yield { line: pending.trim(), number: start };
+}
+
+/**
  * Every external-image reference in one Dockerfile's text, in order.
  * @param {string} text
  * @param {string} file
@@ -122,25 +145,32 @@ function classify(image, file, line, stages, origin) {
 export function parseDockerfileRefs(text, file) {
   const refs = [];
   const stages = new Set();
-  for (const [index, raw] of text.split('\n').entries()) {
-    const line = raw.trim();
-    if (line === '' || line.startsWith('#')) continue;
+  for (const { line, number } of logicalLines(text)) {
     const from = /^FROM\s+(.*)$/i.exec(line);
     if (from) {
       const tokens = from[1].split(/\s+/).filter((t) => !t.startsWith('--'));
       const image = tokens[0];
       if (image === undefined) {
-        refs.push({ file, line: index + 1, image: '', origin: 'FROM', kind: 'unparseable' });
+        refs.push({ file, line: number, image: '', origin: 'FROM', kind: 'unparseable' });
         continue;
       }
-      refs.push(classify(image, file, index + 1, stages, 'FROM'));
+      refs.push(classify(image, file, number, stages, 'FROM'));
       const alias = /\bAS\s+([\w.-]+)/i.exec(from[1]);
       if (alias) stages.add(alias[1]);
       continue;
     }
     const copy = /^COPY\s+.*?--from=(\S+)/i.exec(line);
     if (copy && !stages.has(copy[1])) {
-      refs.push(classify(copy[1], file, index + 1, stages, 'COPY'));
+      refs.push(classify(copy[1], file, number, stages, 'COPY'));
+    }
+    // `RUN --mount=type=bind,from=<image>` pulls an image exactly as COPY --from does.
+    if (/^RUN\s/i.test(line)) {
+      for (const mount of line.matchAll(/--mount=(\S+)/gi)) {
+        const source = /(?:^|,)from=([^,\s]+)/i.exec(mount[1]);
+        if (source && !stages.has(source[1])) {
+          refs.push(classify(source[1], file, number, stages, 'RUN'));
+        }
+      }
     }
   }
   return refs.filter((r) => r.kind !== 'stage' && r.kind !== 'scratch');
@@ -158,6 +188,14 @@ export function exclusionProblem(entry) {
   if (!Array.isArray(entry.covers) || entry.covers.length === 0) return 'needs non-empty `covers`';
   const unknown = entry.covers.filter((c) => !KNOWN_CHECKS.includes(c));
   if (unknown.length) return `unknown check(s) in \`covers\`: ${unknown.join(', ')}`;
+  // A registry-resolution exclusion would otherwise hide ANY digest on the tag, so
+  // it must name the exact file and the exact digest it tolerates (#2665).
+  if (entry.covers.includes('registry-resolution')) {
+    if (!entry.file) return 'a registry-resolution exclusion needs an exact `file`';
+    if (!DIGEST.test(entry.digest ?? '')) {
+      return 'a registry-resolution exclusion needs the exact `digest` it tolerates';
+    }
+  }
   if (typeof entry.justification !== 'string' || entry.justification.trim() === '') {
     return 'needs a `justification`';
   }
@@ -180,11 +218,11 @@ export function loadExclusions(root) {
 
 /**
  * Does an UNEXPIRED, well-formed exclusion cover `check` for this reference?
- * `ref` is `{ file, key?, image? }`; `image` may be written `repo:tag` or in
+ * `ref` is `{ file, key?, image?, digest? }`; an entry carrying `digest` matches only that digest.; `image` may be written `repo:tag` or in
  * canonical `registry/path:tag` form.
  * @param {Exclusion[]} exclusions
  * @param {string} check
- * @param {{ file?: string, key?: string, image?: string }} ref
+ * @param {{ file?: string, key?: string, image?: string, digest?: string }} ref
  * @param {Date} [today]
  */
 export function isExcluded(exclusions, check, ref, today = new Date()) {
@@ -192,6 +230,7 @@ export function isExcluded(exclusions, check, ref, today = new Date()) {
     if (exclusionProblem(entry) || isExpired(entry, today)) return false;
     if (!entry.covers.includes(check)) return false;
     if (entry.file && entry.file !== ref.file) return false;
+    if (entry.digest && entry.digest !== ref.digest) return false;
     if (entry.image) {
       const wanted = entry.image;
       const names = [ref.key, ref.image?.split('@')[0]].filter(Boolean);

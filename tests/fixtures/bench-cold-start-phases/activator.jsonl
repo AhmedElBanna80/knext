@@ -1,0 +1,2 @@
+{"timestamp":"2026-01-01T00:00:00.300Z","knative.dev/key":"bench-cells/base-00000","message":"Failed probing pods: connection refused"}
+{"timestamp":"2026-01-01T00:01:00.900Z","knative.dev/key":"bench-cells/base-00001","message":"Updating Revision Throttler with: backends = 1"}

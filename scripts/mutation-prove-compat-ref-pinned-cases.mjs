@@ -41,7 +41,7 @@ const MANIFEST = resolve(REPO_ROOT, 'test/deploy-tests-manifest.knext.json');
 const DOCS = resolve(REPO_ROOT, 'apps/docs/content/docs/compat-suite.mdx');
 const ADR = resolve(REPO_ROOT, 'docs/adr/0007-compat-suite.md');
 
-declareMutations(36);
+declareMutations(38);
 
 const RUNNER = resolveSpecRunner(REPO_ROOT, REF_SPEC);
 

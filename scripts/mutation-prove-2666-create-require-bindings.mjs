@@ -251,7 +251,8 @@ console.log(`\n=== analysis rows: ${UNIT_SPEC} ===`);
 unit.baseline();
 unit.proveCanSeeRed({
   subject: 'analyze',
-  anchor: '    if (parent.type === "CallExpression" && parent.callee === ref.node) return true;',
+  anchor:
+    '    if (parent.type === "CallExpression" && parent.callee === ref.node) return !parent.optional;',
   replacement: '    if (parent.type === "CallExpression") return false;',
 });
 for (const m of UNIT) {

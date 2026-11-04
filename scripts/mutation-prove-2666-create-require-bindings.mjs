@@ -227,9 +227,9 @@ unit.finish(UNIT.length);
 console.log(`\n=== compile rows: ${COMPILE_SPEC} ===`);
 compile.baseline();
 compile.proveCanSeeRed({
-  subject: 'analyze',
-  anchor: '    if (parent.type === "CallExpression" && parent.callee === ref.node) return true;',
-  replacement: '    if (parent.type === "CallExpression") return false;',
+  subject: 'staticize',
+  anchor: '    return result.escapes;',
+  replacement: '    return true;',
 });
 for (const m of COMPILE) {
   compile.run({ ...m, expect: 'red' });

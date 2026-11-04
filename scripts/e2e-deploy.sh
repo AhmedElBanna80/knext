@@ -632,6 +632,20 @@ if [ -n "${FIXTURE_SCRIPT_TO_RUN}" ] \
   log "next.config.(m)ts detected — exporting __NEXT_NODE_NATIVE_TS_LOADER_ENABLED=true for the wrapper script (B2 #173)"
 fi
 
+# jest sets NODE_ENV=test and the deploy harness hands this script the raw jest
+# env, but `next build` KEEPS an inherited NODE_ENV (next/dist/bin/next:
+# `NODE_ENV = NODE_ENV || defaultEnv`), so every build below ran as `test` and a
+# webpack SWC plugin saw `env=test` (test/e2e/swc-plugins-env@v16.4.3 expects
+# `production`). Next's own start/dev modes blank NODE_ENV for the build child
+# (`NODE_ENV: this.env.NODE_ENV || ''`, test/lib/next-modes/base.ts); mirror that.
+# Only jest's own value is cleared — an explicit production/development is the
+# caller's choice. Past this point nothing in this script needs the jest value:
+# the server boots below pin NODE_ENV=production themselves.
+if [ "${NODE_ENV:-}" = "test" ]; then
+  unset NODE_ENV
+  log "NODE_ENV=test is jest's, not the build's — cleared so next build defaults to production (as Next's own start mode does)"
+fi
+
 : > "${BUILD_LOG}"
 if [ -n "${FIXTURE_PREBUILD_SCRIPT}" ]; then
   log "running the fixture prebuild hook: ${FIXTURE_PREBUILD_SCRIPT}"

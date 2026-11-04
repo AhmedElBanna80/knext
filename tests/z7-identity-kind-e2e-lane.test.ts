@@ -728,7 +728,8 @@ describe('the rotation watcher proves what it says: it ran the whole rotation an
   it('asserts the watcher is still alive before it stops it', () => {
     const r = rotate();
     const alive = r.indexOf('kill -0 "${WATCH_PID}"');
-    const stop = r.indexOf('kill "${WATCH_PID}"');
+    // Concatenated: the needle is shell text, not a JS template placeholder.
+    const stop = r.indexOf(`kill "$` + `{WATCH_PID}"`);
     expect(alive, 'no liveness check').toBeGreaterThan(0);
     expect(stop, 'no stop').toBeGreaterThan(alive);
     expect(r).toContain('the watcher stopped early');

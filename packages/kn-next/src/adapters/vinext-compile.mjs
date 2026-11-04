@@ -85,6 +85,7 @@ import {
 } from "./entry-external-sidecar.mjs";
 import {
     analyzeServerModule,
+    importedRequireEscapes,
     wrapRequireBindings,
 } from "./entry-require-staticize.mjs";
 import { verifyBytecodeExec, verifyBytecodeModules } from "./bytecode-exec-verify.mjs";
@@ -322,6 +323,15 @@ function listServerOutputModules(dir) {
  *  again elsewhere (a parameter, an inner helper) does not make its real
  *  require hits doubtful — treating it as ambiguous would let a real failure
  *  through a strict build.
+ *
+ *  Runs on EVERY build, and a broken analyzer fails every build, strict or not
+ *  (#2666). That is deliberate: the `embed` set decides which packages are
+ *  bundled into the executable in a default build too, so an analysis that
+ *  silently did not run would ship a binary missing them. Only the FINDINGS
+ *  (`unresolved`, `dynamic`, `unrecognized`) are downgraded to warnings outside
+ *  strict mode. The analyzer is only spawned for a module that mentions
+ *  `createRequire` or imports `module` (entry-require-staticize.mjs), and
+ *  `importedRequireEscapes` only for a module importing a require binding.
  */
 function planRuntimeRequires() {
     const modules = new Map();
@@ -363,6 +373,19 @@ function planRuntimeRequires() {
                     if (local) requireNames.set(local, 0);
                 }
             }
+        }
+        // A require binding IMPORTED from a sibling chunk is followed by name; a
+        // copy, a stored or passed value or a re-export of it is not (#2666), so
+        // the module doing that is as unverifiable as one that hands a create on.
+        const importedNames = [...requireNames]
+            .filter(([, own]) => own === 0)
+            .map(([n]) => n);
+        if (
+            importedNames.length > 0 &&
+            !unrecognized.includes(name(path)) &&
+            importedRequireEscapes(readFileSync(path, "utf8"), importedNames, CREATE_REQUIRE_ANALYZER)
+        ) {
+            unrecognized.push(name(path));
         }
         for (const [callee, ownDeclarations] of requireNames) {
             const ambiguous =

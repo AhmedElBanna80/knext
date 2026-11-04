@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
 
@@ -108,6 +108,20 @@ function trivyWithConfig(text: string): Record<string, string> {
     }
   }
   return config;
+}
+
+/**
+ * Every way to make Trivy ignore a finding OTHER than the one reviewed ignorefile
+ * wired through `trivyignores:`. Matched as text over the WHOLE workflow, so an
+ * env var at workflow, job or step level, a `with:` key, or a CLI flag in a `run:`
+ * step all trip it. (#2700: this ban used to cover the nightly only.)
+ */
+const TRIVY_BYPASS_RE =
+  /TRIVY_(?:IGNOREFILE|IGNORE_POLICY|SKIP_DIRS|SKIP_FILES|CONFIG)|\bskip-(?:dirs|files)\s*:|\bignore-policy\s*:|\btrivy-config\s*:|--(?:ignorefile|ignore-policy|skip-dirs|skip-files)\b/g;
+
+/** The bypass tokens found in `text` (empty = clean). */
+function trivyBypasses(text: string): string[] {
+  return [...text.matchAll(TRIVY_BYPASS_RE)].map((m) => m[0]);
 }
 
 describe('#320 docs-closure nightly workflow exists and is scheduled', () => {
@@ -414,9 +428,9 @@ describe('#465 docs-closure HIGH remediation is by BUMP, not suppression', () =>
     // The only exception mechanism is the single dated-and-justified file
     // asserted below. Any other ignorefile / env override / skip is a bypass.
     expect(
-      /TRIVY_IGNOREFILE|skip-(dirs|files):|ignore-policy:/.test(nightly),
-      'no env ignorefile, skip-dirs/files or ignore-policy may be introduced',
-    ).toBe(false);
+      trivyBypasses(nightly),
+      'no env ignorefile, skip-dirs/files, ignore-policy or trivy config may be introduced',
+    ).toEqual([]);
     const ignores = [...nightly.matchAll(/^\s*trivyignores:\s*(\S+)\s*$/gm)].map((m) => m[1]);
     expect(ignores, 'exactly the one triaged ignorefile').toEqual([TRIVY_IGNORE_PATH]);
   });
@@ -465,5 +479,90 @@ describe('docs-closure Trivy ignorefile is narrow, justified and expiring', () =
     const cfg = trivyWithConfig(read(CI_WORKFLOW_PATH));
     expect(cfg.severity).toBe('HIGH,CRITICAL');
     expect(cfg['exit-code']).toBe('1');
+  });
+});
+
+// ── #2700: the bypasses the two workflow-side checks above did not cover ────────
+// Trivy reads a repo-root `.trivyignore` (and, from its working directory,
+// `.trivyignore.yaml|yml` and `trivy.yaml|yml`) WITHOUT being told to. None of the
+// guards above would notice one appear, and it would suppress findings in both
+// gates at once. These tests pin the files absent.
+
+/**
+ * Root-level files Trivy picks up implicitly, mapped to the written approval that
+ * lets one exist. EMPTY on purpose: to approve a file, add its name here with a
+ * non-empty justification (what it ignores, why it is safe, when it expires) so
+ * the approval is a reviewed diff to this guard, not a side effect of dropping a
+ * file in. The scoped, expiring `security/docs-closure-trivyignore.yaml` is the
+ * sanctioned mechanism and is NOT a root file.
+ */
+const APPROVED_ROOT_TRIVY_FILES: Record<string, string> = {};
+
+const IMPLICIT_ROOT_TRIVY_FILES = [
+  '.trivyignore',
+  '.trivyignore.yaml',
+  '.trivyignore.yml',
+  'trivy.yaml',
+  'trivy.yml',
+];
+
+/** Root files Trivy would read implicitly that have no recorded approval. */
+function unapprovedRootTrivyFiles(
+  exists: (name: string) => boolean,
+  approved: Record<string, string>,
+): string[] {
+  return IMPLICIT_ROOT_TRIVY_FILES.filter((f) => exists(f) && !(approved[f] ?? '').trim());
+}
+
+describe('#2700 no implicit Trivy ignore/config file at the repo root', () => {
+  it('no unapproved root .trivyignore / trivy.yaml exists', () => {
+    expect(
+      unapprovedRootTrivyFiles((f) => existsSync(resolve(REPO_ROOT, f)), APPROVED_ROOT_TRIVY_FILES),
+      'Trivy reads these implicitly; an unreviewed one silently suppresses findings in every scan',
+    ).toEqual([]);
+  });
+
+  it('the detector fires on a present file, honours a written approval, and ignores a blank one', () => {
+    const present = (f: string) => f === '.trivyignore';
+    expect(unapprovedRootTrivyFiles(present, {})).toEqual(['.trivyignore']);
+    expect(
+      unapprovedRootTrivyFiles(present, { '.trivyignore': 'CVE-1, expires 2027-01-01' }),
+    ).toEqual([]);
+    expect(unapprovedRootTrivyFiles(present, { '.trivyignore': '   ' })).toEqual(['.trivyignore']);
+    expect(unapprovedRootTrivyFiles(() => false, {})).toEqual([]);
+  });
+});
+
+describe('#2700 ci.yml carries the same Trivy bypass bans as the nightly', () => {
+  it('ci.yml has no env ignorefile, skip-dirs/files, ignore-policy or trivy config', () => {
+    expect(trivyBypasses(read(CI_WORKFLOW_PATH))).toEqual([]);
+  });
+
+  it('ci.yml wires exactly the one reviewed ignorefile', () => {
+    const ignores = [...read(CI_WORKFLOW_PATH).matchAll(/^\s*trivyignores:\s*(\S+)\s*$/gm)].map(
+      (m) => m[1],
+    );
+    expect(ignores).toEqual([TRIVY_IGNORE_PATH]);
+  });
+
+  it('the bypass detector recognises every spelling (positive controls)', () => {
+    for (const bad of [
+      'TRIVY_IGNOREFILE: x',
+      'TRIVY_IGNORE_POLICY: x',
+      'TRIVY_SKIP_DIRS: node_modules',
+      'TRIVY_SKIP_FILES: a',
+      'TRIVY_CONFIG: trivy.yaml',
+      '          skip-dirs: node_modules',
+      '          skip-files: a',
+      '          ignore-policy: p.rego',
+      '          trivy-config: trivy.yaml',
+      'run: trivy sbom --ignorefile .x f',
+      'run: trivy sbom --ignore-policy p f',
+      'run: trivy sbom --skip-dirs d f',
+      'run: trivy sbom --skip-files d f',
+    ]) {
+      expect(trivyBypasses(bad).length, bad).toBeGreaterThan(0);
+    }
+    expect(trivyBypasses('trivyignores: security/docs-closure-trivyignore.yaml')).toEqual([]);
   });
 });

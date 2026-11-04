@@ -56,11 +56,11 @@ function specsExit(specs) {
 let pass = 0;
 let fail = 0;
 
-function prove(label, target, anchor, replacement, { specs = [REF_SPEC] } = {}) {
+function prove(label, target, anchor, replacement, { specs = [REF_SPEC], commentPrefix } = {}) {
   console.log(`── mutation: ${label}`);
   const snap = snapshot(target);
   try {
-    mutate(snap, anchor, replacement);
+    mutate(snap, anchor, replacement, { commentPrefix });
     const code = specsExit(specs);
     if (code === 0) {
       console.log('   x DECORATION: the specs stayed GREEN (exit 0) with the behaviour removed');
@@ -339,14 +339,14 @@ prove(
   DOCS,
   'currently holds 9 files (19 test cases)',
   'currently holds 12 files (40 test cases)',
-  { specs: [DOCS_SPEC] },
+  { specs: [DOCS_SPEC], commentPrefix: '<!--' },
 );
 prove(
   'DOCS: the page claims a cap other than the real one',
   DOCS,
   'hard ceiling of 10 files and 20 cases',
   'hard ceiling of 50 files and 90 cases',
-  { specs: [DOCS_SPEC] },
+  { specs: [DOCS_SPEC], commentPrefix: '<!--' },
 );
 prove(
   'ADR: the amendment drops what the runner does with a listed case',

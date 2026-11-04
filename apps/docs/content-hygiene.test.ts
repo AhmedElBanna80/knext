@@ -17,6 +17,7 @@
 import { describe, expect, it } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { REF_PINNED_CASE_CAP, REF_PINNED_FILE_CAP } from '../../scripts/lib/ref-pinned-cases.mjs';
 
 const DOCS_DIR = resolve(import.meta.dirname, 'content/docs');
 
@@ -301,6 +302,25 @@ describe('docs content — compat-suite credential page stays honest about an op
         `compat-suite.mdx's \`${family}\` count should read ${entries} entries / ${cases} cases`,
       ).toMatch(new RegExp(`${entries}\\s*entries\\s*\\(${cases}\\s*test cases\\)`));
     }
+  });
+
+  it("states the per-case list's file and case counts and its cap, derived from the manifest", () => {
+    // `$knextRefPinnedCases` is the source of truth. The page must carry its real counts and
+    // the real cap, and must not claim a cell nobody measured.
+    const manifest = JSON.parse(
+      readFileSync(resolve(DOCS_DIR, '../../../../test/deploy-tests-manifest.knext.json'), 'utf-8'),
+    ) as { $knextRefPinnedCases: Array<{ cases: unknown[]; runs: Array<{ cell: string }> }> };
+    const files = manifest.$knextRefPinnedCases.length;
+    const cases = manifest.$knextRefPinnedCases.reduce((n, e) => n + e.cases.length, 0);
+    expect(compatSuite).toMatch(new RegExp(`${files}\\s*files\\s*\\(${cases}\\s*test cases\\)`));
+    expect(compatSuite).toContain(
+      `ceiling of ${REF_PINNED_FILE_CAP} files and ${REF_PINNED_CASE_CAP} cases`,
+    );
+    const measured = new Set(
+      manifest.$knextRefPinnedCases.flatMap((e) => e.runs.map((r) => r.cell)),
+    );
+    expect([...measured].sort()).toEqual(['bun-webpack', 'node-turbopack']);
+    expect(compatSuite).toMatch(/Node\/webpack and\s+Bun\/Turbopack cells were not measured/);
   });
 
   it('mutation control: the completed-14-night guard actually catches a false claim, and only while the window is open', () => {

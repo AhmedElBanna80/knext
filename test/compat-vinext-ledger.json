@@ -159,6 +159,37 @@
       "refreshed": "2026-10-27"
     },
     {
+      "test": "test/e2e/app-dir/partial-fallback-shell-upgrade/partial-fallback-shell-upgrade.test.ts",
+      "class": "unsupported",
+      "feature": "Partial Prerendering fallback shells (build-time prerender)",
+      "upstream": "https://github.com/cloudflare/vinext/issues/1359",
+      "cases": [
+        "should not upgrade a route shell when no params were prerendered",
+        "should upgrade the fallback shell to a route shell"
+      ],
+      "evidence": {
+        "fail": [
+          {
+            "run": "40193586592",
+            "cases": [
+              "should not upgrade a route shell when no params were prerendered",
+              "should upgrade the fallback shell to a route shell"
+            ]
+          },
+          {
+            "run": "39125644778",
+            "cases": [
+              "should not upgrade a route shell when no params were prerendered",
+              "should upgrade the fallback shell to a route shell"
+            ]
+          }
+        ]
+      },
+      "added": "2026-10-18",
+      "expires": "2026-11-17",
+      "refreshed": "2026-10-27"
+    },
+    {
       "test": "test/e2e/app-dir/resume-data-cache/resume-data-cache.test.ts",
       "class": "unsupported",
       "feature": "Partial Prerendering resume data cache (build-time prerender)",

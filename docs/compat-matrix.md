@@ -35,7 +35,7 @@
 > `deploy` branch encodes behaviour only Vercel's own infrastructure produces, and knext's result
 > matches the self-hosted expectation in every case — full per-test provenance is in the ADR
 > addendum and `.github/compat-credentialed-next-version.json`. At v16.4.3 the exclusions are
-> recorded in the bullet below; the manifest is not ref-scoped, so they do not carry over to other refs.
+> recorded in the bullet below, measured on two of the four cells; the runner does not scope them by ref.
 >
 > **The last COMPLETED 14-run-eligible credential evidence is the rc.1 rehearsal, still at
 > `v16.2.12`.** re-credentialed 2026-09-27 (#1570) — the four credential cells each ran green
@@ -114,27 +114,42 @@ gate, not the official suite — the official suite has its own row, own workflo
   row back (the guard permits an honest ❌ regression without ceremony) or annotate it. The
   quarantine + exclusion ledgers in `test/deploy-tests-manifest.knext.json` are the public
   scoreboard — shrinking them to zero is the standing goal (ADR-0007 A3-3).
-- **Next.js 16.4.3 scope exclusions (read these as three different things).** Three files are a
-  **deliberate product scope exclusion**, not a platform-coupling one: knext deploys a server
-  (`output: 'standalone'`) only, so a static export (`output: 'export'`) is refused and its
-  deploy tests cannot pass by design. The harness fails on `standalone server.js not found`.
-  Eight files are **platform-coupled** (vercel-infra-coupled, file level): each failing assertion
-  sits in a branch that expects the Vercel platform, such as its CDN headers, build-root paths,
-  or build-log formatting. One file is a **harness gap** (tech debt, tracked): the compat
-  harness installs with npm and cannot reproduce the fixture's pnpm install mode.
-  **Two files are still red and NOT excluded**: `cache-components-allow-otel-spans` (upstream
-  calls its deploy expectation a `next start` regression, which knext shares) and
-  `metadata-streaming-parallel-routes` (a `.failing` expectation that knext's passing body reds).
-  Excluding them would take the platform-coupled family to 16, one past its soft bound of 15, which
-  needs a reviewed ADR-0007 amendment, not a quieter exclusion. Until then the harness is not green.
-- **Exclusions are not ref-scoped.** The manifest is one global list. Of the lanes that run it,
-  only `compat-vinext.yml` checks out `main` (its default `NEXTJS_REF` is `v16.2.0`). The credential
-  lanes check out their pinned rc tag and read that tag's manifest. So any run that reads this
-  manifest at any ref loses the excluded cases. The cost of this change on node/turbopack at
-  v16.4.3, counting passing cases only: partial-fallback 10 of 13, prerender-encoding 3 of 5,
-  segment-cache/metadata 2 of 3, cached-navigations 19 of 20, non-root 6 of 10, transpile 1 of 2
-  (41 in total). The two still-red files are not excluded, so they cost nothing here.
-  Per-case entries would need an ADR-0007 amendment.
+- **Next.js 16.4.3 exclusions (read these as three different things).** Measured at v16.4.3 on
+  two of the four cells only: node/turbopack (run 41754152861) and bun/webpack (run 41770412157).
+  node/webpack and bun/turbopack were **not** measured at this ref, and nothing below claims them.
+  - **Deliberate product scope, file level (3 files).** knext deploys a server
+    (`output: 'standalone'`) only, so a static export (`output: 'export'`) is refused and its deploy
+    tests cannot pass by design. The harness fails on `standalone server.js not found`.
+  - **Platform-coupled, file level (3 files).** Every
+    case that runs fails on an assertion in a branch that expects the Vercel platform: span shape
+    set by the platform, or Vercel's build-log formatting.
+  - **Ref-pinned per-case entries (9 files, 19 cases).** Files that fail only some cases keep the
+    rest running. Each entry is pinned to the exact Next ref it was measured at, lists exact case
+    names that must still exist upstream at that ref, cites the upstream line and a mechanism
+    category, records its run IDs and the cells it was measured on, and counts against a cap of 10
+    files and 20 cases (ADR-0007 amendment 2026-11-04). The mechanisms: Vercel CDN header
+    (`partial-fallback-shell-upgrade`), Vercel static-prerender serving (`cached-navigations`), the
+    Vercel build root (`non-root-project-monorepo`), upstream `@gate` pragmas that expect a deploy
+    to fail while knext's result passes (`prerender-encoding`, `segment-cache/metadata`,
+    `metadata-streaming-parallel-routes`), a `next start` regression upstream names in its own TODO
+    (`cache-components-allow-otel-spans`), a harness package-manager gap
+    (`transpile-packages-typescript-foreign`), and a **Bun gap**.
+  - **The Bun gap, stated plainly.** `prerender-native-module` (2 cases) fails on the Bun cell
+    because the fixture's native addon uses the V8 C++ API and the Bun runtime loads it with a
+    different ABI version (Node 24's 137 against Bun 1.4.2's 147). It is deselected so the Bun cell
+    is not red. **It is not a claim that V8-API native addons work on Bun.** The manifest cannot scope
+    a deselection to one runtime, so the Node cells also stop running those 2 passing cases.
+  - **What a deselected case does at the same ref.** The runner does not run it, so a case that
+    starts passing is silent. A ref bump is what re-exposes it: an entry is only admissible at the
+    default or shipped ref, so a bump turns CI red until each entry is re-measured or removed.
+  - **Passing cases lost, on the cells that were measured:** node/turbopack 4 (2 client-side cases
+    in `non-root-project-monorepo` that fail only on webpack, and the 2 Bun-gap cases above),
+    bun/webpack 0. The earlier file-level version of this change lost 41 and 39.
+- **Exclusions are not ref-scoped at run time.** The manifest is one global list and the runner
+  has no notion of a ref. Of the lanes that run it, only `compat-vinext.yml` checks out `main` (its
+  default `NEXTJS_REF` is `v16.2.0`); the credential lanes check out their pinned rc tag and read
+  that tag's manifest. So a run that reads this manifest at another ref still deselects these
+  names. The pin is enforced in CI (an entry is inadmissible at any other ref), not by the runner.
 - **Red-nightly procedure (mechanized, end to end).** Red **test results actually fail the
   workflow**: each shard's final "Fail shard on red results" gate exits 1 when its summary JSON
   carries `failed>0` or `notRun>0` (the run step's `|| true` only swallows the *step* exit so the

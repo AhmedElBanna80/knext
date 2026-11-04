@@ -120,14 +120,12 @@ describe('validateStructuralGaps: the approved bounds', () => {
   });
 
   it('CAP: exactly the cap is fine, one more file reds', () => {
-    // Draw only canonical files the live manifest still lets run: a file the deploy
-    // manifest excludes (lane-blind, §h or a static-export ledger entry) cannot also be a
-    // structural gap, so the cap is measured on eligible corpus files, not excluded ones.
-    const excludedByManifest = new Set<string>(manifest.rules.exclude);
-    const eligible = STRUCTURAL_CANONICAL_FILES.filter((f) => !excludedByManifest.has(f));
     const many = (n: number) =>
       Array.from({ length: n }, (_, i) =>
-        file(eligible[i] ?? `test/e2e/app-dir/segment-cache/gen-${i}/gen-${i}.test.ts`),
+        file(
+          STRUCTURAL_CANONICAL_FILES[i] ??
+            `test/e2e/app-dir/segment-cache/gen-${i}/gen-${i}.test.ts`,
+        ),
       );
     expect(errs(sg(many(STRUCTURAL_FILE_CAP)))).toEqual([]);
     expect(errs(sg(many(STRUCTURAL_FILE_CAP + 1))).join()).toMatch(

@@ -115,6 +115,12 @@ const KNOWN_UNSUPPORTED_CATEGORIES = new Set([
   'ppr',
   'cache-components',
   'image-optimization',
+  // A deliberate product scope exclusion (knext refuses `output: 'export'`), NOT a
+  // platform-coupling one. Loud on purpose: see the static-export describe below.
+  'static-export',
+  // A compat-harness gap (the harness cannot reproduce the fixture's declared install
+  // mode). Tech debt, not product scope: every entry must link its tracking issue.
+  'harness-gap',
 ]);
 
 const manifest: Manifest = existsSync(MANIFEST_PATH)
@@ -787,6 +793,8 @@ const VERCEL_COUPLED_FILE_QUARANTINES: Record<
   {
     childIssue: number;
     observedRuns: string[];
+    /** The NEXTJS_REF the entry was observed at. Defaults to v16.3.5 (the rc.2 cohort). */
+    observedRef?: string;
     stubRuns?: string[];
     upstreamRef?: string;
     upstreamIssue?: string;
@@ -823,7 +831,114 @@ const VERCEL_COUPLED_FILE_QUARANTINES: Record<
     upstreamRef: 'vercel/next.js#94905',
     upstreamIssue: 'vercel/next.js#99435',
   },
+  // v16.4.3 entries (run 41754152861, node x turbopack, FINAL 3/3). Each file's
+  // failing assertion sits in a branch that cites the Vercel platform or its build
+  // environment (upstream line numbers in the ledger's mechanism). Files whose failure
+  // cites NO platform behaviour are deliberately absent: cache-components-allow-otel-spans
+  // and metadata-streaming-parallel-routes are reported as real failures, not quarantined.
+  'test/e2e/app-dir/otel-middleware-trace/otel-middleware-trace.test.ts': {
+    childIssue: 2627,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
+  'test/e2e/app-dir/empty-generate-static-params/empty-generate-static-params.test.ts': {
+    childIssue: 2128,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
+  'test/e2e/app-dir/use-cache-segment-configs/use-cache-segment-configs.test.ts': {
+    childIssue: 2128,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
+  'test/e2e/app-dir/partial-fallback-shell-upgrade/partial-fallback-shell-upgrade.test.ts': {
+    childIssue: 2128,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
+  'test/e2e/app-dir/prerender-encoding/prerender-encoding.test.ts': {
+    childIssue: 2127,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
+  'test/e2e/app-dir/segment-cache/metadata/segment-cache-metadata.test.ts': {
+    childIssue: 2127,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
+  'test/e2e/app-dir/segment-cache/cached-navigations/cached-navigations.test.ts': {
+    childIssue: 2129,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
+  'test/e2e/app-dir/non-root-project-monorepo/non-root-project-monorepo.test.ts': {
+    childIssue: 2128,
+    observedRuns: ['41754152861'],
+    observedRef: 'v16.4.3',
+  },
 };
+
+describe('deploy-tests-manifest — static-export scope exclusion and harness-gap ledger (v16.4.3)', () => {
+  // Deliberate product scope: knext deploys a server (output:'standalone'), so a
+  // static export has no server to boot. The harness failure is the downstream
+  // `standalone server.js not found`, not the CLI refusal (assertNotStaticExport).
+  const STATIC_EXPORT_FILES = [
+    'test/e2e/app-dir/use-cache-output-export/use-cache-output-export.test.ts',
+    'test/e2e/middleware-src/middleware-src.test.ts',
+    'test/e2e/middleware-src-node/middleware-src-node.test.ts',
+  ];
+  // Harness gap, not product scope: the compat harness installs with npm and does not
+  // honour the fixture's declared package manager. Tracked by the linked issue.
+  const HARNESS_GAP_FILES = ['test/e2e/transpile-packages-typescript-foreign/index.test.ts'];
+  const HARNESS_GAP_ISSUE_URL = 'https://github.com/getknext-dev/knext/issues/2709';
+
+  it('every static-export file is a DELIBERATE product scope exclusion, enforced at file level', () => {
+    for (const file of STATIC_EXPORT_FILES) {
+      const entry = manifest.$knextExclusions.find((e) => e.test === file);
+      expect(entry, `${file} must be in $knextExclusions`).toBeTruthy();
+      expect(entry?.category, `${file}: category`).toBe('static-export');
+      expect(
+        entry?.rationale ?? '',
+        `${file}: rationale must say it is a deliberate product scope exclusion`,
+      ).toMatch(/deliberate product scope exclusion/i);
+      expect(
+        entry?.rationale ?? '',
+        `${file}: rationale must cite the real harness failure`,
+      ).toMatch(/standalone server\.js not found/);
+      expect(
+        manifest.rules.exclude.includes(file),
+        `${file} must be in rules.exclude verbatim`,
+      ).toBe(true);
+    }
+  });
+
+  it('static-export is NOT platform coupling: no static-export file carries a vercel-infra-coupled quarantine', () => {
+    const quarantines: KnextQuarantine[] =
+      (manifest as unknown as { $knextQuarantines?: KnextQuarantine[] }).$knextQuarantines ?? [];
+    for (const file of STATIC_EXPORT_FILES) {
+      expect(
+        quarantines.some((q) => q.test === file),
+        `${file} must not be a §h quarantine`,
+      ).toBe(false);
+    }
+  });
+
+  it('the transpile harness gap is ledgered as a harness-gap with its tech-debt issue, not as product or platform scope', () => {
+    for (const file of HARNESS_GAP_FILES) {
+      const entry = manifest.$knextExclusions.find((e) => e.test === file);
+      expect(entry, `${file} must be in $knextExclusions`).toBeTruthy();
+      expect(entry?.category, `${file}: category`).toBe('harness-gap');
+      expect(
+        entry?.rationale ?? '',
+        `${file}: rationale must link ${HARNESS_GAP_ISSUE_URL}`,
+      ).toContain(HARNESS_GAP_ISSUE_URL);
+      expect(
+        manifest.rules.exclude.includes(file),
+        `${file} must be in rules.exclude verbatim`,
+      ).toBe(true);
+    }
+  });
+});
 
 describe('deploy-tests-manifest — vercel-infra-coupled family (ADR-0007 §h, #1571)', () => {
   const quarantines: KnextQuarantine[] =
@@ -846,12 +961,13 @@ describe('deploy-tests-manifest — vercel-infra-coupled family (ADR-0007 §h, #
   });
 
   it('every §h file has a complete level:"file" ledger record — mechanism, cases, run-cited evidence', () => {
-    for (const [file, { observedRuns, stubRuns }] of coupled) {
+    for (const [file, { observedRuns, stubRuns, observedRef }] of coupled) {
       const ledger = quarantines.find((q) => q.test === file);
       expect(ledger, `no $knextQuarantines ledger entry for §h file ${file}`).toBeTruthy();
       expect(ledger?.level, `${file}: §h quarantine must declare level:"file"`).toBe('file');
       expect(ledger?.family, `${file}: §h family`).toBe('vercel-infra-coupled');
-      expect(ledger?.nextjsRef, `${file}: observed at v16.3.5`).toBe('v16.3.5');
+      const expectedRef = observedRef ?? 'v16.3.5';
+      expect(ledger?.nextjsRef, `${file}: observed at ${expectedRef}`).toBe(expectedRef);
       expect((ledger?.cases ?? []).length, `${file}: failing cases preserved`).toBeGreaterThan(0);
       // The mechanism must name the deploy branch it rests on — the whole §h bar.
       expect(

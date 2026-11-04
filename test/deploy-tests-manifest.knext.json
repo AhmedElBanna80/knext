@@ -244,7 +244,19 @@
       "test/e2e/incremental-cache-path-traversal/index.test.ts",
       "test/e2e/app-dir/not-found-non-document/not-found-non-document.test.ts",
       "test/e2e/app-dir/expire-time/expire-time.test.ts",
-      "test/e2e/middleware-rewrites/test/index.test.ts"
+      "test/e2e/middleware-rewrites/test/index.test.ts",
+      "test/e2e/app-dir/otel-middleware-trace/otel-middleware-trace.test.ts",
+      "test/e2e/app-dir/empty-generate-static-params/empty-generate-static-params.test.ts",
+      "test/e2e/app-dir/use-cache-segment-configs/use-cache-segment-configs.test.ts",
+      "test/e2e/app-dir/partial-fallback-shell-upgrade/partial-fallback-shell-upgrade.test.ts",
+      "test/e2e/app-dir/prerender-encoding/prerender-encoding.test.ts",
+      "test/e2e/app-dir/segment-cache/metadata/segment-cache-metadata.test.ts",
+      "test/e2e/app-dir/segment-cache/cached-navigations/cached-navigations.test.ts",
+      "test/e2e/app-dir/non-root-project-monorepo/non-root-project-monorepo.test.ts",
+      "test/e2e/app-dir/use-cache-output-export/use-cache-output-export.test.ts",
+      "test/e2e/middleware-src/middleware-src.test.ts",
+      "test/e2e/middleware-src-node/middleware-src-node.test.ts",
+      "test/e2e/transpile-packages-typescript-foreign/index.test.ts"
     ]
   },
   "$knextQuarantines": [
@@ -365,6 +377,122 @@
       "evidence": "runs 36332946048 (node x webpack) / 36332959885 (bun x webpack), NEXTJS_REF=v16.3.5: FINAL 3/3 attempts, the case named in the shard 9/16 summary; runs 36430362513 (node x webpack) / 36430368139 (bun x webpack): FINAL 3/3 (1 failed, 2 skipped, 56 passed, 59 total). Turbopack cells 36332940411 / 36332951393 / 36430353283 / 36430358027: the file is skipped upstream (finished in 2.09 s with IS_TURBOPACK_TEST=1 and NEXT_ENABLE_ADAPTER=1), not passed. RE-AUDITED at v16.3.6 (rc.4 security bump, GHSA-vcvr-r3jv-pc5j) by source equivalence, not by a fresh run: The v16.3.5...v16.3.6 compare (3 commits: the version bump, a hardened next/og SVG serialization in packages/next/src/compiled/@vercel/og, and test/production/deterministic-build/deployment-id.test.ts) changes no file of this test or its fixture and no runtime file outside next/og. The failing assertion sits in the isNextDeploy branch and encodes Vercel-only routing behaviour that an og serialization change cannot reach, and the file is in rules.exclude, so it did not execute in the bump branch's dispatches (node x turbopack 36835179424 and bun x turbopack 36835175500, each 1099 passed / 0 failed, identical per-shard counts to the v16.3.5 baselines 36829124072 and 36638859599). No webpack cell was dispatched (two-dispatch budget). RE-AUDITED at v16.3.8 (rc.6 security bump, GHSA-cjq9-62q9-8jv4) by source equivalence, not by a fresh run of this file: the v16.3.6...v16.3.8 compare (10 commits, 192 files, summarised in .github/compat-credentialed-next-version.json) changes no file of this test or its fixture. The quarantined cases stay excluded or jest-deselected, so they do not execute in the credential dispatches either; this stamp does not claim the case passes or fails at v16.3.8. CAVEAT: unlike the og-only 16.3.6 bump, this compare does change routing and cache runtime code near this surface (case-sensitive /_next/data path matching in match-next-data-pathname.ts, response-cache keys scoped to the source route, the app-page and app-route build templates). The failing assertion still encodes an expectation only Vercel infrastructure produces, but that was NOT re-run at v16.3.8; un-exclude this file at v16.3.8 to confirm.",
       "provenance": "https://github.com/getknext-dev/knext/issues/1633 (triage: https://github.com/getknext-dev/knext/issues/1633#issuecomment-5895614465; founder decision 2026-09-29 to evidence-quarantine on the webpack cells for rc.2) + vercel/next.js#94905 (runApi keeps req.url as the original URL) + vercel/next.js#99435 (upstream issue asking for an adapter-neutral expectation). Retire when upstream changes the deploy-branch req.url expectation for non-Vercel adapters, then restore the mirrored suites.failed entry.",
       "reaudited": "v16.3.8"
+    },
+    {
+      "test": "test/e2e/app-dir/otel-middleware-trace/otel-middleware-trace.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": [
+        "traces a page rendered after NextResponse.next()",
+        "traces a route handler executed after NextResponse.next()",
+        "traces a rewritten page",
+        "traces a middleware redirect",
+        "traces a direct middleware response",
+        "traces a request the middleware does not match",
+        "traces /page with an incoming traceparent",
+        "traces /route-handler with an incoming traceparent",
+        "traces /rewrite with an incoming traceparent",
+        "still applies request header overrides set by middleware",
+        "respects a traceparent explicitly set by middleware",
+        "traces instrumentation registration in the triggering request"
+      ],
+      "mechanism": "Every failing case is a `toMatchInlineSnapshot` span-tree mismatch inside the `describe.each(VARIANTS)` block, for both the proxy and the middleware variant (12 cases each). The deployed snapshots are selected by `isNextDeploy` (deploy branches at lines 164, 336, 362 and 1106 of the v16.4.3 file). The file's own comments (lines 115-122 and 136-138) attribute the deployed span shape to the platform invoking the middleware and the render separately, which is the Vercel deploy shape and not knext's. The custom-server block at line 1139 is skipped on deploy, so the file-level entry covers every case that runs on deploy.",
+      "evidence": "run 41754152861 (node x turbopack, main at aea548047, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts on all 24 cases (12 proxy, 12 middleware), each title appearing in every attempt of the job logs. Only the node x turbopack cell was measured at v16.4.3; the other cells are not claimed here.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2627 (ADR-0007 section (h); precedent #1571 / #1624). Retire when upstream's deployed snapshots stop attributing the span shape to the platform, or at the first Next ref where the deployed snapshots match knext's span shape on all four cells."
+    },
+    {
+      "test": "test/e2e/app-dir/empty-generate-static-params/empty-generate-static-params.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": [
+        "points the computed empty array build error at the declaration",
+        "points the literal empty array build error at the array"
+      ],
+      "mechanism": "Both failing cases are `toMatchInlineSnapshot` assertions of the build-error text, reached through the `isTurbopack && isNextDeploy` branch (line 67 of the v16.4.3 file; the same shape repeats at line 148). Its comments (lines 68, 84, 149 and 166) read 'Vercel build logs omit leading indentation from stack and code frames.', so the deployed snapshot encodes Vercel's build-log formatting.",
+      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts on both cases. Observed at v16.4.0 on all four cells in the #2149 record: runs 38040527044, 38161219571, 38174324666, 38181750458, 38186195085.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2128 (ADR-0007 section (h); precedent #1571 / #1624). Retire when upstream's isNextDeploy snapshot stops encoding Vercel's build-log formatting for non-Vercel adapters."
+    },
+    {
+      "test": "test/e2e/app-dir/use-cache-segment-configs/use-cache-segment-configs.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": ["it should error when using segment configs that aren't supported by useCache"],
+      "mechanism": "The failing case is a `toMatchInlineSnapshot` of the build error, reached through the `isTurbopack && isNextDeploy` branch (line 76 of the v16.4.3 file). Its comment (line 77) reads 'Vercel removes code-frame indentation and may omit blank log lines.', and the other deploy branch (lines 133-134) repeats it: 'Vercel strips code-frame indentation and trailing whitespace'.",
+      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts. Observed at v16.4.0 on all four cells in the #2149 record: runs 38040527044, 38161219571, 38174324666, 38181750458, 38186195085.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2128 (ADR-0007 section (h); precedent #1571 / #1624). Retire when upstream's isNextDeploy snapshot stops encoding Vercel's code-frame formatting for non-Vercel adapters."
+    },
+    {
+      "test": "test/e2e/app-dir/partial-fallback-shell-upgrade/partial-fallback-shell-upgrade.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": [
+        "shares an on-demand shell across params without generateStaticParams",
+        "keeps params without generateStaticParams dynamic after explicit revalidation of an on-demand shell",
+        "reuses generated optional catch-all pages before and after explicit revalidation"
+      ],
+      "mechanism": "Each failing assertion is `expect(headers.get('x-vercel-cache')).toBe('HIT')` inside an `if (isNextDeploy)` block (lines 297-300, 315-316, 326-329, 370-371 and 423-428 of the v16.4.3 file). x-vercel-cache is set by Vercel's CDN, and the file's comment at line 33 says the legacy Vercel builder does not implement the Cache Components shell. The received value is null on every attempt: knext serves no CDN header.",
+      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts on the three cases, 'Expected: HIT / Received: null'. Observed at v16.4.0 on all four cells in the #2149 record: runs 38040527044, 38161219571, 38174324666, 38181750458, 38186195085. Stub check (#2149 record, v16.4.0): with ONLY the x-vercel-cache assertions removed, the three cases passed on knext in a local run. Not re-run at v16.4.3. A harness-side header fake is rejected by ADR-0007 section (h) option (c).",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2128 (ADR-0007 section (h); precedent #1571 / #1624, x-vercel-cache). Retire when upstream stops asserting x-vercel-cache for non-Vercel adapters in these cases, or at the first Next ref where the file is green on all four cells. The bun-vinext ledger record for this file (upstream https://github.com/cloudflare/vinext/issues/1359, runs 40193586592 and 39125644778) was removed from the vinext ledgers in this change: the exclusion is lane-blind, so that record could never run (one mechanism per file)."
+    },
+    {
+      "test": "test/e2e/app-dir/prerender-encoding/prerender-encoding.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": [
+        "should preserve an encoded slash in an exact closed catch-all path",
+        "should preserve an encoded slash in an open catch-all fallback"
+      ],
+      "mechanism": "Both cases are gated by upstream pragmas, not by an assertion in an isNextDeploy branch: the closed case carries `// @gate !deploy` (line 35) and the open case `// @gate !deploy || !adapter` (line 50). On this isNextDeploy lane the harness runs them as expected-failing ('Failing test passed even though it was supposed to fail') and knext's result passes. The upstream comments give the platform reason: 'Vercel tries the raw URL and the fully decoded path for filesystem lookup' (lines 33-34) and 'The Vercel adapter deployment path decodes the captured slash' (lines 47-49), while next start preserves the slash, which is what knext returns.",
+      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts on both cases, 'Failing test passed'. Observed at v16.4.0 on all four cells in the #2149 record: runs 38040527044, 38161219571, 38174324666, 38181750458, 38186195085.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2127 (ADR-0007 section (h); precedent #1571 / #1624). Retire when upstream drops the deploy-only expected failure for these cases, or at the first Next ref where they pass on all four cells."
+    },
+    {
+      "test": "test/e2e/app-dir/segment-cache/metadata/segment-cache-metadata.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": ["requests only the head when the page segments are cached"],
+      "mechanism": "The case carries `// @gate !deploy` (line 150). On this isNextDeploy lane the harness runs it as expected-failing ('Failing test passed even though it was supposed to fail') and knext's head-only response passes the assertion. The upstream comment at lines 147-149 gives the platform reason: 'On the platform a cold ISR path is served from a completed static prerender that cannot vary on the request tree, so the page body is sent along with the head.'",
+      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts, 'Failing test passed'. Observed at v16.4.0 on all four cells in the #2149 record: runs 38040527044, 38161219571, 38174324666, 38181750458, 38186195085.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2127 (ADR-0007 section (h); precedent #1571 / #1624). Retire when upstream drops the deploy-only expected failure for this case, or at the first Next ref where it passes on all four cells."
+    },
+    {
+      "test": "test/e2e/app-dir/segment-cache/cached-navigations/cached-navigations.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": ["caches a fully static on-demand param for repeated navigations"],
+      "mechanism": "The failing assertion sits in the `if (isNextDeploy)` branch (lines 618-623 of the v16.4.3 file), under the comment at lines 619-620: 'The platform serves a completed static prerender, not an unmarked live-render prefix.' The failure is 'Expected no network requests to be initiated' on the `act(navigate, 'no-requests')` at line 621. The non-deploy branch (lines 626-633) asserts the live-prefix behaviour instead.",
+      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts, 'Expected no network requests to be initiated'. Observed at v16.4.0 on all four cells in the #2149 record: runs 38040527044, 38161219571, 38174324666, 38181750458, 38186195085.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2129 (triage 2026-10-10: local reproduction against plain next start; ADR-0007 section (h)). Retire when upstream's isNextDeploy branch for this case stops encoding the platform's static-prerender serving, or at the first Next ref where it passes on all four cells. The bun-vinext structural-gap record for cached-navigations.test.ts (13 cases) was removed from the vinext ledgers in this change for the same one-mechanism-per-file reason; the lane-blind exclusion means it could never run."
+    },
+    {
+      "test": "test/e2e/app-dir/non-root-project-monorepo/non-root-project-monorepo.test.ts",
+      "nextjsRef": "v16.4.3",
+      "lane": "node",
+      "family": "vercel-infra-coupled",
+      "level": "file",
+      "cases": [
+        "should encode special chars during RSC",
+        "should encode special chars during SSR",
+        "should work during RSC",
+        "should work during SSR"
+      ],
+      "mechanism": "The helper `sourceFileUrl` (lines 43-47 of the v16.4.3 file) returns `file:///vercel/path0/apps/web/` when isNextDeploy is set, and all four failing cases compare import.meta.url against it. The received values are knext's real build paths (`file:///tmp/next-test-.../apps/web/app/...`), so the monorepo layout built and resolved apps/web. The mismatch is the Vercel build-root literal, not a layout failure.",
+      "evidence": "run 41754152861 (node x turbopack, NEXTJS_REF=v16.4.3): FINAL 3/3 attempts on all four cases, 'Expected: file:///vercel/path0/apps/web/... / Received: file:///tmp/next-test-...'. Observed at v16.4.0 on all four cells in the #2162 record: runs 38161219571, 38174324666, 38181750458, 38186195085.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2128 (ADR-0007 section (h); the 16.4 triage residual after the harness fix, the file asserts Vercel's build root at upstream lines 43-47). Retire when upstream stops hard-coding the Vercel build root for non-Vercel adapters."
     }
   ],
   "$knextExclusions": [
@@ -382,6 +510,26 @@
       "test": "test/e2e/app-dir/ppr-full/**/*",
       "category": "ppr",
       "rationale": "Partial Prerendering (PPR) is not adapter-standardizable yet (CLAUDE.md §6 Tier C, upstream-gated); knext does not implement the PPR resume/stream contract. compat-matrix row: PPR ❌."
+    },
+    {
+      "test": "test/e2e/app-dir/use-cache-output-export/use-cache-output-export.test.ts",
+      "category": "static-export",
+      "rationale": "Deliberate product scope exclusion, NOT platform coupling. knext deploys a server (output: 'standalone') only. A static export (output: 'export') emits out/ and no .next/standalone/server.js, so there is nothing to boot, and the CLI refuses a static export up front (assertNotStaticExport, run by runProjectBuild). The compat harness builds with next build directly, so it fails in e2e-deploy.sh with 'standalone server.js not found under .next/standalone' (run 41754152861, node x turbopack, FINAL 3/3). This file is the VALID export case and cannot pass by design. Removal condition: knext gains a static-export serving path."
+    },
+    {
+      "test": "test/e2e/middleware-src/middleware-src.test.ts",
+      "category": "static-export",
+      "rationale": "Deliberate product scope exclusion, NOT platform coupling. Both cases build with output: 'export' and call next.start() on deploy (isNextDeploy branch, lines 85-86 of the v16.4.3 file). knext deploys only a standalone server, so a static export has no server to boot and the CLI refuses it (assertNotStaticExport). The harness fails in e2e-deploy.sh with 'standalone server.js not found under .next/standalone' (run 41754152861, node x turbopack, FINAL 3/3 on both cases). Removal condition: knext gains a static-export serving path."
+    },
+    {
+      "test": "test/e2e/middleware-src-node/middleware-src-node.test.ts",
+      "category": "static-export",
+      "rationale": "Deliberate product scope exclusion, NOT platform coupling. Same shape as the middleware-src entry: both cases build with output: 'export' and call next.start() on deploy (isNextDeploy branch, lines 85-86 of the v16.4.3 file). knext deploys only a standalone server and refuses a static export (assertNotStaticExport). The harness fails in e2e-deploy.sh with 'standalone server.js not found under .next/standalone' (run 41754152861, node x turbopack, FINAL 3/3 on both cases). Removal condition: knext gains a static-export serving path."
+    },
+    {
+      "test": "test/e2e/transpile-packages-typescript-foreign/index.test.ts",
+      "category": "harness-gap",
+      "rationale": "Harness gap, NOT product scope and NOT platform coupling; tracked by https://github.com/getknext-dev/knext/issues/2709. The case 'without transpilePackages › should fail' expects a build failure that only occurs when file: dependencies sit inside node_modules, as upstream's vercel.json pnpm install produces (upstream test lines 3-4). The compat harness installs fixtures with npm, which symlinks the file: dependency to fixture source, so next.start() resolves (run 41754152861, node x turbopack, FINAL 3/3). The file-level exclusion also drops the passing sibling case 'with transpilePackages › should work'. Removal condition: the harness installs with the fixture's declared package manager and the linked issue closes."
     }
   ]
 }

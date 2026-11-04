@@ -113,6 +113,16 @@ gate, not the official suite — the official suite has its own row, own workflo
   row back (the guard permits an honest ❌ regression without ceremony) or annotate it. The
   quarantine + exclusion ledgers in `test/deploy-tests-manifest.knext.json` are the public
   scoreboard — shrinking them to zero is the standing goal (ADR-0007 A3-3).
+- **Next.js 16.4.3 scope exclusions (read these as three different things).** Three files are a
+  **deliberate product scope exclusion**, not a platform-coupling one: knext deploys a server
+  (`output: 'standalone'`) only, so a static export (`output: 'export'`) is refused and its
+  deploy tests cannot pass by design. The harness fails on `standalone server.js not found`.
+  Eight files are **platform-coupled** (vercel-infra-coupled, file level): each failing assertion
+  sits in a branch that expects the Vercel platform, such as its CDN headers, build-root paths,
+  or build-log formatting. One file is a **harness gap** (tech debt, not product scope): the
+  compat harness installs with npm and cannot reproduce the fixture's pnpm install mode. Two
+  files are **not** excluded: their failures cite no platform behaviour, so they stay red as
+  real failures until someone decides what they are.
 - **Red-nightly procedure (mechanized, end to end).** Red **test results actually fail the
   workflow**: each shard's final "Fail shard on red results" gate exits 1 when its summary JSON
   carries `failed>0` or `notRun>0` (the run step's `|| true` only swallows the *step* exit so the

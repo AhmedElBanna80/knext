@@ -1,0 +1,9 @@
+not json at all, ignored
+{this is not valid json
+{"timestamp":"2026-01-01T00:00:00.250000000Z","knative.dev/key":"bench-cells/base-00000","message":"PA scale got=0, want=1 (some trailing detail)"}
+{"timestamp":"2026-01-01T00:01:20.000Z","knative.dev/key":"bench-cells/base-00001","message":"PA scale got=0, want=1 (some trailing detail)"}
+{"timestamp":"2026-01-01T00:02:20.001Z","knative.dev/key":"bench-cells/base-00002","message":"PA scale got=0, want=1 (some trailing detail)"}
+{"timestamp":"2026-01-01T00:03:00.000Z","knative.dev/key":"bench-cells/base-00003","message":"PA scale got=1, want=0"}
+{"timestamp":"2026-01-01T00:09:59.950Z","knative.dev/key":"bench-cells/var-00000","message":"PA scale got=0, want=1 (some trailing detail)"}
+{"timestamp":"2026-01-01T00:10:59.949Z","knative.dev/key":"bench-cells/var-00001","message":"PA scale got=0, want=1 (some trailing detail)"}
+{"timestamp":"2026-01-01T00:12:00.100Z","knative.dev/key":"other-ns/var-00002","message":"PA scale got=0, want=1 (some trailing detail)"}

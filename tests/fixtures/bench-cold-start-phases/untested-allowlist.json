@@ -1,0 +1,113 @@
+{
+  "$comment": "Dated allowlist for tests/bench-cold-start-analyzers.test.ts. An entry is a debt, not an exemption: remove it when the script gains a test that names it. The guard fails on an expired list, on a stale entry (file gone), and on an entry that a test now covers.",
+  "tracking": "https://github.com/getknext-dev/knext/issues/2705",
+  "added": "2026-11-04",
+  "expires": "2026-12-04",
+  "entries": [
+    {
+      "path": "scripts/bench-a13-postready-lazy-incluster.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-a13-postready-lazy.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/baseline-stability-analyze.py",
+      "kind": "analyzer",
+      "reason": "analyzer with no fixture test yet"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/baseline-stability-drive.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/bunexec-ab-analyze.py",
+      "kind": "analyzer",
+      "reason": "analyzer with no fixture test yet"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/bunexec-ab-incluster.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/burst-ab-analyze.py",
+      "kind": "analyzer",
+      "reason": "analyzer with no fixture test yet"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/burst-ab-incluster.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/cold-cycle.mjs",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/cpu-boost-analyze.py",
+      "kind": "analyzer",
+      "reason": "analyzer with no fixture test yet"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/dns-probe.js",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/drive.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/gke/cold-cycle.mjs",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/gke/drive.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/gke/first-request.mjs",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/gke/variants/bc-check.mjs",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/gke/variants/instrumentation-stub.js",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/gke/variants/warm-entry.mjs",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/node-diagnosis-analyze.py",
+      "kind": "analyzer",
+      "reason": "analyzer with no fixture test yet"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/prepull-ab-analyze.py",
+      "kind": "analyzer",
+      "reason": "analyzer with no fixture test yet"
+    },
+    {
+      "path": "scripts/bench-cold-start-phases/prepull-ab-incluster.py",
+      "kind": "cluster-driver",
+      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+    }
+  ]
+}

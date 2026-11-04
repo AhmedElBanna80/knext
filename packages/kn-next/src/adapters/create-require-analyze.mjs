@@ -382,9 +382,7 @@ function classify(call, parents, getFacts) {
             if (spec !== null) return { kind: "direct", dynamic: false, spec };
         }
         const folded =
-            parent.arguments.length === 1
-                ? foldSpecifier(parent.arguments[0], getFacts())
-                : null;
+            parent.arguments.length === 1 ? foldSpecifier(parent.arguments[0], getFacts()) : null;
         return folded === null
             ? { kind: "direct", dynamic: true, spec: null }
             : { kind: "direct", dynamic: true, spec: null, folded };
@@ -407,22 +405,22 @@ function classify(call, parents, getFacts) {
 
 /** Parent of every node, built with one explicit-stack walk (no recursion on a deep tree). */
 function indexParents(ast) {
-  const parents = new Map();
-  const stack = [ast];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    for (const key of Object.keys(node)) {
-      if (SKIP_KEYS.has(key)) continue;
-      const value = node[key];
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (child && typeof child.type === 'string') {
-          parents.set(child, node);
-          stack.push(child);
+    const parents = new Map();
+    const stack = [ast];
+    while (stack.length > 0) {
+        const node = stack.pop();
+        for (const key of Object.keys(node)) {
+            if (SKIP_KEYS.has(key)) continue;
+            const value = node[key];
+            for (const child of Array.isArray(value) ? value : [value]) {
+                if (child && typeof child.type === "string") {
+                    parents.set(child, node);
+                    stack.push(child);
+                }
+            }
         }
-      }
     }
-  }
-  return parents;
+    return parents;
 }
 
 /**
@@ -444,335 +442,336 @@ function indexParents(ast) {
  * RangeError, which the caller turns into a parse failure (fails closed).
  */
 function buildScopes(ast) {
-  /** Identifier node -> the Binding it declares. */
-  const declOf = new Map();
-  /** Every identifier reference: { node, scope, role, value?, binding }. */
-  const refs = [];
-  /** Every variable declarator. */
-  const declarators = [];
-  /** Every dynamic `import(...)`. */
-  const dynamicImports = [];
+    /** Identifier node -> the Binding it declares. */
+    const declOf = new Map();
+    /** Every identifier reference: { node, scope, role, value?, binding }. */
+    const refs = [];
+    /** Every variable declarator. */
+    const declarators = [];
+    /** Every dynamic `import(...)`. */
+    const dynamicImports = [];
 
-  const newScope = (parent, isFunction) => ({ parent, isFunction, names: new Map() });
-  const functionScopeOf = (scope) => {
-    let s = scope;
-    while (!s.isFunction) s = s.parent;
-    return s;
-  };
-  const declare = (scope, id, kind) => {
-    let binding = scope.names.get(id.name);
-    if (!binding) {
-      binding = {
-        name: id.name,
-        kind,
-        decls: 0,
-        init: null,
-        writes: [],
-        otherWrite: false,
-        refs: [],
-      };
-      scope.names.set(id.name, binding);
-    }
-    binding.decls++;
-    declOf.set(id, binding);
-    return binding;
-  };
-
-  const declarePattern = (node, scope, kind) => {
-    if (!node) return;
-    switch (node.type) {
-      case 'Identifier':
-        declare(scope, node, kind);
-        break;
-      case 'ObjectPattern':
-        for (const p of node.properties) {
-          if (p.type === 'RestElement') {
-            declarePattern(p.argument, scope, kind);
-          } else {
-            if (p.computed) visit(p.key, scope);
-            declarePattern(p.value, scope, kind);
-          }
+    const newScope = (parent, isFunction) => ({ parent, isFunction, names: new Map() });
+    const functionScopeOf = (scope) => {
+        let s = scope;
+        while (!s.isFunction) s = s.parent;
+        return s;
+    };
+    const declare = (scope, id, kind) => {
+        let binding = scope.names.get(id.name);
+        if (!binding) {
+            binding = {
+                name: id.name,
+                kind,
+                decls: 0,
+                init: null,
+                writes: [],
+                otherWrite: false,
+                refs: [],
+            };
+            scope.names.set(id.name, binding);
         }
-        break;
-      case 'ArrayPattern':
-        for (const el of node.elements) declarePattern(el, scope, kind);
-        break;
-      case 'RestElement':
-        declarePattern(node.argument, scope, kind);
-        break;
-      case 'AssignmentPattern':
-        declarePattern(node.left, scope, kind);
-        visit(node.right, scope);
-        break;
-    }
-  };
+        binding.decls++;
+        declOf.set(id, binding);
+        return binding;
+    };
 
-  /** An assignment target that is a pattern: every name in it is written by something unknown. */
-  const writePattern = (node, scope) => {
-    if (!node) return;
-    switch (node.type) {
-      case 'Identifier':
-        refs.push({ node, scope, role: 'writeOther' });
-        break;
-      case 'ObjectPattern':
-        for (const p of node.properties) {
-          if (p.type === 'RestElement') {
-            writePattern(p.argument, scope);
-          } else {
-            if (p.computed) visit(p.key, scope);
-            writePattern(p.value, scope);
-          }
+    const declarePattern = (node, scope, kind) => {
+        if (!node) return;
+        switch (node.type) {
+            case "Identifier":
+                declare(scope, node, kind);
+                break;
+            case "ObjectPattern":
+                for (const p of node.properties) {
+                    if (p.type === "RestElement") {
+                        declarePattern(p.argument, scope, kind);
+                    } else {
+                        if (p.computed) visit(p.key, scope);
+                        declarePattern(p.value, scope, kind);
+                    }
+                }
+                break;
+            case "ArrayPattern":
+                for (const el of node.elements) declarePattern(el, scope, kind);
+                break;
+            case "RestElement":
+                declarePattern(node.argument, scope, kind);
+                break;
+            case "AssignmentPattern":
+                declarePattern(node.left, scope, kind);
+                visit(node.right, scope);
+                break;
         }
-        break;
-      case 'ArrayPattern':
-        for (const el of node.elements) writePattern(el, scope);
-        break;
-      case 'RestElement':
-        writePattern(node.argument, scope);
-        break;
-      case 'AssignmentPattern':
-        writePattern(node.left, scope);
-        visit(node.right, scope);
-        break;
-      default:
-        visit(node, scope); // a member expression target
-    }
-  };
+    };
 
-  const visitFunction = (node, scope) => {
-    const inner = newScope(scope, true);
-    if (node.type === 'FunctionExpression' && node.id) declare(inner, node.id, 'fname');
-    for (const p of node.params) declarePattern(p, inner, 'param');
-    if (node.body.type === 'BlockStatement') {
-      for (const stmt of node.body.body) visit(stmt, inner);
-    } else {
-      visit(node.body, inner);
-    }
-  };
-
-  const visitClass = (node, scope) => {
-    let inner = scope;
-    if (node.type === 'ClassDeclaration' && node.id) {
-      declare(scope, node.id, 'class');
-    } else if (node.id) {
-      inner = newScope(scope, false);
-      declare(inner, node.id, 'class');
-    }
-    if (node.superClass) visit(node.superClass, inner);
-    for (const member of node.body.body) {
-      if (member.type === 'StaticBlock') {
-        const block = newScope(inner, true);
-        for (const stmt of member.body) visit(stmt, block);
-        continue;
-      }
-      if (member.computed) visit(member.key, inner);
-      if (member.value) visit(member.value, inner);
-    }
-  };
-
-  const visitDeclaration = (node, scope) => {
-    const target = node.kind === 'var' ? functionScopeOf(scope) : scope;
-    for (const decl of node.declarations) {
-      if (decl.id.type === 'Identifier') {
-        const binding = declare(target, decl.id, node.kind);
-        if (decl.init) {
-          binding.init = decl.init;
-          binding.writes.push(decl.init);
+    /** An assignment target that is a pattern: every name in it is written by something unknown. */
+    const writePattern = (node, scope) => {
+        if (!node) return;
+        switch (node.type) {
+            case "Identifier":
+                refs.push({ node, scope, role: "writeOther" });
+                break;
+            case "ObjectPattern":
+                for (const p of node.properties) {
+                    if (p.type === "RestElement") {
+                        writePattern(p.argument, scope);
+                    } else {
+                        if (p.computed) visit(p.key, scope);
+                        writePattern(p.value, scope);
+                    }
+                }
+                break;
+            case "ArrayPattern":
+                for (const el of node.elements) writePattern(el, scope);
+                break;
+            case "RestElement":
+                writePattern(node.argument, scope);
+                break;
+            case "AssignmentPattern":
+                writePattern(node.left, scope);
+                visit(node.right, scope);
+                break;
+            default:
+                visit(node, scope); // a member expression target
         }
-      } else {
-        declarePattern(decl.id, target, node.kind);
-      }
-      if (decl.init) visit(decl.init, scope);
-      declarators.push(decl);
-    }
-  };
+    };
 
-  /** `for (x of y)` / `for (var x in y)`: the target is written by the loop. */
-  const visitLoopTarget = (left, scope) => {
-    if (left.type === 'VariableDeclaration') {
-      visitDeclaration(left, scope);
-      const target = left.kind === 'var' ? functionScopeOf(scope) : scope;
-      for (const decl of left.declarations) {
-        const names = [];
-        patternNames(decl.id, names);
-        for (const name of names) {
-          const binding = target.names.get(name);
-          if (binding) binding.otherWrite = true;
-        }
-      }
-    } else {
-      writePattern(left, scope);
-    }
-  };
-
-  const visit = (node, scope) => {
-    switch (node.type) {
-      case 'Identifier':
-        refs.push({ node, scope, role: 'read' });
-        return;
-      case 'MemberExpression':
-        visit(node.object, scope);
-        if (node.computed) visit(node.property, scope);
-        return;
-      case 'Property':
-        if (node.computed) visit(node.key, scope);
-        visit(node.value, scope);
-        return;
-      case 'MethodDefinition':
-      case 'PropertyDefinition':
-        if (node.computed) visit(node.key, scope);
-        if (node.value) visit(node.value, scope);
-        return;
-      case 'MetaProperty':
-      case 'BreakStatement':
-      case 'ContinueStatement':
-      case 'ExportAllDeclaration':
-        return;
-      case 'LabeledStatement':
-        visit(node.body, scope);
-        return;
-      case 'VariableDeclaration':
-        visitDeclaration(node, scope);
-        return;
-      case 'FunctionDeclaration':
-        declare(scope, node.id, 'function');
-        visitFunction(node, scope);
-        return;
-      case 'FunctionExpression':
-      case 'ArrowFunctionExpression':
-        visitFunction(node, scope);
-        return;
-      case 'ClassDeclaration':
-      case 'ClassExpression':
-        visitClass(node, scope);
-        return;
-      case 'BlockStatement': {
-        const block = newScope(scope, false);
-        for (const stmt of node.body) visit(stmt, block);
-        return;
-      }
-      case 'ForStatement': {
-        const loop = newScope(scope, false);
-        if (node.init) visit(node.init, loop);
-        if (node.test) visit(node.test, loop);
-        if (node.update) visit(node.update, loop);
-        visit(node.body, loop);
-        return;
-      }
-      case 'ForInStatement':
-      case 'ForOfStatement': {
-        const loop = newScope(scope, false);
-        visitLoopTarget(node.left, loop);
-        visit(node.right, loop);
-        visit(node.body, loop);
-        return;
-      }
-      case 'CatchClause': {
-        const clause = newScope(scope, false);
-        declarePattern(node.param, clause, 'catch');
-        visit(node.body, clause);
-        return;
-      }
-      case 'SwitchStatement': {
-        visit(node.discriminant, scope);
-        const block = newScope(scope, false);
-        for (const c of node.cases) {
-          if (c.test) visit(c.test, block);
-          for (const stmt of c.consequent) visit(stmt, block);
-        }
-        return;
-      }
-      case 'AssignmentExpression':
-        if (node.left.type === 'Identifier') {
-          refs.push(
-            node.operator === '='
-              ? { node: node.left, scope, role: 'write', value: node.right }
-              : { node: node.left, scope, role: 'writeOther' },
-          );
+    const visitFunction = (node, scope) => {
+        const inner = newScope(scope, true);
+        if (node.type === "FunctionExpression" && node.id) declare(inner, node.id, "fname");
+        for (const p of node.params) declarePattern(p, inner, "param");
+        if (node.body.type === "BlockStatement") {
+            for (const stmt of node.body.body) visit(stmt, inner);
         } else {
-          writePattern(node.left, scope);
+            visit(node.body, inner);
         }
-        visit(node.right, scope);
-        return;
-      case 'UpdateExpression':
-        if (node.argument.type === 'Identifier') {
-          refs.push({ node: node.argument, scope, role: 'writeOther' });
+    };
+
+    const visitClass = (node, scope) => {
+        let inner = scope;
+        if (node.type === "ClassDeclaration" && node.id) {
+            declare(scope, node.id, "class");
+        } else if (node.id) {
+            inner = newScope(scope, false);
+            declare(inner, node.id, "class");
+        }
+        if (node.superClass) visit(node.superClass, inner);
+        for (const member of node.body.body) {
+            if (member.type === "StaticBlock") {
+                const block = newScope(inner, true);
+                for (const stmt of member.body) visit(stmt, block);
+                continue;
+            }
+            if (member.computed) visit(member.key, inner);
+            if (member.value) visit(member.value, inner);
+        }
+    };
+
+    const visitDeclaration = (node, scope) => {
+        const target = node.kind === "var" ? functionScopeOf(scope) : scope;
+        for (const decl of node.declarations) {
+            if (decl.id.type === "Identifier") {
+                const binding = declare(target, decl.id, node.kind);
+                if (decl.init) {
+                    binding.init = decl.init;
+                    binding.writes.push(decl.init);
+                }
+            } else {
+                declarePattern(decl.id, target, node.kind);
+            }
+            if (decl.init) visit(decl.init, scope);
+            declarators.push(decl);
+        }
+    };
+
+    /** `for (x of y)` / `for (var x in y)`: the target is written by the loop. */
+    const visitLoopTarget = (left, scope) => {
+        if (left.type === "VariableDeclaration") {
+            visitDeclaration(left, scope);
+            const target = left.kind === "var" ? functionScopeOf(scope) : scope;
+            for (const decl of left.declarations) {
+                const names = [];
+                patternNames(decl.id, names);
+                for (const name of names) {
+                    const binding = target.names.get(name);
+                    if (binding) binding.otherWrite = true;
+                }
+            }
         } else {
-          visit(node.argument, scope);
+            writePattern(left, scope);
         }
-        return;
-      case 'ImportDeclaration':
-        for (const spec of node.specifiers) declare(scope, spec.local, 'import');
-        return;
-      case 'ExportNamedDeclaration':
-        if (node.declaration) visit(node.declaration, scope);
-        if (!node.source) {
-          for (const spec of node.specifiers) {
-            refs.push({ node: spec.local, scope, role: 'export' });
-          }
+    };
+
+    const visit = (node, scope) => {
+        switch (node.type) {
+            case "Identifier":
+                refs.push({ node, scope, role: "read" });
+                return;
+            case "MemberExpression":
+                visit(node.object, scope);
+                if (node.computed) visit(node.property, scope);
+                return;
+            case "Property":
+                if (node.computed) visit(node.key, scope);
+                visit(node.value, scope);
+                return;
+            case "MethodDefinition":
+            case "PropertyDefinition":
+                if (node.computed) visit(node.key, scope);
+                if (node.value) visit(node.value, scope);
+                return;
+            case "MetaProperty":
+            case "BreakStatement":
+            case "ContinueStatement":
+            case "ExportAllDeclaration":
+                return;
+            case "LabeledStatement":
+                visit(node.body, scope);
+                return;
+            case "VariableDeclaration":
+                visitDeclaration(node, scope);
+                return;
+            case "FunctionDeclaration":
+                declare(scope, node.id, "function");
+                visitFunction(node, scope);
+                return;
+            case "FunctionExpression":
+            case "ArrowFunctionExpression":
+                visitFunction(node, scope);
+                return;
+            case "ClassDeclaration":
+            case "ClassExpression":
+                visitClass(node, scope);
+                return;
+            case "BlockStatement": {
+                const block = newScope(scope, false);
+                for (const stmt of node.body) visit(stmt, block);
+                return;
+            }
+            case "ForStatement": {
+                const loop = newScope(scope, false);
+                if (node.init) visit(node.init, loop);
+                if (node.test) visit(node.test, loop);
+                if (node.update) visit(node.update, loop);
+                visit(node.body, loop);
+                return;
+            }
+            case "ForInStatement":
+            case "ForOfStatement": {
+                const loop = newScope(scope, false);
+                visitLoopTarget(node.left, loop);
+                visit(node.right, loop);
+                visit(node.body, loop);
+                return;
+            }
+            case "CatchClause": {
+                const clause = newScope(scope, false);
+                declarePattern(node.param, clause, "catch");
+                visit(node.body, clause);
+                return;
+            }
+            case "SwitchStatement": {
+                visit(node.discriminant, scope);
+                const block = newScope(scope, false);
+                for (const c of node.cases) {
+                    if (c.test) visit(c.test, block);
+                    for (const stmt of c.consequent) visit(stmt, block);
+                }
+                return;
+            }
+            case "AssignmentExpression":
+                if (node.left.type === "Identifier") {
+                    refs.push(
+                        node.operator === "="
+                            ? { node: node.left, scope, role: "write", value: node.right }
+                            : { node: node.left, scope, role: "writeOther" },
+                    );
+                } else {
+                    writePattern(node.left, scope);
+                }
+                visit(node.right, scope);
+                return;
+            case "UpdateExpression":
+                if (node.argument.type === "Identifier") {
+                    refs.push({ node: node.argument, scope, role: "writeOther" });
+                } else {
+                    visit(node.argument, scope);
+                }
+                return;
+            case "ImportDeclaration":
+                for (const spec of node.specifiers) declare(scope, spec.local, "import");
+                return;
+            case "ExportNamedDeclaration":
+                if (node.declaration) visit(node.declaration, scope);
+                if (!node.source) {
+                    for (const spec of node.specifiers) {
+                        refs.push({ node: spec.local, scope, role: "export" });
+                    }
+                }
+                return;
+            case "ExportDefaultDeclaration":
+                visit(node.declaration, scope);
+                return;
+            case "ImportExpression":
+                dynamicImports.push(node);
+                visit(node.source, scope);
+                if (node.options) visit(node.options, scope);
+                return;
         }
-        return;
-      case 'ExportDefaultDeclaration':
-        visit(node.declaration, scope);
-        return;
-      case 'ImportExpression':
-        dynamicImports.push(node);
-        visit(node.source, scope);
-        if (node.options) visit(node.options, scope);
-        return;
-    }
-    for (const key of Object.keys(node)) {
-      if (SKIP_KEYS.has(key)) continue;
-      const value = node[key];
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (child && typeof child.type === 'string') visit(child, scope);
-      }
-    }
-  };
+        for (const key of Object.keys(node)) {
+            if (SKIP_KEYS.has(key)) continue;
+            const value = node[key];
+            for (const child of Array.isArray(value) ? value : [value]) {
+                if (child && typeof child.type === "string") visit(child, scope);
+            }
+        }
+    };
 
-  const top = newScope(null, true);
-  for (const stmt of ast.body) visit(stmt, top);
+    const top = newScope(null, true);
+    for (const stmt of ast.body) visit(stmt, top);
 
-  /** Identifier reference node -> Binding. */
-  const refBinding = new Map();
-  for (const ref of refs) {
-    let scope = ref.scope;
-    let binding;
-    while (scope && !(binding = scope.names.get(ref.node.name))) scope = scope.parent;
-    if (!binding) continue;
-    refBinding.set(ref.node, binding);
-    if (ref.role === 'write') binding.writes.push(ref.value);
-    else if (ref.role === 'writeOther') binding.otherWrite = true;
-    else binding.refs.push(ref);
-  }
-  return { declOf, refBinding, declarators, dynamicImports };
+    /** Identifier reference node -> Binding. */
+    const refBinding = new Map();
+    for (const ref of refs) {
+        let scope = ref.scope;
+        let binding;
+        while (scope && !(binding = scope.names.get(ref.node.name))) scope = scope.parent;
+        if (!binding) continue;
+        refBinding.set(ref.node, binding);
+        if (ref.role === "write") binding.writes.push(ref.value);
+        else if (ref.role === "writeOther") binding.otherWrite = true;
+        else binding.refs.push(ref);
+    }
+    return { declOf, refBinding, declarators, dynamicImports };
 }
 
 /** The Binding an identifier node declares or references. */
 function bindingOf(node, scopes) {
-  return scopes.declOf.get(node) ?? scopes.refBinding.get(node) ?? null;
+    return scopes.declOf.get(node) ?? scopes.refBinding.get(node) ?? null;
 }
 
 /** Declared once, written once, by its own initialiser: its value is that initialiser. */
 function isSingleValue(binding) {
-  return (
-    binding !== null &&
-    binding.decls === 1 &&
-    !binding.otherWrite &&
-    binding.init !== null &&
-    binding.writes.length === 1 &&
-    binding.writes[0] === binding.init
-  );
+    return (
+        binding !== null &&
+        binding.decls === 1 &&
+        !binding.otherWrite &&
+        binding.init !== null &&
+        binding.writes.length === 1 &&
+        binding.writes[0] === binding.init
+    );
 }
 
 /** `import.meta.url`, or a binding that is nothing but that. */
 function isMetaUrlValue(node, scopes) {
-  if (isImportMetaUrl(node) || isGetterIndirection(node)) return true;
-  if (node.type !== 'Identifier') return false;
-  const binding = bindingOf(node, scopes);
-  return (
-    isSingleValue(binding) && (isImportMetaUrl(binding.init) || isGetterIndirection(binding.init))
-  );
+    if (isImportMetaUrl(node) || isGetterIndirection(node)) return true;
+    if (node.type !== "Identifier") return false;
+    const binding = bindingOf(node, scopes);
+    return (
+        isSingleValue(binding) &&
+        (isImportMetaUrl(binding.init) || isGetterIndirection(binding.init))
+    );
 }
 
 /**
@@ -782,28 +781,28 @@ function isMetaUrlValue(node, scopes) {
  * `__filename` is anchored elsewhere and is not this.
  */
 function mayDeriveFromImportMeta(root, scopes) {
-  const seen = new Set();
-  const stack = [root];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (node.type === 'MetaProperty') return true;
-    if (node.type === 'Identifier') {
-      const binding = scopes.refBinding.get(node) ?? null;
-      if (binding === null || seen.has(binding)) continue;
-      seen.add(binding);
-      if (binding.kind === 'param') return true;
-      if (isSingleValue(binding)) stack.push(binding.init);
-      continue;
+    const seen = new Set();
+    const stack = [root];
+    while (stack.length > 0) {
+        const node = stack.pop();
+        if (node.type === "MetaProperty") return true;
+        if (node.type === "Identifier") {
+            const binding = scopes.refBinding.get(node) ?? null;
+            if (binding === null || seen.has(binding)) continue;
+            seen.add(binding);
+            if (binding.kind === "param") return true;
+            if (isSingleValue(binding)) stack.push(binding.init);
+            continue;
+        }
+        for (const key of Object.keys(node)) {
+            if (SKIP_KEYS.has(key)) continue;
+            const value = node[key];
+            for (const child of Array.isArray(value) ? value : [value]) {
+                if (child && typeof child.type === "string") stack.push(child);
+            }
+        }
     }
-    for (const key of Object.keys(node)) {
-      if (SKIP_KEYS.has(key)) continue;
-      const value = node[key];
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (child && typeof child.type === 'string') stack.push(child);
-      }
-    }
-  }
-  return false;
+    return false;
 }
 
 /**
@@ -814,28 +813,28 @@ function mayDeriveFromImportMeta(root, scopes) {
  * packages it loads.
  */
 function isUnderstoodRequireUse(ref, parents, allowExport) {
-  if (ref.role === 'export') return allowExport;
-  const parent = parents.get(ref.node);
-  if (!parent) return false;
-  if (parent.type === 'CallExpression' && parent.callee === ref.node) return true;
-  if (parent.type === 'UnaryExpression' && parent.operator === 'typeof') return true;
-  return (
-    parent.type === 'MemberExpression' &&
-    parent.object === ref.node &&
-    !parent.computed &&
-    (parent.property.name === 'resolve' || parent.property.name === 'cache')
-  );
+    if (ref.role === "export") return allowExport;
+    const parent = parents.get(ref.node);
+    if (!parent) return false;
+    if (parent.type === "CallExpression" && parent.callee === ref.node) return true;
+    if (parent.type === "UnaryExpression" && parent.operator === "typeof") return true;
+    return (
+        parent.type === "MemberExpression" &&
+        parent.object === ref.node &&
+        !parent.computed &&
+        (parent.property.name === "resolve" || parent.property.name === "cache")
+    );
 }
 
 /** Whether a made require has any use the build does not understand. */
 function requireBindingEscapes(binding, parents, allowExport) {
-  return binding.refs.some((ref) => !isUnderstoodRequireUse(ref, parents, allowExport));
+    return binding.refs.some((ref) => !isUnderstoodRequireUse(ref, parents, allowExport));
 }
 
 /** Cheap pre-filter: does a module mention `createRequire` or import `module` at all? */
 const MODULE_IMPORT = /(?:\bfrom|\bimport)\s*\(?\s*["'](?:node:)?module["']/;
 function mentionsCreateRequire(src) {
-  return src.includes('createRequire') || MODULE_IMPORT.test(src);
+    return src.includes("createRequire") || MODULE_IMPORT.test(src);
 }
 
 /**
@@ -843,179 +842,184 @@ function mentionsCreateRequire(src) {
  * @returns {{ aliases: string[], sites: object[], parseError: string | null }}
  */
 export function analyzeCreateRequire(src) {
-  if (!mentionsCreateRequire(src)) return { aliases: [], sites: [], parseError: null };
-  let ast;
-  try {
-    ast = parseSource(src);
-  } catch (err) {
-    return { aliases: [], sites: [], parseError: String(err?.message ?? err) };
-  }
-  try {
-    return analyzeParsed(ast);
-  } catch (err) {
-    // A tree deeper than the stack: nothing was proven, so say so.
-    return {
-      aliases: [],
-      sites: [],
-      parseError: `scope analysis failed: ${String(err?.message ?? err)}`,
-    };
-  }
+    if (!mentionsCreateRequire(src)) return { aliases: [], sites: [], parseError: null };
+    let ast;
+    try {
+        ast = parseSource(src);
+    } catch (err) {
+        return { aliases: [], sites: [], parseError: String(err?.message ?? err) };
+    }
+    try {
+        return analyzeParsed(ast);
+    } catch (err) {
+        // A tree deeper than the stack: nothing was proven, so say so.
+        return {
+            aliases: [],
+            sites: [],
+            parseError: `scope analysis failed: ${String(err?.message ?? err)}`,
+        };
+    }
 }
 
 function analyzeParsed(ast) {
-  const parents = indexParents(ast);
-  const scopes = buildScopes(ast);
+    const parents = indexParents(ast);
+    const scopes = buildScopes(ast);
 
-  // The creator (`createRequire` itself) and the `module` namespace, as bindings.
-  const creators = new Set();
-  const namespaces = new Set();
-  const sites = [];
-  const consumed = new Set(); // reference nodes whose use is accounted for
-  const aliases = [];
+    // The creator (`createRequire` itself) and the `module` namespace, as bindings.
+    const creators = new Set();
+    const namespaces = new Set();
+    const sites = [];
+    const consumed = new Set(); // reference nodes whose use is accounted for
+    const aliases = [];
 
-  for (const node of ast.body) {
-    if (node.type !== 'ImportDeclaration') continue;
-    if (!CREATE_REQUIRE_SOURCES.has(node.source.value)) continue;
-    for (const spec of node.specifiers) {
-      const binding = scopes.declOf.get(spec.local);
-      if (spec.type === 'ImportSpecifier') {
-        const imported = spec.imported.name ?? spec.imported.value;
-        if (imported === 'createRequire') {
-          creators.add(binding);
-          aliases.push(spec.local.name);
-        } else if (imported === 'default') {
-          namespaces.add(binding);
+    for (const node of ast.body) {
+        if (node.type !== "ImportDeclaration") continue;
+        if (!CREATE_REQUIRE_SOURCES.has(node.source.value)) continue;
+        for (const spec of node.specifiers) {
+            const binding = scopes.declOf.get(spec.local);
+            if (spec.type === "ImportSpecifier") {
+                const imported = spec.imported.name ?? spec.imported.value;
+                if (imported === "createRequire") {
+                    creators.add(binding);
+                    aliases.push(spec.local.name);
+                } else if (imported === "default") {
+                    namespaces.add(binding);
+                }
+            } else {
+                namespaces.add(binding); // default and namespace imports
+            }
         }
-      } else {
-        namespaces.add(binding); // default and namespace imports
-      }
     }
-  }
 
-  // `await import("node:module")`, destructured or bound whole.
-  const handledImports = new Set();
-  for (const declarator of scopes.declarators) {
-    const init = declarator.init;
-    if (init?.type !== 'AwaitExpression' || init.argument.type !== 'ImportExpression') continue;
-    const spec = literalSpec(init.argument.source);
-    if (spec === null || !CREATE_REQUIRE_SOURCES.has(spec)) continue;
-    handledImports.add(init.argument);
-    if (declarator.id.type === 'Identifier') {
-      namespaces.add(scopes.declOf.get(declarator.id));
-    } else if (declarator.id.type === 'ObjectPattern') {
-      for (const p of declarator.id.properties) {
-        if (p.type === 'RestElement') {
-          sites.push({ kind: 'handed' });
-          continue;
-        }
-        const key = p.computed ? null : (p.key.name ?? p.key.value);
-        if (key !== 'createRequire') continue;
-        const target = p.value.type === 'AssignmentPattern' ? p.value.left : p.value;
-        if (target.type === 'Identifier') creators.add(scopes.declOf.get(target));
-        else sites.push({ kind: 'handed' });
-      }
-    } else {
-      sites.push({ kind: 'handed' });
-    }
-  }
-  // Any other dynamic import of `module`: where its value goes is not followed.
-  for (const imp of scopes.dynamicImports) {
-    const spec = literalSpec(imp.source);
-    if (spec !== null && CREATE_REQUIRE_SOURCES.has(spec) && !handledImports.has(imp)) {
-      sites.push({ kind: 'handed' });
-    }
-  }
-
-  // `const c = e`: an alias of a tracked binding is tracked. Set iteration
-  // visits entries added during the loop, so one pass reaches the end of a chain.
-  const followAliases = (set) => {
-    for (const binding of set) {
-      for (const ref of binding.refs) {
-        if (ref.role !== 'read') continue;
-        const parent = parents.get(ref.node);
-        if (
-          parent?.type !== 'VariableDeclarator' ||
-          parent.init !== ref.node ||
-          parent.id.type !== 'Identifier'
-        ) {
-          continue;
-        }
-        // `export const c = e` hands the alias to every importer.
-        if (parents.get(parents.get(parent))?.type === "ExportNamedDeclaration") continue;
-        const alias = scopes.declOf.get(parent.id);
-        if (isSingleValue(alias) && !set.has(alias)) {
-          set.add(alias);
-          consumed.add(ref.node);
-        }
-      }
-    }
-  };
-  followAliases(creators);
-  followAliases(namespaces);
-
-  // Every create call, with the callee text that names it.
-  const createCalls = [];
-  for (const binding of creators) {
-    for (const ref of binding.refs) {
-      if (consumed.has(ref.node)) continue;
-      const parent = parents.get(ref.node);
-      if (parent?.type === 'CallExpression' && parent.callee === ref.node) {
-        createCalls.push({ call: parent, name: binding.name });
-      } else {
-        sites.push({ kind: 'handed' }); // copied, stored, passed, returned, exported
-      }
-    }
-  }
-  for (const binding of namespaces) {
-    for (const ref of binding.refs) {
-      if (consumed.has(ref.node)) continue;
-      const member = parents.get(ref.node);
-      if (member?.type !== 'MemberExpression' || member.object !== ref.node || member.computed) {
-        sites.push({ kind: 'handed' });
-        continue;
-      }
-      const prop = member.property.name;
-      if (prop === 'createRequire') {
-        const call = parents.get(member);
-        if (call?.type === 'CallExpression' && call.callee === member) {
-          createCalls.push({ call, name: `${binding.name}.createRequire` });
+    // `await import("node:module")`, destructured or bound whole.
+    const handledImports = new Set();
+    for (const declarator of scopes.declarators) {
+        const init = declarator.init;
+        if (init?.type !== "AwaitExpression" || init.argument.type !== "ImportExpression") continue;
+        const spec = literalSpec(init.argument.source);
+        if (spec === null || !CREATE_REQUIRE_SOURCES.has(spec)) continue;
+        handledImports.add(init.argument);
+        if (declarator.id.type === "Identifier") {
+            namespaces.add(scopes.declOf.get(declarator.id));
+        } else if (declarator.id.type === "ObjectPattern") {
+            for (const p of declarator.id.properties) {
+                if (p.type === "RestElement") {
+                    sites.push({ kind: "handed" });
+                    continue;
+                }
+                const key = p.computed ? null : (p.key.name ?? p.key.value);
+                if (key !== "createRequire") continue;
+                const target = p.value.type === "AssignmentPattern" ? p.value.left : p.value;
+                if (target.type === "Identifier") creators.add(scopes.declOf.get(target));
+                else sites.push({ kind: "handed" });
+            }
         } else {
-          sites.push({ kind: 'handed' });
+            sites.push({ kind: "handed" });
         }
-      } else if (prop === 'default') {
-        sites.push({ kind: 'handed' }); // a second namespace
-      }
     }
-  }
+    // Any other dynamic import of `module`: where its value goes is not followed.
+    for (const imp of scopes.dynamicImports) {
+        const spec = literalSpec(imp.source);
+        if (spec !== null && CREATE_REQUIRE_SOURCES.has(spec) && !handledImports.has(imp)) {
+            sites.push({ kind: "handed" });
+        }
+    }
 
-  let facts = null;
-  const getFacts = () => {
-    facts ??= bindingFacts(ast);
-    return facts;
-  };
-  const checkedBindings = new Set();
-  for (const { call, name } of createCalls) {
-    const arg = call.arguments.length === 1 ? call.arguments[0] : null;
-    if (arg !== null && isMetaUrlValue(arg, scopes)) {
-      const site = classify(call, parents, getFacts);
-      sites.push(site);
-      if (!aliases.includes(name)) aliases.push(name);
-      if (site.kind === 'binding') {
-        const holder = parents.get(call);
-        const idNode = holder?.type === 'VariableDeclarator' ? holder.id : (holder?.left ?? null);
-        const made = idNode ? bindingOf(idNode, scopes) : null;
-        if (made !== null && !checkedBindings.has(made)) {
-          checkedBindings.add(made);
-          if (requireBindingEscapes(made, parents, true)) sites.push({ kind: 'handed' });
+    // `const c = e`: an alias of a tracked binding is tracked. Set iteration
+    // visits entries added during the loop, so one pass reaches the end of a chain.
+    const followAliases = (set) => {
+        for (const binding of set) {
+            for (const ref of binding.refs) {
+                if (ref.role !== "read") continue;
+                const parent = parents.get(ref.node);
+                if (
+                    parent?.type !== "VariableDeclarator" ||
+                    parent.init !== ref.node ||
+                    parent.id.type !== "Identifier"
+                ) {
+                    continue;
+                }
+                // `export const c = e` hands the alias to every importer.
+                if (parents.get(parents.get(parent))?.type === "ExportNamedDeclaration") continue;
+                const alias = scopes.declOf.get(parent.id);
+                if (isSingleValue(alias) && !set.has(alias)) {
+                    set.add(alias);
+                    consumed.add(ref.node);
+                }
+            }
         }
-      }
-    } else if (call.arguments.some((a) => mayDeriveFromImportMeta(a, scopes))) {
-      sites.push({ kind: 'handed' }); // a wrapper, or an anchor derived from import.meta
+    };
+    followAliases(creators);
+    followAliases(namespaces);
+
+    // Every create call, with the callee text that names it.
+    const createCalls = [];
+    for (const binding of creators) {
+        for (const ref of binding.refs) {
+            if (consumed.has(ref.node)) continue;
+            const parent = parents.get(ref.node);
+            if (parent?.type === "CallExpression" && parent.callee === ref.node) {
+                createCalls.push({ call: parent, name: binding.name });
+            } else {
+                sites.push({ kind: "handed" }); // copied, stored, passed, returned, exported
+            }
+        }
     }
-    // Anything else is anchored somewhere other than this module (a literal,
-    // the cwd): it was never embedded by this check and is not changed here.
-  }
-  return { aliases, sites, parseError: null };
+    for (const binding of namespaces) {
+        for (const ref of binding.refs) {
+            if (consumed.has(ref.node)) continue;
+            const member = parents.get(ref.node);
+            if (
+                member?.type !== "MemberExpression" ||
+                member.object !== ref.node ||
+                member.computed
+            ) {
+                sites.push({ kind: "handed" });
+                continue;
+            }
+            const prop = member.property.name;
+            if (prop === "createRequire") {
+                const call = parents.get(member);
+                if (call?.type === "CallExpression" && call.callee === member) {
+                    createCalls.push({ call, name: `${binding.name}.createRequire` });
+                } else {
+                    sites.push({ kind: "handed" });
+                }
+            } else if (prop === "default") {
+                sites.push({ kind: "handed" }); // a second namespace
+            }
+        }
+    }
+
+    let facts = null;
+    const getFacts = () => {
+        facts ??= bindingFacts(ast);
+        return facts;
+    };
+    const checkedBindings = new Set();
+    for (const { call, name } of createCalls) {
+        const arg = call.arguments.length === 1 ? call.arguments[0] : null;
+        if (arg !== null && isMetaUrlValue(arg, scopes)) {
+            const site = classify(call, parents, getFacts);
+            sites.push(site);
+            if (!aliases.includes(name)) aliases.push(name);
+            if (site.kind === "binding") {
+                const holder = parents.get(call);
+                const idNode =
+                    holder?.type === "VariableDeclarator" ? holder.id : (holder?.left ?? null);
+                const made = idNode ? bindingOf(idNode, scopes) : null;
+                if (made !== null && !checkedBindings.has(made)) {
+                    checkedBindings.add(made);
+                    if (requireBindingEscapes(made, parents, true)) sites.push({ kind: "handed" });
+                }
+            }
+        } else if (call.arguments.some((a) => mayDeriveFromImportMeta(a, scopes))) {
+            sites.push({ kind: "handed" }); // a wrapper, or an anchor derived from import.meta
+        }
+        // Anything else is anchored somewhere other than this module (a literal,
+        // the cwd): it was never embedded by this check and is not changed here.
+    }
+    return { aliases, sites, parseError: null };
 }
 
 /**
@@ -1030,46 +1034,46 @@ function analyzeParsed(ast) {
  * @returns {{ escapes: boolean, parseError: string | null }}
  */
 export function analyzeImportedRequire(src, names) {
-  if (names.length === 0) return { escapes: false, parseError: null };
-  let ast;
-  try {
-    ast = parseSource(src);
-  } catch (err) {
-    return { escapes: true, parseError: String(err?.message ?? err) };
-  }
-  try {
-    const parents = indexParents(ast);
-    const scopes = buildScopes(ast);
-    const wanted = new Set(names);
-    for (const node of ast.body) {
-      if (node.type !== 'ImportDeclaration') continue;
-      for (const spec of node.specifiers) {
-        if (!wanted.has(spec.local.name)) continue;
-        const binding = scopes.declOf.get(spec.local);
-        if (binding && requireBindingEscapes(binding, parents, false)) {
-          return { escapes: true, parseError: null };
-        }
-      }
+    if (names.length === 0) return { escapes: false, parseError: null };
+    let ast;
+    try {
+        ast = parseSource(src);
+    } catch (err) {
+        return { escapes: true, parseError: String(err?.message ?? err) };
     }
-    return { escapes: false, parseError: null };
-  } catch (err) {
-    return {
-      escapes: true,
-      parseError: `scope analysis failed: ${String(err?.message ?? err)}`,
-    };
-  }
+    try {
+        const parents = indexParents(ast);
+        const scopes = buildScopes(ast);
+        const wanted = new Set(names);
+        for (const node of ast.body) {
+            if (node.type !== "ImportDeclaration") continue;
+            for (const spec of node.specifiers) {
+                if (!wanted.has(spec.local.name)) continue;
+                const binding = scopes.declOf.get(spec.local);
+                if (binding && requireBindingEscapes(binding, parents, false)) {
+                    return { escapes: true, parseError: null };
+                }
+            }
+        }
+        return { escapes: false, parseError: null };
+    } catch (err) {
+        return {
+            escapes: true,
+            parseError: `scope analysis failed: ${String(err?.message ?? err)}`,
+        };
+    }
 }
 
 // Script mode: `bun create-require-analyze.mjs < module.js` (the createRequire
 // analysis), or `... --imported '["n"]' < module.js` (imported require bindings).
 if (import.meta.main) {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const src = Buffer.concat(chunks).toString('utf8');
-  const flag = process.argv.indexOf('--imported');
-  const result =
-    flag === -1
-      ? analyzeCreateRequire(src)
-      : analyzeImportedRequire(src, JSON.parse(process.argv[flag + 1]));
-  process.stdout.write(JSON.stringify(result));
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    const src = Buffer.concat(chunks).toString("utf8");
+    const flag = process.argv.indexOf("--imported");
+    const result =
+        flag === -1
+            ? analyzeCreateRequire(src)
+            : analyzeImportedRequire(src, JSON.parse(process.argv[flag + 1]));
+    process.stdout.write(JSON.stringify(result));
 }

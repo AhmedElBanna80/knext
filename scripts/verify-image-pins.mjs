@@ -352,6 +352,16 @@ export function basePinKeys(root, base, files, run = gitIn) {
   return { keys, unchangedFiles, mergeBase };
 }
 
+/**
+ * @param {string} repoRoot
+ * @param {{
+ *   api?: (pin: any) => Promise<{ status: number, digest?: string }>,
+ *   exclusions?: import('./lib/dockerfile-base-images.mjs').Exclusion[],
+ *   today?: Date,
+ *   base?: string,
+ * }} [options] `base` is a git revision: set it for a diff-scoped (PR) run, leave it
+ *   unset for the full tree (nightly / manual).
+ */
 export async function verifyRepo(
   repoRoot,
   { api = resolveTagDigest, exclusions = loadExclusions(repoRoot), today = new Date(), base } = {},

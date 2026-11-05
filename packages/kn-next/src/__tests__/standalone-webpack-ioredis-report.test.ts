@@ -91,6 +91,10 @@ describe("only the ioredis load on a file URL is named (the gate stays narrow)",
             `(0,m.createRequire)("${URL_}")("ioredis", 1)`,
         ],
         [
+            "createRequire called with more than the one URL argument",
+            `(0,m.createRequire)("${URL_}", 1)("ioredis")`,
+        ],
+        [
             "a callee that is not a createRequire",
             `(0,m.somethingElse)("${URL_}")("ioredis")`,
         ],

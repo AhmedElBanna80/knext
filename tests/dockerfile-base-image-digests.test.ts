@@ -121,6 +121,150 @@ describe('parseDockerfileRefs: references the line-by-line reader used to miss (
   });
 });
 
+describe('parseDockerfileRefs: constructs the first parser missed or over-flagged (#2712)', () => {
+  const refsOf = (text: string) =>
+    parseDockerfileRefs(text, 'x/Dockerfile') as {
+      kind: string;
+      origin: string;
+      image: string;
+      line: number;
+    }[];
+  const kinds = (text: string) => refsOf(text).map((r) => r.kind);
+  const BASE = `FROM alpine:3.22@${A} AS b\n`;
+
+  describe('silent misses (an unpinned image must not pass)', () => {
+    it('reads a quoted key inside a mount value', () => {
+      const text = `${BASE}RUN --mount=type=bind,"from=evil:1",target=/e true\n`;
+      expect(refsOf(text)[1]).toMatchObject({ kind: 'unpinned', origin: 'RUN', image: 'evil:1' });
+    });
+
+    it('reads a quoted field that holds a space', () => {
+      expect(kinds(`${BASE}RUN --mount=type=bind,"target=/a b",from=evil:1 true\n`)).toEqual([
+        'pinned',
+        'unpinned',
+      ]);
+    });
+
+    it('FAILS a mount whose quoting it cannot read, instead of skipping it', () => {
+      expect(kinds(`${BASE}RUN --mount=type=bind,"from=evil:1 true\n`)).toEqual([
+        'pinned',
+        'unparseable',
+      ]);
+      expect(kinds(`${BASE}RUN --mount=type=bind,fr"om=evil:1" true\n`)).toEqual([
+        'pinned',
+        'unparseable',
+      ]);
+    });
+
+    it('FAILS an unclosed quote in an earlier flag that would swallow a later mount', () => {
+      const text = `${BASE}RUN --network="none --mount=type=bind,from=evil:1,target=/e true\n`;
+      expect(kinds(text)).toEqual(['pinned', 'unparseable']);
+    });
+
+    it('reads a quoted COPY --from value', () => {
+      expect(kinds(`${BASE}COPY --from="busybox:1.36" /x /x\n`)).toEqual(['pinned', 'unpinned']);
+    });
+
+    it('reads instructions behind ONBUILD', () => {
+      const text =
+        `${BASE}ONBUILD COPY --from=busybox:1.36 /x /x\n` +
+        'ONBUILD RUN --mount=type=bind,from=evil:1,target=/e true\n' +
+        `ONBUILD copy --from=busybox:1.36@${B} /y /y\n`;
+      expect(refsOf(text).map((r) => [r.kind, r.origin])).toEqual([
+        ['pinned', 'FROM'],
+        ['unpinned', 'COPY'],
+        ['unpinned', 'RUN'],
+        ['pinned', 'COPY'],
+      ]);
+    });
+
+    it('honours # escape=` so a backtick continuation is joined', () => {
+      const text = `# escape=\`\n${BASE}COPY \`\n  --from=busybox:1.36 \`\n  /x /x\n`;
+      expect(refsOf(text)[1]).toMatchObject({ kind: 'unpinned', origin: 'COPY', line: 3 });
+    });
+
+    it('with # escape=` a trailing backslash does NOT join the next line', () => {
+      // Under the default escape this FROM would be swallowed into the RUN line.
+      const text = `# escape=\`\nFROM alpine:3.22@${A}\nRUN echo C:\\\nFROM busybox:1.36\n`;
+      expect(kinds(text)).toEqual(['pinned', 'unpinned']);
+    });
+
+    it('does not honour an escape directive that is not at the top', () => {
+      // Default escape stays in force, so the trailing backslash DOES join the FROM below.
+      const text = `FROM alpine:3.22@${A}\n# escape=\`\nRUN echo C:\\\nFROM busybox:1.36\n`;
+      expect(kinds(text)).toEqual(['pinned']);
+    });
+
+    it('FAILS an escape directive with an unusable character', () => {
+      expect(kinds(`# escape=x\nFROM alpine:3.22@${A}\n`)).toEqual(['unparseable', 'pinned']);
+    });
+  });
+
+  describe('false positives (a stage reference is not an image)', () => {
+    it('treats a numeric RUN --mount from= as a stage index when that stage exists', () => {
+      expect(kinds(`${BASE}RUN --mount=type=bind,from=0,target=/e true\n`)).toEqual(['pinned']);
+    });
+
+    it('treats a numeric COPY --from as a stage index only when that stage exists', () => {
+      expect(kinds(`${BASE}COPY --from=0 /x /x\n`)).toEqual(['pinned']);
+      // Index 1 is out of range with one stage: Docker would read it as an image.
+      expect(kinds(`${BASE}COPY --from=1 /x /x\n`)).toEqual(['pinned', 'unpinned']);
+      expect(kinds('COPY --from=0 /x /x\n')).toEqual(['unpinned']);
+    });
+
+    it('matches stage names case-insensitively, as Docker does', () => {
+      const text =
+        `FROM alpine:3.22@${A} AS Builder\n` +
+        'COPY --from=builder /x /x\n' +
+        'RUN --mount=type=bind,from=BUILDER,target=/e true\n' +
+        'FROM BUILDER AS second\n' +
+        'COPY --from=Second /y /y\n';
+      expect(kinds(text)).toEqual(['pinned']);
+    });
+
+    it('does not read the body of a heredoc as instructions', () => {
+      const text = `${BASE}RUN <<EOF\nFROM evil:1\nCOPY --from=evil:2 /a /a\nRUN --mount=from=evil:3 x\nEOF\n`;
+      expect(kinds(text)).toEqual(['pinned']);
+    });
+
+    it('handles <<-, quoted delimiters, several heredocs and a continued start line', () => {
+      const text =
+        `${BASE}RUN <<-'END'\n\tFROM evil:1\n\tEND\n` +
+        'COPY <<ONE <<"TWO" /x/\nFROM evil:2\nONE\nFROM evil:3\nTWO\n' +
+        'RUN python3 - \\\n  <<PY\nFROM evil:4\nPY\n' +
+        'COPY --from=busybox:1.36 /z /z\n';
+      expect(kinds(text)).toEqual(['pinned', 'unpinned']);
+    });
+
+    it('does not mistake a here-string for a heredoc', () => {
+      const text = `${BASE}RUN cat <<<"hello"\nCOPY --from=busybox:1.36 /x /x\n`;
+      expect(kinds(text)).toEqual(['pinned', 'unpinned']);
+    });
+
+    it('does not read --mount= in the shell text of a RUN as a flag', () => {
+      expect(kinds(`${BASE}RUN echo --mount=type=bind,from=evil:1\n`)).toEqual(['pinned']);
+    });
+
+    it('FAILS an unterminated heredoc instead of silently swallowing the file', () => {
+      const text = `${BASE}RUN <<EOF\nCOPY --from=busybox:1.36 /x /x\n`;
+      expect(kinds(text)).toEqual(['pinned', 'unparseable']);
+    });
+  });
+
+  it('checkDockerfiles FAILS each silent-miss shape end to end', () => {
+    const tree = (body: string) =>
+      reasons(
+        checkDockerfiles(fixture({ 'a/Dockerfile': `FROM alpine:3.22@${A} AS b\n${body}` }), {
+          exclusions: [],
+          today: TODAY,
+        }),
+      );
+    expect(tree('RUN --mount=type=bind,"from=evil:1" true\n')).toEqual(['unpinned']);
+    expect(tree('ONBUILD COPY --from=evil:1 /x /x\n')).toEqual(['unpinned']);
+    expect(tree('RUN --mount=type=bind,"from=evil:1 true\n')).toEqual(['unparseable']);
+  });
+});
+
 describe('checkDockerfiles (fixtures, both halves)', () => {
   it('passes a consistent tree and reports what it scanned', () => {
     const root = fixture({

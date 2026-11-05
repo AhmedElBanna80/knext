@@ -150,3 +150,32 @@ describe("js-source-lexer: blank-strings + blankRegex", () => {
         expect(stripComments(src, opts)).toBe(`r = /${sp(4)}/; y();`);
     });
 });
+
+describe("js-source-lexer: postfix/prefix increment vs regex", () => {
+    it("treats `/` after postfix ++ as division, so the trailing comment is dropped", () => {
+        const src = "let n = i++ / 2; // cacheComponents: true";
+        expect(stripComments(src)).toBe(`let n = i++ / 2; ${sp(24)}`);
+    });
+
+    it("treats `/` after postfix -- as division", () => {
+        const src = "let n = i-- / 2; // c: 1";
+        expect(stripComments(src)).toBe(`let n = i-- / 2; ${sp(7)}`);
+    });
+
+    it("still lexes a regex after a prefix ++", () => {
+        const src = "x = ++i; r = ++/a\\/\\/b/.x; // c";
+        expect(stripComments(src)).toBe(
+            `x = ++i; r = ++/a\\/\\/b/.x; ${sp(4)}`,
+        );
+    });
+
+    it("still lexes a regex after a prefix unary minus", () => {
+        const src = "x = -/re\\//.source; // c";
+        expect(stripComments(src)).toBe(`x = -/re\\//.source; ${sp(4)}`);
+    });
+
+    it("lexes `/` after `a + +b` operand pair correctly (prefix after binary op)", () => {
+        const src = "x = a + ++b / 2; // c";
+        expect(stripComments(src)).toBe(`x = a + ++b / 2; ${sp(4)}`);
+    });
+});

@@ -146,6 +146,15 @@ export function stripComments(
         i = j;
         continue;
       }
+      if ((c === '+' || c === '-') && d === c) {
+        // `++`/`--`: postfix after a value ends a value (so `/` divides); prefix
+        // stays an operator (a regex may follow).
+        const postfix = !regexMayStart();
+        out.push(c, d);
+        i += 2;
+        last = postfix ? ')' : c;
+        continue;
+      }
       if (!/\s/.test(c)) last = c;
       out.push(c);
       i += 1;

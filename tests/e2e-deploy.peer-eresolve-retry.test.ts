@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,6 +22,13 @@ import { join, resolve } from 'node:path';
  * and checks the other half too: a non-ERESOLVE install failure still fails
  * the deploy (no blanket retry).
  */
+
+// bun IGNORES `describe(name, { timeout }, fn)` and runs every case and hook under its
+// 5000 ms default, but this file runs a REAL scripts/e2e-deploy.sh (spawn budget
+// 120 s) and scripts/e2e-cleanup.sh (20 s). `setDefaultTimeout` is the form bun
+// honours. File-scoped and equal to spawn + cleanup, so a real hang still fails at
+// the spawn timeout rather than being masked by a longer test budget.
+setDefaultTimeout(140_000);
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const DEPLOY_SH = resolve(REPO_ROOT, 'scripts/e2e-deploy.sh');

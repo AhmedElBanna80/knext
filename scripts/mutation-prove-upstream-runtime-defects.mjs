@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveSpecRunner } from './lib/ci-blocking-gate-proof.mjs';
-import { mutate, restore, snapshot } from './lib/mutation-harness.mjs';
+import { MUTATION_MARKER, mutate, restore, snapshot } from './lib/mutation-harness.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -410,21 +410,21 @@ prove(
   'DATA: the entry is widened to the node cell',
   MANIFEST,
   '"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",\n      "lane": "bun/turbopack",',
-  '"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",\n      "lane": "node/turbopack", "//KNEXT-MUTATION": 1,',
+  `"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",\n      "lane": "node/turbopack", "//${MUTATION_MARKER}": 1,`,
   { specs: RUN_SPECS },
 );
 prove(
   'DATA: a case title is renamed away from upstream',
   MANIFEST,
   '"title": "builds and runs Node.js middleware importing via a star re-export"',
-  '"title": "builds and runs Node.js middleware importing via a star re-export KNEXT-MUTATION"',
+  `"title": "builds and runs Node.js middleware importing via a star re-export ${MUTATION_MARKER}"`,
   { specs: [SPEC] },
 );
 prove(
   'DATA: a reaudited stamp is planted',
   MANIFEST,
   '"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",',
-  '"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts", "reaudited": "v16.4.3 KNEXT-MUTATION",',
+  `"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts", "reaudited": "v16.4.3 ${MUTATION_MARKER}",`,
   { specs: [SPEC] },
 );
 

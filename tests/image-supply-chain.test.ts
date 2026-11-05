@@ -236,7 +236,12 @@ const lane = (o: LaneOpts = {}): Workflow => ({
   doc: {
     on: o.on ?? { push: { branches: ['main'] } },
     jobs: {
-      scan: { steps: o.scan ?? [trivyStep(), sbomStep()], ...(o.scanJob ?? {}) },
+      // contents: read — a job with NO permissions block is credentialed (fail closed).
+      scan: {
+        permissions: { contents: 'read' },
+        steps: o.scan ?? [trivyStep(), sbomStep()],
+        ...(o.scanJob ?? {}),
+      },
       publish: {
         needs: 'scan',
         steps: o.push ?? [pushStep(), signStep()],
@@ -993,7 +998,9 @@ describe('repo-local scripts are read for pushes', () => {
             file: 'fx.yml',
             doc: {
               on: {},
-              jobs: { j: { ...ro, steps: [{ uses: './.github/actions/reg' }, { run: 'bash h.sh' }] } },
+              jobs: {
+                j: { ...ro, steps: [{ uses: './.github/actions/reg' }, { run: 'bash h.sh' }] },
+              },
             },
           },
         ],
@@ -1042,6 +1049,20 @@ describe('repo-local scripts are read for pushes', () => {
         expect(checks(findingsOf(w, null))).toContain('unresolved-script');
       }
     });
+    it('a non-registry secret (kubeconfig, deploy hook) does not make the job credentialed', () => {
+      const tok = '${{ secrets.PREVIEW_KUBECONFIG }}';
+      for (const extra of [
+        { env: { T: tok }, steps: [{ run: 'bash hack/p.sh' }] },
+        { steps: [{ run: 'bash hack/p.sh', env: { T: tok } }] },
+        { steps: [{ uses: 'some/action@abc', with: { token: tok } }, { run: 'bash hack/p.sh' }] },
+      ]) {
+        const w: Workflow = {
+          file: 'fx.yml',
+          doc: { on: {}, jobs: { j: { ...ro, ...extra } } },
+        };
+        expect(findingsOf(w, null)).toEqual([]);
+      }
+    });
     it('the GITHUB_TOKEN alone, with contents: read, is not a registry credential', () => {
       const w: Workflow = {
         file: 'fx.yml',
@@ -1050,9 +1071,7 @@ describe('repo-local scripts are read for pushes', () => {
           jobs: {
             j: {
               ...ro,
-              steps: [
-                { run: 'bash hack/p.sh', env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' } },
-              ],
+              steps: [{ run: 'bash hack/p.sh', env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' } }],
             },
           },
         },

@@ -592,10 +592,21 @@ function scriptsInvoked(
   return { paths, bad };
 }
 
-/** A secret other than the ephemeral `GITHUB_TOKEN` referenced anywhere in a value tree. */
+/**
+ * Secret names that look like a registry / signing credential. Any secret would
+ * over-fire (a deploy-preview kubeconfig cannot push an image), so only names
+ * that say registry, docker, ghcr, ocir, ecr, gcr, acr, quay, harbor, cosign,
+ * sigstore or "container/image registry" count. `GITHUB_TOKEN` never does.
+ */
+const REGISTRY_SECRET_NAME =
+  /(?:^|_)(?:REGISTRY|DOCKER(?:HUB)?|GHCR|OCIR|ECR|GCR|ACR|QUAY|HARBOR|COSIGN|SIGSTORE)(?:_|$)/i;
+
+/** A registry-looking secret (not `GITHUB_TOKEN`) referenced anywhere in a value tree. */
 function referencesSecret(v: unknown): boolean {
   if (typeof v === 'string')
-    return [...v.matchAll(/\bsecrets\.([A-Za-z0-9_]+)/g)].some((m) => m[1] !== 'GITHUB_TOKEN');
+    return [...v.matchAll(/\bsecrets\.([A-Za-z0-9_]+)/g)].some(
+      (m) => m[1] !== 'GITHUB_TOKEN' && REGISTRY_SECRET_NAME.test(m[1]),
+    );
   if (Array.isArray(v)) return v.some(referencesSecret);
   if (v && typeof v === 'object') return Object.values(v).some(referencesSecret);
   return false;

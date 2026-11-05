@@ -318,6 +318,25 @@ export function lineSubstitutions(spec, shape = 'runs') {
       to: `This per-cell issue is labelled \\\`${spec.resetLabel}\\\`.`,
       count: 1,
     },
+    {
+      // Fail-closed least privilege (#2682): the tag's deploy-tests job carries no
+      // `permissions` block, so it would inherit the repo-default token scope.
+      // It reads the repo and the run's own artifacts and calls no GitHub API.
+      id: 'deploy-tests-permissions',
+      from:
+        '  deploy-tests:\n' +
+        '    name: Deploy tests (shard ${{ matrix.shard }})\n' +
+        '    needs: build-next\n' +
+        '    runs-on: ubuntu-latest\n',
+      to:
+        '  deploy-tests:\n' +
+        '    name: Deploy tests (shard ${{ matrix.shard }})\n' +
+        '    needs: build-next\n' +
+        '    runs-on: ubuntu-latest\n' +
+        '    permissions:\n' +
+        '      contents: read\n',
+      count: 1,
+    },
     ...sourceShape.prose(v),
     {
       id: 'pin-prose',

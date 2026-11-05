@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it, setDefaultTimeout } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -44,6 +44,13 @@ import { join, resolve } from 'node:path';
  * Same fake fixture-local `next` technique as e2e-deploy.contract.test.ts: the
  * shim records its argv so the test asserts what the REAL script passed.
  */
+
+// bun IGNORES `describe(name, { timeout }, fn)` and runs every case and hook under its
+// 5000 ms default, but this file runs a REAL scripts/e2e-deploy.sh (spawn budget
+// 60 s) and scripts/e2e-cleanup.sh (20 s). `setDefaultTimeout` is the form bun
+// honours. File-scoped and equal to spawn + cleanup, so a real hang still fails at
+// the spawn timeout rather than being masked by a longer test budget.
+setDefaultTimeout(80_000);
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const DEPLOY_SH = resolve(REPO_ROOT, 'scripts/e2e-deploy.sh');

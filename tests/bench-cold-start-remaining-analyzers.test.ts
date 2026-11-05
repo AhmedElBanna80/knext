@@ -629,7 +629,10 @@ describe('node-diagnosis-analyze.py: segment analysis of the node diagnosis run'
     return { r, json: JSON.parse(readFileSync(out, 'utf8')) };
   });
   const seg = (name: string) =>
-    (json.segments as { name: string }[]).find((s) => s.name === name) as Record<string, number>;
+    (json.segments as { name: string }[]).find((s) => s.name === name) as unknown as Record<
+      string,
+      number
+    >;
 
   it('counts rows and keeps only wakes with a watch block, HTTP 200 and no error', () => {
     expect(r.code).toBe(0);

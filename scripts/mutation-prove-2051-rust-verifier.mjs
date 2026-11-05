@@ -36,8 +36,23 @@
  *       unknown RPC given one.
  *   W*, M*  the wiring of the issuer (src/rpc/mod.rs) and its env
  *       (src/main.rs).
+ *   K*  the JWKS as a pod really reads it (src/auth/jwks.rs): a ConfigMap
+ *       volume's jwks.json is a symlink into a generation directory the
+ *       kubelet swaps wholesale. A key set judged by the symlink itself reads
+ *       as not mounted, and a change watched on the symlink is not seen until
+ *       the interval. The in-place writes the other J* guards use cannot tell
+ *       either apart.
+ *   R*  a key the JWKS dropped is no longer trusted (src/auth/jwks.rs): a
+ *       reload that accumulates keys keeps a retired key valid after the
+ *       overlap.
+ *   B*  a user id forged into a request header (src/auth.rs): it never stands
+ *       in for a missing token, and never replaces the token's subject.
  *   N*  negative control: a re-read interval shorter than the contract's
  *       bound is tolerated, so the suite must stay GREEN.
+ *
+ * KNEXT_PROVER_ROWS=K,B runs only the rows whose id starts with one of the
+ * comma-separated prefixes, while iterating on one family; the declared count
+ * follows the selection. Unset (the nightly lane), the whole table runs.
  *
  * A row counts only if the mutated tree COMPILES: before its test run, each
  * row must pass a build-only `cargo test --no-run` of the same target. A row
@@ -95,7 +110,7 @@ const cargoBuild = (target) => ['cargo', 'test', '--locked', '--no-run', target[
 
 // Every replacement ends in '\n', so the harness puts its residue marker on a
 // line of its own rather than swallowing the line after the anchor.
-const MUTATIONS = [
+const ALL_MUTATIONS = [
   // ── P: parsing ────────────────────────────────────────────────────────────
   {
     id: 'P1',
@@ -441,6 +456,61 @@ const MUTATIONS = [
     anchor: '        issuer: getenv(auth::ENV_ISSUER).unwrap_or_default(),\n',
     replacement: '        issuer: getenv(auth::ENV_AUDIENCE).unwrap_or_default(),\n',
   },
+  // ── K: the JWKS as a kubelet ConfigMap volume lays it out ─────────────────
+  // Every other J* row writes the file in place, where a symlink-blind verifier
+  // behaves exactly like a symlink-aware one. Only a test that mounts the
+  // verifier on jwks.json -> ..data/jwks.json, and swaps ..data, can tell them
+  // apart: K1 is a function that refuses every call on a real cluster while
+  // every in-place test stays green.
+  {
+    id: 'K1',
+    claim:
+      'the JWKS is judged by the symlink itself (a ConfigMap volume mounts jwks.json as one), so a mounted key set reads as not mounted',
+    subject: 'jwks',
+    anchor: '    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)\n',
+    replacement: '    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)\n',
+  },
+  {
+    id: 'K2',
+    claim:
+      'the change check fingerprints the symlink, not the file the kubelet swaps in (a rotated key is not seen until the interval)',
+    subject: 'jwks',
+    anchor: '        let meta = std::fs::metadata(&self.path).map_err(|_| AuthError::NoJwks)?;\n',
+    replacement:
+      '        let meta = std::fs::symlink_metadata(&self.path).map_err(|_| AuthError::NoJwks)?;\n',
+  },
+  // ── R: a key the JWKS dropped is no longer trusted ────────────────────────
+  // The "fails after the overlap" half of rotation. J5/J6 only catch a verifier
+  // that never looks again; a verifier that DOES reload but accumulates keys
+  // across reloads trusts a retired key forever, and only this row sees it.
+  {
+    id: 'R1',
+    claim:
+      'a reload keeps the keys of the last read (a key the JWKS dropped stays trusted after the overlap)',
+    subject: 'jwks',
+    anchor:
+      '        *last = None;\n        let data = read_at_most(&self.path, MAX_JWKS_BYTES)?;\n        let keys = parse(&data).map(Arc::new);\n',
+    replacement:
+      '        let previous = last.take().and_then(|s| s.keys.ok());\n        let data = read_at_most(&self.path, MAX_JWKS_BYTES)?;\n        let keys = parse(&data).map(|mut fresh| {\n            if let Some(old) = &previous {\n                for (kid, key) in old.iter() {\n                    fresh.entry(kid.clone()).or_insert(*key);\n                }\n            }\n            Arc::new(fresh)\n        });\n',
+  },
+  // ── B: an identity forged into a request header ───────────────────────────
+  {
+    id: 'B1',
+    claim: 'a user id in a request header stands in for a missing bearer token',
+    subject: 'auth',
+    anchor:
+      '        let Some(token) = token else {\n            return Either::Right(ready(Ok(refusal(req.headers(), "missing bearer token"))));\n        };\n',
+    replacement:
+      '        let Some(token) = token else {\n            let forged = req\n                .headers()\n                .get("x-user-id")\n                .and_then(|v| v.to_str().ok())\n                .map(str::to_owned);\n            if let Some(user) = forged {\n                req.extensions_mut().insert(Caller {\n                    subject: user,\n                    zone: String::new(),\n                });\n                return Either::Left(self.inner.call(req));\n            }\n            return Either::Right(ready(Ok(refusal(req.headers(), "missing bearer token"))));\n        };\n',
+  },
+  {
+    id: 'B2',
+    claim: "a user id in a request header replaces the verified token's subject",
+    subject: 'auth',
+    anchor: '        req.extensions_mut().insert(caller);\n',
+    replacement:
+      '        let caller = match req.headers().get("x-user-id").and_then(|v| v.to_str().ok()) {\n            Some(user) => Caller {\n                subject: user.to_owned(),\n                zone: caller.zone,\n            },\n            None => caller,\n        };\n        req.extensions_mut().insert(caller);\n',
+  },
   // ── N: negative control ───────────────────────────────────────────────────
   {
     id: 'N1',
@@ -451,6 +521,22 @@ const MUTATIONS = [
     replacement: 'pub const JWKS_REREAD_INTERVAL: Duration = Duration::from_secs(5);\n',
   },
 ].map((m) => ({ expect: 'red', tests: AUTH_TESTS, ...m }));
+
+// Optional: run one family of rows while iterating, for example
+// KNEXT_PROVER_ROWS=K,B. A comma list of id prefixes. Unset, the whole table
+// runs, which is what the nightly lane does; the declared count follows the
+// selection so a partial run reports honestly.
+const ROW_FILTER = (process.env.KNEXT_PROVER_ROWS ?? '').split(',').filter(Boolean);
+const MUTATIONS =
+  ROW_FILTER.length === 0
+    ? ALL_MUTATIONS
+    : ALL_MUTATIONS.filter((m) => ROW_FILTER.some((prefix) => m.id.startsWith(prefix)));
+if (MUTATIONS.length === 0) {
+  console.error(
+    `mutation-prove-2051-rust-verifier: KNEXT_PROVER_ROWS=${ROW_FILTER.join(',')} selects no row`,
+  );
+  process.exit(2);
+}
 
 // Returns the command's exit code, or null if cargo could not be run. Never
 // exits here: a caller holding a mutation must restore it first.

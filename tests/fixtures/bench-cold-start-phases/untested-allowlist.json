@@ -7,87 +7,12 @@
     {
       "path": "scripts/bench-a13-postready-lazy-incluster.py",
       "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+      "reason": "module-level script with a hard-coded kubeconfig context and public hostname; needs those made configurable before a fake kubectl can drive it, or it should be retired with a ledger note"
     },
     {
       "path": "scripts/bench-a13-postready-lazy.py",
       "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/baseline-stability-analyze.py",
-      "kind": "analyzer",
-      "reason": "analyzer with no fixture test yet"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/baseline-stability-drive.py",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/bunexec-ab-analyze.py",
-      "kind": "analyzer",
-      "reason": "analyzer with no fixture test yet"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/bunexec-ab-incluster.py",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/burst-ab-analyze.py",
-      "kind": "analyzer",
-      "reason": "analyzer with no fixture test yet"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/burst-ab-incluster.py",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/cpu-boost-analyze.py",
-      "kind": "analyzer",
-      "reason": "analyzer with no fixture test yet"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/dns-probe.js",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/gke/first-request.mjs",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/gke/variants/bc-check.mjs",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/gke/variants/instrumentation-stub.js",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/gke/variants/warm-entry.mjs",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/node-diagnosis-analyze.py",
-      "kind": "analyzer",
-      "reason": "analyzer with no fixture test yet"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/prepull-ab-analyze.py",
-      "kind": "analyzer",
-      "reason": "analyzer with no fixture test yet"
-    },
-    {
-      "path": "scripts/bench-cold-start-phases/prepull-ab-incluster.py",
-      "kind": "cluster-driver",
-      "reason": "drives a live cluster (kubectl or in-cluster); not importable, needs a fake kubectl or extracted pure logic"
+      "reason": "module-level script with a hard-coded kubeconfig context and public hostname; needs those made configurable before a fake kubectl can drive it, or it should be retired with a ledger note"
     }
   ]
 }

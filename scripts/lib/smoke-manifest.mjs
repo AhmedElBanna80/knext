@@ -52,3 +52,18 @@ export function deriveSmokeManifest(mainManifest) {
   };
   return clone;
 }
+
+/**
+ * Render the smoke manifest to the exact bytes committed to the repo.
+ *
+ * `JSON.stringify(_, null, 2)` is NOT what the repo formatter commits (biome
+ * collapses short arrays onto one line at lineWidth 100), so the output is
+ * piped through `biome format` using the repo's own config. Emitting raw
+ * JSON.stringify bytes left whoever regenerated the file with a red
+ * `biome check .`.
+ */
+export function renderSmokeManifest(mainManifest, { format }) {
+  // The formatter is INJECTED (scripts/biome-format.mjs): this helper lives in
+  // scripts/lib, which the prover-lane guard keeps free of process spawns.
+  return format(`${JSON.stringify(deriveSmokeManifest(mainManifest), null, 2)}\n`);
+}

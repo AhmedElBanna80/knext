@@ -48,7 +48,9 @@ afterAll(() => {
         } catch {}
         rmSync(d, { recursive: true, force: true });
     }
-}, 120_000);
+    // Explicit timeout: this removes large compile temp trees, which exceeded
+    // bun's 5 s default hook timeout on loaded CI runners with every test green.
+}, 60_000);
 function temp(prefix: string): string {
     // realpath: macOS tmpdir is a /var -> /private/var symlink.
     const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));

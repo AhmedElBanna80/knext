@@ -229,7 +229,8 @@ const V13_LANE = '.github/workflows/compat-credential-v1.3.yml';
  * with `git show <tag>:test/deploy-tests-manifest.knext.json | grep -c RefPinnedCases` = 0 and
  * `git show <tag>:scripts/compat-manifest-for-ref.mjs` = absent. A NEW rc tag is cut from a main that
  * has the script, so it is never added here; if the pin moves and the derived workflow still has no
- * scope step, the v1.3 test below reds until this list is argued with.
+ * scope step, the v1.3 test below reds. DO NOT extend this list to get green: the tag was cut from the
+ * wrong commit (docs/RELEASING.md, "Cutting the next v1.3 rc from `main`"); cut the next rc.
  */
 const LEDGER_FREE_RC_TAGS = ['v1.0.0-rc.6', 'v1.3.0-rc.10'] as const;
 const SCOPE_STEP = 'Scope ref-pinned per-case deselections to NEXTJS_REF';
@@ -302,6 +303,15 @@ describe('compat-manifest-for-ref — the v1.3 credential lane (generated from t
 
   it('names the tag it was derived from', () => {
     expect(tag).toMatch(/^v\d+\.\d+\.\d+-rc\.\d+$/);
+  });
+
+  it('docs/RELEASING.md tells the founder to cut the rc from main, warns off the ledger-free list, and names the immutable tag rule', () => {
+    const doc = read('docs/RELEASING.md');
+    expect(doc).not.toMatch(/pushes the annotated `v1\.3\.X-rc\.N\+1` tag on `integration\/v1\.3`/);
+    expect(doc).toMatch(/Cut it from `main`, not `integration\/v1\.3`/);
+    expect(doc).toContain('Do not extend `LEDGER_FREE_RC_TAGS`');
+    expect(doc).toContain('release tags (v*) immutable');
+    expect(doc).toContain('v1.3.2-rc.1');
   });
 
   it('either carries the scope step (a tag cut from a main that has it) or runs a tag known to have no ledger', () => {

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -29,7 +29,7 @@ const REAL_CURL = ['/usr/bin/curl', '/usr/local/bin/curl', '/bin/curl'].find((p)
 // GNU coreutils prints `FAILED`; the macOS sha256sum prints `did NOT match`.
 const CHECKSUM_REJECTED = /FAILED|did NOT match/;
 
-type Mode = { failFirst: number; status: number };
+type Mode = { failFirst: number; status: number; reset?: boolean };
 let server: Server;
 let port = 0;
 let mode: Mode = { failFirst: 0, status: 504 };
@@ -39,6 +39,11 @@ beforeAll(async () => {
   server = createServer((_req, res) => {
     requests += 1;
     if (requests <= mode.failFirst) {
+      if (mode.reset) {
+        // Drop the connection mid-request: curl exit 52/56, not an HTTP status.
+        _req.socket.destroy();
+        return;
+      }
       res.statusCode = mode.status;
       res.end('upstream error');
       return;
@@ -108,8 +113,11 @@ const SCRIPTS: Array<[string, string[]]> = [
 ];
 
 describe('kind manifest downloads retry a transient upstream 5xx', () => {
-  it('has a real curl to drive', () => {
+  it('has a real, working curl to drive', () => {
     expect(REAL_CURL).toBeDefined();
+    const v = spawnSync(REAL_CURL as string, ['--version'], { encoding: 'utf8' });
+    expect(v.status).toBe(0);
+    expect(v.stdout).toMatch(/^curl \d/);
   });
 
   for (const [script, args] of SCRIPTS) {
@@ -140,5 +148,31 @@ describe('kind manifest downloads retry a transient upstream 5xx', () => {
       expect(r.stderr).toMatch(CHECKSUM_REJECTED);
       expect(r.stderr).not.toContain('STUB kubectl');
     }, 30_000);
+
+    it(`${script}: a 404 is NOT retried (exactly one request, non-zero exit)`, async () => {
+      const r = await run(script, args, { failFirst: Number.MAX_SAFE_INTEGER, status: 404 });
+      expect(r.requests).toBe(1);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).not.toContain('STUB kubectl');
+    }, 30_000);
+
+    it(`${script}: a connection reset is retried and then succeeds (to the checksum stage)`, async () => {
+      const r = await run(script, args, { failFirst: 2, status: 0, reset: true });
+      expect(r.requests).toBe(3);
+      expect(r.stderr).toMatch(CHECKSUM_REJECTED);
+      expect(r.stderr).not.toContain('STUB kubectl');
+    }, 60_000);
+
+    it(`${script}: an endless connection reset still ends non-zero within the bound`, async () => {
+      const r = await run(script, args, {
+        failFirst: Number.MAX_SAFE_INTEGER,
+        status: 0,
+        reset: true,
+      });
+      expect(r.status).not.toBe(0);
+      expect(r.requests).toBeGreaterThan(1);
+      expect(r.requests).toBeLessThanOrEqual(10);
+      expect(r.stderr).not.toContain('STUB kubectl');
+    }, 60_000);
   }
 });

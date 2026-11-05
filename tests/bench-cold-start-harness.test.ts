@@ -80,6 +80,39 @@ describe('one harness, no diverging copy', () => {
   });
 });
 
+describe('example manifests declare their cluster-specific values', () => {
+  // The YAML manifests record the cluster each study ran on (namespace, node name or IP, context).
+  // The code scan above skips them by design, so the contract is that each one SAYS it is a
+  // cluster-specific example, and the README says what to edit. Scanned, not listed.
+  const CLUSTER_VALUE =
+    /bench-cells|\b(?!127\.0\.0\.1\b|0\.0\.0\.0\b)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|gke-knext-|knext-oke-sa|knext-coldstart/;
+  const MARKER = /^# CLUSTER-SPECIFIC EXAMPLE:/m;
+
+  const manifests = walk(DIR).filter((p) => /\.ya?ml$/.test(p));
+
+  it('finds the manifests it is meant to guard', () => {
+    expect(manifests.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it('marks every manifest that names a cluster value within its first 6 lines', () => {
+    const unmarked: string[] = [];
+    for (const p of manifests) {
+      const text = readFileSync(p, 'utf8');
+      if (!CLUSTER_VALUE.test(text)) continue;
+      const head = text.split('\n').slice(0, 6).join('\n');
+      if (!MARKER.test(head)) unmarked.push(relative(ROOT, p));
+    }
+    expect(unmarked).toEqual([]);
+  });
+
+  it('documents the manifests in the README and no longer claims scripts are unported', () => {
+    const readme = readFileSync(join(DIR, 'README.md'), 'utf8');
+    expect(readme).toContain('CLUSTER-SPECIFIC EXAMPLE');
+    expect(readme).toMatch(/nodeName/);
+    expect(readme).not.toMatch(/not yet driven by this config/);
+  });
+});
+
 // ------------------------------------------------------------------ fake kubectl
 
 const FAKE_KUBECTL = `#!/usr/bin/env python3

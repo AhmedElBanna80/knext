@@ -592,9 +592,33 @@ function scriptsInvoked(
   return { paths, bad };
 }
 
-/** Could this job push to a registry at all? It needs a credential: packages/id-token write, a login, cosign. */
-function credentialed(job: Job, wfDoc: Record<string, unknown> | undefined): boolean {
+/** A secret other than the ephemeral `GITHUB_TOKEN` referenced anywhere in a value tree. */
+function referencesSecret(v: unknown): boolean {
+  if (typeof v === 'string')
+    return [...v.matchAll(/\bsecrets\.([A-Za-z0-9_]+)/g)].some((m) => m[1] !== 'GITHUB_TOKEN');
+  if (Array.isArray(v)) return v.some(referencesSecret);
+  if (v && typeof v === 'object') return Object.values(v).some(referencesSecret);
+  return false;
+}
+
+/**
+ * Could this job push to a registry at all? It needs a credential. Judged on
+ * what the job can actually reach, not only its own raw keys:
+ *  - `packages`/`id-token` write, or a login / cosign in a step, INCLUDING steps
+ *    inside local composite actions (followed to depth 5);
+ *  - no `permissions` block at job or workflow level: the job inherits the repo
+ *    default `GITHUB_TOKEN`, whose scope is a repo setting this file cannot see,
+ *    so it is assumed read/write (fail closed);
+ *  - a non-`GITHUB_TOKEN` secret handed in (`on.workflow_call.secrets`) or read
+ *    in job env, step env/with/run.
+ */
+function credentialed(
+  job: Job,
+  wfDoc: Record<string, unknown> | undefined,
+  resolveAction: ActionResolver,
+): boolean {
   const perms = [job.permissions, wfDoc?.permissions];
+  if (perms.every((pm) => pm === undefined)) return true;
   for (const pm of perms) {
     if (pm === 'write-all') return true;
     if (pm && typeof pm === 'object') {
@@ -602,14 +626,33 @@ function credentialed(job: Job, wfDoc: Record<string, unknown> | undefined): boo
       if (o.packages === 'write' || o['id-token'] === 'write') return true;
     }
   }
-  const steps = Array.isArray(job.steps) ? (job.steps as Step[]) : [];
-  return steps.some(
-    (st) =>
+  const on = onOf({ file: '', doc: wfDoc ?? {} });
+  const call = on?.workflow_call;
+  if (call && typeof call === 'object') {
+    const declared = (call as Record<string, unknown>).secrets;
+    if (declared && typeof declared === 'object' && Object.keys(declared).length > 0) return true;
+  }
+  if (referencesSecret(job.env)) return true;
+  const credStep = (st: Step, depth: number): boolean => {
+    if (
       /^docker\/login-action@/.test(uses(st)) ||
       /\b(?:docker|podman|crane|regctl|skopeo|oras)\s+(?:auth\s+)?login\b|\bcosign\b/.test(
         code(st),
-      ),
-  );
+      ) ||
+      referencesSecret(st.env) ||
+      referencesSecret(st.with) ||
+      referencesSecret(st.run)
+    )
+      return true;
+    const u = uses(st);
+    if (u.startsWith('./') && !u.includes('/.github/workflows/') && depth < 5) {
+      const inner = resolveAction(u);
+      return inner !== null && inner.some((i) => credStep(i, depth + 1));
+    }
+    return false;
+  };
+  const steps = Array.isArray(job.steps) ? (job.steps as Step[]) : [];
+  return steps.some((st) => credStep(st, 0));
 }
 
 /**
@@ -629,7 +672,7 @@ function expandedSteps(
   wfDoc?: Record<string, unknown>,
 ): Step[] {
   const resolveAction = opts.resolveAction ?? fsActionResolver;
-  const scriptProblems = credentialed(job, wfDoc) ? problems : [];
+  const scriptProblems = credentialed(job, wfDoc, resolveAction) ? problems : [];
   const checkouts = new Map<string, boolean>();
   for (const st of stepsOf(file, id, job)) {
     if (/^actions\/checkout@/.test(uses(st)) && typeof withOf(st).path === 'string') {

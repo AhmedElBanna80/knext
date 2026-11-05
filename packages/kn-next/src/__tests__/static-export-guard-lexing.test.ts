@@ -71,6 +71,16 @@ describe("static-export-guard comment handling", () => {
         expect(classifyStaticExport(config)).toBe("conditional");
     });
 
+    it("is not thrown off by brackets inside strings, templates or regexes before the declaration", () => {
+        const config = [
+            'const a = "{ [ (";',
+            "const b = `} ] )`;",
+            "const c = /[{(]/;",
+            "module.exports = { output: 'export' };",
+        ].join("\n");
+        expect(classifyStaticExport(config)).toBe("unconditional");
+    });
+
     it("calls the literal conditional when it only appears inside a string value", () => {
         const config =
             "module.exports = { note: \"output: 'export'\", reactStrictMode: true };\n";

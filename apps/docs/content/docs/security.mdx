@@ -180,6 +180,13 @@ a detector that guessed "enforced" would be worse than none. `knext doctor` runs
 read-only detection as a preflight check. Note that flannel is what OrbStack and stock OKE clusters
 run — on those, treat network isolation as absent unless you install a policy-capable CNI.
 
+**Opting out is visible too.** While `spec.security.networkPolicy` is `false`, the operator sets a
+`NetworkPolicyDisabled` condition to `True` on the `NextApp` (and on a zone function's
+`BackendService`) and emits a `Warning` event with reason `NetworkPolicyOptedOut` once, when the
+opt-out first takes effect. `Ready` is not changed, because the workload is healthy; the condition
+is there so lost isolation never goes unnoticed. It disappears when the policy is turned back on,
+and an object that never opted out never carries it.
+
 ## Read-only root filesystem
 
 Defense in depth against in-container tampering: knext renders your app's container with a

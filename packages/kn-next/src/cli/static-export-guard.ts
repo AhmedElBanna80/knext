@@ -25,6 +25,7 @@
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripComments } from "../adapters/js-source-lexer.mjs";
 import { UsageError } from "./shared";
 import { readNextConfigStrict } from "./turbopack-fragments-guard";
 
@@ -39,7 +40,7 @@ Either remove \`output: 'export'\` from your Next.js config and build again,
 or host the \`out/\` folder on a static host instead.`;
 
 /** The literal `distDir` in the config text, or undefined (default `.next`). */
-function configuredDistDir(configText: string): string | undefined {
+export function configuredDistDir(configText: string): string | undefined {
     return stripCommentsStringAware(configText).match(
         /\bdistDir\s*:\s*(["'`])([^"'`\n]+)\1/,
     )?.[2];
@@ -57,7 +58,9 @@ function configuredDistDir(configText: string): string | undefined {
  */
 export type StaticExportDeclaration = "unconditional" | "conditional" | "none";
 
-function classifyStaticExport(configText: string): StaticExportDeclaration {
+export function classifyStaticExport(
+    configText: string,
+): StaticExportDeclaration {
     const text = stripCommentsStringAware(configText);
     const re = /\boutput\s*:\s*(["'`])export\1/g;
     let result: StaticExportDeclaration = "none";
@@ -94,30 +97,13 @@ function classifyStaticExport(configText: string): StaticExportDeclaration {
     return result;
 }
 
-const QUOTES = ["'", '"', "`"];
-
-/** Strip `//` and block comments, but never inside a string or template literal. */
-function stripCommentsStringAware(src: string): string {
-    let out = "";
-    let quote: string | undefined;
-    for (let i = 0; i < src.length; i++) {
-        const c = src[i];
-        if (quote) {
-            out += c;
-            if (c === "\\") out += src[++i] ?? "";
-            else if (c === quote) quote = undefined;
-        } else if (QUOTES.includes(c)) {
-            quote = c;
-            out += c;
-        } else if (c === "/" && src[i + 1] === "/") {
-            while (i < src.length && src[i] !== "\n") i++;
-            i--;
-        } else if (c === "/" && src[i + 1] === "*") {
-            const end = src.indexOf("*/", i + 2);
-            i = end === -1 ? src.length : end + 1;
-        } else out += c;
-    }
-    return out;
+/**
+ * Strip `//` and block comments, but never inside a string, template literal
+ * or regex literal. The shared lexer (keep-strings mode): comments become
+ * same-width blanks, so offsets and newlines are preserved.
+ */
+export function stripCommentsStringAware(src: string): string {
+    return stripComments(src);
 }
 
 /** Wrapper calls (`defineConfig(`, `withX(`) and an optional `(phase) => (` arrow. */

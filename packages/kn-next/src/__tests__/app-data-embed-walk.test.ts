@@ -68,6 +68,22 @@ describe("the walk is bounded", () => {
         expect(took).toBeLessThan(15_000);
     }, 30_000);
 
+    it("a wide link fan-out is bounded by entries, not only by directories", () => {
+        const files: Record<string, string> = {};
+        for (let i = 0; i < 400; i++) files[`data/shared/f${i}.json`] = "{}";
+        const root = app(files);
+        mkdirSync(join(root, "data/fan"));
+        for (let i = 0; i < 600; i++) {
+            symlinkSync(
+                join(root, "data/shared"),
+                join(root, `data/fan/l${i}`),
+            );
+        }
+        expect(() => planAppData({ root, includes: ["data/fan"] })).toThrow(
+            /more than 200,000 entries/,
+        );
+    }, 30_000);
+
     it("the same bound applies to a glob", () => {
         const root = denseLinks(9);
         expect(() =>
@@ -147,6 +163,25 @@ describe("the exact-path opt-out under a package-manager link layout", () => {
                 includes: ["node_modules/pkg/data/public.txt"],
             }),
         ).toThrow(/look like secrets[\s\S]*vault\/\.env/);
+    });
+
+    it("a file link whose target is also inside node_modules is still not opted out", () => {
+        const root = pnpm({ "data/x.json": "{}" });
+        mkdirSync(join(root, "node_modules/other"), { recursive: true });
+        writeFileSync(join(root, "node_modules/other/.env"), "S=1");
+        symlinkSync(
+            join(root, "node_modules/other/.env"),
+            join(
+                root,
+                "node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/data/public.txt",
+            ),
+        );
+        expect(() =>
+            planAppData({
+                root,
+                includes: ["node_modules/pkg/data/public.txt"],
+            }),
+        ).toThrow(/look like secrets/);
     });
 
     it("outside node_modules a directory link still withholds the opt-out", () => {

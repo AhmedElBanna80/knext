@@ -30,7 +30,9 @@ CORE_OUT="${TMPDIR}/serving-core.yaml"
 KOURIER_OUT="${TMPDIR}/kourier.yaml"
 
 fetch() { # <url> <sha256> <file>
-  curl -fsSL -o "$3" "$1"
+  # Bounded retries on the DOWNLOAD only; the checksum below is unchanged and a
+  # mismatch is not a curl error, so it is never retried.
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay "${KIND_MANIFEST_RETRY_DELAY:-5}" -o "$3" "$1"
   echo "$2  $3" | sha256sum -c -
 }
 

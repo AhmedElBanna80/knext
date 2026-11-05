@@ -894,5 +894,93 @@
       "provenance": "https://github.com/getknext-dev/knext/issues/2713",
       "retire": "Retire when Bun can load a V8-API addon built for its own ABI and the musl rebuild builds the fixture addon from source, then re-measure."
     }
+  ],
+  "$knextUpstreamRuntimeDefects": [
+    {
+      "test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",
+      "lane": "bun/turbopack",
+      "nextjsRef": "v16.4.3",
+      "bunVersion": "1.4.2",
+      "cases": [
+        {
+          "path": ["treeshake-mw"],
+          "title": "builds and runs Node.js middleware importing via a star re-export"
+        }
+      ],
+      "mechanism": "The fixture sets `experimental.turbopackModuleFragments: true`. The Node.js-runtime middleware chunk Turbopack emits contains an assignment to a `const` binding in code that never runs. The compiled Bun executable loads the chunk through Bun's own parser, which reports it as a load-time error (`Cannot assign to \"t\" because it is a constant`), so the middleware never runs and the `x-key` response header is absent. Node defers the same assignment to a runtime TypeError that is never reached. Minimal repro: `if (process.argv[2]===\"x\") { const e = 1; e = 2 }` loads under node and exits 1 under bun 1.4.2.",
+      "evidence": "run 42048108176 (dispatch on main e32f00187, NEXTJS_REF=v16.4.3, bun x turbopack, Bun 1.4.2, shard 12/16): FINAL 3/3 attempts, `expect(res.headers.get('x-key')).toBe('k')` Received null. The file is not among the failures of run 42048101712 (node x webpack, v16.4.3, 1176 passed, 0 failed), run 41754152861 (node x turbopack, v16.4.3) or run 41770412157 (bun x webpack, v16.4.3, Bun 1.4.2). The same file was red the same way on bun x turbopack at v16.4.0 (run 38181750458) before the ref moved.",
+      "runs": [
+        {
+          "run": "42048108176",
+          "cell": "bun-turbopack",
+          "ref": "v16.4.3"
+        },
+        {
+          "run": "42048101712",
+          "cell": "node-webpack",
+          "ref": "v16.4.3"
+        },
+        {
+          "run": "41754152861",
+          "cell": "node-turbopack",
+          "ref": "v16.4.3"
+        },
+        {
+          "run": "41770412157",
+          "cell": "bun-webpack",
+          "ref": "v16.4.3"
+        }
+      ],
+      "upstream": {
+        "issue": "oven-sh/bun#45007",
+        "fix": "oven-sh/bun#45010"
+      },
+      "knextRefusal": "packages/kn-next/src/cli/turbopack-fragments-guard.ts#assertNoBunTurbopackFragments: knext refuses `experimental.turbopackModuleFragments` on the Bun runtime at build time (`knext build`, `deploy`, `preview`, and `doctor`), so a user cannot reach this state silently. The compat harness runs `next build` directly, not through the CLI, so the refusal is not on its path and the red is expected there.",
+      "removeWhen": "a Bun release containing oven-sh/bun#45010 (an assignment to a const in code that never runs becomes a runtime TypeError, not a load-time error). Mechanically: the entry is pinned to the lane's Bun (bunVersion), so the PR that moves the lane's Bun pin is red until this entry is re-measured at the new Bun or removed, and at any other Bun the run-time scope does not deselect, so the re-measure runs the case. When it passes, delete this entry and the knext refusal in the same change.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2225 (the bun x turbopack red, filed from the Next 16.4 smoke) + oven-sh/bun#45007 (upstream issue) + oven-sh/bun#45010 (upstream fix, open). Founder instruction 2026-11-05: \"Batch the bun bug on knext until the upstream merge\". ADR-0007 amendment 2026-11-05. NOT in rules.exclude: the file runs on every cell; the run-time scope deselects it only on bun/turbopack at v16.4.3 on Bun 1.4.2."
+    },
+    {
+      "test": "test/e2e/app-dir/turbopack-tree-shaking-chunkgroup/turbopack-tree-shaking-chunkgroup.test.ts",
+      "lane": "bun/turbopack",
+      "nextjsRef": "v16.4.3",
+      "bunVersion": "1.4.2",
+      "cases": [
+        {
+          "path": ["turbopack-tree-shaking-chunkgroup"],
+          "title": "builds an app-router app with tree-shaking enabled and renders"
+        }
+      ],
+      "mechanism": "The fixture sets `experimental.turbopackModuleFragments: true`. Turbopack's module-fragment chunks (`server/chunks/ssr/node_modules_next_dist_esm_build_templates_app-page_*.js`) contain assignments to `const` bindings in code that never runs. The compiled Bun executable loads the chunk through Bun's own parser, which reports them as load-time errors (`Cannot assign to \"e\" because it is a constant`), so the page fails with `ChunkLoadError` and renders no `h1`. Node defers the same assignment to a runtime TypeError that is never reached. Same Bun parser defect as treeshake-mw.",
+      "evidence": "run 42048108176 (dispatch on main e32f00187, NEXTJS_REF=v16.4.3, bun x turbopack, Bun 1.4.2, shard 2/16): FINAL 3/3 attempts, `expect($('h1').text()).toContain('tree shaking app')` Received ''. The file is not among the failures of run 42048101712 (node x webpack, v16.4.3, 1176 passed, 0 failed), run 41754152861 (node x turbopack, v16.4.3) or run 41770412157 (bun x webpack, v16.4.3, Bun 1.4.2). The same file was red the same way on bun x turbopack at v16.4.0 (run 38181750458) before the ref moved.",
+      "runs": [
+        {
+          "run": "42048108176",
+          "cell": "bun-turbopack",
+          "ref": "v16.4.3"
+        },
+        {
+          "run": "42048101712",
+          "cell": "node-webpack",
+          "ref": "v16.4.3"
+        },
+        {
+          "run": "41754152861",
+          "cell": "node-turbopack",
+          "ref": "v16.4.3"
+        },
+        {
+          "run": "41770412157",
+          "cell": "bun-webpack",
+          "ref": "v16.4.3"
+        }
+      ],
+      "upstream": {
+        "issue": "oven-sh/bun#45007",
+        "fix": "oven-sh/bun#45010"
+      },
+      "knextRefusal": "packages/kn-next/src/cli/turbopack-fragments-guard.ts#assertNoBunTurbopackFragments: knext refuses `experimental.turbopackModuleFragments` on the Bun runtime at build time (`knext build`, `deploy`, `preview`, and `doctor`), so a user cannot reach this state silently. The compat harness runs `next build` directly, not through the CLI, so the refusal is not on its path and the red is expected there.",
+      "removeWhen": "a Bun release containing oven-sh/bun#45010 (an assignment to a const in code that never runs becomes a runtime TypeError, not a load-time error). Mechanically: the entry is pinned to the lane's Bun (bunVersion), so the PR that moves the lane's Bun pin is red until this entry is re-measured at the new Bun or removed, and at any other Bun the run-time scope does not deselect, so the re-measure runs the case. When it passes, delete this entry and the knext refusal in the same change.",
+      "provenance": "https://github.com/getknext-dev/knext/issues/2225 (the bun x turbopack red, filed from the Next 16.4 smoke) + oven-sh/bun#45007 (upstream issue) + oven-sh/bun#45010 (upstream fix, open). Founder instruction 2026-11-05: \"Batch the bun bug on knext until the upstream merge\". ADR-0007 amendment 2026-11-05. NOT in rules.exclude: the file runs on every cell; the run-time scope deselects it only on bun/turbopack at v16.4.3 on Bun 1.4.2."
+    }
   ]
 }

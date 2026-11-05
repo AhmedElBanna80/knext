@@ -915,6 +915,87 @@ section (h) requires where a Vercel-only assertion could be masking a content ch
   (`partial-fallback-shell-upgrade`, `cached-navigations`): their records stay valid and apply.
 - Review trigger: any Next ref bump, or the first time the cap is approached.
 
+## Amendment (2026-11-05): the upstream-runtime-defect category, deselected on its own lane only
+
+- Status: Accepted (founder instruction, 2026-11-05: "Batch the bun bug on knext until the upstream
+  merge"). Backports the integration/v2 category (its amendment of 2026-10-12) onto main's
+  ref-pinned scheme above, with one change of substance: on main the entry **deselects**, at run
+  time and on its lane only. On v2 it is a record and the cell stays red.
+
+### Context
+
+At Next v16.4.3 two files are red on **bun x turbopack** and on no other cell: `treeshake-mw` and
+`turbopack-tree-shaking-chunkgroup` (run 42048108176, Bun 1.4.2, 3 of 3 attempts each; green on
+node x webpack run 42048101712, node x turbopack run 41754152861 and bun x webpack run
+41770412157). Both fixtures set `experimental.turbopackModuleFragments`. Turbopack emits an
+assignment to a `const` in code that never runs; Bun's parser reports it as a load-time error where
+Node defers it to a runtime TypeError that is never reached. Upstream issue oven-sh/bun#45007, fix
+oven-sh/bun#45010 (open, unreleased). knext already refuses that combination at build time
+(`assertNoBunTurbopackFragments` in `packages/kn-next/src/cli/turbopack-fragments-guard.ts`); the
+harness runs `next build` directly, so the refusal is not on its path.
+
+No existing category fits. Section (h) and the global exclusions are file level on every cell, so
+the three cells where the files pass would lose them. The ref-pinned ledger above is lane-blind
+(one manifest serves every cell), so a `failed` entry there would deselect on node too; it would
+also take its cap from 9 files and 19 cases to 11 and 21.
+
+### Decision
+
+A separate ledger, `$knextUpstreamRuntimeDefects`, in the credential manifest and its derived
+smoke manifest. The committed manifest deselects **nothing** of this kind. At run time
+`scripts/compat-manifest-for-ref.mjs` (the step already in `test-e2e-deploy.yml` and
+`compat-vinext.yml`) adds an entry's case names to `suites[file].failed` in the scoped copy only
+when all three hold: the lane under test (the workflow-level `KNEXT_RUNTIME`/`KNEXT_BUILDER` the
+step inherits) is the entry's lane; `NEXTJS_REF` is the entry's ref; on a Bun lane, `bun --version`
+is the entry's `bunVersion`. Rules, each a guard in `scripts/lib/upstream-runtime-defects.mjs`:
+
+| Rule | Value |
+|---|---|
+| Lane | `<node or bun>/<turbopack or webpack>`, exactly one cell. A runtime-wide or vinext lane is rejected |
+| Ref | the ref-pinned bar 1: a harness lane's default `NEXTJS_REF` or the shipped pin while it is ahead. No `reaudited` escape |
+| Bun pin | a Bun-lane entry carries the Bun it was measured on, and it must equal the lane's pinned Bun in `test-e2e-deploy.yml`. Moving the pin is red until each entry is re-measured or removed |
+| Upstream | an issue **and** a fix, as `owner/repo#N` outside `getknext-dev` |
+| Removal condition | non-empty and names the entry's own upstream fix |
+| knext refusal | names a real guard: a repo path that exists, as `path#symbol` with the symbol in that file |
+| Names | full jest names whose title and describe path exist in the committed upstream snapshot at the entry's ref (the snapshot and its `--verify` job now cover this ledger's files too) |
+| Evidence | at least one run on the entry's own cell, every run at the entry's ref |
+| Boundaries | not in `rules.exclude`, `$knextExclusions`, `$knextQuarantines` or `$knextRefPinnedCases`; its names are not in the committed `failed` lists |
+| Cap | **5**, its own constant (`UPSTREAM_RUNTIME_DEFECT_CAP`); it counts toward no other cap. Raising it needs an amendment of this ADR |
+
+Fail closed, like the ref scope: a non-empty ledger on an unknown lane, an entry without a
+parseable lane, ref or cases, or a matching Bun entry whose Bun cannot be read exits non-zero and
+leaves no copy. A checkout without the script (an older rc tag) deselects nothing of this kind, so
+the files run and report red, which is the safe direction.
+
+**Why it cannot outlive the bug.** The Bun release that will contain the fix is unknown until it
+ships, so no guard can compare against it. The mechanical equivalent is the Bun pin: the deselection
+holds only at the Bun it was measured on, a dispatch on another Bun (`bun-version=canary`) runs the
+cases, and the PR that moves the lane to a Bun carrying the fix is red until the entry is
+re-measured there, which runs the case. When it passes, the entry and the knext refusal are deleted
+in the same change.
+
+### Options considered
+
+| Option | Verdict |
+|---|---|
+| A `failed` entry in the ref-pinned ledger | Rejected: lane-blind, deselects on node, and over that ledger's cap |
+| File-level exclusion (section (h) or `$knextExclusions`) | Rejected: drops the files on the three cells where they pass |
+| The v2 record-only form (cell stays red) | Rejected for main by the founder instruction: the cell's red is triaged and has a named upstream cause |
+| **Separate, capped ledger, deselected at run time on its lane, ref and Bun only** | **Chosen** |
+
+### Consequences
+
+- At v16.4.3 the ledger holds **2 files and 2 cases**, both bun/turbopack on Bun 1.4.2. No passing
+  case is lost on any other cell. Each file has one case, so on bun/turbopack the file runs no case.
+- The v1.0 credential nights check out the pinned rc tag, whose checkout has neither the ledger nor
+  the new code, and run at v16.3.8: nothing changes there. The v1.3 credential lane is generated
+  from its own pinned rc tag and gains this when an rc is cut from a main that has it.
+- A fix inside one Bun is invisible until the Bun moves, the same limit as the ref pin above.
+- The guards check form, not truth. Human review of each mechanism is the defence for truth.
+- Guards: `tests/compat-upstream-runtime-defects.test.ts`; the run-time half is also executed through
+  the real workflow step text in `tests/compat-manifest-for-ref.test.ts`. Mutation proofs, by exit
+  code: `scripts/mutation-prove-upstream-runtime-defects.mjs`.
+
 ## Action items
 
 - **A3-1 (per-PR gate, this PR's deliverable):**

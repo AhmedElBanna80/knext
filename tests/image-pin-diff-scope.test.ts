@@ -294,6 +294,21 @@ describe('PR mode fails CLOSED when the diff cannot be computed', () => {
     expect(calls).toEqual([]);
   });
 
+  it('a shallow clone that still HAS the base commit is refused too', async () => {
+    const r = repoWith({ 'svc/Dockerfile': docker(OLD) });
+    r.write('svc/Dockerfile', docker(NEW));
+    r.commit();
+    const shallow = mkdtempSync(join(tmpdir(), 'pin-diff-shallow2-'));
+    made.push(shallow);
+    git(tmpdir(), 'clone', '-q', '--depth', '2', `file://${r.dir}`, shallow);
+    expect(git(shallow, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    expect(git(shallow, 'cat-file', '-t', r.base)).toBe('commit'); // the base IS reachable
+    const { api, calls } = fakeRegistry();
+    const result = await verifyRepo(shallow, { api, base: r.base });
+    expect(result.findings.map((f) => f.reason)).toEqual(['diff-unavailable']);
+    expect(calls).toEqual([]);
+  });
+
   it('a directory that is not a git repository', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'pin-diff-nogit-'));
     made.push(dir);

@@ -46,7 +46,7 @@ function slashStartsRegex(src, i, lastSignificant) {
  * a scan over the result sees only code. Code inside a template's `${…}` is
  * code and stays visible; templates nest to any depth.
  */
-export function maskCommentsAndStrings(src) {
+function maskCommentsAndStrings(src) {
   const out = src.split('');
   const blank = (from, to) => {
     for (let k = from; k < to; k++) if (out[k] !== '\n') out[k] = ' ';

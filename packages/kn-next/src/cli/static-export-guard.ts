@@ -39,7 +39,7 @@ Either remove \`output: 'export'\` from your Next.js config and build again,
 or host the \`out/\` folder on a static host instead.`;
 
 /** The literal `distDir` in the config text, or undefined (default `.next`). */
-export function configuredDistDir(configText: string): string | undefined {
+function configuredDistDir(configText: string): string | undefined {
     return stripCommentsStringAware(configText).match(
         /\bdistDir\s*:\s*(["'`])([^"'`\n]+)\1/,
     )?.[2];
@@ -57,9 +57,7 @@ export function configuredDistDir(configText: string): string | undefined {
  */
 export type StaticExportDeclaration = "unconditional" | "conditional" | "none";
 
-export function classifyStaticExport(
-    configText: string,
-): StaticExportDeclaration {
+function classifyStaticExport(configText: string): StaticExportDeclaration {
     const text = stripCommentsStringAware(configText);
     const re = /\boutput\s*:\s*(["'`])export\1/g;
     let result: StaticExportDeclaration = "none";
@@ -99,7 +97,7 @@ export function classifyStaticExport(
 const QUOTES = ["'", '"', "`"];
 
 /** Strip `//` and block comments, but never inside a string or template literal. */
-export function stripCommentsStringAware(src: string): string {
+function stripCommentsStringAware(src: string): string {
     let out = "";
     let quote: string | undefined;
     for (let i = 0; i < src.length; i++) {

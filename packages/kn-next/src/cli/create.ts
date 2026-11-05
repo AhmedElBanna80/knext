@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { DEFAULT_RUNTIME_ID } from "../adapters/artifact-contract";
 import { createLogger } from "../utils/logger";
+import { readCoreVersion } from "./core-version";
 import {
     applyCreateChoices,
     type CreateChoices,
@@ -171,17 +172,20 @@ export function assertValidAppName(name: string): void {
     }
 }
 
-/** Reads the CLI's own version — the range the scaffold pins its deps to. */
+/**
+ * The CLI's own version — the range the scaffold pins its deps to and the
+ * version `init-ci --provider gitlab` renders into `npx --yes @getknext/core@…`.
+ * Read through the one shared reader; an unreadable version REFUSES rather than
+ * becoming a `0.0.0` pin written into a user's app or pipeline.
+ */
 export function cliVersion(): string {
-    try {
-        const pkgPath = join(packageRoot(), "package.json");
-        return (
-            (JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: string })
-                .version ?? "0.0.0"
+    const version = readCoreVersion();
+    if (version === undefined) {
+        throw new UsageError(
+            "cannot determine the knext CLI version (no readable @getknext/core package.json above the CLI), so the scaffold cannot pin @getknext/* — reinstall @getknext/core",
         );
-    } catch {
-        return "0.0.0";
     }
+    return version;
 }
 
 /** Load every `.hbs` under `root` as relPath (minus the `.hbs`) → source. */

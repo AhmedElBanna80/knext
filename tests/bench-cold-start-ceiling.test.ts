@@ -1033,9 +1033,15 @@ describe('the runbook states the procedure the harness, the analyzer and the bui
     const fullMin = 15 + 7 * blk(ROUND_MIN) + 10;
     const fullMax = 15 + 7 * blk(ROUND_MAX) + 10;
     expect(rb).toContain(`${Math.round(screenMin)}-${Math.round(screenMax)} minutes`);
-    expect(rb).toContain(`${(screenMin / 60).toFixed(1)}-${(screenMax / 60).toFixed(1)} h`);
+    // every place that states the hours states these (the approval, the preconditions, the arithmetic)
+    const times = (needle: string) => rb.split(needle).length - 1;
+    expect(
+      times(`${(screenMin / 60).toFixed(1)}-${(screenMax / 60).toFixed(1)} h`),
+    ).toBeGreaterThanOrEqual(4);
     expect(rb).toContain(`${Math.round(fullMin)}-${Math.round(fullMax)} minutes`);
-    expect(rb).toContain(`${Math.round(fullMin / 60)}-${Math.round(fullMax / 60)} h`);
+    expect(
+      times(`${Math.round(fullMin / 60)}-${Math.round(fullMax / 60)} h`),
+    ).toBeGreaterThanOrEqual(4);
     expect(rb).toContain(
       `${Math.round((3 * fullMin + 240) / 60)}-${Math.round((3 * fullMax + 240) / 60)} h`,
     );

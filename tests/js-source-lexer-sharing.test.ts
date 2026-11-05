@@ -29,6 +29,14 @@ const MIGRATED = [
   'scripts/lib/prover-anchor-scan.mjs',
   'packages/kn-next/src/adapters/computed-require-scan.mjs',
   'packages/kn-next/src/cli/static-export-guard.ts',
+  'packages/kn-next/src/cli/doctor/checks/use-cache.ts',
+  'packages/kn-next/src/cli/tracing-root.ts',
+  'packages/kn-next/src/__tests__/boot-trace-wiring.test.ts',
+  'packages/kn-next/src/__tests__/cr-apply-strict-validation.test.ts',
+  'packages/kn-next/src/__tests__/kube-context-scan.test.ts',
+  'packages/kn-next/src/__tests__/node-server-log-after-spawn.test.ts',
+  'packages/kn-next/src/__tests__/visibility-guard-coverage-scan.test.ts',
+  'tests/e2e-ephemeral-ports.test.ts',
 ];
 
 const read = (rel: string) => readFileSync(resolve(ROOT, rel), 'utf8');

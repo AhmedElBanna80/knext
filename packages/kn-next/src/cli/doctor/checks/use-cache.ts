@@ -19,6 +19,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripComments } from "../../../adapters/js-source-lexer.mjs";
 import { mk } from "../report";
 import type { CheckContext, CheckResult } from "../types";
 
@@ -29,13 +30,6 @@ export const NEXT_CONFIG_FILES = [
     "next.config.cjs",
     "next.config.mts",
 ];
-
-/** Strip // and block comments so a commented-out flag does not count. */
-export function stripComments(src: string): string {
-    return src
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/(^|[^:])\/\/.*$/gm, "$1");
-}
 
 /** True iff the config text enables Cache Components / `'use cache'`. */
 function enablesUseCache(configText: string): boolean {

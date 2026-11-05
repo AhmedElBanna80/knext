@@ -45,6 +45,38 @@ describe("static-export-guard comment handling", () => {
         expect(classifyStaticExport(config)).toBe("unconditional");
     });
 
+    it("classifies an unconditional `output: 'export'` after a regex literal holding a quote as unconditional", () => {
+        // The brace walk used to keep its own quote tracking, so the `'` inside
+        // the regex opened a "string" that never closed and the real top-level
+        // declaration was reported as the warn-only `conditional`.
+        const config =
+            "const q = /'/;\nmodule.exports = { output: 'export' };\n";
+        expect(classifyStaticExport(config)).toBe("unconditional");
+    });
+
+    it("is not thrown off by quotes in strings, templates, regexes or comments before the declaration", () => {
+        const config = [
+            'const a = "it\'s";',
+            "const b = `don't stop`;",
+            "// it's a comment with a ' quote",
+            'const c = /"/;',
+            "module.exports = { output: 'export' };",
+        ].join("\n");
+        expect(classifyStaticExport(config)).toBe("unconditional");
+    });
+
+    it("still calls a declaration under a ternary conditional after a quote-holding regex", () => {
+        const config =
+            "const q = /'/;\nmodule.exports = { ...(process.env.X ? { output: 'export' } : {}) };\n";
+        expect(classifyStaticExport(config)).toBe("conditional");
+    });
+
+    it("calls the literal conditional when it only appears inside a string value", () => {
+        const config =
+            "module.exports = { note: \"output: 'export'\", reactStrictMode: true };\n";
+        expect(classifyStaticExport(config)).toBe("conditional");
+    });
+
     it("preserves offsets and newlines (same-width blanks, not removal)", () => {
         const src = "a /* x */ b // y\nc";
         const out = stripCommentsStringAware(src);

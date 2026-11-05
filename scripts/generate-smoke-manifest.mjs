@@ -6,6 +6,7 @@
 // committed bytes are exactly what `biome check .` accepts (needs node_modules).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { biomeFormat } from './biome-format.mjs';
 import { renderSmokeManifest } from './lib/smoke-manifest.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
@@ -16,8 +17,11 @@ const main = JSON.parse(readFileSync(MAIN_PATH, 'utf8'));
 writeFileSync(
   SMOKE_PATH,
   renderSmokeManifest(main, {
-    repoRoot: REPO_ROOT,
-    filePath: 'test/deploy-tests-manifest.smoke.knext.json',
+    format: (raw) =>
+      biomeFormat(raw, {
+        repoRoot: REPO_ROOT,
+        filePath: 'test/deploy-tests-manifest.smoke.knext.json',
+      }),
   }),
 );
 console.log(`wrote ${SMOKE_PATH}`);

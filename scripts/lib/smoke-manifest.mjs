@@ -17,9 +17,6 @@
 // cannot silently drift out of sync with the credential manifest's
 // exclude/suites ledger.
 
-import { spawnSync } from 'node:child_process';
-import { resolve } from 'node:path';
-
 /** The narrowing glob(s) applied for the branch smoke selection (#1301). */
 export const SMOKE_INCLUDE = ['test/e2e/app-dir/**/*.test.{t,j}s{,x}'];
 
@@ -65,17 +62,8 @@ export function deriveSmokeManifest(mainManifest) {
  * JSON.stringify bytes left whoever regenerated the file with a red
  * `biome check .`.
  */
-export function renderSmokeManifest(mainManifest, { repoRoot, filePath }) {
-  const raw = `${JSON.stringify(deriveSmokeManifest(mainManifest), null, 2)}\n`;
-  const r = spawnSync(
-    resolve(repoRoot, 'node_modules/.bin/biome'),
-    ['format', `--stdin-file-path=${filePath}`],
-    { cwd: repoRoot, input: raw, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
-  );
-  if (r.error || r.status !== 0) {
-    throw new Error(
-      `renderSmokeManifest: biome format failed (${r.error?.message ?? `exit ${r.status}: ${r.stderr}`}) — install dependencies so node_modules/.bin/biome exists`,
-    );
-  }
-  return r.stdout;
+export function renderSmokeManifest(mainManifest, { format }) {
+  // The formatter is INJECTED (scripts/biome-format.mjs): this helper lives in
+  // scripts/lib, which the prover-lane guard keeps free of process spawns.
+  return format(`${JSON.stringify(deriveSmokeManifest(mainManifest), null, 2)}\n`);
 }

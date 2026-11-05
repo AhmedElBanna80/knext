@@ -228,7 +228,7 @@ export function lineSubstitutions(spec, shape = 'runs') {
   if (!sourceShape) throw new Error(`compat-line-workflow: unknown source shape ${shape}`);
   const derivedPath = `.github/workflows/${spec.workflowFile}`;
   const v = spec.line;
-  /** @type {{id: string, from: string, to: string, count: number}[]} */
+  /** @type {{id: string, from: string, to: string, count: number, optional?: boolean}[]} */
   const subs = [
     {
       id: 'workflow-name',
@@ -336,6 +336,7 @@ export function lineSubstitutions(spec, shape = 'runs') {
         '    permissions:\n' +
         '      contents: read\n',
       count: 1,
+      optional: true,
     },
     ...sourceShape.prose(v),
     {
@@ -544,6 +545,9 @@ export function deriveLineWorkflow(sourceText, { line, tag, repoRoot }) {
   }
   let text = sourceText;
   for (const s of lineSubstitutions(spec, sourceShapeOf(sourceText))) {
+    // `optional`: a tag cut after the fix already carries the replacement; skip it
+    // rather than apply it twice (a later tag converges on the same derived text).
+    if (s.optional && count(text, s.to) > 0) continue;
     const n = count(text, s.from);
     if (n !== s.count) {
       throw new Error(
@@ -606,10 +610,16 @@ export function underiveLineWorkflow(derivedText, { line, repoRoot }) {
   // readable from the derived text: invert with each, and keep the one whose
   // recovered source hashes to the recorded digest.
   const errors = [];
-  for (const shape of /** @type {(keyof typeof SOURCE_SHAPES)[]} */ (Object.keys(SOURCE_SHAPES))) {
+  // An `optional` substitution is skipped when the source already carried its
+  // replacement, so each shape is also tried with the optional ones left alone.
+  const attempts = [];
+  for (const shape of /** @type {(keyof typeof SOURCE_SHAPES)[]} */ (Object.keys(SOURCE_SHAPES)))
+    for (const keepOptional of [false, true]) attempts.push([shape, keepOptional]);
+  for (const [shape, keepOptional] of attempts) {
     let text = derivedText.slice(header.length);
     try {
       for (const s of [...lineSubstitutions(spec, shape)].reverse()) {
+        if (s.optional && keepOptional) continue;
         const n = count(text, s.to);
         if (n !== s.count) {
           throw new Error(

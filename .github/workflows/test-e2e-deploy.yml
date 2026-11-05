@@ -985,9 +985,6 @@ jobs:
     name: Deploy tests (shard ${{ matrix.shard }})
     needs: build-next
     runs-on: ubuntu-latest
-    # Least privilege: this job reads the repo and the run's own artifacts; it
-    # pushes nothing and calls no GitHub API. Without a block it would inherit
-    # the repo-default GITHUB_TOKEN scope, which this file cannot see.
     permissions:
       contents: read
     # #147 A3-3 fix round 1 — 120 min (was 60). Run 28558576615 never exceeded

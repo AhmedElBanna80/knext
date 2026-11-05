@@ -20,6 +20,7 @@ import {
   buildSnapshot,
   diffSnapshots,
   fetchFromGitHub,
+  snapshotLedger,
   verifySnapshot,
 } from '../scripts/compat-ref-pinned-cases-snapshot.mjs';
 import {
@@ -404,9 +405,20 @@ describe('ref-pinned per-case ledger — the FORGED-CASE scenario (--verify is t
     return { fl, fs, suites };
   })();
 
+  // The snapshot also covers the upstream-runtime-defect entries (ADR-0007 amendment 2026-11-05),
+  // so --verify rebuilds from BOTH ledgers, exactly as the script's main() does.
+  const full = snapshotLedger(manifest);
+
   it('CONTROL: the real ledger verifies against an upstream that matches the real snapshot', async () => {
-    const v = await verifySnapshot(ledger as never, snapshot, upstreamFrom(snapshot));
+    const v = await verifySnapshot(full as never, snapshot, upstreamFrom(snapshot));
     expect(v.code, v.lines.join('\n')).toBe(0);
+  });
+
+  it('the snapshot covers exactly the files of both ledgers, no more and no fewer', () => {
+    expect(Object.keys(snapshot.files).sort()).toEqual(
+      [...new Set(full.map((e: { test: string }) => e.test))].sort(),
+    );
+    expect(full.length).toBeGreaterThan(ledger.length);
   });
 
   it('the forgery passes EVERY offline check (this is the hole)', () => {
@@ -423,7 +435,11 @@ describe('ref-pinned per-case ledger — the FORGED-CASE scenario (--verify is t
   });
 
   it('--verify REJECTS the forgery: upstream does not hold the forged title', async () => {
-    const v = await verifySnapshot(forged.fl as never, forged.fs, upstreamFrom(snapshot));
+    const v = await verifySnapshot(
+      snapshotLedger({ ...manifest, $knextRefPinnedCases: forged.fl }) as never,
+      forged.fs,
+      upstreamFrom(snapshot),
+    );
     expect(v.code).toBe(1);
     expect(v.lines.join('\n')).toMatch(/DRIFT .*differs from upstream/);
   });

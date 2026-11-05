@@ -103,13 +103,29 @@ export async function verifySnapshot(ledger, committed, fetchFile) {
   return { code: 0, lines: [`snapshot matches upstream at ${rebuilt.ref}`] };
 }
 
+/**
+ * The files the snapshot covers: every ref-pinned entry, plus every upstream-runtime-defect entry
+ * (ADR-0007 amendment 2026-11-05), whose case names are checked against the same snapshot. A
+ * defect entry cites no upstream line, so it contributes only its file and ref.
+ */
+export function snapshotLedger(manifest) {
+  return [
+    ...(manifest.$knextRefPinnedCases ?? []),
+    ...(manifest.$knextUpstreamRuntimeDefects ?? []).map((e) => ({
+      test: e.test,
+      nextjsRef: e.nextjsRef,
+      upstream: [],
+    })),
+  ];
+}
+
 async function main(argv) {
   const mode = argv[2];
   if (mode !== '--write' && mode !== '--verify') {
     console.error('usage: compat-ref-pinned-cases-snapshot.mjs --write | --verify');
     return 2;
   }
-  const ledger = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')).$knextRefPinnedCases ?? [];
+  const ledger = snapshotLedger(JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')));
   if (mode === '--verify') {
     const verdict = await verifySnapshot(
       ledger,

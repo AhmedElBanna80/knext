@@ -192,6 +192,40 @@ V8-API native addons work on Bun. Because one manifest serves every cell, the No
 which was measured passing, also stops running those 2 cases; the Node/webpack cell was not
 measured.
 
+### 5 · A known defect in the Bun runtime, scoped to one cell
+
+Some failures are caused by a bug in a runtime knext does not own, on one cell only. For these,
+knext keeps a separate, small list. An entry is admitted only when all of the following hold, each
+checked by CI:
+
+- **One cell.** The entry names exactly one runtime and one builder (for example, Bun with
+  Turbopack). Before the tests run, the harness deselects the entry's cases on that cell only, and
+  only at the Next.js version and the Bun version the entry was measured at. On every other cell,
+  version or Bun build the cases run.
+- **Whole files are excluded, not counted.** When an entry covers every case in a test file, the
+  harness skips the file on that cell rather than running it with no cases, so the run never counts
+  that file as passed.
+- **A named upstream fix.** The entry cites the runtime's own issue and fix, and its removal
+  condition is the release that contains that fix.
+- **Cannot outlive the bug.** Moving the Bun version the test lanes run fails CI until each entry
+  is re-measured on the new Bun or removed. The entry must cite a run on the new Bun, so changing
+  the recorded version without a run is not enough. The re-measure runs the cases, so a Bun release
+  that fixes the bug shows them passing.
+- **knext refuses the configuration.** knext rejects the affected setup at build time, so an app
+  cannot reach the failing state silently.
+- **Exact names, measured, capped.** Case names are checked against the upstream test file at that
+  version, the entry records the runs it was measured on, and the list has its own ceiling of 5.
+
+<Callout type="info">
+**Counts, kept honest by a CI check.** This list currently holds 2 files (2 test cases), both on the
+Bun/Turbopack cell at Next.js 16.4.3 on Bun 1.4.2. Both fixtures enable Next's experimental
+`turbopackModuleFragments` flag, which Turbopack compiles into code Bun's parser rejects when it
+loads it, where Node only fails if the code runs (it never does). The same files pass on the
+Node/Turbopack, Node/webpack and Bun/webpack cells, where they keep running. knext refuses
+`turbopackModuleFragments` on the Bun runtime; see
+[Bun & the compiled executable](/docs/bun-runtime).
+</Callout>
+
 No ledger above is used to manufacture a green run — they exist to keep the nightly signal
 honest, and they shrink toward zero over time rather than growing pre-emptively.
 

@@ -18,6 +18,7 @@ import { describe, expect, it } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { REF_PINNED_CASE_CAP, REF_PINNED_FILE_CAP } from '../../scripts/lib/ref-pinned-cases.mjs';
+import { UPSTREAM_RUNTIME_DEFECT_CAP } from '../../scripts/lib/upstream-runtime-defects.mjs';
 
 const DOCS_DIR = resolve(import.meta.dirname, 'content/docs');
 
@@ -321,6 +322,40 @@ describe('docs content — compat-suite credential page stays honest about an op
     );
     expect([...measured].sort()).toEqual(['bun-webpack', 'node-turbopack']);
     expect(compatSuite).toMatch(/Node\/webpack and\s+Bun\/Turbopack cells were not measured/);
+  });
+
+  it("states the upstream-runtime-defect list's counts, cells, versions and cap, derived from the manifest", () => {
+    // `$knextUpstreamRuntimeDefects` is the source of truth. The page must carry its real counts,
+    // the one cell the entries scope to, the Next and Bun versions they were measured at, and the cap.
+    const manifest = JSON.parse(
+      readFileSync(resolve(DOCS_DIR, '../../../../test/deploy-tests-manifest.knext.json'), 'utf-8'),
+    ) as {
+      $knextUpstreamRuntimeDefects: Array<{
+        lane: string;
+        nextjsRef: string;
+        bunVersion?: string;
+        cases: unknown[];
+      }>;
+    };
+    const ledger = manifest.$knextUpstreamRuntimeDefects;
+    const files = ledger.length;
+    const cases = ledger.reduce((n, e) => n + e.cases.length, 0);
+    expect(files).toBeGreaterThan(0);
+    expect(compatSuite).toMatch(
+      new RegExp(`This list currently holds ${files}\\s*files\\s*\\(${cases}\\s*test cases\\)`),
+    );
+    expect(compatSuite).toContain(`its own ceiling of ${UPSTREAM_RUNTIME_DEFECT_CAP}`);
+    const spell: Record<string, string> = {
+      'bun/turbopack': 'Bun/Turbopack',
+      'bun/webpack': 'Bun/webpack',
+      'node/turbopack': 'Node/Turbopack',
+      'node/webpack': 'Node/webpack',
+    };
+    for (const e of ledger) {
+      const at = `${spell[e.lane]}\\s+cell at Next\\.js\\s+${e.nextjsRef.replace(/^v/, '').replace(/\./g, '\\.')}`;
+      const bun = e.bunVersion ? `\\s+on Bun\\s+${e.bunVersion.replace(/\./g, '\\.')}` : '';
+      expect(compatSuite).toMatch(new RegExp(at + bun));
+    }
   });
 
   it('mutation control: the completed-14-night guard actually catches a false claim, and only while the window is open', () => {

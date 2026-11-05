@@ -55,11 +55,24 @@ type Manifest = {
     cases: { path: string[]; title: string }[];
   }[];
   $knextRefPinnedScope?: { ref: string; applied: string[]; dropped: string[] };
+  $knextUpstreamRuntimeDefects?: { test: string }[];
   [k: string]: unknown;
 };
 
+/**
+ * The lane every run below scopes for. The script also applies the upstream-runtime-defect ledger
+ * (tests/compat-upstream-runtime-defects.test.ts holds that half), which needs a lane and fails
+ * closed without one; the workflows hand it the workflow-level KNEXT_RUNTIME/KNEXT_BUILDER. A
+ * fixed, explicit env keeps these runs independent of whatever the test host exports. node/turbopack
+ * matches no entry in that ledger, so the ref-pinned assertions here see only the ref-pinned half.
+ */
+const LANE_ENV = { KNEXT_RUNTIME: 'node', KNEXT_BUILDER: 'turbopack' } as const;
+
 function run(args: string[]) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
+  return spawnSync(process.execPath, [SCRIPT, ...args], {
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH ?? '', ...LANE_ENV },
+  });
 }
 
 function scope(ref: string | null, manifestPath = MANIFEST) {
@@ -338,7 +351,14 @@ describe('compat-manifest-for-ref — the REAL step text, executed', () => {
 
   function execStep(
     lane: string,
-    o: { ref: string | undefined; withScript: boolean; manifest: object },
+    o: {
+      ref: string | undefined;
+      withScript: boolean;
+      manifest: object;
+      lane?: { KNEXT_RUNTIME: string; KNEXT_BUILDER: string };
+      /** A fake `bun` first on PATH that prints this version. */
+      bun?: string;
+    },
   ) {
     const s = stepFor(lane);
     const root = tmp();
@@ -347,10 +367,9 @@ describe('compat-manifest-for-ref — the REAL step text, executed', () => {
     if (o.withScript) {
       mkdirSync(join(knext, 'scripts/lib'), { recursive: true });
       copyFileSync(SCRIPT, join(knext, 'scripts/compat-manifest-for-ref.mjs'));
-      copyFileSync(
-        resolve(ROOT, 'scripts/lib/ref-pinned-cases.mjs'),
-        join(knext, 'scripts/lib/ref-pinned-cases.mjs'),
-      );
+      for (const lib of ['ref-pinned-cases.mjs', 'upstream-runtime-defects.mjs']) {
+        copyFileSync(resolve(ROOT, 'scripts/lib', lib), join(knext, 'scripts/lib', lib));
+      }
     }
     const manifestName = 'deploy-tests-manifest.knext.json';
     writeFileSync(join(knext, 'test', manifestName), JSON.stringify(o.manifest));
@@ -359,7 +378,15 @@ describe('compat-manifest-for-ref — the REAL step text, executed', () => {
         .replace('${{ runner.temp }}', root)
         .replace('${{ env.KNEXT_DEPLOY_MANIFEST }}', manifestName)
         .replace('${{ github.workspace }}', root);
-    const env: Record<string, string> = { PATH: process.env.PATH ?? '' };
+    // KNEXT_RUNTIME/KNEXT_BUILDER stand in for the workflow-level env the real step inherits.
+    let path = process.env.PATH ?? '';
+    if (o.bun !== undefined) {
+      const bin = join(root, 'fake-bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'bun'), `#!/bin/sh\necho ${o.bun}\n`, { mode: 0o755 });
+      path = `${bin}:${path}`;
+    }
+    const env: Record<string, string> = { PATH: path, ...(o.lane ?? LANE_ENV) };
     for (const [k, v] of Object.entries(s.env ?? {})) env[k] = sub(String(v));
     if (o.ref !== undefined) env.NEXTJS_REF = o.ref;
     const r = spawnSync('bash', ['-c', s.run as string], { cwd: knext, env, encoding: 'utf8' });
@@ -409,6 +436,60 @@ describe('compat-manifest-for-ref — the REAL step text, executed', () => {
       });
     });
   }
+
+  // The upstream-runtime-defect half of the same step (ADR-0007 amendment 2026-11-05): the lane
+  // comes from the workflow-level env the step inherits, so no workflow edit carries it.
+  describe('.github/workflows/test-e2e-deploy.yml — upstream-runtime defects, by lane', () => {
+    const defects = (real.$knextUpstreamRuntimeDefects ?? []) as { test: string }[];
+    const BUN_TURBO = { KNEXT_RUNTIME: 'bun', KNEXT_BUILDER: 'turbopack' };
+    const lane = '.github/workflows/test-e2e-deploy.yml';
+    it('bun/turbopack at v16.4.3 on Bun 1.4.2: the copy the harness reads excludes both files', () => {
+      const { r, scoped } = execStep(lane, {
+        ref: 'v16.4.3',
+        withScript: true,
+        manifest: real,
+        lane: BUN_TURBO,
+        bun: '1.4.2',
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(defects.length).toBe(2);
+      for (const d of defects) {
+        // Whole-file entries become file exclusions, never a failed list (a jest run that filters
+        // out every case exits 0 and would be credited as a passed file).
+        expect(scoped?.rules.exclude).toContain(d.test);
+        expect(scoped?.suites[d.test]?.failed).toBeUndefined();
+      }
+    });
+    it.each([
+      [
+        'node/turbopack at v16.4.3',
+        'v16.4.3',
+        { KNEXT_RUNTIME: 'node', KNEXT_BUILDER: 'turbopack' },
+        '1.4.2',
+      ],
+      [
+        'bun/webpack at v16.4.3',
+        'v16.4.3',
+        { KNEXT_RUNTIME: 'bun', KNEXT_BUILDER: 'webpack' },
+        '1.4.2',
+      ],
+      ['bun/turbopack at v16.3.8', 'v16.3.8', BUN_TURBO, '1.4.2'],
+      ['bun/turbopack at v16.4.3 on another Bun', 'v16.4.3', BUN_TURBO, '1.4.3'],
+    ])('%s: they run', (_label, ref, laneEnv, bun) => {
+      const { r, scoped } = execStep(lane, {
+        ref,
+        withScript: true,
+        manifest: real,
+        lane: laneEnv,
+        bun,
+      });
+      expect(r.status, r.stderr).toBe(0);
+      for (const d of defects) {
+        expect(scoped?.suites[d.test]?.failed).toBeUndefined();
+        expect(scoped?.rules.exclude).not.toContain(d.test);
+      }
+    });
+  });
 
   it('the cap constant is still what the ADR says (sanity that the real lib was imported)', () => {
     expect(REF_PINNED_FILE_CAP).toBe(10);

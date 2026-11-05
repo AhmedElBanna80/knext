@@ -182,6 +182,22 @@
         "14": "    // `bindings` is a direct dependency rather than one of `native-addon`. The",
         "35": "  it('should render /blog/first correctly', async () => {"
       }
+    },
+    "test/e2e/app-dir/treeshake-mw/mw.test.ts": {
+      "blob": "f006a822872334f5b96cc07d81e4ad858f13b331",
+      "literals": [
+        "builds and runs Node.js middleware importing via a star re-export",
+        "treeshake-mw"
+      ],
+      "lines": {}
+    },
+    "test/e2e/app-dir/turbopack-tree-shaking-chunkgroup/turbopack-tree-shaking-chunkgroup.test.ts": {
+      "blob": "c37b0bedb5f07bc900cced485cc67034d941a74a",
+      "literals": [
+        "builds an app-router app with tree-shaking enabled and renders",
+        "turbopack-tree-shaking-chunkgroup"
+      ],
+      "lines": {}
     }
   }
 }

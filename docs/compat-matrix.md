@@ -160,6 +160,28 @@ gate, not the official suite — the official suite has its own row, own workflo
   of this kind. A separate CI job re-fetches the pinned upstream files on every pull request that
   touches the entries, and nightly, and fails if the committed snapshot differs or upstream is
   unreachable. The constraint that remains: the manifest is one file for every cell at one ref.
+- **Upstream-runtime defects, scoped to one cell (2 files, 2 cases; ADR-0007 amendment
+  2026-11-05).** A separate ledger, `$knextUpstreamRuntimeDefects`, for a red on exactly one cell
+  caused by a runtime knext does not own. The committed manifest deselects nothing of this kind;
+  the same scope step applies an entry to the copy the harness reads only on the entry's lane
+  (`KNEXT_RUNTIME`/`KNEXT_BUILDER`), at its ref, and on Bun at its `bunVersion` (`bun --version`).
+  An entry that covers every case in its file (`wholeFile`) adds the **file** to the copy's
+  `rules.exclude`. A `failed` list that covers a whole file would make jest run no case and exit 0,
+  and the shard summary would count a passed file. A partial-file entry adds its case names to
+  `failed`. The shard summary's `excluded` figure comes from the committed manifest, so it does not
+  count these files.
+  Today: `treeshake-mw` and `turbopack-tree-shaking-chunkgroup` on **bun/turbopack** at v16.4.3 on
+  Bun 1.4.2 (run 42048108176, 3 of 3 attempts each). Each has one case, so both files are excluded
+  on that cell. Both fixtures set
+  `experimental.turbopackModuleFragments`; Bun's parser rejects a `const` assignment in dead code
+  at load time where Node defers it (oven-sh/bun#45007, fix oven-sh/bun#45010, unreleased). Green
+  and still running on node/webpack (run 42048101712), node/turbopack (run 41754152861) and
+  bun/webpack (run 41770412157). knext refuses the flag on Bun at build time. Removal: the Bun
+  release containing the fix. A PR that moves the lanes' Bun pin is red until each entry is
+  re-measured at the new Bun or removed. Each Bun-cell run records its Bun, and an entry needs an
+  own-cell run at its `bunVersion`, so editing `bunVersion` with the pin is not enough. At any other
+  Bun (a canary dispatch included) the cases run. Its own cap is 5; it counts toward no other cap. The v1.0 credential (rc tag checkout,
+  v16.3.8) is unaffected; the v1.3 credential gains it with the next rc cut from `main`.
 - **Red-nightly procedure (mechanized, end to end).** Red **test results actually fail the
   workflow**: each shard's final "Fail shard on red results" gate exits 1 when its summary JSON
   carries `failed>0` or `notRun>0` (the run step's `|| true` only swallows the *step* exit so the

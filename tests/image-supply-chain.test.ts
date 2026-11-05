@@ -1128,7 +1128,7 @@ describe('repo-local scripts are read for pushes', () => {
       expect(run('NPM_TOKEN')).toEqual([]);
     });
     describe('a caller handing secrets to a local reusable workflow', () => {
-      const pair = (callerSecrets: Any) => {
+      const pair = (callerSecrets: Any | string | undefined) => {
         const caller: Workflow = {
           file: 'caller.yml',
           doc: {

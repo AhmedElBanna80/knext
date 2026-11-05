@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
+import { biomeFormat } from '../scripts/biome-format.mjs';
 import { cronsOverlap, findOverlappingPairs, parseCron } from '../scripts/lib/cron-overlap.mjs';
-import { deriveSmokeManifest } from '../scripts/lib/smoke-manifest.mjs';
+import { deriveSmokeManifest, renderSmokeManifest } from '../scripts/lib/smoke-manifest.mjs';
 import { evaluate, exprBody } from './helpers/gha-expr';
 
 /**
@@ -307,6 +309,39 @@ describe('the branch smoke manifest never drifts from the credential manifest (#
       committedSmoke,
       'test/deploy-tests-manifest.smoke.knext.json is stale — run `node scripts/generate-smoke-manifest.mjs`',
     ).toEqual(expectedSmoke);
+  });
+
+  it('the generator output is byte-identical to the committed file and biome check accepts it', () => {
+    const main = JSON.parse(readFileSync(MAIN_PATH, 'utf8'));
+    const rendered = renderSmokeManifest(main, {
+      format: (raw: string) =>
+        biomeFormat(raw, {
+          repoRoot: REPO_ROOT,
+          filePath: 'test/deploy-tests-manifest.smoke.knext.json',
+        }),
+    });
+    expect(
+      rendered === readFileSync(SMOKE_PATH, 'utf8'),
+      'generator bytes differ from the committed smoke manifest — run `node scripts/generate-smoke-manifest.mjs` and commit the result',
+    ).toBe(true);
+    // Bytes are identical (asserted above), so the repo lint on the file on disk
+    // is the lint on the generator output. (`biome check --stdin-file-path`
+    // without --write always exits 1 on stdin, so it cannot be used here.)
+    const check = spawnSync(
+      resolve(REPO_ROOT, 'node_modules/.bin/biome'),
+      ['check', 'test/deploy-tests-manifest.smoke.knext.json'],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    expect(
+      check.status,
+      `biome check rejected the smoke manifest:\n${check.stdout}${check.stderr}`,
+    ).toBe(0);
+  });
+
+  it('generate-smoke-manifest.mjs writes through renderSmokeManifest, not raw JSON.stringify', () => {
+    const src = readFileSync(resolve(REPO_ROOT, 'scripts/generate-smoke-manifest.mjs'), 'utf8');
+    expect(src).toMatch(/renderSmokeManifest\(/);
+    expect(src).not.toMatch(/JSON\.stringify/);
   });
 
   it('the smoke manifest narrows rules.include and copies exclude/suites/quarantines verbatim', () => {

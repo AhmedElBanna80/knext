@@ -8,11 +8,35 @@
  * the server's own output, so a genuinely broken server is diagnosable.
  */
 
+import { canBind } from "./free-port";
+
+/**
+ * A server that exits without printing anything gives the reader nothing to
+ * go on. The Nitro servers swallow an EADDRINUSE on listen and exit 0 silently,
+ * so say what the port looks like now instead of leaving a bare `code=0`.
+ */
+async function silentExitHint(
+    url: string,
+    free: (port: number) => Promise<boolean>,
+): Promise<string> {
+    const port = Number(new URL(url).port);
+    const base =
+        "\nserver printed no output before exiting; it swallows listen " +
+        "errors (EADDRINUSE) and exits 0, so a silent exit usually means its " +
+        "port was already taken.";
+    if (!port) return base;
+    return (await free(port))
+        ? `${base} port ${port} is free now (a holder may have been transient).`
+        : `${base} port ${port} is held by another process now.`;
+}
+
 export interface WaitForHttpOkOptions {
     /** Total time to wait. Default 60 s. */
     deadlineMs?: number;
     /** Pause between probes. Default 250 ms. */
     intervalMs?: number;
+    /** Per-probe timeout. Default 5 s. */
+    probeTimeoutMs?: number;
     /** The spawned server's combined stdout/stderr, appended to failures. */
     log?: () => string;
     /** Returns a description once the server process has exited, else null. */
@@ -25,32 +49,39 @@ export async function waitForHttpOk(
     url: string,
     opts: WaitForHttpOkOptions = {},
 ): Promise<Response> {
-    const { deadlineMs = 60_000, intervalMs = 250, now = Date.now } = opts;
+    const {
+        deadlineMs = 60_000,
+        intervalMs = 250,
+        probeTimeoutMs = 5000,
+        now = Date.now,
+    } = opts;
     const deadline = now() + deadlineMs;
     let lastStatus: number | undefined;
     let lastError: string | undefined;
 
-    const fail = (why: string): never => {
+    const fail = async (why: string, silentExit = false): Promise<never> => {
         const seen =
             lastStatus !== undefined
                 ? `last status ${lastStatus}`
                 : `no response (${lastError ?? "none"})`;
         const log = opts.log?.() ?? "";
+        const hint =
+            silentExit && !log ? await silentExitHint(url, canBind) : "";
         throw new Error(
-            `${url}: ${why}; ${seen}${log ? `\n--- server output ---\n${log}` : ""}`,
+            `${url}: ${why}; ${seen}${hint}${log ? `\n--- server output ---\n${log}` : ""}`,
         );
     };
-    const failIfExited = () => {
+    const failIfExited = async () => {
         const gone = opts.exited?.();
-        if (gone) fail(`server exited before ready (${gone})`);
+        if (gone) await fail(`server exited before ready (${gone})`, true);
     };
 
     for (;;) {
-        failIfExited();
+        await failIfExited();
         try {
             const res = await fetch(url, {
                 signal: AbortSignal.timeout(
-                    Math.max(1, Math.min(5000, deadline - now())),
+                    Math.max(1, Math.min(probeTimeoutMs, deadline - now())),
                 ),
             });
             if (res.status === 200) return res;
@@ -75,8 +106,8 @@ export async function waitForHttpOk(
         if (now() >= deadline) {
             // Crash vs slow: the process may have died during the last probe,
             // after the loop's own exit check.
-            failIfExited();
-            fail(
+            await failIfExited();
+            await fail(
                 `not ready with HTTP 200 within ${deadlineMs} ms` +
                     (opts.exited ? " (server process still running)" : ""),
             );

@@ -990,7 +990,8 @@ describe('the runbook states the procedure the harness, the analyzer and the bui
   it('runs kubectl from the workstation, not from P, and labels staged binaries after staging them', () => {
     const s5 = rb.slice(rb.indexOf('## 5. On P'), rb.indexOf('## 6. The block loop'));
     const fences = [...s5.matchAll(/```\n([\s\S]*?)```/g)].map((m) => m[1]);
-    const withKubectl = fences.filter((f) => /\bkubectl\b/.test(f));
+    // anything on the workstation (kubectl, or the helper that wraps it) is labelled as such
+    const withKubectl = fences.filter((f) => /\bkubectl\b|wait-kubelet-heartbeat\.sh/.test(f));
     expect(withKubectl.length).toBeGreaterThan(0);
     for (const f of withKubectl) expect(f.trimStart().startsWith('# workstation')).toBe(true);
     expect(s5.indexOf('sudo install -m 0755 <stock file>')).toBeLessThan(
@@ -1075,17 +1076,20 @@ describe('the runbook states the procedure the harness, the analyzer and the bui
 
 describe('a restarted kubelet is waited for by its new heartbeat, not by a stale Ready', () => {
   // Measured on the kind rehearsal: after a kubelet restart the API keeps the OLD Ready=True for ~54 s
-  // (even for a crash-looping kubelet), so `kubectl wait --for=condition=Ready` proves nothing.
+  // (even for a crash-looping kubelet), so waiting on the Ready condition proves nothing.
   const HELPER = 'scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh';
   const rb = readFileSync(join(ROOT, RUNBOOK), 'utf8');
   const stubDir = mkdtempSync(join(tmpdir(), 'ceiling-kubectl-stub-'));
   afterAll(() => rmSync(stubDir, { recursive: true, force: true }));
 
-  // A kubectl that answers only `get node ... jsonpath=...lastHeartbeatTime|status` from two files.
+  // A kubectl that answers only `get node ... jsonpath=...lastHeartbeatTime|status` from two files,
+  // logs every call's arguments, and fails (exit 1, message on stderr) when the file "fail" exists.
   writeFileSync(
     join(stubDir, 'kubectl'),
     [
       '#!/bin/sh',
+      'echo "$*" >> "$STUB_DIR/calls"',
+      'if [ -e "$STUB_DIR/fail" ]; then echo "Error: context \\"nope\\" does not exist" >&2; exit 1; fi',
       'case "$*" in',
       '  *lastHeartbeatTime*) cat "$STUB_DIR/hb" ;;',
       '  *status*) cat "$STUB_DIR/st" ;;',
@@ -1096,10 +1100,13 @@ describe('a restarted kubelet is waited for by its new heartbeat, not by a stale
     { mode: 0o755 },
   );
 
-  function wait(hb: string, st: string, before = '2026-11-05T09:00:00Z', timeout = '2') {
+  function run(args: string[], hb = '', st = 'True', fail = false) {
     writeFileSync(join(stubDir, 'hb'), hb);
     writeFileSync(join(stubDir, 'st'), st);
-    const r = spawnSync('bash', [join(ROOT, HELPER), 'node-p', before, timeout], {
+    writeFileSync(join(stubDir, 'calls'), '');
+    rmSync(join(stubDir, 'fail'), { force: true });
+    if (fail) writeFileSync(join(stubDir, 'fail'), '');
+    const r = spawnSync('bash', [join(ROOT, HELPER), ...args], {
       encoding: 'utf8',
       env: {
         PATH: `${stubDir}:${process.env.PATH ?? ''}`,
@@ -1107,8 +1114,12 @@ describe('a restarted kubelet is waited for by its new heartbeat, not by a stale
         WAIT_KUBELET_HEARTBEAT_INTERVAL: '0.2',
       },
     });
-    return { out: r.stdout, err: r.stderr, code: r.status ?? -1 };
+    const calls = readFileSync(join(stubDir, 'calls'), 'utf8').split('\n').filter(Boolean);
+    return { out: r.stdout, err: r.stderr, code: r.status ?? -1, calls };
   }
+  const BEFORE = '2026-11-05T09:00:00Z';
+  const wait = (hb: string, st: string, before = BEFORE, timeout = '2') =>
+    run(['wait', 'ctx-ceiling', 'node-p', before, timeout], hb, st);
 
   it('succeeds when the Ready heartbeat moved and Ready is True', () => {
     const r = wait('2026-11-05T09:10:01Z', 'True');
@@ -1116,8 +1127,8 @@ describe('a restarted kubelet is waited for by its new heartbeat, not by a stale
     expect(r.out).toContain('new heartbeat 2026-11-05T09:10:01Z');
   });
 
-  it('times out on the stale Ready=True that kubectl wait would accept at once', () => {
-    const r = wait('2026-11-05T09:00:00Z', 'True');
+  it('times out (exit 1) on the stale Ready=True that a plain wait would accept at once', () => {
+    const r = wait(BEFORE, 'True');
     expect(r.code).toBe(1);
     expect(r.err).toContain('no new kubelet heartbeat after 2s');
   });
@@ -1127,19 +1138,148 @@ describe('a restarted kubelet is waited for by its new heartbeat, not by a stale
     expect(wait('2026-11-05T09:10:01Z', 'False').code).toBe(1);
   });
 
-  it('does not accept an empty heartbeat (a kubectl that failed or a node without the condition)', () => {
+  it('does not accept an empty heartbeat (a node without the condition)', () => {
     expect(wait('', 'True').code).toBe(1);
   });
 
-  it('is the only post-restart readiness gate in the runbook: kubectl wait is gone, the helper is used', () => {
+  it('passes the context to every kubectl call, as --context, and never relies on the current one', () => {
+    const w = wait('2026-11-05T09:10:01Z', 'True');
+    expect(w.calls.length).toBeGreaterThan(0);
+    for (const c of w.calls)
+      expect(c.startsWith('--context ctx-ceiling get node node-p')).toBe(true);
+    const r = run(['read', 'ctx-ceiling', 'node-p'], '2026-11-05T09:10:01Z');
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe('2026-11-05T09:10:01Z');
+    for (const c of r.calls)
+      expect(c.startsWith('--context ctx-ceiling get node node-p')).toBe(true);
+  });
+
+  it('refuses to run without a context (exit 2, before any kubectl call)', () => {
+    for (const args of [['read'], ['read', '', 'node-p'], ['wait', '', 'node-p', BEFORE, '2']]) {
+      const r = run(args, '2026-11-05T09:10:01Z');
+      expect(r.code).toBe(2);
+      expect(r.err).toContain('without a kubectl context');
+      expect(r.calls).toEqual([]);
+    }
+  });
+
+  it('refuses a missing node, a missing prior heartbeat and an unknown mode (exit 2)', () => {
+    expect(run(['read', 'ctx-ceiling']).code).toBe(2);
+    expect(run(['wait', 'ctx-ceiling', 'node-p']).code).toBe(2);
+    expect(run(['wait', 'ctx-ceiling', 'node-p', '']).code).toBe(2);
+    expect(run(['sleep', 'ctx-ceiling', 'node-p']).code).toBe(2);
+  });
+
+  it('reports a failing kubectl as exit 2 with its message, not as a timeout (exit 1)', () => {
+    const w = run(['wait', 'ctx-ceiling', 'node-p', BEFORE, '2'], BEFORE, 'True', true);
+    expect(w.code).toBe(2);
+    expect(w.err).toContain('does not exist');
+    expect(w.err).not.toContain('no new kubelet heartbeat');
+    const r = run(['read', 'ctx-ceiling', 'node-p'], '', 'True', true);
+    expect(r.code).toBe(2);
+    expect(r.err).toContain('does not exist');
+    // a node with no Ready heartbeat to read is also an error, not an empty success
+    expect(run(['read', 'ctx-ceiling', 'node-p'], '').code).toBe(2);
+  });
+
+  it('every wait in the runbook is preceded by a heartbeat read just before its restart', () => {
+    // kubectl wait is gone, the helper is used with the context, in the four places
     expect(rb).not.toContain('kubectl wait --for=condition=Ready');
-    expect(rb.split('wait-kubelet-heartbeat.sh').length - 1).toBeGreaterThanOrEqual(4);
-    // the heartbeat is read before the restart, on the workstation, and the runbook says why
-    expect(rb).toContain('{.status.conditions[?(@.type=="Ready")].lastHeartbeatTime}');
-    expect(rb).toContain('stale Ready=True');
+    // command occurrences only (a fenced line, or the section 8 inline step), not the prose that names it
+    const waits = [
+      ...rb.matchAll(
+        /^\s*`?(?:scripts\/bench-cold-start-phases\/ceiling\/)?wait-kubelet-heartbeat\.sh wait "\$CTX" <P> "\$HB" 120/gm,
+      ),
+    ];
+    expect(waits.length).toBeGreaterThanOrEqual(4);
+    for (const m of waits) {
+      const idx = m.index ?? 0;
+      // the nearest earlier read is within the same step (a stale HB from a previous step is the bug)
+      const before = rb.slice(Math.max(0, idx - 1800), idx);
+      expect(before).toMatch(/wait-kubelet-heartbeat\.sh read "\$CTX" <P>\)/);
+      // and no earlier restart-and-wait pair sits between that read and this wait
+      const lastRead = before.lastIndexOf('wait-kubelet-heartbeat.sh read "$CTX" <P>)');
+      expect(before.slice(lastRead)).not.toContain('wait-kubelet-heartbeat.sh wait');
+    }
+    expect(rb).not.toMatch(/HB=\$\(kubectl/);
+  });
+
+  it('the revert re-reads HB immediately before the revert restart, not once before the run', () => {
+    const s8 = rb.slice(rb.indexOf('## 8. Revert'), rb.indexOf('## 9. Recover'));
+    const read = s8.indexOf('wait-kubelet-heartbeat.sh read "$CTX" <P>)');
+    const revert = s8.indexOf('sudo /bin/sh /var/lib/ceiling/revert.sh');
+    const proof = s8.indexOf('wait-kubelet-heartbeat.sh wait "$CTX" <P> "$HB" 120');
+    expect(read).toBeGreaterThanOrEqual(0);
+    expect(read).toBeLessThan(revert);
+    expect(revert).toBeLessThan(proof);
+    expect(s8).toContain('immediately before the revert restart');
+    // the manual revert in the fire test and the stop condition also re-read first
+    expect(rb).toContain('read `HB` again');
+  });
+
+  it('every kubectl in the runbook names the context, and the driver gets it too', () => {
+    const lines = rb
+      .split('\n')
+      .filter((l) => /\bkubectl (get|apply|cordon|uncordon)\b/.test(l) && !/--context/.test(l));
+    // the only lines allowed to name kubectl without a context are prose that quotes the bare words
+    expect(lines).toEqual([]);
+    expect(rb).toContain('--namespace=<NS> --context="$CTX"');
   });
 });
 
+describe('the amd64 build is never started on P without a check and a stop condition', () => {
+  const rb = readFileSync(join(ROOT, RUNBOOK), 'utf8');
+
+  it('has an off-node start check under amd64 emulation for both builds, pinned by digest', () => {
+    for (const f of ['stock', 'relist100ms']) {
+      expect(rb).toMatch(
+        new RegExp(
+          `docker run --rm --platform linux/amd64 -v <build dir>:/k:ro --entrypoint /k/kubelet-v1\\.34\\.10-${f}-linux-amd64 busybox@sha256:[0-9a-f]{64} --version`,
+        ),
+      );
+    }
+    expect(rb).toContain('Each must print `Kubernetes v1.34.10`');
+    expect(rb).toContain('proves only that the ELF\n   loads and executes');
+  });
+
+  it('stops the run if a first start of an amd64 build does not hold, under an armed timer, before any block', () => {
+    const s5 = rb.slice(rb.indexOf('## 5. On P'), rb.indexOf('## 6. The block loop'));
+    const stop = s5.indexOf('**Stop condition: an amd64 build that does not start as a kubelet.**');
+    expect(stop).toBeGreaterThanOrEqual(0);
+    // before the staging and before the fire test that first starts the stock build
+    expect(stop).toBeLessThan(s5.indexOf('Fire test: the net is proved'));
+    expect(stop).toBeGreaterThan(s5.indexOf('**Stop conditions.**'));
+    const para = s5.slice(stop, s5.indexOf('**SELinux, for the binaries'));
+    for (const needle of [
+      'only under an armed revert timer',
+      'wait "$CTX" <P> "$HB" 120',
+      "`exe_sum` is not that build's sum",
+      '`args_sum` is not `$OKE_ARGS`',
+      'NRestarts',
+      '**stop\nthe whole run**',
+      'revert.sh',
+      'Do not try the other build',
+    ])
+      expect(para).toContain(needle);
+  });
+
+  it('makes the daemon-reload timer re-basing a stop condition with a numeric pass rule', () => {
+    const s5 = rb.slice(rb.indexOf('## 5. On P'), rb.indexOf('## 6. The block loop'));
+    const at = s5.indexOf('the first reload on P is a stop-condition check');
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(s5.indexOf('Fire test: the net is proved'));
+    const para = s5.slice(at, s5.indexOf('Fire test: the net is proved'));
+    for (const needle of [
+      'systemctl list-timers ceiling-revert.timer',
+      'sudo systemctl daemon-reload',
+      'not earlier than `NEXT_before`',
+      '151 minutes',
+      '**Stop if** the timer is no longer listed',
+      '**If the timer cannot be proved still armed after a reload, the run does not start.**',
+    ])
+      expect(para).toContain(needle);
+  });
+});
 describe('the setup manifest is a template with no cluster literal', () => {
   const m = readFileSync(join(ROOT, MANIFEST), 'utf8');
 

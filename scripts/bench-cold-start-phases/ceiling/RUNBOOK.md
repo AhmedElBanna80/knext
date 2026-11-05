@@ -113,7 +113,7 @@ Six blocks on P (`b1` ... `b6`), plus the optional CRI-O block (`b7`): 192 P win
   it, and prints the median and max round trip per arm.**
 - **Placement.** The harness pod runs on **S**, not P: P's kubelet is restarted several times (five in the screen, eight in
   the full run) and a harness on it would be disturbed. `ceiling-setup.example.yaml` pins it to S by `nodeName` (which also bypasses the
-  cordon); confirm with `kubectl get pod ceil-harness -o wide`. If it is on P, **stop**: moving it needs a
+  cordon); confirm with `kubectl --context "$CTX" get pod ceil-harness -o wide`. If it is on P, **stop**: moving it needs a
   delete, which is founder-only. **Network asymmetry, stated:** harness-to-pod traffic is same-node for S
   wakes and cross-node for P wakes, so first byte carries a small constant offset between arms. It is the
   same in every block, so it cancels in the difference in differences; it does not affect the wait.
@@ -216,12 +216,18 @@ The amd64 build was not started anywhere (only the arm64 build was). The two thi
    `kubelet-v1.34.10-relist100ms-linux-amd64` =
    `e8d9fa854e5383685abe9690f4634a5a1645a788db3d5c55519ef523ae1446e0`. A rebuild must match, or the new sum is
    recorded before anything else. Not re-verified by the agent that wrote this.
-3. Nodes, from the cluster (read-only):
+3. **Name the cluster once, and pass it everywhere.** `CTX=<the kubeconfig context of the ceiling cluster, from
+   the founder>`, defined in the workstation shell. Every `kubectl` below carries `--context "$CTX"`, the
+   driver gets `--context="$CTX"`, and the heartbeat helper takes it as a required argument and refuses to run
+   without one: **the current-context of whichever shell runs a command is never relied on**, because this
+   run touches one cluster and a stale current-context points elsewhere. Check `kubectl --context "$CTX" get
+   nodes` shows P and S before anything else.
+   Nodes, from the cluster (read-only):
    ```
-   kubectl get nodes -o wide
-   kubectl get node <P> -o jsonpath='{.metadata.uid} {.status.nodeInfo.kubeletVersion} {.status.nodeInfo.containerRuntimeVersion}{"\n"}'
-   kubectl get node <S> -o jsonpath='{.metadata.uid} {.status.nodeInfo.kubeletVersion} {.status.nodeInfo.containerRuntimeVersion}{"\n"}'
-   kubectl get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable
+   kubectl --context "$CTX" get nodes -o wide
+   kubectl --context "$CTX" get node <P> -o jsonpath='{.metadata.uid} {.status.nodeInfo.kubeletVersion} {.status.nodeInfo.containerRuntimeVersion}{"\n"}'
+   kubectl --context "$CTX" get node <S> -o jsonpath='{.metadata.uid} {.status.nodeInfo.kubeletVersion} {.status.nodeInfo.containerRuntimeVersion}{"\n"}'
+   kubectl --context "$CTX" get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable
    ```
    Expect `v1.34.10` on both and a CRI-O 1.34.x. Record each node's current **UNSCHEDULABLE** state: that is
    the state the revert restores. **Stop if any node other than P and S exists and is schedulable**
@@ -237,19 +243,19 @@ The amd64 build was not started anywhere (only the arm64 build was). The two thi
    - `ceiling/ceiling-setup.example.yaml`: fill `<NS>`, `<S node>` (the harness pod's `nodeName`, which pins
      it to S) and `<IMAGE>` (pinned by digest, never `:latest`).
    Then verify before applying: `grep -n 'nodeName' <the copies>` lists only P's and S's names, and
-   `grep -n '10\.0\.1\.' <the copies>` finds nothing. Apply with `kubectl apply --validate=strict -f`, then
-   `kubectl get pods -n <NS> -o wide`: the harness on S, one agent on each node, `ceil-p` and `ceil-s` Ready
+   `grep -n '10\.0\.1\.' <the copies>` finds nothing. Apply with `kubectl --context "$CTX" apply --validate=strict -f`, then
+   `kubectl --context "$CTX" get pods -n <NS> -o wide`: the harness on S, one agent on each node, `ceil-p` and `ceil-s` Ready
    at zero pods (`minScale: 0`).
-5. **Harness on S** (section 2): `kubectl get pod ceil-harness -n <NS> -o wide`.
+5. **Harness on S** (section 2): `kubectl --context "$CTX" get pod ceil-harness -n <NS> -o wide`.
 6. **The image is on both nodes.** The first wake after a missing image includes a pull. Check on each node
    over SSH (authoritative): `sudo crictl images --digests | grep <digest from the NextApp spec.image>`.
-   The API view `kubectl get node <n> -o jsonpath='{.status.images[*].names}'` is a quick look only: the
+   The API view `kubectl --context "$CTX" get node <n> -o jsonpath='{.status.images[*].names}'` is a quick look only: the
    kubelet reports at most 50 images by default (from memory), so absence there proves nothing. If missing,
    do two unrecorded wakes per arm first and re-check.
 7. Nothing else is benching:
    ```
-   kubectl get pods -A -o wide | grep -Ei 'bench|phase|harness|loadtest|k6' || true
-   kubectl get nextapp -A
+   kubectl --context "$CTX" get pods -A -o wide | grep -Ei 'bench|phase|harness|loadtest|k6' || true
+   kubectl --context "$CTX" get nextapp -A
    pgrep -fl 'drive.py|baseline-stability|prepull|burst-ab|bunexec|cpu-boost' || true   # on the workstation
    ```
    Expected: the harness pod, `ceil-p`, `ceil-s` and the node agents. Ask the founder about anything else.
@@ -274,6 +280,17 @@ The amd64 build was not started anywhere (only the arm64 build was). The two thi
    file ./oke-kubelet                                                  # statically or dynamically linked
    ./oke-kubelet --version                                             # on a linux host; expect Kubernetes v1.34.10
    ```
+   **Start check of the amd64 builds, off the node (before any cluster step).** Neither amd64 build has ever
+   run as a kubelet; only the arm64 builds did (kind rehearsal). On the workstation, with Docker, run each under
+   x86-64 emulation (the image is the amd64 manifest of `busybox:1.37.0`, pinned by digest):
+   ```
+   docker run --rm --platform linux/amd64 -v <build dir>:/k:ro --entrypoint /k/kubelet-v1.34.10-stock-linux-amd64 busybox@sha256:66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4 --version
+   docker run --rm --platform linux/amd64 -v <build dir>:/k:ro --entrypoint /k/kubelet-v1.34.10-relist100ms-linux-amd64 busybox@sha256:66a6306db78bf2dbf3487f293aa8d6990d8e506fdffab9cc43fe422becf886e4 --version
+   ```
+   Each must print `Kubernetes v1.34.10`; anything else is a stop. Run on 2026-11-05 on an arm64 Mac (OrbStack):
+   both did, and the rebuild reproduced the two sums recorded above exactly. **This proves only that the ELF
+   loads and executes** (`--version`); it does not prove a kubelet starts, registers and holds a node, which only
+   the node can show. That is the stop condition in section 5.
    Any difference beyond the relist constant (CGO, flags, `-X` values, a vendor patch) is named as a confound
    in the result. The `oke` blocks and the `stock` blocks exist to measure it.
 10. Record the start time. Cluster time, from the arithmetic in section 6 step 6: **the screen about 2.9-3.4 h**,
@@ -281,7 +298,7 @@ The amd64 build was not started anywhere (only the arm64 build was). The two thi
 
 ## 5. On P: variables, staging, the revert script, the timer and its fire test (founder-run, over SSH)
 
-**Cordon P first**, from the workstation: `kubectl cordon <P>` (verify `SchedulingDisabled`; no drain). P then
+**Cordon P first**, from the workstation: `kubectl --context "$CTX" cordon <P>` (verify `SchedulingDisabled`; no drain). P then
 takes no new work while it runs our binaries.
 
 Commands in the code blocks below run **on P** unless marked `# workstation`: a worker may have no kubectl.
@@ -307,6 +324,15 @@ bytes are not `ELF`); `ExecStart` runs more than one command; an existing drop-i
 **after** `99-ceiling.conf` (ours would not win; one that sorts before is expected and is what the `ExecStart=`
 reset overrides, see section 3); `findmnt -T /var/lib -o OPTIONS` shows `noexec`; the unit uses a
 `ExecStartPre` that touches the binary path.
+
+**Stop condition: an amd64 build that does not start as a kubelet.** Each build is started on P for the first time
+only under an armed revert timer: `stock` in the fire test (step 1 below, under the 150-minute timer armed
+above) and `relist100` in the first block that uses it (section 6 step 1 re-arms the timer first). If after
+that first start `scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh wait "$CTX" <P> "$HB" 120` exits non-zero, or `exe_sum` is not that build's sum, or
+`args_sum` is not `$OKE_ARGS`, or `systemctl show kubelet -p NRestarts --value` is above 0 or still rising, **stop
+the whole run**: read `HB` again, run `sudo /bin/sh /var/lib/ceiling/revert.sh`, prove the OKE binary is back
+(section 8 step 2), and report with `journalctl -u kubelet -n 200 --no-pager`. Do not try the other build or
+another block first. No block starts, and none continues, on a build that has not started cleanly.
 
 **SELinux, for the binaries and for the revert script** (the labelling step comes after staging, below).
 `getenforce` first. The revert script is never exec'd directly: the timer runs it as
@@ -383,9 +409,13 @@ kubelet (the `/run` drop-in does not either); the CRI-O drop-in is the exception
 the old kubelet's Ready=True for about 54 s, even when the new kubelet is crash-looping, so a
 `kubectl wait` on the Ready condition returns at once and proves nothing. A stale Ready=True is what you read
 for the first minute. The check that works is the Ready condition's `lastHeartbeatTime`: the new kubelet posts
-one within about 0.5-0.8 s of starting. Read it before the restart and wait for it to change:
-`scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120` (tested against a stub
-kubectl). It exits 1 on timeout, which means revert (section 8). `exe_sum` on P is still the proof of
+one within about 0.5-0.8 s of starting. Read it with the helper **immediately before the restart whose effect is waited for, and again before every
+later restart** (a value read before an earlier swap is stale by then, because the swapped kubelet has already
+posted newer heartbeats, and the wait would pass at once), and wait for it to change:
+`HB=$(scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh read "$CTX" <P>)`, then `scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh wait "$CTX" <P> "$HB" 120` (tested against a stub
+kubectl). It exits 1 on timeout, which means revert (section 8), and **2 when kubectl itself fails** (a wrong
+context, an unreachable API, an unknown node), which is a different problem and is reported as such, not as a
+timeout; it also refuses to run without a context. `exe_sum` on P is still the proof of
 which binary runs; the heartbeat is the proof that it started and reached the API.
 
 **`daemon-reload` re-bases a pending `--on-active` timer (measured, systemd 257 on kind).** Each
@@ -393,14 +423,26 @@ which binary runs; the heartbeat is the proof that it started and reached the AP
 read 11:41:07, then 11:41:32 after a reload five seconds later, and did not move without one). The swap's
 reload therefore only ever postpones the revert, and the 150-minute margin is measured from the last
 reload, not from arming. Re-arming at the start of every block, as above, is unaffected. OKE's systemd may differ
-and is not tested; check `systemctl list-timers` before and after the first reload there.
+and is not tested, so **the first reload on P is a stop-condition check, run once with the 150-minute timer armed and
+before the fire test**:
+```
+systemctl list-timers ceiling-revert.timer --no-pager; date -u      # record NEXT_before and now_before
+sudo systemctl daemon-reload
+systemctl list-timers ceiling-revert.timer --no-pager; date -u      # NEXT_after and now_after
+```
+Pass: the timer is still listed, `NEXT_after` is **not earlier than `NEXT_before`**, and `NEXT_after` is no
+later than `now_after` plus 151 minutes (either left alone, or re-based to reload time plus 150 minutes).
+**Stop if** the timer is no longer listed, `NEXT_after` is earlier than `NEXT_before` (a reload that shortens
+the net could fire mid-block), or `NEXT_after` is more than 151 minutes ahead (the net is longer than its
+margin). Re-arm once (the arm command above) and repeat the check; if it fails the same way, run `revert.sh`
+and report. **If the timer cannot be proved still armed after a reload, the run does not start.**
 
 **Fire test: the net is proved before anything relies on it. Do not start block 1 without it** (in the
 screen: before `b2`).
 1. Write the **stock** drop-in, then restart:
    ```
    # workstation, BEFORE the restart: the Ready heartbeat to compare against (see "Waiting for the new kubelet")
-   HB=$(kubectl get node <P> -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastHeartbeatTime}')
+   HB=$(scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh read "$CTX" <P>)
    ```
    ```
    sudo systemctl daemon-reload
@@ -408,14 +450,14 @@ screen: before `b2`).
    ```
    ```
    # workstation
-   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120
+   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh wait "$CTX" <P> "$HB" 120
    ```
    On P, `exe_sum` must equal the stock sum and `args_sum` must equal `$OKE_ARGS`. (This is also the first
    time our stock build runs on the node.)
 2. Re-read the heartbeat now, because step 1's restart moved it and a stale `$HB` would pass at once:
    ```
    # workstation
-   HB=$(kubectl get node <P> -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastHeartbeatTime}')
+   HB=$(scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh read "$CTX" <P>)
    ```
    Then fire the timer on a short delay, through the same explicit interpreter, and **poll** for the effect rather
    than sleeping a fixed time:
@@ -430,12 +472,12 @@ screen: before `b2`).
    ```
    ```
    # workstation: HB was re-read just before the timer was armed, so this waits for the timer's own restart
-   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120
+   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh wait "$CTX" <P> "$HB" 120
    ```
    The first line stops an elapsed test timer that may still be loaded from an earlier try.
 3. **The proof is the effect, not the unit's state** (a successful transient service is collected): the
    drop-in is gone, `exe_sum` equals `$OKE_EXE`, `args_sum` equals `$OKE_ARGS`, and P is Ready. **If any of
-   these is not so, stop the run**: run `sudo /bin/sh /var/lib/ceiling/revert.sh` by hand, confirm the same
+   these is not so, stop the run**: read `HB` again (it is stale now), run `sudo /bin/sh /var/lib/ceiling/revert.sh` by hand, confirm the same
    three things, and report. The run does not start on an untested net.
 
 ## 6. The block loop (founder-run on P; the workstation runs the harness)
@@ -451,14 +493,19 @@ relist100, `b5` stock, `b6` oke:
 1. **Re-arm the auto-revert** (section 5).
 2. **Select X and restart, in every block but `b1`** (`b4` restarts onto the same binary as `b3`, so each
    block is freshly restarted). **`b1` follows the fire test's revert restart instead: wait 10 minutes after
-   that revert before its checks.** `oke`: remove the drop-in if present. `stock`/`relist100`: write it. Then
+   that revert before its checks.** `oke`: remove the drop-in if present. `stock`/`relist100`: write it. Read the
+   heartbeat first, just before the restart (it is stale after any earlier swap), then restart:
+   ```
+   # workstation
+   HB=$(scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh read "$CTX" <P>)
+   ```
    ```
    sudo systemctl daemon-reload
    sudo systemctl restart kubelet
    ```
    ```
-   # workstation: read HB with the section 5 command before the restart, then wait for the new heartbeat
-   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120
+   # workstation, after the restart: wait for the new heartbeat (HB was read just before it, see above)
+   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh wait "$CTX" <P> "$HB" 120
    ```
    If P has no new heartbeat after 120 s, **revert at once** (section 8).
 3. **Prove which binary and which flags are running** (the file on disk proves nothing; the running process
@@ -467,7 +514,7 @@ relist100, `b5` stock, `b6` oke:
 4. **Prove the relist period** with the metric, not the assumption. The histogram is cumulative since the
    kubelet started, so read twice, 60 s apart, and use the delta:
    ```
-   kubectl get --raw "/api/v1/nodes/<P>/proxy/metrics" | grep -E '^kubelet_pleg_relist_interval_seconds_(sum|count)'
+   kubectl --context "$CTX" get --raw "/api/v1/nodes/<P>/proxy/metrics" | grep -E '^kubelet_pleg_relist_interval_seconds_(sum|count)'
    ```
    mean = (sum2 - sum1) / (count2 - count1). Pass: `oke` and `stock` about 1.00 s; `relist100` between 0.095
    and 0.110 s. Do the same for S: about 1.00 s. A mismatch is an abort.
@@ -480,7 +527,7 @@ relist100, `b5` stock, `b6` oke:
    ```
    PHASE_POD=ceil-harness python3 scripts/bench-cold-start-phases/drive.py 30 \
      'ceil-p@<P pool>,ceil-s@<S pool>' ceiling-rows.jsonl \
-     --place-mode=restore --pool-label=kubernetes.io/hostname --namespace=<NS> \
+     --place-mode=restore --pool-label=kubernetes.io/hostname --namespace=<NS> --context="$CTX" \
      --expect-state='<P node>:cordoned,<S node>:open' \
      --abort-on-foreign='<P pool>' --abort-failed-fraction=0.10 --block=b1
    ```
@@ -493,7 +540,7 @@ relist100, `b5` stock, `b6` oke:
    blocks + 1 CRI-O block + 10 = 543-648 minutes = 9-11 h. **The driver exits non-zero, and says why, on:** a cordon changed by someone else, a refused
    cordon, a foreign pod on P (`FOREIGN POD on pool ...`), failed wakes past 10% of the planned ones
    (`stopping: N failed wakes of M planned`, observable mid-run), a held lock, or an unexpected rest state.
-   **Treat every non-zero exit as a stop.** Run `kubectl get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable`
+   **Treat every non-zero exit as a stop.** Run `kubectl --context "$CTX" get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable`
    and compare with section 4 step 3 (P cordoned, S as it was) before deciding anything. If the driver was
    SIGKILLed, P may be open and S closed: set them by hand, and `--expect-state` will refuse the next start
    until they are right.
@@ -505,7 +552,7 @@ relist100, `b5` stock, `b6` oke:
 ## 7. Abort criteria (stop, then section 8; section 9 if a node is affected)
 
 Stop the run and report if any of these holds:
-- `wait-kubelet-heartbeat.sh` finds no new heartbeat on P **2 minutes** after a kubelet restart, or S is ever not Ready.
+- `wait-kubelet-heartbeat.sh wait` finds no new heartbeat on P **2 minutes** after a kubelet restart, or S is ever not Ready.
 - A pod outside the bench namespace is evicted, restarted, or fails to schedule, or the driver prints
   `FOREIGN POD on pool <P pool>` (it also stops itself with `--abort-on-foreign`).
 - The kubelet crash-loops (more than 2 restarts in 10 minutes), or its CPU stays above half a core for 10 min.
@@ -520,7 +567,13 @@ Stop the run and report if any of these holds:
 
 All of it works with the kubelet dead, over SSH. It covers the kubelet drop-in and the CRI-O debug drop-in
 together, because `revert.sh` removes both:
-1. Cancel the timer and revert:
+1. Read the heartbeat **immediately before the revert restart**, then cancel the timer and revert. The swapped
+   kubelet has posted newer heartbeats since any earlier read, so an older `$HB` makes step 2 pass on a stale
+   value:
+   ```
+   # workstation
+   HB=$(scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh read "$CTX" <P>)
+   ```
    ```
    sudo systemctl stop ceiling-revert.timer 2>/dev/null || true
    sudo /bin/sh /var/lib/ceiling/revert.sh
@@ -528,12 +581,12 @@ together, because `revert.sh` removes both:
    This removes the volatile drop-in (and the CRI-O one, if present) and restarts the kubelet: the original
    `$KP` was never touched.
 2. Prove it: `exe_sum` equals `$OKE_EXE`, `args_sum` equals `$OKE_ARGS`, and
-   `wait-kubelet-heartbeat.sh <P> "$HB" 120` succeeds (read `$HB` before step 1).
+   `wait-kubelet-heartbeat.sh wait "$CTX" <P> "$HB" 120` succeeds (`$HB` is the one read in step 1, just before the revert).
 3. Verify the relist is back: the section 6 step 4 query on P gives about 1.00 s.
 4. Verify CRI-O is back if section 11 ran: `test ! -e /etc/crio/crio.conf.d/99-ceiling-debug.conf` and
    `sudo crio-status config | grep log_level` shows the original level (normally `info`).
-5. **Uncordon P only now, and only if it was schedulable before the run:** `kubectl uncordon <P>`, then
-   `kubectl get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable` equals the
+5. **Uncordon P only now, and only if it was schedulable before the run:** `kubectl --context "$CTX" uncordon <P>`, then
+   `kubectl --context "$CTX" get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable` equals the
    state recorded in section 4 step 3. Leave `/var/lib/ceiling` in place until the analysis is done; removing
    a named file there is a node file removal, not a cluster delete.
 

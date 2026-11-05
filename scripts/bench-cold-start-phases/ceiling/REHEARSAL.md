@@ -146,13 +146,26 @@ step 6) is therefore also not done. The analyzer and driver are covered only by 
 **`kubectl wait --for=condition=Ready` after a kubelet restart is worthless.** The API keeps the old kubelet's
 Ready=True until the node-lifecycle controller marks it Unknown (53.6 s here), so the wait passes at once, for
 a crash-looping kubelet too. The runbook used it in four places as the "did it come back" gate. It is replaced by
-`wait-kubelet-heartbeat.sh <node> <heartbeat-before-restart> [timeout]`, which succeeds only when the Ready
-condition's `lastHeartbeatTime` has changed and Ready is True (new kubelet heartbeat 0.45-0.83 s after start
-in every swap here). The heartbeat is read from the workstation before each restart, and re-read in the fire
-test after the stock restart so the timer's restart is the one waited for. Tests in
+`wait-kubelet-heartbeat.sh wait <context> <node> <heartbeat-before-restart> [timeout]`, which succeeds only
+when the Ready condition's `lastHeartbeatTime` has changed and Ready is True (new kubelet heartbeat 0.45-0.83 s
+after start in every swap here). The heartbeat comes from `... read <context> <node>`, run from the workstation
+immediately before each restart: before every block's swap, again in the fire test after the stock restart (so
+the timer's restart is the one waited for), and again before the revert (an older value would let the revert check
+pass on a heartbeat the swapped kubelet had already posted). The context is a required argument and every kubectl
+in the runbook carries `--context "$CTX"`; a kubectl failure exits 2 with its message instead of looking like a
+timeout (exit 1). Tests in
 `tests/bench-cold-start-ceiling.test.ts` run the script against a stub kubectl (new heartbeat passes; stale
-Ready=True, Unknown, False and empty all time out) and assert the runbook no longer uses `kubectl wait`;
-mutation-proved by deleting each of the three conditions in the script (each went red).
+Ready=True, Unknown, False and empty all time out; the context reaches every call; a missing context and a
+failing kubectl exit 2) and assert on the runbook: no `kubectl wait`, every wait preceded by a read, the revert
+re-reading first, every kubectl naming the context. They are mutation-proved (see the commit message).
+
+**Added after review:** the amd64 off-node start check and its stop condition, and the `daemon-reload` timer
+stop condition, are in the runbook (sections 4 and 5) with text guards. The amd64 builds were rebuilt locally
+on 2026-11-05 and the sums reproduced the runbook's exactly
+(`e4b218a2...1acdc` stock, `e8d9fa85...446e0` relist100). Both print `Kubernetes v1.34.10` from
+`docker run --platform linux/amd64 ... --entrypoint /k/<binary> busybox@sha256:66a6306d... --version` on an
+arm64 Mac under OrbStack emulation. That shows the ELF loads and runs under x86-64; it does not show that the
+amd64 kubelet starts and holds a node, which stays unverified until the fire test on P.
 
 Smaller runbook edits: the stale "from memory" statements for pod survival and for the `/run` reboot now
 carry the kind measurement; the "ten times the kubelet CPU" estimate is replaced by the measured 2x with OKE

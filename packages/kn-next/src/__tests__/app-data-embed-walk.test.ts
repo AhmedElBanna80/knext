@@ -84,6 +84,18 @@ describe("the walk is bounded", () => {
         );
     }, 30_000);
 
+    it("a fan-out of links to empty directories is bounded by directories", () => {
+        const root = app({ "data/a.json": "{}" });
+        mkdirSync(join(root, "data/empty"));
+        mkdirSync(join(root, "data/fan"));
+        for (let i = 0; i < 10_050; i++) {
+            symlinkSync(join(root, "data/empty"), join(root, `data/fan/l${i}`));
+        }
+        expect(() => planAppData({ root, includes: ["data"] })).toThrow(
+            /more than 10,000 directories/,
+        );
+    }, 30_000);
+
     it("the same bound applies to a glob", () => {
         const root = denseLinks(9);
         expect(() =>

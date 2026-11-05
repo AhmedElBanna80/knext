@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -24,24 +25,25 @@ import (
 	"testing"
 )
 
-// The hard rule (`.claude/rules/architecture.md`) is absolute: NEW honest-status
-// conditions/events/requeues go in computeStatusVerdict, never as new branches
-// in Reconcile. Exactly one inline branch predates that rule — the spec-validation
-// gate (#85, 2b1de76; the rule landed a month later in #274, 35c259b) — and it
-// stays where it is because it is a PRECONDITION, not a verdict: it runs before
-// any child state has been observed, so routing it through computeStatusVerdict
-// would force that pure function to short-circuit every other input, which is
-// exactly the contract the #254 extraction exists to protect. See ADR-0040.
+// The hard rule (`.claude/rules/architecture.md`) is absolute: honest-status
+// conditions/events/requeues go in computeStatusVerdict, never as branches in
+// Reconcile. The one inline branch that predated the rule — the spec-validation
+// gate (#85) — has moved into the verdict path (withInvalidSpec /
+// invalidSpecVerdict in status_verdict.go; ADR-0040 amendment), so the count of
+// inline status branches in Reconcile is now ZERO.
 //
-// That "exactly one" is the whole invariant, and until now it was prose. Prose
-// degrades unobservably: a second inline branch would read as consistent with
-// the first, and nothing would go red. So the count is asserted here.
+// This SCANS rather than enumerating, over nextapp_controller.go:
 //
-// This SCANS rather than enumerating: it walks the AST for every
-// SetStatusCondition call in nextapp_controller.go and checks WHICH function
-// each one sits in, so a third call site anywhere in the file fails — including
-// in a helper nobody thought to add to a list.
-func TestInlineStatusConditionBranchesStayExactlyOne(t *testing.T) {
+//   - every SetStatusCondition call must sit in applyStatusVerdict, the single
+//     writer of a verdict — a call in Reconcile or in any helper is a new inline
+//     branch;
+//   - the spec-validation branch in Reconcile must reach the verdict
+//     (computeStatusVerdict) and must itself write no condition and emit no event.
+//
+// Both halves are asserted: the negative (no stray writes) and the positive (the
+// verdict path is really wired and the validation branch still exists), so
+// deleting the branch or the scan's subject cannot leave the guard green.
+func TestNoInlineStatusBranchesInReconcile(t *testing.T) {
 	const file = "nextapp_controller.go"
 
 	fset := token.NewFileSet()
@@ -50,10 +52,9 @@ func TestInlineStatusConditionBranchesStayExactlyOne(t *testing.T) {
 		t.Fatalf("parse %s: %v", file, err)
 	}
 
-	// Where the ONE sanctioned inline branch lives: the body of the
-	// `if err := validation.ValidateNextAppSpec(...); err != nil { ... }`
-	// statement. Located by its content, not by line number, so the guard
-	// survives edits above it.
+	// The spec-validation branch: the body of the
+	// `if err := validation.ValidateNextAppSpec...(...); err != nil && ... { ... }`
+	// statement. Located by its content, not by line number.
 	var validationBranch *ast.BlockStmt
 	ast.Inspect(f, func(n ast.Node) bool {
 		ifStmt, ok := n.(*ast.IfStmt)
@@ -76,14 +77,11 @@ func TestInlineStatusConditionBranchesStayExactlyOne(t *testing.T) {
 		t.Fatalf("could not find the spec-validation branch in %s — this guard is only "+
 			"meaningful while that branch exists; if it moved, move the guard with it", file)
 	}
+	inValidation := func(p token.Pos) bool { return p > validationBranch.Lbrace && p < validationBranch.Rbrace }
 
-	type site struct {
-		fn            string
-		line          int
-		inValidation  bool
-		enclosingFunc string
-	}
-	var sites []site
+	inApply := 0
+	var offenders []string
+	reachesVerdict := false
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
@@ -94,55 +92,47 @@ func TestInlineStatusConditionBranchesStayExactlyOne(t *testing.T) {
 			if !ok {
 				return true
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "SetStatusCondition" {
-				return true
+			name := ""
+			switch fun := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				name = fun.Sel.Name
+			case *ast.Ident:
+				name = fun.Name
 			}
-			pos := call.Pos()
-			sites = append(sites, site{
-				fn:            fn.Name.Name,
-				line:          fset.Position(pos).Line,
-				inValidation:  pos > validationBranch.Lbrace && pos < validationBranch.Rbrace,
-				enclosingFunc: fn.Name.Name,
-			})
+			line := fset.Position(call.Pos()).Line
+
+			if name == "SetStatusCondition" {
+				if fn.Name.Name == "applyStatusVerdict" {
+					inApply++
+				} else {
+					offenders = append(offenders, fmt.Sprintf(
+						"%s:%d — SetStatusCondition in %s() is an inline status branch", file, line, fn.Name.Name))
+				}
+			}
+			if fn.Name.Name == lcReconcile && inValidation(call.Pos()) {
+				switch name {
+				case "computeStatusVerdict":
+					reachesVerdict = true
+				case "SetStatusCondition", "emitEvent", "Event":
+					offenders = append(offenders, fmt.Sprintf(
+						"%s:%d — %s in the spec-validation branch of Reconcile; the outcome belongs in the verdict",
+						file, line, name))
+				}
+			}
 			return true
 		})
 	}
 
-	if len(sites) == 0 {
-		t.Fatalf("found no SetStatusCondition calls in %s — the scan is broken "+
-			"(or the status write moved), so it is proving nothing", file)
-	}
-
-	// The sanctioned shape: every call is either inside applyStatusVerdict (the
-	// single writer of the computeStatusVerdict result) or inside the
-	// pre-existing validation branch. Anything else is a NEW inline branch.
-	var offenders []site
-	inValidation, inApply := 0, 0
-	for _, s := range sites {
-		switch {
-		case s.enclosingFunc == "applyStatusVerdict":
-			inApply++
-		case s.enclosingFunc == lcReconcile && s.inValidation:
-			inValidation++
-		default:
-			offenders = append(offenders, s)
-		}
-	}
-
-	for _, s := range offenders {
-		t.Errorf("%s:%d — SetStatusCondition in %s() is a NEW inline status branch. "+
-			"Per .claude/rules/architecture.md and ADR-0040 it belongs in computeStatusVerdict "+
-			"(status_verdict.go); if it is a spec PRECONDITION, put the rule in "+
-			"validation.ValidateNextAppSpec and reuse the one existing branch.",
-			file, s.line, s.fn)
+	for _, o := range offenders {
+		t.Errorf("%s. Per .claude/rules/architecture.md and ADR-0040 it belongs in "+
+			"computeStatusVerdict (status_verdict.go).", o)
 	}
 	if inApply == 0 {
 		t.Errorf("no SetStatusCondition inside applyStatusVerdict — the verdict path is " +
-			"supposed to be the only general writer of conditions")
+			"supposed to be the only writer of conditions, so the scan is proving nothing")
 	}
-	if inValidation == 0 {
-		t.Errorf("no SetStatusCondition inside the spec-validation branch — if that branch " +
-			"stopped setting conditions, delete this guard's exemption rather than leaving it")
+	if !reachesVerdict {
+		t.Errorf("the spec-validation branch no longer calls computeStatusVerdict — the " +
+			"invalid-spec outcome must come from the verdict, not be dropped")
 	}
 }

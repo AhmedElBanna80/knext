@@ -40,7 +40,7 @@ func TestSleepRaceWakesBackWhenConnectionArrivesMidSleep(t *testing.T) {
 	gw.connEnded(target, false) // arms the idle timer
 
 	// wait until the sleep command has started
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if _, err := os.Stat(slept); err == nil {
 			break
@@ -55,7 +55,7 @@ func TestSleepRaceWakesBackWhenConnectionArrivesMidSleep(t *testing.T) {
 	gw.connStarted(target, false)
 
 	// after Sleep completes, the gateway must notice and wake back
-	deadline = time.Now().Add(15 * time.Second)
+	deadline = time.Now().Add(3 * time.Second)
 	for {
 		if _, err := os.Stat(woke); err == nil {
 			break // woke back — race healed

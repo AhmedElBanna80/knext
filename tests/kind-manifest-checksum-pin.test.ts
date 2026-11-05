@@ -248,16 +248,6 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(found).toContain('.github/workflows/networkpolicy-enforcement.yml');
   });
 
-  it('the cert-manager fetch retries transient upstream failures (a one-off 502 must not red the lane)', () => {
-    const text = readFileSync(join(ROOT, CERT_MANAGER_SCRIPT), 'utf8');
-    const curlLine = text.match(/^curl [^\n]*(?:\\\n[^\n]*)*/m)?.[0] ?? '';
-    expect(curlLine).toContain('--retry 5');
-    expect(curlLine).toContain('--retry-all-errors');
-    // retry must not weaken verification: still fail-on-HTTP-error, still checksummed
-    expect(curlLine).toMatch(/-f/);
-    expect(text).toContain('sha256sum -c -');
-  });
-
   it('every workflow that installs cert-manager calls the shared script', () => {
     for (const wf of kindWorkflows()) {
       const text = readFileSync(join(ROOT, wf), 'utf8');

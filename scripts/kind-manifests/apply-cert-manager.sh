@@ -12,7 +12,7 @@ CERT_MANAGER_VERSION="v1.16.2"
 CERT_MANAGER_SHA256="1d51cdecd442f1f5f89783e9e0169b95d372724da203cc75dd7a5c4e50a10ce6"
 OUT="${TMPDIR:-/tmp}/cert-manager.yaml"
 
-curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$OUT" \
+curl -fsSL -o "$OUT" \
   "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
 echo "${CERT_MANAGER_SHA256}  ${OUT}" | sha256sum -c -
 

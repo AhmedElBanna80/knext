@@ -17,6 +17,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { summarize } from '../scripts/e2e-summary.mjs';
 import {
   caseName,
   HARNESS_LANE_WORKFLOWS,
@@ -46,7 +47,8 @@ type Entry = {
   bunVersion?: string;
   cases: Case[];
   mechanism: string;
-  runs: { run: string; cell: string; ref: string }[];
+  runs: { run: string; cell: string; ref: string; bun?: string }[];
+  wholeFile?: boolean;
   upstream: { issue: string; fix: string };
   knextRefusal: string;
   removeWhen: string;
@@ -71,6 +73,8 @@ const ctx = {
   read: (p: string) => (existsSync(resolve(ROOT, p)) ? read(p) : undefined),
 };
 const deps = { ctx, laneRefs, shippedRef, laneBun, snapshot };
+/** The Bun the entries were measured on (equal to the lane pin; asserted below). */
+const LEDGER_BUN = String(ledger[0]?.bunVersion);
 
 const tmpDirs: string[] = [];
 function tmp(): string {
@@ -89,13 +93,29 @@ const CHUNKGROUP =
 // ── PR time: the real ledger ──────────────────────────────────────────────────────────────────
 
 describe('upstream-runtime-defect ledger — the real manifest', () => {
-  it('holds exactly the two Bun-parser entries, on bun/turbopack, at v16.4.3, on Bun 1.4.2', () => {
+  // The Bun is DERIVED from the lane pin, not a literal here: a lockstep bump of the pin and every
+  // bunVersion must be stopped by the run-measurement rule alone (the mutation prover plants that).
+  it('holds exactly the two Bun-parser entries, on bun/turbopack, at v16.4.3, on the lane Bun', () => {
     expect(ledger.map((e) => e.test).sort()).toEqual([TREESHAKE, CHUNKGROUP].sort());
     for (const e of ledger) {
       expect(e.lane).toBe('bun/turbopack');
       expect(e.nextjsRef).toBe('v16.4.3');
-      expect(e.bunVersion).toBe('1.4.2');
+      expect(e.bunVersion).toBe(laneBun);
       expect(e.upstream).toEqual({ issue: 'oven-sh/bun#45007', fix: 'oven-sh/bun#45010' });
+    }
+  });
+
+  it('both entries cover their whole file, so the run-time scope excludes the file (not failed)', () => {
+    for (const e of ledger) expect(e.wholeFile).toBe(true);
+  });
+
+  it('every Bun-cell run records the Bun it ran on, and an own-cell run is at the entry Bun', () => {
+    for (const e of ledger) {
+      for (const r of e.runs) {
+        if (r.cell.startsWith('bun-')) expect(r.bun).toMatch(/^\d+\.\d+\.\d+$/);
+        else expect(r.bun).toBeUndefined();
+      }
+      expect(e.runs.some((r) => r.cell === 'bun-turbopack' && r.bun === e.bunVersion)).toBe(true);
     }
   });
 
@@ -189,7 +209,7 @@ describe('upstream-runtime-defect ledger — each rule rejects its violation', (
     ['a missing bunVersion', (e: Entry) => delete e.bunVersion, /bunVersion it was measured on/],
     [
       'a Bun the lane no longer pins',
-      (e: Entry) => (e.bunVersion = '1.4.3'),
+      (e: Entry) => (e.bunVersion = '9.9.9'),
       /not the lane's pinned Bun/,
     ],
     [
@@ -243,8 +263,43 @@ describe('upstream-runtime-defect ledger — each rule rejects its violation', (
       (e: Entry) => (e.runs[0].cell = 'node-webpack'),
       /entry's own cell/,
     ],
+    [
+      'a Bun-cell run that records no Bun',
+      (e: Entry) => delete e.runs[0].bun,
+      /records no X\.Y\.Z bun/,
+    ],
+    [
+      'an own-cell run on another Bun only',
+      (e: Entry) => (e.runs[0].bun = '0.0.1'),
+      /no bun-turbopack run measured on Bun \d+\.\d+\.\d+/,
+    ],
+    ['no wholeFile flag', (e: Entry) => delete e.wholeFile, /wholeFile must be true or false/],
+    [
+      'wholeFile false on an entry that covers every case',
+      (e: Entry) => (e.wholeFile = false),
+      /covers every case in the file/,
+    ],
   ])('%s', (_label, mut, re) => {
     expect(problems(mut)).toMatch(re);
+  });
+
+  it('a lockstep bump (lane pin AND bunVersion move, the runs do not) is red: no run measured it', () => {
+    const e = base();
+    e.bunVersion = '9.9.8';
+    const found = entryProblems(e, { ...deps, laneBun: '9.9.8' }).join('\n');
+    expect(found).not.toMatch(/not the lane's pinned Bun/);
+    expect(found).toMatch(/no bun-turbopack run measured on Bun 9\.9\.8/);
+  });
+
+  it('wholeFile true on an entry that leaves other cases in the file running is red', () => {
+    const e = base();
+    const snap = JSON.parse(JSON.stringify(snapshot));
+    snap.files[e.test].literals.push('another case upstream runs');
+    expect(entryProblems(e, { ...deps, snapshot: snap }).join('\n')).toMatch(
+      /wholeFile is true but the file has other cases/,
+    );
+    e.wholeFile = false;
+    expect(entryProblems(e, { ...deps, snapshot: snap })).toEqual([]);
   });
 
   it('a snapshot taken at another ref is rejected', () => {
@@ -316,7 +371,7 @@ describe('upstream-runtime-defect ledger — ledger-level rules', () => {
 
 describe('upstream-runtime-defect ledger — the lane Bun pin is read, never assumed', () => {
   it('reads the one pin from the real workflow', () => {
-    expect(laneBun).toBe('1.4.2');
+    expect(laneBun).toMatch(/^\d+\.\d+\.\d+$/);
   });
   it('throws when there is no pin', () => {
     expect(() => laneBunPin('bun-version: 1.4.2', 'x.yml')).toThrow(/cannot read ONE/);
@@ -328,9 +383,9 @@ describe('upstream-runtime-defect ledger — the lane Bun pin is read, never ass
     expect(() => laneBunPin(two, 'x.yml')).toThrow(/cannot read ONE/);
   });
   it('a lane Bun bump turns every bun entry red until it is re-measured or removed', () => {
-    const bumped = { ...deps, laneBun: '1.4.3' };
+    const bumped = { ...deps, laneBun: '9.9.9' };
     for (const e of ledger) {
-      expect(entryProblems(e, bumped).join('\n')).toMatch(/not the lane's pinned Bun \(1\.4\.3\)/);
+      expect(entryProblems(e, bumped).join('\n')).toMatch(/not the lane's pinned Bun \(9\.9\.9\)/);
     }
   });
 });
@@ -347,33 +402,85 @@ describe('upstream-runtime-defect scope — in-process', () => {
       bunVersion: () => lane.bun ?? '',
     }) as Manifest;
 
-  it('bun/turbopack at v16.4.3 on Bun 1.4.2: both cases deselected', () => {
-    const m = scope({ ref: 'v16.4.3', runtime: 'bun', builder: 'turbopack', bun: '1.4.2' });
-    for (const e of ledger) expect(names(m, e.test)).toEqual(e.cases.map(caseName));
-    expect((m[UPSTREAM_RUNTIME_DEFECT_SCOPE_KEY] as { applied: string[] }).applied.sort()).toEqual(
-      ledger.map((e) => e.test).sort(),
+  const applied = (m: Manifest) =>
+    (m[UPSTREAM_RUNTIME_DEFECT_SCOPE_KEY] as { applied: { test: string; as: string }[] }).applied;
+
+  it('bun/turbopack at v16.4.3 on the entry Bun: both whole files are EXCLUDED, not failed', () => {
+    const m = scope({ ref: 'v16.4.3', runtime: 'bun', builder: 'turbopack', bun: LEDGER_BUN });
+    for (const e of ledger) {
+      expect(m.rules.exclude).toContain(e.test);
+      expect(names(m, e.test)).toEqual([]);
+    }
+    expect(applied(m).sort((a, b) => a.test.localeCompare(b.test))).toEqual(
+      ledger
+        .map((e) => ({ test: e.test, as: 'exclude' }))
+        .sort((a, b) => a.test.localeCompare(b.test)),
     );
+    // Only these two paths were added; every committed exclusion is still there, in order.
+    expect(m.rules.exclude.slice(0, manifest.rules.exclude.length)).toEqual(manifest.rules.exclude);
+    expect(m.rules.exclude.length).toBe(manifest.rules.exclude.length + ledger.length);
+  });
+  it('a PARTIAL-file entry (wholeFile false) goes to suites failed, never rules.exclude', () => {
+    const m = JSON.parse(JSON.stringify(manifest)) as Manifest;
+    const partial = {
+      ...JSON.parse(JSON.stringify(ledger[0])),
+      test: 'test/e2e/app-dir/partial/partial.test.ts',
+      wholeFile: false,
+    } as Entry;
+    (m[UPSTREAM_RUNTIME_DEFECT_KEY] as Entry[]).push(partial);
+    m.suites[partial.test] = { flakey: ['some other case'] };
+    const out = applyUpstreamRuntimeDefects(m, {
+      ref: 'v16.4.3',
+      runtime: 'bun',
+      builder: 'turbopack',
+      bunVersion: () => LEDGER_BUN,
+    }) as Manifest;
+    expect(out.suites[partial.test]).toEqual({
+      flakey: ['some other case'],
+      failed: partial.cases.map(caseName),
+    });
+    expect(out.rules.exclude).not.toContain(partial.test);
+    expect(applied(out)).toContainEqual({ test: partial.test, as: 'failed' });
   });
   it.each([
     ['node/turbopack at v16.4.3', { ref: 'v16.4.3', runtime: 'node', builder: 'turbopack' }],
     [
       'bun/webpack at v16.4.3',
-      { ref: 'v16.4.3', runtime: 'bun', builder: 'webpack', bun: '1.4.2' },
+      { ref: 'v16.4.3', runtime: 'bun', builder: 'webpack', bun: LEDGER_BUN },
     ],
     ['node/webpack at v16.4.3', { ref: 'v16.4.3', runtime: 'node', builder: 'webpack' }],
     [
       'bun/turbopack at v16.3.8',
-      { ref: 'v16.3.8', runtime: 'bun', builder: 'turbopack', bun: '1.4.2' },
+      { ref: 'v16.3.8', runtime: 'bun', builder: 'turbopack', bun: LEDGER_BUN },
     ],
     [
       'bun/turbopack at v16.4.3 on a canary Bun',
-      { ref: 'v16.4.3', runtime: 'bun', builder: 'turbopack', bun: '1.4.3' },
+      { ref: 'v16.4.3', runtime: 'bun', builder: 'turbopack', bun: '9.9.9' },
     ],
-    ['bun/vinext at v16.4.3', { ref: 'v16.4.3', runtime: 'bun', builder: 'vinext', bun: '1.4.2' }],
-  ])('%s: nothing deselected, the cases run', (_label, lane) => {
+    [
+      'bun/vinext at v16.4.3',
+      { ref: 'v16.4.3', runtime: 'bun', builder: 'vinext', bun: LEDGER_BUN },
+    ],
+  ])('%s: nothing deselected or excluded, the cases run', (_label, lane) => {
     const m = scope(lane);
-    for (const e of ledger) expect(names(m, e.test)).toEqual([]);
-    expect((m[UPSTREAM_RUNTIME_DEFECT_SCOPE_KEY] as { applied: string[] }).applied).toEqual([]);
+    for (const e of ledger) {
+      expect(names(m, e.test)).toEqual([]);
+      expect(m.rules.exclude).not.toContain(e.test);
+    }
+    expect(m.rules.exclude).toEqual(manifest.rules.exclude);
+    expect(applied(m)).toEqual([]);
+  });
+  it('FAIL CLOSED: an entry with no boolean wholeFile throws', () => {
+    const m = JSON.parse(JSON.stringify(manifest)) as Manifest;
+    delete (m[UPSTREAM_RUNTIME_DEFECT_KEY] as Entry[])[0].wholeFile;
+    expect(() =>
+      applyUpstreamRuntimeDefects(m, {
+        ref: 'v16.4.3',
+        runtime: 'node',
+        builder: 'turbopack',
+        bunVersion: () => LEDGER_BUN,
+      }),
+    ).toThrow(/wholeFile/);
   });
   it('the Bun is read only when an entry matches lane and ref (a node lane never needs bun)', () => {
     let calls = 0;
@@ -383,7 +490,7 @@ describe('upstream-runtime-defect scope — in-process', () => {
       builder: 'turbopack',
       bunVersion: () => {
         calls += 1;
-        return '1.4.2';
+        return LEDGER_BUN;
       },
     });
     expect(calls).toBe(0);
@@ -410,7 +517,7 @@ describe('upstream-runtime-defect scope — in-process', () => {
           ref: 'v16.4.3',
           runtime: 'node',
           builder: 'turbopack',
-          bunVersion: () => '1.4.2',
+          bunVersion: () => LEDGER_BUN,
         }),
       ).toThrow();
     }
@@ -435,7 +542,7 @@ describe('upstream-runtime-defect scope — the REAL script, env-driven like the
   function run(o: { ref: string; runtime?: string; builder?: string; bun?: string | null }) {
     const out = join(tmp(), 'scoped.json');
     const env: Record<string, string> = {
-      PATH: `${fakeBun(o.bun === undefined ? '1.4.2' : o.bun)}:${dirname(process.execPath)}:/usr/bin:/bin`,
+      PATH: `${fakeBun(o.bun === undefined ? LEDGER_BUN : o.bun)}:${dirname(process.execPath)}:/usr/bin:/bin`,
     };
     if (o.runtime !== undefined) env.KNEXT_RUNTIME = o.runtime;
     if (o.builder !== undefined) env.KNEXT_BUILDER = o.builder;
@@ -451,16 +558,21 @@ describe('upstream-runtime-defect scope — the REAL script, env-driven like the
     };
   }
 
-  it('bun/turbopack at v16.4.3, Bun 1.4.2: the copy the harness reads deselects both cases', () => {
+  it('bun/turbopack at v16.4.3 on the entry Bun: the copy the harness reads excludes both files', () => {
     const { r, scoped } = run({ ref: 'v16.4.3', runtime: 'bun', builder: 'turbopack' });
     expect(r.status, r.stderr).toBe(0);
-    for (const e of ledger) expect(scoped?.suites[e.test]?.failed).toEqual(e.cases.map(caseName));
-    expect(r.stdout).toMatch(/upstream-runtime defects on bun\/turbopack at v16\.4\.3: 2 applied/);
+    for (const e of ledger) {
+      expect(scoped?.rules.exclude).toContain(e.test);
+      expect(scoped?.suites[e.test]?.failed).toBeUndefined();
+    }
+    expect(r.stdout).toMatch(
+      /upstream-runtime defects on bun\/turbopack at v16\.4\.3: 2 applied \(2 files excluded, 0 by case\)/,
+    );
     // The Bun it compared is the one `bun --version` printed on PATH, not an assumed constant.
     expect(
       (scoped?.[UPSTREAM_RUNTIME_DEFECT_SCOPE_KEY] as { bunVersion: string } | undefined)
         ?.bunVersion,
-    ).toBe('1.4.2');
+    ).toBe(LEDGER_BUN);
   });
   it.each([
     ['node/turbopack v16.4.3', { ref: 'v16.4.3', runtime: 'node', builder: 'turbopack' }],
@@ -474,7 +586,10 @@ describe('upstream-runtime-defect scope — the REAL script, env-driven like the
     const o = lane as { ref: string; runtime: string; builder: string; bun?: string };
     const { r, scoped } = run(o);
     expect(r.status, r.stderr).toBe(0);
-    for (const e of ledger) expect(scoped?.suites[e.test]?.failed).toBeUndefined();
+    for (const e of ledger) {
+      expect(scoped?.suites[e.test]?.failed).toBeUndefined();
+      expect(scoped?.rules.exclude).not.toContain(e.test);
+    }
     if (o.bun) {
       expect(
         (scoped?.[UPSTREAM_RUNTIME_DEFECT_SCOPE_KEY] as { bunVersion: string } | undefined)
@@ -499,7 +614,7 @@ describe('upstream-runtime-defect scope — the REAL script, env-driven like the
         '--builder',
         'turbopack',
         '--bun-version',
-        '1.4.2',
+        LEDGER_BUN,
       ],
       {
         encoding: 'utf8',
@@ -508,7 +623,7 @@ describe('upstream-runtime-defect scope — the REAL script, env-driven like the
     );
     expect(r.status, r.stderr).toBe(0);
     const scoped = JSON.parse(readFileSync(out, 'utf8')) as Manifest;
-    for (const e of ledger) expect(scoped.suites[e.test]?.failed).toEqual(e.cases.map(caseName));
+    for (const e of ledger) expect(scoped.rules.exclude).toContain(e.test);
   });
   it('FAIL CLOSED: no KNEXT_RUNTIME/KNEXT_BUILDER exits non-zero and leaves no copy', () => {
     const { r, out } = run({ ref: 'v16.4.3' });
@@ -547,4 +662,80 @@ describe('upstream-runtime-defect scope — the workflows hand the lane to the s
       expect(scope[0].env?.KNEXT_BUILDER).toBeUndefined();
     });
   }
+});
+
+describe('upstream-runtime-defect scope — what the shard summary credits (excluded, never passed)', () => {
+  // Why a whole-file entry must be a file exclusion and not a `failed` list: vercel/next.js v16.4.3
+  // `test/get-test-filter.js` turns `suites[file].failed` into `excludedCases`, `run-tests.js` passes
+  // jest `--testNamePattern '^(?!(?:<names>)$).'`, jest filters out EVERY test of a one-case file and
+  // exits 0, and run-tests prints `<file> finished on retry 0/N`, which scripts/e2e-summary.mjs counts
+  // as a PASSED file. A file in `rules.exclude` is never selected, so nothing is credited.
+  //
+  // `selectLikeNext` is get-test-filter's version-2 branch (minimatch -> Bun.Glob, same semantics for
+  // these patterns); `runLikeNext` is what run-tests prints for a file whose jest run exits 0.
+  type Selected = { file: string; excludedCases: string[] };
+  function selectLikeNext(m: Manifest, files: string[]): Selected[] {
+    const glob = (pattern: string, file: string) => new Bun.Glob(pattern).match(file);
+    return files
+      .filter((file) => {
+        if (file in m.suites) return !m.rules.exclude?.includes(file);
+        if (m.rules.include.every((p) => !glob(p, file))) return false;
+        if (m.rules.exclude?.some((p) => glob(p, file))) return false;
+        return true;
+      })
+      .map((file) => {
+        const { failed = [], flakey = [] } = m.suites[file] ?? {};
+        return { file, excludedCases: [...failed, ...flakey] };
+      });
+  }
+  function runLikeNext(selected: Selected[]): string {
+    return [
+      `total: ${selected.length}`,
+      ...selected.map((t) => `${t.file} finished on retry 0/3 in 1s`),
+    ].join('\n');
+  }
+  type Summary = { passed: number; failed: number; notRun: number; truncated?: boolean };
+  const OTHER = 'test/e2e/app-dir/some-green-file/some-green-file.test.ts';
+  const FILES = [TREESHAKE, CHUNKGROUP, OTHER];
+  const scopedFor = (runtime: string, builder: string) =>
+    applyUpstreamRuntimeDefects(JSON.parse(JSON.stringify(manifest)), {
+      ref: 'v16.4.3',
+      runtime,
+      builder,
+      bunVersion: () => LEDGER_BUN,
+    }) as Manifest;
+
+  it('bun/turbopack: the two files are not selected, so the summary credits them as nothing', () => {
+    const scoped = scopedFor('bun', 'turbopack');
+    const selected = selectLikeNext(scoped, FILES);
+    expect(selected.map((t) => t.file)).toEqual([OTHER]);
+    const log = runLikeNext(selected);
+    const s = summarize(log, { ref: 'v16.4.3', shard: '1/1', excluded: 0 }) as Summary;
+    expect(s.passed).toBe(1);
+    expect(s.failed).toBe(0);
+    expect(s.notRun).toBe(0);
+    expect(s.truncated).toBe(false);
+    expect(log).not.toContain(TREESHAKE);
+    expect(log).not.toContain(CHUNKGROUP);
+    // Counted where they are: the scoped copy's file exclusions.
+    for (const e of ledger) expect(scoped.rules.exclude).toContain(e.test);
+  });
+
+  it('node/turbopack: the same files are selected with nothing deselected, and run', () => {
+    const selected = selectLikeNext(scopedFor('node', 'turbopack'), FILES);
+    expect(selected).toEqual(FILES.map((file) => ({ file, excludedCases: [] })));
+  });
+
+  it('CONTROL (the defect this avoids): as a failed list, a one-case file is credited PASSED', () => {
+    const m = JSON.parse(JSON.stringify(manifest)) as Manifest;
+    for (const e of ledger) m.suites[e.test] = { failed: e.cases.map(caseName) };
+    const selected = selectLikeNext(m, FILES);
+    expect(selected.map((t) => t.file).sort()).toEqual([...FILES].sort());
+    const s = summarize(runLikeNext(selected), {
+      ref: 'v16.4.3',
+      shard: '1/1',
+      excluded: 0,
+    }) as Summary;
+    expect(s.passed).toBe(3);
+  });
 });

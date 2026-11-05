@@ -901,6 +901,7 @@
       "lane": "bun/turbopack",
       "nextjsRef": "v16.4.3",
       "bunVersion": "1.4.2",
+      "wholeFile": true,
       "cases": [
         {
           "path": ["treeshake-mw"],
@@ -913,7 +914,8 @@
         {
           "run": "42048108176",
           "cell": "bun-turbopack",
-          "ref": "v16.4.3"
+          "ref": "v16.4.3",
+          "bun": "1.4.2"
         },
         {
           "run": "42048101712",
@@ -928,7 +930,8 @@
         {
           "run": "41770412157",
           "cell": "bun-webpack",
-          "ref": "v16.4.3"
+          "ref": "v16.4.3",
+          "bun": "1.4.2"
         }
       ],
       "upstream": {
@@ -944,6 +947,7 @@
       "lane": "bun/turbopack",
       "nextjsRef": "v16.4.3",
       "bunVersion": "1.4.2",
+      "wholeFile": true,
       "cases": [
         {
           "path": ["turbopack-tree-shaking-chunkgroup"],
@@ -956,7 +960,8 @@
         {
           "run": "42048108176",
           "cell": "bun-turbopack",
-          "ref": "v16.4.3"
+          "ref": "v16.4.3",
+          "bun": "1.4.2"
         },
         {
           "run": "42048101712",
@@ -971,7 +976,8 @@
         {
           "run": "41770412157",
           "cell": "bun-webpack",
-          "ref": "v16.4.3"
+          "ref": "v16.4.3",
+          "bun": "1.4.2"
         }
       ],
       "upstream": {

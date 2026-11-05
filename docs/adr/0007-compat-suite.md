@@ -944,26 +944,34 @@ also take its cap from 9 files and 19 cases to 11 and 21.
 A separate ledger, `$knextUpstreamRuntimeDefects`, in the credential manifest and its derived
 smoke manifest. The committed manifest deselects **nothing** of this kind. At run time
 `scripts/compat-manifest-for-ref.mjs` (the step already in `test-e2e-deploy.yml` and
-`compat-vinext.yml`) adds an entry's case names to `suites[file].failed` in the scoped copy only
-when all three hold: the lane under test (the workflow-level `KNEXT_RUNTIME`/`KNEXT_BUILDER` the
-step inherits) is the entry's lane; `NEXTJS_REF` is the entry's ref; on a Bun lane, `bun --version`
-is the entry's `bunVersion`. Rules, each a guard in `scripts/lib/upstream-runtime-defects.mjs`:
+`compat-vinext.yml`) applies an entry to the scoped copy only when all three hold: the lane under
+test (the workflow-level `KNEXT_RUNTIME`/`KNEXT_BUILDER` the step inherits) is the entry's lane;
+`NEXTJS_REF` is the entry's ref; on a Bun lane, `bun --version` is the entry's `bunVersion`.
+
+How it applies depends on whether the entry covers every case in its file (`wholeFile`, checked
+against the upstream snapshot). A whole-file entry adds the **file** to the copy's `rules.exclude`,
+so it is not selected. It must not become a `failed` list. Next's runner turns `failed` into a jest
+`--testNamePattern`, and for a one-case file that pattern filters out every test. Jest then exits 0,
+run-tests prints `<file> finished on retry 0/N`, and `scripts/e2e-summary.mjs` counts a passed file
+that ran no case. A partial-file entry adds its case names to `suites[file].failed`, like the
+ref-pinned ledger. Rules, each a guard in `scripts/lib/upstream-runtime-defects.mjs`:
 
 | Rule | Value |
 |---|---|
 | Lane | `<node or bun>/<turbopack or webpack>`, exactly one cell. A runtime-wide or vinext lane is rejected |
 | Ref | the ref-pinned bar 1: a harness lane's default `NEXTJS_REF` or the shipped pin while it is ahead. No `reaudited` escape |
-| Bun pin | a Bun-lane entry carries the Bun it was measured on, and it must equal the lane's pinned Bun in `test-e2e-deploy.yml`. Moving the pin is red until each entry is re-measured or removed |
+| Bun pin | a Bun-lane entry carries the Bun it was measured on, and it must equal the lane's pinned Bun in `test-e2e-deploy.yml`. Every Bun-cell run records the Bun it ran on, and the entry needs a run on its own cell at its `bunVersion`. So moving the pin is red until each entry is re-measured at the new Bun or removed; editing `bunVersion` alongside the pin, without a new run, is still red |
 | Upstream | an issue **and** a fix, as `owner/repo#N` outside `getknext-dev` |
 | Removal condition | non-empty and names the entry's own upstream fix |
 | knext refusal | names a real guard: a repo path that exists, as `path#symbol` with the symbol in that file |
 | Names | full jest names whose title and describe path exist in the committed upstream snapshot at the entry's ref (the snapshot and its `--verify` job now cover this ledger's files too) |
-| Evidence | at least one run on the entry's own cell, every run at the entry's ref |
+| Evidence | at least one run on the entry's own cell (on Bun lanes, at the entry's Bun), every run at the entry's ref |
+| Whole file | `wholeFile` is true exactly when the entry's cases account for every title literal in the upstream file; true means a file exclusion at run time, false a `failed` list |
 | Boundaries | not in `rules.exclude`, `$knextExclusions`, `$knextQuarantines` or `$knextRefPinnedCases`; its names are not in the committed `failed` lists |
 | Cap | **5**, its own constant (`UPSTREAM_RUNTIME_DEFECT_CAP`); it counts toward no other cap. Raising it needs an amendment of this ADR |
 
 Fail closed, like the ref scope: a non-empty ledger on an unknown lane, an entry without a
-parseable lane, ref or cases, or a matching Bun entry whose Bun cannot be read exits non-zero and
+parseable lane, ref, cases or `wholeFile`, or a matching Bun entry whose Bun cannot be read exits non-zero and
 leaves no copy. A checkout without the script (an older rc tag) deselects nothing of this kind, so
 the files run and report red, which is the safe direction.
 
@@ -986,7 +994,12 @@ in the same change.
 ### Consequences
 
 - At v16.4.3 the ledger holds **2 files and 2 cases**, both bun/turbopack on Bun 1.4.2. No passing
-  case is lost on any other cell. Each file has one case, so on bun/turbopack the file runs no case.
+  case is lost on any other cell. Each file has one case, so both are whole-file entries: on
+  bun/turbopack the scoped copy excludes the two files, and the shard summary credits them as
+  nothing, not as passed. The summary's `excluded` figure is read from the committed manifest's
+  `rules.exclude` by a workflow step and so does not include them; changing that step would move
+  the executing workflow and restart the v1.0 credential windows, and was judged not worth it for
+  two files.
 - The v1.0 credential nights check out the pinned rc tag, whose checkout has neither the ledger nor
   the new code, and run at v16.3.8: nothing changes there. The v1.3 credential lane is generated
   from its own pinned rc tag and gains this when an rc is cut from a main that has it.

@@ -15,11 +15,12 @@
  * mirror, the ledger itself). `$knextRefPinnedScope` records what was kept and dropped.
  *
  * It then applies the upstream-runtime-defect ledger (ADR-0007 amendment 2026-11-05,
- * scripts/lib/upstream-runtime-defects.mjs): an entry's case names are ADDED to
- * `suites[file].failed` only when the lane under test (`--runtime`/`--builder`, else the
- * workflow-level `KNEXT_RUNTIME`/`KNEXT_BUILDER` every step inherits) is the entry's lane, the ref
- * is its ref, and on Bun the Bun under test (`--bun-version`, else `bun --version`) is its Bun.
- * `$knextUpstreamRuntimeDefectScope` records what was applied and skipped.
+ * scripts/lib/upstream-runtime-defects.mjs) only when the lane under test (`--runtime`/`--builder`,
+ * else the workflow-level `KNEXT_RUNTIME`/`KNEXT_BUILDER` every step inherits) is the entry's lane,
+ * the ref is its ref, and on Bun the Bun under test (`--bun-version`, else `bun --version`) is its
+ * Bun. A whole-file entry ADDS its file to `rules.exclude` (a one-case file deselected by name would
+ * run nothing and be credited as passed); a partial one adds its names to `suites[file].failed`.
+ * `$knextUpstreamRuntimeDefectScope` records what was applied, how, and what was skipped.
  *
  * FAIL CLOSED. A missing or unparseable ref, an unreadable manifest, a ledger that is not an array,
  * an entry with no parseable ref, a non-empty upstream-runtime-defect ledger on an unknown lane, or a
@@ -122,8 +123,9 @@ function main(argv) {
     );
     const d = scoped[UPSTREAM_RUNTIME_DEFECT_SCOPE_KEY];
     if (d) {
+      const files = d.applied.filter((a) => a.as === 'exclude').length;
       console.log(
-        `upstream-runtime defects on ${d.lane} at ${d.ref}: ${d.applied.length} applied (deselected), ${d.skipped.length} skipped (those cases run)${d.bunVersion ? `; bun ${d.bunVersion}` : ''}`,
+        `upstream-runtime defects on ${d.lane} at ${d.ref}: ${d.applied.length} applied (${files} files excluded, ${d.applied.length - files} by case), ${d.skipped.length} skipped (those cases run)${d.bunVersion ? `; bun ${d.bunVersion}` : ''}`,
       );
     }
     return 0;

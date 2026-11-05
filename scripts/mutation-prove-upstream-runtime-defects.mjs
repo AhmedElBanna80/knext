@@ -35,7 +35,7 @@ const MANIFEST = resolve(REPO_ROOT, 'test/deploy-tests-manifest.knext.json');
 const DOCS = resolve(REPO_ROOT, 'apps/docs/content/docs/compat-suite.mdx');
 const WF_E2E = resolve(REPO_ROOT, '.github/workflows/test-e2e-deploy.yml');
 
-declareMutations(61);
+declareMutations(71);
 
 const RUNNER = resolveSpecRunner(REPO_ROOT, SPEC);
 
@@ -66,6 +66,36 @@ function prove(label, target, anchor, replacement, { specs = [SPEC], commentPref
     recordMutation();
   } finally {
     restore(snap);
+  }
+  if (specsExit(specs) !== 0) {
+    console.error(`   FATAL: ${specs.join(' ')} did not go green again after restore`);
+    process.exit(1);
+  }
+}
+
+/**
+ * One mutation made of several edits, possibly across files (each anchor exactly once at the time
+ * it is applied). Every touched file is restored by content hash, whatever happens.
+ */
+function proveMulti(label, edits, { specs = [SPEC] } = {}) {
+  console.log(`── mutation: ${label}`);
+  const snaps = new Map();
+  try {
+    for (const [target, anchor, replacement, opts = {}] of edits) {
+      if (!snaps.has(target)) snaps.set(target, snapshot(target));
+      mutate(snaps.get(target), anchor, replacement, opts);
+    }
+    const code = specsExit(specs);
+    if (code === 0) {
+      console.log('   x DECORATION: the specs stayed GREEN (exit 0) with the behaviour removed');
+      fail += 1;
+    } else {
+      console.log(`   ok went RED as required (exit ${code})`);
+      pass += 1;
+    }
+    recordMutation();
+  } finally {
+    for (const snap of snaps.values()) restore(snap);
   }
   if (specsExit(specs) !== 0) {
     console.error(`   FATAL: ${specs.join(' ')} did not go green again after restore`);
@@ -395,6 +425,92 @@ prove(
   '  KNEXT_BUILDER_RENAMED: ${{ github.event.inputs.builder ||',
   { specs: [SPEC] },
 );
+
+// ── Whole-file entries are file exclusions, never a failed list ─────────────────────────────────
+prove(
+  'a whole-file entry is routed to failed (the file would run no case and be credited passed)',
+  LIB,
+  '    if (e.wholeFile) {',
+  '    if (false) {',
+  { specs: RUN_SPECS },
+);
+prove(
+  'a whole-file entry adds nothing to rules.exclude',
+  LIB,
+  'if (!manifest.rules.exclude.includes(e.test)) manifest.rules.exclude.push(e.test);',
+  'if (false) manifest.rules.exclude.push(e.test);',
+  { specs: RUN_SPECS },
+);
+prove(
+  'RUN TIME: an entry with no boolean wholeFile no longer fails closed',
+  LIB,
+  "    if (typeof e.wholeFile !== 'boolean') {\n      throw new DefectScopeError(",
+  '    if (false) {\n      throw new DefectScopeError(',
+  { specs: RUN_SPECS },
+);
+prove(
+  'an entry with no wholeFile flag is accepted',
+  LIB,
+  "    if (typeof e.wholeFile !== 'boolean') {\n      out.push(",
+  '    if (false) {\n      out.push(',
+);
+prove(
+  'wholeFile true is accepted on a file with other cases',
+  LIB,
+  'if (e.wholeFile && others.length > 0) {',
+  'if (false) {',
+);
+prove(
+  'wholeFile false is accepted on an entry covering every case',
+  LIB,
+  '} else if (!e.wholeFile && others.length === 0) {',
+  '} else if (false) {',
+);
+prove(
+  'DATA: a whole-file entry is marked partial',
+  MANIFEST,
+  '"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",\n      "lane": "bun/turbopack",\n      "nextjsRef": "v16.4.3",\n      "bunVersion": "1.4.2",\n      "wholeFile": true,',
+  `"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",\n      "lane": "bun/turbopack",\n      "nextjsRef": "v16.4.3",\n      "bunVersion": "1.4.2",\n      "wholeFile": false, "//${MUTATION_MARKER}": 1,`,
+  { specs: [SPEC] },
+);
+
+// ── "Re-measured" is checked: a run at the entry's Bun on its own cell ──────────────────────────
+prove(
+  'a Bun-cell run with no recorded Bun is accepted',
+  LIB,
+  "if (String(r?.cell).startsWith('bun-') && !BUN_VERSION_SHAPE.test(String(r?.bun ?? '')))",
+  'if (false)',
+);
+prove(
+  'no own-cell run at the entry Bun is required',
+  LIB,
+  '!e.runs.some((r) => r?.cell === laneCell(e.lane) && r?.bun === e.bunVersion)',
+  'false',
+);
+// The reviewer's case: the lane pin AND every bunVersion move together to a Bun nobody ran; the
+// runs are untouched. The pin check is satisfied, so only the run-measurement rule can catch it.
+proveMulti('DATA: lockstep Bun bump (pin + bunVersion move, runs do not)', [
+  [
+    WF_E2E,
+    "          # lane only)` step. Bumping one alone reds compat-bun-lane-lockstep.\n          bun-version: ${{ github.event.inputs.bun-version || '1.4.2' }}",
+    "          # lane only)` step. Bumping one alone reds compat-bun-lane-lockstep.\n          bun-version: ${{ github.event.inputs.bun-version || '1.4.3' }}",
+  ],
+  [
+    WF_E2E,
+    "          # evidence on its own.\n          bun-version: ${{ github.event.inputs.bun-version || '1.4.2' }}",
+    "          # evidence on its own.\n          bun-version: ${{ github.event.inputs.bun-version || '1.4.3' }}",
+  ],
+  [
+    MANIFEST,
+    '"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",\n      "lane": "bun/turbopack",\n      "nextjsRef": "v16.4.3",\n      "bunVersion": "1.4.2",',
+    `"test": "test/e2e/app-dir/treeshake-mw/mw.test.ts",\n      "lane": "bun/turbopack",\n      "nextjsRef": "v16.4.3",\n      "bunVersion": "1.4.3", "//${MUTATION_MARKER}": 1,`,
+  ],
+  [
+    MANIFEST,
+    '"test": "test/e2e/app-dir/turbopack-tree-shaking-chunkgroup/turbopack-tree-shaking-chunkgroup.test.ts",\n      "lane": "bun/turbopack",\n      "nextjsRef": "v16.4.3",\n      "bunVersion": "1.4.2",',
+    `"test": "test/e2e/app-dir/turbopack-tree-shaking-chunkgroup/turbopack-tree-shaking-chunkgroup.test.ts",\n      "lane": "bun/turbopack",\n      "nextjsRef": "v16.4.3",\n      "bunVersion": "1.4.3", "//${MUTATION_MARKER}": 2,`,
+  ],
+]);
 
 // ── The snapshot covers this ledger ────────────────────────────────────────────────────────────
 prove(

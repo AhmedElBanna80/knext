@@ -11,20 +11,30 @@
  *
  * WHAT THE HARNESS DOES WITH IT
  *   Nothing in the committed manifest deselects these cases: the entry is a record. At RUN time
- *   `scripts/compat-manifest-for-ref.mjs` adds the entry's case names to `suites[file].failed` in
- *   the scoped copy ONLY when all three hold:
+ *   `scripts/compat-manifest-for-ref.mjs` applies the entry to the scoped copy ONLY when all three
+ *   hold:
  *     - the lane under test is the entry's lane (`KNEXT_RUNTIME/KNEXT_BUILDER`),
  *     - `NEXTJS_REF` equals the entry's `nextjsRef`,
  *     - on a Bun lane, the Bun under test (`bun --version`) equals the entry's `bunVersion`.
  *   On every other cell, ref or Bun the cases RUN. So a `bun-version=canary` dispatch, or a lane
  *   pin bump to the Bun release that carries the fix, runs them again.
  *
+ *   HOW it is applied depends on `wholeFile`, which the validator checks against the upstream
+ *   snapshot. An entry that covers EVERY case in its file puts the file in the copy's
+ *   `rules.exclude`, so it is never selected. It must not become a `failed` list: next's runner turns
+ *   that into a jest `--testNamePattern` that filters out every test, jest exits 0, run-tests prints
+ *   `<file> finished on retry 0/N`, and scripts/e2e-summary.mjs counts that as a PASSED file that ran
+ *   no case. A partial-file entry (`wholeFile: false`) adds its names to `suites[file].failed`.
+ *
  * WHY IT CANNOT OUTLIVE THE BUG
  *   The upstream fix is unreleased, so the Bun version that will contain it is unknown in advance.
  *   The mechanical equivalent is the same as bar 1 of the ref-pinned ledger: the entry is pinned to
  *   the Bun the lane runs today, and a PR that moves the lane's Bun pin is red until every entry is
- *   re-measured at the new Bun or removed. A re-measure runs the case (the run-time scope drops the
- *   deselection at any other Bun), so a Bun that carries the fix shows the case passing.
+ *   re-measured at the new Bun or removed. "Re-measured" is checked, not trusted: every Bun-cell run
+ *   records the Bun it ran on, and the entry needs a run on its own cell at its `bunVersion`, so
+ *   moving the pin and `bunVersion` together without a new run is still red. A re-measure runs the
+ *   case (the run-time scope drops the deselection at any other Bun), so a Bun that carries the fix
+ *   shows the case passing.
  *
  * Every rule below is a guard held by tests/compat-upstream-runtime-defects.test.ts and has a
  * mutation proof in scripts/mutation-prove-upstream-runtime-defects.mjs.
@@ -228,6 +238,23 @@ export function entryProblems(e, { ctx, laneRefs, shippedRef, laneBun, snapshot 
         }
       }
     }
+    // wholeFile must say whether the entry covers every case: a title literal upstream has that no
+    // case (title or describe path) accounts for is a case that would keep running.
+    if (typeof e.wholeFile !== 'boolean') {
+      out.push(`${who}: wholeFile must be true or false`);
+    } else if (snap) {
+      const covered = e.cases.flatMap((c) => [...(c?.path ?? []), c?.title]).filter(nonEmpty);
+      const others = snap.literals.filter((l) => !covered.some((t) => literalProduces(l, t)));
+      if (e.wholeFile && others.length > 0) {
+        out.push(
+          `${who}: wholeFile is true but the file has other cases upstream (${others.join(' | ')}); a file exclusion would stop them running`,
+        );
+      } else if (!e.wholeFile && others.length === 0) {
+        out.push(
+          `${who}: the entry covers every case in the file, so wholeFile must be true: as a failed list the file runs no case and is credited as passed`,
+        );
+      }
+    }
   }
 
   // Evidence: at least one run on the entry's own cell, every run at the entry's ref.
@@ -241,9 +268,19 @@ export function entryProblems(e, { ctx, laneRefs, shippedRef, laneBun, snapshot 
         out.push(`${who}: run ${r?.run} names no known cell (${r?.cell})`);
       if (r?.ref !== e.nextjsRef)
         out.push(`${who}: run ${r?.run} measured ${r?.ref}, entry is pinned at ${e.nextjsRef}`);
+      if (String(r?.cell).startsWith('bun-') && !BUN_VERSION_SHAPE.test(String(r?.bun ?? '')))
+        out.push(`${who}: Bun-cell run ${r?.run} records no X.Y.Z bun it ran on`);
     }
     if (nonEmpty(e.lane) && !e.runs.some((r) => r?.cell === laneCell(e.lane))) {
       out.push(`${who}: no recorded run measured the entry's own cell (${laneCell(e.lane)})`);
+    } else if (
+      typeof e.lane === 'string' &&
+      e.lane.startsWith('bun/') &&
+      !e.runs.some((r) => r?.cell === laneCell(e.lane) && r?.bun === e.bunVersion)
+    ) {
+      out.push(
+        `${who}: no ${laneCell(e.lane)} run measured on Bun ${e.bunVersion}: moving bunVersion needs a re-measure at that Bun, not an edit`,
+      );
     }
   }
   return out;
@@ -299,10 +336,11 @@ export function ledgerProblems(manifest, deps = {}) {
 export class DefectScopeError extends Error {}
 
 /**
- * RUN-TIME half: add each matching entry's case names to `suites[file].failed` of `manifest`
- * (mutated in place; the caller passes a copy). FAIL CLOSED: a ledger that is not an array, an
- * entry without a parseable lane/ref/cases, a non-empty ledger with no runtime or builder, or a
- * matching Bun entry whose Bun cannot be read all throw.
+ * RUN-TIME half: apply each matching entry to `manifest` (mutated in place; the caller passes a
+ * copy): a `wholeFile` entry adds its file to `rules.exclude`, any other adds its case names to
+ * `suites[file].failed`. FAIL CLOSED: a ledger that is not an array, an entry without a parseable
+ * lane/ref/cases/wholeFile, a non-empty ledger with no runtime or builder, or a matching Bun entry
+ * whose Bun cannot be read all throw.
  *
  * @param {object} manifest
  * @param {{ref: string, runtime?: string, builder?: string, bunVersion?: () => string}} lane
@@ -336,6 +374,11 @@ export function applyUpstreamRuntimeDefects(manifest, { ref, runtime, builder, b
     if (!Array.isArray(e.cases) || e.cases.length === 0) {
       throw new DefectScopeError(`${e.test}: upstream-runtime-defect entry has no cases`);
     }
+    if (typeof e.wholeFile !== 'boolean') {
+      throw new DefectScopeError(
+        `${e.test}: upstream-runtime-defect entry has no boolean wholeFile`,
+      );
+    }
     if (e.lane !== lane) {
       skipped.push({ test: e.test, reason: `lane ${e.lane}` });
       continue;
@@ -356,13 +399,26 @@ export function applyUpstreamRuntimeDefects(manifest, { ref, runtime, builder, b
         continue;
       }
     }
+    if (e.wholeFile) {
+      // Every case of the file: exclude the FILE so it is never selected (and never credited as a
+      // passed file that ran nothing). get-test-filter honours an exact path in rules.exclude
+      // whether or not the file has a suites entry.
+      if (!Array.isArray(manifest.rules?.exclude)) {
+        throw new DefectScopeError(
+          `${e.test}: the manifest has no rules.exclude array to add it to`,
+        );
+      }
+      if (!manifest.rules.exclude.includes(e.test)) manifest.rules.exclude.push(e.test);
+      applied.push({ test: e.test, as: 'exclude' });
+      continue;
+    }
     if (!manifest.suites) manifest.suites = {};
     if (!manifest.suites[e.test]) manifest.suites[e.test] = {};
     const suite = manifest.suites[e.test];
     const failed = suite.failed ?? [];
     for (const name of e.cases.map(caseName)) if (!failed.includes(name)) failed.push(name);
     suite.failed = failed;
-    applied.push(e.test);
+    applied.push({ test: e.test, as: 'failed' });
   }
   manifest[UPSTREAM_RUNTIME_DEFECT_SCOPE_KEY] = {
     ref,

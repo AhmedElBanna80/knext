@@ -443,7 +443,7 @@ describe('compat-manifest-for-ref — the REAL step text, executed', () => {
     const defects = (real.$knextUpstreamRuntimeDefects ?? []) as { test: string }[];
     const BUN_TURBO = { KNEXT_RUNTIME: 'bun', KNEXT_BUILDER: 'turbopack' };
     const lane = '.github/workflows/test-e2e-deploy.yml';
-    it('bun/turbopack at v16.4.3 on Bun 1.4.2: the copy the harness reads deselects them', () => {
+    it('bun/turbopack at v16.4.3 on Bun 1.4.2: the copy the harness reads excludes both files', () => {
       const { r, scoped } = execStep(lane, {
         ref: 'v16.4.3',
         withScript: true,
@@ -453,7 +453,12 @@ describe('compat-manifest-for-ref — the REAL step text, executed', () => {
       });
       expect(r.status, r.stderr).toBe(0);
       expect(defects.length).toBe(2);
-      for (const d of defects) expect(scoped?.suites[d.test]?.failed?.length).toBe(1);
+      for (const d of defects) {
+        // Whole-file entries become file exclusions, never a failed list (a jest run that filters
+        // out every case exits 0 and would be credited as a passed file).
+        expect(scoped?.rules.exclude).toContain(d.test);
+        expect(scoped?.suites[d.test]?.failed).toBeUndefined();
+      }
     });
     it.each([
       [
@@ -479,7 +484,10 @@ describe('compat-manifest-for-ref — the REAL step text, executed', () => {
         bun,
       });
       expect(r.status, r.stderr).toBe(0);
-      for (const d of defects) expect(scoped?.suites[d.test]?.failed).toBeUndefined();
+      for (const d of defects) {
+        expect(scoped?.suites[d.test]?.failed).toBeUndefined();
+        expect(scoped?.rules.exclude).not.toContain(d.test);
+      }
     });
   });
 

@@ -325,7 +325,7 @@ no opt-out for the other three settings, because none of them depends on the ima
 knext rejects mutable image tags everywhere.
 
 - **`:latest` is rejected.** An app whose `image` is `:latest`, tag-only, or untagged is marked
-  `Degraded` (reason `InvalidImage`) and never deployed — a ref is accepted only if it is
+  `Degraded` (reason `InvalidSpec`, with a Warning event of reason `InvalidImage`) and never deployed — a ref is accepted only if it is
   digest-pinned (`@sha256:`).
 - **knext's own images are digest-pinned too.** A build-time check fails if any internal deployment
   manifest references a non-pinned tag, so knext never ships a mutable image reference.

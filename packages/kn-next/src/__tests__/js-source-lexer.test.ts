@@ -63,6 +63,11 @@ describe("js-source-lexer: keep-strings (default)", () => {
         );
     });
 
+    it("does not end a template at an escaped backtick", () => {
+        const src = "t = `a \\` // b`; // c";
+        expect(stripComments(src)).toBe(`t = \`a \\\` // b\`; ${sp(4)}`);
+    });
+
     it("handles templates nested in `${}`", () => {
         const src = "t = `a ${ `b ${ c } // d` } e`; // f";
         expect(stripComments(src)).toBe(

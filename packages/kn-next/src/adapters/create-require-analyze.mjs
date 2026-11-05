@@ -1159,7 +1159,48 @@ function analyzeParsed(ast) {
         // Anything else is anchored somewhere other than this module (a literal,
         // the cwd): it was never embedded by this check and is not changed here.
     }
+    for (const call of parents.keys()) {
+        if (isWebpackFoldedLoad(call)) {
+            sites.push({ kind: "direct", dynamic: true, spec: null, folded: FOLDED_RUNTIME_PACKAGE });
+        }
+    }
     return { aliases, sites, parseError: null };
+}
+
+/**
+ * The webpack standalone shape of the deliberate ioredis load (#2688).
+ *
+ * A webpack `next build` rewrites `import.meta.url` to a string literal URL
+ * (`file:///<build path>/chunk.js`) and constant-folds the specifier, so
+ * @getknext/lib's loader reaches the server chunks as
+ * `(0, <ns>.createRequire)("file:///...")("ioredis")`. The creator there is an
+ * external webpack module, not an ES import, so no alias or anchor is tracked
+ * and `createRequire(import.meta.url)` never appears.
+ *
+ * Decision: match the SHAPE rather than follow webpack's module graph. A call
+ * `C("file:...")("ioredis")` where `C` is `createRequire`, `<x>.createRequire`
+ * or `(0, <x>.createRequire)`, with exactly one string-literal argument each,
+ * is the same deliberate load the other targets name, so it is reported under
+ * the same name-only exemption. It is deliberately narrow: another package, a
+ * non-`file:` anchor, or an extra argument is not matched (the rest of the
+ * literal-specifier cases stay with the scans that already own them).
+ */
+function isWebpackFoldedLoad(call) {
+    if (call.type !== "CallExpression" || call.arguments.length !== 1) return false;
+    if (literalSpec(call.arguments[0]) !== FOLDED_RUNTIME_PACKAGE) return false;
+    const create = call.callee;
+    if (create.type !== "CallExpression" || create.arguments.length !== 1) return false;
+    const url = literalSpec(create.arguments[0]);
+    if (url === null || !url.startsWith("file:")) return false;
+    let callee = create.callee;
+    if (callee.type === "SequenceExpression") callee = callee.expressions[callee.expressions.length - 1];
+    if (callee.type === "Identifier") return callee.name === "createRequire";
+    return (
+        callee.type === "MemberExpression" &&
+        !callee.computed &&
+        callee.property.type === "Identifier" &&
+        callee.property.name === "createRequire"
+    );
 }
 
 /**

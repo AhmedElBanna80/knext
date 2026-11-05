@@ -1089,6 +1089,7 @@ describe('a restarted kubelet is waited for by its new heartbeat, not by a stale
     [
       '#!/bin/sh',
       'echo "$*" >> "$STUB_DIR/calls"',
+      'if [ -e "$STUB_DIR/failafter" ] && [ "$(wc -l < "$STUB_DIR/calls")" -gt "$(cat "$STUB_DIR/failafter")" ]; then echo "Error: connection refused" >&2; exit 1; fi',
       'if [ -e "$STUB_DIR/fail" ]; then echo "Error: context \\"nope\\" does not exist" >&2; exit 1; fi',
       'case "$*" in',
       '  *lastHeartbeatTime*) cat "$STUB_DIR/hb" ;;',
@@ -1105,6 +1106,7 @@ describe('a restarted kubelet is waited for by its new heartbeat, not by a stale
     writeFileSync(join(stubDir, 'st'), st);
     writeFileSync(join(stubDir, 'calls'), '');
     rmSync(join(stubDir, 'fail'), { force: true });
+    rmSync(join(stubDir, 'failafter'), { force: true });
     if (fail) writeFileSync(join(stubDir, 'fail'), '');
     const r = spawnSync('bash', [join(ROOT, HELPER), ...args], {
       encoding: 'utf8',
@@ -1180,6 +1182,31 @@ describe('a restarted kubelet is waited for by its new heartbeat, not by a stale
     expect(r.err).toContain('does not exist');
     // a node with no Ready heartbeat to read is also an error, not an empty success
     expect(run(['read', 'ctx-ceiling', 'node-p'], '').code).toBe(2);
+  });
+
+  it('reports a kubectl that starts failing mid-wait as exit 2, not as a plain timeout', () => {
+    // the first lookup (heartbeat, status) works and shows the stale heartbeat; every later call fails
+    writeFileSync(join(stubDir, 'hb'), BEFORE);
+    writeFileSync(join(stubDir, 'st'), 'True');
+    writeFileSync(join(stubDir, 'calls'), '');
+    rmSync(join(stubDir, 'fail'), { force: true });
+    writeFileSync(join(stubDir, 'failafter'), '2');
+    const r = spawnSync(
+      'bash',
+      [join(ROOT, HELPER), 'wait', 'ctx-ceiling', 'node-p', BEFORE, '2'],
+      {
+        encoding: 'utf8',
+        env: {
+          PATH: `${stubDir}:${process.env.PATH ?? ''}`,
+          STUB_DIR: stubDir,
+          WAIT_KUBELET_HEARTBEAT_INTERVAL: '0.2',
+        },
+      },
+    );
+    rmSync(join(stubDir, 'failafter'), { force: true });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('kubectl was failing at the end');
+    expect(r.stderr).toContain('connection refused');
   });
 
   it('every wait in the runbook is preceded by a heartbeat read just before its restart', () => {

@@ -44,6 +44,13 @@ const read = (rel: string) => readFileSync(resolve(ROOT, rel), 'utf8');
 /** Block-comment terminator search: the hallmark of a hand-rolled comment scanner. */
 const HAND_ROLLED_COMMENT_SCAN = /indexOf\(\s*(['"])\*\/\1/;
 const OWN_STRIP_DEFINITION = /function\s+stripComments\s*\(/;
+/**
+ * A regex-literal comment stripper: a `replace`/`match`/`split` call whose regex
+ * literal contains an escaped comment opener (`\/\*` for block, `\/\/` for line).
+ * The `indexOf('*\/')` hallmark above cannot see these.
+ */
+const REGEX_COMMENT_STRIPPER =
+  /\.(?:replace(?:All)?|match(?:All)?|split)\(\s*\/(?:[^/\n\\]|\\.)*?\\\/(?:\\\*|\\\/)/;
 const SHARED_IMPORT =
   /import\s*\{[^}]*\bstripComments\b[^}]*\}\s*from\s*(['"])[^'"]*js-source-lexer\.mjs\1/;
 
@@ -62,5 +69,28 @@ describe('shared js-source-lexer: call-site migration', () => {
       expect(src).not.toMatch(HAND_ROLLED_COMMENT_SCAN);
       expect(src).not.toMatch(OWN_STRIP_DEFINITION);
     });
+
+    it(`${rel} has no regex-literal comment stripper`, () => {
+      expect(read(rel)).not.toMatch(REGEX_COMMENT_STRIPPER);
+    });
   }
+});
+
+describe('regex comment stripper detector (both halves)', () => {
+  const bad = [
+    'const t = s.replace(/\\/\\*[\\s\\S]*?\\*\\//g, "");',
+    'const t = s.replace(/\\/\\/.*$/gm, "");',
+    'const t = s.split(/\\/\\/.*\\n/);',
+    'const m = s.match(/\\/\\*.*?\\*\\//gs);',
+  ];
+  for (const fixture of bad) {
+    it(`flags ${fixture}`, () => {
+      expect(fixture).toMatch(REGEX_COMMENT_STRIPPER);
+    });
+  }
+
+  it('does not flag the shared-lexer call or an unrelated regex', () => {
+    expect('const t = stripComments(src);').not.toMatch(REGEX_COMMENT_STRIPPER);
+    expect('const t = s.replace(/foo\\/bar/g, "");').not.toMatch(REGEX_COMMENT_STRIPPER);
+  });
 });

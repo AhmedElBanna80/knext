@@ -161,3 +161,17 @@ describe("no guidance pushes the tracing root above the app", () => {
         expect(page).not.toMatch(/not (yet )?supported/i);
     });
 });
+
+describe("configuredTracingRoot lexing: postfix increment then division", () => {
+    it("ignores a commented-out outputFileTracingRoot that follows `i++ / 2;`", () => {
+        const base = realpathSync(
+            mkdtempSync(join(tmpdir(), "knext-lexer-postfix-")),
+        );
+        tempRoots.push(base);
+        writeFileSync(
+            join(base, "next.config.ts"),
+            'let n = i++ / 2; // outputFileTracingRoot: "/elsewhere"\nexport default {};\n',
+        );
+        expect(configuredTracingRoot(base)).toBeNull();
+    });
+});

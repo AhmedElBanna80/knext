@@ -1073,6 +1073,73 @@ describe('the runbook states the procedure the harness, the analyzer and the bui
   });
 });
 
+describe('a restarted kubelet is waited for by its new heartbeat, not by a stale Ready', () => {
+  // Measured on the kind rehearsal: after a kubelet restart the API keeps the OLD Ready=True for ~54 s
+  // (even for a crash-looping kubelet), so `kubectl wait --for=condition=Ready` proves nothing.
+  const HELPER = 'scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh';
+  const rb = readFileSync(join(ROOT, RUNBOOK), 'utf8');
+  const stubDir = mkdtempSync(join(tmpdir(), 'ceiling-kubectl-stub-'));
+  afterAll(() => rmSync(stubDir, { recursive: true, force: true }));
+
+  // A kubectl that answers only `get node ... jsonpath=...lastHeartbeatTime|status` from two files.
+  writeFileSync(
+    join(stubDir, 'kubectl'),
+    [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *lastHeartbeatTime*) cat "$STUB_DIR/hb" ;;',
+      '  *status*) cat "$STUB_DIR/st" ;;',
+      '  *) echo "unexpected kubectl call: $*" >&2; exit 9 ;;',
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+
+  function wait(hb: string, st: string, before = '2026-11-05T09:00:00Z', timeout = '2') {
+    writeFileSync(join(stubDir, 'hb'), hb);
+    writeFileSync(join(stubDir, 'st'), st);
+    const r = spawnSync('bash', [join(ROOT, HELPER), 'node-p', before, timeout], {
+      encoding: 'utf8',
+      env: {
+        PATH: `${stubDir}:${process.env.PATH ?? ''}`,
+        STUB_DIR: stubDir,
+        WAIT_KUBELET_HEARTBEAT_INTERVAL: '0.2',
+      },
+    });
+    return { out: r.stdout, err: r.stderr, code: r.status ?? -1 };
+  }
+
+  it('succeeds when the Ready heartbeat moved and Ready is True', () => {
+    const r = wait('2026-11-05T09:10:01Z', 'True');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('new heartbeat 2026-11-05T09:10:01Z');
+  });
+
+  it('times out on the stale Ready=True that kubectl wait would accept at once', () => {
+    const r = wait('2026-11-05T09:00:00Z', 'True');
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('no new kubelet heartbeat after 2s');
+  });
+
+  it('does not accept a new heartbeat while Ready is not True', () => {
+    expect(wait('2026-11-05T09:10:01Z', 'Unknown').code).toBe(1);
+    expect(wait('2026-11-05T09:10:01Z', 'False').code).toBe(1);
+  });
+
+  it('does not accept an empty heartbeat (a kubectl that failed or a node without the condition)', () => {
+    expect(wait('', 'True').code).toBe(1);
+  });
+
+  it('is the only post-restart readiness gate in the runbook: kubectl wait is gone, the helper is used', () => {
+    expect(rb).not.toContain('kubectl wait --for=condition=Ready');
+    expect(rb.split('wait-kubelet-heartbeat.sh').length - 1).toBeGreaterThanOrEqual(4);
+    // the heartbeat is read before the restart, on the workstation, and the runbook says why
+    expect(rb).toContain('{.status.conditions[?(@.type=="Ready")].lastHeartbeatTime}');
+    expect(rb).toContain('stale Ready=True');
+  });
+});
+
 describe('the setup manifest is a template with no cluster literal', () => {
   const m = readFileSync(join(ROOT, MANIFEST), 'utf8');
 

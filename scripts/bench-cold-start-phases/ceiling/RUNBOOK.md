@@ -1,9 +1,10 @@
 # Kubelet ceiling test: runbook
 
-**Status: prepared, not executed.** Founder-approved on 2026-11-04 as a **measurement, not a shipped
+**Status: prepared; the kind rehearsal (section 3) was executed on 2026-11-05, the OKE run was not.** Founder-approved on 2026-11-04 as a **measurement, not a shipped
 default**, on these terms: **one existing worker is patched (call it P), the other (S) is the untouched
-control**, and the founder applies a host log reader on request. Nothing here has touched a cluster. The
-agent that wrote it had no cluster access, ran no kubectl, ssh or node command, and pushed no image.
+control**, and the founder applies a host log reader on request. Nothing here has touched OKE. The
+agent that wrote it had no cluster access; a second agent ran only the local kind rehearsal (cluster
+`ceiling-rehearsal`, `REHEARSAL.md`), and no image was pushed.
 Every cluster step needs the founder's explicit go, and section 1 lists every approval it needs. The steps
 are for a human operator.
 
@@ -148,20 +149,30 @@ Six blocks on P (`b1` ... `b6`), plus the optional CRI-O block (`b7`): 192 P win
   not the arm, a DaemonSet pod or already there (`foreign_new_pods`), **prints `FOREIGN POD on pool ...` at
   once, and with `--abort-on-foreign=<P pool>` stops the run** after restoring the cordons. Detection, not
   prevention.
-- **What a kubelet restart does to running pods (from memory, verify in the rehearsal).** The container
+- **What a kubelet restart does to running pods (verified on kind, not yet on OKE).** The container
   runtime owns the containers, so they keep running; the kubelet re-adopts them on start. Pods are not
   restarted unless the kubelet computes a different container hash, which is why the version must match and
   the rehearsal compares `restartCount` and container IDs before and after. While the kubelet is down, no
   status is reported; a restart of a few seconds is under the node-monitor grace period (about 40-50 s), so
   the node should not go NotReady. If it did, pods without their own tolerations would be evicted after 300 s
   (the default not-ready toleration), which is why section 7 reverts after 2 minutes, not 5.
-  The 100 ms relist costs about ten times the kubelet CPU (about 25% of a core instead of 2.5%).
+  Kind measured it (REHEARSAL.md): three running pods kept the same container IDs and `restartCount` across
+  every kubelet restart that was checked (stock, relist100, the original, a 54 s crash-loop, both auto-revert
+  firings); the new kubelet re-adopted them. Pods were NOT restarted by a kubelet swap from 1.34.11 to our 1.34.10 builds and back.
+  The 100 ms relist costs more kubelet CPU: the earlier estimate here was about ten times (about 25% of a core
+  instead of 2.5%), which is unmeasured. On an idle kind node it was 0.6% (stock) against 1.1% (relist100), about 2x; in 10 s reads during pod
+  creation, 0.6-1.1% against 1.8-1.9%. OKE's cost is still to be read.
 - **p95 is descriptive.** At 60 pairs per treatment the tail is too thin to judge; the analyzer prints it
   with that sentence and gives no interval for it.
 
-## 3. Kind rehearsal of swap, revert and the CGO-off binary (REQUIRED, NOT YET DONE)
+## 3. Kind rehearsal of swap, revert and the CGO-off binary (REQUIRED; DONE on kind 2026-11-05 for arm64, see REHEARSAL.md)
 
-No cluster step runs before this is done and recorded. Nothing in this section has been executed.
+**Status.** Executed once on a local kind cluster (arm64, kubelet v1.34.11 node image, containerd), steps 1-6
+below (steps 1-5), with the results, commands and the procedure change it forced in `REHEARSAL.md` (same directory).
+**Not done:** step 6 (the driver dry-run and the SIGKILL `--expect-state` check; it needs Knative and the
+NextApps, which the kind cluster does not have), and **still required on the real node:** everything in step 7.
+The amd64 build was not started anywhere (only the arm64 build was). The two things the rehearsal could not show are named in
+`REHEARSAL.md` ("What kind cannot show"). Treat it as evidence about mechanism, not about OKE.
 
 **How the rehearsal differs from production, so it is not read as proving more than it does:**
 - kind runs the kubelet from kubeadm's layout: `ExecStart` is set in `/etc/systemd/system/kubelet.service.d/10-kubeadm.conf`.
@@ -368,20 +379,45 @@ kubelet (the `/run` drop-in does not either); the CRI-O drop-in is the exception
 **If the timer fires during a block, the rest of that block ran on the OKE kubelet.** Check
 `systemctl list-timers` and `exe_sum` at the end of every block; a block where it fired is discarded.
 
+**Waiting for the new kubelet (measured on the kind rehearsal).** After a kubelet restart the API server keeps
+the old kubelet's Ready=True for about 54 s, even when the new kubelet is crash-looping, so a
+`kubectl wait` on the Ready condition returns at once and proves nothing. A stale Ready=True is what you read
+for the first minute. The check that works is the Ready condition's `lastHeartbeatTime`: the new kubelet posts
+one within about 0.5-0.8 s of starting. Read it before the restart and wait for it to change:
+`scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120` (tested against a stub
+kubectl). It exits 1 on timeout, which means revert (section 8). `exe_sum` on P is still the proof of
+which binary runs; the heartbeat is the proof that it started and reached the API.
+
+**`daemon-reload` re-bases a pending `--on-active` timer (measured, systemd 257 on kind).** Each
+`systemctl daemon-reload` moves `ceiling-revert.timer`'s next elapse to reload time plus the full delay (it
+read 11:41:07, then 11:41:32 after a reload five seconds later, and did not move without one). The swap's
+reload therefore only ever postpones the revert, and the 150-minute margin is measured from the last
+reload, not from arming. Re-arming at the start of every block, as above, is unaffected. OKE's systemd may differ
+and is not tested; check `systemctl list-timers` before and after the first reload there.
+
 **Fire test: the net is proved before anything relies on it. Do not start block 1 without it** (in the
 screen: before `b2`).
 1. Write the **stock** drop-in, then restart:
+   ```
+   # workstation, BEFORE the restart: the Ready heartbeat to compare against (see "Waiting for the new kubelet")
+   HB=$(kubectl get node <P> -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastHeartbeatTime}')
+   ```
    ```
    sudo systemctl daemon-reload
    sudo systemctl restart kubelet
    ```
    ```
    # workstation
-   kubectl wait --for=condition=Ready node/<P> --timeout=120s
+   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120
    ```
    On P, `exe_sum` must equal the stock sum and `args_sum` must equal `$OKE_ARGS`. (This is also the first
    time our stock build runs on the node.)
-2. Fire the timer on a short delay, through the same explicit interpreter, and **poll** for the effect rather
+2. Re-read the heartbeat now, because step 1's restart moved it and a stale `$HB` would pass at once:
+   ```
+   # workstation
+   HB=$(kubectl get node <P> -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastHeartbeatTime}')
+   ```
+   Then fire the timer on a short delay, through the same explicit interpreter, and **poll** for the effect rather
    than sleeping a fixed time:
    ```
    sudo systemctl stop ceiling-revert-test.timer ceiling-revert-test.service 2>/dev/null || true
@@ -393,8 +429,8 @@ screen: before `b2`).
    exe_sum; args_sum
    ```
    ```
-   # workstation
-   kubectl wait --for=condition=Ready node/<P> --timeout=120s
+   # workstation: HB was re-read just before the timer was armed, so this waits for the timer's own restart
+   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120
    ```
    The first line stops an elapsed test timer that may still be loaded from an earlier try.
 3. **The proof is the effect, not the unit's state** (a successful transient service is collected): the
@@ -419,9 +455,12 @@ relist100, `b5` stock, `b6` oke:
    ```
    sudo systemctl daemon-reload
    sudo systemctl restart kubelet
-   kubectl wait --for=condition=Ready node/<P> --timeout=120s
    ```
-   If P is not Ready after 120 s, **revert at once** (section 8).
+   ```
+   # workstation: read HB with the section 5 command before the restart, then wait for the new heartbeat
+   scripts/bench-cold-start-phases/ceiling/wait-kubelet-heartbeat.sh <P> "$HB" 120
+   ```
+   If P has no new heartbeat after 120 s, **revert at once** (section 8).
 3. **Prove which binary and which flags are running** (the file on disk proves nothing; the running process
    does): `exe_sum` must equal the OKE sum (`oke`), the stock sum or the relist100 sum, and **`args_sum` must
    equal `$OKE_ARGS` in every block**. A mismatch is an abort.
@@ -466,7 +505,7 @@ relist100, `b5` stock, `b6` oke:
 ## 7. Abort criteria (stop, then section 8; section 9 if a node is affected)
 
 Stop the run and report if any of these holds:
-- P is not Ready **2 minutes** after a kubelet restart, or S is ever not Ready.
+- `wait-kubelet-heartbeat.sh` finds no new heartbeat on P **2 minutes** after a kubelet restart, or S is ever not Ready.
 - A pod outside the bench namespace is evicted, restarted, or fails to schedule, or the driver prints
   `FOREIGN POD on pool <P pool>` (it also stops itself with `--abort-on-foreign`).
 - The kubelet crash-loops (more than 2 restarts in 10 minutes), or its CPU stays above half a core for 10 min.
@@ -489,7 +528,7 @@ together, because `revert.sh` removes both:
    This removes the volatile drop-in (and the CRI-O one, if present) and restarts the kubelet: the original
    `$KP` was never touched.
 2. Prove it: `exe_sum` equals `$OKE_EXE`, `args_sum` equals `$OKE_ARGS`, and
-   `kubectl wait --for=condition=Ready node/<P> --timeout=120s`.
+   `wait-kubelet-heartbeat.sh <P> "$HB" 120` succeeds (read `$HB` before step 1).
 3. Verify the relist is back: the section 6 step 4 query on P gives about 1.00 s.
 4. Verify CRI-O is back if section 11 ran: `test ! -e /etc/crio/crio.conf.d/99-ceiling-debug.conf` and
    `sudo crio-status config | grep log_level` shows the original level (normally `info`).
@@ -505,7 +544,7 @@ Do not delete the node, the pod or the namespace. Do not use `kubectl debug node
    `journalctl -u kubelet -n 200 --no-pager`.
 2. SSH down: log in on the **OCI serial console** and do the same.
 3. Neither works: a **founder-only** OCI soft reset of the instance. The kubelet drop-in lives in `/run`, so
-   the original kubelet starts on boot (from memory, verify in the rehearsal's `docker restart` drill). The
+   the original kubelet starts on boot (verified on kind by a `docker restart` of the node container: `/run` was empty, the original binary ran, the timer was gone; kind's container restart is not a real reboot). The
    timer does not survive the reboot and does not need to. **The CRI-O debug drop-in does survive it**
    (it is in `/etc`): after any reboot, check `/etc/crio/crio.conf.d/99-ceiling-debug.conf` and run
    `revert.sh` if it is there.
@@ -686,7 +725,7 @@ nothing.
 - Whether the OKE kubelet is a plain upstream build, and whether the volatile drop-in, SELinux labels and the
   OKE unit layout behave as described; whether `ExecStart` is a wrapper; whether the fire test passes under
   the node's SELinux policy.
-- What a kubelet restart does to P's existing pods and to node Ready on OKE (the rehearsal covers kind only).
+- What a kubelet restart does to P's existing pods and to node Ready on OKE (kind showed no pod restarts; OKE runs CRI-O, and its pods are Knative's).
 - A reboot reverting to the OKE binary on a real instance, and the OCI console route.
 - Whether CRI-O reloads `log_level` on SIGHUP and `crio-status config` reports the live level.
 - Whether 30 wakes per block is enough power for the 1 s lock test, and the real size of carryover.

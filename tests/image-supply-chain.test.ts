@@ -1035,7 +1035,7 @@ describe('repo-local scripts are read for pushes', () => {
       };
       expect(checks(findingsOf(w, null))).toContain('unresolved-script');
     });
-    it('a non-GITHUB_TOKEN secret in job env, step env or step with makes the job credentialed', () => {
+    it('a registry-named secret in job env, step env or step with makes the job credentialed', () => {
       const tok = '${{ secrets.REGISTRY_TOKEN }}';
       for (const extra of [
         { env: { T: tok }, steps: [{ run: 'bash hack/p.sh' }] },
@@ -1048,6 +1048,122 @@ describe('repo-local scripts are read for pushes', () => {
         };
         expect(checks(findingsOf(w, null))).toContain('unresolved-script');
       }
+    });
+    it('bracket-form, toJSON(secrets) and dynamic secrets[...] reads make the job credentialed', () => {
+      for (const tok of [
+        "${{ secrets['DOCKER_TOKEN'] }}",
+        '${{ secrets["DOCKER_TOKEN"] }}',
+        '${{ toJSON(secrets) }}',
+        '${{ secrets[matrix.name] }}',
+      ]) {
+        const w: Workflow = {
+          file: 'fx.yml',
+          doc: {
+            on: {},
+            jobs: { j: { ...ro, steps: [{ run: 'bash hack/p.sh', env: { T: tok } }] } },
+          },
+        };
+        expect(checks(findingsOf(w, null))).toContain('unresolved-script');
+      }
+    });
+    it('...but a non-registry secret in bracket form does not', () => {
+      const w: Workflow = {
+        file: 'fx.yml',
+        doc: {
+          on: {},
+          jobs: {
+            j: {
+              ...ro,
+              steps: [
+                { run: 'bash hack/p.sh', env: { T: "${{ secrets['PREVIEW_KUBECONFIG'] }}" } },
+              ],
+            },
+          },
+        },
+      };
+      expect(findingsOf(w, null)).toEqual([]);
+    });
+    it('registry credentials on job.container or job.services.* make the job credentialed', () => {
+      const creds = { username: 'u', password: '${{ secrets.PULL_PW }}' };
+      for (const extra of [
+        { container: { image: 'x', credentials: creds } },
+        { services: { db: { image: 'x', credentials: creds } } },
+      ]) {
+        const w: Workflow = {
+          file: 'fx.yml',
+          doc: { on: {}, jobs: { j: { ...ro, ...extra, steps: [{ run: 'bash hack/p.sh' }] } } },
+        };
+        expect(checks(findingsOf(w, null))).toContain('unresolved-script');
+      }
+    });
+    it('...a container without credentials does not', () => {
+      const w: Workflow = {
+        file: 'fx.yml',
+        doc: {
+          on: {},
+          jobs: { j: { ...ro, container: { image: 'x' }, steps: [{ run: 'bash hack/p.sh' }] } },
+        },
+      };
+      expect(findingsOf(w, null)).toEqual([]);
+    });
+    it('generic push names (PUSH_TOKEN, CR_PAT) count as registry secrets; NPM_TOKEN does not', () => {
+      const run = (name: string) =>
+        findingsOf(
+          {
+            file: 'fx.yml',
+            doc: {
+              on: {},
+              jobs: {
+                j: {
+                  ...ro,
+                  steps: [{ run: 'bash hack/p.sh', env: { T: '${{ secrets.' + name + ' }}' } }],
+                },
+              },
+            },
+          },
+          null,
+        );
+      expect(checks(run('PUSH_TOKEN'))).toContain('unresolved-script');
+      expect(checks(run('CR_PAT'))).toContain('unresolved-script');
+      expect(run('NPM_TOKEN')).toEqual([]);
+    });
+    describe('a caller handing secrets to a local reusable workflow', () => {
+      const pair = (callerSecrets: Any) => {
+        const caller: Workflow = {
+          file: 'caller.yml',
+          doc: {
+            on: {},
+            jobs: {
+              c: {
+                uses: './.github/workflows/callee.yml',
+                ...(callerSecrets === undefined ? {} : { secrets: callerSecrets }),
+              },
+            },
+          },
+        };
+        const callee: Workflow = {
+          file: 'callee.yml',
+          doc: {
+            on: { workflow_call: {} },
+            jobs: { j: { ...ro, steps: [{ run: 'bash hack/p.sh' }] } },
+          },
+        };
+        return discoverImageLanes([caller, callee], {
+          resolveAction: () => null,
+          ...script(null),
+        }).findings;
+      };
+      it('secrets: inherit makes the callee credentialed even with no declared secrets', () => {
+        expect(checks(pair('inherit'))).toContain('unresolved-script');
+      });
+      it('a secrets map naming a registry secret (key or value) does too', () => {
+        expect(checks(pair({ REGISTRY_TOKEN: 'x' }))).toContain('unresolved-script');
+        expect(checks(pair({ T: '${{ secrets.GHCR_PAT }}' }))).toContain('unresolved-script');
+      });
+      it('...but no secrets, or only a non-registry one, leaves the callee uncredentialed', () => {
+        expect(pair(undefined)).toEqual([]);
+        expect(pair({ KUBECONFIG: '${{ secrets.PREVIEW_KUBECONFIG }}' })).toEqual([]);
+      });
     });
     it('a non-registry secret (kubeconfig, deploy hook) does not make the job credentialed', () => {
       const tok = '${{ secrets.PREVIEW_KUBECONFIG }}';

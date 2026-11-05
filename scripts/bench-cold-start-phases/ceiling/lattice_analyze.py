@@ -50,10 +50,15 @@ VERDICT is one of the rows of the reading table in RUNBOOK.md section 10, first 
   WAIT_WORSE                  the wait got longer under relist100
   FLOOR_WAIT_PARTIAL          wait moved down, but P's relist100 wait is not at or under 150 ms
   WAIT_REMOVED_LOCK_UNSEEN    wait collapsed and 1 s lock gone, but no 100 ms lock detected
+                              (may be the best reachable verdict: a simulated 100 ms lock was detected
+                              0 of 12 times at 1 ms per-cycle jitter, 9 of 12 at 0.5 ms; the wait is primary)
   RELIST_IS_WAIT_GOAL_MET_ONCE   all of the above plus a 100 ms lock; goal interval under 1000 ms
   RELIST_IS_WAIT_FLOOR        all of the above plus a 100 ms lock; goal interval not under 1000 ms
 There is no PASS: first-byte medians vary 1276-1806 ms from run to run with no change, so one run cannot
 pass the goal. A run that does not reach the goal is reported as a floor.
+
+A two-block screen (--blocks=b2:stock,b3:relist100) is accepted: it has no carryover or build comparison, and
+a single relist100 block is judged at alpha / 1. It cannot separate order or build effects.
 """
 import argparse
 import cmath
@@ -379,7 +384,10 @@ def reading(verdict):
                               f"{WAIT_COLLAPSE_MS:.0f} ms: part of the wait is not the relist.",
         "WAIT_REMOVED_LOCK_UNSEEN": "the wait collapsed and the 1 s lock is gone, but no 100 ms lock "
                                     "was detected: the wait is attributed to the relist constant, "
-                                    "the lock mechanism is not confirmed.",
+                                    "the lock mechanism is not confirmed. This may be the best verdict "
+                                    "reachable: a simulated 100 ms lock was detected in 0 of 12 runs at "
+                                    "1 ms per-cycle jitter and 9 of 12 at 0.5 ms. The wait is the "
+                                    "primary signal; the lock is secondary.",
         "RELIST_IS_WAIT_GOAL_MET_ONCE": "the relist is the wait (lock moved from 1 s to 100 ms, wait "
                                         "collapsed) and the goal interval is under 1000 ms in this "
                                         "run. One run is not a pass.",
@@ -569,9 +577,10 @@ def main(argv=None):
         verdict = "RELIST_IS_WAIT_GOAL_MET_ONCE" if goal_met else "RELIST_IS_WAIT_FLOOR"
 
     print("\n== verdict")
-    print(f"1s lock on P: stock blocks {'all' if baseline else 'not all'} locked, relist100 blocks "
-          f"{'locked in some' if persists else 'none locked'}; 100ms lock on P in relist100 blocks: "
-          f"{'all' if lock100 else 'not all'}; 1s lock on S in {s_locked} of {len(l1_s)} blocks")
+    print(f"1s lock on P: stock blocks {'all' if baseline else 'not all'} locked; relist100 blocks "
+          f"{len(strict)} of {len(relist_b)} locked at 1 s (each at alpha / {len(relist_b)}); 100ms lock on P "
+          f"in relist100 blocks: {'all' if lock100 else 'not all'}; 1s lock on S in {s_locked} of "
+          f"{len(l1_s)} blocks")
     print(f"wait: DiD {fmt_ci(did_w)} ({'down' if went_down else 'up' if went_up else 'includes 0'}); "
           f"P relist100 wait upper bound {p_rel_w[1]:.0f} ms vs {WAIT_COLLAPSE_MS:.0f} ms "
           f"({'collapsed' if collapsed else 'not collapsed'})")

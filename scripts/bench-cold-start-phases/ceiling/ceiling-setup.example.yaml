@@ -1,9 +1,10 @@
 # The objects the kubelet ceiling test needs besides the node-agent pods and the harness RBAC
-# (RUNBOOK.md section 4 says how to get those). A template: replace every <...> and nothing else.
+# (RUNBOOK.md section 4 says how to get those). A template: replace every <...>; the imagePullSecrets lines go only if the image is public.
 #
 #   <NS>      the bench namespace (an existing one; the harness's service account lives there)
 #   <S node>  the control worker S, exactly as `kubectl get nodes` prints it
 #   <IMAGE>   the bench app image, pinned by digest (never :latest), the same for both arms
+#   <PULL SECRET>  the image pull secret every other bench NextApp carries (a private registry)
 #
 # Apply (founder's go required, see RUNBOOK.md section 1):
 #   kubectl apply --validate=strict -f ceiling-setup.example.yaml
@@ -22,6 +23,7 @@ spec:
   image: <IMAGE>
   runtime: node
   build: turbopack
+  imagePullSecrets: [{name: <PULL SECRET>}]
   scaling: {minScale: 0, maxScale: 1}
 ---
 apiVersion: apps.kn-next.dev/v1alpha1
@@ -33,6 +35,7 @@ spec:
   image: <IMAGE>
   runtime: node
   build: turbopack
+  imagePullSecrets: [{name: <PULL SECRET>}]
   scaling: {minScale: 0, maxScale: 1}
 ---
 # The harness pod, pinned to S (the unpatched control). nodeName bypasses the scheduler, so it is placed

@@ -89,6 +89,7 @@ const FAKE_KUBECTL = `#!/usr/bin/env python3
 #   FAKE_LOSE       'cordon n2'                    the call takes effect but reports failure (a lost response)
 #   FAKE_IGNORE     'cordon n2'                    the call reports success but changes nothing
 #   FAKE_CORDON_FAIL n1                            cordon/uncordon of that node fails
+#   FAKE_GET_NODE_FAIL_AFTER 4                     every 'get node <name>' after the 4th fails (an API outage)
 import json, os, sys
 args = sys.argv[1:]
 LOG = os.environ["FAKE_KUBECTL_LOG"]
@@ -128,6 +129,10 @@ if verb in ("cordon", "uncordon"):
 elif "get nodes" in joined:
     print(json.dumps({"items": [node_obj(n) for n in nodes]}))
 elif "get node " in joined:
+    if "FAKE_GET_NODE_FAIL_AFTER" in os.environ and sum(
+            1 for l in calls if "get node " in " ".join(json.loads(l))) > int(os.environ["FAKE_GET_NODE_FAIL_AFTER"]):
+        sys.stderr.write("the server is currently unable to handle the request\\n")
+        finish(1)
     name = args[args.index("node") + 1]
     print(json.dumps(node_obj(next(n for n in nodes if n["name"] == name))))
 elif "--field-selector" in joined:
@@ -574,6 +579,47 @@ describe('drive.py: --place-mode=restore leaves every cordon as it found it', ()
     const good = '{"arm":"a1","node":"n1","watch":{"first_byte":5}}';
     const ok = go({ extra: ['--abort-failed-fraction=0.1'], env: { FAKE_CAT_JSON: good } });
     expect(ok.code).toBe(0);
+  });
+
+  it('reports an API outage during the restore with the exact recovery commands, not a traceback', () => {
+    // 2 reads in the check, 1 after each of the 2 changes: the 5th read is the first one in the restore.
+    const r = go({ env: { FAKE_GET_NODE_FAIL_AFTER: '4' } });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('RESTORE FAILED');
+    expect(r.err).toContain('could not read or change it');
+    expect(r.err).toContain('Rest state to set by hand: kubectl cordon n1; kubectl uncordon n2');
+    expect(r.err).not.toContain('Traceback');
+    expect(r.state).toEqual({ n1: false, n2: true }); // P open, S closed: exactly what the message fixes
+  });
+
+  it('reports an outage that starts before the first placement, with no traceback either', () => {
+    const r = go({ env: { FAKE_GET_NODE_FAIL_AFTER: '0' } });
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('driver error: CalledProcessError');
+    expect(r.err).toContain('Rest state to set by hand');
+    expect(r.err).not.toContain('Traceback');
+    expect(r.rows).toHaveLength(0);
+  });
+
+  it('makes 4 cordon writes per P window, which is what the runbook multiplies', () => {
+    const r = go({ rounds: '2' });
+    expect(r.code).toBe(0);
+    const writes = cordonCalls(r);
+    const windows = writes.filter((l) => l === 'uncordon n1').length; // P opens once per window
+    expect(windows).toBe(2);
+    expect(writes).toHaveLength(4 * windows);
+    // The runbook's totals follow from it: windows per block = rounds + warm-up rounds.
+    const rb = readFileSync(
+      join(ROOT, 'scripts/bench-cold-start-phases/ceiling/RUNBOOK.md'),
+      'utf8',
+    );
+    expect(rb).toContain('4 cordon writes each');
+    const perBlock = 30 + 2;
+    expect(rb).toContain(
+      `${2 * perBlock} P windows, 4 cordon writes each, ${4 * 2 * perBlock} writes`,
+    );
+    expect(rb).toMatch(/drive\.py 30/);
+    expect(rb).toContain('`2`\n   in place of `30`');
   });
 
   it('keeps the default all-pools mode unchanged', () => {

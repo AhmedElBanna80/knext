@@ -7,6 +7,11 @@ agent that wrote it had no cluster access, ran no kubectl, ssh or node command, 
 Every cluster step needs the founder's explicit go, and section 1 lists every approval it needs. The steps
 are for a human operator.
 
+**What this will probably show.** The runbook's own estimate is a P median first byte near 1090 ms (section
+10, H3), so the expected outcome is **a diagnosis and probably a floor near 1.09 s, not a shipped change**.
+That is why the run is staged: a two-block **screen** first (stock, then relist100; section 10 "Phase 1"),
+and the six-block run only if the screen shows the wait collapsing.
+
 Background: `docs/benchmarks/cold-start-node-diagnosis-oke-2026-11-02.md`. The question: is the kubelet's
 1 s PLEG relist the wait between the queue-proxy starting and the pod IP reaching the API, and what does the
 cold-start median look like when the relist is 100 ms on one worker?
@@ -23,30 +28,62 @@ cold-start median look like when the relist is 100 ms on one worker?
 - **The host log reader is a separate, founder-applied step** (section 12). Nothing here applies it.
 - **Claims marked "(from memory, verify)" have not been checked** against a running system. The kind
   rehearsal (section 3) is where they get checked, and it is a required step.
-- **Order of operations, once:** section 4 (preconditions and setup), section 5 (stage and fire-test), six
-  blocks of section 6, optionally section 11 (the CRI-O debug block), then section 8 (revert) **once at the
-  very end, or at once on any abort**, then section 13. Section 8 is the only revert; it covers everything
-  the earlier sections change on P.
+- **Order of operations. Phase 1, the screen:** section 4 (preconditions and setup), section 5 (stage and
+  fire-test), **two blocks of section 6 (`b2` stock, then `b3` relist100)**, section 8 (revert) once at the
+  end or at once on any abort, then section 13 (analysis). **Phase 2, the full run, only if the screen shows
+  the wait collapsing (section 10):** the six blocks of section 6, optionally section 11 (the CRI-O debug
+  block), then section 8 once at the very end or at once on any abort, then section 13. Phase 2 reuses
+  section 5's staging and fire test unless the node rebooted or `revert.sh` changed. Section 8 is the only
+  revert; it covers everything the earlier sections change on P. Section 14 is the founder-only cleanup.
 
 ## 1. Decisions, and every approval the run needs
 
 Record each in the run log (a file on the operator's workstation, not in the repo). A conversation message
 from an agent is not approval. The founder approved: one existing worker patched, the other the control, a
-host log reader on request. **Everything below is beyond that and needs its own approval:**
+host log reader on request. **Everything below is beyond that and needs its own approval.** It is split into
+what the **screen** (Phase 1, section 10) needs and what the **full run** (Phase 2) adds.
+
+### 1a. The screen (Phase 1): what the founder approves first
+
+Two blocks on P (`b2` stock, `b3` relist100), 30 pairs each; 64 P windows; 5 kubelet restarts; about
+2.9-3.4 h of cluster time.
 
 | # | Step | Why it needs its own approval |
 |---|---|---|
-| A1 | **Our own stock build runs on P** (blocks b2 and b5) | The patched build was approved. The stock build is a second binary, built by us, same toolchain and flags, no patch. Without it the OKE-versus-patched difference mixes the constant with the build |
+| A1 | **Our own stock build runs on P** (block b2) | The patched build was approved. The stock build is a second binary, built by us, same toolchain and flags, no patch. Without it the OKE-versus-patched difference mixes the constant with the build |
 | A2 | **The timed auto-revert, and its fire test** (a transient systemd timer; the fire test starts our stock kubelet on P and lets the timer revert it, section 5) | A unit that restarts the kubelet on its own, on a clock |
-| A3 | **Staging directory, volatile drop-in, and kubelet restarts on P** (`/var/lib/ceiling`, `/run/systemd/system/kubelet.service.d`; five block restarts, two for the fire test, one for the revert, per run) | Files on the node; the drop-in changes what systemd starts |
+| A3 | **Staging directory, volatile drop-in, and 5 kubelet restarts on P** (`/var/lib/ceiling`, `/run/systemd/system/kubelet.service.d`; two for the fire test, one each for b2 and b3, one for the revert) | Files on the node; the drop-in changes what systemd starts |
 | A4 | **An OCI serial console connection to P**, and the SSH path | A cloud resource, and a login route into the node |
-| A5 | **CRI-O debug logging on P**, final block only (section 11) | Changes P's runtime config; a drop-in under `/etc/crio` |
 | A6 | **The kind rehearsal cluster** (section 3) | Created on the workstation; deleting it is `kind delete`, founder-only |
-| A7 | The host log reader (section 12) | Refused once already; founder-applied only |
+| A7 | The host log reader (section 12), optional | Refused once already; founder-applied only |
 | A8 | **Creating the cluster objects:** NextApps `ceil-p` and `ceil-s`, the harness pod, the node-agent pods and the harness RBAC (section 4) | New objects in the bench namespace |
-| A9 | **Cordoning P for the whole run, about 4 hours or more** | The cluster has one schedulable worker (S) for that time, apart from P's own wake windows |
-| A10 | **Toggling S's cordon on every P wake, and P's on every wake** (about 90 times in the six blocks) | S was approved as untouched. Its binary is, but its schedulability flips for the length of each P wake, because **the NextApp has no field to pin a pod to a node** (see section 2). Avoiding it needs a node selector in the NextApp CRD and operator, a CRD change out of scope here |
-| A11 | **Repeating the whole run at least three times** for any pass claim (section 10) | Each run is about 4-5 hours, on fresh pods, at least 2 hours apart; A1-A10 apply to each |
+| A9 | **Cordoning P for the whole screen, about 2.9-3.4 h** | The cluster has one schedulable worker (S) for that time, apart from P's own wake windows |
+| A10 | **Toggling S's and P's cordon around every P wake: 64 P windows, 4 cordon writes each, 256 writes** | S was approved as untouched. Its binary is, but its schedulability flips for the length of each P wake, because **the NextApp has no field to pin a pod to a node** (see section 2). Avoiding it needs a node selector in the NextApp CRD and operator, a CRD change out of scope here |
+| A12 | **The founder personally runs the SSH steps throughout** (sections 5, 6 steps 2-4 and 7, 8 and 9) | Kubelet restarts, hashes and metric reads on P are done by hand by the founder for the whole window |
+| A13 | **A cluster-wide freeze of other work for the whole window** | During a P window S is cordoned, so any pod scheduled anywhere lands on P, and the run aborts on it (`--abort-on-foreign`). No deploys, scale-ups or cron jobs for the duration |
+| A14 | **Founder-only cleanup afterwards** (section 14) | The runbook lists it and runs no delete |
+
+**Risks accepted, stated so the approval is informed:**
+- The 100 ms relist costs about ten times the kubelet CPU: about 25% of a core instead of 2.5%, on a node that
+  also runs its existing pods.
+- The harness pod runs as root (its image's default user) and sleeps for 48 hours before it exits.
+- If the workstation dies in the middle of a P window, **P stays open and S stays closed until a human fixes
+  them** (section 6 step 6); the next start refuses until they are right.
+- The expected result is a diagnosis and probably a floor near 1.09 s, not a shipped change.
+
+### 1b. The full run (Phase 2) adds, only if the screen shows the wait collapsing
+
+Six blocks on P (`b1` ... `b6`), plus the optional CRI-O block (`b7`): 192 P windows, 8 kubelet restarts, about
+9-11 h.
+
+| # | Step | What it adds |
+|---|---|---|
+| A1 | Our stock build also runs in block b5 | The ABBA order needs the stock build twice |
+| A3 | 8 kubelet restarts in total | Three more: b4, b5, b6 |
+| A5 | **CRI-O debug logging on P**, final block only (section 11) | Changes P's runtime config; a drop-in under `/etc/crio` |
+| A9 | **Cordoning P for about 9-11 h** (six blocks, fire test, CRI-O block, revert) | The same cordon, three times as long |
+| A10 | **224 P windows, 896 cordon writes**: 6 blocks x 32 windows = 192 (768 writes) plus 32 for the CRI-O block (128 writes) | Every window is 4 cordon writes |
+| A11 | **Repeats, conditional on `RELIST_IS_WAIT_GOAL_MET_ONCE`:** at least three independent runs for any pass claim (section 10) | The runbook itself predicts about 1090 ms, so repeats are not expected. If a run does print it: three full runs plus two 2-hour gaps are 31-36 h, three screen-size runs 13-14 h; fresh pods each time; A1-A14 apply to each |
 
 ## 2. Design, node roles, and what a kubelet restart does
 
@@ -58,7 +95,8 @@ host log reader on request. **Everything below is beyond that and needs its own 
   four); an ABAB order would leave one block's worth of drift in it, which the carryover check could miss
   (about 330 ms of drift would pass it at 30 pairs, against an effect of about 450 ms). **Every block starts
   with a kubelet restart, including `b4` (the same binary again)**, so each block is equally "freshly
-  restarted"; only `b1` follows no restart.
+  restarted"; `b1` follows the fire test's revert restart instead, with a 10-minute settle (section 6
+  step 2).
 - **S** stays on its OKE binary, untouched, with no debug logging, in every block. It is the concurrent drift
   control. A pair is one wake on P and one on S in the same round, **back to back** (the driver wakes the two
   arms serially, with no wait between them, and waits for zero pods only at the start of a round).
@@ -72,8 +110,8 @@ host log reader on request. **Everything below is beyond that and needs its own 
   finds no agent on the node, which would put raw clock skew into P's wait against a 150 ms limit. **The
   analyzer therefore treats a row with no offset, or with a round trip over 50 ms, as unusable and counts
   it, and prints the median and max round trip per arm.**
-- **Placement.** The harness pod runs on **S**, not P: P's kubelet is restarted five times and a harness on
-  it would be disturbed. `ceiling-setup.example.yaml` pins it to S by `nodeName` (which also bypasses the
+- **Placement.** The harness pod runs on **S**, not P: P's kubelet is restarted several times (five in the screen, eight in
+  the full run) and a harness on it would be disturbed. `ceiling-setup.example.yaml` pins it to S by `nodeName` (which also bypasses the
   cordon); confirm with `kubectl get pod ceil-harness -o wide`. If it is on P, **stop**: moving it needs a
   delete, which is founder-only. **Network asymmetry, stated:** harness-to-pod traffic is same-node for S
   wakes and cross-node for P wakes, so first byte carries a small constant offset between arms. It is the
@@ -157,7 +195,7 @@ No cluster step runs before this is done and recorded. Nothing in this section h
 
 ## 4. Preconditions and setup
 
-1. Section 1 approvals (A1-A11) and the rehearsal (section 3) recorded, with dates.
+1. Section 1 approvals (A1-A14, the 1a list for the screen) and the rehearsal (section 3) recorded, with dates.
 2. Builds exist and match. From the build output directory:
    ```
    shasum -a 256 -c SHA256SUMS
@@ -227,12 +265,16 @@ No cluster step runs before this is done and recorded. Nothing in this section h
    ```
    Any difference beyond the relist constant (CGO, flags, `-X` values, a vendor patch) is named as a confound
    in the result. The `oke` blocks and the `stock` blocks exist to measure it.
-10. Record the start time. Six blocks need about 4-5 hours of cluster time, plus the restarts.
+10. Record the start time. Cluster time, from the arithmetic in section 6 step 6: **the screen about 2.9-3.4 h**,
+    the full run (six blocks, fire test, CRI-O block, revert) **about 9-11 h**.
 
 ## 5. On P: variables, staging, the revert script, the timer and its fire test (founder-run, over SSH)
 
-Run the whole section in one shell on P. Define the variables and helpers first; every later command uses
-them.
+**Cordon P first**, from the workstation: `kubectl cordon <P>` (verify `SchedulingDisabled`; no drain). P then
+takes no new work while it runs our binaries.
+
+Commands in the code blocks below run **on P** unless marked `# workstation`: a worker may have no kubectl.
+Define the variables and helpers in one shell on P first; every later command on P uses them.
 
 ```
 sudo systemctl cat kubelet                        # the whole unit including drop-ins; read it
@@ -255,13 +297,11 @@ bytes are not `ELF`); `ExecStart` runs more than one command; an existing drop-i
 reset overrides, see section 3); `findmnt -T /var/lib -o OPTIONS` shows `noexec`; the unit uses a
 `ExecStartPre` that touches the binary path.
 
-**SELinux, for the binaries and for the revert script.** `getenforce`. If it prints `Enforcing`, the staged
-files must be executable by systemd under the node's policy: compare `ls -Z "$KP" /var/lib/ceiling/*` and
-make each staged binary match `$KP` with `sudo chcon --reference="$KP" <file>` (`restorecon` would keep
-`var_lib_t`, which an enforcing node may refuse to exec). The revert script is never exec'd directly: the
-timer runs it as **`/bin/sh /var/lib/ceiling/revert.sh`**, so only `/bin/sh` needs to be executable and the
-script only readable. Whether that holds on the real node is proved by the fire test below, not assumed. If
-it fails, look for the denial (`sudo ausearch -m avc -ts recent`), stop, and report.
+**SELinux, for the binaries and for the revert script** (the labelling step comes after staging, below).
+`getenforce` first. The revert script is never exec'd directly: the timer runs it as
+**`/bin/sh /var/lib/ceiling/revert.sh`**, so only `/bin/sh` needs to be executable and the script only
+readable. Whether that holds on the real node is proved by the fire test below, not assumed. If it fails,
+look for the denial (`sudo ausearch -m avc -ts recent`), stop, and report.
 
 Stage (copy by the founder's approved means; the sums are the control):
 ```
@@ -270,6 +310,11 @@ sudo install -m 0755 <stock file>     /var/lib/ceiling/kubelet-stock
 sudo install -m 0755 <relist100 file> /var/lib/ceiling/kubelet-relist100
 sudo sha256sum /var/lib/ceiling/kubelet-stock /var/lib/ceiling/kubelet-relist100   # equal the SHA256SUMS values
 ```
+**Then label them, if SELinux is `Enforcing`.** The staged binaries must be executable by systemd under the
+node's policy. `install` gives a new file the directory's default label, so it would reset a label set
+earlier: **label after staging, and again after any re-stage.** Compare `ls -Z "$KP" /var/lib/ceiling/*`, then
+make each staged binary match `$KP` with `sudo chcon --reference="$KP" <file>` (`restorecon` would keep
+`var_lib_t`, which an enforcing node may refuse to exec) and confirm with `ls -Z` again.
 **No file at `$KP` is ever overwritten.** The test binaries live under `/var/lib/ceiling`, and a block is
 selected by a **volatile drop-in under `/run`**, which is memory. This avoids two traps: `cp` over a running
 binary fails with ETXTBSY, and a replaced `$KP` would survive a reboot as a bad binary. Here a reboot, or
@@ -305,29 +350,53 @@ sudo chmod 0600 /var/lib/ceiling/revert.sh
 **Timed auto-revert (A2), armed before the first swap and re-armed at the start of every block.** If the
 operator or the workstation vanishes, P returns to the OKE binary by itself:
 ```
-sudo systemctl stop ceiling-revert.timer 2>/dev/null || true
-sudo systemd-run --unit=ceiling-revert --on-active=60m /bin/sh /var/lib/ceiling/revert.sh
+sudo systemctl stop ceiling-revert.timer ceiling-revert.service 2>/dev/null || true
+sudo systemd-run --unit=ceiling-revert --on-active=150m --timer-property=AccuracySec=1s /bin/sh /var/lib/ceiling/revert.sh
 systemctl list-timers ceiling-revert.timer
 ```
-A block is about 35 minutes, so 60 minutes covers a block plus its checks. The timer is transient (memory), so
-it does not survive a reboot, and does not need to for the kubelet (the `/run` drop-in does not either); the
-CRI-O drop-in is the exception, handled in section 9. **If the timer fires during a block, the rest of that
-block ran on the OKE kubelet.** Check `systemctl list-timers` and `exe_sum` at the end of every block; a
-block where it fired is discarded.
+The first line stops an elapsed timer that may still be loaded under the same name. `AccuracySec=1s` is set
+because systemd's default accuracy window is 1 minute (from memory), which lets a timer fire late.
 
-**Fire test: the net is proved before anything relies on it. Do not start block 1 without it.**
-1. Write the **stock** drop-in, `sudo systemctl daemon-reload`, `sudo systemctl restart kubelet`,
-   `kubectl wait --for=condition=Ready node/<P> --timeout=120s`. `exe_sum` must equal the stock sum and
-   `args_sum` must equal `$OKE_ARGS`. (This is also the first time our stock build runs on the node.)
-2. Fire the timer on a short delay, through the same explicit interpreter:
+**Why 150 minutes.** The timer must outlast the longest stretch between a re-arm and the end of the block's
+checks, or it fires in the middle of the block and the rest of it runs on the OKE kubelet (and section 7
+aborts). That stretch is, worst case: 17 minutes of restart, metric reads, 5-minute settle, 2 warm-up rounds
+and after-block checks, plus 30 rounds at 2.4 minutes (72 minutes) = **89 minutes**. A round is the zero-pod
+wait (median 84-92 s in the 2026-11-02 stability study), the 10 s settle and two wakes, 1.9-2.4 minutes. 150
+minutes is a margin of 1.7x. The price is that, with the operator gone, P can stay on a test kubelet for up to
+150 minutes. The timer is transient (memory), so it does not survive a reboot, and does not need to for the
+kubelet (the `/run` drop-in does not either); the CRI-O drop-in is the exception, handled in section 9.
+**If the timer fires during a block, the rest of that block ran on the OKE kubelet.** Check
+`systemctl list-timers` and `exe_sum` at the end of every block; a block where it fired is discarded.
+
+**Fire test: the net is proved before anything relies on it. Do not start block 1 without it** (in the
+screen: before `b2`).
+1. Write the **stock** drop-in, then restart:
    ```
-   sudo systemd-run --unit=ceiling-revert-test --on-active=30s /bin/sh /var/lib/ceiling/revert.sh
-   sleep 75
+   sudo systemctl daemon-reload
+   sudo systemctl restart kubelet
+   ```
+   ```
+   # workstation
+   kubectl wait --for=condition=Ready node/<P> --timeout=120s
+   ```
+   On P, `exe_sum` must equal the stock sum and `args_sum` must equal `$OKE_ARGS`. (This is also the first
+   time our stock build runs on the node.)
+2. Fire the timer on a short delay, through the same explicit interpreter, and **poll** for the effect rather
+   than sleeping a fixed time:
+   ```
+   sudo systemctl stop ceiling-revert-test.timer ceiling-revert-test.service 2>/dev/null || true
+   sudo systemd-run --unit=ceiling-revert-test --on-active=30s --timer-property=AccuracySec=1s /bin/sh /var/lib/ceiling/revert.sh
+   for i in $(seq 1 24); do test ! -e /run/systemd/system/kubelet.service.d/99-ceiling.conf && break; sleep 5; done
+   sleep 20
    sudo journalctl -u ceiling-revert-test.service --no-pager | tail -n 5
    test ! -e /run/systemd/system/kubelet.service.d/99-ceiling.conf && echo drop-in-gone
    exe_sum; args_sum
+   ```
+   ```
+   # workstation
    kubectl wait --for=condition=Ready node/<P> --timeout=120s
    ```
+   The first line stops an elapsed test timer that may still be loaded from an earlier try.
 3. **The proof is the effect, not the unit's state** (a successful transient service is collected): the
    drop-in is gone, `exe_sum` equals `$OKE_EXE`, `args_sum` equals `$OKE_ARGS`, and P is Ready. **If any of
    these is not so, stop the run**: run `sudo /bin/sh /var/lib/ceiling/revert.sh` by hand, confirm the same
@@ -335,14 +404,18 @@ block where it fired is discarded.
 
 ## 6. The block loop (founder-run on P; the workstation runs the harness)
 
-Before block 1: the founder cordons P (`kubectl cordon <P>`; verify `SchedulingDisabled`). Do not drain.
+P was cordoned at the start of section 5 and stays cordoned (no drain).
+
+**Phase 1, the screen, runs only `b2` (stock) and then `b3` (relist100)**, writing to `ceiling-screen.jsonl`.
+**Phase 2 runs all six**, writing to `ceiling-rows.jsonl`. The two phases never share a file.
 
 For each block `bK` with its kubelet `X`, in this order: `b1` oke, `b2` stock, `b3` relist100, `b4`
 relist100, `b5` stock, `b6` oke:
 
 1. **Re-arm the auto-revert** (section 5).
 2. **Select X and restart, in every block but `b1`** (`b4` restarts onto the same binary as `b3`, so each
-   block is freshly restarted). `oke`: remove the drop-in if present. `stock`/`relist100`: write it. Then
+   block is freshly restarted). **`b1` follows the fire test's revert restart instead: wait 10 minutes after
+   that revert before its checks.** `oke`: remove the drop-in if present. `stock`/`relist100`: write it. Then
    ```
    sudo systemctl daemon-reload
    sudo systemctl restart kubelet
@@ -359,7 +432,9 @@ relist100, `b5` stock, `b6` oke:
    ```
    mean = (sum2 - sum1) / (count2 - count1). Pass: `oke` and `stock` about 1.00 s; `relist100` between 0.095
    and 0.110 s. Do the same for S: about 1.00 s. A mismatch is an abort.
-5. **Settle 5 minutes** after the restart, then two unrecorded warm-up wakes (a throwaway output file).
+5. **Settle 5 minutes** after the restart, then **two unrecorded warm-up rounds**: the step 6 command with `2`
+   in place of `30`, the output file `ceiling-warmup.jsonl` and `--block=warmup`. Each is a P window, counted
+   in section 1.
 6. **Run the block** from the workstation, 30 rounds, with the block label. `<P node>` and `<S node>` are node
    names; `<P pool>` is the value of the `kubernetes.io/hostname` label on P (the same as the node name on
    many clusters, but check):
@@ -370,10 +445,13 @@ relist100, `b5` stock, `b6` oke:
      --expect-state='<P node>:cordoned,<S node>:open' \
      --abort-on-foreign='<P pool>' --abort-failed-fraction=0.10 --block=b1
    ```
-   `--block=b1` for the first block, then `--block=b2` ... `--block=b6`. All blocks append to the **same**
-   file. Check the first two rows: `node` equals P for `ceil-p@...` and S for `ceil-s@...`, and the arm
-   strings are the ones passed to the analyzer. Do not continue if they differ. The wakes take about 35
-   minutes. **The driver exits non-zero, and says why, on:** a cordon changed by someone else, a refused
+   `--block=b1` for the first block, then `--block=b2` ... `--block=b6` (the screen uses `--block=b2` then
+   `--block=b3` and the file `ceiling-screen.jsonl`). All blocks of a phase append to the **same** file. Check the first two rows: `node` equals P for `ceil-p@...` and S for `ceil-s@...`, and the arm
+   strings are the ones passed to the analyzer. Do not continue if they differ. **Timing:** a round is the
+   zero-pod wait (median 84-92 s), the 10 s settle and two wakes, 1.9-2.4 minutes, so 30 rounds are
+   57-72 minutes; with 17 minutes of restart, metric reads, settle, warm-up and checks a block is 74-89
+   minutes. Screen: 15 (fire test) + 2 blocks + 10 (revert) = 173-203 minutes = 2.9-3.4 h. Full run: 15 + 6
+   blocks + 1 CRI-O block + 10 = 543-648 minutes = 9-11 h. **The driver exits non-zero, and says why, on:** a cordon changed by someone else, a refused
    cordon, a foreign pod on P (`FOREIGN POD on pool ...`), failed wakes past 10% of the planned ones
    (`stopping: N failed wakes of M planned`, observable mid-run), a held lock, or an unexpected rest state.
    **Treat every non-zero exit as a stop.** Run `kubectl get nodes -o custom-columns=NAME:.metadata.name,UNSCHEDULABLE:.spec.unschedulable`
@@ -439,6 +517,16 @@ Do not delete the node, the pod or the namespace. Do not use `kubectl debug node
 
 Fixed before any data. Do not revise after the run.
 
+**Phase 1, the screen (pre-registered first).** Two blocks on P, 30 pairs each, stock then relist100 (`b2`,
+`b3`): about 3 hours, 64 P windows, 5 kubelet restarts. Analyze with `--blocks=b2:stock,b3:relist100`. The
+reading is the table below, with one block per treatment: no carryover row, no mixed row, and the 1 s lock is
+judged at alpha / 1. **What it cannot separate:** order (stock always runs first, so a drift or a restart
+effect between the blocks lands in the contrast) and the build (no OKE block, so it says nothing about whether
+OKE's own kubelet differs from our stock build). **Decision rule:** go on to the full run only if the screen's
+verdict is `WAIT_REMOVED_LOCK_UNSEEN`, `RELIST_IS_WAIT_GOAL_MET_ONCE` or `RELIST_IS_WAIT_FLOOR` (the wait
+collapsed). Anything else is the answer: report it, revert, stop. The full run exists to separate order and
+build effects from the constant, and is worth 9-11 hours only if there is a wait to attribute.
+
 **Hypotheses.**
 - **H1 (baseline lock).** On P under the stock build, in every stock block, the 1 s cycle lock is present:
   the Rayleigh statistic in the 1 s band exceeds the 95th percentile of its per-group shuffled null with
@@ -466,9 +554,11 @@ Fixed before any data. Do not revise after the run.
 - **One run cannot pass.** First-byte medians vary between 1276 and 1806 ms from run to run with no change
   at all. The analyzer has no PASS verdict: the best it prints is `RELIST_IS_WAIT_GOAL_MET_ONCE`. A pass
   claim needs the goal criterion met in at least three independent runs, each on fresh pods and at least
-  two hours apart (A11).
+  two hours apart. **Repeats are conditional on `RELIST_IS_WAIT_GOAL_MET_ONCE`** (A11): the runbook's own
+  estimate is about 1090 ms, so a first run printing it is not expected and repeats are not planned.
 
-**Sample.** 6 blocks x 30 pairs = 360 wakes; 60 pairs per stock and per relist100 treatment, 60 for oke.
+**Sample.** Screen: 2 blocks x 30 pairs = 120 wakes. Full run: 6 blocks x 30 pairs = 360 wakes; 60 pairs per
+stock and per relist100 treatment, 60 for oke.
 Gate: every block needs at least 24 complete pairs and at most 10% unusable wakes (error rows, no node, no
 first byte or IP, no logs, no clock offset or one with a round trip over 50 ms are skipped and counted, not
 fatal). The 10% limit is checked on a partial file too, before the missing-block check. Intervals are
@@ -495,6 +585,12 @@ persists). They are one row now (row 2), and the precedence is this order.
 | 10 | `RELIST_IS_WAIT_GOAL_MET_ONCE` | row 9's conditions plus a 100 ms lock, and the goal criterion met | **Goal met once.** Not a pass (needs three independent runs). Founder decides on a custom node image, an upstream push, or the early announcer |
 | 11 | `RELIST_IS_WAIT_FLOOR` | row 9's conditions plus a 100 ms lock, goal criterion not met | **Floor.** The relist is the wait; removing it does not reach the goal on OKE |
 
+**`WAIT_REMOVED_LOCK_UNSEEN` may be the best verdict reachable, and the wait is the primary signal.** A
+simulation of the lock test during review found a 100 ms lock in 0 of 12 runs at 1 ms of per-cycle jitter and
+in 9 of 12 at 0.5 ms (reported to this change, not reproduced here). Row 9 is therefore a likely outcome even
+when the relist is the wait; it is not a failure. The goal is judged on the wait and the first byte, not on the
+lock.
+
 Any valid result that does not meet the goal is reported as a **floor**, not as a shipped default; a
 non-pass reads as a floor. Nothing here changes what ships.
 
@@ -511,7 +607,8 @@ including 0 is **not resolved at this n** and cannot show the shares are equal.
 - Drift: a linear drift on P alone cancels in the ABBA stock-versus-relist100 contrast; a non-linear one does
   not, and the blocks are fixed effects in the intervals (above).
 - Harness placement: same-node for S, cross-node for P (section 2).
-- Restarts: `b1` follows no restart; the others follow one. Carryover compares same-treatment blocks.
+- Restarts: every block follows a restart (`b1` follows the fire test's revert, after a 10-minute settle).
+  Carryover compares same-treatment blocks.
 - Cordon-only: P keeps its existing pods, and takes any new pod scheduled during a P wake window.
 - Timestamps: `pod_ip` is the harness's clock and the queue-proxy log is the node's clock re-based by the
   measured offset (section 2); the offset's error bound is half its round trip, not subtracted.
@@ -551,7 +648,12 @@ sudo sha256sum /proc/$(systemctl show -p MainPID --value kubelet)/exe
 ## 13. After the run
 
 1. Section 8 done: P and S Ready, P's exe hash the original, cordons as recorded, CRI-O back.
-2. Analyze the six blocks:
+2. Analyze. **Phase 1, the screen:**
+   ```
+   python3 scripts/bench-cold-start-phases/ceiling/lattice_analyze.py ceiling-screen.jsonl --blocks=b2:stock,b3:relist100 \
+     --p-arm='ceil-p@<P pool>' --s-arm='ceil-s@<S pool>' --perms=100 --boot=2000
+   ```
+   Apply the section 10 decision rule. **Phase 2, the six blocks:**
    ```
    python3 scripts/bench-cold-start-phases/ceiling/lattice_analyze.py ceiling-rows.jsonl \
      --p-arm='ceil-p@<P pool>' --s-arm='ceil-s@<S pool>' --perms=100 --boot=2000
@@ -562,7 +664,23 @@ sudo sha256sum /proc/$(systemctl show -p MainPID --value kubelet)/exe
    the build and carryover lines, the clock round trips, and the descriptive p95 with its caveat. Report a
    missed goal as a floor.
 
-## 14. What only a real node can answer (unverified)
+## 14. Cleanup (founder-only deletes; nothing in this runbook runs one)
+
+After the analysis, and only when the founder decides. This section **lists** what was created; it deletes
+nothing.
+- **Cluster objects from section 4 (A8):** the NextApps `ceil-p` and `ceil-s`, the pod `ceil-harness`, the
+  node-agent pods, and the harness ServiceAccount, Role and RoleBinding in `<NS>`. Removing them is a
+  founder-only delete. Until then the harness pod runs as root and sleeps for 48 hours before it exits on its
+  own; the agents have no expiry and answer a clock request on port 8080.
+- **Files on P:** the contents of `/var/lib/ceiling` (named-file removals, not a cluster delete). The kubelet
+  drop-in under `/run` and the CRI-O drop-in are already gone after section 8.
+- **The OCI serial console connection (A4):** removed in the OCI console.
+- **The kind rehearsal cluster (A6):** a founder-only `kind delete`.
+- **Cordons:** P and S are back to the recorded state (section 8 step 5); nothing to do.
+- **Keep:** the run log, `ceiling-screen.jsonl`, `ceiling-rows.jsonl`, `ceiling-warmup.jsonl` and
+  `ceiling-b7-debug.jsonl` on the workstation.
+
+## 15. What only a real node can answer (unverified)
 
 - Whether the CGO-off kubelet starts and behaves on OKE at all (also first checked on kind).
 - Whether the OKE kubelet is a plain upstream build, and whether the volatile drop-in, SELinux labels and the

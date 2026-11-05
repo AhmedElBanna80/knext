@@ -88,7 +88,14 @@ const DESIGN: [string, string][] = [
   ['b6', 'oke'],
 ];
 const T0 = 1_800_000_000;
-const BLOCK_S = 1900; // 30 rounds of 60 s, plus the kubelet restart
+// Timing the runbook states (and the tests below check it against the runbook): a round is the zero-pod
+// wait (median 84-92 s), the 10 s settle and two wakes, 1.9-2.4 minutes; a block is 30 rounds plus 17
+// minutes of restart, metric reads, settle, warm-up and checks.
+const ROUND_MIN = 1.9;
+const ROUND_MAX = 2.4;
+const OVERHEAD_MIN = 17;
+const ROUND_S = 115;
+const BLOCK_S = 30 * ROUND_S + OVERHEAD_MIN * 60;
 // Periods chosen off any round-number grid.
 const STOCK_LAT: Lat = { kind: 'lattice', period: 1.003571, sigmaMs: 5 };
 const R100_LAT: Lat = { kind: 'lattice', period: 0.103371, sigmaMs: 5 };
@@ -119,8 +126,8 @@ function generate(scn: Scn): Row[] {
     const phaseP = next();
     for (const arm of ['p', 's'] as const) {
       for (let r = 1; r <= pairs; r++) {
-        const base = bi * BLOCK_S + (r - 1) * 60 + (arm === 's' ? 30 : 0);
-        const wall = base + next() * 3;
+        const base = bi * BLOCK_S + (r - 1) * ROUND_S + (arm === 's' ? 15 : 0);
+        const wall = base + next() * 30; // zero-pod waits vary by tens of seconds: regular spacing would alias
         const qp0 = scn.qp0(treat) + (next() - 0.5) * 40;
         const lat = arm === 'p' ? scn.P(treat, block) : scn.S;
         const ready = wall + qp0 / 1000;
@@ -212,7 +219,7 @@ define(
   'smallMove', // the wait moved a little, within noise: the median is below 0, its interval is not
   generate({
     ...EFFECT,
-    P: (t) => (t === 'relist100' ? { kind: 'free', widthS: 0.8 } : STOCK_LAT),
+    P: (t) => (t === 'relist100' ? { kind: 'free', widthS: 0.9 } : STOCK_LAT),
   }),
 );
 define(
@@ -222,6 +229,18 @@ define(
     qp0: () => 300,
     P: (t, b) => (t === 'relist100' ? (b === 'b4' ? STOCK_LAT : R100_LAT) : STOCK_LAT),
   }),
+);
+define(
+  'screen', // the two-block screen: stock then relist100, no oke block, no repeats
+  generate({
+    ...EFFECT,
+    qp0: () => 700,
+    design: [
+      ['b2', 'stock'],
+      ['b3', 'relist100'],
+    ],
+  }),
+  ['--blocks=b2:stock,b3:relist100'],
 );
 define(
   'partial', // the wait moved down but is still about 250 ms: part of it is not the relist
@@ -253,8 +272,8 @@ define(
           ...r,
           watch: {
             ...(r.watch as Row),
-            pod_ip: (r.watch as { pod_ip: number }).pod_ip + 400,
-            first_byte: (r.watch as { first_byte: number }).first_byte + 400,
+            pod_ip: (r.watch as { pod_ip: number }).pod_ip + 800,
+            first_byte: (r.watch as { first_byte: number }).first_byte + 800,
           },
         }
       : r,
@@ -343,7 +362,8 @@ beforeAll(async () => {
 }, 240_000);
 
 afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
+  // CEILING_KEEP_DIR=1 keeps the generated runs for debugging.
+  if (!process.env.CEILING_KEEP_DIR) rmSync(dir, { recursive: true, force: true });
 });
 
 const verdict = (r: Run) => r.out.match(/^VERDICT: (\w+)$/m)?.[1];
@@ -442,6 +462,23 @@ describe('the verdict follows the reading table, not the median alone', () => {
       );
       expect(r.out).not.toContain('met in this run');
     }
+  });
+
+  it('the verdict section counts the relist100 blocks that are locked, in words that match the verdict', () => {
+    expect(results.effect.out).toContain('relist100 blocks 0 of 2 locked at 1 s');
+    expect(results.mixedLock.out).toContain('relist100 blocks 1 of 2 locked at 1 s');
+    expect(results.noEffect.out).toContain('relist100 blocks 2 of 2 locked at 1 s');
+    expect(results.mixedLock.out).not.toContain('none locked');
+    expect(results.noEffect.out).not.toContain('locked in some');
+  });
+
+  it('a two-block screen (stock then relist100) is analysed on its own, without carryover or build lines', () => {
+    const r = results.screen;
+    expect(r.code).toBe(0);
+    expect(verdict(r)).toBe('RELIST_IS_WAIT_GOAL_MET_ONCE');
+    expect(r.out).not.toContain('carryover');
+    expect(r.out).not.toContain('build effect');
+    expect(r.out).toContain('relist100 blocks 0 of 1 locked at 1 s (each at alpha / 1)');
   });
 
   it('one relist100 block with the 1 s lock back is INCONCLUSIVE_LOCK_MIXED, not a condemned binary', () => {
@@ -832,10 +869,15 @@ describe('the runbook states the procedure the harness, the analyzer and the bui
 
   it('arms the timer through an explicit interpreter, and fire-tests it before block 1', () => {
     expect(rb).toMatch(
-      /systemd-run --unit=ceiling-revert --on-active=\d+m \/bin\/sh \/var\/lib\/ceiling\/revert\.sh/,
+      /systemd-run --unit=ceiling-revert --on-active=\d+m --timer-property=AccuracySec=1s \/bin\/sh \/var\/lib\/ceiling\/revert\.sh/,
     );
     expect(rb).toMatch(
-      /systemd-run --unit=ceiling-revert-test --on-active=\d+s \/bin\/sh \/var\/lib\/ceiling\/revert\.sh/,
+      /systemd-run --unit=ceiling-revert-test --on-active=\d+s --timer-property=AccuracySec=1s \/bin\/sh \/var\/lib\/ceiling\/revert\.sh/,
+    );
+    // an elapsed timer can stay loaded under its name: both are stopped before they are re-created
+    expect(rb).toContain('sudo systemctl stop ceiling-revert.timer ceiling-revert.service');
+    expect(rb).toContain(
+      'sudo systemctl stop ceiling-revert-test.timer ceiling-revert-test.service',
     );
     expect(rb).toContain('Do not start block 1 without it');
     expect(rb).toContain('The run does not start on an untested net.');
@@ -882,15 +924,133 @@ describe('the runbook states the procedure the harness, the analyzer and the bui
   });
 
   it('lists every approval beyond one patched worker, including the cordon toggles and the repeat runs', () => {
-    for (const a of ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11'])
-      expect(rb).toContain(`| ${a} |`);
+    for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])
+      expect(rb).toContain(`| A${n} |`);
     expect(rb).toContain('no field to pin a pod to a node');
-    expect(rb).toContain('Repeating the whole run at least three times');
+    expect(rb).toContain('Repeats, conditional on `RELIST_IS_WAIT_GOAL_MET_ONCE`');
+    expect(rb).toContain('The founder personally runs the SSH steps throughout');
+    expect(rb).toContain('A cluster-wide freeze of other work');
+    expect(rb).toContain('Founder-only cleanup afterwards');
+  });
+
+  it('splits the approvals: what the screen needs, what the full run adds', () => {
+    const a1 = rb.indexOf('### 1a. The screen');
+    const a2 = rb.indexOf('### 1b. The full run');
+    const sec2 = rb.indexOf('## 2. Design');
+    expect(a1).toBeGreaterThan(0);
+    expect(a2).toBeGreaterThan(a1);
+    expect(sec2).toBeGreaterThan(a2);
+    const screen = rb.slice(a1, a2);
+    const full = rb.slice(a2, sec2);
+    for (const n of [1, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14]) expect(screen).toContain(`| A${n} |`);
+    expect(screen).not.toContain('| A5 |'); // CRI-O debug is the full run's
+    expect(screen).not.toContain('| A11 |'); // repeats are conditional, and the full run's
+    for (const n of [5, 11]) expect(full).toContain(`| A${n} |`);
+    expect(screen).toContain('Risks accepted');
+    for (const risk of [
+      '25% of a core',
+      'runs as root',
+      '48 hours',
+      'P stays open and S stays closed',
+    ])
+      expect(screen).toContain(risk);
+  });
+
+  it('puts the screen first, with its decision rule, and says what it cannot separate', () => {
+    expect(rb).toContain('**Phase 1, the screen (pre-registered first).**');
+    expect(rb).toContain('--blocks=b2:stock,b3:relist100');
+    expect(rb).toContain('ceiling-screen.jsonl');
+    expect(rb).toContain('go on to the full run only if');
+    expect(rb).toMatch(/cannot separate:\*\* order[\s\S]*build/);
+    expect(rb).toContain('a diagnosis and probably a floor near 1.09 s, not a shipped change');
+  });
+
+  it('says WAIT_REMOVED_LOCK_UNSEEN may be the best reachable verdict, and the wait is primary', () => {
+    expect(rb).toContain('`WAIT_REMOVED_LOCK_UNSEEN` may be the best verdict reachable');
+    expect(rb).toContain('0 of 12 runs at 1 ms');
+    expect(rb).toContain('9 of 12 at 0.5 ms');
+  });
+
+  it('has a cleanup section that lists the founder-only deletes and runs none', () => {
+    const i = rb.indexOf('## 14. Cleanup');
+    expect(i).toBeGreaterThan(0);
+    const sec = rb.slice(i, rb.indexOf('## 15.'));
+    for (const o of [
+      'ceil-p',
+      'ceil-s',
+      'ceil-harness',
+      'node-agent pods',
+      'RoleBinding',
+      'kind delete',
+    ])
+      expect(sec).toContain(o);
+    expect(sec).toContain('deletes\nnothing');
+  });
+
+  it('runs kubectl from the workstation, not from P, and labels staged binaries after staging them', () => {
+    const s5 = rb.slice(rb.indexOf('## 5. On P'), rb.indexOf('## 6. The block loop'));
+    const fences = [...s5.matchAll(/```\n([\s\S]*?)```/g)].map((m) => m[1]);
+    const withKubectl = fences.filter((f) => /\bkubectl\b/.test(f));
+    expect(withKubectl.length).toBeGreaterThan(0);
+    for (const f of withKubectl) expect(f.trimStart().startsWith('# workstation')).toBe(true);
+    expect(s5.indexOf('sudo install -m 0755 <stock file>')).toBeLessThan(
+      s5.indexOf('chcon --reference="$KP" <file>'),
+    );
+    expect(s5).toContain('label after staging');
+  });
+
+  it('the cordon-write and window counts in the runbook are the ones the driver makes', () => {
+    // 4 cordon writes per P window is measured against drive.py in the harness test; the totals follow.
+    const W = 4;
+    const rounds = 30;
+    const warm = 2;
+    const perBlock = rounds + warm;
+    const screen = 2 * perBlock;
+    const six = 6 * perBlock;
+    const total = six + perBlock;
+    expect(rb).toContain(`${screen} P windows, 4 cordon writes each, ${W * screen} writes`);
+    expect(rb).toContain(`${six} P windows, 8 kubelet restarts`);
+    expect(rb).toContain(
+      `**${total} P windows, ${W * total} cordon writes**: 6 blocks x ${perBlock} windows = ${six} (${W * six} writes) plus ${perBlock} for the CRI-O block (${W * perBlock} writes)`,
+    );
+    expect(rb).toContain(`${screen} P windows; 5 kubelet restarts`);
+  });
+
+  it('the timer outlasts the longest re-arm-to-end stretch with a stated margin, and the hours add up', () => {
+    const worst = OVERHEAD_MIN + 30 * ROUND_MAX; // 89 minutes
+    const minutes = Number(rb.match(/--unit=ceiling-revert --on-active=(\d+)m/)?.[1] ?? Number.NaN);
+    expect(minutes).toBeGreaterThanOrEqual(1.5 * worst);
+    expect(rb).toContain(`**${Math.round(worst)} minutes**`);
+    expect(rb).toContain('1.9-2.4 minutes');
+    expect(rb).toContain('84-92 s');
+    // the generator's spacing sits inside the runbook's per-round range
+    expect(ROUND_S / 60).toBeGreaterThanOrEqual(ROUND_MIN);
+    expect(ROUND_S / 60).toBeLessThanOrEqual(ROUND_MAX);
+    // hours: fire test 15 + blocks + revert 10; full adds the CRI-O block
+    const blk = (per: number) => OVERHEAD_MIN + 30 * per;
+    const screenMin = 15 + 2 * blk(ROUND_MIN) + 10;
+    const screenMax = 15 + 2 * blk(ROUND_MAX) + 10;
+    const fullMin = 15 + 7 * blk(ROUND_MIN) + 10;
+    const fullMax = 15 + 7 * blk(ROUND_MAX) + 10;
+    expect(rb).toContain(`${Math.round(screenMin)}-${Math.round(screenMax)} minutes`);
+    expect(rb).toContain(`${(screenMin / 60).toFixed(1)}-${(screenMax / 60).toFixed(1)} h`);
+    expect(rb).toContain(`${Math.round(fullMin)}-${Math.round(fullMax)} minutes`);
+    expect(rb).toContain(`${Math.round(fullMin / 60)}-${Math.round(fullMax / 60)} h`);
+    expect(rb).toContain(
+      `${Math.round((3 * fullMin + 240) / 60)}-${Math.round((3 * fullMax + 240) / 60)} h`,
+    );
+    expect(rb).toContain(
+      `${Math.round((3 * screenMin + 240) / 60)}-${Math.round((3 * screenMax + 240) / 60)} h`,
+    );
+    expect(rb).not.toContain('4-5 hours');
+    expect(rb).not.toContain('about 90 times');
   });
 
   it('keeps stale statements out', () => {
     expect(rb).not.toContain('in the same round, 60 s apart');
     expect(rb).not.toMatch(/restarted four times/);
+    expect(rb).not.toContain('`b1` follows no restart');
+    expect(rb).not.toContain('about 35 minutes');
     expect(rb).toContain("`pod_ip` is **the harness's own watch time**");
   });
 
@@ -922,6 +1082,8 @@ describe('the setup manifest is a template with no cluster literal', () => {
     expect(apps).toHaveLength(2);
     const spec = (d: string) => d.slice(d.indexOf('spec:'));
     expect(spec(apps[0])).toBe(spec(apps[1]));
+    // every other bench NextApp carries a pull secret; the template does too
+    for (const a of apps) expect(a).toContain('imagePullSecrets: [{name: <PULL SECRET>}]');
     expect(apps.map((d) => d.match(/name: (ceil-[ps])/)?.[1])).toEqual(['ceil-p', 'ceil-s']);
     expect(docs.some((d) => /name: ceil-harness/.test(d) && /nodeName: <S node>/.test(d))).toBe(
       true,

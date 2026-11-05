@@ -336,24 +336,35 @@ def place_restore(pool):
                     raise SystemExit(err)
 
 
+def recovery_commands():
+    """The exact commands that put every managed node back to the state found at the start."""
+    return "; ".join(" ".join(BASE + ["cordon" if was else "uncordon", name]) for name, was in sorted(REST.items()))
+
+
 def rest():
     """Put every managed node back to the state it had at the start, unless someone else changed it since
-    this run set it: that node is left alone and reported. Reports every failure, then exits 1."""
+    this run set it: that node is left alone and reported. Never raises anything but SystemExit: an API
+    outage while restoring (kc gives up after about 45 s) is reported with the exact recovery commands,
+    not as a traceback. Reports every failure, then exits 1."""
     failed = []
     for want in (True, False):
         for name, was in REST.items():
             if was != want:
                 continue
-            live = live_cordoned(name)
-            if live != EXPECT[name]:
-                failed.append(f"{name} is {state_word(live)}, this run left it {state_word(EXPECT[name])}; "
-                              "not touched")
-            elif live != was:
-                err = set_cordon(name, was)
-                if err:
-                    failed.append(err)
+            try:
+                live = live_cordoned(name)
+                if live != EXPECT[name]:
+                    failed.append(f"{name} is {state_word(live)}, this run left it {state_word(EXPECT[name])}; "
+                                  "not touched")
+                elif live != was:
+                    err = set_cordon(name, was)
+                    if err:
+                        failed.append(err)
+            except Exception as e:  # noqa: BLE001 - whatever the API outage raised
+                failed.append(f"{name}: could not read or change it ({type(e).__name__})")
     if failed:
         print("RESTORE FAILED, fix by hand: " + "; ".join(failed), file=sys.stderr, flush=True)
+        print("Rest state to set by hand: " + recovery_commands(), file=sys.stderr, flush=True)
         raise SystemExit(1)
 
 
@@ -431,6 +442,12 @@ def main(argv=None):
             code = 1
         else:
             code = e.code or 0
+    except Exception as e:  # noqa: BLE001
+        if PLACE_MODE != "restore":
+            raise
+        # No traceback in restore mode: say what failed, then the finally below restores the cordons.
+        print(f"driver error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        code = 1
     finally:
         if PLACE_MODE == "restore":
             if MANAGED:

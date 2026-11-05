@@ -25,7 +25,7 @@ import { stripComments } from './js-source-lexer.mjs';
  * code and stays visible; templates nest to any depth. The lexer is the shared
  * one (`./js-source-lexer.mjs`) in its blank-strings + blank-regex mode.
  */
-export function maskCommentsAndStrings(src) {
+function maskCommentsAndStrings(src) {
   return stripComments(src, { blankStrings: true, blankRegex: true });
 }
 

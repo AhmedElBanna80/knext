@@ -387,7 +387,7 @@ const CONFIG_CHILD = `
  *
  * @param {Record<string, string | undefined>} parentEnv
  */
-export function configEnvironment(parentEnv = process.env) {
+function configEnvironment(parentEnv = process.env) {
   return { ...parentEnv, NODE_ENV: parentEnv.NODE_ENV || 'production' };
 }
 
@@ -475,7 +475,7 @@ export async function readTraceRules(root) {
 }
 
 /** Every `.js`/`.mjs`/`.cjs` file of the server output proper (never a traced `node_modules`). */
-export function serverOutputFiles(serverDir) {
+function serverOutputFiles(serverDir) {
   const out = [];
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

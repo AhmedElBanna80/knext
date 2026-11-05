@@ -38,7 +38,7 @@ export function stripComments(src: string): string {
 }
 
 /** True iff the config text enables Cache Components / `'use cache'`. */
-export function enablesUseCache(configText: string): boolean {
+function enablesUseCache(configText: string): boolean {
     return /\b(cacheComponents|useCache)\s*:\s*true\b/.test(
         stripComments(configText),
     );

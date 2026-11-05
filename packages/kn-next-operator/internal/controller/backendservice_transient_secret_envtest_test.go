@@ -59,7 +59,7 @@ type secretMetaFailer struct {
 }
 
 func (f *secretMetaFailer) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if o, ok := obj.(*metav1.PartialObjectMetadata); ok && o.Kind == "Secret" && f.err != nil && (f.only == "" || f.only == key.Name) {
+	if o, ok := obj.(*metav1.PartialObjectMetadata); ok && o.Kind == lcSecret && f.err != nil && (f.only == "" || f.only == key.Name) {
 		return f.err
 	}
 	return f.Reader.Get(ctx, key, obj, opts...)
@@ -71,7 +71,7 @@ var transientErrors = map[string]error{
 	"a 429":     apierrors.NewTooManyRequests("simulated", 1),
 	"a 500":     apierrors.NewInternalError(errors.New("simulated")),
 	"a 503":     apierrors.NewServiceUnavailable("simulated"),
-	"a missing grant, inside the hold window": apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "stripe", errors.New("simulated")),
+	"a missing grant, inside the hold window": apierrors.NewForbidden(schema.GroupResource{Resource: lcSecrets}, lcStripe, errors.New("simulated")),
 	"a refused connection":                    &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
 	"a context deadline":                      fmt.Errorf("get secret: %w", context.DeadlineExceeded),
 }
@@ -82,12 +82,12 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 	// setup: a zone, a Secret marked for it, and a function that references it.
 	setup := func() (ns string) {
 		ns = bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "stripe", Namespace: ns, Labels: map[string]string{ZoneLabel: "orders"},
+			Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
 		}})).To(Succeed())
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
-			bs.Spec.EnvFrom = specEnvFromSecret("stripe").EnvFrom
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom
 		})
 		return ns
 	}
@@ -119,7 +119,7 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 			err := reconcileWith(ns, injected)
 
 			Expect(err).To(HaveOccurred(), "an unknown answer must requeue with backoff")
-			Expect(err.Error()).To(ContainSubstring("stripe"), "the error names the Secret it could not read")
+			Expect(err.Error()).To(ContainSubstring(lcStripe), "the error names the Secret it could not read")
 			Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue(), "the running function's Knative Service must survive")
 			Expect(getKsvc(ns).UID).To(Equal(ksvc.UID), "it must be the same object, not a re-created one")
 			Expect(getKsvc(ns).ResourceVersion).To(Equal(ksvc.ResourceVersion), "and untouched")
@@ -160,7 +160,7 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 
-		Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "stripe", Namespace: ns}})).To(Succeed())
+		Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: lcStripe, Namespace: ns}})).To(Succeed())
 		Expect(reconcileWith(ns, nil)).To(Succeed(), "a definitive refusal is a status, not an error")
 		expectNothingRendered(ctx, ns, "pricing")
 		Expect(functionCondition(getFunction(ctx, ns, "pricing"), ConditionSovereigntyCompliant).Status).To(Equal(metav1.ConditionFalse))
@@ -172,8 +172,8 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 
 		sec := &corev1.Secret{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "stripe"}, sec)).To(Succeed())
-		sec.Labels[ZoneLabel] = "billing"
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: lcStripe}, sec)).To(Succeed())
+		sec.Labels[ZoneLabel] = sovOther
 		Expect(k8sClient.Update(ctx, sec)).To(Succeed())
 		Expect(reconcileWith(ns, nil)).To(Succeed())
 		expectNothingRendered(ctx, ns, "pricing")
@@ -182,10 +182,10 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 
 	It("lets a definitive violation win over an unknown one in the same function", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createZone(ctx, ns, "billing")
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
-			bs.Spec.EnvFrom = specEnvFromSecret("stripe").EnvFrom // unreadable: unknown
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovOther)
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom // unreadable: unknown
 			bs.Spec.Env = specSecretKeyRef("billing-db").Env      // another zone's database Secret: definitive
 		})
 		Expect(reconcileWith(ns, transientErrors["a 503"])).To(Succeed())

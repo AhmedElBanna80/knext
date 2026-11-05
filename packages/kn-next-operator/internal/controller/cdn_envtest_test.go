@@ -93,7 +93,7 @@ var _ = Describe("NextApp spec.cdn", func() {
 		Expect(env["KNEXT_CDN_PROVIDER"].Value).To(Equal("cloudflare"))
 		// The CRD default (30) was applied by the apiserver, not by the Go code.
 		Expect(env["KNEXT_CDN_HTML_TTL_SECONDS"].Value).To(Equal("30"))
-		Expect(env["KNEXT_CDN_TAG_PREFIX"].Value).To(HaveLen(12))
+		Expect(env[lcKNEXTCDNTAGPREFIX].Value).To(HaveLen(12))
 		Expect(env["KNEXT_CDN_EXCLUDE_PATHS"].Value).To(Equal("/account"))
 		tok := env["KNEXT_CDN_PURGE_TOKEN"]
 		Expect(tok.Value).To(BeEmpty())
@@ -119,7 +119,7 @@ var _ = Describe("NextApp spec.cdn", func() {
 
 	It("on build vinext renders nothing and reports the CDNAdvisory condition", func() {
 		Expect(create("cdn-vinext", appsv1alpha1.NextAppSpec{
-			Build: "vinext",
+			Build: lcVinext,
 			CDN:   &appsv1alpha1.CDNSpec{Provider: "cloudflare"},
 		})).To(Succeed())
 		ksvc, _ := reconcile1("cdn-vinext")
@@ -153,7 +153,7 @@ var _ = Describe("NextApp spec.cdn", func() {
 			"only allowed with provider: emulator")
 	})
 	It("rejects provider emulator without an endpoint", func() {
-		rejects("cdn-emu-no-endpoint", cdn(func(c *appsv1alpha1.CDNSpec) { c.Provider = "emulator" }),
+		rejects("cdn-emu-no-endpoint", cdn(func(c *appsv1alpha1.CDNSpec) { c.Provider = lcEmulator }),
 			"requires spec.cdn.emulatorEndpoint")
 	})
 	for i, bad := range []string{
@@ -165,19 +165,18 @@ var _ = Describe("NextApp spec.cdn", func() {
 		"ftp://cdn.e2e.svc.cluster.local",
 		"http://127.0.0.1:8080",
 	} {
-		bad := bad
 		It(fmt.Sprintf("rejects emulatorEndpoint %q", bad), func() {
 			rejects(fmt.Sprintf("cdn-bad-endpoint-%d", i), cdn(func(c *appsv1alpha1.CDNSpec) {
-				c.Provider, c.EmulatorEndpoint = "emulator", bad
+				c.Provider, c.EmulatorEndpoint = lcEmulator, bad
 			}), "emulatorEndpoint")
 		})
 	}
 	It("accepts a *.svc.cluster.local emulator endpoint with and without a port", func() {
 		Expect(create("cdn-emu-ok", cdn(func(c *appsv1alpha1.CDNSpec) {
-			c.Provider, c.EmulatorEndpoint = "emulator", emu
+			c.Provider, c.EmulatorEndpoint = lcEmulator, emu
 		}))).To(Succeed())
 		Expect(create("cdn-emu-ok-noport", cdn(func(c *appsv1alpha1.CDNSpec) {
-			c.Provider, c.EmulatorEndpoint = "emulator", "https://cdn-emulator.e2e.svc.cluster.local"
+			c.Provider, c.EmulatorEndpoint = lcEmulator, "https://cdn-emulator.e2e.svc.cluster.local"
 		}))).To(Succeed())
 	})
 	It("rejects htmlTTLSeconds outside 1..3600 (0 is the apiserver default, 3601 is over)", func() {
@@ -210,8 +209,6 @@ var _ = Describe("NextApp spec.cdn", func() {
 	// validation cannot disagree about a bound. An unreadable or hollow table
 	// fails the suite (it must never silently become an empty one).
 	for i, c := range loadCDNCases() {
-		c := c
-		i := i
 		verb := "rejects"
 		if c.Valid {
 			verb = "accepts"
@@ -231,13 +228,13 @@ var _ = Describe("NextApp spec.cdn", func() {
 	// ---- admission: a CR cannot set its own prefix (D3, D5.3) ----
 
 	It("rejects a spec.cdn.tagPrefix field: there is none, and strict decoding says so", func() {
-		u := &unstructured.Unstructured{Object: map[string]interface{}{
+		u := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "apps.kn-next.dev/v1alpha1",
-			"kind":       "NextApp",
-			"metadata":   map[string]interface{}{"name": "cdn-own-prefix", "namespace": namespace},
-			"spec": map[string]interface{}{
+			"kind":       lcNextApp,
+			"metadata":   map[string]any{"name": "cdn-own-prefix", "namespace": namespace},
+			"spec": map[string]any{
 				"image": validImage,
-				"cdn":   map[string]interface{}{"provider": "cloudflare", "tagPrefix": "victim"},
+				"cdn":   map[string]any{"provider": "cloudflare", "tagPrefix": "victim"},
 			},
 		}}
 		err := k8sClient.Create(ctx, u, client.FieldValidation("Strict"))
@@ -266,11 +263,9 @@ var _ = Describe("NextApp spec.cdn", func() {
 		return out
 	}
 
-	reservedCases := []string{"KNEXT_CDN_PROVIDER", "KNEXT_CDN_TAG_PREFIX", "KNEXT_CDN_EMULATOR_ENDPOINT", "KNEXT_CDN_PURGE_TOKEN", "KNEXT_CDN_ANYTHING"}
+	reservedCases := []string{"KNEXT_CDN_PROVIDER", lcKNEXTCDNTAGPREFIX, "KNEXT_CDN_EMULATOR_ENDPOINT", "KNEXT_CDN_PURGE_TOKEN", "KNEXT_CDN_ANYTHING"}
 	const secretValue = "do-not-echo-this-value"
 	for i, rname := range reservedCases {
-		rname := rname
-		i := i
 		It(fmt.Sprintf("admits spec.env %s, never renders it, and reports it by name only", rname), func() {
 			name := fmt.Sprintf("cdn-env-%d", i)
 			Expect(create(name, appsv1alpha1.NextAppSpec{Env: map[string]string{rname: secretValue, "KEEP_ME": "1"}})).To(Succeed())
@@ -319,7 +314,7 @@ var _ = Describe("NextApp spec.cdn", func() {
 
 	It("on build vinext (nothing rendered) a reserved name is still ignored and reported", func() {
 		Expect(create("cdn-env-vinext", appsv1alpha1.NextAppSpec{
-			Build: "vinext",
+			Build: lcVinext,
 			CDN:   &appsv1alpha1.CDNSpec{Provider: "cloudflare"},
 			Env:   map[string]string{"KNEXT_CDN_PROVIDER": secretValue},
 		})).To(Succeed())

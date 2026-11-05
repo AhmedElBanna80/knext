@@ -1,0 +1,202 @@
+{
+  "ready_in_lines_count": {
+    "\u2713 Ready in 0ms": 24
+  },
+  "harness_tcp3000_first_try": [25, 25],
+  "clock_offset_ms": {
+    "name": "clock_offset",
+    "n": 25,
+    "median": 0.2,
+    "p10": 0.2,
+    "p90": 0.3,
+    "min": 0.2,
+    "max": 0.3,
+    "mean": 0.2
+  },
+  "clock_rtt_ms": {
+    "name": "clock_rtt",
+    "n": 25,
+    "median": 0.9,
+    "p10": 0.9,
+    "p90": 1.0,
+    "min": 0.8,
+    "max": 1.0,
+    "mean": 0.9
+  },
+  "file": "docs/benchmarks/data/cold-start-node-diagnosis-oke-2026-11-02.jsonl",
+  "rows": 25,
+  "valid": 25,
+  "segments": [
+    {
+      "name": "wake_to_bound",
+      "n": 25,
+      "median": 116.4,
+      "p10": 95.8,
+      "p90": 193.7,
+      "min": 78.3,
+      "max": 250.8,
+      "mean": 127.4
+    },
+    {
+      "name": "bound_to_user_log",
+      "n": 24,
+      "median": 865.4,
+      "p10": 441.2,
+      "p90": 906.5,
+      "min": 432.4,
+      "max": 912.4,
+      "mean": 701.7
+    },
+    {
+      "name": "bound_to_ready_in",
+      "n": 24,
+      "median": 1017.2,
+      "p10": 592.6,
+      "p90": 1055.4,
+      "min": 573.0,
+      "max": 1069.3,
+      "mean": 852.5
+    },
+    {
+      "name": "bound_to_qp_log",
+      "n": 24,
+      "median": 989.1,
+      "p10": 586.1,
+      "p90": 1038.4,
+      "min": 546.0,
+      "max": 1062.8,
+      "mean": 832.9
+    },
+    {
+      "name": "ready_in_to_podip",
+      "n": 24,
+      "median": 676.6,
+      "p10": 278.5,
+      "p90": 987.0,
+      "min": 90.0,
+      "max": 1005.4,
+      "mean": 653.0
+    },
+    {
+      "name": "qp_log_to_podip",
+      "n": 24,
+      "median": 714.2,
+      "p10": 303.4,
+      "p90": 1004.3,
+      "min": 117.6,
+      "max": 1034.3,
+      "mean": 672.6
+    },
+    {
+      "name": "podip_to_ready",
+      "n": 25,
+      "median": 40.1,
+      "p10": 29.8,
+      "p90": 191.4,
+      "min": 25.4,
+      "max": 353.0,
+      "mean": 75.5
+    },
+    {
+      "name": "ready_to_first_byte",
+      "n": 25,
+      "median": 103.5,
+      "p10": 84.8,
+      "p90": 128.6,
+      "min": 74.8,
+      "max": 139.7,
+      "mean": 104.7
+    },
+    {
+      "name": "ready_in_to_ready",
+      "n": 24,
+      "median": 716.3,
+      "p10": 434.8,
+      "p90": 1025.7,
+      "min": 418.3,
+      "max": 1045.5,
+      "mean": 729.6
+    },
+    {
+      "name": "total_first_byte",
+      "n": 25,
+      "median": 1805.9,
+      "p10": 1439.2,
+      "p90": 2255.1,
+      "min": 1228.8,
+      "max": 2293.6,
+      "mean": 1820.6
+    },
+    {
+      "name": "bound_to_podip",
+      "n": 25,
+      "median": 1507.0,
+      "p10": 1136.8,
+      "p90": 1996.2,
+      "min": 891.3,
+      "max": 2061.8,
+      "mean": 1513.1
+    },
+    {
+      "name": "user_log_to_qp_log",
+      "n": 24,
+      "median": 129.2,
+      "p10": 113.9,
+      "p90": 149.6,
+      "min": 105.5,
+      "max": 151.7,
+      "mean": 131.2
+    },
+    {
+      "name": "started_at_to_podip",
+      "n": 25,
+      "median": 1355.5,
+      "p10": 812.4,
+      "p90": 1876.0,
+      "min": 456.8,
+      "max": 2092.3,
+      "mean": 1326.6
+    },
+    {
+      "name": "bound_to_started_at",
+      "n": 25,
+      "median": 170.1,
+      "p10": -451.6,
+      "p90": 709.5,
+      "min": -529.3,
+      "max": 801.3,
+      "mean": 186.5
+    },
+    {
+      "name": "podip_to_app_tcp3000",
+      "n": 25,
+      "median": 6.4,
+      "p10": 6.1,
+      "p90": 7.0,
+      "min": 5.9,
+      "max": 7.2,
+      "mean": 6.4
+    }
+  ],
+  "uniform_test_ready_in_to_podip_U0_1000": {
+    "n": 24,
+    "D": 0.284,
+    "p": 0.033
+  },
+  "uniform_test_qp_log_to_podip_U0_1000": {
+    "n": 24,
+    "D": 0.313,
+    "p": 0.014
+  },
+  "readiness_unhealthy_events_per_wake": {
+    "name": "unhealthy",
+    "n": 25,
+    "median": 0,
+    "p10": 0.0,
+    "p90": 0.0,
+    "min": 0,
+    "max": 0,
+    "mean": 0.0
+  },
+  "wakes_with_readiness_unhealthy": 0
+}

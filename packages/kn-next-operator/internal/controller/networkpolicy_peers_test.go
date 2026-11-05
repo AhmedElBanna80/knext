@@ -17,12 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -65,7 +66,7 @@ func isOptInMetricsScrapeRule(rule networkingv1.NetworkPolicyIngressRule) bool {
 	if len(p.NamespaceSelector.MatchExpressions) != 0 || len(p.NamespaceSelector.MatchLabels) != 1 {
 		return false
 	}
-	if p.NamespaceSelector.MatchLabels[metricsScrapeNamespaceLabel] != "true" {
+	if p.NamespaceSelector.MatchLabels[metricsScrapeNamespaceLabel] != lcTrue {
 		return false
 	}
 	got := extractStrictTCPPorts(nil, rule)
@@ -109,7 +110,7 @@ func extractStrictTCPPorts(t *testing.T, rule networkingv1.NetworkPolicyIngressR
 		}
 		out = append(out, p.Port.IntVal)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -190,7 +191,7 @@ func admittedPortsForPod(
 	for p := range portSet {
 		out = append(out, p)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }
 
@@ -241,7 +242,7 @@ func TestNetworkPolicyPeersHaveNamespaceAndPodSelectorInOneElement(t *testing.T)
 	})
 
 	t.Run("NextApp default NetworkPolicy", func(t *testing.T) {
-		np := DesiredNetworkPolicy("orders", "shop")
+		np := DesiredNetworkPolicy(sovZone, sovNS)
 		checked := 0
 		for i, rule := range np.Spec.Ingress {
 			if isSameNamespaceMetricsRule(rule) || isOptInMetricsScrapeRule(rule) {
@@ -264,7 +265,7 @@ func TestNetworkPolicyPeersHaveNamespaceAndPodSelectorInOneElement(t *testing.T)
 	})
 
 	t.Run("BackendService function NetworkPolicy", func(t *testing.T) {
-		np := DesiredFunctionNetworkPolicy("pricing", "orders", "shop")
+		np := DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)
 		checked := 0
 		for i, rule := range np.Spec.Ingress {
 			if len(rule.From) == 0 {
@@ -296,8 +297,8 @@ func TestNetworkPolicyPeerPortMatrix(t *testing.T) {
 		name string
 		np   *networkingv1.NetworkPolicy
 	}{
-		{"NextApp", DesiredNetworkPolicy("orders", "shop")},
-		{"BackendService", DesiredFunctionNetworkPolicy("pricing", "orders", "shop")},
+		{lcNextApp, DesiredNetworkPolicy(sovZone, sovNS)},
+		{"BackendService", DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)},
 	}
 
 	for _, tc := range policies {
@@ -424,7 +425,7 @@ func TestNetworkPolicyNoWholeNamespacePeers(t *testing.T) {
 		t.Fatal("mutation control failed: empty PodSelector{} did not flag as whole-namespace")
 	}
 
-	npApp := DesiredNetworkPolicy("orders", "shop")
+	npApp := DesiredNetworkPolicy(sovZone, sovNS)
 	for i, rule := range npApp.Spec.Ingress {
 		if isOptInMetricsScrapeRule(rule) {
 			continue
@@ -436,7 +437,7 @@ func TestNetworkPolicyNoWholeNamespacePeers(t *testing.T) {
 		}
 	}
 
-	npFn := DesiredFunctionNetworkPolicy("pricing", "orders", "shop")
+	npFn := DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)
 	for i, rule := range npFn.Spec.Ingress {
 		for j, peer := range rule.From {
 			if selectsWholeNamespace(peer) {
@@ -478,76 +479,98 @@ func TestNetworkPolicyPodLabelsPinnedAgainstUpstreamDrift(t *testing.T) {
 		}
 	}
 
-	// Resolve knative.dev/serving from the local Go module cache (offline).
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "knative.dev/serving").CombinedOutput()
+	// The labels are read from the release manifests the repo actually installs
+	// (scripts/kind-manifests/apply-knative-kourier.sh), not from the Go module's
+	// copy of serving, which is a different version. Their identity is tied to the
+	// pins in that script, parsed here rather than repeated as a string.
+	repoRoot := filepath.Join("..", "..", "..", "..")
+	applyScript, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "kind-manifests", "apply-knative-kourier.sh"))
 	if err != nil {
-		t.Fatalf("locate knative.dev/serving module dir: %v (%s)", err, string(out))
+		t.Fatalf("read apply-knative-kourier.sh: %v", err)
 	}
-	knativeModDir := strings.TrimSpace(string(out))
-
-	readKnativeDeployment := func(file string) *appsv1.Deployment {
-		t.Helper()
-		raw, err := os.ReadFile(filepath.Join(knativeModDir, "config", "core", "deployments", file))
-		if err != nil {
-			t.Fatalf("read knative deployment %s: %v", file, err)
+	pin := func(name string) string {
+		m := regexp.MustCompile(`(?m)^` + name + `="([0-9a-f]{64})"$`).FindSubmatch(applyScript)
+		if m == nil {
+			t.Fatalf("apply-knative-kourier.sh no longer carries a %s=\"<sha256>\" line; update this test with the pin's new shape", name)
 		}
-		for _, doc := range strings.Split(string(raw), "\n---") {
+		return string(m[1])
+	}
+	versionMatch := regexp.MustCompile(`(?m)^PINNED_KNATIVE_VERSION="([^"]+)"$`).FindSubmatch(applyScript)
+	if versionMatch == nil {
+		t.Fatal("apply-knative-kourier.sh no longer carries a PINNED_KNATIVE_VERSION line")
+	}
+	fixtureDir := filepath.Join("testdata", string(versionMatch[1]))
+
+	// kourier.yaml is vendored whole: its bytes must hash to the pin.
+	kourierRaw, err := os.ReadFile(filepath.Join(fixtureDir, "kourier.yaml"))
+	if err != nil {
+		t.Fatalf("read vendored kourier.yaml for %s (refresh testdata when the pin moves): %v", versionMatch[1], err)
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(kourierRaw)); got != pin("KOURIER_SHA256") {
+		t.Fatalf("testdata kourier.yaml sha256 %s != KOURIER_SHA256 pin %s: refresh the fixture from the pinned release", got, pin("KOURIER_SHA256"))
+	}
+	// serving-core.yaml is ~500 KB, so only its four Deployments are vendored,
+	// unmodified, with the hash of the whole file recorded in a header.
+	coreRaw, err := os.ReadFile(filepath.Join(fixtureDir, "serving-core-deployments.yaml"))
+	if err != nil {
+		t.Fatalf("read vendored serving-core deployments for %s: %v", versionMatch[1], err)
+	}
+	srcSHA := regexp.MustCompile(`(?m)^# source-sha256: ([0-9a-f]{64})$`).FindSubmatch(coreRaw)
+	if srcSHA == nil || string(srcSHA[1]) != pin("SERVING_CORE_SHA256") {
+		t.Fatalf("testdata serving-core-deployments.yaml was not extracted from the pinned SERVING_CORE_SHA256 (%s): refresh the fixture", pin("SERVING_CORE_SHA256"))
+	}
+
+	deployments := func(raw []byte) map[string]*appsv1.Deployment {
+		t.Helper()
+		out := map[string]*appsv1.Deployment{}
+		for doc := range strings.SplitSeq(string(raw), "\n---") {
 			var head struct {
 				Kind string `json:"kind"`
 			}
 			if err := yaml.Unmarshal([]byte(doc), &head); err != nil {
-				t.Fatalf("parse %s header: %v", file, err)
+				t.Fatalf("parse manifest header: %v", err)
 			}
 			if head.Kind != "Deployment" {
 				continue
 			}
 			dep := &appsv1.Deployment{}
 			if err := yaml.Unmarshal([]byte(doc), dep); err != nil {
-				t.Fatalf("unmarshal Deployment in %s: %v", file, err)
+				t.Fatalf("unmarshal Deployment: %v", err)
 			}
-			return dep
+			out[dep.Name] = dep
 		}
-		t.Fatalf("no Deployment found in %s", file)
-		return nil
+		return out
 	}
+	core := deployments(coreRaw)
+	for _, name := range []string{"activator", "autoscaler", "controller", "webhook"} {
+		if core[name] == nil {
+			t.Fatalf("pinned serving-core has no %s Deployment", name)
+		}
+	}
+	activatorDep, autoscalerDep, controllerDep, webhookDep := core["activator"], core["autoscaler"], core["controller"], core["webhook"]
 
-	activatorDep := readKnativeDeployment("activator.yaml")
-	autoscalerDep := readKnativeDeployment("autoscaler.yaml")
-	controllerDep := readKnativeDeployment("controller.yaml")
-	webhookDep := readKnativeDeployment("webhook.yaml")
-
-	if activatorDep.Namespace != "knative-serving" || activatorDep.Spec.Template.Labels["app"] != "activator" {
-		t.Fatalf("upstream Knative activator pod identity drifted: ns=%q labels=%v",
+	// Compare against the package constants, so editing a constant reds this test
+	// and so does upstream moving a label.
+	if activatorDep.Namespace != knativeServingNamespace || activatorDep.Spec.Template.Labels[knativePodLabelKey] != activatorPodLabelValue {
+		t.Fatalf("pinned Knative activator pod identity drifted: ns=%q labels=%v",
 			activatorDep.Namespace, activatorDep.Spec.Template.Labels)
 	}
-	if autoscalerDep.Namespace != "knative-serving" || autoscalerDep.Spec.Template.Labels["app"] != "autoscaler" {
-		t.Fatalf("upstream Knative autoscaler pod identity drifted: ns=%q labels=%v",
+	if autoscalerDep.Namespace != knativeServingNamespace || autoscalerDep.Spec.Template.Labels[knativePodLabelKey] != autoscalerPodLabelValue {
+		t.Fatalf("pinned Knative autoscaler pod identity drifted: ns=%q labels=%v",
 			autoscalerDep.Namespace, autoscalerDep.Spec.Template.Labels)
 	}
-	if controllerDep.Spec.Template.Labels["app"] == "activator" || controllerDep.Spec.Template.Labels["app"] == "autoscaler" {
-		t.Fatalf("upstream Knative controller pod shares activator/autoscaler app label: %v", controllerDep.Spec.Template.Labels)
-	}
-	if webhookDep.Spec.Template.Labels["app"] == "activator" || webhookDep.Spec.Template.Labels["app"] == "autoscaler" {
-		t.Fatalf("upstream Knative webhook pod shares activator/autoscaler app label: %v", webhookDep.Spec.Template.Labels)
+	for name, dep := range map[string]*appsv1.Deployment{"controller": controllerDep, "webhook": webhookDep} {
+		if v := dep.Spec.Template.Labels[knativePodLabelKey]; v == activatorPodLabelValue || v == autoscalerPodLabelValue {
+			t.Fatalf("pinned Knative %s pod shares the activator/autoscaler app label: %v", name, dep.Spec.Template.Labels)
+		}
 	}
 
-	// Verify the repo's pinned Kourier installer still targets kourier-system / 3scale-kourier-gateway
-	// at the pinned manifest checksum (if the Kourier manifest changes, re-verify the gateway pod label).
-	repoRoot := filepath.Join("..", "..", "..", "..")
-	prereqsScript, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "prereqs", "install.sh"))
-	if err != nil {
-		t.Fatalf("read scripts/prereqs/install.sh: %v", err)
+	gateway := deployments(kourierRaw)["3scale-kourier-gateway"]
+	if gateway == nil {
+		t.Fatal("pinned kourier.yaml has no 3scale-kourier-gateway Deployment")
 	}
-	if !strings.Contains(string(prereqsScript), "-n kourier-system deployment/3scale-kourier-gateway") {
-		t.Errorf("scripts/prereqs/install.sh no longer names '-n kourier-system deployment/3scale-kourier-gateway' — verify Kourier gateway namespace/labels")
-	}
-	kourierApplyScript, err := os.ReadFile(filepath.Join(repoRoot, "scripts", "kind-manifests", "apply-knative-kourier.sh"))
-	if err != nil {
-		t.Fatalf("read scripts/kind-manifests/apply-knative-kourier.sh: %v", err)
-	}
-	const pinnedKourierSHA256 = `KOURIER_SHA256="381efeb83e0f424d7ada19a581ecfa9a8267aae396d9100e836cc131cc7d210f"`
-	if !strings.Contains(string(kourierApplyScript), pinnedKourierSHA256) {
-		t.Errorf("apply-knative-kourier.sh KOURIER_SHA256 moved; verify spec.template.metadata.labels (app: 3scale-kourier-gateway in kourier-system) in the new kourier.yaml before updating pinnedKourierSHA256")
+	if gateway.Namespace != kourierSystemNamespace || gateway.Spec.Template.Labels[kourierGatewayPodLabelKey] != kourierGatewayPodLabelValue {
+		t.Fatalf("pinned Kourier gateway pod identity drifted: ns=%q labels=%v", gateway.Namespace, gateway.Spec.Template.Labels)
 	}
 
 	// Verify both rendered policies contain the exact three pinned (namespace, app=<label>) peers.
@@ -562,8 +585,8 @@ func TestNetworkPolicyPodLabelsPinnedAgainstUpstreamDrift(t *testing.T) {
 		name string
 		np   *networkingv1.NetworkPolicy
 	}{
-		{"NextApp", DesiredNetworkPolicy("orders", "shop")},
-		{"BackendService", DesiredFunctionNetworkPolicy("pricing", "orders", "shop")},
+		{lcNextApp, DesiredNetworkPolicy(sovZone, sovNS)},
+		{"BackendService", DesiredFunctionNetworkPolicy("pricing", sovZone, sovNS)},
 	} {
 		seen := map[string]bool{}
 		for _, rule := range tc.np.Spec.Ingress {

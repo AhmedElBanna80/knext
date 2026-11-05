@@ -130,9 +130,14 @@ const FINGERPRINT_TARGET = resolve(REPO_ROOT, 'scripts/compat-window-fingerprint
 // (scripts/lib/e2e-read-base-path.mjs, review finding 2), same reasoning as
 // PROBE_TARGET above for why it is a separate snapshot target.
 const READ_BASE_PATH_TARGET = resolve(REPO_ROOT, 'scripts/lib/e2e-read-base-path.mjs');
+// #2615: the vinext lane's basePath reader (a separate file, like the above).
+const VINEXT_BASE_PATH_TARGET = resolve(REPO_ROOT, 'scripts/lib/e2e-vinext-base-path.mjs');
+// #2615: the allowlist verifier's CLI wrapper, and the workflow step that runs it.
+const VERIFY_TARGET = resolve(REPO_ROOT, 'scripts/lib/e2e-verify-intentional-500.sh');
+const WORKFLOW_TARGET = resolve(REPO_ROOT, '.github/workflows/compat-vinext.yml');
 const SPEC = 'tests/e2e-empty-dir.test.ts';
 
-declareMutations(58);
+declareMutations(77);
 
 const { command, args, runArgs } = resolveSpecRunner(REPO_ROOT, SPEC);
 
@@ -204,6 +209,15 @@ function proveFingerprint(label, anchor, replacement) {
 function proveReadBasePath(label, anchor, replacement) {
   report(label, snapshot(READ_BASE_PATH_TARGET), anchor, replacement);
 }
+function proveVinextBasePath(label, anchor, replacement) {
+  report(label, snapshot(VINEXT_BASE_PATH_TARGET), anchor, replacement);
+}
+function proveVerify(label, anchor, replacement) {
+  report(label, snapshot(VERIFY_TARGET), anchor, replacement);
+}
+function proveWorkflow(label, anchor, replacement) {
+  report(label, snapshot(WORKFLOW_TARGET), anchor, replacement);
+}
 
 console.log('Baseline: the spec must be GREEN before anything is mutated.');
 if (!specPasses()) {
@@ -247,8 +261,8 @@ prove(
 //    see PROBE_TARGET above).
 proveProbe(
   'ed_probe_http status requirement: accept any status again',
-  "const ok = mode === '2xx3xx' ? status >= 200 && status < 300 : status < 500 || status >= 600;",
-  'const ok = true;',
+  'process.exit(ok ? 0 : 1);',
+  'process.exit(0);',
 );
 
 // 5. ROUND-3 BLOCKING-1: the HEALTH branch specifically, independent of
@@ -656,6 +670,150 @@ proveVinext(
   '#1521 round-3: vinext suite staging failure drops its removal',
   '    log "ERROR: KNEXT_SELF_CONTAINED=1 — staging the suite\'s empty dir failed"\n    rm -rf "${EMPTY_DIR}"\n',
   '    log "ERROR: KNEXT_SELF_CONTAINED=1 — staging the suite\'s empty dir failed"\n',
+);
+
+// ── #2615 — the vinext empty-dir probes: basePath, intentional-500 at `/`, native/ order ──
+
+// 59. "expect5xx" is not a mode any more: it falls through to non5xx, so an
+//     allowlisted fixture that 500s at `/` on purpose is rejected again.
+proveProbe(
+  '#2615: ed_probe_http expect5xx no longer accepts a 5xx',
+  "mode === 'expect5xx'",
+  "mode === 'never-matches'",
+);
+
+// 60. ed_check_or_die never switches an allowlisted fixture to expect5xx.
+prove(
+  '#2615: the allowlisted fixture keeps the strict non-5xx check at /',
+  '      extra_mode=expect5xx\n',
+  '      extra_mode=non5xx\n',
+);
+
+// 61. The 500-expecting mode leaks to EVERY lane (every fixture, explicit health
+//     path included) instead of only a matched allowlist entry.
+prove(
+  '#2615: every fixture inherits the 500-expecting mode at /',
+  'local binary_name extra_mode=non5xx',
+  'local binary_name extra_mode=expect5xx',
+);
+
+// 62. ed_boot_probe_kill ignores the mode ed_check_or_die chose.
+prove(
+  '#2615: ed_boot_probe_kill ignores ED_EXTRA_PROBE_MODE',
+  '"${ED_EXTRA_PROBE_MODE:-non5xx}"',
+  '"non5xx"',
+);
+
+// 63. A refused/dropped connection counts as alive: every mode becomes "anything".
+proveProbe(
+  '#2615: a connection error counts as a pass (probe accepts everything)',
+  "req.on('error', () => process.exit(1));",
+  "req.on('error', () => process.exit(0));",
+);
+
+// 64. The vinext lane stops feeding the fixture basePath to the static probe.
+proveVinext(
+  '#2615: the vinext lane never reads the fixture basePath',
+  'ED_STATIC_PROBE_BASE="$(bun "${ED__LIB_DIR}/e2e-vinext-base-path.mjs"',
+  'ED_UNUSED_BASE="$(bun "${ED__LIB_DIR}/e2e-vinext-base-path.mjs"',
+);
+
+// 65. The staged native/ tree is no longer handed to the self-contained compile.
+proveVinext(
+  '#2615: --native-dir is never forwarded to the self-contained compile',
+  '      VINEXT_COMPILE_ARGS+=(--native-dir "${APP_DIR}/native")\n',
+  '      : "${APP_DIR}"\n',
+);
+
+// 66. The compile runs BEFORE native/ is staged again.
+proveVinext(
+  '#2615: the compile runs before native/ is staged',
+  "# ── 5a. stage sharp's addon beside the binary (BEFORE the compile, #2615) ────\n",
+  'bun run "${COMPILE_SCRIPT}" --too-early\n  # ── 5a. stage sharp\'s addon beside the binary (BEFORE the compile, #2615) ────\n',
+);
+
+// 67. An unloadable next.config silently becomes an empty basePath.
+proveVinextBasePath(
+  '#2615: an unloadable next.config is swallowed as an empty basePath',
+  '  process.exit(1);\n}\n\nconst basePath',
+  '  process.exit(0);\n}\n\nconst basePath',
+);
+
+// ── #2615 — the intentional-500 ALLOWLIST (the exemption must stay narrow) ──
+
+// 68. The allowlist is EMPTY: the three fixtures that 500 at / on purpose are
+//     rejected again, so each allowlisted-fixture test goes red.
+prove(
+  '#2615: the intentional-500 allowlist is empty',
+  "ed_intentional_500_entries() {\n  cat <<'ED_INTENTIONAL_500_EOF'\n",
+  "ed_intentional_500_entries() {\n  cat <<'ED_INTENTIONAL_500_EOF' >/dev/null\n",
+);
+
+// 69. EVERY fixture is treated as allowlisted: a non-allowlisted fixture that
+//     500s at / (the bad half) is let through.
+prove(
+  '#2615: every fixture is treated as allowlisted',
+  'if [ -f "${dir}/${file}" ] && grep -qF -- "${needle}" "${dir}/${file}"; then',
+  'if true; then',
+);
+
+// 70. The match ignores WHICH file carries the signature: text anywhere in the
+//     fixture dir allowlists it.
+prove(
+  '#2615: the allowlist matches the signature text in any file',
+  'if [ -f "${dir}/${file}" ] && grep -qF -- "${needle}" "${dir}/${file}"; then',
+  'if grep -rqF -- "${needle}" "${dir}" 2>/dev/null; then',
+);
+
+// 71. expect5xx accepts a non-5xx status: a stale allowlist entry (fixture now
+//     answering 200) no longer fails.
+proveProbe(
+  '#2615: expect5xx accepts any status, so a stale entry stays green',
+  '? status >= 500 && status < 600',
+  '? status >= 100 && status < 600',
+);
+
+// 72. The stale-entry verifier always succeeds.
+prove(
+  '#2615: the allowlist verifier returns success regardless of stale entries',
+  'return "${stale}"',
+  'return 0',
+);
+
+// 73. The verifier no longer checks that the fixture still contains the match.
+prove(
+  '#2615: the verifier ignores an upstream fixture that changed',
+  'elif ! grep -qF -- "${needle}" "${root}/${upstream}/${file}"; then',
+  'elif false; then',
+);
+
+// 74. The verifier's CLI wrapper swallows the verdict.
+proveVerify(
+  '#2615: the verifier script swallows a stale-entry failure',
+  'ed_verify_intentional_500_allowlist "${1:-}"\n',
+  'ed_verify_intentional_500_allowlist "${1:-}" || true\n',
+);
+
+// 75. The workflow stops running the verifier against the pinned next.js.
+proveWorkflow(
+  '#2615: the workflow does not verify the allowlist against the pinned next.js',
+  'e2e-verify-intentional-500.sh "${{ github.workspace }}/next.js"',
+  'e2e-verify-intentional-500.sh "${{ github.workspace }}/knext"',
+);
+
+// 76. The vinext deploy script stops naming the fixture dir: the allowlist can
+//     never match (a test of the lane's wiring, not of the lib).
+proveVinext(
+  '#2615: the vinext lane never tells the pre-check which fixture it is',
+  '    ED_FIXTURE_DIR="${APP_DIR}"\n',
+  '    ED_FIXTURE_UNUSED="${APP_DIR}"\n',
+);
+
+// 77. The basePath reader stops mirroring the build's NODE_ENV=production.
+proveVinextBasePath(
+  '#2615: the basePath reader no longer mirrors the build NODE_ENV',
+  "process.env.NODE_ENV ??= 'production';",
+  'void 0;',
 );
 
 console.log(`\n${pass} caught, ${fail} undetected.`);

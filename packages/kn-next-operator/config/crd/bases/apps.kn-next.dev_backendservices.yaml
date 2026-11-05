@@ -391,6 +391,23 @@ spec:
                 - message: scaling.minScale must not exceed scaling.maxScale
                   rule: '!has(self.maxScale) || self.maxScale == 0 || !has(self.minScale)
                     || self.minScale <= self.maxScale'
+              security:
+                description: Security holds the function's defense-in-depth controls.
+                properties:
+                  networkPolicy:
+                    description: |-
+                      NetworkPolicy toggles the operator-owned Kubernetes NetworkPolicy that
+                      admits only the Knative activator, the Kourier gateway and the autoscaler
+                      to the function's pods. Same semantics as NextApp spec.security.networkPolicy:
+                      nil (unset) or true => the policy is reconciled (DEFAULT-ON); false => it is
+                      not reconciled and any previously-created one is deleted.
+
+                      Turning it off REMOVES the pod-level isolation. It exists for clusters whose
+                      ingress is not Kourier (Istio, Contour, Gateway API) and whose CNI enforces
+                      NetworkPolicy, where the default policy would make the function unreachable.
+                      Leave it unset unless that is your situation.
+                    type: boolean
+                type: object
               volumes:
                 description: |-
                   Volumes mounts Secret, ConfigMap, projected (Secret/ConfigMap) or emptyDir

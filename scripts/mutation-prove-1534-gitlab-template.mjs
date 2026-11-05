@@ -69,9 +69,9 @@ const MUTATIONS = [
     subject: 'initCiGitlabTs',
     spec: GITLAB_TEMPLATE_SPEC,
     anchor:
-      'credential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1\n  needs:\n    - kubeconfig-check\n',
+      'credential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85\n  needs:\n    - kubeconfig-check\n',
     replacement:
-      'xcredential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1\n  needs:\n    - kubeconfig-check\n',
+      'xcredential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85\n  needs:\n    - kubeconfig-check\n',
   },
 
   // ── Guard 2: allow_failure added to a preflight job (made skippable) ────
@@ -81,9 +81,9 @@ const MUTATIONS = [
     subject: 'initCiGitlabTs',
     spec: GITLAB_TEMPLATE_SPEC,
     anchor:
-      'credential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1\n  needs:\n    - kubeconfig-check\n',
+      'credential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85\n  needs:\n    - kubeconfig-check\n',
     replacement:
-      'credential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1\n  allow_failure: true\n  needs:\n    - kubeconfig-check\n',
+      'credential-preflight:\n  stage: preflight\n  image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85\n  allow_failure: true\n  needs:\n    - kubeconfig-check\n',
   },
 
   // ── Guard 3: the ordering guarantee is removed (order swapped/dropped) ──

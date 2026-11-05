@@ -662,7 +662,7 @@ func runZoneKeyPass(w *zoneKeyWorld, in *zoneKeyInputs, clock func() time.Time,
 ) (zoneKeyStep, []*zoneKey, error) {
 	held := appendNewKeys(nil, w.keys.keys())
 	last := zoneKeyStep{action: zkWait}
-	for i := 0; i < maxZoneKeySteps; i++ {
+	for range maxZoneKeySteps {
 		last = planZoneKeyStep(*w, *in)
 		if last.action == zkWait {
 			break
@@ -855,7 +855,7 @@ func redactKeyMaterial(msg string, keys []*zoneKey) string {
 		}
 		var needles []string
 		needles = append(needles, string(k.pem))
-		for _, line := range strings.Split(string(k.pem), "\n") {
+		for line := range strings.SplitSeq(string(k.pem), "\n") {
 			if l := strings.TrimSpace(line); l != "" && !strings.HasPrefix(l, "-----") {
 				needles = append(needles, l)
 			}
@@ -925,7 +925,7 @@ func applyZoneIdentity(ksvc *servingv1.Service, app *appsv1alpha1.NextApp, b zon
 			// default, so a group-only mode would be unreadable. Only the
 			// zone's own container mounts it.
 			DefaultMode: ptr.To[int32](0o444),
-			Optional:    ptr.To(true),
+			Optional:    new(true),
 		}},
 	})
 	containers[0].VolumeMounts = append(containers[0].VolumeMounts, corev1.VolumeMount{

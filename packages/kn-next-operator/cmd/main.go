@@ -105,7 +105,8 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	flag.DurationVar(&zoneKeyPropagationBound, "zone-signing-key-propagation-bound", controller.DefaultZoneKeyPropagationBound,
+	flag.DurationVar(&zoneKeyPropagationBound, "zone-signing-key-propagation-bound",
+		controller.DefaultZoneKeyPropagationBound,
 		"How long a zone's new public key is published before the zone signs with it. Must cover the kubelet's "+
 			"ConfigMap-volume refresh on every node: the default 2m is a default kubelet's worst case (1.5 x its 60s "+
 			"sync period = 90s) plus 30s of margin, and the operator refuses anything under 90s.")
@@ -352,7 +353,9 @@ func writePolicyNameDefault(getenv func(string) string) string {
 // addWritePolicyMonitor registers the write-policy self-check
 // (internal/writepolicy) with the manager. It is its own function, taking the
 // manager's Add, so the wiring is testable without standing up a manager.
-func addWritePolicyMonitor(add func(manager.Runnable) error, cfg *rest.Config, name string, interval time.Duration) error {
+func addWritePolicyMonitor(
+	add func(manager.Runnable) error, cfg *rest.Config, name string, interval time.Duration,
+) error {
 	src, err := writepolicy.NewClientSource(cfg)
 	if err != nil {
 		return fmt.Errorf("building the write-policy reader: %w", err)

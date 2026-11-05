@@ -315,6 +315,12 @@ export const IMAGE_TABLE: Record<string, Disposition> = {
       user: '1000',
       note: 'platform e2e: echoes its environment, so the revision marker rides in GREETING; HTTP_PORT moves it to 3000',
     },
+  'ghcr.io/getknext-dev/bench-bunexec@sha256:b3aeecac42e624aacb43823cd096c1d195369e18d918d5267236c47cf82ffa9d':
+    {
+      kind: 'non-root',
+      user: '65532:65532',
+      note: 'bench image (bun runtime, turbopack build, serves on 3000) for the bunexec A/B and cpu-boost runs',
+    },
   // --- apps, root, with the opt-out exercised live
   'ghcr.io/knative/helloworld-go@sha256:c2b7412fbea6f1ef24a0cac60698e88df7ae3c4278e42d0cb34fe7d4b2641bba':
     {

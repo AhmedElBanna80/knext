@@ -18,13 +18,13 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -106,12 +106,12 @@ func TestAMismatchIsNotAccepted(t *testing.T) {
 // specs, so the function is refused even while a Secret read errors.
 func TestAMismatchIsDecidedEvenWhenASecretReadFails(t *testing.T) {
 	o := mismatchObservation()
-	o.unverified = []unverifiedSecret{{name: "stripe", err: "timeout"}}
+	o.unverified = []unverifiedSecret{{name: lcStripe, err: "timeout"}}
 	if o.undecided() {
 		t.Fatal("a mismatched function must not be held as undecided: the mismatch is a definitive refusal")
 	}
 	o = acceptedObservation(zoneJWKSControlled, "")
-	o.unverified = []unverifiedSecret{{name: "stripe", err: "timeout"}}
+	o.unverified = []unverifiedSecret{{name: lcStripe, err: "timeout"}}
 	if !o.undecided() {
 		t.Fatal("control: with no mismatch the same unreadable Secret still holds the function")
 	}
@@ -146,10 +146,8 @@ func TestVerdictForAMismatchIsBindingImageMismatch(t *testing.T) {
 }
 
 func TestTheRefusalIsCountedUnderItsOwnReason(t *testing.T) {
-	for _, r := range backendServiceRefusalReasons {
-		if r == ReasonBindingImageMismatch {
-			return
-		}
+	if slices.Contains(backendServiceRefusalReasons, ReasonBindingImageMismatch) {
+		return
 	}
 	t.Fatalf("%s must be a pre-registered reason of the refusals counter", ReasonBindingImageMismatch)
 }
@@ -177,7 +175,7 @@ func renderZoneKnativeService(t *testing.T, app *appsv1alpha1.NextApp, objs ...c
 	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: app.Name, Namespace: app.Namespace}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	ksvcs := listKind(t, ctx, c, scheme, "Service", app.Namespace)
+	ksvcs := listKind(t, ctx, c, scheme, lcService, app.Namespace)
 	if len(ksvcs) != 1 {
 		t.Fatalf("want exactly the zone's Knative Service, got %d", len(ksvcs))
 	}
@@ -191,13 +189,13 @@ func TestAPinChangesNothingRenderedIntoTheZone(t *testing.T) {
 	bs := &appsv1alpha1.BackendService{
 		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: "default"},
 		Spec: appsv1alpha1.BackendServiceSpec{
-			Zone: "orders", Image: imageA, ProtoVersion: "1.0.0", WakeAhead: ptr.To(true),
+			Zone: sovZone, Image: imageA, ProtoVersion: lcV100, WakeAhead: new(true),
 		},
-		Status: appsv1alpha1.BackendServiceStatus{ServedProtoVersion: "1.0.0"},
+		Status: appsv1alpha1.BackendServiceStatus{ServedProtoVersion: lcV100},
 	}
 	render := func(entry appsv1alpha1.BackendBinding, fn *appsv1alpha1.BackendService) string {
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "default", Generation: 1},
+			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: "default", Generation: 1},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    "registry.example.com/app:v1@sha256:" + pinDigestA,
 				Backends: []appsv1alpha1.BackendBinding{entry},

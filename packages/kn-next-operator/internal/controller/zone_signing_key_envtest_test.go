@@ -110,7 +110,7 @@ func jwksKids(cm *corev1.ConfigMap) []string {
 func expectControlledByZone(obj metav1.Object, app *appsv1alpha1.NextApp) {
 	ref := metav1.GetControllerOf(obj)
 	Expect(ref).NotTo(BeNil(), "%s must carry a controller ownerReference to its zone", obj.GetName())
-	Expect(ref.Kind).To(Equal("NextApp"))
+	Expect(ref.Kind).To(Equal(lcNextApp))
 	Expect(ref.Name).To(Equal(app.Name))
 	Expect(ref.UID).To(Equal(app.UID))
 }
@@ -137,8 +137,8 @@ func requestRotation(ctx context.Context, ns, name, nonce string) {
 // boundZoneFixture creates a zone with one two-sided function binding.
 func boundZoneFixture(ctx context.Context) (string, *appsv1alpha1.NextApp) {
 	ns := bsNamespace(ctx)
-	app := createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-	createFunction(ctx, ns, "pricing", "orders")
+	app := createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+	createFunction(ctx, ns, "pricing", sovZone)
 	return ns, zoneApp(ctx, ns, app.Name)
 }
 
@@ -149,10 +149,10 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	It("creates the key Secret and the JWKS for a zone with a bound function, both owned by the zone, and mounts the key into the zone only", func() {
 		ns, app := boundZoneFixture(ctx)
 		r := newKeyedZoneReconciler(&zoneClock{now: t0})
-		_, err := reconcileWith(ctx, r, ns, "orders")
+		_, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
 
-		sec, ok := getSigningKey(ctx, ns, "orders")
+		sec, ok := getSigningKey(ctx, ns, sovZone)
 		Expect(ok).To(BeTrue(), "the signing-key Secret must exist")
 		expectControlledByZone(sec, app)
 		keys, err := readSigningKeySecret(sec)
@@ -162,7 +162,7 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		Expect(sec.Data).To(HaveKey(signingKeyCurrentKey))
 		Expect(sec.Data).To(HaveKey(signingKeyCurrentKid))
 
-		cm, ok := getJWKS(ctx, ns, "orders")
+		cm, ok := getJWKS(ctx, ns, sovZone)
 		Expect(ok).To(BeTrue(), "the JWKS ConfigMap must exist")
 		expectControlledByZone(cm, app)
 		want, err := buildZoneJWKS(keys.current.pub)
@@ -170,10 +170,10 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		Expect(cm.Data[ZoneJWKSFileName]).To(Equal(string(want)), "the JWKS publishes exactly the Secret's public key")
 		Expect(cm.Data[ZoneJWKSFileName]).NotTo(ContainSubstring(`"d"`))
 
-		ksvc := zoneKsvc(ctx, ns, "orders")
+		ksvc := zoneKsvc(ctx, ns, sovZone)
 		var found bool
 		for _, v := range ksvc.Spec.Template.Spec.Volumes {
-			if v.Secret != nil && v.Secret.SecretName == ZoneSigningKeySecretName("orders") {
+			if v.Secret != nil && v.Secret.SecretName == ZoneSigningKeySecretName(sovZone) {
 				found = true
 			}
 		}
@@ -186,7 +186,7 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 			}
 		}
 
-		c := zoneKeyCondition(ctx, ns, "orders")
+		c := zoneKeyCondition(ctx, ns, sovZone)
 		Expect(c).NotTo(BeNil())
 		Expect(c.Status).To(Equal(metav1.ConditionTrue))
 		Expect(c.Reason).To(Equal(ReasonSigningKeyActive))
@@ -195,111 +195,111 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 
 	It("creates nothing and mounts nothing for a zone whose binding is one-sided", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "billing") // names another zone: not bound
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovOther) // names another zone: not bound
 		r := newKeyedZoneReconciler(&zoneClock{now: t0})
-		_, err := reconcileWith(ctx, r, ns, "orders")
+		_, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		_, ok := getSigningKey(ctx, ns, "orders")
+		_, ok := getSigningKey(ctx, ns, sovZone)
 		Expect(ok).To(BeFalse(), "no per-zone key until both halves agree")
-		_, ok = getJWKS(ctx, ns, "orders")
+		_, ok = getJWKS(ctx, ns, sovZone)
 		Expect(ok).To(BeFalse(), "no JWKS until both halves agree")
-		ksvc := zoneKsvc(ctx, ns, "orders")
+		ksvc := zoneKsvc(ctx, ns, sovZone)
 		Expect(ksvc.Spec.Template.Spec.Volumes).To(BeEmpty())
 		Expect(zoneEnv(ksvc)).NotTo(HaveKey(ZoneIssuerEnv))
-		Expect(zoneKeyCondition(ctx, ns, "orders")).To(BeNil())
+		Expect(zoneKeyCondition(ctx, ns, sovZone)).To(BeNil())
 	})
 
 	It("is idempotent: re-reconciling writes neither object and rolls no revision", func() {
 		ns, _ := boundZoneFixture(ctx)
 		r := newKeyedZoneReconciler(&zoneClock{now: t0})
-		_, err := reconcileWith(ctx, r, ns, "orders")
+		_, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ := getSigningKey(ctx, ns, "orders")
-		cm, _ := getJWKS(ctx, ns, "orders")
-		gen := zoneKsvc(ctx, ns, "orders").Generation
-		for i := 0; i < 5; i++ {
-			_, err := reconcileWith(ctx, r, ns, "orders")
+		sec, _ := getSigningKey(ctx, ns, sovZone)
+		cm, _ := getJWKS(ctx, ns, sovZone)
+		gen := zoneKsvc(ctx, ns, sovZone).Generation
+		for range 5 {
+			_, err := reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
 		}
-		sec2, _ := getSigningKey(ctx, ns, "orders")
-		cm2, _ := getJWKS(ctx, ns, "orders")
+		sec2, _ := getSigningKey(ctx, ns, sovZone)
+		cm2, _ := getJWKS(ctx, ns, sovZone)
 		Expect(sec2.ResourceVersion).To(Equal(sec.ResourceVersion), "a converged Secret must not be rewritten")
 		Expect(cm2.ResourceVersion).To(Equal(cm.ResourceVersion), "a converged JWKS must not be rewritten")
-		Expect(zoneKsvc(ctx, ns, "orders").Generation).To(Equal(gen))
+		Expect(zoneKsvc(ctx, ns, sovZone).Generation).To(Equal(gen))
 	})
 
 	It("rotates in the contract order: publish, wait the propagation bound, switch, retire after the overlap", func() {
 		ns, _ := boundZoneFixture(ctx)
 		clock := &zoneClock{now: t0}
 		r := newKeyedZoneReconciler(clock)
-		_, err := reconcileWith(ctx, r, ns, "orders")
+		_, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ := getSigningKey(ctx, ns, "orders")
+		sec, _ := getSigningKey(ctx, ns, sovZone)
 		before, _ := readSigningKeySecret(sec)
 		oldKid := before.current.kid
 
 		By("step 1: the request publishes the new key and keeps signing with the old one")
-		requestRotation(ctx, ns, "orders", "r1")
-		res, err := reconcileWith(ctx, r, ns, "orders")
+		requestRotation(ctx, ns, sovZone, "r1")
+		res, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ = getSigningKey(ctx, ns, "orders")
+		sec, _ = getSigningKey(ctx, ns, sovZone)
 		staged, err := readSigningKeySecret(sec)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(staged.current.kid).To(Equal(oldKid), "signing must not switch at publish time")
 		Expect(staged.next).NotTo(BeNil())
 		newKid := staged.next.kid
-		cm, _ := getJWKS(ctx, ns, "orders")
+		cm, _ := getJWKS(ctx, ns, sovZone)
 		Expect(jwksKids(cm)).To(ConsistOf(oldKid, newKid))
 		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
 		Expect(res.RequeueAfter).To(BeNumerically("<=", DefaultZoneKeyPropagationBound+zoneKeyRequeueSlack))
-		Expect(zoneKeyCondition(ctx, ns, "orders").Reason).To(Equal(ReasonSigningKeyRotationPropagating))
+		Expect(zoneKeyCondition(ctx, ns, sovZone).Reason).To(Equal(ReasonSigningKeyRotationPropagating))
 
 		By("step 2: 1 ns before the bound, signing still has not switched")
 		clock.Advance(DefaultZoneKeyPropagationBound - time.Nanosecond)
-		_, err = reconcileWith(ctx, r, ns, "orders")
+		_, err = reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ = getSigningKey(ctx, ns, "orders")
+		sec, _ = getSigningKey(ctx, ns, sovZone)
 		mid, _ := readSigningKeySecret(sec)
 		Expect(mid.current.kid).To(Equal(oldKid), "switching before the propagation bound breaks warm verifiers")
 
 		By("step 3: at the bound, current becomes the new key and previous the old one")
 		clock.Advance(time.Nanosecond)
-		_, err = reconcileWith(ctx, r, ns, "orders")
+		_, err = reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ = getSigningKey(ctx, ns, "orders")
+		sec, _ = getSigningKey(ctx, ns, sovZone)
 		switched, _ := readSigningKeySecret(sec)
 		Expect(switched.current.kid).To(Equal(newKid))
 		Expect(switched.previous).NotTo(BeNil())
 		Expect(switched.previous.kid).To(Equal(oldKid))
 		Expect(switched.next).To(BeNil())
-		cm, _ = getJWKS(ctx, ns, "orders")
+		cm, _ = getJWKS(ctx, ns, sovZone)
 		Expect(jwksKids(cm)).To(ConsistOf(oldKid, newKid), "the old key stays published through the overlap")
-		Expect(zoneKeyCondition(ctx, ns, "orders").Reason).To(Equal(ReasonSigningKeyRotationOverlap))
+		Expect(zoneKeyCondition(ctx, ns, sovZone).Reason).To(Equal(ReasonSigningKeyRotationOverlap))
 
 		By("step 4: the old key is retired from both objects only after the 1 h overlap")
 		clock.Advance(ZoneKeyOverlap - time.Nanosecond)
-		_, err = reconcileWith(ctx, r, ns, "orders")
+		_, err = reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ = getSigningKey(ctx, ns, "orders")
+		sec, _ = getSigningKey(ctx, ns, sovZone)
 		still, _ := readSigningKeySecret(sec)
 		Expect(still.previous).NotTo(BeNil(), "retired before the overlap ended")
 		clock.Advance(time.Nanosecond)
-		_, err = reconcileWith(ctx, r, ns, "orders")
+		_, err = reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ = getSigningKey(ctx, ns, "orders")
+		sec, _ = getSigningKey(ctx, ns, sovZone)
 		done, _ := readSigningKeySecret(sec)
 		Expect(done.previous).To(BeNil())
 		Expect(done.current.kid).To(Equal(newKid))
 		Expect(sec.Data).NotTo(HaveKey(signingKeyPreviousKey))
-		cm, _ = getJWKS(ctx, ns, "orders")
+		cm, _ = getJWKS(ctx, ns, sovZone)
 		Expect(jwksKids(cm)).To(ConsistOf(newKid))
-		Expect(zoneKeyCondition(ctx, ns, "orders").Reason).To(Equal(ReasonSigningKeyActive))
+		Expect(zoneKeyCondition(ctx, ns, sovZone).Reason).To(Equal(ReasonSigningKeyActive))
 
 		By("the same nonce does not rotate again")
-		_, err = reconcileWith(ctx, r, ns, "orders")
+		_, err = reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ = getSigningKey(ctx, ns, "orders")
+		sec, _ = getSigningKey(ctx, ns, sovZone)
 		after, _ := readSigningKeySecret(sec)
 		Expect(after.next).To(BeNil())
 		Expect(after.current.kid).To(Equal(newKid))
@@ -310,8 +310,8 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	// the correct next step and never an unsafe one.
 	Describe("resumes after a crash at each step", func() {
 		stage := func(ns string, mutate func(sec *corev1.Secret, cm *corev1.ConfigMap)) {
-			sec, _ := getSigningKey(ctx, ns, "orders")
-			cm, _ := getJWKS(ctx, ns, "orders")
+			sec, _ := getSigningKey(ctx, ns, sovZone)
+			cm, _ := getJWKS(ctx, ns, sovZone)
 			mutate(sec, cm)
 			Expect(k8sClient.Update(ctx, sec)).To(Succeed())
 			Expect(k8sClient.Update(ctx, cm)).To(Succeed())
@@ -319,9 +319,9 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		converged := func(clock *zoneClock) (string, *NextAppReconciler, signingKeySet) {
 			ns, _ := boundZoneFixture(ctx)
 			r := newKeyedZoneReconciler(clock)
-			_, err := reconcileWith(ctx, r, ns, "orders")
+			_, err := reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			sec, _ := getSigningKey(ctx, ns, "orders")
+			sec, _ := getSigningKey(ctx, ns, sovZone)
 			keys, err := readSigningKeySecret(sec)
 			Expect(err).NotTo(HaveOccurred())
 			return ns, r, keys
@@ -330,11 +330,11 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		It("crash after creating the Secret, before the JWKS: the JWKS is created from the Secret", func() {
 			clock := &zoneClock{now: t0}
 			ns, r, keys := converged(clock)
-			cm, _ := getJWKS(ctx, ns, "orders")
+			cm, _ := getJWKS(ctx, ns, sovZone)
 			Expect(k8sClient.Delete(ctx, cm)).To(Succeed())
-			_, err := reconcileWith(ctx, r, ns, "orders")
+			_, err := reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			cm, ok := getJWKS(ctx, ns, "orders")
+			cm, ok := getJWKS(ctx, ns, sovZone)
 			Expect(ok).To(BeTrue())
 			Expect(jwksKids(cm)).To(ConsistOf(keys.current.kid))
 		})
@@ -349,15 +349,15 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 				keys.rotationNonce = "r1"
 				keys.applyTo(sec)
 			})
-			requestRotation(ctx, ns, "orders", "r1")
+			requestRotation(ctx, ns, sovZone, "r1")
 			clock.Advance(10 * time.Minute) // long after the crash: still no switch without a fresh wait
-			_, err = reconcileWith(ctx, r, ns, "orders")
+			_, err = reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			sec, _ := getSigningKey(ctx, ns, "orders")
+			sec, _ := getSigningKey(ctx, ns, sovZone)
 			got, _ := readSigningKeySecret(sec)
 			Expect(got.current.kid).To(Equal(keys.current.kid))
 			Expect(got.nextPublishedAt).To(BeTemporally("==", clock.Now()), "the wait starts at the publish this pass made")
-			cm, _ := getJWKS(ctx, ns, "orders")
+			cm, _ := getJWKS(ctx, ns, sovZone)
 			Expect(jwksKids(cm)).To(ConsistOf(keys.current.kid, nk.kid))
 		})
 
@@ -372,11 +372,11 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 				jwks, _ := buildZoneJWKS(keys.current.pub, nk.pub)
 				cm.Data[ZoneJWKSFileName] = string(jwks)
 			})
-			requestRotation(ctx, ns, "orders", "r1")
+			requestRotation(ctx, ns, sovZone, "r1")
 			clock.Advance(time.Hour)
-			_, err := reconcileWith(ctx, r, ns, "orders")
+			_, err := reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			sec, _ := getSigningKey(ctx, ns, "orders")
+			sec, _ := getSigningKey(ctx, ns, sovZone)
 			got, _ := readSigningKeySecret(sec)
 			Expect(got.current.kid).To(Equal(keys.current.kid), "an unstamped publish never licenses a switch")
 			Expect(got.nextPublishedAt).To(BeTemporally("==", clock.Now()))
@@ -394,17 +394,17 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 				jwks, _ := buildZoneJWKS(keys.current.pub, nk.pub)
 				cm.Data[ZoneJWKSFileName] = string(jwks)
 			})
-			requestRotation(ctx, ns, "orders", "r1")
+			requestRotation(ctx, ns, sovZone, "r1")
 			clock.Advance(DefaultZoneKeyPropagationBound - time.Second)
-			_, err := reconcileWith(ctx, r, ns, "orders")
+			_, err := reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			sec, _ := getSigningKey(ctx, ns, "orders")
+			sec, _ := getSigningKey(ctx, ns, sovZone)
 			got, _ := readSigningKeySecret(sec)
 			Expect(got.current.kid).To(Equal(keys.current.kid))
 			clock.Advance(time.Second)
-			_, err = reconcileWith(ctx, r, ns, "orders")
+			_, err = reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			sec, _ = getSigningKey(ctx, ns, "orders")
+			sec, _ = getSigningKey(ctx, ns, sovZone)
 			got, _ = readSigningKeySecret(sec)
 			Expect(got.current.kid).To(Equal(nk.kid))
 			Expect(got.previous.kid).To(Equal(keys.current.kid))
@@ -423,9 +423,9 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 				cm.Data[ZoneJWKSFileName] = string(jwks)
 			})
 			clock.Advance(3 * time.Hour)
-			_, err := reconcileWith(ctx, r, ns, "orders")
+			_, err := reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			sec, _ := getSigningKey(ctx, ns, "orders")
+			sec, _ := getSigningKey(ctx, ns, sovZone)
 			got, _ := readSigningKeySecret(sec)
 			Expect(got.previous).NotTo(BeNil(), "an unstamped switch never licenses a retire")
 			Expect(got.switchedAt).To(BeTemporally("==", clock.Now()))
@@ -439,9 +439,9 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 				jwks, _ := buildZoneJWKS(old.pub, keys.current.pub)
 				cm.Data[ZoneJWKSFileName] = string(jwks)
 			})
-			_, err := reconcileWith(ctx, r, ns, "orders")
+			_, err := reconcileWith(ctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
-			cm, _ := getJWKS(ctx, ns, "orders")
+			cm, _ := getJWKS(ctx, ns, sovZone)
 			Expect(jwksKids(cm)).To(ConsistOf(keys.current.kid))
 		})
 	})
@@ -449,21 +449,21 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	It("leaves a Secret it does not control untouched, publishes nothing, and reports the conflict", func() {
 		ns := bsNamespace(ctx)
 		squatter := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: ZoneSigningKeySecretName("orders"), Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: ZoneSigningKeySecretName(sovZone), Namespace: ns},
 			Data:       map[string][]byte{"current.key": []byte("not ours")},
 		}
 		Expect(k8sClient.Create(ctx, squatter)).To(Succeed())
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
 		r := newKeyedZoneReconciler(&zoneClock{now: t0})
-		res, err := reconcileWith(ctx, r, ns, "orders")
+		res, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, _ := getSigningKey(ctx, ns, "orders")
+		sec, _ := getSigningKey(ctx, ns, sovZone)
 		Expect(sec.ResourceVersion).To(Equal(squatter.ResourceVersion), "a foreign Secret is never written")
 		Expect(metav1.GetControllerOf(sec)).To(BeNil())
-		_, ok := getJWKS(ctx, ns, "orders")
+		_, ok := getJWKS(ctx, ns, sovZone)
 		Expect(ok).To(BeFalse(), "nothing is published from a Secret the operator does not control")
-		c := zoneKeyCondition(ctx, ns, "orders")
+		c := zoneKeyCondition(ctx, ns, sovZone)
 		Expect(c.Status).To(Equal(metav1.ConditionFalse))
 		Expect(c.Reason).To(Equal(ReasonSigningKeySecretConflict))
 		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
@@ -473,18 +473,18 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	It("leaves a JWKS ConfigMap it does not control untouched and reports the conflict", func() {
 		ns := bsNamespace(ctx)
 		squatter := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: ZoneJWKSConfigMapName("orders"), Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: ZoneJWKSConfigMapName(sovZone), Namespace: ns},
 			Data:       map[string]string{ZoneJWKSFileName: `{"keys":[]}`},
 		}
 		Expect(k8sClient.Create(ctx, squatter)).To(Succeed())
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
 		r := newKeyedZoneReconciler(&zoneClock{now: t0})
-		_, err := reconcileWith(ctx, r, ns, "orders")
+		_, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		cm, _ := getJWKS(ctx, ns, "orders")
+		cm, _ := getJWKS(ctx, ns, sovZone)
 		Expect(cm.ResourceVersion).To(Equal(squatter.ResourceVersion))
-		c := zoneKeyCondition(ctx, ns, "orders")
+		c := zoneKeyCondition(ctx, ns, sovZone)
 		Expect(c.Status).To(Equal(metav1.ConditionFalse))
 		Expect(c.Reason).To(Equal(ReasonJWKSConfigMapConflict))
 	})
@@ -492,9 +492,9 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	It("never mounts the zone's key into a function pod, even one that references it", func() {
 		ns, _ := boundZoneFixture(ctx)
 		r := newKeyedZoneReconciler(&zoneClock{now: t0})
-		_, err := reconcileWith(ctx, r, ns, "orders")
+		_, err := reconcileWith(ctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		sec, ok := getSigningKey(ctx, ns, "orders")
+		sec, ok := getSigningKey(ctx, ns, sovZone)
 		Expect(ok).To(BeTrue())
 		Expect(metav1.GetControllerOf(sec)).NotTo(BeNil(), "the key carries the zone's ownerReference, the very mark the allowlist accepts")
 
@@ -513,13 +513,13 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		Expect(fnEnv).To(HaveKeyWithValue(FunctionTokenAudienceEnv, "knext:fn:"+ns+"/pricing"))
 
 		By("a function in the same zone that names the key is refused and renders nothing")
-		createFunction(ctx, ns, "thief", "orders", func(bs *appsv1alpha1.BackendService) {
+		createFunction(ctx, ns, "thief", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.Volumes = []appsv1alpha1.FunctionVolume{{
 				Name: "k", MountPath: "/keys",
-				Secret: &corev1.SecretVolumeSource{SecretName: ZoneSigningKeySecretName("orders")},
+				Secret: &corev1.SecretVolumeSource{SecretName: ZoneSigningKeySecretName(sovZone)},
 			}}
 		})
-		app := zoneApp(ctx, ns, "orders")
+		app := zoneApp(ctx, ns, sovZone)
 		app.Spec.Backends = append(app.Spec.Backends, appsv1alpha1.BackendBinding{Name: "thief", Service: "thief"})
 		Expect(k8sClient.Update(ctx, app)).To(Succeed())
 		reconcileFunction(ctx, ns, "thief")
@@ -535,7 +535,7 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		bs := &appsv1alpha1.BackendService{
 			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
 			Spec: appsv1alpha1.BackendServiceSpec{
-				Zone: "orders", Image: bsImage, ProtoVersion: "1.0.0",
+				Zone: sovZone, Image: bsImage, ProtoVersion: lcV100,
 				Env: []corev1.EnvVar{{Name: FunctionTokenAudienceEnv, Value: "knext:fn:" + ns + "/other"}},
 			},
 		}
@@ -560,24 +560,24 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		r.Recorder = recorder
 
 		By("a full rotation on the happy path")
-		_, err := reconcileWith(lctx, r, ns, "orders")
+		_, err := reconcileWith(lctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		requestRotation(ctx, ns, "orders", "leak-check")
+		requestRotation(ctx, ns, sovZone, "leak-check")
 		for _, step := range []time.Duration{0, DefaultZoneKeyPropagationBound, ZoneKeyOverlap} {
 			clock.Advance(step)
-			_, err := reconcileWith(lctx, r, ns, "orders")
+			_, err := reconcileWith(lctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
 		}
 
 		By("a write the apiserver refuses with an error that echoes the object (an echoing admission webhook)")
 		echo := &echoingSecretClient{Client: k8sClient}
 		r.Client = echo
-		requestRotation(ctx, ns, "orders", "leak-check-2")
-		_, err = reconcileWith(lctx, r, ns, "orders")
+		requestRotation(ctx, ns, sovZone, "leak-check-2")
+		_, err = reconcileWith(lctx, r, ns, sovZone)
 		Expect(err).To(HaveOccurred(), "the injected refusal must surface")
 		Expect(echo.seen).NotTo(BeEmpty(), "the echoing client never saw a Secret write; the proof is vacuous")
 
-		sec, _ := getSigningKey(ctx, ns, "orders")
+		sec, _ := getSigningKey(ctx, ns, sovZone)
 		var markers []string
 		for _, s := range append(echo.seen, sec) {
 			keys, _ := readSigningKeySecretLenient(s)
@@ -594,7 +594,7 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 			events = append(events, e)
 		}
 		Expect(events).NotTo(BeEmpty())
-		statusJSON, _ := json.Marshal(zoneApp(ctx, ns, "orders").Status)
+		statusJSON, _ := json.Marshal(zoneApp(ctx, ns, sovZone).Status)
 		logMu.Lock()
 		logs := logBuf.String()
 		logMu.Unlock()
@@ -625,22 +625,22 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		r.Recorder = recorder
 
 		By("rotating up to the overlap, so the Secret holds a previous key")
-		_, err := reconcileWith(lctx, r, ns, "orders")
+		_, err := reconcileWith(lctx, r, ns, sovZone)
 		Expect(err).NotTo(HaveOccurred())
-		requestRotation(ctx, ns, "orders", "old-echo")
+		requestRotation(ctx, ns, sovZone, "old-echo")
 		for _, step := range []time.Duration{0, DefaultZoneKeyPropagationBound} {
 			clock.Advance(step)
-			_, err := reconcileWith(lctx, r, ns, "orders")
+			_, err := reconcileWith(lctx, r, ns, sovZone)
 			Expect(err).NotTo(HaveOccurred())
 		}
-		sec, _ := getSigningKey(ctx, ns, "orders")
+		sec, _ := getSigningKey(ctx, ns, sovZone)
 		Expect(sec.Data).To(HaveKey(signingKeyPreviousKey), "setup: the zone must be in its overlap")
 
 		By("the RetirePrevious write is refused by a webhook that echoes the stored oldObject (base64 data)")
 		echo := &oldObjectEchoingSecretClient{Client: k8sClient}
 		r.Client = echo
 		clock.Advance(ZoneKeyOverlap)
-		_, err = reconcileWith(lctx, r, ns, "orders")
+		_, err = reconcileWith(lctx, r, ns, sovZone)
 		Expect(err).To(HaveOccurred(), "the injected refusal must surface")
 		Expect(err.Error()).To(ContainSubstring(string(zkRetirePrevious)), "the refused write must be the retire")
 		Expect(echo.old).NotTo(BeEmpty(), "the echoing client never saw a Secret write; the proof is vacuous")
@@ -660,7 +660,7 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 		for e := range recorder.Events {
 			events = append(events, e)
 		}
-		statusJSON, _ := json.Marshal(zoneApp(ctx, ns, "orders").Status)
+		statusJSON, _ := json.Marshal(zoneApp(ctx, ns, sovZone).Status)
 		logMu.Lock()
 		logs := logBuf.String()
 		logMu.Unlock()
@@ -688,7 +688,7 @@ func (c *oldObjectEchoingSecretClient) Update(ctx context.Context, obj client.Ob
 		return c.Client.Update(ctx, obj, opts...)
 	}
 	stored := &corev1.Secret{}
-	if err := c.Client.Get(ctx, client.ObjectKeyFromObject(obj), stored); err != nil {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(obj), stored); err != nil {
 		return err
 	}
 	c.old = append(c.old, stored)

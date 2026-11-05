@@ -41,7 +41,7 @@ import (
 // injected (a false rejection), and no name is actually injected but NOT
 // admission-reserved (a silent-collision hole, the #1288 bug reopened).
 func reservedEnvNamesParityApp(spec appsv1alpha1.NextAppSpec) *appsv1alpha1.NextApp {
-	spec.Image = "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+	spec.Image = validImage
 	return &appsv1alpha1.NextApp{Spec: spec}
 }
 
@@ -179,7 +179,7 @@ func TestReservedEnvNamesParity(t *testing.T) {
 			Cache: &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://x", KeyPrefix: "app1"},
 		}},
 		{"revalidation: kafka queue", appsv1alpha1.NextAppSpec{
-			Revalidation: &appsv1alpha1.RevalidationSpec{Queue: "kafka", KafkaBrokerUrl: "kafka:9092"},
+			Revalidation: &appsv1alpha1.RevalidationSpec{Queue: lcKafka, KafkaBrokerUrl: "kafka:9092"},
 		}},
 		{"observability: enabled, nothing else", appsv1alpha1.NextAppSpec{
 			Observability: &appsv1alpha1.ObservabilitySpec{Enabled: true},
@@ -232,7 +232,7 @@ func TestReservedEnvNamesParity(t *testing.T) {
 			CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare", IncludePaths: []string{}},
 		}},
 		{"cdn: emulatorEndpoint set", appsv1alpha1.NextAppSpec{
-			CDN: &appsv1alpha1.CDNSpec{Provider: "emulator", EmulatorEndpoint: "http://e.ns.svc.cluster.local"},
+			CDN: &appsv1alpha1.CDNSpec{Provider: lcEmulator, EmulatorEndpoint: "http://e.ns.svc.cluster.local"},
 		}},
 		{"cdn: purge without requestsPerMinute", appsv1alpha1.NextAppSpec{
 			CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare", Purge: &appsv1alpha1.CDNPurgeSpec{
@@ -245,7 +245,7 @@ func TestReservedEnvNamesParity(t *testing.T) {
 			}},
 		}},
 		{"cdn: build vinext renders nothing", appsv1alpha1.NextAppSpec{
-			Build: "vinext",
+			Build: lcVinext,
 			CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare", ExcludePaths: []string{"/a"}, Purge: &appsv1alpha1.CDNPurgeSpec{
 				SecretRef: appsv1alpha1.CDNSecretRef{Name: "s", Key: "k"}, Target: "t", RequestsPerMinute: 7,
 			}},
@@ -254,7 +254,7 @@ func TestReservedEnvNamesParity(t *testing.T) {
 			Scaling:      &appsv1alpha1.ScalingSpec{PoolMax: 10},
 			Storage:      &appsv1alpha1.StorageSpec{Provider: "minio", Bucket: "b", Region: "us-east-1", Endpoint: "http://minio:9000"},
 			Cache:        &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://x", KeyPrefix: "app1"},
-			Revalidation: &appsv1alpha1.RevalidationSpec{Queue: "kafka", KafkaBrokerUrl: "kafka:9092"},
+			Revalidation: &appsv1alpha1.RevalidationSpec{Queue: lcKafka, KafkaBrokerUrl: "kafka:9092"},
 			Observability: &appsv1alpha1.ObservabilitySpec{
 				Enabled: true,
 				Rum:     &appsv1alpha1.RumSpec{Enabled: true, SampleRate: "0.5"},

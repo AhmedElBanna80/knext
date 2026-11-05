@@ -210,7 +210,7 @@ func connectionFootprint(spec *appsv1alpha1.NextAppSpec) int64 {
 // validateNextAppSpec is the shared spec check. grandfathered is the connection
 // footprint an UPDATE may carry forward over the budget (the previous spec's
 // maxScale × poolMax); 0 means no grace, which is what create and the reconciler use.
-func validateNextAppSpec(spec *appsv1alpha1.NextAppSpec, budget int, grandfathered int64) error {
+func validateNextAppSpec(spec *appsv1alpha1.NextAppSpec, budget int, grandfathered int64) error { //nolint:gocyclo // long branch-per-condition orchestrator; splitting is tracked debt, new functions stay under the limit
 	if spec == nil {
 		return fmt.Errorf("spec is required")
 	}

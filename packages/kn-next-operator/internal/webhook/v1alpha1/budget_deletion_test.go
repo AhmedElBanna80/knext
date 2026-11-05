@@ -90,7 +90,7 @@ func TestAdmission_OverBudgetAppRatchet(t *testing.T) {
 
 	old := appWithWall(10, 10)
 	imageBump := appWithWall(10, 10)
-	imageBump.Spec.Image = "registry.example.com/app:v2@sha256:def456abc123"
+	imageBump.Spec.Image = image2
 	if _, err := v.ValidateUpdate(ctx, old, imageBump); err != nil {
 		t.Errorf("an image-only update must pass on an over-budget app, got %v", err)
 	}

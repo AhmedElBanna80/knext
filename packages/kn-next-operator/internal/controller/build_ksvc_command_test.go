@@ -52,8 +52,8 @@ func TestBuildDesiredKsvcCommandByArtifactShape(t *testing.T) {
 		{"standalone under bun execs server.js", "", "bun", false, []string{"bun", "run", "server.js"}},
 		{"turbopack under bun execs server.js", "turbopack", "bun", false, []string{"bun", "run", "server.js"}},
 		{"standalone under node defers to the image", "", "node", false, nil},
-		{"vinext defers to the image CMD even with runtime bun", "vinext", "bun", false, nil},
-		{"vinext with runtime unset defers to the image CMD", "vinext", "", false, nil},
+		{"vinext defers to the image CMD even with runtime bun", lcVinext, "bun", false, nil},
+		{"vinext with runtime unset defers to the image CMD", lcVinext, "", false, nil},
 		// #1219: webpack is a SECOND spelling of the standalone shape (same
 		// `.next/standalone` artifact turbopack emits, just a different `next
 		// build` bundler flag). Nothing distinguishes it from "turbopack" in
@@ -86,7 +86,7 @@ func TestBuildDesiredKsvcCommandByArtifactShape(t *testing.T) {
 		// selfContained is meaningless for vinext (already always nil,
 		// regardless) — this row proves the new field cannot FLIP a vinext
 		// row to a forced command by some accidental precedence bug.
-		{"self-contained vinext defers to the image CMD (field is a no-op here)", "vinext", "bun", true, nil},
+		{"self-contained vinext defers to the image CMD (field is a no-op here)", lcVinext, "bun", true, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

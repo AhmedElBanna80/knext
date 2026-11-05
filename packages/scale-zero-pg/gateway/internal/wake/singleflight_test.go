@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,7 +49,7 @@ func (d *coldWakeDriver) Wake(_ context.Context, t Target) error {
 	if _, up := d.listeners[t.Key]; up {
 		return nil
 	}
-	ln, err := net.Listen("tcp", net.JoinHostPort(t.Host, strconv.Itoa(t.Port)))
+	ln, err := listenReserved(t.Host, t.Port)
 	if err != nil {
 		return err
 	}
@@ -85,18 +84,14 @@ func (d *coldWakeDriver) wakesFor(key string) int {
 	return d.perKey[key]
 }
 
-// reserveColdTarget grabs a free localhost port and returns a Target for it while
-// leaving that port CLOSED — so an initial TryConnect is refused (compute asleep)
-// until coldWakeDriver.Wake binds a listener on it.
+// reserveColdTarget reserves a free localhost port and returns a Target for it
+// while leaving nothing LISTENING on it — so an initial TryConnect is refused
+// (compute asleep) until the driver's Wake brings a listener up on it. The port
+// stays reserved (see reservePort) until Wake claims it via listenReserved, so
+// there is no close->rebind window for another process to steal it.
 func reserveColdTarget(t *testing.T, key string) Target {
 	t.Helper()
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve port: %v", err)
-	}
-	host, portStr, _ := net.SplitHostPort(probe.Addr().String())
-	port, _ := strconv.Atoi(portStr)
-	_ = probe.Close() // release the port; Wake will rebind it (no TIME_WAIT: never accepted)
+	host, port := reservePort(t)
 	return Target{Host: host, Port: port, Key: key}
 }
 
@@ -237,7 +232,7 @@ func (d *blockingWakeDriver) Wake(ctx context.Context, t Target) error {
 	if d.ln != nil {
 		return nil
 	}
-	ln, err := net.Listen("tcp", net.JoinHostPort(t.Host, strconv.Itoa(t.Port)))
+	ln, err := listenReserved(t.Host, t.Port)
 	if err != nil {
 		return err
 	}

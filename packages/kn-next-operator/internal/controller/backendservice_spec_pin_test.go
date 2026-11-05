@@ -20,13 +20,13 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
@@ -102,7 +102,7 @@ func TestSpecDigestVectors(t *testing.T) {
 }
 
 func baseSpec() appsv1alpha1.BackendServiceSpec {
-	return appsv1alpha1.BackendServiceSpec{Zone: "orders", Image: imageA}
+	return appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: imageA}
 }
 
 func digestOf(t *testing.T, spec appsv1alpha1.BackendServiceSpec) string {
@@ -168,7 +168,7 @@ func TestSpecPinIgnoresWhatDoesNotDecideCodeOrReads(t *testing.T) {
 	tuned.Language = "go"
 	tuned.Port = 9090
 	tuned.ProtoVersion = "2.0.0"
-	tuned.WakeAhead = ptr.To(false)
+	tuned.WakeAhead = new(false)
 	tuned.Scaling = &appsv1alpha1.FunctionScalingSpec{MinScale: 1, MaxScale: 4, ContainerConcurrency: 8}
 	tuned.Resources = &appsv1alpha1.ResourcesSpec{CPURequest: "100m", MemoryLimit: "128Mi"}
 	tuned.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "regcred"}}
@@ -206,11 +206,11 @@ func TestSpecDigestEveryHashedFieldMatters(t *testing.T) {
 	mutations := map[string]func(*appsv1alpha1.BackendServiceSpec){
 		"env value":          func(s *appsv1alpha1.BackendServiceSpec) { s.Env[0].Value = "2" },
 		"env name":           func(s *appsv1alpha1.BackendServiceSpec) { s.Env[0].Name = "Z" },
-		"envFrom secret":     func(s *appsv1alpha1.BackendServiceSpec) { s.EnvFrom[0].SecretRef.Name = "stripe" },
+		"envFrom secret":     func(s *appsv1alpha1.BackendServiceSpec) { s.EnvFrom[0].SecretRef.Name = lcStripe },
 		"envFrom prefix":     func(s *appsv1alpha1.BackendServiceSpec) { s.EnvFrom[0].Prefix = "X_" },
-		"volume secret":      func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes[0].Secret.SecretName = "stripe" },
+		"volume secret":      func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes[0].Secret.SecretName = lcStripe },
 		"volume mountPath":   func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes[0].MountPath = "/elsewhere" },
-		"volume defaultMode": func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes[0].Secret.DefaultMode = ptr.To(int32(0)) },
+		"volume defaultMode": func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes[0].Secret.DefaultMode = new(int32(0)) },
 		"image":              func(s *appsv1alpha1.BackendServiceSpec) { s.Image = imageB },
 		"image tag":          func(s *appsv1alpha1.BackendServiceSpec) { s.Image = "registry.example.com/fn:v2@sha256:" + pinDigestA },
 		"image registry":     func(s *appsv1alpha1.BackendServiceSpec) { s.Image = "mirror.example.org/fn:v1@sha256:" + pinDigestA },
@@ -278,7 +278,7 @@ func TestASpecMismatchIsNotAccepted(t *testing.T) {
 
 func TestASpecMismatchIsDecidedEvenWhenASecretReadFails(t *testing.T) {
 	o := specMismatchObservation()
-	o.unverified = []unverifiedSecret{{name: "stripe", err: "timeout"}}
+	o.unverified = []unverifiedSecret{{name: lcStripe, err: "timeout"}}
 	if o.undecided() {
 		t.Fatal("a mismatched function must not be held as undecided: the mismatch is a definitive refusal")
 	}
@@ -319,10 +319,8 @@ func TestAnImageMismatchOutranksASpecMismatch(t *testing.T) {
 }
 
 func TestTheSpecRefusalIsCountedUnderItsOwnReason(t *testing.T) {
-	for _, r := range backendServiceRefusalReasons {
-		if r == ReasonBindingSpecMismatch {
-			return
-		}
+	if slices.Contains(backendServiceRefusalReasons, ReasonBindingSpecMismatch) {
+		return
 	}
 	t.Fatalf("%s must be a pre-registered reason of the refusals counter", ReasonBindingSpecMismatch)
 }
@@ -334,12 +332,12 @@ func TestTheSpecRefusalIsCountedUnderItsOwnReason(t *testing.T) {
 // has, so a new field cannot be added without this file (and the lists in
 // backendservice_spec_pin.go) being touched in the same change.
 var specPinMutators = map[string]func(*appsv1alpha1.BackendServiceSpec){
-	"zone":         func(s *appsv1alpha1.BackendServiceSpec) { s.Zone = "billing" },
+	"zone":         func(s *appsv1alpha1.BackendServiceSpec) { s.Zone = sovOther },
 	"image":        func(s *appsv1alpha1.BackendServiceSpec) { s.Image = imageB },
 	"language":     func(s *appsv1alpha1.BackendServiceSpec) { s.Language = "rust" },
 	"port":         func(s *appsv1alpha1.BackendServiceSpec) { s.Port = 9191 },
 	"protoVersion": func(s *appsv1alpha1.BackendServiceSpec) { s.ProtoVersion = "9.9.9" },
-	"wakeAhead":    func(s *appsv1alpha1.BackendServiceSpec) { s.WakeAhead = ptr.To(false) },
+	"wakeAhead":    func(s *appsv1alpha1.BackendServiceSpec) { s.WakeAhead = new(false) },
 	"scaling": func(s *appsv1alpha1.BackendServiceSpec) {
 		s.Scaling = &appsv1alpha1.FunctionScalingSpec{MinScale: 1, MaxScale: 3, ContainerConcurrency: 7}
 	},
@@ -349,8 +347,11 @@ var specPinMutators = map[string]func(*appsv1alpha1.BackendServiceSpec){
 	"env": func(s *appsv1alpha1.BackendServiceSpec) {
 		s.Env = []corev1.EnvVar{{Name: "NODE_OPTIONS", Value: "--import=data:text/javascript,1"}}
 	},
-	"envFrom": func(s *appsv1alpha1.BackendServiceSpec) { s.EnvFrom = specEnvFromSecret("stripe").EnvFrom },
-	"volumes": func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes = specSecretVolume("stripe").Volumes },
+	"envFrom": func(s *appsv1alpha1.BackendServiceSpec) { s.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom },
+	"volumes": func(s *appsv1alpha1.BackendServiceSpec) { s.Volumes = specSecretVolume(lcStripe).Volumes },
+	"security": func(s *appsv1alpha1.BackendServiceSpec) {
+		s.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: new(false)}
+	},
 	"imagePullSecrets": func(s *appsv1alpha1.BackendServiceSpec) {
 		s.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "regcred"}}
 	},
@@ -358,13 +359,13 @@ var specPinMutators = map[string]func(*appsv1alpha1.BackendServiceSpec){
 
 func specJSONFields(t *testing.T) []string {
 	t.Helper()
-	typ := reflect.TypeOf(appsv1alpha1.BackendServiceSpec{})
+	typ := reflect.TypeFor[appsv1alpha1.BackendServiceSpec]()
 	var names []string
-	for i := 0; i < typ.NumField(); i++ {
-		tag := typ.Field(i).Tag.Get("json")
+	for field := range typ.Fields() {
+		tag := field.Tag.Get("json")
 		name := strings.Split(tag, ",")[0]
 		if name == "" || name == "-" {
-			t.Fatalf("BackendServiceSpec.%s has no json name: the pin cannot classify it", typ.Field(i).Name)
+			t.Fatalf("BackendServiceSpec.%s has no json name: the pin cannot classify it", field.Name)
 		}
 		names = append(names, name)
 	}
@@ -384,7 +385,7 @@ func specPinSortedKeys[V any](m map[string]V) []string {
 func renderedFunction(t *testing.T, spec appsv1alpha1.BackendServiceSpec) string {
 	t.Helper()
 	bs := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: "shop"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: sovNS},
 		Spec:       spec,
 	}
 	objs, err := RenderFunctionObjects(bs, 0)
@@ -511,25 +512,31 @@ func TestFieldClassificationMatchesWhatTheOperatorRenders(t *testing.T) {
 // someone adds a list, a map or a nested object to scaling or resources, that
 // could carry env-like content past the pin, so it must be reviewed.
 func TestExcludedStructFieldsCarryOnlyScalars(t *testing.T) {
-	typ := reflect.TypeOf(appsv1alpha1.BackendServiceSpec{})
-	for i := 0; i < typ.NumField(); i++ {
-		name := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+	typ := reflect.TypeFor[appsv1alpha1.BackendServiceSpec]()
+	for field := range typ.Fields() {
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
 		ex, excluded := specPinExcludedFields[name]
 		if !excluded {
 			continue
 		}
-		ft := typ.Field(i).Type
+		ft := field.Type
 		for ft.Kind() == reflect.Ptr {
 			ft = ft.Elem()
 		}
 		switch ft.Kind() {
 		case reflect.Struct:
-			for j := 0; j < ft.NumField(); j++ {
-				switch ft.Field(j).Type.Kind() {
+			for field := range ft.Fields() {
+				switch field.Type.Kind() {
 				case reflect.String, reflect.Bool, reflect.Int, reflect.Int32, reflect.Int64:
+				case reflect.Ptr:
+					// security.networkPolicy is a *bool (nil = default-on); a pointer to a scalar is still a scalar.
+					if field.Type.Elem().Kind() != reflect.Bool {
+						t.Errorf("excluded field %q (%s) has %s of kind %s: only scalars may be excluded without "+
+							"another review; hash it or extend this guard deliberately", name, ex.Class, field.Name, field.Type.Kind())
+					}
 				default:
 					t.Errorf("excluded field %q (%s) has %s of kind %s: only scalars may be excluded without "+
-						"another review; hash it or extend this guard deliberately", name, ex.Class, ft.Field(j).Name, ft.Field(j).Type.Kind())
+						"another review; hash it or extend this guard deliberately", name, ex.Class, field.Name, field.Type.Kind())
 				}
 			}
 		case reflect.Slice, reflect.Map:
@@ -550,13 +557,13 @@ func TestASpecPinChangesNothingRenderedIntoTheZone(t *testing.T) {
 	bs := &appsv1alpha1.BackendService{
 		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: "default"},
 		Spec: appsv1alpha1.BackendServiceSpec{
-			Zone: "orders", Image: imageA, ProtoVersion: "1.0.0", WakeAhead: ptr.To(true),
+			Zone: sovZone, Image: imageA, ProtoVersion: lcV100, WakeAhead: new(true),
 		},
-		Status: appsv1alpha1.BackendServiceStatus{ServedProtoVersion: "1.0.0"},
+		Status: appsv1alpha1.BackendServiceStatus{ServedProtoVersion: lcV100},
 	}
 	render := func(entry appsv1alpha1.BackendBinding, fn *appsv1alpha1.BackendService) string {
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "default", Generation: 1},
+			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: "default", Generation: 1},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    "registry.example.com/app:v1@sha256:" + pinDigestA,
 				Backends: []appsv1alpha1.BackendBinding{entry},

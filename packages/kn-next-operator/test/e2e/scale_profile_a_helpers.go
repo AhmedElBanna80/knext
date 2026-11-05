@@ -34,13 +34,6 @@ import (
 // move with it.
 const homePageMarker = "Powered by Knative + Next.js"
 
-// onDemandPageMarker is the stable heading of the file-manager
-// `/cache-tests/on-demand` route (apps/file-manager/src/app/cache-tests/on-demand/page.tsx),
-// a `force-dynamic` server-rendered route. Serving it proves the woken pod runs
-// SSR per request, and it is the exact page whose tag-cached data the ISR
-// assertion busts.
-const onDemandPageMarker = "On-Demand Revalidation"
-
 // productsGeneratedAtClass is the Tailwind class on the span wrapping the
 // PRODUCTS card's `generatedAt` timestamp on the on-demand page. That value is
 // produced by an unstable_cache keyed with the `products` tag, so it only

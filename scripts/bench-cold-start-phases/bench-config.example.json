@@ -1,0 +1,11 @@
+{
+  "$comment": "Copy to bench-config.json (git-ignored) and edit. Every key is optional; a flag or KNEXT_BENCH_* variable overrides it. See benchconfig.py.",
+  "context": "my-cluster-context",
+  "namespace": "my-bench-namespace",
+  "harnessPod": "phase-bench",
+  "harnessContainer": "harness",
+  "scratchDir": "/tmp",
+  "agentPods": { "node-name-1": "agent-pod-1", "node-name-2": "agent-pod-2" },
+  "agentLabel": "app=phase-agent",
+  "nodePoolLabel": "cloud.google.com/gke-nodepool"
+}

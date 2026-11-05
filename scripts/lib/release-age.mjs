@@ -339,7 +339,7 @@ export function changedEntries(head, base) {
 
 /** A repository source that pins a commit in its own spec (`github:o/r#sha`, `git+ssh://…#sha`). */
 const PINNED_REPO_SPEC =
-  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\+[a-z]+)?:\/\/|git\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^git(?:\+[a-z]+)?:\/\/(?:(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+(?::[0-9]+)?\/|(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:)[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 /** `github:` deps resolve to a codeload tarball addressed by the full commit sha. */
 const COMMIT_TARBALL =
   /^https:\/\/codeload\.github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/tar\.gz\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/;

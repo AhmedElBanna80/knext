@@ -108,7 +108,7 @@ var _ = Describe("NextApp reconcile idempotency — repeated reconciles never ch
 
 		const reconcileCount = 20
 		templates := make([]string, 0, reconcileCount)
-		for i := 0; i < reconcileCount; i++ {
+		for range reconcileCount {
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
 			Expect(err).NotTo(HaveOccurred())
 

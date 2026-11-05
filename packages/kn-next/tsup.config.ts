@@ -128,6 +128,12 @@ export default defineConfig([
       // (acorn) out of the compile script's node-builtins-only import closure;
       // it fails closed when absent, so it must ship in dist beside it.
       'adapters/asset-anchor-analyze': 'src/adapters/asset-anchor-analyze.mjs',
+      // The createRequire(import.meta.url) analysis behind the strict require
+      // check (#2614). entry-require-staticize SPAWNS it (`bun <path>`) beside
+      // itself, for the same reason as asset-anchor-analyze: acorn stays out of
+      // the compile script's node-builtins-only closure. It fails closed when
+      // absent, so it must ship in dist beside vinext-compile.
+      'adapters/create-require-analyze': 'src/adapters/create-require-analyze.mjs',
       // The compiled standalone-on-Bun build (`build: turbopack` + `runtime:
       // bun`): `next build`'s server.js -> a bytecode single executable.
       // Spawned as a SCRIPT (`bun run …`) like vinext-compile, for the same
@@ -149,6 +155,11 @@ export default defineConfig([
       // imports it into the lazy sharp facade by absolute path (and fails closed
       // when absent), so it must ship in dist beside vinext-compile.
       'adapters/sharp-native-extract': 'src/adapters/sharp-native-extract.mjs',
+      // The self-contained app-data alias: vinext-compile imports it into the
+      // compiled entry by absolute path (and fails closed when it is absent
+      // while data files are embedded), so it must ship in dist beside
+      // vinext-compile.
+      'adapters/app-data-alias': 'src/adapters/app-data-alias.mjs',
       // The Bun.serve deployed Cache-Control normalization (#1322). vinext-compile
       // injects an `import` of this after the sidecar resolver (and fails closed
       // when it is absent), so it must ship in dist beside vinext-compile.

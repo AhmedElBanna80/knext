@@ -117,7 +117,7 @@ func loadGoldenCorpus(t *testing.T) []*appsv1alpha1.NextApp {
 // a header comment block is recognised as empty.
 func stripYAMLComments(doc []byte) []byte {
 	var out [][]byte
-	for _, line := range bytes.Split(doc, []byte("\n")) {
+	for line := range bytes.SplitSeq(doc, []byte("\n")) {
 		if bytes.HasPrefix(bytes.TrimSpace(line), []byte("#")) {
 			continue
 		}
@@ -148,7 +148,7 @@ func goldenTestScheme(t *testing.T, withPlatformKind bool) *runtime.Scheme {
 
 // renderedKinds is the fixed render order of the golden; a kind the operator
 // starts creating that is not listed here is caught by the "unlisted kind" check.
-var renderedKinds = []string{"ServiceAccount", "Image", "Service", "NetworkPolicy", "DaemonSet"}
+var renderedKinds = []string{"ServiceAccount", "Image", lcService, "NetworkPolicy", "DaemonSet"}
 
 // renderApp drives one Reconcile of app and returns the serialised children.
 // rc.objects are pre-existing cluster objects (a KnextPlatform in the platform
@@ -217,7 +217,7 @@ func renderApp(t *testing.T, app *appsv1alpha1.NextApp, rc reconcilerCase) strin
 	// KafkaSource: Reconcile never reaches it today (revalidationDeferred is
 	// true for every kafka app), so it is rendered through its builder to keep
 	// its shape pinned beside the rest. The golden for a non-kafka app has none.
-	if app.Spec.Revalidation != nil && app.Spec.Revalidation.Queue == "kafka" {
+	if app.Spec.Revalidation != nil && app.Spec.Revalidation.Queue == lcKafka {
 		buf.WriteString("# KafkaSource (builder output; Reconcile does not create it)\n---\n")
 		buf.Write(marshalNormalized(t, scheme, buildKafkaSource(app)))
 	}
@@ -234,7 +234,7 @@ func listKind(t *testing.T, ctx context.Context, c client.Client, scheme *runtim
 		for i := range l.Items {
 			out = append(out, &l.Items[i])
 		}
-	case "Service":
+	case lcService:
 		l := &servingv1.ServiceList{}
 		mustList(t, ctx, c, l, ns)
 		for i := range l.Items {

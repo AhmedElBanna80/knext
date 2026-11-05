@@ -212,7 +212,7 @@ func platformSpecHash(spec *platformv1alpha1.KnextPlatformSpec) string {
 		// A KnextPlatformSpec is plain scalars and pointers, so Marshal cannot
 		// fail; the fallback exists only so the shared reconcile loop never
 		// panics (#435) and still gives distinct specs distinct stamps.
-		raw = []byte(fmt.Sprintf("%+v", *spec))
+		raw = fmt.Appendf(nil, "%+v", *spec)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:8])

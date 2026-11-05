@@ -143,7 +143,7 @@ func TestGaugeIsZeroAndOneWarningIsLoggedWhenNotEnforced(t *testing.T) {
 			m := &Monitor{Source: src, Name: "kn-next-operator-secret-configmap-writes", Log: logs.logger()}
 			// Repeated checks of the same broken state: one warning, not one per tick.
 			var v Verdict
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				v = m.CheckOnce(context.Background())
 			}
 			if v.Enforced || v.Reason != tc.want {

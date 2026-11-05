@@ -1,6 +1,9 @@
 export function isBareNonBuiltin(spec: string): boolean;
 
-export function analyzeServerModule(src: string): {
+export function analyzeServerModule(
+    src: string,
+    analyzerPath?: string,
+): {
     aliases: string[];
     requireBindings: string[];
     exports: Map<string, string[]>;
@@ -9,7 +12,14 @@ export function analyzeServerModule(src: string): {
     nonLiteralCallees: Set<string>;
     declarationCounts: Map<string, number>;
     unrecognizedBinding: boolean;
+    foldedRuntimeRequires: string[];
 };
+
+export function importedRequireEscapes(
+    src: string,
+    names: string[],
+    analyzerPath?: string,
+): boolean;
 
 export function wrapRequireBindings(
     src: string,

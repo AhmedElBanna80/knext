@@ -96,6 +96,11 @@ describe("#ADR-0048 the compile argv", () => {
         // from inside a compiled binary — without the shim `/_next/image`
         // silently serves unoptimized originals.
         expect(argv.slice(0, 2)).toEqual(["bun", "run"]);
+        // Bun must not load the app's `.env*` files into the compile process: the
+        // compile reads next.config in a child that gives it the environment
+        // `next build` would, and it can only tell the real shell environment from
+        // Bun's own loading if Bun does not do any.
+        expect(argv[2]).toBe("--no-env-file");
         // Extension-agnostic: the source is `.mjs` and the shipped build emits
         // `.js`, and this guard runs against both.
         expect(argv.join(" ")).toMatch(/vinext-compile\.(m?js)\b/);

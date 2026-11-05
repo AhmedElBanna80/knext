@@ -34,7 +34,7 @@ import (
 // (buildKsvcEnv); the envtest file pins admission and the rendered ksvc end to end.
 
 func cdnApp(spec appsv1alpha1.NextAppSpec) *appsv1alpha1.NextApp {
-	spec.Image = "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+	spec.Image = validImage
 	return &appsv1alpha1.NextApp{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
 		Spec:       spec,
@@ -75,7 +75,7 @@ func TestCDNEnv_RendersEveryField(t *testing.T) {
 
 	want := map[string]string{
 		"KNEXT_CDN_PROVIDER":         "cloudflare",
-		"KNEXT_CDN_TAG_PREFIX":       "24116dd4a062", // first 12 hex of sha256("default/my-app")
+		lcKNEXTCDNTAGPREFIX:          lcV24116dd4a062, // first 12 hex of sha256("default/my-app")
 		"KNEXT_CDN_HTML_TTL_SECONDS": "45",
 		"KNEXT_CDN_SWR_SECONDS":      "10",
 		"KNEXT_CDN_EXCLUDE_PATHS":    "/account,/admin",
@@ -130,7 +130,7 @@ func TestCDNEnv_OptionalFieldsAreOmittedAndDefaultsApply(t *testing.T) {
 
 func TestCDNEnv_EmulatorEndpoint(t *testing.T) {
 	app := cdnApp(appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{
-		Provider:         "emulator",
+		Provider:         lcEmulator,
 		EmulatorEndpoint: "http://cdn-emulator.e2e.svc.cluster.local:8080",
 	}})
 	got := cdnEnvOf(buildEnvFor(t, app))
@@ -145,9 +145,9 @@ func TestCDNEnv_TagPrefixIsDerivedFromNamespaceAndName(t *testing.T) {
 	a := cdnApp(appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}})
 	b := cdnApp(appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}})
 	b.Namespace = "other"
-	pa := cdnEnvOf(buildEnvFor(t, a))["KNEXT_CDN_TAG_PREFIX"].Value
-	pb := cdnEnvOf(buildEnvFor(t, b))["KNEXT_CDN_TAG_PREFIX"].Value
-	if pa != "24116dd4a062" || pb != "222f2582e8eb" {
+	pa := cdnEnvOf(buildEnvFor(t, a))[lcKNEXTCDNTAGPREFIX].Value
+	pb := cdnEnvOf(buildEnvFor(t, b))[lcKNEXTCDNTAGPREFIX].Value
+	if pa != lcV24116dd4a062 || pb != "222f2582e8eb" {
 		t.Errorf("prefixes = %q / %q, want 24116dd4a062 / 222f2582e8eb (sha256 of namespace/name)", pa, pb)
 	}
 }
@@ -163,7 +163,7 @@ func TestCDNEnv_ZeroDiffWithoutSpecCDN(t *testing.T) {
 // D11: vinext (Beta) renders nothing; the verdict reports it instead.
 func TestCDNEnv_VinextRendersNothing(t *testing.T) {
 	app := cdnApp(appsv1alpha1.NextAppSpec{
-		Build: "vinext",
+		Build: lcVinext,
 		CDN:   &appsv1alpha1.CDNSpec{Provider: "cloudflare"},
 	})
 	if got := cdnEnvOf(buildEnvFor(t, app)); len(got) != 0 {
@@ -177,8 +177,8 @@ func TestCDNEnv_VinextRendersNothing(t *testing.T) {
 func TestCDNEnv_EnvMapReservedNamesAreDroppedWithoutSpecCDN(t *testing.T) {
 	app := cdnApp(appsv1alpha1.NextAppSpec{Secrets: &appsv1alpha1.SecretsSpec{
 		EnvMap: map[string]appsv1alpha1.EnvMapEntry{
-			"KNEXT_CDN_TAG_PREFIX": {SecretName: "s", SecretKey: "k"},
-			"KEEP_ME":              {SecretName: "s", SecretKey: "k"},
+			lcKNEXTCDNTAGPREFIX: {SecretName: "s", SecretKey: "k"},
+			"KEEP_ME":           {SecretName: "s", SecretKey: "k"},
 		},
 	}})
 	r := &NextAppReconciler{}
@@ -206,15 +206,15 @@ func TestCDNEnv_EnvMapCannotOverrideARenderedName(t *testing.T) {
 	app := cdnApp(appsv1alpha1.NextAppSpec{
 		CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"},
 		Secrets: &appsv1alpha1.SecretsSpec{EnvMap: map[string]appsv1alpha1.EnvMapEntry{
-			"KNEXT_CDN_TAG_PREFIX": {SecretName: "s", SecretKey: "k"},
+			lcKNEXTCDNTAGPREFIX: {SecretName: "s", SecretKey: "k"},
 		}},
 	})
 	got := buildEnvFor(t, app)
 	n := 0
 	for _, ev := range got {
-		if ev.Name == "KNEXT_CDN_TAG_PREFIX" {
+		if ev.Name == lcKNEXTCDNTAGPREFIX {
 			n++
-			if ev.ValueFrom != nil || ev.Value != "24116dd4a062" {
+			if ev.ValueFrom != nil || ev.Value != lcV24116dd4a062 {
 				t.Errorf("operator value must win, got %+v", ev)
 			}
 		}
@@ -234,7 +234,7 @@ func TestCDNEnv_SpecEnvReservedNamesAreDroppedWithAWarning(t *testing.T) {
 			app := cdnApp(appsv1alpha1.NextAppSpec{
 				CDN: cdn,
 				Env: map[string]string{
-					"KNEXT_CDN_TAG_PREFIX":        "forged",
+					lcKNEXTCDNTAGPREFIX:           "forged",
 					"KNEXT_CDN_EMULATOR_ENDPOINT": "http://evil.example.com",
 					"KEEP_ME":                     "1",
 				},
@@ -247,7 +247,7 @@ func TestCDNEnv_SpecEnvReservedNamesAreDroppedWithAWarning(t *testing.T) {
 				if ev.Name == "KNEXT_CDN_EMULATOR_ENDPOINT" {
 					t.Errorf("spec.env KNEXT_CDN_EMULATOR_ENDPOINT leaked: %+v", ev)
 				}
-				if ev.Name == "KNEXT_CDN_TAG_PREFIX" && ev.Value == "forged" {
+				if ev.Name == lcKNEXTCDNTAGPREFIX && ev.Value == "forged" {
 					t.Errorf("spec.env forged the tag prefix: %+v", ev)
 				}
 				if ev.Name == "KEEP_ME" {
@@ -285,7 +285,7 @@ func cdnCondition(v statusVerdict, condType string) (metav1.Condition, bool) {
 
 func TestCDNAdvisory_VinextIsInertAndSaysSo(t *testing.T) {
 	app := verdictApp()
-	app.Spec.Build = "vinext"
+	app.Spec.Build = lcVinext
 	app.Spec.CDN = &appsv1alpha1.CDNSpec{Provider: "cloudflare"}
 	c, ok := cdnCondition(cdnVerdict(app), ConditionCDNAdvisory)
 	if !ok {
@@ -294,7 +294,7 @@ func TestCDNAdvisory_VinextIsInertAndSaysSo(t *testing.T) {
 	if c.Status != metav1.ConditionTrue || c.Reason != ReasonCDNInertOnVinext {
 		t.Errorf("got %+v", c)
 	}
-	if !strings.Contains(c.Message, "vinext") {
+	if !strings.Contains(c.Message, lcVinext) {
 		t.Errorf("message must say why: %q", c.Message)
 	}
 }
@@ -302,7 +302,7 @@ func TestCDNAdvisory_VinextIsInertAndSaysSo(t *testing.T) {
 func TestCDNAdvisory_CanaryWithoutObjectStorage(t *testing.T) {
 	app := verdictApp()
 	app.Spec.CDN = &appsv1alpha1.CDNSpec{Provider: "cloudflare"}
-	app.Spec.Traffic = &appsv1alpha1.TrafficSpec{RevisionName: "shop-00001", CanaryPercent: 10}
+	app.Spec.Traffic = &appsv1alpha1.TrafficSpec{RevisionName: lcShop00001, CanaryPercent: 10}
 	c, ok := cdnCondition(cdnVerdict(app), ConditionCDNAdvisory)
 	if !ok {
 		t.Fatalf("canary + spec.cdn + no storage must report %s", ConditionCDNAdvisory)
@@ -317,14 +317,14 @@ func TestCDNAdvisory_CanaryWithoutObjectStorage(t *testing.T) {
 
 func TestCDNAdvisory_AbsentWhenThereIsNothingToSay(t *testing.T) {
 	storage := &appsv1alpha1.StorageSpec{Provider: "s3", Bucket: "b"}
-	canary := &appsv1alpha1.TrafficSpec{RevisionName: "shop-00001", CanaryPercent: 10}
+	canary := &appsv1alpha1.TrafficSpec{RevisionName: lcShop00001, CanaryPercent: 10}
 	cdn := &appsv1alpha1.CDNSpec{Provider: "cloudflare"}
 	cases := map[string]func(*appsv1alpha1.NextApp){
 		"no spec.cdn":               func(a *appsv1alpha1.NextApp) { a.Spec.Traffic = canary },
 		"spec.cdn, no canary":       func(a *appsv1alpha1.NextApp) { a.Spec.CDN = cdn },
 		"spec.cdn, canary, storage": func(a *appsv1alpha1.NextApp) { a.Spec.CDN, a.Spec.Traffic, a.Spec.Storage = cdn, canary, storage },
 		"spec.cdn, full rollback pin": func(a *appsv1alpha1.NextApp) {
-			a.Spec.CDN, a.Spec.Traffic = cdn, &appsv1alpha1.TrafficSpec{RevisionName: "shop-00001"}
+			a.Spec.CDN, a.Spec.Traffic = cdn, &appsv1alpha1.TrafficSpec{RevisionName: lcShop00001}
 		},
 	}
 	for name, mutate := range cases {
@@ -377,14 +377,14 @@ func TestCDNEnv_RenderedPrefixIsAPlainValueThatEnvFromCannotOverride(t *testing.
 
 	var prefix []corev1.EnvVar
 	for _, ev := range env {
-		if ev.Name == "KNEXT_CDN_TAG_PREFIX" {
+		if ev.Name == lcKNEXTCDNTAGPREFIX {
 			prefix = append(prefix, ev)
 		}
 	}
 	if len(prefix) != 1 {
 		t.Fatalf("want exactly one KNEXT_CDN_TAG_PREFIX env entry, got %+v", prefix)
 	}
-	if prefix[0].ValueFrom != nil || prefix[0].Value != "24116dd4a062" {
+	if prefix[0].ValueFrom != nil || prefix[0].Value != lcV24116dd4a062 {
 		t.Errorf("the rendered prefix must be a plain value entry, got %+v", prefix[0])
 	}
 	// envFrom is a separate list, applied by Kubernetes BEFORE env: the Secret is

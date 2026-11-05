@@ -1,5 +1,4 @@
 //go:build e2e_gc
-// +build e2e_gc
 
 /*
 Copyright 2026.

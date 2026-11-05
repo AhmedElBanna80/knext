@@ -318,7 +318,11 @@ export function classifyPathExpr(expr, blanked, raw, where = {}) {
   const { at = blanked.length, depth = 0 } = where;
   if (!expr || !expr.trim()) return 'unknown';
   if (TMP_ROOTED.test(expr)) return 'tmp';
-  if (REPO_ROOTED.test(expr)) return 'repo';
+  // JUDGED ON CODE, NOT ON LITERAL TEXT. `blankNonCode` blanks string and
+  // template contents (and comments) but keeps `${…}` holes, so a fixture body
+  // that merely mentions `process.cwd()` does not mark its binding repo-rooted,
+  // while `join(process.cwd(), …)` — bare or inside a template hole — still does.
+  if (REPO_ROOTED.test(blankNonCode(expr))) return 'repo';
 
   // WHICH ARGUMENT IS THE ROOT. `join(a, b)` roots at `a`; only `resolve(a, b)`
   // lets a LATER argument take over, and it does so only when that argument is

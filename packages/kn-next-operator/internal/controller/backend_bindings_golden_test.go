@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -48,10 +47,10 @@ func functionNeighbourCases(app *appsv1alpha1.NextApp) []reconcilerCase {
 		Spec: appsv1alpha1.BackendServiceSpec{
 			Zone:         app.Name,
 			Image:        "registry.example.com/fn@sha256:" + sixtyFourHex,
-			ProtoVersion: "1.0.0",
-			WakeAhead:    ptr.To(true),
+			ProtoVersion: lcV100,
+			WakeAhead:    new(true),
 		},
-		Status: appsv1alpha1.BackendServiceStatus{ServedProtoVersion: "1.0.0"},
+		Status: appsv1alpha1.BackendServiceStatus{ServedProtoVersion: lcV100},
 	}
 	foreign := oneSided.DeepCopy()
 	foreign.Name = "another-zones-function"

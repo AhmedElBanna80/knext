@@ -147,7 +147,7 @@ func DecideTeardown(req TeardownRequest) (warning string, err error) {
 	// Explicit human escape hatch — allowed, but LOUD.
 	if req.Force {
 		return fmt.Sprintf(
-			"TEARDOWN OVERRIDE: %s is set — deleting namespace %q WITHOUT ownership authorization (label %s=%q is missing). This must be a deliberate human reclaim.",
+			"TEARDOWN OVERRIDE: %s is set — deleting namespace %q WITHOUT ownership authorization (label %s=%q is missing). This must be a deliberate human reclaim",
 			E2EForceTeardownEnv, req.Namespace, E2EOwnershipLabel, E2EOwnershipLabelValue), nil
 	}
 
@@ -169,7 +169,7 @@ func DecideTeardown(req TeardownRequest) (warning string, err error) {
 		mode = fmt.Sprintf("kind-default mode WITHOUT a positively-verified kind-* current-context (fail closed: the ambient context may be a real, shared cluster), where prefix-matching never authorizes teardown — the label is required, exactly as if %s were set", existingClusterEnv)
 	}
 	return "", fmt.Errorf(
-		"%w: refusing to delete namespace %q — it does not carry the ownership label %s=%q (stamped only when THIS test infrastructure creates a namespace; a pre-existing namespace is never adopted), and the run is in %s. If reclaiming this namespace is deliberate, re-run with %s=1.",
+		"%w: refusing to delete namespace %q — it does not carry the ownership label %s=%q (stamped only when THIS test infrastructure creates a namespace; a pre-existing namespace is never adopted), and the run is in %s. If reclaiming this namespace is deliberate, re-run with %s=1",
 		ErrTeardownRefused, req.Namespace, E2EOwnershipLabel, E2EOwnershipLabelValue, mode, E2EForceTeardownEnv)
 }
 
@@ -209,11 +209,11 @@ func DecideCreationCollision(ns, ownedLabel string, force bool) (warning string,
 	}
 	if force {
 		return fmt.Sprintf(
-			"CREATION-COLLISION OVERRIDE: %s is set — running the suite in pre-existing namespace %q WITHOUT ownership authorization (label %s=%q is missing). This must be a deliberate human reclaim.",
+			"CREATION-COLLISION OVERRIDE: %s is set — running the suite in pre-existing namespace %q WITHOUT ownership authorization (label %s=%q is missing). This must be a deliberate human reclaim",
 			E2EForceTeardownEnv, ns, E2EOwnershipLabel, E2EOwnershipLabelValue), nil
 	}
 	return "", fmt.Errorf(
-		"%w: namespace %q already exists and does not carry the ownership label %s=%q — refusing to run the suite inside a namespace this test infrastructure did not create (is KNEXT_E2E_NAMESPACE pointing at the wrong namespace?). If reclaiming it is deliberate, re-run with %s=1.",
+		"%w: namespace %q already exists and does not carry the ownership label %s=%q — refusing to run the suite inside a namespace this test infrastructure did not create (is KNEXT_E2E_NAMESPACE pointing at the wrong namespace?). If reclaiming it is deliberate, re-run with %s=1",
 		ErrForeignNamespace, ns, E2EOwnershipLabel, E2EOwnershipLabelValue, E2EForceTeardownEnv)
 }
 

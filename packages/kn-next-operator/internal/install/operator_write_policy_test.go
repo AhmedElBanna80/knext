@@ -312,7 +312,7 @@ func TestRenderedBundleShipsTheWritePolicyForTheOperatorsOwnIdentity(t *testing.
 	var manager *appsv1.Deployment
 	for i := range o.deployments {
 		for _, c := range o.deployments[i].Spec.Template.Spec.Containers {
-			if c.Name == "manager" {
+			if c.Name == lcManager {
 				manager = &o.deployments[i]
 			}
 		}

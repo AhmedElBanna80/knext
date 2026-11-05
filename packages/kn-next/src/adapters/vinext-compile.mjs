@@ -57,6 +57,8 @@ import {
     statSync,
     writeFileSync,
 } from "node:fs";
+import * as fsNamespace from "node:fs";
+import * as fsPromisesNamespace from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertBunBaseExe, sealBuild, sealCompile } from "./bun-base-exe.mjs";
@@ -83,9 +85,18 @@ import {
 } from "./entry-external-sidecar.mjs";
 import {
     analyzeServerModule,
+    importedRequireEscapes,
     wrapRequireBindings,
 } from "./entry-require-staticize.mjs";
 import { verifyBytecodeExec, verifyBytecodeModules } from "./bytecode-exec-verify.mjs";
+import {
+    dataPathsMissing,
+    discoverDataLiterals,
+    planAppData,
+    readTraceRules,
+    rewriteFsImports,
+} from "./app-data-embed.mjs";
+import { ALIASED_FS } from "./app-data-alias.mjs";
 import {
     embedBuildOptions,
     parseIncludeJson,
@@ -312,11 +323,23 @@ function listServerOutputModules(dir) {
  *  again elsewhere (a parameter, an inner helper) does not make its real
  *  require hits doubtful — treating it as ambiguous would let a real failure
  *  through a strict build.
+ *
+ *  Runs on EVERY build, and a broken analyzer fails every build, strict or not
+ *  (#2666). That is deliberate: the `embed` set decides which packages are
+ *  bundled into the executable in a default build too, so an analysis that
+ *  silently did not run would ship a binary missing them. Only the FINDINGS
+ *  (`unresolved`, `dynamic`, `unrecognized`) are downgraded to warnings outside
+ *  strict mode. The analyzer is only spawned for a module that mentions
+ *  `createRequire` or imports `module` (entry-require-staticize.mjs), and
+ *  `importedRequireEscapes` only for a module importing a require binding.
  */
 function planRuntimeRequires() {
     const modules = new Map();
     for (const path of listServerOutputModules(dirname(ENTRY))) {
-        modules.set(path, analyzeServerModule(readFileSync(path, "utf8")));
+        modules.set(
+            path,
+            analyzeServerModule(readFileSync(path, "utf8"), CREATE_REQUIRE_ANALYZER),
+        );
     }
     const name = (path) => relative(dirname(ENTRY), path);
 
@@ -326,8 +349,16 @@ function planRuntimeRequires() {
     const dynamic = [];
     const ambiguousDynamic = [];
     const unrecognized = [];
+    // spec -> modules loading it by a literal-assembled constant name: known,
+    // deliberately not bundled (never embedded, never a strict failure).
+    const foldedRuntime = new Map();
     for (const [path, analysis] of modules) {
         if (analysis.unrecognizedBinding) unrecognized.push(name(path));
+        for (const spec of analysis.foldedRuntimeRequires) {
+            const users = foldedRuntime.get(spec) ?? new Set();
+            users.add(name(path));
+            foldedRuntime.set(spec, users);
+        }
         // name -> declarations that would make a hit on it NOT a require:
         // beyond the binding's own declaration where it is defined, any at all
         // where it is imported.
@@ -342,6 +373,19 @@ function planRuntimeRequires() {
                     if (local) requireNames.set(local, 0);
                 }
             }
+        }
+        // A require binding IMPORTED from a sibling chunk is followed by name; a
+        // copy, a stored or passed value or a re-export of it is not (#2666), so
+        // the module doing that is as unverifiable as one that hands a create on.
+        const importedNames = [...requireNames]
+            .filter(([, own]) => own === 0)
+            .map(([n]) => n);
+        if (
+            importedNames.length > 0 &&
+            !unrecognized.includes(name(path)) &&
+            importedRequireEscapes(readFileSync(path, "utf8"), importedNames, CREATE_REQUIRE_ANALYZER)
+        ) {
+            unrecognized.push(name(path));
         }
         for (const [callee, ownDeclarations] of requireNames) {
             const ambiguous =
@@ -397,6 +441,7 @@ function planRuntimeRequires() {
         dynamic: [...new Set(dynamic)].sort(),
         ambiguousDynamic: [...new Set(ambiguousDynamic)].sort(),
         unrecognized,
+        foldedRuntime,
     };
 }
 
@@ -564,6 +609,19 @@ if (!ASSET_ANCHOR_ANALYZER) {
     );
     process.exit(1);
 }
+
+/**
+ * The createRequire analysis (create-require-analyze.mjs, #2614), spawned by
+ * entry-require-staticize.mjs. Passed EXPLICITLY to it: that module is bundled
+ * into a shared chunk in dist, so it cannot find its sibling from its own
+ * location. A missing file fails the build when a module needs it (the
+ * analyzer names the path it looked for).
+ */
+const CREATE_REQUIRE_ANALYZER =
+    [
+        join(compileHere, "create-require-analyze.js"),
+        join(compileHere, "create-require-analyze.mjs"),
+    ].find((c) => existsSync(c)) ?? join(compileHere, "create-require-analyze.mjs");
 
 /** How long one analyzer process may take before the build gives up on it. */
 const ASSET_ANCHOR_ANALYZER_TIMEOUT_MS = 120_000;
@@ -756,6 +814,11 @@ const importMetaToCjs = {
                     contents = wrapped.contents;
                     changed = changed || wrapped.count > 0;
                 }
+                if (DATA_PLAN.files.length > 0 && isServerOutputModule(path)) {
+                    const fsRewrite = rewriteFsImports(contents, EMBEDDED_PREFIX);
+                    contents = fsRewrite.contents;
+                    changed = changed || fsRewrite.count > 0;
+                }
                 if (!changed) return undefined;
                 return {
                     contents: assetAnchorImports(assetRewrite.assets) + contents,
@@ -787,7 +850,11 @@ const importMetaToCjs = {
                     `[knext compile] embedded HarfBuzz hb.wasm for next/og (${hbRewrite.assets[0].absPath})`,
                 );
             }
-            const raw = assetAnchorImports(hbRewrite.assets) + hbRewrite.contents;
+            const raw =
+                assetAnchorImports(hbRewrite.assets) +
+                (DATA_PLAN.files.length > 0
+                    ? rewriteFsImports(hbRewrite.contents, EMBEDDED_PREFIX).contents
+                    : hbRewrite.contents);
             // Prepend the preload imports FIRST, always — independent of whether
             // the entry uses import.meta. `import "<abs>";` is bundled + evaluated
             // before the rest of the entry's imports, firing the ARP primer and
@@ -819,7 +886,8 @@ const importMetaToCjs = {
                 `import ${JSON.stringify(CACHE_CONTROL_FILE)};\n` +
                 (SELF_CONTAINED
                     ? `import __knextEmbeddedPublic from "${EMBEDDED_PREFIX}public";\n` +
-                      "globalThis[Symbol.for(\"knext.embedded.public\")] = __knextEmbeddedPublic;\n"
+                      "globalThis[Symbol.for(\"knext.embedded.public\")] = __knextEmbeddedPublic;\n" +
+                      (DATA_PLAN.files.length > 0 ? `import "${EMBEDDED_PREFIX}data-alias";\n` : "")
                     : "") +
                 wrapped.contents;
             console.log(
@@ -1116,12 +1184,62 @@ const selfContainedEmbed = {
             namespace: "knext-embedded",
         }));
         build.onLoad({ filter: /.*/, namespace: "knext-embedded" }, (args) => {
+            // @upstream-shim bun-esm-builtin-named-snapshot
+            if (args.path === "fs-facade" || args.path === "fs-promises-facade") {
+                // `import { readFileSync } from "node:fs"` binds a snapshot of the
+                // builtin's exports, which patching the module object cannot reach
+                // (app-data-alias.mjs). The server output's fs imports are rewritten
+                // to this facade (rewriteFsImports), which re-exports the patched
+                // functions by name; everything else is the real module's.
+                const promises = args.path === "fs-promises-facade";
+                const real = promises ? "node:fs/promises" : "node:fs";
+                // Every named export, listed: `export * from` a builtin makes Bun's
+                // bundler emit a reference to an undefined binding.
+                const names = Object.keys(promises ? fsPromisesNamespace : fsNamespace).filter(
+                    (n) => n !== "default" && /^[A-Za-z_$][\w$]*$/.test(n),
+                );
+                for (const n of promises ? ALIASED_FS.promises : ALIASED_FS.fs) {
+                    if (!names.includes(n)) names.push(n);
+                }
+                return {
+                    contents:
+                        `import "${EMBEDDED_PREFIX}data-alias";\n` +
+                        `import real from ${JSON.stringify(real)};\n` +
+                        "export default real;\n" +
+                        names.map((n) => `export const ${n} = real.${n};\n`).join(""),
+                    loader: "js",
+                };
+            }
             if (args.path === "public") {
                 const files = existsSync(PUBLIC_DIR) ? listFiles(PUBLIC_DIR) : [];
                 console.log(
                     `[knext compile] self-contained: embedding ${files.length} file(s) of .output/public`,
                 );
                 return { contents: fileAssetModule(files, PUBLIC_DIR), loader: "js" };
+            }
+            if (args.path === "data") {
+                // Embedded under the file's REAL path; a link answers to its own name too.
+                const lines = DATA_PLAN.files.map(
+                    (f, i) => `import f${i} from ${JSON.stringify(f.abs)} with { type: "file" };`,
+                );
+                const rows = DATA_PLAN.files.flatMap((f, i) =>
+                    [f.rel, ...f.aliases].map((rel) => `{ rel: ${JSON.stringify(rel)}, path: f${i} }`),
+                );
+                return {
+                    contents: `${lines.join("\n")}\nexport default [${rows.join(", ")}];\n`,
+                    loader: "js",
+                };
+            }
+            if (args.path === "data-alias") {
+                // A module of its own, so the alias is installed in import order —
+                // before any static import of the app reads a data file.
+                return {
+                    contents:
+                        `import files from "${EMBEDDED_PREFIX}data";\n` +
+                        `import { installEmbeddedDataAlias } from ${JSON.stringify(DATA_ALIAS_FILE)};\n` +
+                        `installEmbeddedDataAlias(files, { appRoot: ${JSON.stringify(APP_ROOT)} });\n`,
+                    loader: "js",
+                };
             }
             if (args.path === "native") {
                 const files = NATIVE_DIR && existsSync(NATIVE_DIR) ? listFiles(NATIVE_DIR) : [];
@@ -1181,7 +1299,7 @@ const selfContainedEmbed = {
  * output that ships a native addon is one the binary cannot load from inside
  * itself — except sharp's, which is embedded and unpacked on first use.
  */
-function selfContainedSidecarViolations() {
+function sidecarPackageNames() {
     if (!existsSync(SIDECAR_NODE_MODULES)) return [];
     const names = [];
     for (const entry of readdirSync(SIDECAR_NODE_MODULES)) {
@@ -1190,7 +1308,11 @@ function selfContainedSidecarViolations() {
             for (const sub of readdirSync(join(SIDECAR_NODE_MODULES, entry))) names.push(`${entry}/${sub}`);
         } else names.push(entry);
     }
-    return names
+    return names;
+}
+
+function selfContainedSidecarViolations() {
+    return sidecarPackageNames()
         .filter((name) => name !== "sharp" && !name.startsWith("@img/"))
         .filter((name) => hasNativeAddon(join(SIDECAR_NODE_MODULES, name)))
         .sort();
@@ -1215,6 +1337,54 @@ if (SELF_CONTAINED) {
             process.exit(1);
         }
     }
+}
+
+// Self-contained: the app's own data files (outputFileTracingIncludes, and the
+// project files the server output names by literal path) ride inside the
+// binary — see app-data-embed.mjs. A declared include that cannot be embedded
+// fails the build here, before any bundling.
+let DATA_PLAN = { files: [], totalBytes: 0, skipped: [], warnings: [] };
+let DATA_ALIAS_FILE = "";
+if (SELF_CONTAINED) {
+    try {
+        const traceRules = await readTraceRules(APP_ROOT);
+        DATA_PLAN = planAppData({
+            root: APP_ROOT,
+            rules: traceRules.rules,
+            candidateExcludes: traceRules.candidateExcludes,
+            candidates: discoverDataLiterals({
+                serverDir: ENTRY_DIR,
+                cwdRoot: APP_ROOT,
+                entryDir: ENTRY_DIR,
+            }),
+            sidecarPackages: sidecarPackageNames(),
+        });
+    } catch (err) {
+        console.error(`[knext compile] self-contained: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+    }
+    if (DATA_PLAN.files.length > 0) {
+        DATA_ALIAS_FILE = [join(compileHere, "app-data-alias.js"), join(compileHere, "app-data-alias.mjs")].find(
+            (c) => existsSync(c),
+        );
+        if (!DATA_ALIAS_FILE) {
+            console.error(
+                "[knext compile] the app-data alias is missing beside vinext-compile " +
+                    `(looked for app-data-alias.{js,mjs} in ${compileHere}) — the installed @getknext/core is incomplete`,
+            );
+            process.exit(1);
+        }
+        const declared = DATA_PLAN.files.filter((f) => f.declared).length;
+        console.log(
+            `[knext compile] self-contained: embedding ${DATA_PLAN.files.length} app data file(s) ` +
+                `(${declared} declared, ${DATA_PLAN.files.length - declared} named by literal path; ` +
+                `${(DATA_PLAN.totalBytes / 1024).toFixed(1)} KiB)`,
+        );
+    }
+    for (const skip of DATA_PLAN.skipped) {
+        console.log(`[knext compile] self-contained: did not embed ${skip.rel}: ${skip.reason}`);
+    }
+    for (const warning of DATA_PLAN.warnings) console.warn(`[knext compile] WARNING: ${warning}`);
 }
 
 const PLAN = planRuntimeRequires();
@@ -1357,6 +1527,17 @@ if (SELF_CONTAINED) {
             `(sharp: ${sharpFacaded ? "embedded, unpacked on first use" : "not used"}); bytecode verified`,
     );
 }
+if (SELF_CONTAINED && DATA_PLAN.files.length > 0) {
+    // Fail closed: every planned data file must be IN the executable at its
+    // `$bunfs/root` path — a bundler that dropped one would ship a binary that
+    // answers 500 for it.
+    const dropped = dataPathsMissing(readFileSync(OUTFILE), DATA_PLAN.files);
+    if (dropped.length > 0) {
+        rmSync(OUTFILE, { force: true });
+        console.error(`[knext compile] self-contained: app data not embedded in the executable: ${dropped.join(", ")}`);
+        process.exit(1);
+    }
+}
 if (INCLUDE_PLAN) {
     // Fail closed: every planned module must be IN the executable at its
     // `$bunfs/root` path. Catches a Bun that silently ignored `compile.include`
@@ -1422,6 +1603,14 @@ if (PLAN.ambiguousUnresolved.size > 0 || PLAN.ambiguousDynamic.length > 0) {
             `${parts.join("; ")}. The require's name is also declared by other code in that ` +
             "module (common in minified output), so this may be a false alarm; it does not " +
             "fail a KNEXT_COMPILE_STRICT_REQUIRES=1 build",
+    );
+}
+if (PLAN.foldedRuntime.size > 0) {
+    console.warn(
+        "[knext compile] WARNING: the server output loads package(s) at runtime by a name assembled " +
+            `from string literals, deliberately not bundled: ${describeSpecs(PLAN.foldedRuntime)} — ` +
+            "the binary throws if that code path runs and the package is not beside it " +
+            "(this does not fail a KNEXT_COMPILE_STRICT_REQUIRES=1 build)",
     );
 }
 if (PLAN.dynamic.length > 0) {

@@ -918,4 +918,104 @@ export const REGISTRY: RetirementEntry[] = [
       }
     },
   },
+  {
+    id: 'bun-declared-include-assets',
+    upstream: 'oven-sh/bun#44059',
+    upstreamTitle: '--include embeds extra files',
+    issue: '#2616',
+    kind: 'shim',
+    shape: 'vinext',
+    against: 'bun',
+    // The self-contained vinext build embeds the app's declared
+    // `outputFileTracingIncludes` data files itself (app-data-embed.mjs, as
+    // `type: "file"` imports), because stock Bun has no `--compile --include`.
+    // Same oracle, with its controls, as `embed-extra-entrypoints`: red as soon as
+    // ANY landing shape of `--include` embeds, at which point the declared-include
+    // embed is re-expressed on it (the `process.cwd()` path alias stays: Bun maps no
+    // real directory onto `$bunfs`).
+    repro: async () => {
+      const detected = await detectCompileInclude();
+      if (!detected.conclusive) inconclusive('bun-declared-include-assets', detected.evidence);
+      return { stillBroken: !detected.landed, evidence: detected.evidence };
+    },
+  },
+  {
+    id: 'bun-esm-builtin-named-snapshot',
+    // The fix is oven-sh/bun#42616 (open): `module.syncBuiltinESMExports()` is a no-op on Bun,
+    // so there is no way to push a patched builtin's exports into its named ESM bindings.
+    // (An earlier attempt, #33434, was closed unmerged.) There is no issue to cite, only the PR.
+    upstream: 'oven-sh/bun#42616',
+    upstreamTitle: 'synchronize builtin ESM exports',
+    issue: '#2616',
+    kind: 'shim',
+    shape: 'vinext',
+    against: 'bun',
+    // `import { readFileSync } from "node:fs"` binds a snapshot of the builtin's exports on
+    // Node too, until `module.syncBuiltinESMExports()` is called. Node's sync updates the
+    // binding; Bun 1.4.2's does nothing, so the embedded-data alias cannot be a plain
+    // monkey-patch for ESM named imports. vinext-compile routes the server output's fs
+    // imports through a facade that re-exports the patched functions instead.
+    // CONTROL: the default export sees the patch (and the sync call does not throw).
+    // PROBE: the STATIC named binding after the sync. Red (= delete the facade) once Bun's
+    // sync updates it. The same fixture under Node answers `patched` (named-snapshot-probe.test.ts),
+    // which is what proves this probe can flip.
+    repro: async () => {
+      const box = sandbox('esm-builtin-named-snapshot');
+      try {
+        box.write({ 'main.mjs': NAMED_SNAPSHOT_FIXTURE });
+        const { result } = box.run([bunOnPath(), 'main.mjs'], box.dir);
+        const verdict = namedSnapshotVerdict(result);
+        if (!verdict.conclusive) inconclusive('bun-esm-builtin-named-snapshot', verdict.evidence);
+        return { stillBroken: verdict.stillBroken, evidence: verdict.evidence };
+      } finally {
+        box.dispose();
+      }
+    },
+  },
 ];
+
+/**
+ * The named-import snapshot fixture, run by the probe under Bun and by the flip test
+ * under Node. It patches the default export of `node:fs`, calls
+ * `module.syncBuiltinESMExports()`, then reads the STATIC named binding.
+ */
+export const NAMED_SNAPSHOT_FIXTURE =
+  'import fs, { readFileSync } from "node:fs";\n' +
+  'import { syncBuiltinESMExports } from "node:module";\n' +
+  'fs.readFileSync = () => "patched";\n' +
+  'const control = fs.readFileSync("x");\n' +
+  'let syncError = null; try { syncBuiltinESMExports(); } catch (e) { syncError = String(e && e.message || e); }\n' +
+  'let named; try { named = readFileSync("x"); } catch (e) { named = "snapshot"; }\n' +
+  'console.log("RESULT " + JSON.stringify({ control, named, syncError }));\n';
+
+/** Turn the fixture's `RESULT` line into a verdict: red (= not still broken) only if the named binding follows the sync. */
+export function namedSnapshotVerdict(result: string): {
+  conclusive: boolean;
+  stillBroken: boolean;
+  evidence: string;
+} {
+  const { control, named, syncError } = JSON.parse(result) as {
+    control: string;
+    named: string;
+    syncError: string | null;
+  };
+  if (control !== 'patched') {
+    return {
+      conclusive: false,
+      stillBroken: true,
+      evidence: `default export did not see the patch: ${control}`,
+    };
+  }
+  if (syncError !== null) {
+    return {
+      conclusive: false,
+      stillBroken: true,
+      evidence: `syncBuiltinESMExports threw: ${syncError}`,
+    };
+  }
+  return {
+    conclusive: true,
+    stillBroken: named !== 'patched',
+    evidence: `default export → ${control}; static named export after syncBuiltinESMExports() → ${named}`,
+  };
+}

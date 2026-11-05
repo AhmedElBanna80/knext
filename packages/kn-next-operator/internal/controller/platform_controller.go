@@ -138,7 +138,7 @@ func computePlatformStatus(p *platformv1alpha1.KnextPlatform, apps []appsv1alpha
 // never reaches the platform merge.
 func isInvalidSpec(app *appsv1alpha1.NextApp) bool {
 	c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionReady)
-	return c != nil && c.Reason == "InvalidSpec"
+	return c != nil && c.Reason == lcInvalidSpec
 }
 
 // isHeldByPlatform reports whether the app's last verdict was a hold because of

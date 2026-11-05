@@ -187,7 +187,7 @@ func TestInstallBundleIsStructurallyValid(t *testing.T) {
 
 func firstSubmatch(s, pattern string) string {
 	m := regexp.MustCompile(`(?m)` + pattern).FindStringSubmatch(s)
-	if m == nil || len(m) < 2 {
+	if len(m) < 2 {
 		return ""
 	}
 	return strings.TrimSpace(m[1])

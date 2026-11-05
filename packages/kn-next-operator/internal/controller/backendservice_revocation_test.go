@@ -44,7 +44,7 @@ import (
 // backendservice_revocation_envtest_test.go.
 
 func TestClassifyReadError(t *testing.T) {
-	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "s", errors.New("x"))
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: lcSecrets}, "s", errors.New("x"))
 	cases := []struct {
 		name string
 		err  error
@@ -69,7 +69,7 @@ func TestClassifyReadError(t *testing.T) {
 		{"client-side name error", errors.New("resource name may not be empty"), readTransient},
 		{"name is required", errors.New("name is required"), readTransient},
 		{"bad request", apierrors.NewBadRequest("x"), readTransient},
-		{"invalid", apierrors.NewInvalid(schema.GroupKind{Kind: "Secret"}, "s", nil), readTransient},
+		{"invalid", apierrors.NewInvalid(schema.GroupKind{Kind: lcSecret}, "s", nil), readTransient},
 		{"conflict", apierrors.NewConflict(schema.GroupResource{}, "s", errors.New("x")), readTransient},
 		{"gone", apierrors.NewResourceExpired("x"), readTransient},
 	}
@@ -86,7 +86,7 @@ func TestSecretNameProblem(t *testing.T) {
 			t.Errorf("%q must be refused as a Secret name", bad)
 		}
 	}
-	for _, good := range []string{"stripe", "my-secret.v2", "a", strings.Repeat("a", 253), "orders-db-ro-dsn"} {
+	for _, good := range []string{lcStripe, "my-secret.v2", "a", strings.Repeat("a", 253), "orders-db-ro-dsn"} {
 		if p := secretNameProblem(good); p != "" {
 			t.Errorf("%q must be accepted, got %q", good, p)
 		}
@@ -109,12 +109,12 @@ func TestInvalidSecretNameIsAViolationNeverUnverified(t *testing.T) {
 // The only way a failed read can reach a verdict is through its NAME: the type
 // has no "rejected" state to put an error in, and an unrecognised error is held.
 func TestAFailedReadHasNoDefinitiveState(t *testing.T) {
-	typ := reflect.TypeOf(secretMetadata{})
-	for i := 0; i < typ.NumField(); i++ {
-		switch typ.Field(i).Name {
+	typ := reflect.TypeFor[secretMetadata]()
+	for field := range typ.Fields() {
+		switch field.Name {
 		case "found", "labels", "ownerRefs", "readErr", "denied":
 		default:
-			t.Errorf("secretMetadata.%s: a failed read must not gain a state of its own; only the marks of an object that was READ, NotFound, or a name problem are definitive", typ.Field(i).Name)
+			t.Errorf("secretMetadata.%s: a failed read must not gain a state of its own; only the marks of an object that was READ, NotFound, or a name problem are definitive", field.Name)
 		}
 	}
 }
@@ -159,18 +159,18 @@ func TestCheckRunningSovereigntyRefusesARevokedSecretAndIgnoresNoService(t *test
 	bs := sovFunction(appsv1alpha1.BackendServiceSpec{})
 	ksvc := runningKsvc(corev1.PodSpec{Containers: []corev1.Container{{
 		Name:    "user",
-		EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "stripe"}}}},
+		EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: lcStripe}}}},
 	}}})
-	revoked := sovSecrets(map[string]secretMetadata{"stripe": {labels: map[string]string{ZoneLabel: sovOther}}})
+	revoked := sovSecrets(map[string]secretMetadata{lcStripe: {labels: map[string]string{ZoneLabel: sovOther}}})
 	got, _ := checkRunningSovereignty(bs, zone, others, revoked, ksvc)
-	assertOneViolation(t, got, "the running Knative Service: container user envFrom[0].secretRef", "stripe", "marked for zone")
+	assertOneViolation(t, got, "the running Knative Service: container user envFrom[0].secretRef", lcStripe, "marked for zone")
 
 	if v, u := checkRunningSovereignty(bs, zone, others, revoked, nil); len(v) != 0 || len(u) != 0 {
 		t.Errorf("no running Knative Service means nothing to check, got %+v %+v", v, u)
 	}
 	// An unreadable Secret in the running template is unverified, not a violation.
-	_, u := checkRunningSovereignty(bs, zone, others, readFails("stripe"), ksvc)
-	if len(u) != 1 || u[0].name != "stripe" {
+	_, u := checkRunningSovereignty(bs, zone, others, readFails(lcStripe), ksvc)
+	if len(u) != 1 || u[0].name != lcStripe {
 		t.Errorf("want stripe unverified, got %+v", u)
 	}
 }
@@ -228,7 +228,7 @@ func TestVerdictHoldsTheGenerationWhileUndecided(t *testing.T) {
 	bs.Generation = 3
 	bs.Status.ObservedGeneration = 2
 	running := runningKsvc(corev1.PodSpec{})
-	o := functionObservation{zone: zone, zoneListed: true, ksvc: running, unverified: []unverifiedSecret{{name: "stripe"}}}
+	o := functionObservation{zone: zone, zoneListed: true, ksvc: running, unverified: []unverifiedSecret{{name: lcStripe}}}
 
 	v := computeBackendServiceVerdict(bs, o)
 	if v.observedGeneration != 2 {
@@ -287,11 +287,11 @@ func TestSecretLookupMapsEachReadFailure(t *testing.T) {
 		wantDenied bool
 	}{
 		{"timeout", apierrors.NewTimeoutError("x", 1), false, true, false},
-		{"forbidden", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "s", errors.New("x")), false, true, true},
+		{"forbidden", apierrors.NewForbidden(schema.GroupResource{Resource: lcSecrets}, "s", errors.New("x")), false, true, true},
 		{"unauthorized", apierrors.NewUnauthorized("x"), false, true, true},
 		{"client-side", errors.New("name is required"), false, true, false},
 		{"unrecognised", errors.New("something nobody planned for"), false, true, false},
-		{"not found", apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, "s"), false, false, false},
+		{"not found", apierrors.NewNotFound(schema.GroupResource{Resource: lcSecrets}, "s"), false, false, false},
 	}
 	for _, c := range cases {
 		r := &BackendServiceReconciler{APIReader: erroringReader{c.err}}

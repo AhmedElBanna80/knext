@@ -455,9 +455,12 @@ export function assertPathFidelity(binaryPath, relpaths) {
  * module load, so this reuses the two side-effect-free analyses it is built on.
  *
  * @param {string} serverOutputDir
- * @returns {{ file: string, computedSites: number, dynamicRequireBindings: string[] }[]}
+ * @param {string} [analyzerPath] the create-require-analyze script (#2614); see analyzeServerModule.
+ * @returns {{ file: string, computedSites: number, dynamicRequireBindings: string[], foldedRuntimeRequires: string[] }[]}
+ *   `foldedRuntimeRequires` names the packages a direct call loads by a deliberately
+ *   literal-assembled name (ioredis): not embedded, not a failure, but never silent.
  */
-export function unembeddedDynamicReport(serverOutputDir) {
+export function unembeddedDynamicReport(serverOutputDir, analyzerPath) {
   const base = resolve(serverOutputDir);
   const files = [];
   walkFiles(base, base, files);
@@ -466,14 +469,40 @@ export function unembeddedDynamicReport(serverOutputDir) {
     if (!/\.[cm]?js$/.test(rel)) continue;
     const src = readFileSync(join(base, rel), 'utf8');
     const computedSites = computedRequireSites(src).length;
-    const analysis = analyzeServerModule(src);
+    const analysis = analyzeServerModule(src, analyzerPath);
     const dynamicRequireBindings = analysis.requireBindings
       .filter((b) => analysis.nonLiteralCallees.has(b))
       .sort();
-    if (computedSites > 0 || dynamicRequireBindings.length > 0)
-      rows.push({ file: rel, computedSites, dynamicRequireBindings });
+    const foldedRuntimeRequires = analysis.foldedRuntimeRequires;
+    if (computedSites > 0 || dynamicRequireBindings.length > 0 || foldedRuntimeRequires.length > 0)
+      rows.push({ file: rel, computedSites, dynamicRequireBindings, foldedRuntimeRequires });
   }
   return rows;
+}
+
+/**
+ * The build-log line naming every package a server-output module loads at
+ * runtime by a deliberately literal-assembled name (ioredis), or null when there
+ * is none. Shared by the standalone compile path so the load is never silent
+ * there, as it is not in vinext-compile.
+ *
+ * @param {{ file: string, foldedRuntimeRequires?: string[] }[]} rows an `unembeddedDynamicReport`
+ * @returns {string | null}
+ */
+export function foldedRuntimeSummary(rows) {
+  const byPackage = new Map();
+  for (const row of rows) {
+    for (const pkg of row.foldedRuntimeRequires ?? []) {
+      byPackage.set(pkg, [...(byPackage.get(pkg) ?? []), row.file]);
+    }
+  }
+  if (byPackage.size === 0) return null;
+  const parts = [...byPackage].sort().map(([pkg, files]) => `${pkg} (${files.sort().join(', ')})`);
+  return (
+    'loads package(s) at runtime by a name assembled from string literals, deliberately not ' +
+    `bundled: ${parts.join(', ')} — the binary throws if that code path runs and the package is ` +
+    'not beside it'
+  );
 }
 
 let includeDetection;

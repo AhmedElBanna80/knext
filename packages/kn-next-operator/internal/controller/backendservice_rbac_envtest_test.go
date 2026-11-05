@@ -93,7 +93,7 @@ func TestFunctionOwnerReferenceNeedsTheNextAppFinalizersGrant(t *testing.T) {
 		cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: group}, Rules: rules}
 		crb := &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: group},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: group},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: group},
 			Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: group}},
 		}
 		for _, o := range []client.Object{cr, crb} {
@@ -114,7 +114,7 @@ func TestFunctionOwnerReferenceNeedsTheNextAppFinalizersGrant(t *testing.T) {
 			t.Fatal(err)
 		}
 		zone := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: ns},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing"}},
@@ -122,7 +122,7 @@ func TestFunctionOwnerReferenceNeedsTheNextAppFinalizersGrant(t *testing.T) {
 		}
 		bs := &appsv1alpha1.BackendService{
 			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-			Spec:       appsv1alpha1.BackendServiceSpec{Zone: "orders", Image: bsImage},
+			Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
 		}
 		for _, o := range []client.Object{zone, bs} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -151,7 +151,7 @@ func TestFunctionOwnerReferenceNeedsTheNextAppFinalizersGrant(t *testing.T) {
 	if err := admin.Get(ctx, types.NamespacedName{Namespace: "shipped", Name: "pricing"}, got); err != nil {
 		t.Fatal(err)
 	}
-	if ref := metav1.GetControllerOf(got); ref == nil || ref.Name != "orders" || ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
+	if ref := metav1.GetControllerOf(got); ref == nil || ref.Name != sovZone || ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
 		t.Fatalf("want the zone's controller ownerReference with blockOwnerDeletion, got %+v", got.OwnerReferences)
 	}
 	if err := admin.Get(ctx, types.NamespacedName{Namespace: "shipped", Name: "pricing"}, &servingv1.Service{}); err != nil {

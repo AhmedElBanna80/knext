@@ -65,13 +65,13 @@ func slowWriteClient(t *testing.T, clock *zoneClock, latency time.Duration, app 
 }
 
 func fakeZoneApp() *appsv1alpha1.NextApp {
-	return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "shop", UID: "uid-orders"}}
+	return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS, UID: "uid-orders"}}
 }
 
 func readFakeSigningKey(t *testing.T, c client.Client) signingKeySet {
 	t.Helper()
 	sec := &corev1.Secret{}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "shop", Name: ZoneSigningKeySecretName("orders")}, sec); err != nil {
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: sovNS, Name: ZoneSigningKeySecretName(sovZone)}, sec); err != nil {
 		t.Fatalf("reading the key Secret: %v", err)
 	}
 	keys, err := readSigningKeySecret(sec)

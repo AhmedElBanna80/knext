@@ -66,10 +66,10 @@ func main() {
 		defer func() { _ = resp.Body.Close() }()
 		body, _ := io.ReadAll(resp.Body)
 		w.WriteHeader(resp.StatusCode)
-		fmt.Fprintf(w, "zone-called %s=%s -> %s", name, target, body)
+		_, _ = fmt.Fprintf(w, "zone-called %s=%s -> %s", name, target, body)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "knext-function-ok proto=%s\n", r.Proto)
+		_, _ = fmt.Fprintf(w, "knext-function-ok proto=%s\n", r.Proto)
 	})
 
 	srv := &http.Server{Addr: ":" + port, Protocols: protocols, Handler: mux}

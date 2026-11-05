@@ -1156,6 +1156,36 @@ jobs:
           KNEXT_REQUIRE_BUNDLE: '1'
         run: make test
 
+  operator-lint:
+    # The operator's only golangci-lint CI invocation used to live in
+    # packages/kn-next-operator/.github/workflows/lint.yml — a path GitHub never
+    # loads — so it never ran, and its deletion left `make lint` a local-only
+    # check. This is the real lane. It runs the Makefile's `lint` target rather
+    # than golangci-lint-action: the target builds the CUSTOM binary the
+    # operator's config needs (.custom-gcl.yml adds the logcheck plugin, which
+    # the stock binary would reject as an unknown linter) at the one version the
+    # Makefile pins (GOLANGCI_LINT_VERSION), so there is no second copy of that
+    # version here to drift. ci.yml has no `paths` filter, so every PR is linted
+    # and the check can be required without hanging on PRs that skip the
+    # operator. Guarded by tests/operator-golangci-lint-ci.test.ts.
+    name: Operator golangci-lint (make lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/kn-next-operator/go.mod
+          cache: true
+          cache-dependency-path: packages/kn-next-operator/go.sum
+      - name: Run golangci-lint (custom build, honours .custom-gcl.yml)
+        working-directory: packages/kn-next-operator
+        run: make lint
+
   prod-image-optimization:
     # #66 AC#2 + AC#3: the ONLY job that verifies next/image optimization in the
     # SHIPPED Alpine production image. It BUILDS apps/file-manager/Dockerfile (musl),
@@ -1588,6 +1618,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          trivyignores: security/docs-closure-trivyignore.yaml
           format: table
 
   docs-drift-reminder:

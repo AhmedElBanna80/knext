@@ -95,11 +95,11 @@ func TestZoneIdentityRBACIsExactlyGetCreateUpdate(t *testing.T) {
 	want := "create,get,update"
 	seen := map[string]bool{}
 	for _, r := range loadRBACRules(t) {
-		if r.kind != "ClusterRole" || r.name != "manager-role" {
+		if r.kind != lcClusterRole || r.name != lcManagerRole {
 			continue
 		}
 		for _, res := range r.rule.Resources {
-			if res != "secrets" && res != "configmaps" {
+			if res != lcSecrets && res != lcConfigmaps {
 				continue
 			}
 			groupCore := false
@@ -118,7 +118,7 @@ func TestZoneIdentityRBACIsExactlyGetCreateUpdate(t *testing.T) {
 			}
 		}
 	}
-	for _, res := range []string{"secrets", "configmaps"} {
+	for _, res := range []string{lcSecrets, lcConfigmaps} {
 		if !seen[res] {
 			t.Errorf("manager-role has no %s rule; the zone signing key and JWKS cannot be written", res)
 		}
@@ -146,7 +146,7 @@ func grantsCoreSecrets(rule rbacv1.PolicyRule) bool {
 		return false
 	}
 	for _, r := range rule.Resources {
-		if r == "secrets" || r == "*" {
+		if r == lcSecrets || r == "*" {
 			return true
 		}
 	}
@@ -197,10 +197,10 @@ func loadRBACRules(t *testing.T) []rbacRuleRef {
 			if err := yaml.Unmarshal(doc, &meta); err != nil {
 				t.Fatalf("unmarshal %s: %v", f, err)
 			}
-			if meta.Kind != "Role" && meta.Kind != "ClusterRole" {
+			if meta.Kind != "Role" && meta.Kind != lcClusterRole {
 				continue
 			}
-			if meta.Kind == "ClusterRole" && meta.Metadata.Name == "manager-role" {
+			if meta.Kind == lcClusterRole && meta.Metadata.Name == lcManagerRole {
 				sawManagerRole = true
 			}
 			for _, rule := range meta.Rules {
@@ -236,7 +236,7 @@ func TestRBACSecretsLeastPrivilege(t *testing.T) {
 		used[key] = true
 		// Even a justified ClusterRole grant may not be cluster-wide list/watch
 		// without resourceNames: that is the whole-cluster read primitive.
-		if r.kind == "ClusterRole" && len(r.rule.ResourceNames) == 0 {
+		if r.kind == lcClusterRole && len(r.rule.ResourceNames) == 0 {
 			for _, v := range r.rule.Verbs {
 				if v == "list" || v == "watch" || v == "*" {
 					t.Errorf("%s grants cluster-wide Secrets %q without resourceNames; an allowlist entry cannot waive this", r.kind+"/"+r.name, v)
@@ -315,7 +315,7 @@ func TestRBACMarkersDoNotGrantSecrets(t *testing.T) {
 func parseRBACMarker(line string) (rbacv1.PolicyRule, error) {
 	var rule rbacv1.PolicyRule
 	body := strings.TrimPrefix(line, "// +kubebuilder:rbac:")
-	for _, part := range strings.Split(body, ",") {
+	for part := range strings.SplitSeq(body, ",") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
 			return rule, fmt.Errorf("bad key=value %q", part)

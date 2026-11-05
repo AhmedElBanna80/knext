@@ -18,13 +18,13 @@ package controller
 
 import (
 	"fmt"
+	"maps"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -98,9 +98,9 @@ func functionIngressRules() []networkingv1.NetworkPolicyIngressRule {
 	return []networkingv1.NetworkPolicyIngressRule{
 		{
 			Ports: []networkingv1.NetworkPolicyPort{
-				{Port: ptr.To(intstr.FromInt32(queueProxyHTTPPort))},
-				{Port: ptr.To(intstr.FromInt32(queueProxyH2CPort))},
-				{Port: ptr.To(intstr.FromInt32(queueProxyHTTPSPort))},
+				{Port: new(intstr.FromInt32(queueProxyHTTPPort))},
+				{Port: new(intstr.FromInt32(queueProxyH2CPort))},
+				{Port: new(intstr.FromInt32(queueProxyHTTPSPort))},
 			},
 			From: append([]networkingv1.NetworkPolicyPeer{
 				activatorPeer(),
@@ -108,7 +108,7 @@ func functionIngressRules() []networkingv1.NetworkPolicyIngressRule {
 		},
 		{
 			Ports: []networkingv1.NetworkPolicyPort{
-				{Port: ptr.To(intstr.FromInt32(queueProxyMetricsPort))},
+				{Port: new(intstr.FromInt32(queueProxyMetricsPort))},
 			},
 			From: []networkingv1.NetworkPolicyPeer{
 				autoscalerPeer(),
@@ -171,9 +171,7 @@ func buildFunctionKsvc(bs *appsv1alpha1.BackendService, retention time.Duration,
 	if ksvc.Labels == nil {
 		ksvc.Labels = map[string]string{}
 	}
-	for k, v := range functionLabels(bs) {
-		ksvc.Labels[k] = v
-	}
+	maps.Copy(ksvc.Labels, functionLabels(bs))
 	// Cluster-local: no public ingress, ever (ADR-0004).
 	ksvc.Labels["networking.knative.dev/visibility"] = VisibilityClusterLocalLabelValue
 
@@ -208,7 +206,7 @@ func buildFunctionKsvc(bs *appsv1alpha1.BackendService, retention time.Duration,
 				Items:                []corev1.KeyToPath{{Key: ZoneJWKSFileName, Path: ZoneJWKSFileName}},
 				// Optional until the zone identity exists: the pod starts, and the
 				// function's interceptor refuses every RPC except health (fail closed).
-				Optional: ptr.To(true),
+				Optional: new(true),
 			}},
 		})
 		// A directory mount, never a subPath, so a rotated JWKS propagates.
@@ -241,7 +239,7 @@ func buildFunctionKsvc(bs *appsv1alpha1.BackendService, retention time.Duration,
 	// The operator-owned ServiceAccount, always (ADR-0004 Amendment 2 Decision
 	// 4): the spec has no field that could name another one.
 	spec.ServiceAccountName = FunctionServiceAccountName(bs.Name)
-	spec.AutomountServiceAccountToken = ptr.To(false)
+	spec.AutomountServiceAccountToken = new(false)
 	if s := bs.Spec.Scaling; s != nil && s.ContainerConcurrency > 0 {
 		cc := int64(s.ContainerConcurrency)
 		spec.ContainerConcurrency = &cc
@@ -281,11 +279,11 @@ func RenderFunctionObjects(bs *appsv1alpha1.BackendService, zoneRetention time.D
 		ObjectMeta: metav1.ObjectMeta{
 			Name: FunctionServiceAccountName(bs.Name), Namespace: bs.Namespace, Labels: functionLabels(bs),
 		},
-		AutomountServiceAccountToken: ptr.To(false),
+		AutomountServiceAccountToken: new(false),
 		ImagePullSecrets:             bs.Spec.ImagePullSecrets,
 	}
 	ksvc := &servingv1.Service{
-		TypeMeta:   metav1.TypeMeta{APIVersion: servingv1.SchemeGroupVersion.String(), Kind: "Service"},
+		TypeMeta:   metav1.TypeMeta{APIVersion: servingv1.SchemeGroupVersion.String(), Kind: lcService},
 		ObjectMeta: metav1.ObjectMeta{Name: bs.Name, Namespace: bs.Namespace},
 	}
 	// No cluster object is read, so the JWKS is rendered as for a zone that has
@@ -293,7 +291,11 @@ func RenderFunctionObjects(bs *appsv1alpha1.BackendService, zoneRetention time.D
 	if err := buildFunctionKsvc(bs, zoneRetention, zoneJWKSAbsent, ksvc); err != nil {
 		return nil, err
 	}
-	return []client.Object{sa, ksvc, DesiredFunctionNetworkPolicy(bs.Name, bs.Spec.Zone, bs.Namespace)}, nil
+	objs := []client.Object{sa, ksvc}
+	if functionNetworkPolicyEnabled(bs) {
+		objs = append(objs, DesiredFunctionNetworkPolicy(bs.Name, bs.Spec.Zone, bs.Namespace))
+	}
+	return objs, nil
 }
 
 // functionResources parses the function's requests and limits with the

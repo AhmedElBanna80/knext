@@ -1374,12 +1374,9 @@ describe('#1515 — the empty-dir pre-check probe (stdout contract + per-lane he
     expect(r.status).not.toBe(0);
   });
 
-  it('a 5xx at / fails the probe even when the static file answers 200', () => {
-    const src = tempDir('ed-1515-root500-src-');
-    makeCompatFixture(src, 500);
-    const r = miniDeploy(src, join(tempDir('ed-1515-root500-dest-'), 'd'), '@static');
-    expect(r.status).not.toBe(0);
-  });
+  // (#2615 superseded the old "a 5xx at / fails even when the static file
+  // answers 200" case: fixtures that 500 at / on purpose are valid. Its
+  // truly-bad halves live in the #2615 (2) group below.)
 
   it('a missing static file fails the probe (2xx is required of the staged asset)', () => {
     const src = tempDir('ed-1515-nostatic-src-');
@@ -1940,5 +1937,487 @@ describe('#1521 round-2, finding 2c (R13) — the standalone pre-check threads E
   it('scripts/e2e-deploy.sh: ed_static_probe_path is called WITH the resolved basePath variable, never a hardcoded ""', () => {
     const src = readRepo('scripts/e2e-deploy.sh');
     expect(src).toContain('ed_static_probe_path "${EMPTY_DIR}" "${EMPTY_DIR_BASE_PATH}")"');
+  });
+});
+// ══ #2615 — the vinext empty-dir probes produced ~8 FALSE compat failures ══════
+//
+// Three harness (not product) defects, one test group each. Each group asserts
+// BOTH halves: the false failure now passes, and the truly-bad response still
+// fails — the probe was never widened into accepting everything.
+//   (1) basePath ignored   — the static probe asked `/data.txt` of an app that
+//       serves `<basePath>/data.txt` (5 fixtures);
+//   (2) intentional 500 at `/` — global-error / rewrites-destination-query-array
+//       500 on purpose, and the old non-5xx check on `/` rejected them (3);
+//   (3) native/ staged AFTER the compile that embeds it.
+
+/**
+ * A stand-in for a compiled compat fixture with the failure shapes under
+ * test. It serves `.output/public` under `basePath` (404 outside it, like
+ * Next), answers `/` with `rootStatus`, and can misbehave at `/`:
+ * `rootMode: 'drop'` destroys the socket (a crash mid-request), 'hang' never
+ * answers. `staticStatus` overrides what the static file answers.
+ */
+function makeProbeFixture(
+  dir: string,
+  opts: {
+    basePath?: string;
+    rootStatus?: number;
+    rootMode?: 'status' | 'drop' | 'hang';
+    staticStatus?: number;
+  } = {},
+): string {
+  const p = join(dir, 'knext-exec-e2e');
+  const base = opts.basePath ?? '';
+  writeFileSync(
+    p,
+    [
+      '#!/usr/bin/env node',
+      "const http = require('node:http');",
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      'const port = Number(process.env.PORT);',
+      `const base = ${JSON.stringify(base)};`,
+      `const rootMode = ${JSON.stringify(opts.rootMode ?? 'status')};`,
+      'http.createServer((req, res) => {',
+      "  if (req.url === '/') {",
+      "    if (rootMode === 'drop') { req.socket.destroy(); return; }",
+      "    if (rootMode === 'hang') { return; }",
+      `    res.writeHead(${String(opts.rootStatus ?? 200)}); res.end('root'); return;`,
+      '  }',
+      '  if (!req.url.startsWith(base + "/")) { res.writeHead(404); res.end("outside basePath"); return; }',
+      '  const f = path.join(process.cwd(), ".output/public", decodeURIComponent(req.url.slice(base.length)));',
+      `  if (fs.existsSync(f) && fs.statSync(f).isFile()) { res.writeHead(${String(opts.staticStatus ?? 200)}); res.end(fs.readFileSync(f)); return; }`,
+      '  res.writeHead(404); res.end("not found");',
+      "}).listen(port, '127.0.0.1');",
+      '',
+    ].join('\n'),
+  );
+  chmodSync(p, 0o755);
+  mkdirSync(join(dir, '.output/public'), { recursive: true });
+  writeFileSync(join(dir, '.output/public/data.txt'), 'hello');
+  return p;
+}
+
+/** miniDeploy with an optional ED_STATIC_PROBE_BASE, as the vinext script sets it. */
+function probeDeploy(src: string, base: string, health = '@static', fixtureDir = '') {
+  const dest = join(tempDir('ed-2615-dest-'), 'd');
+  return sh(`
+    PORT="$(${freePortExpr()})"
+    ${base ? `ED_STATIC_PROBE_BASE="${base}"` : ''}
+    ${fixtureDir ? `ED_FIXTURE_DIR="${fixtureDir}"` : ''}
+    ed_check_or_die "compat" "${dest}" "${src}/knext-exec-e2e" "${health}" / "\${PORT}" \\
+      "${src}/.output/public:.output/public"
+  `);
+}
+
+describe('#2615 (1) — the static probe honours the fixture basePath', () => {
+  it('a basePath fixture passes when the probe is told the basePath (it was probing /data.txt)', () => {
+    const src = tempDir('ed-2615-bp-ok-');
+    makeProbeFixture(src, { basePath: '/docs' });
+    const r = probeDeploy(src, '/docs');
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain('probing the staged static file /docs/data.txt');
+  });
+
+  it('the SAME fixture still fails when the probe ignores the basePath (the false-failure shape is real, not masked)', () => {
+    const src = tempDir('ed-2615-bp-ignored-');
+    makeProbeFixture(src, { basePath: '/docs' });
+    expect(probeDeploy(src, '').status).not.toBe(0);
+  });
+
+  it('a WRONG basePath still fails: the static file must really be served at the claimed path', () => {
+    const src = tempDir('ed-2615-bp-wrong-');
+    makeProbeFixture(src, { basePath: '/docs' });
+    expect(probeDeploy(src, '/other').status).not.toBe(0);
+  });
+
+  it('a static file answering 500 under the right basePath still fails (2xx required of the asset)', () => {
+    const src = tempDir('ed-2615-bp-500-');
+    makeProbeFixture(src, { basePath: '/docs', staticStatus: 500 });
+    expect(probeDeploy(src, '/docs').status).not.toBe(0);
+  });
+});
+
+describe('#2615 (1b) — scripts/lib/e2e-vinext-base-path.mjs reads the fixture basePath', () => {
+  const HELPER = join(ROOT, 'scripts/lib/e2e-vinext-base-path.mjs');
+  const run = (appDir: string) =>
+    spawnSync(process.execPath, [HELPER, appDir], { encoding: 'utf8' });
+  const appWith = (file: string, body: string) => {
+    const d = tempDir('ed-2615-cfg-');
+    writeFileSync(join(d, file), body);
+    return d;
+  };
+
+  it('reads basePath from an ESM object config', () => {
+    const r = run(appWith('next.config.mjs', "export default { basePath: '/docs' };\n"));
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/docs' });
+  });
+
+  it('reads basePath from a CommonJS config (the harness renames next.config.js to .cjs)', () => {
+    const r = run(appWith('next.config.cjs', "module.exports = { basePath: '/cjs' };\n"));
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/cjs' });
+  });
+
+  it('reads basePath from an async function config', () => {
+    const r = run(
+      appWith('next.config.mjs', "export default async () => ({ basePath: '/fn' });\n"),
+    );
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/fn' });
+  });
+
+  it('a config without basePath, or no config at all, is a legitimate empty basePath', () => {
+    const none = run(appWith('next.config.mjs', 'export default {};\n'));
+    expect({ status: none.status, out: none.stdout }).toEqual({ status: 0, out: '' });
+    const absent = run(tempDir('ed-2615-nocfg-'));
+    expect({ status: absent.status, out: absent.stdout }).toEqual({ status: 0, out: '' });
+  });
+
+  it('a config that cannot be loaded fails LOUD, never a silent empty basePath', () => {
+    const r = run(appWith('next.config.mjs', "throw new Error('boom');\n"));
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('basePath');
+    expect(r.stdout).toBe('');
+  });
+
+  it('a non-string basePath fails loud', () => {
+    const r = run(appWith('next.config.mjs', 'export default { basePath: 42 };\n'));
+    expect(r.status).not.toBe(0);
+  });
+
+  // Verbatim next.config.js bodies from vercel/next.js v16.4.0 fixtures — the shapes
+  // this helper really meets (the lane renames a CommonJS next.config.js to .cjs
+  // before this runs). Each is a different shape: rewrites() beside basePath,
+  // assetPrefix beside basePath, an i18n block with locale-less functions, a bare
+  // object, and a JSDoc-typed `const nextConfig` export.
+  const UPSTREAM_CONFIGS: { fixture: string; basePath: string; body: string }[] = [
+    {
+      fixture: 'test/e2e/app-dir/app-basepath',
+      basePath: '/base',
+      body: "module.exports = {\n  basePath: '/base',\n  async rewrites() {\n    return [\n      {\n        source: '/outsideBasePath',\n        destination: 'https://example.vercel.sh/',\n        basePath: false,\n      },\n    ]\n  },\n}\n",
+    },
+    {
+      fixture: 'test/e2e/app-dir/asset-prefix-with-basepath',
+      basePath: '/custom-base-path',
+      body: "module.exports = {\n  assetPrefix: '/custom-asset-prefix',\n  basePath: '/custom-base-path',\n  async rewrites() {\n    return [\n      { source: '/custom-asset-prefix/:path*', destination: '/:path*' },\n    ]\n  },\n}\n",
+    },
+    {
+      fixture: 'test/e2e/i18n-support-base-path',
+      basePath: '/docs',
+      body: "module.exports = {\n  basePath: '/docs',\n  i18n: {\n    locales: ['nl-NL', 'en-US', 'en'],\n    defaultLocale: 'en-US',\n    domains: [{ http: true, domain: 'example.do', defaultLocale: 'do', locales: ['do-BE'] }],\n  },\n  async redirects() {\n    return [{ source: '/redirect-3', destination: '/somewhere-else', permanent: false }]\n  },\n  async rewrites() {\n    return [{ source: '/rewrite-5', destination: 'http://localhost:__EXTERNAL_PORT__' }]\n  },\n}\n",
+    },
+    {
+      fixture: 'test/e2e/middleware-base-path/app',
+      basePath: '/root',
+      body: "module.exports = {\n  basePath: '/root',\n}\n",
+    },
+    {
+      fixture: 'test/e2e/app-dir/redirect-rewrite-dynamic-basepath',
+      basePath: '/base/path',
+      body: "/**\n * @type {import('next').NextConfig}\n */\nconst nextConfig = {\n  basePath: '/base/path',\n  experimental: {\n    validateRSCRequestHeaders: true,\n  },\n}\n\nmodule.exports = nextConfig\n",
+    },
+  ];
+
+  it('reads the right basePath from several real upstream next.config shapes', () => {
+    for (const c of UPSTREAM_CONFIGS) {
+      const r = run(appWith('next.config.cjs', c.body));
+      expect({ fixture: c.fixture, status: r.status, out: r.stdout }).toEqual({
+        fixture: c.fixture,
+        status: 0,
+        out: c.basePath,
+      });
+    }
+  });
+
+  it('a real upstream config WITHOUT basePath (the typical fixture) is an empty basePath', () => {
+    // test/e2e/rewrites-destination-query-array/next.config.js, verbatim.
+    const body =
+      "module.exports = {\n  rewrites() {\n    return [\n      { source: '/some-page', destination: '/?items=1&items=2' },\n    ]\n  },\n}\n";
+    const r = run(appWith('next.config.cjs', body));
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '' });
+  });
+
+  it('reads a TypeScript config (next.config.ts), as vinext does', () => {
+    const body =
+      "import type { NextConfig } from 'next'\nconst config: NextConfig = { basePath: '/ts' }\nexport default config\n";
+    const r = run(appWith('next.config.ts', body));
+    expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/ts' });
+  });
+
+  describe('env-dependent configs: the helper evaluates the config in ITS OWN process env', () => {
+    // A config that computes basePath from the environment answers by the env
+    // this helper runs in. e2e-deploy-vinext.sh runs it in the same shell that
+    // ran `vite build`, so it sees the build's exports; the one thing the build
+    // sets inline (NODE_ENV=production) is mirrored by the helper itself.
+    const computed =
+      "module.exports = { basePath: process.env.NODE_ENV === 'production' ? '/prod' : '/dev' }\n";
+    const runEnv = (appDir: string, env: Record<string, string | undefined>) =>
+      spawnSync(process.execPath, [HELPER, appDir], {
+        encoding: 'utf8',
+        env: { ...process.env, NODE_ENV: undefined, ...env },
+      });
+
+    it('NODE_ENV unset: mirrors the production build (the vite build runs with NODE_ENV=production)', () => {
+      const r = runEnv(appWith('next.config.cjs', computed), {});
+      expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/prod' });
+    });
+
+    it('an explicit NODE_ENV is respected, not overridden', () => {
+      const r = runEnv(appWith('next.config.cjs', computed), { NODE_ENV: 'development' });
+      expect({ status: r.status, out: r.stdout }).toEqual({ status: 0, out: '/dev' });
+    });
+
+    it('a basePath read from an arbitrary env var follows that env var', () => {
+      const body = "module.exports = { basePath: process.env.APP_BASE_PATH ?? '/default' }\n";
+      const dir = appWith('next.config.cjs', body);
+      expect(runEnv(dir, { APP_BASE_PATH: '/from-env' }).stdout).toBe('/from-env');
+      expect(runEnv(dir, {}).stdout).toBe('/default');
+    });
+
+    it('an env-computed value that is not a string still fails loud', () => {
+      const body = 'module.exports = { basePath: process.env.NOPE_NOT_SET }\n';
+      // undefined is a legitimate "no basePath"; a number is not.
+      expect(runEnv(appWith('next.config.cjs', body), {}).status).toBe(0);
+      const num = 'module.exports = { basePath: Number(process.env.NOPE_NOT_SET ?? 1) }\n';
+      expect(runEnv(appWith('next.config.cjs', num), {}).status).not.toBe(0);
+    });
+  });
+
+  it('e2e-deploy-vinext.sh feeds ED_STATIC_PROBE_BASE from it BEFORE the pre-check, failing closed', () => {
+    const src = readRepo('scripts/e2e-deploy-vinext.sh');
+    expect(src).toMatch(
+      /ED_STATIC_PROBE_BASE="\$\(bun "\$\{ED__LIB_DIR\}\/e2e-vinext-base-path\.mjs" "\$\{APP_DIR\}"\)" \|\| \{[\s\S]{0,400}?exit 1/,
+    );
+    expectInOrder(src, ['e2e-vinext-base-path.mjs', 'ed_check_or_die "vinext"']);
+  });
+});
+
+// The three upstream fixtures that answer 500 at `/` ON PURPOSE (issue #2615), as the
+// allowlist in scripts/lib/e2e-empty-dir.sh must name them: the file the allowlist
+// matches on, and content that really is in the upstream fixture (Next.js v16.4.0).
+const INTENTIONAL_500 = [
+  {
+    id: 'global-error-layout-error',
+    upstream: 'test/e2e/app-dir/global-error/layout-error',
+    file: 'app/layout.js',
+    body: "export default function layout() {\n  throw new Error('layout error')\n}\n\nexport const revalidate = 0\n",
+  },
+  {
+    id: 'global-error-with-style-import',
+    upstream: 'test/e2e/app-dir/global-error/with-style-import',
+    file: 'app/layout.tsx',
+    body: "export const dynamic = 'force-dynamic'\n\nexport default function RootLayout({ children }) {\n  throw new Error('Root Layout Error')\n}\n",
+  },
+  {
+    id: 'rewrites-destination-query-array',
+    upstream: 'test/e2e/rewrites-destination-query-array',
+    file: 'pages/index.js',
+    body: 'export default function Page(props) {\n  return <p id="items">{props.query.items.join(\',\')}</p>\n}\n',
+  },
+] as const;
+
+/** A probe fixture dir that ALSO carries one allowlisted fixture's signature file. */
+function makeAllowlistedFixture(
+  entry: (typeof INTENTIONAL_500)[number],
+  opts: Parameters<typeof makeProbeFixture>[1],
+): string {
+  const src = tempDir(`ed-2615-${entry.id}-`);
+  makeProbeFixture(src, opts);
+  mkdirSync(dirname(join(src, entry.file)), { recursive: true });
+  writeFileSync(join(src, entry.file), entry.body);
+  return src;
+}
+
+describe('#2615 (2) — only the allowlisted intentional-500 fixtures may answer 500 at /', () => {
+  it('each of the 3 allowlisted fixtures passes when it 500s at / and its static asset is 2xx', () => {
+    for (const entry of INTENTIONAL_500) {
+      const src = makeAllowlistedFixture(entry, { rootStatus: 500 });
+      const r = probeDeploy(src, '', '@static', src);
+      expect({ id: entry.id, status: r.status }).toEqual({ id: entry.id, status: 0 });
+      expect(r.stderr).toContain(entry.id);
+    }
+  }, 60_000);
+
+  it('BAD HALF: a NON-allowlisted fixture whose static asset is 2xx but / is 500 FAILS', () => {
+    const src = tempDir('ed-2615-root500-');
+    makeProbeFixture(src, { rootStatus: 500 });
+    // The caller names the fixture dir; nothing in it matches an allowlist entry.
+    expect(probeDeploy(src, '', '@static', src).status).not.toBe(0);
+  });
+
+  it('a fixture whose file merely LOOKS like an entry (right text, wrong file) is not allowlisted', () => {
+    const src = tempDir('ed-2615-wrongfile-');
+    makeProbeFixture(src, { rootStatus: 500 });
+    const entry = INTENTIONAL_500[0];
+    mkdirSync(join(src, 'docs'), { recursive: true });
+    writeFileSync(join(src, 'docs/notes.txt'), entry.body);
+    expect(probeDeploy(src, '', '@static', src).status).not.toBe(0);
+  });
+
+  it('without a named fixture dir the check is strict: nothing is allowlisted by default', () => {
+    const src = makeAllowlistedFixture(INTENTIONAL_500[0], { rootStatus: 500 });
+    expect(probeDeploy(src, '').status).not.toBe(0);
+  });
+
+  it('an allowlisted fixture that answers / with 200 FAILS: the entry is stale (it no longer 500s by design)', () => {
+    const src = makeAllowlistedFixture(INTENTIONAL_500[2], { rootStatus: 200 });
+    const r = probeDeploy(src, '', '@static', src);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain(INTENTIONAL_500[2].id);
+  });
+
+  it('an allowlisted fixture that DROPS the socket at / still fails', () => {
+    const src = makeAllowlistedFixture(INTENTIONAL_500[0], { rootMode: 'drop' });
+    expect(probeDeploy(src, '', '@static', src).status).not.toBe(0);
+  });
+
+  it('an allowlisted fixture that never answers / still fails within the bounded probe time', () => {
+    const src = makeAllowlistedFixture(INTENTIONAL_500[1], { rootMode: 'hang' });
+    expect(probeDeploy(src, '', '@static', src).status).not.toBe(0);
+  }, 30_000);
+
+  it('an allowlisted fixture whose process is not listening at all (refused) still fails', () => {
+    const src = makeAllowlistedFixture(INTENTIONAL_500[0], { rootStatus: 500 });
+    writeFileSync(join(src, 'knext-exec-e2e'), '#!/bin/sh\nexit 0\n');
+    expect(probeDeploy(src, '', '@static', src).status).not.toBe(0);
+  }, 30_000);
+
+  it('an allowlisted fixture whose STATIC asset is 500 still fails: the asset is what proves serving works', () => {
+    const src = makeAllowlistedFixture(INTENTIONAL_500[0], { rootStatus: 500, staticStatus: 500 });
+    expect(probeDeploy(src, '', '@static', src).status).not.toBe(0);
+  });
+
+  it('a 404 / redirect / 200 at / still pass for a non-allowlisted fixture (no regression of the non-5xx set)', () => {
+    for (const rootStatus of [200, 307, 404]) {
+      const src = tempDir(`ed-2615-root${rootStatus}-`);
+      makeProbeFixture(src, { rootStatus });
+      expect(probeDeploy(src, '', '@static', src).status).toBe(0);
+    }
+  }, 30_000);
+
+  it('a lane with an EXPLICIT health path keeps non-5xx at /, even for an allowlisted fixture', () => {
+    const src = makeAllowlistedFixture(INTENTIONAL_500[0], { rootStatus: 500 });
+    // /data.txt answers 200, so the health half is satisfied; only the / mode decides.
+    expect(probeDeploy(src, '', '/data.txt', src).status).not.toBe(0);
+  });
+
+  it('ed_probe_http "expect5xx": only a 5xx passes; 2xx fails; a refused connection fails', () => {
+    const dir = tempDir('ed-2615-expect5xx-');
+    makeServerFixture(dir, 'server.js', { status: 503, onlyStatus: true });
+    const r = sh(`
+      PORT="$(${freePortExpr()})"
+      export PORT
+      cd "${dir}"
+      ( exec node ./server.js ) >/dev/null 2>&1 &
+      pid=$!
+      for i in $(seq 1 50); do node -e "require('net').connect(\${PORT},'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))" 2>/dev/null && break; sleep 0.1; done
+      ed_probe_http "\${PORT}" /anything expect5xx; a=$?
+      ed_probe_http "\${PORT}" /anything non5xx; b=$?
+      ed_probe_http "\${PORT}" /anything 2xx3xx; c=$?
+      kill $pid 2>/dev/null; wait $pid 2>/dev/null
+      ed_probe_http "\${PORT}" /anything expect5xx; d=$?
+      echo "$a $b $c $d"
+    `);
+    expect(r.stdout.trim()).toBe('0 1 1 1');
+  });
+
+  it('the allowlist names exactly the 3 issue fixtures, each with an upstream path, a match, and a reason', () => {
+    const r = sh('ed_intentional_500_entries');
+    expect(r.status).toBe(0);
+    const rows = r.stdout
+      .split('\n')
+      .filter((l) => l.trim() && !l.trim().startsWith('#'))
+      .map((l) => l.split('|'));
+    expect(rows.map((c) => c[0]).sort()).toEqual(INTENTIONAL_500.map((e) => e.id).sort());
+    for (const c of rows) {
+      expect(c.length).toBe(5);
+      expect(c[1]).toMatch(/^test\/e2e\//);
+      expect(c.slice(2).every((x) => x.trim().length > 0)).toBe(true);
+    }
+  });
+
+  it('the lenient expectation is chosen only for a matched allowlist entry, only inside the static-probe branch', () => {
+    const lib = readRepo('scripts/lib/e2e-empty-dir.sh');
+    expect(lib.split('extra_mode=expect5xx').length - 1).toBe(1);
+    const staticBranch = block(
+      lib,
+      'if [ "${health_path}" = "${ED_STATIC_PROBE}" ]; then',
+      '\n  fi\n',
+    );
+    expect(staticBranch).toContain('extra_mode=expect5xx');
+    expect(staticBranch).toContain('ed_intentional_500_id');
+    expect(lib).not.toContain('anyresponse');
+    expect(readRepo('scripts/lib/e2e-probe-http.mjs')).not.toContain('anyresponse');
+  });
+
+  it('e2e-deploy-vinext.sh names the fixture dir (ED_FIXTURE_DIR) for the pre-check', () => {
+    const src = readRepo('scripts/e2e-deploy-vinext.sh');
+    expect(src).toContain('ED_FIXTURE_DIR="${APP_DIR}"');
+    expectInOrder(src, ['ED_FIXTURE_DIR="${APP_DIR}"', 'ed_check_or_die "vinext"']);
+  });
+});
+
+describe('#2615 (2b) — a stale allowlist entry is detected against the pinned Next.js checkout', () => {
+  const VERIFY = join(ROOT, 'scripts/lib/e2e-verify-intentional-500.sh');
+  const nextTree = (skip?: string, mutate?: (e: (typeof INTENTIONAL_500)[number]) => string) => {
+    const root = tempDir('ed-2615-nextco-');
+    for (const e of INTENTIONAL_500) {
+      if (e.id === skip) continue;
+      const f = join(root, e.upstream, e.file);
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, mutate ? mutate(e) : e.body);
+    }
+    return root;
+  };
+  const verify = (root: string) => spawnSync('bash', [VERIFY, root], { encoding: 'utf8' });
+
+  it('passes when every entry still matches its upstream fixture', () => {
+    expect(verify(nextTree()).status).toBe(0);
+  });
+
+  it('FAILS naming the entry when its upstream fixture no longer exists', () => {
+    const r = verify(nextTree('global-error-with-style-import'));
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('global-error-with-style-import');
+  });
+
+  it('FAILS naming the entry when the fixture no longer contains what the entry matches on', () => {
+    const r = verify(
+      nextTree(undefined, (e) =>
+        e.id === 'rewrites-destination-query-array' ? 'export default () => null\n' : e.body,
+      ),
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('rewrites-destination-query-array');
+  });
+
+  it('FAILS when the checkout root itself is missing (never a silent pass)', () => {
+    expect(verify(join(tempDir('ed-2615-nonext-'), 'absent')).status).not.toBe(0);
+    expect(spawnSync('bash', [VERIFY], { encoding: 'utf8' }).status).not.toBe(0);
+  });
+
+  it('is wired into the compat-vinext workflow against the pinned next.js checkout', () => {
+    const wf = readRepo('.github/workflows/compat-vinext.yml');
+    expect(wf).toMatch(
+      /knext\/scripts\/lib\/e2e-verify-intentional-500\.sh"? "?\$\{\{ github\.workspace \}\}\/next\.js/,
+    );
+  });
+});
+
+describe('#2615 (3) — native/ is staged BEFORE the compile that embeds it', () => {
+  const src = () => readRepo('scripts/e2e-deploy-vinext.sh');
+
+  it('the sharp staging loop runs before `bun run "${COMPILE_SCRIPT}"`', () => {
+    const s = src();
+    const stage = s.indexOf('mkdir -p "${APP_DIR}/native"');
+    const compile = s.indexOf('bun run "${COMPILE_SCRIPT}"');
+    expect(stage).toBeGreaterThan(0);
+    expect(compile).toBeGreaterThan(0);
+    expect(stage).toBeLessThan(compile);
+  });
+
+  it('under KNEXT_SELF_CONTAINED=1 the staged tree is handed to the compile via --native-dir (only when it exists)', () => {
+    expect(src()).toMatch(
+      /if \[ "\$\{KNEXT_SELF_CONTAINED:-0\}" = "1" \]; then\n\s+VINEXT_COMPILE_ARGS\+=\(--self-contained 1\)\n\s+if \[ -d "\$\{APP_DIR\}\/native" \]; then\n\s+VINEXT_COMPILE_ARGS\+=\(--native-dir "\$\{APP_DIR\}\/native"\)/,
+    );
   });
 });

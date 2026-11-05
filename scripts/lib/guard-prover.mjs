@@ -33,6 +33,23 @@ import { resolveSpecRunner } from './ci-blocking-gate-proof.mjs';
 import { mutate, restore, snapshot } from './mutation-harness.mjs';
 
 /**
+ * Run `git <args>` in `cwd` and return stdout (throws on a non-zero exit).
+ *
+ * The one place a prover or scan helper spawns git: spawning lives in this
+ * resolver-aware helper, so callers stay spawn-free and need no exemption from
+ * the runner-resolution audit.
+ *
+ * @param {string} cwd
+ * @param {string[]} args
+ * @param {{ encoding?: BufferEncoding, maxBuffer?: number, stdio?: 'pipe' | 'ignore' }} [opts]
+ * @returns {string}
+ */
+export function gitRun(cwd, args, opts = {}) {
+  const out = execFileSync('git', args, { cwd, encoding: 'utf8', ...opts });
+  return typeof out === 'string' ? out : '';
+}
+
+/**
  * Run one spec and return ONLY its exit code.
  *
  * Output is deliberately discarded. This repo has already had 14 decorative

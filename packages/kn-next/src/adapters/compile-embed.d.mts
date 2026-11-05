@@ -40,7 +40,17 @@ export declare function assertPathFidelity(binaryPath: string, relpaths: string[
 
 export declare function unembeddedDynamicReport(
     serverOutputDir: string,
-): { file: string; computedSites: number; dynamicRequireBindings: string[] }[];
+    analyzerPath?: string,
+): {
+    file: string;
+    computedSites: number;
+    dynamicRequireBindings: string[];
+    foldedRuntimeRequires: string[];
+}[];
+
+export declare function foldedRuntimeSummary(
+    rows: { file: string; foldedRuntimeRequires?: string[] }[],
+): string | null;
 
 export declare function detectCompileInclude(): Promise<{
     supported: boolean;

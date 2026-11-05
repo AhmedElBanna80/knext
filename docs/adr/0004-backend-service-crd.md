@@ -765,7 +765,8 @@ bound, not only the image.
    `BackendServiceSpec` is either in `specPinHashedFields` or in `specPinExcludedFields` with a class and
    a reason (`zone`: the binding's identity, immutable; `language`, `wakeAhead`: nothing is rendered from
    them into the function; `port`, `protoVersion`, `scaling`, `resources`, `imagePullSecrets`: reach the
-   pod only as tuning that cannot add code or widen what it can read; jev: image, env, envFrom, volumes
+   pod only as tuning that cannot add code or widen what it can read; `security`: adds no code and
+   widens nothing the pod can read, but can remove its pod-level ingress isolation (residual (c)); jev: image, env, envFrom, volumes
    0.83 / everything that reaches the pod 0.17). `TestEveryBackendServiceSpecFieldIsBoundOrReviewed`
    enumerates the fields by **reflection** on the type and fails when one is in neither list, in both, or
    stale; a second test compares each classification with **behaviour** (it renders the function objects
@@ -866,7 +867,8 @@ Context and the tests below.
   what the function reads, and what it executes if the image loads code or configuration from it. That
   needs write on that object, not on `backendservices`. (b) **A Secret the zone itself provides** is
   readable by the function by design. (c) **Excluded fields**: `port` (aim traffic at another listener of
-  the pinned image), `protoVersion` (misreport the contract version), `scaling`, `resources`,
+  the pinned image), `protoVersion` (misreport the contract version), `security` (turn off the function's NetworkPolicy,
+  removing its pod-level ingress isolation without the pin moving), `scaling`, `resources`,
   `imagePullSecrets`. (d) **Optional per zone**: an unset `specDigest` keeps the image-only or name-only
   binding and the residual of Amendment 3 (e). (e) **Whoever can write the `NextApp` can move the pin.**
   (f) **Content, not provenance.** (g) **Rotation is two writes** and costs a cold start when apart.

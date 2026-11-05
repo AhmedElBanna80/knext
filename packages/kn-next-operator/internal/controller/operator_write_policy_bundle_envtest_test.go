@@ -101,7 +101,7 @@ func TestRenderedBundlePolicyConfinesTheIdentityTheOperatorRunsAs(t *testing.T) 
 			if err := yaml.UnmarshalStrict(doc, binding); err != nil {
 				t.Fatal(err)
 			}
-		case head.Kind == "ClusterRole" && strings.HasSuffix(head.Metadata.Name, "-manager-role"):
+		case head.Kind == lcClusterRole && strings.HasSuffix(head.Metadata.Name, "-manager-role"):
 			role = &rbacv1.ClusterRole{}
 			if err := yaml.Unmarshal(doc, role); err != nil {
 				t.Fatal(err)
@@ -147,7 +147,7 @@ func TestRenderedBundlePolicyConfinesTheIdentityTheOperatorRunsAs(t *testing.T) 
 	cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "bundle-manager-role"}, Rules: role.Rules}
 	crb := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "bundle-manager-role"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: cr.Name},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: cr.Name},
 		Subjects:   []rbacv1.Subject{*subject},
 	}
 	for _, o := range []client.Object{cr, crb} {

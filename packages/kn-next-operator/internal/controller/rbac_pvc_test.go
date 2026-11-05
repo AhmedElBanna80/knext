@@ -19,6 +19,7 @@ package controller
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -69,12 +70,7 @@ func TestManagerRoleGrantsPersistentVolumeClaims(t *testing.T) {
 }
 
 func containsString(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(hay, needle)
 }
 
 func keys(m map[string]bool) []string {

@@ -77,7 +77,7 @@ var _ = Describe("Image-prewarm DaemonSet (ADR-0037)", func() {
 		// Owner-referenced to the NextApp so it is GC'd on delete.
 		Expect(ds.OwnerReferences).To(HaveLen(1))
 		Expect(ds.OwnerReferences[0].Name).To(Equal(nn.Name))
-		Expect(ds.OwnerReferences[0].Kind).To(Equal("NextApp"))
+		Expect(ds.OwnerReferences[0].Kind).To(Equal(lcNextApp))
 
 		spec := ds.Spec.Template.Spec
 		Expect(spec.Containers).To(HaveLen(1))

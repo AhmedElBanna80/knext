@@ -25,6 +25,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pickServerPort } from "./helpers/free-port";
 import { waitForHttpOk } from "./helpers/wait-for-http-ok";
 
 const tempRoots: string[] = [];
@@ -110,7 +111,7 @@ async function buildAndServe(
     sh("bun", ["install", "--frozen-lockfile"]);
     sh(join(root, "node_modules", ".bin", "vite"), ["build"]);
 
-    const port = 20000 + Math.floor(Math.random() * 20000);
+    const port = await pickServerPort();
     const srv = spawn(
         preset === "bun" ? "bun" : "node",
         [".output/server/index.mjs"],

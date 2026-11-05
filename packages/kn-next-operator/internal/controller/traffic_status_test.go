@@ -19,7 +19,6 @@ package controller
 import (
 	"testing"
 
-	"k8s.io/utils/ptr"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 )
 
@@ -61,8 +60,8 @@ func TestMapTrafficStatus(t *testing.T) {
 		// Exactly the value observed in the failing nightly: the previous 60/40 split,
 		// still present while the spec pinned a revision that does not exist.
 		stale := []servingv1.TrafficTarget{
-			{RevisionName: "gc-e2e-app-00002", Percent: ptr.To(int64(60))},
-			{RevisionName: "gc-e2e-app-00003", Percent: ptr.To(int64(40)), LatestRevision: ptr.To(true)},
+			{RevisionName: "gc-e2e-app-00002", Percent: new(int64(60))},
+			{RevisionName: "gc-e2e-app-00003", Percent: new(int64(40)), LatestRevision: new(true)},
 		}
 		got := mapTrafficStatus(stale)
 		if len(got) != 2 {
@@ -85,9 +84,9 @@ func TestMapTrafficStatus(t *testing.T) {
 
 	t.Run("a nil LatestRevision maps to false", func(t *testing.T) {
 		got := mapTrafficStatus([]servingv1.TrafficTarget{
-			{RevisionName: "r", Percent: ptr.To(int64(100))},
+			{RevisionName: "r", Percent: new(int64(100))},
 		})
-		if len(got) != 1 || !(!got[0].LatestRevision) {
+		if len(got) != 1 || got[0].LatestRevision {
 			t.Fatalf("got %+v, want LatestRevision false", got)
 		}
 	})

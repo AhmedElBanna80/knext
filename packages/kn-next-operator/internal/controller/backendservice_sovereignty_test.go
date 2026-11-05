@@ -254,7 +254,7 @@ func TestSovereigntyAllowsSecretMarkedForSameZoneByOwnerReference(t *testing.T) 
 	zone, others := sovFixture()
 	lookup := sovSecrets(map[string]secretMetadata{
 		"stripe-key": {ownerRefs: []metav1.OwnerReference{{
-			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "NextApp", Name: sovZone, UID: sovZoneUID,
+			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: lcNextApp, Name: sovZone, UID: sovZoneUID,
 		}}},
 	})
 	if got, _ := checkFunctionSovereignty(sovFunction(specSecretVolume("stripe-key")), zone, others, lookup); len(got) != 0 {
@@ -268,7 +268,7 @@ func TestSovereigntyRejectsOwnerReferenceWithWrongUID(t *testing.T) {
 	zone, others := sovFixture()
 	lookup := sovSecrets(map[string]secretMetadata{
 		"stripe-key": {ownerRefs: []metav1.OwnerReference{{
-			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "NextApp", Name: sovZone, UID: "stale-uid",
+			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: lcNextApp, Name: sovZone, UID: "stale-uid",
 		}}},
 	})
 	got, _ := checkFunctionSovereignty(sovFunction(specSecretVolume("stripe-key")), zone, others, lookup)
@@ -290,7 +290,7 @@ func TestSovereigntyRejectsSecretOwnedByAnotherZone(t *testing.T) {
 	zone, others := sovFixture()
 	lookup := sovSecrets(map[string]secretMetadata{
 		"billing-stripe": {ownerRefs: []metav1.OwnerReference{{
-			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "NextApp", Name: sovOther, UID: sovOtherUID,
+			APIVersion: appsv1alpha1.GroupVersion.String(), Kind: lcNextApp, Name: sovOther, UID: sovOtherUID,
 		}}},
 	})
 	got, _ := checkFunctionSovereignty(sovFunction(specSecretKeyRef("billing-stripe")), zone, others, lookup)
@@ -307,7 +307,7 @@ func TestSovereigntyDenyWinsOverSameZoneMark(t *testing.T) {
 		sovForeignDB: {
 			labels: map[string]string{ZoneLabel: sovZone},
 			ownerRefs: []metav1.OwnerReference{{
-				APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "NextApp", Name: sovZone, UID: sovZoneUID,
+				APIVersion: appsv1alpha1.GroupVersion.String(), Kind: lcNextApp, Name: sovZone, UID: sovZoneUID,
 			}},
 		},
 	})
@@ -433,7 +433,7 @@ func TestDatabaseHostLintFlagsAnotherZonesCluster(t *testing.T) {
 
 func TestDatabaseHostLintFlagsReadOnlyService(t *testing.T) {
 	zone, others := sovFixture()
-	got := lintForeignDatabaseHosts(lintFunction(corev1.EnvVar{Name: "RO", Value: cnpgHost("billing", "ro", "")}), zone, others)
+	got := lintForeignDatabaseHosts(lintFunction(corev1.EnvVar{Name: "RO", Value: cnpgHost(sovOther, "ro", "")}), zone, others)
 	if len(got) != 1 || got[0].zone != sovOther {
 		t.Fatalf("want one finding for zone billing's -ro service, got %+v", got)
 	}
@@ -453,14 +453,14 @@ func TestDatabaseHostLintLongestZonePrefixWins(t *testing.T) {
 	// Zones "orders" (the other) and "orders-archive" (this one): the cluster
 	// "orders-archive-db" belongs to the longer match, this zone.
 	zone := sovZoneApp("orders-archive", "uid-archive", "")
-	others := []appsv1alpha1.NextApp{sovZoneApp("orders", "uid-orders", "")}
+	others := []appsv1alpha1.NextApp{sovZoneApp(sovZone, "uid-orders", "")}
 	bs := lintFunction(corev1.EnvVar{Name: "OWN", Value: cnpgHost("orders-archive-db", "rw", "")})
 	bs.Spec.Zone = "orders-archive"
 	if got := lintForeignDatabaseHosts(bs, &zone, others); len(got) != 0 {
 		t.Fatalf("own zone's cluster flagged as foreign: %+v", got)
 	}
 	bs.Spec.Env[0].Value = cnpgHost("orders-db", "ro", "")
-	if got := lintForeignDatabaseHosts(bs, &zone, others); len(got) != 1 || got[0].zone != "orders" {
+	if got := lintForeignDatabaseHosts(bs, &zone, others); len(got) != 1 || got[0].zone != sovZone {
 		t.Fatalf("zone orders' cluster not flagged: %+v", got)
 	}
 }
@@ -484,7 +484,7 @@ func TestDatabaseHostLintIgnoresOwnAndUnrelatedHosts(t *testing.T) {
 // literal leaves checkFunctionSovereignty empty.
 func TestDatabaseHostLintIsNotARejection(t *testing.T) {
 	zone, others := sovFixture()
-	bs := lintFunction(corev1.EnvVar{Name: "X", Value: cnpgHost("billing", "rw", "")})
+	bs := lintFunction(corev1.EnvVar{Name: "X", Value: cnpgHost(sovOther, "rw", "")})
 	if got, _ := checkFunctionSovereignty(bs, zone, others, noSecrets()); len(got) != 0 {
 		t.Fatalf("the database-host check is a lint, not a rejection: %+v", got)
 	}

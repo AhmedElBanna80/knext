@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	podsecurityapi "k8s.io/pod-security-admission/api"
 	"k8s.io/pod-security-admission/policy"
-	"k8s.io/utils/ptr"
 	"knative.dev/pkg/apis"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
@@ -63,9 +62,9 @@ func knativeQueueProxy() corev1.Container {
 		Name:  "queue-proxy",
 		Image: "gcr.io/knative-releases/knative.dev/serving/cmd/queue@sha256:0000",
 		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			ReadOnlyRootFilesystem:   ptr.To(true),
-			RunAsNonRoot:             ptr.To(true),
+			AllowPrivilegeEscalation: new(false),
+			ReadOnlyRootFilesystem:   new(true),
+			RunAsNonRoot:             new(true),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 			SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
@@ -173,11 +172,11 @@ func TestNextAppKsvcMeetsPodSecurityRestricted(t *testing.T) {
 	}{
 		{"default standalone", appsv1alpha1.NextAppSpec{}},
 		{"bun runtime", appsv1alpha1.NextAppSpec{Runtime: "bun"}},
-		{"vinext single executable", appsv1alpha1.NextAppSpec{Build: "vinext"}},
+		{"vinext single executable", appsv1alpha1.NextAppSpec{Build: lcVinext}},
 		{"self-contained standalone", appsv1alpha1.NextAppSpec{SelfContained: true}},
 		{"object storage (mounts the image cache)", appsv1alpha1.NextAppSpec{Storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}}},
-		{"writable cache (mounts /tmp and the image cache)", appsv1alpha1.NextAppSpec{Security: &appsv1alpha1.SecuritySpec{WritableCache: ptr.To(true)}}},
-		{"read-only root filesystem opted out", appsv1alpha1.NextAppSpec{Security: &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: ptr.To(false)}}},
+		{"writable cache (mounts /tmp and the image cache)", appsv1alpha1.NextAppSpec{Security: &appsv1alpha1.SecuritySpec{WritableCache: new(true)}}},
+		{"read-only root filesystem opted out", appsv1alpha1.NextAppSpec{Security: &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: new(false)}}},
 		{"private app", appsv1alpha1.NextAppSpec{Networking: &appsv1alpha1.NetworkingSpec{Visibility: appsv1alpha1.VisibilityClusterLocal}}},
 	}
 	for _, tc := range cases {
@@ -229,7 +228,7 @@ func TestKnativeRejectsPodLevelSecurityContextByDefault(t *testing.T) {
 	}
 	ksvc := renderNextAppKsvc(t, app)
 	ksvc.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{
-		RunAsNonRoot:   ptr.To(true),
+		RunAsNonRoot:   new(true),
 		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 	}
 	ctx := context.Background()
@@ -250,8 +249,8 @@ func TestNextAppRunAsNonRootOptOut(t *testing.T) {
 	}{
 		{"nil security defaults ON", nil, true},
 		{"nil field defaults ON", &appsv1alpha1.SecuritySpec{}, true},
-		{"explicit true stays ON", &appsv1alpha1.SecuritySpec{RunAsNonRoot: ptr.To(true)}, true},
-		{"explicit false omits runAsNonRoot", &appsv1alpha1.SecuritySpec{RunAsNonRoot: ptr.To(false)}, false},
+		{"explicit true stays ON", &appsv1alpha1.SecuritySpec{RunAsNonRoot: new(true)}, true},
+		{"explicit false omits runAsNonRoot", &appsv1alpha1.SecuritySpec{RunAsNonRoot: new(false)}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -335,13 +334,13 @@ func TestRestrictedCheckerRejectsThePreviousRender(t *testing.T) {
 	nextApp := &servingv1.Service{}
 	nextApp.Spec.Template.Spec.Containers = []corev1.Container{{
 		Name: "user-container", Image: restrictedTestImage,
-		SecurityContext: &corev1.SecurityContext{ReadOnlyRootFilesystem: ptr.To(true)},
+		SecurityContext: &corev1.SecurityContext{ReadOnlyRootFilesystem: new(true)},
 	}}
 	function := &servingv1.Service{}
 	function.Spec.Template.Spec.Containers = []corev1.Container{{
 		Name: "user-container", Image: restrictedTestImage,
 		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
+			AllowPrivilegeEscalation: new(false),
 			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		},
 	}}

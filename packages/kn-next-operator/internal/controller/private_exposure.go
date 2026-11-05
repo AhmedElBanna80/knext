@@ -95,7 +95,7 @@ func (r *NextAppReconciler) ownerAppOf(ctx context.Context, dm *servingv1beta1.D
 	if ns == "" {
 		ns = dm.Namespace
 	}
-	if ref.APIVersion == "serving.knative.dev/v1" && ref.Kind == "Service" {
+	if ref.APIVersion == "serving.knative.dev/v1" && ref.Kind == lcService {
 		return ref.Name, nil
 	}
 	reader := r.APIReader
@@ -114,7 +114,7 @@ func (r *NextAppReconciler) ownerAppOf(ctx context.Context, dm *servingv1beta1.D
 	defer cancel()
 	if err := reader.Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ns}, obj); err != nil {
 		if apierrors.IsNotFound(err) {
-			if ref.Kind == "Service" || ref.Kind == "Route" {
+			if ref.Kind == lcService || ref.Kind == lcRoute {
 				return ref.Name, nil
 			}
 			return "", nil

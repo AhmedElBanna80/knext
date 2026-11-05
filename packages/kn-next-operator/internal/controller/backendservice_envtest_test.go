@@ -109,7 +109,7 @@ func deleteFunctionAndFinalize(ctx context.Context, nn types.NamespacedName) {
 }
 
 func validImageForBS() string {
-	return "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+	return validImage
 }
 
 func createFunction(ctx context.Context, ns, name, zone string, mut ...func(*appsv1alpha1.BackendService)) *appsv1alpha1.BackendService {
@@ -118,7 +118,7 @@ func createFunction(ctx context.Context, ns, name, zone string, mut ...func(*app
 		Spec: appsv1alpha1.BackendServiceSpec{
 			Zone:         zone,
 			Image:        bsImage,
-			ProtoVersion: "1.0.0",
+			ProtoVersion: lcV100,
 		},
 	}
 	for _, m := range mut {
@@ -180,22 +180,22 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 
 	It("sets the controller ownerReference itself, with blockOwnerDeletion, from spec.zone", func() {
 		ns := bsNamespace(ctx)
-		zone := createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
+		zone := createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
 		reconcileFunction(ctx, ns, "pricing")
 
 		ref := metav1.GetControllerOf(getFunction(ctx, ns, "pricing"))
 		Expect(ref).NotTo(BeNil())
-		Expect(ref.Kind).To(Equal("NextApp"))
-		Expect(ref.Name).To(Equal("orders"))
+		Expect(ref.Kind).To(Equal(lcNextApp))
+		Expect(ref.Name).To(Equal(sovZone))
 		Expect(ref.UID).To(Equal(zone.UID))
 		Expect(ptr.Deref(ref.BlockOwnerDeletion, false)).To(BeTrue())
 	})
 
 	It("refuses a one-sided binding from the function side: the zone does not list it, nothing rendered or mounted", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders") // no spec.backends: the zone has not consented
-		createFunction(ctx, ns, "pricing", "orders")
+		createZone(ctx, ns, sovZone) // no spec.backends: the zone has not consented
+		createFunction(ctx, ns, "pricing", sovZone)
 		reconcileFunction(ctx, ns, "pricing")
 
 		bs := getFunction(ctx, ns, "pricing")
@@ -209,26 +209,26 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 
 	It("never overwrites a conflicting controller ownerReference", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		other := createZone(ctx, ns, "billing")
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		other := createZone(ctx, ns, sovOther)
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.OwnerReferences = []metav1.OwnerReference{{
-				APIVersion: appsv1alpha1.GroupVersion.String(), Kind: "NextApp", Name: other.Name, UID: other.UID,
-				Controller: ptr.To(true),
+				APIVersion: appsv1alpha1.GroupVersion.String(), Kind: lcNextApp, Name: other.Name, UID: other.UID,
+				Controller: new(true),
 			}}
 		})
 		reconcileFunction(ctx, ns, "pricing")
 
 		bs := getFunction(ctx, ns, "pricing")
-		Expect(metav1.GetControllerOf(bs).Name).To(Equal("billing"), "the operator must not overwrite it")
+		Expect(metav1.GetControllerOf(bs).Name).To(Equal(sovOther), "the operator must not overwrite it")
 		Expect(functionCondition(bs, ConditionFunctionBound).Reason).To(Equal(ReasonConflictingOwner))
 		expectNothingRendered(ctx, ns, "pricing")
 	})
 
 	It("renders a cluster-local h2c Knative Service, an operator-owned ServiceAccount and the function NetworkPolicy for a two-sided binding", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.Port = 9000
 		})
 		reconcileFunction(ctx, ns, "pricing")
@@ -236,9 +236,9 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 		ksvc := &servingv1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "pricing"}, ksvc)).To(Succeed())
 		Expect(ksvc.Labels["networking.knative.dev/visibility"]).To(Equal("cluster-local"))
-		Expect(ksvc.Labels[ZoneLabel]).To(Equal("orders"))
+		Expect(ksvc.Labels[ZoneLabel]).To(Equal(sovZone))
 		Expect(metav1.GetControllerOf(ksvc).Kind).To(Equal("BackendService"))
-		Expect(ksvc.Spec.Template.Annotations[ProtoVersionAnnotation]).To(Equal("1.0.0"))
+		Expect(ksvc.Spec.Template.Annotations[ProtoVersionAnnotation]).To(Equal(lcV100))
 
 		spec := ksvc.Spec.Template.Spec
 		Expect(spec.Containers).To(HaveLen(1))
@@ -261,7 +261,7 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 		}
 		Expect(jwks).NotTo(BeNil())
 		Expect(jwks.ConfigMap).NotTo(BeNil())
-		Expect(jwks.ConfigMap.Name).To(Equal(ZoneJWKSConfigMapName("orders")))
+		Expect(jwks.ConfigMap.Name).To(Equal(ZoneJWKSConfigMapName(sovZone)))
 		Expect(ptr.Deref(jwks.ConfigMap.Optional, false)).To(BeTrue())
 		var mount *corev1.VolumeMount
 		for i := range spec.Containers[0].VolumeMounts {
@@ -295,15 +295,83 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 		Expect(bs.Finalizers).To(ContainElement(BackendServiceFinalizer))
 	})
 
+	It("spec.security.networkPolicy: default renders the policy; false removes it and never renders it; true re-creates it", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
+		npKey := types.NamespacedName{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")}
+
+		By("unset: the policy is rendered (default on)")
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{})).To(Succeed())
+
+		By("explicit false: the previously-rendered policy is deleted")
+		cur := getFunction(ctx, ns, "pricing")
+		cur.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: new(false)}
+		Expect(k8sClient.Update(ctx, cur)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{}))).To(BeTrue())
+		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue(), "opting out of the policy must not stop the function rendering")
+
+		By("still false after another reconcile: never re-rendered")
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{}))).To(BeTrue())
+
+		By("re-enabled: the policy is re-created")
+		cur = getFunction(ctx, ns, "pricing")
+		cur.Spec.Security.NetworkPolicy = new(true)
+		Expect(k8sClient.Update(ctx, cur)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, npKey, &networkingv1.NetworkPolicy{})).To(Succeed())
+	})
+
+	It("spec.security.networkPolicy=false on a fresh function never renders the policy", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: new(false)}
+		})
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
+		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")}, &networkingv1.NetworkPolicy{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("spec.security.networkPolicy=false leaves a same-named NetworkPolicy the function does not control untouched", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{NetworkPolicy: new(false)}
+		})
+		foreign := &networkingv1.NetworkPolicy{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")},
+			Spec:       networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}},
+		}
+		Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(foreign), &networkingv1.NetworkPolicy{})).To(Succeed(),
+			"the opt-out deletes only a policy this function controls")
+	})
+
+	It("spec.security.networkPolicy: an empty security block means ON", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Security = &appsv1alpha1.BackendServiceSecuritySpec{}
+		})
+		reconcileFunction(ctx, ns, "pricing")
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: FunctionNetworkPolicyName("pricing")}, &networkingv1.NetworkPolicy{})).To(Succeed())
+	})
+
 	It("ignores a stray serviceAccountName: the apiserver prunes it and the pod uses the operator-owned ServiceAccount", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		u := &unstructured.Unstructured{Object: map[string]interface{}{
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		u := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": appsv1alpha1.GroupVersion.String(),
 			"kind":       "BackendService",
-			"metadata":   map[string]interface{}{"name": "pricing", "namespace": ns},
-			"spec": map[string]interface{}{
-				"zone":               "orders",
+			"metadata":   map[string]any{"name": "pricing", "namespace": ns},
+			"spec": map[string]any{
+				"zone":               sovZone,
 				"image":              bsImage,
 				"serviceAccountName": "secret-reader",
 			},
@@ -320,8 +388,8 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 
 	It("revokes: removing the zone's backends[] entry deletes the function's Knative Service", func() {
 		ns := bsNamespace(ctx)
-		zone := createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
+		zone := createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 
@@ -339,8 +407,8 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 
 	It("rejects an image that is not pinned by digest", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.Image = "registry.example.com/fn:latest"
 		})
 		reconcileFunction(ctx, ns, "pricing")
@@ -350,13 +418,13 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 
 	It("keeps a bound function's retention longer than its zone's", func() {
 		ns := bsNamespace(ctx)
-		zone := createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		zone := createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		zone.Spec.Scaling = &appsv1alpha1.ScalingSpec{MaxScale: 3, ScaleDownDelay: "2m"}
 		Expect(k8sClient.Update(ctx, zone)).To(Succeed())
 		_, err := newZoneReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(zone)})
 		Expect(err).NotTo(HaveOccurred())
 
-		createFunction(ctx, ns, "pricing", "orders")
+		createFunction(ctx, ns, "pricing", sovZone)
 		reconcileFunction(ctx, ns, "pricing")
 		ksvc := &servingv1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "pricing"}, ksvc)).To(Succeed())
@@ -372,10 +440,10 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 	refuse := func(name string, mut func(*appsv1alpha1.BackendService, string), wantSource string) {
 		It(name, func() {
 			ns := bsNamespace(ctx)
-			createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+			createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 			// The other zone's database Secret: the most dangerous foreign credential.
-			createZone(ctx, ns, "billing")
-			createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) { mut(bs, "billing-db") })
+			createZone(ctx, ns, sovOther)
+			createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) { mut(bs, "billing-db") })
 			reconcileFunction(ctx, ns, "pricing")
 
 			bs := getFunction(ctx, ns, "pricing")
@@ -405,10 +473,10 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 
 	It("refuses an unmarked Secret (it is neither the zone's database Secret nor marked for the zone)", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "stripe", Namespace: ns}})).To(Succeed())
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
-			bs.Spec.EnvFrom = specEnvFromSecret("stripe").EnvFrom
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: lcStripe, Namespace: ns}})).To(Succeed())
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom
 		})
 		reconcileFunction(ctx, ns, "pricing")
 		c := functionCondition(getFunction(ctx, ns, "pricing"), ConditionSovereigntyCompliant)
@@ -419,13 +487,13 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 
 	It("allows the zone's own database Secret and a Secret labelled for the zone (read through the uncached reader)", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "stripe", Namespace: ns, Labels: map[string]string{ZoneLabel: "orders"},
+			Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
 		}})).To(Succeed())
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.Env = specSecretKeyRef("orders-db").Env
-			bs.Spec.EnvFrom = specEnvFromSecret("stripe").EnvFrom
+			bs.Spec.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom
 		})
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionCondition(getFunction(ctx, ns, "pricing"), ConditionSovereigntyCompliant).Status).To(Equal(metav1.ConditionTrue))
@@ -434,12 +502,12 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 
 	It("deny wins: another zone's database Secret labelled for this zone is still refused", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createZone(ctx, ns, "billing")
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovOther)
 		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: "billing-db", Namespace: ns, Labels: map[string]string{ZoneLabel: "orders"},
+			Name: "billing-db", Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
 		}})).To(Succeed())
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.Volumes = specSecretVolume("billing-db").Volumes
 		})
 		reconcileFunction(ctx, ns, "pricing")
@@ -449,9 +517,9 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 
 	It("fails closed: a violation added to a rendered function deletes its Knative Service", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createZone(ctx, ns, "billing")
-		createFunction(ctx, ns, "pricing", "orders")
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovOther)
+		createFunction(ctx, ns, "pricing", sovZone)
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 
@@ -464,12 +532,12 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 
 	It("refuses another zone's JWKS ConfigMap: a function cannot mount a foreign JWKS", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createZone(ctx, ns, "billing")
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovOther)
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.Volumes = []appsv1alpha1.FunctionVolume{{
 				Name: "keys", MountPath: "/keys",
-				ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: ZoneJWKSConfigMapName("billing")}},
+				ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: ZoneJWKSConfigMapName(sovOther)}},
 			}}
 		})
 		reconcileFunction(ctx, ns, "pricing")
@@ -483,7 +551,7 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 		ns := bsNamespace(ctx)
 		bs := &appsv1alpha1.BackendService{
 			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-			Spec: appsv1alpha1.BackendServiceSpec{Zone: "orders", Image: bsImage, Volumes: []appsv1alpha1.FunctionVolume{{
+			Spec: appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage, Volumes: []appsv1alpha1.FunctionVolume{{
 				Name: "shadow", MountPath: ZoneJWKSMountDir, EmptyDir: &corev1.EmptyDirVolumeSource{},
 			}}},
 		}
@@ -494,8 +562,8 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 
 	It("rejects a change of spec.zone at admission (immutable)", func() {
 		ns := bsNamespace(ctx)
-		bs := createFunction(ctx, ns, "pricing", "orders")
-		bs.Spec.Zone = "billing"
+		bs := createFunction(ctx, ns, "pricing", sovZone)
+		bs.Spec.Zone = sovOther
 		err := k8sClient.Update(ctx, bs)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("spec.zone is immutable"))
@@ -503,9 +571,9 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 
 	It("reports a foreign database host as a lint WARNING and still renders the function", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createZone(ctx, ns, "billing")
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovOther)
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.Env = []corev1.EnvVar{{Name: "LEGACY_DSN", Value: "postgres://u@" + cnpgHost("billing-db", "rw", ":5432/app")}}
 		})
 		reconcileFunction(ctx, ns, "pricing")
@@ -526,24 +594,24 @@ var _ = Describe("BackendService reconciler: served proto version and deletion",
 
 	It("reports the version stamped on the latest READY revision, not the spec's", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) { bs.Spec.ProtoVersion = "1.1.0" })
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) { bs.Spec.ProtoVersion = "1.1.0" })
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(getFunction(ctx, ns, "pricing").Status.ServedProtoVersion).To(BeEmpty(), "nothing is served before a revision is Ready")
 
 		By("a Ready revision stamped 1.0.0 (the previous rollout) serves while 1.1.0 rolls")
-		markFunctionServed(ctx, ns, "pricing", "pricing-00001", "1.0.0")
+		markFunctionServed(ctx, ns, "pricing", "pricing-00001", lcV100)
 		reconcileFunction(ctx, ns, "pricing")
 		bs := getFunction(ctx, ns, "pricing")
-		Expect(bs.Status.ServedProtoVersion).To(Equal("1.0.0"))
+		Expect(bs.Status.ServedProtoVersion).To(Equal(lcV100))
 		Expect(bs.Status.ObservedRevision).To(Equal("pricing-00001"))
 		Expect(functionCondition(bs, ConditionReady).Status).To(Equal(metav1.ConditionTrue))
 	})
 
 	It("runs the finalizer on delete: the Knative Service goes, the object is released", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 

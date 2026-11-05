@@ -138,7 +138,7 @@ func TestComputePlatformStatus_AppsThatCannotReceiveTheConfigAreNotCounted(t *te
 	p := platformObj(1, nil)
 	hash := platformSpecHash(&p.Spec)
 
-	invalid := appWithPlatform("invalid", "", &metav1.Condition{Type: ConditionReady, Status: metav1.ConditionFalse, Reason: "InvalidSpec"})
+	invalid := appWithPlatform("invalid", "", &metav1.Condition{Type: ConditionReady, Status: metav1.ConditionFalse, Reason: lcInvalidSpec})
 	deleting := appWithPlatform("deleting", "old-hash", nil)
 	now := metav1.Now()
 	deleting.DeletionTimestamp = &now

@@ -49,8 +49,8 @@ func TestRunningTemplateViolationNeedsPositiveEvidence(t *testing.T) {
 		wantErr bool // a violation is expected
 	}{
 		{"a pruned old Secret (NotFound) is a routine rotation", "stripe-v1", noSecrets(), zone, false},
-		{"a Secret re-marked for another zone", "stripe", sovSecrets(map[string]secretMetadata{"stripe": {labels: map[string]string{ZoneLabel: sovOther}}}), zone, true},
-		{"a Secret that exists but lost the zone's mark", "stripe", sovSecrets(map[string]secretMetadata{"stripe": {}}), zone, true},
+		{"a Secret re-marked for another zone", lcStripe, sovSecrets(map[string]secretMetadata{lcStripe: {labels: map[string]string{ZoneLabel: sovOther}}}), zone, true},
+		{"a Secret that exists but lost the zone's mark", lcStripe, sovSecrets(map[string]secretMetadata{lcStripe: {}}), zone, true},
 		{"another zone's database Secret", sovForeignDB, noSecrets(), zone, true},
 		{"a zone signing key", ZoneSigningKeySecretName(sovZone), noSecrets(), zone, true},
 		{"the zone is gone (NotFound Secret, no zone)", "stripe-v1", noSecrets(), nil, true},
@@ -142,7 +142,7 @@ func TestRunningCheckAloneToleratesAbsentSecrets(t *testing.T) {
 			})
 		}
 	}
-	if seen["checkRunningSovereignty"] != "true" || seen["checkFunctionSovereignty"] != "false" {
+	if seen["checkRunningSovereignty"] != lcTrue || seen["checkFunctionSovereignty"] != "false" {
 		t.Errorf("checkSecretRefs absentIsRotation: running=%q (want true), spec=%q (want false)",
 			seen["checkRunningSovereignty"], seen["checkFunctionSovereignty"])
 	}

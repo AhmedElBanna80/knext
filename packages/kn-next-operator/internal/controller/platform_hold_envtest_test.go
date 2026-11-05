@@ -57,9 +57,9 @@ var _ = Describe("hold-last-good that drops the app's own change is not Ready", 
 	It("reports Ready=False and does not advance the reconciled generation; recovers when the hold lifts", func() {
 		holdsBefore := holdsCounter(ReasonEffectiveSpecInvalid)
 		DeferCleanup(func() { deletePlatformIfPresent(ctx, "default") })
-		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]interface{}{
+		Expect(k8sClient.Create(ctx, rawPlatform("default", map[string]any{
 			// An active platform that sets no budget: the built-in 80 applies until it does.
-			"limits": map[string]interface{}{"timeoutSeconds": int64(600)},
+			"limits": map[string]any{"timeoutSeconds": int64(600)},
 		}))).To(Succeed())
 
 		app := &appsv1alpha1.NextApp{

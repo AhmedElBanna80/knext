@@ -98,7 +98,7 @@ func TestHeldTracker_CounterCountsTransitionsIntoAHoldNotPasses(t *testing.T) {
 	a := types.NamespacedName{Namespace: "ns", Name: "count-a"}
 	before := holdsCounter(ReasonEffectiveSpecInvalid)
 
-	for i := 0; i < 5; i++ { // a hold that persists across many passes is ONE hold
+	for range 5 { // a hold that persists across many passes is ONE hold
 		h.observe(a, platformGate{hold: holdEffectiveSpecInvalid})
 	}
 	if got := holdsCounter(ReasonEffectiveSpecInvalid) - before; got != 1 {

@@ -27,7 +27,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -195,7 +194,7 @@ var _ = Describe("NetworkPolicyEnforced condition (#744)", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    image,
-				Security: &appsv1alpha1.SecuritySpec{NetworkPolicy: ptr.To(false)},
+				Security: &appsv1alpha1.SecuritySpec{NetworkPolicy: new(false)},
 			},
 		}
 		Expect(k8sClient.Create(ctx, app)).To(Succeed())

@@ -53,7 +53,7 @@ var _ = Describe("NextApp Controller", func() {
 					},
 					Spec: appsv1alpha1.NextAppSpec{
 						// A digest-pinned image is required by validateImageRef (A1-digest).
-						Image: "registry.example.com/app:v1@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+						Image: validImage,
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())

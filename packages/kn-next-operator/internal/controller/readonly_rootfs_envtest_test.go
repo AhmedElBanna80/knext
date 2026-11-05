@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"knative.dev/pkg/apis"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -105,7 +104,7 @@ var _ = Describe("NextApp readOnlyRootFilesystem (#1332)", func() {
 		// (the live admission webhook admits it, proven separately on kind).
 		fetched := ksvc.DeepCopy()
 		fetched.SetDefaults(ctx)
-		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(BeNil())
+		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(Succeed())
 	})
 
 	It("default + spec.storage set: mounts ONLY the image cache, not /tmp (#1786 round 2)", func() {
@@ -126,7 +125,7 @@ var _ = Describe("NextApp readOnlyRootFilesystem (#1332)", func() {
 
 		fetched := ksvc.DeepCopy()
 		fetched.SetDefaults(ctx)
-		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(BeNil())
+		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(Succeed())
 	})
 
 	It("default + selfContained: true mounts ONLY /tmp, not the image cache (#1786 round 2)", func() {
@@ -148,11 +147,11 @@ var _ = Describe("NextApp readOnlyRootFilesystem (#1332)", func() {
 
 		fetched := ksvc.DeepCopy()
 		fetched.SetDefaults(ctx)
-		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(BeNil())
+		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(Succeed())
 	})
 
 	It("writableCache: true mounts /tmp + the image cache for the standalone shape", func() {
-		nn := reconcileApp("rorf-writable", &appsv1alpha1.SecuritySpec{WritableCache: ptr.To(true)}, "")
+		nn := reconcileApp("rorf-writable", &appsv1alpha1.SecuritySpec{WritableCache: new(true)}, "")
 
 		ksvc := &servingv1.Service{}
 		Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
@@ -172,11 +171,11 @@ var _ = Describe("NextApp readOnlyRootFilesystem (#1332)", func() {
 		By("passing Knative's own webhook defaulting + validation")
 		fetched := ksvc.DeepCopy()
 		fetched.SetDefaults(ctx)
-		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(BeNil())
+		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(Succeed())
 	})
 
 	It("writableCache: true skips the standalone image-cache mount for the vinext single-executable shape", func() {
-		nn := reconcileApp("rorf-vinext", &appsv1alpha1.SecuritySpec{WritableCache: ptr.To(true)}, "vinext")
+		nn := reconcileApp("rorf-vinext", &appsv1alpha1.SecuritySpec{WritableCache: new(true)}, lcVinext)
 
 		ksvc := &servingv1.Service{}
 		Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
@@ -195,7 +194,7 @@ var _ = Describe("NextApp readOnlyRootFilesystem (#1332)", func() {
 	})
 
 	It("disables it and drops the volumes/mounts on explicit spec.security.readOnlyRootFilesystem: false", func() {
-		nn := reconcileApp("rorf-disabled", &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: ptr.To(false)}, "")
+		nn := reconcileApp("rorf-disabled", &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: new(false)}, "")
 
 		ksvc := &servingv1.Service{}
 		Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
@@ -212,6 +211,6 @@ var _ = Describe("NextApp readOnlyRootFilesystem (#1332)", func() {
 		// which is a Knative warning, not a rejection.
 		fetched := ksvc.DeepCopy()
 		fetched.SetDefaults(ctx)
-		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(BeNil())
+		Expect(fetched.Validate(ctx).Filter(apis.ErrorLevel)).To(Succeed())
 	})
 })

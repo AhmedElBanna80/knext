@@ -210,6 +210,11 @@ ed_assert_clean() {
 #   * "non5xx" — anything except 500–599. Used for the general app route: a
 #     404 for an unrouted path is a legitimate "the runtime is alive and
 #     routing" answer; a 500 is not.
+#   * "expect5xx" — 500–599 ONLY (#2615). Used for `/` of a fixture on the
+#     intentional-500 allowlist (ed_intentional_500_entries) and nowhere else:
+#     the fixture is MEANT to 500 there, so anything else means the allowlist
+#     entry has gone stale. A refused connection, a dropped socket or a hang
+#     fails in every mode.
 # BLOCKING-4 (round-2 review): the previous version counted ANY complete
 # response, so a server 500-ing on every route — or a missing on-disk route
 # chunk surfacing as a 500 — passed. 5s timeout either way.
@@ -237,6 +242,10 @@ ed_probe_http() {
 }
 
 # ed_boot_probe_kill <port> <health_path> <extra_path> <cmd...>
+#
+# <extra_path> is probed in the mode named by ED_EXTRA_PROBE_MODE (default
+# "non5xx"; "expect5xx" is set ONLY by ed_check_or_die, for a fixture on the
+# intentional-500 allowlist — see there, #2615).
 #
 # Runs <cmd...> in the background (PORT must already be exported by the
 # caller — the command reads it the same way it would in production), waits
@@ -298,10 +307,10 @@ ed_boot_probe_kill() {
     return 1
   fi
   local ok=0
-  if ed_probe_http "${port}" "${health_path}" "2xx3xx" && ed_probe_http "${port}" "${extra_path}" "non5xx"; then
+  if ed_probe_http "${port}" "${health_path}" "2xx3xx" && ed_probe_http "${port}" "${extra_path}" "${ED_EXTRA_PROBE_MODE:-non5xx}"; then
     ok=1
   else
-    ed_log "ERROR: the empty-dir boot did not answer ${health_path} with 2xx/3xx and ${extra_path} with a non-5xx status"
+    ed_log "ERROR: the empty-dir boot did not answer ${health_path} with 2xx/3xx and ${extra_path} as '${ED_EXTRA_PROBE_MODE:-non5xx}' (non5xx = any status but 5xx; expect5xx = a 5xx, the fixture is allowlisted as an intentional 500)"
   fi
   ed__kill_wait "${pid}"
   [ "${ok}" = "1" ]
@@ -373,6 +382,73 @@ ed_static_probe_path() {
   return 1
 }
 
+# ── the intentional-500 allowlist (#2615) ─────────────────────────────────────
+#
+# A few official Next.js fixtures answer 500 at `/` ON PURPOSE (a root layout
+# that throws to exercise global-error, a getServerSideProps page that needs a
+# rewrite's query). Under the static-probe pre-check the staged static asset
+# answering 2xx already proves the binary boots and serves from the empty dir,
+# so for THESE fixtures — and only these — `/` must answer 5xx instead of
+# non-5xx. Every other fixture keeps the strict non-5xx check at `/`: a binary
+# that serves the asset but 500s every dynamic route is a real failure.
+#
+# One entry per line:  id|upstream fixture dir|file|fixed string|reason
+#   * file + fixed string identify the fixture inside the harness's copy of it
+#     (the harness hands the deploy script only a temp dir, never a name);
+#   * upstream fixture dir (relative to a vercel/next.js checkout) lets
+#     scripts/lib/e2e-verify-intentional-500.sh prove each entry still points at
+#     a real fixture that still contains the fixed string;
+#   * a matched fixture whose `/` does NOT 5xx fails too (ed_probe_http
+#     "expect5xx"), so an entry that stops being true cannot linger silently.
+# Add an entry only for a fixture that 500s at `/` by design, with the reason.
+ed_intentional_500_entries() {
+  cat <<'ED_INTENTIONAL_500_EOF'
+global-error-layout-error|test/e2e/app-dir/global-error/layout-error|app/layout.js|throw new Error('layout error')|root layout throws on purpose so app/global-error.js renders
+global-error-with-style-import|test/e2e/app-dir/global-error/with-style-import|app/layout.tsx|throw new Error('Root Layout Error')|root layout throws on purpose to test a style import inside global-error
+rewrites-destination-query-array|test/e2e/rewrites-destination-query-array|pages/index.js|props.query.items.join|getServerSideProps page needs ?items from a rewrite, so a direct GET / throws a TypeError
+ED_INTENTIONAL_500_EOF
+}
+
+# ed_intentional_500_id <fixture_dir> — prints the id of the allowlist entry the
+# harness's copy of a fixture matches and returns 0; returns 1 (prints nothing)
+# when it matches none, or when <fixture_dir> is empty/absent.
+ed_intentional_500_id() {
+  local dir="${1:-}"
+  [ -n "${dir}" ] && [ -d "${dir}" ] || return 1
+  local id upstream file needle reason
+  while IFS='|' read -r id upstream file needle reason; do
+    [ -n "${id}" ] || continue
+    if [ -f "${dir}/${file}" ] && grep -qF -- "${needle}" "${dir}/${file}"; then
+      printf '%s\n' "${id}"
+      return 0
+    fi
+  done < <(ed_intentional_500_entries)
+  return 1
+}
+
+# ed_verify_intentional_500_allowlist <next.js checkout root> — returns 1,
+# naming each entry, when an entry's upstream fixture file is gone or no longer
+# contains the entry's fixed string (a stale entry).
+ed_verify_intentional_500_allowlist() {
+  local root="${1:-}"
+  if [ -z "${root}" ] || [ ! -d "${root}" ]; then
+    ed_log "ERROR: intentional-500 allowlist: not a directory: '${root}' — refusing to pass without a checkout to verify against"
+    return 1
+  fi
+  local id upstream file needle reason stale=0
+  while IFS='|' read -r id upstream file needle reason; do
+    [ -n "${id}" ] || continue
+    if [ ! -f "${root}/${upstream}/${file}" ]; then
+      ed_log "ERROR: STALE intentional-500 entry '${id}': ${upstream}/${file} does not exist in the checkout"
+      stale=1
+    elif ! grep -qF -- "${needle}" "${root}/${upstream}/${file}"; then
+      ed_log "ERROR: STALE intentional-500 entry '${id}': ${upstream}/${file} no longer contains '${needle}'"
+      stale=1
+    fi
+  done < <(ed_intentional_500_entries)
+  return "${stale}"
+}
+
 # ed_check_or_die <label> <fresh_dir> <binary_src> <health_path> <extra_path> <port> [<src>:<dest_rel>]...
 #
 # <health_path> may be ED_STATIC_PROBE (#1515): resolved, after staging, to a
@@ -420,7 +496,7 @@ ed_check_or_die() {
     ed_log "ERROR: ${label}: staging into ${fresh_dir} failed"
     return 1
   }
-  local binary_name
+  local binary_name extra_mode=non5xx
   binary_name="$(basename "${staged}")"
   ed_assert_clean "${fresh_dir}" "${binary_name}" || {
     ed_log "ERROR: ${label}: the staged directory is not clean — see above"
@@ -431,7 +507,22 @@ ed_check_or_die() {
       ed_log "ERROR: ${label}: could not pick a staged static file to probe"
       return 1
     }
-    ed_log "${label}: probing the staged static file ${health_path} (2xx) and ${extra_path} (non-5xx)"
+    # #2615: the static asset answering 2xx PROVES the binary boots and serves
+    # from the empty dir, but `/` is still checked: non-5xx for every fixture,
+    # EXCEPT the few on the intentional-500 allowlist (global-error x2,
+    # rewrites-destination-query-array) that answer 500 there on purpose — for
+    # those `/` must answer 5xx, so a stale entry fails instead of lingering.
+    # A refused connection, a dropped socket or a hang fails in every mode. The
+    # allowlist is looked up in ED_FIXTURE_DIR (the caller names the fixture's
+    # own dir; unset means nothing can match) and never applies when the lane
+    # names its own health path (KNEXT_EMPTY_DIR_HEALTH_PATH).
+    local intentional_id
+    if [ "${extra_path}" = "/" ] && intentional_id="$(ed_intentional_500_id "${ED_FIXTURE_DIR:-}")"; then
+      extra_mode=expect5xx
+      ed_log "${label}: fixture is allowlisted as an intentional 500 at / (${intentional_id}); probing the staged static file ${health_path} (2xx) and / (must answer 5xx)"
+    else
+      ed_log "${label}: probing the staged static file ${health_path} (2xx) and ${extra_path} (non-5xx)"
+    fi
   fi
 
   local -a hide_targets=()
@@ -473,7 +564,7 @@ ed_check_or_die() {
     if [ "${#hidden[@]}" -gt 0 ]; then
       trap 'ed_restore_hidden_paths "${hidden[@]}"' EXIT
     fi
-    cd "${fresh_dir}" && ed_boot_probe_kill "${port}" "${health_path}" "${extra_path}" "./$(basename "${staged}")"
+    cd "${fresh_dir}" && ED_EXTRA_PROBE_MODE="${extra_mode}" ed_boot_probe_kill "${port}" "${health_path}" "${extra_path}" "./$(basename "${staged}")"
   )
   local boot_status=$?
   # Belt-and-braces: the subshell's own EXIT trap already restored these, but

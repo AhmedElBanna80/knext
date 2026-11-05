@@ -266,11 +266,20 @@ updates:
       - '/packages/scale-zero-pg/gateway'
       - '/packages/kn-next-operator'
       - '/templates/go'
+      - '/templates/rust'
     schedule:
       interval: 'weekly'
     cooldown:
       default-days: 3
     groups:
+      # ONE PR moves `gcr.io/distroless/static:nonroot` in every directory at
+      # once. The Dockerfile base-image guard fails when a tag maps to two
+      # digests (tests/dockerfile-base-image-digests.test.ts), so per-directory
+      # PRs would each be red; this group is what keeps a correct bump green.
+      # No `update-types` filter: a digest-only refresh must be grouped too.
+      distroless-base:
+        patterns:
+          - 'gcr.io/distroless/*'
       go-base-images:
         patterns:
           - '*'

@@ -27,7 +27,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -80,29 +79,29 @@ var _ = Describe("NextApp reconciler: rendering the zone's binding env", func() 
 
 	It("renders <NAME>_SERVICE_URL, <NAME>_SERVICE_PROTO_VERSION and KNEXT_WAKE_FUNCTIONS into the template, and never writes NextApp.spec", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders",
+		createZone(ctx, ns, sovZone,
 			appsv1alpha1.BackendBinding{Name: "user-profile", Service: "profile"},
 			appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
-		createFunction(ctx, ns, "profile", "orders", func(bs *appsv1alpha1.BackendService) { bs.Spec.WakeAhead = ptr.To(false) })
+		createFunction(ctx, ns, "pricing", sovZone)
+		createFunction(ctx, ns, "profile", sovZone, func(bs *appsv1alpha1.BackendService) { bs.Spec.WakeAhead = new(false) })
 		setServed(ctx, ns, "pricing", "1.2.0")
-		specBefore, genBefore := zoneSpecJSON(ctx, ns, "orders")
+		specBefore, genBefore := zoneSpecJSON(ctx, ns, sovZone)
 
-		reconcileZone(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
 
-		env := zoneEnv(zoneKsvc(ctx, ns, "orders"))
+		env := zoneEnv(zoneKsvc(ctx, ns, sovZone))
 		Expect(env).To(HaveKeyWithValue("PRICING_SERVICE_URL", "http://pricing."+ns+".svc.cluster.local"))
 		Expect(env).To(HaveKeyWithValue("PRICING_SERVICE_PROTO_VERSION", "1.2.0"))
 		Expect(env).To(HaveKeyWithValue("USER_PROFILE_SERVICE_URL", "http://profile."+ns+".svc.cluster.local"))
 		Expect(env).NotTo(HaveKey("USER_PROFILE_SERVICE_PROTO_VERSION"), "unset until the function serves: the gateway fails closed")
 		Expect(env).To(HaveKeyWithValue(WakeFunctionsEnv, "pricing"), "the opted-out function is left out of the wake list")
 
-		specAfter, genAfter := zoneSpecJSON(ctx, ns, "orders")
+		specAfter, genAfter := zoneSpecJSON(ctx, ns, sovZone)
 		Expect(specAfter).To(Equal(specBefore), "the operator must never write NextApp.spec")
 		Expect(genAfter).To(Equal(genBefore), "a spec write would have bumped metadata.generation")
 
 		app := &appsv1alpha1.NextApp{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "orders"}, app)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: sovZone}, app)).To(Succeed())
 		c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionBackendBindings)
 		Expect(c).NotTo(BeNil())
 		Expect(c.Status).To(Equal(metav1.ConditionTrue))
@@ -110,36 +109,36 @@ var _ = Describe("NextApp reconciler: rendering the zone's binding env", func() 
 
 	It("rolls no revision on a second reconcile, and exactly one on a served-version bump", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
-		setServed(ctx, ns, "pricing", "1.0.0")
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
+		setServed(ctx, ns, "pricing", lcV100)
 
-		reconcileZone(ctx, ns, "orders")
-		gen1 := zoneKsvc(ctx, ns, "orders").Generation
+		reconcileZone(ctx, ns, sovZone)
+		gen1 := zoneKsvc(ctx, ns, sovZone).Generation
 
-		for i := 0; i < 5; i++ {
-			reconcileZone(ctx, ns, "orders")
+		for range 5 {
+			reconcileZone(ctx, ns, sovZone)
 		}
-		Expect(zoneKsvc(ctx, ns, "orders").Generation).To(Equal(gen1), "an unchanged binding must not change the template")
+		Expect(zoneKsvc(ctx, ns, sovZone).Generation).To(Equal(gen1), "an unchanged binding must not change the template")
 
 		setServed(ctx, ns, "pricing", "1.1.0")
-		reconcileZone(ctx, ns, "orders")
-		reconcileZone(ctx, ns, "orders")
-		reconcileZone(ctx, ns, "orders")
-		ksvc := zoneKsvc(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
+		reconcileZone(ctx, ns, sovZone)
+		reconcileZone(ctx, ns, sovZone)
+		ksvc := zoneKsvc(ctx, ns, sovZone)
 		Expect(ksvc.Generation).To(Equal(gen1+1), "a served-version bump rolls exactly one revision")
 		Expect(zoneEnv(ksvc)).To(HaveKeyWithValue("PRICING_SERVICE_PROTO_VERSION", "1.1.0"))
 	})
 
 	It("does not overwrite a same-named spec.env entry; reports the binding failed and names the variable", func() {
 		ns := bsNamespace(ctx)
-		app := createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		app := createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		app.Spec.Env = map[string]string{"PRICING_SERVICE_URL": "http://dev-pricing.example"}
 		Expect(k8sClient.Update(ctx, app)).To(Succeed())
-		createFunction(ctx, ns, "pricing", "orders")
+		createFunction(ctx, ns, "pricing", sovZone)
 
-		reconcileZone(ctx, ns, "orders")
-		env := zoneEnv(zoneKsvc(ctx, ns, "orders"))
+		reconcileZone(ctx, ns, sovZone)
+		env := zoneEnv(zoneKsvc(ctx, ns, sovZone))
 		Expect(env).To(HaveKeyWithValue("PRICING_SERVICE_URL", "http://dev-pricing.example"))
 
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(app), app)).To(Succeed())
@@ -152,17 +151,17 @@ var _ = Describe("NextApp reconciler: rendering the zone's binding env", func() 
 
 	It("refuses a cross-zone backends[] entry: no env, reported on the zone's status", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "billing")
-		createFunction(ctx, ns, "ledger", "billing")
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "ledger", Service: "ledger"})
+		createZone(ctx, ns, sovOther)
+		createFunction(ctx, ns, "ledger", sovOther)
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "ledger", Service: "ledger"})
 
-		reconcileZone(ctx, ns, "orders")
-		env := zoneEnv(zoneKsvc(ctx, ns, "orders"))
+		reconcileZone(ctx, ns, sovZone)
+		env := zoneEnv(zoneKsvc(ctx, ns, sovZone))
 		Expect(env).NotTo(HaveKey("LEDGER_SERVICE_URL"))
 		Expect(env).NotTo(HaveKey(WakeFunctionsEnv))
 
 		app := &appsv1alpha1.NextApp{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "orders"}, app)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: sovZone}, app)).To(Succeed())
 		c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionBackendBindings)
 		Expect(c.Reason).To(Equal(ReasonCrossZoneBinding))
 		Expect(c.Message).To(ContainSubstring(`zone "billing"`))
@@ -170,27 +169,27 @@ var _ = Describe("NextApp reconciler: rendering the zone's binding env", func() 
 
 	It("renders nothing for a one-sided binding from the zone side (the function does not exist)", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		reconcileZone(ctx, ns, "orders")
-		env := zoneEnv(zoneKsvc(ctx, ns, "orders"))
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		reconcileZone(ctx, ns, sovZone)
+		env := zoneEnv(zoneKsvc(ctx, ns, sovZone))
 		Expect(env).NotTo(HaveKey("PRICING_SERVICE_URL"))
 		app := &appsv1alpha1.NextApp{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "orders"}, app)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: sovZone}, app)).To(Succeed())
 		Expect(apimeta.FindStatusCondition(app.Status.Conditions, ConditionBackendBindings).Reason).To(Equal(ReasonBackendNotFound))
 	})
 
 	It("revokes from the zone side: removing the entry drops the binding env on the next render", func() {
 		ns := bsNamespace(ctx)
-		app := createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
-		reconcileZone(ctx, ns, "orders")
-		Expect(zoneEnv(zoneKsvc(ctx, ns, "orders"))).To(HaveKey("PRICING_SERVICE_URL"))
+		app := createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
+		reconcileZone(ctx, ns, sovZone)
+		Expect(zoneEnv(zoneKsvc(ctx, ns, sovZone))).To(HaveKey("PRICING_SERVICE_URL"))
 
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(app), app)).To(Succeed())
 		app.Spec.Backends = nil
 		Expect(k8sClient.Update(ctx, app)).To(Succeed())
-		reconcileZone(ctx, ns, "orders")
-		env := zoneEnv(zoneKsvc(ctx, ns, "orders"))
+		reconcileZone(ctx, ns, sovZone)
+		env := zoneEnv(zoneKsvc(ctx, ns, sovZone))
 		Expect(env).NotTo(HaveKey("PRICING_SERVICE_URL"))
 		Expect(env).NotTo(HaveKey(WakeFunctionsEnv))
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(app), app)).To(Succeed())
@@ -199,12 +198,12 @@ var _ = Describe("NextApp reconciler: rendering the zone's binding env", func() 
 
 	It("keeps a user's KNEXT_WAKE_FUNCTIONS untouched when the zone binds nothing (byte-identical render)", func() {
 		ns := bsNamespace(ctx)
-		app := createZone(ctx, ns, "orders")
+		app := createZone(ctx, ns, sovZone)
 		app.Spec.Env = map[string]string{WakeFunctionsEnv: "whatever"}
 		Expect(k8sClient.Update(ctx, app)).To(Succeed())
-		reconcileZone(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
 		var count int
-		for _, e := range zoneKsvc(ctx, ns, "orders").Spec.Template.Spec.Containers[0].Env {
+		for _, e := range zoneKsvc(ctx, ns, sovZone).Spec.Template.Spec.Containers[0].Env {
 			if e.Name == WakeFunctionsEnv {
 				count++
 				Expect(e.Value).To(Equal("whatever"))
@@ -223,7 +222,7 @@ var _ = Describe("NextApp reconciler: BackendBindings and the zone's pins", func
 
 	zoneBindingsCondition := func(ns string) *metav1.Condition {
 		app := &appsv1alpha1.NextApp{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "orders"}, app)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: sovZone}, app)).To(Succeed())
 		return apimeta.FindStatusCondition(app.Status.Conditions, ConditionBackendBindings)
 	}
 	setFunctionImage := func(ns, image string) {
@@ -234,25 +233,25 @@ var _ = Describe("NextApp reconciler: BackendBindings and the zone's pins", func
 	// pinnedZone binds `pricing` to a function whose image carries the pinned digest.
 	pinnedZone := func() string {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing", Image: pinA})
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) { bs.Spec.Image = imageA })
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing", Image: pinA})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) { bs.Spec.Image = imageA })
 		return ns
 	}
 
 	It("names the function refused for BindingImageMismatch, leaves the zone's Knative Service untouched, and heals", func() {
 		ns := pinnedZone()
 		reconcileFunction(ctx, ns, "pricing")
-		reconcileZone(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
 		c := zoneBindingsCondition(ns)
 		Expect(c).NotTo(BeNil())
 		Expect(c.Status).To(Equal(metav1.ConditionTrue), "precondition: the matching function is bound")
-		before := zoneKsvc(ctx, ns, "orders")
+		before := zoneKsvc(ctx, ns, sovZone)
 
 		By("a principal with only `update` on backendservices swaps the image")
 		setFunctionImage(ns, imageB)
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionCondition(getFunction(ctx, ns, "pricing"), ConditionReady).Reason).To(Equal(ReasonBindingImageMismatch))
-		reconcileZone(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
 
 		c = zoneBindingsCondition(ns)
 		Expect(c).NotTo(BeNil())
@@ -260,7 +259,7 @@ var _ = Describe("NextApp reconciler: BackendBindings and the zone's pins", func
 		Expect(c.Reason).To(Equal(ReasonBindingImageMismatch))
 		Expect(c.Message).To(ContainSubstring(`"pricing"`))
 
-		after := zoneKsvc(ctx, ns, "orders")
+		after := zoneKsvc(ctx, ns, sovZone)
 		Expect(after.Generation).To(Equal(before.Generation), "the pin must never roll a zone revision")
 		Expect(after.Spec.Template).To(Equal(before.Spec.Template), "the zone-render golden is identical")
 		Expect(zoneEnv(after)).To(HaveKey("PRICING_SERVICE_URL"))
@@ -268,19 +267,19 @@ var _ = Describe("NextApp reconciler: BackendBindings and the zone's pins", func
 		By("restoring the pinned image heals the condition")
 		setFunctionImage(ns, imageA)
 		reconcileFunction(ctx, ns, "pricing")
-		reconcileZone(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
 		Expect(zoneBindingsCondition(ns).Status).To(Equal(metav1.ConditionTrue))
 	})
 
 	It("names the function refused for BindingSpecMismatch", func() {
 		ns := bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		createFunction(ctx, ns, "pricing", "orders")
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone)
 		digest, err := backendSpecDigest(&getFunction(ctx, ns, "pricing").Spec)
 		Expect(err).NotTo(HaveOccurred())
 		setZoneSpecPin(ctx, ns, digest)
 		reconcileFunction(ctx, ns, "pricing")
-		reconcileZone(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
 		Expect(zoneBindingsCondition(ns).Status).To(Equal(metav1.ConditionTrue), "precondition: the pinned spec is bound")
 
 		bs := getFunction(ctx, ns, "pricing")
@@ -288,7 +287,7 @@ var _ = Describe("NextApp reconciler: BackendBindings and the zone's pins", func
 		Expect(k8sClient.Update(ctx, bs)).To(Succeed())
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionCondition(getFunction(ctx, ns, "pricing"), ConditionReady).Reason).To(Equal(ReasonBindingSpecMismatch))
-		reconcileZone(ctx, ns, "orders")
+		reconcileZone(ctx, ns, sovZone)
 
 		c := zoneBindingsCondition(ns)
 		Expect(c.Status).To(Equal(metav1.ConditionFalse))

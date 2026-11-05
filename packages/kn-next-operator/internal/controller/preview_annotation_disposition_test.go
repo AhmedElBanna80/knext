@@ -19,6 +19,7 @@ package controller
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -249,7 +250,7 @@ func maximalWarmScheduleSpec() appsv1alpha1.NextAppSpec {
 			Provider: "redis", URL: "redis://cache:6379", KeyPrefix: "app",
 		},
 		Revalidation: &appsv1alpha1.RevalidationSpec{
-			Queue: "kafka", KafkaBrokerUrl: "kafka:9092", ProvisionKafkaSource: &provisionKafka,
+			Queue: lcKafka, KafkaBrokerUrl: "kafka:9092", ProvisionKafkaSource: &provisionKafka,
 		},
 		Secrets: &appsv1alpha1.SecretsSpec{
 			EnvFrom: []string{"app-secrets"},
@@ -308,7 +309,7 @@ func maximalWarmScheduleSpec() appsv1alpha1.NextAppSpec {
 		// spec.cdn renders KNEXT_CDN_* container env, also outside both scans in
 		// this file, and likewise only needs non-zero values here.
 		CDN: &appsv1alpha1.CDNSpec{
-			Provider:                    "emulator",
+			Provider:                    lcEmulator,
 			HTMLTTLSeconds:              45,
 			StaleWhileRevalidateSeconds: 10,
 			ExcludePaths:                []string{"/account"},
@@ -382,7 +383,7 @@ func assertFixturesCoverEveryNextAppSpecLeaf(t *testing.T) {
 	t.Helper()
 
 	var want []string
-	typeLeafPaths("NextAppSpec", reflect.TypeOf(appsv1alpha1.NextAppSpec{}), nil, &want)
+	typeLeafPaths("NextAppSpec", reflect.TypeFor[appsv1alpha1.NextAppSpec](), nil, &want)
 
 	covered := map[string]bool{}
 	for _, f := range guardFixtures() {
@@ -409,10 +410,8 @@ func assertFixturesCoverEveryNextAppSpecLeaf(t *testing.T) {
 // types collapse to a single "[]" path, since one populated element is what
 // proves the branch runs. seen breaks type cycles.
 func typeLeafPaths(path string, t reflect.Type, seen []reflect.Type, out *[]string) {
-	for _, s := range seen {
-		if s == t {
-			return
-		}
+	if slices.Contains(seen, t) {
+		return
 	}
 	seen = append(seen, t)
 
@@ -420,11 +419,11 @@ func typeLeafPaths(path string, t reflect.Type, seen []reflect.Type, out *[]stri
 	case reflect.Pointer:
 		typeLeafPaths(path, t.Elem(), seen, out)
 	case reflect.Struct:
-		for i := 0; i < t.NumField(); i++ {
-			if !t.Field(i).IsExported() {
+		for field := range t.Fields() {
+			if !field.IsExported() {
 				continue
 			}
-			typeLeafPaths(path+"."+t.Field(i).Name, t.Field(i).Type, seen, out)
+			typeLeafPaths(path+"."+field.Name, field.Type, seen, out)
 		}
 	case reflect.Slice, reflect.Array, reflect.Map:
 		typeLeafPaths(path+"[]", t.Elem(), seen, out)
@@ -518,7 +517,7 @@ type fixtureRuns struct {
 // annotations the builder emitted.
 func stampedAutoscalingAnnotations(ksvc *servingv1.Service) map[string]string {
 	out := map[string]string{}
-	for k, v := range ksvc.Spec.Template.ObjectMeta.Annotations {
+	for k, v := range ksvc.Spec.Template.Annotations {
 		if strings.HasPrefix(k, "autoscaling.knative.dev/") {
 			out[k] = v
 		}

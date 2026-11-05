@@ -21,7 +21,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -42,9 +41,9 @@ func TestBuildDesiredKsvcReadOnlyRootFilesystem(t *testing.T) {
 	}{
 		{"nil security defaults ON", "", nil, true},
 		{"nil field defaults ON", "", &appsv1alpha1.SecuritySpec{}, true},
-		{"explicit true stays ON", "", &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: ptr.To(true)}, true},
-		{"explicit false disables it", "", &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: ptr.To(false)}, false},
-		{"vinext build defaults ON too", "vinext", nil, true},
+		{"explicit true stays ON", "", &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: new(true)}, true},
+		{"explicit false disables it", "", &appsv1alpha1.SecuritySpec{ReadOnlyRootFilesystem: new(false)}, false},
+		{"vinext build defaults ON too", lcVinext, nil, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,23 +120,23 @@ func TestBuildDesiredKsvcReadOnlyRootFilesystemMounts(t *testing.T) {
 		wantImageCache bool
 	}{
 		{name: "default standalone, no storage, not self-contained: no mounts at all", build: "turbopack"},
-		{name: "default vinext (self-contained by build): /tmp only, for sharp unpack", build: "vinext", wantTmp: true},
+		{name: "default vinext (self-contained by build): /tmp only, for sharp unpack", build: lcVinext, wantTmp: true},
 		{name: "default standalone + selfContained:true: /tmp only, for sharp unpack", build: "turbopack", selfContained: true, wantTmp: true},
 		{name: "default standalone + spec.storage set: image-cache mount only", build: "turbopack", storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}, wantImageCache: true},
-		{name: "vinext + spec.storage set: still /tmp only — vinext has no .next/cache tree", build: "vinext", storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}, wantTmp: true},
-		{name: "writableCache explicitly false: no mounts, standalone, no storage", build: "turbopack", writableCache: ptr.To(false)},
-		{name: "writableCache true + standalone (turbopack): mounts /tmp and the image cache", build: "turbopack", writableCache: ptr.To(true), wantTmp: true, wantImageCache: true},
-		{name: "writableCache true + standalone (unset build): mounts /tmp and the image cache", build: "", writableCache: ptr.To(true), wantTmp: true, wantImageCache: true},
-		{name: "writableCache true + webpack: mounts /tmp and the image cache", build: "webpack", writableCache: ptr.To(true), wantTmp: true, wantImageCache: true},
-		{name: "writableCache true + vinext: mounts only /tmp", build: "vinext", writableCache: ptr.To(true), wantTmp: true},
+		{name: "vinext + spec.storage set: still /tmp only — vinext has no .next/cache tree", build: lcVinext, storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}, wantTmp: true},
+		{name: "writableCache explicitly false: no mounts, standalone, no storage", build: "turbopack", writableCache: new(false)},
+		{name: "writableCache true + standalone (turbopack): mounts /tmp and the image cache", build: "turbopack", writableCache: new(true), wantTmp: true, wantImageCache: true},
+		{name: "writableCache true + standalone (unset build): mounts /tmp and the image cache", build: "", writableCache: new(true), wantTmp: true, wantImageCache: true},
+		{name: "writableCache true + webpack: mounts /tmp and the image cache", build: "webpack", writableCache: new(true), wantTmp: true, wantImageCache: true},
+		{name: "writableCache true + vinext: mounts only /tmp", build: lcVinext, writableCache: new(true), wantTmp: true},
 		// spec.security.writeFree (the CLI states the image's runtime writes
 		// nothing to local disk): the shape-inferred mounts above are dropped.
-		{name: "writeFree + vinext (disk-mode binary): no mounts at all", build: "vinext", writeFree: ptr.To(true)},
-		{name: "writeFree + standalone + spec.storage (images handler-routed): no mounts at all", build: "turbopack", storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}, writeFree: ptr.To(true)},
-		{name: "writeFree + standalone selfContained (no native addons): no mounts at all", build: "turbopack", selfContained: true, writeFree: ptr.To(true)},
-		{name: "writeFree + writableCache true: the escape hatch still mounts both", build: "turbopack", writeFree: ptr.To(true), writableCache: ptr.To(true), wantTmp: true, wantImageCache: true},
-		{name: "writeFree explicitly false + vinext: today's inference (/tmp)", build: "vinext", writeFree: ptr.To(false), wantTmp: true},
-		{name: "writeFree explicitly false + standalone + storage: today's inference (image cache)", build: "turbopack", storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}, writeFree: ptr.To(false), wantImageCache: true},
+		{name: "writeFree + vinext (disk-mode binary): no mounts at all", build: lcVinext, writeFree: new(true)},
+		{name: "writeFree + standalone + spec.storage (images handler-routed): no mounts at all", build: "turbopack", storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}, writeFree: new(true)},
+		{name: "writeFree + standalone selfContained (no native addons): no mounts at all", build: "turbopack", selfContained: true, writeFree: new(true)},
+		{name: "writeFree + writableCache true: the escape hatch still mounts both", build: "turbopack", writeFree: new(true), writableCache: new(true), wantTmp: true, wantImageCache: true},
+		{name: "writeFree explicitly false + vinext: today's inference (/tmp)", build: lcVinext, writeFree: new(false), wantTmp: true},
+		{name: "writeFree explicitly false + standalone + storage: today's inference (image cache)", build: "turbopack", storage: &appsv1alpha1.StorageSpec{Provider: "gcs", Bucket: "b"}, writeFree: new(false), wantImageCache: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

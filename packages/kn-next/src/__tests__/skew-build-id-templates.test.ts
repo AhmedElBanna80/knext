@@ -239,7 +239,17 @@ describe("in-repo apps carry the same generateBuildId", () => {
         // Named so the exclusion is visible in the test output rather than
         // being a silent gap, and so adding a knext config to one of these
         // moves it into scope loudly.
-        expect(outOfScope).toEqual(["apps/spike-bun-bytecode/next.config.mjs"]);
+        //
+        // `traceparent-app` is a test FIXTURE (#2627), not an app: its only
+        // build is the spec's own `next build --webpack` against a bare
+        // standalone config, and knext never builds or deploys it (no
+        // knext.config.ts / vite.config.ts beside it, so it cannot enter the
+        // deploy path). Wiring it with generateBuildId would be a no-op for
+        // the guard it is scanned by, so it stays out of scope on purpose.
+        expect(outOfScope).toEqual([
+            "apps/file-manager/__fixtures__/traceparent-app/next.config.mjs",
+            "apps/spike-bun-bytecode/next.config.mjs",
+        ]);
     });
 
     it.each(inScope)("%s mints its build id from the deploy id", (rel) => {

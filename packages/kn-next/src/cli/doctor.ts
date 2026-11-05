@@ -36,9 +36,8 @@
  * test suite import them from `./doctor`).
  */
 
-import { readFileSync, writeSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { writeSync } from "node:fs";
+import { readCoreVersion, UNKNOWN_CORE_VERSION } from "./core-version";
 import { parseDoctorArgs } from "./doctor/args";
 import { appImageCheck } from "./doctor/checks/app-image";
 import { certManagerCheck } from "./doctor/checks/cert-manager";
@@ -184,27 +183,6 @@ export async function runDoctor(
     return { checks, exitCode };
 }
 
-/**
- * This CLI's own version from its package manifest (#1947). Works from both the
- * source layout (`src/cli/doctor.ts`) and the bundled layout
- * (`dist/cli/kn-next.js`): package.json sits three path segments up from the
- * module file in both, mirroring `deploy.ts`'s `getCliVersion`. Returns
- * undefined when unreadable, so the operator-version row degrades to "no
- * compatibility verdict" rather than guessing.
- */
-function readOwnVersion(): string | undefined {
-    try {
-        const here = fileURLToPath(import.meta.url);
-        const pkgPath = resolve(here, "..", "..", "..", "package.json");
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
-            version?: string;
-        };
-        return pkg.version;
-    } catch {
-        return undefined;
-    }
-}
-
 const DOCTOR_HELP = `knext doctor — cluster-prereq preflight (read-only)
 
 Checks: NextApp CRD, operator readiness, the installed operator's release
@@ -248,7 +226,7 @@ export async function doctorMain(
     deps: DoctorDeps = {
         kubectl: kubectlRunner,
         probeImage: probeManifest,
-        cliVersion: readOwnVersion(),
+        cliVersion: readCoreVersion() ?? UNKNOWN_CORE_VERSION,
         readInstalledVinext: () => readInstalledVinextVersion(process.cwd()),
         readInstalledNext: () => readInstalledNextVersion(process.cwd()),
     },

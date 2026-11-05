@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -153,12 +154,7 @@ func TestPrivateExposure_UnknownKeepsPriorVerdict(t *testing.T) {
 }
 
 func containsStr(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s, v)
 }
 
 func dm(ns, name, refName string) *servingv1beta1.DomainMapping {
@@ -181,41 +177,41 @@ func fakeScheme() *runtime.Scheme {
 
 func TestDetectPrivateExposure_MatchesOnlyThisAppsKsvc(t *testing.T) {
 	app := privateApp()
-	app.Namespace = "team-a"
-	other := dm("team-a", "other.example.com", "someone-else")
+	app.Namespace = lcTeamA
+	other := dm(lcTeamA, "other.example.com", "someone-else")
 	otherNS := dm("team-b", "app.example.com", app.Name)
-	hit := dm("team-a", "app.example.com", app.Name)
-	k8sSvcRef := dm("team-a", "svc.example.com", app.Name)
+	hit := dm(lcTeamA, "app.example.com", app.Name)
+	k8sSvcRef := dm(lcTeamA, "svc.example.com", app.Name)
 	k8sSvcRef.Spec.Ref.APIVersion = "v1"
-	notSvc := dm("team-a", "dep.example.com", app.Name)
+	notSvc := dm(lcTeamA, "dep.example.com", app.Name)
 	notSvc.Spec.Ref.Kind = "Deployment"
 	notSvc.Spec.Ref.APIVersion = "apps/v1"
 	// A Revision of this app, referenced directly.
-	revRef := dm("team-a", "revref.example.com", app.Name+"-00002")
+	revRef := dm(lcTeamA, "revref.example.com", app.Name+"-00002")
 	revRef.Spec.Ref.Kind = "Revision"
-	otherRevRef := dm("team-a", "other-revref.example.com", "someone-else-00002")
+	otherRevRef := dm(lcTeamA, "other-revref.example.com", "someone-else-00002")
 	otherRevRef.Spec.Ref.Kind = "Revision"
 	rev := func(name, owner string) *servingv1.Revision {
-		return &servingv1.Revision{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a",
+		return &servingv1.Revision{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: lcTeamA,
 			Labels: map[string]string{"serving.knative.dev/service": owner}}}
 	}
 
 	// Route of this app (same name as the ksvc) and a revision's core Service.
-	route := dm("team-a", "route.example.com", app.Name)
-	route.Spec.Ref.Kind = "Route"
-	otherRoute := dm("team-a", "other-route.example.com", "someone-else")
-	otherRoute.Spec.Ref.Kind = "Route"
-	revSvc := dm("team-a", "rev.example.com", app.Name+"-00001")
+	route := dm(lcTeamA, "route.example.com", app.Name)
+	route.Spec.Ref.Kind = lcRoute
+	otherRoute := dm(lcTeamA, "other-route.example.com", "someone-else")
+	otherRoute.Spec.Ref.Kind = lcRoute
+	revSvc := dm(lcTeamA, "rev.example.com", app.Name+"-00001")
 	revSvc.Spec.Ref.APIVersion = "v1"
-	otherRevSvc := dm("team-a", "other-rev.example.com", "someone-else-00001")
+	otherRevSvc := dm(lcTeamA, "other-rev.example.com", "someone-else-00001")
 	otherRevSvc.Spec.Ref.APIVersion = "v1"
 	// A different app whose name merely starts with this one's must NOT match.
-	prefixSvc := dm("team-a", "prefix.example.com", app.Name+"-v2-00001")
+	prefixSvc := dm(lcTeamA, "prefix.example.com", app.Name+"-v2-00001")
 	prefixSvc.Spec.Ref.APIVersion = "v1"
-	unlabelled := dm("team-a", "plain.example.com", "unrelated-svc")
+	unlabelled := dm(lcTeamA, "plain.example.com", "unrelated-svc")
 	unlabelled.Spec.Ref.APIVersion = "v1"
 	coreSvc := func(name, owner string) *corev1.Service {
-		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team-a"}}
+		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: lcTeamA}}
 		if owner != "" {
 			svc.Labels = map[string]string{"serving.knative.dev/service": owner}
 		}
@@ -280,8 +276,8 @@ func TestDetectPrivateExposure_TransientErrorIsUnknown(t *testing.T) {
 
 func TestDomainMappingToNextAppRequests(t *testing.T) {
 	r := &NextAppReconciler{}
-	got := r.domainMappingToNextAppRequests(context.Background(), dm("team-a", "app.example.com", "my-app"))
-	want := reconcile.Request{NamespacedName: types.NamespacedName{Name: "my-app", Namespace: "team-a"}}
+	got := r.domainMappingToNextAppRequests(context.Background(), dm(lcTeamA, "app.example.com", "my-app"))
+	want := reconcile.Request{NamespacedName: types.NamespacedName{Name: "my-app", Namespace: lcTeamA}}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
@@ -289,22 +285,22 @@ func TestDomainMappingToNextAppRequests(t *testing.T) {
 		t.Fatalf("non-DomainMapping must enqueue nothing")
 	}
 	// Route ref and a revision-Service ref both map back to the owning app.
-	route := dm("team-a", "r.example.com", "my-app")
-	route.Spec.Ref.Kind = "Route"
+	route := dm(lcTeamA, "r.example.com", "my-app")
+	route.Spec.Ref.Kind = lcRoute
 	if got := r.domainMappingToNextAppRequests(context.Background(), route); len(got) != 1 || got[0] != want {
 		t.Fatalf("route ref: got %+v want %+v", got, want)
 	}
 	rc := fake.NewClientBuilder().WithScheme(fakeScheme()).WithObjects(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-app-00003", Namespace: "team-a",
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-00003", Namespace: lcTeamA,
 			Labels: map[string]string{"serving.knative.dev/service": "my-app"}},
 	}).Build()
 	rr := &NextAppReconciler{Client: rc}
-	rev := dm("team-a", "rev.example.com", "my-app-00003")
+	rev := dm(lcTeamA, "rev.example.com", "my-app-00003")
 	rev.Spec.Ref.APIVersion = "v1"
 	if got := rr.domainMappingToNextAppRequests(context.Background(), rev); len(got) != 1 || got[0] != want {
 		t.Fatalf("revision service ref: got %+v want %+v", got, want)
 	}
-	empty := dm("team-a", "x", "")
+	empty := dm(lcTeamA, "x", "")
 	if got := r.domainMappingToNextAppRequests(context.Background(), empty); got != nil {
 		t.Fatalf("empty ref must enqueue nothing")
 	}
@@ -312,11 +308,11 @@ func TestDomainMappingToNextAppRequests(t *testing.T) {
 
 func TestDetectPrivateExposure_UnresolvableRefFailsClosedOnNameElseUnknown(t *testing.T) {
 	app := privateApp()
-	app.Namespace = "team-a"
+	app.Namespace = lcTeamA
 	boom := interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
 		return errors.New("forbidden")
 	}}
-	same := dm("team-a", "same.example.com", app.Name)
+	same := dm(lcTeamA, "same.example.com", app.Name)
 	same.Spec.Ref.Kind = "Widget"
 	same.Spec.Ref.APIVersion = "example.dev/v1"
 	c := fake.NewClientBuilder().WithScheme(fakeScheme()).WithObjects(same).WithInterceptorFuncs(boom).Build()
@@ -324,7 +320,7 @@ func TestDetectPrivateExposure_UnresolvableRefFailsClosedOnNameElseUnknown(t *te
 	if got.unknown || len(got.domainMappings) != 1 {
 		t.Fatalf("name == app must fail closed: %+v", got)
 	}
-	diff := dm("team-a", "diff.example.com", "other-thing")
+	diff := dm(lcTeamA, "diff.example.com", "other-thing")
 	diff.Spec.Ref.Kind = "Widget"
 	diff.Spec.Ref.APIVersion = "example.dev/v1"
 	c = fake.NewClientBuilder().WithScheme(fakeScheme()).WithObjects(diff).WithInterceptorFuncs(boom).Build()
@@ -336,15 +332,15 @@ func TestDetectPrivateExposure_UnresolvableRefFailsClosedOnNameElseUnknown(t *te
 
 func TestDetectPrivateExposure_UnresolvableDMDoesNotBlockLaterLeak(t *testing.T) {
 	app := privateApp()
-	app.Namespace = "team-a"
+	app.Namespace = lcTeamA
 	boom := interceptor.Funcs{Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
 		return errors.New("forbidden")
 	}}
 	// "a-bad" sorts (and lists) BEFORE "z-leak".
-	bad := dm("team-a", "a-bad.example.com", "some-broker")
+	bad := dm(lcTeamA, "a-bad.example.com", "some-broker")
 	bad.Spec.Ref.Kind = "Broker"
 	bad.Spec.Ref.APIVersion = "eventing.knative.dev/v1"
-	leak := dm("team-a", "z-leak.example.com", app.Name)
+	leak := dm(lcTeamA, "z-leak.example.com", app.Name)
 	c := fake.NewClientBuilder().WithScheme(fakeScheme()).WithObjects(bad, leak).WithInterceptorFuncs(boom).Build()
 	got := (&NextAppReconciler{Client: c}).detectPrivateExposure(context.Background(), app)
 	if got.unknown || len(got.domainMappings) != 1 || got.domainMappings[0] != "z-leak.example.com" {
@@ -361,18 +357,18 @@ func TestDomainMappingToNextAppRequests_FailedGetEnqueuesPrivateAppsOnly(t *test
 		return a
 	}
 	c := fake.NewClientBuilder().WithScheme(fakeScheme()).
-		WithObjects(mk("priv-1", "team-a", true), mk("priv-2", "team-a", true), mk("pub", "team-a", false), mk("priv-other-ns", "team-b", true)).
+		WithObjects(mk("priv-1", lcTeamA, true), mk("priv-2", lcTeamA, true), mk("pub", lcTeamA, false), mk("priv-other-ns", "team-b", true)).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
 				return errors.New("apiserver timeout")
 			},
 		}).Build()
-	d := dm("team-a", "x.example.com", "my-app-00003")
+	d := dm(lcTeamA, "x.example.com", "my-app-00003")
 	d.Spec.Ref.APIVersion = "v1"
 	got := (&NextAppReconciler{Client: c}).domainMappingToNextAppRequests(context.Background(), d)
 	names := []string{}
 	for _, g := range got {
-		if g.Namespace != "team-a" {
+		if g.Namespace != lcTeamA {
 			t.Fatalf("wrong namespace enqueued: %+v", g)
 		}
 		names = append(names, g.Name)

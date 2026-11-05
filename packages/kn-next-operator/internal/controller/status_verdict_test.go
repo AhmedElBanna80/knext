@@ -23,7 +23,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	"knative.dev/pkg/apis"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
@@ -49,8 +48,8 @@ const (
 
 func verdictApp() *appsv1alpha1.NextApp {
 	app := &appsv1alpha1.NextApp{}
-	app.Name = "shop"
-	app.Namespace = "prod"
+	app.Name = sovNS
+	app.Namespace = lcProd
 	app.Generation = 3
 	return app
 }
@@ -187,7 +186,7 @@ func TestComputeStatusVerdict_KsvcNotReadyNilConditionDefaults(t *testing.T) {
 		t.Fatalf("Ready message: got %q, want %q", readyCond.Message, wantMsg)
 	}
 	degraded := findVerdictCondition(t, v, ConditionDegraded)
-	if degraded.Reason != "Pending" || degraded.Message != "Knative Service has not reported Ready yet" {
+	if degraded.Reason != lcPending || degraded.Message != "Knative Service has not reported Ready yet" {
 		t.Fatalf("Degraded: got %+v", degraded)
 	}
 }
@@ -341,7 +340,7 @@ func TestComputeStatusVerdict_GhostPinRequeuesWhileKsvcStillReady(t *testing.T) 
 func TestComputeStatusVerdict_RevalidationDeferred(t *testing.T) {
 	now := time.Now()
 	app := verdictApp()
-	app.Spec.Revalidation = &appsv1alpha1.RevalidationSpec{Queue: "kafka"}
+	app.Spec.Revalidation = &appsv1alpha1.RevalidationSpec{Queue: lcKafka}
 
 	v := computeStatusVerdict(app, readyKsvc(now), databaseCheckState{mode: databaseModeNone},
 		revisionCheck{}, imageCacheState{}, netpolEnforcementState{}, envMapCollisionReport{}, privateExposureState{}, podCreationState{}, now)
@@ -373,8 +372,8 @@ func TestComputeStatusVerdict_ProvisionKafkaSourceIsInert(t *testing.T) {
 	now := time.Now()
 	app := verdictApp()
 	app.Spec.Revalidation = &appsv1alpha1.RevalidationSpec{
-		Queue:                "kafka",
-		ProvisionKafkaSource: ptr.To(true),
+		Queue:                lcKafka,
+		ProvisionKafkaSource: new(true),
 	}
 
 	v := computeStatusVerdict(app, readyKsvc(now), databaseCheckState{mode: databaseModeNone},

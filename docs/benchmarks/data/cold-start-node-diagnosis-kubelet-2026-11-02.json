@@ -1,0 +1,34 @@
+{
+  "source": "GET /api/v1/nodes/10.0.1.118/proxy/metrics (read-only), cumulative since kubelet start",
+  "lines": [
+    "kubelet_pleg_discard_events 0",
+    "kubelet_pleg_relist_duration_seconds_sum 6504.967286216015",
+    "kubelet_pleg_relist_duration_seconds_count 2.551198e+06",
+    "kubelet_pleg_relist_interval_seconds_sum 2.559125036815642e+06",
+    "kubelet_pleg_relist_interval_seconds_count 2.551197e+06",
+    "kubelet_runtime_operations_duration_seconds_count{operation_type=\"create_container\"} 1082",
+    "kubelet_runtime_operations_duration_seconds_count{operation_type=\"run_podsandbox\"} 500",
+    "kubelet_runtime_operations_duration_seconds_count{operation_type=\"start_container\"} 1082",
+    "kubernetes_build_info{build_date=\"2026-07-27T17:10:50Z\",compiler=\"gc\",git_commit=\"fe2956bb6d7e30969aab62e2b541e7391a9b6e90\",git_tree_state=\"clean\",git_version=\"v1.34.10\",go_version=\"go1.25.10 140-3\",major=\"1\",minor=\"34\",platform=\"linux/amd64\"} 1",
+    "kubernetes_feature_enabled{name=\"EventedPLEG\",stage=\"ALPHA\"} 0"
+  ],
+  "derived": {
+    "relist_interval_mean_s": 1.0031,
+    "relist_duration_mean_ms": 2.55
+  },
+  "configz_both_nodes": {
+    "cgroupDriver": "systemd",
+    "containerRuntimeEndpoint": "unix:///var/run/crio/crio.sock",
+    "featureGates_explicit": {
+      "DynamicResourceAllocation": true
+    },
+    "nodeStatusUpdateFrequency": "10s",
+    "nodeStatusReportFrequency": "5m0s",
+    "syncFrequency": "1m0s",
+    "cpuManagerPolicy": "none"
+  },
+  "node_runtime": "cri-o://1.34.8-18.60377013136.el8",
+  "kubelet": "v1.34.10",
+  "os": "Oracle Linux Server 8.10",
+  "knative_serving": "1.16.0 (controller label)"
+}

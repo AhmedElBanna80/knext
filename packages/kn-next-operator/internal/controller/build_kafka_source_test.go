@@ -35,10 +35,10 @@ import (
 // envtest that would have to assert an object the operator must never create.
 func TestBuildKafkaSourceShape(t *testing.T) {
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "shop", Namespace: "prod"},
+		ObjectMeta: metav1.ObjectMeta{Name: sovNS, Namespace: lcProd},
 		Spec: appsv1alpha1.NextAppSpec{
 			Revalidation: &appsv1alpha1.RevalidationSpec{
-				Queue:          "kafka",
+				Queue:          lcKafka,
 				KafkaBrokerUrl: "kafka-broker:9092",
 			},
 		},
@@ -55,7 +55,7 @@ func TestBuildKafkaSourceShape(t *testing.T) {
 	if got, want := ks.GetName(), "shop-revalidation-source"; got != want {
 		t.Errorf("name = %q, want %q", got, want)
 	}
-	if got, want := ks.GetNamespace(), "prod"; got != want {
+	if got, want := ks.GetNamespace(), lcProd; got != want {
 		t.Errorf("namespace = %q, want %q", got, want)
 	}
 
@@ -88,7 +88,7 @@ func TestBuildKafkaSourceShape(t *testing.T) {
 	sinkKind, _, _ := unstructured.NestedString(ks.Object, "spec", "sink", "ref", "kind")
 	sinkAPI, _, _ := unstructured.NestedString(ks.Object, "spec", "sink", "ref", "apiVersion")
 	sinkName, _, _ := unstructured.NestedString(ks.Object, "spec", "sink", "ref", "name")
-	if sinkKind != "Service" || sinkAPI != "serving.knative.dev/v1" || sinkName != "shop-revalidator" {
+	if sinkKind != lcService || sinkAPI != "serving.knative.dev/v1" || sinkName != "shop-revalidator" {
 		t.Errorf("sink.ref = %s/%s %q, want serving.knative.dev/v1 Service \"shop-revalidator\"",
 			sinkAPI, sinkKind, sinkName)
 	}

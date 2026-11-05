@@ -194,7 +194,7 @@ func OverrideManagerImage(img, dstName string) (string, error) {
 
 	var b strings.Builder
 	replaced := false
-	for _, line := range strings.Split(string(src), "\n") {
+	for line := range strings.SplitSeq(string(src), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "image:") &&
 			strings.Contains(line, "ghcr.io/getknext-dev/kn-next-operator") {

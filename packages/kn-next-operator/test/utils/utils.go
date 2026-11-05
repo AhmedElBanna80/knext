@@ -302,11 +302,11 @@ func ParseCurlStatusMarker(out, url string) (int, string, error) {
 		return 0, out, fmt.Errorf("no HTTP status marker in response from %s: %q", url, out)
 	}
 	rest := out[start+len(curlCodePrefix):]
-	end := strings.Index(rest, curlCodeSuffix)
-	if end < 0 {
+	before, _, ok := strings.Cut(rest, curlCodeSuffix)
+	if !ok {
 		return 0, out, fmt.Errorf("truncated HTTP status marker in response from %s: %q", url, out)
 	}
-	codeStr := strings.TrimSpace(rest[:end])
+	codeStr := strings.TrimSpace(before)
 	code, convErr := strconv.Atoi(codeStr)
 	if convErr != nil {
 		return 0, out, fmt.Errorf("could not parse HTTP status %q from response: %w", codeStr, convErr)
@@ -333,16 +333,16 @@ func HTTPPostInCluster(namespace, ksvc, path, jsonBody string, headerLines []str
 	// Best-effort cleanup of any prior POST pod so `kubectl run` does not collide.
 	_, _ = Kubectl("delete", "pod", podName, "-n", namespace, "--ignore-not-found")
 
-	args := []string{"run", podName,
+	args := append(make([]string, 0, 32+2*len(headerLines)), "run", podName,
 		"-n", namespace,
 		"--restart=Never",
 		"--rm", "-i",
-		"--image=" + CurlImage(),
+		"--image="+CurlImage(),
 		"--command", "--",
 		"curl", "-sS", "--max-time", "120",
 		"-X", "POST",
 		"-H", "Content-Type: application/json",
-	}
+	)
 	for _, h := range headerLines {
 		args = append(args, "-H", h)
 	}
@@ -409,7 +409,7 @@ func ScrapeAppMetrics(namespace, ksvc string) (string, error) {
 // whose name (with any label set) matches `metricPrefix` from raw exposition text.
 // Returns the raw string value (e.g. "1") so callers can assert exact equality.
 func ScrapeAppMetricValue(metrics, metricPrefix string) (string, bool) {
-	for _, line := range strings.Split(metrics, "\n") {
+	for line := range strings.SplitSeq(metrics, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

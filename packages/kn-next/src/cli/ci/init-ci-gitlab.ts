@@ -260,7 +260,7 @@ variables:
 # \`allow_failure\`/\`when: manual\` on a shared job could.
 kubeconfig-check:
   stage: preflight
-  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
+  image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
   script:
@@ -276,7 +276,7 @@ kubeconfig-check:
 # first kubectl call.
 credential-preflight:
   stage: preflight
-  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
+  image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
   needs:
     - kubeconfig-check
   rules:
@@ -307,7 +307,7 @@ credential-preflight:
 # on \`main\` must not race two applies of the same NextApp.
 deploy:
   stage: deploy
-  image: node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
+  image: node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
   services:
     - docker:27.3.1-dind@${DIND_DIGEST}
   variables:

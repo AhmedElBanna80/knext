@@ -22,6 +22,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,10 +40,8 @@ import (
 
 func readFails(names ...string) secretLookup {
 	return func(name string) secretMetadata {
-		for _, n := range names {
-			if n == name {
-				return secretMetadata{readErr: "simulated apiserver timeout"}
-			}
+		if slices.Contains(names, name) {
+			return secretMetadata{readErr: "simulated apiserver timeout"}
 		}
 		return secretMetadata{}
 	}
@@ -225,7 +224,7 @@ func teardownOrVerdictIn(fset *token.FileSet, body ast.Node) []string {
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.CallExpr:
-			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "removeRendered" {
+			if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == lcRemoveRendered {
 				hits = append(hits, fset.Position(x.Pos()).String()+": removeRendered")
 			}
 		case *ast.CompositeLit:
@@ -307,11 +306,11 @@ func TestRemoveRenderedHasThreeSanctionedCallSites(t *testing.T) {
 					return true
 				}
 				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "removeRendered" {
+				if !ok || sel.Sel.Name != lcRemoveRendered {
 					return true
 				}
 				pos := fset.Position(call.Pos()).String()
-				if fn.Name.Name != "Reconcile" {
+				if fn.Name.Name != lcReconcile {
 					t.Errorf("%s: removeRendered is called from %s; only Reconcile may tear a function down", pos, fn.Name.Name)
 					return true
 				}
@@ -357,7 +356,7 @@ func TestReconcileLeavesOnUndecidedBeforeTheAcceptedFork(t *testing.T) {
 	var verdictApplied, heldReturned token.Pos
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "Reconcile" {
+		if !ok || fn.Name.Name != lcReconcile {
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -392,7 +391,7 @@ func TestReconcileLeavesOnUndecidedBeforeTheAcceptedFork(t *testing.T) {
 	// The undecided branch neither renders nor removes: it only observes.
 	ast.Inspect(undecidedBody, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "removeRendered" || sel.Sel.Name == "render") {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == lcRemoveRendered || sel.Sel.Name == "render") {
 				t.Errorf("%s: the obs.undecided() branch calls %s; an unknown answer must neither render nor remove", fset.Position(call.Pos()), sel.Sel.Name)
 			}
 		}
@@ -412,7 +411,7 @@ func TestReconcileLeavesOnUndecidedBeforeTheAcceptedFork(t *testing.T) {
 func TestVerdictForAnUndecidedFunctionIsUnverifiedNotAViolation(t *testing.T) {
 	zone, _ := sovFixture()
 	bs := sovFunction(appsv1alpha1.BackendServiceSpec{})
-	o := functionObservation{zone: zone, zoneListed: true, unverified: []unverifiedSecret{{name: "stripe", err: "boom"}}}
+	o := functionObservation{zone: zone, zoneListed: true, unverified: []unverifiedSecret{{name: lcStripe, err: "boom"}}}
 	v := computeBackendServiceVerdict(bs, o)
 	byType := map[string]metav1.Condition{}
 	for _, c := range v.conditions {
@@ -475,7 +474,10 @@ func TestKnativeServiceIsDeletedOnlyInsideRemoveRendered(t *testing.T) {
 					return true
 				}
 				deletes++
-				if fn.Name.Name != "removeRendered" {
+				// removeFunctionNetworkPolicy is the only other sanctioned Delete: it
+				// removes the NetworkPolicy alone (spec.security.networkPolicy=false)
+				// and never the Knative Service, so the function is not torn down.
+				if fn.Name.Name != lcRemoveRendered && fn.Name.Name != "removeFunctionNetworkPolicy" {
 					t.Errorf("%s: %s calls %s; a function is torn down only through removeRendered (see G1)", file, fn.Name.Name, sel.Sel.Name)
 				}
 				return true

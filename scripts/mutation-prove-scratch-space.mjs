@@ -232,6 +232,17 @@ const MUTATIONS = [
       '    /\\bfor\\s*\\(\\s*(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s+of\\s+[A-Za-z_$][\\w$]*\\s*\\)/g,',
   },
   {
+    id: 'M5j',
+    expect: 'red',
+    claim:
+      'REPO_ROOTED is matched against the RAW initializer again, so a fixture body that only ' +
+      'mentions `process.cwd()` in a string marks its binding repo-rooted and every write through ' +
+      'it is reported although it lands under `tmpdir()`',
+    subject: 'scan',
+    anchor: '  if (REPO_ROOTED.test(blankNonCode(expr))) return',
+    replacement: '  if (REPO_ROOTED.test(expr)) return',
+  },
+  {
     id: 'M6',
     expect: 'red',
     claim:

@@ -21,8 +21,7 @@
 // __tests__/node-floor.test.ts on the source and on the built bin.
 import "./node-floor-guard.cjs";
 import { readFileSync, writeSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import {
     DEFAULT_BUILDER_ID,
@@ -53,6 +52,7 @@ import {
 } from "./build-id-env";
 import { DEPLOY_SHIP_ARCH } from "./build-target";
 import { resolveCompileToolchain } from "./bun-toolchain";
+import { readCoreVersion, UNKNOWN_CORE_VERSION } from "./core-version";
 import {
     renderNextAppCR,
     resolveDigest,
@@ -181,21 +181,11 @@ function writeStdoutSync(text: string): void {
 }
 
 /**
- * Reads the CLI version from the package manifest. Works from both the source
- * layout (src/cli/deploy.ts) and the bundled layout (dist/cli/kn-next.js) —
- * package.json sits two directories up in both cases.
+ * The CLI version for `--version`: the shared reader's answer, or `unknown`
+ * when `@getknext/core`'s manifest cannot be read — never a made-up `0.0.0`.
  */
 function getCliVersion(): string {
-    try {
-        const here = fileURLToPath(import.meta.url);
-        const pkgPath = resolve(here, "..", "..", "..", "package.json");
-        const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as {
-            version?: string;
-        };
-        return pkg.version ?? "0.0.0";
-    } catch {
-        return "0.0.0";
-    }
+    return readCoreVersion() ?? UNKNOWN_CORE_VERSION;
 }
 
 function parseCliArgs(): DeployOptions {

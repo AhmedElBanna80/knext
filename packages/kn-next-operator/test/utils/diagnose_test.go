@@ -175,7 +175,7 @@ func indexFold(s, substr string) int {
 	ls, lsub := len(s), len(substr)
 	for i := 0; i+lsub <= ls; i++ {
 		match := true
-		for j := 0; j < lsub; j++ {
+		for j := range lsub {
 			if lower(s[i+j]) != lower(substr[j]) {
 				match = false
 				break

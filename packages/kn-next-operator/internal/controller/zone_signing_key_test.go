@@ -404,7 +404,7 @@ func TestPlannerDefersARotationRequestedMidRotation(t *testing.T) {
 		if s.action == zkStartRotation {
 			t.Fatalf("%s: a new request must wait for the in-flight rotation to finish", name)
 		}
-		st := zoneKeyStatusFrom(w, zoneKeyInputs{now: now, cfg: testCfg, requestedNonce: "b"}, s, "orders")
+		st := zoneKeyStatusFrom(w, zoneKeyInputs{now: now, cfg: testCfg, requestedNonce: "b"}, s, sovZone)
 		if !st.pending {
 			t.Fatalf("%s: the deferred request must be reported as pending", name)
 		}
@@ -487,7 +487,7 @@ func TestRotationIsCrashSafeAtEveryWrite(t *testing.T) {
 		}
 	}
 	totalSwitches, totalRetires, chaosRetires := 0, 0, 0
-	for run := 0; run < 300; run++ {
+	for run := range 300 {
 		store := &simStore{inJWKSSince: map[string]time.Time{}}
 		now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 		clock := func() time.Time { return now }
@@ -591,7 +591,7 @@ func TestRotationIsCrashSafeAtEveryWrite(t *testing.T) {
 			}
 		}
 
-		for p := 0; p < 120; p++ {
+		for p := range 120 {
 			if rng.Intn(6) == 0 {
 				nonce = fmt.Sprintf("n%d", p)
 			}
@@ -612,7 +612,7 @@ func TestRotationIsCrashSafeAtEveryWrite(t *testing.T) {
 
 		// Settle: no new request, no crash, time past every bound. Every
 		// rotation that started must now complete, so each switch has its retire.
-		for p := 0; p < 12; p++ {
+		for p := range 12 {
 			pass(1000+p, 0, 0)
 			now = now.Add(ZoneKeyOverlap + cfg.PropagationBound + time.Second)
 		}
@@ -702,7 +702,7 @@ func boundZone() zoneBindings {
 }
 
 func TestApplyZoneIdentityRendersNothingWithoutABoundFunction(t *testing.T) {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "shop"}}
+	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS}}
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{Image: "img"}}
 	before := ksvc.DeepCopy()
@@ -722,7 +722,7 @@ func TestApplyZoneIdentityRendersNothingWithoutABoundFunction(t *testing.T) {
 }
 
 func TestApplyZoneIdentityMountsTheKeyAsADirectoryVolume(t *testing.T) {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "shop"}}
+	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS}}
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{Image: "img", Env: []corev1.EnvVar{{Name: "A", Value: "1"}}}}
 	if c := applyZoneIdentity(ksvc, app, boundZone()); c != nil {
@@ -733,7 +733,7 @@ func TestApplyZoneIdentityMountsTheKeyAsADirectoryVolume(t *testing.T) {
 		t.Fatalf("want exactly the signing-key Secret volume, got %+v", vols)
 	}
 	sv := vols[0].Secret
-	if sv.SecretName != ZoneSigningKeySecretName("orders") {
+	if sv.SecretName != ZoneSigningKeySecretName(sovZone) {
 		t.Fatalf("mounts %q, want the zone's own key", sv.SecretName)
 	}
 	if sv.Optional == nil || !*sv.Optional {
@@ -770,7 +770,7 @@ func TestApplyZoneIdentityMountsTheKeyAsADirectoryVolume(t *testing.T) {
 }
 
 func TestApplyZoneIdentityKeepsAUserIssuerAndReportsIt(t *testing.T) {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "shop"}}
+	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS}}
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{Image: "img", Env: []corev1.EnvVar{{Name: ZoneIssuerEnv, Value: "mine"}}}}
 	c := applyZoneIdentity(ksvc, app, boundZone())
@@ -787,9 +787,9 @@ func TestApplyZoneIdentityKeepsAUserIssuerAndReportsIt(t *testing.T) {
 
 func TestFunctionRenderSetsTheVerifierIdentityAndNoPrivateKey(t *testing.T) {
 	bs := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: "shop"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: sovNS},
 		Spec: appsv1alpha1.BackendServiceSpec{
-			Zone: "orders", Image: "img",
+			Zone: sovZone, Image: "img",
 			Env: []corev1.EnvVar{
 				{Name: "A", Value: "1"},
 				{Name: FunctionTokenAudienceEnv, Value: "knext:fn:shop/other"},
@@ -882,9 +882,9 @@ func functionPodZoneKeyLeaks(spec corev1.PodSpec, zone string) []string {
 // The scan above must see every channel; a scanner that misses one is
 // decoration.
 func TestFunctionPodZoneKeyScanSeesEveryChannel(t *testing.T) {
-	key := ZoneSigningKeySecretName("orders")
-	jwks := ZoneJWKSConfigMapName("orders")
-	other := ZoneSigningKeySecretName("billing")
+	key := ZoneSigningKeySecretName(sovZone)
+	jwks := ZoneJWKSConfigMapName(sovZone)
+	other := ZoneSigningKeySecretName(sovOther)
 	for name, mutate := range map[string]func(*corev1.PodSpec){
 		"secret volume": func(s *corev1.PodSpec) {
 			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k", VolumeSource: corev1.VolumeSource{
@@ -932,11 +932,11 @@ func TestFunctionPodZoneKeyScanSeesEveryChannel(t *testing.T) {
 		},
 	} {
 		spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "fn", Image: "img"}}}
-		if leaks := functionPodZoneKeyLeaks(spec, "orders"); len(leaks) != 0 {
+		if leaks := functionPodZoneKeyLeaks(spec, sovZone); len(leaks) != 0 {
 			t.Fatalf("a clean spec must scan clean: %v", leaks)
 		}
 		mutate(&spec)
-		if leaks := functionPodZoneKeyLeaks(spec, "orders"); len(leaks) == 0 {
+		if leaks := functionPodZoneKeyLeaks(spec, sovZone); len(leaks) == 0 {
 			t.Fatalf("%s: the scan missed it", name)
 		}
 	}
@@ -1150,7 +1150,7 @@ func TestZoneSigningKeyConditionWarnsOnABoundBelowTheDefault(t *testing.T) {
 			{0, false}, // zero means the default
 		} {
 			in := zoneKeyInputs{now: now, cfg: ZoneSigningKeyConfig{PropagationBound: tc.bound}}
-			st := zoneKeyStatusFrom(w, in, zoneKeyStep{action: zkWait, wait: time.Second}, "orders")
+			st := zoneKeyStatusFrom(w, in, zoneKeyStep{action: zkWait, wait: time.Second}, sovZone)
 			msg := zoneSigningKeyCondition(app, st).Message
 			warned := strings.Contains(msg, "below the "+DefaultZoneKeyPropagationBound.String())
 			wantWarn := tc.warns && name != "steady" // nothing is in flight to refuse
@@ -1297,7 +1297,7 @@ func TestSetupOptionsCarryTheZoneSigningKeyConfig(t *testing.T) {
 // NextApp watch otherwise passes only generation changes, #98).
 func TestRotationRequestChangedPredicate(t *testing.T) {
 	mk := func(ann map[string]string) *appsv1alpha1.NextApp {
-		return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "shop", Annotations: ann}}
+		return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS, Annotations: ann}}
 	}
 	cases := []struct {
 		name     string

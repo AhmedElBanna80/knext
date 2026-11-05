@@ -1,5 +1,4 @@
 //go:build e2e_webhook_down
-// +build e2e_webhook_down
 
 /*
 Copyright 2026.

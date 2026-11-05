@@ -67,7 +67,7 @@ func (c ksvcWriteFails) Patch(ctx context.Context, obj client.Object, p client.P
 type configMap503 struct{ client.Reader }
 
 func (f configMap503) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	if o, ok := obj.(*metav1.PartialObjectMetadata); ok && o.Kind == "ConfigMap" {
+	if o, ok := obj.(*metav1.PartialObjectMetadata); ok && o.Kind == lcConfigMap {
 		return apierrors.NewServiceUnavailable("simulated")
 	}
 	return f.Reader.Get(ctx, key, obj, opts...)
@@ -79,12 +79,12 @@ var _ = Describe("BackendService reconciler: a rotation that coincides with an a
 	// prep: running on stripe-v1, then the spec moves to stripe-v2 and v1 is pruned.
 	prep := func() (ns string, uid types.UID) {
 		ns = bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		for _, s := range []string{"stripe-v1", "stripe-v2"} {
 			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: "orders"}}})).To(Succeed())
+				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}}})).To(Succeed())
 		}
-		createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.EnvFrom = specEnvFromSecret("stripe-v1").EnvFrom
 		})
 		reconcileFunction(ctx, ns, "pricing")
@@ -162,16 +162,16 @@ var _ = Describe("BackendService reconciler: a rotation that coincides with an a
 	} {
 		It("tears down a REVOKED running Secret when the update fails with "+name+", and says so in status", func() {
 			ns := bsNamespace(ctx)
-			createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+			createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: "stripe", Namespace: ns, Labels: map[string]string{ZoneLabel: "orders"}}})).To(Succeed())
-			createFunction(ctx, ns, "pricing", "orders", func(bs *appsv1alpha1.BackendService) {
-				bs.Spec.EnvFrom = specEnvFromSecret("stripe").EnvFrom
+				Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}}})).To(Succeed())
+			createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+				bs.Spec.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom
 			})
 			reconcileFunction(ctx, ns, "pricing")
 			sec := &corev1.Secret{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "stripe"}, sec)).To(Succeed())
-			sec.Labels[ZoneLabel] = "billing"
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: lcStripe}, sec)).To(Succeed())
+			sec.Labels[ZoneLabel] = sovOther
 			Expect(k8sClient.Update(ctx, sec)).To(Succeed())
 			bs := getFunction(ctx, ns, "pricing")
 			bs.Spec.Env = append(bs.Spec.Env, corev1.EnvVar{Name: "FEATURE", Value: "on"})

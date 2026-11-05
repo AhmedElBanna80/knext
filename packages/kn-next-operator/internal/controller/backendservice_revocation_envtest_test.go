@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"time"
 
@@ -72,7 +73,7 @@ func (c specOverrideClient) Get(ctx context.Context, key client.ObjectKey, obj c
 type webhookLikeClient struct{ specOverrideClient }
 
 func rejectedByWebhook() error {
-	return apierrors.NewInvalid(schema.GroupKind{Group: "serving.knative.dev", Kind: "Service"}, "pricing",
+	return apierrors.NewInvalid(schema.GroupKind{Group: "serving.knative.dev", Kind: lcService}, "pricing",
 		nil)
 }
 
@@ -102,10 +103,10 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 
 	setup := func(secrets ...string) (ns string) {
 		ns = bsNamespace(ctx)
-		createZone(ctx, ns, "orders", appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		for _, s := range secrets {
 			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: "orders"},
+				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
 			}})).To(Succeed())
 		}
 		return ns
@@ -120,7 +121,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	revoke := func(ns, secret string) {
 		sec := &corev1.Secret{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: secret}, sec)).To(Succeed())
-		sec.Labels[ZoneLabel] = "billing"
+		sec.Labels[ZoneLabel] = sovOther
 		Expect(k8sClient.Update(ctx, sec)).To(Succeed())
 	}
 	sovereignty := func(ns string) *metav1.Condition {
@@ -128,13 +129,13 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	}
 
 	It("tears down a running function whose Secret was revoked, even when the NEW spec's Secret cannot be read", func() {
-		ns := setup("stripe", "flaky")
-		createFunction(ctx, ns, "pricing", "orders", envFrom("stripe"))
+		ns := setup(lcStripe, "flaky")
+		createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 
 		By("the owner revokes nothing themselves: the platform relabels stripe for another zone")
-		revoke(ns, "stripe")
+		revoke(ns, lcStripe)
 		By("the owner swaps the spec to a Secret whose read fails")
 		bs := getFunction(ctx, ns, "pricing")
 		bs.Spec.EnvFrom = specEnvFromSecret("flaky").EnvFrom
@@ -151,11 +152,11 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	})
 
 	It("tears down for the exact repro: a revoked Secret, then a Secret ref with an empty name", func() {
-		ns := setup("stripe")
-		createFunction(ctx, ns, "pricing", "orders", envFrom("stripe"))
+		ns := setup(lcStripe)
+		createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
-		revoke(ns, "stripe")
+		revoke(ns, lcStripe)
 
 		r := newBSReconciler()
 		r.Client = specOverrideClient{Client: k8sClient, mutate: func(bs *appsv1alpha1.BackendService) {
@@ -170,7 +171,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	for _, name := range []string{"", "..", "a/b", "UPPER", ".leading", "-leading", "has space", strings.Repeat("a", 254)} {
 		It("refuses the invalid Secret name "+strings.ReplaceAll(`"`+name+`"`, strings.Repeat("a", 254), "a*254")+" as a violation, never holds it as unverified", func() {
 			ns := setup()
-			createFunction(ctx, ns, "pricing", "orders")
+			createFunction(ctx, ns, "pricing", sovZone)
 			reconcileFunction(ctx, ns, "pricing") // adds the finalizer and renders
 			Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 			r := newBSReconciler()
@@ -188,11 +189,11 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	}
 
 	It("tears down a running function whose Secret was revoked even when the new spec cannot be rolled out", func() {
-		ns := setup("stripe")
-		createFunction(ctx, ns, "pricing", "orders", envFrom("stripe"))
+		ns := setup(lcStripe)
+		createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
-		revoke(ns, "stripe")
+		revoke(ns, lcStripe)
 
 		By("the owner drops stripe and adds a volume Knative refuses (a reserved mount path); the ksvc update is rejected as the webhook does")
 		r := newBSReconciler()
@@ -210,7 +211,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 
 	It("rolls a routine Secret rotation out in place: the old version is pruned and nothing is torn down", func() {
 		ns := setup("stripe-v1", "stripe-v2")
-		createFunction(ctx, ns, "pricing", "orders", envFrom("stripe-v1"))
+		createFunction(ctx, ns, "pricing", sovZone, envFrom("stripe-v1"))
 		reconcileFunction(ctx, ns, "pricing")
 		ksvcKey := types.NamespacedName{Namespace: ns, Name: "pricing"}
 		before := &servingv1.Service{}
@@ -239,13 +240,13 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	})
 
 	It("replaces a revoked Secret in place when the new spec drops it and rolls out", func() {
-		ns := setup("stripe")
-		createFunction(ctx, ns, "pricing", "orders", envFrom("stripe"))
+		ns := setup(lcStripe)
+		createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))
 		reconcileFunction(ctx, ns, "pricing")
 		ksvcKey := types.NamespacedName{Namespace: ns, Name: "pricing"}
 		before := &servingv1.Service{}
 		Expect(k8sClient.Get(ctx, ksvcKey, before)).To(Succeed())
-		revoke(ns, "stripe")
+		revoke(ns, lcStripe)
 
 		By("the owner drops the revoked Secret; the new template replaces the old one, so nothing revoked survives")
 		bs := getFunction(ctx, ns, "pricing")
@@ -262,8 +263,8 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	})
 
 	It("keeps a healthy running function when its new spec cannot be rolled out and nothing was revoked", func() {
-		ns := setup("stripe")
-		createFunction(ctx, ns, "pricing", "orders", envFrom("stripe"))
+		ns := setup(lcStripe)
+		createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))
 		reconcileFunction(ctx, ns, "pricing")
 		before := &servingv1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: "pricing"}, before)).To(Succeed())
@@ -287,7 +288,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 				Spec: appsv1alpha1.BackendServiceSpec{Volumes: []appsv1alpha1.FunctionVolume{
 					{Name: "scratch", MountPath: path, EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
 			}
-			bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = "orders", bsImage, "1.0.0"
+			bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = sovZone, bsImage, lcV100
 			err := k8sClient.Create(ctx, bs)
 			if err == nil {
 				DeferCleanup(deleteFunctionAndFinalize, ctx, client.ObjectKeyFromObject(bs))
@@ -323,7 +324,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 						ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
 						Spec:       spec(name),
 					}
-					bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = "orders", bsImage, "1.0.0"
+					bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = sovZone, bsImage, lcV100
 					err := k8sClient.Create(ctx, bs)
 					Expect(apierrors.IsInvalid(err)).To(BeTrue(), "the schema must refuse it at admission, got %v", err)
 					Expect(err.Error()).To(ContainSubstring("must name a Secret"))
@@ -345,10 +346,8 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 		for source, extra := range rawSpecs {
 			It("rejects "+source+" with an explicitly empty name", func() {
 				ns := setup()
-				spec := map[string]any{"zone": "orders", "image": bsImage, "protoVersion": "1.0.0"}
-				for k, v := range extra {
-					spec[k] = v
-				}
+				spec := map[string]any{"zone": sovZone, "image": bsImage, "protoVersion": lcV100}
+				maps.Copy(spec, extra)
 				u := &unstructured.Unstructured{Object: map[string]any{
 					"apiVersion": appsv1alpha1.GroupVersion.String(),
 					"kind":       "BackendService",
@@ -372,7 +371,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 						ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
 						Spec:       spec(name),
 					}
-					bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = "orders", bsImage, "1.0.0"
+					bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = sovZone, bsImage, lcV100
 					Expect(k8sClient.Create(ctx, bs)).To(Succeed())
 					DeferCleanup(deleteFunctionAndFinalize, ctx, client.ObjectKeyFromObject(bs))
 					reconcileFunction(ctx, ns, "pricing")
@@ -390,14 +389,14 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 				ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
 				Spec:       specEnvFromSecret("my-secret.v2"),
 			}
-			bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = "orders", bsImage, "1.0.0"
+			bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = sovZone, bsImage, lcV100
 			Expect(k8sClient.Create(ctx, bs)).To(Succeed())
 			DeferCleanup(deleteFunctionAndFinalize, ctx, client.ObjectKeyFromObject(bs))
 		})
 	})
 
 	Context("a persistent Forbidden", func() {
-		forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "stripe", errors.New("simulated"))
+		forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: lcSecrets}, lcStripe, errors.New("simulated"))
 
 		// The hold is counted from the first DENIAL, which the operator records
 		// in status.secretsDeniedSince. Backdating it stands in for elapsed time.
@@ -415,8 +414,8 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 			return reconcileFn(r, ns)
 		}
 		running := func() string {
-			ns := setup("stripe")
-			createFunction(ctx, ns, "pricing", "orders", envFrom("stripe"))
+			ns := setup(lcStripe)
+			createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))
 			reconcileFunction(ctx, ns, "pricing")
 			return ns
 		}
@@ -444,7 +443,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 
 		It("never turns a TRANSIENT error into a teardown, however long it lasts, and never starts the clock", func() {
 			ns := running()
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				Expect(run(ns, transientErrors["a 503"])).NotTo(Succeed())
 				Expect(deniedSince(ns)).To(BeNil(), "a 503 is not a denial")
 				Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
@@ -477,7 +476,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 			r.APIReader = &secretMetaFailer{Reader: k8sClient, err: forbidden}
 			recorder := r.Recorder.(*record.FakeRecorder)
 			before := testutil.ToFloat64(backendServiceRefusalsTotal.WithLabelValues(ReasonSovereigntyViolation))
-			for i := 0; i < 4; i++ {
+			for i := range 4 {
 				Expect(reconcileFn(r, ns)).To(Succeed())
 				c := sovereignty(ns)
 				Expect(c.Status).To(Equal(metav1.ConditionFalse), "pass %d must still be refused", i)
@@ -507,10 +506,10 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 
 	Context("a spec change that cannot be verified", func() {
 		It("does not report the new generation as observed or Ready", func() {
-			ns := setup("stripe")
-			createFunction(ctx, ns, "pricing", "orders", envFrom("stripe"))
+			ns := setup(lcStripe)
+			createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))
 			reconcileFunction(ctx, ns, "pricing")
-			markFunctionServed(ctx, ns, "pricing", "pricing-00001", "1.0.0")
+			markFunctionServed(ctx, ns, "pricing", "pricing-00001", lcV100)
 			reconcileFunction(ctx, ns, "pricing")
 			settled := getFunction(ctx, ns, "pricing")
 			Expect(functionCondition(settled, ConditionReady).Status).To(Equal(metav1.ConditionTrue))

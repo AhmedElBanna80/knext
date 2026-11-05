@@ -109,6 +109,10 @@ function makeFixture(): { repoRoot: string; tarballsDir: string } {
   // default lane needs them present" rule as the credential-ref files above.
   mkdirSync(join(root, 'scripts/lib'), { recursive: true });
   writeFileSync(join(root, 'scripts/lib/musl-lockfile-lookup.sh'), '#!/bin/sh\n');
+  // #2615: the bun-vinext cell declares the empty-dir intentional-500 gate
+  // compat-vinext.yml invokes as a subprocess (CREDENTIAL_CELLS, bun-vinext
+  // extraFiles) — a declared-but-missing entry is a hard error.
+  writeFileSync(join(root, 'scripts/lib/e2e-verify-intentional-500.sh'), '#!/bin/sh\n');
   for (const pkgDir of [
     'img-sharp-linuxmusl-x64-0.34.5',
     'img-sharp-libvips-linuxmusl-x64-1.2.4',

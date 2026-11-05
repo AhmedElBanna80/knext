@@ -794,7 +794,8 @@ phase_rotate() {
 
   # Calls through the zone every 2 s for the whole rotation. A rotation must not
   # fail one: the point of publish-then-wait-then-switch.
-  local watch_log="${WORK}/watch.log" watch_failed="${WORK}/watcher.failed"
+  local watch_log="${WORK}/watch.log"
+  local watch_failed="${WORK}/watcher.failed"
   : >"${watch_log}"
   rm -f "${watch_failed}"
   (

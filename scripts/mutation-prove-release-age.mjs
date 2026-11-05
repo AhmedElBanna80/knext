@@ -34,6 +34,7 @@
  *       bytes under the same URL passes).
  *   H1-H3 a hashless URL dependency is excusable by an exception / stops failing /
  *       is not classified as hashless.
+ *   H17 the git+ssh pin path stops being a clean segment list (percent-escapes pass).
  *   H14-H16 a short bun-id sha pins a repo (bun's sha512 decision is I2); a multi-hash
  *       list is judged by its first token / accepts a sha1 token.
  *   H11-H13 SRI length/padding is not enforced; the repo part of a github: pin or a
@@ -330,8 +331,8 @@ const MUTATIONS = [
     id: 'H4',
     claim: 'any #fragment (branch, tag, range) pins a repo spec, not only a full commit sha',
     subject: 'lib',
-    anchor: '|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
-    replacement: `|git\\+)[^#?]*#.+$/; /* ${M} */`,
+    anchor: '(?:\\/[A-Za-z0-9._-]+)*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `(?:\\/[A-Za-z0-9._-]+)*#.+$/; /* ${M} */`,
   },
   {
     id: 'H5',
@@ -390,8 +391,8 @@ const MUTATIONS = [
       'the owner/repo of a github:/gitlab:/bitbucket: pin is no longer a clean name (percent-escapes, ?, #, @)',
     subject: 'lib',
     anchor:
-      '  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
-    replacement: `  /^(?:github:|gitlab:|bitbucket:).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
+      '  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^git(?:\\+[a-z]+)?:\\/\\/(?:(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+(?::[0-9]+)?\\/|(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:)[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `  /^(?:github:|gitlab:|bitbucket:).*#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^git(?:\\+[a-z]+)?:\\/\\/(?:(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+(?::[0-9]+)?\\/|(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:)[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
   },
   {
     id: 'H13',
@@ -402,12 +403,21 @@ const MUTATIONS = [
     replacement: `codeload\\.github\\.com\\/[^/]+\\/[^/]+\\/tar\\.gz\\/(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */`,
   },
   {
+    id: 'H17',
+    claim:
+      'the path of a git+ssh pin accepts anything but ? and # (percent-escapes pass as commit-pinned)',
+    subject: 'lib',
+    anchor:
+      '[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;\n/** `github:` deps',
+    replacement: `[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/; /* ${M} */\n/** \`github:\` deps`,
+  },
+  {
     id: 'H14',
     claim: 'a short (bun-id) sha pins a repo spec: the hex is widened to {7,64}',
     subject: 'lib',
     anchor:
-      '  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
-    replacement: `  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#[0-9a-f]{7,64}$|^(?:git(?:\\+[a-z]+)?:\\/\\/|git\\+)[^#?]*#[0-9a-f]{7,64}$/; /* ${M} */`,
+      '  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#(?:[0-9a-f]{40}|[0-9a-f]{64})$|^git(?:\\+[a-z]+)?:\\/\\/(?:(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+(?::[0-9]+)?\\/|(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:)[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*#(?:[0-9a-f]{40}|[0-9a-f]{64})$/;',
+    replacement: `  /^(?:(?:github|bitbucket):[A-Za-z0-9._-]+\\/[A-Za-z0-9._-]+|gitlab:(?:[A-Za-z0-9._-]+\\/)+[A-Za-z0-9._-]+)#[0-9a-f]{7,64}$|^git(?:\\+[a-z]+)?:\\/\\/(?:(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+(?::[0-9]+)?\\/|(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:)[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*#[0-9a-f]{7,64}$/; /* ${M} */`,
   },
   {
     id: 'H15',

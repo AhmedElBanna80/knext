@@ -63,7 +63,7 @@ func (r *NextAppReconciler) uncachedReader() client.Reader {
 // controlledByZone reports whether obj's controller is this NextApp (by UID).
 func controlledByZone(obj metav1.Object, app *appsv1alpha1.NextApp) bool {
 	ref := metav1.GetControllerOf(obj)
-	return ref != nil && ref.Kind == "NextApp" && ref.UID == app.UID && ref.Name == app.Name &&
+	return ref != nil && ref.Kind == lcNextApp && ref.UID == app.UID && ref.Name == app.Name &&
 		strings.HasPrefix(ref.APIVersion, appsv1alpha1.GroupVersion.Group+"/")
 }
 

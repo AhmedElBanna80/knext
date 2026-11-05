@@ -43,11 +43,11 @@ func decodeDocs(t *testing.T, raw []byte, source string) []manifestDoc {
 		// Kustomize patch files are JSON-patch ARRAYS, not Kubernetes objects; they
 		// carry no kind and cannot be a KnextPlatform, so they are skipped by name
 		// rather than by swallowing a decode error.
-		var generic interface{}
+		var generic any
 		if err := yaml.Unmarshal(doc, &generic); err != nil {
 			t.Fatalf("unmarshal %s: %v", source, err)
 		}
-		if _, isMap := generic.(map[string]interface{}); !isMap {
+		if _, isMap := generic.(map[string]any); !isMap {
 			continue
 		}
 		var m manifestDoc

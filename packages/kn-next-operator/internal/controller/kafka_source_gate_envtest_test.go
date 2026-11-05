@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -80,9 +79,9 @@ var _ = Describe("KafkaSource inertness (#475)", func() {
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: image,
 				Revalidation: &appsv1alpha1.RevalidationSpec{
-					Queue:                "kafka",
+					Queue:                lcKafka,
 					KafkaBrokerUrl:       "kafka.default.svc:9092",
-					ProvisionKafkaSource: ptr.To(true),
+					ProvisionKafkaSource: new(true),
 				},
 			},
 		}
@@ -113,7 +112,7 @@ var _ = Describe("KafkaSource inertness (#475)", func() {
 		// is the fingerprint of the rejection this change replaced.
 		degraded := apimeta.FindStatusCondition(fetched.Status.Conditions, ConditionDegraded)
 		Expect(degraded).NotTo(BeNil())
-		Expect(degraded.Reason).NotTo(Equal("InvalidSpec"))
+		Expect(degraded.Reason).NotTo(Equal(lcInvalidSpec))
 
 		// The withdrawal is surfaced honestly, with its own reason.
 		deferredCond := apimeta.FindStatusCondition(fetched.Status.Conditions, ConditionRevalidationDeferred)
@@ -135,7 +134,7 @@ var _ = Describe("KafkaSource inertness (#475)", func() {
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: image,
 				Revalidation: &appsv1alpha1.RevalidationSpec{
-					Queue:          "kafka",
+					Queue:          lcKafka,
 					KafkaBrokerUrl: "kafka.default.svc:9092",
 				},
 			},

@@ -31,7 +31,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -85,7 +84,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 
 	ownedBy := func(refs []metav1.OwnerReference, name string) bool {
 		for _, ref := range refs {
-			if ref.Kind == "NextApp" && ref.Name == name {
+			if ref.Kind == lcNextApp && ref.Name == name {
 				return true
 			}
 		}
@@ -234,7 +233,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 					MinScale:             1,
 					MaxScale:             7,
 					ContainerConcurrency: 20,
-					TargetBurstCapacity:  ptr.To(int32(-1)),
+					TargetBurstCapacity:  new(int32(-1)),
 				},
 			})
 
@@ -264,7 +263,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 		It("stamps a non-negative targetBurstCapacity (a numeric burst capacity, not always-activator) (#411)", func() {
 			nn := reconcileOnce("ksvc-tbc-numeric", appsv1alpha1.NextAppSpec{
 				Image:   validImage,
-				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: ptr.To(int32(200))},
+				Scaling: &appsv1alpha1.ScalingSpec{TargetBurstCapacity: new(int32(200))},
 			})
 
 			ksvc := &servingv1.Service{}
@@ -281,9 +280,9 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 					MinScale:                 1,
 					MaxScale:                 7,
 					ContainerConcurrency:     20,
-					TargetBurstCapacity:      ptr.To(int32(-1)),
-					PanicWindowPercentage:    ptr.To(int32(10)),
-					PanicThresholdPercentage: ptr.To(int32(200)),
+					TargetBurstCapacity:      new(int32(-1)),
+					PanicWindowPercentage:    new(int32(10)),
+					PanicThresholdPercentage: new(int32(200)),
 				},
 			})
 
@@ -317,7 +316,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 		It("stamps only panicWindowPercentage when panicThresholdPercentage is unset (#413)", func() {
 			nn := reconcileOnce("ksvc-panic-window-only", appsv1alpha1.NextAppSpec{
 				Image:   validImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: ptr.To(int32(20))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicWindowPercentage: new(int32(20))},
 			})
 
 			ksvc := &servingv1.Service{}
@@ -331,7 +330,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 		It("stamps only panicThresholdPercentage when panicWindowPercentage is unset (#413)", func() {
 			nn := reconcileOnce("ksvc-panic-threshold-only", appsv1alpha1.NextAppSpec{
 				Image:   validImage,
-				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: ptr.To(int32(150))},
+				Scaling: &appsv1alpha1.ScalingSpec{PanicThresholdPercentage: new(int32(150))},
 			})
 
 			ksvc := &servingv1.Service{}
@@ -541,7 +540,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			ksvc := &servingv1.Service{}
 			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
 			env := ksvc.Spec.Template.Spec.Containers[0].Env
-			Expect(envValue(env, "NEXT_PUBLIC_RUM_ENABLED")).To(Equal("true"))
+			Expect(envValue(env, "NEXT_PUBLIC_RUM_ENABLED")).To(Equal(lcTrue))
 			Expect(envValue(env, "NEXT_PUBLIC_RUM_SAMPLE_RATE")).To(Equal("0.25"))
 		})
 
@@ -556,7 +555,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			ksvc := &servingv1.Service{}
 			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
 			env := ksvc.Spec.Template.Spec.Containers[0].Env
-			Expect(envValue(env, "NEXT_PUBLIC_RUM_ENABLED")).To(Equal("true"))
+			Expect(envValue(env, "NEXT_PUBLIC_RUM_ENABLED")).To(Equal(lcTrue))
 			Expect(envValue(env, "NEXT_PUBLIC_RUM_SAMPLE_RATE")).To(BeEmpty())
 		})
 	})
@@ -601,8 +600,8 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 				"the node axis must leave Command nil (the image's own ENTRYPOINT decides)")
 
 			for _, ksvc := range []*servingv1.Service{bunKsvc, nodeKsvc} {
-				annotations := ksvc.Spec.Template.ObjectMeta.Annotations
-				Expect(annotations).To(HaveKeyWithValue("prometheus.io/scrape", "true"))
+				annotations := ksvc.Spec.Template.Annotations
+				Expect(annotations).To(HaveKeyWithValue("prometheus.io/scrape", lcTrue))
 				Expect(annotations).To(HaveKeyWithValue("prometheus.io/port", "9464"),
 					"9464 is the ONLY port the NetworkPolicy grant and the shipped PodMonitor admit "+
 						"(metrics-port-lockstep.test.ts) — any other value scrapes nothing")
@@ -610,8 +609,8 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			}
 
 			By("the two runtimes agreeing byte-for-byte on the scrape annotations")
-			bunAnn := bunKsvc.Spec.Template.ObjectMeta.Annotations
-			nodeAnn := nodeKsvc.Spec.Template.ObjectMeta.Annotations
+			bunAnn := bunKsvc.Spec.Template.Annotations
+			nodeAnn := nodeKsvc.Spec.Template.Annotations
 			for _, key := range []string{"prometheus.io/scrape", "prometheus.io/port", "prometheus.io/path"} {
 				Expect(bunAnn[key]).To(Equal(nodeAnn[key]), "annotation %q diverges across the runtime axis", key)
 			}
@@ -647,7 +646,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			ksvc := &servingv1.Service{}
 			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
 			env := ksvc.Spec.Template.Spec.Containers[0].Env
-			Expect(envValue(env, "OTEL_TRACING_ENABLED")).To(Equal("true"))
+			Expect(envValue(env, "OTEL_TRACING_ENABLED")).To(Equal(lcTrue))
 			Expect(envValue(env, "OTEL_EXPORTER_OTLP_ENDPOINT")).To(Equal("http://tempo.monitoring:4317"))
 			Expect(envValue(env, "OTEL_TRACES_SAMPLER_ARG")).To(Equal("0.25"))
 		})
@@ -663,7 +662,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			ksvc := &servingv1.Service{}
 			Expect(k8sClient.Get(ctx, nn, ksvc)).To(Succeed())
 			env := ksvc.Spec.Template.Spec.Containers[0].Env
-			Expect(envValue(env, "OTEL_TRACING_ENABLED")).To(Equal("true"))
+			Expect(envValue(env, "OTEL_TRACING_ENABLED")).To(Equal(lcTrue))
 			Expect(envValue(env, "OTEL_EXPORTER_OTLP_ENDPOINT")).To(BeEmpty())
 			Expect(envValue(env, "OTEL_TRACES_SAMPLER_ARG")).To(BeEmpty())
 		})
@@ -693,7 +692,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			env := ksvc.Spec.Template.Spec.Containers[0].Env
 
 			By("keeping the HOSTNAME=0.0.0.0 bind override (defense-in-depth, #178)")
-			Expect(envValue(env, "HOSTNAME")).To(Equal("0.0.0.0"))
+			Expect(envValue(env, lcHOSTNAME)).To(Equal("0.0.0.0"))
 
 			By("not injecting KNEXT_POD_NAME as a literal (a static value would lie about pod identity)")
 			Expect(envValue(env, "KNEXT_POD_NAME")).To(BeEmpty())
@@ -721,7 +720,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			nn := reconcileOnce("kafka-deferred", appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Revalidation: &appsv1alpha1.RevalidationSpec{
-					Queue:          "kafka",
+					Queue:          lcKafka,
 					KafkaBrokerUrl: "kafka-broker:9092",
 				},
 			})
@@ -1119,7 +1118,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 				Image: validImage,
 				Scaling: &appsv1alpha1.ScalingSpec{
 					MaxScale:            10,
-					TargetBurstCapacity: ptr.To(int32(-1)),
+					TargetBurstCapacity: new(int32(-1)),
 				},
 				Preview: &appsv1alpha1.PreviewSpec{
 					Enabled: true,
@@ -1143,8 +1142,8 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 				Image: validImage,
 				Scaling: &appsv1alpha1.ScalingSpec{
 					MaxScale:                 10,
-					PanicWindowPercentage:    ptr.To(int32(15)),
-					PanicThresholdPercentage: ptr.To(int32(150)),
+					PanicWindowPercentage:    new(int32(15)),
+					PanicThresholdPercentage: new(int32(150)),
 				},
 				Preview: &appsv1alpha1.PreviewSpec{
 					Enabled: true,

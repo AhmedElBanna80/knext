@@ -16,6 +16,8 @@ Rules, all from workflow.md / the block-dangerous-bash harness:
   * The unmutated suites must be GREEN first — a harness that cannot see green proves nothing
     about red.
   * Every anchor must occur EXACTLY once or the run ABORTS, non-zero. No silent no-ops.
+  * A suite that does not finish inside its bound (JEV_PROOF_SUITE_TIMEOUT, default 300 s) is a TIMEOUT:
+    it is reported by mutation name, fails the run, and is NEVER counted as a killed mutation.
   * Mutates a COPY in a temp directory; the in-repo hooks are never opened for writing.
   * No mutation may target code that is not in the tree: every anchor is looked up in the real
     file, so a mutation of removed code aborts instead of passing.
@@ -144,8 +146,28 @@ for _label, _anchor, _repl in [
     MUTATIONS.append((f"lib: literal pattern removed: {_label}", LIB, _anchor, _repl))
 
 
-def run_suite(work: Path, test: str) -> int:
-    # Own session so a timeout kills the whole process group: killing only bash would orphan a
+# Per-suite wall-clock bound, seconds. A healthy run is ~45 s on ubuntu and ~110 s on macOS (about 2.5x
+# slower; see the `safety-hook-mutation-proof` job in ci.yml), so 300 s is already ~2.7x the slow leg.
+# Not raised: a suite past it is more likely hung (the yes|tr hang) than slow, and a raise only
+# delays that signal. Overridable for tests and for a deliberately slow machine.
+SUITE_TIMEOUT = int(os.environ.get("JEV_PROOF_SUITE_TIMEOUT", "300"))
+
+
+class SuiteTimeout(Exception):
+    """A suite did not finish inside its bound. It is NOT an exit code: a suite that never finished
+    proves nothing, so it must never be folded into "went red" (killed) or "stayed green"."""
+
+    def __init__(self, test: str, timeout: float, note: str = ""):
+        self.test, self.timeout = test, timeout
+        super().__init__(f"{test} did not finish within {timeout}s{note}")
+
+
+def run_suite(work: Path, test: str, timeout: float = None) -> int:
+    """Run one suite; return its exit code, or raise SuiteTimeout (never a bare exit code) if it
+    exceeds `timeout`. On timeout the whole process group is killed and the leader reaped."""
+    timeout = SUITE_TIMEOUT if timeout is None else timeout
+    # Own session (start_new_session=True -> setsid) so the child is a group leader and p.pid IS its
+    # process-group id; a timeout then kills the whole group. Killing only bash would orphan a
     # spinning child (an infinite producer, a leaked sleep) onto the runner for the rest of the job.
     p = subprocess.Popen(
         ["bash", str(work / test)],
@@ -154,11 +176,41 @@ def run_suite(work: Path, test: str) -> int:
         start_new_session=True,
     )
     try:
-        return p.wait(timeout=300)
+        return p.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
+        pass
+    note = ""
+    try:
         os.killpg(p.pid, signal.SIGKILL)
-        p.wait()
-        raise
+    except (ProcessLookupError, PermissionError) as e:
+        # The group is already gone, or holds only a leader that has exited but is not yet reaped:
+        # Linux answers ESRCH for that, macOS answers EPERM (it refuses to signal a zombie). Either
+        # way there is nothing left to kill in the group except possibly the leader itself.
+        note = f" (killpg: {type(e).__name__})"
+        if p.poll() is None:
+            try:
+                p.kill()  # EPERM for some other reason: at least take down the leader
+            except ProcessLookupError:
+                pass
+    try:
+        p.wait(timeout=30)  # reap: no zombie, no orphan record
+    except subprocess.TimeoutExpired:
+        note += " (child could not be reaped after SIGKILL)"
+    raise SuiteTimeout(test, timeout, note)
+
+
+def judge(label: str, which: str, work: Path, timeout: float = None):
+    """Run the owning suite(s) on a mutated tree -> (status, line). status is RED (killed), GREEN
+    (survived) or TIMEOUT. TIMEOUT is its own outcome on purpose: the suites are folded below with
+    max(), and a timeout turned into an exit code would read as RED and certify a proof the suite
+    never finished."""
+    try:
+        rc = max(run_suite(work, t, timeout) for t in SUITE[which])
+    except SuiteTimeout as e:
+        return "TIMEOUT", f"TIMEOUT {label}: {e}; NOT counted as killed, the proof is incomplete"
+    if rc != 0:
+        return "RED", f"RED    {label} (suite exit {rc})"
+    return "GREEN", f"GREEN  {label}  <-- SURVIVED, the guard is decoration"
 
 
 # CI cost: a suite run takes minutes on a hosted runner, so the full sweep would be too long for a
@@ -216,7 +268,7 @@ def main() -> int:
         for _, m in todo:
             print(m[0])
         return 0
-    aborts, survivors, killed = [], [], 0
+    aborts, survivors, timeouts, killed = [], [], [], 0
     with tempfile.TemporaryDirectory() as td:
         base = Path(td) / "base"
         base.mkdir()
@@ -224,11 +276,15 @@ def main() -> int:
             (base / dest).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(d / f, base / dest)
         for t in SUITE["both"]:
-            rc = run_suite(base, t)
-            if rc != 0:
-                print(f"ABORT: the UNMUTATED suite {t} is not green (exit {rc}); cannot prove anything")
+            try:
+                rc = run_suite(base, t)
+            except SuiteTimeout as e:
+                print(f"ABORT: the UNMUTATED suite timed out: {e}; cannot prove anything", flush=True)
                 return 2
-        print("baseline: green (exit 0)")
+            if rc != 0:
+                print(f"ABORT: the UNMUTATED suite {t} is not green (exit {rc}); cannot prove anything", flush=True)
+                return 2
+        print("baseline: green (exit 0)", flush=True)
 
         def prove(item):
             i, (label, fname, anchor, repl) = item
@@ -244,27 +300,26 @@ def main() -> int:
                 return "ABORT", f"ABORT  {label}: substitution produced no change"
             target.write_text(out)
             which = "pr-risk" if fname == "pr-risk.sh" else "both" if fname == LIB else "hooks"
-            rc = max(run_suite(work, t) for t in SUITE[which])
-            if rc != 0:
-                return "RED", f"RED    {label} (suite exit {rc})"
-            return "GREEN", f"GREEN  {label}  <-- SURVIVED, the guard is decoration"
+            return judge(label, which, work)
 
         # Independent temp copies, so mutations run in parallel (each suite keeps its own TMP).
         # Results print in declaration order.
         with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 2)) as pool:
             for status, line in pool.map(prove, todo):
-                print(line)
+                print(line, flush=True)
                 if status == "RED":
                     killed += 1
                 elif status == "GREEN":
                     survivors.append(line)
+                elif status == "TIMEOUT":
+                    timeouts.append(line)
                 else:
                     aborts.append(line)
     suffix = f" (smoke subset of {len(MUTATIONS)})" if smoke else ""
     if shard:
         suffix += f" [shard {shard[0]}/{shard[1]}]"
-    print(f"\n{killed}/{len(todo)} mutations killed{suffix}; survivors={len(survivors)} aborts={len(aborts)}")
-    return 0 if not survivors and not aborts else 1
+    print(f"\n{killed}/{len(todo)} mutations killed{suffix}; survivors={len(survivors)} timeouts={len(timeouts)} aborts={len(aborts)}")
+    return 0 if not survivors and not timeouts and not aborts else 1
 
 
 if __name__ == "__main__":

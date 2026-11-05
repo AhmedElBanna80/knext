@@ -12,6 +12,7 @@
  * move to.
  */
 
+import { UNKNOWN_CORE_VERSION } from "../../core-version";
 import {
     classifyOperatorCompat,
     type OperatorVersion,
@@ -84,6 +85,20 @@ export function operatorVersionCheck(ctx: CheckContext): CheckResult[] {
                 `${base} (a bundle from before the operator version line); compatibility with this CLI cannot be checked`,
                 pinHint(
                     "Move to a versioned operator (operator first, then CLI).",
+                ),
+            ),
+        ];
+    }
+
+    if (ctx.deps.cliVersion === UNKNOWN_CORE_VERSION) {
+        return [
+            mk(
+                ID,
+                TITLE,
+                "warn",
+                `${base}; this CLI's own version is unknown (its package.json could not be read), so compatibility with the operator cannot be checked`,
+                pinHint(
+                    "Reinstall @getknext/core so its package.json sits beside the CLI, then re-run doctor.",
                 ),
             ),
         ];

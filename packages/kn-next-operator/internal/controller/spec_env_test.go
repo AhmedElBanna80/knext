@@ -160,7 +160,7 @@ var _ = Describe("NextApp spec.env (plain, non-secret env vars)", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "env-app-hostname", Namespace: namespace},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
-				Env:   map[string]string{"HOSTNAME": "evil.example.com"},
+				Env:   map[string]string{lcHOSTNAME: "evil.example.com"},
 			},
 		}
 		err := k8sClient.Create(ctx, nextApp)

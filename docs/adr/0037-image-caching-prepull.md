@@ -264,6 +264,7 @@ Three things worth keeping from how this was missed:
       (unlike `image-pin-resolution-nightly.yml`) lacks. Note the limit of the preflight: it checks
       **shape, not pullability**, so a well-formed digest for an image that was never pushed still
       dies inside the `continue-on-error` job. Only #670 closes that.
+      The scale-suite tolerance itself (owner, expiry, visibility of its outcome) is tracked in [#2648](https://github.com/getknext-dev/knext/issues/2648).
 - [ ] **STILL OPEN — the distroless / shell-less app-image case.** The e2e above runs against
       `SCALE_TEST_IMAGE` = the file-manager image, whose runner stage is `node:22-alpine`
       (`apps/file-manager/Dockerfile:105`). **Alpine ships busybox and `/bin/sh`**, so a naive

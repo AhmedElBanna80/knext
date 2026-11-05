@@ -6,7 +6,7 @@ use std::convert::Infallible;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use bytes::Bytes;
 use connectrpc::ConnectRpcBody;
@@ -324,6 +324,103 @@ async fn body_forged_user_id_is_never_the_caller() {
     assert_eq!(reached.lock().unwrap().len(), 1);
 }
 
+/// The headers a caller, or a gateway in front of the function, might use to
+/// name a user. None of them is ever read.
+const FORGED_IDENTITY_HEADERS: [&str; 5] = [
+    "x-user-id",
+    "x-knext-sub",
+    "x-forwarded-user",
+    "x-forwarded-email",
+    "remote-user",
+];
+
+/// A POST to `procedure` carrying every forged identity header, with the given
+/// Authorization value (none at all when `None`).
+fn forged_identity_request(procedure: &str, authorization: Option<&str>) -> Request<Full<Bytes>> {
+    let mut builder = Request::post(procedure).header("content-type", "application/json");
+    if let Some(value) = authorization {
+        builder = builder.header("authorization", value);
+    }
+    for name in FORGED_IDENTITY_HEADERS {
+        builder = builder.header(name, "admin");
+    }
+    builder.body(Full::new(Bytes::from_static(b"{}"))).unwrap()
+}
+
+/// A user id forged into a request header is not a token and does not stand in
+/// for one: with no token, a token of another scheme, an empty or unreadable
+/// bearer token, or a valid token that carries no user for an AUTH_USER RPC,
+/// the call is refused before the service runs, with the headers present. The
+/// control differs in exactly one property: a valid token with the same
+/// headers is served, as the token's user and not the header's.
+#[tokio::test]
+async fn forged_user_headers_never_stand_in_for_a_token() {
+    let v = testvectors::load();
+    let valid = v.case("valid-user");
+    let userless = v.case("user-empty-sub");
+
+    let (verifier, _) = case_verifier(&v, valid, "forged-header-control");
+    let (mut svc, reached) = stand_in(Arc::new(verifier));
+    let bearer = format!("Bearer {}", v.token("valid-user"));
+    let resp = svc
+        .ready()
+        .await
+        .unwrap()
+        .call(forged_identity_request(&valid.procedure, Some(&bearer)))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        http::StatusCode::OK,
+        "the control (a valid token with forged headers) was refused"
+    );
+    assert_eq!(
+        reached.lock().unwrap().as_slice(),
+        &[Some(Caller {
+            subject: valid.sub.clone(),
+            zone: v.verifier.issuer.clone()
+        })],
+        "the control must be served as the token's subject, not the header's"
+    );
+
+    let userless_bearer = format!("Bearer {}", v.token("user-empty-sub"));
+    let refused: [(&str, &Case, Option<&str>); 5] = [
+        ("no token", valid, None),
+        (
+            "a scheme that is not Bearer",
+            valid,
+            Some("Basic YWRtaW46YWRtaW4="),
+        ),
+        ("an empty bearer token", valid, Some("Bearer ")),
+        (
+            "a bearer token that is no token",
+            valid,
+            Some("Bearer admin"),
+        ),
+        ("a token with no user", userless, Some(&userless_bearer)),
+    ];
+    for (i, (name, c, authorization)) in refused.into_iter().enumerate() {
+        let (verifier, _) = case_verifier(&v, c, &format!("forged-header-{i}"));
+        let (mut svc, reached) = stand_in(Arc::new(verifier));
+        let resp = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(forged_identity_request(&c.procedure, authorization))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            http::StatusCode::UNAUTHORIZED,
+            "{name}, with forged identity headers"
+        );
+        assert!(
+            reached.lock().unwrap().is_empty(),
+            "{name}: a refused call reached the service"
+        );
+    }
+}
+
 /// Rotation: a previous-key token verifies while the JWKS still holds the
 /// previous key (the overlap), and is refused once the key leaves the JWKS,
 /// in the same warm verifier.
@@ -374,6 +471,134 @@ fn warm_pod_picks_up_a_new_key_without_restart() {
     verifier
         .verify(&next, &before.procedure)
         .expect("the warm verifier must accept a new-key token after the JWKS propagated");
+}
+
+/// A ConfigMap volume laid out the way the kubelet's atomic writer does, which
+/// is the layout a function pod really reads its JWKS from:
+///
+/// ```text
+/// dir/jwks.json       -> ..data/jwks.json   (a symlink, made once)
+/// dir/..data          -> ..<generation>     (a symlink, replaced by a rename)
+/// dir/..<generation>/jwks.json              (the file, written once)
+/// ```
+///
+/// An update writes a new generation directory, renames a fresh `..data`
+/// symlink over the old one, and removes the old generation. Nothing is
+/// rewritten in place, so the file the verifier opens afterwards is a
+/// different file.
+#[cfg(unix)]
+struct KubeletVolume {
+    dir: std::path::PathBuf,
+    live: Option<std::path::PathBuf>,
+    count: u32,
+}
+
+#[cfg(unix)]
+impl KubeletVolume {
+    fn new(name: &str) -> Self {
+        Self {
+            dir: testvectors::temp_dir(name),
+            live: None,
+            count: 0,
+        }
+    }
+
+    /// Where the function mounts its JWKS: the symlink.
+    fn path(&self) -> std::path::PathBuf {
+        self.dir.join("jwks.json")
+    }
+
+    /// Makes `data` the volume's content, as of `mtime`.
+    fn publish(&mut self, data: &[u8], mtime: SystemTime) {
+        use std::os::unix::fs::symlink;
+        self.count += 1;
+        let generation = format!("..2026_01_01_00_00_{:02}.{}", self.count, 1000 + self.count);
+        let dir = self.dir.join(&generation);
+        fs::create_dir(&dir).unwrap();
+        let file = dir.join("jwks.json");
+        fs::write(&file, data).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        let staging = self.dir.join("..data_tmp");
+        symlink(&generation, &staging).unwrap();
+        fs::rename(&staging, self.dir.join("..data")).unwrap();
+        if let Some(old) = self.live.take() {
+            fs::remove_dir_all(old).unwrap();
+        }
+        self.live = Some(dir);
+        if self.count == 1 {
+            symlink(Path::new("..data").join("jwks.json"), self.path()).unwrap();
+        }
+    }
+}
+
+/// Warm-pod rotation on the layout a function pod really has. The tests above
+/// rewrite the file in place, where a verifier that cannot follow a symlink,
+/// or that watches the symlink instead of the file behind it, behaves exactly
+/// like one that can. Here the mount is `jwks.json -> ..data/jwks.json` and an
+/// update swaps `..data`, so the verifier must (1) count a symlinked key set
+/// as mounted, (2) see the swap with no restart and without waiting for the
+/// re-read interval (the clock does not move), and (3) stop trusting a key
+/// that left.
+#[cfg(unix)]
+#[test]
+fn warm_pod_picks_up_a_new_key_through_a_kubelet_configmap_volume() {
+    let v = testvectors::load();
+    let c = v.case("rotation-next-before-propagation");
+    assert_eq!(
+        v.jwks_bytes("zone-a-overlap").len(),
+        v.jwks_bytes("zone-a-rotating").len(),
+        "the two JWK Sets must be the same size, so the modification time is the only signal"
+    );
+    let mut volume = KubeletVolume::new("kubelet-volume");
+    let published = SystemTime::now() - Duration::from_secs(3600);
+    volume.publish(&v.jwks_bytes("zone-a-overlap"), published);
+    assert!(
+        fs::symlink_metadata(volume.path())
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the mounted JWKS must be a symlink, as in a ConfigMap volume"
+    );
+    let verifier = token_verifier(config(&v, c, &volume.path(), TestClock::at(c.now).clock()));
+    let previous = v.token("rotation-previous-during-overlap");
+    let next = v.token("rotation-next-before-propagation");
+
+    // (1) A key set behind symlinks is a mounted key set: during the overlap,
+    // the previous key's token verifies.
+    verifier
+        .verify(&previous, &c.procedure)
+        .expect("a token signed by a key in the mounted volume was refused");
+    // Signing switched before the volume carried the new key: refused.
+    refused_with(
+        verifier.verify(&next, &c.procedure),
+        "unknown-kid",
+        "a new-key token before the volume was updated",
+    );
+
+    // (2) The kubelet swaps ..data. The clock has not moved, so only the
+    // change itself can make the verifier look again.
+    volume.publish(
+        &v.jwks_bytes("zone-a-rotating"),
+        published + Duration::from_secs(60),
+    );
+    verifier
+        .verify(&next, &c.procedure)
+        .expect("the warm verifier did not pick up the swapped volume");
+    // The key that stays current keeps verifying.
+    verifier
+        .verify(&v.token("valid-user-second-jti"), &c.procedure)
+        .expect("the current key stopped verifying after the swap");
+    // (3) The key that left the set is refused: the old generation is gone.
+    refused_with(
+        verifier.verify(&previous, &c.procedure),
+        "unknown-kid",
+        "the previous key after the volume dropped it",
+    );
 }
 
 /// The JWKS is re-read at least every JWKS_REREAD_INTERVAL even when the

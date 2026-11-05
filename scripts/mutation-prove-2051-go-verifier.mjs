@@ -32,8 +32,21 @@
  *       procedure parse, the default policy.
  *   I*, W*, M*  the caller identity reaching the handler (auth.go), New
  *       wiring the issuer (rpc.go), main reading it from the env (main.go).
+ *   K*  the JWKS as a pod really reads it (jwks.go): a ConfigMap volume's
+ *       jwks.json is a symlink into a generation directory the kubelet swaps
+ *       wholesale. A key set judged by the symlink itself reads as not mounted,
+ *       and a change watched on the symlink is not seen until the interval.
+ *       The in-place writes the other J* guards use cannot tell either apart.
+ *   R*  a key the JWKS dropped is no longer trusted (jwks.go): a reload that
+ *       accumulates keys keeps a retired key valid after the overlap.
+ *   B*  a user id forged into a request header (auth.go): it never stands in
+ *       for a missing token, and never replaces the token's subject.
  *   N*  negative control: a re-read interval shorter than the contract's
  *       bound is tolerated, so the suite must stay GREEN.
+ *
+ * KNEXT_PROVER_ROWS=K,B runs only the rows whose id starts with one of the
+ * comma-separated prefixes, while iterating on one family; the declared count
+ * follows the selection. Unset (the nightly lane), the whole table runs.
  *
  * A row counts only if the mutated tree COMPILES: before its test run, each
  * row must pass a build-only `go test -run ^$` over the same packages. A row
@@ -91,7 +104,7 @@ const goBuild = (pkgs) => ['go', 'test', '-count=1', '-run', '^$', ...pkgs];
 
 // Every replacement ends in '\n', so the harness puts its residue marker on a
 // line of its own rather than swallowing the line after the anchor.
-const MUTATIONS = [
+const ALL_MUTATIONS = [
   // ── P: parsing ────────────────────────────────────────────────────────────
   {
     id: 'P1',
@@ -484,6 +497,59 @@ const MUTATIONS = [
     anchor: '\t\tIssuer:   getenv(auth.EnvIssuer),\n',
     replacement: '\t\tIssuer:   getenv(auth.EnvAudience),\n',
   },
+  // ── K: the JWKS as a kubelet ConfigMap volume lays it out ─────────────────
+  // Every other J* row writes the file in place, where a symlink-blind verifier
+  // behaves exactly like a symlink-aware one. Only a test that mounts the
+  // verifier on jwks.json -> ..data/jwks.json, and swaps ..data, can tell them
+  // apart: K1 is a function that refuses every call on a real cluster while
+  // every in-place test stays green.
+  {
+    id: 'K1',
+    claim:
+      'the JWKS is judged by the symlink itself (a ConfigMap volume mounts jwks.json as one), so a mounted key set reads as not mounted',
+    subject: 'jwks',
+    anchor: '\tinfo, err := os.Stat(f.path)\n',
+    replacement: '\tinfo, err := os.Lstat(f.path)\n',
+  },
+  {
+    id: 'K2',
+    claim:
+      'the change check fingerprints the symlink, not the file the kubelet swaps in (a rotated key is not seen until the interval)',
+    subject: 'jwks',
+    anchor: '\tnow := f.now()\n',
+    replacement:
+      '\tnow := f.now()\n\tif link, lerr := os.Lstat(f.path); lerr == nil {\n\t\tinfo = link\n\t}\n',
+  },
+  // ── R: a key the JWKS dropped is no longer trusted ────────────────────────
+  // The "fails after the overlap" half of rotation. J6/J7 only catch a verifier
+  // that never looks again; a verifier that DOES reload but accumulates keys
+  // across reloads trusts a retired key forever, and only this row sees it.
+  {
+    id: 'R1',
+    claim:
+      'a reload keeps the keys of the last read (a key the JWKS dropped stays trusted after the overlap)',
+    subject: 'jwks',
+    anchor: '\tkeys, err := parseJWKS(data)\n',
+    replacement:
+      '\tkeys, err := parseJWKS(data)\n\tif err == nil {\n\t\tfor kid, old := range f.cached {\n\t\t\tif _, ok := keys[kid]; !ok {\n\t\t\t\tkeys[kid] = old\n\t\t\t}\n\t\t}\n\t}\n',
+  },
+  // ── B: an identity forged into a request header ───────────────────────────
+  {
+    id: 'B1',
+    claim: 'a user id in a request header stands in for a missing bearer token',
+    subject: 'auth',
+    anchor: '\t\t\ttoken, ok := bearerToken(info.RequestHeader().Get("Authorization"))\n',
+    replacement:
+      '\t\t\ttoken, ok := bearerToken(info.RequestHeader().Get("Authorization"))\n\t\t\tif user := info.RequestHeader().Get("X-User-Id"); !ok && user != "" {\n\t\t\t\treturn next(withCaller(ctx, Caller{Subject: user}), spec, stream)\n\t\t\t}\n',
+  },
+  {
+    id: 'B2',
+    claim: "a user id in a request header replaces the verified token's subject",
+    subject: 'auth',
+    anchor: '\t\t\treturn next(withCaller(ctx, caller), spec, stream)\n',
+    replacement:
+      '\t\t\tif user := info.RequestHeader().Get("X-User-Id"); user != "" {\n\t\t\t\tcaller.Subject = user\n\t\t\t}\n\t\t\treturn next(withCaller(ctx, caller), spec, stream)\n',
+  },
   // ── N: negative control ───────────────────────────────────────────────────
   {
     id: 'N1',
@@ -494,6 +560,22 @@ const MUTATIONS = [
     replacement: '\tJWKSRereadInterval = 5 * time.Second\n',
   },
 ].map((m) => ({ expect: 'red', pkgs: AUTH_PKG, ...m }));
+
+// Optional: run one family of rows while iterating, for example
+// KNEXT_PROVER_ROWS=K,B. A comma list of id prefixes. Unset, the whole table
+// runs, which is what the nightly lane does; the declared count follows the
+// selection so a partial run reports honestly.
+const ROW_FILTER = (process.env.KNEXT_PROVER_ROWS ?? '').split(',').filter(Boolean);
+const MUTATIONS =
+  ROW_FILTER.length === 0
+    ? ALL_MUTATIONS
+    : ALL_MUTATIONS.filter((m) => ROW_FILTER.some((prefix) => m.id.startsWith(prefix)));
+if (MUTATIONS.length === 0) {
+  console.error(
+    `mutation-prove-2051-go-verifier: KNEXT_PROVER_ROWS=${ROW_FILTER.join(',')} selects no row`,
+  );
+  process.exit(2);
+}
 
 // Returns the command's exit code, or null if go could not be run. Never exits
 // here: a caller holding a mutation must restore it first.

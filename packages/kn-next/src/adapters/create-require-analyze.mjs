@@ -1173,7 +1173,7 @@ function analyzeParsed(ast) {
  * @param {string[]} names local names of the imported require bindings
  * @returns {{ escapes: boolean, parseError: string | null }}
  */
-export function analyzeImportedRequire(src, names) {
+function analyzeImportedRequire(src, names) {
     if (names.length === 0) return { escapes: false, parseError: null };
     let ast;
     try {

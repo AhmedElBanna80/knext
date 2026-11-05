@@ -244,6 +244,54 @@ describe('PR mode keeps the no-network checks on the full tree', () => {
     expect(result.findings.map((f) => f.reason)).toEqual(['no-tag']);
   });
 
+  // The real shape in security/dockerfile-base-exclusions.json: a private,
+  // digest-only baseline, bound to an exact file AND digest.
+  const variantsExclusion = (digest: string, expires = '2999-01-01') => ({
+    file: 'scripts/bench-cold-start-phases/gke/variants/Dockerfile.variants',
+    covers: ['registry-resolution'],
+    justification: 'private digest-only baseline; the digest is the experiment control',
+    added: '2026-11-02',
+    expires,
+    digest,
+  });
+  const VARIANTS = 'scripts/bench-cold-start-phases/gke/variants/Dockerfile.variants';
+  const digestOnly = (digest: string) => `FROM us-docker.pkg.dev/p/r/bc-bun-turbopack@${digest}\n`;
+
+  it('an UNCHANGED excluded digest-only pin behaves as in full-tree mode: not a finding', async () => {
+    const r = repoWith({ [VARIANTS]: digestOnly(OLD), 'README.md': 'a\n' });
+    r.write('README.md', 'b\n');
+    r.commit();
+    const { api, calls } = fakeRegistry();
+    const exclusions = [variantsExclusion(OLD)];
+    const full = await verifyRepo(r.dir, { api, exclusions });
+    const pr = await verifyRepo(r.dir, { api, base: r.base, exclusions });
+    expect(full.findings).toEqual([]);
+    expect(pr.findings).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('an excluded digest-only pin is still exempt only for the EXACT digest it names', async () => {
+    const r = repoWith({ [VARIANTS]: digestOnly(OLD), 'README.md': 'a\n' });
+    r.write('README.md', 'b\n');
+    r.commit();
+    const exclusions = [variantsExclusion(NEW)]; // names a different digest
+    const { api } = fakeRegistry();
+    const pr = await verifyRepo(r.dir, { api, base: r.base, exclusions });
+    expect(pr.findings.map((f) => f.reason)).toEqual(['no-tag']);
+  });
+
+  it('an EXPIRED exclusion on an unchanged digest-only pin is a finding in PR mode too (offline)', async () => {
+    const r = repoWith({ [VARIANTS]: digestOnly(OLD), 'README.md': 'a\n' });
+    r.write('README.md', 'b\n');
+    r.commit();
+    const exclusions = [variantsExclusion(OLD, '2020-01-01')];
+    const { api } = fakeRegistry();
+    const full = await verifyRepo(r.dir, { api, exclusions });
+    const pr = await verifyRepo(r.dir, { api, base: r.base, exclusions });
+    expect(full.findings.map((f) => f.reason)).toEqual(['no-tag']);
+    expect(pr.findings.map((f) => f.reason)).toEqual(['no-tag']);
+  });
+
   it('still applies a dated registry-resolution exclusion to a changed pin', async () => {
     const r = repoWith({ 'svc/Dockerfile': docker(OLD) });
     r.write('svc/Dockerfile', docker(NEW));

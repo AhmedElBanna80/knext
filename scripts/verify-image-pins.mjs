@@ -398,13 +398,9 @@ export async function verifyRepo(
   }
   let skipped = 0;
   for (const pin of pins) {
-    if (baseline && (baseline.unchangedFiles.has(pin.file) || baseline.keys.has(pinKey(pin)))) {
-      // Unchanged by this PR: upstream drift is the nightly's to report. The
-      // check that needs no network (a digest-only reference) still runs.
-      if (!pin.tag) findings.push(await verifyImagePin(pin, { api }));
-      else skipped++;
-      continue;
-    }
+    // An unexpired, dated, file+digest-bound exclusion applies in BOTH scopes,
+    // before anything else: a PR run must treat an unchanged excluded pin exactly
+    // as the full-tree run does for the checks that need no network.
     if (
       dockerfiles.includes(pin.file) &&
       isExcluded(
@@ -414,6 +410,13 @@ export async function verifyRepo(
         today,
       )
     ) {
+      continue;
+    }
+    if (baseline && (baseline.unchangedFiles.has(pin.file) || baseline.keys.has(pinKey(pin)))) {
+      // Unchanged by this PR: upstream drift is the nightly's to report. The
+      // check that needs no network (a digest-only reference) still runs.
+      if (!pin.tag) findings.push(await verifyImagePin(pin, { api }));
+      else skipped++;
       continue;
     }
     const finding = await verifyImagePin(pin, { api });

@@ -524,8 +524,9 @@ One computed name is exempt: `ioredis`, assembled as `['io', 'redis'].join('')`.
 it that way on purpose so no bundler follows it, and its Redis client never reaches that load under Bun,
 which uses its built-in Redis client. A strict build does not fail for it, and the `knext build` log
 names it as "deliberately not bundled" when the server output has the form the build looks for: the
-vinext build, and a standalone build whose bundler keeps `createRequire(import.meta.url)`. A webpack
-standalone build rewrites that call, so the build does not name an `ioredis` load there. The exemption is
+vinext build, a standalone build whose bundler keeps `createRequire(import.meta.url)`, and a webpack
+standalone build, which rewrites that call to `createRequire("file:///...")("ioredis")` (the build
+recognises that exact shape: a `file:` URL and the literal name `ioredis`). The exemption is
 by name and applies wherever the build finds that load, so it does not check that your own code guards
 it. The binary would throw if that code path ran without the package beside it. Any other computed
 name, including one assembled from string literals, is a non-literal require and fails a strict build.

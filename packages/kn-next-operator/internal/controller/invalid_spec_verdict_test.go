@@ -98,7 +98,11 @@ func TestComputeStatusVerdict_InvalidSpecWithNilError(t *testing.T) {
 	app := verdictApp()
 	v := computeStatusVerdict(app, nil, databaseCheckState{}, revisionCheck{}, imageCacheState{},
 		netpolEnforcementState{}, envMapCollisionReport{}, privateExposureState{}, podCreationState{},
-		time.Now(), withInvalidSpec(nil))
+		time.Now(), withInvalidSpec(nil), func(x *verdictExtras) {
+			// Set the flag with a nil error directly: the early return must key on the
+			// flag, so reverting it to `invalidSpec != nil` falls through and panics.
+			*x = verdictExtras{invalidSpecSet: true}
+		})
 
 	if got := conditionTypes(v); len(got) != 2 || got[0] != ConditionDegraded || got[1] != ConditionReady {
 		t.Fatalf("conditions = %v, want [Degraded Ready]", got)

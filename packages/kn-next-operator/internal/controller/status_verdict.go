@@ -165,12 +165,7 @@ var errNilInvalidSpec = errors.New("spec rejected by validation")
 // spec is decidable from the spec alone, so no observed-state input (ksvc,
 // database, revision, ...) is consulted: the app was never reconciled this pass.
 func withInvalidSpec(err error) verdictOption {
-	return func(x *verdictExtras) {
-		if err == nil {
-			err = errNilInvalidSpec
-		}
-		x.invalidSpecSet, x.invalidSpec = true, err
-	}
+	return func(x *verdictExtras) { x.invalidSpecSet, x.invalidSpec = true, err }
 }
 
 // invalidSpecEventReason names the cause on the Warning event. An image that fails
@@ -190,6 +185,9 @@ func invalidSpecEventReason(app *appsv1alpha1.NextApp) string {
 // rejected pass, as it always was; the #98 no-op guard in applyStatusVerdict keeps
 // the unchanged status from being rewritten.
 func invalidSpecVerdict(app *appsv1alpha1.NextApp, err error) statusVerdict {
+	if err == nil {
+		err = errNilInvalidSpec
+	}
 	return statusVerdict{
 		conditions: []metav1.Condition{
 			{

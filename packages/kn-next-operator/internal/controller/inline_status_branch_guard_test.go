@@ -36,57 +36,104 @@ const dynamicKeyPart = "<dynamic>"
 
 // statusBranchScan is what scanStatusBranches reports.
 type statusBranchScan struct {
-	offenders      []string
-	inApply        int  // SetStatusCondition calls inside applyStatusVerdict
-	reachesVerdict bool // the validation branch calls computeStatusVerdict
-	sawValidation  bool // the validation branch exists in nextapp_controller.go
-	reconcileEvent map[string]int
+	offenders       []string
+	reachesVerdict  bool           // the validation branch calls computeStatusVerdict
+	sawValidation   bool           // the validation branch exists in nextapp_controller.go
+	events          map[string]int // "Method|Reason|format" -> occurrences, NextApp reconciler methods
+	conditionWrites map[string]int // "file:func" -> SetStatusCondition occurrences
+}
+
+// sanctioned is an allowlist entry: the exact number of occurrences permitted and why.
+type sanctioned struct {
+	count  int
+	reason string
 }
 
 // sanctionedConditionWriters are the only functions that may call
-// SetStatusCondition, keyed "file:func". Each is the single writer of ONE
-// kind's verdict; a write anywhere else is an inline status branch.
-var sanctionedConditionWriters = map[string]string{
-	"nextapp_controller.go:applyStatusVerdict":          "the single writer of a NextApp verdict",
-	"backendservice_controller.go:applyFunctionVerdict": "the single writer of a BackendService verdict (a different kind)",
-	"platform_controller.go:Reconcile":                  "KnextPlatform status (a different kind) is a copy of its computed desired state",
+// SetStatusCondition, keyed "file:func", with the EXACT number of calls each may
+// hold (a second write in an exempted function reds). Each is the single writer of
+// ONE kind's verdict; a write anywhere else is an inline status branch.
+var sanctionedConditionWriters = map[string]sanctioned{
+	"nextapp_controller.go:applyStatusVerdict":          {1, "the single writer of a NextApp verdict"},
+	"backendservice_controller.go:applyFunctionVerdict": {1, "the single writer of a BackendService verdict (a different kind)"},
+	"platform_controller.go:Reconcile":                  {1, "KnextPlatform status (a different kind) is a copy of its computed desired state"},
 }
 
-// sanctionedReconcileEvents are the inline emitEvent calls that already sat in
-// NextApp Reconcile before this ratchet, keyed "Reason|message format". Each is a
-// hard-error path (the step's error is also returned, which drives the backoff and
-// precedes the verdict), so it cannot move into the verdict without changing the
-// observable events. A NEW inline event in Reconcile is not in this map and reds;
-// the right home for a new one is computeStatusVerdict.
-var sanctionedReconcileEvents = map[string]string{
-	"ReasonReconcileFailed|Failed to reconcile ServiceAccount: %s":       "step error: returned, precedes the verdict",
-	"ReasonReconcileFailed|Failed to reconcile the zone signing key: %s": "step error: returned, precedes the verdict",
-	"ReasonReconcileFailed|Failed to reconcile Knative Service: %s":      "step error: returned, precedes the verdict",
-	"ReasonReconcileFailed|Failed to reconcile NetworkPolicy: %s":        "step error: returned, precedes the verdict",
-	"ReasonReconcileFailed|Failed to reconcile KafkaSource: %s":          "step error: returned, precedes the verdict",
-	"ReasonReconciled|NextApp reconciled successfully (image %s)":        "success event after the verdict is applied; not a status roll-up",
+const (
+	stepErrorWhy = "step error: returned, precedes the verdict"
+	envWarnWhy   = "user-env warning, not a status roll-up"
+	cleanupWhy   = "finalizer best-effort cleanup warning"
+)
+
+// sanctionedNextAppEvents are the event emissions that already sat in the
+// NextApp reconciler's methods before this ratchet, keyed
+// "Method|Reason|message format" with the exact count. The Reconcile
+// ReconcileFailed entries are hard-error paths (the step's error is also returned,
+// which drives the backoff and precedes the verdict), so they cannot move into the
+// verdict without changing the observable events. A NEW event in any
+// *NextAppReconciler method is not in this map and reds; the right home for a new
+// status event is computeStatusVerdict.
+var sanctionedNextAppEvents = map[string]sanctioned{
+	"Reconcile|ReasonReconcileFailed|Failed to reconcile ServiceAccount: %s":                                                         {1, stepErrorWhy},
+	"Reconcile|ReasonReconcileFailed|Failed to reconcile the zone signing key: %s":                                                   {1, stepErrorWhy},
+	"Reconcile|ReasonReconcileFailed|Failed to reconcile Knative Service: %s":                                                        {1, stepErrorWhy},
+	"Reconcile|ReasonReconcileFailed|Failed to reconcile NetworkPolicy: %s":                                                          {1, stepErrorWhy},
+	"Reconcile|ReasonReconcileFailed|Failed to reconcile KafkaSource: %s":                                                            {1, stepErrorWhy},
+	"Reconcile|ReasonReconciled|NextApp reconciled successfully (image %s)":                                                          {1, "success event after the verdict is applied; not a status roll-up"},
+	"applyStatusVerdict|reason|<dynamic>":                                                                                            {1, "the verdict path emitting the verdict's own events"},
+	"emitEvent|reason|<dynamic>":                                                                                                     {1, "the Recorder wrapper itself"},
+	"appendUserEnv|ReasonEnvVarIgnored|spec.env[%s] ignored: the %s* namespace is reserved by the operator (set spec.cdn instead)":   {1, envWarnWhy},
+	"appendUserEnv|ReasonEnvVarIgnored|spec.env[%s] ignored: name is reserved/managed by %s":                                         {1, envWarnWhy},
+	"warnDatabaseEnvOverride|ReasonEnvVarIgnored|spec.secrets.envMap[%s] (secret %q key %q) ignored: %s is managed by spec.database": {1, envWarnWhy},
+	"cleanupExternalState|ReasonCleanupFailed|Object-store cleanup failed (best-effort, proceeding): ":                               {1, cleanupWhy},
+	"cleanupExternalState|ReasonCleanupFailed|Redis cleanup failed (best-effort, proceeding): ":                                      {1, cleanupWhy},
 }
 
-// eventKey names an emitEvent call by its reason and message format literal.
-func eventKey(call *ast.CallExpr) string {
-	if len(call.Args) < 4 {
-		return "<unparseable>"
+// eventCallArgs maps each Recorder-style emitter to the index of its reason
+// argument; the format/message follows it. Recorder.Event/Eventf and the
+// reconciler's emitEvent take (obj, type, reason, msg, ...); AnnotatedEventf takes
+// (obj, annotations, type, reason, fmt, ...), so everything shifts by one.
+var eventCallArgs = map[string]int{
+	"emitEvent":       2,
+	"Event":           2,
+	"Eventf":          2,
+	"AnnotatedEventf": 3,
+}
+
+// eventKey names an event call by its enclosing method, reason and message format.
+func eventKey(method, name string, call *ast.CallExpr) string {
+	ri := eventCallArgs[name]
+	if len(call.Args) <= ri+1 {
+		return method + "|<unparseable>"
 	}
 	reason := dynamicKeyPart
-	switch r := call.Args[2].(type) {
+	switch r := call.Args[ri].(type) {
 	case *ast.Ident:
 		reason = r.Name
 	case *ast.SelectorExpr:
 		reason = r.Sel.Name
 	}
 	msg := dynamicKeyPart
-	ast.Inspect(call.Args[3], func(n ast.Node) bool {
+	ast.Inspect(call.Args[ri+1], func(n ast.Node) bool {
 		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING && msg == dynamicKeyPart {
 			msg = strings.Trim(lit.Value, "\"")
 		}
 		return true
 	})
-	return reason + "|" + msg
+	return method + "|" + reason + "|" + msg
+}
+
+// isNextAppReconcilerMethod reports whether fn has a *NextAppReconciler receiver.
+func isNextAppReconcilerMethod(fn *ast.FuncDecl) bool {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return false
+	}
+	star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	id, ok := star.X.(*ast.Ident)
+	return ok && id.Name == "NextAppReconciler"
 }
 
 // findValidationBranch locates the body of the
@@ -115,9 +162,11 @@ func findValidationBranch(f *ast.File) *ast.BlockStmt {
 }
 
 // scanStatusBranches scans the given non-test sources (name -> content).
+// It is per-function LEXICAL, not a call graph: an event or condition write is
+// attributed to the function whose body contains it.
 func scanStatusBranches(t *testing.T, files map[string]string) statusBranchScan {
 	t.Helper()
-	res := statusBranchScan{reconcileEvent: map[string]int{}}
+	res := statusBranchScan{events: map[string]int{}, conditionWrites: map[string]int{}}
 	fset := token.NewFileSet()
 	for file, src := range files {
 		f, err := parser.ParseFile(fset, file, src, 0)
@@ -137,6 +186,7 @@ func scanStatusBranches(t *testing.T, files map[string]string) statusBranchScan 
 			if !ok || fn.Body == nil {
 				continue
 			}
+			nextAppMethod := isNextAppReconcilerMethod(fn)
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -150,29 +200,32 @@ func scanStatusBranches(t *testing.T, files map[string]string) statusBranchScan 
 					name = fun.Name
 				}
 				line := fset.Position(call.Pos()).Line
-				isNextAppReconcile := file == nextAppControllerFile && fn.Name.Name == lcReconcile
 
 				if name == setStatusConditionName {
 					key := file + ":" + fn.Name.Name
+					res.conditionWrites[key]++
 					if _, ok := sanctionedConditionWriters[key]; !ok {
 						res.offenders = append(res.offenders, fmt.Sprintf(
 							"%s:%d — SetStatusCondition in %s() is an inline status branch", file, line, fn.Name.Name))
-					} else if key == nextAppControllerFile+":applyStatusVerdict" {
-						res.inApply++
 					}
 				}
-				if !isNextAppReconcile {
+				if !nextAppMethod {
 					return true
 				}
-				if name == "emitEvent" || name == "Event" {
-					k := eventKey(call)
-					res.reconcileEvent[k]++
-					if _, ok := sanctionedReconcileEvents[k]; !ok || inValidation(call.Pos()) {
+				if _, isEvent := eventCallArgs[name]; isEvent {
+					k := eventKey(fn.Name.Name, name, call)
+					res.events[k]++
+					if inValidation(call.Pos()) {
 						res.offenders = append(res.offenders, fmt.Sprintf(
-							"%s:%d — inline %s %q in Reconcile; the outcome belongs in the verdict", file, line, name, k))
+							"%s:%d — event %q in the spec-validation branch of Reconcile; the outcome belongs in the verdict",
+							file, line, k))
+					} else if _, ok := sanctionedNextAppEvents[k]; !ok {
+						res.offenders = append(res.offenders, fmt.Sprintf(
+							"%s:%d — unsanctioned event %q in a NextApp reconciler method; the outcome belongs in the verdict",
+							file, line, k))
 					}
 				}
-				if inValidation(call.Pos()) {
+				if fn.Name.Name == lcReconcile && file == nextAppControllerFile && inValidation(call.Pos()) {
 					switch name {
 					case "computeStatusVerdict":
 						res.reachesVerdict = true
@@ -184,6 +237,19 @@ func scanStatusBranches(t *testing.T, files map[string]string) statusBranchScan 
 				}
 				return true
 			})
+		}
+	}
+	// Exact counts: a second write/emission inside an exempted function reds.
+	for k, want := range sanctionedConditionWriters {
+		if got := res.conditionWrites[k]; got > want.count {
+			res.offenders = append(res.offenders, fmt.Sprintf(
+				"%s has %d SetStatusCondition calls, only %d sanctioned (%s)", k, got, want.count, want.reason))
+		}
+	}
+	for k, want := range sanctionedNextAppEvents {
+		if got := res.events[k]; got > want.count {
+			res.offenders = append(res.offenders, fmt.Sprintf(
+				"event %q occurs %d times, only %d sanctioned (%s)", k, got, want.count, want.reason))
 		}
 	}
 	return res
@@ -213,14 +279,15 @@ func readControllerSources(t *testing.T) map[string]string {
 // The hard rule (`.claude/rules/architecture.md`) is absolute: honest-status
 // conditions/events/requeues go in computeStatusVerdict, never as branches in
 // Reconcile. This SCANS rather than enumerating, over EVERY non-test .go file in
-// the package:
+// the package. It is per-function LEXICAL, not a call graph: a call is attributed
+// to the function whose body contains it, so an emission reached only through a
+// free function (no *NextAppReconciler receiver) is out of scope.
 //
 //   - every SetStatusCondition call must sit in a sanctioned verdict writer
-//     (sanctionedConditionWriters, with reasons) — a call in Reconcile or in a
-//     helper in any file is a new inline branch;
-//   - every emitEvent in NextApp Reconcile must be in the sanctioned list
-//     (sanctionedReconcileEvents, with reasons) — a new inline event reds, and the
-//     allowlist must be exact (no stale entries);
+//     (sanctionedConditionWriters, with reasons and exact counts);
+//   - every Event/Eventf/AnnotatedEventf/emitEvent in ANY *NextAppReconciler
+//     method must be in sanctionedNextAppEvents (reason + format, exact counts) —
+//     a new event, in Reconcile or in a helper method, reds;
 //   - the spec-validation branch must reach the verdict and write nothing itself.
 //
 // Both halves are asserted: the negative (no stray writes) and the positive (the
@@ -237,18 +304,20 @@ func TestNoInlineStatusBranchesInReconcile(t *testing.T) {
 		t.Fatalf("could not find the spec-validation branch in %s — this guard is only "+
 			"meaningful while that branch exists; if it moved, move the guard with it", nextAppControllerFile)
 	}
-	if res.inApply == 0 {
-		t.Errorf("no SetStatusCondition inside applyStatusVerdict — the verdict path is " +
-			"supposed to be the only writer of conditions, so the scan is proving nothing")
-	}
 	if !res.reachesVerdict {
 		t.Errorf("the spec-validation branch no longer calls computeStatusVerdict — the " +
 			"invalid-spec outcome must come from the verdict, not be dropped")
 	}
-	for k := range sanctionedReconcileEvents {
-		if res.reconcileEvent[k] != 1 {
-			t.Errorf("sanctioned inline event %q occurs %d times in Reconcile, want exactly 1 — "+
-				"remove or fix the stale allowlist entry", k, res.reconcileEvent[k])
+	for k, want := range sanctionedConditionWriters {
+		if res.conditionWrites[k] != want.count {
+			t.Errorf("sanctioned condition writer %q has %d SetStatusCondition calls, want exactly %d — "+
+				"fix the stale allowlist entry", k, res.conditionWrites[k], want.count)
+		}
+	}
+	for k, want := range sanctionedNextAppEvents {
+		if res.events[k] != want.count {
+			t.Errorf("sanctioned event %q occurs %d times, want exactly %d — "+
+				"remove or fix the stale allowlist entry", k, res.events[k], want.count)
 		}
 	}
 }
@@ -257,48 +326,78 @@ func TestNoInlineStatusBranchesInReconcile(t *testing.T) {
 // the scan (not only in the controller) turns a test red.
 func TestScanStatusBranches_Bites(t *testing.T) {
 	const base = `package controller
-func (r *R) Reconcile() {
+func (r *NextAppReconciler) Reconcile() {
 	if err := validation.ValidateNextAppSpec(x); err != nil {
 		computeStatusVerdict()
 	}
 %s}
-func (r *R) applyStatusVerdict() { apimeta.SetStatusCondition(a, b) }
-`
-	clean := fmt.Sprintf(base, "")
+func (r *NextAppReconciler) applyStatusVerdict() { apimeta.SetStatusCondition(a, b)%s }
+%s`
+	mk := func(inReconcile, inApply, extra string) string {
+		return fmt.Sprintf(base, inReconcile, inApply, extra)
+	}
+	clean := mk("", "", "")
+	scan := func(t *testing.T, src string, more ...string) statusBranchScan {
+		files := map[string]string{nextAppControllerFile: src}
+		for i, m := range more {
+			files[fmt.Sprintf("extra_%d.go", i)] = m
+		}
+		return scanStatusBranches(t, files)
+	}
+	wantOne := func(t *testing.T, res statusBranchScan, substr string) {
+		t.Helper()
+		if len(res.offenders) != 1 || !strings.Contains(res.offenders[0], substr) {
+			t.Fatalf("offenders = %v, want exactly one containing %q", res.offenders, substr)
+		}
+	}
 
 	t.Run("clean", func(t *testing.T) {
-		res := scanStatusBranches(t, map[string]string{nextAppControllerFile: clean})
-		if len(res.offenders) != 0 || !res.reachesVerdict || !res.sawValidation || res.inApply != 1 {
+		res := scan(t, clean)
+		if len(res.offenders) != 0 || !res.reachesVerdict || !res.sawValidation {
 			t.Fatalf("clean source flagged: %+v", res)
 		}
 	})
-	t.Run("new inline event in Reconcile", func(t *testing.T) {
-		src := fmt.Sprintf(base, "\tr.emitEvent(a, w, ReasonReconcileFailed, fmt.Sprintf(\"brand new %s\", e))\n")
-		res := scanStatusBranches(t, map[string]string{nextAppControllerFile: src})
-		if len(res.offenders) != 1 || !strings.Contains(res.offenders[0], "brand new") {
-			t.Fatalf("offenders = %v, want exactly the new event", res.offenders)
+	t.Run("new inline emitEvent in Reconcile", func(t *testing.T) {
+		wantOne(t, scan(t, mk("\tr.emitEvent(a, w, ReasonReconcileFailed, fmt.Sprintf(\"brand new %s\", e))\n", "", "")), "brand new")
+	})
+	t.Run("new inline Event in Reconcile", func(t *testing.T) {
+		wantOne(t, scan(t, mk("\tr.Recorder.Event(a, w, ReasonReconcileFailed, \"brand new event\")\n", "", "")), "brand new event")
+	})
+	t.Run("new inline Eventf in Reconcile", func(t *testing.T) {
+		wantOne(t, scan(t, mk("\tr.Recorder.Eventf(a, w, ReasonReconcileFailed, \"brand new eventf %s\", e)\n", "", "")), "brand new eventf")
+	})
+	t.Run("new inline AnnotatedEventf in Reconcile (reason and format shift by one)", func(t *testing.T) {
+		res := scan(t, mk("\tr.Recorder.AnnotatedEventf(a, ann, w, ReasonReconcileFailed, \"brand new annotated %s\", e)\n", "", ""))
+		wantOne(t, res, "Reconcile|ReasonReconcileFailed|brand new annotated %s")
+	})
+	t.Run("event in a helper method of the NextApp reconciler", func(t *testing.T) {
+		helper := "func (r *NextAppReconciler) helper() { r.emitEvent(a, w, ReasonReconcileFailed, \"from helper\") }\n"
+		wantOne(t, scan(t, mk("", "", helper)), "helper|ReasonReconcileFailed|from helper")
+	})
+	t.Run("event in another reconciler's method is out of scope", func(t *testing.T) {
+		other := "func (r *OtherReconciler) helper() { r.emitEvent(a, w, ReasonReconcileFailed, \"other kind\") }\n"
+		if res := scan(t, mk("", "", other)); len(res.offenders) != 0 {
+			t.Fatalf("offenders = %v, want none", res.offenders)
 		}
 	})
 	t.Run("sanctioned event moved into the validation branch", func(t *testing.T) {
 		src := strings.Replace(clean, "computeStatusVerdict()",
 			"computeStatusVerdict()\n\t\tr.emitEvent(a, w, ReasonReconciled, fmt.Sprintf(\"NextApp reconciled successfully (image %s)\", i))", 1)
-		res := scanStatusBranches(t, map[string]string{nextAppControllerFile: src})
-		if len(res.offenders) != 1 {
-			t.Fatalf("offenders = %v, want the event in the validation branch", res.offenders)
-		}
+		wantOne(t, scan(t, src), "spec-validation branch")
 	})
 	t.Run("condition write in a helper in another file", func(t *testing.T) {
 		other := "package controller\nfunc helper() { apimeta.SetStatusCondition(a, b) }\n"
-		res := scanStatusBranches(t, map[string]string{nextAppControllerFile: clean, "some_helper.go": other})
-		if len(res.offenders) != 1 || !strings.Contains(res.offenders[0], "some_helper.go") {
-			t.Fatalf("offenders = %v, want the helper write", res.offenders)
-		}
+		wantOne(t, scan(t, clean, other), "extra_0.go")
 	})
 	t.Run("condition write in Reconcile", func(t *testing.T) {
-		src := fmt.Sprintf(base, "\tapimeta.SetStatusCondition(a, b)\n")
-		res := scanStatusBranches(t, map[string]string{nextAppControllerFile: src})
-		if len(res.offenders) != 1 {
-			t.Fatalf("offenders = %v, want the Reconcile write", res.offenders)
-		}
+		wantOne(t, scan(t, mk("\tapimeta.SetStatusCondition(a, b)\n", "", "")), "Reconcile()")
+	})
+	t.Run("second condition write inside a sanctioned writer", func(t *testing.T) {
+		wantOne(t, scan(t, mk("", "; apimeta.SetStatusCondition(a, c)", "")), "only 1 sanctioned")
+	})
+	t.Run("second condition write inside the exempted platform Reconcile", func(t *testing.T) {
+		plat := "package controller\nfunc (r *KnextPlatformReconciler) Reconcile() { apimeta.SetStatusCondition(a, b); apimeta.SetStatusCondition(a, c) }\n"
+		res := scanStatusBranches(t, map[string]string{nextAppControllerFile: clean, "platform_controller.go": plat})
+		wantOne(t, res, "platform_controller.go:Reconcile has 2")
 	})
 }

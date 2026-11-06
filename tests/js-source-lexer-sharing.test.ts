@@ -46,11 +46,29 @@ const HAND_ROLLED_COMMENT_SCAN = /indexOf\(\s*(['"])\*\/\1/;
 const OWN_STRIP_DEFINITION = /function\s+stripComments\s*\(/;
 /**
  * A regex-literal comment stripper: a `replace`/`match`/`split` call whose regex
- * literal contains an escaped comment opener (`\/\*` for block, `\/\/` for line).
+ * literal is comment-shaped, i.e. either
+ *   - block form: `\/\*` followed later by `\*\/`, or by the classic
+ *     `\*+ ... \/` tail (`/\/\*[^*]*\*+([^/*][^*]*\*+)*\//g`); or
+ *   - line form: `\/\/` (optionally `\s*`, optionally a capture group) followed by
+ *     `.*` / `.+` / `.*?` anchored to the end of the regex (or `$`, or `\n`), or by
+ *     a negated class excluding `\n`/`\r` (`[^\n]*`, `[^\r\n]*`).
+ * A `\/\/` followed by more pattern is a URL/path, not a comment:
+ * `/https?:\/\//`, `/^\/\/cdn/`, `/https:\/\/.*\.example/`, `/\/\/.+\.com/`.
  * The `indexOf('*\/')` hallmark above cannot see these.
+ *
+ * Not covered (known evasions of this tripwire): `new RegExp('...')` built from
+ * strings, a regex held in a const and passed by name, and character-class
+ * spellings such as `/[/][*]/`. The real-tree scan below covers only the MIGRATED
+ * files; the shared-lexer import test is the real gate.
  */
-const REGEX_COMMENT_STRIPPER =
-  /\.(?:replace(?:All)?|match(?:All)?|split)\(\s*\/(?:[^/\n\\]|\\.)*?\\\/(?:\\\*|\\\/)/;
+const RE_BODY = String.raw`(?:[^/\n\\\[]|\\.|\[(?:[^\]\\\n]|\\.)*\])`;
+const RE_BLOCK = String.raw`\\\/\\\*${RE_BODY}*?\\\*(?:\\\/|\+${RE_BODY}*?\\\/)`;
+const RE_ANY = String.raw`\.[*+]\??`;
+const RE_NEG_NL = String.raw`\[\^(?:[^\]\\\n]|\\.)*\\[nr](?:[^\]\\\n]|\\.)*\]\*`;
+const RE_LINE = String.raw`\\\/\\\/(?:\\s\*)?\(?(?:${RE_ANY}(?=\)?(?:\$|\\n)?\/)|${RE_NEG_NL})`;
+const REGEX_COMMENT_STRIPPER = new RegExp(
+  String.raw`\.(?:replace(?:All)?|match(?:All)?|split)\(\s*\/${RE_BODY}*?(?:${RE_BLOCK}|${RE_LINE})`,
+);
 const SHARED_IMPORT =
   /import\s*\{[^}]*\bstripComments\b[^}]*\}\s*from\s*(['"])[^'"]*js-source-lexer\.mjs\1/;
 
@@ -82,6 +100,12 @@ describe('regex comment stripper detector (both halves)', () => {
     'const t = s.replace(/\\/\\/.*$/gm, "");',
     'const t = s.split(/\\/\\/.*\\n/);',
     'const m = s.match(/\\/\\*.*?\\*\\//gs);',
+    'const t = s.replace(/\\/\\/[^\\r\\n]*/g, "");',
+    'const t = s.replace(/\\/\\/[^\\n\\r]*/g, "");',
+    'const t = s.replace(/\\/\\/(.*)$/gm, "");',
+    'const t = s.replace(/\\/\\/\\s*.*$/gm, "");',
+    'const t = s.replace(/\\/\\/.*?$/gm, "");',
+    'const t = s.replace(/\\/\\*[^*]*\\*+([^/*][^*]*\\*+)*\\//g, "");',
   ];
   for (const fixture of bad) {
     it(`flags ${fixture}`, () => {
@@ -92,5 +116,14 @@ describe('regex comment stripper detector (both halves)', () => {
   it('does not flag the shared-lexer call or an unrelated regex', () => {
     expect('const t = stripComments(src);').not.toMatch(REGEX_COMMENT_STRIPPER);
     expect('const t = s.replace(/foo\\/bar/g, "");').not.toMatch(REGEX_COMMENT_STRIPPER);
+  });
+
+  it('does not flag URL/path regexes that merely contain //', () => {
+    expect("const t = s.replace(/https?:\\/\\//, '');").not.toMatch(REGEX_COMMENT_STRIPPER);
+    expect('const t = s.match(/^\\/\\/cdn/);').not.toMatch(REGEX_COMMENT_STRIPPER);
+    expect('const t = s.replace(/https:\\/\\/.*\\.example/, "");').not.toMatch(
+      REGEX_COMMENT_STRIPPER,
+    );
+    expect('const t = s.match(/\\/\\/.+\\.com/);').not.toMatch(REGEX_COMMENT_STRIPPER);
   });
 });

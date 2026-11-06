@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -145,17 +146,26 @@ type verdictExtras struct {
 	platform *platformDefaultsState
 	bindings *backendBindingsState
 	zoneKey  *zoneSigningKeyState
-	// invalidSpec, when non-nil, is the error the spec-validation gate rejected the
-	// app with. It selects the invalid-spec outcome (invalidSpecVerdict) instead of
+	// invalidSpecSet records that withInvalidSpec was supplied, independent of the
+	// error's value: the early return keys on this flag so a nil error cannot fall
+	// through to the observed-state roll-up.
+	invalidSpecSet bool
+	// invalidSpec is the error the spec-validation gate rejected the app with
+	// (meaningful when invalidSpecSet). It selects the invalid-spec outcome
+	// (invalidSpecVerdict) instead of
 	// the observed-state roll-up.
 	invalidSpec error
 }
+
+// errNilInvalidSpec stands in when withInvalidSpec is given a nil error, so the
+// rejected-spec outcome always has a message to carry.
+var errNilInvalidSpec = errors.New("spec rejected by validation")
 
 // withInvalidSpec supplies the spec-validation failure. The verdict for a rejected
 // spec is decidable from the spec alone, so no observed-state input (ksvc,
 // database, revision, ...) is consulted: the app was never reconciled this pass.
 func withInvalidSpec(err error) verdictOption {
-	return func(x *verdictExtras) { x.invalidSpec = err }
+	return func(x *verdictExtras) { x.invalidSpecSet, x.invalidSpec = true, err }
 }
 
 // invalidSpecEventReason names the cause on the Warning event. An image that fails
@@ -175,6 +185,9 @@ func invalidSpecEventReason(app *appsv1alpha1.NextApp) string {
 // rejected pass, as it always was; the #98 no-op guard in applyStatusVerdict keeps
 // the unchanged status from being rewritten.
 func invalidSpecVerdict(app *appsv1alpha1.NextApp, err error) statusVerdict {
+	if err == nil {
+		err = errNilInvalidSpec
+	}
 	return statusVerdict{
 		conditions: []metav1.Condition{
 			{
@@ -363,7 +376,7 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 
 	// A rejected spec is a precondition failure decided from the spec alone: the
 	// child state below was never observed, so it is not consulted.
-	if extras.invalidSpec != nil {
+	if extras.invalidSpecSet {
 		return invalidSpecVerdict(app, extras.invalidSpec)
 	}
 

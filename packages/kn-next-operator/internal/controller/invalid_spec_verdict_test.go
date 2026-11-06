@@ -90,3 +90,37 @@ func TestComputeStatusVerdict_NoInvalidSpecInputIsTheOrdinaryVerdict(t *testing.
 		}
 	}
 }
+
+// withInvalidSpec(nil) is still a rejected spec: the early return is keyed on the
+// option having been supplied, not on the error being non-nil, so a nil error can
+// never fall through to the observed-state roll-up (which dereferences the ksvc).
+func TestComputeStatusVerdict_InvalidSpecWithNilError(t *testing.T) {
+	t.Run("withInvalidSpec(nil)", func(t *testing.T) {
+		// Exercises the option itself: it must set the flag even for a nil error.
+		assertRejectedSpecVerdict(t, computeStatusVerdict(verdictApp(), nil, databaseCheckState{},
+			revisionCheck{}, imageCacheState{}, netpolEnforcementState{}, envMapCollisionReport{},
+			privateExposureState{}, podCreationState{}, time.Now(), withInvalidSpec(nil)))
+	})
+	t.Run("flag set with a nil error", func(t *testing.T) {
+		// Set the flag with a nil error directly: the early return must key on the
+		// flag, so reverting it to `invalidSpec != nil` falls through and panics.
+		assertRejectedSpecVerdict(t, computeStatusVerdict(verdictApp(), nil, databaseCheckState{},
+			revisionCheck{}, imageCacheState{}, netpolEnforcementState{}, envMapCollisionReport{},
+			privateExposureState{}, podCreationState{}, time.Now(), func(x *verdictExtras) {
+				*x = verdictExtras{invalidSpecSet: true}
+			}))
+	})
+}
+
+func assertRejectedSpecVerdict(t *testing.T, v statusVerdict) {
+	t.Helper()
+	if got := conditionTypes(v); len(got) != 2 || got[0] != ConditionDegraded || got[1] != ConditionReady {
+		t.Fatalf("conditions = %v, want [Degraded Ready]", got)
+	}
+	if d := findVerdictCondition(t, v, ConditionDegraded); d.Reason != lcInvalidSpec || d.Message == "" {
+		t.Errorf("Degraded = %+v, want InvalidSpec with a non-empty message", d)
+	}
+	if len(v.events) != 1 || v.events[0].eventType != corev1.EventTypeWarning {
+		t.Errorf("events = %+v, want one Warning", v.events)
+	}
+}

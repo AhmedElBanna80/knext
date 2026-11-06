@@ -141,6 +141,10 @@ const (
 const (
 	// ReasonInvalidImage marks a NextApp rejected for failing digest-pinning (e.g. :latest).
 	ReasonInvalidImage = "InvalidImage"
+	// ReasonInvalidSpec marks a NextApp rejected for any OTHER spec validation
+	// failure (resources, scaling, connection budget, ...). An image that fails
+	// digest pinning keeps ReasonInvalidImage.
+	ReasonInvalidSpec = "InvalidSpec"
 	// ReasonReconcileFailed marks a generic reconcile error (API error, child create/update failure).
 	ReasonReconcileFailed = "ReconcileFailed"
 	// ReasonReconciled marks a successful reconcile.
@@ -456,27 +460,14 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	gate := platformEffectiveGate(&nextApp, snap, eff)
 	if err := validation.ValidateNextAppSpecWithBudget(&nextApp.Spec, eff.connectionBudget); err != nil && gate.hold == holdNone {
 		logger.Error(err, "Rejecting NextApp: spec failed validation")
-		r.emitEvent(&nextApp, corev1.EventTypeWarning, ReasonInvalidImage,
-			fmt.Sprintf("Spec rejected: %s", err.Error()))
-		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
-			Type:               ConditionDegraded,
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: nextApp.Generation,
-			Reason:             lcInvalidSpec,
-			Message:            err.Error(),
-		})
-		apimeta.SetStatusCondition(&nextApp.Status.Conditions, metav1.Condition{
-			Type:               ConditionReady,
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: nextApp.Generation,
-			Reason:             lcInvalidSpec,
-			Message:            "Spec does not meet validation requirements",
-		})
-		// Only write when the status actually changed (#98 no-op guard) so a
-		// persistently-invalid CR does not hot-loop on its own status writes.
-		if !apiequality.Semantic.DeepEqual(observedStatus, &nextApp.Status) {
-			_ = r.Status().Update(ctx, &nextApp)
-		}
+		// The outcome (Degraded/Ready, the Warning event) is the verdict's: no
+		// observed-state input exists yet, so only the rejection is supplied.
+		verdict := computeStatusVerdict(&nextApp, nil, databaseCheckState{}, revisionCheck{}, imageCacheState{},
+			netpolEnforcementState{}, envMapCollisionReport{}, privateExposureState{}, podCreationState{}, time.Now(),
+			withInvalidSpec(err))
+		// The validation error, not a status-write failure, is what the caller needs;
+		// a failed write retries with the error's own backoff.
+		_ = r.applyStatusVerdict(ctx, &nextApp, observedStatus, verdict)
 		return ctrl.Result{}, err
 	}
 

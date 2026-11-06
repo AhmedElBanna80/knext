@@ -467,10 +467,10 @@ describe('docs-closure Trivy ignorefile is narrow, justified and expiring', () =
     expect(v[0].paths).toBeUndefined();
   });
 
-  it('expires on 2026-12-01 and carries a reachability statement', () => {
+  it('expires on 2026-12-21 and carries a reachability statement', () => {
     const v = (doc.vulnerabilities ?? [])[0];
     const exp = v.expired_at instanceof Date ? v.expired_at.toISOString() : String(v.expired_at);
-    expect(exp.startsWith('2026-12-01')).toBe(true);
+    expect(exp.startsWith('2026-12-21')).toBe(true);
     expect(v.statement ?? '').toMatch(/query-string/);
     expect(v.statement ?? '').toMatch(/minio/);
   });

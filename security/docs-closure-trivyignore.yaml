@@ -9,7 +9,7 @@ vulnerabilities:
   - id: CVE-2026-118664
     purls:
       - "pkg:npm/decode-uri-component@0.2.2"
-    expired_at: 2026-12-01
+    expired_at: 2026-12-21
     statement: >-
       decode-uri-component 0.2.2 (denial of service in percent-decoding; fixed
       only in 0.5.1) reaches the docs closure ONLY via @getknext/lib -> minio
@@ -17,7 +17,11 @@ vulnerabilities:
       the decode path (parse/extract) is never invoked, so no request or
       response bytes are decoded by this package. The bump is not possible:
       0.5.1 is ESM-only and breaks query-string 7's require(), and minio's
-      latest still pins query-string ^7.1.3. Added 2026-11-03, expires
-      2026-12-01. Re-check at expiry; drop this entry (do not renew) once
-      minio or query-string pulls a fixed version, and drop it immediately if
-      any code calls query-string.parse on untrusted input.
+      latest still pins query-string ^7.1.3. Added 2026-11-03, renewed
+      2026-11-06 to 2026-12-21 after re-checking: minio latest is 8.0.7 and
+      still pins query-string ^7.1.3, query-string latest 10.0.0 is ESM-only,
+      decode-uri-component 0.5.1 is still ESM-only, and a Trivy sbom scan of
+      the current docs closure still reports exactly this one HIGH without the
+      ignore and is clean with it. Re-check at expiry; drop this entry (do not
+      renew) once minio or query-string pulls a fixed version, and drop it
+      immediately if any code calls query-string.parse on untrusted input.

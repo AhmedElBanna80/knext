@@ -684,6 +684,8 @@ function credentialed(
   // #2756: google-github-actions/auth only mints a cloud credential, so it counts as a registry
   // login ONLY when the same job also uses a registry: `docker push`, a *.pkg.dev / gcr.io
   // image, or `gcloud auth configure-docker`. Alone it is not credentialed.
+  // Known gap: only the job's own steps are read, so a registry use inside a local composite
+  // action or a repo script does not make the auth step count.
   const jobSteps = Array.isArray(job.steps) ? (job.steps as Step[]) : [];
   const usesGcpRegistry = jobSteps.some((x) =>
     /\bdocker\s+push\b|\b[\w.-]*pkg\.dev\b|\bgcr\.io\b|\bgcloud\s+auth\s+configure-docker\b/.test(

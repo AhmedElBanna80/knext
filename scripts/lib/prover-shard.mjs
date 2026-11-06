@@ -65,11 +65,11 @@ export function parseShardSpec(spec) {
 export const PROVER_WEIGHT_MINUTES = Object.freeze({
   // MEASURED on hosted runners: run 39016841640 (all six legs, integration/v2) unless
   // noted. Minutes are wall-clock for the whole prover.
-  // 68 was MEASURED for 58 mutations (run 39016841640); it now declares 77, so this is
-  // that figure scaled by mutation count (68 x 77 / 58 = 90). A SCALED ESTIMATE, not a
-  // new hosted measurement: the spec also grew (126 -> 145 tests), so it likely
-  // under-states; re-measure on the next hosted run.
-  'scripts/mutation-prove-empty-dir-guard.mjs': 90,
+  // MEASURED at 77 mutations with two spec runs each: the 130-minute bound killed it on
+  // mutation 76 (runs 41851702194, 42049823853), ~51 s per spec run. It now runs the
+  // spec once per mutation plus one final re-check (79 runs), so ~70 minutes. A
+  // DERIVED figure from that measurement; re-measure on the next hosted run.
+  'scripts/mutation-prove-empty-dir-guard.mjs': 70,
   // 71 minutes on one runner (run 39016841640), but still on mutation 109 of 111
   // when a 100-minute bound killed it on another (run 39029215555).
   'scripts/mutation-prove-kind-manifest-apply-safety.mjs': 100,

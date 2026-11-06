@@ -180,11 +180,12 @@ function report(label, snap, anchor, replacement) {
     }
     recordMutation();
   } finally {
+    // restore() proves the file is byte-identical (sha256) or throws, so the
+    // spec is NOT re-run here: a per-mutation re-run doubled the prover's cost
+    // and pushed it past the nightly 7800 s bound (runs 41851702194,
+    // 42049823853). The single re-check after the last mutation below still
+    // fails the prover if a red run leaked residue into the later ones.
     restore(snap);
-  }
-  if (!specPasses()) {
-    console.error(`   FATAL: ${SPEC} did not go green again after restore`);
-    process.exit(1);
   }
 }
 
@@ -815,6 +816,15 @@ proveVinextBasePath(
   "process.env.NODE_ENV ??= 'production';",
   'void 0;',
 );
+
+// One green re-check after every mutation is restored. If a red run left
+// residue behind, every later mutation would have "gone red" for the wrong
+// reason; that residue keeps the spec red here, so the prover fails instead
+// of certifying those kills.
+if (!specPasses()) {
+  console.error(`FATAL: ${SPEC} did not go green again after the last restore`);
+  process.exit(1);
+}
 
 console.log(`\n${pass} caught, ${fail} undetected.`);
 if (fail > 0) {

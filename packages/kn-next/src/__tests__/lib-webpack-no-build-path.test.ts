@@ -204,7 +204,9 @@ describe("the loader still resolves ioredis at runtime (#2758)", () => {
         const empty = mkdtempSync(join(work, "cwd-"));
         const r = run(
             process.execPath,
-            ["-e", probeScript(chunkPath)],
+            // --no-install: Bun would otherwise auto-install a package it cannot
+            // find, which makes a broken anchor pass.
+            ["--no-install", "-e", probeScript(chunkPath)],
             empty,
             30_000,
         );
@@ -228,7 +230,9 @@ describe("the loader still resolves ioredis at runtime (#2758)", () => {
         const empty = mkdtempSync(join(work, "cwd-"));
         const r = run(
             process.execPath,
-            ["-e", distProbe(findLoaderChunk(dist))],
+            // --no-install: Bun would otherwise auto-install a package it cannot
+            // find, which makes a broken anchor pass.
+            ["--no-install", "-e", distProbe(findLoaderChunk(dist))],
             empty,
             30_000,
         );

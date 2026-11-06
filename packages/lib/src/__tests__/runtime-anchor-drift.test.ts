@@ -35,7 +35,13 @@ function logicSlice(code: string): string {
   expect(start).toBeGreaterThan(-1);
   expect(fnStart).toBeGreaterThan(start);
   const end = code.indexOf('\n}', fnStart) + 2;
-  return code.slice(start, end);
+  expect(end).toBeGreaterThan(fnStart);
+  const slice = code.slice(start, end);
+  // A found-but-truncated region would let the parity check pass vacuously.
+  for (const piece of ['BUN_VIRTUAL', 'process.cwd()', 'getFileName', 'prepareStackTrace']) {
+    expect(slice).toContain(piece);
+  }
+  return slice;
 }
 
 const transpiler = new Bun.Transpiler({ loader: 'ts' });

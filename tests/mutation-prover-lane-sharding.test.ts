@@ -1282,6 +1282,49 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
       }
     });
 
+    it('with the runner handed an AMBIENT tmpdir, only the provers own temp files are removed (#2777)', () => {
+      // The runner gets only a test-owned "ambient" TMPDIR (so the real /tmp is never at risk).
+      // A bystander appearing in that ambient dir while a prover runs must survive; the
+      // prover's own os.tmpdir() leftovers must not.
+      const ambient = mkdtempSync(join(tmpdir(), 'knext-lane-ambient-'));
+      const dir = makeTree({
+        'mutation-prove-a.mjs': `
+          import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { tmpdir } from 'node:os';
+          mkdirSync(join(process.env.AMBIENT_TMP, 'bystander-2777'));
+          const d = mkdtempSync(join(tmpdir(), 'own-leak-'));
+          writeFileSync(join(d, 'big.bin'), 'x');
+          writeFileSync(process.env.OWN_REC, d);
+          console.log('::prover-summary:: ' + JSON.stringify({ declared: 1, run: 1 }));`,
+      });
+      try {
+        writeFileSync(join(ambient, 'pre-existing.txt'), 'keep');
+        const rec = join(dir, 'own.txt');
+        const r = run(dir, [], {
+          TMPDIR: ambient,
+          KNEXT_LANE_CLEANUP: '1',
+          AMBIENT_TMP: ambient,
+          OWN_REC: rec,
+        });
+        expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+        expect(existsSync(rec), 'the prover did not run').toBe(true);
+        expect(existsSync(read(rec)), 'the prover own temp dir survived').toBe(false);
+        expect(
+          existsSync(join(ambient, 'bystander-2777')),
+          'the runner swept an ambient entry that is not its prover',
+        ).toBe(true);
+        expect(existsSync(join(ambient, 'pre-existing.txt'))).toBe(true);
+        expect(
+          readdirSync(ambient).filter((n) => n.startsWith('knext-lane-provers-')),
+          'the private dir was not removed at exit',
+        ).toHaveLength(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        rmSync(ambient, { recursive: true, force: true });
+      }
+    });
+
     it('temp entries a prover leaves are removed in CI; entries that pre-existed are kept', () => {
       const tmp = mkdtempSync(join(tmpdir(), 'knext-lane-tmp-'));
       writeFileSync(join(tmp, 'pre-existing.txt'), 'keep');

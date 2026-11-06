@@ -27,7 +27,7 @@
 // Flush: no explicit forceFlush across the process boundary; the batch processor
 // is set to a short schedule delay and the test awaits receipt (event-driven).
 
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from 'bun:test';
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
@@ -41,6 +41,9 @@ const FIXTURE = join(HERE, '__fixtures__', 'traceparent-app');
 const NEXT_BIN = join(HERE, 'node_modules', 'next', 'dist', 'bin', 'next');
 const BUILD_TIMEOUT_MS = 150_000;
 const READY_TIMEOUT_MS = 60_000;
+// Export waits are event-driven but bounded (waitForSpans: 30 s); let that bound,
+// not bun's 5 s default, be what fails a missing export (with a useful message).
+setDefaultTimeout(40_000);
 
 const TRACE_ID = '0af7651916cd43dd8448eb211c80319c';
 const INCOMING = `00-${TRACE_ID}-b7ad6b7169203331-01`;

@@ -166,6 +166,15 @@ beforeAll(() => {
     });
 }, 180_000);
 
+// A fresh, empty working directory INSIDE `work`, removed with it in afterAll
+// (a plain mkdir, not mkdtemp: its lifetime is `work`'s).
+let cwdCount = 0;
+function freshCwd(): string {
+    const dir = join(work, `cwd-${cwdCount++}`);
+    mkdirSync(dir);
+    return dir;
+}
+
 afterAll(() => {
     if (work) rmSync(work, { recursive: true, force: true });
 });
@@ -195,13 +204,13 @@ describe("the loader still resolves ioredis at runtime (#2758)", () => {
     // cwd is an EMPTY directory unrelated to the lib or the deployment, so a
     // resolution that only works from cwd, or from the build path, cannot pass.
     it("resolves from the bundled chunk's deployed location, under node", () => {
-        const empty = mkdtempSync(join(work, "cwd-"));
+        const empty = freshCwd();
         const r = run("node", ["-e", probeScript(chunkPath)], empty, 30_000);
         expect(r.out).toContain("OK:function:wait");
     });
 
     it("resolves from the bundled chunk's deployed location, under bun", () => {
-        const empty = mkdtempSync(join(work, "cwd-"));
+        const empty = freshCwd();
         const r = run(
             process.execPath,
             // --no-install: Bun would otherwise auto-install a package it cannot
@@ -215,7 +224,7 @@ describe("the loader still resolves ioredis at runtime (#2758)", () => {
 
     it("the unbundled dist still resolves ioredis relative to the lib, under node", () => {
         linkLibModules();
-        const empty = mkdtempSync(join(work, "cwd-"));
+        const empty = freshCwd();
         const r = run(
             "node",
             ["--input-type=module", "-e", distProbe(findLoaderChunk(dist))],
@@ -227,7 +236,7 @@ describe("the loader still resolves ioredis at runtime (#2758)", () => {
 
     it("the unbundled dist still resolves ioredis relative to the lib, under bun", () => {
         linkLibModules();
-        const empty = mkdtempSync(join(work, "cwd-"));
+        const empty = freshCwd();
         const r = run(
             process.execPath,
             // --no-install: Bun would otherwise auto-install a package it cannot

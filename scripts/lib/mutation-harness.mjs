@@ -154,6 +154,71 @@ export function assertAnchorOnce(filePath, anchor) {
   }
 }
 
+/**
+ * Every problem with a list of RUN-TIME-RESOLVED anchors, as strings (empty when
+ * all are live).
+ *
+ * This is the pure half of {@link assertAnchorsResolved}. A row is
+ * `{ label, file, anchor }` — the exact file and text the prover is about to hand
+ * to `mutate()`. A row is live when its file is readable and the anchor occurs
+ * EXACTLY once. An empty list is itself a problem: a prover that builds its
+ * anchors at run time and resolved none of them is the vacuous green this exists
+ * to stop.
+ *
+ * @param {Array<{ label: string, file: string, anchor: string }>} rows
+ * @returns {string[]}
+ */
+export function anchorProblems(rows) {
+  if (rows.length === 0) {
+    return ['no anchors were resolved at all — the prover would prove nothing'];
+  }
+  const problems = [];
+  for (const { label, file, anchor } of rows) {
+    let src;
+    try {
+      src = readFileSync(file, 'utf8');
+    } catch (err) {
+      problems.push(`${JSON.stringify(label)}: cannot read ${file}: ${err.message}`);
+      continue;
+    }
+    if (!anchor) {
+      problems.push(`${JSON.stringify(label)}: the anchor is empty`);
+      continue;
+    }
+    const n = countOccurrences(src, anchor);
+    if (n !== 1) {
+      problems.push(
+        `${JSON.stringify(label)}: anchor occurs ${n} times in ${file} (expected exactly 1): ${JSON.stringify(anchor.slice(0, 80))}`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * Fail the whole prover, BEFORE it plants anything, unless every anchor it is
+ * about to use resolved exactly once.
+ *
+ * For provers whose anchors are COMPUTED at run time (derived from a job id, a
+ * token list, a per-gate default) there is no literal for the PR-time audit in
+ * `scripts/lib/prover-lane.mjs` to resolve, so they assert their own resolution
+ * here instead and are classified `SELF_ASSERTING_PROVERS` there. The audit then
+ * checks that this call is still on the prover's top-level path — so a
+ * self-asserting prover that quietly stops asserting is red at PR time.
+ *
+ * Exits non-zero (it does not throw) so a prover cannot swallow it in a
+ * try/catch and carry on scoring mutations whose anchors never matched.
+ *
+ * @param {Array<{ label: string, file: string, anchor: string }>} rows
+ */
+export function assertAnchorsResolved(rows) {
+  const problems = anchorProblems(rows);
+  if (problems.length === 0) return rows.length;
+  console.error('FATAL: prover anchors did not all resolve exactly once\n');
+  for (const problem of problems) console.error(`  - ${problem}`);
+  process.exit(1);
+}
+
 /** Capture a file's bytes before the first mutation. */
 export function snapshot(filePath) {
   const bytes = readFileSync(filePath);

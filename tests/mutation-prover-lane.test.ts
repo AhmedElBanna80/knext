@@ -20,6 +20,7 @@ import {
   auditAnchorLiveness,
   auditProverSource,
   auditRunnerResolution,
+  auditSelfAsserting,
   auditSpecFrameworkMatch,
   codeStringLiterals,
   discoverProvers,
@@ -33,6 +34,7 @@ import {
   PROVER_RE,
   proverPathBindings,
   RESOLVER_DEFINITION_FILE,
+  SELF_ASSERTING_PROVERS,
   SHARED_MUTATION_DRIVERS,
 } from '../scripts/lib/prover-lane.mjs';
 import { PROVER_SUMMARY_PREFIX, parseProverSummary } from '../scripts/lib/prover-report.mjs';
@@ -700,11 +702,12 @@ describe('#912 a prover whose anchors no longer match its subjects is a PR-time 
     // review found the driver shape unreadable and the extractors were taught to
     // read it (+16) and to follow const-valued anchors (+9).
     //
-    // TODAY, and these are the numbers the PR body must match: 46 anchors and 24
-    // read-subjects across 23 provers; 9 provers are anchor-covered, 16 have at
-    // least one audited subject, and the 7 that have neither each carry a DATED
-    // exemption in PROVER_AUDIT_EXEMPTIONS. "The rest are covered by subject
-    // existence" was the round-1 claim and it was false for eleven of them.
+    // TODAY (re-measured for #2793): thousands of anchors across the fleet, and NO
+    // prover is exempt. The eight that used to carry a dated exemption are now
+    // either READ (object / positional tables, wrapper call sites, tables
+    // delegated to an imported lib) or classified SELF_ASSERTING and checked by
+    // `auditSelfAsserting`. "The rest are covered by subject existence" was the
+    // round-1 claim and it was false for eleven of them.
     //
     // It was 22 before this audit existed. Ten of those were DEAD
     // (`{{ standalonePrefix }}` text ADR-0048 deleted); retiring the seven with
@@ -734,14 +737,31 @@ describe('#912 a prover whose anchors no longer match its subjects is a PR-time 
     // shape neither extractor understands now reds on arrival instead of being
     // silently exempt.
     const excused = activeProverAuditExemptions();
+    // A SELF-ASSERTING prover is accounted for only while it still asserts: the
+    // classification is permanent, so what keeps it honest is this check, not a
+    // date. One that stopped calling `assertAnchorsResolved` is reported by name.
+    const selfAsserting = new Map<string, string[]>(
+      SELF_ASSERTING_PROVERS.map((s: { prover: string }) => [
+        s.prover,
+        auditSelfAsserting(read(resolve(REPO_ROOT, s.prover))),
+      ]),
+    );
+    const stoppedAsserting = [...selfAsserting]
+      .filter(([, findings]) => findings.length > 0)
+      .map(([prover, findings]) => `${prover}: ${findings.join('; ')}`);
+    expect(
+      stoppedAsserting,
+      'these provers are classified self-asserting but no longer assert their anchors',
+    ).toEqual([]);
     const unaudited: string[] = [];
     const audited: string[] = [];
     for (const p of provers) {
       const src = read(p.absPath);
       const anchors = auditAnchorLiveness(src, readTarget).resolved.length;
       const bindings = proverPathBindings(src).length;
-      if (anchors === 0 && bindings === 0) unaudited.push(p.relPath);
-      else audited.push(p.relPath);
+      if (anchors === 0 && bindings === 0 && !selfAsserting.has(p.relPath)) {
+        unaudited.push(p.relPath);
+      } else audited.push(p.relPath);
     }
     const unexcused = unaudited.filter((r) => !excused.has(r));
     expect(
@@ -766,7 +786,9 @@ describe('#912 a prover whose anchors no longer match its subjects is a PR-time 
     // naming a DELETED prover excuses nothing and hides that fact, so both
     // directions are checked. `activeProverAuditExemptions()` throws on a
     // malformed entry, which is the third direction.
-    expect(PROVER_AUDIT_EXEMPTIONS.length).toBeGreaterThan(0);
+    // EMPTY IS THE GOAL (#2793): every prover is read or self-asserting, so there
+    // is nothing to excuse. The mechanism stays for the next unreadable prover;
+    // what must hold is that any entry added is real and unlapsed.
     const known = new Set(provers.map((p) => p.relPath));
     for (const e of PROVER_AUDIT_EXEMPTIONS) {
       expect(known.has(e.prover), `${e.prover} is exempted but does not exist`).toBe(true);
@@ -774,7 +796,7 @@ describe('#912 a prover whose anchors no longer match its subjects is a PR-time 
     expect(
       activeProverAuditExemptions().size,
       'every exemption has already lapsed — they are doing nothing and should be deleted',
-    ).toBeGreaterThan(0);
+    ).toBe(PROVER_AUDIT_EXEMPTIONS.length);
   });
 
   it('no driver table entry vanishes unaccounted for (resolved + unresolved covers them all)', () => {

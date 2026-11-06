@@ -418,7 +418,7 @@ describe('the real tree: no dated exemption remains for these provers', () => {
   it('every self-asserting classification is permanent, reasoned, and names a real prover', () => {
     const known = new Set(provers.map((p) => p.relPath));
     expect(SELF_ASSERTING_PROVERS.length).toBeGreaterThan(0);
-    for (const s of SELF_ASSERTING_PROVERS as Array<Record<string, unknown>>) {
+    for (const s of SELF_ASSERTING_PROVERS as ReadonlyArray<Record<string, unknown>>) {
       expect(known.has(s.prover as string), `${s.prover} does not exist`).toBe(true);
       expect(String(s.reason ?? '').length, `${s.prover} needs a reason`).toBeGreaterThan(40);
       // PERMANENT: a dated entry would be the renewing clock this replaces.
@@ -427,7 +427,7 @@ describe('the real tree: no dated exemption remains for these provers', () => {
   });
 
   it('every self-asserting prover really asserts (red if one stops)', () => {
-    for (const s of SELF_ASSERTING_PROVERS as Array<{ prover: string }>) {
+    for (const s of SELF_ASSERTING_PROVERS as ReadonlyArray<{ prover: string }>) {
       const src = readFileSync(resolve(REPO_ROOT, s.prover), 'utf8');
       expect(auditSelfAsserting(src), s.prover).toEqual([]);
     }

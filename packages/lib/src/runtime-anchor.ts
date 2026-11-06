@@ -24,10 +24,16 @@
  *   - bundled (`.next/server/chunks/*.js`): the chunk's real, deployed path, so
  *     resolution walks up into the standalone `node_modules`.
  *
- * When the engine reports nothing usable (an empty stack, a virtual
- * `webpack-internal:` / Bun `$bunfs` name, a `stackTraceLimit` of 0) it falls
- * back to the working directory, which for a standalone server is the
- * standalone root.
+ * When the engine reports nothing usable (an empty stack or a virtual
+ * `webpack-internal:` / Bun `$bunfs` name; a `stackTraceLimit` of 0 is not a
+ * case, the helper raises it to 1 for the capture) it falls back to the working
+ * directory, which for a standalone server is the standalone root.
+ *
+ * Known trade-off: under `next dev --webpack` server modules are evaluated with
+ * `webpack-internal:` names, so resolution is from the app's working directory,
+ * not the lib's folder. An app on a strict install must then depend on the
+ * optional SDK (ioredis, pino-pretty, minio, cerbos) itself; knext scaffolds
+ * already add ioredis.
  *
  * The result is a path or `file:` URL string, which is all `createRequire`
  * takes. Evaluated lazily and never at module scope, so it costs nothing until

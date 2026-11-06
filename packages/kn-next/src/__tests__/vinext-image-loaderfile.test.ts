@@ -24,6 +24,7 @@ import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyVinextPatches } from "../cli/vinext-patches";
+import { pickServerPort } from "./helpers/free-port";
 import { waitForHttpOk } from "./helpers/wait-for-http-ok";
 
 const FIXTURE = join(
@@ -57,7 +58,7 @@ beforeAll(async () => {
     applyVinextPatches(join(root, "node_modules", "vinext"));
     sh(join(root, "node_modules", ".bin", "vite"), ["build"]);
 
-    const port = 20000 + Math.floor(Math.random() * 20000);
+    const port = await pickServerPort();
     base = `http://127.0.0.1:${port}`;
     srv = spawn("node", [".output/server/index.mjs"], {
         cwd: root,

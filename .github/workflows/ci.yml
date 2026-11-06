@@ -902,19 +902,54 @@ jobs:
           git diff --quiet -- .claude/hooks/block-dangerous-bash.sh ||
             { echo "::error::this step modified the in-tree hook"; exit 1; }
           echo "OK: neutering deny() reddens the suite, and the in-tree hook is untouched"
-      - name: Run the jev hook suite (offline, stubbed jev) and mutation-prove it
+      - name: Run the jev hook suites (offline, stubbed jev)
+        # Step-level bound: this step once HUNG (see the mutation-proof job below) and sat for
+        # the rest of the job's 25 minutes. A healthy run takes 1-3 minutes on either OS.
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           # The jev result screen is an advisory layer ON TOP of the hook above; it fails
           # open by design, so only a test can show the flag branch, the literal-secret
           # skip and each fail-open path still work. The suite stubs jev (no network, no
-          # key). The harness mutates a temp COPY, requires the baseline green first, and
-          # aborts non-zero on a missed anchor. --smoke runs one mutation per guard family
-          # (the suite takes minutes on a hosted runner); the full sweep stays the local
-          # evidence tool.
+          # key). Its mutation proof runs in `safety-hook-mutation-proof`, sharded.
           bash .claude/hooks/jev-hooks.test.sh
           bash .claude/skills/jev/pr-risk.test.sh
-          python3 .claude/hooks/jev-hooks-mutation-proof.py --smoke
+
+  safety-hook-mutation-proof:
+    name: Agent safety-control hook mutation proof (${{ matrix.os }}, shard ${{ matrix.shard }}/3)
+    # Split out of `safety-hook-guard`, and sharded, because the work is serial-per-mutant and
+    # the macOS leg could not finish it inside one job: every mutant re-runs the whole jev suite
+    # in a fresh temp copy (about 40 mutants x one to two ~45 s suite runs), and macOS runs this
+    # spawn-heavy bash about 2.5x slower than ubuntu (the sibling steps measured 2.5-2.8x on the
+    # same runs). Run as one step after the other two, that put the macOS job past its 25 minutes
+    # even once the hang below was gone. Three shards keep each macOS shard near 6-7 minutes;
+    # every smoke mutant still runs on both platforms, exactly once per platform.
+    #
+    # THE HANG (not slowness) that used to kill the macOS job: jev-hooks.test.sh built test text
+    # with `yes x | tr -d '\n' | head -c N`. GitHub's macOS runners start jobs with SIGPIPE ignored,
+    # and `tr` ignores the failed write (EPIPE) and keeps draining the infinite `yes`, so the pipeline
+    # never ended and the step ran to the job timeout (6 hours before #2607 bounded it). (`yes | head`
+    # alone exits; the rule is never to feed an infinite producer through a filter that ignores
+    # EPIPE.) Ubuntu runs with SIGPIPE default, which is why the ubuntu twin finished. The suite now
+    # uses finite generators and refuses to run if an infinite `yes` producer comes back.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shard: [1, 2, 3]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Mutation-prove the jev hook suites (one slice of the smoke set)
+        run: |
+          set -euo pipefail
+          # The harness mutates a temp COPY, requires the baseline green first, and aborts
+          # non-zero on a missed anchor. --smoke runs one mutation per guard family; the full
+          # sweep stays the local evidence tool. --shard i/3 runs every third mutant, so the
+          # three shards together are exactly the smoke set.
+          python3 .claude/hooks/jev-hooks-mutation-proof.py --smoke --shard "${{ matrix.shard }}/3"
 
   operator-codegen-check:
     name: Operator codegen is up-to-date (make generate + make manifests)
@@ -1367,6 +1402,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+          trivyignores: security/docs-closure-trivyignore.yaml
           format: table
 
   docs-drift-reminder:

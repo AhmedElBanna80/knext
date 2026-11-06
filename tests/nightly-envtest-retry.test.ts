@@ -35,6 +35,16 @@ describe('nightly envtest install', () => {
     expect(loop?.[2]).toMatch(/^\s*if make setup-envtest; then exit 0; fi$/m);
   });
 
+  it('does not sleep after the final attempt', () => {
+    const step = envtestStep();
+    const loop = step.match(/for attempt in ((?:\d+ ?)+); do\n([\s\S]*?)\n\s*done/);
+    const attempts = loop?.[1].trim().split(/\s+/) ?? [];
+    const last = attempts[attempts.length - 1];
+    const sleeps = (loop?.[2] ?? '').split('\n').filter((l) => /\bsleep\b/.test(l));
+    expect(sleeps.length, 'expected exactly one backoff sleep in the loop').toBe(1);
+    expect(sleeps[0]).toMatch(new RegExp(`if \\[ "\\$attempt" -lt ${last} \\]; then sleep `));
+  });
+
   it('fails the leg once the attempts run out', () => {
     const step = envtestStep();
     expect(step).not.toContain('continue-on-error');

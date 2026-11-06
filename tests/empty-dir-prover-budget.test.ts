@@ -14,8 +14,9 @@ import { resolve } from 'node:path';
  * What must hold:
  *  - one spec run per mutation (the restore is already proved byte-identical by sha256 in
  *    `mutation-harness.mjs`, so a per-mutation re-run re-proves the baseline);
- *  - ONE green re-check after the last mutation, so residue that leaks out of a red run and
- *    poisons the remaining mutations still fails the prover instead of counting as kills;
+ *  - a green re-check every RECHECK_EVERY (at most 20) mutations AND after the last one, so
+ *    residue that leaks out of a red run and poisons later mutations fails the prover instead
+ *    of counting as kills, even when a later run happens to clean that residue up;
  *  - the declared mutation count, at the measured per-run cost, fits the bound the workflow
  *    sets with room for the 40% runner-to-runner variance the workflow comment records.
  */
@@ -49,6 +50,12 @@ function declared(): number {
   return Number(m?.[1]);
 }
 
+function recheckEvery(): number {
+  const m = PROVER.match(/const RECHECK_EVERY = (\d+);/);
+  expect(m, 'const RECHECK_EVERY = n; not found').not.toBeNull();
+  return Number(m?.[1]);
+}
+
 function boundSeconds(): number {
   const m = WORKFLOW.match(/KNEXT_PROVER_TIMEOUT_MS:\s*(\d+)/);
   expect(m, 'KNEXT_PROVER_TIMEOUT_MS not found in the nightly workflow').not.toBeNull();
@@ -60,20 +67,31 @@ describe('empty-dir mutation prover fits the nightly bound', () => {
     expect(count(reportBody(), 'specPasses()')).toBe(1);
   });
 
-  it('re-checks green once after the last mutation, and fails the prover if it is red', () => {
-    const lastMutation = PROVER.lastIndexOf('\nprove');
-    const tail = PROVER.slice(lastMutation);
-    const recheck = tail.indexOf('if (!specPasses())');
-    expect(recheck, 'no green re-check after the last mutation').toBeGreaterThan(-1);
-    // Only the re-check's own block: the summary after it also exits 1, on a different condition.
-    const block = tail.slice(recheck, tail.indexOf('\n}', recheck));
-    expect(block).toContain('process.exit(1)');
+  it('the re-check helper fails the prover when the spec is red', () => {
+    const start = PROVER.indexOf('function recheckGreen(');
+    expect(start, 'function recheckGreen( not found').toBeGreaterThan(-1);
+    const body = PROVER.slice(start, PROVER.indexOf('\n}', start));
+    expect(body).toContain('if (!specPasses())');
+    expect(body).toContain('process.exit(1)');
+  });
+
+  it('re-checks green every RECHECK_EVERY mutations, at most every 20', () => {
+    expect(recheckEvery()).toBeGreaterThan(0);
+    expect(recheckEvery()).toBeLessThanOrEqual(20);
+    expect(reportBody()).toMatch(
+      /mutationsRun \+= 1;\s*if \(mutationsRun % RECHECK_EVERY === 0\) \{\s*recheckGreen\(/,
+    );
+  });
+
+  it('re-checks green after the last mutation', () => {
+    const tail = PROVER.slice(PROVER.lastIndexOf('\nprove'));
+    expect(tail).toMatch(/\nrecheckGreen\(/);
   });
 
   it('declared mutations x spec runs fit the bound with runner-variance headroom', () => {
     const runsPerMutation = count(reportBody(), 'specPasses()');
-    // baseline + per-mutation runs + the final re-check
-    const runs = 1 + declared() * runsPerMutation + 1;
+    // baseline + per-mutation runs + periodic re-checks + the final re-check
+    const runs = 1 + declared() * runsPerMutation + Math.floor(declared() / recheckEvery()) + 1;
     const worstCase = runs * SECONDS_PER_SPEC_RUN * RUNNER_VARIANCE;
     expect(worstCase).toBeLessThanOrEqual(boundSeconds());
   });

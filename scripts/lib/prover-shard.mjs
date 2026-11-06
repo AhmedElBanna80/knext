@@ -67,9 +67,9 @@ export const PROVER_WEIGHT_MINUTES = Object.freeze({
   // noted. Minutes are wall-clock for the whole prover.
   // MEASURED at 77 mutations with two spec runs each: the 130-minute bound killed it on
   // mutation 76 (runs 41851702194, 42049823853), ~51 s per spec run. It now runs the
-  // spec once per mutation plus one final re-check (79 runs), so ~70 minutes. A
-  // DERIVED figure from that measurement; re-measure on the next hosted run.
-  'scripts/mutation-prove-empty-dir-guard.mjs': 70,
+  // spec once per mutation plus a re-check every 20 and one final one (82 runs), so
+  // ~72 minutes. A DERIVED figure from that measurement; re-measure on the next hosted run.
+  'scripts/mutation-prove-empty-dir-guard.mjs': 72,
   // 71 minutes on one runner (run 39016841640), but still on mutation 109 of 111
   // when a 100-minute bound killed it on another (run 39029215555).
   'scripts/mutation-prove-kind-manifest-apply-safety.mjs': 100,

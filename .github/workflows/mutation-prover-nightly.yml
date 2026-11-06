@@ -313,7 +313,7 @@ jobs:
           for attempt in 1 2 3 4; do
             if make setup-envtest; then exit 0; fi
             echo "::warning::make setup-envtest attempt ${attempt} failed; retrying"
-            sleep $((attempt * 20))
+            if [ "$attempt" -lt 4 ]; then sleep $((attempt * 20)); fi
           done
           echo "::error::make setup-envtest failed after 4 attempts"
           exit 1

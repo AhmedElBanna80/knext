@@ -9,6 +9,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, posix, resolve } from 'node:path';
+import ts from 'typescript';
 import { blankNonCode } from './blank-non-code.mjs';
 import { activeExemptions } from './dated-exemptions.mjs';
 import { parseProverSummary } from './prover-report.mjs';
@@ -1467,35 +1468,101 @@ export const SELF_ASSERTING_PROVERS = Object.freeze([
 ]);
 
 /**
+ * Calls that mean "the prover has started doing work". The assertion must come
+ * before the first top-level statement containing one. Derived from what the two
+ * self-asserting provers actually use: `snapshot`/`mutate` plant, `prove` is the
+ * ci-blocking-gates driver that plants, `process.exit` ends the run.
+ */
+const WORK_CALLS = new Set(['snapshot', 'mutate', 'prove']);
+
+/** Does this statement contain, outside any function body, a work call? */
+function statementDoesWork(node) {
+  let found = false;
+  const visit = (n) => {
+    if (found) return;
+    // A definition is not an invocation.
+    if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+    if (ts.isCallExpression(n)) {
+      const c = n.expression;
+      if (ts.isIdentifier(c) && WORK_CALLS.has(c.text)) found = true;
+      else if (
+        ts.isPropertyAccessExpression(c) &&
+        ts.isIdentifier(c.expression) &&
+        c.expression.text === 'process' &&
+        c.name.text === 'exit'
+      ) {
+        found = true;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
+/**
  * Does a self-asserting prover still assert? Returns findings (empty when it does).
  *
- * Both must hold, read from the prover's CODE (comments and string contents
- * blanked, so documenting the call or quoting it proves nothing):
- *   1. it imports `assertAnchorsResolved` from the shared harness; a local stub
- *      of the same name would satisfy a bare call check and assert nothing;
- *   2. it calls it as a TOP-LEVEL statement (column 0); a call nested in a
- *      function nobody invokes is a definition, not an assertion.
+ * Read from the prover's AST (TypeScript's parser), so comments, strings and
+ * layout prove nothing. Both must hold:
+ *   1. it imports `assertAnchorsResolved` by that name from the shared harness
+ *      (`./lib/mutation-harness.mjs`); a local stub, an alias or a re-export
+ *      satisfies a bare call check and asserts nothing;
+ *   2. an UNCONDITIONAL top-level ExpressionStatement calls it with at least one
+ *      argument (the rows), BEFORE the first top-level statement that calls
+ *      `snapshot`, `mutate`, `prove` or `process.exit`. Under an `if`, after an
+ *      exit, inside an IIFE or a never-invoked function, or with no rows, it is
+ *      not an assertion.
  *
  * @param {string} source
  * @returns {string[]}
  */
 export function auditSelfAsserting(source) {
-  const blanked = blankNonCode(source);
+  const sf = ts.createSourceFile(
+    'prover.mjs',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
   const findings = [];
-  const imp = /\bimport\s*\{([^}]*)\}\s*from\s*(['"])\.\/lib\/mutation-harness\.mjs\2/g;
   let imported = false;
-  for (let m = imp.exec(source); m; m = imp.exec(source)) {
-    if (!blanked.startsWith('import', m.index)) continue;
-    if (m[1].split(',').some((n) => n.trim() === 'assertAnchorsResolved')) imported = true;
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st)) continue;
+    if (!ts.isStringLiteral(st.moduleSpecifier)) continue;
+    if (st.moduleSpecifier.text !== './lib/mutation-harness.mjs') continue;
+    const nb = st.importClause?.namedBindings;
+    if (st.importClause?.isTypeOnly || !nb || !ts.isNamedImports(nb)) continue;
+    for (const el of nb.elements) {
+      if (el.isTypeOnly || el.propertyName) continue;
+      if (el.name.text === 'assertAnchorsResolved') imported = true;
+    }
   }
   if (!imported) {
     findings.push(
       'does not import assertAnchorsResolved from ./lib/mutation-harness.mjs; a local stand-in asserts nothing',
     );
   }
-  if (!/^(?:await\s+)?assertAnchorsResolved\s*\(/m.test(blanked)) {
+  let asserted = false;
+  for (const st of sf.statements) {
+    if (ts.isExpressionStatement(st)) {
+      let e = st.expression;
+      if (ts.isAwaitExpression(e)) e = e.expression;
+      if (
+        ts.isCallExpression(e) &&
+        ts.isIdentifier(e.expression) &&
+        e.expression.text === 'assertAnchorsResolved' &&
+        e.arguments.length >= 1
+      ) {
+        asserted = true;
+        break;
+      }
+    }
+    if (statementDoesWork(st)) break;
+  }
+  if (!asserted) {
     findings.push(
-      'never calls assertAnchorsResolved(...) as a top-level statement; it is classified self-asserting, so it must',
+      'never calls assertAnchorsResolved(...) as an unconditional top-level statement with its rows, before the first snapshot/mutate/prove/process.exit; it is classified self-asserting, so it must',
     );
   }
   return findings;

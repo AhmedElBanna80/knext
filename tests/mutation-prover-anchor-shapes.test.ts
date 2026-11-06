@@ -373,6 +373,52 @@ describe('self-asserting provers: anchors built at run time assert themselves', 
       );
       expect(auditSelfAsserting(stub).join(' ')).toMatch(/does not import/);
     });
+
+    const CALL = 'assertAnchorsResolved(rows);';
+    const evasions: Array<[string, string]> = [
+      ['`if (false)` on the line before a column-0 call', `if (false)\n${CALL}`],
+      ['the call AFTER process.exit(0)', `process.exit(0);\n${CALL}`],
+      ['the call AFTER the first mutate()', `mutate(rows[0]);\n${CALL}`],
+      ['the call inside an async IIFE', `(async () => {\n${CALL}\n})();`],
+      ['the call with no arguments', 'assertAnchorsResolved();'],
+      ['the call under a conditional', `if (process.env.CHECK) {\n${CALL}\n}`],
+      ['the call inside a function never invoked', `function never() {\n${CALL}\n}`],
+    ];
+    for (const [name, replacement] of evasions) {
+      it(`${name} -> red`, () => {
+        const src = GOOD.replace(CALL, replacement);
+        expect(src).not.toBe(GOOD);
+        expect(auditSelfAsserting(src).join(' ')).toMatch(/never calls assertAnchorsResolved/);
+      });
+    }
+
+    it('a local stub named assertAnchorsResolved (no import) -> red', () => {
+      const stub = GOOD.replace(
+        "import { assertAnchorsResolved, mutate } from './lib/mutation-harness.mjs';",
+        "import { mutate } from './lib/mutation-harness.mjs';\nfunction assertAnchorsResolved(r) {\n  return r;\n}",
+      );
+      expect(auditSelfAsserting(stub).join(' ')).toMatch(/does not import/);
+    });
+
+    it('a re-export instead of an import -> red', () => {
+      const reexp = GOOD.replace(
+        "import { assertAnchorsResolved, mutate } from './lib/mutation-harness.mjs';",
+        "import { mutate } from './lib/mutation-harness.mjs';\nexport { assertAnchorsResolved } from './lib/mutation-harness.mjs';",
+      );
+      expect(auditSelfAsserting(reexp).join(' ')).toMatch(/does not import/);
+    });
+
+    it('an aliased import -> red', () => {
+      const aliased = GOOD.replace(
+        'assertAnchorsResolved, mutate }',
+        'assertAnchorsResolved as other, mutate }',
+      );
+      expect(auditSelfAsserting(aliased).join(' ')).toMatch(/does not import/);
+    });
+
+    it('await-prefixed top-level call before any work -> green', () => {
+      expect(auditSelfAsserting(GOOD.replace(CALL, `await ${CALL}`))).toEqual([]);
+    });
   });
 });
 

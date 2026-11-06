@@ -1103,42 +1103,6 @@ jobs:
           # evidence on its own.
           bun-version: ${{ github.event.inputs.bun-version || '1.4.2' }}
 
-      # Dispatch-only (bunBaseRunId): the patched Bun base executable from infra/bun-base. Fail
-      # closed — a wrong run, a bad signature or a digest mismatch stops the shard; it never falls
-      # back to the stock base (that would report a stock-Bun result as a patched-Bun proof).
-      - name: Install cosign (patched Bun base only)
-        if: env.KNEXT_BUN_BASE_RUN_ID != ''
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Fetch and verify the patched Bun base (dispatch-only CI proof)
-        if: env.KNEXT_BUN_BASE_RUN_ID != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          [[ "${KNEXT_BUN_BASE_RUN_ID}" =~ ^[0-9]+$ ]] || { echo "::error::bunBaseRunId must be a numeric run id, got '${KNEXT_BUN_BASE_RUN_ID}'"; exit 1; }
-          [ "${KNEXT_RUNTIME}" = bun ] || { echo "::error::bunBaseRunId needs runtime=bun (the base is the compiled exec's)"; exit 1; }
-          src="$(gh run view "${KNEXT_BUN_BASE_RUN_ID}" -R "${GITHUB_REPOSITORY}" --json workflowName,conclusion,headBranch,event -q '[.workflowName, .conclusion, .headBranch] | join(" ")')"
-          [ "${src}" = "bun-base-build success main" ] || { echo "::error::run ${KNEXT_BUN_BASE_RUN_ID} is '${src}', want a successful bun-base-build run on main"; exit 1; }
-          d="${RUNNER_TEMP}/bun-base"
-          gh run download "${KNEXT_BUN_BASE_RUN_ID}" -R "${GITHUB_REPOSITORY}" -p 'bun-base-*' -D "${d}"
-          [ "$(find "${d}" -mindepth 1 -maxdepth 1 -type d | wc -l)" = 1 ] || { echo "::error::expected exactly one bun-base-* artifact in run ${KNEXT_BUN_BASE_RUN_ID}"; exit 1; }
-          cd "$(find "${d}" -mindepth 1 -maxdepth 1 -type d)"
-          cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/bun-base-build.yml@refs/heads/main" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
-          sha256sum -c SHA256SUMS
-          sha256sum -c bun-linux-x64-musl.sha256
-          chmod +x bun-linux-x64-musl
-          id="$(bun --version)+bun-base.$(cut -c1-12 bun-linux-x64-musl.sha256)"
-          echo "KNEXT_BUN_BASE_EXE=${PWD}/bun-linux-x64-musl" >> "${GITHUB_ENV}"
-          echo "KNEXT_BUN_BASE_ID=${id}" >> "${GITHUB_ENV}"
-          {
-            echo "### Patched Bun base (CI proof, not a credential run)"
-            echo "- bun-base-build run ${KNEXT_BUN_BASE_RUN_ID}; patches: $(jq -c .patches manifest.json); upstream $(jq -r .upstream_sha manifest.json)"
-            echo "- base executable sha256 $(cut -c1-64 bun-linux-x64-musl.sha256); lane Bun id \`${id}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
-
       # #1553 (ADR-0056 Amendment 4) — dispatch-only, DEFAULT-OFF fault
       # injection: deliberately fails HERE, before a single dependency-install
       # step or any knext code, when explicitly requested. Same contract as
@@ -1970,6 +1934,39 @@ jobs:
             ' "${SAFE_SHARD}" "${{ matrix.shard }}" "${FREE_BYTES:-0}"
           fi
           echo "ok=$([ "${STATUS}" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # Dispatch-only (bunBaseRunId): the patched Bun base executable from infra/bun-base. Fail
+      # closed — a wrong run or a digest mismatch stops the shard; it never falls back to the
+      # stock base (that would report a stock-Bun result as a patched-Bun proof). Provenance is the
+      # run itself: GitHub's artifact store for a successful run of bun-base-build.yml on main
+      # (that workflow checked the Cloud Build digests and signed SHA256SUMS before uploading).
+      # No extra action is used here: this job's actions are an allowlist (compat-credential-runs).
+      - name: Fetch and verify the patched Bun base (dispatch-only CI proof)
+        if: env.KNEXT_BUN_BASE_RUN_ID != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "${KNEXT_BUN_BASE_RUN_ID}" =~ ^[0-9]+$ ]] || { echo "::error::bunBaseRunId must be a numeric run id, got '${KNEXT_BUN_BASE_RUN_ID}'"; exit 1; }
+          [ "${KNEXT_RUNTIME}" = bun ] || { echo "::error::bunBaseRunId needs runtime=bun (the base is the compiled exec's)"; exit 1; }
+          src="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${KNEXT_BUN_BASE_RUN_ID}" -q '[.path, .conclusion, .head_branch] | join(" ")')"
+          [ "${src}" = ".github/workflows/bun-base-build.yml success main" ] || { echo "::error::run ${KNEXT_BUN_BASE_RUN_ID} is '${src}', want a successful bun-base-build.yml run on main"; exit 1; }
+          d="${RUNNER_TEMP}/bun-base"
+          gh run download "${KNEXT_BUN_BASE_RUN_ID}" -R "${GITHUB_REPOSITORY}" -p 'bun-base-*' -D "${d}"
+          [ "$(find "${d}" -mindepth 1 -maxdepth 1 -type d | wc -l)" = 1 ] || { echo "::error::expected exactly one bun-base-* artifact in run ${KNEXT_BUN_BASE_RUN_ID}"; exit 1; }
+          cd "$(find "${d}" -mindepth 1 -maxdepth 1 -type d)"
+          test -s SHA256SUMS.sigstore.json || { echo "::error::run ${KNEXT_BUN_BASE_RUN_ID}'s artifact carries no SHA256SUMS signature"; exit 1; }
+          sha256sum -c SHA256SUMS
+          sha256sum -c bun-linux-x64-musl.sha256
+          chmod +x bun-linux-x64-musl
+          id="$(bun --version)+bun-base.$(cut -c1-12 bun-linux-x64-musl.sha256)"
+          echo "KNEXT_BUN_BASE_EXE=${PWD}/bun-linux-x64-musl" >> "${GITHUB_ENV}"
+          echo "KNEXT_BUN_BASE_ID=${id}" >> "${GITHUB_ENV}"
+          {
+            echo "### Patched Bun base (CI proof, not a credential run)"
+            echo "- bun-base-build run ${KNEXT_BUN_BASE_RUN_ID}; patches: $(jq -c .patches manifest.json); upstream $(jq -r .upstream_sha manifest.json)"
+            echo "- base executable sha256 $(cut -c1-64 bun-linux-x64-musl.sha256); lane Bun id \`${id}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       # ADR-0007 amendment (ref-pinned per-case entries), bar 1 enforced at RUN time. The runner
       # knows no refs: `suites[file].failed` deselects at whatever NEXTJS_REF is under test. This step

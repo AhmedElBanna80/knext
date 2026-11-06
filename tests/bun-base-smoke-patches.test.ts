@@ -32,7 +32,9 @@ describe('infra/bun-base per-patch smoke', () => {
   });
 
   it('has no section for a patch that is not there (a stale check reads as coverage)', () => {
-    const sections = [...smoke.matchAll(/^# ── (\d{3}-[a-z0-9-]+) \(/gm)].map((m) => `${m[1]}.patch`);
+    const sections = [...smoke.matchAll(/^# ── (\d{3}-[a-z0-9-]+) \(/gm)].map(
+      (m) => `${m[1]}.patch`,
+    );
     expect(sections.filter((s) => !patches.includes(s))).toEqual([]);
   });
 

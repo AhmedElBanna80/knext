@@ -25,6 +25,9 @@ import (
 	"testing"
 )
 
+// setStatusConditionName is the call this guard looks for (a const for goconst).
+const setStatusConditionName = "SetStatusCondition"
+
 // The hard rule (`.claude/rules/architecture.md`) is absolute: honest-status
 // conditions/events/requeues go in computeStatusVerdict, never as branches in
 // Reconcile. The one inline branch that predated the rule — the spec-validation
@@ -101,7 +104,7 @@ func TestNoInlineStatusBranchesInReconcile(t *testing.T) {
 			}
 			line := fset.Position(call.Pos()).Line
 
-			if name == "SetStatusCondition" {
+			if name == setStatusConditionName {
 				if fn.Name.Name == "applyStatusVerdict" {
 					inApply++
 				} else {
@@ -113,7 +116,7 @@ func TestNoInlineStatusBranchesInReconcile(t *testing.T) {
 				switch name {
 				case "computeStatusVerdict":
 					reachesVerdict = true
-				case "SetStatusCondition", "emitEvent", "Event":
+				case setStatusConditionName, "emitEvent", "Event":
 					offenders = append(offenders, fmt.Sprintf(
 						"%s:%d — %s in the spec-validation branch of Reconcile; the outcome belongs in the verdict",
 						file, line, name))

@@ -1475,26 +1475,75 @@ export const SELF_ASSERTING_PROVERS = Object.freeze([
  */
 const WORK_CALLS = new Set(['snapshot', 'mutate', 'prove']);
 
-const isDefinition = (n) =>
-  ts.isFunctionDeclaration(n) ||
-  ts.isClassLike(n) ||
-  (ts.isFunctionLike(n) &&
+/**
+ * A DEFINITION is not an invocation: function declarations, a function bound by
+ * `const f = ...` or an object key, and class instance members (constructor,
+ * methods, accessors, non-static fields). Class STATIC blocks and static field
+ * initializers are NOT definitions: they run when the class is defined, so they
+ * are scanned as the code they are.
+ */
+const isDefinition = (n) => {
+  if (ts.isFunctionDeclaration(n)) return true;
+  if (ts.isClassStaticBlockDeclaration(n)) return false;
+  if (ts.isPropertyDeclaration(n)) {
+    return !n.modifiers?.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+  }
+  if (
+    ts.isMethodDeclaration(n) ||
+    ts.isConstructorDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) ||
+    ts.isSetAccessorDeclaration(n)
+  ) {
+    return true;
+  }
+  return (
+    ts.isFunctionLike(n) &&
     n.parent &&
-    ts.isVariableDeclaration(n.parent) &&
-    n.parent.initializer === n);
+    ((ts.isVariableDeclaration(n.parent) && n.parent.initializer === n) ||
+      (ts.isPropertyAssignment(n.parent) && n.parent.initializer === n))
+  );
+};
 
-/** Names of local functions (declarations and `const f = () => ...`) mapped to their nodes. */
+const nameText = (name) =>
+  name && (ts.isIdentifier(name) || ts.isStringLiteral(name)) ? name.text : undefined;
+
+/**
+ * Local callables, keyed by bare name, each name mapped to EVERY node bound to
+ * it (scope-insensitive and conservative: if any binding of a name does work,
+ * the name does work, so a later nested `const go = () => 0` cannot launder a
+ * top-level `function go() { mutate() }`). Class members are keyed by their own
+ * name and ALSO under the class name (so `new X()` / `X.go()` / `x.go()` reach
+ * them); a constructor is keyed under the class name.
+ */
 function localFunctions(sf) {
   const fns = new Map();
+  const add = (name, node) => {
+    if (!name) return;
+    if (!fns.has(name)) fns.set(name, []);
+    fns.get(name).push(node);
+  };
   const visit = (n) => {
-    if (ts.isFunctionDeclaration(n) && n.name) fns.set(n.name.text, n);
+    if (ts.isFunctionDeclaration(n)) add(nameText(n.name), n);
     else if (
       ts.isVariableDeclaration(n) &&
-      ts.isIdentifier(n.name) &&
       n.initializer &&
       (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
     ) {
-      fns.set(n.name.text, n.initializer);
+      add(nameText(n.name), n.initializer);
+    } else if (
+      ts.isPropertyAssignment(n) &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      add(nameText(n.name), n.initializer);
+    } else if (ts.isClassLike(n)) {
+      const cls = nameText(n.name);
+      for (const m of n.members) {
+        if (!isDefinition(m)) continue;
+        add(ts.isConstructorDeclaration(m) ? cls : nameText(m.name), m);
+        add(cls, m);
+      }
+    } else if (ts.isMethodDeclaration(n) && ts.isObjectLiteralExpression(n.parent)) {
+      add(nameText(n.name), n);
     }
     ts.forEachChild(n, visit);
   };
@@ -1502,36 +1551,71 @@ function localFunctions(sf) {
   return fns;
 }
 
+/** Is this identifier a declaration/import/key position rather than a reference? */
+function isNamePosition(n) {
+  const p = n.parent;
+  if (!p) return false;
+  if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p)) return true;
+  if (
+    (ts.isFunctionDeclaration(p) ||
+      ts.isClassLike(p) ||
+      ts.isVariableDeclaration(p) ||
+      ts.isParameter(p) ||
+      ts.isMethodDeclaration(p) ||
+      ts.isPropertyDeclaration(p) ||
+      ts.isPropertyAssignment(p)) &&
+    p.name === n
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Does `node` do work? Anywhere inside it, INCLUDING inline function/arrow
- * bodies and callbacks (an IIFE or `.forEach(r => mutate(r))` runs), a call to
- * snapshot/mutate/prove, or a call to a local function that transitively does.
- * A function DEFINITION (declaration, `const f = () => ...`, class) is not an
- * invocation and is skipped; calling it is what counts.
- * `process.exit` counts only OUTSIDE any function body: a read-only preflight
- * helper may exit on a bad input before the assertion (the compat prover does),
- * and an exit inside a helper says nothing about having started planting.
- * `workFns` is the set of local function names that transitively do work.
+ * bodies and callbacks (an IIFE or `.forEach(r => mutate(r))` runs), any
+ * REFERENCE to snapshot/mutate/prove or to a local callable that transitively
+ * does. A reference, not only a call: `rows.forEach(mutate)`,
+ * `setTimeout(mutate, 0)`, `const m = mutate; m()`, `h.mutate()`,
+ * `mutate.call()`, `[mutate][0]()` and a tagged template all count. Only
+ * definitions and declaration-name positions are exempt.
+ * `process.exit` counts only as a CALL outside any function body: a read-only
+ * preflight helper may exit on a bad input before the assertion (the compat
+ * prover does), and an exit inside a helper says nothing about having started
+ * planting.
+ *
+ * DOCUMENTED LIMITS (a static, name-based audit cannot see these; they are
+ * accepted, not handled): `eval('mutate(rows)')`, computed names such as
+ * `globalThis['mut' + 'ate'](rows)`, and an argument that is syntactically
+ * non-empty but empty or opaque at run time (`{}`, `undefined`, `[...[]]`,
+ * `[].concat([])`). The audit proves the call is present, ordered and fed an
+ * argument expression; it cannot prove the rows are non-empty at run time.
  */
 function doesWork(node, workFns, { exitCounts = true } = {}) {
   let found = false;
   const visit = (n, inFn) => {
     if (found) return;
     if (isDefinition(n)) return;
+    if (
+      ts.isIdentifier(n) &&
+      !isNamePosition(n) &&
+      (WORK_CALLS.has(n.text) || workFns.has(n.text))
+    ) {
+      found = true;
+      return;
+    }
     const nowInFn = inFn || ts.isFunctionLike(n);
-    if (ts.isCallExpression(n)) {
-      const c = n.expression;
-      if (ts.isIdentifier(c) && (WORK_CALLS.has(c.text) || workFns.has(c.text))) found = true;
-      else if (
-        exitCounts &&
-        !inFn &&
-        ts.isPropertyAccessExpression(c) &&
-        ts.isIdentifier(c.expression) &&
-        c.expression.text === 'process' &&
-        c.name.text === 'exit'
-      ) {
-        found = true;
-      }
+    if (
+      exitCounts &&
+      !inFn &&
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === 'process' &&
+      n.expression.name.text === 'exit'
+    ) {
+      found = true;
+      return;
     }
     ts.forEachChild(n, (ch) => visit(ch, nowInFn));
   };
@@ -1539,17 +1623,19 @@ function doesWork(node, workFns, { exitCounts = true } = {}) {
   return found;
 }
 
-/** Closure over local functions: a function works if its body does, or calls one that does. */
+/** Closure over local callables: one works if any binding's body does, or references one that does. */
 function workFunctions(fns) {
   const workFns = new Set();
   for (let changed = true; changed; ) {
     changed = false;
-    for (const [name, fn] of fns) {
+    for (const [name, nodes] of fns) {
       if (workFns.has(name)) continue;
       let hit = false;
-      ts.forEachChild(fn, (ch) => {
-        if (!hit && doesWork(ch, workFns, { exitCounts: false })) hit = true;
-      });
+      for (const fn of nodes) {
+        ts.forEachChild(fn, (ch) => {
+          if (!hit && doesWork(ch, workFns, { exitCounts: false })) hit = true;
+        });
+      }
       if (hit) {
         workFns.add(name);
         changed = true;

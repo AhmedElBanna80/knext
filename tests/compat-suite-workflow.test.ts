@@ -1046,9 +1046,16 @@ describe('compat-suite runs REAL deploy tests (test-e2e-deploy.yml, #147 A3-3)',
     // decision's own coverage (default resolves to the real manifest, smoke
     // dispatch-only, exactly one hardcoded literal).
     const block = deployTestsJobBlock();
+    // ADR-0007 amendment: the run step reads a COPY scoped to NEXTJS_REF (the "Scope ref-pinned
+    // per-case deselections" step, held by tests/compat-manifest-for-ref.test.ts). The copy's SOURCE
+    // is still the KNEXT_DEPLOY_MANIFEST decision, so the two steps cannot disagree about it.
     expect(
-      /NEXT_EXTERNAL_TESTS_FILTERS\s*:[^\n]*env\.KNEXT_DEPLOY_MANIFEST/.test(block),
-      'the run step must filter via the KNEXT_DEPLOY_MANIFEST decision',
+      /NEXT_EXTERNAL_TESTS_FILTERS\s*:[^\n]*knext-deploy-manifest\.json/.test(block),
+      'the run step must filter via the NEXTJS_REF-scoped copy',
+    ).toBe(true);
+    expect(
+      /SCOPE_SOURCE_MANIFEST\s*:[^\n]*env\.KNEXT_DEPLOY_MANIFEST/.test(block),
+      'the scope step must read the KNEXT_DEPLOY_MANIFEST decision',
     ).toBe(true);
     const raw = readFileSync(WORKFLOW_PATH, 'utf8');
     expect(

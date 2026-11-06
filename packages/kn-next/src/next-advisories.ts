@@ -96,7 +96,10 @@ export function isComparableNextVersion(version: string): boolean {
  * a later minor. Such a minor must never be recommended to a user — doing so
  * tells them to downgrade into the advisory.
  */
-export function minorWithoutFixedRelease(minor: string): string[] {
+export function minorWithoutFixedRelease(
+    minor: string,
+    advisories: readonly NextAdvisory[] = NEXT_ADVISORIES,
+): string[] {
     const m = /^(\d+)\.(\d+)$/.exec(minor.trim());
     if (!m) return [];
     const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -105,14 +108,17 @@ export function minorWithoutFixedRelease(minor: string): string[] {
         return t[0] !== maj ? t[0] - maj : t[1] - min;
     };
     const ids: string[] = [];
-    for (const advisory of NEXT_ADVISORIES) {
+    for (const advisory of advisories) {
         if (
             advisory.ranges.some(
                 (r) =>
-                    // affected from the line's first release (X.Y.0) ...
-                    cmp(triple(r.introduced) as Triple, [maj, min, 0]) <= 0 &&
-                    // ... through past its end, with the fix on a later minor.
-                    cmpMinor(r.lastAffected) > 0 &&
+                    // affected on this line or an earlier one — compared by
+                    // MINOR, so an advisory introduced mid-line (16.3.2) still
+                    // covers the line's latest patch ...
+                    cmpMinor(r.introduced) <= 0 &&
+                    // ... with the fix on a later minor: the line's latest
+                    // patch is then affected, whatever `lastAffected`
+                    // says (it may be this line's own last patch).
                     cmpMinor(r.fixed) > 0,
             )
         ) {

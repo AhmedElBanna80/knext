@@ -397,8 +397,12 @@ needing the tag.
 **Moving the v1.3 pin (rc.N → rc.N+1) restarts only the v1.3 window.** It is the v1.3 mirror of the
 v1.0 pin PR (the rc.6 one was a pin-only diff of `.github/compat-credential-ref.json`):
 
-1. The founder pushes the annotated `v1.3.X-rc.N+1` tag on `integration/v1.3` (publishing it is the
-   normal release lane). Confirm it exists: `git ls-remote --tags origin v1.3.X-rc.N+1`.
+1. The founder pushes the annotated `v1.3.X-rc.N+1` tag. **Cut it from `main`, not `integration/v1.3`**
+   (founder direction, 2026-11-05): `integration/v1.3` diverged from `main` on 2026-10-16 and carries
+   neither the ref-pinned scoping step, the ledger, nor the harness fixes since. A candidate cut
+   there would derive a v1.3 workflow with no scoping step. See "Cutting the next v1.3 rc from
+   `main`" below for the exact name and procedure. Confirm the tag exists:
+   `git ls-remote --tags origin v1.3.X-rc.N+1`.
 2. On a branch off `origin/main`, set `rcTag` in `.github/compat-credential-ref-v1.3.json` to the new
    tag. No `rcBumpMarker` is needed: the v1.0 freeze guard does not cover the v1.3 pin.
 3. Regenerate the derived workflow from the new tag, in the same PR:
@@ -416,6 +420,71 @@ v1.0 pin PR (the rc.6 one was a pin-only diff of `.github/compat-credential-ref.
    an edit to any file in the guard closure regenerates the same workflow the same way).
    It merges through the merge queue like any PR; the next v1.3 slot runs the new tag and every v1.3
    cell's window restarts (its fingerprint moved). The v1.0 windows do not move.
+
+**Cutting the next v1.3 rc from `main` (after 1.3.1).** What the repo settles, and what it does not.
+
+*Settled by the repo.*
+
+- **The tag is immutable.** The repository ruleset "release tags (v*) immutable" blocks deleting,
+  updating and force-moving any `refs/tags/v*`, with no bypass actor; creating is allowed
+  (`.github/workflows/npm-publish-drift-nightly.yml` header). A wrong tag cannot be fixed: it burns
+  its name for ever, and the repair is the next rc number. So verify the commit before pushing
+  (step 4).
+- **The tag name equals the package version at the tagged commit.** `v1.3.0-rc.10` points at the
+  merge of `release/prepare-v1.3.0-rc.10`, where `@getknext/core` is `1.3.0-rc.10`, and the release
+  cut guard requires a `release/vX.Y.Z-rc.N` cut's computed version to equal `X.Y.Z-rc.N` exactly.
+- **The pin accepts `v1.3.N-rc.M`** (`tagPattern` in `scripts/compat-credential-line.mjs`) and the
+  tag must exist on the remote. It is a lightweight ls-remote check; the v1.3 pin has no
+  reachable-from-`main` precheck (the v1.0 pin does).
+- **`1.3.0` and `1.3.1` are taken.** Both are published to npm and tagged (`v1.3.0`, and `v1.3.1`,
+  which lives on `integration/v1.3`). `main` is at `1.3.0` but already contains the 1.3.1 source
+  change (`cache-handler.js`): the 15 commits `v1.3.1` has that `main` lacks are the version fields,
+  changelogs, release notes and CI, not shipped source.
+
+*The name, by inference (confirm before tagging).* **`v1.3.2-rc.1`**, with every `@getknext/*`
+package at `1.3.2-rc.1` at the tagged commit. The next unpublished patch of the 1.3 line is `1.3.2`,
+so this is the rc "cut ahead of its GA" that the published-bytes rules describe. `v1.3.0-rc.11`
+would pass the pin's pattern but names a prerelease of a version that is already GA, sorts below
+`1.3.0` and `1.3.1`, and confuses the GA-vs-rc gate's "highest `vX.Y.Z-rc.N`" lookup. Nothing in
+the repo states the post-GA rc naming rule in words, so this is derived, not documented.
+
+*Not settled by the repo, decide before step 3.* `main`'s version is `1.3.0`, so a stock
+`changeset version` there would propose `1.3.1`, which is already on npm and which
+`publish-preflight` would refuse. Either bring the `v1.3.1` version fields, changelogs and
+`docs/release/v1.3.1.md` into `main` first, or set the versions by hand to `1.3.2-rc.1` in the
+prepare PR. Whether the prepare PR uses changesets pre mode is likewise not specified for a
+post-GA rc. Also note the published-bytes guard's selector applies the v1.3 pin only to
+`integration/v1.3`, so a window whose tag comes from `main` is not covered by that guard
+(`scripts/published-bytes-select-pin.mjs`, "Which pin"); that is a gap to accept or fix
+deliberately, not a given.
+
+*Procedure.*
+
+1. Preconditions: the ref-pinned PR and the musl-rebuild PR are merged to `main`, `main` CI is
+   green, and `git show origin/main:scripts/compat-manifest-for-ref.mjs` exists.
+2. Open `release/prepare-v1.3.2-rc.1` off `origin/main` (mirroring `release/prepare-v1.3.0-rc.10`):
+   `@getknext/*` fixed group to `1.3.2-rc.1`, `docs/release/v1.3.2-rc.1.md` (the release job checks
+   for it), and any lockfile change. Merge it through the queue.
+3. Resolve the merge commit `SHA` on `main`.
+4. **Before tagging, on that exact `SHA`:** `git show SHA:packages/kn-next/package.json` reads
+   `"version": "1.3.2-rc.1"`; `git show SHA:scripts/compat-manifest-for-ref.mjs` exists;
+   `git show SHA:test/deploy-tests-manifest.knext.json` has `"$knextRefPinnedCases"`;
+   `git show SHA:.github/workflows/test-e2e-deploy.yml` contains the step
+   `Scope ref-pinned per-case deselections to NEXTJS_REF`.
+5. `git tag -a v1.3.2-rc.1 SHA -m "v1.3.2-rc.1 (dist-tag next)" && git push origin v1.3.2-rc.1`, then
+   publish through the normal release lane (a `release/v1.3.2-rc.1` cut from `main`, or the `main`
+   lane, per "Publish lanes").
+6. Pin PR, off `origin/main`: set `rcTag` in `.github/compat-credential-ref-v1.3.json` to
+   `v1.3.2-rc.1` and regenerate the derived workflow exactly as in the numbered steps above
+   (`git show v1.3.2-rc.1:.github/workflows/test-e2e-deploy.yml`, then `compat-line-workflow.mjs
+   --write --line v1.3 --tag v1.3.2-rc.1`). The regenerated file now contains the scoping step, and
+   every v1.3 cell's window restarts. The v1.0 pin stays at `v1.0.0-rc.6`.
+
+**Do not extend `LEDGER_FREE_RC_TAGS`** (`tests/compat-manifest-for-ref.test.ts`) to get this PR green.
+It lists the two tags that predate the ledger, `v1.0.0-rc.6` and `v1.3.0-rc.10`, and it is the guard
+that stops a v1.3 workflow derived from a tag with no scoping step from running ledgered
+deselections at an unmeasured ref. If the regenerated workflow lacks the step, the tag was cut from
+the wrong commit: leave the list alone, burn the name, and cut the next rc from the right one.
 
 **What protects the v1.3 harness mid-window.** There is no PR-time freeze guard for the v1.3 harness
 (the v1.0 one protects v1.0's files only), so protection is the fingerprint plus the PR-time spec:

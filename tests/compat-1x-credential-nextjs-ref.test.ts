@@ -129,7 +129,10 @@ export function checkOneXCredentialRef(inputs: OneXInputs): OneXVerdict {
     );
     return { applies: true, violations };
   }
-  const anchor = anchorEnv;
+  // The v1.3 lane carries a v1.3-ONLY override of the Next ref (spec.nextjsRefOverride),
+  // so the 1.x anchor is the ref the lane would have WITHOUT it: undo it.
+  const override = lineSpec('v1.3').nextjsRefOverride;
+  const anchor = override && anchorEnv === override.to ? override.from : anchorEnv;
 
   const text = inputs.e2eWorkflowText;
   const dispatch = dispatchDefault(text);
@@ -362,6 +365,34 @@ describe("#2317 — while rcTag is v1.x, main's credential NEXTJS_REF stays on t
     });
     expect(v.applies).toBe(true);
     expect(v.anchor).not.toBe(V2_REF);
+    expect(v.violations.some((m) => m.includes('dispatch default'))).toBe(true);
+    expect(v.violations.some((m) => m.includes('env fallback'))).toBe(true);
+    expect(v.violations.some((m) => m.includes('credentialedNextRef'))).toBe(true);
+  });
+
+  it("the v1.3 lane's own override is undone to find the 1.x anchor: v1.0 stays on the 1.x ref, passes", () => {
+    const o = lineSpec('v1.3').nextjsRefOverride;
+    expect(o).toBeDefined();
+    const v = checkOneXCredentialRef(
+      fixture({
+        v13WorkflowText: lane(o.to, o.to),
+        e2eWorkflowText: lane(o.from, o.from),
+        manifest: { credentialedNextRef: o.from },
+      }),
+    );
+    expect(v.anchor).toBe(o.from);
+    expect(v.violations).toEqual([]);
+  });
+
+  it('the v1.0 lane moving to the v1.3 override ref is red (the override must not leak into v1.0)', () => {
+    const o = lineSpec('v1.3').nextjsRefOverride;
+    const v = checkOneXCredentialRef(
+      fixture({
+        v13WorkflowText: lane(o.to, o.to),
+        e2eWorkflowText: lane(o.to, o.to),
+        manifest: { credentialedNextRef: o.to },
+      }),
+    );
     expect(v.violations.some((m) => m.includes('dispatch default'))).toBe(true);
     expect(v.violations.some((m) => m.includes('env fallback'))).toBe(true);
     expect(v.violations.some((m) => m.includes('credentialedNextRef'))).toBe(true);

@@ -205,6 +205,17 @@ on:
         required: false
         type: string
         default: ''
+      # Dispatch-only CI proof of an upstream Bun fix BEFORE Bun releases it (infra/bun-base): the
+      # id of a successful `bun-base-build` run on main. Its signature-verified musl base becomes
+      # the compiled exec's base executable (KNEXT_BUN_BASE_EXE), and the upstream-runtime-defect
+      # ledger is scoped with `--bun-version <stock>+bun-base.<digest>`, so entries measured on
+      # stock Bun do not deselect the files the patch is meant to turn green. Same contract as the
+      # inputs above: '' on every `schedule` event, so no credential or early-warning night sees it.
+      bunBaseRunId:
+        description: 'dispatch-only: run id of a successful bun-base-build run on main; its patched musl base is the compile base for the bun lane (CI proof of an unreleased Bun fix). Requires runtime=bun. Never runs on schedule.'
+        required: false
+        type: string
+        default: ''
   schedule:
     # 03:17 UTC nightly — off-peak; the run takes the better part of an hour.
     # This is the NODE lane: the compat-matrix credential (docs/compat-matrix.md).
@@ -355,6 +366,8 @@ env:
   # on an explicit dispatch that requests it. Read by the two per-shard
   # fault-injection steps in the `deploy-tests` job.
   KNEXT_PREKNEXT_FAULT: ${{ github.event.inputs.preKnextFault || '' }}
+  # Dispatch input ONLY (bunBaseRunId above): '' on every schedule event.
+  KNEXT_BUN_BASE_RUN_ID: ${{ github.event.inputs.bunBaseRunId || '' }}
   # #1301 — the ONE manifest-filename decision, made once at the workflow
   # level so both the test-selection step and the "Compute excluded count"
   # step (which must agree with it, or the reported excluded count would lie)
@@ -1089,6 +1102,42 @@ jobs:
           # shard summary below — the requested spec here is not attributable
           # evidence on its own.
           bun-version: ${{ github.event.inputs.bun-version || '1.4.2' }}
+
+      # Dispatch-only (bunBaseRunId): the patched Bun base executable from infra/bun-base. Fail
+      # closed — a wrong run, a bad signature or a digest mismatch stops the shard; it never falls
+      # back to the stock base (that would report a stock-Bun result as a patched-Bun proof).
+      - name: Install cosign (patched Bun base only)
+        if: env.KNEXT_BUN_BASE_RUN_ID != ''
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Fetch and verify the patched Bun base (dispatch-only CI proof)
+        if: env.KNEXT_BUN_BASE_RUN_ID != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "${KNEXT_BUN_BASE_RUN_ID}" =~ ^[0-9]+$ ]] || { echo "::error::bunBaseRunId must be a numeric run id, got '${KNEXT_BUN_BASE_RUN_ID}'"; exit 1; }
+          [ "${KNEXT_RUNTIME}" = bun ] || { echo "::error::bunBaseRunId needs runtime=bun (the base is the compiled exec's)"; exit 1; }
+          src="$(gh run view "${KNEXT_BUN_BASE_RUN_ID}" -R "${GITHUB_REPOSITORY}" --json workflowName,conclusion,headBranch,event -q '[.workflowName, .conclusion, .headBranch] | join(" ")')"
+          [ "${src}" = "bun-base-build success main" ] || { echo "::error::run ${KNEXT_BUN_BASE_RUN_ID} is '${src}', want a successful bun-base-build run on main"; exit 1; }
+          d="${RUNNER_TEMP}/bun-base"
+          gh run download "${KNEXT_BUN_BASE_RUN_ID}" -R "${GITHUB_REPOSITORY}" -p 'bun-base-*' -D "${d}"
+          [ "$(find "${d}" -mindepth 1 -maxdepth 1 -type d | wc -l)" = 1 ] || { echo "::error::expected exactly one bun-base-* artifact in run ${KNEXT_BUN_BASE_RUN_ID}"; exit 1; }
+          cd "$(find "${d}" -mindepth 1 -maxdepth 1 -type d)"
+          cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/bun-base-build.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+          sha256sum -c SHA256SUMS
+          sha256sum -c bun-linux-x64-musl.sha256
+          chmod +x bun-linux-x64-musl
+          id="$(bun --version)+bun-base.$(cut -c1-12 bun-linux-x64-musl.sha256)"
+          echo "KNEXT_BUN_BASE_EXE=${PWD}/bun-linux-x64-musl" >> "${GITHUB_ENV}"
+          echo "KNEXT_BUN_BASE_ID=${id}" >> "${GITHUB_ENV}"
+          {
+            echo "### Patched Bun base (CI proof, not a credential run)"
+            echo "- bun-base-build run ${KNEXT_BUN_BASE_RUN_ID}; patches: $(jq -c .patches manifest.json); upstream $(jq -r .upstream_sha manifest.json)"
+            echo "- base executable sha256 $(cut -c1-64 bun-linux-x64-musl.sha256); lane Bun id \`${id}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       # #1553 (ADR-0056 Amendment 4) — dispatch-only, DEFAULT-OFF fault
       # injection: deliberately fails HERE, before a single dependency-install
@@ -1938,7 +1987,10 @@ jobs:
           set -euo pipefail
           rm -f "${SCOPED_MANIFEST}"
           if [ -f scripts/compat-manifest-for-ref.mjs ]; then
-            node scripts/compat-manifest-for-ref.mjs --manifest "${SCOPE_SOURCE_MANIFEST}" --ref "${NEXTJS_REF}" --out "${SCOPED_MANIFEST}"
+            # A patched-base proof (bunBaseRunId) scopes Bun entries to the base it runs, not to
+            # the stock compiler on PATH: `<stock>+bun-base.<digest>` matches no stock-Bun entry.
+            node scripts/compat-manifest-for-ref.mjs --manifest "${SCOPE_SOURCE_MANIFEST}" --ref "${NEXTJS_REF}" --out "${SCOPED_MANIFEST}" \
+              ${KNEXT_BUN_BASE_ID:+--bun-version "${KNEXT_BUN_BASE_ID}"}
           elif grep -Eq '"[$]knextRefPinnedCases"[[:space:]]*:' "${SCOPE_SOURCE_MANIFEST}"; then
             echo "::error::${SCOPE_SOURCE_MANIFEST} carries ref-pinned per-case deselections but this checkout has no scripts/compat-manifest-for-ref.mjs to scope them to NEXTJS_REF; refusing to run with them applied at an unmeasured ref"
             exit 1

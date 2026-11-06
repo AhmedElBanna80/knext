@@ -46,11 +46,18 @@ const HAND_ROLLED_COMMENT_SCAN = /indexOf\(\s*(['"])\*\/\1/;
 const OWN_STRIP_DEFINITION = /function\s+stripComments\s*\(/;
 /**
  * A regex-literal comment stripper: a `replace`/`match`/`split` call whose regex
- * literal contains an escaped comment opener (`\/\*` for block, `\/\/` for line).
+ * literal is comment-shaped, i.e. either
+ *   - block form: `\/\*` followed later by `\*\/`, or
+ *   - line form: `\/\/` followed by `.*`, `[^\n]*` or `.+` (to end of line).
+ * A bare `\/\/` (e.g. `/https?:\/\//`, `/^\/\/cdn/`) is a URL/path, not a comment.
  * The `indexOf('*\/')` hallmark above cannot see these.
+ *
+ * Not covered (known evasions of this tripwire): `new RegExp('...')` built from
+ * strings, a regex held in a const and passed by name, and character-class
+ * spellings such as `/[/][*]/`. The shared-lexer import test is the real gate.
  */
 const REGEX_COMMENT_STRIPPER =
-  /\.(?:replace(?:All)?|match(?:All)?|split)\(\s*\/(?:[^/\n\\]|\\.)*?\\\/(?:\\\*|\\\/)/;
+  /\.(?:replace(?:All)?|match(?:All)?|split)\(\s*\/(?:[^/\n\\]|\\.)*?(?:\\\/\\\*(?:[^/\n\\]|\\.)*?\\\*\\\/|\\\/\\\/(?:\.\*|\[\^\\n\]\*|\.\+))/;
 const SHARED_IMPORT =
   /import\s*\{[^}]*\bstripComments\b[^}]*\}\s*from\s*(['"])[^'"]*js-source-lexer\.mjs\1/;
 
@@ -92,5 +99,10 @@ describe('regex comment stripper detector (both halves)', () => {
   it('does not flag the shared-lexer call or an unrelated regex', () => {
     expect('const t = stripComments(src);').not.toMatch(REGEX_COMMENT_STRIPPER);
     expect('const t = s.replace(/foo\\/bar/g, "");').not.toMatch(REGEX_COMMENT_STRIPPER);
+  });
+
+  it('does not flag URL/path regexes that merely contain //', () => {
+    expect("const t = s.replace(/https?:\\/\\//, '');").not.toMatch(REGEX_COMMENT_STRIPPER);
+    expect('const t = s.match(/^\\/\\/cdn/);').not.toMatch(REGEX_COMMENT_STRIPPER);
   });
 });

@@ -447,6 +447,10 @@ Knative install whose request-metrics protocol is Prometheus, so the app metrics
   `NextApp` pins `METRICS_PORT` onto a queue-proxy port (`8012`, `8013`, `8022`, `8112`, `9090`,
   `9091`). Run `knext doctor` (the metrics-port check names the app and the governing ConfigMap key),
   then redeploy with a current build or drop the override.
+- **Crash loop, log says `[knext] failed to bind the app listener on <host>:<port>`.** The server could
+  not bind `PORT` (the app port, not the metrics port) because another process already owns it, and it
+  exits non-zero instead of exiting silently. Free the port or set a different `PORT`. An app scaffolded
+  before this check keeps its old entry file; `knext doctor` flags a stale `knext-node-entry.mjs`.
 - **Metrics went dark after an upgrade.** The scrape contract (annotation, NetworkPolicy, PodMonitor)
   targets `:9464`, but a pod running a pre-upgrade image still binds `:9091` until redeployed, and any
   scrape config you wrote yourself keeps pointing at the old port. Redeploy the app, repoint hand-rolled

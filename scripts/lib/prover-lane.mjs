@@ -9,6 +9,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, posix, resolve } from 'node:path';
+import ts from 'typescript';
 import { blankNonCode } from './blank-non-code.mjs';
 import { activeExemptions } from './dated-exemptions.mjs';
 import { parseProverSummary } from './prover-report.mjs';
@@ -1467,35 +1468,255 @@ export const SELF_ASSERTING_PROVERS = Object.freeze([
 ]);
 
 /**
+ * Calls that mean "the prover has started doing work". The assertion must come
+ * before the first top-level statement containing one. Derived from what the two
+ * self-asserting provers actually use: `snapshot`/`mutate` plant, `prove` is the
+ * ci-blocking-gates driver that plants, `process.exit` ends the run.
+ */
+const WORK_CALLS = new Set(['snapshot', 'mutate', 'prove']);
+
+/**
+ * A DEFINITION is not an invocation: function declarations, a function bound by
+ * `const f = ...` or an object key, and class instance members (constructor,
+ * methods, accessors, non-static fields). Class STATIC blocks and static field
+ * initializers are NOT definitions: they run when the class is defined, so they
+ * are scanned as the code they are.
+ */
+const isDefinition = (n) => {
+  if (ts.isFunctionDeclaration(n)) return true;
+  if (ts.isClassStaticBlockDeclaration(n)) return false;
+  if (ts.isPropertyDeclaration(n)) {
+    return !n.modifiers?.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+  }
+  if (
+    ts.isMethodDeclaration(n) ||
+    ts.isConstructorDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) ||
+    ts.isSetAccessorDeclaration(n)
+  ) {
+    return true;
+  }
+  return (
+    ts.isFunctionLike(n) &&
+    n.parent &&
+    ((ts.isVariableDeclaration(n.parent) && n.parent.initializer === n) ||
+      (ts.isPropertyAssignment(n.parent) && n.parent.initializer === n))
+  );
+};
+
+const nameText = (name) =>
+  name && (ts.isIdentifier(name) || ts.isStringLiteral(name)) ? name.text : undefined;
+
+/**
+ * Local callables, keyed by bare name, each name mapped to EVERY node bound to
+ * it (scope-insensitive and conservative: if any binding of a name does work,
+ * the name does work, so a later nested `const go = () => 0` cannot launder a
+ * top-level `function go() { mutate() }`). Class members are keyed by their own
+ * name and ALSO under the class name (so `new X()` / `X.go()` / `x.go()` reach
+ * them); a constructor is keyed under the class name.
+ */
+function localFunctions(sf) {
+  const fns = new Map();
+  const add = (name, node) => {
+    if (!name) return;
+    if (!fns.has(name)) fns.set(name, []);
+    fns.get(name).push(node);
+  };
+  const visit = (n) => {
+    if (ts.isFunctionDeclaration(n)) add(nameText(n.name), n);
+    else if (
+      ts.isVariableDeclaration(n) &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      add(nameText(n.name), n.initializer);
+    } else if (
+      ts.isPropertyAssignment(n) &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      add(nameText(n.name), n.initializer);
+    } else if (ts.isClassLike(n)) {
+      const cls = nameText(n.name);
+      for (const m of n.members) {
+        if (!isDefinition(m)) continue;
+        add(ts.isConstructorDeclaration(m) ? cls : nameText(m.name), m);
+        add(cls, m);
+      }
+    } else if (ts.isMethodDeclaration(n) && ts.isObjectLiteralExpression(n.parent)) {
+      add(nameText(n.name), n);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return fns;
+}
+
+/** Is this identifier a declaration/import/key position rather than a reference? */
+function isNamePosition(n) {
+  const p = n.parent;
+  if (!p) return false;
+  if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p)) return true;
+  if (
+    (ts.isFunctionDeclaration(p) ||
+      ts.isClassLike(p) ||
+      ts.isVariableDeclaration(p) ||
+      ts.isParameter(p) ||
+      ts.isMethodDeclaration(p) ||
+      ts.isPropertyDeclaration(p) ||
+      ts.isPropertyAssignment(p)) &&
+    p.name === n
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Does `node` do work? Anywhere inside it, INCLUDING inline function/arrow
+ * bodies and callbacks (an IIFE or `.forEach(r => mutate(r))` runs), any
+ * REFERENCE to snapshot/mutate/prove or to a local callable that transitively
+ * does. A reference, not only a call: `rows.forEach(mutate)`,
+ * `setTimeout(mutate, 0)`, `const m = mutate; m()`, `h.mutate()`,
+ * `mutate.call()`, `[mutate][0]()` and a tagged template all count. Only
+ * definitions and declaration-name positions are exempt.
+ * `process.exit` counts only as a CALL outside any function body: a read-only
+ * preflight helper may exit on a bad input before the assertion (the compat
+ * prover does), and an exit inside a helper says nothing about having started
+ * planting.
+ *
+ * DOCUMENTED LIMITS (a static, name-based audit cannot see these; they are
+ * accepted, not handled): `eval('mutate(rows)')`, computed names such as
+ * `globalThis['mut' + 'ate'](rows)`, and an argument that is syntactically
+ * non-empty but empty or opaque at run time (`{}`, `undefined`, `[...[]]`,
+ * `[].concat([])`). The audit proves the call is present, ordered and fed an
+ * argument expression; it cannot prove the rows are non-empty at run time.
+ */
+function doesWork(node, workFns, { exitCounts = true } = {}) {
+  let found = false;
+  const visit = (n, inFn) => {
+    if (found) return;
+    if (isDefinition(n)) return;
+    if (
+      ts.isIdentifier(n) &&
+      !isNamePosition(n) &&
+      (WORK_CALLS.has(n.text) || workFns.has(n.text))
+    ) {
+      found = true;
+      return;
+    }
+    const nowInFn = inFn || ts.isFunctionLike(n);
+    if (
+      exitCounts &&
+      !inFn &&
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === 'process' &&
+      n.expression.name.text === 'exit'
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, (ch) => visit(ch, nowInFn));
+  };
+  visit(node, false);
+  return found;
+}
+
+/** Closure over local callables: one works if any binding's body does, or references one that does. */
+function workFunctions(fns) {
+  const workFns = new Set();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [name, nodes] of fns) {
+      if (workFns.has(name)) continue;
+      let hit = false;
+      for (const fn of nodes) {
+        ts.forEachChild(fn, (ch) => {
+          if (!hit && doesWork(ch, workFns, { exitCounts: false })) hit = true;
+        });
+      }
+      if (hit) {
+        workFns.add(name);
+        changed = true;
+      }
+    }
+  }
+  return workFns;
+}
+
+const isEmptyArrayLiteral = (e) => ts.isArrayLiteralExpression(e) && e.elements.length === 0;
+
+/**
  * Does a self-asserting prover still assert? Returns findings (empty when it does).
  *
- * Both must hold, read from the prover's CODE (comments and string contents
- * blanked, so documenting the call or quoting it proves nothing):
- *   1. it imports `assertAnchorsResolved` from the shared harness; a local stub
- *      of the same name would satisfy a bare call check and assert nothing;
- *   2. it calls it as a TOP-LEVEL statement (column 0); a call nested in a
- *      function nobody invokes is a definition, not an assertion.
+ * Read from the prover's AST (TypeScript's parser), so comments, strings and
+ * layout prove nothing. Both must hold:
+ *   1. it imports `assertAnchorsResolved` by that name from the shared harness
+ *      (`./lib/mutation-harness.mjs`); a local stub, an alias or a re-export
+ *      satisfies a bare call check and asserts nothing;
+ *   2. an UNCONDITIONAL top-level ExpressionStatement calls it with at least one
+ *      argument (the rows), BEFORE the first top-level statement that calls
+ *      `snapshot`, `mutate`, `prove` or `process.exit`. Under an `if`, after an
+ *      exit, inside an IIFE or a never-invoked function, or with no rows, it is
+ *      not an assertion.
  *
  * @param {string} source
  * @returns {string[]}
  */
 export function auditSelfAsserting(source) {
-  const blanked = blankNonCode(source);
+  const sf = ts.createSourceFile(
+    'prover.mjs',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  if (sf.parseDiagnostics.length > 0) {
+    return ['does not parse; the audit fails closed on a source it cannot read'];
+  }
+  const workFns = workFunctions(localFunctions(sf));
   const findings = [];
-  const imp = /\bimport\s*\{([^}]*)\}\s*from\s*(['"])\.\/lib\/mutation-harness\.mjs\2/g;
   let imported = false;
-  for (let m = imp.exec(source); m; m = imp.exec(source)) {
-    if (!blanked.startsWith('import', m.index)) continue;
-    if (m[1].split(',').some((n) => n.trim() === 'assertAnchorsResolved')) imported = true;
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st)) continue;
+    if (!ts.isStringLiteral(st.moduleSpecifier)) continue;
+    if (st.moduleSpecifier.text !== './lib/mutation-harness.mjs') continue;
+    const nb = st.importClause?.namedBindings;
+    if (st.importClause?.isTypeOnly || !nb || !ts.isNamedImports(nb)) continue;
+    for (const el of nb.elements) {
+      if (el.isTypeOnly || el.propertyName) continue;
+      if (el.name.text === 'assertAnchorsResolved') imported = true;
+    }
   }
   if (!imported) {
     findings.push(
       'does not import assertAnchorsResolved from ./lib/mutation-harness.mjs; a local stand-in asserts nothing',
     );
   }
-  if (!/^(?:await\s+)?assertAnchorsResolved\s*\(/m.test(blanked)) {
+  let asserted = false;
+  for (const st of sf.statements) {
+    if (ts.isExpressionStatement(st)) {
+      let e = st.expression;
+      if (ts.isAwaitExpression(e)) e = e.expression;
+      if (
+        ts.isCallExpression(e) &&
+        ts.isIdentifier(e.expression) &&
+        e.expression.text === 'assertAnchorsResolved' &&
+        e.arguments.length >= 1 &&
+        !isEmptyArrayLiteral(e.arguments[0]) &&
+        !(ts.isSpreadElement(e.arguments[0]) && isEmptyArrayLiteral(e.arguments[0].expression)) &&
+        !e.arguments.some((arg) => doesWork(arg, workFns))
+      ) {
+        asserted = true;
+        break;
+      }
+    }
+    if (doesWork(st, workFns)) break;
+  }
+  if (!asserted) {
     findings.push(
-      'never calls assertAnchorsResolved(...) as a top-level statement; it is classified self-asserting, so it must',
+      'never calls assertAnchorsResolved(...) as an unconditional top-level statement with its rows, before the first snapshot/mutate/prove/process.exit; it is classified self-asserting, so it must',
     );
   }
   return findings;

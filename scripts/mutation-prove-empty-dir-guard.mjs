@@ -152,6 +152,22 @@ function specPasses() {
 
 let pass = 0;
 let fail = 0;
+let mutationsRun = 0;
+
+// Re-check green every RECHECK_EVERY mutations and once after the last one.
+// A single final check alone has a gap: residue one red run leaves behind can
+// be cleaned up by a LATER run, and the mutations in between would have gone
+// red for the wrong reason without the final check ever seeing it. Every 20
+// bounds that window at ~4 extra spec runs over 77 mutations.
+const RECHECK_EVERY = 20;
+
+/** Fails the prover unless the spec is green against the restored tree. */
+function recheckGreen(when) {
+  if (!specPasses()) {
+    console.error(`FATAL: ${SPEC} did not go green again ${when}`);
+    process.exit(1);
+  }
+}
 
 /**
  * Shared mutate/restore body. Takes an already-snapshotted `snap`, not a
@@ -180,11 +196,16 @@ function report(label, snap, anchor, replacement) {
     }
     recordMutation();
   } finally {
+    // restore() proves the file is byte-identical (sha256) or throws, so the
+    // spec is NOT re-run here: a per-mutation re-run doubled the prover's cost
+    // and pushed it past the nightly 7800 s bound (runs 41851702194,
+    // 42049823853). The periodic and final re-checks (recheckGreen) still
+    // fail the prover if a red run leaked residue into the later ones.
     restore(snap);
   }
-  if (!specPasses()) {
-    console.error(`   FATAL: ${SPEC} did not go green again after restore`);
-    process.exit(1);
+  mutationsRun += 1;
+  if (mutationsRun % RECHECK_EVERY === 0) {
+    recheckGreen(`after mutation ${mutationsRun}`);
   }
 }
 
@@ -815,6 +836,12 @@ proveVinextBasePath(
   "process.env.NODE_ENV ??= 'production';",
   'void 0;',
 );
+
+// One green re-check after every mutation is restored. If a red run left
+// residue behind, every later mutation would have "gone red" for the wrong
+// reason; that residue keeps the spec red here, so the prover fails instead
+// of certifying those kills.
+recheckGreen('after the last restore');
 
 console.log(`\n${pass} caught, ${fail} undetected.`);
 if (fail > 0) {

@@ -304,9 +304,19 @@ jobs:
       # in packages/kn-next-operator/bin/k8s, where the suite finds them without
       # KUBEBUILDER_ASSETS. Without them that prover exits 2 before its baseline
       # — a red night, never a silent skip.
+      # The download is a GitHub release asset that does exist; run 42049823853
+      # lost two legs to a transient "504 Gateway Timeout" on it. So retry, then
+      # still fail the leg if every attempt failed.
       - name: Install the operator's envtest binaries
         working-directory: packages/kn-next-operator
-        run: make setup-envtest
+        run: |
+          for attempt in 1 2 3 4; do
+            if make setup-envtest; then exit 0; fi
+            echo "::warning::make setup-envtest attempt ${attempt} failed; retrying"
+            if [ "$attempt" -lt 4 ]; then sleep $((attempt * 20)); fi
+          done
+          echo "::error::make setup-envtest failed after 4 attempts"
+          exit 1
 
       # `mutation-prove-2462-operator-write-policy.mjs` re-renders the install
       # bundle (`kustomize build config/default`) for every row that mutates the

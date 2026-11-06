@@ -464,9 +464,13 @@ export const COVERAGE_METRIC_EXCEPTIONS = Object.freeze([
     justification:
       'bun 1.4.0 lcov emits SF/FNF/FNH/DA/LF/LH and no BRDA/BRF/BRH, so the suite emits no branch ' +
       'records at all — there is nothing to compute a branch percentage from. Restoring a branch ' +
-      'floor needs branch records from the bun side, which the current lcov output does not carry.',
+      'floor needs branch records from the bun side, which the current lcov output does not carry. ' +
+      'Re-checked 2026-11-06: bun 1.4.2 (pinned) AND 1.4.4 (npm latest) were both run with ' +
+      '`bun test --coverage --coverage-reporter=lcov` over a function with if/else/ternary ' +
+      'branches and emit only TN/SF/FNF/FNH/DA/LF/LH, still no BRDA/BRF/BRH; the upstream ask ' +
+      '(oven-sh/bun#7100, statements and branches) is still open.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-11',
     note: "Renew with a fresh measurement of bun's lcov output, or land a branch source and a floor.",
   }),
   Object.freeze({
@@ -474,9 +478,11 @@ export const COVERAGE_METRIC_EXCEPTIONS = Object.freeze([
     justification:
       'statements is not an lcov concept at all — the old floor was a v8/istanbul-provider ' +
       'quantity with no representation in the merged report. There is nothing to lower and ' +
-      'nothing to measure; a floor here would be a number describing a measurement nobody makes.',
+      'nothing to measure; a floor here would be a number describing a measurement nobody makes. ' +
+      'Re-checked 2026-11-06: bun 1.4.2 and 1.4.4 lcov output carries no statement-level record ' +
+      'type (only SF/FNF/FNH/DA/LF/LH), and the gate has gained no istanbul-shaped source.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-17',
     note: 'Only actionable if the gate gains an istanbul-shaped source; otherwise renew or retire the metric from GATED_METRICS.',
   }),
 ]);

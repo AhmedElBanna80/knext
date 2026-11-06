@@ -3,9 +3,9 @@
   "allow": [
     {
       "id": "GHSA-qr28-fpjm-wq7f",
-      "justification": "Same advisory and reasoning as the matching entry in precompile-closure-allowlist.json: decode-uri-component 0.2.2 reaches the published @getknext/lib production closure only via minio -> query-string 7.1.3, whose decode path (parse/parseUrl/extract) minio never calls (it uses only stringify). The fixed 0.5.1 is ESM-only and breaks query-string 7's require(); minio's latest still pins query-string ^7.1.3, and a local patch would not reach published consumers. Drop on the first minio/query-string release that pulls a fixed decode-uri-component.",
+      "justification": "Same advisory and reasoning as the matching entry in precompile-closure-allowlist.json: decode-uri-component 0.2.2 reaches the published @getknext/lib production closure only via minio -> query-string 7.1.3, whose decode path (parse/parseUrl/extract) minio never calls (it uses only stringify). The fixed 0.5.1 is ESM-only and breaks query-string 7's require(); minio's latest still pins query-string ^7.1.3, and a local patch would not reach published consumers. Drop on the first minio/query-string release that pulls a fixed decode-uri-component. RE-CHECKED 2026-11-06 (renewal, 45 days): minio latest is still 8.0.7 and still depends on query-string ^7.1.3; query-string latest is 10.0.0 (ESM-only); decode-uri-component latest is 0.5.1 and is still \"type\": \"module\" with only an ESM `default` export, so query-string 7 cannot require() it; the 8.0.7 tarball's dist/main still calls only qs.stringify (internal/client.js x5, helpers.js x1) and never parse/parseUrl/extract. The advisory is unchanged (high, fixed in 0.5.1). Nothing has changed since acceptance except the clock.",
       "added": "2026-11-01",
-      "expires": "2026-12-01"
+      "expires": "2026-12-21"
     },
     {
       "id": "GHSA-vcc3-ghjq-m6fr",

@@ -117,7 +117,7 @@ console.log('\n── planting M1: the expiry date removed');
 // must be rejected outright, not silently treated as permanent.
 mutate(
   policySnap,
-  "    expires: '2026-12-01',\n    note: \"Renew with a fresh measurement",
+  "    expires: '2026-12-11',\n    note: \"Renew with a fresh measurement",
   '    note: "Renew with a fresh measurement',
 );
 check('M1', 'an exception with no `expires` is not an exception', 1, runSpec(SPEC));

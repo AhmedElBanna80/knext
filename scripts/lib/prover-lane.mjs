@@ -1139,66 +1139,90 @@ export const PROVER_AUDIT_EXEMPTIONS = Object.freeze([
       'per-prover audit; neither extractor reads that shape, and the collision surfaced only on ' +
       'the merged tree because the merge train validated each PR against a pre-merge ref. ' +
       'Follow-up: convert the table to the {subject, anchor} object shape both extractors read. ' +
-      'Expiry deliberately OFF the 2026-12-01 bloc (sprint-2 close C6: staggered clocks).',
+      'Expiry deliberately OFF the 2026-12-01 bloc (sprint-2 close C6: staggered clocks). ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-05',
-    expires: '2026-11-20',
+    expires: '2026-12-24',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-anonymous-install.mjs',
     justification:
       'Builds every anchor inside per-case closures over a fixture tree it creates at runtime; no ' +
-      'anchor exists as a literal in the source for a static pass to resolve.',
+      'anchor exists as a literal in the source for a static pass to resolve. ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-08',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-ci-blocking-gates.mjs',
     justification:
       'Delegates both mutation and running to runGateTest in ci-blocking-gate-proof.mjs, so the ' +
-      'anchors live in the shared helper rather than in the prover the lane discovers.',
+      'anchors live in the shared helper rather than in the prover the lane discovers. ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-10',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-compat-fail-on-red-teeth.mjs',
     justification:
       'Anchors are shell fragments assembled from shell-command-position.mjs token lists at ' +
       'runtime — deliberately generated so a new token is covered without a new row, which is ' +
-      'the property that also makes them unresolvable statically.',
+      'the property that also makes them unresolvable statically. ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-14',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-compat-lane-pointer.mjs',
     justification:
       'Mutates a workflow re-serialised from parsed YAML rather than by text anchor, so there is ' +
-      'no source literal to count occurrences of.',
+      'no source literal to count occurrences of. ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-16',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-entry-copy-parity.mjs',
     justification:
       'Iterates the runtime-entry copy list from runtime-entry-copies.mjs and mutates each by ' +
-      'computed offset; the subject set is derived, never named in this file.',
+      'computed offset; the subject set is derived, never named in this file. ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-18',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-ledger-completeness.mjs',
     justification:
       'Anchors are built from ledger fixture JSON generated per case; the prover writes its own ' +
-      'subjects rather than reading tracked ones.',
+      'subjects rather than reading tracked ones. ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-22',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-publish-markers.mjs',
     justification:
       'Delegates to publish-markers-proof.mjs, which holds the anchors; the prover itself is a ' +
-      'thin driver with no literals.',
+      'thin driver with no literals. ' +
+      'Re-checked 2026-11-06: auditAnchorLiveness resolves 0 anchors and proverPathBindings ' +
+      'finds 0 read-subjects in this prover, so the argument above still holds; the per-prover ' +
+      'audit test in tests/mutation-prover-lane.test.ts would red on a stale exemption.',
     added: '2026-09-04',
-    expires: '2026-12-01',
+    expires: '2026-12-29',
   }),
 ]);
 

@@ -35,7 +35,8 @@ permanence.
 
 Both are now entries in `COVERAGE_METRIC_EXCEPTIONS`
 (`scripts/lib/coverage-policy.mjs`), each carrying a justification, an `added`
-date and an **`expires` date of 2026-12-01**. `scripts/check-coverage.mjs` calls
+date and an **`expires` date** (renewed on 2026-11-06 after re-measuring bun 1.4.2 and 1.4.4:
+branches 2026-12-11, statements 2026-12-17). `scripts/check-coverage.mjs` calls
 `assertEveryMetricAccountedFor` before it checks any floor, so:
 
 - while an exception is live, its metric is excused and the gate runs as today;
@@ -49,7 +50,7 @@ would otherwise read as an exception that never expires while looking exactly
 like one that does.
 
 Renewing is a deliberate act, not a default. If bun still emits no branch records
-on 2026-12-01, the answer is a new entry with a fresh measurement in its
+at the next expiry, the answer is a new entry with a fresh measurement in its
 justification — the expiry is a date precisely because "when upstream ships it"
 is an expiry that never arrives.
 

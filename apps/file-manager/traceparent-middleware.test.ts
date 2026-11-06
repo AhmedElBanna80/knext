@@ -306,27 +306,32 @@ describe('traceparent through middleware, standalone server (#2627)', () => {
 
 const HANDLER_SPAN = 'AppRouteRouteHandlers.runHandler';
 const REQUEST_SPAN = 'BaseServer.handleRequest';
-const spansOf = (traceId: string): ExportedSpan[] => exported.filter((s) => s.traceId === traceId);
 const byType = (spans: ExportedSpan[], type: string): ExportedSpan[] =>
   spans.filter((s) => s.attrs['next.span_type'] === type);
 
-/** Wait until the whole request tree (handler + both request spans) is exported. */
-async function exportedTree(traceId: string): Promise<ExportedSpan[]> {
-  await waitForSpans(() => {
-    const spans = spansOf(traceId);
-    return byType(spans, HANDLER_SPAN).length >= 1 && byType(spans, REQUEST_SPAN).length >= 2;
-  }, `tree for ${traceId}`);
-  return spansOf(traceId);
+/**
+ * Wait until the whole request tree (handler + both request spans) for `traceId`
+ * has been received AFTER `mark` (a snapshot of `exported.length` taken before the
+ * request was sent), so spans exported by earlier requests can never satisfy it.
+ */
+async function exportedTree(traceId: string, mark: number): Promise<ExportedSpan[]> {
+  const fresh = (): ExportedSpan[] => exported.slice(mark).filter((s) => s.traceId === traceId);
+  await waitForSpans(
+    () => byType(fresh(), HANDLER_SPAN).length >= 1 && byType(fresh(), REQUEST_SPAN).length >= 2,
+    `tree for ${traceId}`,
+  );
+  return fresh();
 }
 
 describe('span tree + OTLP export, standalone server (#2657)', () => {
   it('exports the inbound request span tree under the incoming traceparent, correctly parented', async () => {
-    await echo('/api/echo', INCOMING);
-    const spans = await exportedTree(TRACE_ID);
+    const traceId = 'cccccccccccccccccccccccccccccc01';
+    const incomingSpanId = 'c0c0c0c0c0c0c001';
+    const mark = exported.length;
+    await echo('/api/echo', `00-${traceId}-${incomingSpanId}-01`);
+    const spans = await exportedTree(traceId, mark);
 
-    // (b) every exported span of this request carries the incoming trace id, and
-    // the outermost in-process span is parented on the INCOMING span id.
-    const incomingSpanId = INCOMING.split('-')[2];
+    // (b) the outermost in-process span is parented on the INCOMING span id.
     const outer = spans.find((s) => s.parentSpanId === incomingSpanId);
     expect(outer).toBeDefined();
     expect(outer?.attrs['next.span_type']).toBe(REQUEST_SPAN);
@@ -347,9 +352,10 @@ describe('span tree + OTLP export, standalone server (#2657)', () => {
   });
 
   it('actually exports over OTLP with the registered service name and the direct-passed processor attribute', async () => {
-    const traceId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1';
-    await echo('/api/echo', `00-${traceId}-b7ad6b7169203332-01`);
-    const spans = await exportedTree(traceId);
+    const traceId = 'cccccccccccccccccccccccccccccc02';
+    const mark = exported.length;
+    await echo('/api/echo', `00-${traceId}-c0c0c0c0c0c0c002-01`);
+    const spans = await exportedTree(traceId, mark);
     // (c) service identity from registerOTel, on every exported span...
     for (const s of spans) expect(s.serviceName).toBe('traceparent-fixture');
     // ...and the spanProcessors entry passed directly into registerOTel ran on all of them.
@@ -359,23 +365,38 @@ describe('span tree + OTLP export, standalone server (#2657)', () => {
   });
 
   it('a request with no traceparent exports a fresh, internally consistent tree (single root)', async () => {
+    const mark = exported.length;
     const seen = await echo('/api/echo');
     const traceId = seen.activeTraceId as string;
     expect(traceId).toMatch(VALID_ID);
-    const spans = await exportedTree(traceId);
+    const spans = await exportedTree(traceId, mark);
     const roots = spans.filter((s) => !s.parentSpanId);
     expect(roots.length).toBe(1);
     expect(roots[0].attrs['next.span_type']).toBe(REQUEST_SPAN);
   });
 
   it('a middleware-set traceparent re-roots the exported handler span under the middleware trace', async () => {
-    const mwTrace = MW_TRACEPARENT.split('-')[1];
-    await echo('/api/echo/mw-sets', INCOMING);
-    const spans = await exportedTree(mwTrace);
-    const handler = byType(spans, HANDLER_SPAN)[0];
+    // The middleware sets a FIXED traceparent, so the trace id cannot identify
+    // this request: only spans received after `mark` are considered.
+    const [, mwTrace, mwSpanId] = MW_TRACEPARENT.split('-');
+    const incomingTrace = 'cccccccccccccccccccccccccccccc04';
+    const mark = exported.length;
+    await echo('/api/echo/mw-sets', `00-${incomingTrace}-c0c0c0c0c0c0c004-01`);
+    const fresh = (traceId: string): ExportedSpan[] =>
+      exported.slice(mark).filter((s) => s.traceId === traceId);
+    // Wait for this request's own spans on BOTH traces before asserting absence:
+    // the handler span under the middleware trace, and the outer request span
+    // under the incoming trace (so the negative below cannot pass vacuously).
+    await waitForSpans(
+      () =>
+        byType(fresh(mwTrace), HANDLER_SPAN).length >= 1 &&
+        byType(fresh(incomingTrace), REQUEST_SPAN).length >= 1,
+      'mw-sets spans on both traces',
+    );
+    const handler = byType(fresh(mwTrace), HANDLER_SPAN)[0];
     expect(handler.name).toContain('/api/echo/mw-sets');
     // parented on the middleware-supplied span id, never the incoming trace
-    expect(spans.some((s) => s.parentSpanId === MW_TRACEPARENT.split('-')[2])).toBe(true);
-    expect(spansOf(TRACE_ID).some((s) => s.name.includes('mw-sets'))).toBe(false);
+    expect(fresh(mwTrace).some((s) => s.parentSpanId === mwSpanId)).toBe(true);
+    expect(byType(fresh(incomingTrace), HANDLER_SPAN)).toEqual([]);
   });
 });

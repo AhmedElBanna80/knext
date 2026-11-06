@@ -18,7 +18,7 @@ Next.js zone calls it like a local function; the function scales to zero like th
   Rust, and the server-only TypeScript your zone calls.
 - **The function is reachable only inside the cluster.** It has no public route.
 - **Same zone only.** A function serves the zone that owns it and no other. A zone cannot bind
-  another zone's function, and a function never reads another zone's database.
+  another zone's function, and a function must not read another zone's database.
 - **The operator wires it up.** You declare the function with a `BackendService`; the operator runs
   it as a Knative Service and tells the zone where it is.
 
@@ -156,8 +156,11 @@ the token lives (about a minute). Make writes idempotent. See
   enforce NetworkPolicy, so there the policy is declarative only and the token alone protects the
   function. Do not rely on network isolation for authorization.
 - **Secrets stay in Kubernetes Secrets.** A function may read only Secrets marked for its own zone,
-  and never a zone's signing key or another zone's database credentials.
-- **Cluster-local, no public ingress.**
+  and never a zone's signing key or another zone's database credentials. An unpinned function runs
+  with its zone's database Secret mounted; see [Pin the function's spec](/docs/zone-functions#pin-the-functions-spec)
+  to narrow what it gets.
+- **Cluster-local, no public ingress.** A function has no public route; only its own zone reaches
+  it through the cluster.
 
 Details: [Identity and the JWKS](/docs/zone-functions#identity-and-the-jwks),
 [Network](/docs/zone-functions#network), [Security](/docs/security) and the

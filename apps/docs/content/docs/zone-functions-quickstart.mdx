@@ -1,0 +1,182 @@
+---
+title: Zone functions quickstart (Beta)
+description: What a zone function is, how to build and ship one in Go or Rust, who may call it, what it cannot do, and how its security model works.
+---
+
+<Callout type="warn">
+**Beta, v2 only.** Zone functions and their identity tokens are **Beta**. They are available on the
+**v2** line only; released 1.x has none of this. They are not covered by knext's compatibility
+credential. See [Stability](/docs/stability).
+</Callout>
+
+## Concepts
+
+A **zone function** is a Go or Rust service that belongs to exactly one zone (your `NextApp`). Your
+Next.js zone calls it like a local function; the function scales to zero like the zone does.
+
+- **The contract is a `.proto` file.** Both sides are generated from it: the server project in Go or
+  Rust, and the server-only TypeScript your zone calls.
+- **The function is reachable only inside the cluster.** It has no public route.
+- **Same zone only.** A function serves the zone that owns it and no other. A zone cannot bind
+  another zone's function, and a function must not read another zone's database.
+- **The operator wires it up.** You declare the function with a `BackendService`; the operator runs
+  it as a Knative Service and tells the zone where it is.
+
+Reference pages: [Zone functions](/docs/zone-functions) (binding, pinning, credentials, status),
+[Go zone functions](/docs/go-functions), [Rust zone functions](/docs/rust-functions) and the
+[CLI reference](/docs/cli#knext-add-function).
+
+## Quickstart
+
+The commands are the same for Go and Rust except for `--lang` and the toolchain each needs.
+
+1. **Install the optional package.** `knext add function`, `knext generate` and
+   `knext deploy function` come from `@getknext/grpc`, and its version must match your
+   `@getknext/core`. Without it each command prints how to install it and exits 1.
+
+2. **Scaffold the function.** In your zone:
+
+   ```bash
+   knext add function orders --lang go     # needs the Go toolchain on your PATH
+   knext add function orders --lang rust   # needs cargo on your PATH
+   ```
+
+   This writes the contract at `proto/orders/v1/orders.proto`, the server project at
+   `functions/orders/` with its code already generated, and an `authorize()` hook at
+   `src/knext/authorize.ts` that refuses every call until you write it. Pass
+   `--module github.com/acme/orders` to choose the Go module path. Nothing is deployed.
+
+3. **Write your handlers.** In Go, where `functions/orders/internal/items` is. In Rust, in
+   `functions/orders/src/items.rs`. After you change the contract, copy it over the function's
+   copy and regenerate: `buf generate` for Go, `./codegen.sh` for Rust (run from
+   `functions/orders`). Raise `contract_version` in the contract with every change.
+
+4. **Generate the zone's client.** From the zone:
+
+   ```bash
+   knext generate
+   ```
+
+   Set `cacheComponents: true` in your `next.config.ts`: generated queries are `'use cache'`
+   functions. In CI, run `knext generate --check` so generated code cannot drift from its contract.
+
+5. **Test, build and push the image.** Go: `go test -race ./...`. Rust: `cargo test`. Then
+   `docker build` in `functions/orders` and push the image, noting its digest.
+
+6. **Deploy the function.** The image must be pinned by digest:
+
+   ```bash
+   knext deploy function orders \
+     --zone shop \
+     --image registry.example.com/shop/orders@sha256:<digest>
+   ```
+
+   Use `--dry-run` to print the `BackendService` without applying it.
+
+7. **Bind it from the zone and deploy.** Add the function to `backends` in `knext.config.ts`, then
+   deploy the zone:
+
+   ```ts title="knext.config.ts (excerpt)"
+   export default {
+     // ...
+     backends: [{ name: "orders" }],
+   };
+   ```
+
+   ```bash
+   knext deploy
+   ```
+
+## Rollout order: function before zone
+
+A function must serve a contract version greater than or equal to the one its zone was generated
+against. A newer function still answers every call an older zone makes; an older function may not
+know an RPC or a field a newer zone sends. So:
+
+- **Contract changes:** deploy the function first, then the zone.
+- **Operator:** upgrade the operator and its CRDs before the CLI, and before you apply a
+  `BackendService` or deploy a config with `backends`. An older operator does not know these fields,
+  and the CLI stops and names the field.
+- **Identity tokens:** a function refuses a token that has no id, so when you upgrade across that
+  change, upgrade the zone first, then its functions. This is the one case where the order reverses.
+
+## Who may call an RPC
+
+Every RPC in the contract states who may call it, with `option (knext.v1.auth)`. There is no
+default: `knext generate` refuses an RPC that does not state it.
+
+| Option | Meaning |
+|---|---|
+| `AUTH_USER` | A signed-in user. Your `authorize()` hook must return a verified user before the call is made. This is what `knext add function` writes. |
+| `AUTH_PUBLIC` | Anyone, without a user. Allowed only on a read (`option idempotency_level = NO_SIDE_EFFECTS;`); `knext generate` refuses it on any other RPC. |
+
+**There is no public write.** An anonymous write such as sign-up or a contact form is an
+`AUTH_USER` RPC whose `authorize()` returns an anonymous principal, and only after your own check
+(CAPTCHA, rate limit, CSRF) has passed. Every generated write therefore runs an end-user check
+first.
+
+`authorize()` is your code. Set `"authorize"` in `knext.grpc.json` to the module that exports it by
+name. It receives the function, service, method and kind of the call, and returns `{ sub }` (your
+session's stable user id) or throws, for example a redirect to sign-in. Each generated query,
+action and stream runs it first, outside any cache. Cached reads are keyed per user.
+
+## Limits
+
+- **Beta.** Not covered by the compatibility credential.
+- **Same zone only.** A function serves the zone that owns it.
+- **Streaming is not a Server Action.** A unary RPC that is not a read is generated as a Server
+  Action. A server-streaming RPC is generated as an async generator for Server Components and
+  route handlers, and is never a Server Action.
+- **Writes are never retried.** Only reads are retried, within the one deadline. Every write takes
+  an idempotency key.
+- **Deadline.** Calls have a deadline (10 seconds by default) that must be shorter than the zone's
+  request timeout.
+- **Request size.** The Go and Rust templates accept up to 4 MiB per request message.
+- **In-memory example store.** The template's example data is per pod and lost when the function
+  scales to zero. Keep real data in your zone's own database.
+
+## Replay window
+
+The identity token a call carries expires 60 seconds after it is minted. A function refuses a
+second use of a token it has already accepted, but the memory is per pod, so a copy can still be
+replayed once to a different replica, or after the pod restarts or scales to zero, for as long as
+the token lives (about a minute). Make writes idempotent. See
+[Tokens are single-use](/docs/zone-functions#tokens-are-single-use).
+
+## Security model
+
+- **The token is the authoritative control.** Every call carries a short-lived token signed with
+  the zone's own key. It names the zone, the one function and the one RPC, and the user
+  `authorize()` returned. The function checks it against the zone's public keys (a JWKS the
+  operator mounts) before your code runs, and refuses every call except the health check without
+  a valid one. A function that has no keys mounted fails closed.
+- **NetworkPolicy is defense in depth, and it is CNI-conditional.** The operator writes a
+  NetworkPolicy that admits only the Knative data path to the function. It is enforced only by a
+  CNI that supports it, such as Calico or Cilium. flannel, the CNI on OKE and OrbStack, does not
+  enforce NetworkPolicy, so there the policy is declarative only and the token alone protects the
+  function. Do not rely on network isolation for authorization.
+- **Secrets stay in Kubernetes Secrets.** A function may read only Secrets marked for its own zone,
+  and never a zone's signing key or another zone's database credentials. An unpinned function runs
+  with its zone's database Secret mounted; see [Pin the function's spec](/docs/zone-functions#pin-the-functions-spec)
+  to narrow what it gets.
+- **Cluster-local, no public ingress.** A function has no public route; only its own zone reaches
+  it through the cluster.
+
+Details: [Identity and the JWKS](/docs/zone-functions#identity-and-the-jwks),
+[Network](/docs/zone-functions#network), [Security](/docs/security) and the
+[threat model](/docs/threat-model).
+
+### Drill result for the network layer
+
+The published drill result for the NetworkPolicy layer on a CNI that enforces it is **not yet
+available**. Until it is, treat the token as the only control you can rely on.
+
+## Cold-chain numbers
+
+<Callout type="info">
+**Cold-chain numbers are not yet published.** The time a call takes when the zone and the function
+are both at zero has not been measured on a reference cluster to the standard these docs require,
+so this page states no figure for it. Do not size deadlines from this page. Size the client
+deadline to cover a cold function on your own cluster and keep it shorter than the zone's request
+timeout.
+</Callout>

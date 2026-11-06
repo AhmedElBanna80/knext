@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 #
 # BUILT-image Trivy scan fixture for the knext self-contained standalone
 # runtime image (M3, N2 round-2, #1457/#1519) — NOT a shipped image, mirrors

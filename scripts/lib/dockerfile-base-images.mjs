@@ -52,7 +52,7 @@ const IMAGE_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*(?:@sha256:[0-9a-f]{64})?$/;
  *   file: string,
  *   line: number,
  *   image: string,
- *   origin: 'FROM' | 'COPY' | 'RUN' | 'PARSER',
+ *   origin: 'FROM' | 'COPY' | 'RUN' | 'PARSER' | 'SYNTAX',
  *   kind: string,
  *   key?: string,
  *   digest?: string,
@@ -70,6 +70,7 @@ const IMAGE_TOKEN = /^[a-zA-Z0-9][a-zA-Z0-9._\-/:]*(?:@sha256:[0-9a-f]{64})?$/;
 export const EXCLUSION_FILE = 'security/dockerfile-base-exclusions.json';
 export const KNOWN_CHECKS = [
   'unpinned',
+  'unpinned-frontend',
   'unparseable',
   'tag-digest-conflict',
   'registry-resolution',
@@ -131,6 +132,7 @@ function classify(image, file, line, ctx, origin) {
   return { ...base, kind: 'pinned', key, digest: DIGEST.test(digest) ? digest : undefined };
 }
 
+const FRONTEND_VERSION = /:\d+\.\d+(?:\.\d+)?@sha256:/;
 const PARSER_DIRECTIVE = /^#\s*([a-z]+)\s*=\s*(\S.*?)\s*$/i;
 const KNOWN_DIRECTIVES = new Set(['syntax', 'escape', 'check']);
 /** A heredoc word as BuildKit reads it: `<<EOF`, `<<-EOF`, `<<"EOF"`, `2<<'EOF'`; not `<<<`. */
@@ -169,6 +171,8 @@ function* logicalLines(text) {
           if (directive[2] === '\\' || directive[2] === '`') escapeChar = directive[2];
           else yield { error: trimmed, number: index + 1 };
         }
+        // The `# syntax=` frontend is an image BuildKit pulls and RUNS for the build.
+        if (name === 'syntax') yield { syntax: directive[2], number: index + 1 };
         continue;
       }
       directives = false;
@@ -269,6 +273,10 @@ export function parseDockerfileRefs(text, file) {
     const { number } = item;
     if (item.error !== undefined) {
       unreadable(number, item.error, 'PARSER');
+      continue;
+    }
+    if (item.syntax !== undefined) {
+      refs.push(classify(item.syntax, file, number, ctx, 'SYNTAX'));
       continue;
     }
     // ONBUILD triggers pull the same images when a child build fires them.
@@ -425,11 +433,24 @@ export function checkDockerfiles(root, { exclusions = [], today = new Date() } =
       reason = 'unparseable';
       detail = 'cannot be resolved statically (variable or malformed reference); pin it literally';
     } else if (ref.kind === 'unpinned') {
-      reason = 'unpinned';
-      detail = 'external image without an @sha256 digest';
+      // A `# syntax=` frontend executes during every build, so it gets its own check name.
+      reason = ref.origin === 'SYNTAX' ? 'unpinned-frontend' : 'unpinned';
+      detail =
+        ref.origin === 'SYNTAX'
+          ? 'build frontend (# syntax=) without an @sha256 digest; pin docker/dockerfile:<version>@sha256:<digest>'
+          : 'external image without an @sha256 digest';
     } else if (ref.kind === 'pinned' && !ref.digest) {
       reason = 'unparseable';
       detail = 'malformed digest (need sha256:<64 hex>)';
+    } else if (
+      ref.kind === 'pinned' &&
+      ref.origin === 'SYNTAX' &&
+      !FRONTEND_VERSION.test(ref.image)
+    ) {
+      // A bare major (`:1`) or `:latest` beside a digest hides which release was pinned.
+      reason = 'unpinned-frontend';
+      detail =
+        'build frontend (# syntax=) needs a specific version tag, e.g. docker/dockerfile:1.28@sha256:<digest>';
     }
     if (reason && !isExcluded(exclusions, reason, ref, today)) {
       findings.push({ reason, file: ref.file, line: ref.line, image: ref.image, detail });

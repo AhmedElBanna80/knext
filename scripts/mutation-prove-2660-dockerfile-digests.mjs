@@ -305,6 +305,40 @@ const MUTATIONS = [
     replacement: 'false &&',
     options: JS,
   },
+  {
+    id: 'F01',
+    subject: 'lib',
+    claim: 'the # syntax= frontend is ignored by the scan again (#2786)',
+    anchor: "if (name === 'syntax') yield { syntax: directive[2], number: index + 1 };",
+    replacement: '',
+    options: JS,
+  },
+  {
+    id: 'F02',
+    subject: 'fileManager',
+    claim: 'a Dockerfile goes back to the floating docker/dockerfile:1 frontend (#2786)',
+    anchor:
+      'docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b',
+    replacement: 'docker/dockerfile:1',
+    options: DOCKER,
+  },
+  {
+    id: 'F03',
+    subject: 'lib',
+    claim: 'a bare-major frontend tag beside a digest is accepted (#2786)',
+    anchor: '!FRONTEND_VERSION.test(ref.image)',
+    replacement: 'false',
+    options: JS,
+  },
+  {
+    id: 'F04',
+    subject: 'lib',
+    claim:
+      'an undigested frontend is reported under the plain unpinned check, not unpinned-frontend (#2786)',
+    anchor: "reason = ref.origin === 'SYNTAX' ? 'unpinned-frontend' : 'unpinned';",
+    replacement: "reason = 'unpinned';",
+    options: JS,
+  },
 ];
 
 // The canary: a real mutation of a real subject. If this stays green the harness
@@ -328,6 +362,7 @@ const prover = createGuardProver({
     rust: 'templates/rust/Dockerfile',
     goTemplate: 'templates/go/Dockerfile',
     bakeoff: 'packages/scale-zero-pg/bakeoff/gateway-exec.Dockerfile',
+    fileManager: 'apps/file-manager/Dockerfile',
     lib: 'scripts/lib/dockerfile-base-images.mjs',
     verify: 'scripts/verify-image-pins.mjs',
   },

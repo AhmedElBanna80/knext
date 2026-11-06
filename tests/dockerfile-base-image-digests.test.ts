@@ -414,7 +414,94 @@ describe('an exclusion cannot mask a digest other than the one it names (#2665)'
   });
 });
 
+describe('# syntax= build frontend (#2786)', () => {
+  const FE = 'docker/dockerfile';
+  const scan = (first: string, extra: Record<string, string> = {}) =>
+    checkDockerfiles(fixture({ 'a/Dockerfile': `${first}\nFROM ${DS}@${A}\n`, ...extra }), {
+      today: TODAY,
+    });
+
+  it('passes a versioned, digest-pinned frontend', () => {
+    expect(scan(`# syntax=${FE}:1.28@${A}`).findings).toEqual([]);
+    expect(scan(`# syntax=${FE}:1.28.0@${A}`).findings).toEqual([]);
+  });
+
+  it('fails the floating tag (docker/dockerfile:1)', () => {
+    const { findings } = scan(`# syntax=${FE}:1`);
+    expect(reasons({ findings })).toEqual(['unpinned-frontend']);
+    expect(findings[0].line).toBe(1);
+  });
+
+  it('fails a digest with only a bare major or latest as the tag', () => {
+    expect(reasons(scan(`# syntax=${FE}:1@${A}`))).toEqual(['unpinned-frontend']);
+    expect(reasons(scan(`# syntax=${FE}:latest@${A}`))).toEqual(['unpinned-frontend']);
+    expect(reasons(scan(`# syntax=${FE}@${A}`))).toEqual(['unpinned-frontend']);
+  });
+
+  it('fails a third-party frontend that is not digest-pinned', () => {
+    expect(reasons(scan('# syntax=ghcr.io/acme/frontend:2.0'))).toEqual(['unpinned-frontend']);
+  });
+
+  it('fails a malformed digest and an unreadable value', () => {
+    expect(reasons(scan(`# syntax=${FE}:1.28@sha256:abc`))).toEqual(['unparseable']);
+    expect(reasons(scan('# syntax=$' + '{FRONTEND}'))).toEqual(['unparseable']);
+  });
+
+  it('fails when the same frontend tag maps to two digests', () => {
+    const r = scan(`# syntax=${FE}:1.28@${A}`, {
+      'b/Dockerfile': `# syntax=${FE}:1.28@${B}\nFROM ${DS}@${A}\n`,
+    });
+    expect(reasons(r)).toEqual(['tag-digest-conflict']);
+  });
+
+  it('honours a dated unpinned-frontend exclusion and ignores an expired one', () => {
+    const entry = {
+      file: 'a/Dockerfile',
+      covers: ['unpinned-frontend'],
+      justification: 'frozen credential harness file; pin when the window allows',
+      added: '2026-11-01',
+      expires: '2027-01-01',
+    };
+    const root = fixture({ 'a/Dockerfile': `# syntax=${FE}:1\nFROM ${DS}@${A}\n` });
+    expect(checkDockerfiles(root, { exclusions: [entry], today: TODAY }).findings).toEqual([]);
+    const dead = checkDockerfiles(root, {
+      exclusions: [{ ...entry, expires: '2026-10-01' }],
+      today: TODAY,
+    });
+    expect(reasons(dead)).toContain('unpinned-frontend');
+  });
+
+  it('the nightly resolver reads the frontend pin like any other (digest-mismatch is caught)', async () => {
+    const root = fixture({
+      'packages/kn-next-operator/x.go': '// nothing\n',
+      'a/Dockerfile': `# syntax=${FE}:1.28@${A}\nFROM ${DS}@${A}\n`,
+    });
+    const seen: string[] = [];
+    const bad = await verifyRepo(root, {
+      api: async (pin: { repository: string }) => {
+        seen.push(pin.repository);
+        return { status: 200, digest: B };
+      },
+      exclusions: [],
+    });
+    expect(seen).toContain('docker/dockerfile');
+    expect(bad.findings.map((f: { reason: string }) => f.reason)).toContain('digest-mismatch');
+  });
+});
+
 describe('the real tree', () => {
+  it('every tracked Dockerfile declaring # syntax= pins it to docker/dockerfile:<version>@sha256', () => {
+    const declared = discoverDockerfiles(ROOT).filter((f: string) =>
+      /^#\s*syntax\s*=/im.test(readFileSync(join(ROOT, f), 'utf8')),
+    );
+    expect(declared.length).toBeGreaterThanOrEqual(10);
+    for (const f of declared) {
+      expect(readFileSync(join(ROOT, f), 'utf8').split('\n')[0]).toMatch(
+        /^# syntax=docker\/dockerfile:\d+\.\d+(?:\.\d+)?@sha256:[0-9a-f]{64}$/,
+      );
+    }
+  });
+
   it('every committed exclusion names an exact file, and registry ones a digest', () => {
     const allow = loadExclusions(ROOT) as { file?: string; digest?: string; covers: string[] }[];
     for (const e of allow) {

@@ -100,6 +100,31 @@ describe('classifyVulnerabilities — derived (name-only via) groups', () => {
     expect(names(r)).toEqual(['a', 'b']);
   });
 
+  it('fails closed when an unknown name sits beside an allowlisted carrier', () => {
+    // Without the fail-closed return, the allowlisted carrier's ids alone
+    // would clear this group even though `ghost` is undescribed.
+    const r = classifyVulnerabilities(
+      {
+        ...FIXTURE,
+        mixed: { name: 'mixed', severity: 'high', via: ['decode-uri-component', 'ghost'] },
+      },
+      new Set(['GHSA-vcc3-ghjq-m6fr', 'GHSA-qr28-fpjm-wq7f']),
+    );
+    expect(names(r)).toEqual(['mixed']);
+  });
+
+  it('fails closed when a cycle sits beside an allowlisted carrier', () => {
+    const r = classifyVulnerabilities(
+      {
+        ...FIXTURE,
+        a: { name: 'a', severity: 'high', via: ['decode-uri-component', 'b'] },
+        b: { name: 'b', severity: 'high', via: ['a'] },
+      },
+      new Set(['GHSA-vcc3-ghjq-m6fr', 'GHSA-qr28-fpjm-wq7f']),
+    );
+    expect(names(r)).toEqual(['a', 'b']);
+  });
+
   it('ignores moderate advisories on the way up the chain (gate is HIGH/CRITICAL)', () => {
     // minio also depends on stream-json (3 moderate advisories); those must
     // neither fail nor need allowlisting.

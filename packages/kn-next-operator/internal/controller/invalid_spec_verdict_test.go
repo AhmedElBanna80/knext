@@ -90,3 +90,23 @@ func TestComputeStatusVerdict_NoInvalidSpecInputIsTheOrdinaryVerdict(t *testing.
 		}
 	}
 }
+
+// withInvalidSpec(nil) is still a rejected spec: the early return is keyed on the
+// option having been supplied, not on the error being non-nil, so a nil error can
+// never fall through to the observed-state roll-up (which dereferences the ksvc).
+func TestComputeStatusVerdict_InvalidSpecWithNilError(t *testing.T) {
+	app := verdictApp()
+	v := computeStatusVerdict(app, nil, databaseCheckState{}, revisionCheck{}, imageCacheState{},
+		netpolEnforcementState{}, envMapCollisionReport{}, privateExposureState{}, podCreationState{},
+		time.Now(), withInvalidSpec(nil))
+
+	if got := conditionTypes(v); len(got) != 2 || got[0] != ConditionDegraded || got[1] != ConditionReady {
+		t.Fatalf("conditions = %v, want [Degraded Ready]", got)
+	}
+	if d := findVerdictCondition(t, v, ConditionDegraded); d.Reason != lcInvalidSpec || d.Message == "" {
+		t.Errorf("Degraded = %+v, want InvalidSpec with a non-empty message", d)
+	}
+	if len(v.events) != 1 || v.events[0].eventType != corev1.EventTypeWarning {
+		t.Errorf("events = %+v, want one Warning", v.events)
+	}
+}

@@ -93,7 +93,8 @@ does not parse, or `maxScale` × `poolMax` above the connection budget.
 **Cause.** The spec failed validation. An image that is not digest-pinned is the one spec error with its
 own event reason, `InvalidImage` (see [Image rejected](#image-rejected)); every other spec error uses
 `InvalidSpec`. The `Degraded` and `Ready` conditions say `InvalidSpec` in both cases. If you alert on the
-`InvalidImage` event reason, that alert keeps firing for unpinned images only.
+`InvalidImage` event reason, that alert keeps firing for unpinned images and for a missing image
+(`spec.image` empty), and for nothing else.
 
 **Fix.** Read the message in `kubectl get nextapp <app> -n <ns> -o jsonpath='{.status.conditions}' | jq`,
 correct the named field, and re-apply the `NextApp`. The operator re-validates on the next reconcile.

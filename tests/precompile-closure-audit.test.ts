@@ -11,6 +11,7 @@ import {
   MIN_NPM_COMPONENTS,
   npmComponents,
   readAllowlist,
+  readAllowlistDetailed,
   verifyClosureCoverage,
 } from '../scripts/lib/precompile-closure.mjs';
 
@@ -333,5 +334,41 @@ describe('evaluateFindings — HIGH/CRITICAL block, allowlisted ids are reported
     // A scanner that failed and printed something else must never read as
     // "zero findings". This is the same emptiness rule one layer down.
     expect(() => evaluateFindings({} as never, { allowlist: new Set() })).toThrow(/matches/i);
+  });
+});
+
+describe('readAllowlistDetailed — expired entries are reported, not dropped silently', () => {
+  const NOW = new Date('2026-11-06T00:00:00Z');
+  const entry = (id: string, expires: string) => ({
+    id,
+    justification: 'x',
+    added: '2026-01-01',
+    expires,
+  });
+
+  it('reports an expired entry and does not use it', () => {
+    const { active, expired } = readAllowlistDetailed(
+      { allow: [entry('GHSA-old', '2026-11-03')] },
+      NOW,
+    );
+    expect(expired).toEqual(['GHSA-old']);
+    expect(active.has('GHSA-old')).toBe(false);
+  });
+
+  it('uses a future entry and does not report it', () => {
+    const { active, expired } = readAllowlistDetailed(
+      { allow: [entry('GHSA-new', '2026-11-19')] },
+      NOW,
+    );
+    expect(expired).toEqual([]);
+    expect(active.has('GHSA-new')).toBe(true);
+  });
+
+  it('readAllowlist still returns just the active set', () => {
+    const active = readAllowlist(
+      { allow: [entry('GHSA-old', '2026-11-03'), entry('GHSA-new', '2026-11-19')] },
+      NOW,
+    );
+    expect([...active]).toEqual(['GHSA-new']);
   });
 });

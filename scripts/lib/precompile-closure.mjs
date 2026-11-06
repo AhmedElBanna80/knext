@@ -256,8 +256,13 @@ export function verifyClosureCoverage({
  */
 export const ALLOWLIST_ENTRY_KEYS = new Set(['id', 'justification', 'added', 'expires', 'note']);
 
-export function readAllowlist(doc, now = new Date()) {
+/**
+ * Same validation as `readAllowlist`, but also reports the ids it skipped as
+ * expired so the gate can say so instead of dropping them silently.
+ */
+export function readAllowlistDetailed(doc, now = new Date()) {
   const active = new Set();
+  const expired = [];
   const entries = doc?.allow ?? [];
   if (!Array.isArray(entries)) throw new Error('allowlist: `allow` must be an array');
   for (const entry of entries) {
@@ -283,11 +288,18 @@ export function readAllowlist(doc, now = new Date()) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.expires)) {
         throw new Error(`allowlist: entry ${entry.id} has a malformed \`expires\` date`);
       }
-      if (new Date(`${entry.expires}T00:00:00Z`) <= now) continue; // expired — no longer suppresses
+      if (new Date(`${entry.expires}T00:00:00Z`) <= now) {
+        expired.push(entry.id); // no longer suppresses — reported, never silent
+        continue;
+      }
     }
     active.add(entry.id);
   }
-  return active;
+  return { active, expired };
+}
+
+export function readAllowlist(doc, now = new Date()) {
+  return readAllowlistDetailed(doc, now).active;
 }
 
 /**

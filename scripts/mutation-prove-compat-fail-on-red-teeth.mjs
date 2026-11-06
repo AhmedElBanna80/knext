@@ -107,7 +107,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runGateTest } from './lib/ci-blocking-gate-proof.mjs';
-import { countOccurrences, mutate, restore, snapshot } from './lib/mutation-harness.mjs';
+import {
+  assertAnchorsResolved,
+  countOccurrences,
+  mutate,
+  restore,
+  snapshot,
+} from './lib/mutation-harness.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 import { HATCH_SHAPES } from './lib/shell-command-position.mjs';
 
@@ -862,6 +868,25 @@ function preflight() {
 }
 
 preflight();
+
+/**
+ * SELF-ASSERTING (classified in `SELF_ASSERTING_PROVERS`, scripts/lib/prover-lane.mjs).
+ *
+ * `preflight()` above checks each row's edits in SEQUENCE against the text the
+ * earlier edits produced and that no two rows collapse into one mutation. This
+ * is the shared, audited half: every edit of every row, against its real file,
+ * must occur exactly once. The PR-time audit cannot read the defaulted-`file`
+ * majority of rows, so it checks that THIS call is still here instead.
+ */
+assertAnchorsResolved(
+  MUTATIONS.flatMap((row) =>
+    editsOf(row).map((edit) => ({
+      label: row.label,
+      file: row.file ?? WORKFLOW,
+      anchor: edit.anchor,
+    })),
+  ),
+);
 declareMutations(MUTATIONS.length);
 
 /** Run one assertion and refuse to interpret a run in which nothing executed. */

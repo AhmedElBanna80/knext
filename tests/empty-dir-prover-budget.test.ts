@@ -65,7 +65,9 @@ describe('empty-dir mutation prover fits the nightly bound', () => {
     const tail = PROVER.slice(lastMutation);
     const recheck = tail.indexOf('if (!specPasses())');
     expect(recheck, 'no green re-check after the last mutation').toBeGreaterThan(-1);
-    expect(tail.slice(recheck, recheck + 400)).toContain('process.exit(1)');
+    // Only the re-check's own block: the summary after it also exits 1, on a different condition.
+    const block = tail.slice(recheck, tail.indexOf('\n}', recheck));
+    expect(block).toContain('process.exit(1)');
   });
 
   it('declared mutations x spec runs fit the bound with runner-variance headroom', () => {

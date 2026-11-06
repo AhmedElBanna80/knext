@@ -681,9 +681,26 @@ function credentialed(
     if (declared && typeof declared === 'object' && Object.keys(declared).length > 0) return true;
   }
   if (referencesSecret(job.env)) return true;
+  // #2756: google-github-actions/auth only mints a cloud credential, so it counts as a registry
+  // login ONLY when the same job also uses a registry: `docker push`, a *.pkg.dev / gcr.io
+  // image, or `gcloud auth configure-docker`. Alone it is not credentialed.
+  const jobSteps = Array.isArray(job.steps) ? (job.steps as Step[]) : [];
+  const usesGcpRegistry = jobSteps.some((x) =>
+    /\bdocker\s+push\b|\b[\w.-]*pkg\.dev\b|\bgcr\.io\b|\bgcloud\s+auth\s+configure-docker\b/.test(
+      `${code(x)}\n${JSON.stringify(x.with ?? {})}`,
+    ),
+  );
   const credStep = (st: Step, depth: number): boolean => {
+    if (/^google-github-actions\/auth@/.test(uses(st)) && usesGcpRegistry) return true;
     if (
       /^docker\/login-action@/.test(uses(st)) ||
+      /^aws-actions\/amazon-ecr-login@/.test(uses(st)) ||
+      /^azure\/docker-login@/.test(uses(st)) ||
+      /\baz\s+acr\s+login\b/.test(code(st)) ||
+      /\bhelm\s+registry\s+login\b/.test(code(st)) ||
+      /\bgcloud\s+auth\s+configure-docker\b/.test(code(st)) ||
+      /\baws\s+ecr(?:-public)?\s+get-login-password\b/.test(code(st)) ||
+      /\b(?:buildah|nerdctl)\s+login\b/.test(code(st)) ||
       /\b(?:docker|podman|crane|regctl|skopeo|oras)\s+(?:auth\s+)?login\b|\bcosign\b/.test(
         code(st),
       ) ||

@@ -1008,6 +1008,75 @@ describe('repo-local scripts are read for pushes', () => {
       ).findings;
       expect(checks(f)).toContain('unresolved-script');
     });
+    describe('third-party registry login shapes (#2756)', () => {
+      const direct = (steps: Any[]) =>
+        discoverImageLanes(
+          [
+            {
+              file: 'fx.yml',
+              doc: { on: {}, jobs: { j: { ...ro, steps: [...steps, { run: 'bash hack/p.sh' }] } } },
+            },
+          ],
+          { resolveAction: () => null, readScript: () => null },
+        ).findings;
+      const positives: Array<[string, Any[]]> = [
+        ['aws-actions/amazon-ecr-login', [{ uses: 'aws-actions/amazon-ecr-login@abc' }]],
+        ['azure/docker-login', [{ uses: 'azure/docker-login@abc' }]],
+        ['az acr login', [{ run: 'az acr login --name reg' }]],
+        ['helm registry login', [{ run: 'helm registry login ghcr.io -u x' }]],
+        [
+          'gcloud auth configure-docker',
+          [{ run: 'gcloud auth configure-docker us-docker.pkg.dev' }],
+        ],
+        ['aws ecr get-login-password', [{ run: 'aws ecr get-login-password | crane x' }]],
+        ['aws ecr-public get-login-password', [{ run: 'aws ecr-public get-login-password' }]],
+        ['buildah login', [{ run: 'buildah login -u x ghcr.io' }]],
+        ['nerdctl login', [{ run: 'nerdctl login ghcr.io' }]],
+        [
+          'google-github-actions/auth + docker push',
+          [{ uses: 'google-github-actions/auth@abc' }, { run: 'docker push img' }],
+        ],
+        [
+          'google-github-actions/auth + pkg.dev image',
+          [
+            { uses: 'google-github-actions/auth@abc' },
+            { run: 'crane copy a us-docker.pkg.dev/p/r/i:1' },
+          ],
+        ],
+        [
+          'google-github-actions/auth + gcr.io image in with',
+          [
+            { uses: 'google-github-actions/auth@abc' },
+            { uses: 'x/y@abc', with: { image: 'gcr.io/p/i' } },
+          ],
+        ],
+        [
+          'google-github-actions/auth + configure-docker',
+          [{ uses: 'google-github-actions/auth@abc' }, { run: 'gcloud auth configure-docker' }],
+        ],
+      ];
+      for (const [label, steps] of positives) {
+        it(`${label} makes the job credentialed`, () => {
+          expect(checks(direct(steps))).toContain('unresolved-script');
+        });
+      }
+      const negatives: Array<[string, Any[]]> = [
+        ['helm repo add', [{ run: 'helm repo add bitnami https://charts.bitnami.com' }]],
+        ['az login without acr', [{ run: 'az login --service-principal' }]],
+        ['aws s3 cp', [{ run: 'aws s3 cp a s3://b/c' }]],
+        ['google-github-actions/auth alone', [{ uses: 'google-github-actions/auth@abc' }]],
+        ['xbuildah login', [{ run: 'xbuildah login' }]],
+        [
+          'aws-actions/configure-aws-credentials',
+          [{ uses: 'aws-actions/configure-aws-credentials@abc' }],
+        ],
+      ];
+      for (const [label, steps] of negatives) {
+        it(`${label} does not make the job credentialed`, () => {
+          expect(checks(direct(steps))).not.toContain('unresolved-script');
+        });
+      }
+    });
     it('a composite action with no registry login leaves the job uncredentialed', () => {
       expect(checks(withAction([{ run: 'echo hi' }]))).not.toContain('unresolved-script');
     });

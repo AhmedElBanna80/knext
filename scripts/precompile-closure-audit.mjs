@@ -80,7 +80,7 @@ import {
   closureShape,
   evaluateFindings,
   installedPackages,
-  readAllowlist,
+  readAllowlistDetailed,
   verifyClosureCoverage,
 } from './lib/precompile-closure.mjs';
 
@@ -209,7 +209,12 @@ if (!coverage.ok) {
 const allowlistDoc = existsSync(allowlistPath)
   ? JSON.parse(readFileSync(allowlistPath, 'utf8'))
   : { allow: [] };
-const allowlist = readAllowlist(allowlistDoc);
+const { active: allowlist, expired: expiredAllowlist } = readAllowlistDetailed(allowlistDoc);
+if (expiredAllowlist.length > 0) {
+  // Informational only: an expired entry already stopped suppressing, so
+  // pass/fail is unchanged. This just stops it sitting there silently.
+  console.log(`  expired allowlist entries: ${expiredAllowlist.join(', ')} (remove them)`);
+}
 
 const grypeOut = run('grype', [`sbom:${sbomPath}`, '-o', 'json', '-q']);
 let report;

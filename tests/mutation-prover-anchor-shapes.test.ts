@@ -383,6 +383,23 @@ describe('self-asserting provers: anchors built at run time assert themselves', 
       ['the call with no arguments', 'assertAnchorsResolved();'],
       ['the call under a conditional', `if (process.env.CHECK) {\n${CALL}\n}`],
       ['the call inside a function never invoked', `function never() {\n${CALL}\n}`],
+      [
+        'work hidden in a called local function declaration',
+        `function run() {\n  mutate(rows);\n}\nrun();\n${CALL}`,
+      ],
+      [
+        'work hidden in a called local arrow binding',
+        `const run = () => {\n  mutate(rows);\n};\nrun();\n${CALL}`,
+      ],
+      [
+        'work hidden in a transitively called local function',
+        `function inner() {\n  snapshot(rows);\n}\nfunction outer() {\n  inner();\n}\nouter();\n${CALL}`,
+      ],
+      ['work in an IIFE before the call', `(() => {\n  mutate(rows);\n})();\n${CALL}`],
+      ['work in a callback before the call', `[rows].forEach((r) => mutate(r));\n${CALL}`],
+      ['work inside the call arguments', 'assertAnchorsResolved(snapshot(rows));'],
+      ['an empty array literal as the rows', 'assertAnchorsResolved([]);'],
+      ['a spread of an empty literal as the rows', 'assertAnchorsResolved(...[]);'],
     ];
     for (const [name, replacement] of evasions) {
       it(`${name} -> red`, () => {
@@ -414,6 +431,24 @@ describe('self-asserting provers: anchors built at run time assert themselves', 
         'assertAnchorsResolved as other, mutate }',
       );
       expect(auditSelfAsserting(aliased).join(' ')).toMatch(/does not import/);
+    });
+
+    it('a process.exit inside a never-run helper before the call -> green (read-only preflight)', () => {
+      const src = GOOD.replace(
+        CALL,
+        `function preflight() {\n  if (!rows) process.exit(1);\n}\npreflight();\n${CALL}`,
+      );
+      expect(auditSelfAsserting(src)).toEqual([]);
+    });
+
+    it('an array literal or call expression as the rows -> green', () => {
+      expect(auditSelfAsserting(GOOD.replace('(rows)', '([rows[0]])'))).toEqual([]);
+      expect(auditSelfAsserting(GOOD.replace('(rows)', '(rows.flatMap((r) => [r]))'))).toEqual([]);
+    });
+
+    it('a source that does not parse fails closed (call otherwise valid) -> red', () => {
+      const src = GOOD.replace(CALL, `${CALL}\nconst rows2 = [;`);
+      expect(auditSelfAsserting(src).join(' ')).toMatch(/does not parse/);
     });
 
     it('await-prefixed top-level call before any work -> green', () => {

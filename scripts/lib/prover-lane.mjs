@@ -1475,17 +1475,56 @@ export const SELF_ASSERTING_PROVERS = Object.freeze([
  */
 const WORK_CALLS = new Set(['snapshot', 'mutate', 'prove']);
 
-/** Does this statement contain, outside any function body, a work call? */
-function statementDoesWork(node) {
-  let found = false;
+const isDefinition = (n) =>
+  ts.isFunctionDeclaration(n) ||
+  ts.isClassLike(n) ||
+  (ts.isFunctionLike(n) &&
+    n.parent &&
+    ts.isVariableDeclaration(n.parent) &&
+    n.parent.initializer === n);
+
+/** Names of local functions (declarations and `const f = () => ...`) mapped to their nodes. */
+function localFunctions(sf) {
+  const fns = new Map();
   const visit = (n) => {
+    if (ts.isFunctionDeclaration(n) && n.name) fns.set(n.name.text, n);
+    else if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      fns.set(n.name.text, n.initializer);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return fns;
+}
+
+/**
+ * Does `node` do work? Anywhere inside it, INCLUDING inline function/arrow
+ * bodies and callbacks (an IIFE or `.forEach(r => mutate(r))` runs), a call to
+ * snapshot/mutate/prove, or a call to a local function that transitively does.
+ * A function DEFINITION (declaration, `const f = () => ...`, class) is not an
+ * invocation and is skipped; calling it is what counts.
+ * `process.exit` counts only OUTSIDE any function body: a read-only preflight
+ * helper may exit on a bad input before the assertion (the compat prover does),
+ * and an exit inside a helper says nothing about having started planting.
+ * `workFns` is the set of local function names that transitively do work.
+ */
+function doesWork(node, workFns, { exitCounts = true } = {}) {
+  let found = false;
+  const visit = (n, inFn) => {
     if (found) return;
-    // A definition is not an invocation.
-    if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+    if (isDefinition(n)) return;
+    const nowInFn = inFn || ts.isFunctionLike(n);
     if (ts.isCallExpression(n)) {
       const c = n.expression;
-      if (ts.isIdentifier(c) && WORK_CALLS.has(c.text)) found = true;
+      if (ts.isIdentifier(c) && (WORK_CALLS.has(c.text) || workFns.has(c.text))) found = true;
       else if (
+        exitCounts &&
+        !inFn &&
         ts.isPropertyAccessExpression(c) &&
         ts.isIdentifier(c.expression) &&
         c.expression.text === 'process' &&
@@ -1494,11 +1533,33 @@ function statementDoesWork(node) {
         found = true;
       }
     }
-    ts.forEachChild(n, visit);
+    ts.forEachChild(n, (ch) => visit(ch, nowInFn));
   };
-  visit(node);
+  visit(node, false);
   return found;
 }
+
+/** Closure over local functions: a function works if its body does, or calls one that does. */
+function workFunctions(fns) {
+  const workFns = new Set();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [name, fn] of fns) {
+      if (workFns.has(name)) continue;
+      let hit = false;
+      ts.forEachChild(fn, (ch) => {
+        if (!hit && doesWork(ch, workFns, { exitCounts: false })) hit = true;
+      });
+      if (hit) {
+        workFns.add(name);
+        changed = true;
+      }
+    }
+  }
+  return workFns;
+}
+
+const isEmptyArrayLiteral = (e) => ts.isArrayLiteralExpression(e) && e.elements.length === 0;
 
 /**
  * Does a self-asserting prover still assert? Returns findings (empty when it does).
@@ -1525,6 +1586,10 @@ export function auditSelfAsserting(source) {
     true,
     ts.ScriptKind.JS,
   );
+  if (sf.parseDiagnostics.length > 0) {
+    return ['does not parse; the audit fails closed on a source it cannot read'];
+  }
+  const workFns = workFunctions(localFunctions(sf));
   const findings = [];
   let imported = false;
   for (const st of sf.statements) {
@@ -1552,13 +1617,16 @@ export function auditSelfAsserting(source) {
         ts.isCallExpression(e) &&
         ts.isIdentifier(e.expression) &&
         e.expression.text === 'assertAnchorsResolved' &&
-        e.arguments.length >= 1
+        e.arguments.length >= 1 &&
+        !isEmptyArrayLiteral(e.arguments[0]) &&
+        !(ts.isSpreadElement(e.arguments[0]) && isEmptyArrayLiteral(e.arguments[0].expression)) &&
+        !e.arguments.some((arg) => doesWork(arg, workFns))
       ) {
         asserted = true;
         break;
       }
     }
-    if (statementDoesWork(st)) break;
+    if (doesWork(st, workFns)) break;
   }
   if (!asserted) {
     findings.push(

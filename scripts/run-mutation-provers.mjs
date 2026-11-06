@@ -386,6 +386,10 @@ function cleanPrivateTmp() {
 process.on('exit', () => {
   if (privateTmp) rmSync(privateTmp, { recursive: true, force: true });
 });
+// A job timeout or cancellation sends SIGTERM/SIGINT, which skips 'exit' unless
+// handled; exit with the conventional code so the private dir is still removed.
+process.once('SIGTERM', () => process.exit(143));
+process.once('SIGINT', () => process.exit(130));
 
 /** Delete regenerable build output; returns what was removed. */
 function cleanBuildOutput() {

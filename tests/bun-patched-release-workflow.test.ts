@@ -74,12 +74,12 @@ describe('bun-patched-release: every gate runs BEFORE anything is signed or publ
     }
   });
 
-  it('the arm64 smoke runs on a real arm64 runner against the pinned stock 1.4.2 control', () => {
+  it('the arm64 smoke runs on a real arm64 runner against the pinned stock 1.4.4 control', () => {
     const job = release.jobs['smoke-arm64'] as Job;
     expect(job['runs-on']).toBe('ubuntu-24.04-arm');
     const text = stepText(job);
     expect(text).toContain('bun-linux-aarch64');
-    expect(text).toContain('54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7');
+    expect(text).toContain('baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e');
     expect(text).toContain('deploy/bun-patched/smoke.sh');
   });
 
@@ -157,7 +157,7 @@ describe('bun-patched drift check (informational, nightly)', () => {
   });
 
   it('reads the pinned stock version from bun-toolchain.ts (exactly one pin)', () => {
-    expect(pinnedBunVersion(read('packages/kn-next/src/cli/bun-toolchain.ts'))).toBe('1.4.2');
+    expect(pinnedBunVersion(read('packages/kn-next/src/cli/bun-toolchain.ts'))).toBe('1.4.4');
     expect(() => pinnedBunVersion('')).toThrow();
   });
 

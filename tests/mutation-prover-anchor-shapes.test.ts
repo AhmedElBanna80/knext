@@ -410,6 +410,10 @@ describe('self-asserting provers: anchors built at run time assert themselves', 
         `class X {\n  static go() {\n    mutate(rows);\n  }\n}\nX.go();\n${CALL}`,
       ],
       [
+        'work via new class with work in an instance field initializer',
+        `class X {\n  y = mutate(rows);\n}\nnew X();\n${CALL}`,
+      ],
+      [
         'work via new class with work in constructor',
         `class X {\n  constructor() {\n    mutate(rows);\n  }\n}\nnew X();\n${CALL}`,
       ],

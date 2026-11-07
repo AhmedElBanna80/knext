@@ -50,7 +50,7 @@
  * TWO SCOPES (#2739)
  * -------------------
  * Upstream tags are rebuilt in place (base-image CVE refreshes), so a CORRECT
- * pin goes stale within a day — `golang:1.26.10` carried four digests in two
+ * pin goes stale within a day — `golang:1.27.3` carried four digests in two
  * days. Resolving the whole tree on every PR therefore reddened PRs whose diff
  * touches no pin, and each re-pin cost a PR, a review and a CI run.
  *

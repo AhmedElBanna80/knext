@@ -140,9 +140,9 @@ const MUTATIONS = [
     subject: 'goTemplate',
     claim: 'one golang pin goes back to the digest it had before the re-pin (#2665)',
     anchor:
-      'golang:1.26.10@sha256:b27fde63cc160f04a81cf7cf43c6560b47d736a1f0e3babe17745e8fbdff198d',
+      'golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e',
     replacement:
-      'golang:1.26.10@sha256:24a707af49702fa44f02785475d02fb752f6982d3e9c0afb7696e1f0204e7ce9',
+      'golang:1.27.3@sha256:24a707af49702fa44f02785475d02fb752f6982d3e9c0afb7696e1f0204e7ce9',
     options: DOCKER,
   },
   {

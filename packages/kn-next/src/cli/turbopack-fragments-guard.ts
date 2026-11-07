@@ -68,3 +68,6 @@ export function assertNoBunTurbopackFragments(opts: {
         );
     }
 }
+
+// Retirement probe (tests/upstream-retirement): red once a stock Bun ships oven-sh/bun#45010.
+// @upstream-shim bun-45007-const-assign

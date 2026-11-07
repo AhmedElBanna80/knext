@@ -9,7 +9,7 @@
  *     same PR: this test stays red until the entry and its markers are gone;
  *  2b. every upstream issue/PR the registry cites exists with the title it
  *     records (a typo'd number that happens to exist still reds);
- *  3. every `// @upstream-shim <id>` marker under MARKER_ROOTS (the adapters and packages/ffi/src) has
+ *  3. every `// @upstream-shim <id>` marker under MARKER_ROOTS (the adapters, packages/ffi/src and the CLI) has
  *     an entry, every entry has at least one marker, and no marker is malformed.
  */
 import { describe, expect, it } from 'bun:test';
@@ -26,6 +26,7 @@ import {
   cacheControlVerdict,
   pinnedBunFfiDoc,
   REGISTRY,
+  upstreamFixedMessage,
 } from './registry';
 
 /** Every marker under every scanned root (MARKER_ROOTS), paths relative to the repo root. */
@@ -63,12 +64,7 @@ describe('upstream-retirement: every registered upstream problem still reproduce
       async () => {
         const probe = await entry.repro();
         if (!probe.stillBroken) {
-          throw new Error(
-            `upstream fixed — delete shim ${entry.id} and close ${entry.issue} ` +
-              `(${entry.upstream} no longer reproduces on the pinned ${entry.against}). ` +
-              `Remove every \`// @upstream-shim ${entry.id}\` shim and this registry entry in the same PR as the bump.\n` +
-              `evidence: ${probe.evidence}`,
-          );
+          throw new Error(upstreamFixedMessage(entry, probe));
         }
         expect(probe.stillBroken).toBe(true);
       },

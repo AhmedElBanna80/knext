@@ -1,13 +1,14 @@
 # ADR-0072: Do not ship a patched Bun runtime base for oven-sh/bun#45007; verify the fix in CI only
 
-- **Status:** **Proposed (draft, 2026-11-06).** Recommends option (a). Options (b) and (c) would
-  reverse a recorded founder decision (decision A, 2026-09-26, quoted below), so neither can be
-  adopted without the founder signing off on that reversal explicitly.
+- **Status:** **Accepted (2026-11-07, founder decision): option (a).** Proposed 2026-11-06.
+  Options (b) and (c) would reverse a recorded founder decision (decision A, 2026-09-26, quoted
+  below). Reopening either one needs a revisit trigger (T1-T3) and explicit founder sign-off.
 - **Date:** 2026-11-06
 - **Trigger class:** supply chain (`.claude/rules/security.md`: which binary runs in users' pods),
   the `knext.config.ts` schema / CLI surface (options b and c), and the credential (ADR-0056 cells).
   The recommended option touches none of the tracked trigger paths.
-- **Relates to:** ADR-0007 (the 2026-11-05 amendment and its upstream-runtime-defect ledger),
+- **Relates to:** ADR-0007 (the 2026-11-05 amendment and its upstream-runtime-defect ledger,
+  which now points back here for the patched-base question),
   ADR-0056 (credential cells and fingerprints), ADR-0058 (the runtime × builder matrix and the Bun
   default), ADR-0036/0048 (build targets), ADR-0001 (unchanged by every option here).
 - **Decision method:** each option was scored with jev (`jev-1.14.0`). Scores are quoted where they
@@ -262,7 +263,8 @@ against paying that.
    cosign-verifies the base and sets `KNEXT_BUN_BASE_EXE` for the compile step. While it is set,
    **fold the base's sha256 into the fingerprint and refuse to record a credential night.** Run
    bun/turbopack at v16.4.3 with the ledger entries disabled, and post the result on oven-sh/bun#45010.
+   **Tracked in #2804.**
 4. Add a `bun-45007-const-assign` probe to `tests/upstream-retirement/registry.ts`, using the
    ledger's minimal repro, so the first stock Bun release with the fix turns red and starts the
-   retirement of the guard and the ledger entries in one change.
+   retirement of the guard and the ledger entries in one change. **Tracked in #2805.**
 5. Track T1-T3 in the issue that carries this ADR. Check T1 on every Next ref bump.

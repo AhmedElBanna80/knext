@@ -55,10 +55,20 @@ describe('infra/bun-base per-patch smoke', () => {
   });
 
   it('fails the smoke when a control does not discriminate (both halves asserted)', () => {
-    // Each fixed-on-patched check is paired with a broken-on-stock check.
-    expect(smoke).toMatch(/\[ "\$p" = 0 \].*\|\| fail/);
-    expect(smoke).toMatch(/\[ "\$s" = 1 \][\s\S]*?\|\| fail/);
-    expect(smoke).toMatch(/\[ "\$cp" = 0 \].*\|\| fail/);
-    expect(smoke).toMatch(/\[ "\$cs" = 1 \] \|\| fail/);
+    // Each check is ONE line ending in `|| fail`: a pattern spanning lines could bind to a later
+    // line's `|| fail` and stay green with this one's removed. `[^\n]*` keeps each on its line.
+    const lines = smoke.split('\n');
+    const failing = (guard: string) =>
+      lines.some((l) => l.startsWith(guard) && /\|\| fail "[^\n]+"$/.test(l));
+    // Fixed on the patched binary, run directly and as a compiled exec on that base…
+    expect(failing('[ "$p" = 0 ] && grep -qx loaded p.out')).toBe(true);
+    expect(failing('[ "$cp" = 0 ] && grep -qx loaded cp.out')).toBe(true);
+    // …still broken on stock (the control), both shapes…
+    expect(
+      failing(`[ "$s" = 1 ] && grep -q 'Cannot assign to "e" because it is a constant' s.out`),
+    ).toBe(true);
+    expect(failing('[ "$cs" = 1 ]')).toBe(true);
+    // …and a TypeError at run time when the assignment does run on the patched binary.
+    expect(failing('[ "$px" != 0 ] && grep -q TypeError px.out')).toBe(true);
   });
 });

@@ -40,8 +40,7 @@ cs=$?
 set -e
 echo "const-assign: patched exit $p, stock exit $s; compiled on patched base exit $cp, on stock base exit $cs; patched with the assignment reached exit $px"
 [ "$p" = 0 ] && grep -qx loaded p.out || fail "patched Bun did not load the const-assign module (exit $p)"
-[ "$s" = 1 ] && grep -q 'Cannot assign to "e" because it is a constant' s.out \
-  || fail "stock Bun loaded the const-assign module (exit $s): the control no longer discriminates — has the fix shipped?"
+[ "$s" = 1 ] && grep -q 'Cannot assign to "e" because it is a constant' s.out || fail "stock Bun loaded the const-assign module (exit $s): the control no longer discriminates — has the fix shipped?"
 [ "$cp" = 0 ] && grep -qx loaded cp.out || fail "a compiled exec on the patched base did not load the chunk from disk (exit $cp)"
 [ "$cs" = 1 ] || fail "a compiled exec on the stock base loaded the chunk (exit $cs): the control no longer discriminates"
 # When the assignment DOES run it must still throw — at run time, as a TypeError.

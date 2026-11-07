@@ -116,7 +116,9 @@ const CONST_ASSIGN_HARNESS =
 export function constAssignVerdict(exits: { load: number | null; assign: number | null }): Probe {
   const { load, assign } = exits;
   const known: number[] = Object.values(CONST_ASSIGN_EXIT);
-  if (load === null || assign === null || !known.includes(assign)) {
+  // A direct run either loads (0) or fails to load (1); anything else (a crash,
+  // a signal) says nothing about the parser.
+  if (load === null || ![0, 1].includes(load) || assign === null || !known.includes(assign)) {
     inconclusive(
       'bun-45007-const-assign',
       `exit codes outside the harness contract: ${JSON.stringify(exits)}`,

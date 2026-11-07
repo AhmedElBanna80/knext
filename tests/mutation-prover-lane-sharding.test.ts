@@ -1353,6 +1353,38 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
         rmSync(tmp, { recursive: true, force: true });
       }
     });
+
+    it('the NEXT prover does not inherit the previous prover temp entries (swept between provers, not only at exit)', () => {
+      // The runner also removes its whole private temp dir at exit, so a one-prover run
+      // cannot tell a between-prover sweep from the exit sweep. A starved leg dies from
+      // what accumulates across 40 provers, so observe it from the SECOND prover.
+      const dir = makeTree({
+        'mutation-prove-a.mjs': `
+          import { mkdtempSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { tmpdir } from 'node:os';
+          writeFileSync(join(mkdtempSync(join(tmpdir(), 'leaky-')), 'big.bin'), 'x');
+          console.log('::prover-summary:: ' + JSON.stringify({ declared: 1, run: 1 }));`,
+        'mutation-prove-b.mjs': `
+          import { readdirSync, writeFileSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          writeFileSync(process.env.SEEN_REC, JSON.stringify(readdirSync(tmpdir())));
+          console.log('::prover-summary:: ' + JSON.stringify({ declared: 1, run: 1 }));`,
+      });
+      try {
+        const rec = join(dir, 'seen.json');
+        const r = run(dir, [], { KNEXT_LANE_CLEANUP: '1', SEEN_REC: rec });
+        expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+        expect(existsSync(rec), 'the second prover did not run').toBe(true);
+        expect(
+          (JSON.parse(read(rec)) as string[]).filter((n) => n.startsWith('leaky-')),
+          'the second prover saw the first prover temp entries',
+        ).toHaveLength(0);
+        expect(r.stdout).toMatch(/cleanup: removed 1 temp entry the prover left/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('is HERMETIC: a lane-style environment does not leak into the runner under test', () => {
@@ -1517,12 +1549,17 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
     };
     const env = { KNEXT_PROVER_TIMEOUT_MS: '1500', KNEXT_LANE_RESTORE_AFTER_KILL: '1' };
 
-    it('restores the modified tracked file', () => {
+    it('restores the modified tracked file, and names it (the residue check covers a killed prover)', () => {
       const dir = tree();
       try {
         const r = run(dir, [], env);
         expect(r.status).not.toBe(0);
         expect(read(join(dir, 'tracked.txt'))).toBe('original');
+        // The tracked half of a kill is the general residue restore, not a kill-only
+        // checkout: the finding must name the killed prover and the file it left.
+        expect(`${r.stdout}${r.stderr}`).toMatch(
+          /mutation-prove-a-leaky\.mjs left tracked file\(s\) modified: tracked\.txt — restored/,
+        );
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

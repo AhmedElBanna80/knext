@@ -76,6 +76,11 @@ describe('bun-45007-const-assign: the verdict (exit codes only)', () => {
     expect(() => constAssignVerdict({ load: 0, assign: 99 })).toThrow(/inconclusive/);
     expect(() => constAssignVerdict({ load: 0, assign: null })).toThrow(/inconclusive/);
   });
+
+  it('a load exit outside {0, 1} (a crash, e.g. 139) is inconclusive, not "still broken"', () => {
+    expect(() => constAssignVerdict({ load: 139, assign: OTHER_ERROR })).toThrow(/inconclusive/);
+    expect(() => constAssignVerdict({ load: 2, assign: OTHER_ERROR })).toThrow(/inconclusive/);
+  });
 });
 
 describe('bun-45007-const-assign: the live probe', () => {
@@ -113,7 +118,12 @@ describe('bun-45007-const-assign: the live probe', () => {
       const dir = mkdtempSync(join(tmpdir(), 'knext-45007-fake-'));
       try {
         const fake = join(dir, 'fake-runtime');
-        writeFileSync(fake, `#!/bin/sh\nexit ${CONST_ASSIGN_EXIT.OTHER_ERROR}\n`);
+        // Looks exactly like Bun 1.4.2 on the repro (load 1, harness 43), so only
+        // the harness check can tell it apart: a clean module also fails.
+        writeFileSync(
+          fake,
+          `#!/bin/sh\ncase "$1" in repro.js) exit 1 ;; *) exit ${CONST_ASSIGN_EXIT.OTHER_ERROR} ;; esac\n`,
+        );
         chmodSync(fake, 0o755);
         expect(() => constAssignProbe({ subject: fake, control: nodeOnPath() })).toThrow(
           /inconclusive/,

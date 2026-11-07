@@ -211,6 +211,13 @@ describe('compat-bun-base fetch — behaviour (stubbed tools, real script)', () 
     expect(r.stderr).toMatch(/fingerprint folded/);
     expect(fetch({}, {}, ['--expect-sha256', r.baseSha]).status).toBe(0);
   });
+
+  it('refuses an EMPTY --expect-sha256 (a build-next that exported no digest is a refusal, not a pass)', () => {
+    const r = fetch({}, {}, ['--expect-sha256', '']);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/fingerprint folded ""/);
+    expect(r.ghEnv).toBe('');
+  });
 });
 
 describe('compat-bun-base — pure checks', () => {

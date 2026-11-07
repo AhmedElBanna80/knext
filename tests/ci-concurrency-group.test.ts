@@ -183,6 +183,8 @@ const CI_YML = 'ci.yml';
  * `npm publish` step would have stayed waved through with no signal at all. An
  * exemption has to name what it is excusing or it is an unbounded licence.
  *
+ * - `test-e2e-deploy.yml` for `cosign` only (#2804): verify-only, see the entry below. Any other
+ *   marker that file gains is unexcused.
  * - `preview.yml` for `preview.js deploy` (pre-existing, 2026-08): deploys a PR
  *   preview to a PR-SCOPED namespace, keyed `preview-<pr number>`. Superseding
  *   deploys to one namespace are the intended semantics, and a cancelled deploy
@@ -191,6 +193,11 @@ const CI_YML = 'ci.yml';
  */
 const CANCEL_IN_PROGRESS_EXEMPT = new Map<string, Set<string>>([
   ['preview.yml', new Set(['preview.js deploy'])],
+  // `test-e2e-deploy.yml` for `cosign` (#2804, founder-approved 2026-11-07): the dispatch-only
+  // patched-Bun-base fetch installs cosign and runs `cosign verify-blob` over the artifact's
+  // SHA256SUMS. It only VERIFIES a signature bun-base-build.yml already made; it never signs,
+  // publishes or pushes anything, so a cancelled run leaves nothing half-signed behind.
+  ['test-e2e-deploy.yml', new Set(['cosign'])],
 ]);
 
 /**

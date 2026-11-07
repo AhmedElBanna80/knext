@@ -1,7 +1,7 @@
 /**
  * PR-time diff scoping for `scripts/verify-image-pins.mjs` (#2739).
  *
- * An upstream tag rebuilt in place (`golang:1.27.3` has carried four digests in
+ * An upstream tag rebuilt in place (`golang:1.26.10` has carried four digests in
  * two days) reddened PRs whose diff touches no pin. The decision: on a PR the
  * registry is asked only about pins the PR ADDS OR CHANGES; the nightly keeps
  * the full tree and owns "upstream moved under us".

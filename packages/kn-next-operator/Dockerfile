@@ -9,6 +9,8 @@
 # `trivy image --severity HIGH,CRITICAL --exit-code 1` gate on main and blocking
 # the whole bundle publish (refs #117). 1.26.9 is the first line carrying the fixes (x/net >= 0.60 requires Go 1.26; the 1.25 line is unpatched for the 2026-10 net/http, HTTP/2 and crypto/tls DoS CVEs; 1.25.13 cleared the 7 HIGH stdlib CVEs Trivy flagged in 1.25.12: CVE-2026-33818 asn1 DoS, CVE-2026-39821 idna, +5)
 # (fixes CVE-2026-39822, os.Root symlink following, HIGH).
+# The builder is now Go 1.27.3, which carries the fix for CVE-2026-111943
+# (crypto/x509); 1.27.0 through 1.27.2 are unpatched. The 1.26 history above stands.
 # Bump this in lockstep with hack/check-trivy-baseimage.bats.sh (MIN_PATCH).
 #
 # DIGEST-PINNED in addition to the patched point release: the tag fixes the Go

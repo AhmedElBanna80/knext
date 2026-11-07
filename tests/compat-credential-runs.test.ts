@@ -518,6 +518,12 @@ const CACHE_RULES: Record<string, (step: WorkflowStep) => string | null> = {
   'actions/checkout': () => null,
   'actions/upload-artifact': () => null,
   'actions/download-artifact': () => null,
+  // #2804: installs cosign for the dispatch-only patched-base fetch. It never runs on a credential
+  // night because the seam is empty on every schedule event (and the fetch refuses credential mode).
+  'sigstore/cosign-installer': (s) =>
+    s.if === "env.KNEXT_BUN_BASE_RUN_ID != ''"
+      ? null
+      : "cosign-installer may run only for the dispatch-only patched-base proof (if: env.KNEXT_BUN_BASE_RUN_ID != '')",
 };
 
 function credentialCacheViolations(text: string): string[] {

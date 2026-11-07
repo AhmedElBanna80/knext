@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -2390,4 +2390,67 @@ describe('compat-window fingerprint — scanning: every file an e2e-* entry scri
       }
     });
   }
+});
+
+describe('compat-window fingerprint — a patched Bun base is folded and never credited (#2804)', () => {
+  const BASE = '7bc3e9db8c96f2eec1471b9d385bdef06d8c8a3a9ce33710d033119211afb1e4';
+  function run(repoRoot: string, tarballsDir: string, extra: string[]) {
+    return spawnSync(
+      process.execPath,
+      [SCRIPT, '--repo-root', repoRoot, '--tarballs-dir', tarballsDir, '--json', ...extra],
+      { encoding: 'utf8' },
+    );
+  }
+
+  it('a base moves the digest, attributably, and is recorded verbatim', () => {
+    const { repoRoot, tarballsDir } = makeFixture();
+    const plain = JSON.parse(run(repoRoot, tarballsDir, []).stdout);
+    const based = JSON.parse(
+      run(repoRoot, tarballsDir, ['--bun-base-sha256', BASE, '--compat-mode', 'early-warning'])
+        .stdout,
+    );
+    expect(based.fingerprint).not.toBe(plain.fingerprint);
+    expect(based.components.harness).toBe(plain.components.harness);
+    expect(based.components.packed).toBe(plain.components.packed);
+    expect(based.components.bunBase).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(based.recorded.bunBase).toEqual({ sha256: BASE, frozen: true });
+    expect(plain.components).not.toHaveProperty('bunBase');
+    expect(plain.recorded.bunBase).toEqual({ sha256: null, frozen: false });
+  });
+
+  it('two different bases never share a digest', () => {
+    const { repoRoot, tarballsDir } = makeFixture();
+    const a = JSON.parse(run(repoRoot, tarballsDir, ['--bun-base-sha256', BASE]).stdout);
+    const b = JSON.parse(
+      run(repoRoot, tarballsDir, ['--bun-base-sha256', BASE.replace(/^7/, '8')]).stdout,
+    );
+    expect(a.fingerprint).not.toBe(b.fingerprint);
+  });
+
+  it('refuses a base in credential mode (exit non-zero, nothing printed as a digest)', () => {
+    const { repoRoot, tarballsDir } = makeFixture();
+    const r = run(repoRoot, tarballsDir, [
+      '--bun-base-sha256',
+      BASE,
+      '--compat-mode',
+      'credential',
+    ]);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain('evidence only');
+    expect(r.stdout).not.toContain('"fingerprint"');
+  });
+
+  it('refuses a base that is not a sha256', () => {
+    const { repoRoot, tarballsDir } = makeFixture();
+    const r = run(repoRoot, tarballsDir, ['--bun-base-sha256', 'latest']);
+    expect(r.status).not.toBe(0);
+  });
+
+  it('the workflow folds the base only from the verified fetch, in the fingerprint step', () => {
+    const wf = readFileSync(WORKFLOW, 'utf8');
+    expect(wf).toContain(
+      'BUN_BASE_ARGS+=(--bun-base-sha256 "${KNEXT_BUN_BASE_SHA256}" --compat-mode "${KNEXT_COMPAT_MODE}")',
+    );
+    expect(wf).toContain('${BUN_BASE_ARGS[@]+"${BUN_BASE_ARGS[@]}"} \\');
+  });
 });

@@ -680,6 +680,9 @@ const ALLOWED_ACTIONS = new Set([
   'actions/upload-artifact',
   'oven-sh/setup-bun',
   'pnpm/action-setup',
+  // #2804: installs the cosign binary for the dispatch-only patched-base fetch; not a retry
+  // wrapper, and gated on `env.KNEXT_BUN_BASE_RUN_ID != ''` (empty on every schedule).
+  'sigstore/cosign-installer',
 ]);
 
 /** Every `uses:` in the workflow, and any that is not on the allowlist. */

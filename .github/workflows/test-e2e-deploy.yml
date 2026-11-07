@@ -205,6 +205,17 @@ on:
         required: false
         type: string
         default: ''
+      # #2804 (ADR-0072 item 3) — dispatch-only CI proof of an upstream Bun fix before Bun
+      # releases it: the id of a successful bun-base-build.yml run on main. Its cosign-verified
+      # musl base becomes the compiled exec's base executable (KNEXT_BUN_BASE_EXE). The run is
+      # EVIDENCE ONLY: the base sha256 is folded into the fingerprint, the lane Bun id becomes
+      # `<stock>+bun-base.<sha256[:12]>` in every shard summary, and scripts/compat-bun-base.mjs
+      # refuses any event but workflow_dispatch and any credential-mode run.
+      bunBaseRunId:
+        description: '#2804 — dispatch-only: run id of a successful bun-base-build.yml run on main; its signature-verified patched musl base is the bun lane compile base (evidence only, never credited). Requires runtime=bun. Never runs on schedule.'
+        required: false
+        type: string
+        default: ''
   schedule:
     # 03:17 UTC nightly — off-peak; the run takes the better part of an hour.
     # This is the NODE lane: the compat-matrix credential (docs/compat-matrix.md).
@@ -355,6 +366,9 @@ env:
   # on an explicit dispatch that requests it. Read by the two per-shard
   # fault-injection steps in the `deploy-tests` job.
   KNEXT_PREKNEXT_FAULT: ${{ github.event.inputs.preKnextFault || '' }}
+  # #2804 — dispatch input ONLY, and gated on the event as well as the input: '' on every
+  # schedule event (tests/compat-bun-base-seam.test.ts pins this exact expression).
+  KNEXT_BUN_BASE_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bunBaseRunId || '' }}
   # #1301 — the ONE manifest-filename decision, made once at the workflow
   # level so both the test-selection step and the "Compute excluded count"
   # step (which must agree with it, or the reported excluded count would lie)
@@ -447,6 +461,10 @@ jobs:
     name: Prepare prebuilt next + harness
     needs: credential-ref
     runs-on: ubuntu-latest
+    outputs:
+      # #2804: the patched base the fingerprint folded ('' on every stock-base run); the shards
+      # re-fetch it and refuse any other bytes.
+      bun_base_sha256: ${{ steps.bun-base.outputs.sha256 }}
     # #147 step 1 (round 4 — the PREBUILT pivot). Rounds 1–3 tried to make this
     # job COMPILE next.js v16.0.3 from source within the runner window (timeout
     # 60→120→180, a build scoped to next + its workspace deps, a GHA-backed turbo
@@ -648,6 +666,21 @@ jobs:
           # lane only)` step. Bumping one alone reds compat-bun-lane-lockstep.
           bun-version: ${{ github.event.inputs.bun-version || '1.4.2' }}
 
+      # #2804 — dispatch-only patched Bun base (bunBaseRunId). scripts/compat-bun-base.mjs fails
+      # closed on a wrong source run, a signature or digest mismatch, or a base whose Bun is not
+      # the compiler's; it never falls back to the stock base.
+      - name: Install cosign (patched Bun base only)
+        if: env.KNEXT_BUN_BASE_RUN_ID != ''
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Fetch and verify the patched Bun base (dispatch-only evidence run)
+        id: bun-base
+        if: env.KNEXT_BUN_BASE_RUN_ID != ''
+        working-directory: knext
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/compat-bun-base.mjs fetch --run-id "${KNEXT_BUN_BASE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --dir "${RUNNER_TEMP}/bun-base"
+
       - name: Fingerprint the frozen compat-window set
         run: |
           set -euo pipefail
@@ -695,6 +728,12 @@ jobs:
           if [ "${KNEXT_SELF_CONTAINED:-}" = "1" ]; then
             SELF_CONTAINED_ARGS+=(--self-contained)
           fi
+          # #2804: a patched-base run folds the base's sha256 (set by the fetch step above only);
+          # the fingerprint script refuses it in credential mode.
+          BUN_BASE_ARGS=()
+          if [ -n "${KNEXT_BUN_BASE_SHA256:-}" ]; then
+            BUN_BASE_ARGS+=(--bun-base-sha256 "${KNEXT_BUN_BASE_SHA256}" --compat-mode "${KNEXT_COMPAT_MODE}")
+          fi
           node knext/scripts/compat-window-fingerprint.mjs \
             --repo-root knext \
             --tarballs-dir "${GITHUB_WORKSPACE}/knext-tarballs" \
@@ -706,6 +745,7 @@ jobs:
             --out "${GITHUB_WORKSPACE}/compat-window-fingerprint.json" \
             ${RUNTIME_ARGS[@]+"${RUNTIME_ARGS[@]}"} \
             ${SELF_CONTAINED_ARGS[@]+"${SELF_CONTAINED_ARGS[@]}"} \
+            ${BUN_BASE_ARGS[@]+"${BUN_BASE_ARGS[@]}"} \
             | tee "${RUNNER_TEMP}/fingerprint.txt"
           {
             echo '### Compat-window fingerprint'
@@ -1922,6 +1962,20 @@ jobs:
           fi
           echo "ok=$([ "${STATUS}" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
+      # #2804 — dispatch-only patched Bun base: re-fetched per shard (artifacts do not cross jobs
+      # here), and it must be the exact bytes build-next folded into the fingerprint.
+      - name: Install cosign (patched Bun base only)
+        if: env.KNEXT_BUN_BASE_RUN_ID != ''
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Fetch and verify the patched Bun base (dispatch-only evidence run)
+        if: env.KNEXT_BUN_BASE_RUN_ID != ''
+        working-directory: knext
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOLDED_SHA256: ${{ needs.build-next.outputs.bun_base_sha256 }}
+        run: node scripts/compat-bun-base.mjs fetch --run-id "${KNEXT_BUN_BASE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --dir "${RUNNER_TEMP}/bun-base" --expect-sha256 "${FOLDED_SHA256}"
+
       # ADR-0007 amendment (ref-pinned per-case entries), bar 1 enforced at RUN time. The runner
       # knows no refs: `suites[file].failed` deselects at whatever NEXTJS_REF is under test. This step
       # writes a COPY of the manifest in which every ref-pinned entry measured at another ref has its
@@ -1938,7 +1992,10 @@ jobs:
           set -euo pipefail
           rm -f "${SCOPED_MANIFEST}"
           if [ -f scripts/compat-manifest-for-ref.mjs ]; then
-            node scripts/compat-manifest-for-ref.mjs --manifest "${SCOPE_SOURCE_MANIFEST}" --ref "${NEXTJS_REF}" --out "${SCOPED_MANIFEST}"
+            # #2804: a patched-base run is scoped to the base it runs (`<stock>+bun-base.<sha>`),
+            # which matches no stock-Bun ledger entry, so those files RUN.
+            node scripts/compat-manifest-for-ref.mjs --manifest "${SCOPE_SOURCE_MANIFEST}" --ref "${NEXTJS_REF}" --out "${SCOPED_MANIFEST}" \
+              ${KNEXT_BUN_BASE_ID:+--bun-version "${KNEXT_BUN_BASE_ID}"}
           elif grep -Eq '"[$]knextRefPinnedCases"[[:space:]]*:' "${SCOPE_SOURCE_MANIFEST}"; then
             echo "::error::${SCOPE_SOURCE_MANIFEST} carries ref-pinned per-case deselections but this checkout has no scripts/compat-manifest-for-ref.mjs to scope them to NEXTJS_REF; refusing to run with them applied at an unmeasured ref"
             exit 1
@@ -2178,6 +2235,10 @@ jobs:
           RUNTIME_VERSION=""
           if [ "${KNEXT_RUNTIME}" = "bun" ]; then
             RUNTIME_VERSION="$(bun --version 2>/dev/null || echo unknown)"
+          fi
+          # #2804: a patched-base shard never reports as a stock Bun.
+          if [ -n "${KNEXT_BUN_BASE_ID:-}" ]; then
+            RUNTIME_VERSION="${KNEXT_BUN_BASE_ID}"
           fi
           node scripts/e2e-summary.mjs \
             --runner-log "${{ github.workspace }}/next.js/runner.log" \

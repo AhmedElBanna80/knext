@@ -57,11 +57,14 @@ mostly binds the SBOM to the exact bytes) — `manifest.json`, `SHA256SUMS`, and
 
 ## Bumping the SHA
 
-Choose a `main` commit whose Buildkite status and GitHub check-runs are all green. Put it in
+Choose a `main` commit whose Buildkite status and GitHub check-runs are all green — or, when the
+base is consumed by a `--bytecode` compile, the commit of the stock Bun **release** that lane compiles
+with (bytecode is only valid for the JSC that produced it). Put it in
 `UPSTREAM_SHA` and update the comment that explains the choice. Rebase each patch onto the new
 commit (`git am` has to apply cleanly). Delete any patch whose upstream PR is already in the new
 SHA, and delete its knext shim in the same PR. The toolchain versions in `build.sh` (LLVM major,
-Alpine release) follow `scripts/build/ci-images/spec.ts` at the pinned SHA, so check that file as
+Alpine release) follow the pinned SHA's toolchain — `scripts/build/tools.ts` (`LLVM_VERSION`) at
+`bun-v1.4.2`, `scripts/build/ci-images/spec.ts` on later mains — so check that file as
 well.
 
 ## Consuming it in a lane (GitHub Actions only)

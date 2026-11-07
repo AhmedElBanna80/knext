@@ -10,7 +10,8 @@ export DEBIAN_FRONTEND=noninteractive HOME=/root LC_ALL=C
 WS=/workspace
 SRC=$WS/bun
 OUT=$WS/out
-# Toolchain pins. LLVM/Alpine track oven-sh/bun's scripts/build/ci-images/spec.ts at UPSTREAM_SHA;
+# Toolchain pins. LLVM/Alpine track oven-sh/bun's toolchain at UPSTREAM_SHA (scripts/build/tools.ts
+# LLVM_VERSION at bun-v1.4.2; scripts/build/ci-images/spec.ts on later mains);
 # rust comes from the repo's own rust-toolchain.toml.
 #
 # Every fetch below is either checked against a value committed here (not against a digest served by
@@ -20,13 +21,13 @@ OUT=$WS/out
 # network fetch that is neither pinned nor listed fails CI. When an upstream rotates a pinned artifact
 # out (apt.llvm.org and the Alpine CDN keep only the latest build) the build FAILS CLOSED and a
 # maintainer bumps the pin — see README.md, "Toolchain pins".
-LLVM_MAJOR=23
-LLVM_PKG_VERSION='1:23.1.2~++20260919103626+4b1925210476-1~exp1~20260919223755.77'
+LLVM_MAJOR=21
+LLVM_PKG_VERSION='1:21.1.8~++20251221032922+2078da43e25a-1~exp1~20251221153059.70'
 # apt.llvm.org archive signer, written as `gpg --fingerprint` prints it; compared with spaces stripped.
 # (Grouped, not one 40-hex token: see README "Secret-scan hygiene".)
 LLVM_SIGNER_FPR='6084 F3CF 814B 57C1 CF12  EFD5 15CF 4D18 AF4F 7421'
 ALPINE_RELEASE=3.23
-APK_TOOLS_STATIC_VERSION=3.0.8-r0
+APK_TOOLS_STATIC_VERSION=3.0.9-r0
 BOOTSTRAP_BUN=1.4.2
 RUSTUP_VERSION=1.29.1
 # sha256 pins for downloaded files live in fetch-pins.sha256 (sha256sum format, one per file).
@@ -163,7 +164,9 @@ for arch in $TARGETS; do
   wkkey="$(printf '%s' "$wkurl" | sha256sum | cut -c1-32)"
   cp "/tmp/wk/$wkfile" "$BUN_BUILD_PREFETCH_DIR/by-url/$wkkey"
   bd="build/release-linux-$arch-musl"
-  bun scripts/build.ts --profile=release --os=linux --arch="$arch" --abi=musl --canary=off \
+  # --lto=on: at bun-v1.4.2 the release profile enables ThinLTO only under --ci, and the pinned WebKit
+  # prebuilt above is the -lto one; without it the build would fetch the non-LTO tarball unpinned.
+  bun scripts/build.ts --profile=release --lto=on --os=linux --arch="$arch" --abi=musl --canary=off \
     --build-dir="$bd" 2>&1 | tee "/tmp/build-$arch.log" | tail -n 60
   test -x "$bd/bun"
   # Proof the pinned tarball — not a fresh network fetch — is what got linked.

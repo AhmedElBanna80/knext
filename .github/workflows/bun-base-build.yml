@@ -153,10 +153,23 @@ jobs:
         run: gcloud storage cp out/SHA256SUMS.sigstore.json "gs://$BUCKET/$PREFIX/$BUILD_ID/"
 
       - name: Smoke-test the x64 binary (musl, in Alpine)
+        env:
+          # The stock release UPSTREAM_SHA is (or is nearest to): smoke-patches.sh's negative control.
+          STOCK_BUN_TAG: bun-v1.4.2
         run: |
           set -euo pipefail
           head="$(jq -r .patched_head out/manifest.json)"
-          docker run --rm -v "$PWD/out:/w:ro" -e HEAD="$head" "$ALPINE_IMAGE" sh -euc '
+          # Stock control, pinned by sha256 in the repo (infra/bun-base/smoke-pins.sha256) and
+          # cross-checked against the release's own SHASUMS256.txt.
+          mkdir -p /tmp/stock && cd /tmp/stock
+          curl -fsSLo bun-linux-x64-musl.zip "https://github.com/oven-sh/bun/releases/download/$STOCK_BUN_TAG/bun-linux-x64-musl.zip"
+          grep -E '  bun-linux-x64-musl\.zip$' "$GITHUB_WORKSPACE/infra/bun-base/smoke-pins.sha256" | sha256sum -c --strict -
+          curl -fsSLo SHASUMS256.txt "https://github.com/oven-sh/bun/releases/download/$STOCK_BUN_TAG/SHASUMS256.txt"
+          grep -qxF "$(grep -E '  bun-linux-x64-musl\.zip$' "$GITHUB_WORKSPACE/infra/bun-base/smoke-pins.sha256")" SHASUMS256.txt
+          unzip -q bun-linux-x64-musl.zip
+          cd "$GITHUB_WORKSPACE"
+          docker run --rm -v "$PWD/out:/w:ro" -v /tmp/stock/bun-linux-x64-musl:/stock:ro \
+            -v "$PWD/infra/bun-base:/k:ro" -e HEAD="$head" "$ALPINE_IMAGE" sh -euc '
             apk add --no-cache libstdc++ libgcc >/dev/null
             cp /w/bun-linux-x64-musl /usr/local/bin/bun
             bun --version
@@ -166,7 +179,9 @@ jobs:
             bun build --compile a.js --outfile hello
             ./hello | grep -qx knext-bun-base-ok
             echo "compile round trip ok"
-          '
+            # Each patch fixed on the patched binary, still broken on the same stock release.
+            sh /k/smoke-patches.sh /usr/local/bin/bun /stock/bun
+          ' | tee -a "$GITHUB_STEP_SUMMARY"
           # aarch64 is not executed here (no arm64 runner/emulation in this job): format check only.
           if [ -f out/bun-linux-aarch64-musl ]; then file out/bun-linux-aarch64-musl | grep -q 'ARM aarch64'; fi
 

@@ -1,0 +1,208 @@
+From aec8ce5e51f272b0795958ef2a0ef99e3e61a3c9 Mon Sep 17 00:00:00 2001
+From: AhmedElBanna80 <ahmadelbanna80@gmail.com>
+Date: Fri, 6 Nov 2026 00:00:00 +0000
+Subject: [PATCH] parser: assignment to a const is a runtime TypeError, not a
+ load-time error
+
+Backport of oven-sh/bun#45010 (head 420fc6b47e) onto bun-v1.4.2 for CI
+verification only. Assigning to a `const` binding in code that never runs
+must not stop a module from loading; Node defers it to a runtime TypeError.
+Turbopack's module-fragment chunks (Next 16.4,
+experimental.turbopackModuleFragments) contain exactly that, so a
+Bun-runtime app fails to load them.
+
+Upstream: oven-sh/bun#45010 (fixes oven-sh/bun#45007)
+knext-shim: turbopack-fragments-guard
+---
+ src/js_parser/p.rs                  |   8 +-
+ src/js_parser/visit/visit_expr.rs   |  10 ++-
+ test/regression/issue/45007.test.ts | 123 ++++++++++++++++++++++++++++
+ 3 files changed, 136 insertions(+), 5 deletions(-)
+ create mode 100644 test/regression/issue/45007.test.ts
+
+diff --git a/src/js_parser/p.rs b/src/js_parser/p.rs
+index 7aba6f7d8..e4ed02d28 100644
+--- a/src/js_parser/p.rs
++++ b/src/js_parser/p.rs
+@@ -2173,7 +2173,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+     ) -> Expr {
+         let ref_ = ident.ref_;
+ 
+-        if self.options.features.inlining {
++        // Never substitute a constant's value into an assignment or delete target: that
++        // would turn `e = 2` into `1 = 2`, an early SyntaxError, where the spec says
++        // it is a run-time TypeError.
++        if self.options.features.inlining
++            && opts.assign_target() == js_ast::AssignTarget::None
++            && !opts.is_delete_target()
++        {
+             if let Some(replacement) = self.const_values.get(&ref_) {
+                 let replacement = *replacement;
+                 self.ignore_usage(ref_);
+diff --git a/src/js_parser/visit/visit_expr.rs b/src/js_parser/visit/visit_expr.rs
+index a5f851dc0..d6749c7b4 100644
+--- a/src/js_parser/visit/visit_expr.rs
++++ b/src/js_parser/visit/visit_expr.rs
+@@ -199,7 +199,10 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         if in_.assign_target != js_ast::AssignTarget::None {
+             if p.symbols[result.r#ref.inner_index() as usize].kind == js_ast::symbol::Kind::Constant
+             {
+-                // TODO: silence this for runtime transpiler
++                // Assigning to a constant is a runtime TypeError, not an early error, so
++                // outside of bundling it must not stop the module from loading (the
++                // assignment may sit on a path that never runs). Bundling still errors:
++                // the linker may inline the constant across modules.
+                 let r = js_lexer::range_of_identifier(p.source, expr.loc);
+                 let notes: Box<[bun_ast::Data]> = Box::new([bun_ast::Data {
+                     text: {
+@@ -219,8 +222,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                     ..Default::default()
+                 }]);
+ 
+-                let is_error = p.const_values.contains_key(&result.r#ref) || p.options.bundle;
+-                match is_error {
++                match p.options.bundle {
+                     true => p.log().add_range_error_fmt_with_notes(
+                         Some(p.source),
+                         r,
+@@ -231,7 +233,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                         ),
+                     ),
+ 
+-                    false => p.log().add_range_error_fmt_with_notes(
++                    false => p.log().add_range_warning_fmt_with_notes(
+                         Some(p.source),
+                         r,
+                         notes,
+diff --git a/test/regression/issue/45007.test.ts b/test/regression/issue/45007.test.ts
+new file mode 100644
+index 000000000..40314600f
+--- /dev/null
++++ b/test/regression/issue/45007.test.ts
+@@ -0,0 +1,123 @@
++import { expect, test } from "bun:test";
++import { bunEnv, bunExe, tempDir } from "harness";
++
++// Assignment to a `const` binding is a runtime TypeError (ECMA-262 PutValue ->
++// SetMutableBinding), not an early error. A module whose assignment never runs must load.
++async function run(files: Record<string, string>, entry: string) {
++  using dir = tempDir("issue-45007", files);
++  await using proc = Bun.spawn({
++    cmd: [bunExe(), entry],
++    env: bunEnv,
++    cwd: String(dir),
++    stdout: "pipe",
++    stderr: "pipe",
++  });
++  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
++  return { stdout, stderr, exitCode };
++}
++
++test.each([
++  ["literal initializer", "const e = 1;"],
++  ["non-literal initializer", "const e = Math.random();"],
++])("unexecuted assignment to a const loads (%s)", async (_name, decl) => {
++  const { stdout, stderr, exitCode } = await run(
++    { "index.js": `${decl}\nfunction f() { e = 2 }\nconsole.log("loaded");\n` },
++    "index.js",
++  );
++  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "loaded\n", stderr: "", exitCode: 0 });
++});
++
++test("unexecuted assignment to a const loads from a required CommonJS file", async () => {
++  const { stdout, stderr, exitCode } = await run(
++    {
++      "chunk.cjs": `const t = 1;\nfunction f() { t = 2 }\nmodule.exports = "chunk";\n`,
++      "index.js": `console.log(require("./chunk.cjs"));\n`,
++    },
++    "index.js",
++  );
++  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "chunk\n", stderr: "", exitCode: 0 });
++});
++
++test.each([
++  ["literal initializer", "const e = 1;"],
++  ["non-literal initializer", "const e = Math.random();"],
++])("executed assignment to a const throws TypeError at runtime (%s)", async (_name, decl) => {
++  const { stdout, stderr, exitCode } = await run(
++    {
++      "index.js": `${decl}\ntry { e = 2 } catch (err) { console.log(err instanceof TypeError, typeof e) }\n`,
++    },
++    "index.js",
++  );
++  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "true number\n", stderr: "", exitCode: 0 });
++});
++
++// The exact shape Turbopack (Next.js 16.4, module fragments / tree shaking) emits, minified: every
++// export of a module factory gets a live-binding getter and setter, `e.s([name, () => v, e => v = e])`,
++// and for a `const` the setter assigns to a constant. It is never called, so the chunk must load.
++// Both a literal and an object initializer occur in real chunks (`const t="/middleware"`, `const s={...}`).
++const factorySource = `
++const factories = [
++  e => { const t = "/middleware"; e.s(["a", () => t, e => t = e]) },
++  e => { const s = { wait: 1 }; e.s(["a", () => s, e => s = e]) },
++  e => { const n = { ...e.x }; const i = (n.c ? n.proxy : n.middleware) || n.default; e.s(["b", () => i, e => i = e, "g", () => n, e => n = e]) },
++];
++function run() {
++  const seen = [];
++  for (const f of factories) {
++    f({ x: { middleware: "mw" }, s: exports => seen.push(exports.filter(x => typeof x === "string")) });
++  }
++  return JSON.stringify(seen);
++}
++`;
++
++test("Turbopack-style CommonJS chunk with unused const setters loads", async () => {
++  const { stdout, stderr, exitCode } = await run(
++    {
++      "chunk.js": `${factorySource}\nmodule.exports = run;\n`,
++      "index.js": `console.log(require("./chunk.js")());\n`,
++    },
++    "index.js",
++  );
++  expect({ stdout, stderr, exitCode }).toEqual({ stdout: '[["a"],["a"],["b","g"]]\n', stderr: "", exitCode: 0 });
++});
++
++test("Turbopack-style ES module chunk with unused const setters loads", async () => {
++  const { stdout, stderr, exitCode } = await run(
++    {
++      "chunk.mjs": `${factorySource}\nexport { run };\nexport const marker = 1;\n`,
++      "index.mjs": `import { run, marker } from "./chunk.mjs";\nconsole.log(run(), marker);\n`,
++    },
++    "index.mjs",
++  );
++  expect({ stdout, stderr, exitCode }).toEqual({ stdout: '[["a"],["a"],["b","g"]] 1\n', stderr: "", exitCode: 0 });
++});
++
++test("calling a Turbopack-style const setter throws TypeError at runtime", async () => {
++  const { stdout, stderr, exitCode } = await run(
++    {
++      "index.mjs": `let set; const t = "/middleware"; set = e => t = e;
++try { set("x") } catch (err) { console.log(err instanceof TypeError, t) }\n`,
++    },
++    "index.mjs",
++  );
++  expect({ stdout, stderr, exitCode }).toEqual({ stdout: "true /middleware\n", stderr: "", exitCode: 0 });
++});
++
++// Every other form of write target must also stay a runtime error rather than a parse error.
++test.each([
++  ["compound", "e += 1"],
++  ["increment", "e++"],
++  ["logical", "e ||= 1"],
++  ["array destructuring", "[e] = [1]"],
++  ["object destructuring", "({ a: e } = { a: 1 })"],
++  ["for-of target", "for (e of [1]) {}"],
++  ["for-in target", "for (e in { a: 1 }) {}"],
++])("unexecuted %s write to a const loads", async (_name, stmt) => {
++  for (const decl of ["const e = 1;", "const e = Math.random();"]) {
++    const { stdout, stderr, exitCode } = await run(
++      { "index.js": `${decl}\nfunction f() { ${stmt} }\nconsole.log("loaded");\n` },
++      "index.js",
++    );
++    expect({ stdout, stderr, exitCode }).toEqual({ stdout: "loaded\n", stderr: "", exitCode: 0 });
++  }
++});
+-- 
+2.51.0
+

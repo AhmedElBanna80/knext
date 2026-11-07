@@ -1,5 +1,9 @@
-# oven-sh/bun main, pinned. The first non-comment line is the 40-hex SHA; nothing else is read.
-# Pinned 2026-09-26: b12539ce "main" — the most recent main commit on that day whose Buildkite
-# status AND every GitHub check-run were green (the newer 36cd1514 tip had 6 failing checks).
+# oven-sh/bun, pinned. The first non-comment line is the 40-hex SHA; nothing else is read.
+# Pinned 2026-11-06: 744846f8 = the `bun-v1.4.2` release tag (tag object resolves to this commit),
+# moved back from main b12539ce. Reason: the compat bun lane compiles with STOCK Bun 1.4.2
+# (oven-sh/setup-bun) and passes this binary as the `--compile` base executable. A `--bytecode`
+# compile embeds JSC bytecode, which is only valid for the JSC that produced it, so the base must be
+# the same Bun release as the compiler; and pinned to that release, the patched base differs from
+# the lane's stock Bun by the patches in patches/ and nothing else.
 # Bump rule: see README.md "Bumping the SHA".
-b12539ce270ba098058d92c92a34c917e020a4bd
+744846f844374847c902b5e7fd59b4342a51ef99

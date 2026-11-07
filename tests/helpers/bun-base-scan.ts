@@ -898,7 +898,7 @@ export const NET_EXACT = new Set([
   'rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl',
   '/tmp/apk/sbin/apk.static --arch "$apkarch" --root "$root" --repository "$repo" --keys-dir "$WS/keys/$apkarch" --no-cache --initdb add musl-dev libc-dev linux-headers g++ libstdc++-dev',
   'bun install --frozen-lockfile',
-  'bun scripts/build.ts --profile=release --os=linux --arch="$arch" --abi=musl --canary=off --build-dir="$bd"',
+  'bun scripts/build.ts --profile=release --lto=on --os=linux --arch="$arch" --abi=musl --canary=off --build-dir="$bd"',
 ]);
 export const CONSUMED =
   'grep -qF "using prefetch cache: $BUN_BUILD_PREFETCH_DIR/by-url/$wkkey" "/tmp/build-$arch.log"';

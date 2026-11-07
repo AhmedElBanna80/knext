@@ -1008,6 +1008,13 @@ in the same change.
 - Guards: `tests/compat-upstream-runtime-defects.test.ts`; the run-time half is also executed through
   the real workflow step text in `tests/compat-manifest-for-ref.test.ts`. Mutation proofs, by exit
   code: `scripts/mutation-prove-upstream-runtime-defects.mjs`.
+- **Cross-reference: ADR-0072 (accepted 2026-11-07, founder decision).** These entries are not
+  retired by shipping a patched Bun base. ADR-0072 decides that knext ships no patched Bun runtime
+  base, either opt-in or default, for oven-sh/bun#45007. A run on the CI-only patched base
+  (`KNEXT_BUN_BASE_EXE`) is evidence for upstream review only. It removes no entry from this ledger
+  and is credited to no cell (#2804). The entries are retired only by a stock Bun release that
+  contains oven-sh/bun#45010, which #2805's retirement probe detects. ADR-0072's revisit triggers
+  (T1-T3) are the only way to reopen this.
 
 ## Action items
 

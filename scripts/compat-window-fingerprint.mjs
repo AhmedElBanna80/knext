@@ -83,7 +83,15 @@
  *     [--next-ref v16.2.0] \
  *     [--workflow-file knext-executing/.github/workflows/test-e2e-deploy.yml] \
  *     [--self-contained] \
+ *     [--bun-base-sha256 <hex> --compat-mode <mode>] \
  *     [--out compat-window-fingerprint.json] [--json] [--files]
+ *
+ * THE PATCHED BASE (#2804, ADR-0072 item 3). A dispatch-only proof run can compile the bun lane's
+ * executable on a CI-only patched Bun base (`KNEXT_BUN_BASE_EXE`, scripts/compat-bun-base.mjs).
+ * That changes what every deploy boots without changing a harness byte or the Bun on PATH, so the
+ * base's sha256 is FOLDED (`--bun-base-sha256`) and recorded: a patched-base window can never share
+ * a digest with a stock one. It is evidence only — `--compat-mode credential` with a base is
+ * refused outright. Absent, the digest is byte-identical to the formula without it.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -1664,7 +1672,7 @@ function assertSelfContainedServedFrom(servedFrom) {
 }
 
 /**
- * @param {{ repoRoot: string, tarballsDir: string, nextJsDir?: string | null, nextTarball?: string | null, nextRef?: string | null, runtimeVersion?: string | null, runtimeRevision?: string | null, workflowFile?: string | null, lane?: string, selfContained?: boolean }} options
+ * @param {{ repoRoot: string, tarballsDir: string, nextJsDir?: string | null, nextTarball?: string | null, nextRef?: string | null, runtimeVersion?: string | null, runtimeRevision?: string | null, workflowFile?: string | null, lane?: string, selfContained?: boolean, bunBaseSha256?: string | null, compatMode?: string | null }} options
  */
 export function computeFingerprint({
   repoRoot,
@@ -1683,13 +1691,28 @@ export function computeFingerprint({
   // #1455 (F6): KNEXT_SELF_CONTAINED=1. Defaults false — every pre-#1455 caller
   // and every disk-mode caller after it gets the byte-identical formula.
   selfContained = false,
+  // #2804: the sha256 of a patched Bun base executable, or null. Never on a credential night.
+  bunBaseSha256 = null,
+  compatMode = null,
 }) {
+  if (bunBaseSha256 != null && bunBaseSha256 !== '') {
+    if (!/^[0-9a-f]{64}$/.test(bunBaseSha256)) {
+      throw new Error(
+        `compat-window fingerprint: --bun-base-sha256 must be 64 lowercase hex, got ${JSON.stringify(bunBaseSha256)}`,
+      );
+    }
+    if (compatMode === 'credential') {
+      throw new Error(
+        'compat-window fingerprint: a patched Bun base run is evidence only — refusing to fingerprint it as a credential night',
+      );
+    }
+  }
   const harness = collectHarness(repoRoot, lane, { workflowFile });
   const { entries: packed, packages } = collectPacked(tarballsDir);
 
   const harnessLines = harness.map((e) => e.line).sort();
   const packedLines = packed.map((e) => e.line).sort();
-  /** @type {{ harness: string, packed: string, runtime?: string, selfContained?: string }} */
+  /** @type {{ harness: string, packed: string, runtime?: string, selfContained?: string, bunBase?: string }} */
   const components = {
     harness: `sha256:${sha256(harnessLines.join('\n'))}`,
     packed: `sha256:${sha256(packedLines.join('\n'))}`,
@@ -1715,6 +1738,12 @@ export function computeFingerprint({
   if (selfContainedComponent !== null) {
     components.selfContained = selfContainedComponent;
     digestInput += `selfContained\t${selfContainedComponent}\n`;
+  }
+  // #2804: folded last, only when present, so every stock-base digest is unchanged.
+  const bunBase = bunBaseSha256 == null || bunBaseSha256 === '' ? null : bunBaseSha256;
+  if (bunBase !== null) {
+    components.bunBase = `sha256:${sha256(`bunBase\t${bunBase}`)}`;
+    digestInput += `bunBase\t${components.bunBase}\n`;
   }
   const fingerprint = `sha256:${sha256(digestInput)}`;
 
@@ -1743,6 +1772,8 @@ export function computeFingerprint({
         frozen: selfContainedComponent !== null,
         servedFrom,
       },
+      // #2804: the patched base, verbatim; null on every stock-base run.
+      bunBase: { sha256: bunBase, frozen: bunBase !== null },
     },
     counts: { harness: harness.length, packed: packed.length },
     packages,
@@ -1789,6 +1820,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       // caller that has never heard of it (every one before #1455) gets the
       // unfolded, byte-identical digest.
       selfContained: flag('self-contained'),
+      // #2804: dispatch-only patched base. Absent ⇒ null ⇒ the unfolded digest.
+      bunBaseSha256: arg('bun-base-sha256', null),
+      compatMode: arg('compat-mode', null),
     });
   } catch (error) {
     console.error(`::error::${error instanceof Error ? error.message : String(error)}`);

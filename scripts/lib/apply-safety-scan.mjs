@@ -2676,6 +2676,26 @@ export const REMOTE_FETCH_ALLOWLIST = [
     segment: /^git remote add upstream https:\/\/github\.com\/oven-sh\/bun\.git$/,
   },
   {
+    id: 'compat-bun-base-fetch-build-next',
+    // .github/workflows/test-e2e-deploy.yml#build-next (#2804, dispatch-only bunBaseRunId):
+    // scripts/compat-bun-base.mjs runs `gh run download` for ONE run of THIS repo's
+    // bun-base-build.yml on main (checked by path/status/conclusion/branch first), then refuses the
+    // bytes unless `cosign verify-blob` accepts SHA256SUMS under that workflow's keyless identity
+    // and every file matches SHA256SUMS (tests/compat-bun-base-seam.test.ts runs each refusal). What
+    // it writes is a Bun base executable for the compile step and the fingerprint's sha256 — never
+    // anything a cluster apply reads; this job applies nothing to any cluster.
+    segment:
+      /^node scripts\/compat-bun-base\.mjs fetch --run-id "\$\{KNEXT_BUN_BASE_RUN_ID\}" --repo "\$\{GITHUB_REPOSITORY\}" --dir "\$\{RUNNER_TEMP\}\/bun-base"$/,
+  },
+  {
+    id: 'compat-bun-base-fetch-shard',
+    // .github/workflows/test-e2e-deploy.yml#deploy-tests: the same fetch per shard, which must also
+    // return exactly the sha256 build-next folded (`--expect-sha256`). The base is the standalone
+    // compile's base executable (KNEXT_BUN_BASE_EXE); nothing fetched reaches a cluster apply.
+    segment:
+      /^node scripts\/compat-bun-base\.mjs fetch --run-id "\$\{KNEXT_BUN_BASE_RUN_ID\}" --repo "\$\{GITHUB_REPOSITORY\}" --dir "\$\{RUNNER_TEMP\}\/bun-base" --expect-sha256 "\$\{FOLDED_SHA256\}"$/,
+  },
+  {
     id: 'bun-patched-release-assets',
     // .github/workflows/bun-patched-release.yml (#1822): downloads THIS repo's draft release of the
     // patched Bun toolchain; the very next step checks every binary against

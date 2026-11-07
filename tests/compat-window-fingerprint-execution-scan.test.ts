@@ -116,6 +116,18 @@ const NAMED_EXCEPTIONS: { path: string; reason: string; sources: readonly string
   // under it is frozen individually via MUSL_NATIVE_LOCKFILE_FILES, and
   // tests/musl-lockfile-credential-sharp-coverage.test.ts fails if the files on
   // disk and that list ever differ, so the directory root adds nothing unfrozen.
+  // #2804 — the dispatch-only patched-Bun-base fetch. VERIFIED never to run on a credential
+  // night: every step that calls it is gated on KNEXT_BUN_BASE_RUN_ID, whose workflow-level
+  // expression is '' on every non-dispatch event (pinned, both halves, by
+  // tests/compat-bun-base-seam.test.ts), and the script itself refuses any event but
+  // workflow_dispatch and any credential-mode run. A run that does use it is evidence only: the
+  // base sha256 is folded into its fingerprint and its shards report `<stock>+bun-base.<sha>`.
+  {
+    path: 'scripts/compat-bun-base.mjs',
+    reason:
+      'dispatch-only patched-base fetch; its steps are gated on an env that is empty on every schedule event and the script refuses credential mode, so it never executes on a credentialing night.',
+    sources: ['.github/workflows/test-e2e-deploy.yml'],
+  },
   {
     path: 'scripts/musl-native-lockfiles',
     reason:

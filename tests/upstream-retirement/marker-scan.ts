@@ -13,10 +13,15 @@ import { join, relative } from 'node:path';
 export const MARKER_TOKEN = '@upstream-shim';
 /**
  * Every tree the marker scan covers, relative to the repo root: the runtime
- * shims, and the in-process Rust package whose Beta label is a registered
- * upstream constraint (ADR-0069 D19).
+ * shims, the in-process Rust package whose Beta label is a registered
+ * upstream constraint (ADR-0069 D19), and the CLI, where the Bun build refusal
+ * for oven-sh/bun#45007 (`turbopack-fragments-guard.ts`) is a registered shim.
  */
-export const MARKER_ROOTS = ['packages/kn-next/src/adapters', 'packages/ffi/src'] as const;
+export const MARKER_ROOTS = [
+  'packages/kn-next/src/adapters',
+  'packages/ffi/src',
+  'packages/kn-next/src/cli',
+] as const;
 
 /** The only accepted form: a whole line, `// @upstream-shim <kebab-id>`. */
 const MARKER_LINE = /^\s*\/\/ @upstream-shim ([a-z0-9]+(?:-[a-z0-9]+)*)\s*$/;

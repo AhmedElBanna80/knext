@@ -44,8 +44,8 @@ its target (`bun-linux-*-musl`, which Bun downloads for a cross-target compile).
 
 | Tag | Status |
 |---|---|
-| `bun-patched-1.4.4-knext.2` | **Pinned by `bun-toolchain.ts`; not yet released.** (`1.4.4-knext.1` was tagged on these same bytes, but its release run's e2e still expected the old 1.4.2 shipped base, so it never published; that tag is left as it was.) Bun 1.4.4 + the same patch, Cloud Builds `0511b7d0` (x64) and `f9e3fad1` (arm64); see Provenance below. Becomes current when its tag passes the gated release workflow. |
-| `bun-patched-1.4.2-knext.2` | **Superseded by 1.4.4-knext.2** once that is released. Was current. Same x64 bytes as knext.1 plus the arm64 build, released through the gated workflow: pin check → x64 smoke + arm64 smoke on `ubuntu-24.04-arm` + the e2e on the verified draft binary → only then cosign + build-provenance attestations + publish. |
+| `bun-patched-1.4.4-knext.3` | **Pinned by `bun-toolchain.ts`; not yet released.** (`1.4.4-knext.1` and `1.4.4-knext.2` were tagged on these same bytes, but their release runs' e2e never passed, so neither published; both tags are left as they were. The e2e's build-log checks needed `knext build --verbose` once the default build log began collapsing `[knext compile]` lines into a count.) Bun 1.4.4 + the same patch, Cloud Builds `0511b7d0` (x64) and `f9e3fad1` (arm64); see Provenance below. Becomes current when its tag passes the gated release workflow. |
+| `bun-patched-1.4.2-knext.2` | **Superseded by 1.4.4-knext.3** once that is released. Was current. Same x64 bytes as knext.1 plus the arm64 build, released through the gated workflow: pin check → x64 smoke + arm64 smoke on `ubuntu-24.04-arm` + the e2e on the verified draft binary → only then cosign + build-provenance attestations + publish. |
 | `bun-patched-1.4.2-knext.1` | **Superseded by knext.2.** Its release run published BEFORE its e2e, and that e2e was red (the tag predates the e2e fix); x64 only, no attestation. Left in place (its bytes are identical to knext.2's x64 asset); no knext version pins it after this change. |
 
 ## Release procedure (a maintainer)
@@ -64,7 +64,7 @@ its target (`bun-linux-*-musl`, which Bun downloads for a cross-target compile).
 ## Verifying a release by hand
 
 ```sh
-TAG=bun-patched-1.4.4-knext.2
+TAG=bun-patched-1.4.4-knext.3
 gh release download "$TAG" -R getknext-dev/knext
 cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-identity "https://github.com/getknext-dev/knext/.github/workflows/bun-patched-release.yml@refs/tags/$TAG" \
@@ -88,7 +88,7 @@ nightly and goes red when a stock Bun newer than the pinned `bunVersion` has shi
 to be refreshed (a 3-way apply), rebuilt, re-pinned and re-released. It also reports when
 oven-sh/bun#44059 merges, the signal to retire this directory.
 
-## Provenance of the 1.4.4-knext.2 binaries
+## Provenance of the 1.4.4-knext.3 binaries
 
 | | |
 |---|---|

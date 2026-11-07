@@ -201,7 +201,7 @@ describe('bun-patched-e2e: the expected shipped base is derived from the pin, ne
     expect(runCode).toContain(
       'SHIPPED_WANT="${UPSTREAM_TAG#bun-v}+$(printf \'%s\' "$UPSTREAM_SHA" | cut -c1-9)"',
     );
-    expect(runCode).toContain('grep -qxF "$SHIPPED_WANT" shipped-revision.txt');
+    expect(runCode).toContain('grep -qxF "$SHIPPED_WANT" shipped-revision.txt \\');
   });
 
   it('carries no hardcoded Bun revision literal anywhere in its run steps', () => {
@@ -215,5 +215,39 @@ describe('bun-patched-e2e: the expected shipped base is derived from the pin, ne
     const toolchain = read('packages/kn-next/src/cli/bun-toolchain.ts');
     expect(pinnedBunVersion(toolchain)).toBe(version);
     expect(toolchain).toContain(`tag: "bun-patched-${version}-knext.`);
+  });
+});
+
+describe('bun-patched-e2e: its build-log checks can see the lines they check, and fail loudly', () => {
+  const steps = Object.values(e2e.jobs).flatMap((j) => j.steps ?? []);
+  const lines = (r: string) =>
+    r
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'));
+
+  it('a step that checks `[knext compile]` lines in build.log builds with --verbose (the default log collapses them into a count)', () => {
+    const checking = steps.filter(
+      (s) => /\\\[knext compile\\\]/.test(s.run ?? '') && /build\.log/.test(s.run ?? ''),
+    );
+    expect(checking.length).toBeGreaterThan(0);
+    for (const s of checking) {
+      const builds = lines(s.run ?? '').filter((l) => /knext build\b/.test(l));
+      expect(builds.length, `${s.name}: one knext build`).toBe(1);
+      expect(builds[0], `${s.name}`).toMatch(/knext build .*--verbose\b/);
+    }
+  });
+
+  it('no check is a bare `! grep` (errexit ignores a negated command, so it can never fail the step)', () => {
+    const negated = steps.flatMap((s) => lines(s.run ?? '').filter((l) => /^!\s/.test(l)));
+    expect(negated).toEqual([]);
+  });
+
+  it('a failed build-log check prints the compile lines it did find', () => {
+    const run = steps.map((s) => s.run ?? '').join('\n');
+    expect(run).toContain('echo "::error::build.log has no line matching: $1"');
+    expect(run).toContain(
+      "grep -E '\\[knext compile\\]|knext-patched|Single executable' build.log || echo '(none)'",
+    );
   });
 });

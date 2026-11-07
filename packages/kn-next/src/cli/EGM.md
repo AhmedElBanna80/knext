@@ -91,7 +91,7 @@ are unknown-command errors.
 
 ### Shared utilities
 
-- `loadConfig`, `CONFIG_FILE` (`knext.config.ts`), `LEGACY_CONFIG_FILE` (`kn-next.config.ts`), `UsageError`, `ConfigNotFoundError`, `LegacyConfigFileError`, `withKubeContext`, `resolveKubeContext` (`shared.ts`). It also exports the error codes `USAGE_ERROR_CODE`, `CONFIG_NOT_FOUND_CODE` and `LEGACY_CONFIG_FILE_CODE`, and the handlers `handleUsageError`, `handleConfigNotFound`, `formatConfigNotFound` and `formatLegacyConfigFile`.
+- `loadConfig`, `CONFIG_FILE` (`knext.config.ts`), `LEGACY_CONFIG_FILE` (the pre-rename config filename), `UsageError`, `ConfigNotFoundError`, `LegacyConfigFileError`, `withKubeContext`, `resolveKubeContext` (`shared.ts`). It also exports the error codes `USAGE_ERROR_CODE`, `CONFIG_NOT_FOUND_CODE` and `LEGACY_CONFIG_FILE_CODE`, and the handlers `handleUsageError`, `handleConfigNotFound`, `formatConfigNotFound` and `formatLegacyConfigFile`.
 - The message builders `invalidSpecMessage`, `heldChangeMessage`, `noReconcileMessage` and `operatorPodCheckCommand` (`deploy-reconcile-wait.ts`).
 - Published subpaths: `./internal/cli-validate` (`validate.ts`) and `./internal/cli-shared` (`shared.ts`).
 - `runCapture`, `runInherit`, `runQuiet`, `runQuietAllowFail`, `isEntrypoint` (`exec.ts`).
@@ -118,7 +118,7 @@ are unknown-command errors.
 - Every rendered CR has `apiVersion: apps.kn-next.dev/v1alpha1` and `kind: NextApp`. Nothing negotiates this version against the cluster [`crd-api-version.ts`].
 - Turning a live cluster-local NextApp public needs an explicit opt-in. Read errors fail closed, and NotFound is allowed [`visibility-guard.ts:assertVisibilityDowngradeIsExplicit`].
 - All process spawns use argv arrays with `shell: false`. A `--context` flag beats `KN_CONTEXT` and is inserted right after `kubectl` [`exec.ts`, `shared.ts:withKubeContext`].
-- The CLI never reads the legacy `kn-next.config.ts`; it only reports an error asking for a rename [`shared.ts:loadConfig`].
+- The CLI never reads the legacy config file (`LEGACY_CONFIG_FILE`); it only reports an error asking for a rename [`shared.ts:loadConfig`].
 - Config validation collects every error into one `ConfigValidationError` with the code `ERR_KN_CONFIG_INVALID`. `runtime` must be `bun` or `node`, and only the `redis` cache provider is implemented [`validate.ts:validateConfig`].
 - Version floors: Node must be at least 24, and the CLI exits 1 at startup otherwise. Bun must be at least 1.4 for compiled executables [`node-floor-guard.cjs`, `vinext-build.ts:bunMeetsFloor`].
 - The deploy image architecture is always `linux-x64`. Self-contained mode is opt-in and defaults to `false` [`build-target.ts`].

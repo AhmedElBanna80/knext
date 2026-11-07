@@ -375,8 +375,8 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - Mutating test seams (`assertTestSeamEnabled`) always throw when
   `NODE_ENV=production`. Otherwise they need `KNEXT_TEST_SEAMS=1`.
 - The invalidation replay backlog is capped at 1000 tags. Past that, it
-  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix,
-  `kn-next` and `kn-next:*`. A CDN purge is sent only for tags whose Redis
+  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix
+  and the shared legacy default key prefix (bare, or with a `:*` wildcard). A CDN purge is sent only for tags whose Redis
   invalidation completed.
 - `cache-write-registry.js:drainCacheWrites` never rejects and is bounded by
   `timeoutMs`.

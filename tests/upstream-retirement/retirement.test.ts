@@ -9,7 +9,7 @@
  *     same PR: this test stays red until the entry and its markers are gone;
  *  2b. every upstream issue/PR the registry cites exists with the title it
  *     records (a typo'd number that happens to exist still reds);
- *  3. every `// @upstream-shim <id>` marker under packages/kn-next/src/adapters has
+ *  3. every `// @upstream-shim <id>` marker under MARKER_ROOTS (the adapters and the CLI) has
  *     an entry, every entry has at least one marker, and no marker is malformed.
  */
 import { describe, expect, it } from 'bun:test';
@@ -17,11 +17,20 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { crossCheck, scanMarkers } from './marker-scan';
+import { crossCheck, MARKER_ROOTS, type ScanResult, scanMarkers } from './marker-scan';
 import { bunOnPath, bunVersionOf, pinnedBunVersion, pinnedVinext, REPO_ROOT } from './probe-kit';
-import { type CacheShape, cacheControlVerdict, REGISTRY } from './registry';
+import { type CacheShape, cacheControlVerdict, REGISTRY, upstreamFixedMessage } from './registry';
 
-const ADAPTERS = join(REPO_ROOT, 'packages/kn-next/src/adapters');
+/** Every marker under every scanned root (MARKER_ROOTS), paths relative to the repo root. */
+function scanAll(): ScanResult {
+  const all: ScanResult = { markers: [], malformed: [] };
+  for (const root of MARKER_ROOTS) {
+    const r = scanMarkers(join(REPO_ROOT, root), REPO_ROOT);
+    all.markers.push(...r.markers);
+    all.malformed.push(...r.malformed);
+  }
+  return all;
+}
 const PROBE_TIMEOUT = 120_000;
 
 describe('upstream-retirement: the probes run the pinned toolchain', () => {
@@ -47,12 +56,7 @@ describe('upstream-retirement: every registered upstream problem still reproduce
       async () => {
         const probe = await entry.repro();
         if (!probe.stillBroken) {
-          throw new Error(
-            `upstream fixed — delete shim ${entry.id} and close ${entry.issue} ` +
-              `(${entry.upstream} no longer reproduces on the pinned ${entry.against}). ` +
-              `Remove every \`// @upstream-shim ${entry.id}\` shim and this registry entry in the same PR as the bump.\n` +
-              `evidence: ${probe.evidence}`,
-          );
+          throw new Error(upstreamFixedMessage(entry, probe));
         }
         expect(probe.stillBroken).toBe(true);
       },
@@ -241,16 +245,16 @@ describe('upstream-retirement: @upstream-shim markers ↔ registry', () => {
   const ids = REGISTRY.map((e) => e.id);
 
   it('no marker is malformed', () => {
-    expect(scanMarkers(ADAPTERS).malformed).toEqual([]);
+    expect(scanAll().malformed).toEqual([]);
   });
 
   it('every marker has a registry entry', () => {
-    const { markers } = scanMarkers(ADAPTERS);
+    const { markers } = scanAll();
     expect(crossCheck(markers, ids).orphanMarkers).toEqual([]);
   });
 
   it('every registry entry has at least one marker', () => {
-    const { markers } = scanMarkers(ADAPTERS);
+    const { markers } = scanAll();
     expect(crossCheck(markers, ids).unmarkedEntries).toEqual([]);
   });
 

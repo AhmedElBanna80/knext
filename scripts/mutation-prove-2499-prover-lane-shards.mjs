@@ -465,10 +465,12 @@ const MUTATIONS = [
   {
     id: 'R08',
     subject: 'runner',
-    claim: 'a killed prover’s modified tracked files are not restored',
-    anchor:
-      "    execFileSync('git', ['checkout', '--', '.'], { cwd: REPO_ROOT, stdio: 'ignore' });",
-    replacement: '    void 0;',
+    // The tracked half of a kill is the residue restore that runs after EVERY prover
+    // (killed or not); a kill-only `checkout -- .` used to duplicate it, so deleting
+    // that duplicate survived. This deletes the one restore that exists.
+    claim: 'a prover’s modified tracked files (killed or exited) are not restored',
+    anchor: "    execFileSync('git', ['checkout', 'HEAD', '--', ...residue], {",
+    replacement: '    void ([...residue], {',
   },
   {
     id: 'R09',

@@ -262,23 +262,23 @@ console.log('');
  * After a kill the prover's byte-snapshot restore never ran; do not let the next
  * prover inherit a half-mutated tree.
  *
- * Two halves, because a prover can leave two kinds of residue: a MODIFIED tracked
- * file (restored by checkout) and a NEW untracked file (checkout cannot see it).
- * The untracked half removes only what appeared since `before` was taken, never
- * the whole untracked set, so lane-owned files that existed before the prover
- * started (and everything git ignores: node_modules, dist, bin) are preserved.
+ * A prover can leave two kinds of residue: a MODIFIED tracked file and a NEW
+ * untracked file. The tracked half is NOT handled here: `residueFinding` runs after
+ * EVERY prover, killed or not, restores from HEAD exactly the tracked files this
+ * prover changed (staged ones too), and names them. A second, kill-only
+ * `checkout -- .` here was redundant for every prover-made change and could only
+ * add harm (reverting files that were dirty before the prover started), so it is
+ * gone; the mutation that used to delete it survived for exactly that reason.
+ * This function owns the untracked half, which removes only what appeared since
+ * `before` was taken, never the whole untracked set, so lane-owned files that
+ * existed before the prover started (and everything git ignores: node_modules,
+ * dist, bin) are preserved.
  */
 function restoreTreeAfterKill(before) {
   if (process.env.GITHUB_ACTIONS !== 'true' && process.env.KNEXT_LANE_RESTORE_AFTER_KILL !== '1') {
     return 'the prover was killed mid-mutation; this is not CI so the tree was NOT restored — check the working tree';
   }
-  const notes = [];
-  try {
-    execFileSync('git', ['checkout', '--', '.'], { cwd: REPO_ROOT, stdio: 'ignore' });
-    notes.push('tracked files restored');
-  } catch (error) {
-    return `RESTORE FAILED (${error.message}) — later provers ran on a possibly-dirty tree`;
-  }
+  const notes = ['tracked files are restored by the residue check'];
   const after = untrackedFiles();
   if (before && after) {
     const created = [...after].filter((f) => !before.has(f));

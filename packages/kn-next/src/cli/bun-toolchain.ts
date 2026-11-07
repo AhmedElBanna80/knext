@@ -97,10 +97,10 @@ export interface BunToolchainPins {
  * build is a new tag and new sha256s here, in the same change.
  */
 export const PATCHED_BUN: BunToolchainPins = {
-    tag: "bun-patched-1.4.4-knext.1",
+    tag: "bun-patched-1.4.4-knext.2",
     bunVersion: "1.4.4",
     baseUrl:
-        "https://github.com/getknext-dev/knext/releases/download/bun-patched-1.4.4-knext.1",
+        "https://github.com/getknext-dev/knext/releases/download/bun-patched-1.4.4-knext.2",
     assets: {
         "linux-x64": {
             file: "bun-linux-x64",

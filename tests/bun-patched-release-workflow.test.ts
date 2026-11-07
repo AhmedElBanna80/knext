@@ -181,3 +181,39 @@ describe('bun-patched drift check (informational, nightly)', () => {
     expect(v.messages.join('\n')).toContain('retire the patched toolchain');
   });
 });
+
+describe('bun-patched-e2e: the expected shipped base is derived from the pin, never hardcoded', () => {
+  /** Every `run:` line of every e2e job, comments dropped (they may cite past revisions). */
+  const runCode = Object.values(e2e.jobs)
+    .flatMap((j) => (j.steps ?? []).map((s) => s.run ?? ''))
+    .flatMap((r) => r.split('\n'))
+    .map((l) => l.trim())
+    .filter((l) => !l.startsWith('#'));
+  const upstream = read('deploy/bun-patched/UPSTREAM')
+    .split('\n')
+    .find((l) => l.trim() !== '' && !l.startsWith('#'));
+  const [tag, commit] = String(upstream).trim().split(/\s+/);
+
+  it('derives `<X.Y.Z>+<commit[:9]>` from deploy/bun-patched/UPSTREAM and asserts exactly that', () => {
+    expect(runCode).toContain(
+      `read -r UPSTREAM_TAG UPSTREAM_SHA < <(awk '!/^#/ && NF { print $1, $2; exit }' "$GITHUB_WORKSPACE/deploy/bun-patched/UPSTREAM")`,
+    );
+    expect(runCode).toContain(
+      'SHIPPED_WANT="${UPSTREAM_TAG#bun-v}+$(printf \'%s\' "$UPSTREAM_SHA" | cut -c1-9)"',
+    );
+    expect(runCode).toContain('grep -qxF "$SHIPPED_WANT" shipped-revision.txt');
+  });
+
+  it('carries no hardcoded Bun revision literal anywhere in its run steps', () => {
+    expect(runCode.filter((l) => /\b\d+\.\d+\.\d+\+[0-9a-f]{7,}\b/.test(l))).toEqual([]);
+  });
+
+  it('the UPSTREAM release is the release knext pins (bunVersion and tag), so the two cannot drift', () => {
+    expect(tag).toMatch(/^bun-v\d+\.\d+\.\d+$/);
+    expect(commit).toMatch(/^[0-9a-f]{40}$/);
+    const version = String(tag).replace(/^bun-v/, '');
+    const toolchain = read('packages/kn-next/src/cli/bun-toolchain.ts');
+    expect(pinnedBunVersion(toolchain)).toBe(version);
+    expect(toolchain).toContain(`tag: "bun-patched-${version}-knext.`);
+  });
+});

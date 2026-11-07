@@ -6,7 +6,7 @@ The Zone CRD controller binary. It reconciles each Zone by composing an AppDatab
 
 ## Interface
 
-- Binary `/zone-operator` (`main.go:main`), configured by `ZONE_NAMESPACE` (default `scale-zero-pg`), `ZONE_RESYNC_MS` (15000), `ZONE_HEALTH_ADDR` (`:9093`), `ZONE_GATEWAY_HOST` (`pggw-apps.scale-zero-pg.svc`), `ZONE_GATEWAY_PORT` (55432), `ZONE_REPL_ROLE_PREFIX` (`repl_`, kept in lock-step with the apps-gateway `GW_REPL_ROLE_PREFIX`), `ZONE_WAKE_TIMEOUT_SEC` (120) and `ZONE_AUTO_RESYNC` (on unless exactly `false`).
+- Binary `/zone-operator` (`main.go:main`), configured by `ZONE_NAMESPACE` (default `scale-zero-pg`), `ZONE_RESYNC_MS` (15000), `ZONE_HEALTH_ADDR` (`:9093`), `ZONE_GATEWAY_HOST` (default: the `pggw-apps` Service in namespace `scale-zero-pg`), `ZONE_GATEWAY_PORT` (55432), `ZONE_REPL_ROLE_PREFIX` (`repl_`, kept in lock-step with the apps-gateway `GW_REPL_ROLE_PREFIX`), `ZONE_WAKE_TIMEOUT_SEC` (120) and `ZONE_AUTO_RESYNC` (on unless exactly `false`).
 - HTTP: `/healthz` (503 `stale reconcile` when `Controller.Healthy()` is false) and `/readyz` (always 200) (`main.go:main`).
 
 ## Invariants

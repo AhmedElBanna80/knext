@@ -55,6 +55,6 @@ The only direct source file at this level is `tsup.config.ts`.
   details.
 
 ## Verification
-- Run: `node scripts/bun-test.mjs packages/ffi` (from the repo root)
+- Run: the repo root `test` script, scoped to `packages/ffi`
 - Typecheck: the `package.json` `typecheck` script, which runs `tsc` against
   `tsconfig.typecheck.json` and `fixtures/app/tsconfig.json`.

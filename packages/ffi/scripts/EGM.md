@@ -91,4 +91,4 @@ against a host-arch twin or against the shipped image.
 - **Builds.** `compile-smoke-twin.ts` compiles a Bun single executable.
 
 ## Verification
-- Run: `node scripts/bun-test.mjs packages/ffi` (from the repo root)
+- Run: the repo root `test` script, scoped to `packages/ffi`

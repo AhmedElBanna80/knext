@@ -185,4 +185,4 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
   `KNEXT_FFI_SLOW_CALL_MS`.
 
 ## Verification
-- Run: `node scripts/bun-test.mjs packages/ffi` (from the repo root)
+- Run: the repo root `test` script, scoped to `packages/ffi`

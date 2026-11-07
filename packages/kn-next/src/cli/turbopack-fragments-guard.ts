@@ -70,3 +70,6 @@ export function assertNoBunTurbopackFragments(opts: {
         );
     }
 }
+
+// Retirement probe (tests/upstream-retirement): red once the pinned Bun ships the fix (oven-sh/bun#45010).
+// @upstream-shim bun-45007-const-assign

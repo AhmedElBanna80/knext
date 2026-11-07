@@ -23,8 +23,11 @@
  * environment problem must never read as "upstream fixed", or as "still
  * broken".
  */
-import { existsSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { detectCompileInclude } from '../../packages/kn-next/src/adapters/compile-embed.mjs';
 import { bunOnPath, pinnedVinext, REPO_ROOT, sandbox } from './probe-kit';
 
@@ -57,11 +60,134 @@ export type RetirementEntry = {
   /** Which pinned dependency the repro runs against. */
   against: 'bun' | 'vinext';
   repro: () => Promise<Probe>;
+  /**
+   * What else the retiring change must delete, beyond the marked shim and this
+   * entry (a doctor row, a compat ledger entry). Printed in the red.
+   */
+  retire?: string;
 };
+
+/** The red retirement.test.ts throws when an entry's repro stops reproducing. */
+export function upstreamFixedMessage(entry: RetirementEntry, probe: Probe): string {
+  return (
+    `upstream fixed — delete shim ${entry.id} and close ${entry.issue} ` +
+    `(${entry.upstream} no longer reproduces on the pinned ${entry.against}). ` +
+    `Remove every \`// @upstream-shim ${entry.id}\` shim and this registry entry in the same PR as the bump.\n` +
+    (entry.retire ? `Delete in the same change: ${entry.retire}\n` : '') +
+    `evidence: ${probe.evidence}`
+  );
+}
 
 const inconclusive = (id: string, why: string): never => {
   throw new Error(`probe ${id} inconclusive (control failed): ${why}`);
 };
+
+/**
+ * oven-sh/bun#45007 (#2805, ADR-0072 action item 4). Exit codes of the import
+ * harness below — the probe reads nothing else.
+ */
+export const CONST_ASSIGN_EXIT = { OK: 0, TYPE_ERROR: 42, OTHER_ERROR: 43 } as const;
+
+/** Everything the retiring change deletes besides the marked guard and the entry. */
+export const CONST_ASSIGN_RETIRE = {
+  guard: 'packages/kn-next/src/cli/turbopack-fragments-guard.ts',
+  doctorRow: 'packages/kn-next/src/cli/doctor/checks/turbopack-fragments.ts',
+  manifest: 'test/deploy-tests-manifest.knext.json',
+  ledgerTests: [
+    'test/e2e/app-dir/treeshake-mw/mw.test.ts',
+    'test/e2e/app-dir/turbopack-tree-shaking-chunkgroup/turbopack-tree-shaking-chunkgroup.test.ts',
+  ],
+} as const;
+
+/** The ledger's minimal case: an assignment to a `const` in code that runs only with `x`. */
+const CONST_ASSIGN_REPRO = 'if (process.argv[2]==="x") { const e = 1; e = 2 }\n';
+/** Imports KNEXT_PROBE_TARGET and maps the outcome onto CONST_ASSIGN_EXIT. */
+const CONST_ASSIGN_HARNESS =
+  `try { await import(process.env.KNEXT_PROBE_TARGET); } ` +
+  `catch (e) { process.exit(e instanceof TypeError ? ${CONST_ASSIGN_EXIT.TYPE_ERROR} : ${CONST_ASSIGN_EXIT.OTHER_ERROR}); }\n`;
+
+/**
+ * `load` = exit of running the repro directly (no `x`: the assignment never
+ * runs); `assign` = harness exit importing the repro with `x` (it runs). Fixed
+ * ONLY when the repro loads AND the executed assignment throws a TypeError — a
+ * runtime that silently ignores the assignment is not fixed. An exit code
+ * outside the contract is inconclusive.
+ */
+export function constAssignVerdict(exits: { load: number | null; assign: number | null }): Probe {
+  const { load, assign } = exits;
+  const known: number[] = Object.values(CONST_ASSIGN_EXIT);
+  // A direct run either loads (0) or fails to load (1); anything else (a crash,
+  // a signal) says nothing about the parser.
+  if (load === null || ![0, 1].includes(load) || assign === null || !known.includes(assign)) {
+    inconclusive(
+      'bun-45007-const-assign',
+      `exit codes outside the harness contract: ${JSON.stringify(exits)}`,
+    );
+  }
+  const fixed = load === 0 && assign === CONST_ASSIGN_EXIT.TYPE_ERROR;
+  return {
+    stillBroken: !fixed,
+    evidence: `repro without x exited ${load} (0 = loads); with x the harness exited ${assign} (${CONST_ASSIGN_EXIT.TYPE_ERROR} = runtime TypeError)`,
+  };
+}
+
+/** Run the repro + harness under `runtime` in `dir`; exit codes only. */
+function constAssignExits(
+  runtime: string,
+  dir: string,
+): { load: number | null; assign: number | null; clean: number | null; typeError: number | null } {
+  const run = (args: string[], target?: string) =>
+    spawnSync(runtime, args, {
+      cwd: dir,
+      stdio: 'ignore',
+      timeout: 30_000,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        TMPDIR: dir,
+        ...(target ? { KNEXT_PROBE_TARGET: pathToFileURL(join(dir, target)).href } : {}),
+      },
+    }).status;
+  return {
+    load: run(['repro.js']),
+    assign: run(['harness.mjs', 'x'], 'repro.js'),
+    clean: run(['harness.mjs'], 'clean.mjs'),
+    typeError: run(['harness.mjs'], 'type-error.mjs'),
+  };
+}
+
+/**
+ * The probe. `subject` is the runtime under test (the stock Bun on PATH);
+ * `control` must be a runtime that already has the fixed behaviour (Node), so
+ * the oracle is shown to recognise "fixed" before it may report "still
+ * broken". The harness is also checked under the subject: a clean module must
+ * import (exit 0) and a runtime TypeError must map to its code.
+ */
+export function constAssignProbe(runtimes: { subject: string; control: string }): Probe {
+  const id = 'bun-45007-const-assign';
+  const dir = mkdtempSync(join(tmpdir(), `knext-retire-${id}-`));
+  try {
+    writeFileSync(join(dir, 'repro.js'), CONST_ASSIGN_REPRO);
+    writeFileSync(join(dir, 'harness.mjs'), CONST_ASSIGN_HARNESS);
+    writeFileSync(join(dir, 'clean.mjs'), 'export {};\n');
+    writeFileSync(join(dir, 'type-error.mjs'), 'const o = JSON.parse("null");\no.x;\n');
+
+    const control = constAssignExits(runtimes.control, dir);
+    if (constAssignVerdict(control).stillBroken) {
+      inconclusive(id, `the control runtime does not read as fixed: ${JSON.stringify(control)}`);
+    }
+    const subject = constAssignExits(runtimes.subject, dir);
+    if (
+      subject.clean !== CONST_ASSIGN_EXIT.OK ||
+      subject.typeError !== CONST_ASSIGN_EXIT.TYPE_ERROR
+    ) {
+      inconclusive(id, `the harness does not work under the subject: ${JSON.stringify(subject)}`);
+    }
+    return constAssignVerdict(subject);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 /** `@img/sharp-<platform>` + `@img/sharp-libvips-<platform>` of the installed sharp. */
 function sharpNativeDirs(): {
@@ -851,6 +977,37 @@ export const REGISTRY: RetirementEntry[] = [
       } finally {
         box.dispose();
       }
+    },
+  },
+  {
+    id: 'bun-45007-const-assign',
+    upstream: 'oven-sh/bun#45007',
+    upstreamTitle: 'Assignment to a const in unexecuted code fails at parse time',
+    fixedBy: {
+      ref: 'oven-sh/bun#45010',
+      title: 'assignment to a const is a runtime TypeError, not a load-time error',
+    },
+    issue: '#2805',
+    kind: 'shim',
+    shape: 'both',
+    against: 'bun',
+    // Bun rejects an assignment to a `const` at LOAD time even in code that
+    // never runs; Node defers it to a runtime TypeError. Next 16.4 Turbopack
+    // emits that shape with `experimental.turbopackModuleFragments`, so knext
+    // refuses the flag on the Bun runtime (turbopack-fragments-guard.ts, the
+    // marked shim) and the compat ledger deselects two files on bun x
+    // turbopack. Red once the stock Bun on PATH loads the repro (exit 0) AND
+    // still throws a runtime TypeError when the assignment runs; Node is the
+    // control that shows the oracle can read "fixed" (ADR-0072 action item 4).
+    retire:
+      `${CONST_ASSIGN_RETIRE.guard} (the Bun build refusal), its doctor row ` +
+      `${CONST_ASSIGN_RETIRE.doctorRow} (and their tests), and both oven-sh/bun#45007 ` +
+      `$knextUpstreamRuntimeDefects ledger entries in ${CONST_ASSIGN_RETIRE.manifest}: ` +
+      `${CONST_ASSIGN_RETIRE.ledgerTests.join(' and ')}.`,
+    repro: async () => {
+      const node = Bun.which('node');
+      if (!node) inconclusive('bun-45007-const-assign', 'no `node` on PATH for the control');
+      return constAssignProbe({ subject: bunOnPath(), control: node as string });
     },
   },
 ];

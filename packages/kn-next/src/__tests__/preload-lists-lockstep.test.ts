@@ -16,16 +16,24 @@
  *
  * Each list is derived from the SOURCE as text. A list that cannot be read, or
  * a `--require` the scanner cannot attribute to a named file, FAILS the guard
- * rather than being skipped. Differences that are deliberate are named in the
- * two tables below, not tolerated implicitly.
+ * rather than being skipped: the number of `"--require"` tokens in each region
+ * of node-server.ts must equal the number of entries the scanner attributed, so
+ * an inline `resolve(...)`, a string literal or a spread cannot slip past it.
+ * Differences that are deliberate are named in the two tables below, not
+ * tolerated implicitly. Every named file must also exist beside the adapters.
+ *
+ * Scope: the lists are compared as SETS. Load ORDER is not checked (the compiled
+ * executable deliberately runs the ARP primer first and the spawn lists order
+ * differently), so this guard says "the same preloads run", not "in the same
+ * order".
  *
  * The guard is mutation-proved twice: in-file, against mutated copies of the
  * real sources (the `drift` cases), and by editing the real files and checking
- * this file's exit code (see the PR description).
+ * this file's exit code.
  */
 
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ADAPTERS = resolve(__dirname, "..", "adapters");
@@ -44,7 +52,7 @@ const COMPILE_ONLY: Record<string, string> = {
     "arp-primer.cjs":
         "node-server.ts runs the ARP primer in-process in the supervisor, not as a --require; the compiled exec has no supervisor so it is the first preload",
     "standalone-self-contained-supervisor.cjs":
-        "the self-contained exec's own supervisor stage; node-server.ts is that supervisor on the other cells",
+        "folds the SIGTERM drain and metrics sidecar into the self-contained exec; on disk-mode cells that role is a separate process (knext-standalone-entry.mjs), and node-server.ts never --requires it",
 };
 
 /**
@@ -114,8 +122,21 @@ function readPreloadLists(
         }
         return f;
     };
-    const node = requiredVars(common).map(nameOf);
-    const bunExtra = requiredVars(bunBlock).map(nameOf);
+    // Every `"--require"` token must have been attributed to a named file; one
+    // the regex missed (inline resolve(), literal, spread) fails here.
+    const tokens = (src: string): number =>
+        (src.match(/["']--require["']/g) ?? []).length;
+    const attributed = (src: string): string[] => {
+        const vars = requiredVars(src);
+        if (vars.length !== tokens(src)) {
+            throw new Error(
+                `${tokens(src)} "--require" token(s) but only ${vars.length} attributable to a bound .cjs variable`,
+            );
+        }
+        return vars.map(nameOf);
+    };
+    const node = attributed(common);
+    const bunExtra = attributed(bunBlock);
 
     const block = /const PRELOAD_NAMES = \[([\s\S]*?)\];/.exec(compileSrc)?.[1];
     if (block === undefined) throw new Error("no PRELOAD_NAMES array");
@@ -183,6 +204,11 @@ function preloadDrift(l: PreloadLists): string[] {
     return out;
 }
 
+/** Named preloads with no file in `dir`. */
+function missingFiles(names: readonly string[], dir: string): string[] {
+    return [...new Set(names)].filter((n) => !existsSync(resolve(dir, n)));
+}
+
 const real = readPreloadLists(NODE_SERVER, COMPILE);
 
 /** Replace `from` with `to`, refusing unless `from` occurs exactly once. */
@@ -193,7 +219,7 @@ function mutate(src: string, from: string, to: string): string {
 }
 
 describe("preload lists stay in lockstep (Node, Bun, compiled exec)", () => {
-    it("the three shared preloads are on all three lists", () => {
+    it("the three shared preloads are on the Node/Bun spawn and the compiled list", () => {
         for (const n of [
             "request-body-cap.cjs",
             "cache-control-normalize.cjs",
@@ -211,6 +237,21 @@ describe("preload lists stay in lockstep (Node, Bun, compiled exec)", () => {
 
     it("no list drifts from another", () => {
         expect(preloadDrift(real)).toEqual([]);
+    });
+
+    it("every named preload exists beside the adapters", () => {
+        expect(
+            missingFiles(
+                [...real.node, ...real.bunExtra, ...real.compile],
+                ADAPTERS,
+            ),
+        ).toEqual([]);
+    });
+
+    it("a named preload with no file is reported", () => {
+        expect(missingFiles(["no-such-preload.cjs"], ADAPTERS)).toEqual([
+            "no-such-preload.cjs",
+        ]);
     });
 
     describe("reds on drift (the guard is not decoration)", () => {
@@ -297,5 +338,25 @@ describe("preload lists stay in lockstep (Node, Bun, compiled exec)", () => {
             );
             expect(() => readPreloadLists(n, COMPILE)).toThrow(/someOtherVar/);
         });
+
+        for (const [name, replacement] of [
+            [
+                "an inline resolve()",
+                'preloadArgs.push("--require", resolve(import.meta.dirname, "new.cjs"));',
+            ],
+            ["a string literal", 'preloadArgs.push("--require", "x.cjs");'],
+            ["a spread", 'preloadArgs.push(...["--require", x]);'],
+        ] as const) {
+            it(`a --require given as ${name} fails loudly`, () => {
+                const n = mutate(
+                    NODE_SERVER,
+                    'preloadArgs.push("--require", requestBodyCapPreload);',
+                    replacement,
+                );
+                expect(() => readPreloadLists(n, COMPILE)).toThrow(
+                    /"--require" token/,
+                );
+            });
+        }
     });
 });

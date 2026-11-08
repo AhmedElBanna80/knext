@@ -7,31 +7,31 @@
  * The retry exists for fixtures that pin a dependency a peer range excludes
  * (vercel/next.js fixtures pinning a react canary, #2296): npm refuses, pnpm only
  * warns, so the deploy retries once. It must never hide a conflict in knext's own
- * packages: if any package in the conflict report is an `@getknext/*` package,
- * either as the package being resolved or as the one declaring the peer, the
- * conflict is knext's, and the retry is refused.
+ * packages: if `@getknext/` appears ANYWHERE in the ERESOLVE report (the package
+ * being resolved, the one declaring the peer, the one found, or a path line),
+ * the retry is refused. That over-refuses a fixture conflict whose report only
+ * mentions a knext package in passing; failing closed is the intended trade.
  *
- * npm names the packages in two shapes (npm 10 and 11):
- *   While resolving: <name>@<version>
- *   peer <dep>@"<range>" from <name>@<version>
- * Both are matched with or without the `npm error ` / `npm warn ` prefix.
+ * It fails closed in its output too: the deploy retries only when this script
+ * prints exactly `retry` on stdout, so a script that never reaches its decision
+ * (a module-path mismatch, a crash) cannot allow a retry by exiting 0.
  *
  * Usage: node e2e-eresolve-retry.mjs <npm-install-log>
- * Exit 0: the log is an ERESOLVE refusal that names no @getknext/* package (retry).
- * Exit 1, reason on stderr: not an ERESOLVE refusal, or it names an @getknext/*
- *         package (do not retry: fail the deploy).
+ * Prints `retry`, exit 0: an ERESOLVE refusal that mentions no @getknext/ package.
+ * Exit 1, reason on stderr: not an ERESOLVE refusal, or a knext package is in it.
  * Exit 2, reason on stderr: the log cannot be read.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const KNEXT = /(?:While resolving:|\bfrom)\s+(@getknext\/[^@\s]+)/g;
+const KNEXT = /@getknext\/[a-z0-9._-]+/g;
 
 /** @returns {{ retry: boolean, reason: string }} */
 export function decideRetry(log) {
   if (!/\bERESOLVE\b/.test(log)) {
     return { retry: false, reason: 'not an ERESOLVE refusal' };
   }
-  const knext = [...new Set([...log.matchAll(KNEXT)].map((m) => m[1]))];
+  const knext = [...new Set([...log.matchAll(KNEXT)].map((m) => m[0]))].sort();
   if (knext.length > 0) {
     return {
       retry: false,
@@ -41,7 +41,19 @@ export function decideRetry(log) {
   return { retry: true, reason: "the conflict is in the fixture's own dependencies" };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Real paths on both sides: argv[1] may go through a symlink (macOS /var -> /private/var).
+const isMain = () => {
+  try {
+    return (
+      Boolean(process.argv[1]) &&
+      realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+};
+
+if (isMain()) {
   const path = process.argv[2];
   let log;
   try {
@@ -51,6 +63,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(2);
   }
   const { retry, reason } = decideRetry(log);
-  if (!retry) process.stderr.write(`e2e-eresolve-retry: no retry: ${reason}\n`);
-  process.exit(retry ? 0 : 1);
+  if (!retry) {
+    process.stderr.write(`e2e-eresolve-retry: no retry: ${reason}\n`);
+    process.exit(1);
+  }
+  process.stdout.write('retry\n');
 }

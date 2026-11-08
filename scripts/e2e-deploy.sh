@@ -219,13 +219,14 @@ EOF
     cat "${NPM_INSTALL_LOG}" >&2
   else
     cat "${NPM_INSTALL_LOG}" >&2
-    if node "${SCRIPT_DIR}/lib/e2e-eresolve-retry.mjs" "${NPM_INSTALL_LOG}"; then
+    # Retry only on the helper's explicit "retry" verdict (fails closed if it never decides).
+    if [ "$(node "${SCRIPT_DIR}/lib/e2e-eresolve-retry.mjs" "${NPM_INSTALL_LOG}" || true)" = "retry" ]; then
       log "npm refused the tarball install with ERESOLVE (a fixture-pinned dependency conflicts with a peer range); retrying once with --legacy-peer-deps"
       # shellcheck disable=SC2086
       npm install --legacy-peer-deps --no-save --no-audit --no-fund "${LIB_TGZ}" "${DB_TGZ}" "${CORE_TGZ}" ${TS_PIN} >&2
     else
       rm -f "${NPM_INSTALL_LOG}"
-      log "ERROR: npm install of the knext tarballs failed (not an ERESOLVE in a fixture-owned dependency; not retried)"
+      log "ERROR: npm install of the knext tarballs failed and was not retried (not an ERESOLVE, an ERESOLVE that involves an @getknext/* package, or an unreadable install log; see the e2e-eresolve-retry line above)"
       exit 1
     fi
   fi

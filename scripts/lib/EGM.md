@@ -99,7 +99,7 @@ Grouped by concern. The names listed are the modules' exported symbols.
   - `musl-lockfile-lookup.sh` (POSIX sh, side-effect-free): `lockfile_key`, `pinned_lockfile_dir_for`, `musl_lockfile_specs_for_root`, `musl_lockfile_mounts`.
 - Script: `e2e-verify-intentional-500.sh`.
 - Node probes: `e2e-probe-http.mjs`, `e2e-read-base-path.mjs`, `e2e-vinext-base-path.mjs`.
-- `e2e-eresolve-retry.mjs`: `decideRetry(log)` and a CLI over an npm install log. Exit 0 only for an ERESOLVE refusal that names no `@getknext/*` package (as `While resolving:` or `from`), so `e2e-deploy.sh` may retry with `--legacy-peer-deps`; exit 1 for any other failure or a knext-owned conflict (no retry); exit 2 if the log cannot be read. Reads one file, writes only to stderr.
+- `e2e-eresolve-retry.mjs`: `decideRetry(log)` and a CLI over an npm install log. Prints `retry` (exit 0) only for an ERESOLVE refusal in which `@getknext/` appears nowhere; `e2e-deploy.sh` retries with `--legacy-peer-deps` only on that exact stdout, so a helper that never decides fails closed. Exit 1 for any other failure or a report that mentions a knext package (no retry); exit 2 if the log cannot be read. Reads one file, writes only to stderr.
 
 ### Misc
 - `manifest-patch.ts`: `patchManifestJs`.

@@ -1,6 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { decideRetry } from '../scripts/lib/e2e-eresolve-retry.mjs';
@@ -347,7 +355,55 @@ describe('scripts/lib/e2e-eresolve-retry.mjs — which ERESOLVE may be retried (
     );
     expect(decideRetry(log).retry).toBe(false);
   });
+  it('refuses when knext is only the package found, or only on a path line', () => {
+    expect(decideRetry(`${fixtureConflict}\nnpm error Found: @getknext/core@2.0.0`).retry).toBe(
+      false,
+    );
+    expect(decideRetry(`${fixtureConflict}\nnpm error   node_modules/@getknext/lib`).retry).toBe(
+      false,
+    );
+  });
   it('refuses a failure that is not ERESOLVE', () => {
     expect(decideRetry('npm error code EINTEGRITY\n').retry).toBe(false);
+  });
+});
+
+describe('scripts/lib/e2e-eresolve-retry.mjs as a CLI — its verdict is a printed "retry", never just exit 0 (#2319)', () => {
+  const HELPER = resolve(REPO_ROOT, 'scripts/lib/e2e-eresolve-retry.mjs');
+  const LOG = [
+    'npm error code ERESOLVE',
+    'npm error While resolving: fixture-app@0.0.0',
+    'npm error peer react@"^19.0.0" from next@16.4.3',
+  ].join('\n');
+
+  it('prints retry for a fixture conflict, even when the helper lives under a path with a space', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knext eresolve '));
+    try {
+      const copy = join(dir, 'e2e-eresolve-retry.mjs');
+      writeFileSync(copy, readFileSync(HELPER, 'utf8'));
+      const log = join(dir, 'install log.txt');
+      writeFileSync(log, LOG);
+      const r = spawnSync('node', [copy, log], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('retry\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prints nothing and exits 2 for an unreadable log', () => {
+    const r = spawnSync('node', [HELPER, join(tmpdir(), 'knext-no-such-install-log')], {
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('');
+  });
+
+  it('the deploy script retries only on that exact output', () => {
+    const sh = readFileSync(DEPLOY_SH, 'utf8');
+    expect(sh).toContain(
+      'if [ "$(node "${SCRIPT_DIR}/lib/e2e-eresolve-retry.mjs" "${NPM_INSTALL_LOG}" || true)" = "retry" ]; then',
+    );
+    expect(sh).not.toMatch(/grep -q .ERESOLVE./);
   });
 });

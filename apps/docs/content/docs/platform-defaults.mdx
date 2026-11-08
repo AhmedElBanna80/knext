@@ -199,8 +199,27 @@ Two alerts that cover the quiet failures:
 ```
 
 The gauges and the queue reflect the operator process that is running now. After an operator
-restart they refill as each app is reconciled again, and a queue that was in progress is re-spaced
-from the start, still within `maxAppsPerMinute`.
+restart or a leader change they refill as each app is reconciled again. See the next section for
+what that means for pacing.
+
+### If the operator restarts or fails over mid-rollout
+
+The queue of waiting apps lives in the operator's memory, but how far each app has got does not:
+it is recorded on the app itself, in `status.platform`. When the operator restarts, or the standby
+takes over the lease, the new leader starts with an empty queue and rebuilds it from the cluster:
+
+- **Nothing is lost.** Apps that had not rendered yet are queued again and the rollout finishes.
+- **No app renders twice.** An app that was already rendered is recognised as done and is not
+  queued again. If the old leader died after writing an app's service but before recording it, the
+  new leader re-applies an identical service, which creates no new revision and starts no new pod.
+- **The pace may be exceeded by one render per failover.** The new leader's first slot is free: it
+  does not know the old leader rendered an app a moment ago. So in the minute around a failover,
+  at most `maxAppsPerMinute + 1` apps can be re-rendered, never a burst. The rest are spaced
+  `60 ÷ maxAppsPerMinute` seconds apart again from that point.
+
+The trade is deliberate. The queue fails toward finishing the rollout, not toward stalling it, and
+the cost is one extra pod start per failover. If you fail over repeatedly during one rollout, each
+failover can add one.
 
 ## Profiles
 

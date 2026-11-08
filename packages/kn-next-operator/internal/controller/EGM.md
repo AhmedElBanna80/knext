@@ -64,6 +64,10 @@ A reconcile pass fetches the object, reconciles its children, computes a pure st
 - `pod_hardening.go:nextAppRunAsNonRoot`: `runAsNonRoot` is rendered unless `spec.security.runAsNonRoot` is explicitly false.
 - `platform_controller.go:KnextPlatformReconciler` writes only the KnextPlatform status subresource.
 - `platform_rollout.go:rolloutLimiter` hands out re-render slots spaced `60/maxAppsPerMinute` seconds apart. Idle time does not bank capacity.
+- `platform_rollout.go:rolloutLimiter` state is in memory only, and that is deliberate. A leader failover or restart starts with an empty limiter against the same cluster, and the documented behaviour is pinned by `platform_rollout_failover_test.go`:
+  - The queue is rebuilt from the cluster. Progress lives in `status.platform` on each NextApp, so `platform_state.go:decideRollout` re-queues exactly the apps not yet rendered.
+  - No app renders twice. A rendered app matches its applied hash and is not re-admitted. A leader that died between the Knative Service write and the status write re-applies an identical Service, which is a no-op (no second revision).
+  - The cap is exceeded by at most ONE render per failover: the new limiter's first slot is free, so a minute holds at most `maxAppsPerMinute+1` renders. Do not add persistence for this without a measured driver; failing toward progress is the chosen trade.
 - `pod_hardening.go:restrictedContainerSecurityContext` is set at container level, never pod level. It sets `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault` and `runAsNonRoot: true` (unless opted out).
 - `nextapp_networkpolicy.go:appMetricsPort = 9464` is the only app metrics port the default NetworkPolicy admits.
 

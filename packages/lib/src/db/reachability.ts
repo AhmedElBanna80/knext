@@ -18,8 +18,6 @@
  * listens on the other.
  */
 
-import { logger } from '../logger';
-
 export type AcquireFailureObserver = (error: unknown) => void;
 
 type GlobalSets = Record<symbol, Set<unknown> | undefined>;
@@ -116,7 +114,7 @@ const IN_NAMESPACE_SERVICE_NAMES = new Set(['pggw', 'pggw-apps']);
  * Never a substring of the path or userinfo.
  *
  * A value that is neither a recognised word nor empty falls through to the host
- * and logs a warning, once per distinct value (`warnUnrecognisedDeclaration`).
+ * and writes a warning, once per distinct value (`warnUnrecognisedDeclaration`).
  */
 export function isScaleToZeroDatabase(
   dsn: string | undefined,
@@ -157,14 +155,25 @@ function displayValue(value: string): string {
  * otherwise falls back to the host heuristic with no signal. The once-set is
  * anchored on `globalThis` (ADR-0027) so a duplicated module copy cannot warn
  * twice. The set is keyed on the full trimmed value, which is never logged.
+ *
+ * The record is written with `console.warn` as one JSON line, the same shape as
+ * `slow-dep.ts`, and not through `../logger`. This module sits on `clients.ts`'s
+ * static import path, and the logger builds its pino instance at load time, so
+ * importing it here would make every consumer of `clients` construct the logger.
  */
 function warnUnrecognisedDeclaration(raw: string): void {
   const value = raw.trim();
   const seen = globalSet<string>(WARNED_DECLARATIONS_KEY);
   if (seen.has(value)) return;
   seen.add(value);
-  logger.warn(
-    `[knext] KNEXT_DB_SCALE_TO_ZERO=${JSON.stringify(displayValue(value))} is not recognised ` +
-      '(use true, 1, yes, false, 0 or no); falling back to the DATABASE_URL host.',
+  console.warn(
+    JSON.stringify({
+      level: 'warn',
+      msg:
+        'KNEXT_DB_SCALE_TO_ZERO is not recognised (use true, 1, yes, false, 0 or no); ' +
+        'falling back to the DATABASE_URL host.',
+      variable: 'KNEXT_DB_SCALE_TO_ZERO',
+      value: displayValue(value),
+    }),
   );
 }

@@ -40,8 +40,9 @@ no package entry point (`package.json` `exports` has no `db` subpath). It provid
   non-empty `errors` array in which every entry is a refusal. Message text is never matched.
 - `isScaleToZeroDatabase`: an explicit `KNEXT_DB_SCALE_TO_ZERO` (trimmed, case-insensitive,
   read on each call as the default of `declared`) decides first (`true`/`1`/`yes` or
-  `false`/`0`/`no`); any other non-empty value falls through to the DSN, and logs one `logger.warn`
-  per distinct value per process. The warning shows a value containing `:` `/` `@` `=` `?` or `&`
+  `false`/`0`/`no`); any other non-empty value falls through to the DSN, and writes one JSON line
+  through `console.warn` per distinct value per process (not through `../logger`, which would load
+  the pino singleton on `clients.ts`'s static import path). The warning shows a value containing `:` `/` `@` `=` `?` or `&`
   only by its length, and any other value cut to 64 characters. The once-set is keyed on the full
   trimmed value and lives on `globalThis` under `Symbol.for('knext.lib.db.unrecognisedScaleToZeroWarned')`.
   Otherwise the DSN
@@ -55,7 +56,7 @@ no package entry point (`package.json` `exports` has no `db` subpath). It provid
   `observeAcquireFailures` call each install their state on `globalThis`.
 - `observeAcquireFailures` adds to a process-wide observer set.
 - `isScaleToZeroDatabase` installs the unrecognised-value once-set on `globalThis` (created lazily on
-  the first unrecognised value) and writes one `logger.warn` line per distinct unrecognised value.
+  the first unrecognised value) and writes one `console.warn` JSON line per distinct unrecognised value.
 
 ## Verification
 - Run: `node scripts/bun-test.mjs packages/lib` (from repo root)

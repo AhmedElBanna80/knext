@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   acquireFailureObserverCount,
   isConnectionRefused,
@@ -6,12 +7,16 @@ import {
   observeAcquireFailures,
   reportAcquireFailure,
 } from '../db/reachability';
-import { logger } from '../logger';
 
-/** Runs `run` and returns every message it logged through `logger.warn`. */
+/**
+ * Runs `run` and returns every line it wrote through `console.warn`. The warning is a
+ * single JSON line written directly, not through the shared logger: the logger builds
+ * its pino instance at module load, and importing it from `reachability` would pull it
+ * into `clients.ts`'s static graph (see the import-graph guard below).
+ */
 const captureWarnings = (run: () => void): string[] => {
   const lines: string[] = [];
-  const spy = spyOn(logger, 'warn').mockImplementation((...args: unknown[]) => {
+  const spy = spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
     lines.push(args.map(String).join(' '));
   });
   try {
@@ -197,6 +202,27 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
     expect(lines[0]).toContain('KNEXT_DB_SCALE_TO_ZERO');
     expect(lines[0]).toContain('"ture-once-typo"');
     expect(lines[0]).toContain('host');
+  });
+
+  it('writes exactly one parseable JSON record per warning', () => {
+    const lines = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), 'json-shape-typo');
+    });
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0] as string) as Record<string, unknown>;
+    expect(record.level).toBe('warn');
+    expect(record.variable).toBe('KNEXT_DB_SCALE_TO_ZERO');
+    expect(record.value).toBe('json-shape-typo');
+    expect(String(record.msg)).toContain('host');
+  });
+
+  it('keeps reachability off the shared logger import graph', () => {
+    // clients.ts imports this module statically. A static import of ../logger here
+    // builds the pino singleton as a side effect of loading clients, so a suite that
+    // mocks pino after importing clients captures nothing (logger.test.ts,
+    // correlation.test.ts). Guard the import, not the behaviour.
+    const source = readFileSync(new URL('../db/reachability.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/from ['"]\.\.\/logger['"]/);
   });
 
   it('never logs a connection string: a DSN-shaped value shows only its length', () => {

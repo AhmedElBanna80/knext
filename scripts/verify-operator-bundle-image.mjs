@@ -40,8 +40,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 // @digest) is the only thing ignored. Every other occurrence of the name is counted, so anything
 // unclassifiable fails closed. A bare name with no `/` (a resource name, a label value) is not
 // an image reference. instead of slipping past a lookbehind.
-const OPERATOR_TOKEN =
-  /[A-Za-z0-9._:/-]*\/kn-next-operator(?![\w.-])(?::[\w.-]+)?(?:@[\w:.-]+)?/g;
+const OPERATOR_TOKEN = /[A-Za-z0-9._:/-]*\/kn-next-operator(?![\w.-])(?::[\w.-]+)?(?:@[\w:.-]+)?/g;
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 const OPERATOR_REF = /\/kn-next-operator(?:[:@]|$)/;
 const IMAGE_REPO = /^[a-z0-9][a-z0-9.-]*(?::\d+)?(?:\/[a-z0-9][a-z0-9._-]*)+$/;

@@ -355,6 +355,10 @@ export default defineConfig([
       // the child is spawned; compiled exec: baked in as the FIRST preload —
       // see standalone-compile.mjs). Dependency-free, Linux-only, never throws.
       'adapters/arp-primer': 'src/adapters/arp-primer.cjs',
+      // ADR-0066 D3 — the ordered process-start primer list both entries read,
+      // and the wake-ahead primer (#2054) it names after the ARP primer.
+      'adapters/process-start-primers': 'src/adapters/process-start-primers.cjs',
+      'adapters/wake-ahead': 'src/adapters/wake-ahead.cjs',
       // #188 path 2 — opt-in edge-sandbox fetch instrumentation (inert unless
       // KNEXT_SANDBOX_FETCH_DEBUG=1; dispatch-only compat investigation lane).
       'adapters/sandbox-fetch-debug': 'src/adapters/sandbox-fetch-debug.cjs',

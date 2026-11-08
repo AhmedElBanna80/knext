@@ -37,6 +37,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ADAPTERS = resolve(__dirname, "..", "adapters");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { PROCESS_START_PRIMERS } = require("../adapters/process-start-primers.cjs") as {
+    PROCESS_START_PRIMERS: readonly string[];
+};
 const NODE_SERVER = readFileSync(resolve(ADAPTERS, "node-server.ts"), "utf8");
 const COMPILE = readFileSync(
     resolve(ADAPTERS, "standalone-compile.mjs"),
@@ -51,6 +55,8 @@ const COMPILE = readFileSync(
 const COMPILE_ONLY: Record<string, string> = {
     "arp-primer.cjs":
         "node-server.ts runs the ARP primer in-process in the supervisor, not as a --require; the compiled exec has no supervisor so it is the first preload",
+    "wake-ahead.cjs":
+        "a process-start primer like the ARP primer: node-server.ts runs it in-process from the primer list, the compiled exec bakes it in from the same list",
     "standalone-self-contained-supervisor.cjs":
         "folds the SIGTERM drain and metrics sidecar into the self-contained exec; on disk-mode cells that role is a separate process (knext-standalone-entry.mjs), and node-server.ts never --requires it",
 };
@@ -140,9 +146,18 @@ function readPreloadLists(
 
     const block = /const PRELOAD_NAMES = \[([\s\S]*?)\];/.exec(compileSrc)?.[1];
     if (block === undefined) throw new Error("no PRELOAD_NAMES array");
-    const compile = [...block.matchAll(/["']([^"']+\.cjs)["']/g)].map(
-        (m) => m[1],
-    );
+    // The only spread allowed is the process-start primer list (ADR-0066 D3),
+    // expanded from the module both entries read. Any other spread fails.
+    const spreads = [...block.matchAll(/\.\.\.\s*(\w+)/g)].map((m) => m[1]);
+    for (const name of spreads) {
+        if (name !== "PROCESS_START_PRIMERS") {
+            throw new Error(`PRELOAD_NAMES spreads ${name}, which this guard cannot read`);
+        }
+    }
+    const compile = [
+        ...(spreads.length > 0 ? PROCESS_START_PRIMERS : []),
+        ...[...block.matchAll(/["']([^"']+\.cjs)["']/g)].map((m) => m[1]),
+    ];
     for (const m of compileSrc.matchAll(
         /PRELOAD_NAMES\.push\(\s*["']([^"']+\.cjs)["']\s*\)/g,
     )) {

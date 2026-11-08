@@ -60,67 +60,73 @@ const NODE_ENTRY_TEMPLATE_SRC = resolve(
     "knext-node-entry.mjs.hbs",
 );
 
-describe("node-server.ts — arp-primer fires before metrics bind and before spawn", () => {
+// ADR-0066 D3: the ARP primer is the FIRST entry of the shared process-start
+// primer list, and both entries below run that list rather than naming it.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { PROCESS_START_PRIMERS } = require("../adapters/process-start-primers.cjs") as {
+    PROCESS_START_PRIMERS: readonly string[];
+};
+const PRIMER_LIST_RE = /resolve\(\s*import\.meta\.dirname,\s*"process-start-primers\.cjs"/;
+/** Index of the primer-list resolve in `src`, or -1. */
+const primerListAt = (src: string): number => src.search(PRIMER_LIST_RE);
+
+describe("process-start-primers.cjs — the ARP primer is the list's first entry", () => {
+    it("lists arp-primer.cjs first", () => {
+        expect(PROCESS_START_PRIMERS[0]).toBe("arp-primer.cjs");
+    });
+});
+
+describe("node-server.ts — the primer list runs before metrics bind and before spawn", () => {
     const src = readFileSync(NODE_SERVER_SRC, "utf8");
 
-    it("requires arp-primer.cjs somewhere in the module", () => {
-        expect(src).toContain('"arp-primer.cjs"');
-        expect(src).toContain("createRequire(import.meta.url)(arpPrimerPath)");
+    it("requires the primer list and each primer it names", () => {
+        expect(primerListAt(src)).toBeGreaterThan(-1);
+        expect(src).toContain("for (const name of primers.PROCESS_START_PRIMERS)");
+        expect(src).toContain("requirePrimer(primerPath)");
     });
 
-    it("fires arp-primer BEFORE the metrics endpoint binds", () => {
-        const primerAt = src.indexOf(
-            'resolve(import.meta.dirname, "arp-primer.cjs")',
-        );
-        const metricsListenAt = src.indexOf(
-            'metricsEndpoint.ensureListening("',
-        );
+    it("runs the primers BEFORE the metrics endpoint binds", () => {
+        const primerAt = primerListAt(src);
+        const metricsListenAt = src.indexOf('metricsEndpoint.ensureListening("');
         expect(primerAt).toBeGreaterThan(-1);
         expect(metricsListenAt).toBeGreaterThan(-1);
         expect(primerAt).toBeLessThan(metricsListenAt);
     });
 
-    it("fires arp-primer BEFORE the child is spawned", () => {
-        const primerAt = src.indexOf(
-            'resolve(import.meta.dirname, "arp-primer.cjs")',
-        );
+    it("runs the primers BEFORE the child is spawned", () => {
+        const primerAt = primerListAt(src);
         const spawnAt = src.indexOf("spawn(spawnPlan.command");
         expect(primerAt).toBeGreaterThan(-1);
         expect(spawnAt).toBeGreaterThan(-1);
         expect(primerAt).toBeLessThan(spawnAt);
     });
 
-    it("fires arp-primer as close to process start as possible — before bootTrace's entry-eval mark line completes, i.e. immediately after it", () => {
+    it("runs the primers as close to process start as possible — immediately after bootTrace's entry-eval mark", () => {
         const entryEvalAt = src.indexOf('bootTrace.mark("entry-eval")');
-        const primerAt = src.indexOf(
-            'resolve(import.meta.dirname, "arp-primer.cjs")',
-        );
+        const primerAt = primerListAt(src);
         expect(entryEvalAt).toBeGreaterThan(-1);
         expect(primerAt).toBeGreaterThan(entryEvalAt);
-        // Nothing heavy should sit between the two: no "createLogger(" call in
-        // between (the logger must not be constructed before the primer fires).
-        const between = src.slice(entryEvalAt, primerAt);
-        expect(between).not.toContain("createLogger(");
+        // The logger must not be constructed before the primers fire.
+        expect(src.slice(entryEvalAt, primerAt)).not.toContain("createLogger(");
     });
 
-    it("the require is wrapped so a failure to load the module can never throw out of the entry", () => {
-        const primerAt = src.indexOf(
-            'resolve(import.meta.dirname, "arp-primer.cjs")',
-        );
-        const nearby = src.slice(primerAt, primerAt + 400);
-        expect(nearby).toContain("try {");
+    it("each require is wrapped so a failure to load a module can never throw out of the entry", () => {
+        const primerAt = primerListAt(src);
+        const nearby = src.slice(primerAt, primerAt + 1200);
+        expect(nearby.split("try {").length - 1).toBeGreaterThanOrEqual(2);
         expect(nearby).toContain("catch");
+    });
+
+    it("names no primer directly", () => {
+        expect(src).not.toContain('"arp-primer.cjs"');
+        expect(src).not.toContain('"wake-ahead.cjs"');
     });
 });
 
-describe("standalone-compile.mjs — arp-primer is the FIRST baked-in preload", () => {
+describe("standalone-compile.mjs — the primer list is spread FIRST into PRELOAD_NAMES", () => {
     const src = readFileSync(STANDALONE_COMPILE_SRC, "utf8");
 
-    it("lists arp-primer.cjs in PRELOAD_NAMES", () => {
-        expect(src).toContain('"arp-primer.cjs"');
-    });
-
-    it("arp-primer.cjs is the FIRST entry in PRELOAD_NAMES — before cache-control-normalize, bun-keepalive-guard and request-body-cap", () => {
+    it("PRELOAD_NAMES opens with the primer list, before cache-control-normalize, bun-keepalive-guard and request-body-cap", () => {
         const match = src.match(/const PRELOAD_NAMES = \[([\s\S]*?)\];/);
         expect(match).not.toBeNull();
         const names = (match as RegExpMatchArray)[1]
@@ -128,10 +134,15 @@ describe("standalone-compile.mjs — arp-primer is the FIRST baked-in preload", 
             .map((s) => s.trim())
             .filter(Boolean)
             .map((s) => s.replace(/^"|"$/g, ""));
-        expect(names[0]).toBe("arp-primer.cjs");
+        expect(names[0]).toBe("...PROCESS_START_PRIMERS");
         expect(names).toContain("cache-control-normalize.cjs");
         expect(names).toContain("bun-keepalive-guard.cjs");
         expect(names).toContain("request-body-cap.cjs");
+    });
+
+    it("names no primer directly", () => {
+        expect(src).not.toContain('"arp-primer.cjs"');
+        expect(src).not.toContain('"wake-ahead.cjs"');
     });
 });
 

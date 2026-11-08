@@ -64,14 +64,48 @@ bootTrace.mark("entry-eval");
 // child even exists, is earlier than any preload the child itself could
 // run. The compiled standalone-on-Bun executable has no supervisor, so it
 // bakes the same primer in as the FIRST preload instead (standalone-compile.mjs).
-const arpPrimerPath = resolve(import.meta.dirname, "arp-primer.cjs");
-if (existsSync(arpPrimerPath)) {
+//
+// The ARP primer is the first entry of the process-start primer list
+// (ADR-0066 D3, ./process-start-primers.cjs); the wake-ahead primer (#2054)
+// is the second. This loop is the only place disk mode runs them, in list
+// order, before metrics bind and before the child is spawned.
+const primerListPath = resolve(
+    import.meta.dirname,
+    "process-start-primers.cjs",
+);
+// Cancels the primers' shared AbortController (process-start-primers.cjs
+// names its globalThis key); onSignal calls it before draining.
+let primerAbortKey = "knext.runtime.primerAbort";
+const abortPrimers = (): void => {
     try {
-        createRequire(import.meta.url)(arpPrimerPath);
+        (globalThis as Record<symbol, AbortController | undefined>)[
+            Symbol.for(primerAbortKey)
+        ]?.abort();
     } catch {
-        // arp-primer.cjs's own contract is "never throws"; this catch only
-        // guards module resolution itself (e.g. a corrupted dist file), never
-        // the primer's internal logic.
+        // never throw from the shutdown path
+    }
+};
+if (existsSync(primerListPath)) {
+    try {
+        const requirePrimer = createRequire(import.meta.url);
+        const primers = requirePrimer(primerListPath) as {
+            PROCESS_START_PRIMERS: readonly string[];
+            PRIMER_ABORT_KEY_NAME: string;
+        };
+        primerAbortKey = primers.PRIMER_ABORT_KEY_NAME;
+        for (const name of primers.PROCESS_START_PRIMERS) {
+            const primerPath = resolve(import.meta.dirname, name);
+            if (!existsSync(primerPath)) continue;
+            try {
+                requirePrimer(primerPath);
+            } catch {
+                // Each primer's own contract is "never throws"; this catch
+                // only guards module resolution itself (e.g. a corrupted dist
+                // file), never the primer's internal logic.
+            }
+        }
+    } catch {
+        // A missing or corrupted list module must never stop the server.
     }
 }
 
@@ -354,6 +388,9 @@ const alreadyExitedChild: ChildLike = {
 };
 
 const onSignal = (signal: string) => {
+    // ADR-0066 D3: cancel the process-start primers BEFORE draining, so an
+    // outstanding wake-ahead call can never hold the drain.
+    abortPrimers();
     log.info(
         { signal, graceMs: SHUTDOWN_GRACE_MS },
         "Shutting down gracefully...",

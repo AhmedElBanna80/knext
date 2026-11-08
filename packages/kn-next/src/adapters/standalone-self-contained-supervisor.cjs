@@ -276,6 +276,15 @@ function installDrainHandler(appServer, opts = {}) {
   function onSignal() {
     if (draining) return; // idempotent — a second signal must not double-fire
     draining = true;
+    // ADR-0066 D3: cancel the process-start primers before draining, so an
+    // outstanding wake-ahead call can never hold the drain. Same globalThis
+    // key as process-start-primers.cjs's abortPrimers(), read directly so this
+    // preload stays dependency-free.
+    try {
+      globalThis[Symbol.for('knext.runtime.primerAbort')]?.abort();
+    } catch {
+      // never block the drain
+    }
     armExitNormalizer();
     try {
       opts.metricsServer?.close();

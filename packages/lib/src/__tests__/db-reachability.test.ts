@@ -248,10 +248,15 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
       reached.push(file);
       const source = readFileSync(file, 'utf8');
       const { imports } = ts.scan(source);
-      const dynamicSites = (ts.transformSync(source).match(/\b(?:import|require)\s*\(/g) ?? []).length;
-      const dynamicResolved = imports.filter((i) => i.kind === 'dynamic-import' || i.kind === 'require-call').length;
+      const dynamicSites = (ts.transformSync(source).match(/\b(?:import|require)\s*\(/g) ?? [])
+        .length;
+      const dynamicResolved = imports.filter(
+        (i) => i.kind === 'dynamic-import' || i.kind === 'require-call',
+      ).length;
       if (dynamicSites !== dynamicResolved) {
-        throw new Error(`${file}: ${dynamicSites} dynamic import/require sites, only ${dynamicResolved} resolved to a literal path`);
+        throw new Error(
+          `${file}: ${dynamicSites} dynamic import/require sites, only ${dynamicResolved} resolved to a literal path`,
+        );
       }
       for (const i of imports) if (i.path.startsWith('.')) walk(resolve(file, i.path));
     };

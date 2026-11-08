@@ -12,6 +12,8 @@
  * thrown at it.
  */
 
+import { resolve } from "node:path";
+
 export interface PrimerRunDeps {
     /** The directory the primer files sit in (dist/adapters, or src/adapters). */
     dir: string;
@@ -35,7 +37,7 @@ export function describeError(err: unknown): string {
 }
 
 function join(dir: string, file: string): string {
-    return `${dir.replace(/\/+$/, "")}/${file}`;
+    return resolve(dir, file);
 }
 
 /**
@@ -101,8 +103,15 @@ export function runProcessStartPrimers(deps: PrimerRunDeps): () => void {
     }
 
     for (const name of names) {
-        const primerPath = join(deps.dir, name);
+        if (typeof name !== "string" || name === "") {
+            say(
+                `process-start primer did not run: ${listPath} lists a non-file entry`,
+            );
+            continue;
+        }
+        let primerPath = name;
         try {
+            primerPath = join(deps.dir, name);
             if (!deps.exists(primerPath)) {
                 say(
                     `process-start primer did not run: cannot load ${primerPath} (missing)`,

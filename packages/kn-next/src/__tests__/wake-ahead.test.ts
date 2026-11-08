@@ -419,7 +419,11 @@ process.on("SIGTERM", () => {
 });
 `;
 
-function blackhole(): Promise<{ server: Server; url: string }> {
+function blackhole(): Promise<{
+    server: Server;
+    url: string;
+    connections: () => number;
+}> {
     return new Promise((done) => {
         const sockets: import("node:net").Socket[] = [];
         const server = createServer((s) => sockets.push(s));
@@ -428,7 +432,11 @@ function blackhole(): Promise<{ server: Server; url: string }> {
         });
         server.listen(0, "127.0.0.1", () => {
             const port = (server.address() as { port: number }).port;
-            done({ server, url: `http://127.0.0.1:${port}` });
+            done({
+                server,
+                url: `http://127.0.0.1:${port}`,
+                connections: () => sockets.length,
+            });
         });
     });
 }
@@ -474,6 +482,12 @@ describe("a wake-ahead at a function that never answers delays nothing", () => {
                 );
                 expect(await res.text()).toBe("ok");
                 expect(Date.now() - t0).toBeLessThan(500);
+
+                // The wake GET really left the process: the function saw a connection.
+                for (let n = 0; n < 40 && hole.connections() === 0; n++) {
+                    await new Promise((r) => setTimeout(r, 25));
+                }
+                expect(hole.connections()).toBeGreaterThan(0);
 
                 const exited = new Promise<number>((done) =>
                     child.on("exit", () => done(Date.now())),

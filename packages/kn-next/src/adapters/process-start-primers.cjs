@@ -5,8 +5,9 @@
  * best-effort action the moment it is required, before the server boots.
  * The list is defined here and only here:
  *
- *   - disk mode: `node-server.ts` requires each primer, in list order, as its
- *     first statements, before it binds metrics or spawns the Next server;
+ *   - disk mode: `node-server.ts`, as its first statement, calls
+ *     `runProcessStartPrimers` (`process-start-run.ts`), which requires each
+ *     primer in list order before metrics bind and before the spawn;
  *   - compiled single-exec: `standalone-compile.mjs` spreads this list at the
  *     front of `PRELOAD_NAMES`, so the primers stay the earliest preloads.
  *

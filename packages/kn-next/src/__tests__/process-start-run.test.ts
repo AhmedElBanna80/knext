@@ -123,6 +123,20 @@ describe("runProcessStartPrimers", () => {
         expect(() => abort()).not.toThrow();
     });
 
+    it("a non-string list entry is logged and skipped, and the next one runs", () => {
+        const { d, required, lines } = deps({
+            [ABORT]: { abortPrimers: () => {} },
+            [LIST]: {
+                PROCESS_START_PRIMERS: [Symbol("x"), 7, "", "wake-ahead.cjs"],
+            },
+            [WAKE]: {},
+        });
+        expect(() => runProcessStartPrimers(d)).not.toThrow();
+        expect(required).toContain(WAKE);
+        expect(lines.length).toBe(3);
+        for (const l of lines) expect(l).toContain("lists a non-file entry");
+    });
+
     it("never throws: an unprintable thrown value and a failing stderr", () => {
         const unprintable = Object.create(null);
         const d: PrimerRunDeps = {

@@ -9,8 +9,9 @@
  * (`node .output/server/index.mjs`, no supervisor in front of it either). So
  * the fix lands in FOUR different places:
  *
- *   - `node-server.ts` requires `arp-primer.cjs` directly, as the supervisor's
- *     OWN first action — before metrics bind, before the child is spawned.
+ *   - `node-server.ts` runs the process-start primer list (ARP primer first)
+ *     through `process-start-run.ts`, as the supervisor's OWN first action —
+ *     before metrics bind, before the child is spawned.
  *     That is earlier than any `--require` preload the spawned child could
  *     run itself, so the child-side preload list is untouched.
  *   - `standalone-compile.mjs` bakes `arp-primer.cjs` into the compiled

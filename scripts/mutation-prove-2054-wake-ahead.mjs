@@ -71,6 +71,13 @@ const MUTATIONS = [
     replacement: 'false ? undefined : doFetch(',
   },
   {
+    id: 'W7',
+    subject: 'wake',
+    claim: 'requiring the primer no longer fires the wake calls',
+    anchor: '\nwakeAheadNow();\n',
+    replacement: '\n',
+  },
+  {
     id: 'S1',
     subject: 'nodeServer',
     claim: "node-server.ts's onSignal no longer aborts the primers before draining",

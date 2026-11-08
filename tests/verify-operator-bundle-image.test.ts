@@ -47,6 +47,30 @@ function check(tag: string, digest: string, content: string | null) {
 }
 
 describe('verify-operator-bundle-image', () => {
+  it('FAILS a stale operator image in an env value, not only image: lines', () => {
+    const content = `${bundle(`image: ${IMG}:v1.4.0@${D}`)}        env:\n        - name: RELATED_IMAGE_OPERATOR\n          value: ${IMG}:v1.3.0@${OTHER}\n`;
+    const r = check('operator-v1.4.0', D, content);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('more than one operator image');
+  });
+
+  it('FAILS a stale operator image in args and in flow-style YAML', () => {
+    const args = `${bundle(`image: ${IMG}:v1.4.0@${D}`)}        args:\n        - --image=${IMG}:v1.3.0@${OTHER}\n`;
+    expect(check('operator-v1.4.0', D, args).code).toBe(1);
+    const flow = `${bundle(`image: ${IMG}:v1.4.0@${D}`)}        env: [{name: X, value: "${IMG}:v1.3.0@${OTHER}"}]\n`;
+    expect(check('operator-v1.4.0', D, flow).code).toBe(1);
+  });
+
+  it('FAILS a bundle whose only operator reference is outside an image: line and is stale', () => {
+    const content = bundle(null) + `        args: ["${IMG}:v1.3.0@${OTHER}"]\n`;
+    expect(check('operator-v1.4.0', D, content).code).toBe(1);
+  });
+
+  it('passes when an env value repeats the SAME pinned image, and ignores comments', () => {
+    const content = `${bundle(`image: ${IMG}:v1.4.0@${D}`)}        env:\n        - name: RELATED_IMAGE_OPERATOR\n          value: ${IMG}:v1.4.0@${D}\n# old: ${IMG}:v0.1.0@${OTHER}\n`;
+    expect(check('operator-v1.4.0', D, content).code).toBe(0);
+  });
+
   it('passes when tag and digest both match', () => {
     expect(check('operator-v1.4.0', D, bundle(`image: ${IMG}:v1.4.0@${D}`)).code).toBe(0);
   });

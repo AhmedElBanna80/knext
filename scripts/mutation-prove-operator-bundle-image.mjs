@@ -121,6 +121,13 @@ const MUTATIONS = [
     replacement: 'if (!opts.tag || !opts.digest ||',
   },
   {
+    id: 'G12',
+    claim: 'operator references outside image: lines (env, args, flow YAML) are no longer scanned',
+    subject: 'guard',
+    anchor: '    for (const m of line.matchAll(OPERATOR_TOKEN)) refs.add(m[0]);\n',
+    replacement: "    const im = /^\\s*(?:-\\s+)?image:\\s*(\\S+)/.exec(line);\n    if (im) refs.add(im[1]);\n",
+  },
+  {
     id: 'W4',
     claim: "the workflow stops passing this run's image to the guard",
     subject: 'workflow',

@@ -547,13 +547,21 @@ describe("the vinext targets do not wake functions yet, and the docs say so", ()
     // the primer list, this reds until the docs sentence below is updated.
     const read = (p: string) =>
         readFileSync(resolve(__dirname, "..", "..", p), "utf8");
-    it("neither vinext entry runs the wake-ahead primer", () => {
-        expect(read("src/adapters/vinext-compile.mjs")).not.toContain(
-            "wake-ahead",
-        );
-        expect(read("templates/app/knext-node-entry.mjs.hbs")).not.toContain(
-            "wake-ahead",
-        );
+    it("neither vinext entry runs the wake-ahead primer or the primer list", () => {
+        for (const f of [
+            "src/adapters/vinext-compile.mjs",
+            "templates/app/knext-node-entry.mjs.hbs",
+        ]) {
+            const src = read(f);
+            for (const needle of [
+                "wake-ahead",
+                "process-start-primers",
+                "PROCESS_START_PRIMERS",
+                "KNEXT_WAKE_FUNCTIONS",
+            ]) {
+                expect(src, `${f} mentions ${needle}`).not.toContain(needle);
+            }
+        }
     });
     it("zone-functions.mdx says a vinext-target zone does not wake its functions", () => {
         const docs = readFileSync(

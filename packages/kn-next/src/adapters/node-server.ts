@@ -84,13 +84,17 @@ if (existsSync(primerListPath)) {
         };
         for (const name of primers.PROCESS_START_PRIMERS) {
             const primerPath = resolve(import.meta.dirname, name);
-            if (!existsSync(primerPath)) continue;
+            if (!existsSync(primerPath)) {
+                primerNotLoaded(primerPath);
+                continue;
+            }
             try {
                 requirePrimer(primerPath);
-            } catch {
+            } catch (err) {
                 // Each primer's own contract is "never throws"; this catch
                 // only guards module resolution itself (e.g. a corrupted dist
                 // file), never the primer's internal logic.
+                primerNotLoaded(primerPath, err);
             }
         }
     } catch (err) {
@@ -111,13 +115,28 @@ function primerListMissing(err?: unknown): void {
     );
 }
 
+/** Logged once per file: that primer does not run. Never fatal. */
+function primerNotLoaded(path: string, err?: unknown): void {
+    process.stderr.write(
+        `[knext] process-start primer did not run: cannot load ${path}` +
+            (err === undefined
+                ? " (missing)"
+                : ` (${err instanceof Error ? err.message : String(err)})`) +
+            "\n",
+    );
+}
+
 function loadAbortPrimers(): () => void {
+    const path = resolve(import.meta.dirname, "process-start-abort.cjs");
     try {
-        const mod = createRequire(import.meta.url)(
-            resolve(import.meta.dirname, "process-start-abort.cjs"),
-        ) as { abortPrimers: () => void };
+        const mod = createRequire(import.meta.url)(path) as {
+            abortPrimers: () => void;
+        };
         return mod.abortPrimers;
-    } catch {
+    } catch (err) {
+        // The primers still run; SIGTERM just cannot cancel them early (each
+        // call is capped by its own timeout).
+        primerNotLoaded(path, err);
         return () => {};
     }
 }

@@ -255,7 +255,8 @@ starts waking while the zone is still booting, so the first request to need it w
 - The calls never delay the zone: nothing waits for them, and the zone's own health check answers
   whatever state they are in.
 - Each call gives up after one second, and a failure is logged once and not retried.
-- On shutdown the calls are cancelled before the zone drains its in-flight requests.
+- On shutdown the calls are cancelled before the zone drains its in-flight requests (a
+  single-executable zone without the self-contained supervisor simply exits).
 - A zone scaled out to several pods sends one call per pod per function. They collapse into a
   single wake of each function.
 

@@ -81,7 +81,7 @@ are unknown-command errors.
 ### Guards
 
 - `assertNoPlaceholders` (`placeholder-preflight.ts`).
-- `assertNotStaticExport`, `assertVinextNotStaticExport`, `assertDefaultDistDir` (`static-export-guard.ts`).
+- `assertNotStaticExport`, `assertVinextNotStaticExport`, `assertDefaultDistDir`, plus the helpers `classifyStaticExport` and `configuredDistDir` (`static-export-guard.ts`).
 - `assertNoBunTurbopackFragments` (`turbopack-fragments-guard.ts`).
 - `assertVisibilityDowngradeIsExplicit` (`visibility-guard.ts`).
 - `keyPrefixProblem`, `KEY_PREFIX_PATTERN`, `KEY_PREFIX_MAX_LENGTH` (`redis-key-prefix.ts`).
@@ -164,8 +164,8 @@ are unknown-command errors.
   - Reads `KN_CONTEXT`, `KN_REDIS_URL`, `KN_REGISTRY`, `KN_BUCKET`, `KN_IMAGE_TAG`, `KN_NAMESPACE`, `KN_IMAGE`, `KNEXT_VINEXT_PATCHES`, `KNEXT_VERBOSE` and `npm_config_registry`.
   - Reads `KNEXT_CACHE_DIR`, then `XDG_CACHE_HOME`, for the patched-Bun cache location (`bun-toolchain.ts`), `KNEXT_COMPILE_STRICT_REQUIRES` (`vinext-build.ts`), and `CI` to decide whether `create` prompts (`create-options.ts`).
   - The `knext.config.ts` that `create` scaffolds reads `REDIS_URL`, so loading that config reads it.
-  - `runProjectBuild` sets `KNEXT_RUNTIME` (`project-build.ts:runProjectBuild`, through the constant `../adapters/runtime-env.ts:KNEXT_RUNTIME_ENV`). Its callers delete `ASSET_PREFIX` (`build.ts`, `deploy.ts`, `preview.ts`) and export `KNEXT_BUILD_ID` / `NEXT_DEPLOYMENT_ID` through `exportBuildIdEnv` (`deploy.ts`, `preview.ts`).
-  - The distDir guard reads `next.config.*` and checks for `<distDir>/export-detail.json`; it writes nothing (`static-export-guard.ts`).
+  - `runProjectBuild` sets `KNEXT_RUNTIME` (`project-build.ts:runProjectBuild`, through the constant `../adapters/runtime-env.ts:KNEXT_RUNTIME_ENV`). Its callers set `ASSET_PREFIX` from the storage config when storage is configured (`deploy.ts`; `preview.ts` only with a `storage.publicUrl`) and delete it when it is not (`build.ts`, `deploy.ts`, `preview.ts`). `deploy.ts` and `preview.ts` call `build-id-env.ts:exportBuildIdEnv`, which always sets `KNEXT_BUILD_ID`, sets `NEXT_DEPLOYMENT_ID` only for the vinext builder, and otherwise deletes an inherited `NEXT_DEPLOYMENT_ID`.
+  - The `static-export-guard.ts` guards write nothing. They read `next.config.*` through `readNextConfigStrict`; `readConfigOrRefuse` turns an unreadable file into a `UsageError`. `assertDefaultDistDir` refuses a custom `distDir` before the build, `assertVinextNotStaticExport` refuses `output: 'export'` on the vinext path, and `assertNotStaticExport` checks for `<distDir>/export-detail.json` after the build.
 - **Optional packages:** lazily imports `@getknext/grpc`, `@getknext/ffi` and `@getknext/db/migrate`. `db migrate` opens a database connection.
 - **Exit:** `process.exit` with the code returned by each verb's `*Main` function.
 

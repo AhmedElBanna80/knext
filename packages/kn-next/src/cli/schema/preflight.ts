@@ -45,6 +45,7 @@ import {
     crdSchemaFromOpenApiV3Doc,
     flattenSchemaPaths,
     isFieldKnown,
+    NEXTAPP_CRD_NAME,
     NEXTAPP_KIND,
     openApiV3Argv,
     parseUnknownFieldsFromError,
@@ -117,6 +118,7 @@ export interface KnownFieldsRead {
 
 /** The CRD each kind the CLI applies is defined by (#2481). */
 const CRD_NAME_OF_KIND: Readonly<Record<string, string>> = {
+    [NEXTAPP_KIND]: NEXTAPP_CRD_NAME,
     [BACKENDSERVICE_KIND]: BACKENDSERVICE_CRD_NAME,
 };
 
@@ -131,6 +133,14 @@ export function readKnownCRDFields(
     kind: string = NEXTAPP_KIND,
 ): KnownFieldsRead {
     const notes: string[] = [];
+    const crdName = CRD_NAME_OF_KIND[kind];
+    // A kind with no known CRD is never read against another kind's schema.
+    if (crdName === undefined) {
+        return {
+            source: "none",
+            detail: `could not read the installed ${kind} schema — knext applies no such kind`,
+        };
+    }
 
     const openapi = kubectl(openApiV3Argv());
     if (openapi.ok) {
@@ -157,7 +167,7 @@ export function readKnownCRDFields(
         notes.push(`OpenAPI v3 read failed: ${firstLine(openapi.stderr)}`);
     }
 
-    const crd = kubectl(crdGetArgv(CRD_NAME_OF_KIND[kind]));
+    const crd = kubectl(crdGetArgv(crdName));
     if (crd.ok) {
         let obj: unknown;
         try {

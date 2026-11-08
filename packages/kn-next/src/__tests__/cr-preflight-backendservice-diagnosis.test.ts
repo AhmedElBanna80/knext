@@ -7,10 +7,12 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { flattenSchemaPaths } from "../cli/schema/crd-schema";
 import {
     type KubectlCapture,
     preflightCRSchema,
     readKnownCRDFields,
+    unknownFieldsOfCR,
 } from "../cli/schema/preflight";
 
 const obj = (properties: Record<string, unknown>) => ({
@@ -157,7 +159,8 @@ describe("#2481 — the BackendService preflight diagnoses against its own CRD",
                 ? {
                       ok: false,
                       stdout: "",
-                      stderr: 'strict decoding error: unknown field "spec.scaling.maxScale"',
+                      // Names no field, so only the schema walk can produce the answer.
+                      stderr: "strict decoding error: unknown field",
                   }
                 : argv[2] === "--raw"
                   ? {
@@ -192,5 +195,49 @@ describe("#2481 — the BackendService preflight diagnoses against its own CRD",
         expect(out.diagnosis).toBe("apiserver-message");
         expect(out.diagnosisDetail).toMatch(/BackendService/);
         expect(out.unknownFields).toEqual(["spec.scaling", "spec.wakeAhead"]);
+    });
+    it("reads map keys and array items as `*`, skips opaque nodes, and reports an unknown parent once", () => {
+        const known = flattenSchemaPaths(
+            obj({
+                metadata: meta,
+                spec: obj({
+                    env: {
+                        type: "object",
+                        additionalProperties: { type: "string" },
+                    },
+                    ports: {
+                        type: "array",
+                        items: obj({ port: { type: "integer" } }),
+                    },
+                    blob: {
+                        type: "object",
+                        "x-kubernetes-preserve-unknown-fields": true,
+                    },
+                }),
+            }),
+        );
+        const cr = {
+            metadata: { name: "fn", labels: { a: "b" } },
+            spec: {
+                env: { FOO: "1", BAR: "2" },
+                ports: [{ port: 1 }, { port: 2, name: "x" }],
+                blob: { anything: { deep: 1 } },
+                extra: { a: 1, b: { c: 2 } },
+            },
+        };
+        expect(unknownFieldsOfCR(cr, known)).toEqual([
+            "spec.extra",
+            "spec.ports.*.name",
+        ]);
+    });
+
+    it("a kind knext does not apply reads no schema, so the apiserver names the fields", () => {
+        const { kubectl, calls } = fakeKubectl({ openapi: true, crd: true });
+        const out = withCR({ ...CR, kind: "Widget" }, (crPath) =>
+            preflightCRSchema({ kubectl }, { crPath, namespace: "z" }),
+        );
+        expect(out.diagnosis).toBe("apiserver-message");
+        expect(out.diagnosisDetail).toMatch(/Widget/);
+        expect(calls.some((c) => c[1] === "get")).toBe(false);
     });
 });

@@ -16,6 +16,17 @@
  *
  * Process-boot claims ("boots in ~61 ms", "boots 14x faster") are a different
  * number, guarded by boot-claim-hygiene.test.ts; this file is about cold start.
+ *
+ * It is a keyword heuristic, and its limits are deliberate:
+ *   - a sentence must name the executable (or open with a pronoun for the
+ *     previous sentence that did) and say "cold start", "scale from zero" or
+ *     "from zero", so a wake-measured BOOT comparison between runtimes (the
+ *     hedged Bun-vs-Node figures on tuning-cold-start.mdx and bun-runtime.mdx)
+ *     is out of scope, as is a sentence about bytecode caching on both
+ *     runtimes that names the executable in passing (oke.mdx);
+ *   - only the presence of `win test: passed` in the named ledger entry is
+ *     checked, not the A/B's fields (n, IQR): the ledger entry is reviewed.
+ * A reviewer remains the backstop for phrasings outside these patterns.
  */
 
 import { describe, expect, it } from 'bun:test';
@@ -50,9 +61,9 @@ const FILES = [
 
 /** The thing a claim is about: the single executable, in any of its names. */
 const SUBJECT =
-  /\b(single[- ]exec(utable)?s?|self-contained (build|image|executable|binary)|compiled (bun |vinext )?(binary|executable)|vinext (build|executable|binary)|bun (single[- ])?executable|the executable|the binary)\b/i;
+  /\b(single[- ]exec(utable)?s?|self-contained (build|image|executable|binary)|compiled[- ](bun |vinext )?(binary|executable)|vinext (build|executable|binary)|bun (single[- ])?executable|the executable|the binary)\b/i;
 // Cold start, not process boot: boot numbers are boot-claim-hygiene.test.ts's.
-const COLD_START = /\bcold[- ]?start(s|ing)?\b|\bscale[- ]from[- ]zero\b|\bfrom zero\b/i;
+const COLD_START = /\bcold[- ]?start(s|ed|ing)?\b|\bscale[- ]from[- ]zero\b|\bfrom zero\b/i;
 const COMPARATIVE =
   /\b(faster|quicker|shorter|wins?|beats?|outperforms?|ahead of|advantage|cuts?|reduces?|halves)\b|\b\d+(\.\d+)?\s*(%|ms|s|×|x)\s+(faster|quicker|less|lower|shorter)\b/i;
 /** A clause that makes the claim even inside otherwise honest wording. */
@@ -178,6 +189,7 @@ describe('comparative cold-start claims about the single executable (ADR-0070 C5
       'The single executable is quicker. It starts faster from zero.',
       'The self-contained build cuts cold start by 40%.',
       'The vinext executable has comparable throughput but a faster cold start.',
+      'The compiled-executable image cold-started faster than disk mode.',
     ];
     for (const c of cases) expect(findUnbackedClaims('x.mdx', c).length, c).toBe(1);
   });

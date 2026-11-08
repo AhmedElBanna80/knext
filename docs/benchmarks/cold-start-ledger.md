@@ -330,7 +330,7 @@ and is not what this row measures.
 A user-facing page may say the single executable cold-starts faster only when its paragraph points
 at one of the entries below with `{/* cold-start-ab: docs/benchmarks/cold-start-ledger.md#<anchor> */}`,
 and that entry records `win test: passed` (ADR-0070 C5, `apps/docs/coldstart-comparison-claims.test.ts`).
-The anchor is the entry's heading in lower case with spaces as `-`.
+The anchor is the entry's heading in lower case, with punctuation other than `-` and `_` removed and spaces turned into `-` (`### A/B 2027-01 OKE` is `#ab-2027-01-oke`).
 
 Each entry is a level-3 heading and these fields, one per line:
 

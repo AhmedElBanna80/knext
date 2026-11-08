@@ -38,7 +38,7 @@ func TestRunningTemplateViolationNeedsPositiveEvidence(t *testing.T) {
 	mount := func(secret string) *servingv1.Service {
 		return runningKsvc(corev1.PodSpec{Containers: []corev1.Container{{
 			Name:    "user",
-			EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: secret}}}},
+			EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{Name: secret}}},
 		}}})
 	}
 	cases := []struct {

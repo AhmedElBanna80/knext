@@ -199,9 +199,9 @@ func TestSelfCheckAgainstARealApiserver(t *testing.T) {
 			t.Fatal(err)
 		}
 		crb := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: role.Name},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name},
-			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Namespace: "kn-next-operator-system", Name: "proof-operator"}},
+			Name:     role.Name,
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name},
+			Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Namespace: "kn-next-operator-system", Name: "proof-operator"}},
 		}
 		if _, err := admin.RbacV1().ClusterRoleBindings().Create(ctx, crb, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)

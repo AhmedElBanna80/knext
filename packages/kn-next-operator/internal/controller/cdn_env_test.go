@@ -36,8 +36,8 @@ import (
 func cdnApp(spec appsv1alpha1.NextAppSpec) *appsv1alpha1.NextApp {
 	spec.Image = validImage
 	return &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
-		Spec:       spec,
+		Name: "my-app", Namespace: "default",
+		Spec: spec,
 	}
 }
 

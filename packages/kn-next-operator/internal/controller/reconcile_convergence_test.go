@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -55,8 +54,8 @@ var _ = Describe("NextApp Controller reconcile convergence (#98)", func() {
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		spec.Image = orDefault(spec.Image, validImage)
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       spec,
+			Name: name, Namespace: namespace,
+			Spec: spec,
 		}
 		Expect(k8sClient.Create(ctx, nextApp)).To(Succeed())
 
@@ -110,8 +109,8 @@ var _ = Describe("NextApp Controller reconcile convergence (#98)", func() {
 	It("does not surface IsConflict on two rapid reconciles", func() {
 		nn := types.NamespacedName{Name: "converge-noconflict", Namespace: namespace}
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: validImage},
+			Name: nn.Name, Namespace: namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: validImage},
 		}
 		Expect(k8sClient.Create(ctx, nextApp)).To(Succeed())
 		DeferCleanup(func() {

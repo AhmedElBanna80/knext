@@ -30,7 +30,6 @@ import (
 
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -301,7 +300,7 @@ func TestOperatorWritesCarryFieldManagerIdentity(t *testing.T) {
 	// A cluster-scoped object (Namespace) sidesteps the envtest limitation
 	// that no controller-manager runs to bootstrap a "default" namespace.
 	probe := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "fieldmanager-identity-probe"},
+		Name: "fieldmanager-identity-probe",
 	}
 	ctx := t.Context()
 	if err := c.Create(ctx, probe); err != nil {

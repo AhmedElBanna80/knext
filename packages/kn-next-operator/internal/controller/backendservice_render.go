@@ -122,16 +122,14 @@ func functionIngressRules() []networkingv1.NetworkPolicyIngressRule {
 // writes.
 func DesiredFunctionNetworkPolicy(function, zone, namespace string) *networkingv1.NetworkPolicy {
 	bs := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: function, Namespace: namespace},
-		Spec:       appsv1alpha1.BackendServiceSpec{Zone: zone},
+		Name: function, Namespace: namespace,
+		Spec: appsv1alpha1.BackendServiceSpec{Zone: zone},
 	}
 	return &networkingv1.NetworkPolicy{
-		TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      FunctionNetworkPolicyName(function),
-			Namespace: namespace,
-			Labels:    functionLabels(bs),
-		},
+		APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy",
+		Name:      FunctionNetworkPolicyName(function),
+		Namespace: namespace,
+		Labels:    functionLabels(bs),
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
 				MatchLabels: map[string]string{"serving.knative.dev/service": function},
@@ -201,13 +199,13 @@ func buildFunctionKsvc(bs *appsv1alpha1.BackendService, retention time.Duration,
 	if jwks != zoneJWKSUntrusted {
 		volumes = append(volumes, corev1.Volume{
 			Name: FunctionJWKSVolumeName,
-			VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{Name: ZoneJWKSConfigMapName(bs.Spec.Zone)},
-				Items:                []corev1.KeyToPath{{Key: ZoneJWKSFileName, Path: ZoneJWKSFileName}},
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				Name:  ZoneJWKSConfigMapName(bs.Spec.Zone),
+				Items: []corev1.KeyToPath{{Key: ZoneJWKSFileName, Path: ZoneJWKSFileName}},
 				// Optional until the zone identity exists: the pod starts, and the
 				// function's interceptor refuses every RPC except health (fail closed).
 				Optional: new(true),
-			}},
+			},
 		})
 		// A directory mount, never a subPath, so a rotated JWKS propagates.
 		mounts = append(mounts, corev1.VolumeMount{Name: FunctionJWKSVolumeName, MountPath: ZoneJWKSMountDir, ReadOnly: true})
@@ -275,16 +273,14 @@ func buildFunctionKsvc(bs *appsv1alpha1.BackendService, retention time.Duration,
 // Calico drill applies exactly the operator's objects rather than a hand copy.
 func RenderFunctionObjects(bs *appsv1alpha1.BackendService, zoneRetention time.Duration) ([]client.Object, error) {
 	sa := &corev1.ServiceAccount{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: FunctionServiceAccountName(bs.Name), Namespace: bs.Namespace, Labels: functionLabels(bs),
-		},
+		APIVersion: "v1", Kind: "ServiceAccount",
+		Name: FunctionServiceAccountName(bs.Name), Namespace: bs.Namespace, Labels: functionLabels(bs),
 		AutomountServiceAccountToken: new(false),
 		ImagePullSecrets:             bs.Spec.ImagePullSecrets,
 	}
 	ksvc := &servingv1.Service{
-		TypeMeta:   metav1.TypeMeta{APIVersion: servingv1.SchemeGroupVersion.String(), Kind: lcService},
-		ObjectMeta: metav1.ObjectMeta{Name: bs.Name, Namespace: bs.Namespace},
+		APIVersion: servingv1.SchemeGroupVersion.String(), Kind: lcService,
+		Name: bs.Name, Namespace: bs.Namespace,
 	}
 	// No cluster object is read, so the JWKS is rendered as for a zone that has
 	// not published one yet: the optional mount.

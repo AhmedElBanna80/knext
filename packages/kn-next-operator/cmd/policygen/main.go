@@ -36,7 +36,6 @@ import (
 	"fmt"
 	"os"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/json"
 
@@ -72,7 +71,7 @@ func main() {
 			os.Exit(2)
 		}
 		bs := &appsv1alpha1.BackendService{
-			ObjectMeta: metav1.ObjectMeta{Name: *function, Namespace: *namespace},
+			Name: *function, Namespace: *namespace,
 			Spec: appsv1alpha1.BackendServiceSpec{
 				Zone: *zone, Image: *image, Port: int32(*port), ProtoVersion: "1.0.0",
 			},

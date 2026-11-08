@@ -112,11 +112,11 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 	// --- identities ---------------------------------------------------------
 	roleFor := func(name string, rules []rbacv1.PolicyRule, subject rbacv1.Subject) {
 		t.Helper()
-		cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: name}, Rules: rules}
+		cr := &rbacv1.ClusterRole{Name: name, Rules: rules}
 		crb := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: name},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: name},
-			Subjects:   []rbacv1.Subject{subject},
+			Name:     name,
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: name},
+			Subjects: []rbacv1.Subject{subject},
 		}
 		for _, o := range []client.Object{cr, crb} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -168,7 +168,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 
 	ns := "vap-writes"
 	for _, n := range []string{ns, otherNS} {
-		if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: n}}); err != nil {
+		if err := admin.Create(ctx, &corev1.Namespace{Name: n}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -186,10 +186,10 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 		return err != nil && apierrors.IsForbidden(err) && strings.Contains(err.Error(), "ValidatingAdmissionPolicy")
 	}
 	secret := func(name string) *corev1.Secret {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, StringData: map[string]string{"k": "v"}}
+		return &corev1.Secret{Name: name, Namespace: ns, StringData: map[string]string{"k": "v"}}
 	}
 	cm := func(name string) *corev1.ConfigMap {
-		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Data: map[string]string{"k": "v"}}
+		return &corev1.ConfigMap{Name: name, Namespace: ns, Data: map[string]string{"k": "v"}}
 	}
 
 	// The policy takes a moment to be compiled and bound: wait until a write the
@@ -271,7 +271,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 			}
 		}
 		// generateName: the generated name decides, and it ends in random characters.
-		gen := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{GenerateName: allowedSecret, Namespace: ns}}
+		gen := &corev1.Secret{GenerateName: allowedSecret, Namespace: ns}
 		if err := operator.Create(ctx, gen); !isPolicyDenial(err) {
 			t.Errorf("operator created a generateName Secret (want a policy denial): %v", err)
 		}
@@ -551,19 +551,19 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 	// --- the real reconciler under the policy -------------------------------
 	reconcileZone := func(t *testing.T, zoneNS string, rotate bool) error {
 		t.Helper()
-		if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: zoneNS}}); err != nil {
+		if err := admin.Create(ctx, &corev1.Namespace{Name: zoneNS}); err != nil {
 			t.Fatal(err)
 		}
 		zone := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: zoneNS},
+			Name: sovZone, Namespace: zoneNS,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing"}},
 			},
 		}
 		bs := &appsv1alpha1.BackendService{
-			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: zoneNS},
-			Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
+			Name: "pricing", Namespace: zoneNS,
+			Spec: appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
 		}
 		for _, o := range []client.Object{zone, bs} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -582,7 +582,7 @@ func TestOperatorWritePolicyNarrowsSecretAndConfigMapWrites(t *testing.T) {
 			Client: operator, APIReader: operator, Scheme: scheme, Recorder: record.NewFakeRecorder(256),
 			BackendServiceCRDPresent: true, Clock: clock.Now,
 		}
-		req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: zoneNS, Name: sovZone}}
+		req := reconcile.Request{Namespace: zoneNS, Name: sovZone}
 		if _, err := r.Reconcile(ctx, req); err != nil {
 			return err
 		}

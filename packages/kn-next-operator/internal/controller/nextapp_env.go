@@ -194,7 +194,7 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 		for _, secretName := range nextApp.Spec.Secrets.EnvFrom {
 			envFrom = append(envFrom, corev1.EnvFromSource{
 				SecretRef: &corev1.SecretEnvSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+					Name: secretName,
 				},
 			})
 		}
@@ -232,8 +232,8 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 				Name: envName,
 				ValueFrom: &corev1.EnvVarSource{
 					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: entry.SecretName},
-						Key:                  entry.SecretKey,
+						Name: entry.SecretName,
+						Key:  entry.SecretKey,
 					},
 				},
 			}

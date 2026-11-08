@@ -193,8 +193,8 @@ func (r *NextAppReconciler) domainMappingToNextAppRequests(ctx context.Context, 
 		var reqs []reconcile.Request
 		for i := range apps.Items {
 			if isPrivate(&apps.Items[i]) {
-				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
-					Name: apps.Items[i].Name, Namespace: apps.Items[i].Namespace}})
+				reqs = append(reqs, reconcile.Request{
+					Name: apps.Items[i].Name, Namespace: apps.Items[i].Namespace})
 			}
 		}
 		return reqs
@@ -206,5 +206,5 @@ func (r *NextAppReconciler) domainMappingToNextAppRequests(ctx context.Context, 
 	if ns == "" {
 		ns = dm.Namespace
 	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: owner, Namespace: ns}}}
+	return []reconcile.Request{{Name: owner, Namespace: ns}}
 }

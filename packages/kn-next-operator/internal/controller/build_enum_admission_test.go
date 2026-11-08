@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -49,7 +48,7 @@ var _ = Describe("NextApp spec.build admission (#1219)", func() {
 		name := "build-enum-webpack"
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Build: "webpack",
@@ -77,7 +76,7 @@ var _ = Describe("NextApp spec.build admission (#1219)", func() {
 	It("still REJECTS an unrecognised build value — the enum is not open", func() {
 		name := "build-enum-unknown"
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Build: "rollup",
@@ -96,7 +95,7 @@ var _ = Describe("NextApp spec.build admission (#1219)", func() {
 			name := "build-enum-" + build
 			nn := types.NamespacedName{Name: name, Namespace: namespace}
 			nextApp := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Name: name, Namespace: namespace,
 				Spec: appsv1alpha1.NextAppSpec{
 					Image: validImage,
 					Build: build,

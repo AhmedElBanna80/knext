@@ -31,7 +31,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	admissionv1 "k8s.io/api/admission/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -138,8 +137,8 @@ var _ = Describe("NextApp validating webhook (envtest)", func() {
 
 	mkApp := func(name string, spec appsv1alpha1.NextAppSpec) *appsv1alpha1.NextApp {
 		return &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-			Spec:       spec,
+			Name: name, Namespace: ns,
+			Spec: spec,
 		}
 	}
 

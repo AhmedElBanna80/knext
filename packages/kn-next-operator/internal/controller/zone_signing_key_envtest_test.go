@@ -70,7 +70,7 @@ func newKeyedZoneReconciler(clock *zoneClock) *NextAppReconciler {
 }
 
 func reconcileWith(ctx context.Context, r *NextAppReconciler, ns, name string) (reconcile.Result, error) {
-	return r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}})
+	return r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: name})
 }
 
 func getSigningKey(ctx context.Context, ns, zone string) (*corev1.Secret, bool) {
@@ -449,8 +449,8 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	It("leaves a Secret it does not control untouched, publishes nothing, and reports the conflict", func() {
 		ns := bsNamespace(ctx)
 		squatter := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: ZoneSigningKeySecretName(sovZone), Namespace: ns},
-			Data:       map[string][]byte{"current.key": []byte("not ours")},
+			Name: ZoneSigningKeySecretName(sovZone), Namespace: ns,
+			Data: map[string][]byte{"current.key": []byte("not ours")},
 		}
 		Expect(k8sClient.Create(ctx, squatter)).To(Succeed())
 		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
@@ -473,8 +473,8 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	It("leaves a JWKS ConfigMap it does not control untouched and reports the conflict", func() {
 		ns := bsNamespace(ctx)
 		squatter := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: ZoneJWKSConfigMapName(sovZone), Namespace: ns},
-			Data:       map[string]string{ZoneJWKSFileName: `{"keys":[]}`},
+			Name: ZoneJWKSConfigMapName(sovZone), Namespace: ns,
+			Data: map[string]string{ZoneJWKSFileName: `{"keys":[]}`},
 		}
 		Expect(k8sClient.Create(ctx, squatter)).To(Succeed())
 		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
@@ -533,7 +533,7 @@ var _ = Describe("NextApp reconciler: the zone signing key and JWKS", func() {
 	It("rejects a function env name in the operator's KNEXT_TOKEN_ namespace at admission", func() {
 		ns := bsNamespace(ctx)
 		bs := &appsv1alpha1.BackendService{
-			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
+			Name: "pricing", Namespace: ns,
 			Spec: appsv1alpha1.BackendServiceSpec{
 				Zone: sovZone, Image: bsImage, ProtoVersion: lcV100,
 				Env: []corev1.EnvVar{{Name: FunctionTokenAudienceEnv, Value: "knext:fn:" + ns + "/other"}},

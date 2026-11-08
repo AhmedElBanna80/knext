@@ -53,7 +53,7 @@ var _ = Describe("NetworkPolicyEnforced condition (#744)", func() {
 	cniDaemonSet := func(name string) *appsv1.DaemonSet {
 		labels := map[string]string{"app": name}
 		return &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system"},
+			Name: name, Namespace: "kube-system",
 			Spec: appsv1.DaemonSetSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: labels},
 				Template: corev1.PodTemplateSpec{
@@ -93,8 +93,8 @@ var _ = Describe("NetworkPolicyEnforced condition (#744)", func() {
 	It("reports Unknown/CannotDetermine when no CNI signature exists (the honest fallback)", func() {
 		nn := types.NamespacedName{Name: "netpol-unknown", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: image},
+			Name: nn.Name, Namespace: nn.Namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: image},
 		}
 		Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		defer deleteAndFinalize(ctx, nn)
@@ -117,8 +117,8 @@ var _ = Describe("NetworkPolicyEnforced condition (#744)", func() {
 
 		nn := types.NamespacedName{Name: "netpol-flannel", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: image},
+			Name: nn.Name, Namespace: nn.Namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: image},
 		}
 		Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		defer deleteAndFinalize(ctx, nn)
@@ -169,8 +169,8 @@ var _ = Describe("NetworkPolicyEnforced condition (#744)", func() {
 
 		nn := types.NamespacedName{Name: "netpol-crashed-agent", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: image},
+			Name: nn.Name, Namespace: nn.Namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: image},
 		}
 		Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		defer deleteAndFinalize(ctx, nn)
@@ -191,7 +191,7 @@ var _ = Describe("NetworkPolicyEnforced condition (#744)", func() {
 	It("reports nothing when the NetworkPolicy is disabled", func() {
 		nn := types.NamespacedName{Name: "netpol-disabled", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    image,
 				Security: &appsv1alpha1.SecuritySpec{NetworkPolicy: new(false)},

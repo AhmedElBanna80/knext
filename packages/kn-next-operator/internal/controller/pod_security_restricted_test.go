@@ -156,7 +156,7 @@ func renderNextAppKsvc(t *testing.T, app *appsv1alpha1.NextApp) *servingv1.Servi
 		t.Fatalf("AddToScheme(serving): %v", err)
 	}
 	r := &NextAppReconciler{Scheme: sch}
-	ksvc := &servingv1.Service{ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace}}
+	ksvc := &servingv1.Service{Name: app.Name, Namespace: app.Namespace}
 	if _, err := r.buildDesiredKsvc(app, ksvc, resolveEffective(app, nil)); err != nil {
 		t.Fatalf("buildDesiredKsvc: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestNextAppKsvcMeetsPodSecurityRestricted(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.spec.Image = restrictedTestImage
-			app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}, Spec: tc.spec}
+			app := &appsv1alpha1.NextApp{Name: "app", Namespace: "default", Spec: tc.spec}
 			ksvc := renderNextAppKsvc(t, app)
 
 			containers := ksvc.Spec.Template.Spec.Containers
@@ -202,8 +202,8 @@ func TestNextAppKsvcMeetsPodSecurityRestricted(t *testing.T) {
 // the profile on the container — and must still pass Knative's own validation.
 func TestNextAppKsvcPassesKnativeAdmissionWithRestrictedContext(t *testing.T) {
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-		Spec:       appsv1alpha1.NextAppSpec{Image: restrictedTestImage},
+		Name: "app", Namespace: "default",
+		Spec: appsv1alpha1.NextAppSpec{Image: restrictedTestImage},
 	}
 	ksvc := renderNextAppKsvc(t, app)
 	if ksvc.Spec.Template.Spec.SecurityContext != nil {
@@ -223,8 +223,8 @@ func TestNextAppKsvcPassesKnativeAdmissionWithRestrictedContext(t *testing.T) {
 // default and the rendering decision in pod_hardening.go is worth revisiting.
 func TestKnativeRejectsPodLevelSecurityContextByDefault(t *testing.T) {
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-		Spec:       appsv1alpha1.NextAppSpec{Image: restrictedTestImage},
+		Name: "app", Namespace: "default",
+		Spec: appsv1alpha1.NextAppSpec{Image: restrictedTestImage},
 	}
 	ksvc := renderNextAppKsvc(t, app)
 	ksvc.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{
@@ -255,8 +255,8 @@ func TestNextAppRunAsNonRootOptOut(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-				Spec:       appsv1alpha1.NextAppSpec{Image: restrictedTestImage, Security: tc.security},
+				Name: "app", Namespace: "default",
+				Spec: appsv1alpha1.NextAppSpec{Image: restrictedTestImage, Security: tc.security},
 			}
 			ksvc := renderNextAppKsvc(t, app)
 			c := ksvc.Spec.Template.Spec.Containers[0]
@@ -279,7 +279,7 @@ func TestNextAppRunAsNonRootOptOut(t *testing.T) {
 func renderedFunctionKsvc(t *testing.T, spec appsv1alpha1.BackendServiceSpec) *servingv1.Service {
 	t.Helper()
 	bs := sovFunction(spec)
-	ksvc := &servingv1.Service{ObjectMeta: metav1.ObjectMeta{Name: bs.Name, Namespace: bs.Namespace}}
+	ksvc := &servingv1.Service{Name: bs.Name, Namespace: bs.Namespace}
 	if err := buildFunctionKsvc(bs, 0, zoneJWKSAbsent, ksvc); err != nil {
 		t.Fatalf("buildFunctionKsvc: %v", err)
 	}

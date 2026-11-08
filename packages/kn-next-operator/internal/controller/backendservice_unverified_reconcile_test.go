@@ -116,7 +116,7 @@ func newUnverifiedHarnessSpec(t *testing.T, withZone bool, spec appsv1alpha1.Bac
 
 func (h *unverifiedHarness) reconcile() error {
 	_, err := h.r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: sovNS, Name: "pricing"},
+		Namespace: sovNS, Name: "pricing",
 	})
 	return err
 }

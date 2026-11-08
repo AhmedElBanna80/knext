@@ -144,11 +144,11 @@ func TestRenderedBundlePolicyConfinesTheIdentityTheOperatorRunsAs(t *testing.T) 
 	}
 
 	// The operator, bound to the rendered manager role exactly as the bundle binds it.
-	cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "bundle-manager-role"}, Rules: role.Rules}
+	cr := &rbacv1.ClusterRole{Name: "bundle-manager-role", Rules: role.Rules}
 	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "bundle-manager-role"},
-		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: cr.Name},
-		Subjects:   []rbacv1.Subject{*subject},
+		Name:     "bundle-manager-role",
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: cr.Name},
+		Subjects: []rbacv1.Subject{*subject},
 	}
 	for _, o := range []client.Object{cr, crb} {
 		if err := admin.Create(ctx, o); err != nil {
@@ -166,7 +166,7 @@ func TestRenderedBundlePolicyConfinesTheIdentityTheOperatorRunsAs(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "bundle-zone"}}); err != nil {
+	if err := admin.Create(ctx, &corev1.Namespace{Name: "bundle-zone"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -179,7 +179,7 @@ func TestRenderedBundlePolicyConfinesTheIdentityTheOperatorRunsAs(t *testing.T) 
 	}
 
 	secret := func(name string) *corev1.Secret {
-		return &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "bundle-zone"}}
+		return &corev1.Secret{Name: name, Namespace: "bundle-zone"}
 	}
 	isPolicyDenial := func(err error) bool {
 		return err != nil && apierrors.IsForbidden(err) && strings.Contains(err.Error(), "ValidatingAdmissionPolicy")
@@ -204,15 +204,15 @@ func TestRenderedBundlePolicyConfinesTheIdentityTheOperatorRunsAs(t *testing.T) 
 	if err := operator.Create(ctx, ownedKey); err != nil {
 		t.Errorf("the operator was refused its own signing-key Secret: %v", err)
 	}
-	ownedJWKS := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ZoneJWKSConfigMapName("zone-a"), Namespace: "bundle-zone",
-		OwnerReferences: []metav1.OwnerReference{zoneOwnerRef("zone-a")}}}
+	ownedJWKS := &corev1.ConfigMap{Name: ZoneJWKSConfigMapName("zone-a"), Namespace: "bundle-zone",
+		OwnerReferences: []metav1.OwnerReference{zoneOwnerRef("zone-a")}}
 	if err := operator.Create(ctx, ownedJWKS); err != nil {
 		t.Errorf("the operator was refused its own JWKS ConfigMap: %v", err)
 	}
 	if err := operator.Create(ctx, secret("evil")); !isPolicyDenial(err) {
 		t.Errorf("the operator created a stranger's Secret (want a policy denial): %v", err)
 	}
-	if err := operator.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "evil", Namespace: "bundle-zone"}}); !isPolicyDenial(err) {
+	if err := operator.Create(ctx, &corev1.ConfigMap{Name: "evil", Namespace: "bundle-zone"}); !isPolicyDenial(err) {
 		t.Errorf("the operator created a stranger's ConfigMap (want a policy denial): %v", err)
 	}
 	// The name is allowed but the type is not: a service-account-token Secret would be

@@ -27,7 +27,6 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/apis"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
@@ -93,7 +92,7 @@ var _ = Describe("Blast radius of a stored-malformed NextApp (#455)", func() {
 		ctx := context.Background()
 
 		By("creating an isolated namespace for the two apps")
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: blastNamespace}}
+		ns := &corev1.Namespace{Name: blastNamespace}
 		if err := k8sClient.Create(ctx, ns); err != nil {
 			Expect(err.Error()).To(ContainSubstring("already exists"))
 		}
@@ -103,7 +102,7 @@ var _ = Describe("Blast radius of a stored-malformed NextApp (#455)", func() {
 
 		By("storing a MALFORMED NextApp (no webhook here — this is the stored-CR case)")
 		bad := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: badNN.Name, Namespace: badNN.Namespace},
+			Name: badNN.Name, Namespace: badNN.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:     validImage,
 				Resources: &appsv1alpha1.ResourcesSpec{CPURequest: malformedCPURequest},
@@ -114,7 +113,7 @@ var _ = Describe("Blast radius of a stored-malformed NextApp (#455)", func() {
 
 		By("storing a VALID sibling NextApp in the same namespace")
 		good := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: goodNN.Name, Namespace: goodNN.Namespace},
+			Name: goodNN.Name, Namespace: goodNN.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:     validImage,
 				Resources: &appsv1alpha1.ResourcesSpec{CPURequest: "250m", MemoryRequest: "512Mi"},

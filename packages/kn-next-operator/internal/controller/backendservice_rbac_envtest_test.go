@@ -90,11 +90,11 @@ func TestFunctionOwnerReferenceNeedsTheNextAppFinalizersGrant(t *testing.T) {
 	// run binds a fresh identity to rules and reconciles one function as it.
 	run := func(name string, rules []rbacv1.PolicyRule) error {
 		group := "knext-ownerref-" + name
-		cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: group}, Rules: rules}
+		cr := &rbacv1.ClusterRole{Name: group, Rules: rules}
 		crb := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: group},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: group},
-			Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: group}},
+			Name:     group,
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: group},
+			Subjects: []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: group}},
 		}
 		for _, o := range []client.Object{cr, crb} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -110,19 +110,19 @@ func TestFunctionOwnerReferenceNeedsTheNextAppFinalizersGrant(t *testing.T) {
 			t.Fatal(err)
 		}
 		ns := name
-		if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		if err := admin.Create(ctx, &corev1.Namespace{Name: ns}); err != nil {
 			t.Fatal(err)
 		}
 		zone := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: ns},
+			Name: sovZone, Namespace: ns,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing"}},
 			},
 		}
 		bs := &appsv1alpha1.BackendService{
-			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-			Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
+			Name: "pricing", Namespace: ns,
+			Spec: appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
 		}
 		for _, o := range []client.Object{zone, bs} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -138,7 +138,7 @@ func TestFunctionOwnerReferenceNeedsTheNextAppFinalizersGrant(t *testing.T) {
 			time.Sleep(200 * time.Millisecond)
 		}
 		r := &BackendServiceReconciler{Client: as, Scheme: scheme, APIReader: as, Recorder: record.NewFakeRecorder(64)}
-		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err = r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		return err
 	}
 

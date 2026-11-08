@@ -20,7 +20,6 @@ import (
 	"os"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -43,7 +42,7 @@ import (
 // (the function half only), and one that belongs to another zone.
 func functionNeighbourCases(app *appsv1alpha1.NextApp) []reconcilerCase {
 	oneSided := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "names-this-zone", Namespace: app.Namespace},
+		Name: "names-this-zone", Namespace: app.Namespace,
 		Spec: appsv1alpha1.BackendServiceSpec{
 			Zone:         app.Name,
 			Image:        "registry.example.com/fn@sha256:" + sixtyFourHex,

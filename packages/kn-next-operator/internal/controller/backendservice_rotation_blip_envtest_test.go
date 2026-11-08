@@ -81,8 +81,8 @@ var _ = Describe("BackendService reconciler: a rotation that coincides with an a
 		ns = bsNamespace(ctx)
 		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		for _, s := range []string{"stripe-v1", "stripe-v2"} {
-			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}}})).To(Succeed())
+			Expect(k8sClient.Create(ctx, &corev1.Secret{
+				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}})).To(Succeed())
 		}
 		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.EnvFrom = specEnvFromSecret("stripe-v1").EnvFrom
@@ -93,11 +93,11 @@ var _ = Describe("BackendService reconciler: a rotation that coincides with an a
 		bs := getFunction(ctx, ns, "pricing")
 		bs.Spec.EnvFrom = specEnvFromSecret("stripe-v2").EnvFrom
 		Expect(k8sClient.Update(ctx, bs)).To(Succeed())
-		Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "stripe-v1", Namespace: ns}})).To(Succeed())
+		Expect(k8sClient.Delete(ctx, &corev1.Secret{Name: "stripe-v1", Namespace: ns})).To(Succeed())
 		return ns, k.UID
 	}
 	run := func(r *BackendServiceReconciler, ns string) error {
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		return err
 	}
 	expectKept := func(ns string, uid types.UID) {
@@ -163,8 +163,8 @@ var _ = Describe("BackendService reconciler: a rotation that coincides with an a
 		It("tears down a REVOKED running Secret when the update fails with "+name+", and says so in status", func() {
 			ns := bsNamespace(ctx)
 			createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}}})).To(Succeed())
+			Expect(k8sClient.Create(ctx, &corev1.Secret{
+				Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}})).To(Succeed())
 			createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 				bs.Spec.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom
 			})

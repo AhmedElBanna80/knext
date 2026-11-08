@@ -46,7 +46,7 @@ const (
 
 func sovZoneApp(name string, uid types.UID, dbSecret string) appsv1alpha1.NextApp {
 	app := appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sovNS, UID: uid},
+		Name: name, Namespace: sovNS, UID: uid,
 	}
 	if dbSecret != "" {
 		app.Spec.Database = &appsv1alpha1.DatabaseSpec{
@@ -66,8 +66,8 @@ func sovFixture() (*appsv1alpha1.NextApp, []appsv1alpha1.NextApp) {
 func sovFunction(spec appsv1alpha1.BackendServiceSpec) *appsv1alpha1.BackendService {
 	spec.Zone = sovZone
 	return &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: sovNS},
-		Spec:       spec,
+		Name: "pricing", Namespace: sovNS,
+		Spec: spec,
 	}
 }
 
@@ -90,14 +90,14 @@ func specSecretKeyRef(secret string) appsv1alpha1.BackendServiceSpec {
 	return appsv1alpha1.BackendServiceSpec{Env: []corev1.EnvVar{{
 		Name: "DSN",
 		ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: "DATABASE_URL",
+			Name: secret, Key: "DATABASE_URL",
 		}},
 	}}}
 }
 
 func specEnvFromSecret(secret string) appsv1alpha1.BackendServiceSpec {
 	return appsv1alpha1.BackendServiceSpec{EnvFrom: []corev1.EnvFromSource{{
-		SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: secret}},
+		SecretRef: &corev1.SecretEnvSource{Name: secret},
 	}}}
 }
 
@@ -112,8 +112,8 @@ func specProjectedSecret(secret string) appsv1alpha1.BackendServiceSpec {
 	return appsv1alpha1.BackendServiceSpec{Volumes: []appsv1alpha1.FunctionVolume{{
 		Name: "bundle", MountPath: "/bundle",
 		Projected: &appsv1alpha1.FunctionProjectedVolume{Sources: []appsv1alpha1.FunctionVolumeProjection{
-			{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "plain-config"}}},
-			{Secret: &corev1.SecretProjection{LocalObjectReference: corev1.LocalObjectReference{Name: secret}}},
+			{ConfigMap: &corev1.ConfigMapProjection{Name: "plain-config"}},
+			{Secret: &corev1.SecretProjection{Name: secret}},
 		}},
 	}}}
 }
@@ -362,26 +362,26 @@ var configMapSources = []struct {
 		return appsv1alpha1.BackendServiceSpec{Env: []corev1.EnvVar{{
 			Name: "JWKS",
 			ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: cm}, Key: ZoneJWKSFileName,
+				Name: cm, Key: ZoneJWKSFileName,
 			}},
 		}}}
 	}},
 	{"envFrom", "envFrom[0].configMapRef", func(cm string) appsv1alpha1.BackendServiceSpec {
 		return appsv1alpha1.BackendServiceSpec{EnvFrom: []corev1.EnvFromSource{{
-			ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: cm}},
+			ConfigMapRef: &corev1.ConfigMapEnvSource{Name: cm},
 		}}}
 	}},
 	{"configMapVolume", "volumes[keys].configMap", func(cm string) appsv1alpha1.BackendServiceSpec {
 		return appsv1alpha1.BackendServiceSpec{Volumes: []appsv1alpha1.FunctionVolume{{
 			Name: "keys", MountPath: "/keys",
-			ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: cm}},
+			ConfigMap: &corev1.ConfigMapVolumeSource{Name: cm},
 		}}}
 	}},
 	{"projectedVolume", "volumes[keys].projected.sources[0].configMap", func(cm string) appsv1alpha1.BackendServiceSpec {
 		return appsv1alpha1.BackendServiceSpec{Volumes: []appsv1alpha1.FunctionVolume{{
 			Name: "keys", MountPath: "/keys",
 			Projected: &appsv1alpha1.FunctionProjectedVolume{Sources: []appsv1alpha1.FunctionVolumeProjection{
-				{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: cm}}},
+				{ConfigMap: &corev1.ConfigMapProjection{Name: cm}},
 			}},
 		}}}
 	}},
@@ -472,7 +472,7 @@ func TestDatabaseHostLintIgnoresOwnAndUnrelatedHosts(t *testing.T) {
 		corev1.EnvVar{Name: "UNRELATED", Value: cnpgHost("cache", "ro", "")},
 		corev1.EnvVar{Name: "PLAIN", Value: "billing.example.com"},
 		corev1.EnvVar{Name: "FROM_SECRET", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-			LocalObjectReference: corev1.LocalObjectReference{Name: sovOwnDB}, Key: "k",
+			Name: sovOwnDB, Key: "k",
 		}}},
 	)
 	if got := lintForeignDatabaseHosts(bs, zone, others); len(got) != 0 {

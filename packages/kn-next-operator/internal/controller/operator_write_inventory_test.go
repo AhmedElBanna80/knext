@@ -451,15 +451,14 @@ func argDeclaredIn(p *packages.Package, arg ast.Expr, body *ast.BlockStmt) bool 
 	return obj != nil && obj.Pos() >= body.Pos() && obj.Pos() <= body.End()
 }
 
-// scanObjectMeta records, for a metav1.ObjectMeta literal, the name helpers its
-// Name field calls (and a marker for a Name that is not a helper call).
+// scanObjectMeta records, for an object's name, the name helpers its Name field
+// calls (and a marker for a Name that is not a helper call). The name is read
+// from both literal shapes: the classic metav1.ObjectMeta literal, and the
+// promoted-field form (`&corev1.Secret{Name: ...}`) that modernize's embedlit
+// rewrites it to.
 func (s *operatorScan) scanObjectMeta(p *packages.Package, fn string, lit *ast.CompositeLit) {
 	tv, ok := p.TypesInfo.Types[lit]
-	if !ok {
-		return
-	}
-	named, ok := tv.Type.(*types.Named)
-	if !ok || named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != "k8s.io/apimachinery/pkg/apis/meta/v1" || named.Obj().Name() != "ObjectMeta" {
+	if !ok || !isObjectMetaType(tv.Type) && !embedsObjectMeta(tv.Type) {
 		return
 	}
 	for _, el := range lit.Elts {
@@ -478,6 +477,27 @@ func (s *operatorScan) scanObjectMeta(p *packages.Package, fn string, lit *ast.C
 		}
 		s.nameFuncs[fn] = append(s.nameFuncs[fn], helper)
 	}
+}
+
+func isObjectMetaType(t types.Type) bool {
+	named, ok := t.(*types.Named)
+	return ok && named.Obj().Pkg() != nil &&
+		named.Obj().Pkg().Path() == "k8s.io/apimachinery/pkg/apis/meta/v1" && named.Obj().Name() == "ObjectMeta"
+}
+
+// embedsObjectMeta reports whether t is a struct with an embedded
+// metav1.ObjectMeta, so a `Name:` key in its literal is the object's name.
+func embedsObjectMeta(t types.Type) bool {
+	st, ok := t.Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	for f := range st.Fields() {
+		if f.Embedded() && isObjectMetaType(f.Type()) {
+			return true
+		}
+	}
+	return false
 }
 
 // typedWriters folds the typed write sites into function -> resource -> verbs.

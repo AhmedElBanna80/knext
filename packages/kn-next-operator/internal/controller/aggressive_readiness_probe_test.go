@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"knative.dev/serving/pkg/apis/serving"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
@@ -57,14 +56,14 @@ func buildProbeTestKsvc(t *testing.T) (*appsv1alpha1.NextApp, *servingv1.Service
 	}
 	r := &NextAppReconciler{Scheme: scheme}
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Name: "app", Namespace: "default",
 		Spec: appsv1alpha1.NextAppSpec{
 			// full-length digest: Knative's own validation parses the ref.
 			Image: validImage,
 		},
 	}
 	ksvc := &servingv1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Name: "app", Namespace: "default",
 	}
 	if _, err := r.buildDesiredKsvc(app, ksvc, resolveEffective(app, nil)); err != nil {
 		t.Fatalf("buildDesiredKsvc: %v", err)

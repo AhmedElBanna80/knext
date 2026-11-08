@@ -190,7 +190,7 @@ func renderApp(t *testing.T, app *appsv1alpha1.NextApp, rc reconcilerCase) strin
 	}
 
 	ctx := context.Background()
-	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: app.Name, Namespace: app.Namespace}}
+	req := reconcile.Request{Name: app.Name, Namespace: app.Namespace}
 	var buf strings.Builder
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		fmt.Fprintf(&buf, "# reconcile error\n%s\n", strings.TrimSpace(err.Error()))
@@ -330,9 +330,8 @@ func goldenPath(app *appsv1alpha1.NextApp) string {
 }
 
 func platformNamed(mut func(*platformv1alpha1.KnextPlatform)) *platformv1alpha1.KnextPlatform {
-	p := &platformv1alpha1.KnextPlatform{ObjectMeta: metav1.ObjectMeta{
-		Name: platformv1alpha1.SingletonName, Generation: 7, UID: "platform-uid-sentinel",
-	}}
+	p := &platformv1alpha1.KnextPlatform{
+		Name: platformv1alpha1.SingletonName, Generation: 7, UID: "platform-uid-sentinel"}
 	mut(p)
 	return p
 }

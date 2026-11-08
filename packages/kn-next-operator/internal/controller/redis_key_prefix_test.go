@@ -23,7 +23,6 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 	"github.com/AhmedElBanna80/knext/packages/kn-next-operator/internal/validation"
@@ -39,7 +38,7 @@ import (
 
 func redisApp(namespace, name, keyPrefix string) *appsv1alpha1.NextApp {
 	return &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Name: name, Namespace: namespace,
 		Spec: appsv1alpha1.NextAppSpec{
 			Image: validImage,
 			Cache: &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://shared:6379", KeyPrefix: keyPrefix},

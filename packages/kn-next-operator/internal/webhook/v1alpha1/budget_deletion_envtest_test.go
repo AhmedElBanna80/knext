@@ -24,7 +24,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	platformv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/platform/v1alpha1"
@@ -49,7 +48,7 @@ var _ = Describe("a lowered connectionBudget (envtest, webhook installed)", Orde
 		err := k8sClient.Get(ctx, client.ObjectKey{Name: platformv1alpha1.SingletonName}, p)
 		if apierrors.IsNotFound(err) {
 			p = &platformv1alpha1.KnextPlatform{
-				ObjectMeta: metav1.ObjectMeta{Name: platformv1alpha1.SingletonName},
+				Name: platformv1alpha1.SingletonName,
 				Spec: platformv1alpha1.KnextPlatformSpec{
 					Database: &platformv1alpha1.PlatformDatabase{ConnectionBudget: n},
 				},
@@ -64,7 +63,7 @@ var _ = Describe("a lowered connectionBudget (envtest, webhook installed)", Orde
 
 	mkApp := func(name string, maxScale, poolMax int32) *appsv1alpha1.NextApp {
 		return &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Finalizers: []string{finalizer}},
+			Name: name, Namespace: ns, Finalizers: []string{finalizer},
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:   image,
 				Scaling: &appsv1alpha1.ScalingSpec{MaxScale: maxScale, PoolMax: poolMax},
@@ -75,7 +74,7 @@ var _ = Describe("a lowered connectionBudget (envtest, webhook installed)", Orde
 	BeforeAll(func() {
 		setBudget(160)
 		DeferCleanup(func() {
-			p := &platformv1alpha1.KnextPlatform{ObjectMeta: metav1.ObjectMeta{Name: platformv1alpha1.SingletonName}}
+			p := &platformv1alpha1.KnextPlatform{Name: platformv1alpha1.SingletonName}
 			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, p))).To(Succeed())
 		})
 	})

@@ -79,7 +79,7 @@ var _ = Describe("NextApp Degraded on unresolvable pinned revision (ADR-0014)", 
 	createAndReconcile := func(name, pin string) types.NamespacedName {
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:   validImage,
 				Traffic: &appsv1alpha1.TrafficSpec{RevisionName: pin},
@@ -178,7 +178,7 @@ var _ = Describe("NextApp Degraded on unresolvable pinned revision (ADR-0014)", 
 
 	createRevision := func(name string) {
 		rev := &servingv1.Revision{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 		}
 		Expect(k8sClient.Create(ctx, rev)).To(Succeed())
 		DeferCleanup(func() {

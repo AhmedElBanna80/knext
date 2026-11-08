@@ -86,7 +86,7 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 	It("binds an existing Secret as DATABASE_URL with the default key (no provisioning, no event noise)", func() {
 		nn := types.NamespacedName{Name: "bound", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    image,
 				Database: &appsv1alpha1.DatabaseSpec{SecretRef: ref("shop-db")},
@@ -122,7 +122,7 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 	It("binds the RO variant: roSecretRef -> DATABASE_URL_RO (default key DATABASE_URL_RO)", func() {
 		nn := types.NamespacedName{Name: "bound-ro", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: image,
 				Database: &appsv1alpha1.DatabaseSpec{
@@ -156,7 +156,7 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 		// the Secret's lifecycle.
 		nn := types.NamespacedName{Name: "bound-absent", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    image,
 				Database: &appsv1alpha1.DatabaseSpec{SecretRef: ref("does-not-exist-yet")},
@@ -178,7 +178,7 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 	It("clears the database status surface when spec.database is removed (mode removal)", func() {
 		nn := types.NamespacedName{Name: "bound-then-removed", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    image,
 				Database: &appsv1alpha1.DatabaseSpec{SecretRef: ref("shop-db")},
@@ -218,7 +218,7 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 		It("BYO: reconciles, binding wins over the stale envMap entry, Warning event emitted", func() {
 			nn := types.NamespacedName{Name: "ratchet-byo", Namespace: "default"}
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+				Name: nn.Name, Namespace: nn.Namespace,
 				Spec: appsv1alpha1.NextAppSpec{
 					Image:    image,
 					Database: &appsv1alpha1.DatabaseSpec{SecretRef: ref("shop-db")},
@@ -270,8 +270,8 @@ var _ = Describe("Database binding — NextApp.spec.database.secretRef (ADR-0019
 		mk := func(name string, spec appsv1alpha1.NextAppSpec) error {
 			spec.Image = image
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-				Spec:       spec,
+				Name: name, Namespace: "default",
+				Spec: spec,
 			}
 			err := k8sClient.Create(ctx, app)
 			if err == nil {

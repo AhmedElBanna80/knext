@@ -68,10 +68,8 @@ var _ = Describe("NextApp Status Conditions", func() {
 		It("should set Reconciling=False and Ready=True conditions after a successful reconcile", func() {
 			By("Creating a NextApp with a valid digest-pinned image")
 			nextApp := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName,
-					Namespace: namespace,
-				},
+				Name:      resourceName,
+				Namespace: namespace,
 				Spec: appsv1alpha1.NextAppSpec{
 					Image: validImage,
 				},

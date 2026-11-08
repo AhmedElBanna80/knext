@@ -50,9 +50,8 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 		bs.Spec.Image = imageA
 	}
 	createStripe := func(ns string) {
-		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
-		}})).To(Succeed())
+		Expect(k8sClient.Create(ctx, &corev1.Secret{
+			Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}})).To(Succeed())
 	}
 	digestOfLive := func(ns string) string {
 		d, err := backendSpecDigest(&getFunction(ctx, ns, "pricing").Spec)
@@ -334,7 +333,7 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 
 		r := newBSReconciler()
 		r.APIReader = &secretMetaFailer{Reader: k8sClient, err: apierrors.NewServiceUnavailable("simulated")}
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		Expect(err).To(HaveOccurred(), "the held error is returned for a retry with backoff")
 
 		Expect(ksvcOf(ns).UID).To(Equal(running.UID), "a read error must not tear a pinned function down")
@@ -351,7 +350,7 @@ var _ = Describe("BackendService reconciler: the zone's spec pin", func() {
 
 		r := newBSReconciler()
 		r.APIReader = &secretMetaFailer{Reader: k8sClient, err: apierrors.NewServiceUnavailable("simulated")}
-		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, _ = r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 
 		expectNothingRendered(ctx, ns, "pricing")
 		Expect(ready(ns).Reason).To(Equal(ReasonBindingSpecMismatch))
@@ -378,7 +377,7 @@ var _ = Describe("NextApp CRD: the backends[].specDigest pin", func() {
 	create := func(pin string) error {
 		ns := bsNamespace(ctx)
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: ns},
+			Name: sovZone, Namespace: ns,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing", SpecDigest: pin}},

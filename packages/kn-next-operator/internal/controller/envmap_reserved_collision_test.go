@@ -52,7 +52,7 @@ import (
 
 func envMapCollisionApp(envMap map[string]appsv1alpha1.EnvMapEntry) *appsv1alpha1.NextApp {
 	return &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"},
+		Name: "app", Namespace: "ns",
 		Spec: appsv1alpha1.NextAppSpec{
 			Image:   validImage,
 			Secrets: &appsv1alpha1.SecretsSpec{EnvMap: envMap},

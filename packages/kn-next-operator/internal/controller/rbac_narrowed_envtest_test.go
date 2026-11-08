@@ -50,7 +50,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -85,14 +84,14 @@ var _ = Describe("Operator reconciles under the shipped (narrowed) ClusterRole",
 
 		By("binding a real client-cert identity to a copy of those rules")
 		cr := &rbacv1.ClusterRole{
-			ObjectMeta: metav1.ObjectMeta{Name: roleName},
-			Rules:      shipped.Rules,
+			Name:  roleName,
+			Rules: shipped.Rules,
 		}
 		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
 		crb := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: roleName},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: roleName},
-			Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: userGroup}},
+			Name:     roleName,
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: roleName},
+			Subjects: []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: userGroup}},
 		}
 		Expect(k8sClient.Create(ctx, crb)).To(Succeed())
 		DeferCleanup(func() {
@@ -106,7 +105,7 @@ var _ = Describe("Operator reconciles under the shipped (narrowed) ClusterRole",
 		userClient, err := client.New(userCfg, client.Options{Scheme: k8sClient.Scheme()})
 		Expect(err).NotTo(HaveOccurred())
 
-		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: rbacNS}}
+		ns := &corev1.Namespace{Name: rbacNS}
 		if err := k8sClient.Create(ctx, ns); err != nil {
 			Expect(apierrors.IsAlreadyExists(err)).To(BeTrue())
 		}
@@ -191,7 +190,7 @@ var _ = Describe("Operator reconciles under the shipped (narrowed) ClusterRole",
 
 		By("creating a NextApp that references Secrets BY NAME (envMap + envFrom) - the kubelet resolves them, not the operator")
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "rbac-narrowed-app", Namespace: rbacNS},
+			Name: "rbac-narrowed-app", Namespace: rbacNS,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Secrets: &appsv1alpha1.SecretsSpec{

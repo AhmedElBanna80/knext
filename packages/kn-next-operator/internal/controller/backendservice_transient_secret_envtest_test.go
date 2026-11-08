@@ -83,9 +83,8 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 	setup := func() (ns string) {
 		ns = bsNamespace(ctx)
 		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
-		Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-			Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
-		}})).To(Succeed())
+		Expect(k8sClient.Create(ctx, &corev1.Secret{
+			Name: lcStripe, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}})).To(Succeed())
 		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
 			bs.Spec.EnvFrom = specEnvFromSecret(lcStripe).EnvFrom
 		})
@@ -94,7 +93,7 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 	reconcileWith := func(ns string, readErr error) error {
 		r := newBSReconciler()
 		r.APIReader = &secretMetaFailer{Reader: k8sClient, err: readErr}
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		return err
 	}
 	getKsvc := func(ns string) *servingv1.Service {
@@ -160,7 +159,7 @@ var _ = Describe("BackendService reconciler: a transient Secret read error never
 		reconcileFunction(ctx, ns, "pricing")
 		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
 
-		Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: lcStripe, Namespace: ns}})).To(Succeed())
+		Expect(k8sClient.Delete(ctx, &corev1.Secret{Name: lcStripe, Namespace: ns})).To(Succeed())
 		Expect(reconcileWith(ns, nil)).To(Succeed(), "a definitive refusal is a status, not an error")
 		expectNothingRendered(ctx, ns, "pricing")
 		Expect(functionCondition(getFunction(ctx, ns, "pricing"), ConditionSovereigntyCompliant).Status).To(Equal(metav1.ConditionFalse))

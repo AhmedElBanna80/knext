@@ -164,12 +164,10 @@ func (r *NextAppReconciler) reconcileZoneSigningKey(ctx context.Context, app *ap
 func (r *NextAppReconciler) writeSigningKeySecret(ctx context.Context, app *appsv1alpha1.NextApp, sec *corev1.Secret, keys signingKeySet) (*corev1.Secret, error) {
 	if sec == nil {
 		sec = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      ZoneSigningKeySecretName(app.Name),
-				Namespace: app.Namespace,
-				Labels:    zoneIdentityLabels(app),
-			},
-			Type: corev1.SecretTypeOpaque,
+			Name:      ZoneSigningKeySecretName(app.Name),
+			Namespace: app.Namespace,
+			Labels:    zoneIdentityLabels(app),
+			Type:      corev1.SecretTypeOpaque,
 		}
 		keys.applyTo(sec)
 		if err := ctrl.SetControllerReference(app, sec, r.Scheme); err != nil {
@@ -209,12 +207,10 @@ var rotationRequestChanged = predicate.Funcs{
 func (r *NextAppReconciler) writeJWKSConfigMap(ctx context.Context, app *appsv1alpha1.NextApp, cm *corev1.ConfigMap, jwks string) (*corev1.ConfigMap, error) {
 	if cm == nil {
 		cm = &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      ZoneJWKSConfigMapName(app.Name),
-				Namespace: app.Namespace,
-				Labels:    zoneIdentityLabels(app),
-			},
-			Data: map[string]string{ZoneJWKSFileName: jwks},
+			Name:      ZoneJWKSConfigMapName(app.Name),
+			Namespace: app.Namespace,
+			Labels:    zoneIdentityLabels(app),
+			Data:      map[string]string{ZoneJWKSFileName: jwks},
 		}
 		if err := ctrl.SetControllerReference(app, cm, r.Scheme); err != nil {
 			return nil, err

@@ -26,7 +26,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -61,8 +60,8 @@ var _ = Describe("NextApp spec.networking.publicHosts", func() {
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		spec.Image = validImage
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       spec,
+			Name: name, Namespace: namespace,
+			Spec: spec,
 		}
 		Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		DeferCleanup(func() { deleteAndFinalize(ctx, nn) })
@@ -155,7 +154,7 @@ var _ = Describe("NextApp spec.networking.publicHosts", func() {
 		It(fmt.Sprintf("CEL admission %s: %s", verb, c.Name), func() {
 			name := fmt.Sprintf("public-hosts-cel-%d", i)
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Name: name, Namespace: namespace,
 				Spec: appsv1alpha1.NextAppSpec{
 					Image:      validImage,
 					Networking: &appsv1alpha1.NetworkingSpec{PublicHosts: c.Hosts},

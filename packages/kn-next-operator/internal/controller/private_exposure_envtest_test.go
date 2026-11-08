@@ -41,14 +41,14 @@ var _ = Describe("PrivateExposure condition (DomainMapping publishes a private a
 
 	reconcileOnce := func(name string) {
 		r := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), Recorder: record.NewFakeRecorder(64)}
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Name: name, Namespace: namespace})
 		Expect(err).NotTo(HaveOccurred())
 	}
 
 	newApp := func(name string, private bool) types.NamespacedName {
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: image},
+			Name: name, Namespace: namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: image},
 		}
 		if private {
 			app.Spec.Networking = &appsv1alpha1.NetworkingSpec{Visibility: appsv1alpha1.VisibilityClusterLocal}

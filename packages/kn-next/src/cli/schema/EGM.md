@@ -15,7 +15,7 @@ and `preflightImageRef`), `../grpc-dispatch.ts`, `../visibility-guard.ts` and
 
 - `preflightCRSchema` (`preflight.ts`): returns a verdict of `ok`, `skew` or `blocked`.
 - `assertCRSchemaCompatible` (`preflight.ts`): throws on any verdict other than `ok`.
-- `dryRunApplyArgv`, `readKnownCRDFields`, `preflightImageRef`, `formatPreflightFailure` (`preflight.ts`).
+- `dryRunApplyArgv`, `readKnownCRDFields(kubectl, kind = NextApp)`, `unknownFieldsOfCR`, `preflightImageRef`, `formatPreflightFailure` (`preflight.ts`).
 - Preflight types in `preflight.ts`: `KubectlCapture`, `KubectlResult`, `PreflightVerdict`, `PreflightReason`, `DiagnosisSource`, `PreflightOutcome`, `KnownFieldsRead` and `PreflightFailureContext`.
 - `captureKubectl` (`kubectl-capture.ts`): the production `KubectlCapture` runner.
 - `flattenSchemaPaths`, `isFieldKnown`, `unknownEmittedFields`, `partitionMissingFields`, `presentEmittedPaths`, `PartitionedMissingFields` (`crd-schema.ts`): compare the schema with the emitted fields.
@@ -32,6 +32,7 @@ and `preflightImageRef`), `../grpc-dispatch.ts`, `../visibility-guard.ts` and
 - `skew` means stderr contains `strict decoding error` or `unknown field`. `blocked` has the reasons `client-too-old` (kubectl before 1.25), `webhook-unavailable` and `apply-failed` [`preflight.ts:preflightCRSchema`].
 - The diagnosis and enrichment tiers change only the message, never the verdict. `assertCRSchemaCompatible` throws on both `skew` and `blocked`, with no warn-and-continue path [`preflight.ts`].
 - If both the OpenAPI v3 read and the CRD read are denied, the result has source `none`, never an empty field set. An empty set would report every field as missing [`preflight.ts:readKnownCRDFields`].
+- The diagnosis reads the schema of the CR's own `kind`: a NextApp CR is checked against `EMITTED_CR_FIELD_PATHS` narrowed to what it carries, and a BackendService CR (or any other kind) is walked directly against its CRD (`backendservices.apps.kn-next.dev`), with a map key or array index read as `*` and an unknown field reported once at its shallowest path [`preflight.ts:preflightCRSchema`, `unknownFieldsOfCR`].
 - The preflight runs before build and push. When the image ref has no digest, it uses the placeholder digest `sha256:000…0` [`preflight.ts:preflightImageRef`].
 - A missing emitted field is a hard failure unless it is listed in `CONDITIONALLY_EMITTED_FIELDS`, which only warns [`crd-schema.ts`].
 - The OpenAPI v3 path needs no cluster-scoped RBAC. `kubectl get crd` is used for enrichment only [`crd-schema.ts:openApiV3Argv`, `crdGetArgv`].

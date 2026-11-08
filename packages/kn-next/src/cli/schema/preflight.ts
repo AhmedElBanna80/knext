@@ -38,10 +38,14 @@
 import { readFileSync } from "node:fs";
 import YAML from "yaml";
 import {
+    BACKENDSERVICE_CRD_NAME,
+    BACKENDSERVICE_KIND,
     crdGetArgv,
     crdSchemaFromCrdObject,
     crdSchemaFromOpenApiV3Doc,
     flattenSchemaPaths,
+    isFieldKnown,
+    NEXTAPP_KIND,
     openApiV3Argv,
     parseUnknownFieldsFromError,
     presentEmittedPaths,
@@ -111,13 +115,21 @@ export interface KnownFieldsRead {
     detail: string;
 }
 
+/** The CRD each kind the CLI applies is defined by (#2481). */
+const CRD_NAME_OF_KIND: Readonly<Record<string, string>> = {
+    [BACKENDSERVICE_KIND]: BACKENDSERVICE_CRD_NAME,
+};
+
 /**
- * Read the installed NextApp structural schema: OpenAPI v3 first (no
- * cluster-scoped RBAC), then the CRD. Returns `source: "none"` — never an empty
- * set — when both are denied: an empty known-set would report EVERY field as
- * missing, and a confident wrong answer is worse than an admitted unknown.
+ * Read the installed structural schema of `kind` (default NextApp): OpenAPI v3
+ * first (no cluster-scoped RBAC), then the CRD. Returns `source: "none"` — never
+ * an empty set — when both are denied: an empty known-set would report EVERY
+ * field as missing, and a confident wrong answer is worse than an admitted unknown.
  */
-export function readKnownCRDFields(kubectl: KubectlCapture): KnownFieldsRead {
+export function readKnownCRDFields(
+    kubectl: KubectlCapture,
+    kind: string = NEXTAPP_KIND,
+): KnownFieldsRead {
     const notes: string[] = [];
 
     const openapi = kubectl(openApiV3Argv());
@@ -128,7 +140,7 @@ export function readKnownCRDFields(kubectl: KubectlCapture): KnownFieldsRead {
         } catch {
             doc = undefined;
         }
-        const found = crdSchemaFromOpenApiV3Doc(doc);
+        const found = crdSchemaFromOpenApiV3Doc(doc, kind);
         if (found) {
             return {
                 known: flattenSchemaPaths(found.schema, {
@@ -139,13 +151,13 @@ export function readKnownCRDFields(kubectl: KubectlCapture): KnownFieldsRead {
             };
         }
         notes.push(
-            "the OpenAPI v3 document carried no NextApp schema (is the CRD installed?)",
+            `the OpenAPI v3 document carried no ${kind} schema (is the CRD installed?)`,
         );
     } else {
         notes.push(`OpenAPI v3 read failed: ${firstLine(openapi.stderr)}`);
     }
 
-    const crd = kubectl(crdGetArgv());
+    const crd = kubectl(crdGetArgv(CRD_NAME_OF_KIND[kind]));
     if (crd.ok) {
         let obj: unknown;
         try {
@@ -168,7 +180,7 @@ export function readKnownCRDFields(kubectl: KubectlCapture): KnownFieldsRead {
 
     return {
         source: "none",
-        detail: `could not read the installed NextApp schema — ${notes.join("; ")}`,
+        detail: `could not read the installed ${kind} schema — ${notes.join("; ")}`,
     };
 }
 
@@ -176,18 +188,59 @@ function firstLine(s: string): string {
     return (s.split("\n").find((l) => l.trim()) ?? "").trim().slice(0, 200);
 }
 
-/**
- * The field paths of the CR actually being applied (#1897). Falls back to the
- * full static vocabulary only when the CR file cannot be read or parsed — a
- * superset is the safe degradation there, never a silent empty list.
- */
-function emittedPathsOfCR(crPath: string): readonly string[] {
+/** The parsed CR at `crPath`, or undefined when it cannot be read or parsed. */
+function readCR(crPath: string): unknown {
     try {
-        const cr = YAML.parse(readFileSync(crPath, "utf-8"));
-        return presentEmittedPaths(EMITTED_CR_FIELD_PATHS, cr);
+        return YAML.parse(readFileSync(crPath, "utf-8"));
     } catch {
-        return EMITTED_CR_FIELD_PATHS;
+        return undefined;
     }
+}
+
+/** The CR's `kind`, or NextApp when it names none. */
+function kindOfCR(cr: unknown): string {
+    const kind = (cr as { kind?: unknown } | null)?.kind;
+    return typeof kind === "string" && kind ? kind : NEXTAPP_KIND;
+}
+
+/**
+ * The NextApp field paths of the CR actually being applied (#1897). Falls back
+ * to the full static vocabulary only when the CR file cannot be read or parsed —
+ * a superset is the safe degradation there, never a silent empty list.
+ */
+function emittedPathsOfCR(cr: unknown): readonly string[] {
+    return cr === undefined
+        ? EMITTED_CR_FIELD_PATHS
+        : presentEmittedPaths(EMITTED_CR_FIELD_PATHS, cr);
+}
+
+/**
+ * The fields of a CR of another kind that `known` does not define (#2481). The
+ * NextApp vocabulary does not describe it, so the CR is walked directly: a key
+ * the schema names is followed, a map key or array index reads as `*` when the
+ * schema has one, and anything else is unknown (reported once, not its leaves).
+ */
+export function unknownFieldsOfCR(
+    cr: unknown,
+    known: ReadonlySet<string>,
+): string[] {
+    const out: string[] = [];
+    const walk = (node: unknown, path: string): void => {
+        if (typeof node !== "object" || node === null) return;
+        if (path && isFieldKnown(`${path}.__opaque__`, known)) return;
+        const entries = Array.isArray(node)
+            ? node.map((v): [string, unknown] => ["*", v])
+            : Object.entries(node as Record<string, unknown>);
+        for (const [key, child] of entries) {
+            const named = path ? `${path}.${key}` : key;
+            const wild = path ? `${path}.*` : "*";
+            if (known.has(named)) walk(child, named);
+            else if (known.has(wild)) walk(child, wild);
+            else if (!isFieldKnown(named, known)) out.push(named);
+        }
+    };
+    walk(cr, "");
+    return [...new Set(out)].sort();
 }
 
 /**
@@ -250,12 +303,14 @@ export function preflightCRSchema(
     }
 
     // Skew. The verdict is already decided; everything below only names fields.
-    const read = readKnownCRDFields(deps.kubectl);
+    const cr = readCR(args.crPath);
+    const kind = kindOfCR(cr);
+    const read = readKnownCRDFields(deps.kubectl, kind);
     if (read.known) {
-        const missing = unknownEmittedFields(
-            emittedPathsOfCR(args.crPath),
-            read.known,
-        );
+        const missing =
+            kind === NEXTAPP_KIND
+                ? unknownEmittedFields(emittedPathsOfCR(cr), read.known)
+                : unknownFieldsOfCR(cr, read.known);
         if (missing.length > 0) {
             return {
                 verdict: "skew",

@@ -47,7 +47,7 @@ type celPair struct {
 // honest answer; the installed policy is not the one this operator expects.
 var canonicalVariables = []celPair{
 	{Name: "objectName", Expression: "request.operation == 'DELETE' ? oldObject.metadata.name : object.metadata.name"},
-	{Name: "allowedSecretSuffixes", Expression: "['-knext-signing-key']"},
+	{Name: "allowedSecretSuffixes", Expression: "['-knext-signing-key', '-redis-credentials']"},
 	{Name: "allowedConfigMapSuffixes", Expression: "['-knext-jwks']"},
 	{Name: "allowedSecretType", Expression: "'Opaque'"},
 	{Name: "allowedSuffixes", Expression: "request.resource.resource == 'secrets' ? variables.allowedSecretSuffixes : variables.allowedConfigMapSuffixes"},

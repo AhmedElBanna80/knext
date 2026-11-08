@@ -113,6 +113,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `publish-verify-alert.mjs`: `verifyAndAlert`.
 - `published-bytes-freeze-check.mjs`: `readPin`, `defaultTagResolves`, `defaultRunDiff`, `main`.
 - `published-bytes-select-pin.mjs`: `readPinTextAt`, `selectPinFromGit`.
+- `mutation-prove-2396-redis-acl.mjs`: mutates the operator's Redis ACL rule set, isolation decision, conflict check, credentials binding and finalizer, and requires the named Go test to go red by exit code.
 - `redis-acl-spike.mjs`: `MINIMAL_COMMANDS`, `escapeAclGlob`, `aclRulesFor`, `failureKind`, `exitCodeFor`.
 - `redis-commands.mjs`: `REDIS_SUBCOMMANDS`, `REDIS_NO_ARG_COMMANDS`, `CLIENT_COMMANDS`.
 - `release-notes-body.mjs`: `PACKAGES`, `isPrerelease`, `compareSemver`, `releaseFlags`, `notesRelPath`, `buildBody`.

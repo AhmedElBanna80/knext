@@ -32,7 +32,7 @@
         },
         {
           "name": "allowedSecretSuffixes",
-          "expression": "['-knext-signing-key']"
+          "expression": "['-knext-signing-key', '-redis-credentials']"
         },
         {
           "name": "allowedConfigMapSuffixes",
@@ -793,7 +793,7 @@
             },
             {
               "name": "allowedSecretSuffixes",
-              "expression": "['-knext-signing-key', '']"
+              "expression": "['-knext-signing-key', '-redis-credentials', '']"
             },
             {
               "name": "allowedConfigMapSuffixes",
@@ -823,7 +823,7 @@
           "value": [
             {
               "name": "allowedSecretSuffixes",
-              "expression": "['-knext-signing-key']"
+              "expression": "['-knext-signing-key', '-redis-credentials']"
             },
             {
               "name": "allowedConfigMapSuffixes",

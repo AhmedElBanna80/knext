@@ -12,7 +12,7 @@ Answers one question at runtime: is the ValidatingAdmissionPolicy that confines 
 - `monitor.go:Monitor{Source, Name, Interval, Log}`: a manager Runnable with `Start`, `CheckOnce` and `NeedLeaderElection() == false`.
 - `monitor.go:DefaultInterval = 5 * time.Minute`.
 - `source.go:ClientSource` / `NewClientSource(*rest.Config)`: a client-go-backed `Source`.
-- `canonical.go:canonicalCEL` / `policyCEL`: the canonical CEL variables and validations a policy must match to count as unmodified.
+- `canonical.go:canonicalCEL` / `policyCEL`: the canonical CEL variables and validations a policy must match to count as unmodified. The Secret suffix allow-list is `-knext-signing-key` and `-redis-credentials`.
 
 ## Invariants
 - `monitor.go:Check`: any read failure gives `ReasonUnverifiable`, which counts as not enforced. The gauge reports "on" only when enforcement was actually observed.

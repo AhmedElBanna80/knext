@@ -119,7 +119,12 @@ func (v *NextAppCustomValidator) connectionBudget(ctx context.Context) int {
 // spec.database and spec.secrets.envMap.
 func (v *NextAppCustomValidator) ValidateCreate(ctx context.Context, nextApp *appsv1alpha1.NextApp) (admission.Warnings, error) {
 	nextAppLog.Info("Validating NextApp on create", "name", nextApp.GetName())
-	return nil, validation.ValidateNextAppSpecCreateWithBudget(&nextApp.Spec, v.connectionBudget(ctx))
+	if err := validation.ValidateNextAppSpecCreateWithBudget(&nextApp.Spec, v.connectionBudget(ctx)); err != nil {
+		return nil, err
+	}
+	// ADR-0071 D6a rule 1: needs this object's own namespace and name, which the
+	// shared spec validator does not see.
+	return nil, validation.ValidateNextAppCacheKeyPrefix(nextApp.GetNamespace(), nextApp.GetName(), &nextApp.Spec)
 }
 
 // ValidateUpdate validates the spec when a NextApp is updated. The collision
@@ -147,7 +152,10 @@ func (v *NextAppCustomValidator) ValidateUpdate(ctx context.Context, oldApp, new
 	if oldApp != nil {
 		oldSpec = &oldApp.Spec
 	}
-	return nil, validation.ValidateNextAppSpecUpdateWithBudget(oldSpec, &newApp.Spec, v.connectionBudget(ctx))
+	if err := validation.ValidateNextAppSpecUpdateWithBudget(oldSpec, &newApp.Spec, v.connectionBudget(ctx)); err != nil {
+		return nil, err
+	}
+	return nil, validation.ValidateNextAppCacheKeyPrefix(newApp.GetNamespace(), newApp.GetName(), &newApp.Spec)
 }
 
 // ValidateDelete is a no-op: deletes are always allowed.

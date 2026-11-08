@@ -297,8 +297,13 @@ functions accept their own key: **the namespace is the trust boundary**, as for 
 **Narrowing: the operator's write policy (#2462).** The install bundle ships a
 `ValidatingAdmissionPolicy` and its binding (`config/admission`) that confine the operator's
 ServiceAccount, and only that identity, to the names it writes: `Opaque` Secrets ending
-`-knext-signing-key` and ConfigMaps ending `-knext-jwks`, on create, update and delete (the type is
-checked on create and update). Any other write by the operator
+`-knext-signing-key` or `-redis-credentials` and ConfigMaps ending `-knext-jwks`, on create, update
+and delete (the type is checked on create and update). The `-redis-credentials` Secret holds an
+isolated app's own Redis URL: the operator creates it with the app's `NextApp` as controller, never
+patches or deletes it, and never writes one the `NextApp` does not control. The operator also holds a
+provisioner credential for each registered Redis endpoint (root-equivalent on that Redis, read only
+from the operator's namespace and dialled only for an app whose canonical `spec.cache.url` equals the
+registered endpoint) and `get` on the `kube-system` Namespace for the cluster identity. Any other write by the operator
 is refused with 403 whatever its RBAC says, which removes the overwrite capability described in the
 blast radius above. Every other principal is untouched: the garbage collector that deletes a zone's
 objects with its `NextApp`, the namespace controller, a tenant, a human who deletes the key Secret

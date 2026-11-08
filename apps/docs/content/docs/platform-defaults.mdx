@@ -33,6 +33,8 @@ leave out keeps its built-in value.
 | | `scaling.defaults.panicThresholdPercentage` | Knative's own default | `spec.scaling.panicThresholdPercentage` |
 | Database | `database.connectionBudget` | `80` | the cap that `maxScale × poolMax` must fit within |
 | Rollout | `rollout.maxAppsPerMinute` | `10` | how fast a platform change reaches your apps |
+| Cache | `cache.redisEndpoints` | none | not a default for an app field: the Redis endpoints that get per-app users, see [Per-app Redis isolation](/docs/redis-isolation) |
+| | `cache.clusterId` | the `kube-system` Namespace uid | not a default for an app field: the cluster identity in every per-app Redis user name |
 
 It does **not** choose your runtime (Node or Bun stays a per-app choice), change any Knative
 configuration, or create a database, cache or ingress.

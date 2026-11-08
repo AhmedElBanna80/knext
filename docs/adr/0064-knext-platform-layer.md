@@ -363,7 +363,7 @@ a `connectionBudget` below an existing app's `maxScale × poolMax`; a default
   object (D3); the `NextApp` CRD change is an additive `status.platform` field; the golden zero-diff
   test gates every operator release. The only new operator permissions are `get/list/watch` on
   `knextplatforms` (P0) and the component RBAC (P3, effective only when enabled).
-- **Release line:** the 1.4 line, on its own integration branch per ADR-0063 (as built, the 1.4 line is `main`; see ADR-0063 Amendment 2026-11-08); never the v1.0 frozen
+- **Release line:** the 1.4 line, which is `main` (ADR-0063 Amendment 2026-11-08; it was planned as its own integration branch, never cut); never the v1.0 frozen
   bytes. jev 1.4-integration **0.94** / v1.0 0.05 / 1.3 0.01.
 
 ## Options considered
@@ -560,7 +560,7 @@ re-litigated.
 
 ## Action items (issue-ready; file after the sprint-close review accepts the design)
 
-Release line: **1.4**, on its integration branch (ADR-0063; as built it is `main`, see ADR-0063 Amendment 2026-11-08). Operator changes are additive and
+Release line: **1.4**, on `main` (ADR-0063 Amendment 2026-11-08; the planned integration branch was never cut). Operator changes are additive and
 gated by the zero-diff test, so they can ship in an operator release that v1.0 and 1.3 users also
 run.
 

@@ -48,7 +48,8 @@ discipline, extended for this line) pins that tag so the 1.3 line cannot acciden
 - `integration/v1.3` carries the 1.3.0-rc.1 line and everything that follows it until GA, and
   publishes to the npm dist-tag `next`.
 - `main` stays on the v1.0.0-rc.5 bytes until 1.0.0 GA is cut. No commit that changes published
-  bytes lands on `main` before then, outside the version-only GA bump itself.
+  bytes lands on `main` before then, outside the version-only GA bump itself. *(Historical: this
+  held until 1.0.0 GA on 2026-10-08; see Amendment 2026-11-08.)*
 - **`integration/v1.3` must NOT merge into `main` before 1.0.0 GA is cut**, for three concrete
   reasons:
   1. the GA tarball must equal the v1.0.0-rc.5 bytes — a **version-only** delta — and merging in
@@ -194,8 +195,9 @@ table described a branch that does not exist.
 
 - **The 1.4 line is `main`** until 1.4.0 ships; the lane table above now says so. There is no
   `integration/v1.4` branch. This does not break the original rule that nothing changing published
-  bytes lands on `main` before 1.0.0 GA: that rule held only until 1.0.0 GA, and 1.0.0 and then
-  1.3.x GA shipped (`latest` is 1.3.1) before the 1.4 work landed on `main`.
+  bytes lands on `main` before 1.0.0 GA: that rule held only until 1.0.0 GA. 1.0.0 GA published on
+  2026-10-08 and 1.3.0 GA on 2026-10-09 (13:04 UTC); the 1.4 work merged to `main` from 2026-10-09
+  23:31 UTC onward.
 - **Not decided here, left to the maintainer:** whether `next-1.4` is still needed as a dist-tag,
   and whether `refs/heads/integration/v1.4` should be removed from `PUBLISH_LANES`
   (`scripts/publish-lane-guard.mjs`). Both are publish-path policy. Keeping the unused lane in the

@@ -81,7 +81,7 @@ map; `release.yml` carries no lane literal of its own (a test asserts that).
 | ref | expected major |
 | --- | --- |
 | `main` | 1 (flipped to 2 at 2.0 GA, before the first 2.x publish) |
-| `integration/v1.3`, `integration/v1.4` | 1 |
+| `integration/v1.3`, `integration/v1.4` (allowlisted, but no such branch exists: the 1.4 line is `main`) | 1 |
 | `integration/v2` | 2 |
 | `release/vX.Y.Z` or `release/vX.Y.Z-rc.N` (a release cut) | X, and the computed version must equal `X.Y.Z[-rc.N]` exactly. Cuts are open for major 1 only. |
 

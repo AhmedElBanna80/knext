@@ -6,7 +6,8 @@ This is the runtime and build layer of `@getknext/core`. It contains:
 
 - the official Next.js Deployment Adapter (`next-adapter.ts`);
 - the standalone-server supervisor (`node-server.ts`), which spawns
-  `.next/standalone/server.js` next to a metrics sidecar;
+  `.next/standalone/server.js` (or, with `STANDALONE_SERVER_EXEC`, the compiled
+  executable) next to a metrics sidecar;
 - the Redis-backed ISR/data-cache and `"use cache"` handlers;
 - preloads that patch `node:http` and `Bun.serve` for cache-control, CDN edge
   headers, body caps, public origins and keep-alive;
@@ -59,7 +60,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
     and `vinext-cache-adapter{,-node,-bun}.mjs`;
   - preloads (`--require`d into the child): `cache-control-normalize.cjs`,
     `bun-keepalive-guard.cjs` and `request-body-cap.cjs`; `public-origin.cjs`
-    is one too, but has no subpath. Imported, never `--require`d:
+    is one too, but has no subpath. Loaded in-process, never `--require`d:
     `arp-primer.cjs`, and the vinext/Bun runtime modules
     `bun-serve-keepalive-guard` and `response-cache-control` (dist `.js`);
   - health: `deep-health-lite.ts`;
@@ -429,7 +430,8 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
     `node-server.ts` supervisor still runs (`STANDALONE_SERVER_EXEC`): it primes
     ARP itself and drops its own `--require` list, since the executable already
     carries the preloads (`standalone-exec.ts`). A self-contained build has no
-    supervisor.
+    `node-server.ts` supervisor process; `standalone-self-contained-supervisor.cjs`
+    takes its place inside the executable.
   - **vinext** (`vinext-compile.mjs`): the single executable imports
     `arp-primer.cjs`, `bun-serve-keepalive-guard`, the sidecar installer (not in a
     self-contained build) and `bun-serve-cache-control-install`, each fail-closed.
@@ -553,8 +555,10 @@ The compile pipeline fails closed.
 
 ### Processes and listeners
 
-- `node-server.ts` spawns the Next child with `--require` preloads and binds the
-  metrics listener on `METRICS_PORT`. It calls `process.exit` when the child
+- `node-server.ts` spawns the Next child with `--require` preloads (script mode),
+  or, when `STANDALONE_SERVER_EXEC` is set, the compiled executable with no
+  arguments (`standalone-exec.ts`), and binds the metrics listener on
+  `METRICS_PORT`. It calls `process.exit` when the child
   exits.
 - `metrics.ts:startChildMetricsServer` and `deep-health-lite.ts` listen on
   `127.0.0.1:9092`, and `fetchChildMetrics` scrapes that address.

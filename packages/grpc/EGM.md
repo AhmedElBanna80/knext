@@ -37,12 +37,13 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     runners for the verbs and the verified buf from source, and the token-vector
     generator.
   - e2e/z7-identity-kind (no EGM.md): the Z7 zone-identity-token lane on kind.
-    `run.sh` is the whole lane (run by `.github/workflows/z7-identity-kind-e2e.yml`);
-    its phases, including the squatted-JWKS-ConfigMap row, are described in the
-    script's header. `mutation-rows.mjs` holds the operator mutation rows. The
-    lane's guard is `tests/z7-identity-kind-e2e-lane.test.ts` (repo root, not run
-    by `node scripts/bun-test.mjs packages/grpc`), and its prover is
-    `scripts/mutation-prove-2461-z7-kind-e2e.mjs`.
+    `run.sh` is the whole lane (run by `.github/workflows/z7-identity-kind-e2e.yml`)
+    and its header describes the phases, including the squatted-JWKS-ConfigMap
+    phase. `mutation-rows.mjs` holds the operator mutation rows, which
+    `mutation-prove-operator.sh` runs by hand. The lane is guarded from the repo
+    root (not by `node scripts/bun-test.mjs packages/grpc`): see the header of its
+    prover, `scripts/mutation-prove-2461-z7-kind-e2e.mjs`, for the test files it
+    covers, including `tests/z7-identity-kind-e2e-lane.test.ts`.
 
 ## Invariants
 

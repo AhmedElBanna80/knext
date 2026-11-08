@@ -23,17 +23,18 @@ import (
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
 
+func envSpec(v string) *appsv1alpha1.NextAppSpec {
+	return &appsv1alpha1.NextAppSpec{Env: map[string]string{EnvRedisKeyPrefix: v}}
+}
+
 // #2451: a REDIS_KEY_PREFIX set through spec.env is the app's key prefix as much
-// as spec.cache.keyPrefix is, so it gets the same rules.
-func TestValidateNextAppSpec_EnvRedisKeyPrefix(t *testing.T) {
-	spec := func(v string) *appsv1alpha1.NextAppSpec {
-		return &appsv1alpha1.NextAppSpec{Image: "r/a@sha256:" + strings.Repeat("a", 64), Env: map[string]string{"REDIS_KEY_PREFIX": v}}
-	}
+// as spec.cache.keyPrefix is, so admission applies the same rules to it.
+func TestValidateNextAppEnvKeyPrefix_Create(t *testing.T) {
 	refused := []struct{ name, value string }{
-		{"the shared fallback keyspace", "kn-next"},
-		{"under the shared fallback keyspace", "kn-next:isr"},
 		{"the platform keyspace", "knext"},
 		{"under the platform keyspace", "knext:cdn:purged"},
+		{"another app's derived prefix", DerivedCacheKeyPrefix("shop", "api")},
+		{"a nesting under the app's own derived prefix", shopWebDerived + ":isr"},
 		{"a glob star", "app*"},
 		{"a glob question mark", "app?"},
 		{"a glob bracket", "app[1]"},
@@ -44,33 +45,40 @@ func TestValidateNextAppSpec_EnvRedisKeyPrefix(t *testing.T) {
 	}
 	for _, c := range refused {
 		t.Run("refuses "+c.name, func(t *testing.T) {
-			err := ValidateNextAppSpec(spec(c.value))
+			err := ValidateNextAppEnvKeyPrefix("shop", "web", nil, envSpec(c.value))
 			if err == nil || !strings.Contains(err.Error(), "spec.env[REDIS_KEY_PREFIX]") {
-				t.Fatalf("ValidateNextAppSpec(%q) = %v, want an error naming spec.env[REDIS_KEY_PREFIX]", c.value, err)
+				t.Fatalf("%q: err = %v, want an error naming spec.env[REDIS_KEY_PREFIX]", c.value, err)
 			}
 		})
 	}
-	for _, v := range []string{"", "shop", "shop:web", strings.Repeat("é", 63)} {
-		if err := ValidateNextAppSpec(spec(v)); err != nil {
-			t.Fatalf("ValidateNextAppSpec(%q) = %v, want accepted", v, err)
+	// kn-next is the documented upgrade pin (keep the warm cache); the app's own
+	// derived prefix and ordinary prefixes are fine; empty is unset.
+	for _, v := range []string{"", "kn-next", "kn-next:isr", "shop", "shop:web", shopWebDerived, strings.Repeat("é", 63)} {
+		if err := ValidateNextAppEnvKeyPrefix("shop", "web", nil, envSpec(v)); err != nil {
+			t.Fatalf("%q: err = %v, want accepted", v, err)
 		}
 	}
 }
 
-// The derived-shape rule needs the app's namespace and name, so it is checked
-// with the explicit keyPrefix in ValidateNextAppCacheKeyPrefix.
-func TestValidateNextAppCacheKeyPrefix_EnvDerivedShape(t *testing.T) {
-	spec := func(v string) *appsv1alpha1.NextAppSpec {
-		return &appsv1alpha1.NextAppSpec{Env: map[string]string{"REDIS_KEY_PREFIX": v}}
+// Ratcheted: an app stored with a value the rule now refuses can still be updated
+// as long as the value does not change; changing it to another bad value is refused.
+func TestValidateNextAppEnvKeyPrefix_UpdateRatchets(t *testing.T) {
+	if err := ValidateNextAppEnvKeyPrefix("shop", "web", envSpec("my app"), envSpec("my app")); err != nil {
+		t.Fatalf("an unchanged stored value must pass on update: %v", err)
 	}
-	if err := ValidateNextAppCacheKeyPrefix("shop", "web", spec(DerivedCacheKeyPrefix("shop", "api"))); err == nil ||
-		!strings.Contains(err.Error(), "spec.env[REDIS_KEY_PREFIX]") {
-		t.Fatalf("another app's derived prefix through spec.env: err = %v, want refused naming spec.env", err)
+	if err := ValidateNextAppEnvKeyPrefix("shop", "web", envSpec("shop"), envSpec("my app")); err == nil {
+		t.Fatal("changing the value to a refused one must be refused")
 	}
-	if err := ValidateNextAppCacheKeyPrefix("shop", "web", spec(shopWebDerived)); err != nil {
-		t.Fatalf("the app's own derived prefix through spec.env: err = %v, want accepted", err)
+	if err := ValidateNextAppEnvKeyPrefix("shop", "web", envSpec("my app"), envSpec("shop")); err != nil {
+		t.Fatalf("fixing a stored bad value must pass: %v", err)
 	}
-	if err := ValidateNextAppCacheKeyPrefix("shop", "web", spec("")); err != nil {
-		t.Fatalf("an empty spec.env REDIS_KEY_PREFIX is unset: err = %v", err)
+}
+
+// The shared validator (and so the reconciler) does not apply the env rule.
+func TestValidateNextAppSpec_DoesNotGateOnEnvKeyPrefix(t *testing.T) {
+	spec := envSpec("my app")
+	spec.Image = "r/a@sha256:" + strings.Repeat("a", 64)
+	if err := ValidateNextAppSpec(spec); err != nil {
+		t.Fatalf("ValidateNextAppSpec must not apply the ratcheted env rule: %v", err)
 	}
 }

@@ -426,11 +426,6 @@ func validateNextAppSpec(spec *appsv1alpha1.NextAppSpec, budget int, grandfather
 			return fmt.Errorf("spec.cache.keyPrefix %q is reserved for the platform keyspace", p)
 		}
 	}
-	// A REDIS_KEY_PREFIX set through spec.env is the app's key prefix too (#2451):
-	// the same rules as spec.cache.keyPrefix, which the CRD enforces only there.
-	if why := EnvKeyPrefixViolation(spec.Env[EnvRedisKeyPrefix]); why != "" {
-		return fmt.Errorf("spec.env[%s] %s", EnvRedisKeyPrefix, why)
-	}
 	// Resource requests/limits (#435): the four spec.resources fields are
 	// user-supplied free text the reconciler turns into Kubernetes quantities
 	// for the Knative container. Validate them HERE so a malformed value fails

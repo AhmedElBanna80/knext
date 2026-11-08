@@ -123,7 +123,6 @@ func TestAdmissionRefusesABadEnvRedisKeyPrefix(t *testing.T) {
 	}
 	refused := map[string]string{
 		"another app's derived prefix": derived("shop", "web"),
-		"the shared fallback keyspace": "kn-next",
 		"under the platform keyspace":  "knext:cdn:purged",
 		"a Redis glob character":       "app*",
 		"whitespace":                   "my app",
@@ -142,7 +141,16 @@ func TestAdmissionRefusesABadEnvRedisKeyPrefix(t *testing.T) {
 			}
 		})
 	}
-	for _, prefix := range []string{"", "shop-web", derived("evil", "app")} {
+	t.Run("update ratchets an unchanged stored value", func(t *testing.T) {
+		if _, err := v.ValidateUpdate(ctx, envApp("my app"), func() *appsv1alpha1.NextApp {
+			a := envApp("my app")
+			a.Spec.Image = digestImage + "x"
+			return a
+		}()); err != nil && strings.Contains(err.Error(), "REDIS_KEY_PREFIX") {
+			t.Fatalf("an unchanged stored env prefix must not block an unrelated update: %v", err)
+		}
+	})
+	for _, prefix := range []string{"", "shop-web", "kn-next", derived("evil", "app")} {
 		if _, err := v.ValidateCreate(ctx, envApp(prefix)); err != nil {
 			t.Fatalf("spec.env REDIS_KEY_PREFIX %q must be accepted, got %v", prefix, err)
 		}

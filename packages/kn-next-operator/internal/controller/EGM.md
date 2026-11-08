@@ -67,7 +67,7 @@ A reconcile pass fetches the object, reconciles its children, computes a pure st
 - `platform_rollout.go:rolloutLimiter` frees a reservation in three ways:
   - the app returns at or after its slot (`reserve`);
   - the app stops being queued without returning, and `release` drops its slot and refreshes the `rollout_pending` gauge: `NextAppReconciler.Reconcile` (`nextapp_controller.go`) calls it when the app is gone or being deleted, and when the pass is held for another reason; `gateRollout` (`platform_state.go`) calls it on any other pass that is not `holdRolloutPending`, such as the app's own spec change or an app already rendered. An error keeps the slot;
-  - the reservation is more than `staleReservationAfter` (10 minutes) past its slot. The sweep runs inside `reserve`, so a stale entry keeps the gauge raised until the next `reserve` call.
+  - the reservation is more than `staleReservationAfter` (10 minutes) past its slot. The sweep runs inside `reserve`, so a stale entry keeps the gauge raised until the next `reserve` call, or a `release` for that app.
 - `platform_rollout.go:rolloutLimiter` state is in memory only, and that is deliberate. A leader failover or restart starts with an empty limiter against the same cluster, and the documented behaviour is pinned by `platform_rollout_failover_test.go`:
   - The queue is rebuilt from the cluster. Progress lives in `status.platform` on each NextApp, so `NextAppReconciler.decideRollout` (`platform_state.go`) re-queues exactly the apps not yet rendered.
   - No app renders twice. A rendered app matches its applied hash and is not re-admitted. A leader that died between the Knative Service write and the status write re-applies an identical Service, which is a no-op (no second revision).

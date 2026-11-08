@@ -142,11 +142,11 @@ func TestAdmissionRefusesABadEnvRedisKeyPrefix(t *testing.T) {
 		})
 	}
 	t.Run("update ratchets an unchanged stored value", func(t *testing.T) {
-		if _, err := v.ValidateUpdate(ctx, envApp("my app"), func() *appsv1alpha1.NextApp {
-			a := envApp("my app")
-			a.Spec.Image = digestImage + "x"
-			return a
-		}()); err != nil && strings.Contains(err.Error(), "REDIS_KEY_PREFIX") {
+		// An unrelated spec change (another env var) on an app stored with a value
+		// the rule now refuses must pass.
+		next := envApp("my app")
+		next.Spec.Env["OTHER"] = "1"
+		if _, err := v.ValidateUpdate(ctx, envApp("my app"), next); err != nil {
 			t.Fatalf("an unchanged stored env prefix must not block an unrelated update: %v", err)
 		}
 	})

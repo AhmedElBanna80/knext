@@ -148,9 +148,11 @@ fails closed, and its deletion does not sweep the older app's keys.
 
 That includes a prefix set the old way, as `REDIS_KEY_PREFIX` in `spec.env`: the operator ranks the
 value as written. When you create the app or change that value, admission checks it: at most 63
-characters, no whitespace and none of `* ? [ ] \`, not `knext` or a prefix starting `knext:`, and not
-another app's generated prefix. Pinning the shared fallback keyspace is allowed here, as the upgrade
-note in [ISR caching](/docs/isr-caching) describes. An empty value means unset. A `REDIS_KEY_PREFIX` that comes from a Secret (`spec.secrets.envMap`) is different:
+characters, no whitespace and none of `* ? [ ] \`, not `knext` or a prefix starting `knext:`, not
+another app's generated prefix, and not a prefix nested under any generated prefix. Pinning the shared
+fallback keyspace is allowed here, as the upgrade note in [ISR caching](/docs/isr-caching) describes.
+An empty value means unset. A value set before this check existed is left as it is, and the operator
+does not re-check it at reconcile, so change it to fix it. A `REDIS_KEY_PREFIX` that comes from a Secret (`spec.secrets.envMap`) is different:
 the operator does not read your Secrets, so it cannot tell which keys that app writes. It treats the
 app as holding any prefix, and **every newer app on the endpoint that sets an explicit
 `spec.cache.keyPrefix` fails closed behind it** (`PrefixConflict`, naming the app). An app on its own

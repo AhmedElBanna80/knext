@@ -324,6 +324,8 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
       ),
     ).toBe(true);
     expect(installsProject('echo "#" && kubectl apply -f ./kourier.yaml\n', K)).toBe(true);
+    // A `#` mid-word is not a comment.
+    expect(installsProject('kubectl apply -f ./a#cert-manager.yaml\n', C)).toBe(true);
     // Real installs, in each spelling, are caught.
     expect(
       installsProject('kubectl apply -f https://github.com/knative/serving/releases/x.yaml\n', K),

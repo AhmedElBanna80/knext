@@ -111,6 +111,11 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     - A library staged in `native/ffi/<triple>/` (`native/` beside `process.execPath`) must be
       listed in `native/.integrity.json` (version 1) with a matching sha256. If `native/ffi/`
       holds only other triples, the load fails.
+    - The bytes are hashed through an open descriptor. On Linux the library is then loaded
+      through that same descriptor (`/proc/self/fd/<n>`, never closed), so a file renamed or
+      symlinked over the path after the check is not the one loaded. On macOS it is loaded by
+      path, because dyld opens `/dev/fd/<n>` as a second library instance; a swap between the
+      check and the load is not caught there.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check.
     - Every `<symbol>_schema` must equal the FNV-1a 64 hash computed at render time.
@@ -176,7 +181,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     which `releaseZig` removes (`SupplyChain.dispose`, called in `runBuild`'s `finally`).
   - `buildSbom` creates and removes `knext-ffi-sbom-<triple>.json` in the crate directory.
 - **What the generated module does at run time** (`render.ts:renderModule`): it calls `dlopen` on
-  the library and reads `KNEXT_FFI_SLOW_CALL_MS` (default 50 ms, `0` turns counting off),
+  the library (on Linux through the verified descriptor, which stays open) and reads `KNEXT_FFI_SLOW_CALL_MS` (default 50 ms, `0` turns counting off),
   `NODE_ENV` and `NEXT_PHASE`. It keeps a process-wide metrics registry at
   `globalThis[Symbol.for('knext.ffi.metrics')]`, publishes a Prometheus renderer at
   `Symbol.for('knext.ffi.renderMetrics')` after the first successful load

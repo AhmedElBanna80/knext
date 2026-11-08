@@ -18,21 +18,29 @@
  * listens on the other.
  */
 
+import { logger } from '../logger';
+
 export type AcquireFailureObserver = (error: unknown) => void;
+
+type GlobalSets = Record<symbol, Set<unknown> | undefined>;
+
+/**
+ * A process-wide Set anchored on `globalThis` under a namespaced `Symbol.for` key
+ * (ADR-0027): a duplicated module copy finds the same Set rather than its own.
+ */
+const globalSet = <T>(key: symbol): Set<T> => {
+  const g = globalThis as unknown as GlobalSets;
+  let set = g[key];
+  if (!set) {
+    set = new Set<unknown>();
+    g[key] = set;
+  }
+  return set as Set<T>;
+};
 
 const OBSERVERS_KEY = Symbol.for('knext.lib.db.acquireFailureObservers');
 
-type ObserversGlobal = Record<symbol, Set<AcquireFailureObserver> | undefined>;
-
-const observers = (): Set<AcquireFailureObserver> => {
-  const g = globalThis as unknown as ObserversGlobal;
-  let set = g[OBSERVERS_KEY];
-  if (!set) {
-    set = new Set();
-    g[OBSERVERS_KEY] = set;
-  }
-  return set;
-};
+const observers = (): Set<AcquireFailureObserver> => globalSet(OBSERVERS_KEY);
 
 /** Subscribe to failed writer-pool connect attempts. Returns the unsubscribe. */
 export function observeAcquireFailures(observer: AcquireFailureObserver): () => void {
@@ -106,6 +114,9 @@ const IN_NAMESPACE_SERVICE_NAMES = new Set(['pggw', 'pggw-apps']);
  * `scale-zero-pg` (`pggw-apps.scale-zero-pg`, `….scale-zero-pg.svc.cluster.local.`,
  * any cluster domain), or the bare in-namespace service name `pggw` / `pggw-apps`.
  * Never a substring of the path or userinfo.
+ *
+ * A value that is neither a recognised word nor empty falls through to the host
+ * and logs a warning, once per distinct value (`warnUnrecognisedDeclaration`).
  */
 export function isScaleToZeroDatabase(
   dsn: string | undefined,
@@ -130,26 +141,30 @@ export function isScaleToZeroDatabase(
 
 const WARNED_DECLARATIONS_KEY = Symbol.for('knext.lib.db.unrecognisedScaleToZeroWarned');
 
-type WarnedDeclarationsGlobal = Record<symbol, Set<string> | undefined>;
+/**
+ * What an operator may see of an unrecognised value. A value carrying the
+ * characters of a connection string or a query-string secret (`:` `/` `@` `=` `?`
+ * `&`) is shown only by its length, because an operator who pasted a DSN here must
+ * not see its password. Anything else is cut at 64 characters.
+ */
+function displayValue(value: string): string {
+  if (/[:/@=?&]/.test(value)) return `<redacted, ${value.length} characters>`;
+  return value.slice(0, 64);
+}
 
 /**
  * Warn once per process per distinct unrecognised value. A typo such as `ture`
- * otherwise falls back to the host heuristic with no signal. The set is anchored
- * on `globalThis` (ADR-0027) so a duplicated module copy cannot warn twice.
- * The value is truncated: an operator who pasted a DSN here must not see all of it.
+ * otherwise falls back to the host heuristic with no signal. The once-set is
+ * anchored on `globalThis` (ADR-0027) so a duplicated module copy cannot warn
+ * twice. The set is keyed on the full trimmed value, which is never logged.
  */
 function warnUnrecognisedDeclaration(raw: string): void {
-  const g = globalThis as unknown as WarnedDeclarationsGlobal;
-  let seen = g[WARNED_DECLARATIONS_KEY];
-  if (!seen) {
-    seen = new Set();
-    g[WARNED_DECLARATIONS_KEY] = seen;
-  }
-  const shown = raw.trim().slice(0, 64);
-  if (seen.has(shown)) return;
-  seen.add(shown);
-  console.warn(
-    `[knext] KNEXT_DB_SCALE_TO_ZERO=${JSON.stringify(shown)} is not recognised ` +
+  const value = raw.trim();
+  const seen = globalSet<string>(WARNED_DECLARATIONS_KEY);
+  if (seen.has(value)) return;
+  seen.add(value);
+  logger.warn(
+    `[knext] KNEXT_DB_SCALE_TO_ZERO=${JSON.stringify(displayValue(value))} is not recognised ` +
       '(use true, 1, yes, false, 0 or no); falling back to the DATABASE_URL host.',
   );
 }

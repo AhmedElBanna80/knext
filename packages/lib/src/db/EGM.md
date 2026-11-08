@@ -40,9 +40,11 @@ no package entry point (`package.json` `exports` has no `db` subpath). It provid
   non-empty `errors` array in which every entry is a refusal. Message text is never matched.
 - `isScaleToZeroDatabase`: an explicit `KNEXT_DB_SCALE_TO_ZERO` (trimmed, case-insensitive,
   read on each call as the default of `declared`) decides first (`true`/`1`/`yes` or
-  `false`/`0`/`no`); any other non-empty value falls through to the DSN, and warns once per process
-  per distinct value (`console.warn`, value truncated to 64 characters). The once-set lives on
-  `globalThis` under `Symbol.for('knext.lib.db.unrecognisedScaleToZeroWarned')`. Otherwise the DSN
+  `false`/`0`/`no`); any other non-empty value falls through to the DSN, and logs one `logger.warn`
+  per distinct value per process. The warning shows a value containing `:` `/` `@` `=` `?` or `&`
+  only by its length, and any other value cut to 64 characters. The once-set is keyed on the full
+  trimmed value and lives on `globalThis` under `Symbol.for('knext.lib.db.unrecognisedScaleToZeroWarned')`.
+  Otherwise the DSN
   hostname decides: true if it has a `scale-zero-pg` label, or if it is exactly `pggw` or
   `pggw-apps`. It returns false for an unparseable or missing DSN.
 
@@ -52,6 +54,8 @@ no package entry point (`package.json` `exports` has no `db` subpath). It provid
 - `runWithoutDbActivity`, the first `isDbActivityUntracked` call and the first
   `observeAcquireFailures` call each install their state on `globalThis`.
 - `observeAcquireFailures` adds to a process-wide observer set.
+- `isScaleToZeroDatabase` installs the unrecognised-value once-set on `globalThis` (created lazily on
+  the first unrecognised value) and writes one `logger.warn` line per distinct unrecognised value.
 
 ## Verification
 - Run: `node scripts/bun-test.mjs packages/lib` (from repo root)

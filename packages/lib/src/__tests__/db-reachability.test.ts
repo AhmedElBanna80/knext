@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import {
   acquireFailureObserverCount,
   isConnectionRefused,
@@ -6,6 +6,21 @@ import {
   observeAcquireFailures,
   reportAcquireFailure,
 } from '../db/reachability';
+import { logger } from '../logger';
+
+/** Runs `run` and returns every message it logged through `logger.warn`. */
+const captureWarnings = (run: () => void): string[] => {
+  const lines: string[] = [];
+  const spy = spyOn(logger, 'warn').mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(' '));
+  });
+  try {
+    run();
+  } finally {
+    spy.mockRestore();
+  }
+  return lines;
+};
 
 describe('isConnectionRefused — only a definitive refusal', () => {
   it('recognises the node pg code and the Bun.SQL code', () => {
@@ -113,10 +128,14 @@ describe('isScaleToZeroDatabase — the gateway, however it is spelled', () => {
   });
 
   it('an empty or unrecognised declaration falls back to the host', () => {
-    for (const flag of [undefined, '', 'maybe']) {
-      expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), flag)).toBe(true);
-      expect(isScaleToZeroDatabase(dsn('db.example.com'), flag)).toBe(false);
-    }
+    const lines = captureWarnings(() => {
+      for (const flag of [undefined, '', 'maybe']) {
+        expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), flag)).toBe(true);
+        expect(isScaleToZeroDatabase(dsn('db.example.com'), flag)).toBe(false);
+      }
+    });
+    // Only the unrecognised 'maybe' warns; undefined and '' are silent.
+    expect(lines).toHaveLength(1);
   });
 
   it('reads KNEXT_DB_SCALE_TO_ZERO from the environment by default', () => {
@@ -169,40 +188,73 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
 
   // Each test uses its own bad value: the once-per-process guard is process state,
   // so a value another test already reported would hide the warning under test.
-  const capture = (run: () => void): string[] => {
-    const lines: string[] = [];
-    const original = console.warn;
-    console.warn = (...args: unknown[]) => {
-      lines.push(args.map(String).join(' '));
-    };
-    try {
-      run();
-    } finally {
-      console.warn = original;
-    }
-    return lines;
-  };
-
   it('names the bad value and the host fallback, and warns once per process', () => {
-    const lines = capture(() => {
-      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-2193')).toBe(false);
-      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-2193')).toBe(false);
+    const lines = captureWarnings(() => {
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-typo')).toBe(false);
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-typo')).toBe(false);
     });
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('KNEXT_DB_SCALE_TO_ZERO');
-    expect(lines[0]).toContain('"ture-once-2193"');
+    expect(lines[0]).toContain('"ture-once-typo"');
     expect(lines[0]).toContain('host');
   });
 
+  it('never logs a connection string: a DSN-shaped value shows only its length', () => {
+    const secret = 'postgres://svc:hunter2pw@db.example.com/postgres';
+    expect(secret.length).toBeLessThan(64);
+    const lines = captureWarnings(() => {
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), secret)).toBe(false);
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`<redacted, ${secret.length} characters>`);
+    expect(lines[0]).not.toContain('hunter2pw');
+    expect(lines[0]).not.toContain('svc:');
+  });
+
+  it('truncates a long plain value to 64 characters', () => {
+    const lines = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), 'z'.repeat(100));
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`"${'z'.repeat(64)}"`);
+    expect(lines[0]).not.toContain('z'.repeat(65));
+  });
+
+  it('dedupes on the full value, so two values sharing a 64-character prefix both warn', () => {
+    const prefix = 'p'.repeat(64);
+    const lines = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), `${prefix}a`);
+      isScaleToZeroDatabase(dsn('db.example.com'), `${prefix}b`);
+    });
+    expect(lines).toHaveLength(2);
+  });
+
+  it('a duplicated module copy shares the once-set (state is anchored on globalThis)', async () => {
+    // A query-string import evaluates the module body afresh, as the standalone
+    // build's second copy does. The copy warns first; the original must stay silent.
+    const copy = (await import(
+      `../db/reachability.ts?copy=${Date.now()}`
+    )) as typeof import('../db/reachability');
+    const value = 'copy-dedupe-typo';
+    const first = captureWarnings(() => {
+      copy.isScaleToZeroDatabase(dsn('db.example.com'), value);
+    });
+    const second = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), value);
+    });
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(0);
+  });
+
   it('the fallback still follows the host when the value is unrecognised', () => {
-    const lines = capture(() => {
-      expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), 'mayb-host-2193')).toBe(true);
+    const lines = captureWarnings(() => {
+      expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), 'mayb-host-typo')).toBe(true);
     });
     expect(lines).toHaveLength(1);
   });
 
   it('stays silent for recognised values, empty values and an unset variable', () => {
-    const lines = capture(() => {
+    const lines = captureWarnings(() => {
       for (const flag of ['true', ' YES ', 'false', '0', 'no', '', '   ', undefined]) {
         isScaleToZeroDatabase(dsn('db.example.com'), flag);
       }

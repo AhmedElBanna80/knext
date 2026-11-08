@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -666,13 +667,39 @@ func (r *BackendServiceReconciler) zoneKsvcToFunctions(ctx context.Context, obj 
 }
 
 // zoneWatchPredicate passes the NextApp events a function's verdict depends on
-// (#2501): a zone created or deleted, and its spec changed (generation: backends,
-// database, which also feeds other zones' deny rule). Deletion starting is a
-// generation change too: the apiserver bumps a custom resource's generation when
-// it sets deletionTimestamp. Status-only writes, which the NextApp reconciler
-// makes on every pass, pass nothing; the periodic re-check stays the backstop.
+// (#2501): a zone created or deleted, its spec changed (generation: backends,
+// database, which also feeds other zones' deny rule; the start of a deletion
+// bumps a custom resource's generation too), and a change to the zone's
+// ZoneSigningKey condition, which is how a JWKS ConfigMap conflict being cleared
+// (the zone publishing its own key set) reaches the functions that read it.
+// Other status-only writes, which the NextApp reconciler makes on every pass,
+// pass nothing; the periodic re-check stays the backstop.
 func zoneWatchPredicate() predicate.Predicate {
-	return predicate.GenerationChangedPredicate{}
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return false },
+			DeleteFunc:  func(event.DeleteEvent) bool { return false },
+			GenericFunc: func(event.GenericEvent) bool { return false },
+			UpdateFunc:  func(e event.UpdateEvent) bool { return zoneSigningKeyChanged(e.ObjectOld, e.ObjectNew) },
+		},
+	)
+}
+
+// zoneSigningKeyChanged reports whether the ZoneSigningKey condition's status or
+// reason differs between two versions of a zone.
+func zoneSigningKeyChanged(oldObj, newObj client.Object) bool {
+	oldApp, ok1 := oldObj.(*appsv1alpha1.NextApp)
+	newApp, ok2 := newObj.(*appsv1alpha1.NextApp)
+	if !ok1 || !ok2 {
+		return false
+	}
+	o := apimeta.FindStatusCondition(oldApp.Status.Conditions, ConditionZoneSigningKey)
+	n := apimeta.FindStatusCondition(newApp.Status.Conditions, ConditionZoneSigningKey)
+	if o == nil || n == nil {
+		return (o == nil) != (n == nil)
+	}
+	return o.Status != n.Status || o.Reason != n.Reason
 }
 
 // SetupWithManager wires the reconciler. Status-only writes to a BackendService

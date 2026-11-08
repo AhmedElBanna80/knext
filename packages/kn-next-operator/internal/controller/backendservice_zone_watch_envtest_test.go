@@ -131,6 +131,18 @@ var _ = Describe("BackendService reconciler: the zone watch passes spec changes,
 		Expect(delta).To(BeZero(), "a status-only zone write must enqueue no function")
 		Consistently(bsReconcileCount, "2s", "250ms").Should(Equal(before))
 
+		By("flipping a zone's ZoneSigningKey condition (a JWKS conflict clearing)")
+		flip := &appsv1alpha1.NextApp{}
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "zone-0"}, flip)).To(Succeed())
+		apimeta.SetStatusCondition(&flip.Status.Conditions, metav1.Condition{
+			Type: ConditionZoneSigningKey, Status: metav1.ConditionFalse, Reason: ReasonJWKSConfigMapConflict,
+			Message: "test", ObservedGeneration: flip.Generation,
+		})
+		Expect(k8sClient.Status().Update(ctx, flip)).To(Succeed())
+		Eventually(bsReconcileCount, "30s", "250ms").Should(BeNumerically(">=", before+zones*perZone),
+			"a ZoneSigningKey change must re-check the functions")
+		before = settle()
+
 		By("changing one zone's spec")
 		app := &appsv1alpha1.NextApp{}
 		Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "zone-1"}, app)).To(Succeed())

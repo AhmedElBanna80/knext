@@ -227,29 +227,28 @@ function runStubbed(script: string, args: string[], env: Record<string, string>)
   }
 }
 
-/** Drop a trailing shell comment: a `#` at a word start that is outside quotes. */
+/**
+ * Drop a shell comment. Fail-closed: a line containing any quote or backslash is
+ * too ambiguous to tokenise with a regex (escaped quotes outside quotes, `$'..'`,
+ * etc.), so it is kept WHOLE unless it is entirely a comment. Only a quote-free,
+ * backslash-free line has a trailing ` #...` cut.
+ */
 function stripComment(line: string): string {
-  let q: string | null = null;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (q) {
-      if (c === '\\' && q === '"') i++;
-      else if (c === q) q = null;
-    } else if (c === '"' || c === "'") q = c;
-    else if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
-  }
-  return line;
+  if (/^\s*#/.test(line)) return '';
+  if (/["'\\]/.test(line)) return line;
+  const m = /(?:^|\s)#/.exec(line);
+  return m ? line.slice(0, m.index) : line;
 }
 
 /**
  * Does this workflow/script text perform an INSTALL of `project`, as opposed to
  * merely mentioning its name? Backslash continuations are folded and comments
- * stripped (quote-aware, so `echo "step #1" && kubectl apply ...` keeps its
- * install). An install is a `kubectl|$VAR apply|create|replace` or
+ * stripped (fail-closed: a line with any quote/backslash is kept whole, so
+ * `echo "step #1" && kubectl apply ...` and `echo \\" " # " && ...` keep their install). An install is a `kubectl|$VAR apply|create|replace` or
  * `helm install|upgrade|template` naming the project, a fetch (`curl`/`wget`)
- * naming it, or any non-comment URL pointing at the project's release assets.
- * The install verb and the project name may sit on the same line or within the
- * next two non-empty lines (a YAML folded scalar splits them), and `$K apply`
+ * naming it, or any non-comment URL containing the project name (including docs hosts; deliberately broad).
+ * The install verb and the project name may sit on the same line or within two
+ * non-empty lines either side (a YAML folded scalar splits them), and `$K apply`
  * counts as kubectl. The rule is "verb AND name nearby", never "is the line
  * understood", so an unclassifiable install still counts (fail-closed).
  * Deliberately narrower than "mentions the project": a non-install use such as
@@ -267,7 +266,7 @@ function installsProject(text: string, project: RegExp): boolean {
   return code.some(
     (l, i) =>
       url.test(l) ||
-      (verb.test(l) && [l, code[i + 1] ?? '', code[i + 2] ?? ''].some((w) => project.test(w))),
+      (verb.test(l) && [code[i - 2] ?? '', code[i - 1] ?? '', l, code[i + 1] ?? '', code[i + 2] ?? ''].some((w) => project.test(w))),
   );
 }
 
@@ -324,6 +323,17 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
       ),
     ).toBe(true);
     expect(installsProject('echo "#" && kubectl apply -f ./kourier.yaml\n', K)).toBe(true);
+    // Escaped quote outside quotes must not fake a quoted region (fail-closed).
+    expect(
+      installsProject(
+        'echo \\" "  # " && kubectl apply -f https://github.com/knative/serving/releases/x.yaml\n',
+        K,
+      ),
+    ).toBe(true);
+    // Name on an EARLIER line than the verb (variable indirection).
+    expect(
+      installsProject('V=knative-v1.16.0\nkubectl apply -f "$BASE/$V/serving.yaml"\n', K),
+    ).toBe(true);
     // A `#` mid-word is not a comment.
     expect(installsProject('kubectl apply -f ./a#cert-manager.yaml\n', C)).toBe(true);
     // Real installs, in each spelling, are caught.

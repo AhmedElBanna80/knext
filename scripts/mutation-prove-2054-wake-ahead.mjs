@@ -39,15 +39,15 @@ const MUTATIONS = [
     id: 'W2',
     subject: 'wake',
     claim: 'a wake call ignores the shared primer signal (SIGTERM cannot cancel it)',
-    anchor: "      shared.addEventListener('abort', onAbort, { once: true });\n",
-    replacement: '',
+    anchor: 'return { signal: AbortSignal.any([shared, timeout.signal]), release };',
+    replacement: 'return { signal: timeout.signal, release };',
   },
   {
     id: 'W3',
     subject: 'wake',
     claim: 'a wake call loses its hard timeout',
-    anchor: '      const timer = setTimeout(onAbort, timeoutMs);\n',
-    replacement: '      const timer = setTimeout(() => {}, timeoutMs);\n',
+    anchor: '  const timer = setTimeout(() => timeout.abort(), timeoutMs);\n',
+    replacement: '  const timer = setTimeout(() => {}, timeoutMs);\n',
   },
   {
     id: 'W4',
@@ -67,7 +67,7 @@ const MUTATIONS = [
     id: 'W6',
     subject: 'wake',
     claim: 'an abort before the call leaves still sends it',
-    anchor: 'controller.signal.aborted ? undefined : doFetch(',
+    anchor: 'signal.aborted ? undefined : doFetch(',
     replacement: 'false ? undefined : doFetch(',
   },
   {
@@ -81,7 +81,7 @@ const MUTATIONS = [
     id: 'S2',
     subject: 'supervisor',
     claim: 'the self-contained supervisor no longer aborts the primers on SIGTERM',
-    anchor: "      globalThis[Symbol.for('knext.runtime.primerAbort')]?.abort();\n",
+    anchor: "      require('./process-start-abort.cjs').abortPrimers();\n",
     replacement: '',
   },
   {

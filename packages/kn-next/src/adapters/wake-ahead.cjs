@@ -37,17 +37,8 @@ const WAKE_PATH = '/healthz';
 /** Below a function's ~1.4 s cold start; the activator has the request long before. */
 const WAKE_TIMEOUT_MS = 1000;
 
-/** `Symbol.for(PRIMER_ABORT_KEY_NAME)` of process-start-primers.cjs, inlined so this file needs no require. */
-const PRIMER_ABORT_KEY = Symbol.for('knext.runtime.primerAbort');
-
-function primerSignal() {
-  let controller = globalThis[PRIMER_ABORT_KEY];
-  if (!controller) {
-    controller = new AbortController();
-    globalThis[PRIMER_ABORT_KEY] = controller;
-  }
-  return controller.signal;
-}
+// The shared primer controller (a sibling file, no package dependency).
+const { primerSignal } = require('./process-start-abort.cjs');
 
 /** `<NAME>_SERVICE_URL` for a binding name (ADR-0004; packages/grpc `urlEnvFor`). */
 function urlEnvFor(name) {
@@ -76,6 +67,34 @@ function wakeTargets(env) {
     else missing.push(name);
   }
   return { targets, missing };
+}
+
+/**
+ * A signal that aborts when `shared` does or after `timeoutMs`, and a release
+ * for the timer. The timer is `unref()`d either way.
+ *
+ * @param {AbortSignal} shared
+ * @param {number} timeoutMs
+ * @returns {{ signal: AbortSignal, release: () => void }}
+ */
+function callSignal(shared, timeoutMs) {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), timeoutMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  const release = () => clearTimeout(timer);
+  if (typeof AbortSignal.any === 'function') {
+    return { signal: AbortSignal.any([shared, timeout.signal]), release };
+  }
+  // Fallback for a runtime without AbortSignal.any: one listener, removed on settle.
+  const onAbort = () => timeout.abort();
+  shared.addEventListener('abort', onAbort, { once: true });
+  return {
+    signal: timeout.signal,
+    release: () => {
+      clearTimeout(timer);
+      shared.removeEventListener('abort', onAbort);
+    },
+  };
 }
 
 /** The URL the wake GET goes to: the binding's base URL plus `/healthz`. */
@@ -118,21 +137,21 @@ function wakeAheadNow(deps) {
 
     let warned = false;
     for (const t of targets) {
-      const controller = new AbortController();
-      const onAbort = () => controller.abort();
-      shared.addEventListener('abort', onAbort, { once: true });
-      const timer = setTimeout(onAbort, timeoutMs);
-      if (typeof timer.unref === 'function') timer.unref();
+      // One signal per call: the shared primer signal OR this call's timeout.
+      // AbortSignal.any adds no listener to the shared signal per call, so many
+      // bound functions do not trip the EventTarget leak warning.
+      const { signal, release } = callSignal(shared, timeoutMs);
       const call = Promise.resolve()
         .then(() =>
           // Aborted before the call left (a SIGTERM during boot): send nothing.
-          controller.signal.aborted ? undefined : doFetch(wakeUrl(t.url), { method: 'GET', signal: controller.signal }),
+          signal.aborted ? undefined : doFetch(wakeUrl(t.url), { method: 'GET', signal }),
         )
         .then(
           (res) => {
             // Release the connection; the body is empty and nothing reads it.
             try {
-              res && res.body && typeof res.body.cancel === 'function' && res.body.cancel();
+              const done = res && res.body && typeof res.body.cancel === 'function' && res.body.cancel();
+              if (done && typeof done.catch === 'function') done.catch(() => {});
             } catch {
               // never throw from the primer
             }
@@ -140,7 +159,7 @@ function wakeAheadNow(deps) {
           (err) => {
             // A timeout or a shutdown abort is the expected common case: the
             // activator has the request, and that is the point.
-            if (controller.signal.aborted || warned) return;
+            if (signal.aborted || warned) return;
             warned = true;
             try {
               warn(`[knext] wake-ahead: GET ${wakeUrl(t.url)} failed: ${err && err.message ? err.message : String(err)}`);
@@ -149,10 +168,7 @@ function wakeAheadNow(deps) {
             }
           },
         )
-        .finally(() => {
-          clearTimeout(timer);
-          shared.removeEventListener('abort', onAbort);
-        });
+        .finally(release);
       calls.push(call);
     }
   } catch {
@@ -169,7 +185,7 @@ module.exports = {
   WAKE_AHEAD_SWITCH_ENV,
   WAKE_PATH,
   WAKE_TIMEOUT_MS,
-  PRIMER_ABORT_KEY,
+  callSignal,
   urlEnvFor,
   wakeTargets,
   wakeUrl,

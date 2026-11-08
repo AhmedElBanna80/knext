@@ -259,6 +259,9 @@ starts waking while the zone is still booting, so the first request to need it w
 - A zone scaled out to several pods sends one call per pod per function. They collapse into a
   single wake of each function.
 
+Zones built on the default and Bun standalone targets wake their functions. A zone built with
+the vinext target does not wake them yet: its functions start on their first call.
+
 To stop waking one function, set `wakeAhead: false` on it (`--no-wake-ahead` on
 `knext deploy function`). To turn the whole feature off for a zone, set `KNEXT_WAKE_AHEAD=0` in
 its `spec.env`.

@@ -34,7 +34,6 @@ type WakeDeps = {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const wake = require(WAKE_AHEAD) as {
     WAKE_FUNCTIONS_ENV: string;
-    PRIMER_ABORT_KEY: symbol;
     urlEnvFor: (name: string) => string;
     wakeTargets: (env: Record<string, string | undefined>) => {
         targets: Array<{ name: string; url: string }>;
@@ -46,9 +45,15 @@ const wake = require(WAKE_AHEAD) as {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const primers = require(PRIMERS) as {
     PROCESS_START_PRIMERS: readonly string[];
-    PRIMER_ABORT_KEY_NAME: string;
 };
-const PRIMER_ABORT_KEY = Symbol.for(primers.PRIMER_ABORT_KEY_NAME);
+const ABORT = resolve(ADAPTERS, "process-start-abort.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const owner = require(ABORT) as {
+    PRIMER_ABORT_KEY: symbol;
+    primerSignal: () => AbortSignal;
+    abortPrimers: () => void;
+};
+const PRIMER_ABORT_KEY = owner.PRIMER_ABORT_KEY;
 
 interface FixtureBinding {
     name: string;
@@ -222,6 +227,45 @@ describe("wake-ahead keeps the primer contract", () => {
         expect(calls).toEqual([]);
     });
 
+    it("many bound functions add no listener per call to the shared signal", async () => {
+        const env: Record<string, string> = { KNEXT_WAKE_FUNCTIONS: "" };
+        const names = Array.from({ length: 25 }, (_, i) => `fn-${i}`);
+        env.KNEXT_WAKE_FUNCTIONS = names.join(",");
+        for (const n of names)
+            env[wake.urlEnvFor(n)] = `http://${n}.shop.svc.cluster.local`;
+        const shared = new AbortController();
+        let added = 0;
+        const real = shared.signal.addEventListener.bind(shared.signal);
+        shared.signal.addEventListener = ((...a: Parameters<typeof real>) => {
+            added++;
+            return real(...a);
+        }) as typeof real;
+        const pending = wake.wakeAheadNow({
+            env,
+            fetch: hangingFetch([]),
+            signal: shared.signal,
+        });
+        await new Promise((r) => setTimeout(r, 20));
+        shared.abort();
+        await Promise.all(pending);
+        expect(pending.length).toBe(25);
+        expect(added).toBe(0);
+    });
+
+    it("a body whose cancel() rejects never surfaces", async () => {
+        const pending = wake.wakeAheadNow({
+            env: ENV,
+            fetch: async () => ({
+                body: {
+                    cancel: () => Promise.reject(new Error("cancel failed")),
+                },
+            }),
+            signal: new AbortController().signal,
+        });
+        await Promise.all(pending);
+        await new Promise((r) => setTimeout(r, 10));
+    });
+
     it("the hard timeout ends a call that never answers, without a warning", async () => {
         const warnings: string[] = [];
         const started = Date.now();
@@ -299,19 +343,45 @@ describe("wake-ahead keeps the primer contract", () => {
         ]);
     });
 
-    it("every party uses the one controller key the primer list names", () => {
-        const name = primers.PRIMER_ABORT_KEY_NAME;
-        expect(name).toBe("knext.runtime.primerAbort");
-        expect(wake.PRIMER_ABORT_KEY).toBe(Symbol.for(name));
+    it("one owner module holds the shared controller, and every party goes through it", () => {
+        expect(PRIMER_ABORT_KEY).toBe(Symbol.for("knext.runtime.primerAbort"));
+        const signal = owner.primerSignal();
+        expect(
+            (globalThis as Record<symbol, AbortController>)[PRIMER_ABORT_KEY]
+                .signal,
+        ).toBe(signal);
         const read = (f: string) => readFileSync(resolve(ADAPTERS, f), "utf8");
-        // node-server.ts defaults to it before reading the list; the
-        // self-contained supervisor aborts it directly.
-        expect(read("node-server.ts")).toContain(
-            `let primerAbortKey = "${name}";`,
+        expect(read("wake-ahead.cjs")).toContain(
+            "require('./process-start-abort.cjs')",
         );
         expect(read("standalone-self-contained-supervisor.cjs")).toContain(
-            `globalThis[Symbol.for('${name}')]?.abort()`,
+            "require('./process-start-abort.cjs').abortPrimers()",
         );
+        expect(read("node-server.ts")).toContain('"process-start-abort.cjs"');
+        // nobody else spells the key
+        for (const f of [
+            "wake-ahead.cjs",
+            "node-server.ts",
+            "standalone-self-contained-supervisor.cjs",
+            "process-start-primers.cjs",
+        ]) {
+            expect(read(f)).not.toContain("knext.runtime.primerAbort");
+        }
+    });
+
+    it("the shared signal aborts with abortPrimers()", () => {
+        const g = globalThis as Record<symbol, AbortController | undefined>;
+        const saved = g[PRIMER_ABORT_KEY];
+        g[PRIMER_ABORT_KEY] = undefined;
+        try {
+            const signal = owner.primerSignal();
+            expect(signal.aborted).toBe(false);
+            owner.abortPrimers();
+            expect(signal.aborted).toBe(true);
+            owner.abortPrimers(); // idempotent
+        } finally {
+            g[PRIMER_ABORT_KEY] = saved;
+        }
     });
 
     it("is the primer list's second entry, after the ARP primer", () => {
@@ -335,13 +405,14 @@ const http = require("node:http");
 const started = Date.now();
 const req = createRequire(${JSON.stringify(PRIMERS)});
 const primers = req(${JSON.stringify(PRIMERS)});
+const owner = req(${JSON.stringify(ABORT)});
 for (const name of primers.PROCESS_START_PRIMERS) req(resolve(${JSON.stringify(ADAPTERS)}, name));
 const server = http.createServer((_q, s) => s.end("ok"));
 server.listen(0, "127.0.0.1", () => {
   process.stdout.write(JSON.stringify({ port: server.address().port, bootMs: Date.now() - started }) + "\\n");
 });
 process.on("SIGTERM", () => {
-  globalThis[Symbol.for(primers.PRIMER_ABORT_KEY_NAME)]?.abort();
+  owner.abortPrimers();
   server.close();
 });
 `;
@@ -428,10 +499,9 @@ describe("both SIGTERM handlers cancel the primers before they drain", () => {
         const drainAt = src.indexOf("gracefulShutdown(signal", onSignalAt);
         expect(abortAt).toBeGreaterThan(onSignalAt);
         expect(drainAt).toBeGreaterThan(abortAt);
-        // and the key it aborts is the one the list names
-        expect(src).toContain(
-            "primerAbortKey = primers.PRIMER_ABORT_KEY_NAME;",
-        );
+        // and abortPrimers is the owner module's, loaded once into a const
+        expect(src).toContain("const abortPrimers = loadAbortPrimers();");
+        expect(src).toContain("return mod.abortPrimers;");
     });
 
     it("the self-contained supervisor aborts the shared controller on SIGTERM", () => {
@@ -469,5 +539,40 @@ describe("both SIGTERM handlers cancel the primers before they drain", () => {
         } finally {
             g[key] = saved;
         }
+    });
+});
+
+describe("the vinext targets do not wake functions yet, and the docs say so", () => {
+    // ADR-0066 D3 names the two standalone entries. When a vinext entry gains
+    // the primer list, this reds until the docs sentence below is updated.
+    const read = (p: string) =>
+        readFileSync(resolve(__dirname, "..", "..", p), "utf8");
+    it("neither vinext entry runs the wake-ahead primer", () => {
+        expect(read("src/adapters/vinext-compile.mjs")).not.toContain(
+            "wake-ahead",
+        );
+        expect(read("templates/app/knext-node-entry.mjs.hbs")).not.toContain(
+            "wake-ahead",
+        );
+    });
+    it("zone-functions.mdx says a vinext-target zone does not wake its functions", () => {
+        const docs = readFileSync(
+            resolve(
+                __dirname,
+                "..",
+                "..",
+                "..",
+                "..",
+                "apps",
+                "docs",
+                "content",
+                "docs",
+                "zone-functions.mdx",
+            ),
+            "utf8",
+        );
+        expect(docs).toContain(
+            "A zone built with\nthe vinext target does not wake them yet",
+        );
     });
 });

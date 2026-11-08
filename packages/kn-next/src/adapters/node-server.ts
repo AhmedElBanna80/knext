@@ -73,26 +73,15 @@ const primerListPath = resolve(
     import.meta.dirname,
     "process-start-primers.cjs",
 );
-// Cancels the primers' shared AbortController (process-start-primers.cjs
-// names its globalThis key); onSignal calls it before draining.
-let primerAbortKey = "knext.runtime.primerAbort";
-const abortPrimers = (): void => {
-    try {
-        (globalThis as Record<symbol, AbortController | undefined>)[
-            Symbol.for(primerAbortKey)
-        ]?.abort();
-    } catch {
-        // never throw from the shutdown path
-    }
-};
+// The primers' shared AbortController lives in ./process-start-abort.cjs;
+// onSignal calls abortPrimers() before draining (ADR-0066 D3).
+const abortPrimers = loadAbortPrimers();
 if (existsSync(primerListPath)) {
     try {
         const requirePrimer = createRequire(import.meta.url);
         const primers = requirePrimer(primerListPath) as {
             PROCESS_START_PRIMERS: readonly string[];
-            PRIMER_ABORT_KEY_NAME: string;
         };
-        primerAbortKey = primers.PRIMER_ABORT_KEY_NAME;
         for (const name of primers.PROCESS_START_PRIMERS) {
             const primerPath = resolve(import.meta.dirname, name);
             if (!existsSync(primerPath)) continue;
@@ -104,8 +93,32 @@ if (existsSync(primerListPath)) {
                 // file), never the primer's internal logic.
             }
         }
+    } catch (err) {
+        primerListMissing(err);
+    }
+} else {
+    primerListMissing();
+}
+
+/** Logged once: no primers run (no ARP primer, no wake-ahead). Never fatal. */
+function primerListMissing(err?: unknown): void {
+    process.stderr.write(
+        `[knext] process-start primers did not run: cannot load ${primerListPath}` +
+            (err === undefined
+                ? " (missing)"
+                : ` (${err instanceof Error ? err.message : String(err)})`) +
+            "\n",
+    );
+}
+
+function loadAbortPrimers(): () => void {
+    try {
+        const mod = createRequire(import.meta.url)(
+            resolve(import.meta.dirname, "process-start-abort.cjs"),
+        ) as { abortPrimers: () => void };
+        return mod.abortPrimers;
     } catch {
-        // A missing or corrupted list module must never stop the server.
+        return () => {};
     }
 }
 

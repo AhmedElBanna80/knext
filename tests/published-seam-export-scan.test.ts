@@ -325,6 +325,50 @@ describe('Object.defineProperty descriptors are read in every form (#2206)', () 
     ).toBe(CLEAN);
   });
 
+  it('an accessor named `value` inside a descriptor reds (its return is the exported value)', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}Object.defineProperty(exports, 'K', { get value() { return K; } });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('a `value` method / computed-key form fails closed', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}Object.defineProperty(exports, 'K', { value() { return K; } });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('Object.defineProperties with a getter descriptor reds', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}Object.defineProperties(exports, { K: { get() { return K; } } });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('Object.defineProperties with a `{ value: K }` descriptor reds', () => {
+    expect(
+      cjs(`'use strict';\n${seamK}Object.defineProperties(exports, { K: { value: K } });\n`),
+    ).toBe(RED);
+  });
+
+  it('Object.assign with an accessor `get K() { return K }` reds', () => {
+    expect(cjs(`'use strict';\n${seamK}Object.assign(exports, { get K() { return K; } });\n`)).toBe(
+      RED,
+    );
+  });
+
+  it('Object.defineProperties with a clean descriptor stays clean', () => {
+    expect(
+      cjs(
+        `'use strict';\nfunction K() {}\nObject.defineProperties(exports, { K: { value: 1 } });\n`,
+      ),
+    ).toBe(CLEAN);
+  });
+
   it('a tsc re-export getter that returns a member (not a binding) stays clean', () => {
     expect(
       cjs(

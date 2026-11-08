@@ -656,6 +656,44 @@ const MUTATIONS = [
     anchor: '          markExported(node.right);',
     replacement: '          void node;',
   },
+  {
+    id: 'M64',
+    expect: 'red',
+    claim: 'an accessor named `value` in a descriptor is not read (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '        else if (ts.isGetAccessorDeclaration(p)) markReturned(p);',
+    replacement: '        else if (ts.isGetAccessorDeclaration(p)) void p;',
+  },
+  {
+    id: 'M65',
+    expect: 'red',
+    claim: 'an unreadable `value` form in a descriptor passes instead of failing closed (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor:
+      "        else\n          fail(\n            ctx,\n            file,\n            'Object.defineProperty descriptor `value`",
+    replacement:
+      "        else if (false)\n          fail(\n            ctx,\n            file,\n            'Object.defineProperty descriptor `value`",
+  },
+  {
+    id: 'M66',
+    expect: 'red',
+    claim: 'an accessor `get K() { return K }` in an exported object literal is not read (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '      if (ts.isGetAccessorDeclaration(prop)) markReturned(prop);',
+    replacement: '      if (ts.isGetAccessorDeclaration(prop)) void prop;',
+  },
+  {
+    id: 'M67',
+    expect: 'red',
+    claim: 'Object.defineProperties descriptors are not read (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: "            if (callee.name.text === 'defineProperties')",
+    replacement: "            if (callee.name.text === 'defineProperties' && false)",
+  },
 ];
 
 /**

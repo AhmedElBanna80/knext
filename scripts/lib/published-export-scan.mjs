@@ -63,7 +63,7 @@
  * `{ a: K }`), `Object.defineProperty(exports, 'K', { value: K })` (also
  * shorthand `{ value }`), and an identifier a getter returns in
  * `Object.defineProperty(exports, 'K', { get() { return K } })` (#2206). A
- * descriptor that cannot be read (non-literal, spread, non-function getter) fails
+ * descriptor that cannot be read (non-literal, missing or spread descriptor, non-literal key, non-function getter, unreadable `value`) fails
  * closed.
  * Not followed: attachment through an import chain, and objects exported from an
  * imported binding (`import { o } from './x'; export { o }`).
@@ -612,6 +612,8 @@ export function readExports(ctx, file) {
         continue;
       }
       add(`${prefix}${n}`);
+      // `{ get K() { return K } }` hands the returned binding to a consumer.
+      if (ts.isGetAccessorDeclaration(prop)) markReturned(prop);
       // `{ ns: { __k } }` — a seam one level down is still reachable as `x.ns.__k`.
       if (ts.isPropertyAssignment(prop)) {
         markExported(prop.initializer);
@@ -884,6 +886,13 @@ export function readExports(ctx, file) {
       if (n === 'value') {
         if (ts.isPropertyAssignment(p)) markExported(p.initializer);
         else if (ts.isShorthandPropertyAssignment(p)) exportedLocals.add(p.name.text);
+        else if (ts.isGetAccessorDeclaration(p)) markReturned(p);
+        else
+          fail(
+            ctx,
+            file,
+            'Object.defineProperty descriptor `value` in a form that cannot be read statically',
+          );
       } else if (n === 'get') {
         if (ts.isMethodDeclaration(p)) markReturned(p);
         else if (
@@ -938,8 +947,14 @@ export function readExports(ctx, file) {
         (callee.name.text === 'assign' || callee.name.text === 'defineProperties')
       ) {
         for (const a of args.slice(1)) {
-          if (ts.isObjectLiteralExpression(a)) objectKeys(a);
-          else fail(ctx, file, `Object.${callee.name.text} on exports with a non-literal source`);
+          if (ts.isObjectLiteralExpression(a)) {
+            objectKeys(a);
+            // defineProperties: every property value is itself a descriptor.
+            if (callee.name.text === 'defineProperties')
+              for (const p of a.properties)
+                if (ts.isPropertyAssignment(p)) markDescriptor(p.initializer);
+                else if (ts.isShorthandPropertyAssignment(p)) markDescriptor(p.name);
+          } else fail(ctx, file, `Object.${callee.name.text} on exports with a non-literal source`);
         }
       } else if (touchesExports) {
         fail(

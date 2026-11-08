@@ -482,8 +482,34 @@ const MUTATIONS = [
     claim: 'flags before the install verb hide the install',
     subject: 'credential',
     anchor:
+      '  /(?:^|[\\s;&|(])(bun|npm|pnpm|yarn)(?:[ \\t]+-[^\\s;&|]+(?:[ \\t]+[^\\s;&|-][^\\s;&|]*)?)*[ \\t]+(?:install|i|ci|add)(?![\\w-])/gm;',
+    replacement: '  /(?:^|[\\s;&|(])(bun|npm|pnpm|yarn)[ \\t]+(?:install|i|ci|add)(?![\\w-])/gm;',
+  },
+  {
+    id: 'M63',
+    expect: 'red',
+    claim: 'any token, not only a -flag, may sit before the verb — npm run ci counts as an install',
+    subject: 'credential',
+    anchor:
+      '  /(?:^|[\\s;&|(])(bun|npm|pnpm|yarn)(?:[ \\t]+-[^\\s;&|]+(?:[ \\t]+[^\\s;&|-][^\\s;&|]*)?)*[ \\t]+(?:install|i|ci|add)(?![\\w-])/gm;',
+    replacement:
       '  /(?:^|[\\s;&|(])(bun|npm|pnpm|yarn)(?:\\s+[^\\s;&|]+)*?\\s+(?:install|i|ci|add)(?![\\w-])/gm;',
-    replacement: '  /(?:^|[\\s;&|(])(bun|npm|pnpm|yarn)\\s+(?:install|i|ci|add)(?![\\w-])/gm;',
+  },
+  {
+    id: 'M64',
+    expect: 'red',
+    claim: 'an install inside a local action is not seen',
+    subject: 'credential',
+    anchor: '    for (const body of [text, ...actionYmls]) {',
+    replacement: '    for (const body of [text]) {',
+  },
+  {
+    id: 'M65',
+    expect: 'red',
+    claim: 'a dot-directory path (.github/scripts/x.sh) is not a path token',
+    subject: 'credential',
+    anchor: '    /(?:^|[\\s\'"=(`&;|])(?:\\.\\/)?(\\.?[A-Za-z0-9_][\\w.-]*(?:\\/[\\w.-]+)*)/g,',
+    replacement: '    /(?:^|[\\s\'"=(`&;|])(?:\\.\\/)?([A-Za-z0-9_][\\w.-]*(?:\\/[\\w.-]+)*)/g,',
   },
 ];
 

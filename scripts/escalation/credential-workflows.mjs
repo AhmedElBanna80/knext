@@ -86,13 +86,14 @@ export function prepare(text, { comments = false, actionDir = '' } = {}) {
 const SCRIPT_FILE = /\.(?:sh|bash|mjs|cjs|js|ts|py)$/;
 
 /**
- * Path tokens: `dir/file` anywhere, or a bare script name (`release.sh`). Kept only
- * when they exist, so prose and build outputs drop out.
+ * Path tokens: `dir/file` anywhere (a dot-directory such as `.github/scripts/x.sh`
+ * included), or a bare script name (`release.sh`). Kept only when they exist, so
+ * prose and build outputs drop out.
  */
 function pathTokens(text) {
   const out = [];
   for (const m of text.matchAll(
-    /(?:^|[\s'"=(`&;|])(?:\.\/)?([A-Za-z0-9_][\w.-]*(?:\/[\w.-]+)*)/g,
+    /(?:^|[\s'"=(`&;|])(?:\.\/)?(\.?[A-Za-z0-9_][\w.-]*(?:\/[\w.-]+)*)/g,
   )) {
     const p = m[1].replace(/[.,;:]+$/, '');
     if ((p.includes('/') || SCRIPT_FILE.test(p)) && !out.includes(p)) out.push(p);
@@ -189,11 +190,13 @@ export const INSTALL_INPUTS = Object.freeze({
 });
 
 /**
- * A package install command, by manager: the verb may follow flags in the same
- * command (`npm --prefix x ci`, `pnpm -r install`, `bun install`, `yarn add`).
+ * A package install command, by manager: the verb follows the manager, or its
+ * `-flag` options (each with an optional value), on the same line
+ * (`npm --prefix x ci`, `pnpm -r install`, `bun install`, `yarn add`). `npm run ci`
+ * is not one: `run` is not a flag.
  */
 const INSTALL =
-  /(?:^|[\s;&|(])(bun|npm|pnpm|yarn)(?:\s+[^\s;&|]+)*?\s+(?:install|i|ci|add)(?![\w-])/gm;
+  /(?:^|[\s;&|(])(bun|npm|pnpm|yarn)(?:[ \t]+-[^\s;&|]+(?:[ \t]+[^\s;&|-][^\s;&|]*)?)*[ \t]+(?:install|i|ci|add)(?![\w-])/gm;
 
 /** The managers a workflow runs an install with. */
 export function installManagers(text) {
@@ -248,11 +251,18 @@ export function credentialWorkflowFindings(changes, repo) {
     const text = repo.show('head', wf);
     if (text === null || !workflowHoldsCredential(text)) continue;
     for (const p of namedFiles(text, read, (prefix) => repo.listHead(prefix))) named.add(p);
-    const dirs = installDirs(text);
-    for (const m of installManagers(text)) {
-      for (const d of dirs) {
-        for (const p of INSTALL_INPUTS[m]) named.add(at(d, p));
-        manifests.add(at(d, 'package.json'));
+    // Installs in the workflow and in every local action it uses.
+    const actionYmls = [...named]
+      .filter((n) => /^\.github\/actions\/[^/]+\/$/.test(n))
+      .flatMap((d) => ['action.yml', 'action.yaml'].map((f) => read(`${d}${f}`)))
+      .filter((t) => t !== null);
+    for (const body of [text, ...actionYmls]) {
+      const dirs = installDirs(body);
+      for (const m of installManagers(body)) {
+        for (const d of dirs) {
+          for (const p of INSTALL_INPUTS[m]) named.add(at(d, p));
+          manifests.add(at(d, 'package.json'));
+        }
       }
     }
   }

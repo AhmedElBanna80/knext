@@ -917,6 +917,37 @@ describe('credential workflows: the files they name, one level deep', () => {
     expect(fires('pnpm -r install', {}, 'pnpm-lock.yaml')).toEqual(['pnpm-lock.yaml']);
   });
 
+  it('near miss: npm run ci, and an install verb on a later line, are not installs', () => {
+    expect(fires('npm run ci', {}, 'package-lock.json')).toBeUndefined();
+    expect(fires('npm test\ngit add -A', {}, 'package-lock.json')).toBeUndefined();
+  });
+
+  it('an install in a local action the workflow uses names the lockfile', () => {
+    const files = {
+      '.github/workflows/r.yml': wf('echo').replace(
+        '      - run: |',
+        '      - uses: ./.github/actions/setup\n      - run: |',
+      ),
+      '.github/actions/setup/action.yml':
+        'runs:\n  steps:\n    - run: bun install --frozen-lockfile\n',
+    };
+    expect(
+      classifyContent([change('bun.lock')], reader({ head: files })).find(
+        (f: { id: string }) => f.id === 'supply-chain',
+      )?.paths,
+    ).toEqual(['bun.lock']);
+  });
+
+  it('a dot-directory script path is named', () => {
+    expect(
+      fires(
+        'bash .github/scripts/release.sh',
+        { '.github/scripts/release.sh': 'x' },
+        '.github/scripts/release.sh',
+      ),
+    ).toEqual(['.github/scripts/release.sh']);
+  });
+
   it('near miss: without an install a dependency change in package.json does not fire', () => {
     const r = reader({
       base: { 'package.json': JSON.stringify({ dependencies: { a: '1' } }) },

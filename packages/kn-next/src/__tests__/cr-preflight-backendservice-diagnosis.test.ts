@@ -220,7 +220,7 @@ describe("#2481 — the BackendService preflight diagnoses against its own CRD",
             metadata: { name: "fn", labels: { a: "b" } },
             spec: {
                 env: { FOO: "1", BAR: "2" },
-                ports: [{ port: 1 }, { port: 2, name: "x" }],
+                ports: [{ port: 1, name: "w" }, { port: 2, name: "x" }],
                 blob: { anything: { deep: 1 } },
                 extra: { a: 1, b: { c: 2 } },
             },

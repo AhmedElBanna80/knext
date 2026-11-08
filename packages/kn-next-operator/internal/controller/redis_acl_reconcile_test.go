@@ -42,6 +42,7 @@ type fakeProvisioner struct {
 	users       map[string][]string // user -> rules as last set
 	patterns    map[string][]string // user -> key patterns reported by GETUSER
 	disabled    map[string]bool     // users that exist but are "off"
+	commands    map[string][]string // user -> command rules reported by GETUSER
 	defaultOn   bool                // the shared "default" user is on with ~* (nopass or requirepass)
 	provUser    string              // the provisioner's own username ("" = provisioner)
 	sharedLive  bool                // what the no-credential / AUTH default PROBES see
@@ -56,7 +57,7 @@ type fakeProvisioner struct {
 func newFakeProvisioner() *fakeProvisioner {
 	return &fakeProvisioner{
 		version: "7.4.1", users: map[string][]string{}, patterns: map[string][]string{},
-		disabled: map[string]bool{}, setUserArgs: map[string][]string{},
+		disabled: map[string]bool{}, commands: map[string][]string{}, setUserArgs: map[string][]string{},
 	}
 }
 
@@ -143,11 +144,23 @@ func (f *fakeProvisioner) GetUser(_ context.Context, name string) (ACLUserInfo, 
 	}
 	switch name {
 	case "default":
-		return ACLUserInfo{Name: name, Enabled: f.defaultOn, KeyPatterns: []string{"~*"}}, nil
+		return ACLUserInfo{Name: name, Enabled: f.defaultOn, KeyPatterns: []string{"~*"}, CommandRules: []string{"+@all"}}, nil
 	case f.provisionerName():
-		return ACLUserInfo{Name: name, Enabled: true, KeyPatterns: []string{"~*"}}, nil
+		return ACLUserInfo{Name: name, Enabled: true, KeyPatterns: []string{"~*"}, CommandRules: []string{"+@all"}}, nil
 	}
-	return ACLUserInfo{Name: name, Enabled: !f.disabled[name], KeyPatterns: append([]string(nil), f.patterns[name]...)}, nil
+	return ACLUserInfo{
+		Name: name, Enabled: !f.disabled[name],
+		KeyPatterns:  append([]string(nil), f.patterns[name]...),
+		CommandRules: append([]string(nil), f.commands[name]...),
+	}, nil
+}
+
+// setCommands sets the command rules (root first, then each selector's) a user
+// reports through GETUSER.
+func (f *fakeProvisioner) setCommands(name string, rules ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands[name] = rules
 }
 
 // Username is the credential the operator itself dialled with.

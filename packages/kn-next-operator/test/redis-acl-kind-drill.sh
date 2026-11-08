@@ -20,6 +20,9 @@
 #       EndpointUnregistered, no Secret.
 #   L7. A prefix that nests inside another app's fails closed: PrefixConflict, no
 #       Secret, no user, and the condition names the app that owns the prefix.
+#   L4b. An OLDER app on isolation: none holds its prefix: a younger app that copies it
+#       is refused (PrefixConflict, naming the holder) and deleting it does not reap
+#       the older app's keys (it has no Secret, so its finalizer takes the plain path).
 #   L7b. A prefix nested under another app's DERIVED prefix (kn-<hash>:isr) is
 #       refused: PrefixReserved, no Secret, no user.
 #   L8. Deleting an app sweeps its keys as its own user and removes its ACL user.
@@ -300,6 +303,27 @@ expect_not_contains "L3 spec.cache.url carries no credential" "$SPEC_URL" "@"
 
 echo "== L4: the old shared URL still reads A's keys (the hole)"
 expect_eq "L4 shared URL reads zone-a:k" "$(shared_probe GET zone-a:k)" "va"
+
+echo "== L4b: an older app that cannot be given a user still holds its prefix"
+# An older app with isolation: none keeps writing under shared-team on the shared
+# credential. A younger app that copies the prefix must be refused (PrefixConflict,
+# naming the holder), and deleting it must NOT reap the older app's keys. The younger
+# app was never issued a user, so it has no Secret and its finalizer takes the plain
+# path with the spec.cache.url it has; the shared credential is still open here, so
+# without the ownership check that sweep would delete shared-team:* and with it the
+# older app's keys. (Both apps are removed before L5: an isolation: none app keeps a
+# working shared credential, which would hold the isolation claim back.)
+app zone-a legacy shared-team "    isolation: none" | k apply -f - >/dev/null
+sleep 2 # creationTimestamp has one-second resolution
+app zone-b copy shared-team | k apply -f - >/dev/null
+if wait_reason zone-b copy PrefixConflict; then ok "L4b the younger copy is refused"; else bad "L4b the younger copy was not refused"; fi
+expect_contains "L4b the condition names the holder" "$(cond_field zone-b copy message)" "zone-a/legacy"
+expect_eq "L4b no Secret was created for the copy" "$(k -n zone-b get secret copy-redis-credentials -o name 2>/dev/null || true)" ""
+rcli_admin SET shared-team:k legacy-value >/dev/null
+k -n zone-b delete nextapp copy --wait=true --timeout=120s >/dev/null
+expect_eq "L4b the older app's key survives the younger app's deletion" "$(rcli_admin GET shared-team:k)" "legacy-value"
+k -n zone-a delete nextapp legacy --wait=true --timeout=120s >/dev/null
+expect_eq "L4b the holder's own deletion still sweeps its keys" "$(rcli_admin EXISTS shared-team:k)" "0"
 
 echo "== L5: close the shared credential, then observe it refused"
 rcli_admin ACL SETUSER default off >/dev/null

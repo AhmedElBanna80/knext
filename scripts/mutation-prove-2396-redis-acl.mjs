@@ -119,9 +119,9 @@ const cases = [
   },
   {
     name: 'the finalizer leaves the ACL user behind',
-    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
-    anchor: '\t\treturn prov.DelUser(ctx, username)\n',
-    to: '\t\treturn nil\n',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
+    anchor: '\t\tuserErr = prov.DelUser(ctx, username)\n',
+    to: '\t\tuserErr = nil\n',
     pkg: './internal/controller',
     test: 'TestFinalizerSweepsAsTheAppUserThenDeletesIt',
   },
@@ -281,7 +281,7 @@ const cases = [
   },
   {
     name: "B2: deleting a squatting CR sweeps the owner's keyspace",
-    file: 'packages/kn-next-operator/internal/controller/finalizer.go',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
     anchor: '\tif why := reservedCachePrefix(app, keyPrefix); why != "" {',
     to: '\tif why := reservedCachePrefix(app, keyPrefix); why != "" && false {',
     pkg: './internal/controller',
@@ -360,32 +360,158 @@ const cases = [
     anchor: 'err != nil || c != canonical {',
     to: 'err != nil {',
     pkg: './internal/controller',
-    test: 'TestPrefixOwnershipIgnoresAppsThatCannotHoldAUser',
-  },
-  {
-    name: 'B3: an isolation: none app holds a prefix against a valid one',
-    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
-    anchor:
-      '\t\tif a.Spec.Cache.Isolation == cacheIsolationNone {\n\t\t\tcontinue\n\t\t}\n\t\tif reason',
-    to: '\t\tif reason',
-    pkg: './internal/controller',
-    test: 'TestPrefixOwnershipIgnoresAppsThatCannotHoldAUser',
-  },
-  {
-    name: 'B3: a refused app holds a prefix against a valid one',
-    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
-    anchor: '\t\tif reason, _ := cacheLocalRefusal(a); reason != "" {',
-    to: '\t\tif reason, _ := cacheLocalRefusal(a); reason != "" && false {',
-    pkg: './internal/controller',
-    test: 'TestPrefixOwnershipIgnoresAppsThatCannotHoldAUser',
+    test: 'TestPrefixOwnershipRanksEveryAppWithAKnownPrefix',
   },
   {
     name: "B3: a losing app's deletion sweeps the owner's keys",
-    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
     anchor: '\treturn prefixBlocker(claims, self.ref) == nil, nil\n',
     to: '\treturn true, nil\n',
     pkg: './internal/controller',
     test: 'TestFinalizerOfALosingAppNeverSweepsTheOwnersKeys',
+  },
+
+  // Review r2 (2026-11-08).
+
+  // N1: an app that cannot be issued a user still holds its prefix.
+  {
+    name: 'N1: an isolation: none app drops out of the ranking',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
+    anchor: '\t\tif prefix == "" || reservedCachePrefix(a, prefix) != "" {',
+    to: '\t\tif prefix == "" || reservedCachePrefix(a, prefix) != "" || a.Spec.Cache.Isolation == cacheIsolationNone {',
+    pkg: './internal/controller',
+    test: 'TestPrefixOwnershipRanksEveryAppWithAKnownPrefix',
+  },
+  {
+    name: 'N1: an app with a credential in its spec drops out of the ranking',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
+    anchor: '\t\tif prefix == "" || reservedCachePrefix(a, prefix) != "" {',
+    to: '\t\tif prefix == "" || reservedCachePrefix(a, prefix) != "" || redisURLHasUserinfo(a.Spec.Cache.URL) {',
+    pkg: './internal/controller',
+    test: 'TestPrefixOwnershipRanksEveryAppWithAKnownPrefix',
+  },
+  {
+    name: "N1: deleting a refused younger app sweeps the older holder's keys (plain path)",
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
+    anchor: '\tif !owns {',
+    to: '\tif !owns && false {',
+    pkg: './internal/controller',
+    test: 'TestFinalizerOfAYoungerAppNeverSweepsAnOlderHoldersKeys',
+  },
+  {
+    name: 'N1: the plain path does not ask who owns the prefix',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
+    anchor: '\treturn r.ownsPrefixForCleanup(ctx, app, canonical, keyPrefix, "")\n',
+    to: '\treturn true, nil\n',
+    pkg: './internal/controller',
+    test: 'TestFinalizerOfAYoungerAppNeverSweepsAnOlderHoldersKeys',
+  },
+
+  // N3: a user is judged by what it can run, not only by what it can address.
+  {
+    name: 'N3: command rules are not consulted for the isolation claim',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: 'if cmd, dangerous := commandRulesAllowDangerous(rules); dangerous {',
+    to: 'if cmd, dangerous := commandRulesAllowDangerous(rules); dangerous && false {',
+    pkg: './internal/controller',
+    test: 'TestIsolationClaimSeesAUserThatCanRunDangerousCommandsWithoutKeys',
+  },
+  {
+    name: 'N3: a denied category is read as allowed',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_commands.go',
+    anchor: '\n\t\t\t\t\tallowed = adding',
+    to: '\n\t\t\t\t\tallowed = true',
+    pkg: './internal/controller',
+    test: 'TestCommandRulesAllowDangerous',
+  },
+  {
+    name: 'N3: a denied command is read as allowed',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_commands.go',
+    anchor: '\n\t\t\t\tallowed = adding',
+    to: '\n\t\t\t\tallowed = true',
+    pkg: './internal/controller',
+    test: 'TestCommandRulesAllowDangerous',
+  },
+  {
+    name: 'N3: the command rules of a selector are ignored',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\t\t\tinfo.CommandRules = append(info.CommandRules, selCommands)\n',
+    to: '',
+    pkg: './internal/controller',
+    test: 'TestParseACLGetUser',
+  },
+
+  // N4: the finalizer asks the server before it re-asserts and sweeps.
+  {
+    name: 'N4: the finalizer sweeps past another user over the same keys',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
+    anchor: '\t\tcase conflict != "":\n',
+    to: '\t\tcase conflict != "" && false:\n',
+    pkg: './internal/controller',
+    test: 'TestFinalizerChecksTheServerForConflictsBeforeReassertingAndSweeping',
+  },
+
+  // N5: the owner evicts what the server holds, not what the cached spec says.
+  {
+    name: "N5: the owner evicts a loser's user whatever its real patterns are",
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\t\tif !userOverlapsPrefix(info, self.prefix) {',
+    to: '\t\tif false && !userOverlapsPrefix(info, self.prefix) {',
+    pkg: './internal/controller',
+    test: 'TestPrefixOwnershipEvictsOnlyWhatTheServerSaysOverlaps',
+  },
+
+  // Minor: GETUSER fails closed; a transient API error does not leak the user.
+  {
+    name: 'Minor: an ACL GETUSER reply with no flags parses as an empty user',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\tflags, ok := fields["flags"].([]any)\n\tif !ok {',
+    to: '\tflags, ok := fields["flags"].([]any)\n\tif !ok && false {',
+    pkg: './internal/controller',
+    test: 'TestParseACLGetUserFailsClosedOnAnUnrecognisedReply',
+  },
+  {
+    name: 'Minor: a failed app list aborts the cleanup before the user is removed',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
+    anchor:
+      '\t\towns = false\n\t\tnotDone = append(notDone, fmt.Errorf("the keyspace %q was not swept, ownership could not be decided: %w", keyPrefix, apiErr(err)))\n',
+    to: '\t\treturn apiErr(err)\n',
+    pkg: './internal/controller',
+    test: 'TestFinalizerDoesNotLeakTheUserWhenListingAppsFailsTransiently',
+  },
+  {
+    name: 'Minor: a transient platform read error is dropped, not retried',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
+    anchor: '\tsnap, err := r.loadPlatform(ctx)\n\tif err != nil {\n\t\treturn apiErr(err)\n',
+    to: '\tsnap, err := r.loadPlatform(ctx)\n\tif err != nil {\n\t\treturn err\n',
+    pkg: './internal/controller',
+    test: 'TestFinalizerRetriesWhenThePlatformCannotBeReadTransiently',
+  },
+  {
+    name: 'Minor: the finalizer drops a transient error instead of returning it',
+    file: 'packages/kn-next-operator/internal/controller/finalizer.go',
+    anchor: '\t\t\treturn cleanErr\n',
+    to: '\t\t\treturn nil\n',
+    pkg: './internal/controller',
+    test: 'TestFinalizerDoesNotLeakTheUserWhenListingAppsFailsTransiently',
+  },
+  {
+    name: 'Minor: a 503 is not a transient error',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
+    anchor: 'apierrors.IsServiceUnavailable(err) || ',
+    to: '',
+    pkg: './internal/controller',
+    test: 'TestFinalizerDoesNotLeakTheUserWhenListingAppsFailsTransiently',
+  },
+
+  // Nit: status.cache.isolation makes no claim the condition does not.
+  {
+    name: 'Nit: status.cache.isolation says acl while the shared credential is live',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\tif st.reason == ReasonCacheProvisioned {',
+    to: '\tif true {',
+    pkg: './internal/controller',
+    test: 'TestStatusCacheDoesNotClaimIsolationWhileTheSharedCredentialIsLive',
   },
 
   // M1: the verdict owns the condition and the requeue.
@@ -412,7 +538,7 @@ const cases = [
   // M2: the finalizer decides from the Secret and the registration.
   {
     name: 'M2: the lost user is not re-asserted before the sweep',
-    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
     anchor:
       '\t\t\tif err := reassertForCleanup(ctx, prov, app, keyPrefix, username, appURL); err != nil {',
     to: '\t\t\tif err := error(nil); err != nil {',
@@ -421,10 +547,10 @@ const cases = [
   },
   {
     name: 'M2: a deregistered endpoint skips the sweep and says nothing',
-    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
     anchor:
-      '\tcase !registered:\n\t\treturn fmt.Errorf("the Redis endpoint is no longer registered, so the ACL user %q was left on it", username)',
-    to: '\tcase !registered:\n\t\treturn nil',
+      '\tcase !registered:\n\t\tuserErr = fmt.Errorf("the Redis endpoint is no longer registered, so the ACL user %q was left on it", username)',
+    to: '\tcase !registered:\n\t\tuserErr = nil',
     pkg: './internal/controller',
     test: 'TestFinalizerOnADeregisteredEndpointSweepsAndNamesTheLeftoverUser',
   },

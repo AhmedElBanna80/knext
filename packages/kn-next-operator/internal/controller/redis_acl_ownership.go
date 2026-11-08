@@ -159,20 +159,25 @@ func (r *NextAppReconciler) endpointApps(ctx context.Context, self *appsv1alpha1
 	return append(out, self), nil
 }
 
-// eligibleClaims are the claims of apps that could actually be issued a user on a
-// registered endpoint: isolation is not "none", the spec passes every local check,
-// and the operator knows the prefix. An app that cannot hold a user holds no
-// prefix, so an older CR that is itself refused cannot keep a valid one out.
-func eligibleClaims(apps []*appsv1alpha1.NextApp, identity string) []prefixClaim {
+// rankedClaims are the claims of EVERY app on the endpoint whose prefix the
+// operator knows (ADR-0071 D6a rule 2). Whether an app can be issued a user has
+// nothing to do with whether it holds its prefix: an app with isolation: none, or
+// a credential in its spec, keeps writing under its prefix on the shared
+// credential. It holds the prefix without being issued a user, and any younger app
+// that overlaps it fails closed. Leaving such an app out would hand its prefix to
+// whoever copies it, and that app's finalizer would then sweep the original's keys.
+//
+// Left out: an app with no prefix the operator knows (nothing to compare), and an
+// app whose prefix is reserved (the platform keyspace, or another app's derived
+// shape): it is refused, and holds nothing.
+func rankedClaims(apps []*appsv1alpha1.NextApp, identity string) []prefixClaim {
 	var claims []prefixClaim
 	for _, a := range apps {
-		if a.Spec.Cache.Isolation == cacheIsolationNone {
+		prefix := operatorRedisKeyPrefix(a)
+		if prefix == "" || reservedCachePrefix(a, prefix) != "" {
 			continue
 		}
-		if reason, _ := cacheLocalRefusal(a); reason != "" {
-			continue
-		}
-		claims = append(claims, newPrefixClaim(a, operatorRedisKeyPrefix(a), identity))
+		claims = append(claims, newPrefixClaim(a, prefix, identity))
 	}
 	return claims
 }

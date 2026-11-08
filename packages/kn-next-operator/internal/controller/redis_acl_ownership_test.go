@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -255,18 +256,60 @@ func claimFor(name string, created time.Time, uid string) prefixClaim {
 	return prefixClaim{ref: "shop/" + name, created: created.Unix(), uid: uid}
 }
 
-// Only apps that could actually be issued a user take part. An older CR that is
-// itself refused (or opted out) must not hold a prefix against a valid one.
-func TestPrefixOwnershipIgnoresAppsThatCannotHoldAUser(t *testing.T) {
-	cases := map[string]func(*appsv1alpha1.NextApp){
-		"isolation none":         func(a *appsv1alpha1.NextApp) { a.Spec.Cache.Isolation = cacheIsolationNone },
-		"userinfo in the url":    func(a *appsv1alpha1.NextApp) { a.Spec.Cache.URL = "redis://u:p@redis.cache.svc.cluster.local:6379" },
+// ADR-0071 D6a rule 2 ranks EVERY app on the canonical endpoint that has a known
+// prefix. An app that cannot be issued a user (it opted out with isolation: none,
+// or its spec carries a credential) still HOLDS its prefix: it keeps writing there
+// on the shared credential. A younger app that copies it must not be issued
+// ~prefix:* over the older app's keys, and its finalizer must not sweep them.
+func TestPrefixOwnershipRanksEveryAppWithAKnownPrefix(t *testing.T) {
+	holders := map[string]func(*appsv1alpha1.NextApp){
+		"isolation none":      func(a *appsv1alpha1.NextApp) { a.Spec.Cache.Isolation = cacheIsolationNone },
+		"userinfo in the url": func(a *appsv1alpha1.NextApp) { a.Spec.Cache.URL = "redis://u:p@redis.cache.svc.cluster.local:6379" },
+		"REDIS_URL in envMap": func(a *appsv1alpha1.NextApp) {
+			a.Spec.Secrets = &appsv1alpha1.SecretsSpec{EnvMap: map[string]appsv1alpha1.EnvMapEntry{"REDIS_URL": {SecretName: "mine", SecretKey: "k"}}}
+		},
+	}
+	for name, mutate := range holders {
+		t.Run("an older app with "+name+" holds the prefix", func(t *testing.T) {
+			h := newACLHarness(t, true)
+			old := aclAppAt("legacy", "api", "team", "", tOld)
+			mutate(old)
+			h.createSibling(t, old)
+			young := aclAppAt("shop", "web", "team", "", tYoung)
+			h.createSibling(t, young)
+			st := h.reconcileApp(t, young)
+			if st.reason != ReasonCachePrefixConflict || !st.failClosed || st.ready {
+				t.Fatalf("a younger app took the prefix of an older app that cannot hold a user: %+v", st)
+			}
+			if !strings.Contains(st.message, "legacy/api") {
+				t.Fatalf("the condition must name the holder: %q", st.message)
+			}
+			if h.prov.hasUser(h.userOf(young)) || countOps(h.prov.opsLog(), "SETUSER "+h.userOf(young)) != 0 {
+				t.Fatal("the younger app was issued a user over the holder's keys")
+			}
+		})
+	}
+
+	// A holder that is YOUNGER than a valid app does not take its prefix either.
+	t.Run("a younger isolation: none app does not take an older app's prefix", func(t *testing.T) {
+		h := newACLHarness(t, true)
+		old := aclAppAt("shop", "web", "team", "", tOld)
+		young := aclAppAt("legacy", "api", "team", cacheIsolationNone, tYoung)
+		h.createSibling(t, old)
+		h.createSibling(t, young)
+		if st := h.reconcileApp(t, old); st.reason == ReasonCachePrefixConflict || !st.ready {
+			t.Fatalf("the older valid app must keep its prefix: %+v", st)
+		}
+	})
+
+	// These hold nothing the operator can compare, so they never outrank a valid app.
+	nonHolders := map[string]func(*appsv1alpha1.NextApp){
 		"a reserved prefix":      func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "knext" },
 		"another endpoint":       func(a *appsv1alpha1.NextApp) { a.Spec.Cache.URL = "redis://other.cache.svc.cluster.local:6379" },
 		"no prefix the operator": func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "" },
 	}
-	for name, mutate := range cases {
-		t.Run(name, func(t *testing.T) {
+	for name, mutate := range nonHolders {
+		t.Run("an older app with "+name+" holds nothing", func(t *testing.T) {
 			h := newACLHarness(t, true)
 			old := aclAppAt("legacy", "api", "team", "", tOld)
 			mutate(old)
@@ -274,7 +317,7 @@ func TestPrefixOwnershipIgnoresAppsThatCannotHoldAUser(t *testing.T) {
 			young := aclAppAt("shop", "web", "team", "", tYoung)
 			h.createSibling(t, young)
 			if st := h.reconcileApp(t, young); st.reason == ReasonCachePrefixConflict || !st.ready {
-				t.Fatalf("an older app that cannot hold a user took the prefix: %+v", st)
+				t.Fatalf("an app that holds no comparable prefix took it: %+v", st)
 			}
 		})
 	}
@@ -315,6 +358,66 @@ func TestPrefixOwnershipConcurrentClaimAnUnseenUserLandsBetweenCheckAndWrite(t *
 	if !h.prov.hasUser(racer) {
 		t.Fatal("the operator deleted a user it cannot attribute")
 	}
+}
+
+// Review N5: the owner evicts a visible loser's user, but it decides from what the
+// server holds, not from the loser's cached spec. A user that was re-asserted for
+// another prefix (the spec the cache holds is stale) is not the owner's to delete.
+func TestPrefixOwnershipEvictsOnlyWhatTheServerSaysOverlaps(t *testing.T) {
+	setup := func() (*aclHarness, *appsv1alpha1.NextApp, *appsv1alpha1.NextApp) {
+		h := newACLHarness(t, true)
+		old := aclAppAt("shop", "web", "team", "", tOld)
+		young := aclAppAt("evil", "squat", "team", "", tYoung)
+		h.createSibling(t, old)
+		h.createSibling(t, young)
+		return h, old, young
+	}
+
+	t.Run("a loser user whose real pattern is elsewhere is left alone", func(t *testing.T) {
+		h, old, young := setup()
+		h.prov.addUser(h.userOf(young), true, "~elsewhere:*")
+		if st := h.reconcileApp(t, old); st.reason != ReasonCacheProvisioned {
+			t.Fatalf("%+v", st)
+		}
+		if !h.prov.hasUser(h.userOf(young)) {
+			t.Fatalf("a user that does not overlap was deleted: %v", h.prov.delCalls)
+		}
+	})
+
+	t.Run("a loser user whose real pattern overlaps is evicted", func(t *testing.T) {
+		h, old, young := setup()
+		h.prov.addUser(h.userOf(young), true, "~team:sub:*")
+		if st := h.reconcileApp(t, old); st.reason != ReasonCacheProvisioned {
+			t.Fatalf("%+v", st)
+		}
+		if h.prov.hasUser(h.userOf(young)) {
+			t.Fatal("an overlapping loser user was left in place")
+		}
+	})
+
+	t.Run("a loser user whose pattern cannot be read is evicted", func(t *testing.T) {
+		h, old, young := setup()
+		h.prov.addUser(h.userOf(young), true, "~*")
+		if st := h.reconcileApp(t, old); st.reason != ReasonCacheProvisioned {
+			t.Fatalf("%+v", st)
+		}
+		if h.prov.hasUser(h.userOf(young)) {
+			t.Fatal("a loser user the operator cannot reason about was left in place")
+		}
+	})
+
+	t.Run("an unreadable user is not deleted blind", func(t *testing.T) {
+		h, old, young := setup()
+		h.prov.addUser(h.userOf(young), true, "~team:*")
+		h.prov.getUserErr = errors.New("NOPERM acl|getuser")
+		st := h.reconcileApp(t, old)
+		if st.reason != ReasonCacheProvisionerRefused || !st.failClosed {
+			t.Fatalf("%+v", st)
+		}
+		if len(h.prov.delCalls) != 0 {
+			t.Fatalf("deleted a user it could not read: %v", h.prov.delCalls)
+		}
+	})
 }
 
 // Same race, but the other claimant is a visible loser: the owner evicts it.

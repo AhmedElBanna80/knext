@@ -104,6 +104,104 @@ func TestIsolationClaimNamedSharedUser(t *testing.T) {
 	}
 }
 
+// A user with no key pattern can still reach every app's data or take the server
+// over: PSYNC / SYNC stream the whole dataset, MONITOR streams every command,
+// ACL SETUSER grants itself anything, CONFIG SET, MODULE LOAD and DEBUG are
+// admin. The claim looks at commands as well as keys.
+func TestCommandRulesAllowDangerous(t *testing.T) {
+	danger := map[string]string{
+		"+@all":                       "psync",
+		"allcommands":                 "psync",
+		"+@admin":                     "psync",
+		"+@dangerous":                 "psync",
+		"+@slow":                      "psync",
+		"-@all +psync":                "psync",
+		"-@all +sync":                 "sync",
+		"-@all +monitor":              "monitor",
+		"-@all +debug":                "debug",
+		"-@all +debug|sleep":          "debug",
+		"-@all +module":               "module|load",
+		"-@all +module|load":          "module|load",
+		"-@all +acl":                  "acl|setuser",
+		"-@all +acl|setuser":          "acl|setuser",
+		"-@all +config":               "config|set",
+		"-@all +config|set":           "config|set",
+		"+@all -@dangerous +psync":    "psync",
+		"-@all +@admin -config|set":   "psync",
+		"-@ALL +PSYNC":                "psync",
+		"+@all -psync -sync -monitor": "debug",
+	}
+	for rules, want := range danger {
+		got, ok := commandRulesAllowDangerous(rules)
+		if !ok || got != want {
+			t.Errorf("commandRulesAllowDangerous(%q) = %q, %v; want %q", rules, got, ok, want)
+		}
+	}
+	safe := []string{
+		"",
+		"nocommands",
+		"-@all",
+		"-@all +get +set +ping",
+		"+@all -@all +ping",
+		"+@all -@dangerous",
+		"+@all -@admin",
+		"+@all -@slow",
+		"+@all -psync -sync -monitor -debug -module -acl -config",
+		"+@read +@write +@connection",
+		"-@all +acl|whoami +config|get +module|list +client|setinfo",
+		"+@all -@dangerous +get",
+	}
+	for _, rules := range safe {
+		if got, ok := commandRulesAllowDangerous(rules); ok {
+			t.Errorf("commandRulesAllowDangerous(%q) = %q; want none", rules, got)
+		}
+	}
+}
+
+func TestIsolationClaimSeesAUserThatCanRunDangerousCommandsWithoutKeys(t *testing.T) {
+	cases := []struct {
+		name  string
+		on    bool
+		rules []string
+		live  bool
+	}{
+		{"psync and no keys", true, []string{"-@all +psync"}, true},
+		{"acl setuser and no keys", true, []string{"-@all +acl|setuser"}, true},
+		{"a dangerous selector", true, []string{"-@all +ping", "+@all"}, true},
+		{"everything", true, []string{"+@all"}, true},
+		{"harmless commands", true, []string{"-@all +ping +get"}, false},
+		{"disabled with everything", false, []string{"+@all"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newACLHarness(t, true)
+			h.prov.addUser("replicator", tc.on) // no key patterns at all
+			h.prov.setCommands("replicator", tc.rules...)
+			st, err := h.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "web", "shop-web", ""), h.snap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.live {
+				assertNoIsolationClaim(t, st, tc.name)
+				if !strings.Contains(st.message, "replicator") {
+					t.Fatalf("the message should name the user: %q", st.message)
+				}
+				return
+			}
+			if st.reason != ReasonCacheProvisioned {
+				t.Fatalf("%+v", st)
+			}
+		})
+	}
+	// knext-app-* users are scoped by construction and are not judged by commands.
+	h := newACLHarness(t, true)
+	h.prov.addUser("knext-app-deadbeef-aaaaaaaaaaaa", true, "~other:*")
+	h.prov.setCommands("knext-app-deadbeef-aaaaaaaaaaaa", "+@all")
+	if st, _ := h.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "web", "shop-web", ""), h.snap); st.reason != ReasonCacheProvisioned {
+		t.Fatalf("a knext-app-* user must not hold the claim back: %+v", st)
+	}
+}
+
 // knext-app-* users are scoped by construction, however they print.
 func TestIsolationClaimIgnoresTheProvisionerAndKnextAppUsers(t *testing.T) {
 	h := newACLHarness(t, true)

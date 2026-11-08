@@ -1142,8 +1142,11 @@ type CacheSpec struct {
 // CacheStatus is the observed Redis cache isolation of one app. It never
 // carries a password.
 type CacheStatus struct {
-	// Isolation is "acl" while the app runs under its own ACL user, "shared"
-	// while it uses the credential in spec.cache.url.
+	// Isolation is "acl" only while isolation is in force: the app runs under its
+	// own ACL user AND the endpoint shows no other way to reach its keys (the
+	// CacheCredentialsReady reason is Provisioned). It is "acl-pending" while the
+	// app has its own user but isolation is not in force; the condition says why.
+	// It is absent while the app uses the credential in spec.cache.url.
 	// +optional
 	Isolation string `json:"isolation,omitempty"`
 	// Username is the ACL user (knext-app-<cluster tag>-<app hash>).

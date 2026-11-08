@@ -89,7 +89,9 @@ An app on the same Redis with `isolation: none` (or with a credential written in
 reported as isolated.
 
 For an isolated app, `spec.cache.url` must carry no credentials and `spec.secrets.envMap` must not set
-`REDIS_URL`. The operator rejects both, because either would put the shared credential back.
+`REDIS_URL`. The operator refuses both, because either would put the shared credential back. It does so
+when it reconciles the app, not when you apply it (see *Not yet*): the app reports
+`SharedCredentialInSpec` and waits on a Secret that does not exist.
 
 <Callout type="warn">
 Code that uses `REDIS_URL` for keys outside the app's prefix gets `NOPERM`. The cache handler stays
@@ -104,9 +106,12 @@ kubectl get nextapp web -o jsonpath='{.status.conditions[?(@.type=="CacheCredent
 kubectl get nextapp web -o jsonpath='{.status.cache}'   # isolation, username, secretName; never a password
 ```
 
+`status.cache.isolation` is `acl` only while isolation is in force (the reason below is `Provisioned`).
+While the app has its own user but something else can still reach its keys it is `acl-pending`.
+
 | Reason | Meaning |
 | --- | --- |
-| `SharedCredentialLive` | The app has its own user, but something else can still reach app keys: an enabled user on the endpoint (the `default` user included, with or without `requirepass`) whose key pattern covers an app's prefix, an app on the endpoint with `isolation: none` or a credential in its spec, a provisioner that logs in as `default`, or the endpoint still accepts a connection without credentials or `AUTH default` with a password nobody issued. The message names which. Isolation is **not** in force. |
+| `SharedCredentialLive` | The app has its own user, but something else can still reach app keys: an enabled user on the endpoint (the `default` user included, with or without `requirepass`) whose key pattern covers an app's prefix, an enabled user that can run a command that streams or administers the whole server (`PSYNC`, `SYNC`, `MONITOR`, `ACL SETUSER`, `CONFIG SET`, `MODULE LOAD`, `DEBUG`, or a rule such as `+@all`, `+@admin` or `+@dangerous` that allows them) even if it holds no keys, an app on the endpoint with `isolation: none` or a credential in its spec, a provisioner that logs in as `default`, or the endpoint still accepts a connection without credentials or `AUTH default` with a password nobody issued. The message names which. Isolation is **not** in force. |
 | `Provisioned` | The app has its own user and none of the above holds. Isolation is in force. |
 | `EndpointUnregistered` | `isolation: acl` and the endpoint is not registered. |
 | `PrefixConflict` | Another app owns an overlapping prefix (the same one, one nested inside the other, or one containing the other), or another user on the endpoint already covers keys under it. The app does not get a user, and one it had is removed. The message names the app that owns the prefix. See *Who owns a prefix*. |
@@ -129,6 +134,11 @@ by which app it reconciled first:
    refuses it, at admission and again at reconcile.
 2. Otherwise the oldest `NextApp` (by creation time, to the second) owns the prefix.
 3. Otherwise the one with the smaller `metadata.uid`.
+
+Every app on the endpoint that has a prefix takes part, **including an app that cannot be given a
+user**: one with `isolation: none`, or with a credential in its `url` or `envMap`, still writes under
+its prefix on the shared credential, so it holds that prefix. A newer app that asks for the same prefix
+fails closed, and its deletion does not sweep the older app's keys.
 
 The app that loses fails closed with `PrefixConflict`, loses the user it had, and the message names
 the owner. An older app that already holds an explicit prefix keeps it when a newer app asks for the
@@ -159,7 +169,14 @@ that user, then runs `ACL DELUSER`. This is decided by the app's `<app>-redis-cr
 by its status, so an app deleted while it was refused, or after it was switched to `isolation: none`,
 is still cleaned up. It never touches another app's keys: an app that does not own its prefix (see
 *Who owns a prefix*) is neither given a user nor allowed to sweep, and it never sweeps `knext`, a
-generated prefix that is not its own, or the legacy shared prefix.
+generated prefix that is not its own, or the legacy shared prefix. Before it recreates the user or
+sweeps, it asks the Redis whether any other user also covers those keys (a user left by another
+cluster, or a leftover of an app that opted out); if one does, it removes the app's user and leaves the
+keys.
+
+If the cluster's own API fails while the operator is working this out, the deletion waits and the
+operator retries, so the app's user is not left behind. A permanent error (a missing permission) does
+not hold the deletion: the operator warns and lets it go.
 
 If the endpoint was removed from the `KnextPlatform` before the app was deleted, the operator can
 still remove the app's keys with the app's own credential but cannot remove its user. It emits a

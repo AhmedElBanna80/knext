@@ -77,35 +77,72 @@ func TestParseACLGetUser(t *testing.T) {
 		"commands":  "+@all",
 		"selectors": []any{map[any]any{"keys": "~sel:*", "commands": "+get"}},
 	}
-	got := parseACLGetUser("u", resp3)
+	parse := func(reply any) ACLUserInfo {
+		t.Helper()
+		info, err := parseACLGetUser("u", reply)
+		if err != nil {
+			t.Fatalf("parse %v: %v", reply, err)
+		}
+		return info
+	}
+	got := parse(resp3)
 	if !got.Enabled || !reflect.DeepEqual(got.KeyPatterns, []string{"~app:*", "%R~other:*", "~sel:*"}) {
 		t.Fatalf("RESP3: %+v", got)
+	}
+	// Command rules: the root's first, then each selector's.
+	if !reflect.DeepEqual(got.CommandRules, []string{"+@all", "+get"}) {
+		t.Fatalf("RESP3 command rules: %q", got.CommandRules)
 	}
 
 	resp2 := []any{
 		"flags", []any{"off"},
 		"keys", "~*",
-		"selectors", []any{[]any{"commands", "+get", "keys", "~sel2:*"}},
+		"commands", "-@all +ping",
+		"selectors", []any{[]any{"commands", "+psync", "keys", "~sel2:*"}},
 	}
-	got = parseACLGetUser("u", resp2)
+	got = parse(resp2)
 	if got.Enabled || !reflect.DeepEqual(got.KeyPatterns, []string{"~*", "~sel2:*"}) {
 		t.Fatalf("RESP2: %+v", got)
 	}
+	if !reflect.DeepEqual(got.CommandRules, []string{"-@all +ping", "+psync"}) {
+		t.Fatalf("RESP2 command rules: %q", got.CommandRules)
+	}
 
 	// allkeys is how Redis prints ~*; older servers print bare patterns in an array.
-	got = parseACLGetUser("u", map[any]any{"flags": []any{"on"}, "keys": "allkeys"})
+	got = parse(map[any]any{"flags": []any{"on"}, "keys": "allkeys", "commands": "+@all"})
 	if !reflect.DeepEqual(got.KeyPatterns, []string{"~*"}) {
 		t.Fatalf("allkeys: %+v", got)
 	}
-	got = parseACLGetUser("u", map[any]any{"flags": []any{"on"}, "keys": []any{"app:*", "*"}})
+	got = parse(map[any]any{"flags": []any{"on"}, "keys": []any{"app:*", "*"}, "commands": "+@all"})
 	if !reflect.DeepEqual(got.KeyPatterns, []string{"~app:*", "~*"}) {
 		t.Fatalf("array keys: %+v", got)
 	}
 
 	// A user with no keys has no patterns and a user with no flags is not enabled.
-	got = parseACLGetUser("u", map[any]any{"flags": []any{}, "keys": ""})
+	got = parse(map[any]any{"flags": []any{}, "keys": "", "commands": ""})
 	if got.Enabled || len(got.KeyPatterns) != 0 {
 		t.Fatalf("empty: %+v", got)
+	}
+}
+
+// A reply the parser does not recognise must be an ERROR, not an empty user: a
+// user parsed as "disabled, no keys" would be read as harmless.
+func TestParseACLGetUserFailsClosedOnAnUnrecognisedReply(t *testing.T) {
+	for name, reply := range map[string]any{
+		"nil":                     nil,
+		"a bare string":           "OK",
+		"an integer":              int64(1),
+		"an empty map":            map[any]any{},
+		"an empty array":          []any{},
+		"keys but no flags":       map[any]any{"keys": "~*", "commands": "+@all"},
+		"flags of the wrong kind": map[any]any{"flags": "on", "keys": "~*"},
+		"an odd RESP2 array":      []any{"keys", "~*", "commands"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if info, err := parseACLGetUser("u", reply); err == nil {
+				t.Fatalf("an unrecognised reply parsed as %+v", info)
+			}
+		})
 	}
 }
 
@@ -154,6 +191,32 @@ func TestFinalizerNeverSweepsAReservedPrefixOnThePlainPath(t *testing.T) {
 	app := aclApp("shop", "web", "", cacheIsolationNone)
 	if cleaner, _ := h.finalize(t, app); len(cleaner.cache) != 1 || cleaner.cache[0].KeyPrefix != defaultRedisKeyPrefix(app) {
 		t.Fatalf("the app's own derived prefix must still be swept: %+v", cleaner.cache)
+	}
+}
+
+// status.cache.isolation is a claim too. While the shared credential is live the
+// app has its own user but isolation is not in force, so the field must not say
+// "acl".
+func TestStatusCacheDoesNotClaimIsolationWhileTheSharedCredentialIsLive(t *testing.T) {
+	base := cacheCredentialsState{active: true, ready: true, username: "knext-app-aaaaaaaa-bbbbbbbbbbbb", secretName: "web-redis-credentials"}
+
+	provisionedState := base
+	provisionedState.reason = ReasonCacheProvisioned
+	if got := cacheStatusFor(provisionedState); got == nil || got.Isolation != "acl" {
+		t.Fatalf("in force: %+v", got)
+	}
+
+	liveState := base
+	liveState.reason = ReasonCacheSharedCredentialLive
+	got := cacheStatusFor(liveState)
+	if got == nil {
+		t.Fatal("the app has its own user: status.cache must still name it")
+	}
+	if got.Isolation == "acl" || got.Isolation == "" {
+		t.Fatalf("status.cache.isolation claims isolation while the shared credential is live: %q", got.Isolation)
+	}
+	if got.Username != base.username || got.SecretName != base.secretName {
+		t.Fatalf("username and Secret must still be reported: %+v", got)
 	}
 }
 

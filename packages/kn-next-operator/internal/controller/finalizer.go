@@ -167,32 +167,26 @@ func (r *NextAppReconciler) cleanupExternalState(ctx context.Context, app *appsv
 		if errors.Is(cleanErr, errNoCredentialsSecret) {
 			cleanErr = r.cleanupPlainCache(ctx, app, keyPrefix)
 		}
-		if cleanErr != nil {
+		var transient *transientCleanupError
+		switch {
+		case errors.As(cleanErr, &transient):
+			// The cluster's own API failed while deciding what to clean up. That is
+			// the one failure that is NOT dropped: removing the finalizer needs the
+			// same API, and dropping this would leak the app's ACL user for good.
+			logger.Error(cleanErr, "Redis keyspace cleanup hit a transient cluster API error; will retry",
+				"keyPrefix", keyPrefix)
+			r.emitEvent(app, corev1.EventTypeWarning, ReasonCleanupFailed,
+				"Redis cleanup hit a transient cluster API error and will be retried: "+redactErr(cleanErr))
+			return cleanErr
+		case cleanErr != nil:
 			logger.Error(cleanErr, "Redis keyspace cleanup failed; proceeding with deletion (best-effort)",
 				"keyPrefix", keyPrefix)
 			r.emitEvent(app, corev1.EventTypeWarning, ReasonCleanupFailed,
 				"Redis cleanup failed (best-effort, proceeding): "+redactErr(cleanErr))
-		} else {
+		default:
 			logger.Info("Cleared Redis keyspace", "keyPrefix", keyPrefix)
 		}
 	}
 
 	return nil
-}
-
-// cleanupPlainCache sweeps the app's keyspace with the credential in
-// spec.cache.url: the path for an app that never had an operator-owned user. A
-// prefix in the platform's or another app's range is never swept, whatever the
-// credential could reach (ADR-0071 D6a): deleting a squatting CR must not delete
-// the owner's cache.
-func (r *NextAppReconciler) cleanupPlainCache(ctx context.Context, app *appsv1alpha1.NextApp, keyPrefix string) error {
-	if why := reservedCachePrefix(app, keyPrefix); why != "" {
-		logf.FromContext(ctx).Info("Not sweeping a reserved key prefix", "keyPrefix", keyPrefix, "reason", why)
-		return nil
-	}
-	return r.Cleaner.CleanupCache(ctx, CacheTarget{
-		Provider:  app.Spec.Cache.Provider,
-		URL:       app.Spec.Cache.URL,
-		KeyPrefix: keyPrefix,
-	})
 }

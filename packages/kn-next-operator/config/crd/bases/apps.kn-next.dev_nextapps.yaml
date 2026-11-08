@@ -1282,8 +1282,11 @@ spec:
                 properties:
                   isolation:
                     description: |-
-                      Isolation is "acl" while the app runs under its own ACL user, "shared"
-                      while it uses the credential in spec.cache.url.
+                      Isolation is "acl" only while isolation is in force: the app runs under its
+                      own ACL user AND the endpoint shows no other way to reach its keys (the
+                      CacheCredentialsReady reason is Provisioned). It is "acl-pending" while the
+                      app has its own user but isolation is not in force; the condition says why.
+                      It is absent while the app uses the credential in spec.cache.url.
                     type: string
                   secretName:
                     description: SecretName is the operator-owned Secret that holds

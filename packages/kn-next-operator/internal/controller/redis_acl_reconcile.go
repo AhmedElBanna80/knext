@@ -36,7 +36,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	platformv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/platform/v1alpha1"
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -105,6 +104,9 @@ type ACLUserInfo struct {
 	// KeyPatterns are every key pattern the user holds, root and selectors, as
 	// Redis prints them ("~*", "~app:*", "%R~x*").
 	KeyPatterns []string
+	// CommandRules are the command rules the user holds, root first and then each
+	// selector's, as Redis prints them ("+@all -debug", "-@all +get").
+	CommandRules []string
 }
 
 // RedisProvisionerDialer connects to an endpoint with the provisioner URL.
@@ -318,7 +320,7 @@ func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *
 		return st, err
 	}
 	self := newPrefixClaim(app, prefix, identity)
-	claims := eligibleClaims(apps, identity)
+	claims := rankedClaims(apps, identity)
 	if blocker := prefixBlocker(claims, self.ref); blocker != nil {
 		// The loser holds no user: one issued before the owner came into view is
 		// revoked, or it would keep reaching the owner's keys.
@@ -463,11 +465,35 @@ func claimPrefix(ctx context.Context, prov RedisProvisioner, self prefixClaim, c
 		if c.ref == self.ref || !present[c.username] || !prefixesOverlap(self.prefix, c.prefix) {
 			continue
 		}
+		// The claim says the loser WANTS an overlapping prefix; what its user can
+		// touch is what the server holds, and the cached spec can be stale (the
+		// user may have been re-asserted for another prefix since). Evict only a
+		// user whose actual patterns overlap, and never one that cannot be read.
+		info, err := prov.GetUser(ctx, c.username)
+		if err != nil {
+			return "", err
+		}
+		if !userOverlapsPrefix(info, self.prefix) {
+			continue
+		}
 		if err := prov.DelUser(ctx, c.username); err != nil {
 			return "", err
 		}
 	}
 	return prefixConflict(ctx, prov, self.username, self.prefix)
+}
+
+// userOverlapsPrefix reports whether any key pattern the user holds can address
+// keys under the prefix: equal, nested either way, or a pattern the operator
+// cannot reason about (which counts as overlapping everything).
+func userOverlapsPrefix(info ACLUserInfo, prefix string) bool {
+	for _, p := range info.KeyPatterns {
+		other, ok := patternPrefix(p)
+		if !ok || prefixesOverlap(prefix, other) {
+			return true
+		}
+	}
+	return false
 }
 
 func prefixConflict(ctx context.Context, prov RedisProvisioner, ownUser, prefix string) (string, error) {
@@ -483,12 +509,9 @@ func prefixConflict(ctx context.Context, prov RedisProvisioner, ownUser, prefix 
 		if err != nil {
 			return "", err
 		}
-		for _, p := range info.KeyPatterns {
-			other, ok := patternPrefix(p)
-			if !ok || prefixesOverlap(prefix, other) {
-				return fmt.Sprintf("another ACL user on the endpoint already covers keys under %q; "+
-					"an app's key prefix must not equal, nest inside, or contain another app's", prefix), nil
-			}
+		if userOverlapsPrefix(info, prefix) {
+			return fmt.Sprintf("another ACL user on the endpoint already covers keys under %q; "+
+				"an app's key prefix must not equal, nest inside, or contain another app's", prefix), nil
 		}
 	}
 	return "", nil
@@ -537,6 +560,13 @@ func sharedPathLive(ctx context.Context, prov RedisProvisioner, apps []*appsv1al
 				if patternMayCoverPrefix(p, prefix) {
 					return true, fmt.Sprintf("user %q is enabled and its key pattern %q reaches app keys", u, p)
 				}
+			}
+		}
+		// Keys are not the whole story: a user with no key pattern can still stream
+		// the dataset (PSYNC, SYNC, MONITOR) or grant itself anything (ACL SETUSER).
+		for _, rules := range info.CommandRules {
+			if cmd, dangerous := commandRulesAllowDangerous(rules); dangerous {
+				return true, fmt.Sprintf("user %q is enabled and can run %s", u, cmd)
 			}
 		}
 	}
@@ -682,137 +712,29 @@ func injectCacheCredentialsEnv(app *appsv1alpha1.NextApp, st cacheCredentialsSta
 	app.Spec.Secrets.EnvMap = m
 }
 
-// cacheStatusFor is status.cache for one pass.
+// Values of status.cache.isolation.
+const (
+	// cacheStatusIsolationACL: the app runs under its own ACL user AND the endpoint
+	// shows no other way to reach its keys (the CacheCredentialsReady reason is
+	// Provisioned). It is an isolation claim, made on the same terms as the message.
+	cacheStatusIsolationACL = "acl"
+	// cacheStatusIsolationPending: the app runs under its own ACL user, but
+	// isolation is not in force; the condition says why.
+	cacheStatusIsolationPending = "acl-pending"
+)
+
+// cacheStatusFor is status.cache for one pass. The field is named isolation, so it
+// makes the same claim as the condition message and on the same terms: "acl" only
+// when the reason is Provisioned.
 func cacheStatusFor(st cacheCredentialsState) *appsv1alpha1.CacheStatus {
 	if !st.active || !st.ready {
 		return nil
 	}
-	return &appsv1alpha1.CacheStatus{Isolation: "acl", Username: st.username, SecretName: st.secretName}
-}
-
-// errNoCredentialsSecret: the app never had an operator-owned credentials Secret,
-// so the isolated cleanup does not apply and the plain path does.
-var errNoCredentialsSecret = errors.New("no operator-owned credentials Secret")
-
-// cleanupIsolatedCache is the finalizer's half (D7). It is chosen by the presence
-// of the operator-owned Secret, never by status.cache (which is cleared on every
-// pass that is not ready): an app deleted during a refusal, or after a switch to
-// isolation: none, still has its user to remove.
-//
-// In order: re-assert the user from the Secret (a Redis restart may have lost it),
-// sweep the app's keys as the app's own user, then ACL DELUSER. The re-assert and
-// the sweep run only when the app owns its prefix; a loser must not sweep the
-// owner's keys, nor be given a user to do it with. When the endpoint is no longer
-// registered the sweep still runs with the app's own credential, but the user
-// cannot be removed, and the error returned names it.
-func (r *NextAppReconciler) cleanupIsolatedCache(ctx context.Context, app *appsv1alpha1.NextApp, keyPrefix string) error {
-	logger := logf.FromContext(ctx)
-	if r.APIReader == nil && r.Client == nil {
-		// No cluster client wired: unit tests of unrelated paths, the same
-		// convention as a nil Cleaner. There is no Secret to find.
-		return errNoCredentialsSecret
+	isolation := cacheStatusIsolationPending
+	if st.reason == ReasonCacheProvisioned {
+		isolation = cacheStatusIsolationACL
 	}
-	var sec corev1.Secret
-	if err := r.reader().Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: redisCredentialsSecretName(app)}, &sec); err != nil {
-		if apierrors.IsNotFound(err) {
-			return errNoCredentialsSecret
-		}
-		return err
-	}
-	if !controlledByZone(&sec, app) {
-		return errNoCredentialsSecret
-	}
-	snap, err := r.loadPlatform(ctx)
-	if err != nil {
-		return err
-	}
-	canonical, cerr := canonicalRedisEndpoint(app.Spec.Cache.URL, app.Namespace)
-	if cerr != nil {
-		return cerr
-	}
-	identity, err := r.clusterIdentity(ctx, snap)
-	if err != nil {
-		return err
-	}
-	username := redisACLUsername(identity, app)
-
-	owns, err := r.ownsPrefixForCleanup(ctx, app, canonical, keyPrefix, identity)
-	if err != nil {
-		return err
-	}
-
-	ep, registered := registeredEndpoint(snap, canonical)
-	var prov RedisProvisioner
-	var dialErr error
-	if registered {
-		var provURL string
-		if provURL, dialErr = r.provisionerURL(ctx, ep); dialErr == nil {
-			if prov, dialErr = r.redisDialer()(ctx, provURL); dialErr == nil {
-				defer func() { _ = prov.Close() }()
-			}
-		}
-	}
-
-	appURL := string(sec.Data[redisCredentialsSecretKey])
-	if owns && appURL != "" && r.Cleaner != nil {
-		if prov != nil {
-			if err := reassertForCleanup(ctx, prov, app, keyPrefix, username, appURL); err != nil {
-				logger.Error(err, "re-asserting the app's ACL user before the sweep failed", "keyPrefix", keyPrefix)
-			}
-		}
-		if err := r.Cleaner.CleanupCache(ctx, CacheTarget{Provider: redisURLScheme, URL: appURL, KeyPrefix: keyPrefix}); err != nil {
-			logger.Error(err, "sweeping the isolated keyspace as the app user failed", "keyPrefix", keyPrefix)
-		}
-	}
-	switch {
-	case prov != nil:
-		return prov.DelUser(ctx, username)
-	case !registered:
-		return fmt.Errorf("the Redis endpoint is no longer registered, so the ACL user %q was left on it", username)
-	default:
-		return fmt.Errorf("the ACL user %q was left on the endpoint: %w", username, dialErr)
-	}
-}
-
-// reassertForCleanup runs ACL SETUSER from the Secret's credential, the same
-// arguments a reconcile would use, so the sweep does not run as a user a Redis
-// restart removed.
-func reassertForCleanup(ctx context.Context, prov RedisProvisioner, app *appsv1alpha1.NextApp, prefix, username, appURL string) error {
-	u, err := url.Parse(appURL)
-	if err != nil || u.User == nil || u.User.Username() != username {
-		return errors.New("the credentials Secret does not hold this app's user")
-	}
-	password, set := u.User.Password()
-	if !set || password == "" {
-		return errors.New("the credentials Secret holds no password")
-	}
-	cdn := ""
-	if cdnRendersEnv(app) {
-		cdn = cdnTagPrefix(app)
-	}
-	return prov.SetUser(ctx, username, redisACLRules(prefix, password, "", cdn))
-}
-
-// ownsPrefixForCleanup says whether deleting the app may sweep its prefix: the
-// prefix is not reserved, and no app that owns an overlapping prefix on the same
-// endpoint outranks it. The deleting app is counted as a claimant whatever its
-// isolation setting, so an app that opted out cannot reap an owner's cache.
-func (r *NextAppReconciler) ownsPrefixForCleanup(ctx context.Context, app *appsv1alpha1.NextApp, canonical, prefix, identity string) (bool, error) {
-	if reservedCachePrefix(app, prefix) != "" {
-		return false, nil
-	}
-	apps, err := r.endpointApps(ctx, app, canonical)
-	if err != nil {
-		return false, err
-	}
-	self := newPrefixClaim(app, prefix, identity)
-	claims := []prefixClaim{self}
-	for _, c := range eligibleClaims(apps, identity) {
-		if c.ref != self.ref {
-			claims = append(claims, c)
-		}
-	}
-	return prefixBlocker(claims, self.ref) == nil, nil
+	return &appsv1alpha1.CacheStatus{Isolation: isolation, Username: st.username, SecretName: st.secretName}
 }
 
 // Cluster identity (ADR-0071 D2): the kube-system Namespace uid, read only when
@@ -881,29 +803,48 @@ func (g *goRedisProvisioner) GetUser(ctx context.Context, username string) (ACLU
 	if err != nil {
 		return ACLUserInfo{}, err
 	}
-	return parseACLGetUser(username, res), nil
+	return parseACLGetUser(username, res)
 }
 
 // parseACLGetUser reads an ACL GETUSER reply in either protocol shape: RESP3 is a
 // map, RESP2 a flat array of key, value pairs. Selectors (Redis 7) carry their own
-// key patterns, and a user is judged by all of them.
-func parseACLGetUser(name string, reply any) ACLUserInfo {
+// key patterns and command rules, and a user is judged by all of them.
+//
+// It FAILS CLOSED: a reply it does not recognise (no flags, no keys, no commands,
+// a field of the wrong kind) is an error. Returned as an empty user it would read
+// as "disabled, no keys", which is harmless, and that is the one thing an
+// unrecognised reply must never be taken for.
+func parseACLGetUser(name string, reply any) (ACLUserInfo, error) {
 	info := ACLUserInfo{Name: name}
 	fields := aclReplyFields(reply)
-	if flags, ok := fields["flags"].([]any); ok {
-		for _, f := range flags {
-			if s, _ := f.(string); s == "on" {
-				info.Enabled = true
-			}
+	flags, ok := fields["flags"].([]any)
+	if !ok {
+		return ACLUserInfo{}, fmt.Errorf("ACL GETUSER %s: the reply has no flags list (%T)", name, reply)
+	}
+	for _, f := range flags {
+		if s, _ := f.(string); s == "on" {
+			info.Enabled = true
 		}
 	}
-	info.KeyPatterns = aclKeyPatterns(fields["keys"])
+	keys, hasKeys := fields["keys"]
+	commands, hasCommands := fields["commands"].(string)
+	if !hasKeys || !hasCommands {
+		return ACLUserInfo{}, fmt.Errorf("ACL GETUSER %s: the reply has no keys or commands field", name)
+	}
+	info.KeyPatterns = aclKeyPatterns(keys)
+	info.CommandRules = []string{commands}
 	if sels, ok := fields["selectors"].([]any); ok {
 		for _, s := range sels {
-			info.KeyPatterns = append(info.KeyPatterns, aclKeyPatterns(aclReplyFields(s)["keys"])...)
+			sel := aclReplyFields(s)
+			selCommands, ok := sel["commands"].(string)
+			if _, hasSelKeys := sel["keys"]; !ok || !hasSelKeys {
+				return ACLUserInfo{}, fmt.Errorf("ACL GETUSER %s: a selector has no keys or commands field", name)
+			}
+			info.KeyPatterns = append(info.KeyPatterns, aclKeyPatterns(sel["keys"])...)
+			info.CommandRules = append(info.CommandRules, selCommands)
 		}
 	}
-	return info
+	return info, nil
 }
 
 func aclReplyFields(reply any) map[string]any {

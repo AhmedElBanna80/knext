@@ -276,6 +276,7 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
     | 'refused'
     | 'stored'
     | 'stored-old-tag'
+    | 'mixed-tags'
     | 'stored-bare'
     | 'hit-only'
     | 'hit-bare'
@@ -315,6 +316,13 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
           return n === 1
             ? page('v1', { 'x-emu-cache': 'MISS', 'x-emu-stored': '3600', 'cache-tag': tag })
             : page('v1', { 'x-emu-cache': 'HIT', 'cache-tag': tag });
+        case 'mixed-tags': // one page refilled under the PRE-rollout tag, one stored by the new build
+          return page('v1', {
+            'x-emu-cache': 'HIT',
+            'cache-tag': url.includes('k=1')
+              ? 'kn-77489686e9ad,kn-77489686e9ad-b111111111111'
+              : 'kn-77489686e9ad,kn-77489686e9ad-b222222222222',
+          });
         case 'stored-old-tag': // an old-revision pod refilled the edge under the PRE-rollout tag
           return page('v1', {
             'x-emu-cache': 'HIT',
@@ -394,6 +402,30 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
       ?.split('|')[1];
     expect(expected).toBeDefined();
     expect(r.note).not.toContain(expected as string);
+  });
+
+  it('an untagged old-build entry is its own failure, which the red spec does not accept', async () => {
+    const r = await runAgainst('stored-bare');
+    expect(r.ok).toBe(false);
+    expect(r.note).toContain(
+      'old-build HTML with no build tag was stored at or served from the edge',
+    );
+    const expected = readFileSync(join(RED_DIR, 'purge-rollout-foreign-build.txt'), 'utf8')
+      .split('\n')
+      .find((l) => l.startsWith('rollout-no-old-html|'))
+      ?.split('|')[1];
+    expect(r.note).not.toContain(expected as string);
+  });
+
+  it('with both a pre-rollout refill and the new-build defect, one failure names both and the red spec still matches', async () => {
+    const r = await runAgainst('mixed-tags', 'cached', 'kn-77489686e9ad-b111111111111');
+    expect(r.ok).toBe(false);
+    expect(r.note).toContain('under the PRE-rollout build tag kn-77489686e9ad-b111111111111');
+    const expected = readFileSync(join(RED_DIR, 'purge-rollout-foreign-build.txt'), 'utf8')
+      .split('\n')
+      .find((l) => l.startsWith('rollout-no-old-html|'))
+      ?.split('|')[1];
+    expect(r.note).toContain(expected as string);
   });
 
   it('the red spec matches the new-build-tag failure', async () => {

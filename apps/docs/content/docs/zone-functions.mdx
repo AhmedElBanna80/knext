@@ -466,7 +466,7 @@ Ready revision. It is empty until a revision is Ready, and it is the value the z
 | `SovereigntyCompliant` | Every Secret reference passes the allowlist. `SecretNotAllowed` names the ones that do not, including a reference whose name cannot be a Secret name. `Unknown` (`SecretsUnverified`) when the operator could not read a referenced Secret's metadata: see [When Secrets cannot be verified](#when-secrets-cannot-be-verified). |
 | `DatabaseHostLint` | `False` when an env value names another zone's database host. A warning only. |
 | `JWKSTrusted` | `True` when the zone controls its JWKS ConfigMap and the function mounts it. `Unknown` (`NotPublished`) while the ConfigMap does not exist yet. `False` (`JWKSUntrusted`) when another object holds the name: nothing is mounted and every call except the health check is refused. |
-| `Ready` | Bound, compliant, the function's JWKS is not untrusted, and the function's Knative Service is Ready. `False` (`SecretsUnverified`) while a Secret cannot be verified and the function was never rendered, or its latest spec has not been rolled out. |
+| `Ready` | Bound, compliant, the function's JWKS is not untrusted, and the function's Knative Service is Ready. `False` (`InvalidImage`) for an image not pinned by digest, and `False` (`InvalidSpec`) for a spec that cannot be rendered, such as an unparseable `spec.resources` quantity: the message names the field and nothing is rendered until it is fixed. `False` (`SecretsUnverified`) while a Secret cannot be verified and the function was never rendered, or its latest spec has not been rolled out. |
 
 ### When Secrets cannot be verified
 

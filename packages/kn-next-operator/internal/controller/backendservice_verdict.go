@@ -105,6 +105,9 @@ const databaseHostLintDisclaimer = "This is a lint (a heuristic over env literal
 type functionObservation struct {
 	// invalidImage is the image validation error, or "".
 	invalidImage string
+	// invalidSpec is why the rest of the spec cannot be rendered (an
+	// unparseable spec.resources quantity), or "".
+	invalidSpec string
 	// zone is the resolved owning NextApp; nil when it does not exist.
 	zone *appsv1alpha1.NextApp
 	// conflictingOwner describes a controller ownerReference that is not the
@@ -150,7 +153,7 @@ type functionObservation struct {
 // pinned them), the zone's own controller reference, and no allowlist violation. Fail closed:
 // anything else renders nothing.
 func (o functionObservation) accepted() bool {
-	return o.invalidImage == "" && o.zone != nil && o.conflictingOwner == "" && o.zoneListed &&
+	return o.invalidImage == "" && o.invalidSpec == "" && o.zone != nil && o.conflictingOwner == "" && o.zoneListed &&
 		o.imageMismatch == "" && o.specMismatch == "" && len(o.violations) == 0
 }
 
@@ -391,6 +394,9 @@ func computeBackendServiceVerdict(bs *appsv1alpha1.BackendService, o functionObs
 	switch {
 	case o.invalidImage != "":
 		ready = cond(ConditionReady, metav1.ConditionFalse, ReasonInvalidImage, o.invalidImage)
+	case o.invalidSpec != "":
+		ready = cond(ConditionReady, metav1.ConditionFalse, ReasonInvalidSpec,
+			o.invalidSpec+": nothing is rendered until it is fixed")
 	case bound.Status != metav1.ConditionTrue:
 		ready = cond(ConditionReady, metav1.ConditionFalse, bound.Reason, bound.Message)
 	case len(o.violations) > 0:

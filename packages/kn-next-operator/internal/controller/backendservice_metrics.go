@@ -49,7 +49,7 @@ var (
 		prometheus.CounterOpts{
 			Name: "knext_backendservice_refusals_total",
 			Help: "Total number of times a BackendService entered a refused state, labeled by reason " +
-				"(ZoneNotFound | ZoneNotListed | BindingImageMismatch | BindingSpecMismatch | ConflictingOwner | SovereigntyViolation | InvalidImage | KnativeServiceNameTaken | JWKSUntrusted).",
+				"(ZoneNotFound | ZoneNotListed | BindingImageMismatch | BindingSpecMismatch | ConflictingOwner | SovereigntyViolation | InvalidImage | InvalidSpec | KnativeServiceNameTaken | JWKSUntrusted).",
 		},
 		[]string{labelReason},
 	)
@@ -85,7 +85,7 @@ func setUnverifiedGauge(namespace, name string, rep *unverifiedReport) {
 // backendServiceRefusalReasons is every reason the refusals counter carries.
 var backendServiceRefusalReasons = []string{
 	ReasonZoneNotFound, ReasonZoneNotListed, ReasonBindingImageMismatch, ReasonBindingSpecMismatch, ReasonConflictingOwner,
-	ReasonSovereigntyViolation, ReasonInvalidImage, ReasonKnativeServiceNameTaken, ReasonJWKSUntrusted,
+	ReasonSovereigntyViolation, ReasonInvalidImage, ReasonInvalidSpec, ReasonKnativeServiceNameTaken, ReasonJWKSUntrusted,
 }
 
 func init() {

@@ -146,6 +146,12 @@ func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := validation.ValidateImageRef(bs.Spec.Image); err != nil {
 		obs.invalidImage = "spec.image is refused: " + err.Error()
 	}
+	// A spec the render cannot use is a refusal decided from the spec alone,
+	// reported in status (Ready=False InvalidSpec), never a reconcile error
+	// retried on backoff with nothing to say why (#2423).
+	if _, err := functionResources(bs.Spec.Resources); err != nil {
+		obs.invalidSpec = err.Error()
+	}
 
 	// The zone (ADR-0004 Amendment 2 Decision 1): spec.zone names a NextApp in
 	// this namespace; the operator sets the controller ownerReference itself and

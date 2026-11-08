@@ -422,11 +422,13 @@ describe('the lane proves what it claims', () => {
     expect(squat).toContain('delete configmap');
     expect(squat).toContain('True/Controlled');
     // the refusal is held, not sampled once; both the Service and the pods are checked
-    expect(squat).toMatch(/^  sleep 20$/m);
+    expect(squat).toMatch(/^ {2}sleep 20$/m);
     expect(squat).toContain('if sq_ksvc_has_jwks_volume; then fail');
     expect(squat).toContain('if sq_pods_mount_jwks; then fail');
     // the squatter is left untouched: same content, still no owner
-    expect(squat).toContain('(.data["jwks.json"] == $d) and ((.metadata.ownerReferences // []) | length == 0)');
+    expect(squat).toContain(
+      '(.data["jwks.json"] == $d) and ((.metadata.ownerReferences // []) | length == 0)',
+    );
     // and the zone's conflict clears once it is gone
     expect(squat).toContain('"True/KeyActive"');
   });

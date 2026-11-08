@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import {
+  ACK_BODY_EXAMPLE,
   ACK_BODY_PATTERN,
   ACK_LABEL,
   classify,
@@ -762,6 +763,18 @@ describe('credential workflows: the files they name, one level deep', () => {
     ]);
   });
 
+  it('make under a working-directory runs that directory’s Makefile', () => {
+    const files = {
+      '.github/workflows/r.yml': `permissions:\n  id-token: write\njobs:\n  a:\n    defaults:\n      run:\n        working-directory: op\n    steps:\n      - run: make build\n`,
+      'op/Makefile': 'x',
+    };
+    expect(
+      classifyContent([change('op/Makefile')], reader({ head: files })).find(
+        (f: { id: string }) => f.id === 'supply-chain',
+      )?.paths,
+    ).toEqual(['op/Makefile']);
+  });
+
   it('make after a cd runs that directory’s Makefile', () => {
     expect(fires('cd op\nmake build', { 'op/Makefile': 'x' }, 'op/Makefile')).toEqual([
       'op/Makefile',
@@ -778,11 +791,35 @@ describe('credential workflows: the files they name, one level deep', () => {
     ).toBeUndefined();
   });
 
-  it('an install in a credential workflow names the root manifest, lockfile and config', () => {
-    for (const p of ['package.json', 'bun.lock', 'bunfig.toml', '.npmrc']) {
+  it('an install names its own manager’s lockfile and config', () => {
+    for (const p of ['bun.lock', 'bunfig.toml', '.npmrc']) {
       expect(fires('bun install --frozen-lockfile', {}, p)).toEqual([p]);
     }
-    expect(fires('npm ci', {}, 'bun.lock')).toEqual(['bun.lock']);
+    expect(fires('npm ci', {}, 'package-lock.json')).toEqual(['package-lock.json']);
+    expect(fires('pnpm i', {}, 'pnpm-lock.yaml')).toEqual(['pnpm-lock.yaml']);
+    expect(fires('yarn install', {}, 'yarn.lock')).toEqual(['yarn.lock']);
+    // near miss: another manager's lockfile
+    expect(fires('npm ci', {}, 'bun.lock')).toBeUndefined();
+  });
+
+  it('with an install, the root package.json fires only when its dependency keys change', () => {
+    const at = (before: object, after: object) =>
+      classifyContent(
+        [change('package.json')],
+        reader({
+          base: { 'package.json': JSON.stringify(before) },
+          head: {
+            '.github/workflows/r.yml': wf('bun install'),
+            'package.json': JSON.stringify(after),
+          },
+        }),
+      ).find((f: { id: string }) => f.id === 'supply-chain')?.paths;
+    expect(at({ dependencies: { a: '1' } }, { dependencies: { a: '2' } })).toEqual([
+      'package.json',
+    ]);
+    expect(
+      at({ version: '1.0.0', scripts: { a: 'x' } }, { version: '1.0.1', scripts: { a: 'y' } }),
+    ).toBeUndefined();
   });
 
   it('near miss: without an install the lockfile is not named', () => {
@@ -823,6 +860,32 @@ describe('credential workflows: the files they name, one level deep', () => {
     ).toBeUndefined();
   });
 
+  it('a bare root-level script and a chained ./script are named', () => {
+    expect(fires('./release.sh', { 'release.sh': 'x' }, 'release.sh')).toEqual(['release.sh']);
+    expect(fires('node build.mjs', { 'build.mjs': 'x' }, 'build.mjs')).toEqual(['build.mjs']);
+    expect(fires('make build&&./tools/y.sh', { 'tools/y.sh': 'x' }, 'tools/y.sh')).toEqual([
+      'tools/y.sh',
+    ]);
+  });
+
+  it('a relative script resolves against working-directory and cd targets', () => {
+    expect(fires('cd hack && ./sign.sh', { 'hack/sign.sh': 'x' }, 'hack/sign.sh')).toEqual([
+      'hack/sign.sh',
+    ]);
+  });
+
+  it('an action-path prefix is stripped like the workspace prefix', () => {
+    expect(
+      fires('bash "${{ github.action_path }}/hack/p.sh"', { 'hack/p.sh': 'x' }, 'hack/p.sh'),
+    ).toEqual(['hack/p.sh']);
+  });
+
+  it('a scripts/ path named only in a comment still fires (conservative)', () => {
+    expect(fires('# runs scripts/sign.mjs\necho ok', {}, 'scripts/sign.mjs')).toEqual([
+      'scripts/sign.mjs',
+    ]);
+  });
+
   it('near miss: a file the named script imports does not fire', () => {
     expect(
       fires(
@@ -831,5 +894,19 @@ describe('credential workflows: the files they name, one level deep', () => {
         'scripts/b.mjs',
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('acknowledgement example', () => {
+  it('the example line a report prints matches the pattern it is checked with', () => {
+    expect(ACK_BODY_PATTERN.test(ACK_BODY_EXAMPLE)).toBe(true);
+  });
+});
+
+describe('trigger catalogue', () => {
+  it('a finding for an id the catalogue does not have throws', async () => {
+    const { finding } = await import('../scripts/escalation/catalogue.mjs');
+    expect(() => finding('no-such-trigger', ['x'])).toThrow(/unknown escalation trigger/);
+    expect(finding('crd', ['a']).label).toBe('a CRD type');
   });
 });

@@ -263,7 +263,8 @@ const MUTATIONS = [
   {
     id: 'M44',
     expect: 'red',
-    claim: 'the git reader treats a TREE as a file — a local action directory is never listed',
+    claim:
+      'the git reader treats a TREE as a file — a local action directory is read as text, so its action.yml is never opened',
     subject: 'git',
     anchor: "      if (type !== 'blob') return null;\n",
     replacement: '',
@@ -290,10 +291,8 @@ const MUTATIONS = [
     claim:
       'a scripts/ or local-action mention counts only when the file exists, and a named directory stops covering its files',
     subject: 'credential',
-    anchor:
-      '    for (const p of referencedPaths(stripWorkspace(body))) if (!expandDir(p, depth)) out.add(p);',
-    replacement:
-      '    for (const p of referencedPaths(stripWorkspace(body))) if (read(p) !== null) out.add(p);',
+    anchor: '      if (!expandDir(p, depth)) out.add(p);',
+    replacement: '      if (read(p) !== null) out.add(p);',
   },
   {
     id: 'M33',
@@ -315,10 +314,11 @@ const MUTATIONS = [
   {
     id: 'M35',
     expect: 'red',
-    claim: 'a literal cd target is not a make directory — make after cd stops firing',
+    claim:
+      'a literal cd target is not a base — make after cd, and cd hack && ./sign.sh, stop firing',
     subject: 'credential',
     anchor:
-      '    ...[...text.matchAll(/(?:^|[\\s;&|(])cd\\s+[\'"]?([\\w./-]+)/gm)].map((m) => m[1]),',
+      '  for (const m of text.matchAll(/(?:^|[\\s;&|(])cd\\s+[\'"]?([\\w./-]+)/gm)) out.push(m[1]);',
     replacement: '',
   },
   {
@@ -340,9 +340,9 @@ const MUTATIONS = [
   {
     id: 'M45',
     expect: 'red',
-    claim: 'an install in a credential workflow no longer names the lockfile and root manifest',
+    claim: 'an install no longer names its manager’s lockfile and config',
     subject: 'credential',
-    anchor: '    if (INSTALL.test(normalise(text))) for (const p of INSTALL_INPUTS) named.add(p);',
+    anchor: '      for (const p of INSTALL_INPUTS[m]) named.add(p);',
     replacement: '',
   },
   {
@@ -350,23 +350,22 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'a commented-out install still names the lockfile',
     subject: 'credential',
-    anchor: '    if (INSTALL.test(normalise(text))) for (const p of INSTALL_INPUTS) named.add(p);',
-    replacement: '    if (INSTALL.test(text)) for (const p of INSTALL_INPUTS) named.add(p);',
+    anchor: '  return [...new Set([...prepare(text).matchAll(INSTALL)].map((m) => m[1]))];',
+    replacement: '  return [...new Set([...text.matchAll(INSTALL)].map((m) => m[1]))];',
   },
   {
     id: 'M47',
     expect: 'red',
     claim:
-      'the checkout-root prefix is not stripped — ${{ github.workspace }}/hack/p.sh is not named',
+      'the workspace / action-path prefix is not stripped — ${{ github.workspace }}/hack/p.sh is not named',
     subject: 'credential',
-    anchor:
-      "  return text.replace(/\\$\\{\\{\\s*github\\.workspace\\s*\\}\\}\\/|\\$\\{?GITHUB_WORKSPACE\\}?\\//g, '');",
-    replacement: '  return text;',
+    anchor: "  return body.replace(ROOT_PREFIX, '');",
+    replacement: '  return body;',
   },
   {
     id: 'M48',
     expect: 'red',
-    claim: 'any named path counts as a directory — nothing else in the mention is followed',
+    claim: 'a named scripts/ directory no longer covers its files (only local actions do)',
     subject: 'credential',
     anchor: '    if (files.length === 0 && !action) return false;',
     replacement: '    if (!action) return false;',
@@ -395,6 +394,64 @@ const MUTATIONS = [
     anchor: "  return typeof body === 'string' && ACK_BODY_PATTERN.test(body);",
     replacement: '  return false;',
   },
+  {
+    id: 'M52',
+    expect: 'red',
+    claim: 'a bare script name (release.sh) is not a path token',
+    subject: 'credential',
+    anchor: "    if ((p.includes('/') || SCRIPT_FILE.test(p)) && !out.includes(p)) out.push(p);",
+    replacement: "    if (p.includes('/') && !out.includes(p)) out.push(p);",
+  },
+  {
+    id: 'M53',
+    expect: 'red',
+    claim: 'a relative path is resolved from the root only, not from cd / working-directory',
+    subject: 'credential',
+    anchor: '      for (const p of dirs.map((d) => at(d, t))) if (read(p) !== null) out.add(p);',
+    replacement: '      if (read(t) !== null) out.add(t);',
+  },
+  {
+    id: 'M54',
+    expect: 'red',
+    claim: 'a scripts/ path named only in a comment stops firing',
+    subject: 'credential',
+    anchor: '    for (const p of referencedPaths(prepare(body, { comments: true }))) {',
+    replacement: '    for (const p of referencedPaths(code)) {',
+  },
+  {
+    id: 'M55',
+    expect: 'red',
+    claim: 'the root package.json stops firing on a dependency change under an install',
+    subject: 'credential',
+    anchor: "      c.path === 'package.json' &&",
+    replacement: "      c.path === 'no-such-file' &&",
+  },
+  {
+    id: 'M56',
+    expect: 'red',
+    claim: 'the root package.json fires on any change, not only dependency keys',
+    subject: 'credential',
+    anchor: '  return pick(beforeText) !== pick(afterText);',
+    replacement: '  return beforeText !== afterText;',
+  },
+  {
+    id: 'M57',
+    expect: 'red',
+    claim: 'a finding for an unknown trigger id is built instead of failing',
+    subject: 'catalogue',
+    anchor:
+      '  if (!Object.hasOwn(CATALOGUE, id)) throw new Error(`unknown escalation trigger "${id}"`);',
+    replacement: "  if (!Object.hasOwn(CATALOGUE, id)) return { id, label: id, why: '', paths };",
+  },
+  {
+    id: 'M58',
+    expect: 'red',
+    claim: 'a working-directory is not a base — make under it stops firing',
+    subject: 'credential',
+    anchor:
+      '  for (const m of text.matchAll(/working-directory\\s*:\\s*[\'"]?([^\\s\'"#]+)/g)) out.push(m[1]);',
+    replacement: '',
+  },
 ];
 
 const prover = createGuardProver({
@@ -407,6 +464,7 @@ const prover = createGuardProver({
     git: 'scripts/escalation/git.mjs',
     report: 'scripts/escalation/report.mjs',
     ack: 'scripts/escalation/acknowledgement.mjs',
+    catalogue: 'scripts/escalation/catalogue.mjs',
     entry: 'scripts/check-escalation-triggers.mjs',
   },
 });

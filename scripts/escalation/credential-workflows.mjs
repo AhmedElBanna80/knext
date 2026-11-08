@@ -57,73 +57,87 @@ export function referencedPaths(text) {
   return out;
 }
 
-/** Every `dir/file` token in the text: candidates, kept only if they exist. */
+/** Prefixes that stand for the checkout root or the running action's own directory. */
+const ROOT_PREFIX =
+  /\$\{\{\s*github\.(?:workspace|action_path)\s*\}\}\/|\$\{?(?:GITHUB_WORKSPACE|GITHUB_ACTION_PATH)\}?\//g;
+
+/**
+ * The text every rule reads: root prefixes stripped, so the path after one reads
+ * as relative, and (unless `comments`) full-line YAML / shell comments removed. A
+ * trailing ` # ...` stays: it cannot be told apart from a `#` inside a string.
+ */
+export function prepare(text, { comments = false } = {}) {
+  const body = comments
+    ? text
+    : text
+        .split('\n')
+        .map((l) => (/^\s*#/.test(l) ? '' : l))
+        .join('\n');
+  return body.replace(ROOT_PREFIX, '');
+}
+
+/** A script file name: what a bare token (no directory) must look like to count. */
+const SCRIPT_FILE = /\.(?:sh|bash|mjs|cjs|js|ts|py)$/;
+
+/**
+ * Path tokens: `dir/file` anywhere, or a bare script name (`release.sh`). Kept only
+ * when they exist, so prose and build outputs drop out.
+ */
 function pathTokens(text) {
   const out = [];
-  for (const m of text.matchAll(/(?:^|[\s'"=(`])(?:\.\/)?([A-Za-z0-9_][\w.-]*(?:\/[\w.-]+)+)/g)) {
+  for (const m of text.matchAll(
+    /(?:^|[\s'"=(`&;|])(?:\.\/)?([A-Za-z0-9_][\w.-]*(?:\/[\w.-]+)*)/g,
+  )) {
     const p = m[1].replace(/[.,;:]+$/, '');
-    if (!out.includes(p)) out.push(p);
+    if ((p.includes('/') || SCRIPT_FILE.test(p)) && !out.includes(p)) out.push(p);
   }
   return out;
 }
 
+/** The directories a relative path may be resolved from: the root, every `working-directory:` and literal `cd` target. */
+function bases(text) {
+  const out = ['.'];
+  for (const m of text.matchAll(/working-directory\s*:\s*['"]?([^\s'"#]+)/g)) out.push(m[1]);
+  for (const m of text.matchAll(/(?:^|[\s;&|(])cd\s+['"]?([\w./-]+)/gm)) out.push(m[1]);
+  return [...new Set(out.map((d) => posix.normalize(d.replace(/^['"]|['"]$/g, ''))))];
+}
+
+const at = (base, p) => (base === '.' ? posix.normalize(p) : posix.normalize(`${base}/${p}`));
+
 /**
- * The Makefiles a `make` command runs: `-C dir` / `--directory=dir`, else the repo
- * root, every `working-directory:` and every literal `cd` target in the file
- * (which step a `make` is in is not worked out; any of them may be the one).
+ * The Makefiles a `make` command runs: `-C dir` / `--directory=dir`, else every
+ * base (which step a `make` is in is not worked out; any of them may be the one).
+ * GNU make's lookup order: GNUmakefile, makefile, Makefile.
  */
 function makefiles(text) {
-  const workDirs = [
-    ...[...text.matchAll(/working-directory\s*:\s*['"]?([^\s'"#]+)/g)].map((m) => m[1]),
-    ...[...text.matchAll(/(?:^|[\s;&|(])cd\s+['"]?([\w./-]+)/gm)].map((m) => m[1]),
-  ];
   const out = [];
   const add = (dir) => {
-    const d = posix.normalize(dir.replace(/^['"]|['"]$/g, ''));
     for (const name of ['GNUmakefile', 'makefile', 'Makefile']) {
-      const p = d === '.' ? name : `${d}/${name}`;
+      const p = at(dir, name);
       if (!out.includes(p)) out.push(p);
     }
   };
   for (const m of text.matchAll(/(?:^|[\s;&|(])make(?![\w.-])([^\n;&|]*)/gm)) {
     const dir = /(?:^|\s)-C\s*(\S+)/.exec(m[1])?.[1] ?? /(?:^|\s)--directory=(\S+)/.exec(m[1])?.[1];
-    if (dir !== undefined) add(dir);
-    else for (const d of ['.', ...workDirs]) add(d);
+    if (dir !== undefined) add(posix.normalize(dir.replace(/^['"]|['"]$/g, '')));
+    else for (const d of bases(text)) add(d);
   }
   return out;
 }
 
 /**
- * Full-line YAML / shell comments removed, and the checkout-root prefixes
- * (`${{ github.workspace }}/`, `$GITHUB_WORKSPACE/`, `${GITHUB_WORKSPACE}/`)
- * stripped so the path after them reads as repo-relative. A trailing ` # ...` is
- * left in place: it cannot be told apart from a `#` inside a quoted string.
- */
-function normalise(text) {
-  return stripWorkspace(
-    text
-      .split('\n')
-      .map((l) => (/^\s*#/.test(l) ? '' : l))
-      .join('\n'),
-  );
-}
-
-/** The checkout-root prefixes removed, so the path after them reads as repo-relative. */
-function stripWorkspace(text) {
-  return text.replace(/\$\{\{\s*github\.workspace\s*\}\}\/|\$\{?GITHUB_WORKSPACE\}?\//g, '');
-}
-
-/**
- * The files a workflow (or a local action's `action.yml`) names directly.
- * `read(p)` returns a file's text, or null when it is absent. A `scripts/` or
- * `.github/actions/` mention counts whether or not the file exists (deleting a
- * script a release workflow runs is supply chain too), comments included; any
- * other path token, and a Makefile, counts only when it exists, comments excluded.
- * A `scripts/` or `.github/actions/` mention that is a DIRECTORY (`working-directory:
- * scripts/release`, a local action) contributes every file under it and a `dir/`
- * entry, so a file added there counts too; a directory named elsewhere (a build
- * context such as an app) does not, or every app file would fire; a local action's `action.yml` is read the same way once (not
- * recursively).
+ * The files a workflow (or a local action's `action.yml` / `action.yaml`) names
+ * directly. `read(p)` returns a file's text, or null when it is absent.
+ *   - A `scripts/` or `.github/actions/` mention counts whether or not the file
+ *     exists (deleting a script a release workflow runs is supply chain too),
+ *     comments included. When it is a DIRECTORY (`working-directory:
+ *     scripts/release`, a local action) every file under it counts, and a `dir/`
+ *     entry makes a file added there count too.
+ *   - Any other path token (a `dir/file`, or a bare script name), resolved against
+ *     every base, counts only when it exists, comments excluded. A directory named
+ *     elsewhere (an app build context) does not cover its files.
+ *   - A Makefile a `make` command runs counts when it exists.
+ * A local action's `action.yml` is read the same way once (not recursively).
  */
 export function namedFiles(text, read, listUnder) {
   const out = new Set();
@@ -143,36 +157,85 @@ export function namedFiles(text, read, listUnder) {
     return true;
   };
   const scan = (body, depth) => {
-    const code = normalise(body);
-    for (const p of referencedPaths(stripWorkspace(body))) if (!expandDir(p, depth)) out.add(p);
-    for (const p of [...pathTokens(code), ...makefiles(code)]) if (read(p) !== null) out.add(p);
+    const code = prepare(body);
+    for (const p of referencedPaths(prepare(body, { comments: true }))) {
+      if (!expandDir(p, depth)) out.add(p);
+    }
+    const dirs = bases(code);
+    for (const t of pathTokens(code)) {
+      for (const p of dirs.map((d) => at(d, t))) if (read(p) !== null) out.add(p);
+    }
+    for (const p of makefiles(code)) if (read(p) !== null) out.add(p);
   };
   scan(text, 0);
   return out;
 }
 
-/** A package install command (`bun install`, `npm ci`, `pnpm i`, `yarn add`, …). */
-const INSTALL = /(?:^|[\s;&|(])(?:bun|npm|pnpm|yarn)\s+(?:install|i|ci|add)(?![\w-])/m;
+/**
+ * What a package install reads to decide the dependency set, per manager. The
+ * root `package.json` is checked separately: only its dependency keys count.
+ */
+export const INSTALL_INPUTS = Object.freeze({
+  bun: ['bun.lock', 'bun.lockb', 'bunfig.toml', '.npmrc'],
+  npm: ['package-lock.json', 'npm-shrinkwrap.json', '.npmrc'],
+  pnpm: ['pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc'],
+  yarn: ['yarn.lock', '.yarnrc.yml', '.yarnrc'],
+});
 
-/** What an install reads to decide the dependency set. */
-export const INSTALL_INPUTS = ['package.json', 'bun.lock', 'bunfig.toml', '.npmrc'];
+/** A package install command (`bun install`, `npm ci`, `pnpm i`, `yarn add`, …), by manager. */
+const INSTALL = /(?:^|[\s;&|(])(bun|npm|pnpm|yarn)\s+(?:install|i|ci|add)(?![\w-])/gm;
+
+/** The managers a workflow runs an install with. */
+export function installManagers(text) {
+  return [...new Set([...prepare(text).matchAll(INSTALL)].map((m) => m[1]))];
+}
+
+/** The `package.json` keys that decide what an install fetches and runs. */
+export const DEPENDENCY_KEYS = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'overrides',
+  'resolutions',
+  'workspaces',
+  'trustedDependencies',
+  'packageManager',
+];
+
+/** Did the dependency keys of a manifest change? An unparseable side counts as a change. */
+export function dependenciesChanged(beforeText, afterText) {
+  const pick = (t) => {
+    if (t === null) return 'null';
+    try {
+      const o = JSON.parse(t);
+      return JSON.stringify(Object.fromEntries(DEPENDENCY_KEYS.map((k) => [k, o?.[k] ?? null])));
+    } catch {
+      return Symbol('unparseable');
+    }
+  };
+  return pick(beforeText) !== pick(afterText);
+}
 
 /**
  * The `supply-chain` finding from content: a changed credential-bearing workflow
- * (on either side), or a changed file a credential-bearing workflow names.
- * `repo.show(side, p)` reads a file (null when absent); `repo.listHead(prefix)`
- * lists the head tree.
+ * (on either side), or a changed file a credential-bearing workflow names. A
+ * workflow that runs a package install also names that manager's lockfile and
+ * config, and the root `package.json` when its dependency keys change: an
+ * install script runs with the workflow's credentials in scope.
  */
 export function credentialWorkflowFindings(changes, repo) {
   const read = (p) => repo.show('head', p) ?? repo.show('base', p);
   const named = new Set();
+  let installs = false;
   for (const wf of repo.listHead('.github/workflows/').filter((p) => WORKFLOW.test(p))) {
     const text = repo.show('head', wf);
     if (text === null || !workflowHoldsCredential(text)) continue;
     for (const p of namedFiles(text, read, (prefix) => repo.listHead(prefix))) named.add(p);
-    // An install runs with the workflow's credentials in scope, so what decides the
-    // dependency set is named too: the root manifest, the lockfile and npm/bun config.
-    if (INSTALL.test(normalise(text))) for (const p of INSTALL_INPUTS) named.add(p);
+    for (const m of installManagers(text)) {
+      installs = true;
+      for (const p of INSTALL_INPUTS[m]) named.add(p);
+    }
   }
   const hits = [];
   for (const c of changes) {
@@ -183,6 +246,12 @@ export function credentialWorkflowFindings(changes, repo) {
     } else if (
       named.has(c.path) ||
       [...named].some((n) => n.endsWith('/') && c.path.startsWith(n))
+    ) {
+      hits.push(c.path);
+    } else if (
+      installs &&
+      c.path === 'package.json' &&
+      dependenciesChanged(repo.show('base', c.path), repo.show('head', c.path))
     ) {
       hits.push(c.path);
     }

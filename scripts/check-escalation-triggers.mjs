@@ -19,16 +19,25 @@
  *
  * WHAT IT DOES NOT DO. It does not decide whether the change is correct, and it
  * does not block one. It asserts that a trigger-class change was ACKNOWLEDGED —
- * that the trigger was consciously noted. It covers the three triggers workflow.md
- * calls mechanically detectable (an ADR; the config schema, CLI and CRD; the public
- * API), widened to every package's CLI, plus the Rust crates and the supply chain
- * (security.md). The two judgement triggers (a discovered fact that invalidates
- * the sprint plan; a hard-rule contradiction that touches no tracked path) stay
- * unenforced, by the rules' own admission.
+ * that the trigger was consciously noted. The triggers (ids from
+ * `escalation/catalogue.mjs`) and the module that detects each:
+ *   - `adr`: a modified or deleted ADR (`paths.mjs`);
+ *   - `crd`: any `api/**\/*_types.go` (`paths.mjs`);
+ *   - `config-schema`: `packages/kn-next/src/config.ts` (`paths.mjs`);
+ *   - `cli-surface`: every package's CLI (`paths.mjs`);
+ *   - `crates`: anything under `crates/` (`paths.mjs`);
+ *   - `public-api`: a package manifest's published surface (`public-surface.mjs`);
+ *   - `supply-chain`: `security/**` and other static paths (`paths.mjs`), and a
+ *     credential-bearing workflow or a file one names directly
+ *     (`credential-workflows.mjs`).
+ * The first three are the triggers workflow.md calls mechanically detectable; the
+ * rest widen them (every package CLI) or come from security.md. The two judgement
+ * triggers (a discovered fact that invalidates the sprint plan; a hard-rule
+ * contradiction that touches no tracked path) stay unenforced.
  *
  * LAYOUT. This file is the CLI; each concern is its own module under
  * `scripts/escalation/`: `catalogue.mjs` (every trigger's id, label and reason),
- * `paths.mjs` (path triggers), `public-surface.mjs`
+ * `classify.mjs` (all findings for a diff), `paths.mjs` (path triggers), `public-surface.mjs`
  * (package manifest surface), `credential-workflows.mjs` (credential-bearing
  * workflows and the files they name), `acknowledgement.mjs`, `git.mjs` and
  * `report.mjs`. The named exports below keep existing importers working.
@@ -51,18 +60,18 @@
  */
 
 import { ACK_LABEL, isAcknowledged } from './escalation/acknowledgement.mjs';
-import { credentialWorkflowFindings } from './escalation/credential-workflows.mjs';
+import { classifyAll } from './escalation/classify.mjs';
 import { git, gitReader, parseNameStatus } from './escalation/git.mjs';
-import { classifyPaths } from './escalation/paths.mjs';
-import { publicSurfaceFindings } from './escalation/public-surface.mjs';
-import { mergeFired, printReport, writeJobSummary } from './escalation/report.mjs';
+import { printReport, writeJobSummary } from './escalation/report.mjs';
 
 export {
+  ACK_BODY_EXAMPLE,
   ACK_BODY_PATTERN,
   ACK_LABEL,
   isAcknowledged,
   LEGACY_ACK_LABEL,
 } from './escalation/acknowledgement.mjs';
+export { classify, classifyAll, classifyContent } from './escalation/classify.mjs';
 export {
   LOW_PRIVILEGE_SECRETS,
   namedFiles,
@@ -73,14 +82,6 @@ export { parseNameStatus } from './escalation/git.mjs';
 export { isStaticSupplyChainPath, TRIGGERS } from './escalation/paths.mjs';
 export { PUBLIC_MANIFEST_KEYS, publicSurfaceChanged } from './escalation/public-surface.mjs';
 export { mergeFired } from './escalation/report.mjs';
-
-/** Path-only triggers. Pure. */
-export const classify = classifyPaths;
-
-/** Triggers that need file content: the manifest surface and credential workflows. */
-export function classifyContent(changes, repo) {
-  return [...publicSurfaceFindings(changes, repo), ...credentialWorkflowFindings(changes, repo)];
-}
 
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`);
@@ -100,7 +101,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const changes = parseNameStatus(git(['diff', '-z', '--name-status', `${base}...${head}`]));
   // The diff is three-dot, so the "before" side of a content comparison is the merge base.
   const mergeBase = git(['merge-base', base, head]).trim();
-  const fired = mergeFired(classify(changes), classifyContent(changes, gitReader(mergeBase, head)));
+  const fired = classifyAll(changes, gitReader(mergeBase, head));
   const labels = (arg('labels', '') || '').split(',').filter(Boolean);
   const acked = isAcknowledged(labels, arg('body', '') || '');
   writeJobSummary(fired, acked);

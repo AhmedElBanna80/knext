@@ -46,6 +46,7 @@ export const CATALOGUE = Object.freeze({
 
 /** A finding for trigger `id` over `paths`, with an optional note on the reason. */
 export function finding(id, paths, note = '') {
+  if (!Object.hasOwn(CATALOGUE, id)) throw new Error(`unknown escalation trigger "${id}"`);
   const t = CATALOGUE[id];
   return { id: t.id, label: t.label, why: t.why + note, paths };
 }

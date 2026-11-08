@@ -4,7 +4,7 @@
  * surface it protects.
  */
 
-import { CATALOGUE, finding } from './catalogue.mjs';
+import { finding } from './catalogue.mjs';
 
 /** Any `*_types.go` under an `api/` directory, at any depth. */
 const CRD_TYPES = /(^|\/)api\/(.+\/)?[^/]+_types\.go$/;
@@ -24,35 +24,36 @@ export function isStaticSupplyChainPath(p) {
   return /^packages\/[^/]+\/src\/(.+\/)?supply-chain\.[cm]?[jt]s$/.test(p) && !isTestPath(p);
 }
 
+/** Each path trigger: a catalogue id and the rule that matches a changed path. */
 export const TRIGGERS = [
   {
-    ...CATALOGUE['adr'],
+    id: 'adr',
     // A NEW ADR is the output of an escalation, not a reason for one, and
     // `docs/adr/gates/` is measurement data: neither fires.
     match: (p, status) =>
       p.startsWith('docs/adr/') && !p.startsWith('docs/adr/gates/') && status !== 'A',
   },
   {
-    ...CATALOGUE['crd'],
+    id: 'crd',
     // Every `*_types.go` under any `api/` tree, a new one included.
     match: (p) => CRD_TYPES.test(p),
   },
   {
-    ...CATALOGUE['config-schema'],
+    id: 'config-schema',
     match: (p) => p === 'packages/kn-next/src/config.ts',
   },
   {
-    ...CATALOGUE['cli-surface'],
+    id: 'cli-surface',
     // Every package's CLI, not only core's.
     match: (p) => CLI_SURFACE.test(p) && !isTestPath(p),
   },
   {
-    ...CATALOGUE['crates'],
+    id: 'crates',
     // Source, Cargo.lock, deny.toml and the toolchain pin: FFI surface and supply chain.
     match: (p) => p.startsWith('crates/'),
   },
   {
-    ...CATALOGUE['supply-chain'],
+    id: 'supply-chain',
     match: (p) => isStaticSupplyChainPath(p),
   },
 ];

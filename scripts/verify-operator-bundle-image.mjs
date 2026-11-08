@@ -34,9 +34,11 @@ import { fileURLToPath } from 'node:url';
 const OPERATOR_TAG = /^operator-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 // Any operator image reference ANYWHERE in the bundle (image:, env values, args, flow-style
-// YAML), not only `image:` lines. Whole-line comments are skipped.
+// YAML), not only `image:` lines. Whole-line comments are skipped. The lookbehind refuses a
+// token that starts mid-path, so a URL such as https://github.com/<org>/kn-next-operator is not
+// read as an image reference.
 const OPERATOR_TOKEN =
-  /[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9._-]+)*\/kn-next-operator(?![\w.-])(?::[\w.-]+)?(?:@[\w:.-]+)?/g;
+  /(?<![\w.:/-])[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9._-]+)*\/kn-next-operator(?![\w.-])(?::[\w.-]+)?(?:@[\w:.-]+)?/g;
 const OPERATOR_REF = /\/kn-next-operator(?:[:@]|$)/;
 const IMAGE_REPO = /^[a-z0-9][a-z0-9.-]*(?::\d+)?(?:\/[a-z0-9][a-z0-9._-]*)+$/;
 const PINNED = /^(.+\/kn-next-operator):([^@:\s]+)@(sha256:[0-9a-f]{64})$/;

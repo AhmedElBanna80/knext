@@ -45,6 +45,11 @@
 #              so nothing mounts the database Secret, and removing the env
 #              renders it again; a rotation of the spec and the pin together
 #              updates it.
+#   squat      a ConfigMap at the zone's JWKS name that the zone does not control
+#              (pre-created by someone else) is never mounted into a function: the
+#              function reports JWKSTrusted=False, the zone ZoneSigningKey=False
+#              (JWKSConfigMapConflict), the squatter is left untouched, and removing
+#              it lets the operator publish and the function mount the zone's own.
 #   leaks      no key material in the operator's or the pods' logs, the events,
 #              or the objects the operator publishes.
 #
@@ -77,7 +82,7 @@
 #                         testdata/zone-identity-contract.json.
 #   Z7_WITH_RUST          1 (default) also builds and binds the Rust function.
 #   PHASES                space-separated subset of: up images deploy verify
-#                         rotate pin leaks (default: all, in that order).
+#                         rotate pin squat leaks (default: all, in that order).
 #   INTERNAL_PORT         local port of the port-forward to Knative's cluster-local gateway.
 set -euo pipefail
 # This script handles private keys: it must never trace, and what it creates is
@@ -107,7 +112,7 @@ MIN_BOUND_SECONDS="$(jq -er '.rotation.propagationBoundMinimumSeconds' "${BOUND_
   || { echo "cannot read .rotation.propagationBoundMinimumSeconds from ${BOUND_FIXTURE}" >&2; exit 64; }
 BOUND="${Z7_PROPAGATION_BOUND:-${SHIPPED_BOUND_SECONDS}s}"
 WITH_RUST="${Z7_WITH_RUST:-1}"
-PHASES="${PHASES:-up images deploy verify rotate pin leaks}"
+PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"
 INTERNAL_PORT="${INTERNAL_PORT:-18080}"
 KNATIVE_VERSION="${KNATIVE_VERSION:-knative-v1.16.0}"
 REGISTRY_IMAGE='registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373'
@@ -1171,6 +1176,120 @@ YAML
   k -n "${NS}" delete secret "${PIN_DB}" --ignore-not-found
 }
 
+# ---------------------------------------------------------------- phase: squat
+
+SQ_ZONE=squat-zone
+SQ_FN=squat-fn
+SQ_CM="${SQ_ZONE}-knext-jwks"
+SQ_FORGED='{"keys":[]}'
+
+sq_bs_condition() { # <type>: "<status>/<reason>" of a condition on the squat function
+  k -n "${NS}" get backendservice "${SQ_FN}" -o json \
+    | jq -r --arg t "$1" '[.status.conditions // [] | .[] | select(.type == $t)] | if length == 0 then "none" else .[0] | "\(.status)/\(.reason)" end'
+}
+sq_zone_condition() { # <type>: "<status>/<reason>" of a condition on the squat NextApp
+  k -n "${NS}" get nextapp "${SQ_ZONE}" -o json \
+    | jq -r --arg t "$1" '[.status.conditions // [] | .[] | select(.type == $t)] | if length == 0 then "none" else .[0] | "\(.status)/\(.reason)" end'
+}
+sq_ksvc_exists() { k -n "${NS}" get ksvc "${SQ_FN}" >/dev/null 2>&1; }
+sq_ksvc_mounts_cm() { # <name>: the function's Knative Service mounts this ConfigMap as knext-zone-jwks
+  k -n "${NS}" get ksvc "${SQ_FN}" -o json \
+    | jq -e --arg cm "$1" '[.spec.template.spec.volumes[]? | select(.name == "knext-zone-jwks") | .configMap.name] == [$cm]' >/dev/null
+}
+sq_ksvc_has_jwks_volume() {
+  k -n "${NS}" get ksvc "${SQ_FN}" -o json \
+    | jq -e '[.spec.template.spec.volumes[]? | select(.name == "knext-zone-jwks")] | length > 0' >/dev/null
+}
+sq_pods_mount_jwks() { # any pod of the function carrying the JWKS volume
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${SQ_FN}" -o json \
+    | jq -e '[.items[].spec.volumes[]? | select(.name == "knext-zone-jwks")] | length > 0' >/dev/null
+}
+sq_cm_controlled() { # the zone's JWKS ConfigMap is controlled by the NextApp
+  k -n "${NS}" get configmap "${SQ_CM}" -o json \
+    | jq -e --arg z "${SQ_ZONE}" '.metadata.ownerReferences // [] | map(select(.kind == "NextApp" and .name == $z and .controller == true)) | length == 1' >/dev/null
+}
+
+phase_squat() {
+  log "squat: a ConfigMap at the zone's JWKS name that the zone does not control is never mounted"
+  local go_img zone_img
+  go_img="$(image_ref function-go)"
+  zone_img="$(image_ref zone-caller)"
+
+  k -n "${NS}" delete nextapp "${SQ_ZONE}" --ignore-not-found --wait=true --timeout=300s
+  k -n "${NS}" delete backendservice "${SQ_FN}" --ignore-not-found --wait=true --timeout=300s
+  k -n "${NS}" delete configmap "${SQ_CM}" --ignore-not-found
+
+  # The squatter: created BEFORE the zone, by someone else, with no controller
+  # ownerReference, holding a key set of its own choosing (an empty one here; any
+  # content would do, the point is whose it is).
+  k -n "${NS}" create configmap "${SQ_CM}" --from-literal=jwks.json="${SQ_FORGED}"
+
+  k apply --validate=strict -f - <<YAML
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: ${SQ_ZONE}
+  namespace: ${NS}
+spec:
+  image: ${zone_img}
+  healthCheckPath: /api/health
+  scaling:
+    minScale: 0
+    maxScale: 1
+  backends:
+    - name: squat
+      service: ${SQ_FN}
+---
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: BackendService
+metadata:
+  name: ${SQ_FN}
+  namespace: ${NS}
+spec:
+  zone: ${SQ_ZONE}
+  image: ${go_img}
+  language: go
+  port: 8080
+  protoVersion: 1.0.0
+  scaling:
+    minScale: 0
+    maxScale: 1
+YAML
+
+  # The function is RENDERED (so "not mounted" is a fact about a real Knative
+  # Service, not about one that never existed), reports the untrusted ConfigMap,
+  # and the zone reports the conflict.
+  wait_until 180 3 "the function's Knative Service exists" sq_ksvc_exists
+  wait_until 120 2 "the function reports JWKSTrusted=False JWKSUntrusted" \
+    '[ "$(sq_bs_condition JWKSTrusted)" = "False/JWKSUntrusted" ]'
+  wait_until 120 2 "the zone reports ZoneSigningKey=False JWKSConfigMapConflict" \
+    '[ "$(sq_zone_condition ZoneSigningKey)" = "False/JWKSConfigMapConflict" ]'
+  [ "$(sq_bs_condition Ready)" = "False/JWKSUntrusted" ] \
+    || fail "the function with an untrusted JWKS is $(sq_bs_condition Ready), want False/JWKSUntrusted"
+  ok "the zone reports JWKSConfigMapConflict and the function JWKSTrusted=False/JWKSUntrusted"
+
+  # Hold for a while: a refusal that flaps back to mounting is not one.
+  sleep 20
+  if sq_ksvc_has_jwks_volume; then fail "the squatted JWKS ConfigMap is mounted into the function (its Knative Service has a knext-zone-jwks volume)"; fi
+  if sq_pods_mount_jwks; then fail "the squatted JWKS ConfigMap is mounted into the function (a pod has a knext-zone-jwks volume)"; fi
+  # The operator leaves the squatter alone: same content, still no owner.
+  k -n "${NS}" get configmap "${SQ_CM}" -o json \
+    | jq -e --arg d "${SQ_FORGED}" '(.data["jwks.json"] == $d) and ((.metadata.ownerReferences // []) | length == 0)' >/dev/null \
+    || fail "the squatted ConfigMap ${SQ_CM} was modified or adopted by the operator"
+  ok "the squatted ConfigMap is not mounted and is left untouched (not adopted, not overwritten)"
+
+  log "squat: control - removing the squatter lets the operator publish and the function mount the zone's own JWKS"
+  k -n "${NS}" delete configmap "${SQ_CM}"
+  wait_until 180 3 "the zone publishes its own JWKS ConfigMap, controlled by the NextApp" sq_cm_controlled
+  wait_until 180 3 "the function trusts and mounts it" \
+    '[ "$(sq_bs_condition JWKSTrusted)" = "True/Controlled" ] && sq_ksvc_mounts_cm "${SQ_CM}"'
+  wait_until 60 2 "the zone's conflict clears" '[ "$(sq_zone_condition ZoneSigningKey)" = "True/KeyActive" ]'
+  ok "with the squatter gone the zone's own JWKS is published, mounted, and the conflict clears"
+
+  k -n "${NS}" delete nextapp "${SQ_ZONE}" --ignore-not-found --wait=true --timeout=300s
+  k -n "${NS}" delete backendservice "${SQ_FN}" --ignore-not-found --wait=true --timeout=300s
+}
+
 # ---------------------------------------------------------------- phase: leaks
 
 phase_leaks() {
@@ -1221,7 +1340,7 @@ phase_leaks() {
 # ---------------------------------------------------------------- main
 
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then use_cluster; fi
-for phase in up images deploy verify rotate pin leaks; do
+for phase in up images deploy verify rotate pin squat leaks; do
   if has_phase "${phase}"; then
     "phase_${phase}"
   fi

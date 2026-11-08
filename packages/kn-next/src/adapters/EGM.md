@@ -6,7 +6,8 @@ This is the runtime and build layer of `@getknext/core`. It contains:
 
 - the official Next.js Deployment Adapter (`next-adapter.ts`);
 - the standalone-server supervisor (`node-server.ts`), which spawns
-  `.next/standalone/server.js` next to a metrics sidecar;
+  `.next/standalone/server.js` (or, with `STANDALONE_SERVER_EXEC`, the compiled
+  executable) next to a metrics sidecar;
 - the Redis-backed ISR/data-cache and `"use cache"` handlers;
 - preloads that patch `node:http` and `Bun.serve` for cache-control, CDN edge
   headers, body caps, public origins and keep-alive;
@@ -57,9 +58,11 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   - cache: `cache-write-registry.js` (`cache-drain`),
     `cache-handler-{node,bun}.js`, `use-cache-handler{,-remote}-{node,bun}.js`
     and `vinext-cache-adapter{,-node,-bun}.mjs`;
-  - preloads: `cache-control-normalize.cjs`, `bun-keepalive-guard.cjs`,
-    `request-body-cap.cjs`, `arp-primer.cjs`, `bun-serve-keepalive-guard.mjs`
-    and `response-cache-control.mjs`;
+  - preloads (`--require`d into the child): `cache-control-normalize.cjs`,
+    `bun-keepalive-guard.cjs` and `request-body-cap.cjs`; `public-origin.cjs`
+    is one too, but has no subpath. Loaded in-process, never `--require`d:
+    `arp-primer.cjs`, and the vinext/Bun runtime modules
+    `bun-serve-keepalive-guard` and `response-cache-control` (dist `.js`);
   - health: `deep-health-lite.ts`;
   - images: `vinext-image-optimizer.ts` (`vinext-image-optimizer`);
   - debug: `sandbox-fetch-debug.cjs` and `sandbox-fetch-realm-debug.cjs`;
@@ -412,6 +415,30 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Supervisor and preloads
 
+- What each runtime path loads before the server:
+  - **Disk mode** (`node-server.ts` supervisor, a Node or Bun `server.js` child):
+    the supervisor `require`s `arp-primer.cjs` in-process before it spawns the
+    child. The child gets `--require` `cache-control-normalize.cjs`,
+    `request-body-cap.cjs` and `public-origin.cjs` on both runtimes, plus
+    `bun-keepalive-guard.cjs` only when the supervisor runs under Bun
+    (`process.versions.bun`). Each is added only if its file exists.
+  - **Compiled standalone** (`standalone-compile.mjs` `PRELOAD_NAMES`): the
+    executable bakes in, in order, `arp-primer.cjs`, `cache-control-normalize.cjs`,
+    `bun-keepalive-guard.cjs`, `public-origin.cjs` and `request-body-cap.cjs`, plus
+    `standalone-self-contained-supervisor.cjs` for a self-contained build. A
+    missing file aborts the compile. In the disk-compiled image the
+    `node-server.ts` supervisor still runs (`STANDALONE_SERVER_EXEC`): it primes
+    ARP itself and drops its own `--require` list, since the executable already
+    carries the preloads (`standalone-exec.ts`). A self-contained build has no
+    `node-server.ts` supervisor process; `standalone-self-contained-supervisor.cjs`
+    takes its place inside the executable.
+  - **vinext** (`vinext-compile.mjs`): the single executable imports
+    `arp-primer.cjs`, `bun-serve-keepalive-guard`, the sidecar installer (not in a
+    self-contained build) and `bun-serve-cache-control-install`, each fail-closed.
+    It does not load `cache-control-normalize.cjs`, `request-body-cap.cjs`,
+    `public-origin.cjs` or `bun-keepalive-guard.cjs`. The vinext-on-Node entry
+    (`templates/app/knext-node-entry.mjs.hbs`) imports `arp-primer.cjs` and
+    `response-cache-control`.
 - `node-server.ts` installs `registerDbPoolDrain` and the SIGTERM/SIGINT
   handlers before it spawns the child. A spawn `error` exits with code 1.
 - `shutdown.ts:gracefulShutdown` guards against re-entry. It closes the
@@ -528,8 +555,10 @@ The compile pipeline fails closed.
 
 ### Processes and listeners
 
-- `node-server.ts` spawns the Next child with `--require` preloads and binds the
-  metrics listener on `METRICS_PORT`. It calls `process.exit` when the child
+- `node-server.ts` spawns the Next child with `--require` preloads (script mode),
+  or, when `STANDALONE_SERVER_EXEC` is set, the compiled executable with no
+  arguments (`standalone-exec.ts`), and binds the metrics listener on
+  `METRICS_PORT`. It calls `process.exit` when the child
   exits.
 - `metrics.ts:startChildMetricsServer` and `deep-health-lite.ts` listen on
   `127.0.0.1:9092`, and `fetchChildMetrics` scrapes that address.

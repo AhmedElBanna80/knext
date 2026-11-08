@@ -246,7 +246,7 @@ func maximalWarmScheduleSpec() appsv1alpha1.NextAppSpec {
 			Endpoint: "https://storage.googleapis.com",
 		},
 		Cache: &appsv1alpha1.CacheSpec{
-			Provider: "redis", URL: "redis://cache:6379", KeyPrefix: "app",
+			Provider: "redis", URL: "redis://cache:6379", KeyPrefix: "app", Isolation: "acl",
 		},
 		Revalidation: &appsv1alpha1.RevalidationSpec{
 			Queue: lcKafka, KafkaBrokerUrl: "kafka:9092", ProvisionKafkaSource: &provisionKafka,

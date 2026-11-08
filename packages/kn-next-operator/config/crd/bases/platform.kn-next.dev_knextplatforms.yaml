@@ -58,6 +58,55 @@ spec:
           spec:
             description: spec defines the platform configuration.
             properties:
+              cache:
+                description: |-
+                  Cache registers the Redis endpoints the operator may issue per-app ACL
+                  users on.
+                properties:
+                  clusterId:
+                    description: |-
+                      ClusterID names this cluster in the ACL user names it creates, so two
+                      clusters sharing one Redis never overwrite each other's users. Unset means
+                      the uid of the kube-system Namespace. Set it to the old identity before
+                      rebuilding a cluster against the same Redis.
+                    type: string
+                  redisEndpoints:
+                    description: |-
+                      RedisEndpoints lists the Redis endpoints the operator holds a provisioner
+                      credential for. The credential is used only for an app whose
+                      spec.cache.url resolves to exactly one of these endpoints.
+                    items:
+                      description: RedisEndpoint is one registered Redis endpoint.
+                      properties:
+                        endpoint:
+                          description: |-
+                            Endpoint is the in-cluster Service FQDN and port, in canonical form:
+                            <service>.<namespace>.svc.cluster.local:<port> (lower case).
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\.svc\.cluster\.local:[0-9]{1,5}$
+                          type: string
+                        provisionerSecretRef:
+                          description: |-
+                            ProvisionerSecretRef names a Secret in the operator's namespace holding a
+                            Redis URL (with the provisioner user's credentials) under Key.
+                          properties:
+                            key:
+                              type: string
+                            name:
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                      required:
+                      - endpoint
+                      - provisionerSecretRef
+                      type: object
+                    maxItems: 16
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - endpoint
+                    x-kubernetes-list-type: map
+                type: object
               database:
                 description: |-
                   Database carries the cluster-wide database connection budget. It turns the

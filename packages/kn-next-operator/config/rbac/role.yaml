@@ -23,6 +23,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  - services
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
   - persistentvolumeclaims
   verbs:
   - get
@@ -40,12 +47,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - get
 - apiGroups:
   - apps
   resources:

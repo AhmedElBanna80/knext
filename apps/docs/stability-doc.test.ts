@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INTERNAL_ONLY_VERBS } from '../../packages/kn-next/src/cli/help';
@@ -131,6 +131,49 @@ describe('docs — stability tiers page', () => {
     expect(page).not.toMatch(/\bADR-?\s?\d/i);
     expect(page).not.toMatch(/(?:\bPR |\bissue |\(|\s)#\d+\b/i);
   });
+});
+
+describe('docs — every Stable package is documented in the public API reference', () => {
+  // A package named Stable on the stability page is a support promise. The
+  // public API reference is where its supported imports are enumerated, so a
+  // Stable package with no `### \`@getknext/<pkg>\`` section there is an
+  // unbacked promise. Derived from the page itself, not a hand-kept list.
+  const publicApi = read('docs/PUBLIC_API.md');
+  const stableSection = page.slice(page.search(/^##\s+Stable/m), page.search(/^##\s+Beta/m));
+  const stablePackages = [...new Set(stableSection.match(/@getknext\/[a-z-]+/g) ?? [])];
+
+  it('the Stable tier names at least one package to check', () => {
+    expect(stablePackages).toContain('@getknext/db');
+  });
+
+  for (const pkg of stablePackages) {
+    it(`${pkg} has a section in docs/PUBLIC_API.md`, () => {
+      expect(publicApi).toContain(`### \`${pkg}\``);
+    });
+  }
+
+  // Every subpath a Stable package declares public in its own manifest
+  // (`knext.publicApi.public`) must have a heading. Checking only the package
+  // root let a removed `./schema` or `./migrate` section stay green.
+  const manifestFor = new Map<string, { knext?: { publicApi?: { public?: string[] } } }>();
+  for (const dir of readdirSync(resolve(repoRoot, 'packages'))) {
+    const manifestPath = resolve(repoRoot, 'packages', dir, 'package.json');
+    if (!existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifestFor.set(manifest.name, manifest);
+  }
+  for (const pkg of stablePackages) {
+    const publicSubpaths = manifestFor.get(pkg)?.knext?.publicApi?.public ?? [];
+    it(`${pkg} declares its public subpaths and each has a heading`, () => {
+      expect(publicSubpaths.length).toBeGreaterThan(0);
+    });
+    for (const sub of publicSubpaths) {
+      const heading = `### \`${pkg}${sub === '.' ? '' : sub.slice(1)}\``;
+      it(`${pkg} public subpath ${sub} has a heading in docs/PUBLIC_API.md`, () => {
+        expect(publicApi).toContain(heading);
+      });
+    }
+  }
 });
 
 describe('docs — support-matrix reflects the real default build/runtime', () => {

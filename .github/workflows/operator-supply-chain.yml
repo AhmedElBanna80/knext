@@ -716,7 +716,7 @@ jobs:
       # bundle whose image tag is `vX.Y.Z` AND whose digest is the one THIS run
       # pushed. operator-v1.0.0 shipped `:v0.1.0@…` under a 1.0.0 tag. Runs before
       # the release body and the publish step, on both attached assets, and fails
-      # closed (unreadable file, no image line, missing digest). Plain `node`.
+      # closed (unreadable file, no operator image reference, missing digest). Plain `node`.
       - name: Verify the bundle pins this release's image (version tags only, S3-O2)
         if: steps.channel.outputs.is_version_tag == 'true'
         env:

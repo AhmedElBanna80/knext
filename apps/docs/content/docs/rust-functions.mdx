@@ -20,8 +20,9 @@ starts from. The [Go template](/docs/go-functions) is the same function in Go.
 - **A connect-rust server** for your contract, answering the Connect, gRPC and gRPC-Web protocols
   on one port, over HTTP/2 cleartext (h2c) — what the zone uses — or HTTP/1.1.
 - **A token check on every call** (see [Security](#security)).
-- **The standard gRPC health check**, `grpc.health.v1.Health/Check`, served without a token so
-  probes and the zone's wake-up call work.
+- **The standard gRPC health check**, `grpc.health.v1.Health/Check`, served without a token, for probes.
+- **A `GET /healthz` wake-up probe** that answers `200` with no body and no token, for the zone's
+  wake-up call. It is not an RPC, so it is not traced; any other method on it gets `405`.
 - **OpenTelemetry**: a span per call, with the caller's W3C trace context linked, refused calls
   included. A handler reads the span's context from the request extensions
   (`ctx.extensions().get::<opentelemetry::Context>()`) to continue the trace on its own calls.
@@ -120,6 +121,7 @@ It fails closed:
 | An RPC that states no `(knext.v1.auth)` option | refused, `unauthenticated` |
 | A token that passes every check | served |
 | Health check (`grpc.health.v1.Health/Check`) | served, no token needed |
+| `GET /healthz` | served with `200`, no token needed; other methods get `405` |
 
 There is no setting that turns the check off. At start-up the function logs a warning when no
 keys are mounted or the issuer or audience is not set.

@@ -414,6 +414,18 @@ func validateNextAppSpec(spec *appsv1alpha1.NextAppSpec, budget int, grandfather
 			)
 		}
 	}
+	if spec.Cache != nil {
+		switch spec.Cache.Isolation {
+		case "", "auto", "acl", "none":
+		default:
+			return fmt.Errorf("spec.cache.isolation %q is not recognized (valid: auto, acl, none)", spec.Cache.Isolation)
+		}
+		// The platform keyspace (CDN claim keys live under "knext:cdn:purged:").
+		// No app may own it, isolated or not.
+		if p := spec.Cache.KeyPrefix; IsPlatformKeyspace(p) {
+			return fmt.Errorf("spec.cache.keyPrefix %q is reserved for the platform keyspace", p)
+		}
+	}
 	// Resource requests/limits (#435): the four spec.resources fields are
 	// user-supplied free text the reconciler turns into Kubernetes quantities
 	// for the Knative container. Validate them HERE so a malformed value fails

@@ -17,6 +17,7 @@
     "scale-to-zero",
     "warm-floors",
     "isr-caching",
+    "redis-isolation",
     "image-caching",
     "pull-through-mirror",
     "bytecode",

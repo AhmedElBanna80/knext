@@ -121,6 +121,22 @@ const MUTATIONS = [
     replacement: 'if (!opts.tag || !opts.digest ||',
   },
   {
+    id: 'G12',
+    claim: 'operator references outside image: lines (env, args, flow YAML) are no longer scanned',
+    subject: 'guard',
+    anchor: '    for (const m of line.matchAll(OPERATOR_TOKEN)) {\n',
+    replacement:
+      '    const im = /^\\s*(?:-\\s+)?image:\\s*(\\S+)/.exec(line);\n    if (im) refs.add(im[1]);\n    for (const m of []) {\n',
+  },
+  {
+    id: 'G13',
+    claim: 'a scheme-qualified (https:// / oci://) tagged ref is ignored instead of counted',
+    subject: 'guard',
+    anchor:
+      '      if (hasScheme && !/\\/kn-next-operator[:@]/.test(tok)) continue; // bare repo URL\n',
+    replacement: '      if (hasScheme) continue;\n',
+  },
+  {
     id: 'W4',
     claim: "the workflow stops passing this run's image to the guard",
     subject: 'workflow',

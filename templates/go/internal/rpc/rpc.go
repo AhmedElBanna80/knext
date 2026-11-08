@@ -138,9 +138,10 @@ func newFunction(cfg Config, verifier auth.Verifier) (*Function, error) {
 		return nil, err
 	}
 
-	// Interceptors run in argument order, the first outermost: every call is
+	// Interceptors run in argument order, the first outermost: every RPC is
 	// traced (refusals included), a panic is contained, and the token is
-	// checked before any request payload is read.
+	// checked before any request payload is read. The wake-ahead probe
+	// (/healthz, mounted below) is not an RPC, so it bypasses all three.
 	rpc := connect.NewServer(
 		otelInterceptor,
 		recoverInterceptor,
@@ -154,6 +155,10 @@ func newFunction(cfg Config, verifier auth.Verifier) (*Function, error) {
 		connecthttp.WithReadMaxBytes(MaxRequestBytes),
 		connecthttp.WithCompressors(boundedGzip(MaxRequestBytes)),
 	)
+	// The wake-ahead probe: a plain GET, answered before and outside the token
+	// check. A Connect GET of the health Check is not available, since the
+	// generated health service does not mark Check side-effect free.
+	mux.HandleFunc("GET /healthz", healthz)
 
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
@@ -200,6 +205,19 @@ func (f *Function) Serve(ctx context.Context, ln net.Listener) error {
 		return err
 	}
 	return nil
+}
+
+// healthz answers the wake-ahead probe with 200 and no body. It carries no
+// credentials and reads nothing, so it is never refused for lack of a token.
+// The "GET" pattern also matches HEAD, which is refused with 405 as POST is by
+// the mux, so the probe is GET-only in both templates.
+func healthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // recoverInterceptor answers a panicking handler with CodeInternal, without

@@ -27,8 +27,9 @@ import (
 )
 
 // HealthCheckProcedure is the one RPC served without a token: the standard
-// gRPC health check, used by probes and by the zone's wake-ahead call, which
-// carry no credentials. Health Watch is not exempt.
+// gRPC health check, used by probes, which carry no credentials. The zone's
+// wake-ahead call is GET /healthz, which is not an RPC and is answered outside
+// this interceptor. Health Watch is not exempt.
 const HealthCheckProcedure = "/grpc.health.v1.Health/Check"
 
 // DefaultJWKSPath is where the zone's public keys are mounted, as a volume.

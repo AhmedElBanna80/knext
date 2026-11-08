@@ -44,7 +44,8 @@ pub use replay::{DEFAULT_SEEN_CAPACITY, MAX_JTI_CHARS, MIN_JTI_CHARS};
 use crate::proto::knext::v1::Auth;
 
 /// The one RPC served without a token: the standard gRPC health check, used
-/// by probes and by the zone's wake-ahead call, which carry no credentials.
+/// by probes, which carry no credentials. The zone's wake-ahead call is
+/// `GET /healthz`, which is not an RPC and is answered outside this check.
 /// Health `Watch` is not exempt.
 pub const HEALTH_CHECK_PROCEDURE: &str = "/grpc.health.v1.Health/Check";
 

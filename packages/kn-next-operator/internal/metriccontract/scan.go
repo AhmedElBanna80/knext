@@ -33,8 +33,10 @@ limitations under the License.
 //     other statement) ends it: nothing after it is counted. This is an
 //     allowlist, so it fails closed. It is not a proof that the registration
 //     succeeds (a Register error may be discarded), nor that init() is reached
-//     at all (a panic in a package-level variable initialiser is not
-//     detected, but then the process never serves anything);
+//     at all. Not detected, but each one kills the process before anything is
+//     served: a panic in a package-level variable initialiser, or a panic while
+//     the run itself executes (a nil selector, an out-of-range index, a bad
+//     metric name, a fake constructor matched by name in a nested argument);
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -412,17 +414,26 @@ func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
 // right-hand side of an assignment or var declaration, optionally
 // parenthesised, and whose arguments call nothing but a known prometheus
 // constructor (see pureArgs). Whether the selector really is metrics.Registry is
-// decided later by collect; a call this accepts but collect does not count
-// still ends nothing, since its arguments cannot panic or exit.
+// decided later by collect. A call this accepts can still panic (a nil
+// selector, an index out of range, a bad metric name, a fake constructor
+// matched by name in a nested argument); nothing in the run can recover, so
+// such a panic kills the process and nothing is served at all. The left-hand
+// side of an assignment is held to the same rule, since it is evaluated first.
 func pureRegistration(st ast.Stmt) *ast.CallExpr {
 	var e ast.Expr
 	switch st := st.(type) {
 	case *ast.ExprStmt:
 		e = st.X
 	case *ast.AssignStmt:
-		if len(st.Rhs) == 1 {
-			e = st.Rhs[0]
+		if len(st.Rhs) != 1 {
+			return nil
 		}
+		for _, l := range st.Lhs {
+			if !pureArgs(l) {
+				return nil
+			}
+		}
+		e = st.Rhs[0]
 	case *ast.DeclStmt:
 		gd, ok := st.Decl.(*ast.GenDecl)
 		if !ok || gd.Tok != token.VAR || len(gd.Specs) != 1 {
@@ -454,7 +465,9 @@ func pureRegistration(st ast.Stmt) *ast.CallExpr {
 }
 
 // pureArgs reports whether evaluating e calls nothing but a known prometheus
-// constructor (by selector name; collect checks the package). The body of a
+// constructor, matched by selector name. collect checks the package of the
+// collector argument and of its Opts, not of calls nested deeper (a Help or
+// ConstLabels value). The body of a
 // function literal is skipped, since a literal that is not called does not run
 // (a GaugeFunc callback); a literal that IS called is a call whose function is
 // not a constructor selector, so it is refused.

@@ -862,6 +862,16 @@ func init() {
 	metrics.Registry.MustRegister(prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_x_total", Help: func() string { panic("x") }()}))
 }
 `,
+		"an assignment whose left-hand side calls a helper first": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_x_total"})
+var m = map[int]error{}
+
+func key() int { return 0 }
+
+func init() {
+	m[key()] = metrics.Registry.Register(c)
+}
+`,
 		"an argument built by a helper call": `
 func build() prometheus.Counter { return prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_x_total"}) }
 

@@ -75,7 +75,7 @@ orders, each against a different assumption about the Next floor. jev rated the 
   scaffold today**. At a non-zero size it is per-process and lost on scale-to-zero (measured, research
   Q2).
 - Redis keys are app-scoped: `KEY_PREFIX = REDIS_KEY_PREFIX || 'kn-next'` (`cache-handler.js:112`),
-  and the operator sets the prefix to the app name. The build id is resolved once
+  and the operator sets the prefix per app (see Amendment 6). The build id is resolved once
   (`cache-handler.js:1097-1113`, Next's constant id rejected) and today gates only the #1888 seed
   (`:1135`). PR #2100 extends the gate to the read path and adds the env fallback chain
   `.next/BUILD_ID` → `KNEXT_BUILD_ID` → `NEXT_DEPLOYMENT_ID`. `knext build`/`deploy` set
@@ -260,7 +260,7 @@ Where this text omits or disagrees with the 2026-10-10 text on a point no amendm
   entry format, a tag store or an outage mode.
 
 **Keys and build scoping.**
-- Prefix: `REDIS_KEY_PREFIX` (the app name, set by the operator). ISR entries are
+- Prefix: `REDIS_KEY_PREFIX`, set per app by the operator (Amendment 6). ISR entries are
   `<prefix>:cache:<key>`. `'use cache'` entries are `<prefix>:uc:<handler>:<cacheKey>`, with
   `<handler>` = `default` or `remote` and Next's `<cacheKey>` stored opaque.
 - Build id: one resolver, `.next/BUILD_ID` → `KNEXT_BUILD_ID` → `NEXT_DEPLOYMENT_ID`, ignoring Next's
@@ -419,7 +419,7 @@ false on `main`.
 
 | Element | Rule |
 |---|---|
-| Prefix | `REDIS_KEY_PREFIX` (the app name, operator-set), unchanged |
+| Prefix | `REDIS_KEY_PREFIX` (per app, operator-set; Amendment 6), unchanged |
 | ISR entries | `<prefix>:cache:<key>`, unchanged |
 | `'use cache'` entries | `<prefix>:uc:<handler>:<cacheKey>`. `<handler>` is `default` or `remote`; `<cacheKey>` is Next's key, stored opaque |
 | Build scoping, `'use cache'` | **Next's key already carries it.** The key's implementation part is `deploymentId \|\| buildId`, or a code hash under the durable-entries flag (`use-cache-wrapper.js:1509-1513`, `:2526-2572`). The handler stores `buildId` for diagnostics only and adds **no** foreign-build miss. A second check would be redundant on the default path, and it would defeat the durable-entries flag, whose purpose is reuse across builds when the code is unchanged |
@@ -1313,3 +1313,23 @@ once the breaker closes. Amendment 4's shape, applied to stamps:
 - **The fallback is not atomic.** On a Redis that refuses scripts, a stamp written between the
   fallback's read and its write can be overwritten: a one-round-trip window, against the outage-long
   window the plain `HSET` had.
+
+## Amendment 6 (2026-11-08): the operator's Redis key prefix is derived, not the app name
+
+The decision text above said the operator sets `REDIS_KEY_PREFIX` to the app name. The per-app
+prefix work replaced that with a derived default. The text is corrected in place; this amendment records the actual rule.
+
+- **Who sets it, in order.** `spec.cache.keyPrefix` wins. Otherwise a `REDIS_KEY_PREFIX` the
+  user sets through `spec.env` (non-empty) or a `spec.secrets.envMap` Secret wins. Otherwise,
+  for a Redis cache, the operator renders `kn-` plus the first 12 lowercase hex characters of
+  sha256("<namespace>/<name>"), the same derivation as the CDN tag prefix
+  (`redis_key_prefix.go:defaultRedisKeyPrefix`). An empty `spec.env` value counts as unset and
+  is replaced by the derived default.
+- **The shared fallback.** An app with no prefix falls back to the runtime's literal `kn-next`.
+  No app owns that keyspace, so the finalizer, the cache cleaner and the runtime's collapse sweep
+  refuse to delete under `kn-next` or anything under `kn-next:`
+  (`redis_key_prefix.go:isSharedRedisKeyspace`), and `doctor` flags an app that sets it.
+- **Consequences.** Nothing else in this ADR changes: every key pattern above is still
+  `<prefix>:...`. A `REDIS_KEY_PREFIX` carried only in an `envFrom` Secret or baked into the
+  image is not visible to the operator, so the rendered default overrides it; such an app must
+  set `spec.cache.keyPrefix` to keep its prefix.

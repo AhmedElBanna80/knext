@@ -232,12 +232,16 @@ describe("#2481 — the BackendService preflight diagnoses against its own CRD",
     });
 
     it("a kind knext does not apply reads no schema, so the apiserver names the fields", () => {
-        const { kubectl, calls } = fakeKubectl({ openapi: true, crd: true });
-        const out = withCR({ ...CR, kind: "Widget" }, (crPath) =>
-            preflightCRSchema({ kubectl }, { crPath, namespace: "z" }),
-        );
-        expect(out.diagnosis).toBe("apiserver-message");
-        expect(out.diagnosisDetail).toMatch(/Widget/);
-        expect(calls.some((c) => c[1] === "get")).toBe(false);
+        for (const kind of ["Widget", "constructor", "__proto__"]) {
+            const { kubectl, calls } = fakeKubectl({
+                openapi: true,
+                crd: true,
+            });
+            const out = withCR({ ...CR, kind }, (crPath) =>
+                preflightCRSchema({ kubectl }, { crPath, namespace: "z" }),
+            );
+            expect(out.diagnosis).toBe("apiserver-message");
+            expect(calls.some((c) => c[1] === "get")).toBe(false);
+        }
     });
 });

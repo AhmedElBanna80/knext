@@ -133,7 +133,9 @@ export function readKnownCRDFields(
     kind: string = NEXTAPP_KIND,
 ): KnownFieldsRead {
     const notes: string[] = [];
-    const crdName = CRD_NAME_OF_KIND[kind];
+    const crdName = Object.hasOwn(CRD_NAME_OF_KIND, kind)
+        ? CRD_NAME_OF_KIND[kind]
+        : undefined;
     // A kind with no known CRD is never read against another kind's schema.
     if (crdName === undefined) {
         return {
@@ -237,7 +239,6 @@ export function unknownFieldsOfCR(
     const out: string[] = [];
     const walk = (node: unknown, path: string): void => {
         if (typeof node !== "object" || node === null) return;
-        if (path && isFieldKnown(`${path}.__opaque__`, known)) return;
         const entries = Array.isArray(node)
             ? node.map((v): [string, unknown] => ["*", v])
             : Object.entries(node as Record<string, unknown>);

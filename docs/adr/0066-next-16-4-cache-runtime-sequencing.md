@@ -74,7 +74,7 @@ orders, each against a different assumption about the Next floor. jev rated the 
   `'use cache'` handler a no-op at size 0, so **`'use cache'` is a silent no-op on every knext
   scaffold today**. At a non-zero size it is per-process and lost on scale-to-zero (measured, research
   Q2).
-- Redis keys are app-scoped: `KEY_PREFIX = REDIS_KEY_PREFIX || 'kn-next'` (`cache-handler.js:112`),
+- Redis keys are app-scoped: `KEY_PREFIX = REDIS_KEY_PREFIX || 'kn-next'` (`cache-handler.js:128`),
   and the operator sets the prefix per app (see Amendment 6). The build id is resolved once
   (`cache-handler.js:1097-1113`, Next's constant id rejected) and today gates only the #1888 seed
   (`:1135`). PR #2100 extends the gate to the read path and adds the env fallback chain
@@ -1325,11 +1325,13 @@ prefix work replaced that with a derived default. The text is corrected in place
   sha256("<namespace>/<name>"), the same derivation as the CDN tag prefix
   (`redis_key_prefix.go:defaultRedisKeyPrefix`). An empty `spec.env` value counts as unset and
   is replaced by the derived default.
-- **The shared fallback.** An app with no prefix falls back to the runtime's literal `kn-next`.
-  No app owns that keyspace, so the finalizer, the cache cleaner and the runtime's collapse sweep
+- **The shared fallback.** A pod with no `REDIS_KEY_PREFIX` at all (not deployed by the operator)
+  falls back to the runtime's literal `kn-next`, and a user can also set it explicitly. No app owns
+  that keyspace, so the finalizer, the cache cleaner and the runtime's collapse sweep
   refuse to delete under `kn-next` or anything under `kn-next:`
-  (`redis_key_prefix.go:isSharedRedisKeyspace`), and `doctor` flags an app that sets it.
+  (`redis_key_prefix.go:isSharedRedisKeyspace`), and `doctor` flags an app whose CR sets it
+  (a value from a `spec.secrets.envMap` Secret it reports as not verified).
 - **Consequences.** Nothing else in this ADR changes: every key pattern above is still
   `<prefix>:...`. A `REDIS_KEY_PREFIX` carried only in an `envFrom` Secret or baked into the
   image is not visible to the operator, so the rendered default overrides it; such an app must
-  set `spec.cache.keyPrefix` to keep its prefix.
+  set `spec.cache.keyPrefix` or a non-empty `spec.env` `REDIS_KEY_PREFIX` to keep its prefix.

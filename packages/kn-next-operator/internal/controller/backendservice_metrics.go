@@ -51,7 +51,7 @@ var (
 			Help: "Total number of times a BackendService entered a refused state, labeled by reason " +
 				"(ZoneNotFound | ZoneNotListed | BindingImageMismatch | BindingSpecMismatch | ConflictingOwner | SovereigntyViolation | InvalidImage | KnativeServiceNameTaken | JWKSUntrusted).",
 		},
-		[]string{"reason"},
+		[]string{labelReason},
 	)
 
 	// backendServiceSecretsUnverifiedSince is one series per function currently
@@ -66,7 +66,7 @@ var (
 			Help: "Unix time since which a BackendService has been held as SecretsUnverified (the operator cannot read " +
 				"a referenced Secret), labeled by namespace, name and reason (transient | forbidden). Absent when verified.",
 		},
-		[]string{"namespace", "name", "reason"},
+		[]string{"namespace", "name", labelReason},
 	)
 )
 

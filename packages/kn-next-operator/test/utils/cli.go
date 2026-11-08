@@ -99,8 +99,7 @@ func RunCLIInDir(dir string, args ...string) (CLIResult, error) {
 	runErr := cmd.Run()
 	code := 0
 	if runErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 			code = exitErr.ExitCode()
 		} else {
 			return CLIResult{}, fmt.Errorf(
@@ -111,6 +110,14 @@ func RunCLIInDir(dir string, args ...string) (CLIResult, error) {
 		code, stdout.String(), stderr.String())
 	return CLIResult{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: code}, nil
 }
+
+// Repeated bun argv tokens.
+const (
+	argBun    = "bun"
+	argRun    = "run"
+	argFilter = "--filter"
+	argBuild  = "build"
+)
 
 // BuildCLISteps is the toolchain sequence that builds the kn-next CLI
 // (dist/cli/kn-next.js) from source at the repo root. It uses the repo's
@@ -123,9 +130,9 @@ func RunCLIInDir(dir string, args ...string) (CLIResult, error) {
 // the ci.yml build step. The CLI built this way is still the plain-Node dist.
 func BuildCLISteps() [][]string {
 	return [][]string{
-		{"bun", "run", "--filter", "@getknext/lib", "build"},
-		{"bun", "run", "--filter", "@getknext/db", "build"},
-		{"bun", "run", "--filter", "@getknext/core", "build"},
+		{argBun, argRun, argFilter, "@getknext/lib", argBuild},
+		{argBun, argRun, argFilter, "@getknext/db", argBuild},
+		{argBun, argRun, argFilter, "@getknext/core", argBuild},
 	}
 }
 

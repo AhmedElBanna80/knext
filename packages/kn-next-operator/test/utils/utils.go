@@ -297,11 +297,11 @@ const (
 // both survive kubectl's merged `pod deleted` stderr noise identically. The body
 // is everything before the newline that precedes the status marker.
 func ParseCurlStatusMarker(out, url string) (int, string, error) {
-	start := strings.LastIndex(out, curlCodePrefix)
-	if start < 0 {
+	before0, after, ok0 := strings.CutLast(out, curlCodePrefix)
+	if !ok0 {
 		return 0, out, fmt.Errorf("no HTTP status marker in response from %s: %q", url, out)
 	}
-	rest := out[start+len(curlCodePrefix):]
+	rest := after
 	before, _, ok := strings.Cut(rest, curlCodeSuffix)
 	if !ok {
 		return 0, out, fmt.Errorf("truncated HTTP status marker in response from %s: %q", url, out)
@@ -311,7 +311,7 @@ func ParseCurlStatusMarker(out, url string) (int, string, error) {
 	if convErr != nil {
 		return 0, out, fmt.Errorf("could not parse HTTP status %q from response: %w", codeStr, convErr)
 	}
-	body := strings.TrimRight(out[:start], "\n")
+	body := strings.TrimRight(before0, "\n")
 	return code, body, nil
 }
 

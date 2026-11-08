@@ -70,10 +70,10 @@ func FunctionNetworkPolicyName(function string) string { return function + "-fun
 // functionLabels are stamped on every object rendered for a function.
 func functionLabels(bs *appsv1alpha1.BackendService) map[string]string {
 	return map[string]string{
-		"app":          bs.Name,
-		"generated-by": "kn-next-operator",
-		ZoneLabel:      bs.Spec.Zone,
-		FunctionLabel:  bs.Name,
+		knativePodLabelKey:  bs.Name,
+		generatedByLabelKey: OperatorFieldManager,
+		ZoneLabel:           bs.Spec.Zone,
+		FunctionLabel:       bs.Name,
 	}
 }
 

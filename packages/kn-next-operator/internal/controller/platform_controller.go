@@ -76,10 +76,10 @@ func computePlatformStatus(p *platformv1alpha1.KnextPlatform, apps []appsv1alpha
 	if acceptErr != nil {
 		msg := acceptErr.Error()
 		st.Conditions = []metav1.Condition{
-			{Type: PlatformConditionAccepted, Status: metav1.ConditionFalse, Reason: "NotAccepted", Message: msg, ObservedGeneration: p.Generation},
-			{Type: PlatformConditionDefaultsPropagated, Status: metav1.ConditionFalse, Reason: "NotAccepted",
+			{Type: PlatformConditionAccepted, Status: metav1.ConditionFalse, Reason: reasonNotAccepted, Message: msg, ObservedGeneration: p.Generation},
+			{Type: PlatformConditionDefaultsPropagated, Status: metav1.ConditionFalse, Reason: reasonNotAccepted,
 				Message: "this platform is ignored, so nothing is propagated from it: built-in defaults apply", ObservedGeneration: p.Generation},
-			{Type: PlatformConditionReady, Status: metav1.ConditionFalse, Reason: "NotAccepted", Message: msg, ObservedGeneration: p.Generation},
+			{Type: PlatformConditionReady, Status: metav1.ConditionFalse, Reason: reasonNotAccepted, Message: msg, ObservedGeneration: p.Generation},
 		}
 		return st
 	}

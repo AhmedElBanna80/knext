@@ -549,7 +549,7 @@ func renderedTemplateFields(ksvc *servingv1.Service) map[string]string {
 			}
 			fv = fv.Elem()
 		}
-		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if name == "" {
 			name = f.Name
 		}

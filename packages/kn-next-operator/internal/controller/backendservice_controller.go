@@ -560,8 +560,7 @@ func functionNetworkPolicyEnabled(bs *appsv1alpha1.BackendService) bool {
 // alreadyOwned turns controller-runtime's AlreadyOwnedError into a status
 // message; any other error returns "".
 func alreadyOwned(err error, kind, name string) string {
-	var owned *controllerutil.AlreadyOwnedError
-	if errors.As(err, &owned) {
+	if owned, ok := errors.AsType[*controllerutil.AlreadyOwnedError](err); ok {
 		return fmt.Sprintf("%s %q already exists and is controlled by %s %q; rename the function",
 			kind, name, owned.Owner.Kind, owned.Owner.Name)
 	}

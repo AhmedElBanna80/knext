@@ -168,8 +168,8 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 	if ksvc.Labels == nil {
 		ksvc.Labels = make(map[string]string)
 	}
-	ksvc.Labels["app"] = nextApp.Name
-	ksvc.Labels["generated-by"] = "kn-next-operator"
+	ksvc.Labels[knativePodLabelKey] = nextApp.Name
+	ksvc.Labels[generatedByLabelKey] = OperatorFieldManager
 
 	// Visibility (#1865): spec.networking.visibility == "cluster-local" renders
 	// the Knative label that keeps this ksvc's Route off the external gateway —

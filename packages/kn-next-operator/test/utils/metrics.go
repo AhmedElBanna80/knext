@@ -65,7 +65,7 @@ func MetricValue(exposition, series string) (float64, bool) {
 func ScrapeWithBearer(namespace, podName, url, token string) (string, error) {
 	_, _ = Kubectl("delete", "pod", podName, "-n", namespace, "--ignore-not-found")
 	out, err := runKubectlRedacted([]string{
-		"run", podName,
+		argRun, podName,
 		"-n", namespace,
 		"--restart=Never",
 		"--rm", "-i",

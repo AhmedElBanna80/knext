@@ -84,13 +84,19 @@ type Family struct {
 	Vec bool
 }
 
+// Prometheus exposition types shared by the constructor table.
+const (
+	typeCounter = "counter"
+	typeGauge   = "gauge"
+)
+
 var constructors = map[string]Family{
-	"NewCounter":      {Type: "counter"},
-	"NewCounterVec":   {Type: "counter", Vec: true},
-	"NewCounterFunc":  {Type: "counter"},
-	"NewGauge":        {Type: "gauge"},
-	"NewGaugeVec":     {Type: "gauge", Vec: true},
-	"NewGaugeFunc":    {Type: "gauge"},
+	"NewCounter":      {Type: typeCounter},
+	"NewCounterVec":   {Type: typeCounter, Vec: true},
+	"NewCounterFunc":  {Type: typeCounter},
+	"NewGauge":        {Type: typeGauge},
+	"NewGaugeVec":     {Type: typeGauge, Vec: true},
+	"NewGaugeFunc":    {Type: typeGauge},
 	"NewHistogram":    {Type: "histogram"},
 	"NewHistogramVec": {Type: "histogram", Vec: true},
 	"NewSummary":      {Type: "summary"},

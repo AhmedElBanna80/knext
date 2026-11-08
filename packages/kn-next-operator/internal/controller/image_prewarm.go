@@ -104,8 +104,8 @@ func imagePrewarmEnabled(app *appsv1alpha1.NextApp) bool {
 // does that via controllerutil) — keeping it unit-testable without a scheme.
 func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.LocalObjectReference) *appsv1.DaemonSet {
 	labels := map[string]string{
-		"app":                          app.Name,
-		"generated-by":                 "kn-next-operator",
+		knativePodLabelKey:             app.Name,
+		generatedByLabelKey:            OperatorFieldManager,
 		"apps.kn-next.dev/imgcache":    app.Name,
 		"app.kubernetes.io/component":  "image-prewarm",
 		"app.kubernetes.io/managed-by": "kn-next-operator",
@@ -124,7 +124,7 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 	}
 
-	helperMount := corev1.VolumeMount{Name: "pin", MountPath: prewarmHelperMountPath}
+	helperMount := corev1.VolumeMount{Name: prewarmPinName, MountPath: prewarmHelperMountPath}
 
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -153,7 +153,7 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
 					Volumes: []corev1.Volume{
-						{Name: "pin", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+						{Name: prewarmPinName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 					},
 					// initContainer stages the static busybox helper into the
 					// shared emptyDir. `cp` preserves the executable mode.
@@ -172,7 +172,7 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 					// busybox — the app server never boots and no shell is assumed.
 					Containers: []corev1.Container{
 						{
-							Name:            "pin",
+							Name:            prewarmPinName,
 							Image:           app.Spec.Image,
 							Command:         []string{prewarmHelperBinary, "sleep", "2147483647"},
 							VolumeMounts:    []corev1.VolumeMount{helperMount},

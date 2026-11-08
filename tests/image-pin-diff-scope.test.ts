@@ -80,7 +80,7 @@ const fakeRegistry = () => {
   return { api, calls };
 };
 
-const docker = (digest: string, tag = 'golang:1.26.10') =>
+const docker = (digest: string, tag = 'golang:1.27.3') =>
   `FROM ${tag}@${digest} AS build\nRUN true\n`;
 const goSrc = (digest: string) => `package x\n\nconst helper = "busybox:1.36.1-uclibc@${digest}"\n`;
 const yamlSrc = (digest: string) => `spec:\n  containers:\n    - image: alpine:3.20@${digest}\n`;
@@ -106,7 +106,7 @@ describe('PR mode: only pins the PR adds or changes are resolved', () => {
     r.commit();
     const { api, calls } = fakeRegistry();
     const result = await verifyRepo(r.dir, { api, base: r.base });
-    expect(calls).toEqual(['library/golang:1.26.10']);
+    expect(calls).toEqual(['library/golang:1.27.3']);
     expect(result.findings.map((f) => f.reason)).toEqual(['digest-mismatch']);
   });
 
@@ -140,7 +140,7 @@ describe('PR mode: only pins the PR adds or changes are resolved', () => {
     ]);
     expect(result.findings.length).toBe(4);
     // the untouched Dockerfile pin was not resolved
-    expect(calls).not.toContain('library/golang:1.26.10');
+    expect(calls).not.toContain('library/golang:1.27.3');
   });
 
   it('checks a changed pin in a Go source and in benchmark YAML (not only Dockerfiles)', async () => {
@@ -183,7 +183,7 @@ describe('PR mode: only pins the PR adds or changes are resolved', () => {
     r.commit();
     const { api, calls } = fakeRegistry();
     const result = await verifyRepo(r.dir, { api, base: r.base });
-    expect(calls).toEqual(['library/golang:1.26.10']);
+    expect(calls).toEqual(['library/golang:1.27.3']);
     expect(result.findings.map((f) => f.reason)).toEqual(['digest-mismatch']);
   });
 
@@ -209,11 +209,11 @@ describe('PR mode: only pins the PR adds or changes are resolved', () => {
 
   it('resolves a changed tag with the same digest', async () => {
     const r = repoWith({ 'svc/Dockerfile': docker(UPSTREAM, 'golang:1.26.9') });
-    r.write('svc/Dockerfile', docker(UPSTREAM, 'golang:1.26.10'));
+    r.write('svc/Dockerfile', docker(UPSTREAM, 'golang:1.27.3'));
     r.commit();
     const { api, calls } = fakeRegistry();
     await verifyRepo(r.dir, { api, base: r.base });
-    expect(calls).toEqual(['library/golang:1.26.10']);
+    expect(calls).toEqual(['library/golang:1.27.3']);
   });
 
   it("diffs against the MERGE BASE, not the base tip: a repin that landed on the base is not the PR's", async () => {
@@ -300,7 +300,7 @@ describe('PR mode keeps the no-network checks on the full tree', () => {
     const exclusions = [
       {
         file: 'svc/Dockerfile',
-        image: 'golang:1.26.10',
+        image: 'golang:1.27.3',
         digest: NEW,
         covers: ['registry-resolution'],
         justification: 'fixture',
@@ -374,7 +374,7 @@ describe('without --base (nightly / manual) the whole tree is resolved', () => {
     });
     const { api, calls } = fakeRegistry();
     const result = await verifyRepo(r.dir, { api });
-    expect(calls.sort()).toEqual(['library/alpine:3.20', 'library/golang:1.26.10']);
+    expect(calls.sort()).toEqual(['library/alpine:3.20', 'library/golang:1.27.3']);
     expect(result.findings.map((f) => f.reason)).toEqual(['digest-mismatch', 'digest-mismatch']);
   });
 

@@ -39,11 +39,13 @@ export default adapter;
   `output: 'export'` is left untouched, so Next.js runs its own static-export validation, and the
   knext CLI then refuses the build (on both the Next.js and vinext build targets; both read `next.config` literally, so a value computed at runtime is not detected, and on vinext an `output: 'export'` that sits under a condition or inside a nested value only prints a warning): a static export is not a server deployment, and knext deploys a
   Next.js server. Remove `output: 'export'`, or host the `out/` folder on a static host.
-- **A custom `distDir` is not supported yet.** Before a Next.js build, `knext build`, `deploy` and
-  `preview` refuse a `next.config` whose `distDir` is anything but the default `.next` (also written
-  `./.next` or `.next/`), because knext's build and packaging steps read the output from `.next`.
-  A value the CLI cannot read from the file, such as an environment variable or a template with
-  `${}`, is refused too. Remove `distDir` and build again. The vinext target does not use `distDir`.
+- **A custom `distDir` is not supported yet.** knext's build and packaging steps read the output
+  from `.next`, so leave `distDir` unset (or set it to `.next`). When `knext build`, `deploy` or
+  `preview` runs the Next.js build, it checks `next.config` first and refuses a `distDir` property or
+  assignment set to anything else, or to a value it cannot read from the file (an environment
+  variable, a template with `${}`). The check reads the file as text, so it does not see every way a
+  config can set `distDir` (for example a shorthand `{ distDir }`), and it does not run when you skip
+  the build (`--skip-next`, `--skip-build`). The vinext target does not use `distDir`.
 - **`onBuildComplete`** uploads the build's static artifacts to the configured object store, keyed
   by `buildId`.
 

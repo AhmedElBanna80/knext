@@ -160,7 +160,8 @@ function readConfigOrRefuse(
 
 /**
  * Every `distDir` key in the config text (comments stripped): a property
- * (`distDir:`, quoted or not) or an assignment (`x.distDir =`). Each is either
+ * (`distDir:`, quoted, bare or a computed `['distDir']:`) or an assignment
+ * (`x.distDir =`, `x['distDir'] =`). Each is either
  * a plain string literal (`literal`) or anything else (`raw`: an env var, a
  * ternary, a template with `${}`), which this text scan cannot evaluate.
  */
@@ -170,7 +171,7 @@ function distDirMentions(
     const out: { literal?: string; raw: string }[] = [];
     const text = stripCommentsStringAware(configText);
     for (const m of text.matchAll(
-        /["'`]?\bdistDir["'`]?\s*(?::|=(?!=))\s*([^,;}\n]*)/g,
+        /(?:\[\s*)?["'`]?\bdistDir["'`]?(?:\s*\])?\s*(?::|=(?![=>]))\s*([^,;}\n]*)/g,
     )) {
         const raw = (m[1] ?? "").trim();
         const lit = raw.match(/^(["'`])([^"'`\n]*)\1$/);
@@ -211,8 +212,10 @@ function isDefaultDistDir(distDir: string): boolean {
  * Refused up front until the resolved value is threaded through. It reads the
  * config text, like the other guards here, and fails closed: every `distDir`
  * key must be a plain literal for the default, or the build is refused, so a
- * computed value (an env var, a ternary, a `${}` template) refuses too. Not
- * seen: a shorthand property (`{ distDir }`) or a value set outside the file.
+ * computed value (an env var, a ternary, a `${}` template) refuses too. It is a
+ * best-effort text check, not an evaluation (#2250): not seen are a shorthand
+ * property (`{ distDir }`), `Object.defineProperty`, a value set outside the
+ * file, and builds that skip it (`build --skip-next`, `deploy --skip-build`).
  */
 export function assertDefaultDistDir(
     cwd: string,

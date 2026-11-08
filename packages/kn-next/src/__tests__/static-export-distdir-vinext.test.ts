@@ -115,6 +115,27 @@ describe("a custom distDir is refused before a Next build", () => {
         }
     });
 
+    it("refuses a computed-key property and a bracket assignment", () => {
+        for (const config of [
+            "export default { ['distDir']: 'build' };",
+            "const c = {}; c['distDir'] = 'build'; export default c;",
+        ]) {
+            expectDistDirRefusal(
+                run(appDir({ "next.config.mjs": config }), false).caught,
+                "build",
+            );
+        }
+    });
+
+    it("does not treat an arrow function named distDir as an assignment", () => {
+        const dir = appDir({
+            "next.config.mjs": "const distDir => 1;\nexport default {};",
+        });
+        const { runner, caught } = run(dir, false);
+        expect(caught).toBeUndefined();
+        expect(runner).toHaveBeenCalledTimes(1);
+    });
+
     it("checks every distDir key, so an earlier default one does not mask a later custom one", () => {
         const dir = appDir({
             "next.config.mjs":

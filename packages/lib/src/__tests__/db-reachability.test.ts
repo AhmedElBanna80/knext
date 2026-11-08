@@ -223,10 +223,13 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
     // builds the pino singleton as a side effect of loading clients, so a suite that
     // mocks pino after importing clients captures nothing (logger.test.ts,
     // correlation.test.ts). Walk every relative import of reachability.ts,
-    // transitively, using Bun's own parser, so no spelling slips past (bare,
-    // dynamic, re-export, comments, backticks); none may reach src/logger. It
-    // fails closed: an unresolvable relative import, or a dynamic import or
-    // require call the parser could not resolve to a literal path, fails the test.
+    // transitively; none may reach src/logger. Static imports and re-exports come
+    // from Bun's parser (`scan`). Dynamic imports and require calls are guarded by
+    // a count: the transpiled JS (comments and types stripped) must hold exactly as
+    // many `import(`/`require(` sites as `scan` resolved to a literal path, so a
+    // non-literal or unseen one (`import(p)`, TS `import x = require()`) fails the
+    // test. An unresolvable relative path fails it too. A string containing
+    // `import(` also fails it; that false red is accepted.
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
     const loggerDir = join(srcDir, 'logger');
     const ts = new Bun.Transpiler({ loader: 'ts' });

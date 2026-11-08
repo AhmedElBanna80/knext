@@ -407,7 +407,12 @@ export function purgeChecks(c) {
           ctl.status === 200 && hit(ctl),
           `precondition: ${control}, rendered by the new build, was not an edge HIT (x-emu-cache=${ctl.headers['x-emu-cache']}, status ${ctl.status}): the edge caches nothing, so this check would prove nothing`,
         );
+        // Split by the offending entry's build tag: under a POST-rollout tag it is
+        // the defect this check gates (the new build stored the old body); under
+        // the PRE-rollout tag (s.buildTag) an old-revision pod refilled the edge,
+        // a different failure that must not read as the same one (#2306).
         const bad = [];
+        const badOldTag = [];
         let fromOrigin = 0;
         for (const path of [s.paths[0], `/tagged?${k('ro-fresh')}`]) {
           for (let attempt = 0; attempt < 2; attempt++) {
@@ -427,15 +432,21 @@ export function purgeChecks(c) {
             if (stored(r)) why.push(`stored for ${r.headers['x-emu-stored']} s`);
             for (const h of EDGE_ONLY)
               if (r.headers[h] !== undefined) why.push(`${h}: ${r.headers[h]}`);
-            if (why.length > 0)
-              bad.push(
-                `${path} (build ${mark}, build tag ${buildTagOf(r) ?? 'none'}: ${why.join(', ')})`,
-              );
+            if (why.length > 0) {
+              const tag = buildTagOf(r);
+              const entry = `${path} (build ${mark}, build tag ${tag ?? 'none'}: ${why.join(', ')})`;
+              if (tag !== undefined && tag === s.buildTag) badOldTag.push(entry);
+              else bad.push(entry);
+            }
           }
         }
         must(
+          badOldTag.length === 0,
+          `old-build HTML under the PRE-rollout build tag ${s.buildTag} was stored at or served from the edge (an old-revision pod refilled it, not the new build): ${badOldTag.join('; ')}`,
+        );
+        must(
           bad.length === 0,
-          `old-build HTML was stored at or served from the edge after the first-ready purge: ${bad.join('; ')}`,
+          `old-build HTML was stored at or served from the edge after the first-ready purge, not under the pre-rollout build tag: ${bad.join('; ')}`,
         );
         return `build ${current}: ${fromOrigin} old-build response(s) from the origin, none edge-cacheable or stored; ${control} (new build) an edge HIT`;
       },

@@ -275,6 +275,7 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
   type Mode =
     | 'refused'
     | 'stored'
+    | 'stored-old-tag'
     | 'stored-bare'
     | 'hit-only'
     | 'hit-bare'
@@ -283,7 +284,11 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
     | 'broken'
     | 'no-mark';
 
-  async function runAgainst(tagged: Mode, control: 'cached' | 'never' = 'cached') {
+  async function runAgainst(
+    tagged: Mode,
+    control: 'cached' | 'never' = 'cached',
+    buildTag = 'kn-x-b0',
+  ) {
     const { createServer } = await import('node:http');
     const seen = new Map<string, number>();
     const html = (mark: string) => `<!DOCTYPE html><p id="build">${mark}</p>`;
@@ -310,6 +315,11 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
           return n === 1
             ? page('v1', { 'x-emu-cache': 'MISS', 'x-emu-stored': '3600', 'cache-tag': tag })
             : page('v1', { 'x-emu-cache': 'HIT', 'cache-tag': tag });
+        case 'stored-old-tag': // an old-revision pod refilled the edge under the PRE-rollout tag
+          return page('v1', {
+            'x-emu-cache': 'HIT',
+            'cache-tag': 'kn-77489686e9ad,kn-77489686e9ad-b111111111111',
+          });
         case 'stored-bare': // an edge that stores without a directive (store-all)
           return page('v1', { 'x-emu-cache': 'MISS', 'x-emu-stored': '300' });
         case 'hit-bare': // served from the edge, no edge headers passed through
@@ -341,7 +351,7 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
       const stateFile = join(dir, `state-${port}.json`);
       writeFileSync(
         stateFile,
-        JSON.stringify({ rollout: { paths: ['/tagged?k=1'], mark: 'v1', buildTag: 'kn-x-b0' } }),
+        JSON.stringify({ rollout: { paths: ['/tagged?k=1'], mark: 'v1', buildTag } }),
       );
       const { purgeChecks, purgeConfig } = await import(PURGE_ASSERT);
       const c = purgeConfig({ CDN_EMU_URL: `http://127.0.0.1:${port}`, CDN_STATE_FILE: stateFile });
@@ -370,6 +380,30 @@ describe('rollout-no-old-html: old-build HTML never reaches the edge', () => {
     expect(r.ok).toBe(false);
     expect(r.note.startsWith('old-build HTML was stored at or served from the edge')).toBe(true);
     expect(r.note).toContain('kn-77489686e9ad-b222222222222');
+  });
+
+  it('old-build HTML under the PRE-rollout build tag fails with its own message, which the red spec does not accept', async () => {
+    const r = await runAgainst('stored-old-tag', 'cached', 'kn-77489686e9ad-b111111111111');
+    expect(r.ok).toBe(false);
+    expect(r.note).toContain('under the PRE-rollout build tag kn-77489686e9ad-b111111111111');
+    expect(r.note).toContain('an old-revision pod refilled it');
+    const spec = readFileSync(join(RED_DIR, 'purge-rollout-foreign-build.txt'), 'utf8');
+    const expected = spec
+      .split('\n')
+      .find((l) => l.startsWith('rollout-no-old-html|'))
+      ?.split('|')[1];
+    expect(expected).toBeDefined();
+    expect(r.note).not.toContain(expected as string);
+  });
+
+  it('the red spec matches the new-build-tag failure', async () => {
+    const r = await runAgainst('stored');
+    const spec = readFileSync(join(RED_DIR, 'purge-rollout-foreign-build.txt'), 'utf8');
+    const expected = spec
+      .split('\n')
+      .find((l) => l.startsWith('rollout-no-old-html|'))
+      ?.split('|')[1];
+    expect(r.note).toContain(expected as string);
   });
 
   it('an old-build body carrying an edge directive or a tag header is the failure', async () => {

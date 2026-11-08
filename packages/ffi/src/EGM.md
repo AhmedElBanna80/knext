@@ -115,7 +115,10 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       through that same descriptor (`/proc/self/fd/<n>`, never closed), so a file renamed or
       symlinked over the path after the check is not the one loaded. On macOS it is loaded by
       path, because dyld opens `/dev/fd/<n>` as a second library instance; a swap between the
-      check and the load is not caught there.
+      check and the load is not caught there. The check assumes the attacker cannot write to
+      the library file or to `native/`: the descriptor pins the inode, not its contents, so an
+      in-place write after the hash is loaded. On Linux the load needs `/proc` mounted; a failed
+      load closes the descriptor and its error names both the path and `/proc/self/fd/<n>`.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check.
     - Every `<symbol>_schema` must equal the FNV-1a 64 hash computed at render time.
@@ -181,7 +184,8 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     which `releaseZig` removes (`SupplyChain.dispose`, called in `runBuild`'s `finally`).
   - `buildSbom` creates and removes `knext-ffi-sbom-<triple>.json` in the crate directory.
 - **What the generated module does at run time** (`render.ts:renderModule`): it calls `dlopen` on
-  the library (on Linux through the verified descriptor, which stays open) and reads `KNEXT_FFI_SLOW_CALL_MS` (default 50 ms, `0` turns counting off),
+  the library (on Linux through the verified descriptor, which stays open: one per module copy, so one per
+  bundler layer) and reads `KNEXT_FFI_SLOW_CALL_MS` (default 50 ms, `0` turns counting off),
   `NODE_ENV` and `NEXT_PHASE`. It keeps a process-wide metrics registry at
   `globalThis[Symbol.for('knext.ffi.metrics')]`, publishes a Prometheus renderer at
   `Symbol.for('knext.ffi.renderMetrics')` after the first successful load

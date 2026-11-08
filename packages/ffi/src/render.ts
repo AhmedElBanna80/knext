@@ -21,9 +21,14 @@
  *   in `native/.integrity.json` with a matching sha256. On Linux it is loaded
  *   through the descriptor its bytes were hashed from (`/proc/self/fd/<n>`),
  *   so a file renamed or linked over the path after the check is not the one
- *   `dlopen` opens. On macOS it is loaded by path, since dyld treats
+ *   `dlopen` opens (this needs `/proc` mounted, as every container runtime
+ *   does). On macOS it is loaded by path, since dyld treats
  *   `/dev/fd/<n>` as a second library: a swap between the check and the load
  *   is not caught there (macOS is a development platform; images are Linux).
+ *   The check assumes the attacker cannot write to the library file itself or
+ *   to `native/`: the descriptor pins the inode, not its contents, so a write
+ *   into the same file after the hash is loaded. Ship `native/` root-owned and
+ *   read-only.
  *   The development build
  *   is used only when `NODE_ENV !== 'production'`; every function's `_schema`
  *   value must match the one computed here; any failure is one cached
@@ -628,8 +633,11 @@ function $open(): void {
   try {
     symbols = ffi.dlopen(load, $SPEC).symbols;
   } catch (err) {
+    // A descriptor handed to dlopen is never closed on success; on failure it is.
+    if (load.startsWith('/proc/self/fd/')) $closeSync(Number(load.slice('/proc/self/fd/'.length)));
+    const via = load === path ? '' : \` (opened as \${load}; it needs /proc mounted)\`;
     throw new FfiLoadError(
-      \`knext ffi: could not load \${path}: \${err instanceof Error ? err.message : String(err)}\\n\` +
+      \`knext ffi: could not load \${path}\${via}: \${err instanceof Error ? err.message : String(err)}\\n\` +
         'If the library does not export a function this module calls, the module is stale: run \`knext ffi generate\` and commit the result.',
     );
   }

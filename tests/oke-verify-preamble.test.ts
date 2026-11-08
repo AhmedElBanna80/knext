@@ -33,9 +33,12 @@ afterAll(() => {
 
 type Cluster = { pods?: unknown; crd?: unknown; ksvc?: unknown; fail?: 'pods' | 'crd' | 'ksvc' };
 
-function pods(...ids: string[]) {
+function pods(...ids: (string | null)[]) {
   return {
-    items: ids.map((id) => ({ status: { containerStatuses: [{ name: 'manager', imageID: id }] } })),
+    items: ids.map((id, i) => ({
+      metadata: { name: `op-${i}` },
+      status: id === null ? {} : { containerStatuses: [{ name: 'manager', imageID: id }] },
+    })),
   };
 }
 
@@ -80,8 +83,8 @@ describe('oke-verify-preamble', () => {
   it('passes and prints the three facts when the cluster matches', () => {
     const r = run({}, ['--expect-operator-digest', D, '--expect-ksvc-generation', '7']);
     expect(r.code).toBe(0);
-    expect(r.out).toContain(`operator imageID: ${IMG}@${D}`);
-    expect(r.out).toContain('covers every source field');
+    expect(r.out).toContain(`operator pod op-0 imageID: ${IMG}@${D}`);
+    expect(r.out).toContain('schema equals the source');
     expect(r.out).toContain('ksvc knext-docs/knext-docs generation: 7');
   });
 
@@ -105,13 +108,13 @@ describe('oke-verify-preamble', () => {
   it('fails on a different operator digest', () => {
     const r = run({ pods: pods(`${IMG}@${OTHER}`) });
     expect(r.code).toBe(1);
-    expect(r.out).toContain(`MISMATCH: operator runs ${OTHER}, expected ${D}`);
+    expect(r.out).toContain(`MISMATCH: operator pod op-0 runs ${OTHER}, expected ${D}`);
   });
 
   it('fails when one of several operator pods runs another digest (half-done rollout)', () => {
     const r = run({ pods: pods(`${IMG}@${D}`, `${IMG}@${OTHER}`) });
     expect(r.code).toBe(1);
-    expect(r.out).toContain(`operator runs ${OTHER}`);
+    expect(r.out).toContain(`operator pod op-1 runs ${OTHER}`);
   });
 
   it('fails when no operator pod is running', () => {
@@ -127,7 +130,7 @@ describe('oke-verify-preamble', () => {
     delete spec[dropped];
     const r = run({ crd: live });
     expect(r.code).toBe(1);
-    expect(r.out).toContain('MISMATCH: live CRD differs from the source');
+    expect(r.out).toContain('MISMATCH: live CRD: version');
     expect(r.out).toContain(dropped);
   });
 
@@ -140,7 +143,85 @@ describe('oke-verify-preamble', () => {
   it('fails when the ksvc has no generation', () => {
     const r = run({ ksvc: { metadata: {} } });
     expect(r.code).toBe(1);
-    expect(r.out).toContain('has no metadata.generation');
+    expect(r.out).toContain('has no integer metadata.generation');
+  });
+
+  it('accepts the docker-pullable imageID form', () => {
+    expect(run({ pods: pods(`docker-pullable://${IMG}@${D}`) }).code).toBe(0);
+  });
+
+  it('fails on an imageID with no digest', () => {
+    for (const id of ['', `${IMG}:v1`]) {
+      const r = run({ pods: pods(id) });
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('runs (no digest)');
+    }
+  });
+
+  it('fails when an operator pod has no manager status yet (pod still starting)', () => {
+    const r = run({ pods: pods(`${IMG}@${D}`, null) });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('operator pod op-1 imageID: (none)');
+    expect(r.out).toContain('MISMATCH: operator pod op-1 runs (no digest)');
+  });
+
+  it('fails when the live CRD drops a source pattern but keeps every field', () => {
+    const live = structuredClone(CRD);
+    const dropPattern = (node: Record<string, unknown>): boolean => {
+      if (typeof node.pattern === 'string') {
+        delete node.pattern;
+        return true;
+      }
+      return Object.values(node).some(
+        (v) => v && typeof v === 'object' && dropPattern(v as Record<string, unknown>),
+      );
+    };
+    expect(dropPattern(live.spec.versions[0].schema)).toBe(true);
+    const r = run({ crd: live });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('the schema differs from the source');
+  });
+
+  it('fails when the cluster serves a version the source does not', () => {
+    const live = structuredClone(CRD);
+    live.spec.versions.push({
+      ...structuredClone(live.spec.versions[0]),
+      name: 'v9',
+      storage: false,
+    });
+    const r = run({ crd: live });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('version "v9" is on the cluster but not in the source');
+  });
+
+  it('does not read schema key order as a difference', () => {
+    const live = structuredClone(CRD);
+    const v = live.spec.versions[0];
+    const props = v.schema.openAPIV3Schema.properties;
+    v.schema.openAPIV3Schema.properties = Object.fromEntries(Object.entries(props).reverse());
+    expect(run({ crd: live }).code).toBe(0);
+  });
+
+  it('fails on a non-integer ksvc generation', () => {
+    expect(run({ ksvc: { metadata: { generation: '7' } } }).code).toBe(1);
+  });
+
+  it('reads the ksvc named by --ksvc and --ksvc-namespace', () => {
+    const r = run({}, [
+      '--expect-operator-digest',
+      D,
+      '--ksvc',
+      'docs2',
+      '--ksvc-namespace',
+      'ns2',
+    ]);
+    expect(r.code).toBe(0);
+    expect(r.calls).toContain('get ksvc docs2 -n ns2 -o json');
+    expect(r.out).toContain('ksvc ns2/docs2 generation: 7');
+  });
+
+  it('exits 2 on an unknown flag', () => {
+    expect(run({}, ['--expect-operator-digest', D, '--nope', 'x']).code).toBe(2);
   });
 
   for (const fail of ['pods', 'crd', 'ksvc'] as const) {

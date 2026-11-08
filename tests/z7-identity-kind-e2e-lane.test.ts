@@ -420,7 +420,7 @@ describe('the lane proves what it claims', () => {
     expect(squat).toContain('the squatted JWKS ConfigMap is mounted into the function');
     // control: removing it lets the operator publish and the function mount it
     expect(squat).toContain('delete configmap');
-    expect(squat).toContain('True/JWKSControlled');
+    expect(squat).toContain('True/Controlled');
   });
 
   it('the pin phase swaps the image with kubectl and asserts nothing mounts the zone database Secret', () => {

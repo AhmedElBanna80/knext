@@ -149,9 +149,14 @@ function makefiles(text) {
 export function namedFiles(text, read, listUnder) {
   const out = new Set();
   const expandDir = (p, depth) => {
-    const dir = p.replace(/\/$/, '');
+    const dir = posix.normalize(p.replace(/^\.\//, '').replace(/\/$/, ''));
     const files = listUnder(`${dir}/`);
-    const action = /^\.github\/actions\/[^/]+$/.test(dir);
+    // A local action: under .github/actions/, or any directory a `uses: ./dir`
+    // names that holds an action.yml / action.yaml.
+    const action =
+      /^\.github\/actions\/[^/]+$/.test(dir) ||
+      read(`${dir}/action.yml`) !== null ||
+      read(`${dir}/action.yaml`) !== null;
     if (files.length === 0 && !action) return false;
     out.add(`${dir}/`);
     for (const f of files) out.add(f);
@@ -167,6 +172,12 @@ export function namedFiles(text, read, listUnder) {
     const code = prepare(body, { actionDir });
     for (const p of referencedPaths(prepare(body, { comments: true, actionDir }))) {
       if (!expandDir(p, depth)) out.add(p);
+    }
+    // `uses: ./dir` is a local action wherever it lives, when the directory holds one.
+    for (const m of code.matchAll(/\buses\s*:\s*['"]?\.\/([\w./-]+?)\/?['"]?\s*$/gm)) {
+      const d = posix.normalize(m[1]);
+      if (read(`${d}/action.yml`) !== null || read(`${d}/action.yaml`) !== null)
+        expandDir(d, depth);
     }
     const dirs = bases(code);
     for (const t of pathTokens(code)) {
@@ -253,7 +264,7 @@ export function credentialWorkflowFindings(changes, repo) {
     for (const p of namedFiles(text, read, (prefix) => repo.listHead(prefix))) named.add(p);
     // Installs in the workflow and in every local action it uses.
     const actionYmls = [...named]
-      .filter((n) => /^\.github\/actions\/[^/]+\/$/.test(n))
+      .filter((n) => n.endsWith('/'))
       .flatMap((d) => ['action.yml', 'action.yaml'].map((f) => read(`${d}${f}`)))
       .filter((t) => t !== null);
     for (const body of [text, ...actionYmls]) {

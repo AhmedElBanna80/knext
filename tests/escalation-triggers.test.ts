@@ -938,6 +938,42 @@ describe('credential workflows: the files they name, one level deep', () => {
     ).toEqual(['bun.lock']);
   });
 
+  it('uses: ./dir is a local action wherever it lives (its files, its action.yml, its installs)', () => {
+    const files = {
+      '.github/workflows/r.yml': wf('echo').replace(
+        '      - run: |',
+        '      - uses: ./packages/act\n      - run: |',
+      ),
+      'packages/act/action.yml':
+        'runs:\n  steps:\n    - run: node "${{ github.action_path }}/preflight.mjs"\n',
+      'packages/act/preflight.mjs': 'x',
+      'packages/act/lib/check.mjs': 'x',
+    };
+    const hit = (p: string) =>
+      classifyContent([change(p)], reader({ head: files })).find(
+        (f: { id: string }) => f.id === 'supply-chain',
+      )?.paths;
+    for (const p of [
+      'packages/act/action.yml',
+      'packages/act/preflight.mjs',
+      'packages/act/lib/check.mjs',
+      'packages/act/new.mjs',
+    ]) {
+      expect(hit(p)).toEqual([p]);
+    }
+  });
+
+  it('near miss: uses: ./dir without an action.yml is not a local action', () => {
+    const files = {
+      '.github/workflows/r.yml': wf('echo').replace(
+        '      - run: |',
+        '      - uses: ./apps/web\n      - run: |',
+      ),
+      'apps/web/page.tsx': 'x',
+    };
+    expect(classifyContent([change('apps/web/page.tsx')], reader({ head: files }))).toHaveLength(0);
+  });
+
   it('a dot-directory script path is named', () => {
     expect(
       fires(

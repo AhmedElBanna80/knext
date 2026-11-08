@@ -511,6 +511,25 @@ const MUTATIONS = [
     anchor: '    /(?:^|[\\s\'"=(`&;|])(?:\\.\\/)?(\\.?[A-Za-z0-9_][\\w.-]*(?:\\/[\\w.-]+)*)/g,',
     replacement: '    /(?:^|[\\s\'"=(`&;|])(?:\\.\\/)?([A-Za-z0-9_][\\w.-]*(?:\\/[\\w.-]+)*)/g,',
   },
+  {
+    id: 'M66',
+    expect: 'red',
+    claim: 'uses: ./dir outside .github/actions/ is not a local action — its files stop firing',
+    subject: 'credential',
+    anchor:
+      '      if (read(`${d}/action.yml`) !== null || read(`${d}/action.yaml`) !== null)\n        expandDir(d, depth);',
+    replacement: '',
+  },
+  {
+    id: 'M67',
+    expect: 'red',
+    claim:
+      'uses: ./dir counts as a local action without an action.yml — an app directory’s files fire',
+    subject: 'credential',
+    anchor:
+      '      if (read(`${d}/action.yml`) !== null || read(`${d}/action.yaml`) !== null)\n        expandDir(d, depth);',
+    replacement: '      expandDir(d, depth);',
+  },
 ];
 
 const prover = createGuardProver({

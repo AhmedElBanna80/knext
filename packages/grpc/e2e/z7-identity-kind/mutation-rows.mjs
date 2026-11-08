@@ -125,6 +125,8 @@ export const ROWS = [
     anchor: `${T}if controlledByZone(cm, zone) {`,
     replacement: `${T}if cm != nil {`,
     phases: 'deploy squat',
-    reason: 'the squatted JWKS ConfigMap is mounted into the function',
+    // The first assertion the mutant breaks: it trusts the squatter, so the function
+    // never reports JWKSTrusted=False/JWKSUntrusted (the mount check comes later).
+    reason: 'the function reports JWKSTrusted=False JWKSUntrusted',
   },
 ];

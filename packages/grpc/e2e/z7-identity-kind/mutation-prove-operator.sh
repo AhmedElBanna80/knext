@@ -148,7 +148,7 @@ done
 control_log="${WORK}/control.log"
 install_operator "${control_log}"
 control_rc=0
-run_lane "deploy verify rotate leaks" "${control_log}" || control_rc=$?
-printf 'CONTROL (unmutated operator, deploy verify rotate leaks): exit %s\n' "${control_rc}"
+run_lane "deploy verify rotate squat leaks" "${control_log}" || control_rc=$?
+printf 'CONTROL (unmutated operator, deploy verify rotate squat leaks): exit %s\n' "${control_rc}"
 printf '%s/%s rows killed for their reason\n' "${killed}" "${total}"
 [ "${killed}" = "${total}" ] && [ "${control_rc}" = 0 ]

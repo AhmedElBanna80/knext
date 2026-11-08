@@ -845,13 +845,14 @@ describe('credential workflows: the files they name, one level deep', () => {
   });
 
   it('a scripts/ directory a workflow names covers every file under it', () => {
+    // Only the directory is named; the changed file is nowhere in the text.
     expect(
       fires(
-        'cd scripts/release\nnode index.mjs',
-        { 'scripts/release/index.mjs': 'x' },
-        'scripts/release/index.mjs',
+        'npm --prefix scripts/release run sign',
+        { 'scripts/release/lib/util.mjs': 'x' },
+        'scripts/release/lib/util.mjs',
       ),
-    ).toEqual(['scripts/release/index.mjs']);
+    ).toEqual(['scripts/release/lib/util.mjs']);
   });
 
   it('near miss: an app directory a workflow names (a build context) does not cover its files', () => {

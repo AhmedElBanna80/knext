@@ -26,10 +26,11 @@ limitations under the License.
 //     registry /metrics serves) by a top-level statement of an init() function:
 //     an expression statement, or the right-hand side of an assignment or var
 //     declaration, optionally parenthesised, with no return, goto, labeled
-//     statement or panic earlier in that init(). This is not a proof that the
+//     statement or panic earlier in that init() (a panic inside a function
+//     literal called on the spot counts). This is not a proof that the
 //     registration succeeds (a Register error may be discarded), nor that
-//     init() is reached (a non-terminating loop or os.Exit earlier in it is
-//     not detected);
+//     init() is reached (a non-terminating loop, os.Exit, or a panic inside a
+//     named helper called earlier in it is not detected);
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -422,7 +423,11 @@ func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
 // mayStopInit reports whether st contains, at any depth, a return, a goto, a
 // labeled statement or a call to the panic builtin: each can end init() before
 // a later statement runs, conditionally or not. A function literal is skipped,
-// since a return inside it leaves the literal, not init().
+// since a return inside it leaves the literal, not init(), unless it is called
+// on the spot: then a panic in its body ends init() too (see litMayPanic). A
+// deferred or go-started call does not run before the next statement, so it is
+// not inspected. A panic inside a named helper that init() calls is not
+// detected.
 func (p *pkg) mayStopInit(st ast.Stmt) bool {
 	stop := false
 	ast.Inspect(st, func(n ast.Node) bool {
@@ -430,7 +435,7 @@ func (p *pkg) mayStopInit(st ast.Stmt) bool {
 			return false
 		}
 		switch n := n.(type) {
-		case *ast.FuncLit:
+		case *ast.FuncLit, *ast.DeferStmt, *ast.GoStmt:
 			return false
 		case *ast.ReturnStmt, *ast.LabeledStmt:
 			stop = true
@@ -441,10 +446,41 @@ func (p *pkg) mayStopInit(st ast.Stmt) bool {
 				_, builtin := p.info.Uses[id].(*types.Builtin)
 				stop = builtin
 			}
+			if fl, ok := ast.Unparen(n.Fun).(*ast.FuncLit); ok && p.litMayPanic(fl) {
+				stop = true
+			}
 		}
 		return !stop
 	})
 	return stop
+}
+
+// litMayPanic reports whether the body of a function literal that is called on
+// the spot can panic: a call to the panic builtin at any depth, or a nested
+// literal that is itself called on the spot and can panic. A return or goto in
+// the body only leaves the literal, so it does not count.
+func (p *pkg) litMayPanic(fl *ast.FuncLit) bool {
+	found := false
+	ast.Inspect(fl.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.FuncLit, *ast.DeferStmt, *ast.GoStmt:
+			return false
+		case *ast.CallExpr:
+			if id, ok := ast.Unparen(n.Fun).(*ast.Ident); ok && id.Name == "panic" {
+				if _, builtin := p.info.Uses[id].(*types.Builtin); builtin {
+					found = true
+				}
+			}
+			if inner, ok := ast.Unparen(n.Fun).(*ast.FuncLit); ok && p.litMayPanic(inner) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 // collect adds every family this package registers to out.

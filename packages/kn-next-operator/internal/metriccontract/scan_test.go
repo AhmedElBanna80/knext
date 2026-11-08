@@ -753,6 +753,24 @@ func init() {
 	metrics.Registry.MustRegister(c)
 }
 `,
+		"after a closure called on the spot that panics": `
+func init() {
+	func() { panic("stop") }()
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a closure called on the spot that panics in a nested closure": `
+func cfg() bool { return true }
+
+func init() {
+	func() {
+		if cfg() {
+			func() { panic("stop") }()
+		}
+	}()
+	metrics.Registry.MustRegister(c)
+}
+`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -768,6 +786,52 @@ var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
 			}
 			if !strings.Contains(err.Error(), "not a top-level statement of init()") {
 				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// A closure that only returns, or a panicking closure that is deferred or not
+// called at all, cannot end init() before a later statement, so the later
+// registration is still counted.
+func TestScanCountsARegistrationAfterAClosureThatCannotEndInit(t *testing.T) {
+	cases := map[string]string{
+		"after a closure called on the spot that only returns": `
+func cfg() bool { return true }
+
+func init() {
+	func() {
+		if cfg() {
+			return
+		}
+	}()
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a deferred closure that panics": `
+func init() {
+	defer func() { panic("late") }()
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a panicking closure that is only assigned": `
+func init() {
+	f := func() { panic("never") }
+	_ = f
+	metrics.Registry.MustRegister(c)
+}
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := fixture(t, map[string]string{
+				"cmd/main.go": mainImportsM,
+				"internal/m/m.go": header + `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+` + body,
+			})
+			if got := names(mustScan(t, root)); !reflect.DeepEqual(got, []string{"knext_cond_total"}) {
+				t.Fatalf("got %v", got)
 			}
 		})
 	}

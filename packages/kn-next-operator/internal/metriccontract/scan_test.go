@@ -777,6 +777,12 @@ func init() {
 	metrics.Registry.MustRegister(c)
 }
 `,
+		"after a closure that calls a parenthesised nested closure that panics": `
+func init() {
+	func() { (func() { panic("stop") })() }()
+	metrics.Registry.MustRegister(c)
+}
+`,
 		"after a closure called on the spot that defers a panic": `
 func init() {
 	func() { defer panic("stop") }()

@@ -191,27 +191,78 @@ async fn production_wiring_fails_closed_on_the_wire() {
     running.stop().await.unwrap();
 }
 
+/// A bodiless request of `method` to the wake-ahead probe.
+fn healthz_probe(addr: std::net::SocketAddr, method: http::Method) -> Request<Full<Bytes>> {
+    Request::builder()
+        .method(method)
+        .uri(format!("http://{addr}/healthz"))
+        .body(Full::new(Bytes::new()))
+        .unwrap()
+}
+
 /// The wake-ahead probe is a plain GET to `/healthz`, answered with 200 and no
-/// token, under the production wiring (no JWKS mounted, so every RPC is
-/// refused). POST is not served there.
+/// token. Only GET is served there: HEAD and POST get 405. The token gate stays
+/// live beside it: on a function that admits tokens, a Connect call without one
+/// is refused 401 `unauthenticated`, and the same call with one is served.
 #[tokio::test]
 async fn healthz_get_is_served_without_a_token() {
-    let running = start(production()).await;
-    let get = Request::get(format!("http://{}/healthz", running.addr))
-        .body(Full::new(Bytes::new()))
-        .unwrap();
-    let resp = raw(running.addr, Transport::Http1, get).await.unwrap();
-    assert_eq!(resp.status(), http::StatusCode::OK, "GET /healthz");
-
+    let closed = start(production()).await;
+    let addr = closed.addr;
     let resp = raw(
-        running.addr,
+        addr,
         Transport::Http1,
-        post(running.addr, "/healthz", &[], Bytes::new()),
+        healthz_probe(addr, http::Method::GET),
     )
     .await
     .unwrap();
-    assert_ne!(resp.status(), http::StatusCode::OK, "POST /healthz served");
-    running.stop().await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::OK, "GET /healthz");
+
+    for method in [http::Method::HEAD, http::Method::POST] {
+        let name = method.clone();
+        let resp = raw(addr, Transport::Http1, healthz_probe(addr, method))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            http::StatusCode::METHOD_NOT_ALLOWED,
+            "{name} /healthz"
+        );
+    }
+    closed.stop().await.unwrap();
+
+    let open = start(function(admit(), Timeouts::default())).await;
+    let addr = open.addr;
+    let resp = raw(
+        addr,
+        Transport::Http1,
+        healthz_probe(addr, http::Method::GET),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.status(),
+        http::StatusCode::OK,
+        "GET /healthz, live gate"
+    );
+    let resp = raw(
+        addr,
+        Transport::Http1,
+        post(
+            addr,
+            GET_ITEM,
+            &[("content-type", "application/proto")],
+            Bytes::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.status(),
+        http::StatusCode::UNAUTHORIZED,
+        "GetItem without a token"
+    );
+    assert_eq!(outcome(resp).await.as_deref(), Some("unauthenticated"));
+    open.stop().await.unwrap();
 }
 
 /// Every RPC the function serves, except the health service, states its

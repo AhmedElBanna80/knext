@@ -271,41 +271,48 @@ func TestProductionWiringFailsClosedOnTheWire(t *testing.T) {
 	}
 }
 
-// The wake-ahead call is a plain GET to /healthz. It is answered with no token
-// and with no JWKS mounted (the binary's own wiring, which refuses every RPC),
+// The wake-ahead call is a plain GET to /healthz. It is answered with no token,
 // because a Connect GET of the health Check cannot be used: the generated
-// health service does not mark Check side-effect free. POST is not served there.
+// health service does not mark Check side-effect free. Only GET is served:
+// HEAD and POST get 405. The token gate stays live beside it: a token-requiring
+// call without a token is refused unauthenticated, and the same call with an
+// accepted token is served.
 func TestHealthzGETIsServedWithoutAToken(t *testing.T) {
-	f, err := New(Config{JWKSPath: absentJWKS(t)})
+	f, err := newFunction(Config{JWKSPath: absentJWKS(t)}, acceptOnly("good"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	base := serve(t, f)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/healthz", nil)
-	if err != nil {
-		t.Fatal(err)
+	probe := func(method string) int {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), method, base+"/healthz", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := boundedH2C().Do(req)
+		if err != nil {
+			t.Fatalf("%s /healthz: %v", method, err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
 	}
-	resp, err := boundedH2C().Do(req)
-	if err != nil {
-		t.Fatalf("GET /healthz: %v", err)
+	if got := probe(http.MethodGet); got != http.StatusOK {
+		t.Fatalf("GET /healthz without a token = %d; want 200", got)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /healthz without a token = %d; want 200", resp.StatusCode)
+	if got := probe(http.MethodHead); got != http.StatusMethodNotAllowed {
+		t.Fatalf("HEAD /healthz = %d; want 405 (only GET is the wake-ahead probe)", got)
+	}
+	if got := probe(http.MethodPost); got != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /healthz = %d; want 405 (only GET is the wake-ahead probe)", got)
 	}
 
-	req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/healthz", strings.NewReader(""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err = boundedH2C().Do(req)
-	if err != nil {
-		t.Fatalf("POST /healthz: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("POST /healthz = 200; only GET is the wake-ahead probe")
+	example := examplev1connect.NewExampleServiceClient(
+		connect.NewClient(connecthttp.NewTransport(h2cClient(), base)))
+	_, err = example.GetItem(t.Context(), &examplev1.GetItemRequest{Id: "a"})
+	wantCode(t, "GetItem without a token, after the probe", err, connect.CodeUnauthenticated)
+	if _, err := example.PutItem(bearer(t, "good"), &examplev1.PutItemRequest{Id: "a", Value: "1"}); err != nil {
+		t.Fatalf("PutItem with the accepted token: %v; the gate must admit it", err)
 	}
 }
 

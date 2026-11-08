@@ -126,6 +126,8 @@ pub const HEALTHZ_PATH: &str = "/healthz";
 
 /// Answers the wake-ahead probe with 200 and no body. It carries no
 /// credentials and reads nothing, so it is never refused for lack of a token.
+/// Any other method on the path gets 405 with `Allow: GET`, as the Go template
+/// answers it, so the probe is GET-only in both templates.
 #[derive(Debug, Clone, Copy)]
 pub struct HealthzLayer;
 
@@ -155,9 +157,17 @@ where
     }
 
     fn call(&mut self, req: Request<B>) -> Self::Future {
-        if req.method() == Method::GET && req.uri().path() == HEALTHZ_PATH {
+        if req.uri().path() == HEALTHZ_PATH {
             let body = ConnectRpcBody::Full(Full::new(Bytes::new()));
-            return Either::Right(ready(Ok(Response::new(body))));
+            let mut resp = Response::new(body);
+            if req.method() == Method::GET {
+                *resp.status_mut() = http::StatusCode::OK;
+            } else {
+                *resp.status_mut() = http::StatusCode::METHOD_NOT_ALLOWED;
+                resp.headers_mut()
+                    .insert(http::header::ALLOW, http::HeaderValue::from_static("GET"));
+            }
+            return Either::Right(ready(Ok(resp)));
         }
         Either::Left(self.inner.call(req))
     }

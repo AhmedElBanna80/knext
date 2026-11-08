@@ -3,9 +3,10 @@
 //! recovery, the request-body bounds, the token check), and an accept loop
 //! that speaks HTTP/2 cleartext (h2c) and HTTP/1.1 on one port.
 //!
-//! The layers run in this order, the first outermost: every call is traced
-//! (refusals included), a panic is contained, the request body is bounded,
-//! and the token is checked before any of the body is read.
+//! The layers run in this order, the first outermost: the wake-ahead probe
+//! (`/healthz`) is answered first, as it is not an RPC; every other call is
+//! traced (refusals included), a panic is contained, the request body is
+//! bounded, and the token is checked before any of the body is read.
 
 mod body;
 mod layers;

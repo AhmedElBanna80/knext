@@ -99,9 +99,11 @@ subpath entries do not re-export it.
 - The package ships ESM (`../tsup.config.ts` `format: ['esm']`, `../package.json`
   `"type": "module"`), where a bare `require` is undefined, so
   `migrate.ts:defaultResolveDrizzleKit` probes with
-  `createRequire(import.meta.url).resolve('drizzle-kit')`. A real Node ESM load
-  covers it (`__tests__/migrate-esm-probe.test.ts`): `bun test` defines `require`
-  everywhere, so an in-process test cannot.
+  `createRequire(import.meta.url).resolve('drizzle-kit')`. A real Node ESM load,
+  run from outside the package, covers the installed case
+  (`__tests__/migrate-esm-probe.test.ts`), because `bun test` defines `require`
+  everywhere; the absent case is covered on the built output by
+  `__tests__/peer-shape.test.ts`.
 
 ## Side Effects
 

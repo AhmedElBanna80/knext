@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -19,7 +20,9 @@ describe('@getknext/db/migrate under Node ESM', () => {
       console.log('resolved');
     `;
     const r = spawnSync(process.env.NODE_BINARY ?? 'node', ['--input-type=module', '-e', script], {
-      cwd: resolve(import.meta.dirname, '../..'),
+      // Run from outside the package: the probe must resolve relative to migrate.ts,
+      // not to the working directory.
+      cwd: tmpdir(),
       encoding: 'utf8',
     });
     expect(`${r.stdout}${r.stderr}`).not.toContain('drizzle-kit is required');

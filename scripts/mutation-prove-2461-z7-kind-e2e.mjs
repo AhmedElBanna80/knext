@@ -370,8 +370,8 @@ const LANE_ROWS = [
     id: 'SQ2',
     subject: 'run',
     claim: 'the squat phase no longer holds the refusal before checking the mount',
-    anchor: '  sleep 20\n  if sq_ksvc_has_jwks_volume; then fail',
-    replacement: '  if sq_ksvc_has_jwks_volume; then fail',
+    anchor: '  # Hold for a while: a refusal that flaps back to mounting is not one.\n  sleep 20\n',
+    replacement: '  # Hold for a while: a refusal that flaps back to mounting is not one.\n',
   },
   // The zone image pin phase (ADR-0004 Amendment 3).
   {

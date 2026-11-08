@@ -266,7 +266,10 @@ function installsProject(text: string, project: RegExp): boolean {
   return code.some(
     (l, i) =>
       url.test(l) ||
-      (verb.test(l) && [code[i - 2] ?? '', code[i - 1] ?? '', l, code[i + 1] ?? '', code[i + 2] ?? ''].some((w) => project.test(w))),
+      (verb.test(l) &&
+        [code[i - 2] ?? '', code[i - 1] ?? '', l, code[i + 1] ?? '', code[i + 2] ?? ''].some((w) =>
+          project.test(w),
+        )),
   );
 }
 

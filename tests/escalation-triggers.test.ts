@@ -942,7 +942,7 @@ describe('credential workflows: the files they name, one level deep', () => {
     const files = {
       '.github/workflows/r.yml': wf('echo').replace(
         '      - run: |',
-        '      - uses: ./packages/act\n      - run: |',
+        '      - uses: ./packages/act # the deploy action\n      - run: |',
       ),
       'packages/act/action.yml':
         'runs:\n  steps:\n    - run: node "${{ github.action_path }}/preflight.mjs"\n',

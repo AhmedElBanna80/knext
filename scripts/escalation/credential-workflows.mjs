@@ -174,7 +174,7 @@ export function namedFiles(text, read, listUnder) {
       if (!expandDir(p, depth)) out.add(p);
     }
     // `uses: ./dir` is a local action wherever it lives, when the directory holds one.
-    for (const m of code.matchAll(/\buses\s*:\s*['"]?\.\/([\w./-]+?)\/?['"]?\s*$/gm)) {
+    for (const m of code.matchAll(/\buses\s*:\s*['"]?\.\/([\w./-]+?)\/?['"]?\s*(?:#.*)?$/gm)) {
       const d = posix.normalize(m[1]);
       if (read(`${d}/action.yml`) !== null || read(`${d}/action.yaml`) !== null)
         expandDir(d, depth);

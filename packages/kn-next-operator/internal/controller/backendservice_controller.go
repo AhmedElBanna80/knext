@@ -665,6 +665,16 @@ func (r *BackendServiceReconciler) zoneKsvcToFunctions(ctx context.Context, obj 
 	return r.functionsOfZone(ctx, obj.GetNamespace(), ref.Name)
 }
 
+// zoneWatchPredicate passes the NextApp events a function's verdict depends on
+// (#2501): a zone created or deleted, and its spec changed (generation: backends,
+// database, which also feeds other zones' deny rule). Deletion starting is a
+// generation change too: the apiserver bumps a custom resource's generation when
+// it sets deletionTimestamp. Status-only writes, which the NextApp reconciler
+// makes on every pass, pass nothing; the periodic re-check stays the backstop.
+func zoneWatchPredicate() predicate.Predicate {
+	return predicate.GenerationChangedPredicate{}
+}
+
 // SetupWithManager wires the reconciler. Status-only writes to a BackendService
 // do not re-enqueue it (GenerationChangedPredicate on the primary watch, as for
 // NextApp); owned children and zones do.
@@ -674,7 +684,8 @@ func (r *BackendServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&servingv1.Service{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&networkingv1.NetworkPolicy{}).
-		Watches(&appsv1alpha1.NextApp{}, handler.EnqueueRequestsFromMapFunc(r.zoneToFunctions)).
+		Watches(&appsv1alpha1.NextApp{}, handler.EnqueueRequestsFromMapFunc(r.zoneToFunctions),
+			builder.WithPredicates(zoneWatchPredicate())).
 		Watches(&servingv1.Service{}, handler.EnqueueRequestsFromMapFunc(r.zoneKsvcToFunctions)).
 		Named("backendservice").
 		Complete(r)

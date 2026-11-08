@@ -42,7 +42,7 @@ import (
 // change of the Service's template, observed as metadata.generation.
 
 func reconcileZone(ctx context.Context, ns, name string) {
-	_, err := newZoneReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}})
+	_, err := newZoneReconciler().Reconcile(ctx, reconcile.Request{Namespace: ns, Name: name})
 	Expect(err).NotTo(HaveOccurred())
 }
 

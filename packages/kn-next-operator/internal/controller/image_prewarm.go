@@ -127,11 +127,9 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 	helperMount := corev1.VolumeMount{Name: prewarmPinName, MountPath: prewarmHelperMountPath}
 
 	ds := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      app.Name + "-imgcache",
-			Namespace: app.Namespace,
-			Labels:    labels,
-		},
+		Name:      app.Name + "-imgcache",
+		Namespace: app.Namespace,
+		Labels:    labels,
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"apps.kn-next.dev/imgcache": app.Name},
@@ -153,7 +151,7 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
 					Volumes: []corev1.Volume{
-						{Name: prewarmPinName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+						{Name: prewarmPinName, EmptyDir: &corev1.EmptyDirVolumeSource{}},
 					},
 					// initContainer stages the static busybox helper into the
 					// shared emptyDir. `cp` preserves the executable mode.
@@ -192,10 +190,8 @@ func buildImagePrewarmDaemonSet(app *appsv1alpha1.NextApp, pullSecrets []corev1.
 // unset/false. Mirrors the shape of reconcileBytecodeCachePVC / reconcileNetworkPolicy.
 func (r *NextAppReconciler) reconcileImagePrewarmDaemonSet(ctx context.Context, nextApp *appsv1alpha1.NextApp) error {
 	ds := &appsv1.DaemonSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nextApp.Name + "-imgcache",
-			Namespace: nextApp.Namespace,
-		},
+		Name:      nextApp.Name + "-imgcache",
+		Namespace: nextApp.Namespace,
 	}
 
 	if !imagePrewarmEnabled(nextApp) {

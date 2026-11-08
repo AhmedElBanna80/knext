@@ -22,7 +22,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -49,7 +48,7 @@ var _ = Describe("NextApp spec.networking.visibility (#1865)", func() {
 	reconcileOnce := func(name string) {
 		r := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		_, err := r.Reconcile(ctx, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 		})
 		Expect(err).NotTo(HaveOccurred())
 	}
@@ -64,7 +63,7 @@ var _ = Describe("NextApp spec.networking.visibility (#1865)", func() {
 		name := "networking-visibility-set"
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:      validImage,
 				Networking: &appsv1alpha1.NetworkingSpec{Visibility: appsv1alpha1.VisibilityClusterLocal},
@@ -87,7 +86,7 @@ var _ = Describe("NextApp spec.networking.visibility (#1865)", func() {
 		name := "networking-visibility-unset"
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				// Networking deliberately left nil.
@@ -104,7 +103,7 @@ var _ = Describe("NextApp spec.networking.visibility (#1865)", func() {
 		name := "networking-visibility-toggle-off"
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:      validImage,
 				Networking: &appsv1alpha1.NetworkingSpec{Visibility: appsv1alpha1.VisibilityClusterLocal},
@@ -131,7 +130,7 @@ var _ = Describe("NextApp spec.networking.visibility (#1865)", func() {
 	It("still REJECTS an unrecognised visibility value at admission — the enum is not open", func() {
 		name := "networking-visibility-bad-enum"
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:      validImage,
 				Networking: &appsv1alpha1.NetworkingSpec{Visibility: "visible-to-everyone"},

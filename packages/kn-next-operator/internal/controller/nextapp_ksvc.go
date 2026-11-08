@@ -141,7 +141,7 @@ func buildWritableVolumes(nextApp *appsv1alpha1.NextApp, readOnlyRootFS bool, wr
 
 	const writableVolumeName = "knext-writable"
 	volumes := []corev1.Volume{
-		{Name: writableVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: writableVolumeName, EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
 	var volumeMounts []corev1.VolumeMount
 	if mountTmp {
@@ -501,11 +501,9 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 			// The handler stays httpGet, NOT tcpSocket: a TCP connect would go
 			// Ready on a bound socket, dropping the health-path semantics.
 			ReadinessProbe: &corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{
-					HTTPGet: &corev1.HTTPGetAction{
-						Path: healthPath,
-						Port: intstr.FromInt(3000),
-					},
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: healthPath,
+					Port: intstr.FromInt(3000),
 				},
 			},
 			// Liveness KEEPS an explicit delay + period, unlike readiness above.
@@ -516,11 +514,9 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 			// crash detector, not a cold-start gate: it costs nothing on the
 			// path to Ready, so leave it conservative.
 			LivenessProbe: &corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{
-					HTTPGet: &corev1.HTTPGetAction{
-						Path: healthPath,
-						Port: intstr.FromInt(3000),
-					},
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: healthPath,
+					Port: intstr.FromInt(3000),
 				},
 				InitialDelaySeconds: 5,
 				PeriodSeconds:       10,

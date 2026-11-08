@@ -23,7 +23,6 @@ import (
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	platformv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/platform/v1alpha1"
@@ -38,7 +37,7 @@ func cond(conds []metav1.Condition, t string) *metav1.Condition {
 }
 
 func appWithPlatform(name, hash string, cond *metav1.Condition) appsv1alpha1.NextApp {
-	a := appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	a := appsv1alpha1.NextApp{Name: name, Namespace: "default"}
 	if hash != "" {
 		a.Status.Platform = &appsv1alpha1.NextAppPlatformStatus{SpecHash: hash}
 	}
@@ -169,7 +168,7 @@ func TestPlatformReconciler_WritesStatusAndGoesQuietWhenConverged(t *testing.T) 
 		s.Limits = &platformv1alpha1.PlatformLimits{TimeoutSeconds: 600}
 	}))
 	pr := &KnextPlatformReconciler{Client: h.c, Scheme: h.scheme}
-	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: platformv1alpha1.SingletonName}}
+	req := reconcile.Request{Name: platformv1alpha1.SingletonName}
 
 	// The app has not been rendered against it yet: pending.
 	if _, err := pr.Reconcile(context.Background(), req); err != nil {

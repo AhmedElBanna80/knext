@@ -24,7 +24,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -58,7 +57,7 @@ var _ = Describe("Image-prewarm DaemonSet (ADR-0037)", func() {
 	It("creates the DaemonSet when imagePrewarm=true, owner-referenced, with the app digest and distroless-safe wiring", func() {
 		nn := types.NamespacedName{Name: "prewarm-on", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:   image,
 				Scaling: &appsv1alpha1.ScalingSpec{ImagePrewarm: true},
@@ -100,7 +99,7 @@ var _ = Describe("Image-prewarm DaemonSet (ADR-0037)", func() {
 	It("updates the DaemonSet's app image when the NextApp digest changes", func() {
 		nn := types.NamespacedName{Name: "prewarm-update", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:   image,
 				Scaling: &appsv1alpha1.ScalingSpec{ImagePrewarm: true},
@@ -131,7 +130,7 @@ var _ = Describe("Image-prewarm DaemonSet (ADR-0037)", func() {
 	It("deletes the DaemonSet when imagePrewarm is turned off", func() {
 		nn := types.NamespacedName{Name: "prewarm-off", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:   image,
 				Scaling: &appsv1alpha1.ScalingSpec{ImagePrewarm: true},
@@ -161,8 +160,8 @@ var _ = Describe("Image-prewarm DaemonSet (ADR-0037)", func() {
 	It("never creates a DaemonSet when imagePrewarm is unset (opt-in)", func() {
 		nn := types.NamespacedName{Name: "prewarm-default", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: image},
+			Name: nn.Name, Namespace: nn.Namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: image},
 		}
 		Expect(k8sClient.Create(ctx, app)).To(Succeed())
 		defer deleteAndFinalize(ctx, nn)
@@ -178,7 +177,7 @@ var _ = Describe("Image-prewarm DaemonSet (ADR-0037)", func() {
 	It("threads spec.imagePullSecrets (via the app SA) onto the DaemonSet", func() {
 		nn := types.NamespacedName{Name: "prewarm-pull", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:            image,
 				Scaling:          &appsv1alpha1.ScalingSpec{ImagePrewarm: true},

@@ -19,7 +19,6 @@ package controller
 import (
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -35,7 +34,7 @@ import (
 // envtest that would have to assert an object the operator must never create.
 func TestBuildKafkaSourceShape(t *testing.T) {
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: sovNS, Namespace: lcProd},
+		Name: sovNS, Namespace: lcProd,
 		Spec: appsv1alpha1.NextAppSpec{
 			Revalidation: &appsv1alpha1.RevalidationSpec{
 				Queue:          lcKafka,

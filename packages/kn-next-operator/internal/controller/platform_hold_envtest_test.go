@@ -63,7 +63,7 @@ var _ = Describe("hold-last-good that drops the app's own change is not Ready", 
 		}))).To(Succeed())
 
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: appName, Namespace: ns},
+			Name: appName, Namespace: ns,
 			// 8 x 10 = 80 connections: exactly the built-in budget, so valid on its own
 			// and invalid only once the platform lowers the budget.
 			Spec: appsv1alpha1.NextAppSpec{Image: imageV1, Scaling: &appsv1alpha1.ScalingSpec{MaxScale: 8, PoolMax: 10}},

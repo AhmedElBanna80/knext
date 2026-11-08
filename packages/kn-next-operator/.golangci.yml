@@ -35,12 +35,6 @@ linters:
     modernize:
       disable:
         - omitzero
-        # embedlit (new in v2.15) flattens `ObjectMeta: metav1.ObjectMeta{...}`
-        # into promoted fields. The operator-write inventory guard
-        # (internal/controller/operator_write_inventory_test.go) finds each
-        # writer's object name by scanning for ObjectMeta composite literals, so
-        # the flattened form hides the name from it. Single analyzer, not modernize.
-        - embedlit
   exclusions:
     generated: lax
     rules:

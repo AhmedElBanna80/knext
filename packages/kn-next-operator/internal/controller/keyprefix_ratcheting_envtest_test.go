@@ -29,7 +29,6 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -119,7 +118,7 @@ var _ = Describe("keyPrefix narrowing ratchets for existing NextApps (#2398)", f
 		image := validImage
 		mk := func(name, prefix string) *appsv1alpha1.NextApp {
 			return &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				Name: name, Namespace: ns,
 				Spec: appsv1alpha1.NextAppSpec{
 					Image: image,
 					Cache: &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://redis:6379", KeyPrefix: prefix},

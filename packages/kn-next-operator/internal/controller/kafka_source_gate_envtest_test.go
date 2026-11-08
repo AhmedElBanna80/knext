@@ -75,7 +75,7 @@ var _ = Describe("KafkaSource inertness (#475)", func() {
 	It("ignores provisionKafkaSource=true: no KafkaSource, app still fully reconciled, withdrawal surfaced", func() {
 		nn := types.NamespacedName{Name: "kafka-gate-on", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: image,
 				Revalidation: &appsv1alpha1.RevalidationSpec{
@@ -130,7 +130,7 @@ var _ = Describe("KafkaSource inertness (#475)", func() {
 	It("leaves the honest RevalidationDeferred status untouched for the unset case", func() {
 		nn := types.NamespacedName{Name: "kafka-gate-off", Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: nn.Name, Namespace: nn.Namespace},
+			Name: nn.Name, Namespace: nn.Namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: image,
 				Revalidation: &appsv1alpha1.RevalidationSpec{

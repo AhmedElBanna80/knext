@@ -171,7 +171,7 @@ var _ = Describe("the platform merge against a real API server", func() {
 		}))).To(Succeed())
 
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "platform-merge-app", Namespace: ns},
+			Name: "platform-merge-app", Namespace: ns,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:     image,
 				Resources: &appsv1alpha1.ResourcesSpec{MemoryLimit: "3Gi"},
@@ -300,7 +300,7 @@ var _ = Describe("operator start-up without the KnextPlatform CRD (ADR-0064 P0-3
 		c, err := client.New(cfg2, client.Options{Scheme: scheme2})
 		Expect(err).NotTo(HaveOccurred())
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "startup-no-crd", Namespace: "default"},
+			Name: "startup-no-crd", Namespace: "default",
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 			},
@@ -346,7 +346,7 @@ var _ = Describe("operator with the KnextPlatform CRD: the watch drives the merg
 		Expect(err).NotTo(HaveOccurred())
 
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: "platform-watch-app", Namespace: "default"},
+			Name: "platform-watch-app", Namespace: "default",
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 			},

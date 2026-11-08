@@ -145,11 +145,11 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 	// to create, once to start a rotation).
 	run := func(name string, rules []rbacv1.PolicyRule, rotate bool) error {
 		group := "knext-zonekey-" + name
-		cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: group}, Rules: rules}
+		cr := &rbacv1.ClusterRole{Name: group, Rules: rules}
 		crb := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{Name: group},
-			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: group},
-			Subjects:   []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: group}},
+			Name:     group,
+			RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: lcClusterRole, Name: group},
+			Subjects: []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: group}},
 		}
 		for _, o := range []client.Object{cr, crb} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -165,19 +165,19 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 			t.Fatal(err)
 		}
 		ns := name
-		if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}); err != nil {
+		if err := admin.Create(ctx, &corev1.Namespace{Name: ns}); err != nil {
 			t.Fatal(err)
 		}
 		zone := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: ns},
+			Name: sovZone, Namespace: ns,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImageForBS(),
 				Backends: []appsv1alpha1.BackendBinding{{Name: "pricing", Service: "pricing"}},
 			},
 		}
 		bs := &appsv1alpha1.BackendService{
-			ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-			Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
+			Name: "pricing", Namespace: ns,
+			Spec: appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage},
 		}
 		for _, o := range []client.Object{zone, bs} {
 			if err := admin.Create(ctx, o); err != nil {
@@ -195,7 +195,7 @@ func TestZoneSigningKeyReconcilesUnderTheShippedRole(t *testing.T) {
 			Client: as, APIReader: as, Scheme: scheme, Recorder: record.NewFakeRecorder(256),
 			BackendServiceCRDPresent: true, Clock: clock.Now,
 		}
-		req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: sovZone}}
+		req := reconcile.Request{Namespace: ns, Name: sovZone}
 		if _, err := r.Reconcile(ctx, req); err != nil {
 			return err
 		}

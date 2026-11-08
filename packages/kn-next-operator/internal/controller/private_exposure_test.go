@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	servingv1beta1 "knative.dev/serving/pkg/apis/serving/v1beta1"
@@ -159,7 +158,7 @@ func containsStr(s []string, v string) bool {
 
 func dm(ns, name, refName string) *servingv1beta1.DomainMapping {
 	return &servingv1beta1.DomainMapping{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Name: name, Namespace: ns,
 		Spec: servingv1beta1.DomainMappingSpec{Ref: duckv1.KReference{
 			APIVersion: "serving.knative.dev/v1", Kind: "Service", Name: refName, Namespace: ns,
 		}},
@@ -192,8 +191,8 @@ func TestDetectPrivateExposure_MatchesOnlyThisAppsKsvc(t *testing.T) {
 	otherRevRef := dm(lcTeamA, "other-revref.example.com", "someone-else-00002")
 	otherRevRef.Spec.Ref.Kind = "Revision"
 	rev := func(name, owner string) *servingv1.Revision {
-		return &servingv1.Revision{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: lcTeamA,
-			Labels: map[string]string{"serving.knative.dev/service": owner}}}
+		return &servingv1.Revision{Name: name, Namespace: lcTeamA,
+			Labels: map[string]string{"serving.knative.dev/service": owner}}
 	}
 
 	// Route of this app (same name as the ksvc) and a revision's core Service.
@@ -211,7 +210,7 @@ func TestDetectPrivateExposure_MatchesOnlyThisAppsKsvc(t *testing.T) {
 	unlabelled := dm(lcTeamA, "plain.example.com", "unrelated-svc")
 	unlabelled.Spec.Ref.APIVersion = "v1"
 	coreSvc := func(name, owner string) *corev1.Service {
-		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: lcTeamA}}
+		svc := &corev1.Service{Name: name, Namespace: lcTeamA}
 		if owner != "" {
 			svc.Labels = map[string]string{"serving.knative.dev/service": owner}
 		}
@@ -277,7 +276,7 @@ func TestDetectPrivateExposure_TransientErrorIsUnknown(t *testing.T) {
 func TestDomainMappingToNextAppRequests(t *testing.T) {
 	r := &NextAppReconciler{}
 	got := r.domainMappingToNextAppRequests(context.Background(), dm(lcTeamA, "app.example.com", "my-app"))
-	want := reconcile.Request{NamespacedName: types.NamespacedName{Name: "my-app", Namespace: lcTeamA}}
+	want := reconcile.Request{Name: "my-app", Namespace: lcTeamA}
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
@@ -291,8 +290,8 @@ func TestDomainMappingToNextAppRequests(t *testing.T) {
 		t.Fatalf("route ref: got %+v want %+v", got, want)
 	}
 	rc := fake.NewClientBuilder().WithScheme(fakeScheme()).WithObjects(&corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-app-00003", Namespace: lcTeamA,
-			Labels: map[string]string{"serving.knative.dev/service": "my-app"}},
+		Name: "my-app-00003", Namespace: lcTeamA,
+		Labels: map[string]string{"serving.knative.dev/service": "my-app"},
 	}).Build()
 	rr := &NextAppReconciler{Client: rc}
 	rev := dm(lcTeamA, "rev.example.com", "my-app-00003")
@@ -350,7 +349,7 @@ func TestDetectPrivateExposure_UnresolvableDMDoesNotBlockLaterLeak(t *testing.T)
 
 func TestDomainMappingToNextAppRequests_FailedGetEnqueuesPrivateAppsOnly(t *testing.T) {
 	mk := func(name, ns string, private bool) *appsv1alpha1.NextApp {
-		a := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		a := &appsv1alpha1.NextApp{Name: name, Namespace: ns}
 		if private {
 			a.Spec.Networking = &appsv1alpha1.NetworkingSpec{Visibility: appsv1alpha1.VisibilityClusterLocal}
 		}

@@ -32,7 +32,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -62,8 +61,8 @@ var _ = Describe("spec.scaling.scaleDownDelay (#762, ADR-0045)", func() {
 	storeAndReconcile := func(name string, spec appsv1alpha1.NextAppSpec) (types.NamespacedName, error) {
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       spec,
+			Name: name, Namespace: namespace,
+			Spec: spec,
 		}
 		Expect(k8sClient.Create(ctx, nextApp)).To(Succeed())
 

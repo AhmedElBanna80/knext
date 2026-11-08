@@ -44,14 +44,12 @@ import (
 // ownerReferences (none = a squatter that owns nothing).
 func jwksSpecConfigMap(ctx context.Context, ns, zone string, refs ...metav1.OwnerReference) *corev1.ConfigMap {
 	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: ZoneJWKSConfigMapName(zone), Namespace: ns, OwnerReferences: refs,
-		},
+		Name: ZoneJWKSConfigMapName(zone), Namespace: ns, OwnerReferences: refs,
 		Data: map[string]string{ZoneJWKSFileName: `{"keys":[]}`},
 	}
 	Expect(k8sClient.Create(ctx, cm)).To(Succeed())
 	DeferCleanup(func(ctx context.Context) {
-		_ = k8sClient.Delete(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cm.Name, Namespace: ns}})
+		_ = k8sClient.Delete(ctx, &corev1.ConfigMap{Name: cm.Name, Namespace: ns})
 	})
 	return cm
 }
@@ -169,7 +167,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 			ns, zone := setup()
 			squatter := jwksSpecConfigMap(ctx, ns, sovZone, owners(zone, ns)...)
 			r := newBSReconciler()
-			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+			_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 			Expect(err).NotTo(HaveOccurred())
 
 			By("the function renders (health works) but without any JWKS volume or mount")
@@ -198,7 +196,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 			}
 			Expect(warnings).To(HaveLen(1))
 			Expect(warnings[0]).To(HavePrefix("Warning "))
-			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+			_, err = r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(drainEvents(r.Recorder.(*record.FakeRecorder))).To(BeEmpty())
 
@@ -239,8 +237,8 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 		By("the zone's ConfigMap is deleted and a squatter takes the name")
 		Expect(k8sClient.Delete(ctx, legit)).To(Succeed())
 		squatter := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: ZoneJWKSConfigMapName(sovZone), Namespace: ns},
-			Data:       map[string]string{ZoneJWKSFileName: `{"keys":[]}`},
+			Name: ZoneJWKSConfigMapName(sovZone), Namespace: ns,
+			Data: map[string]string{ZoneJWKSFileName: `{"keys":[]}`},
 		}
 		Expect(k8sClient.Create(ctx, squatter)).To(Succeed())
 		reconcileFunction(ctx, ns, "pricing")
@@ -261,7 +259,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 		jwksSpecConfigMap(ctx, ns, sovZone, controllerRefTo(zone))
 		r := newBSReconciler()
 		r.Client = cachedConfigMapTrap{Client: k8sClient}
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		Expect(err).NotTo(HaveOccurred(), "the JWKS read must use APIReader: the role has no ConfigMap list/watch")
 		expectJWKSMounted(ctx, ns, sovZone, "pricing")
 	})
@@ -274,7 +272,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 
 		r := newBSReconciler()
 		r.APIReader = failingConfigMapReader{Reader: k8sClient}
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("simulated apiserver failure"))
 		expectJWKSMounted(ctx, ns, sovZone, "pricing")
@@ -287,7 +285,7 @@ var _ = Describe("BackendService reconciler: the zone's JWKS is mounted only whe
 		jwksSpecConfigMap(ctx, ns, sovZone)
 		r := newBSReconciler()
 		r.APIReader = failingConfigMapReader{Reader: k8sClient}
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		Expect(err).NotTo(HaveOccurred(), "a refused function renders nothing, so it has no use for the JWKS")
 		expectNothingRendered(ctx, ns, "pricing")
 		c := functionCondition(getFunction(ctx, ns, "pricing"), ConditionJWKSTrusted)

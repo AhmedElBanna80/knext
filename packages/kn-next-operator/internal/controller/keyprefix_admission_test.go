@@ -25,7 +25,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -55,7 +54,7 @@ var _ = Describe("NextApp spec.cache.keyPrefix admission (#2398)", func() {
 
 	appWithPrefix := func(name, prefix string) *appsv1alpha1.NextApp {
 		return &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Cache: &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://redis:6379", KeyPrefix: prefix},

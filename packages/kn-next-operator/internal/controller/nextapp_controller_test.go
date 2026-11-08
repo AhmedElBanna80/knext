@@ -51,10 +51,8 @@ var _ = Describe("NextApp Controller", func() {
 			err := k8sClient.Get(ctx, typeNamespacedName, nextapp)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &appsv1alpha1.NextApp{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
+					Name:      resourceName,
+					Namespace: "default",
 					Spec: appsv1alpha1.NextAppSpec{
 						// A digest-pinned image is required by validateImageRef (A1-digest).
 						Image: validImage,

@@ -92,7 +92,7 @@ func TestPlatform_ARenderedAppStopsHoldingASlotAfterAStaleRead(t *testing.T) {
 
 	// The re-entry reads the pre-render b.
 	h.r.Client = &staleNextAppReads{Client: h.c, key: types.NamespacedName{Namespace: "default", Name: "b"}, stale: frozen}
-	_, _ = h.r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "b"}})
+	_, _ = h.r.Reconcile(context.Background(), reconcile.Request{Namespace: "default", Name: "b"})
 	h.r.Client = h.c
 
 	// The next pass sees the truth: b rendered, nothing is queued.

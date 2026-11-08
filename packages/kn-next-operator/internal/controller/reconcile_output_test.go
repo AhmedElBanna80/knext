@@ -56,8 +56,8 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		spec.Image = orDefault(spec.Image, validImage)
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       spec,
+			Name: name, Namespace: namespace,
+			Spec: spec,
 		}
 		Expect(k8sClient.Create(ctx, nextApp)).To(Succeed())
 
@@ -777,7 +777,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 		reconcileWithClock := func(name string, now time.Time, spec appsv1alpha1.NextAppSpec) (types.NamespacedName, reconcile.Result) {
 			nn := types.NamespacedName{Name: name, Namespace: namespace}
 			spec.Image = orDefault(spec.Image, validImage)
-			app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}, Spec: spec}
+			app := &appsv1alpha1.NextApp{Name: name, Namespace: namespace, Spec: spec}
 			Expect(k8sClient.Create(ctx, app)).To(Succeed())
 			DeferCleanup(func() {
 				cur := &appsv1alpha1.NextApp{}
@@ -897,7 +897,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			name := "bad-image"
 			nn := types.NamespacedName{Name: name, Namespace: namespace}
 			nextApp := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Name: name, Namespace: namespace,
 				// tag-only / :latest-style image — must be rejected by validateImageRef.
 				Spec: appsv1alpha1.NextAppSpec{Image: "registry.example.com/app:latest"},
 			}
@@ -1003,7 +1003,7 @@ var _ = Describe("NextApp Controller reconcile output", func() {
 			name := "traffic-transition"
 			nn := types.NamespacedName{Name: name, Namespace: namespace}
 			nextApp := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Name: name, Namespace: namespace,
 				Spec: appsv1alpha1.NextAppSpec{
 					Image:   validImage,
 					Traffic: &appsv1alpha1.TrafficSpec{RevisionName: name + "-00001"},

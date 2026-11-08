@@ -28,7 +28,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
@@ -58,7 +57,7 @@ var _ = Describe("NextApp Controller Events & Metrics", func() {
 			err := k8sClient.Get(ctx, nn, existing)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &appsv1alpha1.NextApp{
-					ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
+					Name: resourceName, Namespace: "default",
 					Spec: appsv1alpha1.NextAppSpec{
 						Image: validImage,
 					},
@@ -108,7 +107,7 @@ var _ = Describe("NextApp Controller Events & Metrics", func() {
 			err := k8sClient.Get(ctx, nn, existing)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &appsv1alpha1.NextApp{
-					ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
+					Name: resourceName, Namespace: "default",
 					Spec: appsv1alpha1.NextAppSpec{
 						// :latest must be rejected by validateImageRef.
 						Image: "registry.example.com/app:latest",

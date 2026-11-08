@@ -19,7 +19,6 @@ package controller
 import (
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
@@ -57,7 +56,7 @@ func TestBuildDesiredKsvcReadOnlyRootFilesystem(t *testing.T) {
 
 			r := &NextAppReconciler{Scheme: sch}
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+				Name: "app", Namespace: "default",
 				Spec: appsv1alpha1.NextAppSpec{
 					Image:    "registry.example.com/app:v1@sha256:abc123",
 					Build:    tc.build,
@@ -65,7 +64,7 @@ func TestBuildDesiredKsvcReadOnlyRootFilesystem(t *testing.T) {
 				},
 			}
 			ksvc := &servingv1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace},
+				Name: app.Name, Namespace: app.Namespace,
 			}
 
 			if _, err := r.buildDesiredKsvc(app, ksvc, resolveEffective(app, nil)); err != nil {
@@ -150,7 +149,7 @@ func TestBuildDesiredKsvcReadOnlyRootFilesystemMounts(t *testing.T) {
 
 			r := &NextAppReconciler{Scheme: sch}
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+				Name: "app", Namespace: "default",
 				Spec: appsv1alpha1.NextAppSpec{
 					Image:         "registry.example.com/app:v1@sha256:abc123",
 					Build:         tc.build,
@@ -162,7 +161,7 @@ func TestBuildDesiredKsvcReadOnlyRootFilesystemMounts(t *testing.T) {
 				app.Spec.Security = &appsv1alpha1.SecuritySpec{WritableCache: tc.writableCache, WriteFree: tc.writeFree}
 			}
 			ksvc := &servingv1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace},
+				Name: app.Name, Namespace: app.Namespace,
 			}
 
 			if _, err := r.buildDesiredKsvc(app, ksvc, resolveEffective(app, nil)); err != nil {

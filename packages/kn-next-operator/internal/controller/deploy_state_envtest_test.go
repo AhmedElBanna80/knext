@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/apis"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
@@ -46,8 +45,8 @@ var _ = Describe("NextApp scale-state & last-deploy status (#312)", func() {
 	createAndReconcile := func(name string) types.NamespacedName {
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: validImage},
+			Name: name, Namespace: namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: validImage},
 		}
 		Expect(k8sClient.Create(ctx, nextApp)).To(Succeed())
 		DeferCleanup(func() {
@@ -83,7 +82,7 @@ var _ = Describe("NextApp scale-state & last-deploy status (#312)", func() {
 
 		By("Creating a Ready-but-Inactive Revision (scaled to zero)")
 		rev := &servingv1.Revision{
-			ObjectMeta: metav1.ObjectMeta{Name: revName, Namespace: namespace},
+			Name: revName, Namespace: namespace,
 		}
 		Expect(k8sClient.Create(ctx, rev)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, rev) })

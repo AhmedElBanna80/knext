@@ -73,8 +73,8 @@ var _ = Describe("NextApp Ready gating on real Knative Service health", func() {
 	createAndReconcile := func(name string) types.NamespacedName {
 		nn := types.NamespacedName{Name: name, Namespace: namespace}
 		nextApp := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: validImage},
+			Name: name, Namespace: namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: validImage},
 		}
 		Expect(k8sClient.Create(ctx, nextApp)).To(Succeed())
 

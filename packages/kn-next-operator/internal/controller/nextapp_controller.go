@@ -30,11 +30,9 @@ import (
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -489,10 +487,8 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 
 	// 1. Create/Update ServiceAccount
 	sa := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nextApp.Name + "-sa",
-			Namespace: nextApp.Namespace,
-		},
+		Name:      nextApp.Name + "-sa",
+		Namespace: nextApp.Namespace,
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
 		sa.AutomountServiceAccountToken = new(false)
@@ -564,10 +560,8 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 
 	// 3. Create/Update Knative Service
 	ksvc := &servingv1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nextApp.Name,
-			Namespace: nextApp.Namespace,
-		},
+		Name:      nextApp.Name,
+		Namespace: nextApp.Namespace,
 	}
 	// #1288/#1391: captured from the closure so the pure verdict (computed
 	// below) can report/warn on any spec.secrets.envMap entry colliding with
@@ -1024,7 +1018,7 @@ func (r *NextAppReconciler) revisionToNextAppRequests(_ context.Context, obj cli
 		return nil
 	}
 	return []reconcile.Request{
-		{NamespacedName: types.NamespacedName{Name: svc, Namespace: rev.Namespace}},
+		{Name: svc, Namespace: rev.Namespace},
 	}
 }
 
@@ -1128,9 +1122,8 @@ func (r *NextAppReconciler) platformToNextAppRequests(ctx context.Context, _ cli
 	}
 	reqs := make([]reconcile.Request, 0, len(apps.Items))
 	for i := range apps.Items {
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
-			Namespace: apps.Items[i].Namespace, Name: apps.Items[i].Name,
-		}})
+		reqs = append(reqs, reconcile.Request{
+			Namespace: apps.Items[i].Namespace, Name: apps.Items[i].Name})
 	}
 	return reqs
 }

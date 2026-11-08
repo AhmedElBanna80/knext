@@ -48,7 +48,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -157,7 +156,7 @@ var _ = Describe("Operator HA leader-election failover (ADR-0001 single-writer)"
 	It("elects exactly one active leader and hands off to the standby on leader loss", func() {
 		By("cleaning any stale lease from a previous run")
 		stale := &coordinationv1.Lease{
-			ObjectMeta: metav1.ObjectMeta{Name: leTestLeaseID, Namespace: leTestLeaseNamespace},
+			Name: leTestLeaseID, Namespace: leTestLeaseNamespace,
 		}
 		_ = k8sClient.Delete(ctx, stale)
 

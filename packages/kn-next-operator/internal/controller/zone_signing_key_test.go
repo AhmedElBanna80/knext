@@ -702,7 +702,7 @@ func boundZone() zoneBindings {
 }
 
 func TestApplyZoneIdentityRendersNothingWithoutABoundFunction(t *testing.T) {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS}}
+	app := &appsv1alpha1.NextApp{Name: sovZone, Namespace: sovNS}
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{Image: "img"}}
 	before := ksvc.DeepCopy()
@@ -722,7 +722,7 @@ func TestApplyZoneIdentityRendersNothingWithoutABoundFunction(t *testing.T) {
 }
 
 func TestApplyZoneIdentityMountsTheKeyAsADirectoryVolume(t *testing.T) {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS}}
+	app := &appsv1alpha1.NextApp{Name: sovZone, Namespace: sovNS}
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{Image: "img", Env: []corev1.EnvVar{{Name: "A", Value: "1"}}}}
 	if c := applyZoneIdentity(ksvc, app, boundZone()); c != nil {
@@ -770,7 +770,7 @@ func TestApplyZoneIdentityMountsTheKeyAsADirectoryVolume(t *testing.T) {
 }
 
 func TestApplyZoneIdentityKeepsAUserIssuerAndReportsIt(t *testing.T) {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS}}
+	app := &appsv1alpha1.NextApp{Name: sovZone, Namespace: sovNS}
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{Image: "img", Env: []corev1.EnvVar{{Name: ZoneIssuerEnv, Value: "mine"}}}}
 	c := applyZoneIdentity(ksvc, app, boundZone())
@@ -787,7 +787,7 @@ func TestApplyZoneIdentityKeepsAUserIssuerAndReportsIt(t *testing.T) {
 
 func TestFunctionRenderSetsTheVerifierIdentityAndNoPrivateKey(t *testing.T) {
 	bs := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: sovNS},
+		Name: "pricing", Namespace: sovNS,
 		Spec: appsv1alpha1.BackendServiceSpec{
 			Zone: sovZone, Image: "img",
 			Env: []corev1.EnvVar{
@@ -887,36 +887,36 @@ func TestFunctionPodZoneKeyScanSeesEveryChannel(t *testing.T) {
 	other := ZoneSigningKeySecretName(sovOther)
 	for name, mutate := range map[string]func(*corev1.PodSpec){
 		"secret volume": func(s *corev1.PodSpec) {
-			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k", VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: key}}})
+			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k",
+				Secret: &corev1.SecretVolumeSource{SecretName: key}})
 		},
 		"projected secret": func(s *corev1.PodSpec) {
-			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k", VolumeSource: corev1.VolumeSource{
+			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k",
 				Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{
-					{ConfigMap: &corev1.ConfigMapProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "x"}}},
-					{Secret: &corev1.SecretProjection{LocalObjectReference: corev1.LocalObjectReference{Name: key}}},
-				}}}})
+					{ConfigMap: &corev1.ConfigMapProjection{Name: "x"}},
+					{Secret: &corev1.SecretProjection{Name: key}},
+				}}})
 		},
 		"another zone's key": func(s *corev1.PodSpec) {
-			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k", VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: other}}})
+			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k",
+				Secret: &corev1.SecretVolumeSource{SecretName: other}})
 		},
 		"csi secret ref": func(s *corev1.PodSpec) {
-			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k", VolumeSource: corev1.VolumeSource{
-				CSI: &corev1.CSIVolumeSource{Driver: "d", NodePublishSecretRef: &corev1.LocalObjectReference{Name: key}}}})
+			s.Volumes = append(s.Volumes, corev1.Volume{Name: "k",
+				CSI: &corev1.CSIVolumeSource{Driver: "d", NodePublishSecretRef: &corev1.LocalObjectReference{Name: key}}})
 		},
 		"env secretKeyRef": func(s *corev1.PodSpec) {
 			s.Containers[0].Env = append(s.Containers[0].Env, corev1.EnvVar{Name: "K", ValueFrom: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: key}, Key: signingKeyCurrentKey}}})
+				SecretKeyRef: &corev1.SecretKeySelector{Name: key, Key: signingKeyCurrentKey}}})
 		},
 		"init container env secretKeyRef": func(s *corev1.PodSpec) {
 			s.InitContainers = append(s.InitContainers, corev1.Container{Name: "init", Env: []corev1.EnvVar{{Name: "K",
 				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: key}, Key: signingKeyCurrentKey}}}}})
+					Name: key, Key: signingKeyCurrentKey}}}}})
 		},
 		"envFrom secretRef": func(s *corev1.PodSpec) {
 			s.Containers[0].EnvFrom = append(s.Containers[0].EnvFrom, corev1.EnvFromSource{
-				SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: key}}})
+				SecretRef: &corev1.SecretEnvSource{Name: key}})
 		},
 		"inline JWKS value": func(s *corev1.PodSpec) {
 			s.Containers[0].Env = append(s.Containers[0].Env, corev1.EnvVar{Name: "J",
@@ -924,11 +924,11 @@ func TestFunctionPodZoneKeyScanSeesEveryChannel(t *testing.T) {
 		},
 		"JWKS configMapKeyRef": func(s *corev1.PodSpec) {
 			s.Containers[0].Env = append(s.Containers[0].Env, corev1.EnvVar{Name: "J", ValueFrom: &corev1.EnvVarSource{
-				ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: jwks}, Key: ZoneJWKSFileName}}})
+				ConfigMapKeyRef: &corev1.ConfigMapKeySelector{Name: jwks, Key: ZoneJWKSFileName}}})
 		},
 		"JWKS envFrom configMapRef": func(s *corev1.PodSpec) {
 			s.Containers[0].EnvFrom = append(s.Containers[0].EnvFrom, corev1.EnvFromSource{
-				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: jwks}}})
+				ConfigMapRef: &corev1.ConfigMapEnvSource{Name: jwks}})
 		},
 	} {
 		spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "fn", Image: "img"}}}
@@ -1211,7 +1211,7 @@ func TestSharedZoneIdentityFixture(t *testing.T) {
 	}
 
 	// Zone half.
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: fx.Zone.Name, Namespace: fx.Namespace}}
+	app := &appsv1alpha1.NextApp{Name: fx.Zone.Name, Namespace: fx.Namespace}
 	ksvc := &servingv1.Service{}
 	ksvc.Spec.Template.Spec.Containers = []corev1.Container{{Image: "img"}}
 	applyZoneIdentity(ksvc, app, boundZone())
@@ -1238,8 +1238,8 @@ func TestSharedZoneIdentityFixture(t *testing.T) {
 
 	// Function half.
 	bs := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: fx.Function.Name, Namespace: fx.Namespace},
-		Spec:       appsv1alpha1.BackendServiceSpec{Zone: fx.Zone.Name, Image: "img"},
+		Name: fx.Function.Name, Namespace: fx.Namespace,
+		Spec: appsv1alpha1.BackendServiceSpec{Zone: fx.Zone.Name, Image: "img"},
 	}
 	fn := &servingv1.Service{}
 	if err := buildFunctionKsvc(bs, 0, zoneJWKSAbsent, fn); err != nil {
@@ -1297,7 +1297,7 @@ func TestSetupOptionsCarryTheZoneSigningKeyConfig(t *testing.T) {
 // NextApp watch otherwise passes only generation changes, #98).
 func TestRotationRequestChangedPredicate(t *testing.T) {
 	mk := func(ann map[string]string) *appsv1alpha1.NextApp {
-		return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS, Annotations: ann}}
+		return &appsv1alpha1.NextApp{Name: sovZone, Namespace: sovNS, Annotations: ann}
 	}
 	cases := []struct {
 		name     string

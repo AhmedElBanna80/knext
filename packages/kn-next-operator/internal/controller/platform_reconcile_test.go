@@ -84,8 +84,8 @@ func newPlatformHarness(t *testing.T, objs ...client.Object) *platformHarness {
 
 func appNamed(name string, mut func(*appsv1alpha1.NextApp)) *appsv1alpha1.NextApp {
 	a := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", UID: types.UID("uid-" + name), Generation: 1},
-		Spec:       appsv1alpha1.NextAppSpec{Image: platformTestImage},
+		Name: name, Namespace: "default", UID: types.UID("uid-" + name), Generation: 1,
+		Spec: appsv1alpha1.NextAppSpec{Image: platformTestImage},
 	}
 	if mut != nil {
 		mut(a)
@@ -94,9 +94,8 @@ func appNamed(name string, mut func(*appsv1alpha1.NextApp)) *appsv1alpha1.NextAp
 }
 
 func platformObj(generation int64, mut func(*platformv1alpha1.KnextPlatformSpec)) *platformv1alpha1.KnextPlatform {
-	p := &platformv1alpha1.KnextPlatform{ObjectMeta: metav1.ObjectMeta{
-		Name: platformv1alpha1.SingletonName, Generation: generation, UID: "platform-uid-sentinel",
-	}}
+	p := &platformv1alpha1.KnextPlatform{
+		Name: platformv1alpha1.SingletonName, Generation: generation, UID: "platform-uid-sentinel"}
 	if mut != nil {
 		mut(&p.Spec)
 	}
@@ -105,7 +104,7 @@ func platformObj(generation int64, mut func(*platformv1alpha1.KnextPlatformSpec)
 
 func (h *platformHarness) reconcile(name string) ctrl.Result {
 	h.t.Helper()
-	res, err := h.r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}})
+	res, err := h.r.Reconcile(context.Background(), reconcile.Request{Namespace: "default", Name: name})
 	if err != nil {
 		h.t.Fatalf("reconcile %s: %v", name, err)
 	}
@@ -157,7 +156,7 @@ func (h *platformHarness) setPlatform(mut func(*platformv1alpha1.KnextPlatformSp
 
 func (h *platformHarness) deletePlatform() {
 	h.t.Helper()
-	if err := h.c.Delete(context.Background(), &platformv1alpha1.KnextPlatform{ObjectMeta: metav1.ObjectMeta{Name: platformv1alpha1.SingletonName}}); err != nil {
+	if err := h.c.Delete(context.Background(), &platformv1alpha1.KnextPlatform{Name: platformv1alpha1.SingletonName}); err != nil {
 		h.t.Fatalf("delete platform: %v", err)
 	}
 }
@@ -557,7 +556,7 @@ func TestPlatform_AnAppInvalidOnItsOwnStillFailsAsInvalidSpec(t *testing.T) {
 		platformObj(1, func(s *platformv1alpha1.KnextPlatformSpec) {
 			s.Database = &platformv1alpha1.PlatformDatabase{ConnectionBudget: 40}
 		}))
-	_, err := h.r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "bad"}})
+	_, err := h.r.Reconcile(context.Background(), reconcile.Request{Namespace: "default", Name: "bad"})
 	if err == nil {
 		t.Fatal("an app over even the built-in budget must be rejected as before")
 	}
@@ -570,7 +569,7 @@ func TestPlatform_ABudgetAboveTheBuiltinLetsALargerWallThrough(t *testing.T) {
 	spec := func(a *appsv1alpha1.NextApp) { a.Spec.Scaling = &appsv1alpha1.ScalingSpec{MaxScale: 16, PoolMax: 10} } // 160
 	// Without a platform: rejected, as always.
 	h0 := newPlatformHarness(t, appNamed("big", spec))
-	if _, err := h0.r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "big"}}); err == nil {
+	if _, err := h0.r.Reconcile(context.Background(), reconcile.Request{Namespace: "default", Name: "big"}); err == nil {
 		t.Fatal("160 connections must exceed the built-in budget of 80")
 	}
 	// With the platform's budget: accepted and rendered.

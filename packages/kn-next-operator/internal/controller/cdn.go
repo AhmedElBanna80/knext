@@ -121,8 +121,8 @@ func cdnEnvVars(app *appsv1alpha1.NextApp) []corev1.EnvVar {
 		env = append(env, corev1.EnvVar{
 			Name: "KNEXT_CDN_PURGE_TOKEN",
 			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: p.SecretRef.Name},
-				Key:                  p.SecretRef.Key,
+				Name: p.SecretRef.Name,
+				Key:  p.SecretRef.Key,
 			}},
 		})
 	}

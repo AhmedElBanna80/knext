@@ -22,7 +22,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 
@@ -51,7 +50,7 @@ func TestBuildDesiredKsvcRejectsMalformedResourceQuantity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &NextAppReconciler{}
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+				Name: "app", Namespace: "default",
 				Spec: appsv1alpha1.NextAppSpec{
 					Image:     "registry.example.com/app:v1@sha256:abc123",
 					Resources: tc.res,
@@ -195,7 +194,7 @@ func TestBuildDesiredKsvcAppliesDefaultResources(t *testing.T) {
 
 			r := &NextAppReconciler{Scheme: sch}
 			app := &appsv1alpha1.NextApp{
-				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+				Name: "app", Namespace: "default",
 				Spec: appsv1alpha1.NextAppSpec{
 					Image:     "registry.example.com/app:v1@sha256:abc123",
 					Resources: tc.res,
@@ -205,7 +204,7 @@ func TestBuildDesiredKsvcAppliesDefaultResources(t *testing.T) {
 			// CreateOrUpdate mutate (nextapp_controller.go:419-423); the
 			// namespace is required for the owner reference to be valid.
 			ksvc := &servingv1.Service{
-				ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace},
+				Name: app.Name, Namespace: app.Namespace,
 			}
 
 			if _, err := r.buildDesiredKsvc(app, ksvc, resolveEffective(app, nil)); err != nil {
@@ -267,10 +266,10 @@ func TestBuildDesiredKsvcDefaultCPULimitStaysAt1000m(t *testing.T) {
 
 	r := &NextAppReconciler{Scheme: sch}
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-		Spec:       appsv1alpha1.NextAppSpec{Image: "registry.example.com/app:v1@sha256:abc123"},
+		Name: "app", Namespace: "default",
+		Spec: appsv1alpha1.NextAppSpec{Image: "registry.example.com/app:v1@sha256:abc123"},
 	}
-	ksvc := &servingv1.Service{ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace}}
+	ksvc := &servingv1.Service{Name: app.Name, Namespace: app.Namespace}
 	if _, err := r.buildDesiredKsvc(app, ksvc, resolveEffective(app, nil)); err != nil {
 		t.Fatalf("buildDesiredKsvc returned an unexpected error: %v", err)
 	}

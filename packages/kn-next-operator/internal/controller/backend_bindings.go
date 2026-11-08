@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -362,7 +361,7 @@ func (r *NextAppReconciler) backendServiceToZoneRequests(ctx context.Context, ob
 			return
 		}
 		seen[name] = true
-		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: bs.Namespace, Name: name}})
+		reqs = append(reqs, reconcile.Request{Namespace: bs.Namespace, Name: name})
 	}
 	enqueue(bs.Spec.Zone)
 	var apps appsv1alpha1.NextAppList

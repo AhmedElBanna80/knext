@@ -25,7 +25,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -188,7 +187,7 @@ func (r *KnextPlatformReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 // nextAppToPlatformRequests maps ANY NextApp event to the singleton: its rollout
 // counts depend on every app's status.
 func nextAppToPlatformRequests(context.Context, client.Object) []reconcile.Request {
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: platformv1alpha1.SingletonName}}}
+	return []reconcile.Request{{Name: platformv1alpha1.SingletonName}}
 }
 
 // platformRelevantNextAppChange fires only when something the platform status is

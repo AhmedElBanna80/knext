@@ -23,7 +23,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -49,7 +48,7 @@ func overBudgetSpec(a *appsv1alpha1.NextApp) {
 func reconcileExpectingError(t *testing.T, h *platformHarness, name string) (requeues bool, err error) {
 	t.Helper()
 	res, err := h.r.Reconcile(context.Background(),
-		reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}})
+		reconcile.Request{Namespace: "default", Name: name})
 	if err == nil {
 		t.Fatalf("reconcile %s: want a validation error, got nil", name)
 	}

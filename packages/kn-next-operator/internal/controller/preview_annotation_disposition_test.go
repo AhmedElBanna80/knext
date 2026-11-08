@@ -26,7 +26,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -493,11 +492,11 @@ func buildFixtureKsvc(t *testing.T, f guardFixture, preview bool) *servingv1.Ser
 		spec.Preview = guardPreviewSpec()
 	}
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-		Spec:       spec,
+		Name: "app", Namespace: "default",
+		Spec: spec,
 	}
 	ksvc := &servingv1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: app.Name, Namespace: app.Namespace},
+		Name: app.Name, Namespace: app.Namespace,
 	}
 	if _, err := r.buildDesiredKsvc(app, ksvc, resolveEffective(app, nil)); err != nil {
 		t.Fatalf("buildDesiredKsvc(fixture=%s, preview=%v) returned an unexpected error: %v",

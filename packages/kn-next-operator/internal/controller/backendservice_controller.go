@@ -484,7 +484,7 @@ func (r *BackendServiceReconciler) render(
 	zone *appsv1alpha1.NextApp,
 	jwks zoneJWKSState,
 ) (*servingv1.Service, string, error) {
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: FunctionServiceAccountName(bs.Name), Namespace: bs.Namespace}}
+	sa := &corev1.ServiceAccount{Name: FunctionServiceAccountName(bs.Name), Namespace: bs.Namespace}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
 		if sa.Labels == nil {
 			sa.Labels = map[string]string{}
@@ -512,7 +512,7 @@ func (r *BackendServiceReconciler) render(
 		return nil, "", err
 	}
 
-	ksvc := &servingv1.Service{ObjectMeta: metav1.ObjectMeta{Name: bs.Name, Namespace: bs.Namespace}}
+	ksvc := &servingv1.Service{Name: bs.Name, Namespace: bs.Namespace}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ksvc, func() error {
 		if err := buildFunctionKsvc(bs, zoneRetention(zoneKsvc), jwks, ksvc); err != nil {
 			return err
@@ -525,7 +525,7 @@ func (r *BackendServiceReconciler) render(
 		return nil, "", err
 	}
 
-	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: FunctionNetworkPolicyName(bs.Name), Namespace: bs.Namespace}}
+	np := &networkingv1.NetworkPolicy{Name: FunctionNetworkPolicyName(bs.Name), Namespace: bs.Namespace}
 	if !functionNetworkPolicyEnabled(bs) {
 		// Explicit opt-out: never render, and remove only a policy this
 		// BackendService controls (a foreign object of the same name is left).
@@ -587,8 +587,8 @@ func (r *BackendServiceReconciler) servedVersion(ctx context.Context, ksvc *serv
 // takes down an object that belongs to someone else. NotFound is success.
 func (r *BackendServiceReconciler) removeRendered(ctx context.Context, bs *appsv1alpha1.BackendService) error {
 	for _, obj := range []client.Object{
-		&servingv1.Service{ObjectMeta: metav1.ObjectMeta{Name: bs.Name, Namespace: bs.Namespace}},
-		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: FunctionNetworkPolicyName(bs.Name), Namespace: bs.Namespace}},
+		&servingv1.Service{Name: bs.Name, Namespace: bs.Namespace},
+		&networkingv1.NetworkPolicy{Name: FunctionNetworkPolicyName(bs.Name), Namespace: bs.Namespace},
 	} {
 		if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 			if apierrors.IsNotFound(err) {

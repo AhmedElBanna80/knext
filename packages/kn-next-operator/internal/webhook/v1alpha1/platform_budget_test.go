@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -46,7 +45,7 @@ func platformReader(t *testing.T, mut func(*platformv1alpha1.KnextPlatformSpec),
 	}
 	b := fake.NewClientBuilder().WithScheme(s)
 	if mut != nil {
-		p := &platformv1alpha1.KnextPlatform{ObjectMeta: metav1.ObjectMeta{Name: platformv1alpha1.SingletonName}}
+		p := &platformv1alpha1.KnextPlatform{Name: platformv1alpha1.SingletonName}
 		mut(&p.Spec)
 		b = b.WithObjects(p)
 	}

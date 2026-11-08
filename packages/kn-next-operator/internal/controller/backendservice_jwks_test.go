@@ -43,13 +43,12 @@ import (
 const jwksZoneUID = types.UID("uid-orders-current")
 
 func jwksZone() *appsv1alpha1.NextApp {
-	return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS, UID: jwksZoneUID}}
+	return &appsv1alpha1.NextApp{Name: sovZone, Namespace: sovNS, UID: jwksZoneUID}
 }
 
 func jwksConfigMap(refs ...metav1.OwnerReference) *metav1.PartialObjectMetadata {
-	return &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{
-		Name: ZoneJWKSConfigMapName(sovZone), Namespace: sovNS, OwnerReferences: refs,
-	}}
+	return &metav1.PartialObjectMetadata{
+		Name: ZoneJWKSConfigMapName(sovZone), Namespace: sovNS, OwnerReferences: refs}
 }
 
 func nextAppRef(name string, uid types.UID, controller bool) metav1.OwnerReference {
@@ -179,8 +178,8 @@ func acceptedObservation(state zoneJWKSState, detail string) functionObservation
 
 func jwksBS() *appsv1alpha1.BackendService {
 	return &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: sovNS, Generation: 3},
-		Spec:       appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: "img"},
+		Name: "pricing", Namespace: sovNS, Generation: 3,
+		Spec: appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: "img"},
 	}
 }
 

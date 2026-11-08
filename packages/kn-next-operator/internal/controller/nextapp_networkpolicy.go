@@ -220,14 +220,12 @@ func desiredIngressRules() []networkingv1.NetworkPolicyIngressRule {
 // an app. Exported for cmd/policygen (the enforcement drill's source of truth).
 func DesiredNetworkPolicy(appName, namespace string) *networkingv1.NetworkPolicy {
 	return &networkingv1.NetworkPolicy{
-		TypeMeta: metav1.TypeMeta{APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      appName + "-allow-ingress",
-			Namespace: namespace,
-			Labels: map[string]string{
-				knativePodLabelKey:  appName,
-				generatedByLabelKey: OperatorFieldManager,
-			},
+		APIVersion: "networking.k8s.io/v1", Kind: "NetworkPolicy",
+		Name:      appName + "-allow-ingress",
+		Namespace: namespace,
+		Labels: map[string]string{
+			knativePodLabelKey:  appName,
+			generatedByLabelKey: OperatorFieldManager,
 		},
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{
@@ -278,10 +276,8 @@ const metricsScrapeNamespaceLabel = "knext.dev/metrics-scrape"
 // created policy is deleted.
 func (r *NextAppReconciler) reconcileNetworkPolicy(ctx context.Context, nextApp *appsv1alpha1.NextApp) error {
 	np := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nextApp.Name + "-allow-ingress",
-			Namespace: nextApp.Namespace,
-		},
+		Name:      nextApp.Name + "-allow-ingress",
+		Namespace: nextApp.Namespace,
 	}
 
 	if !networkPolicyEnabled(nextApp) {

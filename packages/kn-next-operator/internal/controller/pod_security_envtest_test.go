@@ -25,7 +25,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/apis"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
@@ -74,7 +73,7 @@ var _ = Describe("Pod Security restricted on rendered pods", func() {
 	reconcileApp := func(name string, security *appsv1alpha1.SecuritySpec) *servingv1.Service {
 		nn := types.NamespacedName{Name: name, Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Name: name, Namespace: "default",
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    validImage,
 				Security: security,

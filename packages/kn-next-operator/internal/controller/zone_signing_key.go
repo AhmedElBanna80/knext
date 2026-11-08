@@ -918,7 +918,7 @@ func applyZoneIdentity(ksvc *servingv1.Service, app *appsv1alpha1.NextApp, b zon
 	}
 	ksvc.Spec.Template.Spec.Volumes = append(ksvc.Spec.Template.Spec.Volumes, corev1.Volume{
 		Name: ZoneSigningKeyVolumeName,
-		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+		Secret: &corev1.SecretVolumeSource{
 			SecretName: ZoneSigningKeySecretName(app.Name),
 			Items:      items,
 			// 0444: the app runs non-root and Knative disables pod fsGroup by
@@ -926,7 +926,7 @@ func applyZoneIdentity(ksvc *servingv1.Service, app *appsv1alpha1.NextApp, b zon
 			// zone's own container mounts it.
 			DefaultMode: ptr.To[int32](0o444),
 			Optional:    new(true),
-		}},
+		},
 	})
 	containers[0].VolumeMounts = append(containers[0].VolumeMounts, corev1.VolumeMount{
 		Name: ZoneSigningKeyVolumeName, MountPath: ZoneSigningKeyMountDir, ReadOnly: true,

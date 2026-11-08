@@ -105,9 +105,8 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 		ns = bsNamespace(ctx)
 		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
 		for _, s := range secrets {
-			Expect(k8sClient.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone},
-			}})).To(Succeed())
+			Expect(k8sClient.Create(ctx, &corev1.Secret{
+				Name: s, Namespace: ns, Labels: map[string]string{ZoneLabel: sovZone}})).To(Succeed())
 		}
 		return ns
 	}
@@ -115,7 +114,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 		return func(bs *appsv1alpha1.BackendService) { bs.Spec.EnvFrom = specEnvFromSecret(name).EnvFrom }
 	}
 	reconcileFn := func(r *BackendServiceReconciler, ns string) error {
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "pricing"}})
+		_, err := r.Reconcile(ctx, reconcile.Request{Namespace: ns, Name: "pricing"})
 		return err
 	}
 	revoke := func(ns, secret string) {
@@ -221,7 +220,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 		bs := getFunction(ctx, ns, "pricing")
 		bs.Spec.EnvFrom = specEnvFromSecret("stripe-v2").EnvFrom
 		Expect(k8sClient.Update(ctx, bs)).To(Succeed())
-		Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "stripe-v1", Namespace: ns}})).To(Succeed())
+		Expect(k8sClient.Delete(ctx, &corev1.Secret{Name: "stripe-v1", Namespace: ns})).To(Succeed())
 
 		r := newBSReconciler()
 		recorder := r.Recorder.(*record.FakeRecorder)
@@ -284,7 +283,7 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 	Context("the CRD refuses a mount path Knative serving reserves", func() {
 		mount := func(ns, path string) error {
 			bs := &appsv1alpha1.BackendService{
-				ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
+				Name: "pricing", Namespace: ns,
 				Spec: appsv1alpha1.BackendServiceSpec{Volumes: []appsv1alpha1.FunctionVolume{
 					{Name: "scratch", MountPath: path, EmptyDir: &corev1.EmptyDirVolumeSource{}}}},
 			}
@@ -321,8 +320,8 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 				It("rejects "+source+" naming "+strings.ReplaceAll(`"`+name+`"`, strings.Repeat("a", 254), "a*254"), func() {
 					ns := setup()
 					bs := &appsv1alpha1.BackendService{
-						ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-						Spec:       spec(name),
+						Name: "pricing", Namespace: ns,
+						Spec: spec(name),
 					}
 					bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = sovZone, bsImage, lcV100
 					err := k8sClient.Create(ctx, bs)
@@ -368,8 +367,8 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 				It("admits "+source+" naming "+`"`+name+`"`+", and the reconciler refuses it", func() {
 					ns := setup()
 					bs := &appsv1alpha1.BackendService{
-						ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-						Spec:       spec(name),
+						Name: "pricing", Namespace: ns,
+						Spec: spec(name),
 					}
 					bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = sovZone, bsImage, lcV100
 					Expect(k8sClient.Create(ctx, bs)).To(Succeed())
@@ -386,8 +385,8 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 		It("still admits a valid DNS-subdomain Secret name, dots included", func() {
 			ns := setup()
 			bs := &appsv1alpha1.BackendService{
-				ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: ns},
-				Spec:       specEnvFromSecret("my-secret.v2"),
+				Name: "pricing", Namespace: ns,
+				Spec: specEnvFromSecret("my-secret.v2"),
 			}
 			bs.Spec.Zone, bs.Spec.Image, bs.Spec.ProtoVersion = sovZone, bsImage, lcV100
 			Expect(k8sClient.Create(ctx, bs)).To(Succeed())

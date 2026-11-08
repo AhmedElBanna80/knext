@@ -218,7 +218,7 @@ func verdictConditionOrNil(v statusVerdict, condType string) *metav1.Condition {
 }
 
 func zoneWithBackends(entries ...appsv1alpha1.BackendBinding) *appsv1alpha1.NextApp {
-	app := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: sovNS, Generation: 3}}
+	app := &appsv1alpha1.NextApp{Name: sovZone, Namespace: sovNS, Generation: 3}
 	app.Spec.Backends = entries
 	return app
 }

@@ -24,7 +24,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/apis"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
@@ -46,7 +45,7 @@ var _ = Describe("NextApp readOnlyRootFilesystem (#1332)", func() {
 	reconcileAppFull := func(name string, security *appsv1alpha1.SecuritySpec, build string, selfContained bool, storage *appsv1alpha1.StorageSpec) types.NamespacedName {
 		nn := types.NamespacedName{Name: name, Namespace: "default"}
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Name: name, Namespace: "default",
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:         image,
 				Build:         build,

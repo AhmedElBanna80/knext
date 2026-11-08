@@ -25,7 +25,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -58,7 +57,7 @@ var _ = Describe("NextApp deletion finalizer", func() {
 	It("adds the finalizer on create and removes it (clearing external state) on delete", func() {
 		By("creating the NextApp")
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: "default"},
+			Name: resourceName, Namespace: "default",
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Storage: &appsv1alpha1.StorageSpec{
@@ -129,7 +128,7 @@ var _ = Describe("NextApp deletion finalizer", func() {
 
 		By("creating a NextApp with external storage + cache state to clean up")
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: failName, Namespace: "default"},
+			Name: failName, Namespace: "default",
 			Spec: appsv1alpha1.NextAppSpec{
 				Image: validImage,
 				Storage: &appsv1alpha1.StorageSpec{

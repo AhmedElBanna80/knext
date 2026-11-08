@@ -385,8 +385,8 @@ func specPinSortedKeys[V any](m map[string]V) []string {
 func renderedFunction(t *testing.T, spec appsv1alpha1.BackendServiceSpec) string {
 	t.Helper()
 	bs := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: sovNS},
-		Spec:       spec,
+		Name: "pricing", Namespace: sovNS,
+		Spec: spec,
 	}
 	objs, err := RenderFunctionObjects(bs, 0)
 	if err != nil {
@@ -555,7 +555,7 @@ func TestExcludedStructFieldsCarryOnlyScalars(t *testing.T) {
 // never roll a zone revision, and a pin must never reach the zone's pod.
 func TestASpecPinChangesNothingRenderedIntoTheZone(t *testing.T) {
 	bs := &appsv1alpha1.BackendService{
-		ObjectMeta: metav1.ObjectMeta{Name: "pricing", Namespace: "default"},
+		Name: "pricing", Namespace: "default",
 		Spec: appsv1alpha1.BackendServiceSpec{
 			Zone: sovZone, Image: imageA, ProtoVersion: lcV100, WakeAhead: new(true),
 		},
@@ -563,7 +563,7 @@ func TestASpecPinChangesNothingRenderedIntoTheZone(t *testing.T) {
 	}
 	render := func(entry appsv1alpha1.BackendBinding, fn *appsv1alpha1.BackendService) string {
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: sovZone, Namespace: "default", Generation: 1},
+			Name: sovZone, Namespace: "default", Generation: 1,
 			Spec: appsv1alpha1.NextAppSpec{
 				Image:    "registry.example.com/app:v1@sha256:" + pinDigestA,
 				Backends: []appsv1alpha1.BackendBinding{entry},

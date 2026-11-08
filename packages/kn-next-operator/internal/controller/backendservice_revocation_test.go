@@ -127,18 +127,18 @@ func runningKsvc(spec corev1.PodSpec) *servingv1.Service {
 
 func TestRunningSecretRefsCoversEverySource(t *testing.T) {
 	ksvc := runningKsvc(corev1.PodSpec{
-		InitContainers: []corev1.Container{{Name: "init", EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "from-init"}}}}}},
+		InitContainers: []corev1.Container{{Name: "init", EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{Name: "from-init"}}}}},
 		Containers: []corev1.Container{{
 			Name: "user",
 			Env: []corev1.EnvVar{{Name: "A", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: "from-key-ref"}, Key: "k"}}}},
-			EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "from-env-from"}}}},
+				Name: "from-key-ref", Key: "k"}}}},
+			EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{Name: "from-env-from"}}},
 		}},
 		Volumes: []corev1.Volume{
-			{Name: "v1", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "from-volume"}}},
-			{Name: "v2", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{
-				{Secret: &corev1.SecretProjection{LocalObjectReference: corev1.LocalObjectReference{Name: "from-projected"}}}}}}},
-			{Name: "cm", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "not-a-secret"}}}},
+			{Name: "v1", Secret: &corev1.SecretVolumeSource{SecretName: "from-volume"}},
+			{Name: "v2", Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{
+				{Secret: &corev1.SecretProjection{Name: "from-projected"}}}}},
+			{Name: "cm", ConfigMap: &corev1.ConfigMapVolumeSource{Name: "not-a-secret"}},
 		},
 	})
 	var names []string
@@ -159,7 +159,7 @@ func TestCheckRunningSovereigntyRefusesARevokedSecretAndIgnoresNoService(t *test
 	bs := sovFunction(appsv1alpha1.BackendServiceSpec{})
 	ksvc := runningKsvc(corev1.PodSpec{Containers: []corev1.Container{{
 		Name:    "user",
-		EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: lcStripe}}}},
+		EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{Name: lcStripe}}},
 	}}})
 	revoked := sovSecrets(map[string]secretMetadata{lcStripe: {labels: map[string]string{ZoneLabel: sovOther}}})
 	got, _ := checkRunningSovereignty(bs, zone, others, revoked, ksvc)

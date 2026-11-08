@@ -22,7 +22,6 @@ import (
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // spec.secrets.envMap is a Go map. Ranging it directly emits the Knative
@@ -33,7 +32,7 @@ import (
 // must be a pure function of the CR.
 func TestBuildKsvcEnv_EnvMapOrderIsDeterministic(t *testing.T) {
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "ns"},
+		Name: "app", Namespace: "ns",
 		Spec: appsv1alpha1.NextAppSpec{
 			Image: validImage,
 			Secrets: &appsv1alpha1.SecretsSpec{

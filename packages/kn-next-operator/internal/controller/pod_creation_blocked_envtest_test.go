@@ -53,8 +53,8 @@ var _ = Describe("NextApp PodCreationBlocked from a rejected revision", func() {
 
 	It("sets and clears the condition from the Revision's ResourcesAvailable", func() {
 		Expect(k8sClient.Create(ctx, &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       appsv1alpha1.NextAppSpec{Image: validImage},
+			Name: name, Namespace: namespace,
+			Spec: appsv1alpha1.NextAppSpec{Image: validImage},
 		})).To(Succeed())
 		DeferCleanup(func() {
 			cur := &appsv1alpha1.NextApp{}
@@ -74,7 +74,7 @@ var _ = Describe("NextApp PodCreationBlocked from a rejected revision", func() {
 		}
 		reconcileOnce()
 
-		rev := &servingv1.Revision{ObjectMeta: metav1.ObjectMeta{Name: revName, Namespace: namespace}}
+		rev := &servingv1.Revision{Name: revName, Namespace: namespace}
 		Expect(k8sClient.Create(ctx, rev)).To(Succeed())
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, rev) })
 		setRevision := func(status corev1.ConditionStatus, reason, msg string) {
@@ -106,7 +106,7 @@ var _ = Describe("NextApp PodCreationBlocked from a rejected revision", func() {
 
 		// The revision's Deployment still reports the admission rejection.
 		dep := &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: revName + "-deployment", Namespace: namespace},
+			Name: revName + "-deployment", Namespace: namespace,
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"a": "b"}},
 				Template: corev1.PodTemplateSpec{

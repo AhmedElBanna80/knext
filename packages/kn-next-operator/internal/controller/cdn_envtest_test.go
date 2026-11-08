@@ -50,8 +50,8 @@ var _ = Describe("NextApp spec.cdn", func() {
 	create := func(name string, spec appsv1alpha1.NextAppSpec) error {
 		spec.Image = validImage
 		app := &appsv1alpha1.NextApp{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-			Spec:       spec,
+			Name: name, Namespace: namespace,
+			Spec: spec,
 		}
 		err := k8sClient.Create(ctx, app)
 		if err == nil {

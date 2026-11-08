@@ -227,6 +227,29 @@ function runStubbed(script: string, args: string[], env: Record<string, string>)
   }
 }
 
+/**
+ * Does this workflow/script text perform an INSTALL of `project`, as opposed to
+ * merely mentioning its name? Comments are stripped and backslash
+ * continuations folded first, so rewording a comment can neither trip nor
+ * evade the check. An install is a `kubectl apply|create|replace` or
+ * `helm install|upgrade|template` line naming the project, a fetch
+ * (`curl`/`wget`) naming it, or any non-comment URL pointing at the project's
+ * release assets. The rule is "an install verb AND the project name on the
+ * same logical line", never "is the line understood", so an unclassifiable
+ * install line still counts (fail-closed).
+ */
+function installsProject(text: string, project: RegExp): boolean {
+  const folded = text.replace(/\\\r?\n\s*/g, ' ');
+  const code = folded
+    .split('\n')
+    .map((l) => l.replace(/(^|\s)#.*$/, '$1'))
+    .filter((l) => l.trim() !== '');
+  const verb =
+    /\b(kubectl\s+(?:\S+\s+)*?(apply|create|replace)|helm\s+(?:\S+\s+)*?(install|upgrade|template)|curl|wget)\b/;
+  const url = new RegExp(`https?://\\S*(?:${project.source})`, 'i');
+  return code.some((l) => (verb.test(l) && project.test(l)) || url.test(l));
+}
+
 describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + image-digest pinned (#1289)', () => {
   // The whole-tree scan (~2.7 s here, more on a loaded CI runner) runs ONCE, up
   // front, under an explicit timeout — never inside whichever test happens to
@@ -248,10 +271,29 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(found).toContain('.github/workflows/networkpolicy-enforcement.yml');
   });
 
+  it('install detection: a comment-only mention is not an install; a real unpinned install is', () => {
+    const K = /knative|kourier/i;
+    const C = /cert-manager/i;
+    // Comment-only mentions (whole-line and trailing) stay green.
+    expect(installsProject('# this lane installs no Knative or Kourier\n', K)).toBe(false);
+    expect(installsProject('  run: echo hi # Knative is not used here\n', K)).toBe(false);
+    expect(installsProject('# kubectl apply -f https://x/cert-manager.yaml\n', C)).toBe(false);
+    // Real installs, in each spelling, are caught.
+    expect(
+      installsProject('kubectl apply -f https://github.com/knative/serving/releases/x.yaml\n', K),
+    ).toBe(true);
+    expect(installsProject('kubectl apply \\\n  -f ./kourier.yaml\n', K)).toBe(true);
+    expect(installsProject('helm install cert-manager jetstack/cert-manager\n', C)).toBe(true);
+    expect(
+      installsProject('URL=https://github.com/cert-manager/cert-manager/releases/a.yaml\n', C),
+    ).toBe(true);
+    expect(installsProject('curl -fsSL "$KNATIVE_URL" -o f\n', K)).toBe(true);
+  });
+
   it('every workflow that installs cert-manager calls the shared script', () => {
     for (const wf of kindWorkflows()) {
       const text = readFileSync(join(ROOT, wf), 'utf8');
-      if (!/cert-manager/i.test(text)) continue;
+      if (!installsProject(text, /cert-manager/i)) continue;
       expect(text).toContain(CERT_MANAGER_SCRIPT);
     }
   });
@@ -259,7 +301,7 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
   it('every workflow that installs Knative Serving/Kourier calls the shared script', () => {
     for (const wf of kindWorkflows()) {
       const text = readFileSync(join(ROOT, wf), 'utf8');
-      if (!/knative|kourier/i.test(text)) continue;
+      if (!installsProject(text, /knative|kourier/i)) continue;
       expect(text).toContain(KNATIVE_SCRIPT);
     }
   });

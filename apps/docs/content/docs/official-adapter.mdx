@@ -43,9 +43,9 @@ export default adapter;
   from `.next`, so leave `distDir` unset (or set it to `.next`). When `knext build`, `deploy` or
   `preview` runs the Next.js build, it checks `next.config` first and refuses a `distDir` property or
   assignment set to anything else, or to a value it cannot read from the file (an environment
-  variable, a template with `${}`). The check reads the file as text, so it does not see every way a
-  config can set `distDir` (for example a shorthand `{ distDir }`), and it does not run when you skip
-  the build (`--skip-next`, `--skip-build`). The vinext target does not use `distDir`.
+  variable, a template with `${}`). The check reads the file as text, so it does not see a shorthand
+  `{ distDir }`, `Object.defineProperty`, or a value set outside the file, and it does not run when
+  knext does not build (`build --skip-next`, `deploy --skip-build`, `deploy --image`). The vinext target does not use `distDir`.
 - **`onBuildComplete`** uploads the build's static artifacts to the configured object store, keyed
   by `buildId`.
 

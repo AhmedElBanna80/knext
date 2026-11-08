@@ -215,7 +215,8 @@ function isDefaultDistDir(distDir: string): boolean {
  * computed value (an env var, a ternary, a `${}` template) refuses too. It is a
  * best-effort text check, not an evaluation (#2250): not seen are a shorthand
  * property (`{ distDir }`), `Object.defineProperty`, a value set outside the
- * file, and builds that skip it (`build --skip-next`, `deploy --skip-build`).
+ * file, and builds that skip it (`build --skip-next`, `deploy --skip-build`, and
+ * `deploy --image`, which implies `--skip-build`).
  */
 export function assertDefaultDistDir(
     cwd: string,

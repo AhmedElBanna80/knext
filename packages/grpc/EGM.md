@@ -39,7 +39,8 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
   - e2e/z7-identity-kind (no EGM.md): the Z7 zone-identity-token lane on kind.
     `run.sh` is the whole lane (run by `.github/workflows/z7-identity-kind-e2e.yml`)
     and its header describes the phases, including the squatted-JWKS-ConfigMap
-    phase. `mutation-rows.mjs` holds the operator mutation rows, which
+    phase. `mutation-rows.mjs` holds the mutation rows (the operator rows, plus M7 for
+    `run.sh` itself), which
     `mutation-prove-operator.sh` runs by hand. The lane is guarded from the repo
     root (not by `node scripts/bun-test.mjs packages/grpc`): see the header of its
     prover, `scripts/mutation-prove-2461-z7-kind-e2e.mjs`, for the test files it

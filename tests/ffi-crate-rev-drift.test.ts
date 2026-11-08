@@ -130,6 +130,42 @@ describe('scripts/check-ffi-crate-rev.mjs — crateRev must cover every merged c
     expect(status, out).toBe(0);
   });
 
+  it('ignores docs-only Markdown under the crates (EGM.md / README.md cannot change what a consumer builds)', () => {
+    const { dir } = makeRepo();
+    write(dir, 'crates/knext-ffi/EGM.md', '# docs\n');
+    write(dir, 'crates/knext-ffi-macros/EGM.md', '# docs\n');
+    write(dir, 'crates/knext-ffi/src/README.md', '# docs\n');
+    commitAll(dir, 'docs-only markdown merged without a bump');
+    git(dir, 'switch', '-qc', 'feature');
+    const { status, out } = runGuard(dir, { FFI_CRATE_REV_BASE_REF: 'main' });
+    expect(status, out).toBe(0);
+    expect(out).not.toContain('EGM.md');
+  });
+
+  it('a .rs change next to a merged Markdown change still fails, and the named pin is the .rs commit', () => {
+    const { dir } = makeRepo();
+    write(dir, 'crates/knext-ffi/src/wire.rs', '// v2\n');
+    const rs = commitAll(dir, 'rs change merged without a bump');
+    write(dir, 'crates/knext-ffi/EGM.md', '# docs\n');
+    commitAll(dir, 'docs after');
+    git(dir, 'switch', '-qc', 'feature');
+    const { status, out } = runGuard(dir, { FFI_CRATE_REV_BASE_REF: 'main' });
+    expect(status, out).toBe(1);
+    expect(out).toContain('crates/knext-ffi/src/wire.rs');
+    expect(out).not.toContain('EGM.md');
+    expect(out).toContain(rs);
+  });
+
+  it('a Cargo.toml change still fails', () => {
+    const { dir } = makeRepo();
+    write(dir, 'crates/knext-ffi/Cargo.toml', '[package]\nname = "knext-ffi"\n');
+    commitAll(dir, 'manifest change merged without a bump');
+    git(dir, 'switch', '-qc', 'feature');
+    const { status, out } = runGuard(dir, { FFI_CRATE_REV_BASE_REF: 'main' });
+    expect(status, out).toBe(1);
+    expect(out).toContain('crates/knext-ffi/Cargo.toml');
+  });
+
   it('passes the bump PR that moves the pin onto the merged crate change', () => {
     const { dir } = makeRepo();
     write(dir, 'crates/knext-ffi/src/wire.rs', '// v2\n');

@@ -23,9 +23,13 @@ limitations under the License.
 //     honouring build constraints, test files excluded) — for EVERY architecture
 //     the image ships, and the architectures must agree;
 //   - the collector is registered on controller-runtime's metrics.Registry (the
-//     registry /metrics serves) by a top-level statement of an init() function,
-//     so it runs on every start (not under an if, switch, loop, block, closure,
-//     defer, or as an argument to another call);
+//     registry /metrics serves) by a top-level statement of an init() function:
+//     an expression statement, or the right-hand side of an assignment or var
+//     declaration, optionally parenthesised, with no return, goto, labeled
+//     statement or panic earlier in that init(). This is not a proof that the
+//     registration succeeds (a Register error may be discarded), nor that
+//     init() is reached (a non-terminating loop or os.Exit earlier in it is
+//     not detected);
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -381,6 +385,68 @@ func (p *pkg) errorf(at ast.Node, format string, args ...any) error {
 	return fmt.Errorf("%s: %s", p.fset.Position(at.Pos()), fmt.Sprintf(format, args...))
 }
 
+// markTopLevel marks the calls of init()'s body that can run on every start: a
+// call that is a whole expression statement, or the right-hand side of an
+// assignment or a var declaration, optionally parenthesised. The statements are
+// walked in order, and a call is marked only if no EARLIER statement can end
+// init() before it (see mayStopInit).
+func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
+	stoppable := false
+	for _, st := range body.List {
+		var exprs []ast.Expr
+		switch st := st.(type) {
+		case *ast.ExprStmt:
+			exprs = []ast.Expr{st.X}
+		case *ast.AssignStmt:
+			exprs = st.Rhs
+		case *ast.DeclStmt:
+			if gd, ok := st.Decl.(*ast.GenDecl); ok {
+				for _, spec := range gd.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok {
+						exprs = append(exprs, vs.Values...)
+					}
+				}
+			}
+		}
+		if !stoppable {
+			for _, e := range exprs {
+				if c, ok := ast.Unparen(e).(*ast.CallExpr); ok {
+					marked[c] = true
+				}
+			}
+		}
+		stoppable = stoppable || p.mayStopInit(st)
+	}
+}
+
+// mayStopInit reports whether st contains, at any depth, a return, a goto, a
+// labeled statement or a call to the panic builtin: each can end init() before
+// a later statement runs, conditionally or not. A function literal is skipped,
+// since a return inside it leaves the literal, not init().
+func (p *pkg) mayStopInit(st ast.Stmt) bool {
+	stop := false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if stop {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt, *ast.LabeledStmt:
+			stop = true
+		case *ast.BranchStmt:
+			stop = n.Tok == token.GOTO
+		case *ast.CallExpr:
+			if id, ok := ast.Unparen(n.Fun).(*ast.Ident); ok && id.Name == "panic" {
+				_, builtin := p.info.Uses[id].(*types.Builtin)
+				stop = builtin
+			}
+		}
+		return !stop
+	})
+	return stop
+}
+
 // collect adds every family this package registers to out.
 func (p *pkg) collect(out map[string]Family) error {
 	for _, f := range p.files {
@@ -394,26 +460,14 @@ func (p *pkg) collect(out map[string]Family) error {
 		for _, decl := range f.Decls {
 			inInit := false
 			// topLevel is the registration calls that are direct statements of
-			// init(): the only ones that run on every start. Anything nested
-			// (an if, switch, loop, block, closure, defer, or an argument) may
-			// never run, so it is refused rather than counted.
+			// init() and can run on every start. Anything else is refused.
 			topLevel := map[*ast.CallExpr]bool{}
 			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "init" {
 				inInit = true
-				for _, st := range fd.Body.List {
-					switch st := st.(type) {
-					case *ast.ExprStmt:
-						if c, ok := st.X.(*ast.CallExpr); ok {
-							topLevel[c] = true
-						}
-					case *ast.AssignStmt:
-						for _, r := range st.Rhs {
-							if c, ok := r.(*ast.CallExpr); ok {
-								topLevel[c] = true
-							}
-						}
-					}
+				if fd.Body == nil {
+					return p.errorf(fd, "init() has no body: the scan cannot read the registrations it makes")
 				}
+				p.markTopLevel(fd.Body, topLevel)
 			}
 			handled := map[ast.Expr]bool{}
 			var walkErr error
@@ -436,7 +490,8 @@ func (p *pkg) collect(out map[string]Family) error {
 					}
 					if !topLevel[n] {
 						walkErr = p.errorf(n, "metrics.Registry.%s is not a top-level statement of init(): "+
-							"under a condition, loop, block, closure, defer or argument it may never run", fun.Sel.Name)
+							"nested under a condition, loop, block, closure, defer or argument, or after an earlier "+
+							"return, goto, label or panic in init(), it may never run", fun.Sel.Name)
 						return false
 					}
 					handled[fun.X] = true

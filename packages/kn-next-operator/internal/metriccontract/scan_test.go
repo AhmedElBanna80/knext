@@ -665,3 +665,218 @@ func init() {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// A registration after anything that can end init() early may never run, so it
+// is refused, whether the exit is conditional or not: a return, a goto, a
+// labeled statement or a panic earlier in the body.
+func TestScanRefusesARegistrationAfterAnEarlyExit(t *testing.T) {
+	cases := map[string]string{
+		"after a conditional return": `
+func cfg() bool { return true }
+
+func init() {
+	if cfg() {
+		return
+	}
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after an unconditional return (unreachable code)": `
+func init() {
+	return
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a goto that jumps past it": `
+func init() {
+	goto done
+	metrics.Registry.MustRegister(c)
+done:
+	println("done")
+}
+`,
+		"after a conditional goto": `
+func cfg() bool { return true }
+
+func init() {
+	if cfg() {
+		goto done
+	}
+	metrics.Registry.MustRegister(c)
+done:
+	println("done")
+}
+`,
+		"after a labeled statement": `
+func init() {
+loop:
+	for i := 0; i < 1; i++ {
+		break loop
+	}
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a select that can return": `
+func init() {
+	select {
+	default:
+		return
+	}
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a range that can return": `
+func init() {
+	for range 3 {
+		return
+	}
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a type switch that can return": `
+func init() {
+	var v any
+	switch v.(type) {
+	case int:
+		return
+	}
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a conditional panic": `
+func cfg() bool { return true }
+
+func init() {
+	if cfg() {
+		panic("stop")
+	}
+	metrics.Registry.MustRegister(c)
+}
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := fixture(t, map[string]string{
+				"cmd/main.go": mainImportsM,
+				"internal/m/m.go": header + `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+` + body,
+			})
+			fams, err := Scan(root, "cmd")
+			if err == nil {
+				t.Fatalf("Scan counted a registration an earlier exit can skip: %+v", fams)
+			}
+			if !strings.Contains(err.Error(), "not a top-level statement of init()") {
+				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// A registration that is a go statement, or that sits in a select case, a
+// range loop or a type switch case, is not a top-level statement of init().
+func TestScanRefusesRegistrationsInGoSelectRangeAndTypeSwitch(t *testing.T) {
+	cases := map[string]string{
+		"as a go statement": `
+func init() {
+	go metrics.Registry.MustRegister(c)
+}
+`,
+		"inside a go statement's func literal": `
+func init() {
+	go func() { metrics.Registry.MustRegister(c) }()
+}
+`,
+		"in a select case": `
+func init() {
+	select {
+	default:
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+		"in a range loop": `
+func init() {
+	for range 0 {
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+		"in a type switch case": `
+func init() {
+	var v any
+	switch v.(type) {
+	case nil:
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := fixture(t, map[string]string{
+				"cmd/main.go": mainImportsM,
+				"internal/m/m.go": header + `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+` + body,
+			})
+			fams, err := Scan(root, "cmd")
+			if err == nil {
+				t.Fatalf("Scan counted a registration that is not top-level: %+v", fams)
+			}
+			if !strings.Contains(err.Error(), "not a top-level statement of init()") {
+				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// A top-level registration written as a var declaration or in parentheses still
+// runs on every start, so it is counted. So is one after an earlier return that
+// sits inside a function literal: that return leaves the literal, not init().
+func TestScanAcceptsDeclAndParenthesisedRegistrations(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"cmd/main.go": mainImportsM,
+		"internal/m/m.go": header + `
+var (
+	a = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_a_total"})
+	b = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_b_total"})
+	c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_c_total"})
+)
+
+func init() {
+	_ = func() bool { return true }
+	go func() {}()
+	var err = metrics.Registry.Register(a)
+	_ = err
+	(metrics.Registry.MustRegister(b))
+	_ = (metrics.Registry.Register(c))
+}
+`,
+	})
+	if got := names(mustScan(t, root)); !reflect.DeepEqual(got, []string{"knext_a_total", "knext_b_total", "knext_c_total"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// A function declared init with no body is code the scan cannot read: it must
+// be an error, not a nil dereference.
+func TestScanFailsClosedOnABodilessInit(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"cmd/main.go": mainImportsM,
+		"internal/m/m.go": header + `
+var real = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_real_total"})
+
+func init() { metrics.Registry.MustRegister(real) }
+
+func init()
+`,
+	})
+	fams, err := Scan(root, "cmd")
+	if err == nil {
+		t.Fatalf("Scan accepted a body-less init: %+v", fams)
+	}
+	if !strings.Contains(err.Error(), "no body") {
+		t.Fatalf("refused for the wrong reason: %v", err)
+	}
+}

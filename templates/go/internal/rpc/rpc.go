@@ -154,6 +154,10 @@ func newFunction(cfg Config, verifier auth.Verifier) (*Function, error) {
 		connecthttp.WithReadMaxBytes(MaxRequestBytes),
 		connecthttp.WithCompressors(boundedGzip(MaxRequestBytes)),
 	)
+	// The wake-ahead probe: a plain GET, answered before and outside the token
+	// check. A Connect GET of the health Check is not available, since the
+	// generated health service does not mark Check side-effect free.
+	mux.HandleFunc("GET /healthz", healthz)
 
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
@@ -200,6 +204,12 @@ func (f *Function) Serve(ctx context.Context, ln net.Listener) error {
 		return err
 	}
 	return nil
+}
+
+// healthz answers the wake-ahead probe with 200 and no body. It carries no
+// credentials and reads nothing, so it is never refused for lack of a token.
+func healthz(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
 }
 
 // recoverInterceptor answers a panicking handler with CodeInternal, without

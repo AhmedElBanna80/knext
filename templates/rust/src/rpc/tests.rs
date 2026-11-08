@@ -191,6 +191,29 @@ async fn production_wiring_fails_closed_on_the_wire() {
     running.stop().await.unwrap();
 }
 
+/// The wake-ahead probe is a plain GET to `/healthz`, answered with 200 and no
+/// token, under the production wiring (no JWKS mounted, so every RPC is
+/// refused). POST is not served there.
+#[tokio::test]
+async fn healthz_get_is_served_without_a_token() {
+    let running = start(production()).await;
+    let get = Request::get(format!("http://{}/healthz", running.addr))
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let resp = raw(running.addr, Transport::Http1, get).await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::OK, "GET /healthz");
+
+    let resp = raw(
+        running.addr,
+        Transport::Http1,
+        post(running.addr, "/healthz", &[], Bytes::new()),
+    )
+    .await
+    .unwrap();
+    assert_ne!(resp.status(), http::StatusCode::OK, "POST /healthz served");
+    running.stop().await.unwrap();
+}
+
 /// Every RPC the function serves, except the health service, states its
 /// `(knext.v1.auth)` option in the contract table. Scanned from the router,
 /// so an RPC registered later without an entry reds here.

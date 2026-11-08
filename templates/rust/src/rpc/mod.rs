@@ -164,7 +164,10 @@ fn build(router: Router, verifier: Option<Arc<dyn Verifier>>, cfg: Config) -> Fu
         )
         // gzip only. Decompression stops at the message limit.
         .with_compression(CompressionRegistry::new().register(GzipProvider::new()));
+    // The wake-ahead probe is answered outermost, before tracing and the token
+    // check, as the Go template's /healthz is.
     let stack = ServiceBuilder::new()
+        .layer(layers::HealthzLayer)
         .layer(layers::TraceLayer::new(tracer))
         .layer(layers::RecoverLayer)
         .layer(body::BoundedBodyLayer::new(

@@ -20,8 +20,8 @@ starts from.
 - **A connect-go server** for your contract, answering the Connect, gRPC and gRPC-Web protocols
   on one port, over HTTP/2 cleartext (h2c) — what the zone uses — or HTTP/1.1.
 - **A token check on every call** (see [Security](#security)).
-- **The standard gRPC health check**, `grpc.health.v1.Health/Check`, served without a token so
-  probes and the zone's wake-up call work.
+- **The standard gRPC health check**, `grpc.health.v1.Health/Check`, served without a token, and
+  a plain `GET /healthz` that answers `200` without a token, for the zone's wake-up call.
 - **OpenTelemetry**: a span per call, with the caller's W3C trace context linked, refused calls
   included.
 - **Panic recovery**: a panicking handler returns `internal` and the process keeps running.
@@ -110,6 +110,7 @@ It fails closed:
 | An RPC that states no `(knext.v1.auth)` option | refused, `unauthenticated` |
 | A token that passes every check | served |
 | Health check (`grpc.health.v1.Health/Check`) | served, no token needed |
+| `GET /healthz` | served with `200`, no token needed |
 
 There is no setting that turns the check off. At start-up the function logs a warning when no
 keys are mounted or the issuer or audience is not set.

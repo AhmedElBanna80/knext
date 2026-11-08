@@ -24,7 +24,7 @@ Answers one question at runtime: is the ValidatingAdmissionPolicy that confines 
 
 ## Side Effects
 - `monitor.go:enforcedGauge` is `knext_operator_write_policy_enforced` (unlabelled, 0 or 1), registered on `metrics.Registry` in `init`.
-- `source.go`: GETs `ValidatingAdmissionPolicies` and `ValidatingAdmissionPolicyBindings` by name, and creates a `SelfSubjectReview` (authentication.k8s.io/v1) to learn the operator's own username.
+- `source.go`: GETs `ValidatingAdmissionPolicies` and `ValidatingAdmissionPolicyBindings` by name (the operator's RBAC grants only `get` on those two named objects, `config/rbac/write_policy_reader_role.yaml`, which is why it uses a plain clientset), and creates a `SelfSubjectReview` (authentication.k8s.io/v1) to learn the operator's own username.
 - `monitor.go:Monitor.Start` runs a ticker loop at `Interval` (default `DefaultInterval`).
 
 ## Verification

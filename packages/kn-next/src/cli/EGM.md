@@ -164,7 +164,8 @@ are unknown-command errors.
   - Reads `KN_CONTEXT`, `KN_REDIS_URL`, `KN_REGISTRY`, `KN_BUCKET`, `KN_IMAGE_TAG`, `KN_NAMESPACE`, `KN_IMAGE`, `KNEXT_VINEXT_PATCHES`, `KNEXT_VERBOSE` and `npm_config_registry`.
   - Reads `KNEXT_CACHE_DIR`, then `XDG_CACHE_HOME`, for the patched-Bun cache location (`bun-toolchain.ts`), `KNEXT_COMPILE_STRICT_REQUIRES` (`vinext-build.ts`), and `CI` to decide whether `create` prompts (`create-options.ts`).
   - The `knext.config.ts` that `create` scaffolds reads `REDIS_URL`, so loading that config reads it.
-  - Sets or deletes `KNEXT_BUILD_ID`, `NEXT_DEPLOYMENT_ID`, `ASSET_PREFIX` and `KNEXT_RUNTIME` (`project-build.ts:runProjectBuild`, through the constant `../adapters/runtime-env.ts:KNEXT_RUNTIME_ENV`).
+  - `runProjectBuild` sets `KNEXT_RUNTIME` (`project-build.ts:runProjectBuild`, through the constant `../adapters/runtime-env.ts:KNEXT_RUNTIME_ENV`). Its callers delete `ASSET_PREFIX` (`build.ts`, `deploy.ts`, `preview.ts`) and export `KNEXT_BUILD_ID` / `NEXT_DEPLOYMENT_ID` through `exportBuildIdEnv` (`deploy.ts`, `preview.ts`).
+  - The distDir guard reads `next.config.*` and checks for `<distDir>/export-detail.json`; it writes nothing (`static-export-guard.ts`).
 - **Optional packages:** lazily imports `@getknext/grpc`, `@getknext/ffi` and `@getknext/db/migrate`. `db migrate` opens a database connection.
 - **Exit:** `process.exit` with the code returned by each verb's `*Main` function.
 

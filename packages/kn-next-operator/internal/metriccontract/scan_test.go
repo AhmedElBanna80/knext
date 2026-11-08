@@ -366,13 +366,16 @@ func TestScanRefusesACollectorItCannotTieToItsDeclaration(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "a package var reassigned in init() before MustRegister",
+			// After, not before: a statement before the registration is refused by
+			// the top-level allowlist first. After it, only the assignment check
+			// can catch that the registered collector is not the declared one.
+			name: "a package var reassigned in init() after MustRegister",
 			files: map[string]string{"internal/m/m.go": header + `
 var c = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "knext_real_total"}, []string{"r"})
 
 func init() {
-	c = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "knext_decoy_total"}, []string{"r"})
 	metrics.Registry.MustRegister(c)
+	c = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "knext_decoy_total"}, []string{"r"})
 }
 `},
 			want: "c is assigned",
@@ -395,9 +398,9 @@ func init() { metrics.Registry.MustRegister(c) }
 var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_real_total"})
 
 func init() {
+	metrics.Registry.MustRegister(c)
 	p := &c
 	_ = p
-	metrics.Registry.MustRegister(c)
 }
 `},
 			want: "c is assigned",
@@ -412,6 +415,8 @@ func init() { metrics.Registry.MustRegister(C) }
 			want: "exported",
 		},
 		{
+			// A shadowing declaration must come before the registration, so the
+			// top-level allowlist refuses it before scope resolution sees it.
 			name: "a local var shadowing the package var",
 			files: map[string]string{"internal/m/m.go": header + `
 var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_real_total"})
@@ -421,9 +426,11 @@ func init() {
 	metrics.Registry.MustRegister(c)
 }
 `},
-			want: "local declaration",
+			want: "not a top-level statement of init()",
 		},
 		{
+			// A shadowing declaration must come before the registration, so the
+			// top-level allowlist refuses it before scope resolution sees it.
 			name: "a local var declared with var, shadowing the package var",
 			files: map[string]string{"internal/m/m.go": header + `
 var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_real_total"})
@@ -433,9 +440,11 @@ func init() {
 	metrics.Registry.MustRegister(c)
 }
 `},
-			want: "local declaration",
+			want: "not a top-level statement of init()",
 		},
 		{
+			// A shadowing declaration must come before the registration, so the
+			// top-level allowlist refuses it before scope resolution sees it.
 			name: "a local const shadowing the package const a name is built from",
 			files: map[string]string{"internal/m/m.go": header + `
 const name = "knext_real_total"
@@ -445,7 +454,7 @@ func init() {
 	metrics.Registry.MustRegister(prometheus.NewCounter(prometheus.CounterOpts{Name: name}))
 }
 `},
-			want: "local declaration",
+			want: "not a top-level statement of init()",
 		},
 		{
 			name: "a local shadowing the metrics package name",
@@ -653,11 +662,11 @@ var (
 )
 
 func init() {
-	if false {
-		println("not a registration")
-	}
 	metrics.Registry.MustRegister(a)
 	_ = metrics.Registry.Register(b)
+	if false {
+		println("after the registrations, so it ends nothing")
+	}
 }
 `,
 	})
@@ -843,10 +852,60 @@ var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
 	}
 }
 
-// A closure that only returns, or a panicking closure that is deferred or not
-// called at all, cannot end init() before a later statement, so the later
-// registration is still counted.
-func TestScanCountsARegistrationAfterAClosureThatCannotEndInit(t *testing.T) {
+// A registration whose own arguments call anything but a prometheus constructor
+// may panic before it registers, so it is refused; a function literal that is
+// only passed (a GaugeFunc callback) does not run, so it is fine.
+func TestScanChecksTheRegistrationsOwnArguments(t *testing.T) {
+	refused := map[string]string{
+		"a constructor whose Help calls a closure that panics": `
+func init() {
+	metrics.Registry.MustRegister(prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_x_total", Help: func() string { panic("x") }()}))
+}
+`,
+		"an argument built by a helper call": `
+func build() prometheus.Counter { return prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_x_total"}) }
+
+func init() {
+	metrics.Registry.MustRegister(build())
+}
+`,
+		"after a deferred call whose function value panics now": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_x_total"})
+
+func init() {
+	defer func() func() { panic("x") }()()
+	metrics.Registry.MustRegister(c)
+}
+`,
+	}
+	for name, body := range refused {
+		t.Run(name, func(t *testing.T) {
+			root := fixture(t, map[string]string{"cmd/main.go": mainImportsM, "internal/m/m.go": header + body})
+			fams, err := Scan(root, "cmd")
+			if err == nil {
+				t.Fatalf("Scan counted it: %+v", fams)
+			}
+			if !strings.Contains(err.Error(), "not a top-level statement of init()") {
+				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+	t.Run("a GaugeFunc callback that is only passed", func(t *testing.T) {
+		root := fixture(t, map[string]string{"cmd/main.go": mainImportsM, "internal/m/m.go": header + `
+func init() {
+	metrics.Registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "knext_up"}, func() float64 { panic("only if scraped") }))
+}
+`})
+		if got := names(mustScan(t, root)); !reflect.DeepEqual(got, []string{"knext_up"}) {
+			t.Fatalf("got %v", got)
+		}
+	})
+}
+
+// The top-level check is an allowlist: any statement before a registration that
+// is not itself a pure registration refuses everything after it, even when that
+// statement could not in fact end init(). Failing closed here is deliberate.
+func TestScanRefusesARegistrationAfterAnyNonRegistrationStatement(t *testing.T) {
 	cases := map[string]string{
 		"after a closure called on the spot that only returns": `
 func cfg() bool { return true }
@@ -888,8 +947,12 @@ func init() {
 var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
 ` + body,
 			})
-			if got := names(mustScan(t, root)); !reflect.DeepEqual(got, []string{"knext_cond_total"}) {
-				t.Fatalf("got %v", got)
+			fams, err := Scan(root, "cmd")
+			if err == nil {
+				t.Fatalf("Scan counted a registration after a non-registration statement: %+v", fams)
+			}
+			if !strings.Contains(err.Error(), "not a top-level statement of init()") {
+				t.Fatalf("refused for the wrong reason: %v", err)
 			}
 		})
 	}
@@ -967,12 +1030,10 @@ var (
 )
 
 func init() {
-	_ = func() bool { return true }
-	go func() {}()
 	var err = metrics.Registry.Register(a)
-	_ = err
 	(metrics.Registry.MustRegister(b))
 	_ = (metrics.Registry.Register(c))
+	_ = err
 }
 `,
 	})

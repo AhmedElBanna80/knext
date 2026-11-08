@@ -23,15 +23,18 @@ limitations under the License.
 //     honouring build constraints, test files excluded) — for EVERY architecture
 //     the image ships, and the architectures must agree;
 //   - the collector is registered on controller-runtime's metrics.Registry (the
-//     registry /metrics serves) by a top-level statement of an init() function:
-//     an expression statement, or the right-hand side of an assignment or var
-//     declaration, optionally parenthesised, with no return, goto, labeled
-//     statement or panic earlier in that init() (a panic inside a function
-//     literal called on the spot counts). This is not a proof that the
-//     registration succeeds (a Register error may be discarded), nor that
-//     init() is reached (a non-terminating loop, os.Exit, or a panic inside a
-//     named helper, or inside a literal bound to a variable and called through
-//     it, earlier in init() is not detected);
+//     registry /metrics serves) by a top-level statement of an init() function
+//     that belongs to the leading run of registrations: every statement of
+//     init() up to and including it is an expression statement, or the single
+//     right-hand side of an assignment or var declaration, optionally
+//     parenthesised, that calls Register or MustRegister with arguments that
+//     call nothing but a known prometheus constructor. Anything else in that
+//     run (a condition, loop, block, defer, go, closure call, helper call or any
+//     other statement) ends it: nothing after it is counted. This is an
+//     allowlist, so it fails closed. It is not a proof that the registration
+//     succeeds (a Register error may be discarded), nor that init() is reached
+//     at all (a panic in a package-level variable initialiser is not
+//     detected, but then the process never serves anything);
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -387,138 +390,99 @@ func (p *pkg) errorf(at ast.Node, format string, args ...any) error {
 	return fmt.Errorf("%s: %s", p.fset.Position(at.Pos()), fmt.Sprintf(format, args...))
 }
 
-// markTopLevel marks the calls of init()'s body that can run on every start: a
-// call that is a whole expression statement, or the right-hand side of an
-// assignment or a var declaration, optionally parenthesised. The statements are
-// walked in order, and a call is marked only if no EARLIER statement can end
-// init() before it (see mayStopInit).
+// markTopLevel marks the registration calls of init()'s body that run on every
+// start. It is an allowlist, so it fails closed: init()'s statements are walked
+// in order, and a call is marked only while EVERY statement so far is a pure
+// registration (see pureRegistration). The first statement that is anything
+// else ends the run: nothing after it is counted, whatever it is, because the
+// scan does not try to prove that an arbitrary statement cannot end init().
 func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
-	stoppable := false
 	for _, st := range body.List {
-		var exprs []ast.Expr
-		switch st := st.(type) {
-		case *ast.ExprStmt:
-			exprs = []ast.Expr{st.X}
-		case *ast.AssignStmt:
-			exprs = st.Rhs
-		case *ast.DeclStmt:
-			if gd, ok := st.Decl.(*ast.GenDecl); ok {
-				for _, spec := range gd.Specs {
-					if vs, ok := spec.(*ast.ValueSpec); ok {
-						exprs = append(exprs, vs.Values...)
-					}
-				}
-			}
+		call := pureRegistration(st)
+		if call == nil {
+			return
 		}
-		if !stoppable {
-			for _, e := range exprs {
-				if c, ok := ast.Unparen(e).(*ast.CallExpr); ok {
-					marked[c] = true
-				}
-			}
-		}
-		stoppable = stoppable || p.mayStopInit(st)
+		marked[call] = true
 	}
 }
 
-// mayStopInit reports whether st contains, at any depth, a return, a goto, a
-// labeled statement or a call to the panic builtin: each can end init() before
-// a later statement runs, conditionally or not. A function literal is skipped,
-// since a return inside it leaves the literal, not init(), unless it is called
-// on the spot: then a panic in its body ends init() too (see litMayPanic). A
-// deferred or go-started call runs later, but its arguments are evaluated now,
-// so they are inspected like any expression. A deferred call itself runs only
-// when init() returns, after every later statement, so its callee is not. A
-// go-started panic, or a go-started literal that can panic, is a stop: the
-// goroutine may crash the process before the next statement. Not
-// detected: a panic inside a named helper, or inside a literal bound to a
-// variable and called through it.
-func (p *pkg) mayStopInit(st ast.Stmt) bool {
-	stop := false
-	ast.Inspect(st, func(n ast.Node) bool {
-		if stop {
-			return false
+// pureRegistration returns the registration call when st is a pure
+// registration, else nil. A pure registration is a Register or MustRegister
+// selector call that is the whole expression statement, or the single
+// right-hand side of an assignment or var declaration, optionally
+// parenthesised, and whose arguments call nothing but a known prometheus
+// constructor (see pureArgs). Whether the selector really is metrics.Registry is
+// decided later by collect; a call this accepts but collect does not count
+// still ends nothing, since its arguments cannot panic or exit.
+func pureRegistration(st ast.Stmt) *ast.CallExpr {
+	var e ast.Expr
+	switch st := st.(type) {
+	case *ast.ExprStmt:
+		e = st.X
+	case *ast.AssignStmt:
+		if len(st.Rhs) == 1 {
+			e = st.Rhs[0]
 		}
-		switch n := n.(type) {
-		case *ast.FuncLit:
-			return false
-		case *ast.DeferStmt:
-			stop = p.argsMayStopInit(n.Call)
-			return false
-		case *ast.GoStmt:
-			stop = p.argsMayStopInit(n.Call) || p.isPanicBuiltin(n.Call.Fun)
-			if fl, ok := ast.Unparen(n.Call.Fun).(*ast.FuncLit); ok && p.litMayPanic(fl) {
-				stop = true
-			}
-			return false
-		case *ast.ReturnStmt, *ast.LabeledStmt:
-			stop = true
-		case *ast.BranchStmt:
-			stop = n.Tok == token.GOTO
-		case *ast.CallExpr:
-			if id, ok := ast.Unparen(n.Fun).(*ast.Ident); ok && id.Name == "panic" {
-				_, builtin := p.info.Uses[id].(*types.Builtin)
-				stop = builtin
-			}
-			if fl, ok := ast.Unparen(n.Fun).(*ast.FuncLit); ok && p.litMayPanic(fl) {
-				stop = true
-			}
+	case *ast.DeclStmt:
+		gd, ok := st.Decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR || len(gd.Specs) != 1 {
+			return nil
 		}
-		return !stop
-	})
-	return stop
-}
-
-// argsMayStopInit reports whether evaluating call's arguments can end init():
-// a deferred or go-started call evaluates them at once.
-func (p *pkg) argsMayStopInit(call *ast.CallExpr) bool {
+		vs, ok := gd.Specs[0].(*ast.ValueSpec)
+		if !ok || len(vs.Values) != 1 {
+			return nil
+		}
+		e = vs.Values[0]
+	}
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || (sel.Sel.Name != "MustRegister" && sel.Sel.Name != "Register") {
+		return nil
+	}
+	if !pureArgs(sel.X) {
+		return nil
+	}
 	for _, a := range call.Args {
-		if p.mayStopInit(&ast.ExprStmt{X: a}) {
-			return true
+		if !pureArgs(a) {
+			return nil
 		}
 	}
-	return false
+	return call
 }
 
-// isPanicBuiltin reports whether fun names the panic builtin (not a shadowing
-// declaration).
-func (p *pkg) isPanicBuiltin(fun ast.Expr) bool {
-	id, ok := ast.Unparen(fun).(*ast.Ident)
-	if !ok || id.Name != "panic" {
-		return false
-	}
-	_, builtin := p.info.Uses[id].(*types.Builtin)
-	return builtin
-}
-
-// litMayPanic reports whether the body of a function literal that is called on
-// the spot can panic: a call to the panic builtin at any depth, or a nested
-// literal that is itself called on the spot, deferred or go-started and can
-// panic. A deferred call inside the literal runs when the literal returns, so
-// before the next statement of init(). A return or goto in the body only leaves
-// the literal, so it does not count.
-func (p *pkg) litMayPanic(fl *ast.FuncLit) bool {
-	found := false
-	ast.Inspect(fl.Body, func(n ast.Node) bool {
-		if found {
+// pureArgs reports whether evaluating e calls nothing but a known prometheus
+// constructor (by selector name; collect checks the package). The body of a
+// function literal is skipped, since a literal that is not called does not run
+// (a GaugeFunc callback); a literal that IS called is a call whose function is
+// not a constructor selector, so it is refused.
+func pureArgs(e ast.Expr) bool {
+	pure := true
+	ast.Inspect(e, func(n ast.Node) bool {
+		if !pure {
 			return false
 		}
 		switch n := n.(type) {
 		case *ast.FuncLit:
 			return false
 		case *ast.CallExpr:
-			if id, ok := ast.Unparen(n.Fun).(*ast.Ident); ok && id.Name == "panic" {
-				if _, builtin := p.info.Uses[id].(*types.Builtin); builtin {
-					found = true
-				}
-			}
-			if inner, ok := ast.Unparen(n.Fun).(*ast.FuncLit); ok && p.litMayPanic(inner) {
-				found = true
+			sel, ok := ast.Unparen(n.Fun).(*ast.SelectorExpr)
+			if _, ctor := constructors[selName(sel, ok)]; !ctor {
+				pure = false
 			}
 		}
-		return !found
+		return pure
 	})
-	return found
+	return pure
+}
+
+func selName(sel *ast.SelectorExpr, ok bool) string {
+	if !ok {
+		return ""
+	}
+	return sel.Sel.Name
 }
 
 // collect adds every family this package registers to out.
@@ -564,8 +528,9 @@ func (p *pkg) collect(out map[string]Family) error {
 					}
 					if !topLevel[n] {
 						walkErr = p.errorf(n, "metrics.Registry.%s is not a top-level statement of init(): "+
-							"nested under a condition, loop, block, closure, defer or argument, or after an earlier "+
-							"return, goto, label or panic in init(), it may never run", fun.Sel.Name)
+							"a registration counts only while every statement of init() so far is a registration whose "+
+							"arguments call nothing but a prometheus constructor; this one is nested, follows another "+
+							"kind of statement, or calls something else in its arguments, so it may never run", fun.Sel.Name)
 						return false
 					}
 					handled[fun.X] = true

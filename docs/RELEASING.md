@@ -766,7 +766,7 @@ Confirm every box before starting step 1 below:
    **Bundle-integrity guard.** Before the release body is generated or anything is published, the
    workflow runs `scripts/verify-operator-bundle-image.mjs` against **both** attached assets
    (`install.yaml` and `install-vX.Y.Z.yaml`). It requires each bundle to contain exactly one
-   distinct operator image reference anywhere in the file (image lines, env values, args) of the form `<registry>/<repo>/kn-next-operator:vX.Y.Z@sha256:<digest>`
+   distinct operator image reference anywhere in the file (image lines, env values, args, flow-style YAML, scheme-qualified values) of the form `<registry>/<repo>/kn-next-operator:vX.Y.Z@sha256:<digest>`
    where the registry and repository are exactly the image this run pushed, the tag is the release
    tag's `vX.Y.Z`, and the digest is the one this run pushed. A mismatch (a stale tag, a foreign
    registry or repo, a different digest), no operator image reference at all, more than one distinct reference, or an unreadable file **fails the

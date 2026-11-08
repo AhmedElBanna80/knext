@@ -77,6 +77,15 @@ describe('verify-operator-bundle-image', () => {
     expect(check('operator-v1.4.0', D, content).code).toBe(0);
   });
 
+  it('FAILS a stale ref behind a URL scheme (https:// and oci://) next to a correct image line', () => {
+    for (const scheme of ['https://', 'oci://']) {
+      const content = `${bundle(`image: ${IMG}:v1.4.0@${D}`)}        env:\n        - name: X\n          value: "${scheme}${IMG}:v1.3.0@${OTHER}"\n`;
+      const r = check('operator-v1.4.0', D, content);
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('more than one operator image');
+    }
+  });
+
   it('passes when an env value repeats the SAME pinned image, and ignores comments', () => {
     const content = `${bundle(`image: ${IMG}:v1.4.0@${D}`)}        env:\n        - name: RELATED_IMAGE_OPERATOR\n          value: ${IMG}:v1.4.0@${D}\n# old: ${IMG}:v0.1.0@${OTHER}\n`;
     expect(check('operator-v1.4.0', D, content).code).toBe(0);

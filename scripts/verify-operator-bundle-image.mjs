@@ -34,11 +34,15 @@ import { fileURLToPath } from 'node:url';
 const OPERATOR_TAG = /^operator-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 // Any operator image reference ANYWHERE in the bundle (image:, env values, args, flow-style
-// YAML), not only `image:` lines. Whole-line comments are skipped. The lookbehind refuses a
-// token that starts mid-path, so a URL such as https://github.com/<org>/kn-next-operator is not
-// read as an image reference.
+// YAML), not only `image:` lines. Whole-line comments are skipped. The token is taken with its
+// whole leading path (and scheme, if any) so no start position can be skipped. A URL scheme
+// (`https://`, `oci://`) is stripped; a BARE scheme-qualified token (a repo URL, no :tag and no
+// @digest) is the only thing ignored. Every other occurrence of the name is counted, so anything
+// unclassifiable fails closed. A bare name with no `/` (a resource name, a label value) is not
+// an image reference. instead of slipping past a lookbehind.
 const OPERATOR_TOKEN =
-  /(?<![\w.:/-])[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9._-]+)*\/kn-next-operator(?![\w.-])(?::[\w.-]+)?(?:@[\w:.-]+)?/g;
+  /[A-Za-z0-9._:/-]*\/kn-next-operator(?![\w.-])(?::[\w.-]+)?(?:@[\w:.-]+)?/g;
+const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 const OPERATOR_REF = /\/kn-next-operator(?:[:@]|$)/;
 const IMAGE_REPO = /^[a-z0-9][a-z0-9.-]*(?::\d+)?(?:\/[a-z0-9][a-z0-9._-]*)+$/;
 const PINNED = /^(.+\/kn-next-operator):([^@:\s]+)@(sha256:[0-9a-f]{64})$/;
@@ -59,7 +63,12 @@ export function verifyBundleImage({ tag, digest, image, text }) {
   const refs = new Set();
   for (const line of text.split('\n')) {
     if (/^\s*#/.test(line)) continue;
-    for (const m of line.matchAll(OPERATOR_TOKEN)) refs.add(m[0]);
+    for (const m of line.matchAll(OPERATOR_TOKEN)) {
+      const hasScheme = SCHEME.test(m[0]);
+      const tok = m[0].replace(SCHEME, '');
+      if (hasScheme && !/\/kn-next-operator[:@]/.test(tok)) continue; // bare repo URL
+      refs.add(tok);
+    }
   }
   if (refs.size === 0) return { ok: false, reason: 'no kn-next-operator image reference found' };
   if (refs.size > 1) {

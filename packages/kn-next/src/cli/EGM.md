@@ -81,7 +81,7 @@ are unknown-command errors.
 ### Guards
 
 - `assertNoPlaceholders` (`placeholder-preflight.ts`).
-- `assertNotStaticExport`, `assertVinextNotStaticExport` (`static-export-guard.ts`).
+- `assertNotStaticExport`, `assertVinextNotStaticExport`, `assertDefaultDistDir` (`static-export-guard.ts`).
 - `assertNoBunTurbopackFragments` (`turbopack-fragments-guard.ts`).
 - `assertVisibilityDowngradeIsExplicit` (`visibility-guard.ts`).
 - `keyPrefixProblem`, `KEY_PREFIX_PATTERN`, `KEY_PREFIX_MAX_LENGTH` (`redis-key-prefix.ts`).
@@ -125,6 +125,7 @@ are unknown-command errors.
 - `deploy --skip-build` refuses a compiled executable whose build-identity stamp does not match the current sources [`build-artifact.ts:assertCompiledArtifactFresh`].
 - A patched-Bun download must match the embedded sha256 pin. It never falls back to stock Bun [`bun-toolchain.ts:ensurePatchedBun`].
 - An unconditional `output: 'export'` is refused, and an unreadable Next config also refuses [`static-export-guard.ts`].
+- A literal non-default `distDir` (anything but `.next`, `./.next`, `.next/`) is refused before a Next build (not the vinext target), since the build, artifact and standalone steps assume `.next`; a computed `distDir` is not seen [`static-export-guard.ts:assertDefaultDistDir`, `project-build.ts:runProjectBuild`].
 - `runtime=bun` with Turbopack module fragments enabled is refused [`turbopack-fragments-guard.ts`].
 - vinext patches apply all-or-nothing, with rollback on failure [`vinext-patches.ts`].
 - `create` refuses to overwrite files without `--force`, and requires an RFC 1123 app name of at most 63 characters [`create.ts:writeScaffold`, `assertValidAppName`].

@@ -158,6 +158,40 @@ function readConfigOrRefuse(
     }
 }
 
+const CUSTOM_DIST_DIR_MESSAGE = (
+    distDir: string,
+) => `Your Next.js config sets \`distDir: '${distDir}'\`, and knext does not support a custom build directory yet.
+
+knext's build, artifact and standalone steps read the build output from \`.next\`, so a different
+directory would produce a wrong artifact or fail later in the pipeline.
+Remove \`distDir\` from your Next.js config (the default is \`.next\`) and build again.`;
+
+/** True when `distDir` names the default `.next` (`.next`, `./.next`, `.next/`). */
+function isDefaultDistDir(distDir: string): boolean {
+    return (
+        distDir.replace(/^\.\//, "").replace(/\/+$/, "") === DEFAULT_DIST_DIR
+    );
+}
+
+/**
+ * Before a Next build: refuse a custom `distDir` (#2251). Only the static-export
+ * guard honours it; the build, artifact and standalone steps assume `.next`, so
+ * half-supporting it gives a wrong artifact path or a confusing late failure.
+ * Refused up front until the resolved value is threaded through. It reads the
+ * literal from the config text, like the other guards here, so a computed
+ * `distDir` (an env var, a ternary) is not seen.
+ */
+export function assertDefaultDistDir(
+    cwd: string,
+    readNextConfig: () => string | undefined = () => readNextConfigStrict(cwd),
+): void {
+    const text = readConfigOrRefuse(readNextConfig);
+    const distDir = text === undefined ? undefined : configuredDistDir(text);
+    if (distDir !== undefined && !isDefaultDistDir(distDir)) {
+        throw new UsageError(CUSTOM_DIST_DIR_MESSAGE(distDir));
+    }
+}
+
 /** After a Next build: refuse if it wrote an export marker into `distDir`. */
 export function assertNotStaticExport(
     cwd: string,

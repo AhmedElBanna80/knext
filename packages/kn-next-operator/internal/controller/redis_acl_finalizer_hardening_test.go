@@ -122,6 +122,31 @@ func TestFinalizerOfAYoungerAppNeverSweepsAnOlderHoldersKeys(t *testing.T) {
 	})
 }
 
+// The same attack where the younger app DID get a Secret and a user (it was alone
+// in view when it was provisioned, and the older holder arrived afterwards). The
+// server shows no other user over the keys, because the holder has none (it is on
+// the shared credential), so only the ownership rule can stop the sweep; the
+// server-side check of N4 cannot.
+func TestFinalizerOfAYoungerAppWithAUserNeverSweepsAnOlderHoldersKeys(t *testing.T) {
+	h := newACLHarness(t, true)
+	h.enablePlatformLookup(t)
+	young := aclAppAt("shop", "web", "team", "", tYoung)
+	h.createSibling(t, young)
+	st := h.reconcileApp(t, young)
+	if !st.ready {
+		t.Fatalf("setup: %+v", st)
+	}
+	h.createSibling(t, aclAppAt("legacy", "api", "team", cacheIsolationNone, tOld))
+
+	cleaner, _ := h.finalize(t, young)
+	if len(cleaner.cache) != 0 {
+		t.Fatalf("a younger app with a user swept the older holder's keys: %+v", cleaner.cache)
+	}
+	if h.prov.hasUser(st.username) {
+		t.Fatal("the younger app's own user must still be removed")
+	}
+}
+
 // ── N4 ──────────────────────────────────────────────────────────────────────
 
 // Before the finalizer re-asserts the app's user and sweeps as it, it asks the

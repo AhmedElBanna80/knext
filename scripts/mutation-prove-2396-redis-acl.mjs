@@ -155,10 +155,18 @@ const cases = [
   // B1: isolation is claimed from the endpoint's own state, never from the two
   // probes alone (requirepass refuses both while the shared password holds ~*).
   {
-    name: 'B1: the server-state scan is skipped (probes alone decide)',
+    name: 'B1: key patterns are not consulted (a shared user holding ~* is invisible)',
     file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
     anchor: '\t\t\t\tif patternMayCoverPrefix(p, prefix) {',
     to: '\t\t\t\tif false && patternMayCoverPrefix(p, prefix) {',
+    pkg: './internal/controller',
+    test: 'TestIsolationClaimNamedSharedUser',
+  },
+  {
+    name: 'B1: the whole server-state scan is skipped (the two probes alone decide)',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\tfor _, u := range users {\n\t\tif u == provisioner ||',
+    to: '\tfor _, u := range users[:0] {\n\t\tif u == provisioner ||',
     pkg: './internal/controller',
     test: 'TestIsolationClaimRequirepassEndpointIsNotIsolated',
   },
@@ -368,7 +376,7 @@ const cases = [
     anchor: '\treturn prefixBlocker(claims, self.ref) == nil, nil\n',
     to: '\treturn true, nil\n',
     pkg: './internal/controller',
-    test: 'TestFinalizerOfALosingAppNeverSweepsTheOwnersKeys',
+    test: 'TestFinalizerOfAYoungerAppWithAUserNeverSweepsAnOlderHoldersKeys',
   },
 
   // Review r2 (2026-11-08).

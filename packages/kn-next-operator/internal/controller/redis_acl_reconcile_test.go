@@ -47,6 +47,7 @@ type fakeProvisioner struct {
 	provUser    string              // the provisioner's own username ("" = provisioner)
 	sharedLive  bool                // what the no-credential / AUTH default PROBES see
 	getUserErr  error
+	catErr      error // ACL CAT is refused
 	setErr      error
 	delCalls    []string
 	setUserArgs map[string][]string
@@ -153,6 +154,16 @@ func (f *fakeProvisioner) GetUser(_ context.Context, name string) (ACLUserInfo, 
 		KeyPatterns:  append([]string(nil), f.patterns[name]...),
 		CommandRules: append([]string(nil), f.commands[name]...),
 	}, nil
+}
+
+// CommandCategory is ACL CAT, from the fixture copy of the server's categories.
+func (f *fakeProvisioner) CommandCategory(_ context.Context, category string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.catErr != nil {
+		return nil, f.catErr
+	}
+	return fixtureCategory(category)
 }
 
 // setCommands sets the command rules (root first, then each selector's) a user

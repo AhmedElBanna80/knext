@@ -34,9 +34,13 @@ itself anything. Keep it in the operator's namespace and nowhere else.
 
 ```text
 ACL SETUSER provisioner on >CHOOSE-A-PASSWORD ~* resetchannels -@all
-  +acl|setuser +acl|deluser +acl|getuser +acl|users +acl|whoami
+  +acl|setuser +acl|deluser +acl|getuser +acl|users +acl|whoami +acl|cat
   +scan +del +ping +info|server +client|setinfo
 ```
+
+`+acl|cat` lets the operator ask the Redis which commands it calls administrative or dangerous, so the
+check below uses the server's own list rather than one that can go stale. Without it the operator
+cannot check, and withholds the isolation claim (`SharedCredentialLive`, "the check failed").
 
 **2. Store it as a Secret in the operator's namespace.**
 
@@ -111,7 +115,7 @@ While the app has its own user but something else can still reach its keys it is
 
 | Reason | Meaning |
 | --- | --- |
-| `SharedCredentialLive` | The app has its own user, but something else can still reach app keys: an enabled user on the endpoint (the `default` user included, with or without `requirepass`) whose key pattern covers an app's prefix, an enabled user that can run a command that streams or administers the whole server (`PSYNC`, `SYNC`, `MONITOR`, `ACL SETUSER`, `CONFIG SET`, `MODULE LOAD`, `DEBUG`, or a rule such as `+@all`, `+@admin` or `+@dangerous` that allows them) even if it holds no keys, an app on the endpoint with `isolation: none` or a credential in its spec, a provisioner that logs in as `default`, or the endpoint still accepts a connection without credentials or `AUTH default` with a password nobody issued. The message names which. Isolation is **not** in force. |
+| `SharedCredentialLive` | The app has its own user, but something else can still reach app keys: an enabled user on the endpoint (the `default` user included, with or without `requirepass`) whose key pattern covers an app's prefix, an enabled user, another app's `knext-app-*` user included, that can run any command the Redis itself lists as administrative or dangerous (`ACL CAT admin` and `ACL CAT dangerous`: `FLUSHALL`, `FLUSHDB`, `SWAPDB`, `PSYNC`, `SYNC`, `MONITOR`, `CONFIG GET`, `SLOWLOG`, `SHUTDOWN`, `REPLICAOF`, `ACL SETUSER` and the rest), directly or through a rule such as `+@all`, `+@admin`, `+@dangerous`, `+@write` or `+@keyspace`, even if it holds no keys (the operator's provisioner and the app's own user are not counted), an app on the endpoint with `isolation: none` or a credential in its spec, a provisioner that logs in as `default`, or the endpoint still accepts a connection without credentials or `AUTH default` with a password nobody issued. The message names which. Isolation is **not** in force. |
 | `Provisioned` | The app has its own user and none of the above holds. Isolation is in force. |
 | `EndpointUnregistered` | `isolation: acl` and the endpoint is not registered. |
 | `PrefixConflict` | Another app owns an overlapping prefix (the same one, one nested inside the other, or one containing the other), or another user on the endpoint already covers keys under it. The app does not get a user, and one it had is removed. The message names the app that owns the prefix. See *Who owns a prefix*. |
@@ -139,6 +143,14 @@ Every app on the endpoint that has a prefix takes part, **including an app that 
 user**: one with `isolation: none`, or with a credential in its `url` or `envMap`, still writes under
 its prefix on the shared credential, so it holds that prefix. A newer app that asks for the same prefix
 fails closed, and its deletion does not sweep the older app's keys.
+
+That includes a prefix set the old way, as `REDIS_KEY_PREFIX` in `spec.env`: the operator ranks the
+value as written. A `REDIS_KEY_PREFIX` that comes from a Secret (`spec.secrets.envMap`) is different:
+the operator does not read your Secrets, so it cannot tell which keys that app writes. It treats the
+app as holding any prefix, and **every newer app on the endpoint that sets an explicit
+`spec.cache.keyPrefix` fails closed behind it** (`PrefixConflict`, naming the app). An app on its own
+generated prefix is not affected. To release the others, set `spec.cache.keyPrefix` on the app whose
+prefix lives in a Secret.
 
 The app that loses fails closed with `PrefixConflict`, loses the user it had, and the message names
 the owner. An older app that already holds an explicit prefix keeps it when a newer app asks for the

@@ -179,10 +179,10 @@ const cases = [
     test: 'TestIsolationClaimNamedSharedUser',
   },
   {
-    name: 'B1: knext-app-* users are counted as a shared credential',
+    name: 'B1: knext-app-* users are judged by their key patterns too',
     file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
-    anchor: 'if u == provisioner || strings.HasPrefix(u, redisACLUsernamePrefix) {',
-    to: 'if u == provisioner {',
+    anchor: '\t\tif !strings.HasPrefix(u, redisACLUsernamePrefix) {',
+    to: '\t\tif true {',
     pkg: './internal/controller',
     test: 'TestIsolationClaimIgnoresTheProvisionerAndKnextAppUsers',
   },
@@ -419,8 +419,8 @@ const cases = [
   {
     name: 'N3: command rules are not consulted for the isolation claim',
     file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
-    anchor: 'if cmd, dangerous := commandRulesAllowDangerous(rules); dangerous {',
-    to: 'if cmd, dangerous := commandRulesAllowDangerous(rules); dangerous && false {',
+    anchor: '\t\t\tif dangerous {',
+    to: '\t\t\tif dangerous && false {',
     pkg: './internal/controller',
     test: 'TestIsolationClaimSeesAUserThatCanRunDangerousCommandsWithoutKeys',
   },
@@ -430,7 +430,7 @@ const cases = [
     anchor: '\n\t\t\t\t\tallowed = adding',
     to: '\n\t\t\t\t\tallowed = true',
     pkg: './internal/controller',
-    test: 'TestCommandRulesAllowDangerous',
+    test: 'TestCommandCatalogFirstAllowed',
   },
   {
     name: 'N3: a denied command is read as allowed',
@@ -438,7 +438,7 @@ const cases = [
     anchor: '\n\t\t\t\tallowed = adding',
     to: '\n\t\t\t\tallowed = true',
     pkg: './internal/controller',
-    test: 'TestCommandRulesAllowDangerous',
+    test: 'TestCommandCatalogFirstAllowed',
   },
   {
     name: 'N3: the command rules of a selector are ignored',
@@ -510,6 +510,120 @@ const cases = [
     to: '',
     pkg: './internal/controller',
     test: 'TestFinalizerDoesNotLeakTheUserWhenListingAppsFailsTransiently',
+  },
+
+
+  // Review r3 (2026-11-08).
+
+  // B-1: a prefix set through env is still a prefix an app holds.
+  {
+    name: 'B-1: a literal REDIS_KEY_PREFIX in spec.env drops out of the ranking',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
+    anchor: '\tif v := app.Spec.Env[redisKeyPrefixEnvName]; v != "" && !isSharedRedisKeyspace(v) {',
+    to: '\tif v := app.Spec.Env[redisKeyPrefixEnvName]; v != "" && !isSharedRedisKeyspace(v) && false {',
+    pkg: './internal/controller',
+    test: 'TestPrefixOwnershipRanksAPrefixSetThroughEnv',
+  },
+  {
+    name: 'B-1: a Secret-sourced REDIS_KEY_PREFIX drops out of the ranking',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
+    anchor: '\t\tif _, ok := app.Spec.Secrets.EnvMap[redisKeyPrefixEnvName]; ok {',
+    to: '\t\tif _, ok := app.Spec.Secrets.EnvMap[redisKeyPrefixEnvName]; ok && false {',
+    pkg: './internal/controller',
+    test: 'TestPrefixOwnershipAnOlderAppWhosePrefixComesFromASecretBlocksYoungerClaims',
+  },
+  {
+    name: 'B-1: an opaque app blocks nothing',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
+    anchor: '\tif w.opaque {\n\t\treturn true\n\t}',
+    to: '\tif w.opaque {\n\t\treturn false\n\t}',
+    pkg: './internal/controller',
+    test: 'TestPrefixOwnershipAnOlderAppWhosePrefixComesFromASecretBlocksYoungerClaims',
+  },
+  {
+    name: 'B-1: the finalizer does not rank env-set prefixes (sweeps past an env-prefix holder)',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_ownership.go',
+    anchor: '\t\tprefix, opaque := rankingPrefix(a)\n',
+    to: '\t\tprefix, opaque := operatorRedisKeyPrefix(a), false\n',
+    pkg: './internal/controller',
+    test: 'TestFinalizerOfAYoungerAppNeverSweepsKeysAnEnvSetPrefixHolds',
+  },
+  {
+    name: 'B-1: the isolation claim ignores prefixes set through env',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\t\tswitch p, opaque := rankingPrefix(a); {',
+    to: '\t\tswitch p, opaque := operatorRedisKeyPrefix(a), false; {',
+    pkg: './internal/controller',
+    test: 'TestIsolationClaimCountsPrefixesSetThroughEnvAndDoubtsOpaqueOnes',
+  },
+  {
+    name: 'B-1: the isolation claim does not doubt an app whose prefix is in a Secret',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\t\t\tif opaqueApp != "" && len(info.KeyPatterns) > 0 {',
+    to: '\t\t\tif opaqueApp != "" && len(info.KeyPatterns) > 0 && false {',
+    pkg: './internal/controller',
+    test: 'TestIsolationClaimCountsPrefixesSetThroughEnvAndDoubtsOpaqueOnes',
+  },
+
+  // M-1: the dangerous set is the server's, not a list kept here.
+  {
+    name: 'M-1: only @admin is read from the server (FLUSHALL, SWAPDB and the rest are missed)',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_commands.go',
+    anchor: '\tfor _, cat := range []string{"admin", "dangerous"} {',
+    to: '\tfor _, cat := range []string{"admin"} {',
+    pkg: './internal/controller',
+    test: 'TestCommandCatalogFirstAllowed',
+  },
+  {
+    name: 'M-1: a command category (+@write, +@keyspace) is not expanded',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_commands.go',
+    anchor: '\t\t\t\tif members[cmd] {',
+    to: '\t\t\t\tif members[cmd] && false {',
+    pkg: './internal/controller',
+    test: 'TestCommandCatalogFirstAllowed',
+  },
+  {
+    name: 'M-1: a rule on a parent command (+config, +slowlog) does not cover its subcommands',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_commands.go',
+    anchor: '\tif rule == cmd || rule == commandParent(cmd) {',
+    to: '\tif rule == cmd {',
+    pkg: './internal/controller',
+    test: 'TestCommandCatalogFirstAllowed',
+  },
+  {
+    name: 'M-1: an empty @admin or @dangerous answer is accepted',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_commands.go',
+    anchor: '\t\tif len(members) == 0 {',
+    to: '\t\tif len(members) == 0 && false {',
+    pkg: './internal/controller',
+    test: 'TestCommandCatalogFailsClosedWhenACLCATIsRefused',
+  },
+  {
+    name: 'M-1: a refused ACL CAT of a rule category is read as an empty category',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_commands.go',
+    anchor: '\tnames, err := c.fetch(category)\n\tif err != nil {\n\t\treturn nil, err\n\t}',
+    to: '\tnames, err := c.fetch(category)\n\tif err != nil {\n\t\tnames = nil\n\t}',
+    pkg: './internal/controller',
+    test: 'TestCommandCatalogFailsClosedWhenACLCATIsRefused',
+  },
+  {
+    name: 'M-1: a failed catalog load is not a withheld claim',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor:
+      '\tcommands, err := newCommandCatalog(ctx, prov)\n\tif err != nil {\n\t\treturn true, "the check failed: " + redactErr(err)\n\t}',
+    to: '\tcommands, err := newCommandCatalog(ctx, prov)\n\tif err != nil {\n\t\treturn false, ""\n\t}',
+    pkg: './internal/controller',
+    test: 'TestIsolationClaimNeedsTheServersCommandCategories',
+  },
+
+  // M-2: a knext-app-* user is not exempt from the command rule.
+  {
+    name: 'M-2: knext-app-* users skip the command check',
+    file: 'packages/kn-next-operator/internal/controller/redis_acl_reconcile.go',
+    anchor: '\t\tif u == provisioner {',
+    to: '\t\tif u == provisioner || strings.HasPrefix(u, redisACLUsernamePrefix) {',
+    pkg: './internal/controller',
+    test: 'TestIsolationClaimChecksCommandsOfEveryUserButTheProvisioner',
   },
 
   // Nit: status.cache.isolation makes no claim the condition does not.

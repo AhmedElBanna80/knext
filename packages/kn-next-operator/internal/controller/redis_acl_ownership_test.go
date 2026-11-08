@@ -302,11 +302,24 @@ func TestPrefixOwnershipRanksEveryAppWithAKnownPrefix(t *testing.T) {
 		}
 	})
 
-	// These hold nothing the operator can compare, so they never outrank a valid app.
+	// These hold nothing that overlaps `team`, so they never outrank a valid app.
 	nonHolders := map[string]func(*appsv1alpha1.NextApp){
-		"a reserved prefix":      func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "knext" },
-		"another endpoint":       func(a *appsv1alpha1.NextApp) { a.Spec.Cache.URL = "redis://other.cache.svc.cluster.local:6379" },
-		"no prefix the operator": func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "" },
+		"a reserved prefix": func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "knext" },
+		"another endpoint":  func(a *appsv1alpha1.NextApp) { a.Spec.Cache.URL = "redis://other.cache.svc.cluster.local:6379" },
+		// Clearing keyPrefix gives the app its DERIVED prefix, a different one. (It is
+		// not an app with no prefix: that case is the shared fallback below.)
+		"its own derived prefix instead": func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "" },
+		// The shared fallback keyspace is every prefix-less app's, so nobody owns it
+		// and it is not ranked (the CRD refuses it as an explicit value anyway).
+		"the shared fallback kn-next:cache": func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "kn-next:cache" },
+		"the shared fallback set through env": func(a *appsv1alpha1.NextApp) {
+			a.Spec.Cache.KeyPrefix = ""
+			a.Spec.Env = map[string]string{redisKeyPrefixEnvName: "kn-next"}
+		},
+		"a different prefix set through env": func(a *appsv1alpha1.NextApp) {
+			a.Spec.Cache.KeyPrefix = ""
+			a.Spec.Env = map[string]string{redisKeyPrefixEnvName: "billing"}
+		},
 	}
 	for name, mutate := range nonHolders {
 		t.Run("an older app with "+name+" holds nothing", func(t *testing.T) {

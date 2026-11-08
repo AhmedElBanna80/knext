@@ -43,6 +43,29 @@ type prefixClaim struct {
 	derived  bool   // the prefix is the app's own derived prefix
 	created  int64  // creationTimestamp in whole seconds: the API's resolution
 	uid      string // metadata.uid
+	// opaque: the app takes its prefix from a Secret (REDIS_KEY_PREFIX in
+	// spec.secrets.envMap), which the operator does not read. Nothing is known about
+	// which keys it writes, so it is taken to hold any prefix.
+	opaque bool
+}
+
+// newOpaqueClaim is the claim of an app whose prefix is in a Secret.
+func newOpaqueClaim(app *appsv1alpha1.NextApp, identity string) prefixClaim {
+	c := newPrefixClaim(app, "", identity)
+	c.opaque = true
+	return c
+}
+
+// blocks reports whether winning claim w keeps c from its prefix. An ordinary
+// winner blocks what overlaps it. An opaque winner blocks everything ranked after
+// it. A derived claim is never ranked after an opaque one (derived claims rank
+// first), so the derived shape stays reserved for its own app without a special
+// case here.
+func (w prefixClaim) blocks(c prefixClaim) bool {
+	if w.opaque {
+		return true
+	}
+	return prefixesOverlap(c.prefix, w.prefix)
 }
 
 // newPrefixClaim is the claim an app makes. identity is the cluster identity the
@@ -82,10 +105,14 @@ func prefixBlocker(claims []prefixClaim, self string) *prefixClaim {
 	var winners []prefixClaim
 	for _, c := range ranked {
 		var blocker *prefixClaim
-		for i := range winners {
-			if prefixesOverlap(c.prefix, winners[i].prefix) {
-				blocker = &winners[i]
-				break
+		// An opaque claim cannot be blocked, because what it holds is unknown: it
+		// stays a blocker for everything ranked after it, whatever outranks it.
+		if !c.opaque {
+			for i := range winners {
+				if winners[i].blocks(c) {
+					blocker = &winners[i]
+					break
+				}
 			}
 		}
 		if c.ref == self {
@@ -159,6 +186,34 @@ func (r *NextAppReconciler) endpointApps(ctx context.Context, self *appsv1alpha1
 	return append(out, self), nil
 }
 
+// rankingPrefix is the prefix an app HOLDS, for ranking, which is wider than the
+// prefix the operator can scope an ACL user to (operatorRedisKeyPrefix):
+// REDIS_KEY_PREFIX in spec.env or spec.secrets.envMap is the legacy way to set a
+// prefix, and an app that sets it still writes under it. Leaving such an app out
+// would hand its prefix to whoever copies it.
+//
+//   - a literal in spec.env is ranked as written;
+//   - a Secret in envMap is OPAQUE: the operator does not read tenants' Secrets to
+//     learn a prefix, so the app is taken to hold any prefix (see prefixClaim);
+//   - the shared fallback ("kn-next" and under it) is nobody's, and is not ranked.
+func rankingPrefix(app *appsv1alpha1.NextApp) (prefix string, opaque bool) {
+	if p := operatorRedisKeyPrefix(app); p != "" {
+		return p, false
+	}
+	if !cacheIsRedis(app) {
+		return "", false
+	}
+	if app.Spec.Secrets != nil {
+		if _, ok := app.Spec.Secrets.EnvMap[redisKeyPrefixEnvName]; ok {
+			return "", true // which of envMap and spec.env wins at runtime is not for the operator to guess
+		}
+	}
+	if v := app.Spec.Env[redisKeyPrefixEnvName]; v != "" && !isSharedRedisKeyspace(v) {
+		return v, false
+	}
+	return "", false
+}
+
 // rankedClaims are the claims of EVERY app on the endpoint whose prefix the
 // operator knows (ADR-0071 D6a rule 2). Whether an app can be issued a user has
 // nothing to do with whether it holds its prefix: an app with isolation: none, or
@@ -167,17 +222,24 @@ func (r *NextAppReconciler) endpointApps(ctx context.Context, self *appsv1alpha1
 // that overlaps it fails closed. Leaving such an app out would hand its prefix to
 // whoever copies it, and that app's finalizer would then sweep the original's keys.
 //
-// Left out: an app with no prefix the operator knows (nothing to compare), and an
+// A prefix set through spec.env is ranked as written. One that comes from a Secret
+// is opaque and blocks every younger non-derived claim (rankingPrefix).
+//
+// Left out: an app with no prefix at all (the shared fallback is nobody's), and an
 // app whose prefix is reserved (the platform keyspace, or another app's derived
 // shape): it is refused, and holds nothing.
 func rankedClaims(apps []*appsv1alpha1.NextApp, identity string) []prefixClaim {
 	var claims []prefixClaim
 	for _, a := range apps {
-		prefix := operatorRedisKeyPrefix(a)
-		if prefix == "" || reservedCachePrefix(a, prefix) != "" {
+		prefix, opaque := rankingPrefix(a)
+		switch {
+		case opaque:
+			claims = append(claims, newOpaqueClaim(a, identity))
+		case prefix == "" || reservedCachePrefix(a, prefix) != "":
 			continue
+		default:
+			claims = append(claims, newPrefixClaim(a, prefix, identity))
 		}
-		claims = append(claims, newPrefixClaim(a, prefix, identity))
 	}
 	return claims
 }
@@ -199,6 +261,11 @@ func holdsSharedCredential(app *appsv1alpha1.NextApp) bool {
 
 // conflictMessage is the PrefixConflict message for an app that lost the tiebreak.
 func conflictMessage(prefix string, blocker, self prefixClaim) string {
+	if blocker.opaque {
+		return fmt.Sprintf("key prefix %q cannot be issued: %s sets its key prefix in a Secret (REDIS_KEY_PREFIX in "+
+			"spec.secrets.envMap), so the operator cannot tell which keys it holds and treats it as holding any prefix "+
+			"(%s); set spec.cache.keyPrefix on it", prefix, blocker.ref, blocker.outranksBecause(self))
+	}
 	return fmt.Sprintf("key prefix %q overlaps %q, which %s owns (%s); "+
 		"an app's key prefix must not equal, nest inside, or contain another app's",
 		prefix, blocker.prefix, blocker.ref, blocker.outranksBecause(self))

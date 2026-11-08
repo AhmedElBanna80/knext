@@ -64,7 +64,7 @@ const (
 	// cacheInForceMessage is the only isolation claim the operator makes, and only
 	// after sharedPathLive found nothing on the endpoint (server state, not probes).
 	cacheInForceMessage = "isolation in force: the app runs under its own ACL user and no other enabled user " +
-		"on the endpoint, apart from the provisioner, reaches app keys"
+		"on the endpoint, apart from the provisioner, reaches this app's keys or can run an administrative command"
 
 	cacheResyncInterval = 5 * time.Minute
 	// cacheRetryInterval is how soon a pass that could not finish, or that lost a
@@ -92,6 +92,9 @@ type RedisProvisioner interface {
 	// sufficient: under requirepass both are refused while the real shared
 	// password still holds every key. detail names which probe succeeded.
 	SharedCredentialLive(ctx context.Context) (live bool, detail string, err error)
+	// CommandCategory lists the commands in one command category (ACL CAT),
+	// lower-cased, subcommands as "config|set". The provisioner needs +acl|cat.
+	CommandCategory(ctx context.Context, category string) ([]string, error)
 	Close() error
 }
 
@@ -525,10 +528,24 @@ func prefixConflict(ctx context.Context, prov RedisProvisioner, ownUser, prefix 
 // The probes alone prove nothing: under requirepass a no-credential connect and
 // AUTH default with a random password are both refused while the real shared
 // password still holds every key. A named shared user is never probed at all.
+//
+// Every enabled user but the provisioner is held to the command rule (it must not
+// be able to run anything the server calls @admin or @dangerous). That includes
+// every knext-app-* user, this app's own among them: the name proves nothing about
+// what a user can do, and the operator's own grant is pinned not to be dangerous
+// (TestTheOperatorsOwnCommandListIsNotDangerous, and the kind drill against a real
+// server). The key-pattern rule applies to every non-app user, since an app user
+// is scoped to its own prefix.
 func sharedPathLive(ctx context.Context, prov RedisProvisioner, apps []*appsv1alpha1.NextApp, self *appsv1alpha1.NextApp) (live bool, detail string) {
 	var prefixes []string
+	opaqueApp := "" // an app whose prefix is in a Secret: its keys cannot be named
 	for _, a := range apps {
-		if p := operatorRedisKeyPrefix(a); p != "" {
+		switch p, opaque := rankingPrefix(a); {
+		case opaque:
+			if opaqueApp == "" {
+				opaqueApp = a.Namespace + "/" + a.Name
+			}
+		case p != "":
 			prefixes = append(prefixes, p)
 		}
 		if a != self && holdsSharedCredential(a) {
@@ -544,8 +561,12 @@ func sharedPathLive(ctx context.Context, prov RedisProvisioner, apps []*appsv1al
 	if err != nil {
 		return true, "the check failed: " + redactErr(err)
 	}
+	commands, err := newCommandCatalog(ctx, prov)
+	if err != nil {
+		return true, "the check failed: " + redactErr(err)
+	}
 	for _, u := range users {
-		if u == provisioner || strings.HasPrefix(u, redisACLUsernamePrefix) {
+		if u == provisioner {
 			continue
 		}
 		info, err := prov.GetUser(ctx, u)
@@ -555,17 +576,27 @@ func sharedPathLive(ctx context.Context, prov RedisProvisioner, apps []*appsv1al
 		if !info.Enabled {
 			continue
 		}
-		for _, p := range info.KeyPatterns {
-			for _, prefix := range prefixes {
-				if patternMayCoverPrefix(p, prefix) {
-					return true, fmt.Sprintf("user %q is enabled and its key pattern %q reaches app keys", u, p)
+		if !strings.HasPrefix(u, redisACLUsernamePrefix) {
+			if opaqueApp != "" && len(info.KeyPatterns) > 0 {
+				return true, fmt.Sprintf("user %q is enabled and holds key patterns, and app %s sets its key prefix in a Secret, so they cannot be told apart from its keys", u, opaqueApp)
+			}
+			for _, p := range info.KeyPatterns {
+				for _, prefix := range prefixes {
+					if patternMayCoverPrefix(p, prefix) {
+						return true, fmt.Sprintf("user %q is enabled and its key pattern %q reaches app keys", u, p)
+					}
 				}
 			}
 		}
 		// Keys are not the whole story: a user with no key pattern can still stream
-		// the dataset (PSYNC, SYNC, MONITOR) or grant itself anything (ACL SETUSER).
+		// the dataset (PSYNC, SYNC, MONITOR), destroy it (FLUSHALL, SWAPDB) or grant
+		// itself anything (ACL SETUSER).
 		for _, rules := range info.CommandRules {
-			if cmd, dangerous := commandRulesAllowDangerous(rules); dangerous {
+			cmd, dangerous, err := commands.firstAllowed(rules)
+			if err != nil {
+				return true, "the check failed: " + redactErr(err)
+			}
+			if dangerous {
 				return true, fmt.Sprintf("user %q is enabled and can run %s", u, cmd)
 			}
 		}
@@ -796,6 +827,17 @@ func (g *goRedisProvisioner) DelUser(ctx context.Context, username string) error
 
 func (g *goRedisProvisioner) Users(ctx context.Context) ([]string, error) {
 	return g.rdb.Do(ctx, "ACL", "USERS").StringSlice()
+}
+
+func (g *goRedisProvisioner) CommandCategory(ctx context.Context, category string) ([]string, error) {
+	names, err := g.rdb.Do(ctx, "ACL", "CAT", category).StringSlice()
+	if err != nil {
+		return nil, err
+	}
+	for i, n := range names {
+		names[i] = strings.ToLower(n)
+	}
+	return names, nil
 }
 
 func (g *goRedisProvisioner) GetUser(ctx context.Context, username string) (ACLUserInfo, error) {

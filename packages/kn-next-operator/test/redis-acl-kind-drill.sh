@@ -23,6 +23,8 @@
 #   L4b. An OLDER app on isolation: none holds its prefix: a younger app that copies it
 #       is refused (PrefixConflict, naming the holder) and deleting it does not reap
 #       the older app's keys (it has no Secret, so its finalizer takes the plain path).
+#   L4c. The same when the older app sets its prefix the legacy way, REDIS_KEY_PREFIX
+#       in spec.env: it is never issued a user, but it still holds the prefix.
 #   L7b. A prefix nested under another app's DERIVED prefix (kn-<hash>:isr) is
 #       refused: PrefixReserved, no Secret, no user.
 #   L8. Deleting an app sweeps its keys as its own user and removes its ACL user.
@@ -177,7 +179,7 @@ ADMIN_READY=1
 
 # The provisioner user, exactly the rule set the docs ship.
 rcli_admin ACL SETUSER provisioner on ">$PROV_PW" '~*' resetchannels -@all \
-  +acl\|setuser +acl\|deluser +acl\|getuser +acl\|users +acl\|whoami +scan +del +ping +info\|server +client\|setinfo >/dev/null
+  +acl\|setuser +acl\|deluser +acl\|getuser +acl\|users +acl\|whoami +acl\|cat +scan +del +ping +info\|server +client\|setinfo >/dev/null
 k -n system create secret generic redis-provisioner \
   --from-literal=url="redis://provisioner:${PROV_PW}@redis.cache.svc.cluster.local:6379" >/dev/null
 
@@ -325,6 +327,25 @@ expect_eq "L4b the older app's key survives the younger app's deletion" "$(rcli_
 k -n zone-a delete nextapp legacy --wait=true --timeout=120s >/dev/null
 expect_eq "L4b the holder's own deletion still sweeps its keys" "$(rcli_admin EXISTS shared-team:k)" "0"
 
+echo "== L4c: an older app that sets its prefix the legacy way (REDIS_KEY_PREFIX in spec.env) holds it"
+# The operator cannot scope a user to a prefix that lives in an env var, so such an
+# app is never issued one (PrefixUnknown) -- but it still writes under that prefix.
+# It must still be ranked, or a younger app that copies the prefix is issued
+# ~shared-env:* over its keys and its deletion reaps them.
+app zone-a legacy-env "" "    isolation: none
+  env:
+    REDIS_KEY_PREFIX: shared-env" | k apply -f - >/dev/null
+sleep 2 # creationTimestamp has one-second resolution
+app zone-b copy-env shared-env | k apply -f - >/dev/null
+if wait_reason zone-b copy-env PrefixConflict; then ok "L4c the younger copy is refused"; else bad "L4c the younger copy was not refused"; fi
+expect_contains "L4c the condition names the holder" "$(cond_field zone-b copy-env message)" "zone-a/legacy-env"
+expect_eq "L4c no Secret was created for the copy" "$(k -n zone-b get secret copy-env-redis-credentials -o name 2>/dev/null || true)" ""
+rcli_admin SET shared-env:k legacy-value >/dev/null
+k -n zone-b delete nextapp copy-env --wait=true --timeout=120s >/dev/null
+expect_eq "L4c the older app's key survives the younger app's deletion" "$(rcli_admin GET shared-env:k)" "legacy-value"
+k -n zone-a delete nextapp legacy-env --wait=true --timeout=120s >/dev/null
+rcli_admin DEL shared-env:k >/dev/null
+
 echo "== L5: close the shared credential, then observe it refused"
 rcli_admin ACL SETUSER default off >/dev/null
 # The drill's admin is a shared credential too: from here it is enabled one call at a time.
@@ -406,7 +427,7 @@ spec:
 YAML
 k -n cache rollout status deploy/redis-pw --timeout=120s >/dev/null
 k -n cache exec deploy/redis-pw -- redis-cli --no-auth-warning -a "$RP_PW" ACL SETUSER provisioner on ">$PROV2_PW" '~*' resetchannels -@all \
-  +acl\|setuser +acl\|deluser +acl\|getuser +acl\|users +acl\|whoami +scan +del +ping +info\|server +client\|setinfo >/dev/null
+  +acl\|setuser +acl\|deluser +acl\|getuser +acl\|users +acl\|whoami +acl\|cat +scan +del +ping +info\|server +client\|setinfo >/dev/null
 k -n system create secret generic redis-provisioner-pw \
   --from-literal=url="redis://provisioner:${PROV2_PW}@redis-pw.cache.svc.cluster.local:6379" >/dev/null
 k patch knextplatform default --type=json -p '[{"op":"add","path":"/spec/cache/redisEndpoints/-","value":{"endpoint":"redis-pw.cache.svc.cluster.local:6379","provisionerSecretRef":{"name":"redis-provisioner-pw","key":"url"}}}]' >/dev/null

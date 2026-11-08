@@ -105,38 +105,72 @@ func TestIsolationClaimNamedSharedUser(t *testing.T) {
 }
 
 // A user with no key pattern can still reach every app's data or take the server
-// over: PSYNC / SYNC stream the whole dataset, MONITOR streams every command,
-// ACL SETUSER grants itself anything, CONFIG SET, MODULE LOAD and DEBUG are
-// admin. The claim looks at commands as well as keys.
-func TestCommandRulesAllowDangerous(t *testing.T) {
+// over. What counts as dangerous is the SERVER's answer (ACL CAT admin and ACL CAT
+// dangerous), not a list written here: FLUSHALL, SWAPDB, CONFIG GET, SLOWLOG,
+// SHUTDOWN, REPLICAOF and the rest are all in it. The rules are applied left to
+// right, and a command is allowed by its own name, by its parent, or by any
+// category it belongs to.
+func TestCommandCatalogFirstAllowed(t *testing.T) {
+	cat, err := newCommandCatalogFrom(fixtureCategory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	danger := map[string]string{
-		"+@all":                       "psync",
-		"allcommands":                 "psync",
-		"+@admin":                     "psync",
-		"+@dangerous":                 "psync",
-		"+@slow":                      "psync",
-		"-@all +psync":                "psync",
-		"-@all +sync":                 "sync",
-		"-@all +monitor":              "monitor",
-		"-@all +debug":                "debug",
-		"-@all +debug|sleep":          "debug",
-		"-@all +module":               "module|load",
-		"-@all +module|load":          "module|load",
-		"-@all +acl":                  "acl|setuser",
-		"-@all +acl|setuser":          "acl|setuser",
-		"-@all +config":               "config|set",
-		"-@all +config|set":           "config|set",
-		"+@all -@dangerous +psync":    "psync",
-		"-@all +@admin -config|set":   "psync",
-		"-@ALL +PSYNC":                "psync",
-		"+@all -psync -sync -monitor": "debug",
+		// each is named by the first dangerous command it allows
+		"-@all +psync":             "psync",
+		"-@all +sync":              "sync",
+		"-@all +monitor":           "monitor",
+		"-@all +debug":             "debug",
+		"-@all +debug|sleep":       "debug",
+		"-@all +module":            "module|list",
+		"-@all +module|load":       "module|load",
+		"-@all +acl":               "acl|deluser",
+		"-@all +acl|setuser":       "acl|setuser",
+		"-@all +acl|load":          "acl|load",
+		"-@all +acl|deluser":       "acl|deluser",
+		"-@all +config":            "config|get",
+		"-@all +config|get":        "config|get",
+		"-@all +config|set":        "config|set",
+		"-@all +flushall":          "flushall",
+		"-@all +flushdb":           "flushdb",
+		"-@all +swapdb":            "swapdb",
+		"-@all +replicaof":         "replicaof",
+		"-@all +slaveof":           "slaveof",
+		"-@all +failover":          "failover",
+		"-@all +shutdown":          "shutdown",
+		"-@all +slowlog":           "slowlog|get",
+		"-@all +slowlog|get":       "slowlog|get",
+		"-@all +keys":              "keys",
+		"-@all +info":              "info",
+		"+@all -@dangerous +psync": "psync",
+		"-@ALL +PSYNC":             "psync",
+		// a command is allowed by any category that holds it
+		"-@all +@write":      "flushall",
+		"-@all +@keyspace":   "flushall",
+		"-@all +@read":       "keys",
+		"-@all +@connection": "client|kill",
+		"-@all +@fast":       "swapdb",
+		// and the broad ones
+		"+@all":         "",
+		"allcommands":   "",
+		"+@admin":       "",
+		"+@dangerous":   "",
+		"+@slow":        "",
+		"-@all +@admin": "",
+		// denying a few of many leaves the rest
+		"+@all -psync -sync -monitor -debug -module -acl -config": "",
+		"+@all -@admin": "", // admin is a subset of dangerous: flushall, keys, info remain
 	}
 	for rules, want := range danger {
-		got, ok := commandRulesAllowDangerous(rules)
-		if !ok || got != want {
-			t.Errorf("commandRulesAllowDangerous(%q) = %q, %v; want %q", rules, got, ok, want)
+		got, ok, err := cat.firstAllowed(rules)
+		if err != nil {
+			t.Fatalf("%q: %v", rules, err)
+		}
+		if !ok || (want != "" && got != want) {
+			t.Errorf("firstAllowed(%q) = %q, %v; want %q", rules, got, ok, want)
 		}
 	}
+
 	safe := []string{
 		"",
 		"nocommands",
@@ -144,17 +178,51 @@ func TestCommandRulesAllowDangerous(t *testing.T) {
 		"-@all +get +set +ping",
 		"+@all -@all +ping",
 		"+@all -@dangerous",
-		"+@all -@admin",
-		"+@all -@slow",
-		"+@all -psync -sync -monitor -debug -module -acl -config",
-		"+@read +@write +@connection",
-		"-@all +acl|whoami +config|get +module|list +client|setinfo",
+		"+@all -@dangerous -@admin",
 		"+@all -@dangerous +get",
+		"-@all +client|setinfo +acl|whoami +acl|cat +ping +time",
+		// later rules win
+		"-@all +psync -psync",
+		"+@all -@dangerous +@read -keys -sort_ro",
 	}
 	for _, rules := range safe {
-		if got, ok := commandRulesAllowDangerous(rules); ok {
-			t.Errorf("commandRulesAllowDangerous(%q) = %q; want none", rules, got)
+		got, ok, err := cat.firstAllowed(rules)
+		if err != nil {
+			t.Fatalf("%q: %v", rules, err)
 		}
+		if ok {
+			t.Errorf("firstAllowed(%q) = %q; want none", rules, got)
+		}
+	}
+}
+
+// The catalog is the server's: when ACL CAT is refused nothing can be said, and
+// nothing is claimed.
+func TestCommandCatalogFailsClosedWhenACLCATIsRefused(t *testing.T) {
+	if _, err := newCommandCatalogFrom(failingCategory); err == nil {
+		t.Fatal("a refused ACL CAT was read as an empty dangerous set")
+	}
+	// an empty answer for admin or dangerous is as unusable as an error
+	if _, err := newCommandCatalogFrom(func(string) ([]string, error) { return nil, nil }); err == nil {
+		t.Fatal("an empty dangerous set was accepted")
+	}
+	// Any other category is read when a rule mentions it; a refusal there is an
+	// error too, never an empty category.
+	partial := func(category string) ([]string, error) {
+		if category == "read" {
+			return failingCategory(category)
+		}
+		return fixtureCategory(category)
+	}
+	cat, err := newCommandCatalogFrom(partial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := cat.firstAllowed("-@all +@read"); err == nil {
+		t.Fatal("a refused category lookup was read as an empty category")
+	}
+	if _, _, err := cat.firstAllowed("-@all +ping"); err != nil {
+		t.Fatalf("a rule that mentions no category must not need one: %v", err)
 	}
 }
 
@@ -164,13 +232,19 @@ func TestIsolationClaimSeesAUserThatCanRunDangerousCommandsWithoutKeys(t *testin
 		on    bool
 		rules []string
 		live  bool
+		why   string
 	}{
-		{"psync and no keys", true, []string{"-@all +psync"}, true},
-		{"acl setuser and no keys", true, []string{"-@all +acl|setuser"}, true},
-		{"a dangerous selector", true, []string{"-@all +ping", "+@all"}, true},
-		{"everything", true, []string{"+@all"}, true},
-		{"harmless commands", true, []string{"-@all +ping +get"}, false},
-		{"disabled with everything", false, []string{"+@all"}, false},
+		{"psync and no keys", true, []string{"-@all +psync"}, true, "psync"},
+		{"acl setuser and no keys", true, []string{"-@all +acl|setuser"}, true, "acl|setuser"},
+		{"flushall and no keys", true, []string{"-@all +flushall"}, true, "flushall"},
+		{"config get and no keys", true, []string{"-@all +config|get"}, true, "config|get"},
+		{"swapdb and no keys", true, []string{"-@all +swapdb"}, true, "swapdb"},
+		{"slowlog and no keys", true, []string{"-@all +slowlog|get"}, true, "slowlog|get"},
+		{"everything but a few", true, []string{"+@all -psync -sync -monitor -debug -module -acl -config"}, true, ""},
+		{"a dangerous selector", true, []string{"-@all +ping", "+@all"}, true, ""},
+		{"everything", true, []string{"+@all"}, true, ""},
+		{"harmless commands", true, []string{"-@all +ping +get"}, false, ""},
+		{"disabled with everything", false, []string{"+@all"}, false, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,8 +257,8 @@ func TestIsolationClaimSeesAUserThatCanRunDangerousCommandsWithoutKeys(t *testin
 			}
 			if tc.live {
 				assertNoIsolationClaim(t, st, tc.name)
-				if !strings.Contains(st.message, "replicator") {
-					t.Fatalf("the message should name the user: %q", st.message)
+				if !strings.Contains(st.message, "replicator") || !strings.Contains(st.message, tc.why) {
+					t.Fatalf("the message should name the user and the command: %q", st.message)
 				}
 				return
 			}
@@ -193,12 +267,55 @@ func TestIsolationClaimSeesAUserThatCanRunDangerousCommandsWithoutKeys(t *testin
 			}
 		})
 	}
-	// knext-app-* users are scoped by construction and are not judged by commands.
+}
+
+// ACL CAT refused: no claim.
+func TestIsolationClaimNeedsTheServersCommandCategories(t *testing.T) {
+	h := newACLHarness(t, true)
+	h.prov.catErr = errors.New("NOPERM this user has no permissions to run the 'acl|cat' command")
+	st, _ := h.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "web", "shop-web", ""), h.snap)
+	assertNoIsolationClaim(t, st, "ACL CAT refused")
+}
+
+// Another app's own user is held to the same rule: a user named knext-app-* that
+// can run FLUSHALL is a shared credential whatever its name says.
+func TestIsolationClaimChecksCommandsOfEveryUserButTheProvisioner(t *testing.T) {
 	h := newACLHarness(t, true)
 	h.prov.addUser("knext-app-deadbeef-aaaaaaaaaaaa", true, "~other:*")
-	h.prov.setCommands("knext-app-deadbeef-aaaaaaaaaaaa", "+@all")
-	if st, _ := h.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "web", "shop-web", ""), h.snap); st.reason != ReasonCacheProvisioned {
-		t.Fatalf("a knext-app-* user must not hold the claim back: %+v", st)
+	h.prov.setCommands("knext-app-deadbeef-aaaaaaaaaaaa", "-@all +get +flushall")
+	st, _ := h.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "web", "shop-web", ""), h.snap)
+	assertNoIsolationClaim(t, st, "a knext-app-* user with FLUSHALL")
+	if !strings.Contains(st.message, "knext-app-deadbeef-aaaaaaaaaaaa") {
+		t.Fatalf("the message should name the user: %q", st.message)
+	}
+
+	// An ordinary app user, with the rules the operator grants, holds nothing back.
+	h2 := newACLHarness(t, true)
+	h2.prov.addUser("knext-app-deadbeef-bbbbbbbbbbbb", true, "~other:*")
+	h2.prov.setCommands("knext-app-deadbeef-bbbbbbbbbbbb", "-@all "+strings.Join(prefixedPlus(appRedisCommands()), " "))
+	if st, _ := h2.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "web", "shop-web", ""), h2.snap); st.reason != ReasonCacheProvisioned {
+		t.Fatalf("an app user with the operator's own rules must not hold the claim back: %+v", st)
+	}
+}
+
+func prefixedPlus(cmds []string) []string {
+	out := make([]string, len(cmds))
+	for i, c := range cmds {
+		out[i] = "+" + c
+	}
+	return out
+}
+
+// The operator's own grant is not dangerous, or every app on the endpoint would
+// hold the claim back for every other. Pinned against the server's categories.
+func TestTheOperatorsOwnCommandListIsNotDangerous(t *testing.T) {
+	cat, err := newCommandCatalogFrom(fixtureCategory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := "-@all " + strings.Join(prefixedPlus(appRedisCommands()), " ")
+	if got, ok, err := cat.firstAllowed(rules); err != nil || ok {
+		t.Fatalf("appRedisCommands() allows %q (%v): every isolated app would hold the claim back", got, err)
 	}
 }
 

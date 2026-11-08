@@ -16,29 +16,85 @@ limitations under the License.
 
 package controller
 
-import "strings"
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+)
 
-// Commands that make a user a shared credential even when it holds no key
-// pattern at all. A user is judged by what it can run, not only by what it can
-// address:
+// A user is a shared credential when it can reach another app's data or take the
+// server over, whether or not it holds a key pattern: PSYNC and SYNC stream the
+// whole dataset, MONITOR streams every command, FLUSHALL and SWAPDB destroy every
+// app's cache, ACL SETUSER grants itself anything, CONFIG GET, SLOWLOG, SHUTDOWN
+// and REPLICAOF are administration.
 //
-//   - psync / sync stream the whole dataset to the caller, every app's keys;
-//   - monitor streams every command every client runs, arguments included;
-//   - acl|setuser lets the user grant itself anything;
-//   - config|set, module load/unload and debug are server administration.
-//
-// Every one of them belongs to the @admin, @dangerous and @slow categories.
-const debugCommand = "debug" // any DEBUG subcommand counts, see ruleCovers
+// What counts as dangerous is the SERVER's answer, not a list written here: the
+// members of the @admin and @dangerous categories, read with ACL CAT. A hand-kept
+// list misses commands (it missed FLUSHALL, FLUSHDB, SWAPDB, FAILOVER, SHUTDOWN,
+// CONFIG GET, SLOWLOG and ACL LOAD/DELUSER), and the next Redis adds more.
 
-var dangerousCommands = []string{
-	"psync", "sync", "monitor", debugCommand,
-	"module|load", "module|loadex", "module|unload",
-	"acl|setuser", "config|set",
+// commandCatalog answers "can these command rules run anything dangerous?".
+type commandCatalog struct {
+	fetch     func(category string) ([]string, error)
+	cats      map[string]map[string]bool
+	dangerous []string // sorted, deterministic: the first match is reported
 }
 
-// dangerousCategories are the command categories that contain every command in
-// dangerousCommands: allowing one allows them all, denying one denies them all.
-var dangerousCategories = map[string]bool{"all": true, "admin": true, "dangerous": true, "slow": true}
+// newCommandCatalogFrom builds a catalog over a category lookup. It reads @admin
+// and @dangerous now and fails if either is unreadable or empty: an empty answer
+// is as unusable as a refusal, and neither may be read as "nothing is dangerous".
+// Any other category is read the first time a rule mentions it.
+func newCommandCatalogFrom(fetch func(category string) ([]string, error)) (*commandCatalog, error) {
+	c := &commandCatalog{fetch: fetch, cats: map[string]map[string]bool{}}
+	set := map[string]bool{}
+	for _, cat := range []string{"admin", "dangerous"} {
+		members, err := c.members(cat)
+		if err != nil {
+			return nil, err
+		}
+		if len(members) == 0 {
+			return nil, fmt.Errorf("ACL CAT %s returned no commands", cat)
+		}
+		for name := range members {
+			set[name] = true
+		}
+	}
+	for name := range set {
+		c.dangerous = append(c.dangerous, name)
+	}
+	sort.Strings(c.dangerous)
+	return c, nil
+}
+
+// newCommandCatalog reads the categories from the endpoint (the provisioner needs
+// +acl|cat for it).
+func newCommandCatalog(ctx context.Context, prov RedisProvisioner) (*commandCatalog, error) {
+	return newCommandCatalogFrom(func(category string) ([]string, error) {
+		names, err := prov.CommandCategory(ctx, category)
+		if err != nil {
+			return nil, fmt.Errorf("ACL CAT %s: %w", category, err)
+		}
+		return names, nil
+	})
+}
+
+// members is a category's commands, read once.
+func (c *commandCatalog) members(category string) (map[string]bool, error) {
+	if m, ok := c.cats[category]; ok {
+		return m, nil
+	}
+	names, err := c.fetch(category)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		m[strings.ToLower(n)] = true
+	}
+	c.cats[category] = m
+	return m, nil
+}
 
 // commandParent is "acl" for "acl|setuser" and the command itself when it has no
 // subcommand.
@@ -48,31 +104,30 @@ func commandParent(cmd string) string {
 }
 
 // ruleCovers reports whether a command rule (the text after + or -) names the
-// dangerous command, or its parent command as a whole. For allowing (+) a rule on
-// a subcommand of debug counts too: any debug subcommand is administration, and
-// the check errs toward live.
-func ruleCovers(rule, dangerous string, allowing bool) bool {
-	if rule == dangerous || rule == commandParent(dangerous) {
+// command, or its parent as a whole. For allowing (+), a rule on a subcommand also
+// reaches a command that has no subcommands of its own and shares the parent
+// ("+debug|sleep" allows DEBUG): the check errs toward live.
+func ruleCovers(rule, cmd string, allowing bool) bool {
+	if rule == cmd || rule == commandParent(cmd) {
 		return true
 	}
-	return allowing && dangerous == debugCommand && commandParent(rule) == debugCommand
+	return allowing && !strings.Contains(cmd, "|") && commandParent(rule) == cmd
 }
 
-// commandRulesAllowDangerous reports the first dangerous command a user's command
-// rules end up allowing. Redis applies the rules left to right, so for each
-// dangerous command the LAST rule that mentions it (or a category that holds it)
-// decides: "+@all -@dangerous" allows none, "+@all -@dangerous +psync" allows
-// psync. Rules are the text ACL GETUSER prints for "commands".
-func commandRulesAllowDangerous(rules string) (string, bool) {
+// firstAllowed reports the first dangerous command the rules end up allowing.
+// Redis applies the rules left to right, so for each command the LAST rule that
+// mentions it (by name, by parent, or through a category that holds it) decides:
+// "+@all -@dangerous" allows none, "+@all -@dangerous +psync" allows psync.
+func (c *commandCatalog) firstAllowed(rules string) (string, bool, error) {
 	tokens := strings.Fields(strings.ToLower(rules))
-	for _, cmd := range dangerousCommands {
+	for _, cmd := range c.dangerous {
 		allowed := false
 		for _, tok := range tokens {
 			switch tok {
-			case "allcommands":
+			case "allcommands", "+@all":
 				allowed = true
 				continue
-			case "nocommands":
+			case "nocommands", "-@all":
 				allowed = false
 				continue
 			}
@@ -81,7 +136,11 @@ func commandRulesAllowDangerous(rules string) (string, bool) {
 			}
 			adding, body := tok[0] == '+', tok[1:]
 			if category, isCategory := strings.CutPrefix(body, "@"); isCategory {
-				if dangerousCategories[category] {
+				members, err := c.members(category)
+				if err != nil {
+					return "", false, err
+				}
+				if members[cmd] {
 					allowed = adding
 				}
 				continue
@@ -91,8 +150,8 @@ func commandRulesAllowDangerous(rules string) (string, bool) {
 			}
 		}
 		if allowed {
-			return cmd, true
+			return cmd, true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }

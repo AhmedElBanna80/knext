@@ -153,7 +153,7 @@ var _ = Describe("BackendService reconciler: the zone watch passes spec changes,
 			}
 		})
 		afterFinalizer := settle()
-		Expect(afterFinalizer).To(BeNumerically(">=", afterSpec), "a finalizer edit may or may not re-check")
+		Expect(afterFinalizer).To(Equal(afterSpec), "a finalizer edit is metadata only and re-checks nothing")
 		Expect(k8sClient.Delete(ctx, held)).To(Succeed())
 		Eventually(bsReconcileCount, "30s", "250ms").Should(BeNumerically(">=", afterFinalizer+zones*perZone),
 			"a zone whose deletion starts must re-check the functions")

@@ -677,7 +677,8 @@ func zoneWatchPredicate() predicate.Predicate {
 
 // SetupWithManager wires the reconciler. Status-only writes to a BackendService
 // do not re-enqueue it (GenerationChangedPredicate on the primary watch, as for
-// NextApp); owned children and zones do.
+// NextApp); owned children do, and so do zones that are created, deleted or have
+// a changed spec (zoneWatchPredicate), but not a zone's status-only writes.
 func (r *BackendServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1alpha1.BackendService{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).

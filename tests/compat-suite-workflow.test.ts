@@ -2280,6 +2280,27 @@ describe('compat-suite fail-on-red gate — revocation teeth (test-e2e-deploy.ym
     ).toBeGreaterThanOrEqual(5);
   });
 
+  it('#2527 the reporting tail is these five steps, by name and in order', () => {
+    // The count above survives a renamed or swapped step; this does not. A step
+    // that joins the tail on purpose is added here, which keeps the floor honest.
+    const expected = [
+      'Compute excluded count from manifest',
+      'Summarize shard result',
+      'Upload summary artifact',
+      'Fail shard on red results',
+      'Verify boot-mode ledger',
+    ];
+    const { tailLabels } = auditReportingTail(WORKFLOW_PATH);
+    const names = tailLabels.map((l) => l.replace(/^`|`$/g, ''));
+    expect(names.length, `tail: ${names.join(', ')}`).toBe(expected.length);
+    expected.forEach((want, i) => {
+      expect(
+        names[i]?.startsWith(want),
+        `tail step ${i + 1} is "${names[i]}", want "${want}…"`,
+      ).toBe(true);
+    });
+  });
+
   it('#703 no job on the ledger spine can be conditioned off', () => {
     const { problems, jobsWalked } = auditLedgerSpine(WORKFLOW_PATH);
     expect(problems, `${problems.join('\n')}\n(spine: ${jobsWalked.join(' -> ')})`).toEqual([]);

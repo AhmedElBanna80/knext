@@ -24,11 +24,10 @@ import (
 	"testing"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func aclTestApp(ns, name string) *appsv1alpha1.NextApp {
-	return &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}
+	return &appsv1alpha1.NextApp{Namespace: ns, Name: name}
 }
 
 func TestCanonicalRedisEndpoint(t *testing.T) {

@@ -122,8 +122,8 @@ func newACLEnv(ctx context.Context) *aclEnv {
 	})
 
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: aclEnvSecret, Namespace: aclEnvNS},
-		Data:       map[string][]byte{"url": []byte("redis://provisioner:pw@" + aclEnvEndpt)},
+		Name: aclEnvSecret, Namespace: aclEnvNS,
+		Data: map[string][]byte{"url": []byte("redis://provisioner:pw@" + aclEnvEndpt)},
 	}
 	Expect(k8sClient.Create(ctx, sec)).To(Succeed())
 	DeferCleanup(func() { _ = k8sClient.Delete(ctx, sec) })
@@ -153,7 +153,7 @@ func newACLEnv(ctx context.Context) *aclEnv {
 func (e *aclEnv) createApp(ctx context.Context, name, prefix string) *appsv1alpha1.NextApp {
 	GinkgoHelper()
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: aclEnvNS},
+		Name: name, Namespace: aclEnvNS,
 		Spec: appsv1alpha1.NextAppSpec{
 			Image: validImage,
 			Cache: &appsv1alpha1.CacheSpec{Provider: "redis", URL: aclEnvURL, KeyPrefix: prefix},
@@ -162,14 +162,14 @@ func (e *aclEnv) createApp(ctx context.Context, name, prefix string) *appsv1alph
 	Expect(k8sClient.Create(ctx, app)).To(Succeed())
 	DeferCleanup(func() {
 		deleteAndFinalize(ctx, client.ObjectKeyFromObject(app))
-		_ = k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name + "-redis-credentials", Namespace: aclEnvNS}})
+		_ = k8sClient.Delete(ctx, &corev1.Secret{Name: name + "-redis-credentials", Namespace: aclEnvNS})
 	})
 	return app
 }
 
 func (e *aclEnv) reconcile(ctx context.Context, name string) reconcile.Result {
 	GinkgoHelper()
-	res, err := e.r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: aclEnvNS, Name: name}})
+	res, err := e.r.Reconcile(ctx, reconcile.Request{Namespace: aclEnvNS, Name: name})
 	Expect(err).NotTo(HaveOccurred())
 	return res
 }
@@ -191,7 +191,7 @@ func kubeSystemUID(ctx context.Context) string {
 
 func (e *aclEnv) ownUser(ctx context.Context, name string) string {
 	GinkgoHelper()
-	return redisACLUsername(kubeSystemUID(ctx), &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Namespace: aclEnvNS, Name: name}})
+	return redisACLUsername(kubeSystemUID(ctx), &appsv1alpha1.NextApp{Namespace: aclEnvNS, Name: name})
 }
 
 // waitForNextSecond makes the next object's creationTimestamp strictly later: the
@@ -283,7 +283,7 @@ var _ = Describe("Per-app Redis ACL ownership through a real Reconcile (ADR-0071
 		func(attackerFirst bool) {
 			e := newACLEnv(ctx)
 			victimName, attackerName := uniq("victim"), uniq("attacker")
-			victim := &appsv1alpha1.NextApp{ObjectMeta: metav1.ObjectMeta{Namespace: aclEnvNS, Name: victimName}}
+			victim := &appsv1alpha1.NextApp{Namespace: aclEnvNS, Name: victimName}
 			nested := defaultRedisKeyPrefix(victim) + ":isr"
 			e.createApp(ctx, victimName, "")
 			e.createApp(ctx, attackerName, nested)
@@ -324,7 +324,7 @@ var _ = Describe("A transient failure of the cache-credentials step goes through
 
 		// The cluster identity can no longer be read (an API blip).
 		e.rdr.fail = true
-		res, err := e.r.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: aclEnvNS, Name: name}})
+		res, err := e.r.Reconcile(ctx, reconcile.Request{Namespace: aclEnvNS, Name: name})
 		Expect(err).NotTo(HaveOccurred(), "the error must reach the verdict, not abort the pass before it runs")
 		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
 		Expect(res.RequeueAfter).To(BeNumerically("<=", time.Minute), "the verdict owns a short retry, not the five-minute resync")

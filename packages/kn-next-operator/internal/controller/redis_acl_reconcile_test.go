@@ -24,7 +24,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -189,10 +188,10 @@ func newACLHarness(t *testing.T, registered bool, objs ...client.Object) *aclHar
 		t.Fatal(err)
 	}
 	all := append([]client.Object{
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system", UID: types.UID("ks-uid-1")}},
+		&corev1.Namespace{Name: "kube-system", UID: types.UID("ks-uid-1")},
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "redis-provisioner", Namespace: "operator-ns"},
-			Data:       map[string][]byte{"url": []byte("redis://provisioner:pw@redis.cache.svc.cluster.local:6379")},
+			Name: "redis-provisioner", Namespace: "operator-ns",
+			Data: map[string][]byte{"url": []byte("redis://provisioner:pw@redis.cache.svc.cluster.local:6379")},
 		},
 	}, objs...)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(all...).Build()
@@ -209,7 +208,7 @@ func newACLHarness(t *testing.T, registered bool, objs ...client.Object) *aclHar
 	}
 	if registered {
 		h.snap = platformSnapshot{crdPresent: true, obj: &platformv1alpha1.KnextPlatform{
-			ObjectMeta: metav1.ObjectMeta{Name: "default"},
+			Name: "default",
 			Spec: platformv1alpha1.KnextPlatformSpec{Cache: &platformv1alpha1.PlatformCache{
 				RedisEndpoints: []platformv1alpha1.RedisEndpoint{{
 					Endpoint:             aclTestEndpoint,
@@ -223,7 +222,7 @@ func newACLHarness(t *testing.T, registered bool, objs ...client.Object) *aclHar
 
 func aclApp(ns, name, prefix, isolation string) *appsv1alpha1.NextApp {
 	app := &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(ns + "-" + name)},
+		Namespace: ns, Name: name, UID: types.UID(ns + "-" + name),
 		Spec: appsv1alpha1.NextAppSpec{Cache: &appsv1alpha1.CacheSpec{
 			Provider: "redis", URL: aclTestURL, KeyPrefix: prefix, Isolation: isolation,
 		}},

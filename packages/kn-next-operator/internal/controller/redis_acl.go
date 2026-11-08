@@ -70,6 +70,13 @@ func resolveCacheIsolation(isolation string, registered bool) cacheIsolationMode
 	}
 }
 
+// The two URL schemes a Redis endpoint is reached with. The cache provider
+// "redis" shares the first spelling.
+const (
+	redisURLScheme    = "redis"
+	redisURLSchemeTLS = "rediss"
+)
+
 // redisACLUsernamePrefix starts every user this operator family creates.
 const redisACLUsernamePrefix = "knext-app-"
 
@@ -154,7 +161,7 @@ func canonicalRedisEndpoint(raw, appNamespace string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse redis url: %w", err)
 	}
-	if u.Scheme != "redis" && u.Scheme != "rediss" {
+	if u.Scheme != redisURLScheme && u.Scheme != redisURLSchemeTLS {
 		return "", fmt.Errorf("not a redis url (scheme %q)", u.Scheme)
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")

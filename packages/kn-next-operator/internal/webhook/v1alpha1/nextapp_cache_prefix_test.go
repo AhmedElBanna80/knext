@@ -23,8 +23,6 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
 
@@ -43,7 +41,7 @@ func derived(namespace, name string) string {
 
 func cacheApp(ns, name, prefix string) *appsv1alpha1.NextApp {
 	return &appsv1alpha1.NextApp{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+		Namespace: ns, Name: name,
 		Spec: appsv1alpha1.NextAppSpec{
 			Image: digestImage,
 			Cache: &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://redis.cache.svc.cluster.local:6379", KeyPrefix: prefix},

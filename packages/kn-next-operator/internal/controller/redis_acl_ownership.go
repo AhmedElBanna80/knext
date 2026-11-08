@@ -198,6 +198,3 @@ func conflictMessage(prefix string, blocker, self prefixClaim) string {
 		"an app's key prefix must not equal, nest inside, or contain another app's",
 		prefix, blocker.prefix, blocker.ref, blocker.outranksBecause(self))
 }
-
-// refOf is the ref a claim is looked up by.
-func refOf(app *appsv1alpha1.NextApp) string { return app.Namespace + "/" + app.Name }

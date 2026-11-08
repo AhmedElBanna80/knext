@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"regexp"
@@ -570,16 +571,16 @@ func (r *NextAppReconciler) provisionerURL(ctx context.Context, ep platformv1alp
 	}
 	v, ok := sec.Data[ep.ProvisionerSecretRef.Key]
 	if !ok || len(v) == 0 {
-		return "", fmt.Errorf("Secret %s/%s has no key %q", key.Namespace, key.Name, ep.ProvisionerSecretRef.Key)
+		return "", fmt.Errorf("secret %s/%s has no key %q", key.Namespace, key.Name, ep.ProvisionerSecretRef.Key)
 	}
 	raw := strings.TrimSpace(string(v))
 	// The errors below never carry raw: it holds the provisioner's password.
 	if canonical, err := canonicalRedisEndpoint(raw, operatorNamespace()); err != nil || canonical != ep.Endpoint {
-		return "", fmt.Errorf("Secret %s/%s does not point at the registered endpoint %s", key.Namespace, key.Name, ep.Endpoint)
+		return "", fmt.Errorf("secret %s/%s does not point at the registered endpoint %s", key.Namespace, key.Name, ep.Endpoint)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("Secret %s/%s does not hold a URL", key.Namespace, key.Name)
+		return "", fmt.Errorf("secret %s/%s does not hold a URL", key.Namespace, key.Name)
 	}
 	u.Host = ep.Endpoint
 	return u.String(), nil
@@ -594,9 +595,9 @@ var errCredentialsSecretForeign = errors.New("the Secret name is held by an obje
 // returns the current password. An existing, well-formed Secret is reused, so a
 // reconcile never changes the password (rotation is a separate step).
 func (r *NextAppReconciler) ensureCredentialsSecret(ctx context.Context, app *appsv1alpha1.NextApp, canonical, username string) (string, error) {
-	scheme := "redis"
-	if u, err := url.Parse(app.Spec.Cache.URL); err == nil && u.Scheme == "rediss" {
-		scheme = "rediss"
+	scheme := redisURLScheme
+	if u, err := url.Parse(app.Spec.Cache.URL); err == nil && u.Scheme == redisURLSchemeTLS {
+		scheme = redisURLSchemeTLS
 	}
 	var existing corev1.Secret
 	var current *corev1.Secret
@@ -657,6 +658,13 @@ func (r *NextAppReconciler) writeCredentialsSecret(ctx context.Context, app *app
 	return r.Update(ctx, sec)
 }
 
+// isOperatorCacheBinding reports whether an envMap entry is the REDIS_URL binding
+// injectCacheCredentialsEnv put there: the operator's own Secret and key.
+func isOperatorCacheBinding(app *appsv1alpha1.NextApp, envName string, entry appsv1alpha1.EnvMapEntry) bool {
+	return envName == "REDIS_URL" && entry.SecretName == redisCredentialsSecretName(app) &&
+		entry.SecretKey == redisCredentialsSecretKey
+}
+
 // injectCacheCredentialsEnv points REDIS_URL at the operator-owned Secret, in
 // memory only (like the database binding): the user's own spec is never written.
 // When failClosed, the reference is injected even though the Secret may not
@@ -669,9 +677,7 @@ func injectCacheCredentialsEnv(app *appsv1alpha1.NextApp, st cacheCredentialsSta
 		app.Spec.Secrets = &appsv1alpha1.SecretsSpec{}
 	}
 	m := make(map[string]appsv1alpha1.EnvMapEntry, len(app.Spec.Secrets.EnvMap)+1)
-	for k, v := range app.Spec.Secrets.EnvMap {
-		m[k] = v
-	}
+	maps.Copy(m, app.Spec.Secrets.EnvMap)
 	m["REDIS_URL"] = appsv1alpha1.EnvMapEntry{SecretName: st.secretName, SecretKey: redisCredentialsSecretKey}
 	app.Spec.Secrets.EnvMap = m
 }
@@ -754,7 +760,7 @@ func (r *NextAppReconciler) cleanupIsolatedCache(ctx context.Context, app *appsv
 				logger.Error(err, "re-asserting the app's ACL user before the sweep failed", "keyPrefix", keyPrefix)
 			}
 		}
-		if err := r.Cleaner.CleanupCache(ctx, CacheTarget{Provider: "redis", URL: appURL, KeyPrefix: keyPrefix}); err != nil {
+		if err := r.Cleaner.CleanupCache(ctx, CacheTarget{Provider: redisURLScheme, URL: appURL, KeyPrefix: keyPrefix}); err != nil {
 			logger.Error(err, "sweeping the isolated keyspace as the app user failed", "keyPrefix", keyPrefix)
 		}
 	}
@@ -849,7 +855,7 @@ func (g *goRedisProvisioner) Version(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, line := range strings.Split(info, "\n") {
+	for line := range strings.SplitSeq(info, "\n") {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "redis_version:"); ok {
 			return v, nil
 		}
@@ -937,7 +943,7 @@ func aclKeyPatterns(v any) []string {
 	}
 	switch k := v.(type) {
 	case string:
-		for _, p := range strings.Fields(k) {
+		for p := range strings.FieldsSeq(k) {
 			add(p)
 		}
 	case []any:

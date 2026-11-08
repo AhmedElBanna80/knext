@@ -352,17 +352,12 @@ func TestPrefixOwnershipConcurrentReconcilesIssueOneUser(t *testing.T) {
 			order = []*appsv1alpha1.NextApp{young, old}
 		}
 		var wg sync.WaitGroup
-		results := make([]cacheCredentialsState, len(order))
-		for j, a := range order {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				st, err := h.r.reconcileCacheCredentials(context.Background(), a, h.snap)
-				if err != nil {
+		for _, a := range order {
+			wg.Go(func() {
+				if _, err := h.r.reconcileCacheCredentials(context.Background(), a, h.snap); err != nil {
 					t.Error(err)
 				}
-				results[j] = st
-			}()
+			})
 		}
 		wg.Wait()
 		if t.Failed() {

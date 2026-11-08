@@ -393,8 +393,8 @@ const MUTATIONS = [
     id: 'R07',
     claim: "the function mounts a JWKS that is not its own zone's",
     subject: 'render',
-    anchor: 'Name: ZoneJWKSConfigMapName(bs.Spec.Zone)},',
-    replacement: 'Name: ZoneJWKSConfigMapName(bs.Name)},',
+    anchor: 'Name:  ZoneJWKSConfigMapName(bs.Spec.Zone),',
+    replacement: 'Name:  ZoneJWKSConfigMapName(bs.Name),',
     test: envtest('operator-owned ServiceAccount and the function NetworkPolicy'),
   },
   {

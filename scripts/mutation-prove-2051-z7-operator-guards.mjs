@@ -161,8 +161,8 @@ const ALL_MUTATIONS = [
     claim:
       "every function mounts one SHARED JWKS instead of its own zone's (a token from any zone verifies if its iss check is ever lost)",
     subject: 'render',
-    anchor: 'Name: ZoneJWKSConfigMapName(bs.Spec.Zone)},',
-    replacement: 'Name: "knext-shared-jwks"},',
+    anchor: 'Name:  ZoneJWKSConfigMapName(bs.Spec.Zone),',
+    replacement: 'Name:  "knext-shared-jwks",',
     test: POD_SPEC,
   },
   // ── O: the rotation order ─────────────────────────────────────────────────

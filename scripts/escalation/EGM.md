@@ -37,15 +37,15 @@ A `repo` is `{ show(side, path), listHead(prefix) }`: `show` returns a blob's te
 - `public-api` compares only `PUBLIC_MANIFEST_KEYS` of `packages/<pkg>/package.json`; a manifest that does not parse on either side fires, with the reason saying so [`public-surface.mjs:publicSurfaceFindings`].
 - A workflow holds a credential when its text has `id-token: write`, `permissions: write-all`, a `packages`/`contents`/`attestations: write` grant, `toJSON(secrets)`, a `secrets[…]` index, or any `secrets.<NAME>` outside `LOW_PRIVILEGE_SECRETS` [`credential-workflows.mjs:workflowHoldsCredential`].
 - A changed workflow fires `supply-chain` when it holds a credential on the base or the head side [`credential-workflows.mjs:credentialWorkflowFindings`].
-- A changed file fires `supply-chain` when a credential-bearing head workflow names it directly (`namedFiles`), after YAML/shell comments are removed:
-  - a `scripts/` or `.github/actions/` path, whether or not it exists;
-  - any other `dir/file` path token that exists;
+- A changed file fires `supply-chain` when a credential-bearing head workflow names it directly (`namedFiles`), with the checkout-root prefixes (`${{ github.workspace }}/`, `$GITHUB_WORKSPACE/`) stripped:
+  - a `scripts/` or `.github/actions/` path, whether or not it exists, comments included; when it is a directory, every file under it and any file added there;
+  - any other `dir/file` path token that exists, full-line comments excluded (a directory such as an app build context does not cover its files);
   - the Makefile of a `make` command (`-C dir`, `--directory=dir`, else the repo root, every `working-directory:` and every literal `cd` target in the file), when it exists;
-  - every file under a named local action directory (also a file added there), and what its `action.yml` names, read once.
+  - for a local action, what its `action.yml` names, read once.
   - `INSTALL_INPUTS`, when the workflow runs a package install (`bun|npm|pnpm|yarn` `install`, `i`, `ci` or `add`).
 - Only one level is followed: a file that a named script imports or runs does not fire [`credential-workflows.mjs`].
 - `parseNameStatus` throws on an unknown status letter or a record with no path, and a rename or copy yields both paths, destination first [`git.mjs`].
-- `gitReader.show` treats a tree as absent (`cat-file -t` must be `blob`); any other git failure throws [`git.mjs`].
+- `gitReader.show` returns null when `cat-file -t` fails or the object is not a blob, so a tree reads as absent; `git show` of a found blob, and `listHead`, throw on failure [`git.mjs`].
 - `mergeFired` keeps one entry per id and every path once [`report.mjs`].
 - `isAcknowledged` accepts either label, trimmed and case-folded, or a body line matching `ACK_BODY_PATTERN` [`acknowledgement.mjs`].
 
@@ -53,7 +53,7 @@ A `repo` is `{ show(side, path), listHead(prefix) }`: `show` returns a blob's te
 
 - `git.mjs` runs `git` (`show`, `cat-file`, `ls-tree`) through `execFileSync`.
 - `report.mjs` writes to stdout/stderr and appends to `$GITHUB_STEP_SUMMARY` when set; a failed append is ignored.
-- `catalogue.mjs`, `paths.mjs`, `public-surface.mjs`, `credential-workflows.mjs` and `acknowledgement.mjs` are pure.
+- `catalogue.mjs`, `paths.mjs` and `acknowledgement.mjs` are pure. `public-surface.mjs` and `credential-workflows.mjs` read files only through the `repo` they are given.
 
 ## Verification
 

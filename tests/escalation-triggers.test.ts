@@ -790,6 +790,39 @@ describe('credential workflows: the files they name, one level deep', () => {
     expect(fires('# bun install\necho ok', {}, 'bun.lock')).toBeUndefined();
   });
 
+  it('a checkout-root prefix still names the script', () => {
+    for (const run of [
+      'bash "${{ github.workspace }}/hack/p.sh"',
+      'bash "$GITHUB_WORKSPACE/hack/p.sh"',
+      'bash ${GITHUB_WORKSPACE}/scripts/p.sh',
+    ]) {
+      const f = run.includes('scripts/') ? 'scripts/p.sh' : 'hack/p.sh';
+      expect(fires(run, { [f]: 'x' }, f)).toEqual([f]);
+    }
+  });
+
+  it('a # inside a quoted string does not hide the path after it', () => {
+    expect(fires('echo "step # 2" && bash hack/p.sh', { 'hack/p.sh': 'x' }, 'hack/p.sh')).toEqual([
+      'hack/p.sh',
+    ]);
+  });
+
+  it('a scripts/ directory a workflow names covers every file under it', () => {
+    expect(
+      fires(
+        'cd scripts/release\nnode index.mjs',
+        { 'scripts/release/index.mjs': 'x' },
+        'scripts/release/index.mjs',
+      ),
+    ).toEqual(['scripts/release/index.mjs']);
+  });
+
+  it('near miss: an app directory a workflow names (a build context) does not cover its files', () => {
+    expect(
+      fires('docker build apps/web', { 'apps/web/page.tsx': 'x' }, 'apps/web/page.tsx'),
+    ).toBeUndefined();
+  });
+
   it('near miss: a file the named script imports does not fire', () => {
     expect(
       fires(

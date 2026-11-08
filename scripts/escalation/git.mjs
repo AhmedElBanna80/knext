@@ -56,9 +56,10 @@ function pathCount(status) {
 }
 
 /**
- * A repo reader over two refs: `show(side, path)` returns a blob's text or null
- * (absent, or not a blob); `listHead(prefix)` lists the head tree. A git error
- * other than absence THROWS, so it cannot read as "file absent".
+ * A repo reader over two refs: `show(side, path)` returns a blob's text, or null
+ * when `cat-file -t` fails (absent, or the ref is unreadable) or the object is not
+ * a blob; reading a blob that `cat-file` found then THROWS on failure.
+ * `listHead(prefix)` lists the head tree and throws on a git error.
  */
 export function gitReader(baseRef, headRef) {
   const refs = { base: baseRef, head: headRef };

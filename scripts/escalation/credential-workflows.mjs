@@ -43,7 +43,8 @@ export function workflowHoldsCredential(text) {
 
 /**
  * Repo paths a workflow mentions under `scripts/` or `.github/actions/`. Comment
- * mentions count too (conservative); trailing prose punctuation is stripped.
+ * mentions count too (conservative): `namedFiles` passes the text with comments.
+ * Trailing prose punctuation is stripped.
  */
 export function referencedPaths(text) {
   const out = [];
@@ -92,46 +93,59 @@ function makefiles(text) {
   return out;
 }
 
-/** YAML / shell comments removed: prose that names a test or a doc runs nothing. */
-function withoutComments(text) {
-  return text
-    .split('\n')
-    .map((l) => (/^\s*#/.test(l) ? '' : l.replace(/\s#\s.*$/, '')))
-    .join('\n');
+/**
+ * Full-line YAML / shell comments removed, and the checkout-root prefixes
+ * (`${{ github.workspace }}/`, `$GITHUB_WORKSPACE/`, `${GITHUB_WORKSPACE}/`)
+ * stripped so the path after them reads as repo-relative. A trailing ` # ...` is
+ * left in place: it cannot be told apart from a `#` inside a quoted string.
+ */
+function normalise(text) {
+  return stripWorkspace(
+    text
+      .split('\n')
+      .map((l) => (/^\s*#/.test(l) ? '' : l))
+      .join('\n'),
+  );
+}
+
+/** The checkout-root prefixes removed, so the path after them reads as repo-relative. */
+function stripWorkspace(text) {
+  return text.replace(/\$\{\{\s*github\.workspace\s*\}\}\/|\$\{?GITHUB_WORKSPACE\}?\//g, '');
 }
 
 /**
  * The files a workflow (or a local action's `action.yml`) names directly.
  * `read(p)` returns a file's text, or null when it is absent. A `scripts/` or
  * `.github/actions/` mention counts whether or not the file exists (deleting a
- * script a release workflow runs is supply chain too); any other path token, and a
- * Makefile, counts only when it exists. A local action directory contributes every
- * file in it (and a `dir/` entry, so a file added under it counts too), and its
- * `action.yml` is read the same way once (not recursively).
+ * script a release workflow runs is supply chain too), comments included; any
+ * other path token, and a Makefile, counts only when it exists, comments excluded.
+ * A `scripts/` or `.github/actions/` mention that is a DIRECTORY (`working-directory:
+ * scripts/release`, a local action) contributes every file under it and a `dir/`
+ * entry, so a file added there counts too; a directory named elsewhere (a build
+ * context such as an app) does not, or every app file would fire; a local action's `action.yml` is read the same way once (not
+ * recursively).
  */
 export function namedFiles(text, read, listUnder) {
   const out = new Set();
-  const expandAction = (p, depth) => {
-    const action = /^\.github\/actions\/[^/]+$/.exec(p.replace(/\/$/, ''));
-    if (!action) return false;
-    // The directory itself, as a `dir/` prefix: any file under it is named.
-    out.add(`${action[0]}/`);
-    for (const f of listUnder(`${action[0]}/`)) out.add(f);
-    if (depth === 0) {
+  const expandDir = (p, depth) => {
+    const dir = p.replace(/\/$/, '');
+    const files = listUnder(`${dir}/`);
+    const action = /^\.github\/actions\/[^/]+$/.test(dir);
+    if (files.length === 0 && !action) return false;
+    out.add(`${dir}/`);
+    for (const f of files) out.add(f);
+    if (action && depth === 0) {
       for (const name of ['action.yml', 'action.yaml']) {
-        const body = read(`${action[0]}/${name}`);
+        const body = read(`${dir}/${name}`);
         if (body !== null) scan(body, depth + 1);
       }
     }
     return true;
   };
   const scan = (body, depth) => {
-    const code = withoutComments(body);
-    for (const p of referencedPaths(code)) if (!expandAction(p, depth)) out.add(p);
-    for (const p of [...pathTokens(code), ...makefiles(code)]) {
-      if (read(p) !== null) out.add(p);
-      else expandAction(p, depth);
-    }
+    const code = normalise(body);
+    for (const p of referencedPaths(stripWorkspace(body))) if (!expandDir(p, depth)) out.add(p);
+    for (const p of [...pathTokens(code), ...makefiles(code)]) if (read(p) !== null) out.add(p);
   };
   scan(text, 0);
   return out;
@@ -158,7 +172,7 @@ export function credentialWorkflowFindings(changes, repo) {
     for (const p of namedFiles(text, read, (prefix) => repo.listHead(prefix))) named.add(p);
     // An install runs with the workflow's credentials in scope, so what decides the
     // dependency set is named too: the root manifest, the lockfile and npm/bun config.
-    if (INSTALL.test(withoutComments(text))) for (const p of INSTALL_INPUTS) named.add(p);
+    if (INSTALL.test(normalise(text))) for (const p of INSTALL_INPUTS) named.add(p);
   }
   const hits = [];
   for (const c of changes) {

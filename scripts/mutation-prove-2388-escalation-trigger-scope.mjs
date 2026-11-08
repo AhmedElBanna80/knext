@@ -13,6 +13,9 @@
  * only, baseline green first, a canary that must go red, anchors that occur
  * exactly once, byte-exact restore.
  *
+ * Rows that survived the slimming keep their old ids, so a missing id is a row
+ * that tested the removed transitive analysis; new rows took free numbers.
+ *
  * Usage: node scripts/mutation-prove-2388-escalation-trigger-scope.mjs
  */
 
@@ -284,10 +287,13 @@ const MUTATIONS = [
   {
     id: 'M32',
     expect: 'red',
-    claim: 'a scripts/ mention counts only when the file exists — deleting a release script passes',
+    claim:
+      'a scripts/ or local-action mention counts only when the file exists, and a named directory stops covering its files',
     subject: 'credential',
-    anchor: '    for (const p of referencedPaths(code)) if (!expandAction(p, depth)) out.add(p);',
-    replacement: '    for (const p of referencedPaths(code)) if (read(p) !== null) out.add(p);',
+    anchor:
+      '    for (const p of referencedPaths(stripWorkspace(body))) if (!expandDir(p, depth)) out.add(p);',
+    replacement:
+      '    for (const p of referencedPaths(stripWorkspace(body))) if (read(p) !== null) out.add(p);',
   },
   {
     id: 'M33',
@@ -328,16 +334,15 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'comments are scanned — a path named only in a comment fires',
     subject: 'credential',
-    anchor: "    .map((l) => (/^\\s*#/.test(l) ? '' : l.replace(/\\s#\\s.*$/, '')))",
-    replacement: '    .map((l) => l)',
+    anchor: "      .map((l) => (/^\\s*#/.test(l) ? '' : l))",
+    replacement: '      .map((l) => l)',
   },
   {
     id: 'M45',
     expect: 'red',
     claim: 'an install in a credential workflow no longer names the lockfile and root manifest',
     subject: 'credential',
-    anchor:
-      '    if (INSTALL.test(withoutComments(text))) for (const p of INSTALL_INPUTS) named.add(p);',
+    anchor: '    if (INSTALL.test(normalise(text))) for (const p of INSTALL_INPUTS) named.add(p);',
     replacement: '',
   },
   {
@@ -345,9 +350,50 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'a commented-out install still names the lockfile',
     subject: 'credential',
-    anchor:
-      '    if (INSTALL.test(withoutComments(text))) for (const p of INSTALL_INPUTS) named.add(p);',
+    anchor: '    if (INSTALL.test(normalise(text))) for (const p of INSTALL_INPUTS) named.add(p);',
     replacement: '    if (INSTALL.test(text)) for (const p of INSTALL_INPUTS) named.add(p);',
+  },
+  {
+    id: 'M47',
+    expect: 'red',
+    claim:
+      'the checkout-root prefix is not stripped — ${{ github.workspace }}/hack/p.sh is not named',
+    subject: 'credential',
+    anchor:
+      "  return text.replace(/\\$\\{\\{\\s*github\\.workspace\\s*\\}\\}\\/|\\$\\{?GITHUB_WORKSPACE\\}?\\//g, '');",
+    replacement: '  return text;',
+  },
+  {
+    id: 'M48',
+    expect: 'red',
+    claim: 'any named path counts as a directory — nothing else in the mention is followed',
+    subject: 'credential',
+    anchor: '    if (files.length === 0 && !action) return false;',
+    replacement: '    if (!action) return false;',
+  },
+  {
+    id: 'M49',
+    expect: 'red',
+    claim: 'the legacy design-gate:cleared label stops acknowledging',
+    subject: 'ack',
+    anchor: '    return normalized === ACK_LABEL || normalized === LEGACY_ACK_LABEL;',
+    replacement: '    return normalized === ACK_LABEL;',
+  },
+  {
+    id: 'M50',
+    expect: 'red',
+    claim: 'the label is compared without case folding',
+    subject: 'ack',
+    anchor: '    const normalized = l.trim().toLowerCase();',
+    replacement: '    const normalized = l.trim();',
+  },
+  {
+    id: 'M51',
+    expect: 'red',
+    claim: 'the PR-body acknowledgement line stops counting',
+    subject: 'ack',
+    anchor: "  return typeof body === 'string' && ACK_BODY_PATTERN.test(body);",
+    replacement: '  return false;',
   },
 ];
 
@@ -360,6 +406,7 @@ const prover = createGuardProver({
     publicSurface: 'scripts/escalation/public-surface.mjs',
     git: 'scripts/escalation/git.mjs',
     report: 'scripts/escalation/report.mjs',
+    ack: 'scripts/escalation/acknowledgement.mjs',
     entry: 'scripts/check-escalation-triggers.mjs',
   },
 });

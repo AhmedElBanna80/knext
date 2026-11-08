@@ -207,23 +207,25 @@ EOF
   # react@19.3.0-canary-…), which next's own `react ^19.0.0` peer range
   # excludes, so npm refuses the whole install with ERESOLVE before knext is
   # built. Vercel installs those fixtures with pnpm, which only warns on a peer
-  # mismatch. Retry ONCE with --legacy-peer-deps, and ONLY on ERESOLVE: every
-  # fixture that installs today keeps exactly today's install, and any other
-  # failure still fails the deploy. ERESOLVE aborts before reify, so the first
-  # attempt leaves node_modules untouched.
+  # mismatch. Retry ONCE with --legacy-peer-deps, and ONLY on an ERESOLVE that
+  # names no @getknext/* package (#2319, scripts/lib/e2e-eresolve-retry.mjs): a
+  # conflict in knext's own peer ranges must fail the deploy, not be hidden.
+  # Every fixture that installs today keeps exactly today's install, and any
+  # other failure still fails the deploy. ERESOLVE aborts before reify, so the
+  # first attempt leaves node_modules untouched.
   NPM_INSTALL_LOG="${APP_DIR}/.knext-npm-install.log"
   # shellcheck disable=SC2086
   if npm install --no-save --no-audit --no-fund "${LIB_TGZ}" "${DB_TGZ}" "${CORE_TGZ}" ${TS_PIN} >"${NPM_INSTALL_LOG}" 2>&1; then
     cat "${NPM_INSTALL_LOG}" >&2
   else
     cat "${NPM_INSTALL_LOG}" >&2
-    if grep -q 'ERESOLVE' "${NPM_INSTALL_LOG}"; then
+    if node "${SCRIPT_DIR}/lib/e2e-eresolve-retry.mjs" "${NPM_INSTALL_LOG}"; then
       log "npm refused the tarball install with ERESOLVE (a fixture-pinned dependency conflicts with a peer range); retrying once with --legacy-peer-deps"
       # shellcheck disable=SC2086
       npm install --legacy-peer-deps --no-save --no-audit --no-fund "${LIB_TGZ}" "${DB_TGZ}" "${CORE_TGZ}" ${TS_PIN} >&2
     else
       rm -f "${NPM_INSTALL_LOG}"
-      log "ERROR: npm install of the knext tarballs failed (not ERESOLVE; not retried)"
+      log "ERROR: npm install of the knext tarballs failed (not an ERESOLVE in a fixture-owned dependency; not retried)"
       exit 1
     fi
   fi

@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { decideRetry } from '../scripts/lib/e2e-eresolve-retry.mjs';
 
 /**
  * #2296 — at vercel/next.js v16.4.0 three deploy-suite files that used to set
@@ -84,7 +85,11 @@ function packStub(
   });
 }
 
-function packKnextStubs(stageDir: string, tarballsDir: string): void {
+function packKnextStubs(
+  stageDir: string,
+  tarballsDir: string,
+  corePeers: Record<string, string> = {},
+): void {
   packStub(
     stageDir,
     tarballsDir,
@@ -109,6 +114,7 @@ function packKnextStubs(stageDir: string, tarballsDir: string): void {
         './internal/bun-keepalive-guard': './dist/adapters/bun-keepalive-guard.cjs',
       },
       dependencies: { '@getknext/lib': '0.0.0-test' },
+      ...(Object.keys(corePeers).length > 0 ? { peerDependencies: corePeers } : {}),
     },
     {
       'dist/adapters/next-adapter.js': 'module.exports = {};\n',
@@ -279,5 +285,69 @@ describe('scripts/e2e-deploy.sh — a NON-ERESOLVE install failure still fails t
 
   it('does not retry with --legacy-peer-deps', () => {
     expect(result.stderr).not.toContain('--legacy-peer-deps');
+  });
+});
+
+describe("scripts/e2e-deploy.sh — an ERESOLVE in knext's OWN peer range fails the deploy, never retried (#2319)", () => {
+  let stageDir = '';
+  let appDir = '';
+  let result: ReturnType<typeof runDeploy>;
+
+  beforeAll(() => {
+    stageDir = mkdtempSync(join(tmpdir(), 'knext-e2e-knext-peer-stubs-'));
+    const tarballsDir = join(stageDir, 'tarballs');
+    mkdirSync(tarballsDir, { recursive: true });
+    // @getknext/core with a NON-optional peer the fixture cannot satisfy: a real
+    // conflict in knext's own packages, which --legacy-peer-deps would hide.
+    packKnextStubs(stageDir, tarballsDir, { react: '^99.0.0' });
+    appDir = makeCanaryPinnedApp();
+    result = runDeploy(appDir, tarballsDir);
+  }, 150000);
+
+  afterAll(() => {
+    cleanup(appDir);
+    if (stageDir && existsSync(stageDir)) rmSync(stageDir, { recursive: true, force: true });
+  });
+
+  it('exits non-zero and does not print a URL', () => {
+    expect(result.status).not.toBe(0);
+    expect(result.stdout.trim()).toBe('');
+  });
+
+  it("does not retry with --legacy-peer-deps, and says the conflict is knext's", () => {
+    expect(result.stderr).not.toContain('retrying once with --legacy-peer-deps');
+    expect(result.stderr).toContain("names knext's own package(s): @getknext/core");
+  });
+});
+
+describe('scripts/lib/e2e-eresolve-retry.mjs — which ERESOLVE may be retried (#2319)', () => {
+  const fixtureConflict = [
+    'npm error code ERESOLVE',
+    'npm error ERESOLVE unable to resolve dependency tree',
+    'npm error While resolving: fixture-app@0.0.0',
+    'npm error Found: react@19.3.0-canary-fef12a01-20260413',
+    'npm error Could not resolve dependency:',
+    'npm error peer react@"^19.0.0" from next@16.4.3',
+  ].join('\n');
+
+  it("retries a conflict that is the fixture's own pin", () => {
+    expect(decideRetry(fixtureConflict).retry).toBe(true);
+  });
+  it('refuses when knext declares the conflicting peer', () => {
+    const log = fixtureConflict.replace('from next@16.4.3', 'from @getknext/core@2.0.0');
+    expect(decideRetry(log)).toEqual({
+      retry: false,
+      reason: "the conflict names knext's own package(s): @getknext/core",
+    });
+  });
+  it('refuses when knext is the package being resolved', () => {
+    const log = fixtureConflict.replace(
+      'While resolving: fixture-app@0.0.0',
+      'While resolving: @getknext/db@2.0.0',
+    );
+    expect(decideRetry(log).retry).toBe(false);
+  });
+  it('refuses a failure that is not ERESOLVE', () => {
+    expect(decideRetry('npm error code EINTEGRITY\n').retry).toBe(false);
   });
 });

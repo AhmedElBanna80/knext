@@ -133,6 +133,26 @@ describe('docs — stability tiers page', () => {
   });
 });
 
+describe('docs — every Stable package is documented in the public API reference', () => {
+  // A package named Stable on the stability page is a support promise. The
+  // public API reference is where its supported imports are enumerated, so a
+  // Stable package with no `### \`@getknext/<pkg>\`` section there is an
+  // unbacked promise. Derived from the page itself, not a hand-kept list.
+  const publicApi = read('docs/PUBLIC_API.md');
+  const stableSection = page.slice(page.search(/^##\s+Stable/m), page.search(/^##\s+Beta/m));
+  const stablePackages = [...new Set(stableSection.match(/@getknext\/[a-z-]+/g) ?? [])];
+
+  it('the Stable tier names at least one package to check', () => {
+    expect(stablePackages).toContain('@getknext/db');
+  });
+
+  for (const pkg of stablePackages) {
+    it(`${pkg} has a section in docs/PUBLIC_API.md`, () => {
+      expect(publicApi).toContain(`### \`${pkg}\``);
+    });
+  }
+});
+
 describe('docs — support-matrix reflects the real default build/runtime', () => {
   const supportMatrix = readFileSync(resolve(DOCS_DIR, 'support-matrix.mdx'), 'utf8');
   const artifactContract = read('packages/kn-next/src/adapters/artifact-contract.ts');

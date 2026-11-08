@@ -32,7 +32,7 @@ wakes classifies Postgres (hard dependency) and Redis (soft dependency) for obse
   without waiting for the pool's retry budget. The observer is always unsubscribed in `finally`.
 - The `SELECT 1 as healthy` probe runs inside `runWithoutDbActivity`, so it never counts as DB
   activity.
-- All deep checks share one timeout: `HEALTH_DEEP_TIMEOUT_MS` when it is a positive integer,
+- All deep checks share one timeout: `HEALTH_DEEP_TIMEOUT_MS` when `parseInt` reads a positive integer from it (so `12abc` is 12),
   otherwise `DEFAULT_DEEP_TIMEOUT_MS = 8000` (`index.ts:deepTimeoutMs`).
 - The Redis client comes from `createRedisClient(REDIS_URL, 'deep-health')`. It is cached for
   the life of the module, and `ensureDialable` runs before each `ping()`.
@@ -44,8 +44,8 @@ wakes classifies Postgres (hard dependency) and Redis (soft dependency) for obse
 - Arms a `setTimeout` for the deep-check timeout on each `checkDeepHealth` call and never
   clears it, so the timer stays pending after the checks settle.
 - Logs through `logger` (`../logger`): `info` for waking or a timeout, `error` for a failure.
-- Reads `DATABASE_URL`, `REDIS_URL`, `HEALTH_DEEP_TIMEOUT_MS` and `KNEXT_DB_SCALE_TO_ZERO`
-  (the last through `isScaleToZeroDatabase`) on each call.
+- Reads `DATABASE_URL`, `REDIS_URL` and `HEALTH_DEEP_TIMEOUT_MS` on each call, and
+  `KNEXT_DB_SCALE_TO_ZERO` (through `isScaleToZeroDatabase`) only when `DATABASE_URL` is set.
 - When `DATABASE_URL` is set, the call to `isScaleToZeroDatabase` means an unrecognised
   `KNEXT_DB_SCALE_TO_ZERO` value writes one JSON `console.warn` line per distinct value per
   process, tracked in a `globalThis` once-set.

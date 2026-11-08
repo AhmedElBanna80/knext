@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INTERNAL_ONLY_VERBS } from '../../packages/kn-next/src/cli/help';
@@ -150,6 +150,29 @@ describe('docs — every Stable package is documented in the public API referenc
     it(`${pkg} has a section in docs/PUBLIC_API.md`, () => {
       expect(publicApi).toContain(`### \`${pkg}\``);
     });
+  }
+
+  // Every subpath a Stable package declares public in its own manifest
+  // (`knext.publicApi.public`) must have a heading. Checking only the package
+  // root let a removed `./schema` or `./migrate` section stay green.
+  const manifestFor = new Map<string, { knext?: { publicApi?: { public?: string[] } } }>();
+  for (const dir of readdirSync(resolve(repoRoot, 'packages'))) {
+    const manifestPath = resolve(repoRoot, 'packages', dir, 'package.json');
+    if (!existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    manifestFor.set(manifest.name, manifest);
+  }
+  for (const pkg of stablePackages) {
+    const publicSubpaths = manifestFor.get(pkg)?.knext?.publicApi?.public ?? [];
+    it(`${pkg} declares its public subpaths and each has a heading`, () => {
+      expect(publicSubpaths.length).toBeGreaterThan(0);
+    });
+    for (const sub of publicSubpaths) {
+      const heading = `### \`${pkg}${sub === '.' ? '' : sub.slice(1)}\``;
+      it(`${pkg} public subpath ${sub} has a heading in docs/PUBLIC_API.md`, () => {
+        expect(publicApi).toContain(heading);
+      });
+    }
   }
 });
 

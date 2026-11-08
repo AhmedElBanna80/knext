@@ -11,7 +11,7 @@ not listed is internal and may change without a major bump.
 
 | Subpath | Status | Exports |
 |---|---|---|
-| `@getknext/db` (`.`) | **public** | `getDb`, `getDbRO`, and the re-exported drizzle-orm query surface (`eq`, `and`, `or`, `sql`, the query builder, …). |
+| `@getknext/db` (`.`) | **public** | `getDb`, `getDbRO`, `resetDbClients` (test-only cache reset), and the re-exported drizzle-orm query surface (`eq`, `and`, `or`, `sql`, the query builder, …). |
 | `@getknext/db/schema` | **public** | drizzle `pg-core` primitives (`pgTable`, column + index + constraint builders) plus `relations`/`sql`, re-exported from one place, **and** the TimescaleDB + pgvector extension helpers (`hypertable`/`dropChunks`/`createTimescaleExtension`, `hnsw`/`ivfflat`/`createVectorExtension`, `cosineDistance`/`l2Distance`/`innerProduct`). |
 | `@getknext/db/migrate` | **public** | `defineDrizzleConfig()`, the one-shot writer-only runner `runMigrations()` / `resolveWriterDsn()`, `RO_GATEWAY_PORT`, and `DEFAULT_SCHEMA_PATH` / `DEFAULT_MIGRATIONS_DIR`. |
 

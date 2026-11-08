@@ -387,6 +387,9 @@ Exports:
   (`DATABASE_URL_RO`). Its data may lag the writer slightly and it has no
   read-your-writes guarantee. When `DATABASE_URL_RO` is unset it falls back to the
   writer and logs a one-time warning.
+- `resetDbClients()` — drops the cached `getDb()` / `getDbRO()` clients so the next
+  call rebuilds them. It exists for test suites that reset module state between
+  cases. It does not close the pools, which the `@getknext/lib` shutdown drain owns.
 - The drizzle-orm query surface (operators such as `eq` and `and`, `sql`, and the
   query builder), re-exported from the package root.
 
@@ -405,9 +408,10 @@ export const users = pgTable('users', {
 
 Exports: the drizzle `pg-core` primitives (`pgTable`, the column, index and
 constraint builders), plus `relations` and `sql`. It also exports the TimescaleDB
-helpers (`hypertable`, `dropChunks`, `createTimescaleExtension`) and the pgvector
-helpers (`hnsw`, `ivfflat`, `createVectorExtension`, `cosineDistance`,
-`l2Distance`, `innerProduct`).
+helpers (`hypertable`, `dropChunks`, `createTimescaleExtension`, and the
+`CREATE_TIMESCALEDB_EXTENSION` SQL constant) and the pgvector helpers (`hnsw`,
+`ivfflat`, `createVectorExtension`, `cosineDistance`, `l2Distance`,
+`innerProduct`, and the `CREATE_VECTOR_EXTENSION` SQL constant).
 
 ### `@getknext/db/migrate`
 
@@ -421,10 +425,18 @@ import { defineDrizzleConfig } from '@getknext/db/migrate';
 export default defineDrizzleConfig();
 ```
 
+Prerequisite: `drizzle-kit` is an optional peer dependency of `@getknext/db`. Only
+`defineDrizzleConfig()` needs it. Install it as a devDependency
+(`npm i -D drizzle-kit`). If it is missing, `defineDrizzleConfig()` throws an error
+that names the package and the install command. The root and `./schema` entries
+and `runMigrations()` do not need it.
+
 Exports:
 - `defineDrizzleConfig()` — the drizzle-kit config for a knext zone.
 - `runMigrations()` — a one-shot runner that applies pending migrations through
   the writer connection only.
+- `defaultMigrateDeps()` — the production dependencies `runMigrations()` uses
+  (a single-connection writer pool). Pass your own to substitute them in tests.
 - `resolveWriterDsn()` — the writer connection string the runner uses.
 - `RO_GATEWAY_PORT`, `DEFAULT_SCHEMA_PATH`, `DEFAULT_MIGRATIONS_DIR` — constants
   the runner and config share.

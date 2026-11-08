@@ -635,7 +635,7 @@ function $open(): void {
   } catch (err) {
     // A descriptor handed to dlopen is never closed on success; on failure it is.
     if (load.startsWith('/proc/self/fd/')) $closeSync(Number(load.slice('/proc/self/fd/'.length)));
-    const via = load === path ? '' : \` (opened as \${load}; it needs /proc mounted)\`;
+    const via = load === path ? '' : \` (opened as \${load}, which needs /proc mounted)\`;
     throw new FfiLoadError(
       \`knext ffi: could not load \${path}\${via}: \${err instanceof Error ? err.message : String(err)}\\n\` +
         'If the library does not export a function this module calls, the module is stale: run \`knext ffi generate\` and commit the result.',

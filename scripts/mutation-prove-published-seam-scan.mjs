@@ -22,7 +22,10 @@
  *   - an unresolvable relative re-export is skipped instead of failing;
  *   - CommonJS `module.exports = { __x }` keys are not read;
  *   - a post-hoc seam on a CommonJS-exported binding (`exports.K = K; K.__x = 1`)
- *     is not read as reachable (#2206);
+ *     is not read as reachable (#2206), at each export position: the helper, its
+ *     call sites, the `value` / shorthand / getter forms of `defineProperty`;
+ *   - an unreadable `defineProperty` descriptor (non-literal, spread, missing,
+ *     non-function getter) reads as clean instead of failing closed (#2206);
  *   - `.d.ts` interfaces are not read;
  *   - only the first `exports` condition is scanned;
  *   - a package that exposes nothing, or an empty workspace, reads as clean;
@@ -523,8 +526,135 @@ const MUTATIONS = [
     claim: 'a defineProperty `{ value: K }` binding is not marked exported (#2206)',
     subject: 'lib',
     validate: jsStillParses,
-    anchor: '              markExported(p.initializer);',
-    replacement: '              void p;',
+    anchor: '        if (ts.isPropertyAssignment(p)) markExported(p.initializer);',
+    replacement: '        if (ts.isPropertyAssignment(p)) void p;',
+  },
+  {
+    id: 'M51',
+    expect: 'red',
+    claim:
+      'a non-literal `Object.defineProperty` descriptor (a call) reads as clean instead of failing closed (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '    if (!ts.isObjectLiteralExpression(d)) {',
+    replacement: '    if (!ts.isObjectLiteralExpression(d)) { return;',
+  },
+  {
+    id: 'M52',
+    expect: 'red',
+    claim:
+      'a spread in a defineProperty descriptor (which may carry `value`) is skipped instead of failing closed (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '    if (ts.isSpreadAssignment(p)) {',
+    replacement: '    if (ts.isSpreadAssignment(p)) { continue;',
+  },
+  {
+    id: 'M53',
+    expect: 'red',
+    claim:
+      'a defineProperty call with no descriptor reads as clean instead of failing closed (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '    if (desc === undefined) {',
+    replacement: '    if (desc === undefined) { return;',
+  },
+  {
+    id: 'M54',
+    expect: 'red',
+    claim:
+      'a getter that is not a function literal reads as clean instead of failing closed (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor:
+      "        else\n          fail(\n            ctx,\n            file,\n            'Object.defineProperty getter that is not a function literal — what it returns cannot be read statically',\n          );",
+    replacement: '        else void 0;',
+  },
+  {
+    id: 'M55',
+    expect: 'red',
+    claim: 'a getter written as a method (`get() { return K }`) is not marked exported (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '        if (ts.isMethodDeclaration(p)) markReturned(p);',
+    replacement: '        if (ts.isMethodDeclaration(p)) void p;',
+  },
+  {
+    id: 'M56',
+    expect: 'red',
+    claim:
+      'a getter written as a function literal is not marked exported, so its returned binding reads clean (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '          markReturned(p.initializer);',
+    replacement: '          void p;',
+  },
+  {
+    id: 'M57',
+    expect: 'red',
+    claim: 'a shorthand `{ value }` descriptor is not marked exported (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor:
+      '        else if (ts.isShorthandPropertyAssignment(p)) exportedLocals.add(p.name.text);',
+    replacement: '        else if (ts.isShorthandPropertyAssignment(p)) void p;',
+  },
+  {
+    id: 'M58',
+    expect: 'red',
+    claim:
+      'an arrow getter with an expression body (`get: () => K`) is not marked exported (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '      markExported(body);',
+    replacement: '      void body;',
+  },
+  {
+    id: 'M59',
+    expect: 'red',
+    claim: 'a `return K` in a block getter body is not marked exported (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '        if (node.expression) markExported(node.expression);',
+    replacement: '        if (node.expression) void node;',
+  },
+  {
+    id: 'M60',
+    expect: 'red',
+    claim:
+      'the getter return walk descends into nested functions, marking a binding that only a nested function returns (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '      if (ts.isFunctionLike(node)) return;',
+    replacement: '      void node;',
+  },
+  {
+    id: 'M61',
+    expect: 'red',
+    claim:
+      'a descriptor bound to a same-file identifier is not resolved, so a clean literal reds instead of being read (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '        markDescriptor(init, depth + 1);\n        return;',
+    replacement: '        void init;',
+  },
+  {
+    id: 'M62',
+    expect: 'red',
+    claim: 'a `{ a: K }` property inside an exported object literal is not marked exported (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '        markExported(prop.initializer);',
+    replacement: '        void prop;',
+  },
+  {
+    id: 'M63',
+    expect: 'red',
+    claim: 'an `exports.K = K` assignment is not marked exported at its call site (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '          markExported(node.right);',
+    replacement: '          void node;',
   },
 ];
 

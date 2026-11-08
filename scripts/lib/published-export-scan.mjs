@@ -60,7 +60,11 @@
  * binding: `K.__x = 1`, `Object.assign` / `defineProperty` / `defineProperties`.
  * An identifier is an exported binding when it is the value of an export
  * position, CommonJS included: `exports.K = K`, `module.exports = { K }` (also
- * `{ a: K }`), `Object.defineProperty(exports, 'K', { value: K })` (#2206).
+ * `{ a: K }`), `Object.defineProperty(exports, 'K', { value: K })` (also
+ * shorthand `{ value }`), and an identifier a getter returns in
+ * `Object.defineProperty(exports, 'K', { get() { return K } })` (#2206). A
+ * descriptor that cannot be read (non-literal, spread, non-function getter) fails
+ * closed.
  * Not followed: attachment through an import chain, and objects exported from an
  * imported binding (`import { o } from './x'; export { o }`).
  */
@@ -801,6 +805,102 @@ export function readExports(ctx, file) {
     );
   };
 
+  /**
+   * The identifiers a getter body returns. `get() { return K }`, `get: () => K`
+   * and `get: function () { return K }` all hand `K` to a consumer. A nested
+   * function returns for itself and is not read here.
+   */
+  const markReturned = (fn) => {
+    const body = fn.body;
+    if (!body) return;
+    if (!ts.isBlock(body)) {
+      markExported(body);
+      return;
+    }
+    const visit = (node) => {
+      if (ts.isReturnStatement(node)) {
+        if (node.expression) markExported(node.expression);
+        return;
+      }
+      if (ts.isFunctionLike(node)) return;
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(body, visit);
+  };
+
+  /**
+   * The descriptor of `Object.defineProperty(exports, 'K', desc)`. Its `value`
+   * and the body of its `get` both carry the binding out to a consumer, so each
+   * is marked. A descriptor this reader cannot read is a finding, never a pass:
+   * a missing one, a non-literal one, a spread that may carry `value`, and a
+   * getter that is not a function literal (#2206).
+   */
+  const markDescriptor = (desc, depth = 0) => {
+    if (desc === undefined) {
+      fail(
+        ctx,
+        file,
+        'Object.defineProperty on exports with no descriptor — its value cannot be read statically',
+      );
+      return;
+    }
+    let d = desc;
+    while (
+      ts.isParenthesizedExpression(d) ||
+      ts.isAsExpression(d) ||
+      ts.isSatisfiesExpression(d) ||
+      ts.isNonNullExpression(d)
+    )
+      d = d.expression;
+    if (ts.isIdentifier(d) && depth < 4) {
+      const init = topLevel.get(d.text);
+      if (init && ts.isObjectLiteralExpression(init)) {
+        markDescriptor(init, depth + 1);
+        return;
+      }
+    }
+    if (!ts.isObjectLiteralExpression(d)) {
+      fail(
+        ctx,
+        file,
+        `Object.defineProperty on exports with a non-literal descriptor ${desc.getText(sf).slice(0, 60)} — its value cannot be read statically`,
+      );
+      return;
+    }
+    for (const p of d.properties) {
+      if (ts.isSpreadAssignment(p)) {
+        fail(
+          ctx,
+          file,
+          'Object.defineProperty descriptor with a spread — its value cannot be read statically',
+        );
+        continue;
+      }
+      const n = p.name ? nameOf(p.name) : undefined;
+      if (n === undefined) {
+        fail(ctx, file, 'Object.defineProperty descriptor key cannot be read statically');
+        continue;
+      }
+      if (n === 'value') {
+        if (ts.isPropertyAssignment(p)) markExported(p.initializer);
+        else if (ts.isShorthandPropertyAssignment(p)) exportedLocals.add(p.name.text);
+      } else if (n === 'get') {
+        if (ts.isMethodDeclaration(p)) markReturned(p);
+        else if (
+          ts.isPropertyAssignment(p) &&
+          (ts.isFunctionExpression(p.initializer) || ts.isArrowFunction(p.initializer))
+        )
+          markReturned(p.initializer);
+        else
+          fail(
+            ctx,
+            file,
+            'Object.defineProperty getter that is not a function literal — what it returns cannot be read statically',
+          );
+      }
+    }
+  };
+
   const visitExportsUse = (node) => {
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       const left = node.left;
@@ -830,13 +930,7 @@ export function readExports(ctx, file) {
         const key = args[1];
         if (key && ts.isStringLiteralLike(key)) add(key.text);
         else fail(ctx, file, `Object.defineProperty on exports with a non-literal key`);
-        const desc = args[2];
-        if (desc && ts.isObjectLiteralExpression(desc)) {
-          for (const p of desc.properties) {
-            if (ts.isPropertyAssignment(p) && nameOf(p.name) === 'value')
-              markExported(p.initializer);
-          }
-        }
+        markDescriptor(args[2]);
       } else if (
         touchesExports &&
         ts.isPropertyAccessExpression(callee) &&

@@ -232,6 +232,108 @@ describe('CommonJS post-hoc attachment on an exported binding reds (#2206)', () 
   });
 });
 
+/**
+ * #2206 review: every form of `Object.defineProperty(exports, 'K', desc)` either
+ * marks the binding it hands out, or fails closed. A descriptor the reader cannot
+ * read is a finding, never a clean pass. Each red has a post-hoc seam on `K`, so
+ * a form that stops being read reads clean and goes red-to-green.
+ */
+describe('Object.defineProperty descriptors are read in every form (#2206)', () => {
+  const cjs = (body: string) =>
+    exitFor({ 'dist/index.cjs': body }, { exports: { '.': './dist/index.cjs' } });
+  const seamK = `function K() {}\nK.__x = 1;\n`;
+
+  it('a `{ value: K }` descriptor bound to a same-file literal reds', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}const d = { value: K };\nObject.defineProperty(exports, 'K', d);\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('a clean same-file descriptor literal is read, not failed (stays clean)', () => {
+    expect(
+      cjs(
+        `'use strict';\nfunction K() {}\nconst d = { value: 1, enumerable: true };\nObject.defineProperty(exports, 'K', d);\n`,
+      ),
+    ).toBe(CLEAN);
+  });
+
+  it('a non-literal descriptor (a call) fails closed with a post-hoc seam', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}const mk = () => ({ value: K });\nObject.defineProperty(exports, 'K', mk());\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('a descriptor spread that may carry `value` fails closed', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}const base = { value: K };\nObject.defineProperty(exports, 'K', { ...base });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('a missing descriptor fails closed', () => {
+    expect(cjs(`'use strict';\n${seamK}Object.defineProperty(exports, 'K');\n`)).toBe(RED);
+  });
+
+  it('a getter method `get() { return K }` reds', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}Object.defineProperty(exports, 'K', { enumerable: true, get() { return K; } });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('a getter arrow `get: () => K` reds', () => {
+    expect(
+      cjs(`'use strict';\n${seamK}Object.defineProperty(exports, 'K', { get: () => K });\n`),
+    ).toBe(RED);
+  });
+
+  it('a getter function with a block `return K` on a nested branch reds', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}Object.defineProperty(exports, 'K', { get: function () { if (Math.random() < 2) { return K; } return 0; } });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('a shorthand `{ value }` descriptor marks the local `value` and reds', () => {
+    expect(
+      cjs(
+        `'use strict';\nfunction value() {}\nvalue.__x = 1;\nObject.defineProperty(exports, 'K', { value });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('a getter that is not a function literal fails closed', () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}const g = () => K;\nObject.defineProperty(exports, 'K', { get: g });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it("a `return` inside a nested function does not mark the getter's binding (stays clean)", () => {
+    expect(
+      cjs(
+        `'use strict';\n${seamK}Object.defineProperty(exports, 'K', { get() { const f = function () { return K; }; return f; } });\n`,
+      ),
+    ).toBe(CLEAN);
+  });
+
+  it('a tsc re-export getter that returns a member (not a binding) stays clean', () => {
+    expect(
+      cjs(
+        `'use strict';\nconst m = { ok: 1 };\nObject.defineProperty(exports, 'ok', { enumerable: true, get: function () { return m.ok; } });\n`,
+      ),
+    ).toBe(CLEAN);
+  });
+});
+
 describe('every way a seam can be exported reds', () => {
   const cases: Array<[string, Files, object?]> = [
     ['a direct `export function __x`', { 'dist/index.js': `export function __x() {}\n` }],

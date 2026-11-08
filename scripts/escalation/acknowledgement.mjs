@@ -13,6 +13,9 @@ export const LEGACY_ACK_LABEL = 'design-gate:cleared';
 /** The PR-body line: `Escalation trigger acknowledged: <trigger> — <reason>`. */
 export const ACK_BODY_PATTERN = /Escalation trigger acknowledged:/i;
 
+/** The body line as a report shows it; it matches `ACK_BODY_PATTERN`. */
+export const ACK_BODY_EXAMPLE = 'Escalation trigger acknowledged: <trigger> — <reason>';
+
 export function isAcknowledged(labels, body) {
   const labelHit = labels.some((l) => {
     const normalized = l.trim().toLowerCase();

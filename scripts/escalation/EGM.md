@@ -4,10 +4,12 @@
 
 The modules behind `../check-escalation-triggers.mjs`, the PR check that the
 escalation triggers in `.claude/rules/workflow.md` were acknowledged. Each module
-owns one concern; the CLI composes them.
+owns one concern; every trigger's wording comes from `catalogue.mjs`; the CLI
+composes them.
 
 | Module | Concern |
 |---|---|
+| `catalogue.mjs` | Every trigger's id, label and reason, and `finding()` |
 | `paths.mjs` | Triggers decided by the changed path alone |
 | `public-surface.mjs` | The published surface of a package manifest |
 | `credential-workflows.mjs` | Credential-bearing workflows and the files they name |
@@ -17,10 +19,11 @@ owns one concern; the CLI composes them.
 
 ## Interface
 
-- `paths.mjs`: `TRIGGERS` (ids `adr`, `crd`, `config-schema`, `cli-surface`, `crates`, `supply-chain`), `classifyPaths(changes)`, `isStaticSupplyChainPath(p)`, `isTestPath(p)`, `SUPPLY_CHAIN_WHY`.
+- `catalogue.mjs`: `CATALOGUE` (ids `adr`, `crd`, `config-schema`, `cli-surface`, `crates`, `supply-chain`, `public-api`, each with `label` and `why`), `finding(id, paths, note = '')`.
+- `paths.mjs`: `TRIGGERS` (the catalogue entries `adr`, `crd`, `config-schema`, `cli-surface`, `crates`, `supply-chain`, each with a `match(path, status)`), `classifyPaths(changes)`, `isStaticSupplyChainPath(p)`, `isTestPath(p)`.
 - `public-surface.mjs`: `PUBLIC_MANIFEST_KEYS` (`exports`, `bin`, `files`, `main`, `types`, `typesVersions`), `publicSurfaceChanged(before, after)`, `publicSurfaceFindings(changes, repo)` (id `public-api`).
-- `credential-workflows.mjs`: `WORKFLOW`, `LOW_PRIVILEGE_SECRETS` (`GITHUB_TOKEN`, `CODECOV_TOKEN`), `workflowHoldsCredential(text)`, `referencedPaths(text)`, `namedFiles(text, read, listUnder)`, `credentialWorkflowFindings(changes, repo, why)` (id `supply-chain`).
-- `acknowledgement.mjs`: `ACK_LABEL` (`trigger:acknowledged`), `LEGACY_ACK_LABEL` (`design-gate:cleared`), `ACK_BODY_PATTERN` (`/Escalation trigger acknowledged:/i`), `isAcknowledged(labels, body)`.
+- `credential-workflows.mjs`: `WORKFLOW`, `LOW_PRIVILEGE_SECRETS` (`GITHUB_TOKEN`, `CODECOV_TOKEN`), `workflowHoldsCredential(text)`, `referencedPaths(text)`, `namedFiles(text, read, listUnder)`, `INSTALL_INPUTS` (`package.json`, `bun.lock`, `bunfig.toml`, `.npmrc`), `credentialWorkflowFindings(changes, repo)` (id `supply-chain`).
+- `acknowledgement.mjs`: `ACK_LABEL` (`trigger:acknowledged`), `LEGACY_ACK_LABEL` (`design-gate:cleared`), `ACK_BODY_PATTERN` (`/Escalation trigger acknowledged:/i`), `ACK_BODY_EXAMPLE`, `isAcknowledged(labels, body)`.
 - `git.mjs`: `git(args)`, `parseNameStatus(text)`, `gitReader(baseRef, headRef)` (`show(side, path)`, `listHead(prefix)`).
 - `report.mjs`: `mergeFired(a, b)`, `writeJobSummary(fired, acked)`, `printReport(fired, acked)` (returns the exit code).
 
@@ -39,6 +42,7 @@ A `repo` is `{ show(side, path), listHead(prefix) }`: `show` returns a blob's te
   - any other `dir/file` path token that exists;
   - the Makefile of a `make` command (`-C dir`, `--directory=dir`, else the repo root, every `working-directory:` and every literal `cd` target in the file), when it exists;
   - every file under a named local action directory (also a file added there), and what its `action.yml` names, read once.
+  - `INSTALL_INPUTS`, when the workflow runs a package install (`bun|npm|pnpm|yarn` `install`, `i`, `ci` or `add`).
 - Only one level is followed: a file that a named script imports or runs does not fire [`credential-workflows.mjs`].
 - `parseNameStatus` throws on an unknown status letter or a record with no path, and a rename or copy yields both paths, destination first [`git.mjs`].
 - `gitReader.show` treats a tree as absent (`cat-file -t` must be `blob`); any other git failure throws [`git.mjs`].
@@ -49,7 +53,7 @@ A `repo` is `{ show(side, path), listHead(prefix) }`: `show` returns a blob's te
 
 - `git.mjs` runs `git` (`show`, `cat-file`, `ls-tree`) through `execFileSync`.
 - `report.mjs` writes to stdout/stderr and appends to `$GITHUB_STEP_SUMMARY` when set; a failed append is ignored.
-- `paths.mjs`, `public-surface.mjs`, `credential-workflows.mjs` and `acknowledgement.mjs` are pure.
+- `catalogue.mjs`, `paths.mjs`, `public-surface.mjs`, `credential-workflows.mjs` and `acknowledgement.mjs` are pure.
 
 ## Verification
 

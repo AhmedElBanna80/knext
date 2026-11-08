@@ -4,8 +4,7 @@
  * surface it protects.
  */
 
-export const SUPPLY_CHAIN_WHY =
-  'changes the supply chain — a security invariant (security.md): credentials, scan allowlists, SBOM/audit, or what a credential-bearing workflow runs';
+import { CATALOGUE, finding } from './catalogue.mjs';
 
 /** Any `*_types.go` under an `api/` directory, at any depth. */
 const CRD_TYPES = /(^|\/)api\/(.+\/)?[^/]+_types\.go$/;
@@ -27,46 +26,34 @@ export function isStaticSupplyChainPath(p) {
 
 export const TRIGGERS = [
   {
-    id: 'adr',
-    label: 'an ADR',
+    ...CATALOGUE['adr'],
     // A NEW ADR is the output of an escalation, not a reason for one, and
     // `docs/adr/gates/` is measurement data: neither fires.
     match: (p, status) =>
       p.startsWith('docs/adr/') && !p.startsWith('docs/adr/gates/') && status !== 'A',
-    why: 'changes or removes an existing ADR — workflow.md: a change that contradicts or would require amending an ADR',
   },
   {
-    id: 'crd',
-    label: 'a CRD type',
+    ...CATALOGUE['crd'],
     // Every `*_types.go` under any `api/` tree, a new one included.
     match: (p) => CRD_TYPES.test(p),
-    why: 'changes a CRD type, which is the operator/CLI compatibility surface (upgrade order is load-bearing: operator/CRD first, then CLI)',
   },
   {
-    id: 'config-schema',
-    label: 'the knext.config.ts schema',
+    ...CATALOGUE['config-schema'],
     match: (p) => p === 'packages/kn-next/src/config.ts',
-    why: 'changes the public config schema every consuming app is written against',
   },
   {
-    id: 'cli-surface',
-    label: 'the CLI surface',
+    ...CATALOGUE['cli-surface'],
     // Every package's CLI, not only core's.
     match: (p) => CLI_SURFACE.test(p) && !isTestPath(p),
-    why: 'changes a CLI, which is a published entry point (`knext` and its package verbs)',
   },
   {
-    id: 'crates',
-    label: 'the Rust crates',
+    ...CATALOGUE['crates'],
     // Source, Cargo.lock, deny.toml and the toolchain pin: FFI surface and supply chain.
     match: (p) => p.startsWith('crates/'),
-    why: 'changes the Rust crates — FFI surface and the cargo supply chain (lockfile, deny policy, toolchain pin)',
   },
   {
-    id: 'supply-chain',
-    label: 'the supply chain',
+    ...CATALOGUE['supply-chain'],
     match: (p) => isStaticSupplyChainPath(p),
-    why: SUPPLY_CHAIN_WHY,
   },
 ];
 
@@ -75,7 +62,7 @@ export function classifyPaths(changes) {
   const fired = [];
   for (const t of TRIGGERS) {
     const hits = changes.filter((c) => t.match(c.path, c.status)).map((c) => c.path);
-    if (hits.length > 0) fired.push({ id: t.id, label: t.label, why: t.why, paths: hits });
+    if (hits.length > 0) fired.push(finding(t.id, hits));
   }
   return fired;
 }

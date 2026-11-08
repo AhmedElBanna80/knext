@@ -180,8 +180,8 @@ const MUTATIONS = [
     claim: 'the fired reason stops saying the manifest was unparseable',
     subject: 'publicSurface',
     anchor:
-      "        (unparseable ? ' (a manifest is UNPARSEABLE, so it cannot be proven unchanged)' : ''),",
-    replacement: "        (unparseable ? '' : ''),",
+      "  const note = unparseable ? ' (a manifest is UNPARSEABLE, so it cannot be proven unchanged)' : '';",
+    replacement: "  const note = '';",
   },
   {
     id: 'M24',
@@ -330,6 +330,24 @@ const MUTATIONS = [
     subject: 'credential',
     anchor: "    .map((l) => (/^\\s*#/.test(l) ? '' : l.replace(/\\s#\\s.*$/, '')))",
     replacement: '    .map((l) => l)',
+  },
+  {
+    id: 'M45',
+    expect: 'red',
+    claim: 'an install in a credential workflow no longer names the lockfile and root manifest',
+    subject: 'credential',
+    anchor:
+      '    if (INSTALL.test(withoutComments(text))) for (const p of INSTALL_INPUTS) named.add(p);',
+    replacement: '',
+  },
+  {
+    id: 'M46',
+    expect: 'red',
+    claim: 'a commented-out install still names the lockfile',
+    subject: 'credential',
+    anchor:
+      '    if (INSTALL.test(withoutComments(text))) for (const p of INSTALL_INPUTS) named.add(p);',
+    replacement: '    if (INSTALL.test(text)) for (const p of INSTALL_INPUTS) named.add(p);',
   },
 ];
 

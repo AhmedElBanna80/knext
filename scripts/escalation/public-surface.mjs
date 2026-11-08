@@ -7,6 +7,8 @@
 
 export const PUBLIC_MANIFEST_KEYS = ['exports', 'bin', 'files', 'main', 'types', 'typesVersions'];
 
+import { finding } from './catalogue.mjs';
+
 const PACKAGE_MANIFEST = /^packages\/[^/]+\/package\.json$/;
 
 export function publicSurfaceChanged(before, after) {
@@ -41,14 +43,6 @@ export function publicSurfaceFindings(changes, repo) {
     }
   }
   if (hits.length === 0) return [];
-  return [
-    {
-      id: 'public-api',
-      label: 'the published package surface',
-      why:
-        `changes ${PUBLIC_MANIFEST_KEYS.join('/')} in a package manifest — what consumers can import or run` +
-        (unparseable ? ' (a manifest is UNPARSEABLE, so it cannot be proven unchanged)' : ''),
-      paths: hits,
-    },
-  ];
+  const note = unparseable ? ' (a manifest is UNPARSEABLE, so it cannot be proven unchanged)' : '';
+  return [finding('public-api', hits, note)];
 }

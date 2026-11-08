@@ -778,6 +778,18 @@ describe('credential workflows: the files they name, one level deep', () => {
     ).toBeUndefined();
   });
 
+  it('an install in a credential workflow names the root manifest, lockfile and config', () => {
+    for (const p of ['package.json', 'bun.lock', 'bunfig.toml', '.npmrc']) {
+      expect(fires('bun install --frozen-lockfile', {}, p)).toEqual([p]);
+    }
+    expect(fires('npm ci', {}, 'bun.lock')).toEqual(['bun.lock']);
+  });
+
+  it('near miss: without an install the lockfile is not named', () => {
+    expect(fires('bun run build', {}, 'bun.lock')).toBeUndefined();
+    expect(fires('# bun install\necho ok', {}, 'bun.lock')).toBeUndefined();
+  });
+
   it('near miss: a file the named script imports does not fire', () => {
     expect(
       fires(

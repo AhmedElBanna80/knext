@@ -19,13 +19,16 @@
  *
  * WHAT IT DOES NOT DO. It does not decide whether the change is correct, and it
  * does not block one. It asserts that a trigger-class change was ACKNOWLEDGED —
- * that someone summoned the gate the rules require. The remaining two triggers (a
- * discovered fact that invalidates the sprint plan; a hard-rule contradiction that
- * touches no tracked path) are judgement and stay unenforced, by the rules' own
- * admission. This closes three of five, not five of five.
+ * that the trigger was consciously noted. It covers the three triggers workflow.md
+ * calls mechanically detectable (an ADR; the config schema, CLI and CRD; the public
+ * API), widened to every package's CLI, plus the Rust crates and the supply chain
+ * (security.md). The two judgement triggers (a discovered fact that invalidates
+ * the sprint plan; a hard-rule contradiction that touches no tracked path) stay
+ * unenforced, by the rules' own admission.
  *
  * LAYOUT. This file is the CLI; each concern is its own module under
- * `scripts/escalation/`: `paths.mjs` (path triggers), `public-surface.mjs`
+ * `scripts/escalation/`: `catalogue.mjs` (every trigger's id, label and reason),
+ * `paths.mjs` (path triggers), `public-surface.mjs`
  * (package manifest surface), `credential-workflows.mjs` (credential-bearing
  * workflows and the files they name), `acknowledgement.mjs`, `git.mjs` and
  * `report.mjs`. The named exports below keep existing importers working.
@@ -50,7 +53,7 @@
 import { ACK_LABEL, isAcknowledged } from './escalation/acknowledgement.mjs';
 import { credentialWorkflowFindings } from './escalation/credential-workflows.mjs';
 import { git, gitReader, parseNameStatus } from './escalation/git.mjs';
-import { classifyPaths, SUPPLY_CHAIN_WHY } from './escalation/paths.mjs';
+import { classifyPaths } from './escalation/paths.mjs';
 import { publicSurfaceFindings } from './escalation/public-surface.mjs';
 import { mergeFired, printReport, writeJobSummary } from './escalation/report.mjs';
 
@@ -76,10 +79,7 @@ export const classify = classifyPaths;
 
 /** Triggers that need file content: the manifest surface and credential workflows. */
 export function classifyContent(changes, repo) {
-  return [
-    ...publicSurfaceFindings(changes, repo),
-    ...credentialWorkflowFindings(changes, repo, SUPPLY_CHAIN_WHY),
-  ];
+  return [...publicSurfaceFindings(changes, repo), ...credentialWorkflowFindings(changes, repo)];
 }
 
 function arg(name, fallback = null) {

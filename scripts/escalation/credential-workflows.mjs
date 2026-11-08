@@ -11,6 +11,7 @@
  */
 
 import { posix } from 'node:path';
+import { finding } from './catalogue.mjs';
 
 export const WORKFLOW = /^\.github\/workflows\/[^/]+\.ya?ml$/;
 
@@ -136,19 +137,28 @@ export function namedFiles(text, read, listUnder) {
   return out;
 }
 
+/** A package install command (`bun install`, `npm ci`, `pnpm i`, `yarn add`, …). */
+const INSTALL = /(?:^|[\s;&|(])(?:bun|npm|pnpm|yarn)\s+(?:install|i|ci|add)(?![\w-])/m;
+
+/** What an install reads to decide the dependency set. */
+export const INSTALL_INPUTS = ['package.json', 'bun.lock', 'bunfig.toml', '.npmrc'];
+
 /**
  * The `supply-chain` finding from content: a changed credential-bearing workflow
  * (on either side), or a changed file a credential-bearing workflow names.
  * `repo.show(side, p)` reads a file (null when absent); `repo.listHead(prefix)`
  * lists the head tree.
  */
-export function credentialWorkflowFindings(changes, repo, why) {
+export function credentialWorkflowFindings(changes, repo) {
   const read = (p) => repo.show('head', p) ?? repo.show('base', p);
   const named = new Set();
   for (const wf of repo.listHead('.github/workflows/').filter((p) => WORKFLOW.test(p))) {
     const text = repo.show('head', wf);
     if (text === null || !workflowHoldsCredential(text)) continue;
     for (const p of namedFiles(text, read, (prefix) => repo.listHead(prefix))) named.add(p);
+    // An install runs with the workflow's credentials in scope, so what decides the
+    // dependency set is named too: the root manifest, the lockfile and npm/bun config.
+    if (INSTALL.test(withoutComments(text))) for (const p of INSTALL_INPUTS) named.add(p);
   }
   const hits = [];
   for (const c of changes) {
@@ -163,7 +173,5 @@ export function credentialWorkflowFindings(changes, repo, why) {
       hits.push(c.path);
     }
   }
-  return hits.length === 0
-    ? []
-    : [{ id: 'supply-chain', label: 'the supply chain', why, paths: hits }];
+  return hits.length === 0 ? [] : [finding('supply-chain', hits)];
 }

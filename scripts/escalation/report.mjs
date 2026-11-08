@@ -1,7 +1,7 @@
 /** Combining findings and reporting them: text, JSON and the job summary. */
 
 import { appendFileSync } from 'node:fs';
-import { ACK_LABEL, LEGACY_ACK_LABEL } from './acknowledgement.mjs';
+import { ACK_BODY_EXAMPLE, ACK_LABEL, LEGACY_ACK_LABEL } from './acknowledgement.mjs';
 
 /** Merge findings into one entry per trigger id, keeping every path once. */
 export function mergeFired(a, b) {
@@ -55,7 +55,7 @@ export function printReport(fired, acked) {
   if (acked) {
     console.log(
       `\nAcknowledged (\`${ACK_LABEL}\` label, \`${LEGACY_ACK_LABEL}\` label, or a` +
-        `\n"Escalation trigger acknowledged: ..." line in the PR body). Passing — logged to` +
+        `\n"${ACK_BODY_EXAMPLE}" line in the PR body). Passing — logged to` +
         `\nthe job summary for sprint close to collect.`,
     );
     return 0;
@@ -66,7 +66,7 @@ export function printReport(fired, acked) {
       `\nsign-off per PR for this — it requires that the trigger was CONSCIOUSLY NOTED, so` +
       `\nsprint close can pick it up as tech debt. Acknowledge by either:` +
       `\n  - adding the \`${ACK_LABEL}\` label, or` +
-      `\n  - adding a line to the PR body: "Escalation trigger acknowledged: <trigger> — <reason>"` +
+      `\n  - adding a line to the PR body: "${ACK_BODY_EXAMPLE}"` +
       `\n\nThis check does not judge the change and does not require a gate to clear it — it` +
       `\nasserts the trigger was not skipped by default. If it fired on something genuinely` +
       `\nroutine, say so on the PR and narrow the rule; a guard that cries wolf gets worked` +

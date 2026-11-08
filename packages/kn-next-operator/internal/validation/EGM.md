@@ -10,6 +10,7 @@ The single authoritative validation logic for `NextApp` and `KnextPlatform` spec
 - `validate.go:ValidateNextAppSpecUpdate` / `ValidateNextAppSpecUpdateWithBudget(oldSpec, newSpec, budget)`: update-time admission with ratcheting.
 - `validate.go:DatabaseEnvMapCollisions`, `EnvMapReservedCollisions` and `ReservedOperatorEnvNames(spec)`: env-name collision helpers.
 - `validate.go:CDNRendersEnv(spec) bool`.
+- `cache_prefix.go:DerivedCacheKeyPrefix(namespace, name)`, `IsPlatformKeyspace(prefix)`, `CacheKeyPrefixViolation(namespace, name, prefix) string` (empty when allowed) and `ValidateNextAppCacheKeyPrefix(namespace, name, spec) error`: the reserved Redis key prefixes. The webhook and the reconciler both use them.
 - `validate.go:OperatorAlwaysWinsEnvNames` (`HOSTNAME`) and `EnvMapUserAlwaysWinsEnvNames`.
 - `validate.go:MaxConnections = 100` (documents Postgres `max_connections`) and `MaxAppConnections = defaults.ConnectionBudget` (the enforced budget).
 - `platform.go:ValidatePlatformSpec(*KnextPlatformSpec) error` and `ValidateEffectiveResources(cpuReq, cpuLim, memReq, memLim) (field, error)`.
@@ -19,6 +20,7 @@ The single authoritative validation logic for `NextApp` and `KnextPlatform` spec
 ## Invariants
 - `validate.go:ValidateImageRef`: accepts only refs containing `@sha256:`. It rejects `:latest`, tagless refs and tag-only refs.
 - `validate.go:ValidateNextAppSpec` also refuses an unknown `spec.cache.isolation` and a `spec.cache.keyPrefix` of `knext` or under `knext:` (the platform keyspace).
+- `cache_prefix.go:CacheKeyPrefixViolation` refuses, for every app, a key prefix that is `knext` or under `knext:`, and a prefix in the derived shape `^kn-[0-9a-f]{12}(:.*)?$` that is not the app's own derived prefix. The own prefix must be equal: a nesting under it is refused too, since `kn-<hash>:isr` is issued `~kn-<hash>:isr:*`, which is the ISR keys of the app the hash derives from. It needs the object's namespace and name, so `ValidateNextAppSpec` (which has neither) applies only the platform-keyspace half and the webhook calls `ValidateNextAppCacheKeyPrefix` for the rest. `DerivedCacheKeyPrefix` must equal the controller's `defaultRedisKeyPrefix` (`TestDerivedPrefixLockstepWithAdmission`).
 - `validate.go:ValidateNextAppSpec` checks:
   - the image is required and digest-pinned;
   - `MinScale`, `MaxScale`, `ContainerConcurrency` and `PoolMax` are non-negative, and `MinScale <= MaxScale` when `MaxScale` is set;

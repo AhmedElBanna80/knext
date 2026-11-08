@@ -148,7 +148,8 @@ type functionObservation struct {
 	jwksDetail string
 }
 
-// accepted reports whether the function may be rendered: a valid image, both
+// accepted reports whether the function may be rendered: a valid image, a spec
+// the render can use (no invalidSpec), both
 // halves of the binding (and the image and the spec the zone pinned, if it
 // pinned them), the zone's own controller reference, and no allowlist violation. Fail closed:
 // anything else renders nothing.

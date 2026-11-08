@@ -42,7 +42,7 @@ var (
 	// backendServiceRefusalsTotal counts transitions INTO a refusal, by reason: a
 	// function the operator would not render (zone missing, binding not
 	// consented, an image or a spec other than the one the zone pinned, a conflicting owner, a credential-allowlist violation, an
-	// unpinned image, a name another object controls), or would render only
+	// unpinned image, a spec it cannot render, a name another object controls), or would render only
 	// without its zone's JWKS (a ConfigMap the zone does not control holds the
 	// name).
 	backendServiceRefusalsTotal = prometheus.NewCounterVec(

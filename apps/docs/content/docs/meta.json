@@ -38,6 +38,7 @@
     "---Deploy lifecycle---",
     "versioning",
     "upgrading",
+    "upgrading-to-2",
     "rollback",
     "gitops",
     "previews",

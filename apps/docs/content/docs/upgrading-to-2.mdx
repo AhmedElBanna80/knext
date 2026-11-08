@@ -59,8 +59,7 @@ If you cannot move to these floors yet, stay on 1.x (see [Staying on 1.x](#stayi
 - **Test-only helpers.** `@getknext/core/adapters/cache-handler` no longer exports
   `__resetEnvForTests`, `__setRedisClientForTests` or any other `__`-prefixed helper, and
   `@getknext/core/internal/logger` no longer exports `__resetLoggerForTests`. They were for tests
-  only, and the two cache-handler helpers are deprecated in 1.x. An app that uses the handler the
-  documented way is not affected:
+  only. An app that uses the handler the documented way is not affected:
 
   ```ts title="cache-handler.ts"
   export { default } from '@getknext/core/adapters/cache-handler';
@@ -78,7 +77,7 @@ does not use them. See [Zone functions](/docs/zone-functions).
 ## Upgrade checklist
 
 1. Upgrade the operator and CRD, and run `knext doctor`.
-2. Move to Node.js 24 and Next.js 16.4 if you are below them.
+2. Move to Node.js 24 and Next.js 16.4.1 or later if you are below them.
 3. Replace every `kn-next` call with `knext`.
 4. Remove any import of a `__`-prefixed test helper.
 5. Upgrade `@getknext/core` (and `@getknext/lib`, `@getknext/db`) to 2.x, then deploy.
@@ -86,7 +85,7 @@ does not use them. See [Zone functions](/docs/zone-functions).
 ## Staying on 1.x
 
 The 1.x line keeps receiving security fixes only, for six months after 2.0 is generally available.
-Once 2.0 is released, install it with the `latest-1` dist-tag:
+Once 2.0 is generally available, install it with the `latest-1` dist-tag:
 
 ```bash
 npm i @getknext/core@latest-1
@@ -94,7 +93,7 @@ npm i @getknext/core@latest-1
 
 Use the same tag for `@getknext/lib` and `@getknext/db` if your app uses them.
 
-The 1.x line keeps its own floors, Node.js `>=22.18` and Next.js `>=16.0.0`, so it is the place to
+The 1.x line keeps its own floors, Node.js `>=22.18` and Next.js `>=16.0.0 <16.5.0`, so it is the place to
 stay while you upgrade your runtimes. Zone functions are on 2.x only.
 
 ## Rolling back

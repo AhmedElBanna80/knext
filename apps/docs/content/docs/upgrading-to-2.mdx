@@ -3,8 +3,8 @@ title: Upgrading to knext 2
 description: What changes in knext 2, the order to upgrade in, and how to go back to 1.x.
 ---
 
-knext 2 raises the runtime floors and removes what 1.x deprecated. It also adds zone functions,
-which are **Beta**. Your `NextApp` resources and the operator do not
+knext 2 raises the runtime floors, removes the `kn-next` command that 1.x deprecated, and stops
+exporting a few test-only helpers. It also adds zone functions, which are **Beta**. Your `NextApp` resources and the operator do not
 change version line.
 
 > knext 2.0 is **not yet released**. This page describes what is planned; the release notes of the
@@ -93,8 +93,8 @@ npm i @getknext/core@latest-1
 
 Use the same tag for `@getknext/lib` and `@getknext/db` if your app uses them.
 
-The 1.x line keeps its own floors, Node.js `>=22.18` and Next.js `>=16.0.0 <16.5.0`, so it is the place to
-stay while you upgrade your runtimes. Zone functions are on 2.x only.
+The 1.x line keeps its own floors, Node.js `>=22.18` and Next.js `>=16.0.0 <16.5.0`, so it is
+the place to stay while you upgrade your runtimes. Zone functions are on 2.x only.
 
 ## Rolling back
 

@@ -222,11 +222,14 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
     // clients.ts imports this module statically. A static import of ../logger here
     // builds the pino singleton as a side effect of loading clients, so a suite that
     // mocks pino after importing clients captures nothing (logger.test.ts,
-    // correlation.test.ts). Walk every relative import of reachability.ts, in any
-    // form (from, bare import, dynamic import, require), transitively; none may
-    // reach src/logger. An unresolvable relative specifier fails the test.
+    // correlation.test.ts). Walk every relative import of reachability.ts,
+    // transitively, using Bun's own parser, so no spelling slips past (bare,
+    // dynamic, re-export, comments, backticks); none may reach src/logger. It
+    // fails closed: an unresolvable relative import, or a dynamic import or
+    // require call the parser could not resolve to a literal path, fails the test.
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
     const loggerDir = join(srcDir, 'logger');
+    const ts = new Bun.Transpiler({ loader: 'ts' });
     const resolve = (from: string, spec: string): string => {
       const base = join(dirname(from), spec.replace(/\.(c|m)?js$/, ''));
       for (const c of [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')]) {
@@ -234,18 +237,20 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
       }
       throw new Error(`unresolvable import ${spec} in ${from}`);
     };
-    const specRe =
-      /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]/gm;
     const seen = new Set<string>();
     const reached: string[] = [];
     const walk = (file: string): void => {
       if (seen.has(file)) return;
       seen.add(file);
       reached.push(file);
-      for (const m of readFileSync(file, 'utf8').matchAll(specRe)) {
-        const spec = m[1] as string;
-        if (spec.startsWith('.')) walk(resolve(file, spec));
+      const source = readFileSync(file, 'utf8');
+      const { imports } = ts.scan(source);
+      const dynamicSites = (ts.transformSync(source).match(/\b(?:import|require)\s*\(/g) ?? []).length;
+      const dynamicResolved = imports.filter((i) => i.kind === 'dynamic-import' || i.kind === 'require-call').length;
+      if (dynamicSites !== dynamicResolved) {
+        throw new Error(`${file}: ${dynamicSites} dynamic import/require sites, only ${dynamicResolved} resolved to a literal path`);
       }
+      for (const i of imports) if (i.path.startsWith('.')) walk(resolve(file, i.path));
     };
     walk(join(srcDir, 'db', 'reachability.ts'));
     expect(reached.filter((f) => f.startsWith(loggerDir))).toEqual([]);

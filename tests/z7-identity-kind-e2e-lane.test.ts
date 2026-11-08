@@ -421,6 +421,14 @@ describe('the lane proves what it claims', () => {
     // control: removing it lets the operator publish and the function mount it
     expect(squat).toContain('delete configmap');
     expect(squat).toContain('True/Controlled');
+    // the refusal is held, not sampled once; both the Service and the pods are checked
+    expect(squat).toMatch(/^  sleep 20$/m);
+    expect(squat).toContain('if sq_ksvc_has_jwks_volume; then fail');
+    expect(squat).toContain('if sq_pods_mount_jwks; then fail');
+    // the squatter is left untouched: same content, still no owner
+    expect(squat).toContain('(.data["jwks.json"] == $d) and ((.metadata.ownerReferences // []) | length == 0)');
+    // and the zone's conflict clears once it is gone
+    expect(squat).toContain('"True/KeyActive"');
   });
 
   it('the pin phase swaps the image with kubectl and asserts nothing mounts the zone database Secret', () => {

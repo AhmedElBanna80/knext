@@ -359,6 +359,20 @@ const LANE_ROWS = [
     anchor: 'PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"',
     replacement: 'PHASES="${PHASES:-up images deploy verify rotate pin squat}"',
   },
+  {
+    id: 'SQ1',
+    subject: 'run',
+    claim: 'the default phases drop the squatted-JWKS phase',
+    anchor: 'PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"',
+    replacement: 'PHASES="${PHASES:-up images deploy verify rotate pin leaks}"',
+  },
+  {
+    id: 'SQ2',
+    subject: 'run',
+    claim: 'the squat phase no longer holds the refusal before checking the mount',
+    anchor: '  sleep 20\n  if sq_ksvc_has_jwks_volume; then fail',
+    replacement: '  if sq_ksvc_has_jwks_volume; then fail',
+  },
   // The zone image pin phase (ADR-0004 Amendment 3).
   {
     id: 'PIN1',

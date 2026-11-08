@@ -220,9 +220,9 @@ takes over the lease, the new leader starts with an empty queue and rebuilds it 
 
 The trade is deliberate. The queue fails toward finishing the rollout, not toward stalling it, and
 the cost is one extra pod start per failover. If you fail over repeatedly during one rollout, each
-failover can add one: two failovers inside one minute allow `maxAppsPerMinute + 2`. The old
-leader stops pacing when it loses the lease, so an overlap is at most a reconcile it had already
-started; even then, no app renders twice.
+failover can add one: two failovers inside one minute allow `maxAppsPerMinute + 2`. If the old
+leader is still running while the new one starts, the pace is not bounded by this rule, but no
+app renders twice.
 
 ## Profiles
 

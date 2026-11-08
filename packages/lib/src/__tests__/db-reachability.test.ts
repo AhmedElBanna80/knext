@@ -225,10 +225,11 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
     // correlation.test.ts). Walk every relative import of reachability.ts,
     // transitively; none may reach src/logger. Static imports and re-exports come
     // from Bun's parser (`scan`). Dynamic imports and require calls are guarded by
-    // a count: the transpiled JS (comments and types stripped) must hold exactly as
-    // many `import(`/`require(` sites as `scan` resolved to a literal path, so a
-    // non-literal or unseen one (`import(p)`, TS `import x = require()`) fails the
-    // test. An unresolvable relative path fails it too. A string containing
+    // a per-file count: in each file, the number of `import(`/`require(` sites in
+    // the transpiled JS (comments and types stripped, so a type-position
+    // `import()` is gone) must equal the number `scan` resolved to a literal path.
+    // A non-literal or unseen one (`import(p)`, TS `import x = require()`) makes
+    // the totals differ and fails the test. An unresolvable relative path fails it too. A string containing
     // `import(` also fails it; that false red is accepted.
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
     const loggerDir = join(srcDir, 'logger');

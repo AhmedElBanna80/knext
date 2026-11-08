@@ -426,9 +426,11 @@ func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
 // a later statement runs, conditionally or not. A function literal is skipped,
 // since a return inside it leaves the literal, not init(), unless it is called
 // on the spot: then a panic in its body ends init() too (see litMayPanic). A
-// top-level deferred call runs only when init() returns, after every later
-// statement, so it is not inspected. A go-started literal that can panic is a
-// stop: the goroutine may crash the process before the next statement. Not
+// deferred or go-started call runs later, but its arguments are evaluated now,
+// so they are inspected like any expression. A deferred call itself runs only
+// when init() returns, after every later statement, so its callee is not. A
+// go-started panic, or a go-started literal that can panic, is a stop: the
+// goroutine may crash the process before the next statement. Not
 // detected: a panic inside a named helper, or inside a literal bound to a
 // variable and called through it.
 func (p *pkg) mayStopInit(st ast.Stmt) bool {
@@ -438,9 +440,13 @@ func (p *pkg) mayStopInit(st ast.Stmt) bool {
 			return false
 		}
 		switch n := n.(type) {
-		case *ast.FuncLit, *ast.DeferStmt:
+		case *ast.FuncLit:
+			return false
+		case *ast.DeferStmt:
+			stop = p.argsMayStopInit(n.Call)
 			return false
 		case *ast.GoStmt:
+			stop = p.argsMayStopInit(n.Call) || p.isPanicBuiltin(n.Call.Fun)
 			if fl, ok := ast.Unparen(n.Call.Fun).(*ast.FuncLit); ok && p.litMayPanic(fl) {
 				stop = true
 			}
@@ -461,6 +467,28 @@ func (p *pkg) mayStopInit(st ast.Stmt) bool {
 		return !stop
 	})
 	return stop
+}
+
+// argsMayStopInit reports whether evaluating call's arguments can end init():
+// a deferred or go-started call evaluates them at once.
+func (p *pkg) argsMayStopInit(call *ast.CallExpr) bool {
+	for _, a := range call.Args {
+		if p.mayStopInit(&ast.ExprStmt{X: a}) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPanicBuiltin reports whether fun names the panic builtin (not a shadowing
+// declaration).
+func (p *pkg) isPanicBuiltin(fun ast.Expr) bool {
+	id, ok := ast.Unparen(fun).(*ast.Ident)
+	if !ok || id.Name != "panic" {
+		return false
+	}
+	_, builtin := p.info.Uses[id].(*types.Builtin)
+	return builtin
 }
 
 // litMayPanic reports whether the body of a function literal that is called on

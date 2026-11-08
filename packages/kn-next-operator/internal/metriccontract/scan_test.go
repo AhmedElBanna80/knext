@@ -795,6 +795,28 @@ func init() {
 	metrics.Registry.MustRegister(c)
 }
 `,
+		"after a deferred call whose argument panics now": `
+func use(any) {}
+
+func init() {
+	defer use(func() int { panic("stop") }())
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a go-started call whose argument panics now": `
+func use(any) {}
+
+func init() {
+	go use(func() int { panic("stop") }())
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a go-started panic": `
+func init() {
+	go panic("stop")
+	metrics.Registry.MustRegister(c)
+}
+`,
 		"after a go-started closure that panics": `
 func init() {
 	go func() { panic("stop") }()

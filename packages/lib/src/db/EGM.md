@@ -46,8 +46,8 @@ no package entry point (`package.json` `exports` has no `db` subpath). It provid
   only by its length, and any other value cut to 64 characters. The once-set is keyed on the full
   trimmed value and lives on `globalThis` under `Symbol.for('knext.lib.db.unrecognisedScaleToZeroWarned')`.
   Otherwise the DSN
-  hostname decides: true if it has a `scale-zero-pg` label, or if it is exactly `pggw` or
-  `pggw-apps`. It returns false for an unparseable or missing DSN.
+  hostname decides: true if it has a `scale-zero-pg` label, or if it is the single label `pggw` or
+  `pggw-apps` (a trailing dot, as in `pggw.`, is ignored). It returns false for an unparseable or missing DSN.
 
 ## Side Effects
 - `createBunSqlPool` builds a `Bun.SQL` client, which opens database connections as queries need

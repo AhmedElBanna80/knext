@@ -46,8 +46,9 @@ wakes classifies Postgres (hard dependency) and Redis (soft dependency) for obse
 - Logs through `logger` (`../logger`): `info` for waking or a timeout, `error` for a failure.
 - Reads `DATABASE_URL`, `REDIS_URL`, `HEALTH_DEEP_TIMEOUT_MS` and `KNEXT_DB_SCALE_TO_ZERO`
   (the last through `isScaleToZeroDatabase`) on each call.
-- Through `isScaleToZeroDatabase`, an unrecognised `KNEXT_DB_SCALE_TO_ZERO` value writes one
-  JSON `console.warn` line per distinct value per process, tracked in a `globalThis` once-set.
+- When `DATABASE_URL` is set, the call to `isScaleToZeroDatabase` means an unrecognised
+  `KNEXT_DB_SCALE_TO_ZERO` value writes one JSON `console.warn` line per distinct value per
+  process, tracked in a `globalThis` once-set.
 
 ## Verification
 - Run: `node scripts/bun-test.mjs packages/lib` (from repo root)

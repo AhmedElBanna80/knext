@@ -229,8 +229,9 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
     // the transpiled JS (comments and types stripped, so a type-position
     // `import()` is gone) must equal the number `scan` resolved to a literal path.
     // A non-literal or unseen one (`import(p)`, TS `import x = require()`) makes
-    // the totals differ and fails the test. An unresolvable relative path fails it too. A string containing
-    // `import(` also fails it; that false red is accepted.
+    // that file's two numbers differ and fails the test. An unresolvable relative
+    // path fails it too. A string containing `import(` also fails it; that false
+    // red is accepted.
     const srcDir = fileURLToPath(new URL('../', import.meta.url));
     const loggerDir = join(srcDir, 'logger');
     const ts = new Bun.Transpiler({ loader: 'ts' });

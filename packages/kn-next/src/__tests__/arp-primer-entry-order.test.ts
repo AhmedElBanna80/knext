@@ -63,12 +63,13 @@ const NODE_ENTRY_TEMPLATE_SRC = resolve(
 // ADR-0066 D3: the ARP primer is the FIRST entry of the shared process-start
 // primer list, and both entries below run that list rather than naming it.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { PROCESS_START_PRIMERS } = require("../adapters/process-start-primers.cjs") as {
-    PROCESS_START_PRIMERS: readonly string[];
-};
-const PRIMER_LIST_RE = /resolve\(\s*import\.meta\.dirname,\s*"process-start-primers\.cjs"/;
-/** Index of the primer-list resolve in `src`, or -1. */
-const primerListAt = (src: string): number => src.search(PRIMER_LIST_RE);
+const { PROCESS_START_PRIMERS } =
+    require("../adapters/process-start-primers.cjs") as {
+        PROCESS_START_PRIMERS: readonly string[];
+    };
+/** Where node-server.ts runs the primer list (./process-start-run). */
+const primerListAt = (src: string): number =>
+    src.indexOf("const abortPrimers = runProcessStartPrimers({");
 
 describe("process-start-primers.cjs — the ARP primer is the list's first entry", () => {
     it("lists arp-primer.cjs first", () => {
@@ -79,15 +80,24 @@ describe("process-start-primers.cjs — the ARP primer is the list's first entry
 describe("node-server.ts — the primer list runs before metrics bind and before spawn", () => {
     const src = readFileSync(NODE_SERVER_SRC, "utf8");
 
-    it("requires the primer list and each primer it names", () => {
+    it("runs the primer list through process-start-run, which requires each primer it names", () => {
         expect(primerListAt(src)).toBeGreaterThan(-1);
-        expect(src).toContain("for (const name of primers.PROCESS_START_PRIMERS)");
-        expect(src).toContain("requirePrimer(primerPath)");
+        const runner = readFileSync(
+            resolve(__dirname, "..", "adapters", "process-start-run.ts"),
+            "utf8",
+        );
+        expect(runner).toContain(
+            'PRIMER_LIST_FILE = "process-start-primers.cjs"',
+        );
+        expect(runner).toContain("for (const name of names)");
+        expect(runner).toContain("deps.requireFrom(primerPath);");
     });
 
     it("runs the primers BEFORE the metrics endpoint binds", () => {
         const primerAt = primerListAt(src);
-        const metricsListenAt = src.indexOf('metricsEndpoint.ensureListening("');
+        const metricsListenAt = src.indexOf(
+            'metricsEndpoint.ensureListening("',
+        );
         expect(primerAt).toBeGreaterThan(-1);
         expect(metricsListenAt).toBeGreaterThan(-1);
         expect(primerAt).toBeLessThan(metricsListenAt);
@@ -108,13 +118,6 @@ describe("node-server.ts — the primer list runs before metrics bind and before
         expect(primerAt).toBeGreaterThan(entryEvalAt);
         // The logger must not be constructed before the primers fire.
         expect(src.slice(entryEvalAt, primerAt)).not.toContain("createLogger(");
-    });
-
-    it("each require is wrapped so a failure to load a module can never throw out of the entry", () => {
-        const primerAt = primerListAt(src);
-        const nearby = src.slice(primerAt, primerAt + 1200);
-        expect(nearby.split("try {").length - 1).toBeGreaterThanOrEqual(2);
-        expect(nearby).toContain("catch");
     });
 
     it("names no primer directly", () => {

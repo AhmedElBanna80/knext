@@ -1342,11 +1342,15 @@ D3 said the primer list module owns the shared AbortController and exposes `abor
 built (#2054) the two are split, because the list is imported into `standalone-compile.mjs`'s own
 closure, which `bun-base-exe-seam.test.ts` keeps free of any global access:
 
-- **`process-start-primers.cjs`** holds only `PROCESS_START_PRIMERS`, the ordered list. Both
-  standalone entries read it, and neither names a primer.
+- **`process-start-primers.cjs`** holds only `PROCESS_START_PRIMERS`, the ordered list. Disk mode
+  reads it at start (`node-server.ts`, through `process-start-run.ts`, which logs and skips any file
+  it cannot load); the compiled exec reads it at build time (`standalone-compile.mjs` spreads it
+  into `PRELOAD_NAMES`). Neither names a primer.
 - **`process-start-abort.cjs`** owns the `globalThis`-anchored controller (ADR-0027) and exposes
-  `primerSignal()` and `abortPrimers()`. `wake-ahead.cjs`, `node-server.ts` and
-  `standalone-self-contained-supervisor.cjs` go through it; nobody else spells the key.
+  `primerSignal()` and `abortPrimers()`. `wake-ahead.cjs`, `process-start-run.ts` and
+  `standalone-self-contained-supervisor.cjs` go through it; nobody else spells the key. If it
+  cannot load, the wake still runs, bounded by its own timeout, and disk mode says SIGTERM cannot
+  cancel it.
 - **SIGTERM.** `node-server.ts` and the self-contained supervisor call `abortPrimers()` before
   they drain. The plain compiled exec (not self-contained) has no knext SIGTERM handler: Next's
   own handler exits the process, which ends a wake call with it, and each call is capped at 1 s.

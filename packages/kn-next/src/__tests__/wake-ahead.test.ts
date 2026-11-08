@@ -357,7 +357,9 @@ describe("wake-ahead keeps the primer contract", () => {
         expect(read("standalone-self-contained-supervisor.cjs")).toContain(
             "require('./process-start-abort.cjs').abortPrimers()",
         );
-        expect(read("node-server.ts")).toContain('"process-start-abort.cjs"');
+        expect(read("process-start-run.ts")).toContain(
+            'PRIMER_ABORT_FILE = "process-start-abort.cjs"',
+        );
         // nobody else spells the key
         for (const f of [
             "wake-ahead.cjs",
@@ -500,8 +502,7 @@ describe("both SIGTERM handlers cancel the primers before they drain", () => {
         expect(abortAt).toBeGreaterThan(onSignalAt);
         expect(drainAt).toBeGreaterThan(abortAt);
         // and abortPrimers is the owner module's, loaded once into a const
-        expect(src).toContain("const abortPrimers = loadAbortPrimers();");
-        expect(src).toContain("return mod.abortPrimers;");
+        expect(src).toContain("const abortPrimers = runProcessStartPrimers({");
     });
 
     it("the self-contained supervisor aborts the shared controller on SIGTERM", () => {

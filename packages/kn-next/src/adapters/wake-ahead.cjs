@@ -37,8 +37,15 @@ const WAKE_PATH = '/healthz';
 /** Below a function's ~1.4 s cold start; the activator has the request long before. */
 const WAKE_TIMEOUT_MS = 1000;
 
-// The shared primer controller (a sibling file, no package dependency).
-const { primerSignal } = require('./process-start-abort.cjs');
+// The shared primer controller (a sibling file, no package dependency). If
+// it cannot load, the wake still runs, bounded by its own timeout; it just
+// cannot be cancelled early.
+let primerSignal;
+try {
+  ({ primerSignal } = require('./process-start-abort.cjs'));
+} catch {
+  primerSignal = () => new AbortController().signal;
+}
 
 /** `<NAME>_SERVICE_URL` for a binding name (ADR-0004; packages/grpc `urlEnvFor`). */
 function urlEnvFor(name) {

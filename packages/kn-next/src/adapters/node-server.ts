@@ -35,6 +35,7 @@ import {
     isSupervisorInitDeferred,
 } from "./deferred-supervisor-init";
 import { buildChildEnv } from "./env";
+import { runProcessStartPrimers } from "./process-start-run";
 import { type ChildLike, gracefulShutdown, isShuttingDown } from "./shutdown";
 import { childSpawnPlan } from "./standalone-exec";
 
@@ -67,79 +68,17 @@ bootTrace.mark("entry-eval");
 //
 // The ARP primer is the first entry of the process-start primer list
 // (ADR-0066 D3, ./process-start-primers.cjs); the wake-ahead primer (#2054)
-// is the second. This loop is the only place disk mode runs them, in list
-// order, before metrics bind and before the child is spawned.
-const primerListPath = resolve(
-    import.meta.dirname,
-    "process-start-primers.cjs",
-);
-// The primers' shared AbortController lives in ./process-start-abort.cjs;
-// onSignal calls abortPrimers() before draining (ADR-0066 D3).
-const abortPrimers = loadAbortPrimers();
-if (existsSync(primerListPath)) {
-    try {
-        const requirePrimer = createRequire(import.meta.url);
-        const primers = requirePrimer(primerListPath) as {
-            PROCESS_START_PRIMERS: readonly string[];
-        };
-        for (const name of primers.PROCESS_START_PRIMERS) {
-            const primerPath = resolve(import.meta.dirname, name);
-            if (!existsSync(primerPath)) {
-                primerNotLoaded(primerPath);
-                continue;
-            }
-            try {
-                requirePrimer(primerPath);
-            } catch (err) {
-                // Each primer's own contract is "never throws"; this catch
-                // only guards module resolution itself (e.g. a corrupted dist
-                // file), never the primer's internal logic.
-                primerNotLoaded(primerPath, err);
-            }
-        }
-    } catch (err) {
-        primerListMissing(err);
-    }
-} else {
-    primerListMissing();
-}
-
-/** Logged once: no primers run (no ARP primer, no wake-ahead). Never fatal. */
-function primerListMissing(err?: unknown): void {
-    process.stderr.write(
-        `[knext] process-start primers did not run: cannot load ${primerListPath}` +
-            (err === undefined
-                ? " (missing)"
-                : ` (${err instanceof Error ? err.message : String(err)})`) +
-            "\n",
-    );
-}
-
-/** Logged once per file: that primer does not run. Never fatal. */
-function primerNotLoaded(path: string, err?: unknown): void {
-    process.stderr.write(
-        `[knext] process-start primer did not run: cannot load ${path}` +
-            (err === undefined
-                ? " (missing)"
-                : ` (${err instanceof Error ? err.message : String(err)})`) +
-            "\n",
-    );
-}
-
-function loadAbortPrimers(): () => void {
-    const path = resolve(import.meta.dirname, "process-start-abort.cjs");
-    try {
-        const mod = createRequire(import.meta.url)(path) as {
-            abortPrimers: () => void;
-        };
-        return mod.abortPrimers;
-    } catch (err) {
-        // The primers still run; SIGTERM just cannot cancel them early (each
-        // call is capped by its own timeout).
-        primerNotLoaded(path, err);
-        return () => {};
-    }
-}
+// is the second. runProcessStartPrimers (./process-start-run) is the only
+// place disk mode runs them, in list order, before metrics bind and before
+// the child is spawned. It returns abortPrimers from the owner module
+// (./process-start-abort.cjs), which onSignal calls before draining. It never
+// throws: a primer that cannot load is logged once and skipped.
+const abortPrimers = runProcessStartPrimers({
+    dir: import.meta.dirname,
+    requireFrom: createRequire(import.meta.url),
+    exists: existsSync,
+    write: (line) => process.stderr.write(line),
+});
 
 const log = createLogger({ module: "server" });
 // Prometheus metrics port. Defaults to 9464 (no behavior change); overridable via

@@ -62,6 +62,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - CDN: `cdn-e2e-assert.mjs`, `cdn-e2e-purge-assert.mjs`, `cdn-e2e-mutate-preload.mjs`, `cdn-e2e-expect-red.sh`.
 - `use-cache-2pod-e2e-assert.sh`, `public-hosts-e2e-assert.sh`, `deep-health-alert-e2e.sh`, `load-test.sh`, `scale-suite-tolerance.mjs`, `nightly-alert-issue.mjs`.
 - Redis: `redis-acl-spike.mjs`, `redis-commands.mjs` (`REDIS_COMMANDS`).
+- `oke-verify-preamble.mjs`: run before an OKE verify; prints the running operator digest, whether the live `NextApp` CRD covers the source CRD, and the `knext-docs` ksvc generation.
 
 ### Other exported symbols
 The scripts below also export these symbols, mostly so `tests/` can import their pure logic. Names already given above are not repeated.
@@ -105,6 +106,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `merge-train.mjs`: `REPO`, `runGh`, `fetchPrHead`, `fetchPrView`, `isHeadAncestorOfMain`, `defaultExec`, `runPreflight`, `enqueueAndWait`, `investigateFailure`, `listOpenChildPRs`, `deleteBaseBranch`.
 - `merged-sha-check.mjs`: `checkContained`.
 - `next-minor-matrix.mjs`: `buildMatrix`.
+- `oke-verify-preamble.mjs`: `CRD_PATH`, `OPERATOR_NAMESPACE`, `OPERATOR_SELECTOR`, `CRD_NAME`, `evaluatePreamble`, `parseArgs`, `readCluster`, `main`.
 - `npm-dist-tag-rollback.mjs`: `DEFAULT_REGISTRY`, `DEFAULT_DIST_TAG`, `EXPECTED_GROUP_SIZE`, `discoverGroupPackageNames`, `validateTargetPublished`, `buildRollbackCommands`, `executeCommands`.
 - `operator-release-notes-body.mjs`: `parseInstallYaml`, `buildOperatorBody`.
 - `pack-release-tarballs.mjs`: `parseArgs`, `resolveGroup`, `buildManifest`.
@@ -150,11 +152,12 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `check-config-filename-mentions.mjs` fails on any mention of the old config filename outside its exemptions (`OLD_NAME`, `isExempt`).
 - Scripts that fail closed state in their headers that an unreachable upstream is a failure, never a pass. Examples: `verify-action-pins.mjs` and the `RegistryUnreachableError` paths in `publish-preflight.mjs` and `verify-published-group.mjs`.
 - `check-ffi-crate-rev.mjs` (`CRATE_PATHSPEC`) watches `crates/knext-ffi/` and `crates/knext-ffi-macros/` and excludes `*.md` with the `:(exclude)*.md` pathspec, so docs-only Markdown never requires moving the `packages/ffi/package.json` `knextFfi.crateRev` pin. Its exit-2 paths (shallow history, unresolvable base ref) fail closed.
+- `oke-verify-preamble.mjs` (`evaluatePreamble`) fails unless every operator pod's manager `imageID` carries the expected digest, the live CRD has every source CRD field (`lib/crd-schema-diff.mjs:diffCrd`, source as the old side), and the ksvc has a `metadata.generation` (equal to `--expect-ksvc-generation` when given). A failed cluster read exits 2, never 0.
 
 ## Side Effects
 - Release scripts call the npm registry and GitHub (`gh`), and some publish or alter dist-tags (`ensure-published-group.mjs`, `npm-dist-tag-rollback.mjs`).
 - Pack and smoke scripts write tarballs and temp directories. `rewrite-workspace-ranges.mjs` rewrites `package.json` files in the tree. `install-smoke.mjs` guards them with `lib/manifest-restore.mjs:guardManifests`, which restores every workspace `package.json` afterwards.
-- The e2e shell drivers (`e2e-deploy.sh`, `e2e-cleanup.sh`) build and boot an app locally and persist its `BUILD_ID`, `PORT` and `PID` to `.adapter-build.log`; `e2e-cleanup.sh` reads that file and stops the server. The cluster assertion scripts (`deep-health-alert-e2e.sh`, `load-test.sh`, `public-hosts-e2e-assert.sh`, `use-cache-2pod-e2e-assert.sh`) run `kubectl` against the current context.
+- The e2e shell drivers (`e2e-deploy.sh`, `e2e-cleanup.sh`) build and boot an app locally and persist its `BUILD_ID`, `PORT` and `PID` to `.adapter-build.log`; `e2e-cleanup.sh` reads that file and stops the server. The cluster assertion scripts (`deep-health-alert-e2e.sh`, `load-test.sh`, `public-hosts-e2e-assert.sh`, `use-cache-2pod-e2e-assert.sh`) run `kubectl` against the current context. `oke-verify-preamble.mjs` runs only `kubectl get` (against `--context` when given) and writes nothing to the cluster.
 - The mutation provers temporarily edit tracked files and restore them, through `lib/mutation-harness.mjs` or `mutate-prove.sh`.
 - `run-mutation-provers.mjs` (`residueFinding`) runs after every prover, killed or not, and names any tracked file the prover left modified. It restores those files with `git checkout HEAD -- <files>` only in CI (`GITHUB_ACTIONS=true`) or with `KNEXT_LANE_RESTORE_AFTER_KILL=1`; elsewhere the tree stays dirty and the finding says so. A killed prover (`restoreTreeAfterKill`) only removes the untracked files it created, under the same gate, and no path runs a whole-tree `git checkout`. When cleanup is on (CI or `KNEXT_LANE_CLEANUP=1`), `cleanPrivateTmp()` empties the lane's private `TMPDIR` between provers.
 - `secret-scan.mjs` runs gitleaks over the full git history with `--redact=100`, then filters findings against `security/gitleaks-allowlist.json`. A missing or crashed gitleaks is a failure.

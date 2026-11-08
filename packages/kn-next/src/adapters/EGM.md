@@ -58,8 +58,10 @@ These are the `exports` entries in `packages/kn-next/package.json`:
     `cache-handler-{node,bun}.js`, `use-cache-handler{,-remote}-{node,bun}.js`
     and `vinext-cache-adapter{,-node,-bun}.mjs`;
   - preloads: `cache-control-normalize.cjs`, `bun-keepalive-guard.cjs`,
-    `request-body-cap.cjs`, `arp-primer.cjs`, `bun-serve-keepalive-guard.mjs`
-    and `response-cache-control.mjs`;
+    `request-body-cap.cjs` and `arp-primer.cjs`; and the vinext/Bun runtime
+    modules `bun-serve-keepalive-guard.mjs` and `response-cache-control.mjs`
+    (imported, not `--require`d). `public-origin.cjs` is a preload too, but has
+    no subpath;
   - health: `deep-health-lite.ts`;
   - images: `vinext-image-optimizer.ts` (`vinext-image-optimizer`);
   - debug: `sandbox-fetch-debug.cjs` and `sandbox-fetch-realm-debug.cjs`;
@@ -412,6 +414,18 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Supervisor and preloads
 
+- Which preloads each path loads:
+  - **Disk mode** (`node-server.ts`, Node or Bun `server.js` child): `--require`
+    `cache-control-normalize.cjs`, `request-body-cap.cjs` and `public-origin.cjs`
+    for both runtimes, plus `bun-keepalive-guard.cjs` only when the supervisor
+    itself runs under Bun (`process.versions.bun`). Each is added only if its file
+    exists. `arp-primer.cjs` is not a child preload: the supervisor `require`s it
+    in-process before it spawns the child.
+  - **Compiled standalone** (`standalone-compile.mjs` `PRELOAD_NAMES`):
+    `arp-primer.cjs` first (there is no supervisor), then
+    `cache-control-normalize.cjs`, `bun-keepalive-guard.cjs`, `public-origin.cjs`
+    and `request-body-cap.cjs`, plus `standalone-self-contained-supervisor.cjs`
+    for a self-contained build. A missing file aborts the compile.
 - `node-server.ts` installs `registerDbPoolDrain` and the SIGTERM/SIGINT
   handlers before it spawns the child. A spawn `error` exits with code 1.
 - `shutdown.ts:gracefulShutdown` guards against re-entry. It closes the

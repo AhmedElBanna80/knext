@@ -46,14 +46,14 @@ exits non-zero before doing anything else, and `knext doctor` reports your Node.
 the floor.
 
 The Node.js images knext builds, and the GitLab CI template `knext init-ci` writes, use Node.js 24. A
-GitHub Actions workflow you wrote yourself needs `node-version: 24`.
+GitHub Actions workflow you wrote yourself needs `node-version: "24"`.
 
 If you cannot move to these floors yet, stay on 1.x (see [Staying on 1.x](#staying-on-1x)).
 
 ## What is removed
 
 - **The `kn-next` command.** `@getknext/core` installs exactly one command, `knext`, with the same
-  subcommands and flags. A script that still calls `kn-next` fails with `command not found`. See
+  subcommands and flags. A 1.x script that still calls the old command stops with `command not found`. See
   [the `kn-next` command is gone](/docs/upgrading#version-specific-step-the-kn-next-command-is-gone)
   for where to look.
 - **Test-only helpers.** `@getknext/core/adapters/cache-handler` no longer exports

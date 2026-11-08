@@ -179,7 +179,7 @@ const NOT_GUIDANCE: Array<[RegExp, string]> = [
         "the forwarding package is itself the kn-next name",
     ],
     [
-        /^apps\/docs\/content\/docs\/(upgrading|versioning)\.mdx$/,
+        /^apps\/docs\/content\/docs\/(upgrading|upgrading-to-2|versioning)\.mdx$/,
         "documents that the command is gone",
     ],
     [/^apps\/docs\/_design-reference\//, "static design mock-up"],

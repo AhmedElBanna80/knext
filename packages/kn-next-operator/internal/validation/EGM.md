@@ -18,6 +18,7 @@ The single authoritative validation logic for `NextApp` and `KnextPlatform` spec
 
 ## Invariants
 - `validate.go:ValidateImageRef`: accepts only refs containing `@sha256:`. It rejects `:latest`, tagless refs and tag-only refs.
+- `validate.go:ValidateNextAppSpec` also refuses an unknown `spec.cache.isolation` and a `spec.cache.keyPrefix` of `knext` or under `knext:` (the platform keyspace).
 - `validate.go:ValidateNextAppSpec` checks:
   - the image is required and digest-pinned;
   - `MinScale`, `MaxScale`, `ContainerConcurrency` and `PoolMax` are non-negative, and `MinScale <= MaxScale` when `MaxScale` is set;

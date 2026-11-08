@@ -11,7 +11,7 @@ A reconcile pass fetches the object, reconciles its children, computes a pure st
 
 ## Interface
 - `setup.go:SetupControllers(mgr, cleaner ExternalCleaner, opts ...SetupOption) error`, with `SetupOption` and `WithZoneSigningKeyConfig(ZoneSigningKeyConfig)`.
-- `nextapp_controller.go:NextAppReconciler`: fields `Client`, `Scheme`, `APIReader`, `Recorder`, `Cleaner`, `Clock`, `PlatformCRDPresent`, `BackendServiceCRDPresent` and `ZoneSigningKey`. Methods are `Reconcile` and `SetupWithManager`.
+- `nextapp_controller.go:NextAppReconciler`: fields `Client`, `Scheme`, `APIReader`, `Recorder`, `Cleaner`, `RedisDialer`, `Clock`, `PlatformCRDPresent`, `BackendServiceCRDPresent` and `ZoneSigningKey`. Methods are `Reconcile` and `SetupWithManager`.
 - `backendservice_controller.go:BackendServiceReconciler`: fields `Client`, `Scheme`, `APIReader` and `Recorder`. Methods are `Reconcile` and `SetupWithManager`. Also defines `BackendServiceFinalizer = "apps.kn-next.dev/backendservice-cleanup"`.
 - `platform_controller.go:KnextPlatformReconciler`: `Reconcile` and `SetupWithManager`.
 - `finalizer.go`: `ExternalCleanupFinalizer = "apps.kn-next.dev/external-cleanup"`, the `ExternalCleaner` interface (`CleanupStorage`, `CleanupCache`), and `StorageTarget` / `CacheTarget`.
@@ -28,11 +28,13 @@ A reconcile pass fetches the object, reconciles its children, computes a pure st
 - Platform status conditions (`platform_controller.go`): `PlatformConditionAccepted`, `PlatformConditionDefaultsPropagated` and `PlatformConditionReady`.
 - Binding env contract (`backend_bindings.go`): `WakeFunctionsEnv = "KNEXT_WAKE_FUNCTIONS"`, `BindingURLEnv(name)` (`<NAME>_SERVICE_URL`) and `BindingProtoVersionEnv(name)` (`<NAME>_SERVICE_PROTO_VERSION`).
 - `identity.go:OperatorFieldManager = "kn-next-operator"`: the UserAgent and field manager recorded for every operator write.
+- Redis ACL user (`redis_acl.go` pure, `redis_acl_reconcile.go` I/O): `reconcileCacheCredentials` runs before the Knative Service render and returns a `cacheCredentialsState`; `injectCacheCredentialsEnv` binds `REDIS_URL` to the operator-owned Secret in memory; `RedisCredentialsSecretName(zone)` is `<zone>-redis-credentials`; `RedisProvisioner` / `RedisProvisionerDialer` are the injectable Redis view; `appRedisCommands()` is the granted command list; `redisACLUsername(clusterIdentity, app)` is `knext-app-<8 hex>-<12 hex>`; `CacheCredentialsReady` reasons are the `ReasonCache*` constants.
 - Condition types, defined as `Condition*` constants across the package:
   - always-relevant: `Ready`, `Reconciling`, `Degraded`, `DatabaseReady`, `ImageCacheReady`, `ZoneSigningKey`, `BackendBindings`;
   - network and exposure: `NetworkPolicyEnforced`, `NetworkPolicyDisabled`, `PrivateExposure`, `PodCreationBlocked`;
   - platform and spec: `PlatformDefaultsApplied`, `RevalidationDeferred`, `EnvMapCollision`, `DatabaseHostLint`, `CDNAdvisory`, `CDNReservedEnvIgnored`;
-  - zone functions: `Bound`, `JWKSTrusted`, `SovereigntyCompliant`.
+  - zone functions: `Bound`, `JWKSTrusted`, `SovereigntyCompliant`;
+  - cache: `CacheCredentialsReady`, present only while isolation is requested or in force.
 
 ## Invariants
 - `nextapp_controller.go:Reconcile` validates with `validation.ValidateNextAppSpecWithBudget`, the same code the webhook uses. The reconciler is fail-closed, as defense in depth.
@@ -59,6 +61,11 @@ A reconcile pass fetches the object, reconciles its children, computes a pure st
 
   Key material never leaves the Secret and the derived JWKS ConfigMap.
 - `zone_signing_key.go:ValidateZoneSigningKeyConfig` refuses a bound below `MinZoneKeyPropagationBound`, a negative rotation interval, and a non-zero interval that does not exceed the bound plus `ZoneKeyOverlap`.
+- `redis_acl.go:appRedisCommands` must equal `MINIMAL_COMMANDS` in `scripts/redis-acl-spike.mjs` plus `client|setinfo` (`TestAppRedisCommandsMatchTheSpike`). `INFO`, `KEYS`, `FLUSHALL`, `ACL` and pub/sub are never granted.
+- `redis_acl_reconcile.go:reconcileCacheCredentials`: the provisioner credential is dialled only for an endpoint registered on the KnextPlatform and equal to the app's canonical `spec.cache.url`. An isolated app fails closed (REDIS_URL points at the operator-owned Secret, which may not exist) on every refusal; it never falls back to the shared URL. The Secret is written before `ACL SETUSER`, and a re-assert reuses the Secret's password. A user already on the endpoint whose key pattern equals, nests in, contains, or cannot be parsed against the app's prefix is a `PrefixConflict`; the first claimant keeps its user.
+- `redis_acl_reconcile.go`: `CacheCredentialsReady` says `isolation not in force: shared credential live` until the endpoint refuses both a connection with no credential and `AUTH default` with an unissued password. No condition, event or message may say the app is isolated before that.
+- `redis_acl_reconcile.go:writeCredentialsSecret` is the only writer of `<app>-redis-credentials`: create with the NextApp as controller, or update. Never patch or delete; the owner reference collects it. A Secret of that name the NextApp does not control is never written.
+- `finalizer.go:cleanupExternalState`: an app with `status.cache.isolation == acl` is swept as its own user and then `ACL DELUSER`ed (`redis_acl_reconcile.go:cleanupIsolatedCache`); the plain `spec.cache.url` path would be refused.
 - `zone_signing_key_reconcile.go`: the signing-key Secret and JWKS ConfigMap get a controller owner reference to the zone's NextApp at create only, so they are garbage-collected with it and the operator needs no delete on Secrets.
 - `backendservice_controller.go:functionNetworkPolicyEnabled`: a function's NetworkPolicy is default-on and is skipped only on an explicit `spec.security.networkPolicy: false`. `RenderFunctionObjects` follows the same rule.
 - `pod_hardening.go:nextAppRunAsNonRoot`: `runAsNonRoot` is rendered unless `spec.security.runAsNonRoot` is explicitly false.

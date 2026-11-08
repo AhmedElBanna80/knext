@@ -157,18 +157,26 @@ func (r *NextAppReconciler) cleanupExternalState(ctx context.Context, app *appsv
 	// the same keyPrefix on purpose still share one keyspace, and deleting
 	// either one reaps both caches; the CLI's doctor warns about that collision.
 	if keyPrefix := operatorRedisKeyPrefix(app); keyPrefix != "" {
-		target := CacheTarget{
-			Provider:  app.Spec.Cache.Provider,
-			URL:       app.Spec.Cache.URL,
-			KeyPrefix: keyPrefix,
-		}
-		if err := r.Cleaner.CleanupCache(ctx, target); err != nil {
-			logger.Error(err, "Redis keyspace cleanup failed; proceeding with deletion (best-effort)",
-				"keyPrefix", target.KeyPrefix)
-			r.emitEvent(app, corev1.EventTypeWarning, ReasonCleanupFailed,
-				"Redis cleanup failed (best-effort, proceeding): "+err.Error())
+		var cleanErr error
+		if app.Status.Cache != nil && app.Status.Cache.Isolation == "acl" {
+			// Isolated app (ADR-0071 D7): sweep as the app's own user, then
+			// DELUSER. spec.cache.url carries no credential for it, so the plain
+			// path would be refused.
+			cleanErr = r.cleanupIsolatedCache(ctx, app, keyPrefix)
 		} else {
-			logger.Info("Cleared Redis keyspace", "keyPrefix", target.KeyPrefix)
+			cleanErr = r.Cleaner.CleanupCache(ctx, CacheTarget{
+				Provider:  app.Spec.Cache.Provider,
+				URL:       app.Spec.Cache.URL,
+				KeyPrefix: keyPrefix,
+			})
+		}
+		if cleanErr != nil {
+			logger.Error(cleanErr, "Redis keyspace cleanup failed; proceeding with deletion (best-effort)",
+				"keyPrefix", keyPrefix)
+			r.emitEvent(app, corev1.EventTypeWarning, ReasonCleanupFailed,
+				"Redis cleanup failed (best-effort, proceeding): "+redactErr(cleanErr))
+		} else {
+			logger.Info("Cleared Redis keyspace", "keyPrefix", keyPrefix)
 		}
 	}
 

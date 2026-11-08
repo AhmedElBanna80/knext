@@ -258,6 +258,9 @@ type NextAppReconciler struct {
 	// exact scoped delete and the cross-app safety guard. May be nil (skips
 	// external cleanup) for unit tests of unrelated paths.
 	Cleaner ExternalCleaner
+	// RedisDialer connects to a registered Redis endpoint with its provisioner
+	// credential (ADR-0071). nil => the go-redis implementation (production).
+	RedisDialer RedisProvisionerDialer
 	// Clock returns the current time; injectable so tests can pin "now" to
 	// exercise the scheduled warm-floor window evaluation (ADR-0030, #380)
 	// deterministically. nil => time.Now (production).
@@ -485,12 +488,24 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		nextApp.Status.DatabaseSecretName = ""
 	}
 
+	// 0d. Per-app Redis ACL user (ADR-0071). Before the Knative Service, so the
+	// credentials Secret exists when the first revision resolves its secretKeyRef.
+	// The outcome reaches status through computeStatusVerdict (CacheCredentialsReady).
+	var cacheCreds cacheCredentialsState
+	var err error
+	if cacheCreds, err = r.reconcileCacheCredentials(ctx, &nextApp, snap); err != nil {
+		logger.Error(err, "Failed to reconcile the Redis cache credentials")
+		return ctrl.Result{}, err
+	}
+	injectCacheCredentialsEnv(&nextApp, cacheCreds)
+	nextApp.Status.Cache = cacheStatusFor(cacheCreds)
+
 	// 1. Create/Update ServiceAccount
 	sa := &corev1.ServiceAccount{
 		Name:      nextApp.Name + "-sa",
 		Namespace: nextApp.Namespace,
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
 		sa.AutomountServiceAccountToken = new(false)
 		// Own the pull secrets: set them from spec on every reconcile so an
 		// out-of-band `kubectl patch sa` is no longer required for a private
@@ -813,7 +828,8 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	verdict := computeStatusVerdict(&nextApp, ksvc, db, revCheck, ic, np, envMapCollision, r.detectPrivateExposure(ctx, &nextApp), r.detectPodCreationBlocked(ctx, &nextApp, ksvc), time.Now(),
 		withPlatformDefaults(newPlatformDefaultsState(snap, eff, gate)),
 		withBackendBindings(bindings, bindingCollisions),
-		withZoneSigningKey(zoneKey))
+		withZoneSigningKey(zoneKey),
+		withCacheCredentials(cacheCreds))
 	if err := r.applyStatusVerdict(ctx, &nextApp, observedStatus, verdict); err != nil {
 		return ctrl.Result{}, err
 	}

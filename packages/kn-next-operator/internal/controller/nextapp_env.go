@@ -270,6 +270,12 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 				// undocumented breaking change on upgrade (e.g. a bound
 				// REDIS_URL Secret silently replaced by an empty default).
 				envVars[reservedIndex[envName]] = fromSecret
+				if envName == "REDIS_URL" && entry.SecretName == redisCredentialsSecretName(nextApp) &&
+					entry.SecretKey == redisCredentialsSecretKey {
+					// The operator's own isolated-cache binding (ADR-0071 D3), injected
+					// in memory by reconcileCacheCredentials: not a collision.
+					continue
+				}
 				if _, exempt := validation.EnvMapUserAlwaysWinsEnvNames[envName]; exempt {
 					// The documented pattern, not a real collision — kept
 					// out of userWinsGrandfathered so computeStatusVerdict

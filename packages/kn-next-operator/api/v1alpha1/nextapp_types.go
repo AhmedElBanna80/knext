@@ -1119,7 +1119,42 @@ type CacheSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[^*?\[\]\\ \t\n\r\f\v]*$`
 	// +kubebuilder:validation:XValidation:rule="self != 'kn-next' && !self.startsWith('kn-next:')",message="keyPrefix 'kn-next' and prefixes under 'kn-next:' are reserved for the shared fallback keyspace"
+	// "knext" and prefixes under "knext:" are the platform keyspace and are
+	// refused by the webhook and the reconciler (validation.ValidateNextAppSpec),
+	// not by a CEL rule here: the CLI keeps a verbatim copy of this field's CEL
+	// rules, and that copy ships in the published package.
 	KeyPrefix string `json:"keyPrefix,omitempty"`
+
+	// Isolation selects whether this app's Redis cache runs under its own ACL
+	// user, restricted to its key prefix and the commands the cache needs.
+	//   - auto (the default): isolate when spec.cache.url names a Redis endpoint
+	//     the platform admin registered on the KnextPlatform; otherwise keep the
+	//     shared credential in spec.cache.url.
+	//   - acl: require isolation. If it cannot be provided the app fails closed
+	//     (REDIS_URL points at a Secret that does not exist, so no pod starts on
+	//     the shared credential).
+	//   - none: never isolate; spec.cache.url is used as written.
+	// +optional
+	// +kubebuilder:validation:Enum=auto;acl;none
+	Isolation string `json:"isolation,omitempty"`
+}
+
+// CacheStatus is the observed Redis cache isolation of one app. It never
+// carries a password.
+type CacheStatus struct {
+	// Isolation is "acl" only while isolation is in force: the app runs under its
+	// own ACL user AND the endpoint shows no other way to reach its keys (the
+	// CacheCredentialsReady reason is Provisioned). It is "acl-pending" while the
+	// app has its own user but isolation is not in force; the condition says why.
+	// It is absent while the app uses the credential in spec.cache.url.
+	// +optional
+	Isolation string `json:"isolation,omitempty"`
+	// Username is the ACL user (knext-app-<cluster tag>-<app hash>).
+	// +optional
+	Username string `json:"username,omitempty"`
+	// SecretName is the operator-owned Secret that holds the app's REDIS_URL.
+	// +optional
+	SecretName string `json:"secretName,omitempty"`
 }
 
 type RevalidationSpec struct {
@@ -1229,6 +1264,10 @@ type NextAppStatus struct {
 	// split, mirrored from the Knative Service status (issue #92).
 	// +optional
 	CurrentTraffic []TrafficStatus `json:"currentTraffic,omitempty"`
+
+	// Cache reports the app's Redis cache isolation.
+	// +optional
+	Cache *CacheStatus `json:"cache,omitempty"`
 
 	// DatabaseSecretName is the name of the same-namespace Secret currently
 	// feeding DATABASE_URL(+_RO): the user-supplied Secret named by

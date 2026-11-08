@@ -87,6 +87,9 @@ var sanctionedNextAppEvents = map[string]sanctioned{
 	"warnDatabaseEnvOverride|ReasonEnvVarIgnored|spec.secrets.envMap[%s] (secret %q key %q) ignored: %s is managed by spec.database": {1, envWarnWhy},
 	"cleanupExternalState|ReasonCleanupFailed|Object-store cleanup failed (best-effort, proceeding): ":                               {1, cleanupWhy},
 	"cleanupExternalState|ReasonCleanupFailed|Redis cleanup failed (best-effort, proceeding): ":                                      {1, cleanupWhy},
+	// The one cleanup failure that is retried rather than dropped: the cluster's own
+	// API failed while the finalizer decided what to clean up (redis_acl_cleanup.go).
+	"cleanupExternalState|ReasonCleanupFailed|Redis cleanup hit a transient cluster API error and will be retried: ": {1, cleanupWhy},
 }
 
 // eventCallArgs maps each Recorder-style emitter to the index of its reason

@@ -137,6 +137,14 @@ const DEFERRALS: Deferral[] = [
     match: (f) => /packages\/scale-zero-pg\/docs\/operations\.md$/.test(f),
   },
   {
+    id: 'redis-acl-canonical-endpoint',
+    reason:
+      'the per-app Redis isolation page and its kind drill write the registered endpoint in the form the operator matches on: <service>.<namespace>.svc.cluster.local with NO trailing dot (lowercase, explicit port). The KnextPlatform schema pattern refuses a rooted registration, and an app URL is canonicalised to that string before it is compared. Whether the REDIS_URL the operator mints should carry the rooted form is an open question recorded on the endpoint-canonicalisation issue (#2826), not decided here.',
+    match: (f) =>
+      /^apps\/docs\/content\/docs\/redis-isolation\.mdx$/.test(f) ||
+      /^packages\/kn-next-operator\/test\/redis-acl-kind-drill\.sh$/.test(f),
+  },
+  {
     id: 'this-guards-own-fixtures',
     reason:
       'the rooted-host guards must contain unrooted literals — they are the negative cases the predicates are tested against.',

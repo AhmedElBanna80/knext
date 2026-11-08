@@ -6,10 +6,12 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use bytes::Bytes;
 use connectrpc::{ConnectError, ConnectRpcBody};
 use futures_util::FutureExt;
-use futures_util::future::BoxFuture;
-use http::{HeaderMap, Request, Response};
+use futures_util::future::{BoxFuture, Either, Ready, ready};
+use http::{HeaderMap, Method, Request, Response};
+use http_body_util::Full;
 use opentelemetry::KeyValue;
 use opentelemetry::global::BoxedTracer;
 use opentelemetry::propagation::{Extractor, TextMapCompositePropagator, TextMapPropagator};
@@ -114,6 +116,60 @@ where
             span.end();
             Ok(resp)
         })
+    }
+}
+
+/// The path of the wake-ahead probe: a plain GET, answered before the token
+/// check. A Connect GET of the health Check is not available, since the
+/// generated health service does not mark Check side-effect free.
+pub const HEALTHZ_PATH: &str = "/healthz";
+
+/// Answers the wake-ahead probe with 200 and no body. It carries no
+/// credentials and reads nothing, so it is never refused for lack of a token.
+/// Any other method on the path gets 405 with `Allow: GET`, as the Go template
+/// answers it, so the probe is GET-only in both templates.
+#[derive(Debug, Clone, Copy)]
+pub struct HealthzLayer;
+
+impl<S> tower::Layer<S> for HealthzLayer {
+    type Service = HealthzService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        HealthzService { inner }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HealthzService<S> {
+    inner: S,
+}
+
+impl<S, B> tower::Service<Request<B>> for HealthzService<S>
+where
+    S: tower::Service<Request<B>, Response = Response<ConnectRpcBody>>,
+{
+    type Response = Response<ConnectRpcBody>;
+    type Error = S::Error;
+    type Future = Either<S::Future, Ready<Result<Self::Response, S::Error>>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<B>) -> Self::Future {
+        if req.uri().path() == HEALTHZ_PATH {
+            let body = ConnectRpcBody::Full(Full::new(Bytes::new()));
+            let mut resp = Response::new(body);
+            if req.method() == Method::GET {
+                *resp.status_mut() = http::StatusCode::OK;
+            } else {
+                *resp.status_mut() = http::StatusCode::METHOD_NOT_ALLOWED;
+                resp.headers_mut()
+                    .insert(http::header::ALLOW, http::HeaderValue::from_static("GET"));
+            }
+            return Either::Right(ready(Ok(resp)));
+        }
+        Either::Left(self.inner.call(req))
     }
 }
 

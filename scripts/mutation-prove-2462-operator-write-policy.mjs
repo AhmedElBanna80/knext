@@ -169,8 +169,8 @@ const MUTATIONS = [
     id: 'P07',
     claim: 'the Secret allow-list holds a suffix the operator does not write (widened)',
     subject: 'policy',
-    anchor: `    expression: "['-knext-signing-key']"`,
-    replacement: `    expression: "['-knext-signing-key', '-extra']"`,
+    anchor: `    expression: "['-knext-signing-key', '-redis-credentials']"`,
+    replacement: `    expression: "['-knext-signing-key', '-redis-credentials', '-extra']"`,
     test: LOCKSTEP,
   },
   {

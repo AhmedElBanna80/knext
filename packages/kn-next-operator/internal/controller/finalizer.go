@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -157,18 +158,33 @@ func (r *NextAppReconciler) cleanupExternalState(ctx context.Context, app *appsv
 	// the same keyPrefix on purpose still share one keyspace, and deleting
 	// either one reaps both caches; the CLI's doctor warns about that collision.
 	if keyPrefix := operatorRedisKeyPrefix(app); keyPrefix != "" {
-		target := CacheTarget{
-			Provider:  app.Spec.Cache.Provider,
-			URL:       app.Spec.Cache.URL,
-			KeyPrefix: keyPrefix,
+		// An app that has an operator-owned credentials Secret (ADR-0071 D7) is
+		// cleaned up as its own ACL user and then has that user removed: its
+		// spec.cache.url carries no credential, so the plain path would be refused.
+		// The Secret decides, never status.cache, which is cleared on every pass
+		// that is not ready. An app with no such Secret takes the plain path.
+		cleanErr := r.cleanupIsolatedCache(ctx, app, keyPrefix)
+		if errors.Is(cleanErr, errNoCredentialsSecret) {
+			cleanErr = r.cleanupPlainCache(ctx, app, keyPrefix)
 		}
-		if err := r.Cleaner.CleanupCache(ctx, target); err != nil {
-			logger.Error(err, "Redis keyspace cleanup failed; proceeding with deletion (best-effort)",
-				"keyPrefix", target.KeyPrefix)
+		var transient *transientCleanupError
+		switch {
+		case errors.As(cleanErr, &transient):
+			// The cluster's own API failed while deciding what to clean up. That is
+			// the one failure that is NOT dropped: removing the finalizer needs the
+			// same API, and dropping this would leak the app's ACL user for good.
+			logger.Error(cleanErr, "Redis keyspace cleanup hit a transient cluster API error; will retry",
+				"keyPrefix", keyPrefix)
 			r.emitEvent(app, corev1.EventTypeWarning, ReasonCleanupFailed,
-				"Redis cleanup failed (best-effort, proceeding): "+err.Error())
-		} else {
-			logger.Info("Cleared Redis keyspace", "keyPrefix", target.KeyPrefix)
+				"Redis cleanup hit a transient cluster API error and will be retried: "+redactErr(cleanErr))
+			return cleanErr
+		case cleanErr != nil:
+			logger.Error(cleanErr, "Redis keyspace cleanup failed; proceeding with deletion (best-effort)",
+				"keyPrefix", keyPrefix)
+			r.emitEvent(app, corev1.EventTypeWarning, ReasonCleanupFailed,
+				"Redis cleanup failed (best-effort, proceeding): "+redactErr(cleanErr))
+		default:
+			logger.Info("Cleared Redis keyspace", "keyPrefix", keyPrefix)
 		}
 	}
 

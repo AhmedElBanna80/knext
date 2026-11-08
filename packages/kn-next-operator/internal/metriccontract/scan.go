@@ -23,7 +23,23 @@ limitations under the License.
 //     honouring build constraints, test files excluded) — for EVERY architecture
 //     the image ships, and the architectures must agree;
 //   - the collector is registered on controller-runtime's metrics.Registry (the
-//     registry /metrics serves) from an init() function;
+//     registry /metrics serves) by a top-level statement of an init() function
+//     that belongs to the leading run of registrations: every statement of
+//     init() up to and including it is an expression statement, or the single
+//     right-hand side of an assignment (whose left-hand side is held to the
+//     same rule) or var declaration, optionally parenthesised, that calls
+//     Register or MustRegister with arguments that call nothing but a known
+//     prometheus constructor. Anything else in that
+//     run (a condition, loop, block, defer, go, closure call, helper call or any
+//     other statement) ends it: nothing after it is counted. This is an
+//     allowlist, so it fails closed. It is not a proof that the registration
+//     succeeds (a Register error may be discarded), nor that init() is reached
+//     at all. Not detected: a panic in a package-level variable initialiser,
+//     or a panic while the run itself executes (a nil selector, an
+//     out-of-range index, a bad metric name); either kills the process before
+//     anything is served. Also not detected: a non-prometheus call matched by
+//     constructor name in a nested argument (a Help or ConstLabels value),
+//     which may do anything a call can, including panic or exit;
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -379,6 +395,113 @@ func (p *pkg) errorf(at ast.Node, format string, args ...any) error {
 	return fmt.Errorf("%s: %s", p.fset.Position(at.Pos()), fmt.Sprintf(format, args...))
 }
 
+// markTopLevel marks the registration calls of init()'s body that run on every
+// start. It is an allowlist, so it fails closed: init()'s statements are walked
+// in order, and a call is marked only while EVERY statement so far is a pure
+// registration (see pureRegistration). The first statement that is anything
+// else ends the run: nothing after it is counted, whatever it is, because the
+// scan does not try to prove that an arbitrary statement cannot end init().
+func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
+	for _, st := range body.List {
+		call := pureRegistration(st)
+		if call == nil {
+			return
+		}
+		marked[call] = true
+	}
+}
+
+// pureRegistration returns the registration call when st is a pure
+// registration, else nil. A pure registration is a Register or MustRegister
+// selector call that is the whole expression statement, or the single
+// right-hand side of an assignment or var declaration, optionally
+// parenthesised, and whose arguments call nothing but a known prometheus
+// constructor (see pureArgs). Whether the selector really is metrics.Registry is
+// decided later by collect. A call this accepts can still panic (a nil
+// selector, an index out of range, a bad metric name); nothing in the run can
+// recover, so such a panic kills the process and nothing is served at all. A
+// non-prometheus call matched by constructor name in a nested argument may do
+// anything a call can, including exit or panic. The left-hand
+// side of an assignment is held to the same rule, since it is evaluated first.
+func pureRegistration(st ast.Stmt) *ast.CallExpr {
+	var e ast.Expr
+	switch st := st.(type) {
+	case *ast.ExprStmt:
+		e = st.X
+	case *ast.AssignStmt:
+		if len(st.Rhs) != 1 {
+			return nil
+		}
+		for _, l := range st.Lhs {
+			if !pureArgs(l) {
+				return nil
+			}
+		}
+		e = st.Rhs[0]
+	case *ast.DeclStmt:
+		gd, ok := st.Decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR || len(gd.Specs) != 1 {
+			return nil
+		}
+		vs, ok := gd.Specs[0].(*ast.ValueSpec)
+		if !ok || len(vs.Values) != 1 {
+			return nil
+		}
+		e = vs.Values[0]
+	}
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return nil
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || (sel.Sel.Name != "MustRegister" && sel.Sel.Name != "Register") {
+		return nil
+	}
+	if !pureArgs(sel.X) {
+		return nil
+	}
+	for _, a := range call.Args {
+		if !pureArgs(a) {
+			return nil
+		}
+	}
+	return call
+}
+
+// pureArgs reports whether evaluating e calls nothing but a known prometheus
+// constructor, matched by selector name. collect checks the package of the
+// collector argument and of its Opts, not of calls nested deeper (a Help or
+// ConstLabels value). The body of a function literal is skipped, since a
+// literal that is not called does not run (a GaugeFunc callback); a literal
+// that IS called is a call whose function is not a constructor selector, so it
+// is refused.
+func pureArgs(e ast.Expr) bool {
+	pure := true
+	ast.Inspect(e, func(n ast.Node) bool {
+		if !pure {
+			return false
+		}
+		switch n := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.CallExpr:
+			sel, ok := ast.Unparen(n.Fun).(*ast.SelectorExpr)
+			if _, ctor := constructors[selName(sel, ok)]; !ctor {
+				pure = false
+			}
+		}
+		return pure
+	})
+	return pure
+}
+
+func selName(sel *ast.SelectorExpr, ok bool) string {
+	if !ok {
+		return ""
+	}
+	return sel.Sel.Name
+}
+
 // collect adds every family this package registers to out.
 func (p *pkg) collect(out map[string]Family) error {
 	for _, f := range p.files {
@@ -391,8 +514,15 @@ func (p *pkg) collect(out map[string]Family) error {
 		}
 		for _, decl := range f.Decls {
 			inInit := false
+			// topLevel is the registration calls that are direct statements of
+			// init() and can run on every start. Anything else is refused.
+			topLevel := map[*ast.CallExpr]bool{}
 			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "init" {
 				inInit = true
+				if fd.Body == nil {
+					return p.errorf(fd, "init() has no body: the scan cannot read the registrations it makes")
+				}
+				p.markTopLevel(fd.Body, topLevel)
 			}
 			handled := map[ast.Expr]bool{}
 			var walkErr error
@@ -411,6 +541,13 @@ func (p *pkg) collect(out map[string]Family) error {
 					}
 					if !inInit {
 						walkErr = p.errorf(n, "metrics.Registry.%s outside init(): the scan cannot prove it runs", fun.Sel.Name)
+						return false
+					}
+					if !topLevel[n] {
+						walkErr = p.errorf(n, "metrics.Registry.%s is not a top-level statement of init(): "+
+							"a registration counts only while every statement of init() so far is a registration whose "+
+							"arguments call nothing but a prometheus constructor; this one is nested, follows another "+
+							"kind of statement, or calls something else in its arguments, so it may never run", fun.Sel.Name)
 						return false
 					}
 					handled[fun.X] = true

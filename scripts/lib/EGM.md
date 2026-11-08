@@ -22,7 +22,7 @@ Grouped by concern. The names listed are the modules' exported symbols.
 - `cli-cluster-write-scan.mjs`: `ALLOWED_KINDS` (`NextApp`, `BackendService`), `KIND_EXCEPTIONS`, `MANIFEST_WRITES`, `scanClusterWriteTree`, `scanClusterWriteSource`, `WRITE_SCOPE_DIRS`. Also exports `KIND_UNREADABLE_WAIVERS`, `checkManifestKinds`, `kindsOfSource`, `writeScopeFiles`.
 - `cli-spawn-scan.mjs`: `scanSpawnTree`, `scanSpawnSource`, `SPAWN_SCOPE_DIRS`, `DYNAMIC_SPAWN_ALLOWLIST`. Also exports `spawnScopeFiles`, `classify`.
 - `server-action-auth-scan.mjs`: `scanTree`, `scanSource`, `gateVerdict`, `AUTH_CALLS`, `ALLOWLIST`, `SCAN_ROOTS`. Also exports `ASYNC_AUTH_CALLS`, `MUTATING_METHODS`, `SENSITIVE_READS`, `listScanFiles`, `collectSurfaces`.
-- `published-export-scan.mjs`: `scanPackage`, `SEAM_PREFIX`, `enumerateEntries`. Also exports `createCtx`, `readExports`, `describeFinding`.
+- `published-export-scan.mjs`: `scanPackage`, `SEAM_PREFIX`, `enumerateEntries`. Also exports `createCtx`, `readExports`, `describeFinding`. Reads CommonJS post-hoc attachment on exported bindings, including `Object.defineProperty` descriptors (`value`, shorthand `value`, getter returns); an unreadable descriptor is a finding.
 - `unused-export-scan.mjs`: `scanUnusedExports`, `scanTree`. Also exports `PACKAGE_DIR`, `SCOPE_DIR`, `isScopedSource`, `declarationCompanions`, `exportedNames`, `publicSourceFiles`, `readTrackedFiles`.
 - `scratch-space-scan.mjs`: `repoRootedWrites`, `unpairedTempDirs`, `countTempDirSites`. Also exports `WRITE_CALLS`, `classifyPathExpr`.
 - `test-skips.mjs`: `scanSkips`, `skipCount`, `SKIP_FORMS`. Also exports `CONDITIONAL_FORMS`, `artifactGatedSkipCount`.

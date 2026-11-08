@@ -33,6 +33,8 @@ leave out keeps its built-in value.
 | | `scaling.defaults.panicThresholdPercentage` | Knative's own default | `spec.scaling.panicThresholdPercentage` |
 | Database | `database.connectionBudget` | `80` | the cap that `maxScale × poolMax` must fit within |
 | Rollout | `rollout.maxAppsPerMinute` | `10` | how fast a platform change reaches your apps |
+| Cache | `cache.redisEndpoints` | none | not a default for an app field: the Redis endpoints that get per-app users, see [Per-app Redis isolation](/docs/redis-isolation) |
+| | `cache.clusterId` | the `kube-system` Namespace uid | not a default for an app field: the cluster identity in every per-app Redis user name |
 
 It does **not** choose your runtime (Node or Bun stays a per-app choice), change any Knative
 configuration, or create a database, cache or ingress.
@@ -199,8 +201,30 @@ Two alerts that cover the quiet failures:
 ```
 
 The gauges and the queue reflect the operator process that is running now. After an operator
-restart they refill as each app is reconciled again, and a queue that was in progress is re-spaced
-from the start, still within `maxAppsPerMinute`.
+restart or a leader change they refill as each app is reconciled again. See the next section for
+what that means for pacing.
+
+### If the operator restarts or fails over mid-rollout
+
+The queue of waiting apps lives in the operator's memory, but how far each app has got does not:
+it is recorded on the app itself, in `status.platform`. When the operator restarts, or the standby
+takes over the lease, the new leader starts with an empty queue and rebuilds it from the cluster:
+
+- **Nothing is lost.** Apps that had not rendered yet are queued again and the rollout finishes.
+- **No app renders twice.** An app that was already rendered is recognised as done and is not
+  queued again. If the old leader died after writing an app's service but before recording it, the
+  new leader re-applies an identical service, which leaves the service unchanged, so it is not
+  rendered a second time.
+- **The pace may be exceeded by one render per failover.** The new leader's first slot is free: it
+  does not know the old leader rendered an app a moment ago. So in the minute around a failover,
+  once the old leader has stopped, at most `maxAppsPerMinute + 1` apps can be re-rendered, never
+  a burst. The rest are spaced `60 ÷ maxAppsPerMinute` seconds apart again from that point.
+
+The trade is deliberate. The queue fails toward finishing the rollout, not toward stalling it, and
+the cost is one extra render per failover. If you fail over repeatedly during one rollout, each
+failover can add one: two failovers inside one minute allow `maxAppsPerMinute + 2`. If the old
+leader is still running while the new one starts, the pace is not bounded by this rule, but no
+app renders twice.
 
 ## Profiles
 

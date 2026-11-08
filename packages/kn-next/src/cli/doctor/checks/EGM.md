@@ -29,7 +29,7 @@ Cluster checks:
 - `networkPolicyCheck` (`network-policy.ts`): whether the CNI enforces NetworkPolicy, classified from DaemonSets.
 - `appImageCheck` (`app-image.ts`, async): every NextApp image is pullable. Uses ServiceAccounts, pull secrets and a time-budgeted registry manifest probe.
 - `unverifiedSecretsCheck` (`unverified-secrets.ts`): NextApp secret references that cannot be verified.
-- `redisPrefixCheck`, `defaultRedisKeyPrefix`, `LEGACY_SHARED_KEY_PREFIX` (`redis-prefix.ts`): Redis key-prefix collisions and the legacy shared prefix.
+- `redisPrefixCheck`, `defaultRedisKeyPrefix`, `LEGACY_SHARED_KEY_PREFIX` (`redis-prefix.ts`): Redis key-prefix collisions and the legacy shared prefix. The prefixes it reports as refused are only `kn-next` and `kn-next:*` (`redis-key-prefix.ts`). Admission also refuses a squat on the derived shape `kn-<12 hex>` (or under it) that is not the app's own; doctor reports that only as a collision warning, and only when the owning app is on the cluster.
 - `writePolicyCheck`, `evaluateWritePolicy`, `CANONICAL_POLICY_CEL`, `WritePolicyVerdict`, `WritePolicyReason` (`write-policy.ts`): the operator's ValidatingAdmissionPolicy write bound.
 
 Local checks:

@@ -62,6 +62,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - CDN: `cdn-e2e-assert.mjs`, `cdn-e2e-purge-assert.mjs`, `cdn-e2e-mutate-preload.mjs`, `cdn-e2e-expect-red.sh`.
 - `use-cache-2pod-e2e-assert.sh`, `public-hosts-e2e-assert.sh`, `deep-health-alert-e2e.sh`, `load-test.sh`, `scale-suite-tolerance.mjs`, `nightly-alert-issue.mjs`.
 - Redis: `redis-acl-spike.mjs`, `redis-commands.mjs` (`REDIS_COMMANDS`).
+- `mutation-prove-2396-redis-acl.mjs` (exports nothing): mutates the operator's Redis ACL surface (the command list, the isolation decision, prefix-ownership ranking, the derived-prefix squat, the command catalog read through `ACL CAT`, provisioner endpoint pinning, the status verdict and requeue, the credentials binding and the finalizer's Secret-over-status decision) and requires the named Go test to go red by exit code. `ONLY=<text>` runs the cases whose name contains it. Envtest cases need `KUBEBUILDER_ASSETS` or `packages/kn-next-operator/bin/k8s` (`make setup-envtest`); without either the prover exits 2.
 
 ### Other exported symbols
 The scripts below also export these symbols, mostly so `tests/` can import their pure logic. Names already given above are not repeated.
@@ -113,7 +114,6 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `publish-verify-alert.mjs`: `verifyAndAlert`.
 - `published-bytes-freeze-check.mjs`: `readPin`, `defaultTagResolves`, `defaultRunDiff`, `main`.
 - `published-bytes-select-pin.mjs`: `readPinTextAt`, `selectPinFromGit`.
-- `mutation-prove-2396-redis-acl.mjs`: mutates the operator's Redis ACL rule set, isolation decision, conflict check, credentials binding and finalizer, and requires the named Go test to go red by exit code.
 - `redis-acl-spike.mjs`: `MINIMAL_COMMANDS`, `escapeAclGlob`, `aclRulesFor`, `failureKind`, `exitCodeFor`.
 - `redis-commands.mjs`: `REDIS_SUBCOMMANDS`, `REDIS_NO_ARG_COMMANDS`, `CLIENT_COMMANDS`.
 - `release-notes-body.mjs`: `PACKAGES`, `isPrerelease`, `compareSemver`, `releaseFlags`, `notesRelPath`, `buildBody`.
@@ -153,6 +153,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `check-ffi-crate-rev.mjs` (`CRATE_PATHSPEC`) watches `crates/knext-ffi/` and `crates/knext-ffi-macros/` and excludes `*.md` with the `:(exclude)*.md` pathspec, so docs-only Markdown never requires moving the `packages/ffi/package.json` `knextFfi.crateRev` pin. Its exit-2 paths (shallow history, unresolvable base ref) fail closed.
 
 ## Side Effects
+- `redis-acl-spike.mjs` writes to the Redis at `KNEXT_REDIS_ACL_SPIKE_URL` (never `REDIS_URL`): each run creates two throwaway ACL users and removes them and their keys when done.
 - Release scripts call the npm registry and GitHub (`gh`), and some publish or alter dist-tags (`ensure-published-group.mjs`, `npm-dist-tag-rollback.mjs`).
 - Pack and smoke scripts write tarballs and temp directories. `rewrite-workspace-ranges.mjs` rewrites `package.json` files in the tree. `install-smoke.mjs` guards them with `lib/manifest-restore.mjs:guardManifests`, which restores every workspace `package.json` afterwards.
 - The e2e shell drivers (`e2e-deploy.sh`, `e2e-cleanup.sh`) build and boot an app locally and persist its `BUILD_ID`, `PORT` and `PID` to `.adapter-build.log`; `e2e-cleanup.sh` reads that file and stops the server. The cluster assertion scripts (`deep-health-alert-e2e.sh`, `load-test.sh`, `public-hosts-e2e-assert.sh`, `use-cache-2pod-e2e-assert.sh`) run `kubectl` against the current context.

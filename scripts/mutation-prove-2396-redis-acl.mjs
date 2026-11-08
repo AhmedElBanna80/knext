@@ -16,7 +16,7 @@
  * baseline red).
  */
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
@@ -703,10 +703,14 @@ const cases = [
   },
 ];
 
-// KUBEBUILDER_ASSETS for the envtest cases; the shared checkout carries the binaries.
-const ENVTEST_ASSETS =
-  process.env.KUBEBUILDER_ASSETS ??
-  '/Users/banna/alpheya/pocs/knext/packages/kn-next-operator/bin/k8s/1.35.0-darwin-arm64';
+// Envtest binaries for the envtest cases: KUBEBUILDER_ASSETS when set, else the
+// operator's own lookup of packages/kn-next-operator/bin/k8s (`make setup-envtest`),
+// as the other operator provers do.
+function envtestAssetsPresent() {
+  if (process.env.KUBEBUILDER_ASSETS) return true;
+  const dir = join(OP, 'bin/k8s');
+  return existsSync(dir) && readdirSync(dir).length > 0;
+}
 
 function goTest(pkg, test, c = {}) {
   const args = ['test', pkg, '-run', `^${test}$`, '-count=1'];
@@ -714,7 +718,7 @@ function goTest(pkg, test, c = {}) {
   const r = spawnSync('go', args, {
     cwd: OP,
     encoding: 'utf8',
-    env: c.envtest ? { ...process.env, KUBEBUILDER_ASSETS: ENVTEST_ASSETS } : process.env,
+    env: process.env,
   });
   return r.status;
 }
@@ -726,6 +730,12 @@ function occurrences(text, needle) {
 let survived = 0;
 let infra = 0;
 const selected = cases.filter((c) => !process.env.ONLY || c.name.includes(process.env.ONLY));
+if (selected.some((c) => c.envtest) && !envtestAssetsPresent()) {
+  console.error(
+    'mutation-prove-2396-redis-acl: no envtest binaries (set KUBEBUILDER_ASSETS or run `make setup-envtest` in packages/kn-next-operator)',
+  );
+  process.exit(2);
+}
 declareMutations(selected.length);
 for (const c of selected) {
   const path = join(REPO, c.file);

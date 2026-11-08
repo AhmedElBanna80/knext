@@ -3,8 +3,8 @@ title: Upgrading to knext 2
 description: What changes in knext 2, the order to upgrade in, and how to go back to 1.x.
 ---
 
-knext 2 is a contract-cleanup major: it raises the runtime floors and removes what 1.x deprecated.
-It also adds zone functions, which are **Beta**. Your `NextApp` resources and the operator do not
+knext 2 raises the runtime floors and removes what 1.x deprecated. It also adds zone functions,
+which are **Beta**. Your `NextApp` resources and the operator do not
 change version line.
 
 > knext 2.0 is **not yet released**. This page describes what is planned; the release notes of the
@@ -37,12 +37,15 @@ knext 2 requires:
 
 {/* runtime-floors:end */}
 
+Use Next.js **16.4.1 or later** within that range: 16.4.0 and earlier are affected by security
+advisories fixed in 16.4.1, and `knext doctor` fails on them.
+
 These are the `engines` and `next` peer range `@getknext/core` declares, so your package manager
 warns about a project outside them. On an older Node.js, `knext` prints one line naming the floor and
 exits non-zero before doing anything else, and `knext doctor` reports your Node.js version against
 the floor.
 
-The images knext builds, and the GitLab CI template `knext init-ci` writes, use Node.js 24. A
+The Node.js images knext builds, and the GitLab CI template `knext init-ci` writes, use Node.js 24. A
 GitHub Actions workflow you wrote yourself needs `node-version: 24`.
 
 If you cannot move to these floors yet, stay on 1.x (see [Staying on 1.x](#staying-on-1x)).
@@ -55,8 +58,9 @@ If you cannot move to these floors yet, stay on 1.x (see [Staying on 1.x](#stayi
   for where to look.
 - **Test-only helpers.** `@getknext/core/adapters/cache-handler` no longer exports
   `__resetEnvForTests`, `__setRedisClientForTests` or any other `__`-prefixed helper, and
-  `@getknext/core/internal/logger` no longer exports `__resetLoggerForTests`. They were deprecated
-  in 1.x. An app that uses the handler the documented way is not affected:
+  `@getknext/core/internal/logger` no longer exports `__resetLoggerForTests`. They were for tests
+  only, and the two cache-handler helpers are deprecated in 1.x. An app that uses the handler the
+  documented way is not affected:
 
   ```ts title="cache-handler.ts"
   export { default } from '@getknext/core/adapters/cache-handler';
@@ -82,7 +86,7 @@ does not use them. See [Zone functions](/docs/zone-functions).
 ## Staying on 1.x
 
 The 1.x line keeps receiving security fixes only, for six months after 2.0 is generally available.
-Install it with the `latest-1` dist-tag:
+Once 2.0 is released, install it with the `latest-1` dist-tag:
 
 ```bash
 npm i @getknext/core@latest-1
@@ -90,11 +94,14 @@ npm i @getknext/core@latest-1
 
 Use the same tag for `@getknext/lib` and `@getknext/db` if your app uses them.
 
+The 1.x line keeps its own floors, Node.js `>=22.18` and Next.js `>=16.0.0`, so it is the place to
+stay while you upgrade your runtimes. Zone functions are on 2.x only.
+
 ## Rolling back
 
-Rolling back means going back to 1.x packages. There is **no operator rollback**: 1.x and 2.x use
-the same operator line, and an older CLI against a newer operator is supported. Leave the operator
-where it is and reinstall the packages:
+Rolling back means going back to 1.x packages. You do **not** need to roll back the operator: 1.x
+and 2.x use the same operator line, and an older CLI against a newer operator is supported. Leave the
+operator where it is and reinstall the packages:
 
 ```bash
 npm i @getknext/core@latest-1

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   acquireFailureObserverCount,
   isConnectionRefused,
@@ -6,6 +9,25 @@ import {
   observeAcquireFailures,
   reportAcquireFailure,
 } from '../db/reachability';
+
+/**
+ * Runs `run` and returns every line it wrote through `console.warn`. The warning is a
+ * single JSON line written directly, not through the shared logger: the logger builds
+ * its pino instance at module load, and importing it from `reachability` would pull it
+ * into `clients.ts`'s static graph (see the import-graph guard below).
+ */
+const captureWarnings = (run: () => void): string[] => {
+  const lines: string[] = [];
+  const spy = spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(' '));
+  });
+  try {
+    run();
+  } finally {
+    spy.mockRestore();
+  }
+  return lines;
+};
 
 describe('isConnectionRefused — only a definitive refusal', () => {
   it('recognises the node pg code and the Bun.SQL code', () => {
@@ -113,10 +135,14 @@ describe('isScaleToZeroDatabase — the gateway, however it is spelled', () => {
   });
 
   it('an empty or unrecognised declaration falls back to the host', () => {
-    for (const flag of [undefined, '', 'maybe']) {
-      expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), flag)).toBe(true);
-      expect(isScaleToZeroDatabase(dsn('db.example.com'), flag)).toBe(false);
-    }
+    const lines = captureWarnings(() => {
+      for (const flag of [undefined, '', 'maybe']) {
+        expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), flag)).toBe(true);
+        expect(isScaleToZeroDatabase(dsn('db.example.com'), flag)).toBe(false);
+      }
+    });
+    // Only the unrecognised 'maybe' warns; undefined and '' are silent.
+    expect(lines).toHaveLength(1);
   });
 
   it('reads KNEXT_DB_SCALE_TO_ZERO from the environment by default', () => {
@@ -161,5 +187,145 @@ describe('acquire-failure observers', () => {
     stop();
     expect(seen).toEqual([err]);
     expect(copy.acquireFailureObserverCount()).toBe(acquireFailureObserverCount());
+  });
+});
+
+describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns once', () => {
+  const dsn = (host: string) => `postgres://u:p@${host}:55432/postgres`;
+
+  // Each test uses its own bad value: the once-per-process guard is process state,
+  // so a value another test already reported would hide the warning under test.
+  it('names the bad value and the host fallback, and warns once per process', () => {
+    const lines = captureWarnings(() => {
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-typo')).toBe(false);
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-typo')).toBe(false);
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('KNEXT_DB_SCALE_TO_ZERO');
+    expect(lines[0]).toContain('"ture-once-typo"');
+    expect(lines[0]).toContain('host');
+  });
+
+  it('writes exactly one parseable JSON record per warning', () => {
+    const lines = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), 'json-shape-typo');
+    });
+    expect(lines).toHaveLength(1);
+    const record = JSON.parse(lines[0] as string) as Record<string, unknown>;
+    expect(record.level).toBe('warn');
+    expect(record.variable).toBe('KNEXT_DB_SCALE_TO_ZERO');
+    expect(record.value).toBe('json-shape-typo');
+    expect(String(record.msg)).toContain('host');
+  });
+
+  it('keeps reachability off the shared logger import graph', () => {
+    // clients.ts imports this module statically. A static import of ../logger here
+    // builds the pino singleton as a side effect of loading clients, so a suite that
+    // mocks pino after importing clients captures nothing (logger.test.ts,
+    // correlation.test.ts). Walk every relative import of reachability.ts,
+    // transitively; none may reach src/logger. Static imports and re-exports come
+    // from Bun's parser (`scan`). Dynamic imports and require calls are guarded by
+    // a per-file count: in each file, the number of `import(`/`require(` sites in
+    // the transpiled JS (comments and types stripped, so a type-position
+    // `import()` is gone) must equal the number `scan` resolved to a literal path.
+    // A non-literal or unseen one (`import(p)`, TS `import x = require()`) makes
+    // that file's two numbers differ and fails the test. An unresolvable relative
+    // path fails it too. A string containing `import(` also fails it; that false
+    // red is accepted.
+    const srcDir = fileURLToPath(new URL('../', import.meta.url));
+    const loggerDir = join(srcDir, 'logger');
+    const ts = new Bun.Transpiler({ loader: 'ts' });
+    const resolve = (from: string, spec: string): string => {
+      const base = join(dirname(from), spec.replace(/\.(c|m)?js$/, ''));
+      for (const c of [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')]) {
+        if (existsSync(c) && statSync(c).isFile()) return c;
+      }
+      throw new Error(`unresolvable import ${spec} in ${from}`);
+    };
+    const seen = new Set<string>();
+    const reached: string[] = [];
+    const walk = (file: string): void => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      reached.push(file);
+      const source = readFileSync(file, 'utf8');
+      const { imports } = ts.scan(source);
+      const dynamicSites = (ts.transformSync(source).match(/\b(?:import|require)\s*\(/g) ?? [])
+        .length;
+      const dynamicResolved = imports.filter(
+        (i) => i.kind === 'dynamic-import' || i.kind === 'require-call',
+      ).length;
+      if (dynamicSites !== dynamicResolved) {
+        throw new Error(
+          `${file}: ${dynamicSites} dynamic import/require sites, only ${dynamicResolved} resolved to a literal path`,
+        );
+      }
+      for (const i of imports) if (i.path.startsWith('.')) walk(resolve(file, i.path));
+    };
+    walk(join(srcDir, 'db', 'reachability.ts'));
+    expect(reached.filter((f) => f.startsWith(loggerDir))).toEqual([]);
+  });
+
+  it('never logs a connection string: a DSN-shaped value shows only its length', () => {
+    const secret = 'postgres://svc:hunter2pw@db.example.com/postgres';
+    expect(secret.length).toBeLessThan(64);
+    const lines = captureWarnings(() => {
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), secret)).toBe(false);
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`<redacted, ${secret.length} characters>`);
+    expect(lines[0]).not.toContain('hunter2pw');
+    expect(lines[0]).not.toContain('svc:');
+  });
+
+  it('truncates a long plain value to 64 characters', () => {
+    const lines = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), 'z'.repeat(100));
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`"${'z'.repeat(64)}"`);
+    expect(lines[0]).not.toContain('z'.repeat(65));
+  });
+
+  it('dedupes on the full value, so two values sharing a 64-character prefix both warn', () => {
+    const prefix = 'p'.repeat(64);
+    const lines = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), `${prefix}a`);
+      isScaleToZeroDatabase(dsn('db.example.com'), `${prefix}b`);
+    });
+    expect(lines).toHaveLength(2);
+  });
+
+  it('a duplicated module copy shares the once-set (state is anchored on globalThis)', async () => {
+    // A query-string import evaluates the module body afresh, as the standalone
+    // build's second copy does. The copy warns first; the original must stay silent.
+    const copy = (await import(
+      `../db/reachability.ts?copy=${Date.now()}`
+    )) as typeof import('../db/reachability');
+    const value = 'copy-dedupe-typo';
+    const first = captureWarnings(() => {
+      copy.isScaleToZeroDatabase(dsn('db.example.com'), value);
+    });
+    const second = captureWarnings(() => {
+      isScaleToZeroDatabase(dsn('db.example.com'), value);
+    });
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(0);
+  });
+
+  it('the fallback still follows the host when the value is unrecognised', () => {
+    const lines = captureWarnings(() => {
+      expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), 'mayb-host-typo')).toBe(true);
+    });
+    expect(lines).toHaveLength(1);
+  });
+
+  it('stays silent for recognised values, empty values and an unset variable', () => {
+    const lines = captureWarnings(() => {
+      for (const flag of ['true', ' YES ', 'false', '0', 'no', '', '   ', undefined]) {
+        isScaleToZeroDatabase(dsn('db.example.com'), flag);
+      }
+    });
+    expect(lines).toHaveLength(0);
   });
 });

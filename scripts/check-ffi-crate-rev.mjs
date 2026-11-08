@@ -40,6 +40,11 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PIN_FILE = 'packages/ffi/package.json';
 /** Trailing slash: a directory boundary, so `knext-ffi-fixture/` never matches. */
 const CRATE_PATHS = ['crates/knext-ffi/', 'crates/knext-ffi-macros/'];
+/**
+ * Docs-only Markdown (EGM.md, README.md) cannot change what a consumer builds at a
+ * rev, so it never requires moving the pin. Non-glob pathspec: `*` crosses `/`.
+ */
+const CRATE_PATHSPEC = [...CRATE_PATHS, ':(exclude)*.md'];
 
 const git = (...args) =>
   execFileSync('git', args, {
@@ -63,12 +68,12 @@ function fail(code, message) {
 }
 
 const changed = (from, to) =>
-  git('diff', '--name-only', from, to, '--', ...CRATE_PATHS)
+  git('diff', '--name-only', from, to, '--', ...CRATE_PATHSPEC)
     .split('\n')
     .filter(Boolean);
 
 const lastCrateCommit = (ref) =>
-  git('log', '--first-parent', '-1', '--format=%H', ref, '--', ...CRATE_PATHS);
+  git('log', '--first-parent', '-1', '--format=%H', ref, '--', ...CRATE_PATHSPEC);
 
 let rev;
 try {

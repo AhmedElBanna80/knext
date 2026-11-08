@@ -147,7 +147,10 @@ its prefix on the shared credential, so it holds that prefix. A newer app that a
 fails closed, and its deletion does not sweep the older app's keys.
 
 That includes a prefix set the old way, as `REDIS_KEY_PREFIX` in `spec.env`: the operator ranks the
-value as written. A `REDIS_KEY_PREFIX` that comes from a Secret (`spec.secrets.envMap`) is different:
+value as written, and admission checks it like `spec.cache.keyPrefix`. It must be at most 63
+characters, with no whitespace and none of `* ? [ ] \`. It must not be `kn-next` or start with
+`kn-next:`, must not be `knext` or start with `knext:`, and must not be another app's generated prefix.
+An empty value means unset. A `REDIS_KEY_PREFIX` that comes from a Secret (`spec.secrets.envMap`) is different:
 the operator does not read your Secrets, so it cannot tell which keys that app writes. It treats the
 app as holding any prefix, and **every newer app on the endpoint that sets an explicit
 `spec.cache.keyPrefix` fails closed behind it** (`PrefixConflict`, naming the app). An app on its own

@@ -96,15 +96,16 @@ var _ = Describe("BackendService reconciler: the zone watch passes spec changes,
 		}()
 
 		By("letting the initial reconciles settle")
+		// Settled = the count unchanged across three samples a second apart, so a
+		// reconcile still running at one sample cannot pass for quiet.
 		settle := func() float64 {
-			var last float64 = -1
+			var seen []float64
 			Eventually(func() bool {
-				cur := bsReconcileCount()
-				stable := cur == last && cur > 0
-				last = cur
-				return stable
+				seen = append(seen, bsReconcileCount())
+				n := len(seen)
+				return n >= 3 && seen[n-1] > 0 && seen[n-1] == seen[n-2] && seen[n-2] == seen[n-3]
 			}, "60s", "1s").Should(BeTrue())
-			return last
+			return seen[len(seen)-1]
 		}
 		before := settle()
 

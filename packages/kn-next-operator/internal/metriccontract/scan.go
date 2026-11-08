@@ -418,9 +418,10 @@ func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
 // parenthesised, and whose arguments call nothing but a known prometheus
 // constructor (see pureArgs). Whether the selector really is metrics.Registry is
 // decided later by collect. A call this accepts can still panic (a nil
-// selector, an index out of range, a bad metric name, a fake constructor
-// matched by name in a nested argument); nothing in the run can recover, so
-// such a panic kills the process and nothing is served at all. The left-hand
+// selector, an index out of range, a bad metric name); nothing in the run can
+// recover, so such a panic kills the process and nothing is served at all. A
+// non-prometheus call matched by constructor name in a nested argument may do
+// anything a call can, including exit or panic. The left-hand
 // side of an assignment is held to the same rule, since it is evaluated first.
 func pureRegistration(st ast.Stmt) *ast.CallExpr {
 	var e ast.Expr
@@ -471,9 +472,9 @@ func pureRegistration(st ast.Stmt) *ast.CallExpr {
 // constructor, matched by selector name. collect checks the package of the
 // collector argument and of its Opts, not of calls nested deeper (a Help or
 // ConstLabels value). The body of a function literal is skipped, since a
-// literal that is not called does not run
-// (a GaugeFunc callback); a literal that IS called is a call whose function is
-// not a constructor selector, so it is refused.
+// literal that is not called does not run (a GaugeFunc callback); a literal
+// that IS called is a call whose function is not a constructor selector, so it
+// is refused.
 func pureArgs(e ast.Expr) bool {
 	pure := true
 	ast.Inspect(e, func(n ast.Node) bool {

@@ -363,6 +363,21 @@ describe('scripts/lib/e2e-eresolve-retry.mjs — which ERESOLVE may be retried (
       false,
     );
   });
+  it('refuses a different failure whose log only carries an ERESOLVE warning line', () => {
+    const log = [
+      'npm warn ERESOLVE overriding peer dependency',
+      'npm warn While resolving: fixture-app@0.0.0',
+      'npm error code EINTEGRITY',
+      'npm error sha512-... integrity checksum failed',
+    ].join('\n');
+    expect(decideRetry(log).retry).toBe(false);
+  });
+  it('refuses on any mention of @getknext/, whatever its case or suffix', () => {
+    expect(decideRetry(`${fixtureConflict}\nnpm error see @getknext/`).retry).toBe(false);
+    expect(
+      decideRetry(`${fixtureConflict}\nnpm error peer x@"1" from @GetKnext/Core@2.0.0`).retry,
+    ).toBe(false);
+  });
   it('refuses a failure that is not ERESOLVE', () => {
     expect(decideRetry('npm error code EINTEGRITY\n').retry).toBe(false);
   });

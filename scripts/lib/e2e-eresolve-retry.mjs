@@ -24,15 +24,21 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const KNEXT = /@getknext\/[a-z0-9._-]+/g;
+// The refusal itself: the error code line, npm 7+ (`npm error code ERESOLVE`) or
+// older (`npm ERR! code ERESOLVE`). A bare ERESOLVE word elsewhere (a `npm warn
+// ERESOLVE overriding peer dependency` line on an install that failed for
+// another reason) is not one.
+const ERESOLVE_CODE = /^npm (?:error|ERR!) code ERESOLVE\s*$/m;
+// Names, for the message only. The decision is a plain substring check.
+const KNEXT_NAMES = /@getknext\/[A-Za-z0-9._-]*/gi;
 
 /** @returns {{ retry: boolean, reason: string }} */
 export function decideRetry(log) {
-  if (!/\bERESOLVE\b/.test(log)) {
+  if (!ERESOLVE_CODE.test(log)) {
     return { retry: false, reason: 'not an ERESOLVE refusal' };
   }
-  const knext = [...new Set([...log.matchAll(KNEXT)].map((m) => m[0]))].sort();
-  if (knext.length > 0) {
+  if (log.toLowerCase().includes('@getknext/')) {
+    const knext = [...new Set([...log.matchAll(KNEXT_NAMES)].map((m) => m[0]))].sort();
     return {
       retry: false,
       reason: `the conflict names knext's own package(s): ${knext.join(', ')}`,

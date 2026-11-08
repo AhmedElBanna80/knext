@@ -2287,17 +2287,18 @@ describe('compat-suite fail-on-red gate — revocation teeth (test-e2e-deploy.ym
       'Compute excluded count from manifest',
       'Summarize shard result',
       'Upload summary artifact',
-      'Fail shard on red results',
+      'Fail shard on red results (revocation teeth)',
       'Verify boot-mode ledger',
     ];
     const { tailLabels } = auditReportingTail(WORKFLOW_PATH);
     const names = tailLabels.map((l) => l.replace(/^`|`$/g, ''));
     expect(names.length, `tail: ${names.join(', ')}`).toBe(expected.length);
+    // The two long names are matched by prefix (the upload name is cut at a YAML
+    // ` #` comment); the short ones must match exactly.
+    const prefixOnly = new Set(['Upload summary artifact', 'Verify boot-mode ledger']);
     expected.forEach((want, i) => {
-      expect(
-        names[i]?.startsWith(want),
-        `tail step ${i + 1} is "${names[i]}", want "${want}…"`,
-      ).toBe(true);
+      const ok = prefixOnly.has(want) ? names[i]?.startsWith(want) : names[i] === want;
+      expect(ok, `tail step ${i + 1} is "${names[i]}", want "${want}"`).toBe(true);
     });
   });
 

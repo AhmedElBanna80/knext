@@ -77,7 +77,7 @@ describe('@getknext/db — defineDrizzleConfig drizzle-kit peer guard (v3-P3c)',
 //     actionable named error, NOT a bare MODULE_NOT_FOUND / ERR_MODULE_NOT_FOUND.
 // Mechanism: a child node process with a CJS `--require` preload that patches
 // Module._resolveFilename so `drizzle-kit` (and only it) is unresolvable — the
-// same choke point the compiled `require.resolve('drizzle-kit')` probe hits.
+// same choke point the `createRequire(import.meta.url).resolve('drizzle-kit')` probe hits.
 describe('@getknext/db — built main entry loads with drizzle-kit ABSENT (v3-P3c)', () => {
   const distIndex = join(pkgDir, 'dist', 'index.js');
   const distMigrate = join(pkgDir, 'dist', 'migrate.js');

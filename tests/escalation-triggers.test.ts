@@ -562,13 +562,6 @@ describe('#2388 — path and content triggers merge into one entry per id', () =
     ]);
   });
 });
-/**
- * #2388 round 2 — four misses the reviewer reproduced in a scratch repo, each of
- * which exited 0. Each block proves the miss now fires and keeps a near miss quiet.
- */
-const RELEASE_WF =
-  'on: push\npermissions:\n  id-token: write\njobs:\n  a:\n    steps:\n' +
-  '      - run: node scripts/pack-release-tarballs.mjs\n';
 
 describe('#2388 r2 — renames and copies classify BOTH paths', () => {
   const fromDiff = (line: string) => ids(classify(parseNameStatus(line)));
@@ -736,7 +729,6 @@ describe('#2388 r2 — the CLI sees non-ASCII and renamed paths end to end', () 
 
 describe('credential workflows: the files they name, one level deep', () => {
   const wf = (run: string) =>
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: workflow expression text
     `env:\n  T: \${{ secrets.NPM_TOKEN }}\njobs:\n  a:\n    steps:\n      - run: |\n${run
       .split('\n')
       .map((l) => `          ${l}`)

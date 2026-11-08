@@ -110,3 +110,41 @@ func TestAdmissionPrefixRuleDoesNotBlockAMetadataOnlyUpdate(t *testing.T) {
 		t.Fatalf("a metadata-only update must pass, got %v", err)
 	}
 }
+
+// #2451: a REDIS_KEY_PREFIX set through spec.env is refused on the same rules as
+// spec.cache.keyPrefix, at CREATE and UPDATE.
+func TestAdmissionRefusesABadEnvRedisKeyPrefix(t *testing.T) {
+	v := &NextAppCustomValidator{}
+	ctx := context.Background()
+	envApp := func(prefix string) *appsv1alpha1.NextApp {
+		app := cacheApp("evil", "app", "")
+		app.Spec.Env = map[string]string{"REDIS_KEY_PREFIX": prefix}
+		return app
+	}
+	refused := map[string]string{
+		"another app's derived prefix": derived("shop", "web"),
+		"the shared fallback keyspace": "kn-next",
+		"under the platform keyspace":  "knext:cdn:purged",
+		"a Redis glob character":       "app*",
+		"whitespace":                   "my app",
+	}
+	for name, prefix := range refused {
+		t.Run("create refuses "+name, func(t *testing.T) {
+			_, err := v.ValidateCreate(ctx, envApp(prefix))
+			if err == nil || !strings.Contains(err.Error(), "spec.env[REDIS_KEY_PREFIX]") {
+				t.Fatalf("spec.env REDIS_KEY_PREFIX %q must be refused at CREATE, got %v", prefix, err)
+			}
+		})
+		t.Run("update refuses "+name, func(t *testing.T) {
+			_, err := v.ValidateUpdate(ctx, envApp("evil-app"), envApp(prefix))
+			if err == nil || !strings.Contains(err.Error(), "spec.env[REDIS_KEY_PREFIX]") {
+				t.Fatalf("spec.env REDIS_KEY_PREFIX %q must be refused at UPDATE, got %v", prefix, err)
+			}
+		})
+	}
+	for _, prefix := range []string{"", "shop-web", derived("evil", "app")} {
+		if _, err := v.ValidateCreate(ctx, envApp(prefix)); err != nil {
+			t.Fatalf("spec.env REDIS_KEY_PREFIX %q must be accepted, got %v", prefix, err)
+		}
+	}
+}

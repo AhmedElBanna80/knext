@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
@@ -68,15 +69,54 @@ func CacheKeyPrefixViolation(namespace, name, prefix string) string {
 	return ""
 }
 
-// ValidateNextAppCacheKeyPrefix is the admission half of CacheKeyPrefixViolation.
-// It needs the object's namespace and name, which the shared spec validator does
-// not see, so the webhook calls it next to that validator.
+// ValidateNextAppCacheKeyPrefix is the admission half of CacheKeyPrefixViolation,
+// for spec.cache.keyPrefix and for a REDIS_KEY_PREFIX set through spec.env (#2451),
+// which is the app's prefix just the same. It needs the object's namespace and
+// name, which the shared spec validator does not see, so the webhook calls it next
+// to that validator.
 func ValidateNextAppCacheKeyPrefix(namespace, name string, spec *appsv1alpha1.NextAppSpec) error {
-	if spec == nil || spec.Cache == nil || spec.Cache.KeyPrefix == "" {
+	if spec == nil {
 		return nil
 	}
-	if why := CacheKeyPrefixViolation(namespace, name, spec.Cache.KeyPrefix); why != "" {
-		return fmt.Errorf("spec.cache.%s", why)
+	if spec.Cache != nil && spec.Cache.KeyPrefix != "" {
+		if why := CacheKeyPrefixViolation(namespace, name, spec.Cache.KeyPrefix); why != "" {
+			return fmt.Errorf("spec.cache.%s", why)
+		}
+	}
+	if v := spec.Env[EnvRedisKeyPrefix]; v != "" {
+		if why := CacheKeyPrefixViolation(namespace, name, v); why != "" {
+			return fmt.Errorf("spec.env[%s]: %s", EnvRedisKeyPrefix, why)
+		}
 	}
 	return nil
+}
+
+// EnvRedisKeyPrefix is the env var the runtime reads its Redis key prefix from.
+const EnvRedisKeyPrefix = "REDIS_KEY_PREFIX"
+
+// keyPrefixMaxRunes and keyPrefixForbidden mirror the CRD's structural rules on
+// spec.cache.keyPrefix (MaxLength=63, Pattern ^[^*?\[\]\\ \t\n\r\f\v]*$).
+const keyPrefixMaxRunes = 63
+
+var keyPrefixForbidden = regexp.MustCompile(`[*?\[\]\\ \t\n\r\f\v]`)
+
+// EnvKeyPrefixViolation says why a REDIS_KEY_PREFIX set through spec.env is not a
+// valid key prefix, or "" when it is: the CRD's rules for spec.cache.keyPrefix
+// (at most 63 code points, no whitespace or Redis glob characters, not the shared
+// fallback keyspace kn-next / kn-next:*) and the platform keyspace. An empty value
+// is unset and always allowed.
+func EnvKeyPrefixViolation(v string) string {
+	switch {
+	case v == "":
+		return ""
+	case utf8.RuneCountInString(v) > keyPrefixMaxRunes:
+		return fmt.Sprintf("is longer than %d characters", keyPrefixMaxRunes)
+	case keyPrefixForbidden.MatchString(v):
+		return "contains whitespace or a Redis glob character (* ? [ ] \\)"
+	case v == "kn-next" || strings.HasPrefix(v, "kn-next:"):
+		return fmt.Sprintf("%q is reserved for the shared fallback keyspace", v)
+	case IsPlatformKeyspace(v):
+		return fmt.Sprintf("%q is reserved for the platform keyspace", v)
+	}
+	return ""
 }

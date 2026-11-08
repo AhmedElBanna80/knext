@@ -177,6 +177,61 @@ describe('values that merely look similar stay clean (#2188)', () => {
   });
 });
 
+/**
+ * #2206: CommonJS had no `export` statement to mark a binding as exported, so a
+ * post-hoc `K.__x = 1` on a function/class/object exported by `exports.K = K`,
+ * `module.exports = { K }` or `defineProperty(exports, 'K', { value: K })` went
+ * unread and passed clean. Each red below is reachable as `require(...).K.__x`.
+ */
+describe('CommonJS post-hoc attachment on an exported binding reds (#2206)', () => {
+  const cjs = (body: string) =>
+    exitFor({ 'dist/index.cjs': body }, { exports: { '.': './dist/index.cjs' } });
+
+  it('`exports.K = K` then `K.__x = 1` reds', () => {
+    expect(cjs(`'use strict';\nfunction K() {}\nK.__x = 1;\nexports.K = K;\n`)).toBe(RED);
+  });
+
+  it('`module.exports.K = K` (class) with a post-hoc seam reds', () => {
+    expect(cjs(`'use strict';\nclass K {}\nK.__x = 1;\nmodule.exports.K = K;\n`)).toBe(RED);
+  });
+
+  it('`module.exports = { K }` (shorthand) with a post-hoc seam reds', () => {
+    expect(cjs(`'use strict';\nconst K = {};\nK.__x = 1;\nmodule.exports = { K };\n`)).toBe(RED);
+  });
+
+  it('`module.exports = { a: K }` (renamed property) with a post-hoc seam reds', () => {
+    expect(cjs(`'use strict';\nfunction K() {}\nK.__x = 1;\nmodule.exports = { a: K };\n`)).toBe(
+      RED,
+    );
+  });
+
+  it('`Object.defineProperty(exports, "K", { value: K })` with a post-hoc seam reds', () => {
+    expect(
+      cjs(
+        `'use strict';\nfunction K() {}\nK.__x = 1;\nObject.defineProperty(exports, 'K', { value: K, enumerable: true });\n`,
+      ),
+    ).toBe(RED);
+  });
+
+  it('an ESM `export const ns = { K }` with a post-hoc seam reds', () => {
+    expect(
+      exitFor({
+        'dist/index.js': `function K() {}\nK.__x = 1;\nexport const ns = { K };\n`,
+      }),
+    ).toBe(RED);
+  });
+
+  it('a post-hoc write that is NOT on an exported binding stays clean', () => {
+    expect(
+      cjs(`'use strict';\nfunction K() {}\nconst other = {};\nother.__x = 1;\nexports.K = K;\n`),
+    ).toBe(CLEAN);
+  });
+
+  it('a non-seam post-hoc write on an exported binding stays clean', () => {
+    expect(cjs(`'use strict';\nfunction K() {}\nK.a = 1;\nexports.K = K;\n`)).toBe(CLEAN);
+  });
+});
+
 describe('every way a seam can be exported reds', () => {
   const cases: Array<[string, Files, object?]> = [
     ['a direct `export function __x`', { 'dist/index.js': `export function __x() {}\n` }],

@@ -21,6 +21,8 @@
  *   - a seam nested in `export * as ns` is missed;
  *   - an unresolvable relative re-export is skipped instead of failing;
  *   - CommonJS `module.exports = { __x }` keys are not read;
+ *   - a post-hoc seam on a CommonJS-exported binding (`exports.K = K; K.__x = 1`)
+ *     is not read as reachable (#2206);
  *   - `.d.ts` interfaces are not read;
  *   - only the first `exports` condition is scanned;
  *   - a package that exposes nothing, or an empty workspace, reads as clean;
@@ -495,6 +497,34 @@ const MUTATIONS = [
     anchor:
       '          else fail(ctx, file, `Object.${how} on exported ${root} with a non-literal source`);',
     replacement: '          else void 0;',
+  },
+  {
+    id: 'M48',
+    expect: 'red',
+    claim:
+      'a CJS `exports.K = K` binding is not marked exported, so its post-hoc seam reads clean (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '    if (ts.isIdentifier(e)) exportedLocals.add(e.text);',
+    replacement: '    void e;',
+  },
+  {
+    id: 'M49',
+    expect: 'red',
+    claim: 'a shorthand `module.exports = { K }` binding is not marked exported (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '        exportedLocals.add(prop.name.text);',
+    replacement: '        void prop;',
+  },
+  {
+    id: 'M50',
+    expect: 'red',
+    claim: 'a defineProperty `{ value: K }` binding is not marked exported (#2206)',
+    subject: 'lib',
+    validate: jsStillParses,
+    anchor: '              markExported(p.initializer);',
+    replacement: '              void p;',
   },
 ];
 

@@ -58,6 +58,9 @@
  * does not resolve to a local declaration (an import, a generic) is not followed.
  * Post-hoc attachment is read when it happens in the same file on an exported
  * binding: `K.__x = 1`, `Object.assign` / `defineProperty` / `defineProperties`.
+ * An identifier is an exported binding when it is the value of an export
+ * position, CommonJS included: `exports.K = K`, `module.exports = { K }` (also
+ * `{ a: K }`), `Object.defineProperty(exports, 'K', { value: K })` (#2206).
  * Not followed: attachment through an import chain, and objects exported from an
  * imported binding (`import { o } from './x'; export { o }`).
  */
@@ -520,6 +523,25 @@ export function readExports(ctx, file) {
   const typeDecls = new Map();
   /** Local bindings a consumer can reach (exported by any form): post-hoc writes to them count. */
   const exportedLocals = new Set();
+  /**
+   * An identifier that is the VALUE of an exported position (`exports.K = K`,
+   * `module.exports = { K }`, `{ a: K }`, `Object.defineProperty(exports, 'K',
+   * { value: K })`) is reachable as `K` through the export, so a post-hoc write
+   * to `K` is reachable too. CommonJS has no `export` statement to mark it, so
+   * the marking happens here, wherever the export position appears (#2206).
+   */
+  const markExported = (expr) => {
+    let e = expr;
+    while (
+      ts.isParenthesizedExpression(e) ||
+      ts.isAsExpression(e) ||
+      ts.isSatisfiesExpression(e) ||
+      ts.isNonNullExpression(e)
+    ) {
+      e = e.expression;
+    }
+    if (ts.isIdentifier(e)) exportedLocals.add(e.text);
+  };
   for (const st of sf.statements) {
     if (
       ts.isImportDeclaration(st) &&
@@ -587,8 +609,12 @@ export function readExports(ctx, file) {
       }
       add(`${prefix}${n}`);
       // `{ ns: { __k } }` — a seam one level down is still reachable as `x.ns.__k`.
-      if (ts.isPropertyAssignment(prop))
+      if (ts.isPropertyAssignment(prop)) {
+        markExported(prop.initializer);
         valueMembers(prop.initializer, `${prefix}${n}.`, depth + 1);
+      } else if (ts.isShorthandPropertyAssignment(prop)) {
+        exportedLocals.add(prop.name.text);
+      }
     }
   };
 
@@ -787,6 +813,7 @@ export function readExports(ctx, file) {
         const n = exportsMember(left);
         if (n !== undefined) {
           add(n);
+          markExported(node.right);
           valueMembers(node.right, `${n}.`);
         }
       }
@@ -803,6 +830,13 @@ export function readExports(ctx, file) {
         const key = args[1];
         if (key && ts.isStringLiteralLike(key)) add(key.text);
         else fail(ctx, file, `Object.defineProperty on exports with a non-literal key`);
+        const desc = args[2];
+        if (desc && ts.isObjectLiteralExpression(desc)) {
+          for (const p of desc.properties) {
+            if (ts.isPropertyAssignment(p) && nameOf(p.name) === 'value')
+              markExported(p.initializer);
+          }
+        }
       } else if (
         touchesExports &&
         ts.isPropertyAccessExpression(callee) &&

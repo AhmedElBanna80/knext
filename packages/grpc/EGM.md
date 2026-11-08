@@ -36,6 +36,13 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
   - scripts: [./scripts/EGM.md](./scripts/EGM.md) - template copy at build time,
     runners for the verbs and the verified buf from source, and the token-vector
     generator.
+  - e2e/z7-identity-kind (no EGM.md): the Z7 zone-identity-token lane on kind.
+    `run.sh` is the whole lane (run by `.github/workflows/z7-identity-kind-e2e.yml`);
+    its phases, including the squatted-JWKS-ConfigMap row, are described in the
+    script's header. `mutation-rows.mjs` holds the operator mutation rows. The
+    lane's guard is `tests/z7-identity-kind-e2e-lane.test.ts` (repo root, not run
+    by `node scripts/bun-test.mjs packages/grpc`), and its prover is
+    `scripts/mutation-prove-2461-z7-kind-e2e.mjs`.
 
 ## Invariants
 

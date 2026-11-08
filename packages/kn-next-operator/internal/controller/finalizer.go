@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -157,18 +158,14 @@ func (r *NextAppReconciler) cleanupExternalState(ctx context.Context, app *appsv
 	// the same keyPrefix on purpose still share one keyspace, and deleting
 	// either one reaps both caches; the CLI's doctor warns about that collision.
 	if keyPrefix := operatorRedisKeyPrefix(app); keyPrefix != "" {
-		var cleanErr error
-		if app.Status.Cache != nil && app.Status.Cache.Isolation == "acl" {
-			// Isolated app (ADR-0071 D7): sweep as the app's own user, then
-			// DELUSER. spec.cache.url carries no credential for it, so the plain
-			// path would be refused.
-			cleanErr = r.cleanupIsolatedCache(ctx, app, keyPrefix)
-		} else {
-			cleanErr = r.Cleaner.CleanupCache(ctx, CacheTarget{
-				Provider:  app.Spec.Cache.Provider,
-				URL:       app.Spec.Cache.URL,
-				KeyPrefix: keyPrefix,
-			})
+		// An app that has an operator-owned credentials Secret (ADR-0071 D7) is
+		// cleaned up as its own ACL user and then has that user removed: its
+		// spec.cache.url carries no credential, so the plain path would be refused.
+		// The Secret decides, never status.cache, which is cleared on every pass
+		// that is not ready. An app with no such Secret takes the plain path.
+		cleanErr := r.cleanupIsolatedCache(ctx, app, keyPrefix)
+		if errors.Is(cleanErr, errNoCredentialsSecret) {
+			cleanErr = r.cleanupPlainCache(ctx, app, keyPrefix)
 		}
 		if cleanErr != nil {
 			logger.Error(cleanErr, "Redis keyspace cleanup failed; proceeding with deletion (best-effort)",
@@ -181,4 +178,21 @@ func (r *NextAppReconciler) cleanupExternalState(ctx context.Context, app *appsv
 	}
 
 	return nil
+}
+
+// cleanupPlainCache sweeps the app's keyspace with the credential in
+// spec.cache.url: the path for an app that never had an operator-owned user. A
+// prefix in the platform's or another app's range is never swept, whatever the
+// credential could reach (ADR-0071 D6a): deleting a squatting CR must not delete
+// the owner's cache.
+func (r *NextAppReconciler) cleanupPlainCache(ctx context.Context, app *appsv1alpha1.NextApp, keyPrefix string) error {
+	if why := reservedCachePrefix(app, keyPrefix); why != "" {
+		logf.FromContext(ctx).Info("Not sweeping a reserved key prefix", "keyPrefix", keyPrefix, "reason", why)
+		return nil
+	}
+	return r.Cleaner.CleanupCache(ctx, CacheTarget{
+		Provider:  app.Spec.Cache.Provider,
+		URL:       app.Spec.Cache.URL,
+		KeyPrefix: keyPrefix,
+	})
 }

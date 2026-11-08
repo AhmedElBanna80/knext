@@ -39,6 +39,7 @@ import (
 
 	platformv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/platform/v1alpha1"
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
+	"github.com/AhmedElBanna80/knext/packages/kn-next-operator/internal/validation"
 )
 
 // Reasons of the CacheCredentialsReady condition (ADR-0071 D2).
@@ -57,10 +58,18 @@ const (
 
 	// cacheSharedLiveMessage is the exact wording the ADR requires while the
 	// shared path is not observed refused. No wording that says "isolated" may be
-	// used before the refusal is observed.
+	// used before the endpoint's own state shows it.
 	cacheSharedLiveMessage = "isolation not in force: shared credential live"
 
+	// cacheInForceMessage is the only isolation claim the operator makes, and only
+	// after sharedPathLive found nothing on the endpoint (server state, not probes).
+	cacheInForceMessage = "isolation in force: the app runs under its own ACL user and no other enabled user " +
+		"on the endpoint, apart from the provisioner, reaches app keys"
+
 	cacheResyncInterval = 5 * time.Minute
+	// cacheRetryInterval is how soon a pass that could not finish, or that lost a
+	// conflict that may resolve, is tried again. The verdict owns the requeue.
+	cacheRetryInterval = 30 * time.Second
 )
 
 // RedisProvisioner is the operator's view of one registered Redis endpoint. It
@@ -72,13 +81,29 @@ type RedisProvisioner interface {
 	DelUser(ctx context.Context, username string) error
 	// Users lists every user on the endpoint (ACL USERS).
 	Users(ctx context.Context) ([]string, error)
-	// KeyPatterns returns the key patterns of one user (ACL GETUSER keys).
-	KeyPatterns(ctx context.Context, username string) ([]string, error)
-	// SharedCredentialLive reports whether the endpoint still accepts a
-	// connection that presents no credential, or the default user with a
-	// password nobody issued. detail names which.
+	// GetUser reports one user's flags and key patterns (ACL GETUSER).
+	GetUser(ctx context.Context, username string) (ACLUserInfo, error)
+	// Username is the user the provisioner itself authenticated as. A client that
+	// sends no username authenticates as "default".
+	Username() string
+	// SharedCredentialLive is the ADR-0071 condition 4 probe: does the endpoint
+	// accept a connection that presents no credential, or the default user with a
+	// password nobody issued. It is NECESSARY for an isolation claim, never
+	// sufficient: under requirepass both are refused while the real shared
+	// password still holds every key. detail names which probe succeeded.
 	SharedCredentialLive(ctx context.Context) (live bool, detail string, err error)
 	Close() error
+}
+
+// ACLUserInfo is what the endpoint reports about one user (ACL GETUSER): whether
+// it can log in and which key patterns it may touch.
+type ACLUserInfo struct {
+	Name string
+	// Enabled is the "on" flag. A user that is "off" cannot authenticate.
+	Enabled bool
+	// KeyPatterns are every key pattern the user holds, root and selectors, as
+	// Redis prints them ("~*", "~app:*", "%R~x*").
+	KeyPatterns []string
 }
 
 // RedisProvisionerDialer connects to an endpoint with the provisioner URL.
@@ -132,17 +157,11 @@ func registeredEndpoint(snap platformSnapshot, canonical string) (platformv1alph
 	return platformv1alpha1.RedisEndpoint{}, false
 }
 
-var derivedPrefixRe = regexp.MustCompile(`^kn-[0-9a-f]{12}$`)
-
-// reservedCachePrefix reports ADR-0071 D6a rules 0 and 1 for an app's prefix.
+// reservedCachePrefix reports ADR-0071 D6a rules 0 and 1 for an app's prefix. The
+// rule lives in internal/validation, next to the admission check that applies it
+// at write time, so the two cannot drift.
 func reservedCachePrefix(app *appsv1alpha1.NextApp, prefix string) string {
-	if prefix == "knext" || strings.HasPrefix(prefix, "knext:") {
-		return fmt.Sprintf("keyPrefix %q is reserved for the platform keyspace", prefix)
-	}
-	if derivedPrefixRe.MatchString(prefix) && prefix != defaultRedisKeyPrefix(app) {
-		return fmt.Sprintf("keyPrefix %q is in the range derived for other apps and is not this app's own", prefix)
-	}
-	return ""
+	return validation.CacheKeyPrefixViolation(app.Namespace, app.Name, prefix)
 }
 
 // prefixesOverlap reports whether two key prefixes can address the same keys:
@@ -172,6 +191,37 @@ func patternPrefix(p string) (prefix string, ok bool) {
 	return b.String(), true
 }
 
+// patternMayCoverPrefix reports whether an ACL key pattern can address a key under
+// "<prefix>:". It errs toward yes: a pattern is judged by its literal head (the
+// text before the first glob character), and anything whose head and the app's
+// "<prefix>:" are not provably different counts as covering. "~*" covers every
+// prefix; "~billing:*" covers none of "shop-web".
+func patternMayCoverPrefix(pattern, prefix string) bool {
+	if i := strings.Index(pattern, "~"); i >= 0 {
+		pattern = pattern[i+1:]
+	}
+	var head strings.Builder
+	glob := false
+scan:
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '*', '?', '[':
+			glob = true
+			break scan
+		case '\\':
+			if i+1 < len(pattern) {
+				i++
+			}
+		}
+		head.WriteByte(pattern[i])
+	}
+	h, target := head.String(), prefix+":"
+	if glob {
+		return strings.HasPrefix(target, h) || strings.HasPrefix(h, target)
+	}
+	return strings.HasPrefix(h, target)
+}
+
 // newRedisPassword is 32 random bytes, URL-safe.
 func newRedisPassword() (string, error) {
 	b := make([]byte, 32)
@@ -193,9 +243,11 @@ func (r *NextAppReconciler) clusterIdentity(ctx context.Context, snap platformSn
 }
 
 // reconcileCacheCredentials is the cache-credentials step (ADR-0071 D2/D3/D6).
-// It never returns an error for a condition the app can be told about; those
-// are the state's reason. A returned error is a transient failure to retry.
-func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *appsv1alpha1.NextApp, snap platformSnapshot) (cacheCredentialsState, error) {
+// A condition the app can be told about is the returned state's reason, never an
+// error. A returned error is a transient failure to complete the step; Reconcile
+// turns it into a ProvisionerRefused-class state (transientCacheCredentials), so
+// the verdict, not the pass, reports and requeues it.
+func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *appsv1alpha1.NextApp, snap platformSnapshot) (cacheCredentialsState, error) { //nolint:gocyclo // one ordered pass over the ADR's refusal table; splitting it would hide the order
 	if !cacheIsRedis(app) {
 		return cacheCredentialsState{}, nil
 	}
@@ -224,24 +276,15 @@ func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *
 		return st, nil
 	}
 
-	if redisURLHasUserinfo(app.Spec.Cache.URL) {
-		return fail(ReasonCacheSharedCredentialInSpec,
-			"spec.cache.url carries credentials; an isolated app gets its credential from the operator-owned Secret")
-	}
-	if app.Spec.Secrets != nil {
-		if e, ok := app.Spec.Secrets.EnvMap["REDIS_URL"]; ok && e.SecretName != st.secretName {
-			return fail(ReasonCacheSharedCredentialInSpec,
-				"spec.secrets.envMap sets REDIS_URL; an isolated app gets it from the operator-owned Secret")
+	if reason, msg := cacheLocalRefusal(app); reason != "" {
+		if reason == ReasonCachePrefixReserved {
+			// The prefix reaches another app's keys. A user issued before the rule
+			// applied (a CR admitted earlier) must not keep that reach.
+			msg += r.revokeAfterRefusal(ctx, app, snap, ep)
 		}
+		return fail(reason, msg)
 	}
 	prefix := operatorRedisKeyPrefix(app)
-	if prefix == "" {
-		return fail(ReasonCachePrefixUnknown,
-			"the app's Redis key prefix is not known to the operator (set spec.cache.keyPrefix)")
-	}
-	if why := reservedCachePrefix(app, prefix); why != "" {
-		return fail(ReasonCachePrefixReserved, why)
-	}
 
 	identity, err := r.clusterIdentity(ctx, snap)
 	if err != nil {
@@ -251,7 +294,7 @@ func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *
 
 	provURL, err := r.provisionerURL(ctx, ep)
 	if err != nil {
-		return fail(ReasonCacheProvisionerRefused, "the provisioner credential cannot be read: "+err.Error())
+		return fail(ReasonCacheProvisionerRefused, "the provisioner credential cannot be used: "+redactErr(err))
 	}
 	prov, err := r.redisDialer()(ctx, provURL)
 	if err != nil {
@@ -267,10 +310,22 @@ func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *
 		return fail(ReasonCacheAclUnsupported, fmt.Sprintf("Redis/Valkey %s is older than 7.0", ver))
 	}
 
-	// D6a: a user already on the endpoint whose key pattern overlaps ours is a
-	// conflict, orphans and other clusters' users included. Whoever holds a user
-	// first keeps it; the second claimant fails closed and never creates one.
-	conflict, err := prefixConflict(ctx, prov, st.username, prefix)
+	// D6a rule 2: who owns the prefix is decided over every app on this endpoint,
+	// never by who got here first.
+	apps, err := r.endpointApps(ctx, app, canonical)
+	if err != nil {
+		return st, err
+	}
+	self := newPrefixClaim(app, prefix, identity)
+	claims := eligibleClaims(apps, identity)
+	if blocker := prefixBlocker(claims, self.ref); blocker != nil {
+		// The loser holds no user: one issued before the owner came into view is
+		// revoked, or it would keep reaching the owner's keys.
+		return fail(ReasonCachePrefixConflict, conflictMessage(prefix, *blocker, self)+revokeUser(ctx, prov, st.username))
+	}
+	// D6a rule 3: what is on the endpoint, not only the CRs. Evicts the users of
+	// visible losers; anything else that overlaps wins against this app.
+	conflict, err := claimPrefix(ctx, prov, self, claims)
 	if err != nil {
 		return fail(ReasonCacheProvisionerRefused, "cannot read the users on the endpoint: "+redactErr(err))
 	}
@@ -295,19 +350,38 @@ func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *
 		return fail(ReasonCacheProvisionerRefused, "ACL SETUSER was refused: "+redactErr(err))
 	}
 
+	// Look again now that the write has landed. Another claimant that checked at the
+	// same moment, from a view that differs from this one, may have written too; an
+	// overlapping user that is not a visible loser's fails this app closed rather
+	// than leaving two users over the same keys.
+	conflict, err = claimPrefix(ctx, prov, self, claims)
+	if err != nil {
+		return fail(ReasonCacheProvisionerRefused, "cannot read the users on the endpoint: "+redactErr(err))
+	}
+	if conflict != "" {
+		return fail(ReasonCachePrefixConflict, conflict+revokeUser(ctx, prov, st.username))
+	}
+
 	st.failClosed = false
 	st.ready = true
-	live, detail, perr := prov.SharedCredentialLive(ctx)
-	switch {
-	case perr != nil:
-		st.reason, st.message = ReasonCacheSharedCredentialLive, cacheSharedLiveMessage+" (the probe failed: "+redactErr(perr)+")"
-	case live:
+	if live, detail := sharedPathLive(ctx, prov, apps, app); live {
 		st.reason, st.message = ReasonCacheSharedCredentialLive, cacheSharedLiveMessage+" ("+detail+")"
-	default:
-		st.reason = ReasonCacheProvisioned
-		st.message = "the app runs under its own ACL user and the endpoint refuses the shared credential"
+	} else {
+		st.reason, st.message = ReasonCacheProvisioned, cacheInForceMessage
 	}
 	return st, nil
+}
+
+// transientCacheCredentials is the state of a pass whose cache-credentials step
+// could not finish (an API or Redis blip). It is a ProvisionerRefused-class state
+// and fails closed: the verdict reports it and owns the retry, so a Provisioned
+// condition from an earlier pass cannot outlive the pass that could not confirm it.
+func transientCacheCredentials(app *appsv1alpha1.NextApp, err error) cacheCredentialsState {
+	return cacheCredentialsState{
+		active: true, failClosed: true, reason: ReasonCacheProvisionerRefused,
+		message:    "the cache credentials could not be reconciled and will be retried: " + redactErr(err),
+		secretName: redisCredentialsSecretName(app),
+	}
 }
 
 func failClosedCache(app *appsv1alpha1.NextApp, reason, msg string) cacheCredentialsState {
@@ -315,6 +389,16 @@ func failClosedCache(app *appsv1alpha1.NextApp, reason, msg string) cacheCredent
 		active: true, failClosed: true, reason: reason, message: msg,
 		secretName: redisCredentialsSecretName(app),
 	}
+}
+
+// cacheRetries reports whether a not-ready state can clear without a spec change,
+// so the verdict should look again soon rather than wait for the next event.
+func cacheRetries(st cacheCredentialsState) bool {
+	switch st.reason {
+	case ReasonCacheProvisionerRefused, ReasonCacheAclUnsupported, ReasonCachePrefixConflict:
+		return true
+	}
+	return false
 }
 
 func redisMajor(version string) int {
@@ -326,10 +410,63 @@ func redisMajor(version string) int {
 	return n
 }
 
+var redisURLInError = regexp.MustCompile(`redis(s)?://[^\s]*@`)
+
 // redactErr keeps a Redis error from carrying a URL with a password.
 func redactErr(err error) string {
-	s := err.Error()
-	return regexp.MustCompile(`redis(s)?://[^\s]*@`).ReplaceAllString(s, "redis$1://***@")
+	return redisURLInError.ReplaceAllString(err.Error(), "redis$1://***@")
+}
+
+// revokeUser removes the app's own ACL user and returns text for the condition
+// message when that failed. ACL DELUSER of a user that is not there is not an error.
+func revokeUser(ctx context.Context, prov RedisProvisioner, username string) string {
+	if err := prov.DelUser(ctx, username); err != nil {
+		return " (the app's ACL user could not be removed: " + redactErr(err) + ")"
+	}
+	return ""
+}
+
+// revokeAfterRefusal dials the registered endpoint and removes the app's own ACL
+// user. Best-effort: the refusal stands whatever happens here.
+func (r *NextAppReconciler) revokeAfterRefusal(ctx context.Context, app *appsv1alpha1.NextApp, snap platformSnapshot, ep platformv1alpha1.RedisEndpoint) string {
+	identity, err := r.clusterIdentity(ctx, snap)
+	if err != nil {
+		return " (the app's earlier ACL user could not be checked: " + redactErr(err) + ")"
+	}
+	provURL, err := r.provisionerURL(ctx, ep)
+	if err != nil {
+		return " (the app's earlier ACL user could not be checked: " + redactErr(err) + ")"
+	}
+	prov, err := r.redisDialer()(ctx, provURL)
+	if err != nil {
+		return " (the app's earlier ACL user could not be checked: " + redactErr(err) + ")"
+	}
+	defer func() { _ = prov.Close() }()
+	return revokeUser(ctx, prov, redisACLUsername(identity, app))
+}
+
+// claimPrefix settles the endpoint side of D6a for an app that owns its prefix by
+// rule. Every other claim that overlaps it is a loser by construction, so the
+// users of those apps are removed; any other overlapping knext-app-* user (an
+// orphan, another cluster's) is a conflict and is never touched.
+func claimPrefix(ctx context.Context, prov RedisProvisioner, self prefixClaim, claims []prefixClaim) (string, error) {
+	users, err := prov.Users(ctx)
+	if err != nil {
+		return "", err
+	}
+	present := make(map[string]bool, len(users))
+	for _, u := range users {
+		present[u] = true
+	}
+	for _, c := range claims {
+		if c.ref == self.ref || !present[c.username] || !prefixesOverlap(self.prefix, c.prefix) {
+			continue
+		}
+		if err := prov.DelUser(ctx, c.username); err != nil {
+			return "", err
+		}
+	}
+	return prefixConflict(ctx, prov, self.username, self.prefix)
 }
 
 func prefixConflict(ctx context.Context, prov RedisProvisioner, ownUser, prefix string) (string, error) {
@@ -341,11 +478,11 @@ func prefixConflict(ctx context.Context, prov RedisProvisioner, ownUser, prefix 
 		if u == ownUser || !strings.HasPrefix(u, redisACLUsernamePrefix) {
 			continue
 		}
-		pats, err := prov.KeyPatterns(ctx, u)
+		info, err := prov.GetUser(ctx, u)
 		if err != nil {
 			return "", err
 		}
-		for _, p := range pats {
+		for _, p := range info.KeyPatterns {
 			other, ok := patternPrefix(p)
 			if !ok || prefixesOverlap(prefix, other) {
 				return fmt.Sprintf("another ACL user on the endpoint already covers keys under %q; "+
@@ -356,6 +493,63 @@ func prefixConflict(ctx context.Context, prov RedisProvisioner, ownUser, prefix 
 	return "", nil
 }
 
+// sharedPathLive decides, from the endpoint's own state, whether a shared
+// credential can still reach app keys. The operator makes an isolation claim only
+// when it reports false. Order: what the apps on the endpoint hold, then what the
+// server says about every user, then the ADR's two probes.
+//
+// The probes alone prove nothing: under requirepass a no-credential connect and
+// AUTH default with a random password are both refused while the real shared
+// password still holds every key. A named shared user is never probed at all.
+func sharedPathLive(ctx context.Context, prov RedisProvisioner, apps []*appsv1alpha1.NextApp, self *appsv1alpha1.NextApp) (live bool, detail string) {
+	var prefixes []string
+	for _, a := range apps {
+		if p := operatorRedisKeyPrefix(a); p != "" {
+			prefixes = append(prefixes, p)
+		}
+		if a != self && holdsSharedCredential(a) {
+			return true, fmt.Sprintf("app %s/%s still holds a shared credential (isolation: none, or a credential in its spec)", a.Namespace, a.Name)
+		}
+	}
+
+	provisioner := prov.Username()
+	if provisioner == "" || provisioner == "default" {
+		return true, "the provisioner authenticates as the default user, so the shared credential is the operator's own"
+	}
+	users, err := prov.Users(ctx)
+	if err != nil {
+		return true, "the check failed: " + redactErr(err)
+	}
+	for _, u := range users {
+		if u == provisioner || strings.HasPrefix(u, redisACLUsernamePrefix) {
+			continue
+		}
+		info, err := prov.GetUser(ctx, u)
+		if err != nil {
+			return true, "the check failed: " + redactErr(err)
+		}
+		if !info.Enabled {
+			continue
+		}
+		for _, p := range info.KeyPatterns {
+			for _, prefix := range prefixes {
+				if patternMayCoverPrefix(p, prefix) {
+					return true, fmt.Sprintf("user %q is enabled and its key pattern %q reaches app keys", u, p)
+				}
+			}
+		}
+	}
+
+	live, probe, err := prov.SharedCredentialLive(ctx)
+	switch {
+	case err != nil:
+		return true, "the probe failed: " + redactErr(err)
+	case live:
+		return true, probe
+	}
+	return false, ""
+}
+
 func (r *NextAppReconciler) reader() client.Reader {
 	if r.APIReader != nil {
 		return r.APIReader
@@ -363,6 +557,11 @@ func (r *NextAppReconciler) reader() client.Reader {
 	return r.Client
 }
 
+// provisionerURL reads the provisioner Secret and returns its URL pinned to the
+// registered endpoint (ADR-0071 D1: endpoint-bound). A Secret whose host does not
+// canonicalise to exactly the registered endpoint is refused, and one that does is
+// dialled at the registered form, never at the Secret's own spelling, so the
+// credential cannot be sent anywhere the platform admin did not register.
 func (r *NextAppReconciler) provisionerURL(ctx context.Context, ep platformv1alpha1.RedisEndpoint) (string, error) {
 	var sec corev1.Secret
 	key := types.NamespacedName{Namespace: operatorNamespace(), Name: ep.ProvisionerSecretRef.Name}
@@ -373,7 +572,17 @@ func (r *NextAppReconciler) provisionerURL(ctx context.Context, ep platformv1alp
 	if !ok || len(v) == 0 {
 		return "", fmt.Errorf("Secret %s/%s has no key %q", key.Namespace, key.Name, ep.ProvisionerSecretRef.Key)
 	}
-	return strings.TrimSpace(string(v)), nil
+	raw := strings.TrimSpace(string(v))
+	// The errors below never carry raw: it holds the provisioner's password.
+	if canonical, err := canonicalRedisEndpoint(raw, operatorNamespace()); err != nil || canonical != ep.Endpoint {
+		return "", fmt.Errorf("Secret %s/%s does not point at the registered endpoint %s", key.Namespace, key.Name, ep.Endpoint)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("Secret %s/%s does not hold a URL", key.Namespace, key.Name)
+	}
+	u.Host = ep.Endpoint
+	return u.String(), nil
 }
 
 // errCredentialsSecretForeign: the reserved Secret name is taken by an object
@@ -475,11 +684,38 @@ func cacheStatusFor(st cacheCredentialsState) *appsv1alpha1.CacheStatus {
 	return &appsv1alpha1.CacheStatus{Isolation: "acl", Username: st.username, SecretName: st.secretName}
 }
 
-// cleanupIsolatedCache is the finalizer's half (D7): sweep the app's keys as the
-// app's own user, then ACL DELUSER with the provisioner credential. Best-effort
-// like the rest of the cleanup; a failure is returned for the caller to warn on.
+// errNoCredentialsSecret: the app never had an operator-owned credentials Secret,
+// so the isolated cleanup does not apply and the plain path does.
+var errNoCredentialsSecret = errors.New("no operator-owned credentials Secret")
+
+// cleanupIsolatedCache is the finalizer's half (D7). It is chosen by the presence
+// of the operator-owned Secret, never by status.cache (which is cleared on every
+// pass that is not ready): an app deleted during a refusal, or after a switch to
+// isolation: none, still has its user to remove.
+//
+// In order: re-assert the user from the Secret (a Redis restart may have lost it),
+// sweep the app's keys as the app's own user, then ACL DELUSER. The re-assert and
+// the sweep run only when the app owns its prefix; a loser must not sweep the
+// owner's keys, nor be given a user to do it with. When the endpoint is no longer
+// registered the sweep still runs with the app's own credential, but the user
+// cannot be removed, and the error returned names it.
 func (r *NextAppReconciler) cleanupIsolatedCache(ctx context.Context, app *appsv1alpha1.NextApp, keyPrefix string) error {
 	logger := logf.FromContext(ctx)
+	if r.APIReader == nil && r.Client == nil {
+		// No cluster client wired: unit tests of unrelated paths, the same
+		// convention as a nil Cleaner. There is no Secret to find.
+		return errNoCredentialsSecret
+	}
+	var sec corev1.Secret
+	if err := r.reader().Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: redisCredentialsSecretName(app)}, &sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return errNoCredentialsSecret
+		}
+		return err
+	}
+	if !controlledByZone(&sec, app) {
+		return errNoCredentialsSecret
+	}
 	snap, err := r.loadPlatform(ctx)
 	if err != nil {
 		return err
@@ -488,36 +724,89 @@ func (r *NextAppReconciler) cleanupIsolatedCache(ctx context.Context, app *appsv
 	if cerr != nil {
 		return cerr
 	}
-	ep, ok := registeredEndpoint(snap, canonical)
-	if !ok {
-		return errors.New("endpoint is no longer registered; the ACL user is left in place")
-	}
-	var sec corev1.Secret
-	if err := r.reader().Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: redisCredentialsSecretName(app)}, &sec); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil // never provisioned
-		}
-		return err
-	}
-	if appURL := string(sec.Data[redisCredentialsSecretKey]); appURL != "" && r.Cleaner != nil {
-		if err := r.Cleaner.CleanupCache(ctx, CacheTarget{Provider: "redis", URL: appURL, KeyPrefix: keyPrefix}); err != nil {
-			logger.Error(err, "sweeping the isolated keyspace as the app user failed", "keyPrefix", keyPrefix)
-		}
-	}
 	identity, err := r.clusterIdentity(ctx, snap)
 	if err != nil {
 		return err
 	}
-	provURL, err := r.provisionerURL(ctx, ep)
+	username := redisACLUsername(identity, app)
+
+	owns, err := r.ownsPrefixForCleanup(ctx, app, canonical, keyPrefix, identity)
 	if err != nil {
 		return err
 	}
-	prov, err := r.redisDialer()(ctx, provURL)
-	if err != nil {
-		return err
+
+	ep, registered := registeredEndpoint(snap, canonical)
+	var prov RedisProvisioner
+	var dialErr error
+	if registered {
+		var provURL string
+		if provURL, dialErr = r.provisionerURL(ctx, ep); dialErr == nil {
+			if prov, dialErr = r.redisDialer()(ctx, provURL); dialErr == nil {
+				defer func() { _ = prov.Close() }()
+			}
+		}
 	}
-	defer func() { _ = prov.Close() }()
-	return prov.DelUser(ctx, redisACLUsername(identity, app))
+
+	appURL := string(sec.Data[redisCredentialsSecretKey])
+	if owns && appURL != "" && r.Cleaner != nil {
+		if prov != nil {
+			if err := reassertForCleanup(ctx, prov, app, keyPrefix, username, appURL); err != nil {
+				logger.Error(err, "re-asserting the app's ACL user before the sweep failed", "keyPrefix", keyPrefix)
+			}
+		}
+		if err := r.Cleaner.CleanupCache(ctx, CacheTarget{Provider: "redis", URL: appURL, KeyPrefix: keyPrefix}); err != nil {
+			logger.Error(err, "sweeping the isolated keyspace as the app user failed", "keyPrefix", keyPrefix)
+		}
+	}
+	switch {
+	case prov != nil:
+		return prov.DelUser(ctx, username)
+	case !registered:
+		return fmt.Errorf("the Redis endpoint is no longer registered, so the ACL user %q was left on it", username)
+	default:
+		return fmt.Errorf("the ACL user %q was left on the endpoint: %w", username, dialErr)
+	}
+}
+
+// reassertForCleanup runs ACL SETUSER from the Secret's credential, the same
+// arguments a reconcile would use, so the sweep does not run as a user a Redis
+// restart removed.
+func reassertForCleanup(ctx context.Context, prov RedisProvisioner, app *appsv1alpha1.NextApp, prefix, username, appURL string) error {
+	u, err := url.Parse(appURL)
+	if err != nil || u.User == nil || u.User.Username() != username {
+		return errors.New("the credentials Secret does not hold this app's user")
+	}
+	password, set := u.User.Password()
+	if !set || password == "" {
+		return errors.New("the credentials Secret holds no password")
+	}
+	cdn := ""
+	if cdnRendersEnv(app) {
+		cdn = cdnTagPrefix(app)
+	}
+	return prov.SetUser(ctx, username, redisACLRules(prefix, password, "", cdn))
+}
+
+// ownsPrefixForCleanup says whether deleting the app may sweep its prefix: the
+// prefix is not reserved, and no app that owns an overlapping prefix on the same
+// endpoint outranks it. The deleting app is counted as a claimant whatever its
+// isolation setting, so an app that opted out cannot reap an owner's cache.
+func (r *NextAppReconciler) ownsPrefixForCleanup(ctx context.Context, app *appsv1alpha1.NextApp, canonical, prefix, identity string) (bool, error) {
+	if reservedCachePrefix(app, prefix) != "" {
+		return false, nil
+	}
+	apps, err := r.endpointApps(ctx, app, canonical)
+	if err != nil {
+		return false, err
+	}
+	self := newPrefixClaim(app, prefix, identity)
+	claims := []prefixClaim{self}
+	for _, c := range eligibleClaims(apps, identity) {
+		if c.ref != self.ref {
+			claims = append(claims, c)
+		}
+	}
+	return prefixBlocker(claims, self.ref) == nil, nil
 }
 
 // Cluster identity (ADR-0071 D2): the kube-system Namespace uid, read only when
@@ -526,7 +815,10 @@ func (r *NextAppReconciler) cleanupIsolatedCache(ctx context.Context, app *appsv
 
 // ── go-redis implementation ─────────────────────────────────────────────────
 
-type goRedisProvisioner struct{ rdb *redis.Client }
+type goRedisProvisioner struct {
+	rdb      *redis.Client
+	username string
+}
 
 func dialGoRedisProvisioner(ctx context.Context, provisionerURL string) (RedisProvisioner, error) {
 	opt, err := redis.ParseURL(provisionerURL)
@@ -539,10 +831,18 @@ func dialGoRedisProvisioner(ctx context.Context, provisionerURL string) (RedisPr
 		_ = rdb.Close()
 		return nil, err
 	}
-	return &goRedisProvisioner{rdb: rdb}, nil
+	return &goRedisProvisioner{rdb: rdb, username: opt.Username}, nil
 }
 
 func (g *goRedisProvisioner) Close() error { return g.rdb.Close() }
+
+// Username is the user the connection authenticated as; none sent means default.
+func (g *goRedisProvisioner) Username() string {
+	if g.username == "" {
+		return "default"
+	}
+	return g.username
+}
 
 func (g *goRedisProvisioner) Version(ctx context.Context) (string, error) {
 	info, err := g.rdb.Info(ctx, "server").Result()
@@ -570,32 +870,90 @@ func (g *goRedisProvisioner) Users(ctx context.Context) ([]string, error) {
 	return g.rdb.Do(ctx, "ACL", "USERS").StringSlice()
 }
 
-func (g *goRedisProvisioner) KeyPatterns(ctx context.Context, username string) ([]string, error) {
+func (g *goRedisProvisioner) GetUser(ctx context.Context, username string) (ACLUserInfo, error) {
 	res, err := g.rdb.Do(ctx, "ACL", "GETUSER", username).Result()
 	if err != nil {
-		return nil, err
+		return ACLUserInfo{}, err
 	}
-	var keys string
-	switch v := res.(type) {
-	case map[any]any:
-		keys, _ = v["keys"].(string)
-	case []any:
-		for i := 0; i+1 < len(v); i += 2 {
-			if k, _ := v[i].(string); k == "keys" {
-				keys, _ = v[i+1].(string)
+	return parseACLGetUser(username, res), nil
+}
+
+// parseACLGetUser reads an ACL GETUSER reply in either protocol shape: RESP3 is a
+// map, RESP2 a flat array of key, value pairs. Selectors (Redis 7) carry their own
+// key patterns, and a user is judged by all of them.
+func parseACLGetUser(name string, reply any) ACLUserInfo {
+	info := ACLUserInfo{Name: name}
+	fields := aclReplyFields(reply)
+	if flags, ok := fields["flags"].([]any); ok {
+		for _, f := range flags {
+			if s, _ := f.(string); s == "on" {
+				info.Enabled = true
 			}
 		}
 	}
-	// "allkeys" is how Redis prints "~*"; it covers everything.
-	if strings.TrimSpace(keys) == "" {
-		return nil, nil
+	info.KeyPatterns = aclKeyPatterns(fields["keys"])
+	if sels, ok := fields["selectors"].([]any); ok {
+		for _, s := range sels {
+			info.KeyPatterns = append(info.KeyPatterns, aclKeyPatterns(aclReplyFields(s)["keys"])...)
+		}
 	}
-	return strings.Fields(strings.ReplaceAll(keys, "allkeys", "~*")), nil
+	return info
+}
+
+func aclReplyFields(reply any) map[string]any {
+	out := map[string]any{}
+	switch v := reply.(type) {
+	case map[any]any:
+		for k, val := range v {
+			if ks, ok := k.(string); ok {
+				out[ks] = val
+			}
+		}
+	case []any:
+		for i := 0; i+1 < len(v); i += 2 {
+			if ks, ok := v[i].(string); ok {
+				out[ks] = v[i+1]
+			}
+		}
+	}
+	return out
+}
+
+// aclKeyPatterns splits a "keys" value: Redis 7 prints one string ("~a:* %R~b*"),
+// older servers an array of bare patterns. "allkeys" is how Redis prints "~*".
+func aclKeyPatterns(v any) []string {
+	var out []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		if p == "allkeys" || p == "*" {
+			p = "~*"
+		}
+		if !strings.Contains(p, "~") {
+			p = "~" + p
+		}
+		out = append(out, p)
+	}
+	switch k := v.(type) {
+	case string:
+		for _, p := range strings.Fields(k) {
+			add(p)
+		}
+	case []any:
+		for _, e := range k {
+			if s, ok := e.(string); ok {
+				add(s)
+			}
+		}
+	}
+	return out
 }
 
 // SharedCredentialLive dials the same endpoint twice without the provisioner's
 // credentials: with none at all, and as the default user with a password nobody
-// issued. Either succeeding means the shared path is still open.
+// issued. Either succeeding means the shared path is still open. A refusal of
+// both is necessary for an isolation claim and not sufficient (sharedPathLive).
 func (g *goRedisProvisioner) SharedCredentialLive(ctx context.Context) (bool, string, error) {
 	base := g.rdb.Options()
 	probe := func(user, pass string) (bool, error) {

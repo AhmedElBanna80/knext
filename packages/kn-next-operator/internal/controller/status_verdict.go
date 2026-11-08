@@ -1112,8 +1112,18 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 			v.events = append(v.events, verdictEvent{eventType, cond.Reason, cond.Message})
 		}
 		v.conditions = append(v.conditions, cond)
-		if extras.cache.ready && (v.requeueAfter == 0 || cacheResyncInterval < v.requeueAfter) {
-			v.requeueAfter = cacheResyncInterval
+		// The verdict owns the requeue of this step: the five-minute re-assert while
+		// it is ready, a short retry while it failed in a way that can clear on its
+		// own (a transient error, a conflict that may resolve).
+		requeue := time.Duration(0)
+		switch {
+		case extras.cache.ready:
+			requeue = cacheResyncInterval
+		case cacheRetries(*extras.cache):
+			requeue = cacheRetryInterval
+		}
+		if requeue > 0 && (v.requeueAfter == 0 || requeue < v.requeueAfter) {
+			v.requeueAfter = requeue
 		}
 	} else if extras.cache != nil && prevCache != nil {
 		v.removeConditions = append(v.removeConditions, ConditionCacheCredentialsReady)

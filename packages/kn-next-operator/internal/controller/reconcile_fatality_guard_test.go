@@ -54,6 +54,13 @@ func TestReconcileChildFatalityMatchesAllowlist(t *testing.T) {
 	// optional AND its failure is surfaced honestly by computeStatusVerdict.
 	nonFatalAllowlist := map[string]bool{
 		"reconcileImagePrewarmDaemonSet": true,
+		// ADR-0071: not optional, but an error that returned out of Reconcile skipped
+		// computeStatusVerdict and left the previous pass's Provisioned condition
+		// standing over a pass that could not confirm it. Its error becomes a
+		// fail-closed ProvisionerRefused-class state (transientCacheCredentials), so
+		// the app can never run on a shared credential because of it, and the verdict
+		// reports it and owns the retry (TestVerdictRequeuesTheCacheCredentialsStep).
+		"reconcileCacheCredentials": true,
 	}
 
 	fset := token.NewFileSet()

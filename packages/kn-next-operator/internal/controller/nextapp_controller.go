@@ -491,11 +491,15 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	// 0d. Per-app Redis ACL user (ADR-0071). Before the Knative Service, so the
 	// credentials Secret exists when the first revision resolves its secretKeyRef.
 	// The outcome reaches status through computeStatusVerdict (CacheCredentialsReady).
-	var cacheCreds cacheCredentialsState
+	// A step that could not finish is a ProvisionerRefused-class STATE, not an error
+	// return: returning here would skip computeStatusVerdict, leaving the previous
+	// pass's Provisioned condition standing over a pass that could not confirm it.
+	// The verdict reports it and owns the retry.
 	var err error
-	if cacheCreds, err = r.reconcileCacheCredentials(ctx, &nextApp, snap); err != nil {
-		logger.Error(err, "Failed to reconcile the Redis cache credentials")
-		return ctrl.Result{}, err
+	cacheCreds, cacheErr := r.reconcileCacheCredentials(ctx, &nextApp, snap)
+	if cacheErr != nil {
+		logger.Error(cacheErr, "Failed to reconcile the Redis cache credentials")
+		cacheCreds = transientCacheCredentials(&nextApp, cacheErr)
 	}
 	injectCacheCredentialsEnv(&nextApp, cacheCreds)
 	nextApp.Status.Cache = cacheStatusFor(cacheCreds)

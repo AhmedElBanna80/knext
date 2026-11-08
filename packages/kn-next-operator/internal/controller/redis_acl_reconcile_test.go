@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -34,32 +35,48 @@ import (
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
 
-// fakeProvisioner is an in-memory Redis ACL endpoint.
+// fakeProvisioner is an in-memory Redis ACL endpoint. It is safe for concurrent
+// use, because the ownership tests drive two reconciles at once.
 type fakeProvisioner struct {
+	mu          sync.Mutex
 	version     string
 	users       map[string][]string // user -> rules as last set
 	patterns    map[string][]string // user -> key patterns reported by GETUSER
-	sharedLive  bool
+	disabled    map[string]bool     // users that exist but are "off"
+	defaultOn   bool                // the shared "default" user is on with ~* (nopass or requirepass)
+	provUser    string              // the provisioner's own username ("" = provisioner)
+	sharedLive  bool                // what the no-credential / AUTH default PROBES see
+	getUserErr  error
 	setErr      error
 	delCalls    []string
 	setUserArgs map[string][]string
+	ops         []string          // ordered "SETUSER <u>" / "DELUSER <u>"
+	onSetUser   func(user string) // runs inside SetUser, before the write lands
 }
 
 func newFakeProvisioner() *fakeProvisioner {
 	return &fakeProvisioner{
 		version: "7.4.1", users: map[string][]string{}, patterns: map[string][]string{},
-		setUserArgs: map[string][]string{},
+		disabled: map[string]bool{}, setUserArgs: map[string][]string{},
 	}
 }
 
 func (f *fakeProvisioner) Close() error                            { return nil }
 func (f *fakeProvisioner) Version(context.Context) (string, error) { return f.version, nil }
 func (f *fakeProvisioner) SetUser(_ context.Context, u string, rules []string) error {
+	if f.onSetUser != nil {
+		f.onSetUser(u)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.setErr != nil {
 		return f.setErr
 	}
+	f.ops = append(f.ops, "SETUSER "+u)
 	f.users[u] = rules
 	f.setUserArgs[u] = rules
+	f.patterns[u] = nil // ACL SETUSER ... reset
+	delete(f.disabled, u)
 	for _, r := range rules {
 		if strings.HasPrefix(r, "~") {
 			f.patterns[u] = append(f.patterns[u], r)
@@ -68,23 +85,83 @@ func (f *fakeProvisioner) SetUser(_ context.Context, u string, rules []string) e
 	return nil
 }
 func (f *fakeProvisioner) DelUser(_ context.Context, u string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ops = append(f.ops, "DELUSER "+u)
 	f.delCalls = append(f.delCalls, u)
 	delete(f.users, u)
+	delete(f.patterns, u)
 	return nil
 }
 func (f *fakeProvisioner) Users(context.Context) ([]string, error) {
-	out := []string{"default"}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []string{"default", f.provisionerName()}
 	for u := range f.users {
 		out = append(out, u)
 	}
 	return out, nil
 }
-func (f *fakeProvisioner) KeyPatterns(_ context.Context, u string) ([]string, error) {
-	return f.patterns[u], nil
+
+// addUser puts a user on the endpoint the way a platform admin would: outside
+// any NextApp.
+func (f *fakeProvisioner) addUser(name string, on bool, patterns ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users[name] = nil
+	f.patterns[name] = patterns
+	if !on {
+		f.disabled[name] = true
+	}
 }
+
+func (f *fakeProvisioner) provisionerName() string {
+	if f.provUser == "" {
+		return "provisioner"
+	}
+	return f.provUser
+}
+
+func (f *fakeProvisioner) opsLog() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ops...)
+}
+
+func (f *fakeProvisioner) hasUser(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.users[name]
+	return ok
+}
+
+// GetUser reports ACL GETUSER: flags and key patterns, as the server holds them.
+func (f *fakeProvisioner) GetUser(_ context.Context, name string) (ACLUserInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getUserErr != nil {
+		return ACLUserInfo{}, f.getUserErr
+	}
+	switch name {
+	case "default":
+		return ACLUserInfo{Name: name, Enabled: f.defaultOn, KeyPatterns: []string{"~*"}}, nil
+	case f.provisionerName():
+		return ACLUserInfo{Name: name, Enabled: true, KeyPatterns: []string{"~*"}}, nil
+	}
+	return ACLUserInfo{Name: name, Enabled: !f.disabled[name], KeyPatterns: append([]string(nil), f.patterns[name]...)}, nil
+}
+
+// Username is the credential the operator itself dialled with.
+func (f *fakeProvisioner) Username() string { return f.provisionerName() }
+
 func (f *fakeProvisioner) SharedCredentialLive(context.Context) (bool, string, error) {
 	return f.sharedLive, "a connection without credentials is accepted", nil
 }
+
+// otherAppDerived is the derived prefix of an app other than the one under test.
+// It is computed, never written out: a literal run of hex next to "KeyPrefix" is
+// what a secret scanner takes for an API key, and these are not credentials.
+var otherAppDerived = defaultRedisKeyPrefix(aclTestApp("other", "app"))
 
 const (
 	aclTestEndpoint = "redis.cache.svc.cluster.local:6379"
@@ -277,7 +354,15 @@ func TestCacheCredentialsRefusals(t *testing.T) {
 		}, ReasonCacheSharedCredentialInSpec},
 		{"knext prefix", func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "knext" }, ReasonCachePrefixReserved},
 		{"knext: nested prefix", func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "knext:cdn" }, ReasonCachePrefixReserved},
-		{"another app's derived prefix", func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = "kn-0123456789ab" }, ReasonCachePrefixReserved},
+		{"another app's derived prefix", func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = otherAppDerived }, ReasonCachePrefixReserved},
+		// ADR-0071 D6a rule 1 is ^kn-[0-9a-f]{12}(:.*)?$ : a NESTING under any derived
+		// prefix is the same squat. `kn-<victim>:isr` is issued ~kn-<victim>:isr:*, the
+		// victim's ISR keys.
+		{"a nesting under another app's derived prefix", func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = otherAppDerived + ":isr" }, ReasonCachePrefixReserved},
+		{"a nesting with an empty remainder", func(a *appsv1alpha1.NextApp) { a.Spec.Cache.KeyPrefix = otherAppDerived + ":" }, ReasonCachePrefixReserved},
+		{"a nesting under the app's own derived prefix", func(a *appsv1alpha1.NextApp) {
+			a.Spec.Cache.KeyPrefix = defaultRedisKeyPrefix(a) + ":isr"
+		}, ReasonCachePrefixReserved},
 		{"prefix set through env is unknown to the operator", func(a *appsv1alpha1.NextApp) {
 			a.Spec.Cache.KeyPrefix = ""
 			a.Spec.Env = map[string]string{"REDIS_KEY_PREFIX": "mine"}
@@ -314,9 +399,12 @@ func TestCacheCredentialsOwnDerivedPrefixIsAccepted(t *testing.T) {
 	}
 }
 
-func TestCacheCredentialsPrefixConflict(t *testing.T) {
+// Overlap between two apps' prefixes is settled by ownership, not arrival
+// (redis_acl_ownership_test.go). What stays here is the endpoint-side half: an
+// overlapping user that no visible app owns is a conflict, whoever it belongs to.
+func TestCacheCredentialsOverlappingUserOnTheEndpointConflicts(t *testing.T) {
 	cases := []struct {
-		name, a, b string
+		name, held, wanted string
 	}{
 		{"equal", "team", "team"},
 		{"nested", "team", "team:sub"},
@@ -325,21 +413,13 @@ func TestCacheCredentialsPrefixConflict(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newACLHarness(t, true)
-			first := aclApp("shop", "a", tc.a, "")
-			if st, _ := h.r.reconcileCacheCredentials(context.Background(), first, h.snap); !st.ready {
-				t.Fatalf("first claimant: %+v", st)
-			}
-			second := aclApp("shop", "b", tc.b, "")
-			st, _ := h.r.reconcileCacheCredentials(context.Background(), second, h.snap)
+			h.prov.addUser("knext-app-"+redisClusterTag("ks-uid-1")+"-0123456789ab", true, "~"+tc.held+":*")
+			st, _ := h.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "b", tc.wanted, ""), h.snap)
 			if st.reason != ReasonCachePrefixConflict || !st.failClosed {
-				t.Fatalf("second claimant must fail closed: %+v", st)
+				t.Fatalf("must fail closed: %+v", st)
 			}
-			if _, ok := h.prov.users[redisACLUsername("ks-uid-1", second)]; ok {
+			if h.prov.hasUser(redisACLUsername("ks-uid-1", aclApp("shop", "b", tc.wanted, ""))) {
 				t.Fatal("the losing app got a user")
-			}
-			// The first claimant keeps working: its own re-assert is not a conflict with itself.
-			if st, _ := h.r.reconcileCacheCredentials(context.Background(), first, h.snap); !st.ready {
-				t.Fatalf("first claimant lost its user: %+v", st)
 			}
 		})
 	}

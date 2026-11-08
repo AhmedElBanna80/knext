@@ -240,3 +240,78 @@ func TestRolloutFailover_AnAppDiedBetweenServiceAndStatusWritesNoSecondRevision(
 		t.Errorf("app-0's Knative Service was rewritten after the failover (rv %s -> %s): a second revision would boot a second pod", rv, got)
 	}
 }
+
+// Failovers compound: each one hands the new limiter a free first slot, so two
+// inside one minute exceed the cap by two. The docs generalise to "+1 per
+// failover" from this case.
+func TestRolloutFailover_TwoFailoversInOneMinuteExceedTheCapByAtMostTwo(t *testing.T) {
+	const perMinute = 2 // one slot every 30s
+	w := newWave(t, 8, perMinute)
+	w.tick() // the first leader renders one app at t0
+
+	w.now = w.now.Add(5 * time.Second)
+	w.failover() // first failover, inside the 30s spacing
+	w.tick()
+
+	w.now = w.now.Add(5 * time.Second)
+	w.failover() // second failover, still inside the same minute
+	w.tick()
+
+	if w.rendered() != 3 {
+		t.Fatalf("%d rendered within 10s across two failovers, want 3: each new leader's first slot is free", w.rendered())
+	}
+
+	w.runUntilRendered(8)
+	if got := w.maxPerWindow(); got > perMinute+2 {
+		t.Errorf("worst minute held %d renders across two failovers, want at most maxAppsPerMinute+2 = %d (%v)", got, perMinute+2, w.times)
+	}
+	if got := w.maxPerWindow(); got != perMinute+2 {
+		t.Errorf("worst minute held %d renders, want exactly %d: the overshoot is +1 per failover", got, perMinute+2)
+	}
+	for _, n := range w.names {
+		if w.renders[n] != 1 {
+			t.Errorf("%s rendered %d times across two failovers, want exactly 1", n, w.renders[n])
+		}
+	}
+}
+
+// The +1 bound is proven for a leader that has STOPPED. If the old one is still
+// alive (two reconcilers, each with its own limiter, over one cluster and clock),
+// nothing in the limiter coordinates them, so this pins only what holds by
+// construction: every app still renders exactly once, and no minute exceeds the
+// sum of the two pacers (2*maxAppsPerMinute+2). Measured here the worst minute
+// was cap+1, but that is this schedule, not a bound, so the docs keep the
+// condition "once the old leader has stopped". The manager exits on lease loss,
+// so the realistic overlap is an in-flight reconcile finishing.
+func TestRolloutFailover_TwoLiveLeadersRenderEachAppOnceWithinTwoPacers(t *testing.T) {
+	const perMinute = 2
+	w := newWave(t, 10, perMinute)
+	old := w.r
+	w.tick() // the old leader renders one app and queues the rest on its own clock
+	w.now = w.now.Add(15 * time.Second)
+	w.failover() // w.r is now the new leader; `old` is still alive, 15s out of phase
+	both := []*NextAppReconciler{old, w.r}
+
+	for range 80 {
+		for _, r := range both {
+			w.r = r
+			w.tick()
+		}
+		if w.rendered() >= 10 {
+			break
+		}
+		w.now = w.now.Add(5 * time.Second)
+	}
+	if w.rendered() != 10 {
+		t.Fatalf("%d of 10 rendered with two live leaders", w.rendered())
+	}
+	for _, n := range w.names {
+		if w.renders[n] != 1 {
+			t.Errorf("%s rendered %d times with two live leaders, want exactly 1", n, w.renders[n])
+		}
+	}
+	got := w.maxPerWindow()
+	if got > 2*perMinute+2 {
+		t.Errorf("worst minute held %d renders with two live leaders, want at most 2*maxAppsPerMinute+2 = %d", got, 2*perMinute+2)
+	}
+}

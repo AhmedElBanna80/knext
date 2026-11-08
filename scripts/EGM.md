@@ -16,6 +16,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - Shared drivers: `lib/prover-report.mjs` (imported by all 166), `lib/mutation-harness.mjs` (97) and `lib/guard-prover.mjs` (95).
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.
+- Kind-lane provers live among them, e.g. `mutation-prove-2461-z7-kind-e2e.mjs` for the Z7 identity lane in `packages/grpc/e2e/z7-identity-kind`, including the SQ1/SQ2 rows for the squatted-JWKS-ConfigMap phase.
 - Other provers: `prove-publish-lane-guard-mutants.mjs`, `mutate-self-contained-dockerfile-proof.mjs`, `use-cache-collapse-keys-mutation.mjs`.
 
 ### Official-harness compat e2e

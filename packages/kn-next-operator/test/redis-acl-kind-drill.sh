@@ -19,8 +19,17 @@
 #   L6. spec.cache.isolation=acl on an unregistered endpoint fails closed:
 #       EndpointUnregistered, no Secret.
 #   L7. A prefix that nests inside another app's fails closed: PrefixConflict, no
-#       Secret, no user.
+#       Secret, no user, and the condition names the app that owns the prefix.
+#   L7b. A prefix nested under another app's DERIVED prefix (kn-<hash>:isr) is
+#       refused: PrefixReserved, no Secret, no user.
 #   L8. Deleting an app sweeps its keys as its own user and removes its ACL user.
+#   L9. A SECOND Redis started with requirepass: both ADR probes are refused (NOAUTH,
+#       WRONGPASS) yet the shared password still reads the app's keys, so the operator
+#       must keep reporting SharedCredentialLive; it reports Provisioned only after
+#       `ACL SETUSER default off`.
+#
+# The drill's own admin user is a shared credential too. Once the shared path is
+# closed it is enabled for the length of one call only, through the provisioner.
 #
 # What this drill does NOT cover: the Next.js cache handler's ISR and 'use cache'
 # paths, including the outage replay. Those run under the same rule set in
@@ -67,11 +76,29 @@ expect_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1: got [$2] want [$3]
 
 k() { kubectl "$@"; }
 ADMIN_PW="adm-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+PROV_PW="prov-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
 ADMIN_READY=0
 # The drill's own full-rights user: needed once the default user is switched off.
+# While it is enabled it is itself a shared credential that reaches every key, and
+# the operator (correctly) refuses to call the endpoint isolated. So once the
+# shared path is closed (ADMIN_WRAPPED=1) it is enabled only for the length of one
+# call, through the provisioner, which holds +acl|setuser.
+ADMIN_WRAPPED=0
+prov_cli() {
+  k -n cache exec deploy/redis -- redis-cli --no-auth-warning --user provisioner --pass "$PROV_PW" "$@"
+}
+admin_raw() {
+  k -n cache exec deploy/redis -- redis-cli --no-auth-warning --user drilladmin --pass "$ADMIN_PW" "$@"
+}
 rcli_admin() {
-  if [ "$ADMIN_READY" = "1" ]; then
-    k -n cache exec deploy/redis -- redis-cli --no-auth-warning --user drilladmin --pass "$ADMIN_PW" "$@"
+  if [ "$ADMIN_WRAPPED" = "1" ]; then
+    prov_cli ACL SETUSER drilladmin on >/dev/null
+    admin_raw "$@"
+    local rc=$?
+    prov_cli ACL SETUSER drilladmin off >/dev/null
+    return $rc
+  elif [ "$ADMIN_READY" = "1" ]; then
+    admin_raw "$@"
   else
     k -n cache exec deploy/redis -- redis-cli "$@"
   fi
@@ -146,7 +173,6 @@ rcli_admin ACL SETUSER drilladmin on ">$ADMIN_PW" '~*' '&*' +@all >/dev/null
 ADMIN_READY=1
 
 # The provisioner user, exactly the rule set the docs ship.
-PROV_PW="prov-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
 rcli_admin ACL SETUSER provisioner on ">$PROV_PW" '~*' resetchannels -@all \
   +acl\|setuser +acl\|deluser +acl\|getuser +acl\|users +acl\|whoami +scan +del +ping +info\|server +client\|setinfo >/dev/null
 k -n system create secret generic redis-provisioner \
@@ -277,6 +303,9 @@ expect_eq "L4 shared URL reads zone-a:k" "$(shared_probe GET zone-a:k)" "va"
 
 echo "== L5: close the shared credential, then observe it refused"
 rcli_admin ACL SETUSER default off >/dev/null
+# The drill's admin is a shared credential too: from here it is enabled one call at a time.
+prov_cli ACL SETUSER drilladmin off >/dev/null
+ADMIN_WRAPPED=1
 OUT="$(shared_probe GET zone-a:k)"
 case "$OUT" in *NOAUTH*|*WRONGPASS*|*NOPERM*) ok "L5 shared URL refused on zone A's keys: $OUT" ;; *) bad "L5 shared URL not refused: $OUT" ;; esac
 OUT="$(shared_probe --user default --pass nope GET zone-a:k)"
@@ -297,9 +326,20 @@ expect_eq "L6 no Secret was created" "$(k -n zone-a get secret unreg-redis-crede
 echo "== L7: a nested prefix fails closed"
 app zone-a nested "zone-a:sub" | k apply -f - >/dev/null
 wait_reason zone-a nested PrefixConflict
+expect_contains "L7 the condition names the app that owns the prefix" "$(cond_field zone-a nested message)" "zone-a/web"
 expect_eq "L7 no Secret was created" "$(k -n zone-a get secret nested-redis-credentials -o name 2>/dev/null || true)" ""
 USERS="$(rcli_admin ACL USERS)"
 [ "$(printf '%s\n' "$USERS" | grep -c '^knext-app-')" = "2" ] && ok "L7 only the two real apps have users" || bad "L7 unexpected users: $USERS"
+
+echo "== L7b: a prefix NESTED under another app's derived prefix is refused"
+# kn-<12 hex of sha256("zone-a/web")>:isr is issued ~kn-<hash>:isr:*, which is zone-a/web's
+# ISR keys if that app used its derived prefix. The shape belongs to the app it derives from.
+HASH_A="$(printf 'zone-a/web' | shasum -a 256 | cut -c1-12)"
+app zone-b squat "kn-${HASH_A}:isr" | k apply -f - >/dev/null
+wait_reason zone-b squat PrefixReserved
+expect_eq "L7b no Secret was created" "$(k -n zone-b get secret squat-redis-credentials -o name 2>/dev/null || true)" ""
+USERS="$(rcli_admin ACL USERS)"
+[ "$(printf '%s\n' "$USERS" | grep -c '^knext-app-')" = "2" ] && ok "L7b the squatter has no user" || bad "L7b unexpected users: $USERS"
 
 echo "== L8: deleting an app sweeps its keys and removes its user"
 USER_A="$(k -n zone-a get nextapp web -o jsonpath='{.status.cache.username}')"
@@ -308,6 +348,80 @@ k -n zone-a delete nextapp web --wait=true --timeout=120s >/dev/null
 expect_not_contains "L8 ACL user removed" "$(rcli_admin ACL USERS)" "$USER_A"
 expect_eq "L8 A's keys swept" "$(rcli_admin EXISTS zone-a:k)" "0"
 expect_eq "L8 B's keys untouched" "$(rcli_admin EXISTS zone-b:k)" "1"
+
+echo "== L9: an endpoint with requirepass is not isolated until its default user is off"
+# Under requirepass the default user is ENABLED, holds ~*, and wants a password. A
+# connection with no credential gets NOAUTH and AUTH default with a password nobody
+# issued gets WRONGPASS, so a probe-only check would call this endpoint isolated
+# while the shared password still reads every app's keys. The operator must decide
+# from the endpoint's own state instead.
+RP_PW="rp-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+PROV2_PW="prov2-$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')"
+cat <<YAML | k apply -f - >/dev/null
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: redis-pw, namespace: cache }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis-pw } }
+  template:
+    metadata: { labels: { app: redis-pw } }
+    spec:
+      containers:
+      - name: redis
+        image: $REDIS_IMAGE
+        args: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "$RP_PW"]
+        ports: [{ containerPort: 6379 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: redis-pw, namespace: cache }
+spec:
+  selector: { app: redis-pw }
+  ports: [{ port: 6379 }]
+YAML
+k -n cache rollout status deploy/redis-pw --timeout=120s >/dev/null
+k -n cache exec deploy/redis-pw -- redis-cli --no-auth-warning -a "$RP_PW" ACL SETUSER provisioner on ">$PROV2_PW" '~*' resetchannels -@all \
+  +acl\|setuser +acl\|deluser +acl\|getuser +acl\|users +acl\|whoami +scan +del +ping +info\|server +client\|setinfo >/dev/null
+k -n system create secret generic redis-provisioner-pw \
+  --from-literal=url="redis://provisioner:${PROV2_PW}@redis-pw.cache.svc.cluster.local:6379" >/dev/null
+k patch knextplatform default --type=json -p '[{"op":"add","path":"/spec/cache/redisEndpoints/-","value":{"endpoint":"redis-pw.cache.svc.cluster.local:6379","provisionerSecretRef":{"name":"redis-provisioner-pw","key":"url"}}}]' >/dev/null
+k create ns zone-c >/dev/null
+URL_OVERRIDE=redis://redis-pw.cache.svc.cluster.local:6379 app zone-c web zone-c | k apply -f - >/dev/null
+wait_reason zone-c web SharedCredentialLive
+MSG="$(cond_field zone-c web message)"
+expect_contains "L9 says isolation is not in force" "$MSG" "isolation not in force: shared credential live"
+expect_not_contains "L9 never claims 'isolated'" "$MSG" "isolated"
+expect_contains "L9 names the live user" "$MSG" "default"
+cat <<YAML | k apply -f - >/dev/null
+apiVersion: v1
+kind: Pod
+metadata: { name: probe, namespace: zone-c }
+spec:
+  containers:
+  - name: probe
+    image: $REDIS_IMAGE
+    command: ["sleep", "3600"]
+    env:
+    - name: REDIS_URL
+      valueFrom: { secretKeyRef: { name: web-redis-credentials, key: REDIS_URL } }
+YAML
+k -n zone-c wait --for=condition=Ready pod/probe --timeout=120s >/dev/null
+expect_eq "L9 the app writes its key under its own user" "$(probe zone-c probe SET zone-c:k vc)" "OK"
+rp() { # args... -> redis-cli against the requirepass Redis with NO credential, or the shared password
+  k -n zone-c exec probe -- redis-cli --no-auth-warning -u "redis://redis-pw.cache.svc.cluster.local:6379" "$@" 2>&1 || true
+}
+expect_contains "L9 no-credential connection gets NOAUTH (what a probe sees)" "$(rp GET zone-c:k)" "NOAUTH"
+expect_contains "L9 AUTH default with an unissued password gets WRONGPASS (what a probe sees)" "$(rp --user default --pass nope GET zone-c:k)" "WRONGPASS"
+expect_eq "L9 yet the shared password reads the app's key (the hole the probes cannot see)" "$(rp --user default --pass "$RP_PW" GET zone-c:k)" "vc"
+expect_eq "L9 the condition is still SharedCredentialLive while that hole is open" "$(cond_field zone-c web reason)" "SharedCredentialLive"
+
+k -n cache exec deploy/redis-pw -- redis-cli --no-auth-warning --user provisioner --pass "$PROV2_PW" ACL SETUSER default off >/dev/null
+OUT="$(rp --user default --pass "$RP_PW" GET zone-c:k)"
+case "$OUT" in *WRONGPASS*|*NOAUTH*|*NOPERM*) ok "L9 the shared password is refused once default is off: $OUT" ;; *) bad "L9 shared password still accepted: $OUT" ;; esac
+k -n zone-c patch nextapp web --type=merge -p '{"spec":{"env":{"DRILL_NUDGE":"1"}}}' >/dev/null
+wait_reason zone-c web Provisioned
+expect_not_contains "L9 observed-refused message" "$(cond_field zone-c web message)" "not in force"
 
 echo
 echo "passed: $PASS  failed: $FAILED"

@@ -425,7 +425,7 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 			Type:               ConditionReconciling,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: app.Generation,
-			Reason:             "ReconcileSuccess",
+			Reason:             reasonReconcileOK,
 			Message:            "Reconciliation complete",
 		})
 	}
@@ -453,14 +453,14 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 			Type:               ConditionReady,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: app.Generation,
-			Reason:             "ReconcileSuccess",
+			Reason:             reasonReconcileOK,
 			Message:            "NextApp reconciled successfully; Knative Service is Ready",
 		})
 		v.conditions = append(v.conditions, metav1.Condition{
 			Type:               ConditionDegraded,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: app.Generation,
-			Reason:             "ReconcileSuccess",
+			Reason:             reasonReconcileOK,
 			Message:            "No errors detected",
 		})
 	} else {

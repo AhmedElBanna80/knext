@@ -89,7 +89,7 @@ var (
 			Help: "Number of NextApps whose Knative Service is held unchanged by the platform layer, " +
 				"labeled by reason (EffectiveSpecInvalid | RolloutPending).",
 		},
-		[]string{"reason"},
+		[]string{labelReason},
 	)
 
 	// platformHoldsTotal counts transitions INTO a hold, by reason. A hold that
@@ -101,7 +101,7 @@ var (
 			Help: "Total number of times a NextApp entered a platform hold, labeled by reason " +
 				"(EffectiveSpecInvalid | RolloutPending).",
 		},
-		[]string{"reason"},
+		[]string{labelReason},
 	)
 
 	// rolloutPending is the rollout limiter's backlog: re-renders holding a

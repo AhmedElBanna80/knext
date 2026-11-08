@@ -35,6 +35,12 @@ linters:
     modernize:
       disable:
         - omitzero
+        # embedlit (new in v2.15) flattens `ObjectMeta: metav1.ObjectMeta{...}`
+        # into promoted fields. The operator-write inventory guard
+        # (internal/controller/operator_write_inventory_test.go) finds each
+        # writer's object name by scanning for ObjectMeta composite literals, so
+        # the flattened form hides the name from it. Single analyzer, not modernize.
+        - embedlit
   exclusions:
     generated: lax
     rules:
@@ -58,6 +64,13 @@ linters:
       - linters:
           - lll
         path: test/
+      # goconst: golangci-lint v2.15 reports repeated literals in _test.go that
+      # v2.8 did not (the newer goconst no longer skips tests by default). Table-
+      # driven fixtures repeat literals by design, so keep the v2.8 effective
+      # behaviour: production code stays under goconst, tests are exempt.
+      - linters:
+          - goconst
+        path: _test\.go
     paths:
       - third_party$
       - builtin$

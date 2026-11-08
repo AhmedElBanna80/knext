@@ -363,7 +363,7 @@ func specJSONFields(t *testing.T) []string {
 	var names []string
 	for field := range typ.Fields() {
 		tag := field.Tag.Get("json")
-		name := strings.Split(tag, ",")[0]
+		name, _, _ := strings.Cut(tag, ",")
 		if name == "" || name == "-" {
 			t.Fatalf("BackendServiceSpec.%s has no json name: the pin cannot classify it", field.Name)
 		}
@@ -514,13 +514,13 @@ func TestFieldClassificationMatchesWhatTheOperatorRenders(t *testing.T) {
 func TestExcludedStructFieldsCarryOnlyScalars(t *testing.T) {
 	typ := reflect.TypeFor[appsv1alpha1.BackendServiceSpec]()
 	for field := range typ.Fields() {
-		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
 		ex, excluded := specPinExcludedFields[name]
 		if !excluded {
 			continue
 		}
 		ft := field.Type
-		for ft.Kind() == reflect.Ptr {
+		for ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
 		switch ft.Kind() {
@@ -528,7 +528,7 @@ func TestExcludedStructFieldsCarryOnlyScalars(t *testing.T) {
 			for field := range ft.Fields() {
 				switch field.Type.Kind() {
 				case reflect.String, reflect.Bool, reflect.Int, reflect.Int32, reflect.Int64:
-				case reflect.Ptr:
+				case reflect.Pointer:
 					// security.networkPolicy is a *bool (nil = default-on); a pointer to a scalar is still a scalar.
 					if field.Type.Elem().Kind() != reflect.Bool {
 						t.Errorf("excluded field %q (%s) has %s of kind %s: only scalars may be excluded without "+

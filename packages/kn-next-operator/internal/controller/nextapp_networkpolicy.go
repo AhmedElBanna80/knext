@@ -225,8 +225,8 @@ func DesiredNetworkPolicy(appName, namespace string) *networkingv1.NetworkPolicy
 			Name:      appName + "-allow-ingress",
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app":          appName,
-				"generated-by": "kn-next-operator",
+				knativePodLabelKey:  appName,
+				generatedByLabelKey: OperatorFieldManager,
 			},
 		},
 		Spec: networkingv1.NetworkPolicySpec{

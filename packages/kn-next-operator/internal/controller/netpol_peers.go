@@ -35,7 +35,17 @@ const (
 	// Kourier gateway. The Knative Operator runs it in knativeServingNamespace.
 	knativeServingIngressNamespace = "knative-serving-ingress"
 
-	knativePodLabelKey          = "app"
+	knativePodLabelKey = "app"
+
+	generatedByLabelKey = "generated-by"
+
+	labelReason = "reason"
+
+	prewarmPinName = "pin"
+
+	reasonNotAccepted = "NotAccepted"
+
+	reasonReconcileOK           = "ReconcileSuccess"
 	activatorPodLabelValue      = "activator"
 	autoscalerPodLabelValue     = "autoscaler"
 	kourierGatewayPodLabelKey   = "app"

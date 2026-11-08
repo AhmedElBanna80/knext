@@ -68,7 +68,7 @@ func controlledByZone(obj metav1.Object, app *appsv1alpha1.NextApp) bool {
 }
 
 func zoneIdentityLabels(app *appsv1alpha1.NextApp) map[string]string {
-	return map[string]string{"app": app.Name, "generated-by": "kn-next-operator"}
+	return map[string]string{knativePodLabelKey: app.Name, generatedByLabelKey: OperatorFieldManager}
 }
 
 // reconcileZoneSigningKey brings the zone's key Secret and JWKS one or more

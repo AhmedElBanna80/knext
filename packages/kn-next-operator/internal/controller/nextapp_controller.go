@@ -524,8 +524,8 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			"image": nextApp.Spec.Image,
 		}
 		labels := map[string]string{
-			"app":          nextApp.Name,
-			"generated-by": "kn-next-operator",
+			knativePodLabelKey:  nextApp.Name,
+			generatedByLabelKey: OperatorFieldManager,
 		}
 		imageCache.SetLabels(labels)
 		return ctrl.SetControllerReference(&nextApp, imageCache, r.Scheme)

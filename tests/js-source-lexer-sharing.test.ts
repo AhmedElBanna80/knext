@@ -24,7 +24,6 @@ const ROOT = resolve(import.meta.dirname, '..');
 const LEXER = 'packages/kn-next/src/adapters/js-source-lexer.mjs';
 
 const MIGRATED = [
-  'scripts/check-escalation-triggers.mjs',
   'scripts/workflow-script-install-guard.mjs',
   'scripts/lib/prover-anchor-scan.mjs',
   'packages/kn-next/src/adapters/computed-require-scan.mjs',

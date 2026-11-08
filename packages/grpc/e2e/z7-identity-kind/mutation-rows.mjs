@@ -116,4 +116,17 @@ export const ROWS = [
     phases: 'deploy rotate',
     reason: 'the watcher stopped early',
   },
+  {
+    id: 'M8',
+    name: 'squatted-jwks-trusted',
+    // The function's JWKS mount rule trusts any ConfigMap at the zone's JWKS name:
+    // a squatter's ConfigMap is mounted as the zone's key set (#2464).
+    file: 'packages/kn-next-operator/internal/controller/backendservice_sovereignty.go',
+    anchor: `${T}if controlledByZone(cm, zone) {`,
+    replacement: `${T}if cm != nil {`,
+    phases: 'deploy squat',
+    // The first assertion the mutant breaks: it trusts the squatter, so the function
+    // never reports JWKSTrusted=False/JWKSUntrusted (the mount check comes later).
+    reason: 'the function reports JWKSTrusted=False JWKSUntrusted',
+  },
 ];

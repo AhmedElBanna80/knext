@@ -19,6 +19,7 @@
 #   M6c jwk-d-in-operator-log  ... as a JWK `d`, the seed in unpadded base64url
 #   M7 watcher-dies-early      the LANE's rotation watcher stops after three rounds
 #                              (this row mutates run.sh, not the operator)
+#   M8 squatted-jwks-trusted   a function mounts a JWKS ConfigMap the zone does not control
 #
 # A row is KILLED only when run.sh exits non-zero AND its output names the
 # expected reason: a red for another reason (a flake, an unready pod) is not a

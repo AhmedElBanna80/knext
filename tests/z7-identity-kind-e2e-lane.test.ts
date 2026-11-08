@@ -389,11 +389,38 @@ describe('the lane admits the zone and its functions under Pod Security restrict
 
 describe('the lane proves what it claims', () => {
   it('runs the phases the issue maps to, in order, by default', () => {
-    expect(runSh).toMatch(/^PHASES="\$\{PHASES:-up images deploy verify rotate pin leaks\}"$/m);
+    expect(runSh).toMatch(
+      /^PHASES="\$\{PHASES:-up images deploy verify rotate pin squat leaks\}"$/m,
+    );
     const main = runSh.slice(
       runSh.lastIndexOf('# ---------------------------------------------------------------- main'),
     );
-    expect(main).toContain('for phase in up images deploy verify rotate pin leaks');
+    expect(main).toContain('for phase in up images deploy verify rotate pin squat leaks');
+  });
+
+  it('the squat phase pre-creates an unowned JWKS ConfigMap, asserts it is never mounted, the conflict is reported on both objects, and removing it recovers', () => {
+    const squat = runSh.slice(
+      runSh.indexOf('phase_squat() {'),
+      runSh.indexOf(
+        '# ---------------------------------------------------------------- phase: leaks',
+      ),
+    );
+    expect(squat.length).toBeGreaterThan(200);
+    // the squatter exists BEFORE the zone is applied, and has no controller ownerReference
+    expect(squat.indexOf('create configmap')).toBeGreaterThan(-1);
+    expect(squat.indexOf('create configmap')).toBeLessThan(
+      squat.indexOf('apply --validate=strict'),
+    );
+    expect(squat).not.toMatch(/ownerReferences:/);
+    // the function is rendered, so "not mounted" is a fact about a real Knative Service
+    expect(squat).toContain('knext-zone-jwks');
+    expect(squat).toContain('False/JWKSUntrusted');
+    // the zone reports the conflict and the squatted ConfigMap is left untouched
+    expect(squat).toContain('False/JWKSConfigMapConflict');
+    expect(squat).toContain('the squatted JWKS ConfigMap is mounted into the function');
+    // control: removing it lets the operator publish and the function mount it
+    expect(squat).toContain('delete configmap');
+    expect(squat).toContain('True/JWKSControlled');
   });
 
   it('the pin phase swaps the image with kubectl and asserts nothing mounts the zone database Secret', () => {
@@ -755,10 +782,21 @@ describe('the mutation proof is anchored to the code it mutates', () => {
   // and 10 to 15 minutes each. These
   // checks need neither: they catch the cheap way a proof rots, an anchor that
   // no longer occurs once, or a reason the lane no longer prints.
-  const phases = ['up', 'images', 'deploy', 'verify', 'rotate', 'pin', 'leaks'];
+  const phases = ['up', 'images', 'deploy', 'verify', 'rotate', 'pin', 'squat', 'leaks'];
 
   it('has at least one row per property the lane claims', () => {
-    expect(ROWS.map((r) => r.id)).toEqual(['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M6b', 'M6c', 'M7']);
+    expect(ROWS.map((r) => r.id)).toEqual([
+      'M1',
+      'M2',
+      'M3',
+      'M4',
+      'M5',
+      'M6',
+      'M6b',
+      'M6c',
+      'M7',
+      'M8',
+    ]);
     expect(new Set(ROWS.map((r) => r.name)).size).toBe(ROWS.length);
   });
 

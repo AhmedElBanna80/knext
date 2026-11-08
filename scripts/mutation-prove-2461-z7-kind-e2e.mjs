@@ -356,16 +356,16 @@ const LANE_ROWS = [
     id: 'S04',
     subject: 'run',
     claim: 'the default phases drop the leak scan',
-    anchor: 'PHASES="${PHASES:-up images deploy verify rotate pin leaks}"',
-    replacement: 'PHASES="${PHASES:-up images deploy verify rotate pin}"',
+    anchor: 'PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"',
+    replacement: 'PHASES="${PHASES:-up images deploy verify rotate pin squat}"',
   },
   // The zone image pin phase (ADR-0004 Amendment 3).
   {
     id: 'PIN1',
     subject: 'run',
     claim: 'the default phases drop the image pin phase',
-    anchor: 'PHASES="${PHASES:-up images deploy verify rotate pin leaks}"',
-    replacement: 'PHASES="${PHASES:-up images deploy verify rotate leaks}"',
+    anchor: 'PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"',
+    replacement: 'PHASES="${PHASES:-up images deploy verify rotate squat leaks}"',
   },
   {
     id: 'PIN2',

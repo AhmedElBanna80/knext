@@ -184,7 +184,7 @@ const cases = [
     anchor: '\t\tif !strings.HasPrefix(u, redisACLUsernamePrefix) {',
     to: '\t\tif true {',
     pkg: './internal/controller',
-    test: 'TestIsolationClaimIgnoresTheProvisionerAndKnextAppUsers',
+    test: 'TestIsolationClaimIgnoresTheProvisionerAndKnextAppKeyPatterns',
   },
   {
     name: 'B1: a provisioner that is the default user still earns the claim',

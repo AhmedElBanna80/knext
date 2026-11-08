@@ -209,7 +209,7 @@ ACL SETUSER knext-app-<cluster tag>-<app hash> reset on ><password> [#<sha256 of
   a version below 7.0, is treated as having no ACL support (D6).
 - **Status.** A new `CacheCredentialsReady` condition, computed in `computeStatusVerdict`, carries
   the reason (`Provisioned`, `SharedCredential`, `EndpointUnregistered`, `AclUnsupported`,
-  `ProvisionerRefused`, `PrefixConflict`, `PrefixReserved`, `RotationStalled`, and, *amended 2026-11-08*, `SharedCredentialLive`, `SharedCredentialInSpec` and `PrefixUnknown`. The code has no `SharedCredential` reason: the shared-credential case is the two named ones, `SharedCredentialLive` (something else can still reach app keys) and `SharedCredentialInSpec` (a credential in the spec).) `status.cache` reports the isolation mode, username and
+  `ProvisionerRefused`, `PrefixConflict`, `PrefixReserved`, `RotationStalled` (planned with rotation, D4; not yet emitted by the operator), and, *amended 2026-11-08*, `SharedCredentialLive`, `SharedCredentialInSpec` and `PrefixUnknown`. The code has no `SharedCredential` reason: the shared-credential case is the two named ones, `SharedCredentialLive` (something else can still reach app keys) and `SharedCredentialInSpec` (a credential in the spec).) `status.cache` reports the isolation mode, username and
   Secret name, and never a password.
 
 ### D3. Who owns the per-app password: an operator-owned Secret in the app's namespace

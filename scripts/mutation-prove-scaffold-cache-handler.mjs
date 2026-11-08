@@ -107,7 +107,9 @@ const prover = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: SPEC,
   subjects: {
-    nextConfig: 'packages/kn-next/templates/app/next.config.ts.hbs',
+    // The guarded next.config assertions scaffold the vinext target, which renders
+    // from the vinext template (create-scaffold.test.ts `scaffoldVinextApp`).
+    nextConfig: 'packages/kn-next/templates/app/next.config.ts.vinext.hbs',
     cacheHandler: 'packages/kn-next/templates/app/cache-handler.js.hbs',
   },
 });

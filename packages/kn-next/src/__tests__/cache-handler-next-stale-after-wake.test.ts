@@ -459,6 +459,39 @@ describe("ISR freshness survives a scale-to-zero wake on the Next path (#1888)",
         expect(SharedCacheControls.cacheControls.has(mapKey("/"))).toBe(true);
     });
 
+    it("seeds a Next 16.3.7+ `/route-cache/` key verbatim, `/index` and all", async () => {
+        // Called on the handler directly: on Next >= 16.4 IncrementalCache also
+        // writes the window itself, which would hide a wrong seed key.
+        const mod = (await import(
+            `../adapters/cache-handler.js?routekey=${Math.random()}`
+        )) as {
+            default: new (
+                o: unknown,
+            ) => {
+                get: (k: string, ctx?: unknown) => Promise<unknown>;
+            };
+            __setRedisClientForTests: (c: unknown) => void;
+        };
+        const handler = new mod.default({ serverDistDir: THIS_DIST });
+        mod.__setRedisClientForTests({
+            connected: true,
+            async connect() {},
+            async get() {
+                return storedEntry(
+                    { revalidate: 3600, expire: ONE_YEAR_S },
+                    SEVEN_MINUTES_MS,
+                );
+            },
+            async send() {
+                return "OK";
+            },
+        });
+        const key = mapKey("/");
+        expect(key).toMatch(/^\/route-cache\/.*\/index$/);
+        await handler.get(key, PAGE);
+        expect([...SharedCacheControls.cacheControls.keys()]).toEqual([key]);
+    });
+
     it("never seeds a window for a FETCH (data-cache) entry", async () => {
         const mod = (await import(
             `../adapters/cache-handler.js?wakefetch=${Math.random()}`

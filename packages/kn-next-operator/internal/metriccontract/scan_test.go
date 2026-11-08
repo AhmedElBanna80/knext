@@ -424,15 +424,13 @@ func init() {
 			want: "local declaration",
 		},
 		{
-			name: "a local var declared with var, in a nested block",
+			name: "a local var declared with var, shadowing the package var",
 			files: map[string]string{"internal/m/m.go": header + `
 var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_real_total"})
 
 func init() {
-	{
-		var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_decoy_total"})
-		metrics.Registry.MustRegister(c)
-	}
+	var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_decoy_total"})
+	metrics.Registry.MustRegister(c)
 }
 `},
 			want: "local declaration",
@@ -514,6 +512,156 @@ func init() { metrics.Registry.MustRegister(a) }
 		"internal/m/x_arm64.go": "package m\n",
 	})
 	if got := names(mustScan(t, root)); !reflect.DeepEqual(got, []string{"knext_real_total"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+// A registration is served on every start only when it is a top-level
+// statement of init(). One under an if, switch, loop, closure, defer or go
+// statement may never run, so the golden would list a family the binary does
+// not always serve. Each shape must be REFUSED, never counted.
+func TestScanRefusesAConditionalRegistrationInInit(t *testing.T) {
+	cases := map[string]string{
+		"under an if": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	if false {
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+		"in the else of an if": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	if true {
+	} else {
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+		"under an if-init statement": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	if err := metrics.Registry.Register(c); err != nil {
+		panic(err)
+	}
+}
+`,
+		"in a switch case": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	switch {
+	case false:
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+		"under a for loop that may run zero times": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	for i := 0; i < 0; i++ {
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+		"in a func literal that never runs": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	_ = func() { metrics.Registry.MustRegister(c) }
+}
+`,
+		"in a func literal that is called": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	func() { metrics.Registry.MustRegister(c) }()
+}
+`,
+		"in a bare block": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	{
+		metrics.Registry.MustRegister(c)
+	}
+}
+`,
+		"deferred": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func init() {
+	defer metrics.Registry.MustRegister(c)
+}
+`,
+		"as an argument to another call": `
+var c = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+
+func keep(error) {}
+
+func init() {
+	keep(metrics.Registry.Register(c))
+}
+`,
+		"alongside an unconditional registration": `
+var (
+	real = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_real_total"})
+	cond = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_cond_total"})
+)
+
+func init() {
+	metrics.Registry.MustRegister(real)
+	if false {
+		metrics.Registry.MustRegister(cond)
+	}
+}
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := fixture(t, map[string]string{
+				"cmd/main.go":     mainImportsM,
+				"internal/m/m.go": header + body,
+			})
+			fams, err := Scan(root, "cmd")
+			if err == nil {
+				t.Fatalf("Scan counted a conditional registration: %+v", fams)
+			}
+			if !strings.Contains(err.Error(), "not a top-level statement of init()") {
+				t.Fatalf("refused for the wrong reason: %v", err)
+			}
+		})
+	}
+}
+
+// The positive control: top-level statements of init() (an expression
+// statement, or the right-hand side of a plain assignment such as `_ =`)
+// still count, and a conditional elsewhere in init() that does not register
+// does not refuse the package.
+func TestScanAcceptsTopLevelRegistrationsInInit(t *testing.T) {
+	root := fixture(t, map[string]string{
+		"cmd/main.go": mainImportsM,
+		"internal/m/m.go": header + `
+var (
+	a = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_a_total"})
+	b = prometheus.NewCounter(prometheus.CounterOpts{Name: "knext_b_total"})
+)
+
+func init() {
+	if false {
+		println("not a registration")
+	}
+	metrics.Registry.MustRegister(a)
+	_ = metrics.Registry.Register(b)
+}
+`,
+	})
+	if got := names(mustScan(t, root)); !reflect.DeepEqual(got, []string{"knext_a_total", "knext_b_total"}) {
 		t.Fatalf("got %v", got)
 	}
 }

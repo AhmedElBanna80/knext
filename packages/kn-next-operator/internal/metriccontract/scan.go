@@ -23,7 +23,9 @@ limitations under the License.
 //     honouring build constraints, test files excluded) — for EVERY architecture
 //     the image ships, and the architectures must agree;
 //   - the collector is registered on controller-runtime's metrics.Registry (the
-//     registry /metrics serves) from an init() function;
+//     registry /metrics serves) by a top-level statement of an init() function,
+//     so it runs on every start (not under an if, switch, loop, block, closure,
+//     defer, or as an argument to another call);
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -391,8 +393,27 @@ func (p *pkg) collect(out map[string]Family) error {
 		}
 		for _, decl := range f.Decls {
 			inInit := false
+			// topLevel is the registration calls that are direct statements of
+			// init(): the only ones that run on every start. Anything nested
+			// (an if, switch, loop, block, closure, defer, or an argument) may
+			// never run, so it is refused rather than counted.
+			topLevel := map[*ast.CallExpr]bool{}
 			if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Name.Name == "init" {
 				inInit = true
+				for _, st := range fd.Body.List {
+					switch st := st.(type) {
+					case *ast.ExprStmt:
+						if c, ok := st.X.(*ast.CallExpr); ok {
+							topLevel[c] = true
+						}
+					case *ast.AssignStmt:
+						for _, r := range st.Rhs {
+							if c, ok := r.(*ast.CallExpr); ok {
+								topLevel[c] = true
+							}
+						}
+					}
+				}
 			}
 			handled := map[ast.Expr]bool{}
 			var walkErr error
@@ -411,6 +432,11 @@ func (p *pkg) collect(out map[string]Family) error {
 					}
 					if !inInit {
 						walkErr = p.errorf(n, "metrics.Registry.%s outside init(): the scan cannot prove it runs", fun.Sel.Name)
+						return false
+					}
+					if !topLevel[n] {
+						walkErr = p.errorf(n, "metrics.Registry.%s is not a top-level statement of init(): "+
+							"under a condition, loop, block, closure, defer or argument it may never run", fun.Sel.Name)
 						return false
 					}
 					handled[fun.X] = true

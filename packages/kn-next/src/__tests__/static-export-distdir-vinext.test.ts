@@ -100,6 +100,46 @@ describe("a custom distDir is refused before a Next build", () => {
         }
     });
 
+    it("refuses a quoted key, an assignment, and an empty value", () => {
+        for (const [config, value] of [
+            ['export default { "distDir": "build" };', "build"],
+            ["const c = {}; c.distDir = 'out'; export default c;", "out"],
+            ["export default { distDir: '' };", ""],
+        ] as const) {
+            const { runner, caught } = run(
+                appDir({ "next.config.mjs": config }),
+                false,
+            );
+            expectDistDirRefusal(caught, value);
+            expect(runner).not.toHaveBeenCalled();
+        }
+    });
+
+    it("checks every distDir key, so an earlier default one does not mask a later custom one", () => {
+        const dir = appDir({
+            "next.config.mjs":
+                "const base = { distDir: '.next' };\nexport default { ...base, distDir: 'build' };",
+        });
+        expectDistDirRefusal(run(dir, false).caught, "build");
+    });
+
+    it("refuses a computed distDir it cannot read (an env var, a template with ${})", () => {
+        for (const config of [
+            "export default { distDir: process.env.DIST || '.next' };",
+            "export default { distDir: `${'build'}` };",
+        ]) {
+            const { runner, caught } = run(
+                appDir({ "next.config.mjs": config }),
+                false,
+            );
+            expect(caught).toMatchObject({ code: USAGE_ERROR_CODE });
+            expect((caught as Error).message).toContain(
+                "which knext cannot read before the build",
+            );
+            expect(runner).not.toHaveBeenCalled();
+        }
+    });
+
     it("does not refuse the vinext target, which never reads Next's distDir", () => {
         const dir = appDir({
             "package.json": ESM_PKG,

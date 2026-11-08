@@ -125,7 +125,7 @@ are unknown-command errors.
 - `deploy --skip-build` refuses a compiled executable whose build-identity stamp does not match the current sources [`build-artifact.ts:assertCompiledArtifactFresh`].
 - A patched-Bun download must match the embedded sha256 pin. It never falls back to stock Bun [`bun-toolchain.ts:ensurePatchedBun`].
 - An unconditional `output: 'export'` is refused, and an unreadable Next config also refuses [`static-export-guard.ts`].
-- A literal non-default `distDir` (anything but `.next`, `./.next`, `.next/`) is refused before a Next build (not the vinext target), since the build, artifact and standalone steps assume `.next`; a computed `distDir` is not seen [`static-export-guard.ts:assertDefaultDistDir`, `project-build.ts:runProjectBuild`].
+- Before a Next build (not the vinext target) every `distDir` key in the config text (a quoted or bare property, or an assignment) must be a plain literal for the default (`.next`, `./.next`, `.next/`), else the build is refused, since the build, artifact and standalone steps assume `.next`; a computed value refuses too (fail closed). Not seen: a shorthand `{ distDir }` property or a value set outside the file [`static-export-guard.ts:assertDefaultDistDir`, `project-build.ts:runProjectBuild`].
 - `runtime=bun` with Turbopack module fragments enabled is refused [`turbopack-fragments-guard.ts`].
 - vinext patches apply all-or-nothing, with rollback on failure [`vinext-patches.ts`].
 - `create` refuses to overwrite files without `--force`, and requires an RFC 1123 app name of at most 63 characters [`create.ts:writeScaffold`, `assertValidAppName`].

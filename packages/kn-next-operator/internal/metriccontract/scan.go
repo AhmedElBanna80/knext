@@ -26,17 +26,20 @@ limitations under the License.
 //     registry /metrics serves) by a top-level statement of an init() function
 //     that belongs to the leading run of registrations: every statement of
 //     init() up to and including it is an expression statement, or the single
-//     right-hand side of an assignment or var declaration, optionally
-//     parenthesised, that calls Register or MustRegister with arguments that
-//     call nothing but a known prometheus constructor. Anything else in that
+//     right-hand side of an assignment (whose left-hand side is held to the
+//     same rule) or var declaration, optionally parenthesised, that calls
+//     Register or MustRegister with arguments that call nothing but a known
+//     prometheus constructor. Anything else in that
 //     run (a condition, loop, block, defer, go, closure call, helper call or any
 //     other statement) ends it: nothing after it is counted. This is an
 //     allowlist, so it fails closed. It is not a proof that the registration
 //     succeeds (a Register error may be discarded), nor that init() is reached
-//     at all. Not detected, but each one kills the process before anything is
-//     served: a panic in a package-level variable initialiser, or a panic while
-//     the run itself executes (a nil selector, an out-of-range index, a bad
-//     metric name, a fake constructor matched by name in a nested argument);
+//     at all. Not detected: a panic in a package-level variable initialiser,
+//     or a panic while the run itself executes (a nil selector, an
+//     out-of-range index, a bad metric name); either kills the process before
+//     anything is served. Also not detected: a non-prometheus call matched by
+//     constructor name in a nested argument (a Help or ConstLabels value),
+//     which may do anything a call can, including panic or exit;
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -467,8 +470,8 @@ func pureRegistration(st ast.Stmt) *ast.CallExpr {
 // pureArgs reports whether evaluating e calls nothing but a known prometheus
 // constructor, matched by selector name. collect checks the package of the
 // collector argument and of its Opts, not of calls nested deeper (a Help or
-// ConstLabels value). The body of a
-// function literal is skipped, since a literal that is not called does not run
+// ConstLabels value). The body of a function literal is skipped, since a
+// literal that is not called does not run
 // (a GaugeFunc callback); a literal that IS called is a call whose function is
 // not a constructor selector, so it is refused.
 func pureArgs(e ast.Expr) bool {

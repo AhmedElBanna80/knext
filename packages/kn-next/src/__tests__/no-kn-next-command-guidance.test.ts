@@ -183,6 +183,7 @@ const NOT_GUIDANCE: Array<[RegExp, string]> = [
         "documents that the command is gone",
     ],
     [/^apps\/docs\/_design-reference\//, "static design mock-up"],
+    [/(^|\/)EGM\.md$/, "agent-facing directory contracts, not user guidance"],
     [
         /(^|\/)(bun\.lock|package-lock\.json)$|\.(jsonl|snap|lock|svg|png)$|^graphify-out\//,
         "generated data",

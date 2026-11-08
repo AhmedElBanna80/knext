@@ -223,7 +223,7 @@ These parts of the design are not built. Until they are, plan around them:
 - **Recognising every spelling of the endpoint.** A Redis reached by its ClusterIP, or by a name that is
   not its in-cluster Service name, is not recognised as the registered endpoint, so such an app keeps
   whatever credential it has and is not counted when the operator decides whether isolation is in force.
-- **Setting `isolation` from the CLI.** `kn-next.config.ts` has no `isolation` setting yet. Set
+- **Setting `isolation` from the CLI.** `knext.config.ts` has no `isolation` setting yet. Set
   `spec.cache.isolation` on the `NextApp`.
 - **`knext doctor` reporting.** `doctor` does not yet list apps on a shared credential or report the
   `CacheCredentialsReady` state. Read it from the `NextApp` status.

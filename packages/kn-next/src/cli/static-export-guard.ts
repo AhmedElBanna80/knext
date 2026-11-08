@@ -171,7 +171,7 @@ function distDirMentions(
     const out: { literal?: string; raw: string }[] = [];
     const text = stripCommentsStringAware(configText);
     for (const m of text.matchAll(
-        /(?:\[\s*)?["'`]?\bdistDir["'`]?(?:\s*\])?\s*(?::|=(?![=>]))\s*([^,;}\n]*)/g,
+        /["'`]?\bdistDir["'`]?(?:\s*\])?\s*(?::|=(?![=>]))\s*([^,;}\n]*)/g,
     )) {
         const raw = (m[1] ?? "").trim();
         const lit = raw.match(/^(["'`])([^"'`\n]*)\1$/);

@@ -40,9 +40,11 @@ no package entry point (`package.json` `exports` has no `db` subpath). It provid
   non-empty `errors` array in which every entry is a refusal. Message text is never matched.
 - `isScaleToZeroDatabase`: an explicit `KNEXT_DB_SCALE_TO_ZERO` (trimmed, case-insensitive,
   read on each call as the default of `declared`) decides first (`true`/`1`/`yes` or
-  `false`/`0`/`no`); any other value falls through to the DSN. Otherwise the DSN hostname decides: true if it has a `scale-zero-pg`
-  label, or if it is exactly `pggw` or `pggw-apps`. It returns false for an unparseable or
-  missing DSN.
+  `false`/`0`/`no`); any other non-empty value falls through to the DSN, and warns once per process
+  per distinct value (`console.warn`, value truncated to 64 characters). The once-set lives on
+  `globalThis` under `Symbol.for('knext.lib.db.unrecognisedScaleToZeroWarned')`. Otherwise the DSN
+  hostname decides: true if it has a `scale-zero-pg` label, or if it is exactly `pggw` or
+  `pggw-apps`. It returns false for an unparseable or missing DSN.
 
 ## Side Effects
 - `createBunSqlPool` builds a `Bun.SQL` client, which opens database connections as queries need

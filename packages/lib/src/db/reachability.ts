@@ -114,6 +114,8 @@ export function isScaleToZeroDatabase(
   const flag = declared?.trim().toLowerCase();
   if (flag === 'true' || flag === '1' || flag === 'yes') return true;
   if (flag === 'false' || flag === '0' || flag === 'no') return false;
+  if (flag) warnUnrecognisedDeclaration(declared as string);
+
   if (!dsn) return false;
   let host: string;
   try {
@@ -124,4 +126,30 @@ export function isScaleToZeroDatabase(
   const labels = host.split('.').filter(Boolean);
   if (labels.includes('scale-zero-pg')) return true;
   return labels.length === 1 && IN_NAMESPACE_SERVICE_NAMES.has(labels[0] as string);
+}
+
+const WARNED_DECLARATIONS_KEY = Symbol.for('knext.lib.db.unrecognisedScaleToZeroWarned');
+
+type WarnedDeclarationsGlobal = Record<symbol, Set<string> | undefined>;
+
+/**
+ * Warn once per process per distinct unrecognised value. A typo such as `ture`
+ * otherwise falls back to the host heuristic with no signal. The set is anchored
+ * on `globalThis` (ADR-0027) so a duplicated module copy cannot warn twice.
+ * The value is truncated: an operator who pasted a DSN here must not see all of it.
+ */
+function warnUnrecognisedDeclaration(raw: string): void {
+  const g = globalThis as unknown as WarnedDeclarationsGlobal;
+  let seen = g[WARNED_DECLARATIONS_KEY];
+  if (!seen) {
+    seen = new Set();
+    g[WARNED_DECLARATIONS_KEY] = seen;
+  }
+  const shown = raw.trim().slice(0, 64);
+  if (seen.has(shown)) return;
+  seen.add(shown);
+  console.warn(
+    `[knext] KNEXT_DB_SCALE_TO_ZERO=${JSON.stringify(shown)} is not recognised ` +
+      '(use true, 1, yes, false, 0 or no); falling back to the DATABASE_URL host.',
+  );
 }

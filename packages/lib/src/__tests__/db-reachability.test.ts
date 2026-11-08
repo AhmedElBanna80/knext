@@ -163,3 +163,50 @@ describe('acquire-failure observers', () => {
     expect(copy.acquireFailureObserverCount()).toBe(acquireFailureObserverCount());
   });
 });
+
+describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns once', () => {
+  const dsn = (host: string) => `postgres://u:p@${host}:55432/postgres`;
+
+  // Each test uses its own bad value: the once-per-process guard is process state,
+  // so a value another test already reported would hide the warning under test.
+  const capture = (run: () => void): string[] => {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    };
+    try {
+      run();
+    } finally {
+      console.warn = original;
+    }
+    return lines;
+  };
+
+  it('names the bad value and the host fallback, and warns once per process', () => {
+    const lines = capture(() => {
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-2193')).toBe(false);
+      expect(isScaleToZeroDatabase(dsn('db.example.com'), 'ture-once-2193')).toBe(false);
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('KNEXT_DB_SCALE_TO_ZERO');
+    expect(lines[0]).toContain('"ture-once-2193"');
+    expect(lines[0]).toContain('host');
+  });
+
+  it('the fallback still follows the host when the value is unrecognised', () => {
+    const lines = capture(() => {
+      expect(isScaleToZeroDatabase(dsn('pggw.scale-zero-pg.svc'), 'mayb-host-2193')).toBe(true);
+    });
+    expect(lines).toHaveLength(1);
+  });
+
+  it('stays silent for recognised values, empty values and an unset variable', () => {
+    const lines = capture(() => {
+      for (const flag of ['true', ' YES ', 'false', '0', 'no', '', '   ', undefined]) {
+        isScaleToZeroDatabase(dsn('db.example.com'), flag);
+      }
+    });
+    expect(lines).toHaveLength(0);
+  });
+});

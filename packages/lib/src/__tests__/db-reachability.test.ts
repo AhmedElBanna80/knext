@@ -1,5 +1,7 @@
 import { describe, expect, it, spyOn } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   acquireFailureObserverCount,
   isConnectionRefused,
@@ -220,9 +222,33 @@ describe('isScaleToZeroDatabase — an unrecognised KNEXT_DB_SCALE_TO_ZERO warns
     // clients.ts imports this module statically. A static import of ../logger here
     // builds the pino singleton as a side effect of loading clients, so a suite that
     // mocks pino after importing clients captures nothing (logger.test.ts,
-    // correlation.test.ts). Guard the import, not the behaviour.
-    const source = readFileSync(new URL('../db/reachability.ts', import.meta.url), 'utf8');
-    expect(source).not.toMatch(/from ['"]\.\.\/logger['"]/);
+    // correlation.test.ts). Walk every relative import of reachability.ts, in any
+    // form (from, bare import, dynamic import, require), transitively; none may
+    // reach src/logger. An unresolvable relative specifier fails the test.
+    const srcDir = fileURLToPath(new URL('../', import.meta.url));
+    const loggerDir = join(srcDir, 'logger');
+    const resolve = (from: string, spec: string): string => {
+      const base = join(dirname(from), spec.replace(/\.(c|m)?js$/, ''));
+      for (const c of [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')]) {
+        if (existsSync(c) && statSync(c).isFile()) return c;
+      }
+      throw new Error(`unresolvable import ${spec} in ${from}`);
+    };
+    const specRe =
+      /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]/gm;
+    const seen = new Set<string>();
+    const reached: string[] = [];
+    const walk = (file: string): void => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      reached.push(file);
+      for (const m of readFileSync(file, 'utf8').matchAll(specRe)) {
+        const spec = m[1] as string;
+        if (spec.startsWith('.')) walk(resolve(file, spec));
+      }
+    };
+    walk(join(srcDir, 'db', 'reachability.ts'));
+    expect(reached.filter((f) => f.startsWith(loggerDir))).toEqual([]);
   });
 
   it('never logs a connection string: a DSN-shaped value shows only its length', () => {

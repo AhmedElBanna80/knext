@@ -156,8 +156,9 @@ function displayValue(value: string): string {
  * anchored on `globalThis` (ADR-0027) so a duplicated module copy cannot warn
  * twice. The set is keyed on the full trimmed value, which is never logged.
  *
- * The record is written with `console.warn` as one JSON line, the same shape as
- * `slow-dep.ts`, and not through `../logger`. This module sits on `clients.ts`'s
+ * The record is written with `console.warn` as one JSON line (`level`, `msg`,
+ * `variable`, `value`), like `slow-dep.ts` writes its own line directly, and not
+ * through `../logger`. This module sits on `clients.ts`'s
  * static import path, and the logger builds its pino instance at load time, so
  * importing it here would make every consumer of `clients` construct the logger.
  */

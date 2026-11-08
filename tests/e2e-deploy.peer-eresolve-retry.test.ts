@@ -229,6 +229,8 @@ describe('scripts/e2e-deploy.sh — a fixture pinning a prerelease react still i
       );
       expect(r.status).not.toBe(0);
       expect(`${r.stdout}${r.stderr}`).toContain('ERESOLVE');
+      // the exact line scripts/lib/e2e-eresolve-retry.mjs gates the retry on
+      expect(`${r.stdout}${r.stderr}`).toMatch(/^npm (?:error|ERR!) code ERESOLVE\s*$/m);
     } finally {
       rmSync(probeApp, { recursive: true, force: true });
     }

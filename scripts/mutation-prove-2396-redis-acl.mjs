@@ -257,8 +257,8 @@ const cases = [
     name: 'B2: the webhook does not apply the rule on CREATE',
     file: 'packages/kn-next-operator/internal/webhook/v1alpha1/nextapp_webhook.go',
     anchor:
-      '\treturn nil, validation.ValidateNextAppCacheKeyPrefix(nextApp.GetNamespace(), nextApp.GetName(), &nextApp.Spec)',
-    to: '\treturn nil, nil',
+      'err := validation.ValidateNextAppCacheKeyPrefix(nextApp.GetNamespace(), nextApp.GetName(), &nextApp.Spec); err != nil',
+    to: 'err := error(nil); err != nil',
     pkg: './internal/webhook/v1alpha1',
     test: 'TestAdmissionRefusesTheDerivedPrefixShapeThatIsNotTheAppsOwn',
   },
@@ -266,8 +266,8 @@ const cases = [
     name: 'B2: the webhook does not apply the rule on UPDATE',
     file: 'packages/kn-next-operator/internal/webhook/v1alpha1/nextapp_webhook.go',
     anchor:
-      '\treturn nil, validation.ValidateNextAppCacheKeyPrefix(newApp.GetNamespace(), newApp.GetName(), &newApp.Spec)',
-    to: '\treturn nil, nil',
+      'err := validation.ValidateNextAppCacheKeyPrefix(newApp.GetNamespace(), newApp.GetName(), &newApp.Spec); err != nil',
+    to: 'err := error(nil); err != nil',
     pkg: './internal/webhook/v1alpha1',
     test: 'TestAdmissionRefusesTheDerivedPrefixShapeThatIsNotTheAppsOwn',
   },

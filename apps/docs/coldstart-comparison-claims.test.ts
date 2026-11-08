@@ -19,7 +19,16 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
 const APPS_DOCS_DIR = resolve(import.meta.dirname);
@@ -41,10 +50,15 @@ const FILES = [
 
 /** The thing a claim is about: the single executable, in any of its names. */
 const SUBJECT =
-  /\b(single[- ]exec(utable)?s?|self-contained (build|image|executable|binary)|compiled (binary|executable)|vinext (build|executable|binary)|the executable|the binary)\b/i;
-const COLD_START = /\bcold[- ]?starts?\b/i;
+  /\b(single[- ]exec(utable)?s?|self-contained (build|image|executable|binary)|compiled (bun |vinext )?(binary|executable)|vinext (build|executable|binary)|bun (single[- ])?executable|the executable|the binary)\b/i;
+// Cold start, not process boot: boot numbers are boot-claim-hygiene.test.ts's.
+const COLD_START = /\bcold[- ]?start(s|ing)?\b|\bscale[- ]from[- ]zero\b|\bfrom zero\b/i;
 const COMPARATIVE =
-  /\b(faster|quicker|wins?|beats?|outperforms?|ahead of)\b|\b\d+(\.\d+)?\s*(ms|s|×|x)\s+(faster|quicker|less|lower)\b/i;
+  /\b(faster|quicker|shorter|wins?|beats?|outperforms?|ahead of|advantage|cuts?|reduces?|halves)\b|\b\d+(\.\d+)?\s*(%|ms|s|×|x)\s+(faster|quicker|less|lower|shorter)\b/i;
+/** A clause that makes the claim even inside otherwise honest wording. */
+const BUT_CLAIM = /\bbut\b[^.;]*\b(faster|quicker|shorter|wins?|beats?)\b/i;
+/** A sentence that refers back to the previous sentence's subject. */
+const PRONOUN_START = /^(it|this|that|they|these)\b/i;
 /** Wording that states a tie or the absence of a proven win. */
 const HONEST =
   /\b(tie|tied|not (yet |\(yet\) )?a proven|no proven|not proven|not (a|yet a) (\w+ )?win|comparable|small or absent|no (measurable|separated)|does not (win|beat)|isn't faster|is not faster)\b/i;
@@ -69,7 +83,8 @@ export function abReferencePasses(ref: string, root = REPO_ROOT): string | undef
   const [path, anchor] = ref.split('#');
   if (!path || !anchor) return `"${ref}" is not path#anchor`;
   const file = resolve(root, path);
-  if (!existsSync(file)) return `${path} does not exist`;
+  if (file !== root && !file.startsWith(`${root}/`)) return `${path} is outside the repository`;
+  if (!existsSync(file) || !statSync(file).isFile()) return `${path} is not a file`;
   const text = readFileSync(file, 'utf8');
   const lines = text.split('\n');
   const slug = (h: string) =>
@@ -91,7 +106,7 @@ export function abReferencePasses(ref: string, root = REPO_ROOT): string | undef
     }
   }
   const section = lines.slice(start, end).join('\n');
-  if (!/^\s*[-*]?\s*win test:\s*passed\b/im.test(section)) {
+  if (!/^\s*[-*]?\s*win test:\s*passed\s*$/im.test(section)) {
     return `${path}#${anchor} does not record "win test: passed"`;
   }
   return undefined;
@@ -101,12 +116,17 @@ export function abReferencePasses(ref: string, root = REPO_ROOT): string | undef
 export function findUnbackedClaims(file: string, text: string, root = REPO_ROOT): Finding[] {
   const out: Finding[] = [];
   for (const para of paragraphs(text)) {
-    if (!SUBJECT.test(para) || !COLD_START.test(para)) continue;
+    if (!SUBJECT.test(para)) continue;
     const marker = para.match(MARKER);
+    let prev = '';
     for (const s of sentences(para)) {
-      if (!COLD_START.test(s) || !COMPARATIVE.test(s) || HONEST.test(s)) continue;
-      // The claim must name the executable itself, not a neighbour in the paragraph.
-      if (!SUBJECT.test(s)) continue;
+      const before = prev;
+      prev = s;
+      if (!COLD_START.test(s) || !COMPARATIVE.test(s)) continue;
+      if (HONEST.test(s) && !BUT_CLAIM.test(s)) continue;
+      // The claim must name the executable itself, or open with a pronoun for
+      // the previous sentence that did, not merely sit near it in the paragraph.
+      if (!SUBJECT.test(s) && !(PRONOUN_START.test(s.trim()) && SUBJECT.test(before))) continue;
       if (marker) {
         const problem = abReferencePasses(marker[1], root);
         if (!problem) continue;
@@ -152,22 +172,34 @@ describe('comparative cold-start claims about the single executable (ADR-0070 C5
     ).toEqual([]);
   });
 
+  it('reds the phrasings a reader would still take as a claim', () => {
+    const cases = [
+      'The compiled Bun executable has a shorter cold start than Node.',
+      'The single executable is quicker. It starts faster from zero.',
+      'The self-contained build cuts cold start by 40%.',
+      'The vinext executable has comparable throughput but a faster cold start.',
+    ];
+    for (const c of cases) expect(findUnbackedClaims('x.mdx', c).length, c).toBe(1);
+  });
+
   it('passes a claim whose pointer names a section that passed the win test, and reds one that did not', () => {
-    const dir = resolve(import.meta.dirname, '.tmp-ab');
-    const ledger = join(dir, 'ledger.md');
-    require('node:fs').mkdirSync(dir, { recursive: true });
-    require('node:fs').writeFileSync(
-      ledger,
-      '# Ledger\n\n## A/B one\n\n- win test: passed\n\n## A/B two\n\n- win test: failed\n',
+    const root = mkdtempSync(join(tmpdir(), 'knext-ab-'));
+    writeFileSync(
+      join(root, 'ledger.md'),
+      '# Ledger\n\n## A/B one\n\n- win test: passed\n\n## A/B two\n\n- win test: failed\n\n## A/B three\n\n- win test: passed?\n',
     );
     try {
-      const claim = (anchor: string) =>
-        `The single executable cold-starts faster. {/* cold-start-ab: ${relative(REPO_ROOT, ledger)}#${anchor} */}`;
-      expect(findUnbackedClaims('x.mdx', claim('ab-one'))).toEqual([]);
-      expect(findUnbackedClaims('x.mdx', claim('ab-two'))[0]?.why).toContain('does not record');
-      expect(findUnbackedClaims('x.mdx', claim('missing'))[0]?.why).toContain('has no section');
+      const claim = (ref: string) =>
+        `The single executable cold-starts faster. {/* cold-start-ab: ${ref} */}`;
+      const why = (ref: string) => findUnbackedClaims('x.mdx', claim(ref), root)[0]?.why;
+      expect(findUnbackedClaims('x.mdx', claim('ledger.md#ab-one'), root)).toEqual([]);
+      expect(why('ledger.md#ab-two')).toContain('does not record');
+      expect(why('ledger.md#ab-three')).toContain('does not record');
+      expect(why('ledger.md#missing')).toContain('has no section');
+      expect(why('../outside.md#ab-one')).toContain('outside the repository');
+      expect(why('.#ab-one')).toContain('not a file');
     } finally {
-      require('node:fs').rmSync(dir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

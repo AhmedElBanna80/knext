@@ -299,7 +299,7 @@ const MUTATIONS = [
     expect: 'red',
     claim: "a local action's action.yml is not read — the scripts it runs stop firing",
     subject: 'credential',
-    anchor: '        if (body !== null) scan(body, depth + 1);',
+    anchor: '        if (body !== null) scan(body, depth + 1, dir);',
     replacement: '',
   },
   {
@@ -342,7 +342,7 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'an install no longer names its manager’s lockfile and config',
     subject: 'credential',
-    anchor: '      for (const p of INSTALL_INPUTS[m]) named.add(p);',
+    anchor: '        for (const p of INSTALL_INPUTS[m]) named.add(at(d, p));',
     replacement: '',
   },
   {
@@ -356,11 +356,10 @@ const MUTATIONS = [
   {
     id: 'M47',
     expect: 'red',
-    claim:
-      'the workspace / action-path prefix is not stripped — ${{ github.workspace }}/hack/p.sh is not named',
+    claim: 'the workspace prefix is not stripped — ${{ github.workspace }}/hack/p.sh is not named',
     subject: 'credential',
-    anchor: "  return body.replace(ROOT_PREFIX, '');",
-    replacement: '  return body;',
+    anchor: "    .replace(WORKSPACE_PREFIX, '')",
+    replacement: '    ',
   },
   {
     id: 'M48',
@@ -415,16 +414,16 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'a scripts/ path named only in a comment stops firing',
     subject: 'credential',
-    anchor: '    for (const p of referencedPaths(prepare(body, { comments: true }))) {',
+    anchor: '    for (const p of referencedPaths(prepare(body, { comments: true, actionDir }))) {',
     replacement: '    for (const p of referencedPaths(code)) {',
   },
   {
     id: 'M55',
     expect: 'red',
-    claim: 'the root package.json stops firing on a dependency change under an install',
+    claim: 'the package.json an install reads stops firing on a dependency change',
     subject: 'credential',
-    anchor: "      c.path === 'package.json' &&",
-    replacement: "      c.path === 'no-such-file' &&",
+    anchor: '      manifests.has(c.path) &&',
+    replacement: '      false &&',
   },
   {
     id: 'M56',
@@ -451,6 +450,40 @@ const MUTATIONS = [
     anchor:
       '  for (const m of text.matchAll(/working-directory\\s*:\\s*[\'"]?([^\\s\'"#]+)/g)) out.push(m[1]);',
     replacement: '',
+  },
+  {
+    id: 'M59',
+    expect: 'red',
+    claim:
+      'the action-path prefix is stripped to the root inside an action.yml — the action’s own script stops firing and a root file of the same name fires',
+    subject: 'credential',
+    anchor: "    .replace(ACTION_PATH_PREFIX, actionDir ? `${actionDir}/` : '');",
+    replacement: "    .replace(ACTION_PATH_PREFIX, '');",
+  },
+  {
+    id: 'M60',
+    expect: 'red',
+    claim: 'an install no longer reads its package.json (root or working-directory)',
+    subject: 'credential',
+    anchor: "        manifests.add(at(d, 'package.json'));",
+    replacement: '',
+  },
+  {
+    id: 'M61',
+    expect: 'red',
+    claim: 'an install runs from the root only, not working-directory / cd',
+    subject: 'credential',
+    anchor: '  return bases(prepare(text));',
+    replacement: "  return ['.'];",
+  },
+  {
+    id: 'M62',
+    expect: 'red',
+    claim: 'flags before the install verb hide the install',
+    subject: 'credential',
+    anchor:
+      '  /(?:^|[\\s;&|(])(bun|npm|pnpm|yarn)(?:\\s+[^\\s;&|]+)*?\\s+(?:install|i|ci|add)(?![\\w-])/gm;',
+    replacement: '  /(?:^|[\\s;&|(])(bun|npm|pnpm|yarn)\\s+(?:install|i|ci|add)(?![\\w-])/gm;',
   },
 ];
 

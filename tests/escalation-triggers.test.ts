@@ -887,6 +887,47 @@ describe('credential workflows: the files they name, one level deep', () => {
     ]);
   });
 
+  it('in an action.yml, the action-path prefix is the action directory, not the root', () => {
+    const files = {
+      '.github/workflows/r.yml': wf('echo').replace(
+        '      - run: |',
+        '      - uses: ./.github/actions/sign\n      - run: |',
+      ),
+      '.github/actions/sign/action.yml':
+        'runs:\n  steps:\n    - run: bash "${{ github.action_path }}/hack/p.sh"\n',
+      '.github/actions/sign/hack/p.sh': 'x',
+      'hack/p.sh': 'x',
+    };
+    const hit = (p: string) =>
+      classifyContent([change(p)], reader({ head: files })).find(
+        (f: { id: string }) => f.id === 'supply-chain',
+      )?.paths;
+    expect(hit('.github/actions/sign/hack/p.sh')).toEqual(['.github/actions/sign/hack/p.sh']);
+    expect(hit('hack/p.sh')).toBeUndefined();
+  });
+
+  it('an install under a working-directory names that directory’s lockfile and manifest', () => {
+    expect(fires('cd tools/foo && npm ci', {}, 'tools/foo/package-lock.json')).toEqual([
+      'tools/foo/package-lock.json',
+    ]);
+  });
+
+  it('an install with flags before the verb still counts', () => {
+    expect(fires('npm --prefix x ci', {}, 'package-lock.json')).toEqual(['package-lock.json']);
+    expect(fires('pnpm -r install', {}, 'pnpm-lock.yaml')).toEqual(['pnpm-lock.yaml']);
+  });
+
+  it('near miss: without an install a dependency change in package.json does not fire', () => {
+    const r = reader({
+      base: { 'package.json': JSON.stringify({ dependencies: { a: '1' } }) },
+      head: {
+        '.github/workflows/r.yml': wf('bun run build'),
+        'package.json': JSON.stringify({ dependencies: { a: '2' } }),
+      },
+    });
+    expect(classifyContent([change('package.json')], r)).toHaveLength(0);
+  });
+
   it('near miss: a file the named script imports does not fire', () => {
     expect(
       fires(

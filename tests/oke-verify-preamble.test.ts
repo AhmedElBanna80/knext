@@ -224,6 +224,38 @@ describe('oke-verify-preamble', () => {
     expect(run({}, ['--expect-operator-digest', D, '--nope', 'x']).code).toBe(2);
   });
 
+  it('fails when a served or storage flag differs', () => {
+    const live = structuredClone(CRD);
+    live.spec.versions[0].served = !live.spec.versions[0].served;
+    const r = run({ crd: live });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('served/storage differ');
+  });
+
+  it('fails when a source version is missing from the cluster', () => {
+    const live = structuredClone(CRD);
+    const name = live.spec.versions[0].name;
+    live.spec.versions = [];
+    const r = run({ crd: live });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain(`version "${name}" is missing from the cluster`);
+  });
+
+  it('fails when the source CRD has no versions', () => {
+    const dir = stub({});
+    const src = join(dir, 'empty-crd.yaml');
+    writeFileSync(src, 'spec:\n  versions: []\n');
+    const r = run({}, ['--expect-operator-digest', D, '--source-crd', src]);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('the source CRD has no versions');
+  });
+
+  it('exits 2, never 0, when the source CRD cannot be read', () => {
+    const r = run({}, ['--expect-operator-digest', D, '--source-crd', '/nonexistent/crd.yaml']);
+    expect(r.code).toBe(2);
+    expect(r.out).toContain('cannot read the cluster or the source CRD');
+  });
+
   for (const fail of ['pods', 'crd', 'ksvc'] as const) {
     it(`exits 2, never 0, when the ${fail} read fails`, () => {
       const r = run({ fail });

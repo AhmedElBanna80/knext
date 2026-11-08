@@ -6,17 +6,18 @@
  * source. This preamble reads the cluster and prints what is actually there:
  *
  *   1. the image the operator's manager container runs (its `imageID`),
- *   2. whether the live NextApp CRD schema equals the source CRD schema,
+ *   2. whether the live NextApp CRD has the source's versions, each with the
+ *      same schema and served/storage flags,
  *   3. the generation of the `knext-docs` Knative Service.
  *
  * It fails when any of them does not match the expected release candidate.
  * It only reads (`kubectl get`); it never writes to the cluster. It also reads
- * the source CRD from this checkout (`CRD_PATH`).
+ * the source CRD from this checkout (`CRD_PATH`, or `--source-crd`).
  *
  * USAGE
  *   node scripts/oke-verify-preamble.mjs --expect-operator-digest sha256:<64 hex>
  *        [--expect-ksvc-generation <n>] [--context <kubectl context>]
- *        [--ksvc knext-docs] [--ksvc-namespace knext-docs]
+ *        [--ksvc knext-docs] [--ksvc-namespace knext-docs] [--source-crd <path>]
  *
  * Without --expect-ksvc-generation the ksvc generation is printed and must
  * exist, but is not compared. `KUBECTL` overrides the kubectl binary (tests
@@ -142,7 +143,7 @@ export function evaluatePreamble({ operatorPods, liveCrd, sourceCrd, ksvc }, exp
 
 /** Parse argv. Throws a usage error string on bad input. */
 export function parseArgs(argv) {
-  const opts = { ksvc: 'knext-docs', ksvcNamespace: 'knext-docs' };
+  const opts = { ksvc: 'knext-docs', ksvcNamespace: 'knext-docs', sourceCrd: CRD_PATH };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const value = argv[i + 1];
@@ -156,6 +157,7 @@ export function parseArgs(argv) {
     } else if (flag === '--context') opts.context = value;
     else if (flag === '--ksvc') opts.ksvc = value;
     else if (flag === '--ksvc-namespace') opts.ksvcNamespace = value;
+    else if (flag === '--source-crd') opts.sourceCrd = value;
     else throw `unknown flag ${flag}`;
   }
   if (!opts.operatorDigest) throw '--expect-operator-digest is required';
@@ -197,7 +199,7 @@ export function main(argv) {
   let cluster;
   let sourceCrd;
   try {
-    sourceCrd = parse(readFileSync(CRD_PATH, 'utf8'));
+    sourceCrd = parse(readFileSync(opts.sourceCrd, 'utf8'));
     cluster = readCluster(opts);
   } catch (err) {
     process.stderr.write(

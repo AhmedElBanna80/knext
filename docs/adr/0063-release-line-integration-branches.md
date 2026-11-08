@@ -7,7 +7,7 @@
   (ADR — a release-line branching decision, founder-delegated, 2026-10-03), reviewed per
   `.claude/rules/workflow.md`'s sprint-close process; not a merge gate.
 - **Amended:** 2026-10-09 — the v2 line, dist-tags, `release/1.x`, 1.x support window (see the
-  amendment at the end).
+  amendment at the end). 2026-11-08 — the 1.4 line lives on `main` (the last amendment).
 - **Relates to:** `CLAUDE.md` §9 (as-built truths on publishing/versioning), ADR-0036 (two build
   targets — the 1.3 line carries vinext/Bun patch work that is separate from the v1.0 GA line),
   and the published-bytes-freeze invariant enforced by
@@ -179,6 +179,10 @@ produced the accidental `2.0.0` computation from a stale pre-mode marker on 242 
 
 ## Amendment (2026-11-08) — the 1.4 line lives on `main`
 
+**Status of this amendment: Accepted** as a record of what the repository already is; it changes no
+publish behaviour. Trigger-class (ADR); per the 2026-09-22 workflow amendment it is reviewed at
+sprint close, not as a merge gate.
+
 ### Context
 
 The 2026-10-09 amendment put the 1.4 line on `integration/v1.4` with the pre-release dist-tag
@@ -189,7 +193,9 @@ table described a branch that does not exist.
 ### Decision
 
 - **The 1.4 line is `main`** until 1.4.0 ships; the lane table above now says so. There is no
-  `integration/v1.4` branch.
+  `integration/v1.4` branch. This does not break the original rule that nothing changing published
+  bytes lands on `main` before 1.0.0 GA: that rule held only until 1.0.0 GA, and 1.0.0 and then
+  1.3.x GA shipped (`latest` is 1.3.1) before the 1.4 work landed on `main`.
 - **Not decided here, left to the maintainer:** whether `next-1.4` is still needed as a dist-tag,
   and whether `refs/heads/integration/v1.4` should be removed from `PUBLISH_LANES`
   (`scripts/publish-lane-guard.mjs`). Both are publish-path policy. Keeping the unused lane in the

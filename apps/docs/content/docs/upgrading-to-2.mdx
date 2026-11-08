@@ -53,7 +53,7 @@ If you cannot move to these floors yet, stay on 1.x (see [Staying on 1.x](#stayi
 ## What is removed
 
 - **The `kn-next` command.** `@getknext/core` installs exactly one command, `knext`, with the same
-  subcommands and flags. A 1.x script that still calls the old command stops with `command not found`. See
+  subcommands and flags. The old name is no longer installed with `@getknext/core`, so a 1.x script that still calls it through your project's install stops with `command not found`. See
   [the `kn-next` command is gone](/docs/upgrading#version-specific-step-the-kn-next-command-is-gone)
   for where to look.
 - **Test-only helpers.** `@getknext/core/adapters/cache-handler` no longer exports

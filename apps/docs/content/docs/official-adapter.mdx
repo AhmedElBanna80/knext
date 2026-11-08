@@ -37,8 +37,13 @@ export default adapter;
 
 - **`modifyConfig`** defaults `output` to `'standalone'` during the production build. An explicit
   `output: 'export'` is left untouched, so Next.js runs its own static-export validation, and the
-  knext CLI then refuses the build (on both the Next.js and vinext build targets; the Next.js check honours a custom `distDir`; both read `next.config` literally, so a value computed at runtime is not detected, and on vinext an `output: 'export'` that sits under a condition or inside a nested value only prints a warning): a static export is not a server deployment, and knext deploys a
+  knext CLI then refuses the build (on both the Next.js and vinext build targets; both read `next.config` literally, so a value computed at runtime is not detected, and on vinext an `output: 'export'` that sits under a condition or inside a nested value only prints a warning): a static export is not a server deployment, and knext deploys a
   Next.js server. Remove `output: 'export'`, or host the `out/` folder on a static host.
+- **A custom `distDir` is not supported yet.** On the Next.js build target the knext CLI refuses a
+  `next.config` that sets `distDir` to anything other than `.next` before it builds, because knext's
+  build and packaging steps read the output from `.next`. Remove `distDir` and build again. The
+  check reads `next.config` literally, so a value computed at runtime is not detected. The vinext
+  target does not use `distDir`.
 - **`onBuildComplete`** uploads the build's static artifacts to the configured object store, keyed
   by `buildId`.
 

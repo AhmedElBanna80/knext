@@ -44,9 +44,12 @@ import (
 // average over a day.
 //
 // The zero value is ready to use. State is in memory only: an operator restart
-// forgets the reservations, so a restart mid-rollout re-spaces the remaining
-// apps from scratch. That is bounded (still at most maxAppsPerMinute from that
-// instant) and is the same trade the warm-schedule requeue makes.
+// forgets the reservations, so a restart or failover mid-rollout re-spaces the
+// remaining apps from scratch. The new limiter's first slot is free, so the
+// minute around each failover can hold one render over the cap
+// (maxAppsPerMinute+1), and never a burst; progress itself lives in
+// status.platform, so no app renders twice. This is the same trade the
+// warm-schedule requeue makes (see platform_rollout_failover_test.go).
 type rolloutLimiter struct {
 	mu sync.Mutex
 	// last is the latest slot handed out (zero before the first).

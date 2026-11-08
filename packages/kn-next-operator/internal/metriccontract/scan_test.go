@@ -771,6 +771,30 @@ func init() {
 	metrics.Registry.MustRegister(c)
 }
 `,
+		"after a parenthesised closure called on the spot that panics": `
+func init() {
+	(func() { panic("stop") })()
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a closure called on the spot that defers a panic": `
+func init() {
+	func() { defer panic("stop") }()
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a closure called on the spot that defers a panicking closure": `
+func init() {
+	func() { defer func() { panic("stop") }() }()
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a go-started closure that panics": `
+func init() {
+	go func() { panic("stop") }()
+	metrics.Registry.MustRegister(c)
+}
+`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -811,6 +835,12 @@ func init() {
 		"after a deferred closure that panics": `
 func init() {
 	defer func() { panic("late") }()
+	metrics.Registry.MustRegister(c)
+}
+`,
+		"after a go-started closure that cannot panic": `
+func init() {
+	go func() { println("bg") }()
 	metrics.Registry.MustRegister(c)
 }
 `,

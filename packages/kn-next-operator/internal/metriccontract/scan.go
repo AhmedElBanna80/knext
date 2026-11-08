@@ -30,7 +30,8 @@ limitations under the License.
 //     literal called on the spot counts). This is not a proof that the
 //     registration succeeds (a Register error may be discarded), nor that
 //     init() is reached (a non-terminating loop, os.Exit, or a panic inside a
-//     named helper called earlier in it is not detected);
+//     named helper, or inside a literal bound to a variable and called through
+//     it, earlier in init() is not detected);
 //   - the collector is an unexported package-level variable that nothing in the
 //     package assigns besides its declaration, or an inline call, built by a
 //     known prometheus constructor, and its name is a compile-time constant of
@@ -425,9 +426,11 @@ func (p *pkg) markTopLevel(body *ast.BlockStmt, marked map[*ast.CallExpr]bool) {
 // a later statement runs, conditionally or not. A function literal is skipped,
 // since a return inside it leaves the literal, not init(), unless it is called
 // on the spot: then a panic in its body ends init() too (see litMayPanic). A
-// deferred or go-started call does not run before the next statement, so it is
-// not inspected. A panic inside a named helper that init() calls is not
-// detected.
+// top-level deferred call runs only when init() returns, after every later
+// statement, so it is not inspected. A go-started literal that can panic is a
+// stop: the goroutine may crash the process before the next statement. Not
+// detected: a panic inside a named helper, or inside a literal bound to a
+// variable and called through it.
 func (p *pkg) mayStopInit(st ast.Stmt) bool {
 	stop := false
 	ast.Inspect(st, func(n ast.Node) bool {
@@ -435,7 +438,12 @@ func (p *pkg) mayStopInit(st ast.Stmt) bool {
 			return false
 		}
 		switch n := n.(type) {
-		case *ast.FuncLit, *ast.DeferStmt, *ast.GoStmt:
+		case *ast.FuncLit, *ast.DeferStmt:
+			return false
+		case *ast.GoStmt:
+			if fl, ok := ast.Unparen(n.Call.Fun).(*ast.FuncLit); ok && p.litMayPanic(fl) {
+				stop = true
+			}
 			return false
 		case *ast.ReturnStmt, *ast.LabeledStmt:
 			stop = true
@@ -457,8 +465,10 @@ func (p *pkg) mayStopInit(st ast.Stmt) bool {
 
 // litMayPanic reports whether the body of a function literal that is called on
 // the spot can panic: a call to the panic builtin at any depth, or a nested
-// literal that is itself called on the spot and can panic. A return or goto in
-// the body only leaves the literal, so it does not count.
+// literal that is itself called on the spot, deferred or go-started and can
+// panic. A deferred call inside the literal runs when the literal returns, so
+// before the next statement of init(). A return or goto in the body only leaves
+// the literal, so it does not count.
 func (p *pkg) litMayPanic(fl *ast.FuncLit) bool {
 	found := false
 	ast.Inspect(fl.Body, func(n ast.Node) bool {
@@ -466,7 +476,7 @@ func (p *pkg) litMayPanic(fl *ast.FuncLit) bool {
 			return false
 		}
 		switch n := n.(type) {
-		case *ast.FuncLit, *ast.DeferStmt, *ast.GoStmt:
+		case *ast.FuncLit:
 			return false
 		case *ast.CallExpr:
 			if id, ok := ast.Unparen(n.Fun).(*ast.Ident); ok && id.Name == "panic" {

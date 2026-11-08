@@ -1,7 +1,7 @@
 /**
  * Disk mode's runner for the process-start primers (ADR-0066 D3).
  *
- * `node-server.ts` calls this as its first action: it loads the ordered list
+ * `node-server.ts` calls this right after its boot-trace mark: it loads the ordered list
  * from `process-start-primers.cjs`, requires each primer it names, and returns
  * `abortPrimers` from the owner module `process-start-abort.cjs`, which the
  * SIGTERM handler calls before draining.

@@ -19,6 +19,7 @@ package controller
 import (
 	"fmt"
 	"strings"
+	"testing"
 )
 
 // A copy of what `ACL CAT <category>` printed on the Redis 7.4 image the CI lane
@@ -74,7 +75,9 @@ var redisCategoriesFixture = map[string][]string{
 func fixtureCategory(category string) ([]string, error) {
 	names, ok := redisCategoriesFixture[category]
 	if !ok {
-		return nil, nil // an unknown category is empty, as ACL CAT of one would be an error; tests do not ask
+		// The server refuses ACL CAT of a name it does not list; an empty answer
+		// would read as "nothing in it is dangerous".
+		return nil, fmt.Errorf("ERR unknown category '%s'", category)
 	}
 	return append([]string(nil), names...), nil
 }
@@ -82,4 +85,16 @@ func fixtureCategory(category string) ([]string, error) {
 // failingCategory is a lookup whose ACL CAT is refused.
 func failingCategory(string) ([]string, error) {
 	return nil, fmt.Errorf("NOPERM this user has no permissions to run the 'acl|cat' command")
+}
+
+// The fixture answers like the server: an unknown category is an error, never an
+// empty list that a catalog could read as "nothing in it is dangerous".
+func TestFixtureCategoryRefusesAnUnknownCategory(t *testing.T) {
+	names, err := fixtureCategory("no-such-category")
+	if err == nil {
+		t.Fatalf("an unknown category returned %d names and no error; the server refuses it", len(names))
+	}
+	if names != nil {
+		t.Fatalf("an unknown category returned names %v alongside its error", names)
+	}
 }

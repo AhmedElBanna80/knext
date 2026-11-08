@@ -90,9 +90,13 @@ spec:
 - **Never leaves the operator namespace.** It is not referenced from any `NextApp`, not mounted into
   any app pod, and not written to status, events or logs.
 - **A dedicated user, not `default`.** The docs ship a provisioner rule set:
-  `on ><pw> ~* resetchannels -@all +acl|setuser +acl|deluser +acl|getuser +acl|users +acl|whoami +scan +del +ping +info|server +client|setinfo`.
+  `on ><pw> ~* resetchannels -@all +acl|setuser +acl|deluser +acl|getuser +acl|users +acl|whoami +acl|cat +scan +del +ping +info|server +client|setinfo`.
   `+acl|users` (with `+acl|getuser`) is what lets the operator see the users actually present on
   the endpoint for the conflict check in D6a, not only the CRs it watches.
+  *Amended 2026-11-08: `+acl|cat` is added.* It lets the operator read the server's `admin` and
+  `dangerous` command categories (`ACL CAT`), which the command check in the isolation claim needs.
+  Without it that check cannot run, and the operator withholds the isolation claim
+  (`SharedCredentialLive`, "the check failed") rather than assume no command is dangerous.
   Stated plainly so nobody mistakes it for least privilege: **a user that can run `ACL SETUSER` can
   grant itself anything, so this credential is root-equivalent on that Redis** (measured: the
   provisioner's `ACL SETUSER <itself> +@all` returns `OK` on both engines). The narrow rule set limits
@@ -205,7 +209,7 @@ ACL SETUSER knext-app-<cluster tag>-<app hash> reset on ><password> [#<sha256 of
   a version below 7.0, is treated as having no ACL support (D6).
 - **Status.** A new `CacheCredentialsReady` condition, computed in `computeStatusVerdict`, carries
   the reason (`Provisioned`, `SharedCredential`, `EndpointUnregistered`, `AclUnsupported`,
-  `ProvisionerRefused`, `PrefixConflict`, `PrefixReserved`, `RotationStalled`). `status.cache` reports the isolation mode, username and
+  `ProvisionerRefused`, `PrefixConflict`, `PrefixReserved`, `RotationStalled`, and, *amended 2026-11-08*, `SharedCredentialLive`, `SharedCredentialInSpec` and `PrefixUnknown`. The code has no `SharedCredential` reason: the shared-credential case is the two named ones, `SharedCredentialLive` (something else can still reach app keys) and `SharedCredentialInSpec` (a credential in the spec).) `status.cache` reports the isolation mode, username and
   Secret name, and never a password.
 
 ### D3. Who owns the per-app password: an operator-owned Secret in the app's namespace
@@ -305,9 +309,13 @@ the Secret. The operator watches the Secret and uses the new value on its next c
    is lost.** Old-revision pods keep the shared credential until they scale down.
 4. `kn-next doctor` lists apps still on a shared credential, and why (`isolation: none`,
    unregistered endpoint, refused).
-5. When none are left, the platform admin retires the shared credential (for example
-   `ACL SETUSER default off`, or a new `requirepass`). knext does not do this: that credential is not
-   knext's.
+5. When none are left, the platform admin retires the shared credential. What retires it is the
+   endpoint's state, not one command: no enabled user other than the provisioner can reach app keys
+   or run an admin or dangerous command. `ACL SETUSER default off` gets there when `default` is the
+   only shared path. *Amended 2026-11-08:* a new `requirepass` does not get there by itself. It
+   changes the password `default` accepts, but `default` stays enabled on every key, so the
+   operator keeps `SharedCredentialLive` until that user is off or restricted. knext does not do
+   this: that credential is not knext's.
 6. Rollback per app: `spec.cache.isolation: none` stops wiring the Secret and makes the operator
    `ACL DELUSER` the app's user.
 
@@ -604,6 +612,22 @@ scope (they hold the provisioner credential by design).
     cluster's, with their key patterns and whether they overlap an app here. It reports, never
     deletes: it is what lets a platform admin tell a rebuilt cluster's orphans from a live second
     cluster before sweeping them, and the docs carry the `clusterId`-before-rebuild step.
+
+## Amendment (2026-11-08, design review of the #2396 build, round 4): the command rule and the wording that follows it
+
+The build's review found three places where the text said less than the code does. The code is the
+reference; these edits make the ADR match it. No decision changes.
+
+- **D1, provisioner rule set:** `+acl|cat` is added (see the inline amendment there).
+- **D2, reason list:** `SharedCredentialLive`, `SharedCredentialInSpec` and `PrefixUnknown` are
+  added, and the earlier `SharedCredential` entry is retired.
+- **D5, step 5:** a new `requirepass` does not retire the shared credential. What does is that no
+  enabled user other than the provisioner can reach app keys or run an admin or dangerous command.
+- **Command rule as built:** every enabled user other than the provisioner, a `knext-app-*` user
+  included, is checked for admin and dangerous commands. Key patterns are checked only for
+  non-app users, because an app user's keys are its own prefix. A module's commands are absent from
+  `ACL CAT`, so they are not checked. A renamed command is not seen under its new name. These limits
+  are documented in the operator's Redis isolation page.
 
 ## Decision log (jev, 2026-10-16)
 

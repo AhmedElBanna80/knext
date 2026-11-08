@@ -31,8 +31,10 @@ import (
 // settled by two probes. A no-credential connect and `AUTH default` with an
 // unissued password are both refused under `requirepass`, yet the real shared
 // password still holds `~*`. So the claim is made only when the endpoint itself
-// says nothing but the provisioner and the knext-app-* users can log in with a
-// key pattern that reaches an app's keys.
+// says nothing that reaches an app's keys or runs an admin or dangerous command,
+// apart from the provisioner. A knext-app-* user is scoped by its key pattern
+// (it is not counted for keys), but it is held to the command rule like every
+// other user, its own included.
 
 func assertNoIsolationClaim(t *testing.T, st cacheCredentialsState, why string) {
 	t.Helper()
@@ -319,8 +321,11 @@ func TestTheOperatorsOwnCommandListIsNotDangerous(t *testing.T) {
 	}
 }
 
-// knext-app-* users are scoped by construction, however they print.
-func TestIsolationClaimIgnoresTheProvisionerAndKnextAppUsers(t *testing.T) {
+// A knext-app-* user with a foreign key pattern and no command rules is not a
+// key-pattern leak: the provisioner is skipped, and knext-app-* users are not
+// counted for their key patterns. Their command rules are still checked (see
+// TestIsolationClaimChecksCommandsOfEveryUserButTheProvisioner).
+func TestIsolationClaimIgnoresTheProvisionerAndKnextAppKeyPatterns(t *testing.T) {
 	h := newACLHarness(t, true)
 	h.prov.addUser("knext-app-deadbeef-aaaaaaaaaaaa", true, "~other:*")
 	st, _ := h.r.reconcileCacheCredentials(context.Background(), aclApp("shop", "web", "shop-web", ""), h.snap)

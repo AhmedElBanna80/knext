@@ -512,7 +512,6 @@ const cases = [
     test: 'TestFinalizerDoesNotLeakTheUserWhenListingAppsFailsTransiently',
   },
 
-
   // Review r3 (2026-11-08).
 
   // B-1: a prefix set through env is still a prefix an app holds.

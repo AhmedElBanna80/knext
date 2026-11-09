@@ -1431,10 +1431,10 @@ time before `process.exit`.
 - `cache-write-registry.js` gains `onProcessExit(report)`. Reporters sit in one `globalThis` set
   (`Symbol.for('knext.core.cache.exitReports')`, ADR-0027), run by one `process.once('exit')`
   listener per process, synchronously, each one guarded.
-- Each handler registers a reporter the first time it records a backlog. On exit with anything
-  still pending, it logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
+- The ISR handler arms its reporter on every recorded skip (the set dedups it, and the call restores a removed listener); the `'use cache'` handler arms once per core. On exit with anything
+  still pending, each handler logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
   count (or "collapsed") and the TTL bound. No metric (see below).
-- The `exit` event fires on every way a knext runtime ends the process: Next's own SIGTERM `cleanup()` ends in
+- The `exit` event fires whenever a knext runtime ends the process through `process.exit` (SIGKILL is the exception, below): Next's own SIGTERM `cleanup()` ends in
   `process.exit(143|130)` (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
   cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
   preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`

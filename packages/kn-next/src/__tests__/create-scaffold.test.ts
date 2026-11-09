@@ -248,6 +248,18 @@ describe("knext create --builder vinext — next.config is minimal under vinext 
         expect(code).toMatch(/cacheMaxMemorySize:\s*0/);
     });
 
+    it("wires the same cache handler on the default (turbopack) scaffold", () => {
+        // The default builder renders from the plain next.config template, not
+        // the vinext one, so the same #895 wiring is pinned on it separately.
+        const { appDir } = scaffoldApp();
+        const code = readFileSync(join(appDir, "next.config.ts"), "utf8")
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/^\s*\/\/.*$/gm, "");
+
+        expect(code).toMatch(/cacheHandler\s*:/);
+        expect(code).toMatch(/cacheMaxMemorySize:\s*0/);
+    });
+
     it("ships cache-handler.js as a thin re-export of the framework handler (#895)", () => {
         // Same shape as apps/file-manager/cache-handler.js: the file exists
         // only because Next requires a PATH; the logic stays in

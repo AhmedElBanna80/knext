@@ -1165,5 +1165,6 @@ only when `KNEXT_WARM_PATH` is set, `KNEXT_EAGER_WARM=0` turns it off, and it lo
 lines. The #765 ruling stands: `/` is never a default. Two consequences are documented rather than
 hidden: an app that already set `KNEXT_WARM_PATH` for the compile-cache bake now also warms at pod
 start (`KNEXT_EAGER_WARM=0` keeps the old behaviour), and with the warm on, `knext.cold_start` /
-`knext_coldstart_*` attach to the warm request rather than the first visitor. The e2e harness does not
-set `KNEXT_WARM_PATH`, so compat fixtures are unaffected.
+`knext_coldstart_*` attach to the warm request rather than the first visitor. The e2e harness sets
+`KNEXT_WARM_PATH` only inline for the compile-cache bake subshell (`scripts/e2e-deploy.sh`), never in
+the supervisor's boot environment, so compat fixtures get no boot warm.

@@ -439,12 +439,13 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   `node-server.ts`, before the metrics collector) requests each `KNEXT_WARM_PATH`
   path (opt-in: none unless set; `KNEXT_EAGER_WARM=0` off; at most 8; logs
   `WARMED:` lines) on `127.0.0.1:$PORT` with
-  `x-knext-warm: 1`, one at a time, never following a redirect, 5 s per path, and
-  never throwing; it skips the warm-up if nothing listens yet, shares one 5 s
+  `x-knext-warm: 1`, one at a time, never following a redirect, and never
+  throwing; it skips the warm-up if nothing listens yet, shares one 5 s
   budget across all paths, and stops on shutdown. It runs wherever this
   supervisor runs: disk mode, and exec mode where the supervisor spawns the
-  compiled executable. The self-contained executable image has no supervisor
-  and does not warm.
+  compiled executable. The self-contained executable image has no supervisor;
+  it warms through its own entry (`knext-bun-entry.mjs`, on by default with
+  `/api/health`, ADR-0042).
 - What each runtime path loads before the server:
   - **Disk mode** (`node-server.ts` supervisor, a Node or Bun `server.js` child):
     the supervisor runs every `PROCESS_START_PRIMERS` entry in-process

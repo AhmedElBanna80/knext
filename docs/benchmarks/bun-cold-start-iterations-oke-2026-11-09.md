@@ -58,7 +58,7 @@ All 60 cycles answered 200, and the harness was the same as in run 2.
 
 | Metric | bp-b median | bp-w median | Paired diff, 95% CI | Hodges–Lehmann | Mann–Whitney p | bp-w faster |
 |---|---|---|---|---|---|---|
-| ready → first byte | 94 | **16** | **−69 [−85, −54]** | −72 | < 0.001 | 27/30 |
+| ready → first byte (harness phase 6: queue-proxy ready, `qp_ready`, to first byte) | 94 | **16** | **−69 [−85, −54]** | −72 | < 0.001 | 27/30 |
 | total | 1604 | 1533 | −72 [−360, +173] | −64 | 0.32 | 17/30 |
 | bound → ready (phases 3–5) | 1411 | 1368 | −7 [−238, +238] | −22 | 0.76 | 16/30 |
 

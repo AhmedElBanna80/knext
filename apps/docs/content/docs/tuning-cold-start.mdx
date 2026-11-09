@@ -126,8 +126,8 @@ Kubernetes still has to report the new pod's address and readiness. You can have
 idle time to render a page before the first visitor arrives. Set `KNEXT_WARM_PATH` to the path (or a
 comma-separated list of paths, up to 8) and, as soon as the server is listening, knext requests each
 one once on the pod's loopback interface. On a managed Kubernetes cluster, warming the page the
-first visitor asked for took the time from "ready" to the first response byte from a median of
-94 ms to 16 ms; the whole cold start was not measurably shorter in that test, because the
+first visitor asked for took the time from the pod passing its readiness check to the first
+response byte from a median of 94 ms to 16 ms; the whole cold start was not measurably shorter in that test, because the
 cluster's own startup varies by several hundred milliseconds.
 
 - It is off unless `KNEXT_WARM_PATH` is set, and `KNEXT_EAGER_WARM=0` turns it off. The default
@@ -142,9 +142,10 @@ cluster's own startup varies by several hundred milliseconds.
   to skip authentication or other checks. knext's cold-start metric and trace span
   (`knext_coldstart_*`, `knext.cold_start`) attach to the first request the server sees, so with the
   warm on they measure the warm request, not your first visitor; your app's own metrics also count it.
-- It never follows a redirect, spends at most 5 seconds on the whole warm-up, stops when the server
-  is shutting down, and never fails the start. It applies to the default image; the self-contained
-  single-executable image does not warm.
+- It never follows a redirect, spends about 5 seconds at most on the whole warm-up, stops when the
+  server is shutting down, and never fails the start. This is the default image's behaviour; the
+  single-executable image has its own warm-up, described on the [Bun runtime](/docs/bun-runtime)
+  page.
 
 ## What's new in this release
 

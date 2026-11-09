@@ -5,6 +5,8 @@
   of the *Developer Experience sprint* (#1531). Trigger-class (ADR + security: it draws the
   credential-custody line), so the architect and system designer review it at sprint close per
   `.claude/rules/workflow.md` — it is not a merge gate.
+- **Amendment 1 (end of this file): Proposed (2026-11-09)** for #2270: the signer bar under tripwire 1,
+  and a single-action CDN purge key permitted under tripwire 3.
 - **Answers:** the positioning map #614 ("should knext own zero-knowledge onboarding?") — see
   [§ Answer to #614](#answer-to-614).
 - **Relates to:** ADR-0001 (the operator is the single source of truth — this ADR adds **no**
@@ -248,3 +250,35 @@ compat credential is the north-star lever; this work does not compete with it fo
    ADR-0001 exception for a `knext cluster install`; (2) token form and rotation; (3) profile
    versioned with the operator or the CLI; (4) generic as baseline row or first-class row;
    (5) storage/registry: docs only or emitted IaC snippets.
+
+## Amendment 1 (Proposed 2026-11-09): a dependency-free signer bar, and a single-action purge key
+
+**Proposed (2026-11-09)** for #2270, as ADR-0068 Amendment 4's action item A4-4. Flagged for the next
+sprint-close design review together with that amendment. It gates A4-1, the CloudFront purge
+implementation: that code does not merge before this amendment is accepted.
+
+**Tripwire 1 (cloud SDK imports), cross-reference.** A hand-written request signer is not a cloud SDK
+only while it meets the bar in ADR-0068 Amendment 4 A4.1: one pinned signer file per provider, at most
+200 lines, importing only `node:crypto`; signing primitives forbidden everywhere else in
+`packages/*/src`; one constant host per provider; one operation, no credential chain; tested
+byte for byte against the provider's published vectors. A signer that breaks a line of that bar is
+treated as a cloud SDK under this tripwire. The tripwire 1 scan also forbids `@smithy/*` and
+`aws4fetch`, the two AWS signing packages that do not match `@aws-sdk/*`.
+
+**Tripwire 3 (stored cloud credential), a bounded exception.** Tripwire 3 stops "a stored
+cloud-account / IAM credential". This amendment permits exactly one class of IAM credential, and
+only on these terms:
+
+- it sits in a **user-created Kubernetes Secret** in the app's namespace, referenced by name from the
+  `NextApp` CR, and knext reads it only through the operator-rendered `secretKeyRef` env, as it does
+  for the Cloudflare purge token;
+- its **only grant is one CDN purge action on one CDN resource** (for CloudFront:
+  `cloudfront:CreateInvalidation` on the one distribution ARN), which the docs require and state;
+- the docs name it a **long-lived key** and say how to rotate it, and that workload identity
+  replaces it once its own amendment lands (ADR-0068 A4-5);
+- knext never writes, copies, logs or derives anything from it except a request signature; the
+  secret part never leaves the pod (ADR-0068 A4.6).
+
+Any other IAM credential, or this one with a wider grant, is still a tripwire 3 stop. Enforcement
+stays as before: review-only, plus gitleaks for committed secrets. Tripwire 3 is review-only by
+necessity, and this exception is narrow so that a reviewer can check it from the docs and the CR.

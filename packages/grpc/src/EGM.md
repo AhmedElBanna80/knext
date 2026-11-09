@@ -201,8 +201,9 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   call sets `knext-contract-version`.
 - The endpoint is read from `<NAME>_SERVICE_URL` at call time and must be
   `http:` or `https:`, otherwise `FailedPrecondition`. Transport: an explicit
-  `<NAME>_SERVICE_HTTP_VERSION` (`2` or `1.1`) wins; otherwise h2c on Node and
-  HTTP/1.1 on Bun (`runtime.ts:chooseTransport`).
+  `<NAME>_SERVICE_HTTP_VERSION` (`2` or `1.1`) wins; otherwise HTTP/2 on Node (h2c for an
+  `http:` URL, HTTP/2 over TLS for `https:`) and HTTP/1.1 on Bun
+  (`runtime.ts:chooseTransport`).
 - A token source is asked for a new token on every attempt. A stream takes only
   a string token. A token must be 1-8192 visible ASCII characters
   (`runtime.ts:tokenFor`).

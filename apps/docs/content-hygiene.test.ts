@@ -148,7 +148,7 @@ describe('docs content — no stale `kn-next` command text', () => {
   // prefix to keep its warm cache, and an env value never names the command.
   const bareKnNextWord =
     /(?<![\w/])(?<!REDIS_KEY_PREFIX['"]?\s*[:=]\s*['"]?)kn-next(?![\w.\-/]|:[^\s`])/;
-  const REMOVAL_PAGES = ['upgrading.mdx', 'versioning.mdx'];
+  const REMOVAL_PAGES = ['upgrading.mdx', 'upgrading-to-2.mdx', 'versioning.mdx'];
 
   it('never shows `kn-next <verb>` as a command to run, anywhere in the docs', () => {
     expect(hits(staleVerbCommand)).toEqual([]);

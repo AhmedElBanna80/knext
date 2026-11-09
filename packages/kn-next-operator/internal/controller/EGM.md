@@ -54,6 +54,7 @@ A reconcile pass fetches the object, reconciles its children, computes a pure st
 - `backendservice_controller.go`: a function without a two-sided binding is rendered as nothing, and anything previously rendered for it is deleted (fail closed).
 - `backendservice_render.go`: function Knative Services carry `networking.knative.dev/visibility: cluster-local` and an `h2c` container port.
 - `backendservice_controller.go`: a `spec.resources` quantity the render cannot parse is recorded as `functionObservation.invalidSpec` before anything is rendered. The verdict reports `Ready=False` reason `InvalidSpec` naming the field, counts it on `knext_backendservice_refusals_total`, and renders nothing (an already-rendered function is torn down, as for `invalidImage`); the reconcile returns no error, so it is not retried on backoff (#2423).
+- `backendservice_metrics.go`: `backendServiceRefusalReasons` is the full set of `knext_backendservice_refusals_total` reasons: `ZoneNotFound`, `ZoneNotListed`, `BindingImageMismatch`, `BindingSpecMismatch`, `ConflictingOwner`, `SovereigntyViolation`, `InvalidImage`, `InvalidSpec`, `KnativeServiceNameTaken`, `JWKSUntrusted`.
 - `backendservice_sovereignty.go`: a function may reference only allowlisted credentials, and never a `*-knext-signing-key` Secret. The database-host check is a lint and never rejects.
 - `zone_signing_key.go` rotation order:
   1. Stage a new key and publish it in the JWKS.

@@ -61,7 +61,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   - preloads (`--require`d into the child): `cache-control-normalize.cjs`,
     `bun-keepalive-guard.cjs` and `request-body-cap.cjs`; `public-origin.cjs`
     is one too, but has no subpath. Loaded in-process, never `--require`d:
-    `arp-primer.cjs`, and the vinext/Bun runtime modules
+    the process-start primers (`arp-primer.cjs`, `wake-ahead.cjs`), and the vinext/Bun runtime modules
     `bun-serve-keepalive-guard` and `response-cache-control` (dist `.js`);
   - health: `deep-health-lite.ts`;
   - images: `vinext-image-optimizer.ts` (`vinext-image-optimizer`);
@@ -188,6 +188,18 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `arp-primer.cjs` exports `primeArpNow`, `parseDefaultGatewayFromRouteTable`,
   `hexRouteFieldToIp`, `readDefaultGateway` and `ARP_PRIMER_TARGET_PORT`, and
   reads `KNEXT_ARP_PRIMER`.
+- Process-start primers (ADR-0066 D3): `process-start-primers.cjs` is data only,
+  `PROCESS_START_PRIMERS` (frozen, in order: `arp-primer.cjs`, `wake-ahead.cjs`).
+  `process-start-abort.cjs` owns the shared abort: `PRIMER_ABORT_KEY`
+  (`Symbol.for('knext.runtime.primerAbort')`), `primerSignal()` and
+  `abortPrimers()`. `process-start-run.ts` exports `runProcessStartPrimers(deps)`
+  (requires each listed primer, skipping missing or broken files with one stderr
+  line each, and returns the abort function), `describeError`,
+  `PRIMER_LIST_FILE` and `PRIMER_ABORT_FILE`.
+- `wake-ahead.cjs` exports `WAKE_FUNCTIONS_ENV` (`KNEXT_WAKE_FUNCTIONS`),
+  `WAKE_AHEAD_SWITCH_ENV` (`KNEXT_WAKE_AHEAD`; `0` turns it off), `WAKE_PATH`
+  (`/healthz`), `WAKE_TIMEOUT_MS` (1000), `callSignal`, `urlEnvFor`,
+  `wakeTargets`, `wakeUrl` and `wakeAheadNow`, which it calls when required.
 - The keep-alive guards are `bun-keepalive-guard.cjs` (exports
   `shouldInstall`, `isAffectedBunVersion`, `guardServer` and `install`) and
   `bun-serve-keepalive-guard.mjs` (exports `shouldInstall`,
@@ -417,13 +429,14 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 - What each runtime path loads before the server:
   - **Disk mode** (`node-server.ts` supervisor, a Node or Bun `server.js` child):
-    the supervisor `require`s `arp-primer.cjs` in-process before it spawns the
-    child. The child gets `--require` `cache-control-normalize.cjs`,
+    the supervisor runs every `PROCESS_START_PRIMERS` entry in-process
+    (`runProcessStartPrimers`) before it spawns the child. The child gets `--require` `cache-control-normalize.cjs`,
     `request-body-cap.cjs` and `public-origin.cjs` on both runtimes, plus
     `bun-keepalive-guard.cjs` only when the supervisor runs under Bun
     (`process.versions.bun`). Each is added only if its file exists.
   - **Compiled standalone** (`standalone-compile.mjs` `PRELOAD_NAMES`): the
-    executable bakes in, in order, `arp-primer.cjs`, `cache-control-normalize.cjs`,
+    executable bakes in, in order, `arp-primer.cjs`, `wake-ahead.cjs` (the
+    `PROCESS_START_PRIMERS` list), `cache-control-normalize.cjs`,
     `bun-keepalive-guard.cjs`, `public-origin.cjs` and `request-body-cap.cjs`, plus
     `standalone-self-contained-supervisor.cjs` for a self-contained build. A
     missing file aborts the compile. In the disk-compiled image the
@@ -461,6 +474,10 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `sidecar-runtime.mjs:installSidecarResolution` fails closed with
   `MODULE_NOT_FOUND`. A resolved real path must stay inside the sidecar root.
 - `arp-primer.cjs:primeArpNow` never throws or blocks, and runs only on Linux.
+- `wake-ahead.cjs:wakeAheadNow` never throws or blocks the server start; each call
+  is bounded by `WAKE_TIMEOUT_MS` and by the shared primer abort.
+- On SIGTERM, `node-server.ts` and `standalone-self-contained-supervisor.cjs` call
+  `abortPrimers()` first, so no wake-ahead request outlives the drain.
 - `bun-keepalive-guard.cjs` is never active on Node. By default it applies
   only to Bun versions below 1.4.
 
@@ -548,6 +565,11 @@ The compile pipeline fails closed.
   - `standalone-embed.mjs` also patches `Module.prototype.require`.
 - `arp-primer.cjs` reads `/proc/net/route` and sends one UDP datagram to the
   default gateway on port 9.
+- `wake-ahead.cjs` sends one fire-and-forget `GET <url>/healthz` (1 s timeout) to
+  each function named in `KNEXT_WAKE_FUNCTIONS`, resolved through its
+  `<NAME>_SERVICE_URL`, and logs `[knext] wake-ahead:` lines to stderr.
+  `process-start-run.ts` logs `[knext] process-start` lines for a missing or broken
+  primer.
 - `sandbox-fetch-debug.cjs` and `sandbox-fetch-realm-debug.cjs` are gated by
   `KNEXT_SANDBOX_FETCH_DEBUG=1`. They subscribe to undici diagnostics channels,
   and the realm variant patches `net` and `tls` connects and rewrites Next's

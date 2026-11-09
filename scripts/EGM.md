@@ -1,7 +1,7 @@
 # scripts
 
 ## Overview
-This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 291 top-level files (276 `.mjs`, 13 `.sh`, one `.ts` and one `.json`). 166 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
+This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 291 top-level files (276 `.mjs`, 13 `.sh`, one `.ts` and one `.json`). 168 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
 
 ## Interface
 
@@ -12,8 +12,8 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - `assert-tree-unchanged.mjs snapshot|check <file>`: compares `git status --porcelain --untracked-files=all` before and after a run.
 
 ### Mutation provers
-- 166 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
-- Shared drivers: `lib/prover-report.mjs` (imported by all 166), `lib/mutation-harness.mjs` (97) and `lib/guard-prover.mjs` (95).
+- 168 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
+- Shared drivers: `lib/prover-report.mjs` (imported by all 168), `lib/mutation-harness.mjs` (97) and `lib/guard-prover.mjs` (96).
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.
 - Kind-lane provers live among them, e.g. `mutation-prove-2461-z7-kind-e2e.mjs` for the Z7 identity lane in `packages/grpc/e2e/z7-identity-kind`, including the SQ1/SQ2 rows for the squatted-JWKS-ConfigMap phase.
@@ -77,7 +77,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `cdn-e2e-purge-assert.mjs`: `PAGE_TAG`, `UC_TAG`, `UC_PATH`, `nextTagOf`, `appTagOf`, `ORIGIN_PAGES`, `purgeConfig`, `purgeChecks`. `rollout-no-old-html` reports each offending edge entry under one of three build-tag lines in a single failure (post-rollout tag: the defect the foreign-build red spec requires; pre-rollout tag: an old-revision refill; no tag: unattributable), so the red leg does not depend on which kind appears first.
 - `check-changeset-required.mjs`: `NO_CHANGESET_LABEL`, `fixedGroupNames`, `derivePackageRoots`, `isTestOrDocsOnly`, `touchedPackages`, `isChangesetEntryPath`, `parseChangesetFrontmatter`, `hasChangesetEntry`, `hasNoChangesetLabel`, `CONSUMER_VISIBLE_DEPENDENCY_KEYS`, `consumerVisibleManifestChanged`, `decide`.
 - `check-config-filename-mentions.mjs`: `trackedFilePaths`, `readTrackedFiles`.
-- `check-escalation-triggers.mjs`: the CLI over [escalation](./escalation/EGM.md). Its own exports are `classify` and `classifyContent`; it re-exports `ACK_LABEL`, `LEGACY_ACK_LABEL`, `ACK_BODY_PATTERN`, `isAcknowledged`, `TRIGGERS`, `isStaticSupplyChainPath`, `LOW_PRIVILEGE_SECRETS`, `workflowHoldsCredential`, `referencedPaths`, `namedFiles`, `parseNameStatus`, `PUBLIC_MANIFEST_KEYS`, `publicSurfaceChanged` and `mergeFired` for existing importers.
+- `check-escalation-triggers.mjs`: the CLI over [escalation](./escalation/EGM.md). It defines no exports of its own; for existing importers it re-exports `classify`, `classifyContent`, `classifyAll`, `ACK_LABEL`, `LEGACY_ACK_LABEL`, `ACK_BODY_PATTERN`, `ACK_BODY_EXAMPLE`, `isAcknowledged`, `TRIGGERS`, `isStaticSupplyChainPath`, `LOW_PRIVILEGE_SECRETS`, `workflowHoldsCredential`, `referencedPaths`, `namedFiles`, `parseNameStatus`, `PUBLIC_MANIFEST_KEYS`, `publicSurfaceChanged` and `mergeFired`.
 - `check-ratchet-floors.mjs`: `collectFloors`, `collectAllowlist`, `resolveMergeBase`, `RatchetFloorGuardError`.
 - `check-ts-import-extensions.mjs`: `findTsExtensionImports`.
 - `ci-resolve-push-base.mjs`: `resolvePushBase`.

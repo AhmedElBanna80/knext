@@ -1148,3 +1148,22 @@ first, then CLI**.
 - **"Requires amendment of (Phase 5, not now)"** in the header. Those rule edits were meant to make
   vinext the default. The rules now need reconciling toward ADR-0054 instead. That half is the
   maintainer's (#1149).
+
+## Amendment 2 (Proposed 2026-11-09): an opt-in boot warm in the supervisor, below the promotion bar
+
+**Proposed (2026-11-09)**, flagged for the next sprint-close design review. It does **not** promote
+warm-on-boot to contract: the promotion criterion above is still unmet.
+
+**The measurement.** On OKE, on the Next standalone build run by Bun with the supervisor (exec mode),
+a supervisor warm of `/` took ready → first byte from a 94 ms median to 16 ms (paired difference
+−69 ms, 95% CI [−85, −54], n=30 per arm); the total cold start was not measurably shorter (CI spans
+0). 94 ms is under this ADR's 200 ms bar, so warm-on-boot stays non-contract and the shipped default
+stays inert (`docs/benchmarks/bun-cold-start-iterations-oke-2026-11-09.md`).
+
+**What changes.** `node-server.ts` gains the same env surface the vinext entry has, **opt-in**: it warms
+only when `KNEXT_WARM_PATH` is set, `KNEXT_EAGER_WARM=0` turns it off, and it logs the same `WARMED:`
+lines. The #765 ruling stands: `/` is never a default. Two consequences are documented rather than
+hidden: an app that already set `KNEXT_WARM_PATH` for the compile-cache bake now also warms at pod
+start (`KNEXT_EAGER_WARM=0` keeps the old behaviour), and with the warm on, `knext.cold_start` /
+`knext_coldstart_*` attach to the warm request rather than the first visitor. The e2e harness does not
+set `KNEXT_WARM_PATH`, so compat fixtures are unaffected.

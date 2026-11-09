@@ -19,22 +19,23 @@ import {
 
 const silent = { info() {}, warn() {} };
 
-describe("parseWarmPaths", () => {
-    it("defaults to the root route", () => {
-        expect(parseWarmPaths({})).toEqual(["/"]);
+describe("parseWarmPaths (ADR-0042 surface, opt-in in the supervisor)", () => {
+    it("is off unless KNEXT_WARM_PATH is set", () => {
+        expect(parseWarmPaths({})).toEqual([]);
     });
-    it("an empty value turns it off", () => {
-        expect(parseWarmPaths({ KNEXT_WARM_PATHS: "" })).toEqual([]);
-        expect(parseWarmPaths({ KNEXT_WARM_PATHS: "  " })).toEqual([]);
+    it("KNEXT_EAGER_WARM=0 turns it off even with paths set", () => {
+        expect(
+            parseWarmPaths({ KNEXT_WARM_PATH: "/", KNEXT_EAGER_WARM: "0" }),
+        ).toEqual([]);
     });
     it("reads a comma list, keeps only absolute paths, and caps the count", () => {
         expect(
             parseWarmPaths({
-                KNEXT_WARM_PATHS: " /, /blog ,x,//evil.example/a,/docs",
+                KNEXT_WARM_PATH: " /, /blog ,x,//evil.example/a,/docs",
             }),
         ).toEqual(["/", "/blog", "/docs"]);
         const many = Array.from({ length: 20 }, (_, i) => `/p${i}`).join(",");
-        expect(parseWarmPaths({ KNEXT_WARM_PATHS: many })).toHaveLength(8);
+        expect(parseWarmPaths({ KNEXT_WARM_PATH: many })).toHaveLength(8);
     });
 });
 
@@ -58,11 +59,17 @@ describe("selfWarm", () => {
     it("requests each path on loopback, in order, marked with the warm header", async () => {
         const srv = await server(() => 200);
         try {
+            const lines: string[] = [];
             const out = await selfWarm({
                 port: srv.port,
                 paths: ["/", "/blog"],
-                log: silent,
+                log: { info: (_o, m) => lines.push(m), warn() {} },
             });
+            // The same log line the vinext entry prints (ADR-0042).
+            expect(lines.map((l) => l.replace(/ms=\d+/, "ms=N"))).toEqual([
+                "WARMED:/ status=200 ms=N",
+                "WARMED:/blog status=200 ms=N",
+            ]);
             expect(srv.seen).toEqual([
                 { path: "/", warm: "1" },
                 { path: "/blog", warm: "1" },
@@ -76,17 +83,57 @@ describe("selfWarm", () => {
         }
     });
 
-    it("never throws: a refused port and a non-2xx answer are both reported, not raised", async () => {
-        const srv = await server(() => 500);
+    it("skips the warm-up when the server is not listening yet, without an error", async () => {
+        const srv = await server(() => 200);
         const port = srv.port;
         await srv.close();
-        const out = await selfWarm({ port, paths: ["/"], log: silent });
-        expect(out[0]?.path).toBe("/");
-        expect(out[0]?.status).toBeUndefined();
-        expect(out[0]?.error).toBeDefined();
+        const warned: unknown[] = [];
+        const out = await selfWarm({
+            port,
+            paths: ["/"],
+            log: { info() {}, warn: (o) => warned.push(o) },
+        });
+        expect(out).toEqual([]);
+        expect(warned).toEqual([]);
     });
 
-    it("gives up on a hung route after its timeout", async () => {
+    it("reports a non-2xx answer as a status, not an error", async () => {
+        const srv = await server(() => 500);
+        try {
+            const out = await selfWarm({
+                port: srv.port,
+                paths: ["/"],
+                log: silent,
+            });
+            expect(out).toEqual([{ path: "/", status: 500 }]);
+        } finally {
+            await srv.close();
+        }
+    });
+
+    it("stops before the next path once shouldStop() is true (shutdown)", async () => {
+        const srv = await server(() => 200);
+        try {
+            let stop = false;
+            const out = await selfWarm({
+                port: srv.port,
+                paths: ["/a", "/b", "/c"],
+                log: {
+                    info() {
+                        stop = true;
+                    },
+                    warn() {},
+                },
+                shouldStop: () => stop,
+            });
+            expect(out.map((r) => r.path)).toEqual(["/a"]);
+            expect(srv.seen.map((x) => x.path)).toEqual(["/a"]);
+        } finally {
+            await srv.close();
+        }
+    });
+
+    it("one budget covers the whole warm-up: a hung route does not hold the later ones past it", async () => {
         const s = createServer(() => {
             /* never answers */
         });
@@ -95,12 +142,14 @@ describe("selfWarm", () => {
         const t0 = Date.now();
         const out = await selfWarm({
             port,
-            paths: ["/"],
+            paths: ["/", "/b", "/c"],
             log: silent,
-            timeoutMs: 100,
+            timeoutMs: 150,
         });
-        expect(Date.now() - t0).toBeLessThan(2000);
+        expect(Date.now() - t0).toBeLessThan(1000);
         expect(out[0]?.error).toBeDefined();
+        // The budget was spent on the first route, so the others were not tried.
+        expect(out).toHaveLength(1);
         s.closeAllConnections();
         await new Promise((r) => s.close(r));
     });

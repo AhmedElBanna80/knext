@@ -174,7 +174,8 @@ const deferredInit = createDeferredSupervisorInit({
         {
             // FIRST, before the metrics collector's ~790 ms load competes for CPU:
             // render the app's first route on loopback while the pod waits for
-            // kubelet to make it routable (self-warm.ts; KNEXT_WARM_PATHS, "" off).
+            // kubelet to make it routable (self-warm.ts). Opt-in: KNEXT_WARM_PATH,
+            // KNEXT_EAGER_WARM=0 off (ADR-0042 surface).
             name: "self-warm",
             run: async () => {
                 const paths = parseWarmPaths(process.env);
@@ -183,6 +184,7 @@ const deferredInit = createDeferredSupervisorInit({
                     port: Number(process.env.PORT ?? 3000),
                     paths,
                     log,
+                    shouldStop: isShuttingDown,
                 });
             },
         },

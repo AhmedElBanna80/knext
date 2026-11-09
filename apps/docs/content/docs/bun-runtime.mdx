@@ -109,8 +109,9 @@ with `bun upgrade`.
 ## Warm-on-boot (vinext build)
 
 This section applies to the **vinext build**, whose scaffolded server entry does the warming. On the
-default standalone build, `KNEXT_WARM_PATH` only chooses the paths warmed while the image bakes its
-compile cache; nothing fires at pod boot.
+default standalone build, `KNEXT_WARM_PATH` chooses the paths warmed while the image bakes its
+compile cache, and, when set, the paths warmed at pod boot too; `KNEXT_EAGER_WARM=0` keeps it to the
+bake. See [Tuning cold start](/docs/tuning-cold-start#warming-a-route-at-boot-opt-in).
 
 When a scaled-to-zero vinext app wakes, the very first request pays the full cost of a cold process —
 JIT warm-up and the first render. To keep a real visitor from paying it, the runtime fires a

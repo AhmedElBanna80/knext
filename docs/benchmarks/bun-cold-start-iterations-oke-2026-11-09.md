@@ -11,24 +11,24 @@ running them on OKE and asked for one improvement at a time, each measured.
 
 ## 1. Patched Bun, three arms (n=66 per arm)
 
-The driver was `bench3-incluster.py`: an in-pod `node` probe from `agent-118`, with the arm order permuted each round. 196 cold starts, 0 excluded.
+The driver was `bench3-incluster.py`: an in-pod `node` probe from `agent-118`, with the arm order permuted each round. 198 cold starts, 0 excluded.
 
 | Arm | Image | Median | IQR | p95 |
 |---|---|---|---|---|
-| A | stock Bun single executable | 1821 | 1598–2020 | 2308 |
-| B | standalone `server.js` run by Bun | 1610 | 1312–1854 | 2160 |
-| C | patched Bun (`bun-patched-1.4.4-knext.3`) single executable | 1623 | 1348–1979 | 2371 |
+| A | vinext build, self-contained single executable, stock Bun | 1821 | 1598–2013 | 2307 |
+| B | Next standalone build, Bun; the supervisor spawns the compiled executable (exec mode) | 1610 | 1312–1854 | 2160 |
+| C | vinext build, self-contained single executable, patched Bun (`bun-patched-1.4.4-knext.3`) | 1623 | 1348–1979 | 2371 |
 
 Paired by round, as the median difference with a 95% bootstrap CI:
-- C − A: −118 [−356, +77];
-- B − A: −210 [−336, +13];
+- C − A: −113 [−323, +77] (the patch alone, same build pipeline);
+- B − A: −226 [−328, +3] (different build pipelines as well as images, so not a runtime comparison);
 - C − B: +87 [−59, +254].
 
 **No arm wins**: every CI includes 0.
 
 **Flaw.** Node placement was not balanced. C ran 55 of 66 rounds on `.118`, while A and B ran mostly on `.169`. The next two runs used the phase harness, which records the node of every cycle.
 
-## 2. Phase split of the standalone-Bun arm (n=30)
+## 2. Phase split of arm B (n=30)
 
 The harness was `scripts/bench-cold-start-phases/drive.py` with the harness pod on `.118`.
 
@@ -52,7 +52,7 @@ Bun reaches "listening" 147 ms after its first log line. The server then waits a
 
 | | bp-b (control) | bp-w (self-warm) |
 |---|---|---|
-| Image | standalone + Bun, as above | the same build with one change: the supervisor's first deferred step requests `/` on loopback once the child is serving |
+| Image | arm B above (Next standalone, Bun, exec mode) | the same build with one change: the supervisor's first deferred step requests `/` on loopback once the child is serving |
 
 All 60 cycles answered 200, and the harness was the same as in run 2.
 
@@ -69,7 +69,9 @@ By node (total median):
 | `.118` | 1589 | 1411 |
 | `.169` | 1618 | 1679 |
 
-**Reading.** Self-warm removes the first render from the critical path. That effect, about −70 ms, is significant and consistent. The total moves by the same amount, but at n=30 that cannot be separated from the roughly 400 ms spread of the platform phases. So self-warm is a real but small win.
+**Reading.** Self-warm removes the first render from the critical path: about −70 ms on that phase, significant and consistent (27 of 30 rounds). The total cold start was **not** shown to improve: its paired CI spans 0 and on node `.169` its median rose (1618 → 1679), within the roughly 400 ms spread of the platform phases. The phase result is the claim; a total-time claim needs a larger sample.
+
+**What shipped.** ADR-0042 promotes a boot warm in the supervisor only above a 200 ms first-request cost, and keeps `/` out of the defaults (the warm request has no cookies and writes the shared page cache). 94 ms is below that bar, so the supervisor warm ships **opt-in**, on ADR-0042's `KNEXT_WARM_PATH` / `KNEXT_EAGER_WARM` surface, and the benchmark warmed the same `/` it then requested (the best case).
 
 **What would move the median further**, in order:
 

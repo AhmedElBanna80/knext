@@ -371,16 +371,18 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Cache
 
-- Redis faults fail open. A fault in `cache-handler.js:redisCall` (every
-  command, including the `del` in `set(key, null)`), an ioredis connect that
+- Redis faults fail open. A fault in `cache-handler.js:redisCall` (every cache
+  command, including the `del` in `set(key, null)`; the best-effort event-log
+  batch is outside it and only logs), an ioredis connect that
   fails (`waitForReady`), or a native connect that throws or resolves with the
   client still disconnected (`waitForNativeReady`) calls `markUnhealthy`, which
-  opens a circuit breaker for `REDIS_RETRY_COOLDOWN_MS`. Concurrent callers for the
+  opens a circuit breaker for `REDIS_RETRY_COOLDOWN_MS` and closes the current
+  client. A connect fault on a client that is no longer current closes only that
+  client and leaves the breaker alone. Concurrent callers for the
   same client share one in-flight connect on both clients (`connectClient`'s
   `connectInFlight`, keyed by client), so a burst of first requests dials that
   client once; a connect settling for a client that was dropped meanwhile hands
-  out nothing. (`markUnhealthy` still closes the current client, not the one that
-  faulted: #2889.) Until the breaker closes, ISR `get`
+  out nothing. Until the breaker closes, ISR `get`
   misses and Next renders from the origin, and `set` writes nothing locally: the
   per-process memory store serves only when Redis is not in use (no `REDIS_URL`,
   or a client that could not be loaded). `use-cache-handler.js` has no
@@ -399,7 +401,10 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
     ID at all.
 - Mutating test seams (`assertTestSeamEnabled`) always throw when
   `NODE_ENV=production`. Otherwise they need `KNEXT_TEST_SEAMS=1`.
-- The invalidation replay backlog is capped at 1000 tags. Past that, it
+- A `set(key, null)` delete that could not reach Redis (breaker open, or the
+  delete faulted) is remembered and replayed, before the tags, once the breaker
+  closes.
+- The invalidation replay backlog is capped at 1000 tags and deletes together. Past that, it
   collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix
   and the shared legacy default key prefix (bare, or with a `:*` wildcard). A CDN purge is sent only for tags whose Redis
   invalidation completed.

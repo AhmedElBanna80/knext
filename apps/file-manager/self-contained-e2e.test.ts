@@ -17,7 +17,7 @@
 
 import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,6 +52,33 @@ if (REQUIRE_SC_EXEC && skipReason !== null) {
 
 const statusOf = (r: RouteResult | undefined) => (r && 'status' in r ? r.status : undefined);
 
+/**
+ * Routes whose render calls a host on the internet (#2272). Disk mode and the
+ * executable request it at different moments, so a slow or failing external
+ * service gives one arm a 500 and the other a 200: a flake that says nothing
+ * about the executable. They are left out of the status comparison only.
+ * NETWORK_BOUND_ROUTES must equal the set the source scan finds, so a route
+ * that stops calling out, or a new one that starts, fails the check below.
+ */
+const NETWORK_BOUND_ROUTES = ['/cache-tests/fetch-cache'];
+
+/** App routes (from `src/app/**\/page.*`) whose source fetches an http(s) URL. */
+function routesFetchingExternalHosts(appDir: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, route: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        walk(p, route + (e.name.startsWith('(') ? '' : `/${e.name}`));
+      } else if (/^page\.(tsx|ts|jsx|js)$/.test(e.name)) {
+        if (/fetch\(\s*['"`]https?:\/\//.test(readFileSync(p, 'utf8'))) out.push(route || '/');
+      }
+    }
+  };
+  walk(appDir, '');
+  return out.sort();
+}
+
 const cleanup: string[] = [];
 afterAll(() => {
   for (const d of cleanup) rmSync(d, { recursive: true, force: true });
@@ -76,6 +103,14 @@ function compile(outfile: string, selfContained: boolean): string {
   if (r.status !== 0) throw new Error(`compile failed (exit ${r.status}):\n${r.stdout}${r.stderr}`);
   return `${r.stdout}`;
 }
+
+describe('the self-contained e2e leaves out only routes that call the internet (#2272)', () => {
+  it('NETWORK_BOUND_ROUTES is exactly the set of routes whose page fetches an http(s) URL', () => {
+    expect(routesFetchingExternalHosts(join(APP, 'src', 'app'))).toEqual(
+      [...NETWORK_BOUND_ROUTES].sort(),
+    );
+  });
+});
 
 describe.skipIf(skipReason !== null)(
   'file-manager self-contained executable from an empty dir',
@@ -110,8 +145,10 @@ describe.skipIf(skipReason !== null)(
       const A = await measureArm(a, { routes, staticAsset, runs: 1, env });
       const B = await measureArm(b, { routes, staticAsset, runs: 1, env });
 
+      // Routes that call the internet are compared by nothing here (#2272):
+      // the exclusion list is checked against the source above.
       const mismatches = Object.keys(A.served).filter(
-        (k) => statusOf(A.served[k]) !== statusOf(B.served[k]),
+        (k) => !NETWORK_BOUND_ROUTES.includes(k) && statusOf(A.served[k]) !== statusOf(B.served[k]),
       );
       expect(mismatches).toEqual([]);
       expect(statusOf(B.served[staticAsset as string])).toBe(200);

@@ -378,6 +378,16 @@ type BackendBinding struct {
 	// +kubebuilder:validation:MaxLength=71
 	// +kubebuilder:validation:Pattern=`^sha256:[a-f0-9]{64}$`
 	SpecDigest string `json:"specDigest,omitempty"`
+
+	// HTTPVersion is the HTTP version this zone's gateway calls the function
+	// with: "2" (h2c) or "1.1". The operator renders it into the zone as
+	// <NAME>_SERVICE_HTTP_VERSION. Unset: nothing is rendered and the gateway
+	// picks by its own runtime (h2c on Node, HTTP/1.1 on Bun). It is the zone's
+	// own choice, so it lives on the zone's entry, not on the BackendService:
+	// a function writer cannot roll the zone's revision with it.
+	// +optional
+	// +kubebuilder:validation:Enum="2";"1.1"
+	HTTPVersion string `json:"httpVersion,omitempty"`
 }
 
 // BuildIDLabel is the revision (pod-template) label key carrying the Next.js

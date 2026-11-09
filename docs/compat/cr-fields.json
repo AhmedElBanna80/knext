@@ -11,6 +11,7 @@
     "metadata.namespace",
     "spec",
     "spec.backends",
+    "spec.backends.*.httpVersion",
     "spec.backends.*.image",
     "spec.backends.*.name",
     "spec.backends.*.service",
@@ -101,5 +102,5 @@
     "spec.storage.region"
   ],
   "notInBundledCRD": [],
-  "fieldCount": 95
+  "fieldCount": 96
 }

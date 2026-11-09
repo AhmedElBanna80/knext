@@ -233,6 +233,7 @@ into your `NextApp` spec:
 | --- | --- |
 | `<NAME>_SERVICE_URL` | `http://<service>.<namespace>.svc.cluster.local` |
 | `<NAME>_SERVICE_PROTO_VERSION` | The contract version the function **actually serves**: the `protoVersion` of its latest Ready revision. Unset until one is Ready, so the zone's calls fail closed instead of guessing. |
+| `<NAME>_SERVICE_HTTP_VERSION` | The HTTP version the zone calls the function with: the `httpVersion` of the zone's `backends` entry (`"2"` for h2c, or `"1.1"`). Set only when the entry sets it; otherwise the zone's server picks (h2c on Node, HTTP/1.1 on Bun). If you already set this variable yourself in the zone's `env` or `secrets.envMap`, move it to the `backends` entry: the operator does not overwrite your value, and reports the clash on the `BackendBindings` condition. Changing it rolls one new revision of the zone. |
 | `KNEXT_WAKE_FUNCTIONS` | The bound functions to wake when the zone starts: their names, sorted and comma-separated. A function with `wakeAhead: false` is left out; with none left the variable is not set. |
 
 `<NAME>` is the `backends` entry's name in upper case with `-` replaced by `_`, so `user-profile`
@@ -244,7 +245,8 @@ The variables are sorted, so a reconcile with no change rolls no new revision, a
 zone rolls one new revision with the new `<NAME>_SERVICE_PROTO_VERSION`.
 
 If your zone's `spec.env` or `spec.secrets.envMap` already sets one of these names, your value is
-kept, and the `BackendBindings` condition names the variable that was not written.
+kept, and the `BackendBindings` condition names the variable that was not written. A same-named key
+imported through `envFrom` is not checked: the variable the operator writes wins over it.
 
 ### Waking functions when the zone starts
 

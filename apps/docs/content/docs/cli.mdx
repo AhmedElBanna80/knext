@@ -917,8 +917,9 @@ Each generated client is server-only (`import "server-only"`) and follows one po
 - **The endpoint is read at call time** from `<NAME>_SERVICE_URL` (never baked into the code). On a
   Node server, calls use HTTP/2 cleartext (h2c) by default. On a Bun server they use HTTP/1.1 by
   default, because Bun's HTTP/2 client is not yet verified with Connect; unary and
-  server-streaming calls both work over HTTP/1.1. Setting `ORDERS_SERVICE_HTTP_VERSION` to `2` or
-  `1.1` chooses for that one function on either runtime. The server logs the transport it chose
+  server-streaming calls both work over HTTP/1.1. Setting `httpVersion: "2"` or `"1.1"` on the function's
+  `backends` entry chooses for that one function on either runtime; the operator renders it as
+  `ORDERS_SERVICE_HTTP_VERSION`. The server logs the transport it chose
   once per function, for example
   `knext: orders function: transport HTTP/1.1, falling back from h2c on a Bun gateway (...)`.
 

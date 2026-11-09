@@ -290,7 +290,7 @@ const BACKEND_IMAGE_PATTERN = /^@sha256:[a-f0-9]{64}$/;
 const BACKEND_IMAGE_MAX_LENGTH = 72;
 const BACKEND_SPEC_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const BACKEND_SPEC_DIGEST_MAX_LENGTH = 71;
-const BACKEND_KEYS = ["name", "service", "image", "specDigest"];
+const BACKEND_KEYS = ["name", "service", "image", "specDigest", "httpVersion"];
 
 function validateBackends(backends: unknown): string[] {
     if (backends === undefined) return [];
@@ -360,6 +360,16 @@ function validateBackends(backends: unknown): string[] {
         ) {
             errors.push(
                 `'${at}.specDigest' must be "sha256:" followed by 64 lowercase hex characters, the digest of the function's spec (\`knext deploy function\` prints the exact entry), got ${JSON.stringify(specDigest)}`,
+            );
+        }
+        const httpVersion = entry.httpVersion;
+        if (
+            httpVersion !== undefined &&
+            httpVersion !== "2" &&
+            httpVersion !== "1.1"
+        ) {
+            errors.push(
+                `'${at}.httpVersion' must be "2" or "1.1", got ${JSON.stringify(httpVersion)}`,
             );
         }
         const service = entry.service;

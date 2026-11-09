@@ -100,6 +100,52 @@
       }
     },
     {
+      "name": "an explicit HTTP version renders beside the address; unset renders nothing",
+      "bindings": [
+        {
+          "name": "orders",
+          "service": "orders-fn",
+          "state": "Bound",
+          "servedProtoVersion": "1.0.0",
+          "httpVersion": "1.1",
+          "wakeAhead": true
+        },
+        {
+          "name": "billing",
+          "service": "billing",
+          "state": "Bound",
+          "servedProtoVersion": "",
+          "httpVersion": "2",
+          "wakeAhead": false
+        },
+        {
+          "name": "stock",
+          "service": "stock",
+          "state": "Bound",
+          "servedProtoVersion": "",
+          "httpVersion": "",
+          "wakeAhead": false
+        },
+        {
+          "name": "stolen",
+          "service": "billing-fn",
+          "state": "CrossZone",
+          "servedProtoVersion": "3.0.0",
+          "httpVersion": "2",
+          "wakeAhead": true
+        }
+      ],
+      "env": {
+        "BILLING_SERVICE_HTTP_VERSION": "2",
+        "BILLING_SERVICE_URL": "http://billing.shop.svc.cluster.local",
+        "KNEXT_WAKE_FUNCTIONS": "orders",
+        "ORDERS_SERVICE_HTTP_VERSION": "1.1",
+        "ORDERS_SERVICE_PROTO_VERSION": "1.0.0",
+        "ORDERS_SERVICE_URL": "http://orders-fn.shop.svc.cluster.local",
+        "STOCK_SERVICE_URL": "http://stock.shop.svc.cluster.local"
+      }
+    },
+    {
       "name": "no bindings",
       "bindings": [],
       "env": {}

@@ -34,7 +34,8 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   (`proto`, `src/generated/grpc`, 10000 ms, 300 s), `GrpcUsageError`.
 - `AUTHORIZE_EXTENSIONS`, `exportsAuthorize(source)`, `checkFunctionName(name)`,
   `urlEnvFor(name)` (`<NAME>_SERVICE_URL`), `SERVICE_PROTO_VERSION_SUFFIX`,
-  `protoVersionEnvFor(name)`, `parseConfig(raw)`, `loadConfig(cwd)`,
+  `protoVersionEnvFor(name)`, `SERVICE_HTTP_VERSION_SUFFIX`, `httpVersionEnvFor(name)`
+  (`<NAME>_SERVICE_HTTP_VERSION`), `parseConfig(raw)`, `loadConfig(cwd)`,
   `serializeConfig(config)`.
 
 ### Generate (`generate.ts`, `plugin.ts`, `glue-plugin.ts`, `policy.ts`, `baseline.ts`, `buf.ts`)

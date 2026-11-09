@@ -11,13 +11,15 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { protoVersionEnvFor, urlEnvFor } from '../config';
+import { httpVersionEnvFor, protoVersionEnvFor, urlEnvFor } from '../config';
 
 interface FixtureBinding {
   name: string;
   service: string;
   state: string;
   servedProtoVersion: string;
+  /** Absent in older cases: the spec left it unset. */
+  httpVersion?: string;
   wakeAhead: boolean;
 }
 
@@ -66,6 +68,16 @@ describe('zone binding env: the generated client reads what the operator renders
         } else {
           expect(c.env[version]).toBe(b.servedProtoVersion);
           accounted.add(version);
+        }
+        const http = httpVersionEnvFor(b.name);
+        if (!b.httpVersion) {
+          // Unset in the spec: the gateway picks by its own runtime.
+          expect(c.env[http]).toBeUndefined();
+        } else {
+          // The name the runtime reads (it derives it from <NAME>_SERVICE_URL).
+          expect(url.replace(/_URL$/, '_HTTP_VERSION')).toBe(http);
+          expect(c.env[http]).toBe(b.httpVersion);
+          accounted.add(http);
         }
       }
 

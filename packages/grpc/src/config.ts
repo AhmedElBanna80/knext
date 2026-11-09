@@ -132,6 +132,19 @@ export function protoVersionEnvFor(functionName: string): string {
   return `${functionName.toUpperCase().replaceAll('-', '_')}${SERVICE_PROTO_VERSION_SUFFIX}`;
 }
 
+/**
+ * The suffix of the variable holding the HTTP version (`2` or `1.1`) the zone's
+ * gateway calls a function with. The operator renders it from the function's
+ * spec.httpVersion; unset, the gateway picks by its own runtime. A contract with
+ * the operator: change it in both places or neither.
+ */
+export const SERVICE_HTTP_VERSION_SUFFIX = '_SERVICE_HTTP_VERSION';
+
+/** `user-profile` -> `USER_PROFILE_SERVICE_HTTP_VERSION`. */
+export function httpVersionEnvFor(functionName: string): string {
+  return `${functionName.toUpperCase().replaceAll('-', '_')}${SERVICE_HTTP_VERSION_SUFFIX}`;
+}
+
 function relativeDir(key: string, value: unknown): string {
   if (typeof value !== 'string' || value === '' || value.startsWith('/') || value.includes('..')) {
     throw new GrpcUsageError(

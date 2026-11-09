@@ -47,6 +47,7 @@ type bindingFixture struct {
 			Service            string `json:"service"`
 			State              string `json:"state"`
 			ServedProtoVersion string `json:"servedProtoVersion"`
+			HTTPVersion        string `json:"httpVersion"`
 			WakeAhead          bool   `json:"wakeAhead"`
 		} `json:"bindings"`
 		Env map[string]string `json:"env"`
@@ -80,7 +81,7 @@ func TestSharedBindingEnvFixture(t *testing.T) {
 			for _, fb := range c.Bindings {
 				b.entries = append(b.entries, zoneBinding{
 					name: fb.Name, service: fb.Service, state: zoneBindingState(fb.State),
-					servedProtoVersion: fb.ServedProtoVersion, wakeAhead: fb.WakeAhead,
+					servedProtoVersion: fb.ServedProtoVersion, httpVersion: fb.HTTPVersion, wakeAhead: fb.WakeAhead,
 				})
 			}
 			got := renderBindingEnv(f.Namespace, nil, b)

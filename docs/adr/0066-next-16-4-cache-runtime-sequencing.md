@@ -1434,8 +1434,8 @@ time before `process.exit`.
 - The ISR handler arms its reporter on every recorded skip (the set dedups it, and the call restores a removed listener); the `'use cache'` handler arms once per core. On exit with anything
   still pending, each handler logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
   count (or "collapsed") and the TTL bound. No metric (see below).
-- The `exit` event fires whenever a knext runtime ends the process through `process.exit` (SIGKILL is the exception, below): Next's own SIGTERM `cleanup()` ends in
-  `process.exit(143|130)` (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
+- The `exit` event fires whenever a knext runtime ends the process through `process.exit` (SIGKILL is the exception, below): Next's own `cleanup()` ends in
+  `process.exit(143)` on SIGTERM (`process.exit(130)` on SIGINT) (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
   cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
   preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`
   listener; no knext runtime ships that way. A SIGKILL (the kubelet after

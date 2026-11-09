@@ -19,7 +19,7 @@ function deps(files: Record<string, unknown>) {
     const lines: string[] = [];
     const d: PrimerRunDeps = {
         dir: DIR,
-        exists: (p) => p in files,
+        fileExists: (p) => p in files,
         requireFrom: (p) => {
             if (!(p in files)) throw new Error(`Cannot find module '${p}'`);
             required.push(p);
@@ -141,7 +141,7 @@ describe("runProcessStartPrimers", () => {
         const unprintable = Object.create(null);
         const d: PrimerRunDeps = {
             dir: DIR,
-            exists: () => true,
+            fileExists: () => true,
             requireFrom: () => {
                 throw unprintable;
             },

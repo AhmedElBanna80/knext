@@ -19,7 +19,7 @@ export interface PrimerRunDeps {
     dir: string;
     /** `createRequire(import.meta.url)` of the caller. */
     requireFrom: (path: string) => unknown;
-    exists: (path: string) => boolean;
+    fileExists: (path: string) => boolean;
     /** One line, newline included. */
     write: (line: string) => void;
 }
@@ -79,7 +79,7 @@ export function runProcessStartPrimers(deps: PrimerRunDeps): () => void {
     const listPath = join(deps.dir, PRIMER_LIST_FILE);
     let names: readonly string[];
     try {
-        if (!deps.exists(listPath)) {
+        if (!deps.fileExists(listPath)) {
             say(
                 `process-start primers did not run: cannot load ${listPath} (missing)`,
             );
@@ -112,7 +112,7 @@ export function runProcessStartPrimers(deps: PrimerRunDeps): () => void {
         let primerPath = name;
         try {
             primerPath = join(deps.dir, name);
-            if (!deps.exists(primerPath)) {
+            if (!deps.fileExists(primerPath)) {
                 say(
                     `process-start primer did not run: cannot load ${primerPath} (missing)`,
                 );

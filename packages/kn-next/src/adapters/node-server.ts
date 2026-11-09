@@ -76,7 +76,7 @@ bootTrace.mark("entry-eval");
 const abortPrimers = runProcessStartPrimers({
     dir: import.meta.dirname,
     requireFrom: createRequire(import.meta.url),
-    exists: existsSync,
+    fileExists: existsSync,
     write: (line) => process.stderr.write(line),
 });
 

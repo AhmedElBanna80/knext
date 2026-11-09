@@ -91,6 +91,7 @@ import { isBuiltin } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertBunBaseExe, sealBuild, sealCompile } from "./bun-base-exe.mjs";
+import primerList from "./process-start-primers.cjs";
 import { routeMarker, verifyBytecodeEmbedded, verifyBytecodeExec } from "./bytecode-exec-verify.mjs";
 import {
     detectCompileInclude,
@@ -188,8 +189,11 @@ const CREATE_REQUIRE_ANALYZER =
 // ENTRYPOINT comment), so the compiled entry itself is the earliest point
 // anything in this process can send the one outbound packet the fix needs,
 // and it must run before every other preload, let alone Next's server.js.
+// The process-start primer list (ADR-0066 D3) owns both that order and the
+// wake-ahead primer (#2054) after it; this file names neither primer.
+const { PROCESS_START_PRIMERS } = primerList;
 const PRELOAD_NAMES = [
-  "arp-primer.cjs",
+  ...PROCESS_START_PRIMERS,
   "cache-control-normalize.cjs",
   "bun-keepalive-guard.cjs",
   "public-origin.cjs",

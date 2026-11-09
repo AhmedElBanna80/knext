@@ -958,6 +958,8 @@ Narrower names are not an option, because the names are per zone.
 
 ## Amendment 6 (2026-11-09) — the zone chooses the HTTP version it calls a function with (#2422) (Proposed)
 
+Amends Amendment 2 Decision 3: the rendered binding env gains one optional variable.
+
 ### Context
 
 The zone's generated client calls a function over h2c by default on Node and falls back to HTTP/1.1 on a
@@ -969,20 +971,28 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
 ### Decision
 
 1. `NextApp.spec.backends[]` gains an optional `httpVersion`, an enum of `"2"` or `"1.1"`. When it is
-   set, the operator renders `<NAME>_SERVICE_HTTP_VERSION` beside the entry's other binding env, for a
-   Bound entry only. When it is unset, nothing is rendered, so a zone that sets no `httpVersion` renders
+   set, the operator renders `<NAME>_SERVICE_HTTP_VERSION` beside `<NAME>_SERVICE_URL`, for a Bound
+   entry of the default (gRPC/Connect) flavour only. A `model`-flavour entry (ADR-0065, Proposed) renders
+   its own `KNEXT_AI_<NAME>_*` env instead and ignores the field. When it is unset, nothing is rendered, so a zone that sets no `httpVersion` renders
    exactly as before.
 2. The field lives on the **zone's** entry, not on the `BackendService`. The transport is the zone's own
    choice: a function-side field would let a writer of the `BackendService` change the zone's pod env and
-   roll its revision, which is against Decision 1's consent model. The function's port accepts both
-   versions, so nothing is rendered into the function, and neither pin (Amendments 3 and 4) is involved.
+   roll its revision, which is against Decision 1's consent model. A function serves both versions on its
+   one port (`packages/grpc/src/__tests__/gateway-transport.test.ts` drives h2c and HTTP/1.1 against the
+   same listener, and the Knative Service's `h2c` port name only enables HTTP/2 cleartext, it does not
+   refuse HTTP/1.1). So nothing is rendered into the function, and neither pin (Amendments 3 and 4) is
+   involved.
 3. If the zone already sets the variable in `spec.env` or `spec.secrets.envMap`, the existing
-   collision rule applies. The zone's value is kept, and `BackendBindings` names the variable.
+   collision rule applies. The zone's value is kept, and `BackendBindings` names the variable. The rule
+   sees only explicit container env, not keys imported through `envFrom`: as for every binding variable,
+   an `envFrom` key of the same name is shadowed by the rendered one (an explicit `env` entry wins over
+   `envFrom` in Kubernetes) and is not reported.
 
 ### Options considered
 
 | Option | For | Against |
 | --- | --- | --- |
+| Keep it a hand-written `spec.env` variable (status quo) | No CRD change | Not typed or validated, and invisible to the binding model; the issue asks the operator to render it |
 | **Zone entry `backends[].httpVersion` (chosen)** | Zone consent; no new writer can roll the zone; additive | A second place to set it beside a hand-written env var (the collision rule reports it) |
 | `BackendService.spec.httpVersion` | Matches the issue's first wording | A function writer changes the zone's env and revision |
 | Derive from `NextApp.spec.runtime` | No new field | The glue already defaults by runtime, so the operator would only duplicate it, and an explicit per-function choice would stay impossible |
@@ -990,6 +1000,12 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
 ### Consequences
 
 - This is an additive, optional CRD field: upgrade the operator/CRD before the CLI, as for every field.
+  The CLI's apply is `--validate=strict`, so an older CRD rejects the field instead of dropping it. An
+  apply that does not assert strict validation (a GitOps controller, a hand `kubectl apply
+  --validate=ignore`) prunes it silently, and the zone falls back to its runtime's default with no report,
+  as for the pins in Amendments 3 and 4.
+- Setting or changing `httpVersion` changes the zone's pod env, so it rolls one new zone revision. It is
+  the zone's own spec, so only a writer of the zone can do it.
 - The shared fixture `testdata/zone-binding-env.json` carries the variable, so the Go render test and the
   TypeScript contract test both pin its name.
 

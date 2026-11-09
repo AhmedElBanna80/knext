@@ -41,7 +41,7 @@ import (
 //
 //	<NAME>_SERVICE_URL            http://<service>.<namespace>.svc.cluster.local
 //	<NAME>_SERVICE_PROTO_VERSION  the function's status.servedProtoVersion (unset until served)
-//	<NAME>_SERVICE_HTTP_VERSION   the function's spec.httpVersion (unset when the spec leaves it unset)
+//	<NAME>_SERVICE_HTTP_VERSION   the zone's backends[].httpVersion (unset when the entry leaves it unset)
 //	KNEXT_WAKE_FUNCTIONS          sorted, comma-separated binding names, minus opt-outs
 //
 // <NAME> is the backends[] entry's name upper-cased with '-' -> '_', the same
@@ -231,7 +231,7 @@ func (r *NextAppReconciler) resolveZoneBindings(ctx context.Context, app *appsv1
 		default:
 			zb.state = bindingBound
 			zb.servedProtoVersion = bs.Status.ServedProtoVersion
-			zb.httpVersion = bs.Spec.HTTPVersion
+			zb.httpVersion = entry.HTTPVersion
 			zb.wakeAhead = bs.Spec.WakeAhead == nil || *bs.Spec.WakeAhead
 			// The same two comparisons the function's reconciler makes (from
 			// the two specs alone), so the zone reports what the function

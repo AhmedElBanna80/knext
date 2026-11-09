@@ -50,7 +50,6 @@ describe('buildBackendServiceCR', () => {
       ...base,
       port: 9090,
       protoVersion: '1.4.0',
-      httpVersion: '1.1',
       wakeAhead: false,
       scaling: { minScale: 1, maxScale: 5, containerConcurrency: 50 },
     });
@@ -60,7 +59,6 @@ describe('buildBackendServiceCR', () => {
       language: 'go',
       port: 9090,
       protoVersion: '1.4.0',
-      httpVersion: '1.1',
       wakeAhead: false,
       scaling: { minScale: 1, maxScale: 5, containerConcurrency: 50 },
     });
@@ -98,8 +96,6 @@ describe('buildBackendServiceCR', () => {
     ['port (too large)', { port: 70000 }],
     ['port (fraction)', { port: 80.5 }],
     ['protoVersion', { protoVersion: 'v1' }],
-    ['httpVersion', { httpVersion: '3' }],
-    ['httpVersion (h2c spelled out)', { httpVersion: 'h2c' }],
     ['minScale (negative)', { scaling: { minScale: -1 } }],
     ['minScale above maxScale', { scaling: { minScale: 5, maxScale: 2 } }],
     ['containerConcurrency (too large)', { scaling: { containerConcurrency: 5000 } }],

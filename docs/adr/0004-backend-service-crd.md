@@ -1,6 +1,6 @@
 # ADR-0004: `BackendService` CRD for polyglot backends
 
-Status: Accepted (2026-10-12, Z1 design gate — architect and system-designer re-confirmation: [architect](https://github.com/getknext-dev/knext/issues/2045#issuecomment-6128826009), [system designer](https://github.com/getknext-dev/knext/issues/2045#issuecomment-6128845685)) · previously Proposed · Date: 2026-06 · Depends on: ADR-0001, ADR-0002 · Amended 2026-10-09 (see the amendment at the end; revised 2026-10-12 with the Z1 design gate's required changes before the re-confirmation) · Amendment 2 (2026-10-15) **Accepted (2026-10-17, sprint-5 close design review)**: `spec.zone`, two-sided binding, rendered binding env, operator-owned ServiceAccount, the activator as a NetworkPolicy peer, explicit RPC auth options (see the end) · Amendment 3 (2026-10-17) **Proposed**, decided at the sprint-6 close per the 2026-09-22 rule: an optional image digest pin on `NextApp.spec.backends[]` (see the end) · Amendment 4 (2026-10-17) **Proposed**, decided at the sprint-6 close: an optional whole-spec digest pin, `NextApp.spec.backends[].specDigest`, binding the function's image, env, envFrom and volumes (see the end)
+Status: Accepted (2026-10-12, Z1 design gate — architect and system-designer re-confirmation: [architect](https://github.com/getknext-dev/knext/issues/2045#issuecomment-6128826009), [system designer](https://github.com/getknext-dev/knext/issues/2045#issuecomment-6128845685)) · previously Proposed · Date: 2026-06 · Depends on: ADR-0001, ADR-0002 · Amended 2026-10-09 (see the amendment at the end; revised 2026-10-12 with the Z1 design gate's required changes before the re-confirmation) · Amendment 2 (2026-10-15) **Accepted (2026-10-17, sprint-5 close design review)**: `spec.zone`, two-sided binding, rendered binding env, operator-owned ServiceAccount, the activator as a NetworkPolicy peer, explicit RPC auth options (see the end) · Amendment 3 (2026-10-17) **Proposed**, decided at the sprint-6 close per the 2026-09-22 rule: an optional image digest pin on `NextApp.spec.backends[]` (see the end) · Amendment 4 (2026-10-17) **Proposed**, decided at the sprint-6 close: an optional whole-spec digest pin, `NextApp.spec.backends[].specDigest`, binding the function's image, env, envFrom and volumes (see the end)· Amendment 6 (2026-11-09) **Proposed**: an optional `NextApp.spec.backends[].httpVersion`, rendered as `<NAME>_SERVICE_HTTP_VERSION` (see the end)
 
 > **Amended by ADR-0065 (Proposed, 2026-10-07):** adds a `flavour: model` `BackendService`
 > (HTTP/1.1, loopback-bound model server behind an auth sidecar) and an `external` variant of
@@ -955,3 +955,46 @@ Narrower names are not an option, because the names are per zone.
       cases (no owner, another zone's owner, another kind or group, a non-controller reference, a create
       without an owner, a delete, a changed owner).
 - [x] Docs: the threat model (residual (a) and the ownership bullet) and the user security page.
+
+## Amendment 6 (2026-11-09) — the zone chooses the HTTP version it calls a function with (#2422) (Proposed)
+
+### Context
+
+The zone's generated client calls a function over h2c by default on Node and falls back to HTTP/1.1 on a
+Bun gateway (Bun's HTTP/2 client is not verified for Connect). `<NAME>_SERVICE_HTTP_VERSION` overrides
+that per function, but until now only by hand in the zone's `spec.env`. Amendment 2 Decision 3 lists the
+binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE_PROTO_VERSION` and
+`KNEXT_WAKE_FUNCTIONS`, and nothing else.
+
+### Decision
+
+1. `NextApp.spec.backends[]` gains an optional `httpVersion`, an enum of `"2"` or `"1.1"`. When it is
+   set, the operator renders `<NAME>_SERVICE_HTTP_VERSION` beside the entry's other binding env, for a
+   Bound entry only. When it is unset, nothing is rendered, so a zone that sets no `httpVersion` renders
+   exactly as before.
+2. The field lives on the **zone's** entry, not on the `BackendService`. The transport is the zone's own
+   choice: a function-side field would let a writer of the `BackendService` change the zone's pod env and
+   roll its revision, which is against Decision 1's consent model. The function's port accepts both
+   versions, so nothing is rendered into the function, and neither pin (Amendments 3 and 4) is involved.
+3. If the zone already sets the variable in `spec.env` or `spec.secrets.envMap`, the existing
+   collision rule applies. The zone's value is kept, and `BackendBindings` names the variable.
+
+### Options considered
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Zone entry `backends[].httpVersion` (chosen)** | Zone consent; no new writer can roll the zone; additive | A second place to set it beside a hand-written env var (the collision rule reports it) |
+| `BackendService.spec.httpVersion` | Matches the issue's first wording | A function writer changes the zone's env and revision |
+| Derive from `NextApp.spec.runtime` | No new field | The glue already defaults by runtime, so the operator would only duplicate it, and an explicit per-function choice would stay impossible |
+
+### Consequences
+
+- This is an additive, optional CRD field: upgrade the operator/CRD before the CLI, as for every field.
+- The shared fixture `testdata/zone-binding-env.json` carries the variable, so the Go render test and the
+  TypeScript contract test both pin its name.
+
+### Action items
+
+- [x] CRD field and render (`backend_bindings.go`); a reconcile-level test and a collision test.
+- [x] `kn-next.config.ts` `backends[].httpVersion`, its validator, and the CR builder emitting it only when set.
+- [x] Docs: the zone-functions env table, the operator field table and the CLI glue note.

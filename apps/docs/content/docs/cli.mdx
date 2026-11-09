@@ -852,10 +852,8 @@ knext deploy function orders \
 - `--zone` names the `NextApp` that owns the function, in the same namespace.
 - `--image` must be pinned by digest; a tag-only reference and `:latest` are refused.
 - The function's language comes from `knext.grpc.json`, where `knext add function` recorded it.
-- Optional: `--namespace`, `--context`, `--port`, `--proto-version`, `--http-version`,
-  `--no-wake-ahead`, `--min-scale`, `--max-scale`, `--container-concurrency`.
-- `--http-version 2` or `--http-version 1.1` fixes the HTTP version the zone calls this function
-  with, for every zone server. Left out, the zone's server picks (h2c on Node, HTTP/1.1 on Bun).
+- Optional: `--namespace`, `--context`, `--port`, `--proto-version`, `--no-wake-ahead`,
+  `--min-scale`, `--max-scale`, `--container-concurrency`.
 - `--dry-run` prints the resource and applies nothing, so it pipes into `kubectl apply -f -`.
 
 It applies the way `knext deploy` applies a `NextApp`. First a server-side dry run checks the
@@ -919,9 +917,9 @@ Each generated client is server-only (`import "server-only"`) and follows one po
 - **The endpoint is read at call time** from `<NAME>_SERVICE_URL` (never baked into the code). On a
   Node server, calls use HTTP/2 cleartext (h2c) by default. On a Bun server they use HTTP/1.1 by
   default, because Bun's HTTP/2 client is not yet verified with Connect; unary and
-  server-streaming calls both work over HTTP/1.1. Setting `ORDERS_SERVICE_HTTP_VERSION` to `2` or
-  `1.1` chooses for that one function on either runtime; the operator sets it from the function's
-  `httpVersion` (`knext deploy function --http-version`). The server logs the transport it chose
+  server-streaming calls both work over HTTP/1.1. Setting `httpVersion: "2"` or `"1.1"` on the function's
+  `backends` entry chooses for that one function on either runtime; the operator renders it as
+  `ORDERS_SERVICE_HTTP_VERSION`. The server logs the transport it chose
   once per function, for example
   `knext: orders function: transport HTTP/1.1, falling back from h2c on a Bun gateway (...)`.
 

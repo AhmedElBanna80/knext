@@ -89,15 +89,6 @@ type BackendServiceSpec struct {
 	// +kubebuilder:validation:Pattern=`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$`
 	ProtoVersion string `json:"protoVersion,omitempty"`
 
-	// HTTPVersion is the HTTP version the zone's gateway uses to call this
-	// function: "2" (h2c) or "1.1". The zone receives it as
-	// <NAME>_SERVICE_HTTP_VERSION. Unset: the variable is not rendered and the
-	// gateway picks by its own runtime (a Node gateway uses h2c, a Bun gateway
-	// falls back to HTTP/1.1). The function's port accepts both.
-	// +optional
-	// +kubebuilder:validation:Enum="2";"1.1"
-	HTTPVersion string `json:"httpVersion,omitempty"`
-
 	// WakeAhead controls whether the zone wakes this function when the zone
 	// itself starts (one non-blocking request to the function's health RPC).
 	// nil or true: the function's binding name is listed in the zone's

@@ -97,7 +97,6 @@ Options:
   --context <ctx>              kubectl context (default: $KN_CONTEXT, else the current one)
   --port <n>                   the h2c port the function serves (operator default 8080)
   --proto-version <x.y.z>      the contract version this image serves
-  --http-version 2|1.1         the HTTP version the zone calls it with (default: the gateway's runtime picks)
   --no-wake-ahead              do not wake this function when the zone starts
   --min-scale <n>              warm floor (default 0, scale to zero)
   --max-scale <n>              fan-out cap (0 = the Knative default)

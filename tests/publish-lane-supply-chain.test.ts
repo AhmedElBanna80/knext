@@ -1391,7 +1391,7 @@ const AUDIT_EXEMPT: readonly AuditExemption[] = [
   {
     name: 'kn-next',
     reason:
-      'forwarding alias: ships one bin file whose only dependency is @getknext/core, which the audit covers; it leaves the package set at 2.0 (ADR-0020 amendment 2026-10-09). Its own SBOM is tracked in #2438.',
+      'forwarding alias: ships one bin file whose only dependency is @getknext/core, which the audit covers, so its target SBOM describes it (ADR-0020 amendment 2026-11-09). It leaves the package set at 2.0 (ADR-0020 amendment 2026-10-09).',
   },
 ];
 
@@ -1433,6 +1433,67 @@ const realReleaseSets = (overrides: Record<string, ManifestFields> = {}) =>
     crateWorkflow: CRATE_WORKFLOW,
     overrides,
   });
+
+/**
+ * ADR-0020 amendment 2026-11-09: the alias is exempt only while its closure is
+ * its target's closure plus its own forwarding bin. Either premise breaking
+ * means it must join auditScope() instead.
+ */
+export function aliasExemptionProblems(manifest: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  files?: string[];
+}): string[] {
+  const out: string[] = [];
+  const deps = Object.keys(manifest.dependencies ?? {});
+  if (deps.length !== 1 || deps[0] !== '@getknext/core') {
+    out.push(
+      `kn-next must depend on @getknext/core only to stay exempt; it depends on [${deps.join(', ')}]`,
+    );
+  }
+  for (const field of ['optionalDependencies', 'peerDependencies'] as const) {
+    const extra = Object.keys(manifest[field] ?? {});
+    if (extra.length > 0)
+      out.push(`kn-next declares ${field} [${extra.join(', ')}]: it must join auditScope()`);
+  }
+  const files = [...(manifest.files ?? [])].sort();
+  if (JSON.stringify(files) !== JSON.stringify(['LICENSE', 'README.md', 'bin'])) {
+    out.push(
+      `kn-next ships [${files.join(', ')}]; the exemption covers only bin, README.md and LICENSE`,
+    );
+  }
+  if (!PUBLISHED.some((p: { name: string }) => p.name === '@getknext/core')) {
+    out.push('@getknext/core, the alias target, is no longer in the audit scope');
+  }
+  return out;
+}
+
+describe('the kn-next alias exemption holds only while it forwards (ADR-0020, #2438)', () => {
+  const manifest = JSON.parse(
+    readFileSync(resolve(REAL_REPO, 'packages', 'kn-next-alias', 'package.json'), 'utf8'),
+  );
+
+  it('the real alias meets both conditions', () => {
+    expect(aliasExemptionProblems(manifest)).toEqual([]);
+  });
+
+  it('reds on a second dependency, a peer, or a shipped file of its own', () => {
+    expect(
+      aliasExemptionProblems({
+        ...manifest,
+        dependencies: { ...manifest.dependencies, chalk: '^5' },
+      }),
+    ).toHaveLength(1);
+    expect(aliasExemptionProblems({ ...manifest, peerDependencies: { react: '*' } })).toHaveLength(
+      1,
+    );
+    expect(aliasExemptionProblems({ ...manifest, files: [...manifest.files, 'lib'] })).toHaveLength(
+      1,
+    );
+    expect(aliasExemptionProblems({ ...manifest, dependencies: {} })).toHaveLength(1);
+  });
+});
 
 describe('package scope (#2389): the real tree', () => {
   const audit = realReleaseSets();

@@ -111,7 +111,7 @@ export async function selfWarm(options: {
         const t0 = Date.now();
         try {
             const res = await fetch(`http://127.0.0.1:${options.port}${path}`, {
-                headers: { [SELF_WARM_HEADER]: "1" },
+                headers: { "x-knext-warm": "1" },
                 redirect: "manual",
                 signal: ac.signal,
             });

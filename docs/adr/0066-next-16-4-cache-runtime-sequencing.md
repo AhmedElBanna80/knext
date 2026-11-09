@@ -330,7 +330,8 @@ Where this text omits or disagrees with the 2026-10-10 text on a point no amendm
   - one counter and one warning are emitted per outage;
   - an `updateTags` whose stamps did not reach Redis is **kept for replay** (Amendment 5).
 - **ISR, while Redis is down or the breaker is open** (Amendment 8, Proposed, changes this row to a
-  miss like `'use cache'`; until it is accepted the row below is the recorded decision):
+  miss like `'use cache'`; until it is accepted, the bullets under this heading are the recorded
+  decision):
   - it falls back to the per-process `memoryCache`;
   - `revalidateTag` clears that pod's map, and the tags whose invalidation did not reach Redis are
     **kept for replay** (Amendment 4).
@@ -935,6 +936,8 @@ on, the amendment governs; for D2, read D2 current text.
     credential lanes (created per the v2 plan, after R5 and at 2.0 GA) complete their windows.
 12. **Tech debt for sprint close:** ISR's per-process outage fallback, and its delete-only handling of
     `revalidateTag(tag, profile)`. Filed as #2122 (milestone v2.0, `priority:P2`).
+13. **ISR outage miss on kind** (Amendment 8): a kind test with Redis down shows no pod serves an
+    ISR entry from its own memory, and measures the render rate during the outage. Filed as #2883.
 
 ## Amendment 1 (2026-10-11): K4 keeps the `adapterPath` shim; the gate is the D4 smoke runs
 
@@ -1404,6 +1407,6 @@ it is unchanged. The 1.x line on `main` is unchanged.
 configured but down: a set then get misses, an image entry misses, and an entry already in pod memory
 is not served. With no Redis configured, the in-memory store still serves. Each guard is
 mutation-proved: removing the `get` guard reds the held-entry case, and removing both guards reds the
-set-then-get case. Open action item: a kind test with Redis down that shows ISR no longer serves a pod-local entry and
+set-then-get case. Open action item 13 (#2883): a kind test with Redis down that shows ISR no longer serves a pod-local entry and
 measures the render rate during the outage.
 

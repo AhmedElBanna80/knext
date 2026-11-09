@@ -110,6 +110,8 @@ var specPinExcludedFields = map[string]specPinExclusion{
 		"Informational metadata; the operator renders nothing from it into the function's objects."},
 	"wakeAhead": {exclusionNotRendered,
 		"Only decides whether the zone's own wake list names the function; nothing is rendered into the function."},
+	"httpVersion": {exclusionNotRendered,
+		"Only decides which HTTP version the zone's own gateway calls the function with; nothing is rendered into the function."},
 	"port": {exclusionOperational,
 		"Chooses which container port Knative sends h2c traffic to inside the same pod; it adds no code to the " +
 			"pinned image and widens nothing the pod can read. Residual: it can aim traffic at another listener of the image."},

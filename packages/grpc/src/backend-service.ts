@@ -38,6 +38,8 @@ export interface BackendServiceInput {
   readonly language: string;
   readonly port?: number;
   readonly protoVersion?: string;
+  /** The HTTP version the zone's gateway calls the function with. Unset: the gateway's runtime picks. */
+  readonly httpVersion?: '2' | '1.1';
   readonly wakeAhead?: boolean;
   readonly scaling?: BackendServiceScalingInput;
 }
@@ -52,6 +54,7 @@ export interface BackendServiceCR {
     readonly language: string;
     readonly port?: number;
     readonly protoVersion?: string;
+    readonly httpVersion?: '2' | '1.1';
     readonly wakeAhead?: boolean;
     readonly scaling?: BackendServiceScalingInput;
   };
@@ -99,6 +102,9 @@ export function buildBackendServiceCR(input: BackendServiceInput): BackendServic
       `proto version "${input.protoVersion}" is not a semantic version (MAJOR.MINOR.PATCH)`,
     );
   }
+  if (input.httpVersion !== undefined && input.httpVersion !== '2' && input.httpVersion !== '1.1') {
+    throw new GrpcUsageError(`http version "${input.httpVersion}" must be "2" or "1.1"`);
+  }
   const s = input.scaling;
   if (s?.minScale !== undefined) intIn('minScale', s.minScale, 0, Number.MAX_SAFE_INTEGER);
   if (s?.maxScale !== undefined) intIn('maxScale', s.maxScale, 0, Number.MAX_SAFE_INTEGER);
@@ -121,6 +127,7 @@ export function buildBackendServiceCR(input: BackendServiceInput): BackendServic
       language: input.language,
       ...(input.port === undefined ? {} : { port: input.port }),
       ...(input.protoVersion === undefined ? {} : { protoVersion: input.protoVersion }),
+      ...(input.httpVersion === undefined ? {} : { httpVersion: input.httpVersion }),
       ...(input.wakeAhead === undefined ? {} : { wakeAhead: input.wakeAhead }),
       ...(s === undefined ? {} : { scaling: s }),
     },

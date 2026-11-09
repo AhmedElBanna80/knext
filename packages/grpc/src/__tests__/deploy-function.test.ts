@@ -253,6 +253,23 @@ describe('knext deploy function: apply order and strictness', () => {
     expect(JSON.parse(c.out()).kind).toBe('BackendService');
     expect(existsSync(join(dir, '.output'))).toBe(false);
   });
+
+  it('--http-version sets spec.httpVersion, and leaving it out sets nothing', async () => {
+    const specFor = async (extra: string[]) => {
+      const dir = copyFixtureZone(`deploy-http-${extra.join('-') || 'none'}`);
+      const c = capture();
+      const code = await run('deploy', [...ARGS, '--dry-run', ...extra], {
+        ...c.io,
+        cwd: dir,
+        host: recordingHost().host,
+      });
+      expect(code).toBe(0);
+      return JSON.parse(c.out()).spec;
+    };
+    expect((await specFor(['--http-version', '1.1'])).httpVersion).toBe('1.1');
+    expect((await specFor(['--http-version', '2'])).httpVersion).toBe('2');
+    expect('httpVersion' in (await specFor([]))).toBe(false);
+  });
 });
 
 describe('knext deploy function: refusals happen before any cluster call', () => {
@@ -269,6 +286,7 @@ describe('knext deploy function: refusals happen before any cluster call', () =>
     ['an extra positional', [...ARGS, 'extra']],
     ['a bad port', [...ARGS, '--port', '0']],
     ['a bad proto version', [...ARGS, '--proto-version', 'one']],
+    ['a bad http version', [...ARGS, '--http-version', '3']],
   ];
   it.each(cases)('exits 1 and calls nothing for %s', async (_label, argv) => {
     const dir = copyFixtureZone('deploy-refuse');

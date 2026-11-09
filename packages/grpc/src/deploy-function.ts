@@ -29,7 +29,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { buildBackendServiceCR, renderBackendServiceCR } from './backend-service';
+import {
+  type BackendServiceInput,
+  buildBackendServiceCR,
+  renderBackendServiceCR,
+} from './backend-service';
 import { GrpcUsageError, loadConfig } from './config';
 import type { Io } from './generate';
 import { backendSpecDigest } from './spec-digest';
@@ -144,6 +148,7 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
         context: { type: 'string' },
         port: { type: 'string' },
         'proto-version': { type: 'string' },
+        'http-version': { type: 'string' },
         'min-scale': { type: 'string' },
         'max-scale': { type: 'string' },
         'container-concurrency': { type: 'string' },
@@ -181,6 +186,9 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
       language: entry.lang,
       port: intFlag('port', v.port),
       protoVersion: v['proto-version'],
+      ...(v['http-version'] === undefined
+        ? {}
+        : { httpVersion: v['http-version'] as BackendServiceInput['httpVersion'] }),
       ...(v['no-wake-ahead'] ? { wakeAhead: false } : {}),
       ...(minScale === undefined && maxScale === undefined && containerConcurrency === undefined
         ? {}

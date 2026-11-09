@@ -41,6 +41,7 @@ import (
 //
 //	<NAME>_SERVICE_URL            http://<service>.<namespace>.svc.cluster.local
 //	<NAME>_SERVICE_PROTO_VERSION  the function's status.servedProtoVersion (unset until served)
+//	<NAME>_SERVICE_HTTP_VERSION   the function's spec.httpVersion (unset when the spec leaves it unset)
 //	KNEXT_WAKE_FUNCTIONS          sorted, comma-separated binding names, minus opt-outs
 //
 // <NAME> is the backends[] entry's name upper-cased with '-' -> '_', the same
@@ -59,6 +60,7 @@ const WakeFunctionsEnv = "KNEXT_WAKE_FUNCTIONS"
 const (
 	bindingURLSuffix          = "_SERVICE_URL"
 	bindingProtoVersionSuffix = "_SERVICE_PROTO_VERSION"
+	bindingHTTPVersionSuffix  = "_SERVICE_HTTP_VERSION"
 )
 
 // bindingEnvPrefix derives <NAME> from a backends[] entry's name.
@@ -73,6 +75,12 @@ func BindingURLEnv(name string) string { return bindingEnvPrefix(name) + binding
 // contract version.
 func BindingProtoVersionEnv(name string) string {
 	return bindingEnvPrefix(name) + bindingProtoVersionSuffix
+}
+
+// BindingHTTPVersionEnv is the variable holding the HTTP version the zone's
+// gateway uses to call a bound function.
+func BindingHTTPVersionEnv(name string) string {
+	return bindingEnvPrefix(name) + bindingHTTPVersionSuffix
 }
 
 // functionURL is the cluster-local address of a function's Knative Service.
@@ -103,6 +111,7 @@ type zoneBinding struct {
 	// functionZone is the zone the BackendService names (for a cross-zone entry).
 	functionZone       string
 	servedProtoVersion string
+	httpVersion        string
 	wakeAhead          bool
 	// imageMismatch / specMismatch: the BackendService is bound but the zone's
 	// own pin (backends[].image / .specDigest) refuses it, so the function's
@@ -157,6 +166,9 @@ func renderBindingEnv(namespace string, existing []corev1.EnvVar, b zoneBindings
 		add(BindingURLEnv(e.name), functionURL(e.service, namespace))
 		if e.servedProtoVersion != "" {
 			add(BindingProtoVersionEnv(e.name), e.servedProtoVersion)
+		}
+		if e.httpVersion != "" {
+			add(BindingHTTPVersionEnv(e.name), e.httpVersion)
 		}
 		if e.wakeAhead {
 			wake = append(wake, e.name)
@@ -219,6 +231,7 @@ func (r *NextAppReconciler) resolveZoneBindings(ctx context.Context, app *appsv1
 		default:
 			zb.state = bindingBound
 			zb.servedProtoVersion = bs.Status.ServedProtoVersion
+			zb.httpVersion = bs.Spec.HTTPVersion
 			zb.wakeAhead = bs.Spec.WakeAhead == nil || *bs.Spec.WakeAhead
 			// The same two comparisons the function's reconciler makes (from
 			// the two specs alone), so the zone reports what the function

@@ -293,6 +293,17 @@ spec:
                     of at most 253 characters'
                   rule: self.all(e, !has(e.secretRef) || (has(e.secretRef.name) &&
                     e.secretRef.name.size() > 0 && e.secretRef.name.size() <= 253))
+              httpVersion:
+                description: |-
+                  HTTPVersion is the HTTP version the zone's gateway uses to call this
+                  function: "2" (h2c) or "1.1". The zone receives it as
+                  <NAME>_SERVICE_HTTP_VERSION. Unset: the variable is not rendered and the
+                  gateway picks by its own runtime (a Node gateway uses h2c, a Bun gateway
+                  falls back to HTTP/1.1). The function's port accepts both.
+                enum:
+                - "2"
+                - "1.1"
+                type: string
               image:
                 description: |-
                   Image is the function's container image, pinned by digest. A tag-only

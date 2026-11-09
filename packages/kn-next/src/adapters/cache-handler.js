@@ -1498,7 +1498,7 @@ function noteCdnPurgeSkipped(tagCount) {
 // edge purge for exactly the tags whose invalidation completed (the same order
 // as `revalidateTag`'s, D6.3).
 //
-//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags. One more and the list is
+//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags and deletes together. One more and the list is
 //    dropped for a COLLAPSE: the replay invalidates every ISR entry under this
 //    app's key prefix (a cursor SCAN, DEL per page) and queues one purge of the
 //    app's edge tag -- wider than needed, never stale. The same collapse the
@@ -1517,9 +1517,10 @@ function noteCdnPurgeSkipped(tagCount) {
 //  - PER PROCESS. The list lives in this process only: a pod that scales to
 //    zero or restarts before Redis is back loses it, and those entries stay
 //    stale until their TTL (a known limit). It is not lost silently: the
-//    process logs what it exits with (`reportReplayLostAtExit`, #2384). The `'use cache'` handler's tag
-//    stamps are replayed by that handler, the same way, from its own list
-//    (use-cache-handler.js, "Tag stamps an outage kept from Redis").
+//    process logs what it exits with (`reportReplayLostAtExit`, #2384).
+//  - The `'use cache'` handler's tag stamps are replayed by that handler, the
+//    same way, from its own list (use-cache-handler.js, "Tag stamps an outage
+//    kept from Redis").
 const REPLAY_MAX_TAGS = 1000;
 const REPLAY_SCAN_COUNT = 100;
 // tag -> the generation it was last recorded at. A Map keeps first-insertion

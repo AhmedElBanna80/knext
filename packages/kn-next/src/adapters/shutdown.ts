@@ -26,7 +26,7 @@ export interface Closable {
  * Must resolve (or reject) on its own; `gracefulShutdown` still force-exits at
  * the grace cap if a hook hangs.
  *
- * ISR cache writes (T13). `cache-handler.js` exports `drainCacheWrites()` for
+ * ISR cache writes (T13). `cache-write-registry.js` exports `drainCacheWrites()` for
  * registration here, so an in-flight revalidation write commits rather than
  * being abandoned. Be precise about WHERE that applies:
  *

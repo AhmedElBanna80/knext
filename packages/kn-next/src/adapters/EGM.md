@@ -87,7 +87,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `globalThis.Bun.RedisClient`. Both extend `CacheHandler`.
 - `cache-write-registry.js` exports `trackWrite`,
   `drainCacheWrites(timeoutMs = 5000)`, `inFlightCacheWriteCount`,
-  `onProcessExit(report)`, `runExitReports` and `clearExitReportsForTests`.
+  `onProcessExit(report)`, `runExitReports`, `clearExitReportsForTests` and
+  `exitReportCountForTests`.
 - `use-cache-handler.js:createUseCacheHandler({kind, core})` returns
   `{get, set, refreshTags, getExpiration, updateTags}`. The metric is
   `USE_CACHE_METRIC = 'knext_use_cache_events_total'`, rendered by

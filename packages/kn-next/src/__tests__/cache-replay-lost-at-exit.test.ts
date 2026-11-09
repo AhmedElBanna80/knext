@@ -148,6 +148,17 @@ describe("ISR handler: exiting with an invalidation backlog", () => {
         expect(exitLines()).toEqual([]);
     });
 
+    it("a listener removed by someone else is put back on the next arm", async () => {
+        const h = await handler();
+        await openBreaker(h);
+        await h.revalidateTag("x");
+        process.removeListener("exit", runExitReports);
+        expect(process.listeners("exit")).not.toContain(runExitReports);
+        await h.revalidateTag("y");
+        exitNow();
+        expect(exitLines()).toHaveLength(1);
+    });
+
     it("nothing recorded: no reporter is armed and the exit logs nothing", async () => {
         const h = await handler();
         await h.get("/p", { kind: "APP_PAGE" });

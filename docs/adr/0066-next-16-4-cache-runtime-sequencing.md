@@ -1434,7 +1434,7 @@ time before `process.exit`.
 - Each handler registers a reporter the first time it records a backlog. On exit with anything
   still pending, it logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
   count (or "collapsed") and the TTL bound. No metric (see below).
-- The `exit` event fires on every way the process ends: Next's own SIGTERM `cleanup()` ends in
+- The `exit` event fires on every way a knext runtime ends the process: Next's own SIGTERM `cleanup()` ends in
   `process.exit(143|130)` (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
   cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
   preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`
@@ -1444,7 +1444,7 @@ time before `process.exit`.
 
 | Option | For | Against |
 | --- | --- | --- |
-| **Exit report (chosen, jev 0.89)** | Fires on every exit path; no signal handler added | No last replay attempt |
+| **Exit report (chosen, jev 0.89)** | Fires on every `process.exit`, which is how every knext runtime ends; no signal handler added | No last replay attempt; a bare default-disposition SIGTERM runs no `exit` listener |
 | SIGTERM listener in the handler (jev 0.10) | One more replay chance | Suppresses default termination on a runtime without Next's handler |
 | Drain in the supervisor (jev 0.01) | Uses the existing drain hook | Cannot see the child process's lists on the node target |
 
@@ -1461,8 +1461,11 @@ Dropped after code review showed that (jev: drop 0.51, gauge 0.31, keep 0.18; an
 keep assumed it was merely rarely seen). The log line is the record. A gauge of the outstanding
 backlog, readable while the outage lasts, is the follow-up if a metric is wanted.
 
-**Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (8 cases). Each case
-asserts the registry's listener is installed on `process` and calls exactly it. Mutation prover
-by exit code: every guard killed (no arm on an invalidation, no arm on a delete, an ISR report with
-nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never registering, a
-replayed backlog reported, no listener installed).
+**Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (11 cases). Each
+positive case asserts exactly one registry listener is installed on `process` and calls it; each
+negative case asserts no reporter was armed; one case removes the listener and checks the next arm
+puts it back. Mutation prover by exit code kills: no arm on an invalidation, no arm on a delete, an
+ISR report with nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never
+registering, a replayed backlog reported, no listener installed, no reinstall. Adding the listener on
+every arm is not visible under Bun, which drops a duplicate `once` for the same function; Node keeps
+it (measured: 2 listeners on Node, 1 on Bun), which is why the code checks first.

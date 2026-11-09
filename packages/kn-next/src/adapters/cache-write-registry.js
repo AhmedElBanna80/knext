@@ -138,7 +138,8 @@ export function onProcessExit(report) {
   }
   reports.add(report);
   // One listener per process, shared by every copy of this module. Checked
-  // against the live listeners, so one removed by someone else is put back.
+  // against the live listeners, so one removed by someone else is put back,
+  // and never added twice (Node keeps a duplicate `once`; Bun drops it).
   globalThis[EXIT_LISTENER_KEY] ??= runExitReports;
   const listener = globalThis[EXIT_LISTENER_KEY];
   if (!process.listeners('exit').includes(listener)) process.once('exit', listener);

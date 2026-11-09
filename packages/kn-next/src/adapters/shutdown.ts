@@ -26,9 +26,11 @@ export interface Closable {
  * Must resolve (or reject) on its own; `gracefulShutdown` still force-exits at
  * the grace cap if a hook hangs.
  *
- * ISR cache writes (T13). `cache-write-registry.js` exports `drainCacheWrites()` for
- * registration here, so an in-flight revalidation write commits rather than
- * being abandoned. Be precise about WHERE that applies:
+ * ISR cache writes (T13). `cache-write-registry.js` exports `drainCacheWrites()`,
+ * which a runtime COULD register here so an in-flight revalidation write
+ * commits rather than being abandoned. No production runtime registers it
+ * today; only `__tests__/shutdown-cache-drain.test.ts` does (ADR-0066
+ * Amendment 9). Be precise about WHERE it could apply:
  *
  *   - **node target** — this module runs in the SUPERVISOR process
  *     (`node-server.ts`), while `cache-handler.js` is loaded by the Next.js
@@ -37,9 +39,9 @@ export interface Closable {
  *     own MULTI/EXEC atomicity (a transmission cut short applies nothing), plus
  *     the SIGTERM this module forwards so Next drains and runs `after()`.
  *   - **single-process target** (ADR-0036 `bun-exec`) — handler and shutdown
- *     share a process, and registering `drainCacheWrites` here is what makes the
- *     write survive the signal. Covered by
- *     `__tests__/shutdown-cache-drain.test.ts`.
+ *     share a process, so registering `drainCacheWrites` here WOULD make the
+ *     write survive the signal (shown by `__tests__/shutdown-cache-drain.test.ts`);
+ *     the self-contained entry does not register it yet.
  *
  * Either way the grace cap below is the backstop: a cache that will not commit
  * must never push the pod past its terminationGracePeriodSeconds.

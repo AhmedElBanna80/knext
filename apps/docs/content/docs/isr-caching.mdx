@@ -116,7 +116,9 @@ Redis, this block is the first thing to check.
   until their TTL. The loss is logged: a pod that exits with tags or deletes it could not apply
   writes one `[CacheHandler] exiting with … not yet replayed to Redis` line saying how many (or that the list had collapsed), so you can tell from
   the pod logs which invalidations did not take effect. Search your logs for that line after a
-  Redis outage longer than your scale-down delay.
+  Redis outage longer than your scale-down delay. A pod that is killed outright (out of memory, or
+  past its termination grace period) cannot write the line, so its absence does not prove nothing
+  was lost.
 
 <Callout type="warn">
 **On the standalone build's Node runtime, the Redis-backed handler can silently fall back to a

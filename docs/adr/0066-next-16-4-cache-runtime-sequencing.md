@@ -1438,7 +1438,9 @@ time before `process.exit`.
   `process.exit(143|130)` (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
   cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
   preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`
-  listener; no knext runtime ships that way.
+  listener; no knext runtime ships that way. A SIGKILL (the kubelet after
+  `terminationGracePeriodSeconds`, an OOM kill) runs none either, so **no line does not prove
+  nothing was lost**: a pod killed that way loses its backlog silently, as before.
 
 **Options considered.**
 
@@ -1462,9 +1464,10 @@ keep assumed it was merely rarely seen). The log line is the record. A gauge of 
 backlog, readable while the outage lasts, is the follow-up if a metric is wanted.
 
 **Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (11 cases). Each
-positive case asserts exactly one registry listener is installed on `process` and calls it; each
-negative case asserts no reporter was armed; one case removes the listener and checks the next arm
-puts it back. Mutation prover by exit code kills: no arm on an invalidation, no arm on a delete, an
+positive case asserts exactly one registry listener is installed on `process` and calls it; the
+no-Redis and nothing-recorded cases assert no reporter was armed; the two "replayed before exit"
+cases arm a reporter, assert the replay ran and that the exit logs nothing; one case removes the
+listener and checks the next ISR arm puts it back. Mutation prover by exit code kills: no arm on an invalidation, no arm on a delete, an
 ISR report with nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never
 registering, a replayed backlog reported, no listener installed, no reinstall. Adding the listener on
 every arm is not visible under Bun, which drops a duplicate `once` for the same function; Node keeps

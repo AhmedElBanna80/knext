@@ -1559,15 +1559,22 @@ function reportReplayLostAtExit() {
   const what = replayCollapsed
     ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
     : `${replayTags.size} tag invalidation(s) and ${replayKeys.size} delete(s)`;
+  // Deletes hold back no edge purge; tags (and a collapse) do.
+  const purge =
+    replayCollapsed || replayTags.size > 0 ? ', and the edge purge they held back does not run' : '';
   console.error(
     `[CacheHandler] exiting with ${what} not yet replayed to Redis: ` +
-      `those ISR entries stay stale until their Redis TTL (${DEFAULT_TTL_SECONDS}s by default, ` +
-      'twice `revalidate` when that is longer), and the edge purge they held back does not run',
+      "those ISR entries stay stale until their Redis TTL (the route's `expire` when set, " +
+      `otherwise ${DEFAULT_TTL_SECONDS}s or twice \`revalidate\` when that is longer)${purge}`,
   );
 }
 
 function armReplayExitReport() {
-  onProcessExit(reportReplayLostAtExit);
+  try {
+    onProcessExit(reportReplayLostAtExit);
+  } catch {
+    // Reporting is best effort; it must never cost the backlog itself.
+  }
 }
 
 /** Remember tags whose invalidation did not reach Redis, and try to replay them. */

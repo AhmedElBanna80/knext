@@ -109,6 +109,7 @@ export function inFlightCacheWriteCount() {
 // duplicated copies of this module must share one listener and one set.
 
 const EXIT_REPORTS_KEY = Symbol.for('knext.core.cache.exitReports');
+const EXIT_LISTENER_KEY = Symbol.for('knext.core.cache.exitReportsListener');
 
 /** The one `exit` listener; exported so a test can call exactly it. */
 export function runExitReports() {
@@ -134,9 +135,18 @@ export function onProcessExit(report) {
   if (!reports) {
     reports = new Set();
     globalThis[EXIT_REPORTS_KEY] = reports;
-    process.once('exit', runExitReports);
   }
   reports.add(report);
+  // One listener per process, shared by every copy of this module. Checked
+  // against the live listeners, so one removed by someone else is put back.
+  globalThis[EXIT_LISTENER_KEY] ??= runExitReports;
+  const listener = globalThis[EXIT_LISTENER_KEY];
+  if (!process.listeners('exit').includes(listener)) process.once('exit', listener);
+}
+
+/** How many reporters are registered (tests). */
+export function exitReportCountForTests() {
+  return globalThis[EXIT_REPORTS_KEY]?.size ?? 0;
 }
 
 /** Forget every reporter (test isolation). The listener stays installed. */

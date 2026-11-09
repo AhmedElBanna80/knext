@@ -109,12 +109,12 @@ Redis, this block is the first thing to check.
   seconds. Expect more rendering while Redis is down. A `revalidateTag` or `revalidatePath` during
   that time still counts. The pod also remembers the tags. As soon as Redis answers again, it
   invalidates them in Redis and then purges them from your [CDN](/docs/cdn), so other pods stop
-  serving the old page without waiting for its TTL. A pod remembers up to 1,000 distinct tags. Past
+  serving the old page without waiting for its TTL. A pod remembers up to 1,000 distinct tags and deletes. Past
   that, it invalidates every cached page of the app instead and purges the whole app from the CDN,
   which costs a burst of re-renders but never leaves a page stale. The list is kept in the pod's
   memory only. If the pod restarts or scales to zero before Redis is back, those pages stay stale
-  until their TTL. The loss is logged: a pod that exits with tags it could not apply writes one
-  `[CacheHandler] exiting with … not yet replayed to Redis` line saying how many, so you can tell from
+  until their TTL. The loss is logged: a pod that exits with tags or deletes it could not apply
+  writes one `[CacheHandler] exiting with … not yet replayed to Redis` line saying how many, so you can tell from
   the pod logs which invalidations did not take effect. Search your logs for that line after a
   Redis outage longer than your scale-down delay.
 
@@ -290,8 +290,9 @@ later expiry is not scheduled. A pod remembers up to 1,000 distinct tags; past t
 it removes every `'use cache'` entry of the app instead, which costs a burst of re-renders but never
 serves a stale result. A pod that restarts or scales to zero before Redis is back forgets the list,
 and those entries are served until they expire. It logs one `exiting with … not yet replayed to Redis`
-line as it goes and counts the lost tags in `tags_lost_at_exit` (below). Each pod logs one warning per outage (and one when
-`REDIS_URL` is not set at all). ISR also misses during an outage rather than serving pod memory, as described above; it keeps a per-pod store only when no `REDIS_URL` is set.
+line as it exits, saying how many tags it lost; there is no metric for this, since the process is
+gone before it could be scraped. Each pod logs one warning per outage (and one when
+`REDIS_URL` is not set at all). ISR also misses during an outage rather than serving pod memory, as described above; it uses a per-pod store only when no `REDIS_URL` is set or its Redis client cannot be loaded.
 
 **Redis memory.** Set `maxmemory` on the Redis you point knext at, with
 `maxmemory-policy volatile-lru`. Every cache entry carries an expiry, so it can be evicted; the tag
@@ -328,7 +329,6 @@ the rate of any of them:
 | `tags_updated` | Tag invalidations written to Redis |
 | `tags_dropped` | Tag invalidations that could not reach Redis; they are applied once it is back |
 | `tags_replayed` | Tags whose invalidation was applied after Redis came back |
-| `tags_lost_at_exit` | Tags a pod still had to apply when it exited (scale to zero, restart) before Redis came back; those entries are served until they expire. A pod that had collapsed its list counts 1. It is counted as the process exits, so a scrape rarely sees it: the log line is the record |
 | `tags_collapsed` | Times a pod had over 1,000 tags to apply and removed every `'use cache'` entry of the app instead |
 | `tags_collapse_refused` | Times a pod had over 1,000 tags to apply but kept its entries, because its keys sit under the shared fallback `kn-next:*` ([why](#key-prefix)) |
 | `prune_error` | Failed clean-ups of old invalidation timestamps (the invalidation itself was written) |

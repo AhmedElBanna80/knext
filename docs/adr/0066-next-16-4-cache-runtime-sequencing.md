@@ -1433,10 +1433,12 @@ time before `process.exit`.
   listener per process, synchronously, each one guarded.
 - Each handler registers a reporter the first time it records a backlog. On exit with anything
   still pending, it logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
-  count (or "collapsed") and the TTL bound. `'use cache'` also counts the lost tags in
-  `knext_use_cache_events_total{event="tags_lost_at_exit"}`.
+  count (or "collapsed") and the TTL bound. No metric (see below).
 - The `exit` event fires on every way the process ends: Next's own SIGTERM `cleanup()` ends in
-  `process.exit(143|130)`, which the self-contained preload only normalises.
+  `process.exit(143|130)` (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
+  cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
+  preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`
+  listener; no knext runtime ships that way.
 
 **Options considered.**
 
@@ -1453,13 +1455,14 @@ SIGTERM listener in the handler's process (`standalone-self-contained-supervisor
 `globalThis` "replay now" kick from it would add one attempt there without suppressing anything.
 It is left as a follow-up, because it covers only that target and only a Redis that is already back.
 
-**The counter** (jev: keep 0.63, gauge 0.27, drop 0.10). It is incremented as the process exits, so
-an in-process `/metrics` scrape rarely sees it, and a dashboard can read near zero while tags are
-lost. The docs say so and name the log line as the record. A gauge of the outstanding backlog,
-readable during the outage, is the alternative if this proves misleading in practice.
+**No counter.** #2384 asked for one. A count taken in the `exit` listener can never be scraped (the
+process answers no request after it), so a dashboard would always read zero while tags are lost.
+Dropped after code review showed that (jev: drop 0.51, gauge 0.31, keep 0.18; an earlier vote for
+keep assumed it was merely rarely seen). The log line is the record. A gauge of the outstanding
+backlog, readable while the outage lasts, is the follow-up if a metric is wanted.
 
 **Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (8 cases). Each case
 asserts the registry's listener is installed on `process` and calls exactly it. Mutation prover
-by exit code: 7/7 killed (no arm on an invalidation, no arm on a delete, an ISR report with nothing
-pending, `'use cache'` never registering, no count, a replayed backlog reported, no listener
-installed).
+by exit code: every guard killed (no arm on an invalidation, no arm on a delete, an ISR report with
+nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never registering, a
+replayed backlog reported, no listener installed).

@@ -417,14 +417,15 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   `timeoutMs`.
 - `onProcessExit` keeps its reporters in one `globalThis` set
   (`Symbol.for('knext.core.cache.exitReports')`) and installs one
-  `process.once('exit', runExitReports)` per process. Reporters run
-  synchronously and a throwing one is swallowed.
+  `process.once('exit', …)` per process (the first copy's `runExitReports`,
+  kept under `Symbol.for('knext.core.cache.exitReportsListener')` and put back
+  if removed). Reporters run synchronously and a throwing one is swallowed.
 - A process that exits with a replay backlog logs one
   `[CacheHandler] exiting with … not yet replayed to Redis` line per handler (#2384).
   The ISR handler arms its reporter on the first recorded skip; the
-  `'use cache'` handler arms one per core and counts `tagsLostAtExit` once per
-  lost tag (once for a collapsed backlog). A backlog already replayed reports
-  nothing.
+  `'use cache'` handler arms one per core. The ISR line names the edge purge
+  only when tags (or a collapse) are lost; deletes hold none back. No counter.
+  A backlog already replayed reports nothing.
 - `cache-control-normalize.cjs:normalizeCacheControl` applies only to GET and
   HEAD and leaves `immutable` responses alone. The CDN edge decision fails
   closed: on any error the edge is skipped and foreign edge headers are

@@ -131,7 +131,6 @@ export const USE_CACHE_EVENTS = Object.freeze({
   tagsUpdated: 'tags_updated',
   tagsDropped: 'tags_dropped',
   tagsReplayed: 'tags_replayed',
-  tagsLostAtExit: 'tags_lost_at_exit',
   tagsCollapsed: 'tags_collapsed',
   tagsCollapseRefused: 'tags_collapse_refused',
   pruneError: 'prune_error',
@@ -501,7 +500,7 @@ function replayArgs(tag, record) {
 //    rest waits for the next probe, one attempt per cooldown.
 //  - PER PROCESS. A pod that restarts or scales to zero before Redis is back
 //    loses the list, and those entries stay valid until their TTL (a known limit).
-//    The process logs and counts what it exits with (`tagsLostAtExit`, #2384).
+//    The process logs what it exits with (`reportTagReplayLostAtExit`, #2384).
 const REPLAY_MAX_TAGS = 1000;
 const REPLAY_BATCH = 100;
 const REPLAY_SCAN_COUNT = 100;
@@ -525,18 +524,17 @@ export function resetUseCacheTagReplay(core) {
 
 /**
  * The exit report (#2384): a process that exits with a backlog loses it, and
- * those entries keep serving until their TTL. One line and a count say so.
- * Counted as one per tag (one for a collapsed backlog, whose size is gone).
+ * those entries keep serving until their TTL. One line says so. No counter: it
+ * could only be counted inside the exit listener, after which no scrape is
+ * answered (ADR-0066 Amendment 9).
  */
 function reportTagReplayLostAtExit(replay) {
   if (!replayPending(replay)) return;
-  const lost = replay.collapsed ? 1 : replay.tags.size;
-  for (let i = 0; i < lost; i += 1) count('tagsLostAtExit');
   const what = replay.collapsed
     ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
-    : `${replay.tags.size} tag stamp(s)`;
+    : `${replay.tags.size} tag(s)`;
   console.error(
-    `[CacheHandler] exiting with ${what} of 'use cache' not yet replayed to Redis: ` +
+    `[CacheHandler] exiting with ${what} of 'use cache' tag invalidations not yet replayed to Redis: ` +
       `those entries keep serving until their TTL (at most ${maxTtlSeconds()}s)`,
   );
 }

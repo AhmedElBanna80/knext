@@ -31,8 +31,11 @@ describe('the compile-cache e2e fixture loads server.js the way production does 
   for (const file of E2E) {
     it(`${file} asserts the server.js cache line in the form that module type produces`, () => {
       expect(typeOf(read(SCAFFOLD))).toBe('module');
-      const text = read(file);
-      // The assertion's regex literal itself, not a mention in a comment.
+      // Comment lines dropped: the regex literal must be in code, not a mention.
+      const text = read(file)
+        .split('\n')
+        .filter((line) => !line.trim().startsWith('//'))
+        .join('\n');
       expect(text).toContain(
         String.raw`/V8 code cache for ESM file:\/\/\/app\/\.next\/standalone\/server\.js was accepted/`,
       );

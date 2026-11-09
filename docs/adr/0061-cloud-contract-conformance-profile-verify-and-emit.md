@@ -175,8 +175,8 @@ security trigger (`workflow.md`), and the default answer is no:
   in `packages/kn-next/src/cli/`, against an allowlist of (CLI, subcommand) pairs in
   `utils/asset-upload.ts`.
 - **Tripwire 3** (stored cloud-account credential): review-only + gitleaks for committed secrets.
-  Amendment 1's exception is not enforced by knext at all: the key's grant lives in the user's AWS
-  account.
+  For Amendment 1's exception, knext's scans enforce custody (one constant host, the secret never
+  logged or sent); the key's grant lives in the user's AWS account and knext cannot check it.
 - **Tripwire 4** (per-cloud operator branch): heuristic Go scan for cloud-identity strings in
   non-comment code. The storage-provider switch (e.g. `external_cleaner.go:59 case "s3","minio"`)
   remains legal because it is a row attribute.
@@ -272,9 +272,14 @@ importing only `node:crypto`; signing primitives forbidden everywhere else in `p
 constant host; one operation, no credential chain; tested byte for byte against AWS's published vectors.
 A second signer, for any provider, needs its own amendment of both ADRs. Because the primitive scan does
 not look inside `node_modules`, a signing package would get past it, so the tripwire 1 scan also
-requires every import in `packages/kn-next/src/adapters/cdn-purge/` (recursively) to be a relative path
-or a `node:` built-in, and forbids `@smithy/*`, `@aws-crypto/*`, `aws4`, `aws4fetch` and the unscoped
-`aws-sdk` anywhere in `packages/`. A signer that breaks a line of that bar is a cloud SDK under this
+follows the module graph from every file in `packages/kn-next/src/adapters/cdn-purge/` through its
+relative imports, transitively, and requires every module it reaches to import only relative paths and
+`node:` built-ins (never `node:module`). Dynamic loading (`require(`, `import(`, `createRequire`) is
+forbidden in every module of that graph. Today the graph is the module's own files,
+`../cache-write-registry.js` (no imports) and `node:crypto`, so the rule passes as written. The scan
+also forbids `@smithy/*`, `@aws-crypto/*`, `aws4`, `aws4fetch` and the unscoped `aws-sdk` anywhere in
+`packages/`. These rules supersede ADR-0068 A4.1's narrower package list, and ADR-0068 A4.2's generic
+"one purge action on one CDN resource" wording reads as the CloudFront-only class below. A signer that breaks a line of that bar is a cloud SDK under this
 tripwire.
 
 **Tripwire 3 (stored cloud credential), a bounded exception for one provider.** Tripwire 3 stops "a
@@ -289,7 +294,8 @@ on one distribution ARN.** On these terms:
   to `cloudfront.amazonaws.com`; the secret access key never leaves the pod (ADR-0068 A4.6);
 - the docs require the one-action policy, name the key as **long-lived**, and say how to rotate it.
 
-Any other IAM credential, for any provider, or this one with a wider grant, is still a tripwire 3 stop.
+Any other IAM credential, for any provider, is still a tripwire 3 stop, and so is a PR that emits or
+documents this key with a wider grant.
 
 **What knext does not enforce, stated plainly.** knext cannot see the key's grant: it lives in the
 user's AWS account, and no PR, CR or gitleaks run shows it. The user owns it. What bounds a key with a
@@ -297,6 +303,10 @@ wider grant is the code bar (one operation, one constant host), not the grant it
 leaked key, even a correctly scoped one, is unlimited billable invalidations and origin load across the
 whole distribution, outside ADR-0068's per-app budget; the docs say so, and say to rotate on any
 suspicion.
+
+**Gating.** ADR-0068 A4-1's exit 4 includes these scans, each mutation-proved by exit code: a bare
+package import reached through a relative import, a dynamic `import(` or `createRequire` in the graph,
+and each forbidden signing package. A4-1 does not merge without them.
 
 **Workload identity** would remove the stored key, but it is on the "knext does not own" list above
 (cloud IAM: workload identity, IRSA bindings). Moving it needs a further amendment of this ADR, not only

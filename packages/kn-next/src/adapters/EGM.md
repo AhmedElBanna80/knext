@@ -86,7 +86,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   default-exports `KnextBunCacheHandler`, which uses
   `globalThis.Bun.RedisClient`. Both extend `CacheHandler`.
 - `cache-write-registry.js` exports `trackWrite`,
-  `drainCacheWrites(timeoutMs = 5000)` and `inFlightCacheWriteCount`.
+  `drainCacheWrites(timeoutMs = 5000)`, `inFlightCacheWriteCount`,
+  `onProcessExit(report)`, `runExitReports` and `clearExitReportsForTests`.
 - `use-cache-handler.js:createUseCacheHandler({kind, core})` returns
   `{get, set, refreshTags, getExpiration, updateTags}`. The metric is
   `USE_CACHE_METRIC = 'knext_use_cache_events_total'`, rendered by
@@ -414,6 +415,16 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   invalidation completed.
 - `cache-write-registry.js:drainCacheWrites` never rejects and is bounded by
   `timeoutMs`.
+- `onProcessExit` keeps its reporters in one `globalThis` set
+  (`Symbol.for('knext.core.cache.exitReports')`) and installs one
+  `process.once('exit', runExitReports)` per process. Reporters run
+  synchronously and a throwing one is swallowed.
+- A process that exits with a replay backlog logs one
+  `[CacheHandler] exiting with … not replayed to Redis` line per handler (#2384).
+  The ISR handler arms its reporter on the first recorded skip; the
+  `'use cache'` handler arms one per core and counts `tagsLostAtExit` once per
+  lost tag (once for a collapsed backlog). A backlog already replayed reports
+  nothing.
 - `cache-control-normalize.cjs:normalizeCacheControl` applies only to GET and
   HEAD and leaves `immutable` responses alone. The CDN edge decision fails
   closed: on any error the edge is skipped and foreign edge headers are

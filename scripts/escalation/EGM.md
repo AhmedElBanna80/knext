@@ -38,7 +38,7 @@ A `repo` is `{ show(side, path), listHead(prefix) }`: `show` returns a blob's te
 ## Invariants
 
 - `adr` fires on a file under `docs/adr/` with any status except added (a rename into it fires), never under `docs/adr/gates/` [`paths.mjs:TRIGGERS`].
-- `crd` fires on any `*_types.go` under an `api/` directory; `cli-surface` on `packages/<pkg>/src/cli.ts` or `src/cli/**`, tests excluded; `crates` on anything under `crates/` [`paths.mjs`].
+- `crd` fires on any `*_types.go` under an `api/` directory; `config-schema` on `packages/kn-next/src/config.ts` exactly; `cli-surface` on `packages/<pkg>/src/cli.ts` or `src/cli/**`, tests excluded; `crates` on anything under `crates/` [`paths.mjs`].
 - The static supply-chain paths are `security/**`, `scripts/audit-published.mjs` and any non-test `packages/<pkg>/src/**/supply-chain.{js,ts,…}` [`paths.mjs:isStaticSupplyChainPath`].
 - `public-api` compares only `PUBLIC_MANIFEST_KEYS` of `packages/<pkg>/package.json`; a manifest that does not parse on either side fires, with the reason saying so [`public-surface.mjs:publicSurfaceFindings`].
 - A workflow holds a credential when its text has `id-token: write`, `permissions: write-all`, a `packages`/`contents`/`attestations: write` grant, `toJSON(secrets)`, a `secrets[…]` index, or any `secrets.<NAME>` outside `LOW_PRIVILEGE_SECRETS` [`credential-workflows.mjs:workflowHoldsCredential`].
@@ -53,7 +53,7 @@ A `repo` is `{ show(side, path), listHead(prefix) }`: `show` returns a blob's te
 - `parseNameStatus` throws on an unknown status letter or a record with no path, and a rename or copy yields both paths, destination first [`git.mjs`].
 - `gitReader.show` returns null when `cat-file -t` fails or the object is not a blob, so a tree reads as absent; `git show` of a found blob, and `listHead`, throw on failure [`git.mjs`].
 - `mergeFired` keeps one entry per id and every path once [`report.mjs`].
-- `isAcknowledged` accepts either label, trimmed and case-folded, or a body line matching `ACK_BODY_PATTERN` [`acknowledgement.mjs`].
+- `isAcknowledged` accepts either label, trimmed and case-folded, or a body in which `ACK_BODY_PATTERN` matches anywhere (the pattern is unanchored, so it need not start a line) [`acknowledgement.mjs`].
 
 ## Side Effects
 

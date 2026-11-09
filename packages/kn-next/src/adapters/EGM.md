@@ -375,7 +375,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   command, including the `del` in `set(key, null)`), an ioredis connect that
   fails (`waitForReady`), or a native connect that throws or resolves with the
   client still disconnected (`waitForNativeReady`) calls `markUnhealthy`, which
-  opens a circuit breaker for `REDIS_RETRY_COOLDOWN_MS`. Until it closes, ISR `get`
+  opens a circuit breaker for `REDIS_RETRY_COOLDOWN_MS`. Concurrent callers share
+  one in-flight connect on both clients (`connectClient`'s `connectPromise`), so a
+  burst of first requests dials once. Until the breaker closes, ISR `get`
   misses and Next renders from the origin, and `set` writes nothing locally: the
   per-process memory store serves only when Redis is not in use (no `REDIS_URL`,
   or a client that could not be loaded). `use-cache-handler.js` has no

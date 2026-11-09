@@ -854,10 +854,12 @@ async function connectClient() {
   // either the native client or ioredis, and only the latter has `.on`/`.status`.
   // Reading `.status` on the native client yields undefined, which silently fell
   // through to the ioredis path — that is how this reached production.
-  if (typeof client.on !== 'function') return await waitForNativeReady(client);
-  if (client.status === 'ready') return client;
+  const native = typeof client.on !== 'function';
+  if (native ? client.connected : client.status === 'ready') return client;
+  // One in-flight connect per client, on both paths: callers that arrive while
+  // it is pending wait on it instead of dialling again (#2887).
   if (!connectPromise) {
-    connectPromise = waitForReady(client).then((result) => {
+    connectPromise = (native ? waitForNativeReady(client) : waitForReady(client)).then((result) => {
       connectPromise = null;
       return result;
     });

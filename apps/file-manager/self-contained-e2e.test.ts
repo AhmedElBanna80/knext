@@ -19,7 +19,7 @@ import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   boot,
@@ -61,31 +61,52 @@ const statusOf = (r: RouteResult | undefined) => (r && 'status' in r ? r.status 
  * them. NETWORK_BOUND_ROUTES must equal the set the source scan finds, so a
  * route that stops calling out, or a new one that starts, fails the check below.
  *
- * The scan's limit: it reads `page.*` files for a literal `fetch('http(s)://…')`.
- * A URL built from a variable or `${…}`, a helper module's fetch, `https.request`
- * or a route handler is not seen. Two such calls exist today, both inert in this
- * lane: the observability Prometheus query (OBSERVABILITY_PROMETHEUS_URL is set
- * in no workflow, so it returns `unconfigured` before any fetch) and the
- * observability Kubernetes API read (`_k8s/nextapp.ts`, an `https.request` that
- * stops at its opt-in gate and at `not-in-cluster` before any request).
+ * The scan reads every non-test source file under `src/` for a literal
+ * `fetch('http(s)://…')` or `http(s).request('http(s)://…')`. A literal in a
+ * `page.*` file maps to that route; a literal anywhere else (a layout, a route
+ * handler, a helper) fails the check below, because it cannot be mapped to a
+ * route. A URL built from a variable is not seen. Two such calls exist today,
+ * and both are inert in this e2e by construction, not by convention: each arm
+ * boots with a clean environment (`boot()` in e2e-support/self-contained-empty-dir.mjs
+ * passes PATH, HOME, TMPDIR, PORT, HOSTNAME, NODE_ENV and the env given here,
+ * only DATABASE_URL), so OBSERVABILITY_PROMETHEUS_URL is never set and the
+ * Prometheus query returns `unconfigured` before any fetch, and
+ * KUBERNETES_SERVICE_HOST is never set, so the Kubernetes API read
+ * (`_k8s/nextapp.ts`) stops at `not-in-cluster` before any request.
  */
 const NETWORK_BOUND_ROUTES = ['/cache-tests/fetch-cache'];
 
-/** App routes (from `src/app/**\/page.*`) whose source fetches an http(s) URL. */
-function routesFetchingExternalHosts(appDir: string): string[] {
-  const out: string[] = [];
-  const walk = (dir: string, route: string) => {
+const EXTERNAL_CALL = /(?:fetch|https?\.request)\(\s*['"`]https?:\/\//;
+
+/**
+ * Scan `src/` for literal external calls. Returns the routes whose `page.*`
+ * makes one, and every other non-test file that makes one (which cannot be
+ * mapped to a route, so the check below requires it to be empty).
+ */
+function externalCalls(srcDir: string): { routes: string[]; unmapped: string[] } {
+  const routes: string[] = [];
+  const unmapped: string[] = [];
+  const appDir = join(srcDir, 'app');
+  const walk = (dir: string) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = join(dir, e.name);
       if (e.isDirectory()) {
-        walk(p, route + (e.name.startsWith('(') ? '' : `/${e.name}`));
-      } else if (/^page\.(tsx|ts|jsx|js)$/.test(e.name)) {
-        if (/fetch\(\s*['"`]https?:\/\//.test(readFileSync(p, 'utf8'))) out.push(route || '/');
+        if (e.name !== 'node_modules') walk(p);
+        continue;
+      }
+      if (!/\.(tsx?|jsx?|mjs|cjs)$/.test(e.name) || /\.(test|spec)\./.test(e.name)) continue;
+      if (!EXTERNAL_CALL.test(readFileSync(p, 'utf8'))) continue;
+      const rel = relative(appDir, p);
+      if (!rel.startsWith('..') && /(^|\/)page\.(tsx|ts|jsx|js)$/.test(rel)) {
+        const segs = rel.split('/').slice(0, -1).filter((s) => !s.startsWith('('));
+        routes.push(`/${segs.join('/')}`);
+      } else {
+        unmapped.push(relative(srcDir, p));
       }
     }
   };
-  walk(appDir, '');
-  return out.sort();
+  walk(srcDir);
+  return { routes: routes.sort(), unmapped: unmapped.sort() };
 }
 
 const cleanup: string[] = [];
@@ -115,9 +136,11 @@ function compile(outfile: string, selfContained: boolean): string {
 
 describe('the self-contained e2e leaves out only routes that call the internet (#2272)', () => {
   it('NETWORK_BOUND_ROUTES is exactly the set of routes whose page fetches an http(s) URL', () => {
-    expect(routesFetchingExternalHosts(join(APP, 'src', 'app'))).toEqual(
-      [...NETWORK_BOUND_ROUTES].sort(),
-    );
+    expect(externalCalls(join(APP, 'src')).routes).toEqual([...NETWORK_BOUND_ROUTES].sort());
+  });
+
+  it('no non-page source file makes a literal external call (it could not be mapped to a route)', () => {
+    expect(externalCalls(join(APP, 'src')).unmapped).toEqual([]);
   });
 });
 
@@ -167,6 +190,14 @@ describe.skipIf(skipReason !== null)(
       );
       expect(servedA.filter((k) => !isServed(B.served[k]))).toEqual([]);
       expect(servedA.length).toBeGreaterThan(routes.length / 2);
+      // A route left out of the cross-arm checks must still exist in both arms:
+      // an executable that loses the route answers 404 (or nothing), whatever the
+      // external host does.
+      for (const k of NETWORK_BOUND_ROUTES) {
+        expect({ k, A: statusOf(A.served[k]) }).not.toEqual({ k, A: 404 });
+        expect({ k, B: statusOf(B.served[k]) }).not.toEqual({ k, B: 404 });
+        expect(statusOf(B.served[k])).toBeDefined();
+      }
 
       // The request-body cap is COMPILED INTO the executable (standalone-compile
       // embeds the preload — the binary takes no `--require`). Boot the

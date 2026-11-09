@@ -96,10 +96,14 @@ subpath entries do not re-export it.
   `getDb*` and `runMigrations` do not need drizzle-kit.
 - `quoteIdent` throws on an empty string or a NUL byte. `quoteLiteral` throws on
   a NUL byte (`sql.ts`).
-- Note: the comment on `migrate.ts:defaultResolveDrizzleKit` says the compiled
-  output is CommonJS, so the module-global `require` exists. But
-  `../tsup.config.ts` sets `format: ['esm']` and `../package.json` sets
-  `"type": "module"`. The comment does not match the current build config.
+- The package ships ESM (`../tsup.config.ts` `format: ['esm']`, `../package.json`
+  `"type": "module"`), where a bare `require` is undefined, so
+  `migrate.ts:defaultResolveDrizzleKit` probes with
+  `createRequire(import.meta.url).resolve('drizzle-kit')`. A real Node ESM load,
+  run from outside the package, covers the installed case
+  (`__tests__/migrate-esm-probe.test.ts`), because `bun test` defines `require`
+  everywhere; the absent case is covered on the built output by
+  `__tests__/peer-shape.test.ts`.
 
 ## Side Effects
 
@@ -107,8 +111,8 @@ subpath entries do not re-export it.
   `getDbPoolRO`). They do not connect themselves.
 - `getDbRO` writes a warning with `logger.warn` once per reset cycle when there
   is no RO pool.
-- `defineDrizzleConfig` reads `process.env.DATABASE_URL` and runs a
-  `require.resolve('drizzle-kit')` lookup.
+- `defineDrizzleConfig` reads `process.env.DATABASE_URL` and resolves
+  `drizzle-kit` with `createRequire(import.meta.url)`.
 - `resolveWriterDsn` reads `process.env.DATABASE_URL` and
   `process.env.DATABASE_URL_RO`.
 - `runMigrations` (with `defaultMigrateDeps`) opens a Postgres connection, which

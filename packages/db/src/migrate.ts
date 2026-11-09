@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import type { Config } from 'drizzle-kit';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate as drizzleMigrate } from 'drizzle-orm/node-postgres/migrator';
@@ -34,11 +35,11 @@ export interface DefineDrizzleConfigDeps {
 }
 
 function defaultResolveDrizzleKit(): string {
-  // The compiled output is CommonJS (Node16 module, no package `type: module`),
-  // so the module-global `require` is available and resolves relative to this
-  // file — no runtime import of drizzle-kit, only a resolvability probe. (If this
-  // package ever ships ESM output, swap to `createRequire(import.meta.url)`.)
-  return require.resolve('drizzle-kit');
+  // The package ships ESM (`"type": "module"`, tsup `format: ['esm']`), where the
+  // module-global `require` does not exist. `createRequire` builds one that resolves
+  // relative to this file: a resolvability probe, with no runtime import of
+  // drizzle-kit.
+  return createRequire(import.meta.url).resolve('drizzle-kit');
 }
 
 /**

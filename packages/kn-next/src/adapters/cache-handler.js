@@ -738,7 +738,11 @@ async function waitForNativeReady(client) {
   if (client.connected) return client;
   try {
     await client.connect();
-    return client.connected ? client : null;
+    if (client.connected) return client;
+    // A connect that resolves but leaves the client down is a failed connect
+    // too: trip the breaker, or every cache call dials again (#2886).
+    markUnhealthy('native redis connect resolved but the client is not connected');
+    return null;
   } catch (err) {
     markUnhealthy(err?.message || 'native redis connect failed');
     return null;
@@ -1895,7 +1899,9 @@ class CacheHandler {
 
     try {
       if (data === null) {
-        if (client) await client.del(cacheKey(key));
+        // Through redisCall like every other command, so a fault trips the
+        // breaker instead of leaving the next call on the same client (#2886).
+        if (client) await redisCall(() => client.del(cacheKey(key)));
         memoryCache.delete(key);
         dropImageFromMemory(key);
         logCacheEvent('DELETE', source, key, {

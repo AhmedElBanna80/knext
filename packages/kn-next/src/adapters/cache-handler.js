@@ -221,7 +221,7 @@ function __resetEnvForTests() {
   // `beforeEach` for a case that does not exist. Production must not call this.
   redis = undefined;
   clientLoad = null;
-  connectPromise = undefined;
+  connectInFlight = null;
   useRedis = !!REDIS_URL;
   unhealthyUntil = 0;
   closeFailureReported = false;
@@ -252,13 +252,19 @@ function __setRedisClientForTests(client) {
   redis = client ? budgetNativeClient(client) : undefined;
   useRedis = !!client;
   unhealthyUntil = 0;
-  connectPromise = null;
+  connectInFlight = null;
   clientLoad = null;
 }
 
 let redis;
 let clientLoad = null;
-let connectPromise;
+/**
+ * The connect in flight, keyed by the client it dials: `{ client, promise }`.
+ * Callers for the same client share it; a promise clears only itself, and a
+ * client dropped while it was connecting (breaker trip, reset) is never handed
+ * out (#2887).
+ */
+let connectInFlight = null;
 let useRedis = !!REDIS_URL;
 // While `Date.now() < unhealthyUntil` the breaker is OPEN: ensureConnected()
 // returns null immediately: ISR reads miss and render from the origin, and
@@ -340,7 +346,7 @@ function markUnhealthy(reason) {
   unhealthyUntil = Date.now() + RETRY_COOLDOWN_MS;
   const dying = redis;
   redis = undefined;
-  connectPromise = null;
+  connectInFlight = null;
   if (dying) {
     try {
       dying.disconnect();
@@ -854,15 +860,19 @@ async function connectClient() {
   // either the native client or ioredis, and only the latter has `.on`/`.status`.
   // Reading `.status` on the native client yields undefined, which silently fell
   // through to the ioredis path — that is how this reached production.
-  if (typeof client.on !== 'function') return await waitForNativeReady(client);
-  if (client.status === 'ready') return client;
-  if (!connectPromise) {
-    connectPromise = waitForReady(client).then((result) => {
-      connectPromise = null;
-      return result;
+  const native = typeof client.on !== 'function';
+  if (native ? client.connected : client.status === 'ready') return client;
+  // One in-flight connect per client, on both paths: callers that arrive while
+  // it is pending wait on it instead of dialling again (#2887).
+  if (connectInFlight?.client !== client) {
+    const promise = (native ? waitForNativeReady(client) : waitForReady(client)).then((result) => {
+      if (connectInFlight?.promise === promise) connectInFlight = null;
+      // Dropped while connecting: never hand out a client that is no longer current.
+      return result && redis === client ? result : null;
     });
+    connectInFlight = { client, promise };
   }
-  return await connectPromise;
+  return await connectInFlight.promise;
 }
 
 /**

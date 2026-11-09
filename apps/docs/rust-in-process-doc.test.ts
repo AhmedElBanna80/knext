@@ -378,7 +378,7 @@ describe('docs — in-process Rust page', () => {
     const body = must(page, /where the library is loaded from/i);
     const mismatch = templateAfter(
       rendered,
-      /\$createHash\('sha256'\)[^\n]*\n\s*if \(actual !== expected\) \{\s*throw new FfiLoadError\(\s*`/,
+      /if \(actual !== expected\) \{\s*\$closeSync\(fd\);\s*throw new FfiLoadError\(\s*`/,
     );
     expectBlock(body, pattern(mismatch), 'the sha256 mismatch refusal');
     const notice = templateAfter(

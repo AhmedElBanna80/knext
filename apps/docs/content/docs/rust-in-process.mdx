@@ -748,7 +748,10 @@ Every image build runs these checks, and stops on the first one that fails, befo
   - `sbom`: the SBOM's file name and sha256.
 - **An integrity check at load.** `native/.integrity.json` holds the sha256 of every file under
   `native/`, written at build time; the module refuses to load a library that is not listed or does
-  not match.
+  not match. On Linux it loads exactly the bytes it checked, even if the file is renamed or replaced
+  by a link in the meantime; this needs `/proc` mounted, as it is in a normal container. The check assumes nothing untrusted can write to `native/`: keep it
+  owned by root and read-only in the image. On macOS, a development platform, the library is
+  loaded by path after the check.
 - **The module matches the library.** The build regenerates the module from the library it is about
   to ship and stops on any difference, and the module itself checks the library's functions when it
   loads.

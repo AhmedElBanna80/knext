@@ -141,7 +141,10 @@ interface Run {
   stderr: string;
 }
 
-/** Run `body(m, c, fixture)` in a fresh Bun process with the generated module imported as `m`. */
+/**
+ * Run `body(m, c, fixture)` in a fresh Bun process with the generated module
+ * imported as `m`. An env `BEFORE` (a function's source) runs before that import.
+ */
 function inBun(
   // biome-ignore lint/suspicious/noExplicitAny: the body runs in another process, untyped.
   body: (m: any, c: (f: () => unknown) => unknown, fixture: any) => unknown,
@@ -166,6 +169,8 @@ function inBun(
 const HARNESS = `// Runs one scenario: BODY is a function (m, c, fixture) => result.
 const fake = process.env.FAKE_EXEC;
 if (fake) process.execPath = fake;
+// BEFORE runs ahead of the import: a node:fs patch it makes reaches the module's bindings.
+if (process.env.BEFORE) await (0, eval)('(' + process.env.BEFORE + ')')();
 const m = await import('./src/generated/ffi/index.ts');
 const c = (f) => {
   try {
@@ -813,6 +818,194 @@ describe('path 1 — native/ffi/<triple> beside the executable, integrity requir
       /the records or enums \w+\(\) uses have changed since it was generated/,
     );
     expect(out.message).toContain('The module is stale: run `knext ffi generate`');
+  });
+});
+
+describe('the library loaded is the library hashed (nothing swapped in between the integrity check and dlopen)', () => {
+  /**
+   * BEFORE: replace the staged library with libs.debug (its greet says "Debug")
+   * once, at WHEN — `read`, as soon as the loader has read the library's bytes
+   * to hash them (by path or through a descriptor), or `dlopen`, as the loader
+   * calls bun:ffi's dlopen — by HOW: another file renamed over the path, or the
+   * path replaced with a symlink. The moment is recorded in globalThis.swaps.
+   */
+  const SWAP = () => {
+    const fs = process.getBuiltinModule('node:fs');
+    const mod = process.getBuiltinModule('node:module') as unknown as {
+      syncBuiltinESMExports: () => void;
+    };
+    const {
+      STAGED: staged,
+      EVIL: evil,
+      WHEN: when,
+      HOW: how,
+    } = process.env as Record<string, string>;
+    const swaps: string[] = [];
+    (globalThis as unknown as { swaps: string[] }).swaps = swaps;
+    const swap = (at: string) => {
+      if (swaps.length > 0) return;
+      if (how === 'rename') {
+        fs.copyFileSync(evil, `${staged}.new`);
+        fs.renameSync(`${staged}.new`, staged);
+      } else {
+        fs.rmSync(staged);
+        fs.symlinkSync(evil, staged);
+      }
+      swaps.push(at);
+    };
+    if (when === 'read') {
+      const read = fs.readFileSync;
+      (fs as { readFileSync: unknown }).readFileSync = function (this: unknown, ...a: unknown[]) {
+        const out = (read as (...x: unknown[]) => unknown).apply(this, a);
+        // The library's bytes, not the manifest's (read by path as UTF-8).
+        if (typeof a[0] === 'number' || String(a[0]) === staged) swap('read');
+        return out;
+      };
+      mod.syncBuiltinESMExports();
+    } else {
+      const get = process.getBuiltinModule.bind(process);
+      (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule = (
+        id: string,
+      ) => {
+        const builtin = get(id as never) as Record<string, unknown>;
+        if (id !== 'bun:ffi') return builtin;
+        const dlopen = builtin.dlopen as (...x: unknown[]) => unknown;
+        return {
+          ...builtin,
+          dlopen: (...a: unknown[]) => {
+            swap('dlopen');
+            return dlopen(...a);
+          },
+        };
+      };
+    }
+  };
+
+  for (const [when, how] of [
+    ['read', 'rename'],
+    ['dlopen', 'rename'],
+    ['dlopen', 'symlink'],
+  ] as const) {
+    it(`a library ${how === 'rename' ? 'renamed over' : 'symlinked at'} the staged path at ${when} is not the one loaded`, () => {
+      const exe = image();
+      const staged = join(exe, '..', 'native', 'ffi', TRIPLE, LIB);
+      const r = inBun(
+        (m, c) => {
+          const greet = c(() => m.greet('World'));
+          const swaps = [...(globalThis as unknown as { swaps: string[] }).swaps];
+          const fs = process.getBuiltinModule('node:fs');
+          const crypto = process.getBuiltinModule('node:crypto');
+          const atPath = crypto
+            .createHash('sha256')
+            .update(fs.readFileSync(process.env.STAGED as string))
+            .digest('hex');
+          return { greet, swaps, atPath };
+        },
+        {
+          FAKE_EXEC: exe,
+          BEFORE: SWAP.toString(),
+          STAGED: staged,
+          EVIL: libs.debug,
+          WHEN: when,
+          HOW: how,
+        },
+      );
+      const out = r.result as { greet: unknown; swaps: string[]; atPath: string };
+      // The swap really happened, at that moment: the path now holds the other library.
+      expect(out?.swaps, r.stderr).toEqual([when]);
+      expect(out.atPath).toBe(sha256(libs.debug as string));
+      if (process.platform === 'linux') {
+        // ...and the library loaded is still the one whose bytes were hashed.
+        expect(out.greet).toEqual({ ok: 'Hello, World!' });
+      } else {
+        // macOS loads by path (dyld opens /dev/fd/<n> as a second library), so the
+        // swapped-in library IS the one loaded. This pins the documented residual.
+        expect(out.greet).not.toEqual({ ok: 'Hello, World!' });
+      }
+      expect(r.status).toBe(0);
+    });
+  }
+
+  it('two copies of the module (one per bundler layer) still bind ONE instance of the library', () => {
+    const exe = image();
+    const r = inBun(
+      async (m, _c, fixture) => {
+        const copy = await import(`${process.env.MODULE_PATH}?copy=3`);
+        const seen: number[] = [];
+        m.sum(new Uint8Array(0));
+        seen.push(fixture.fixture_last_null());
+        copy.sum(new Uint8Array([1]));
+        seen.push(fixture.fixture_last_null());
+        copy.sum(new Uint8Array(0));
+        seen.push(fixture.fixture_last_null());
+        return { same: copy === m, seen };
+      },
+      {
+        FAKE_EXEC: exe,
+        LIBPATH: join(exe, '..', 'native', 'ffi', TRIPLE, LIB),
+        MODULE_PATH: join(app, 'src', 'generated', 'ffi', 'index.ts'),
+      },
+    );
+    // Both copies' calls land in the one library the harness opened by path.
+    expect(r.result, r.stderr).toEqual({ same: false, seen: [1, 0, 1] });
+  });
+
+  it('a second library loaded later in the same process gets its own handle, not the first one’s', () => {
+    // glibc finds an already-loaded library by the name it was opened under, so
+    // a loaded library's descriptor must never be closed: a later open would
+    // reuse its number, and that name would return the first library.
+    const records = [fn('twice', [['v', D.t('u32')]], D.t('u32'))];
+    const m2 = scanManifest(blob(records));
+    const dir = emptyDir('second-lib');
+    const lines = ['#include <stdint.h>', '#include <stddef.h>', '#include <string.h>'];
+    for (const f of m2.fns) {
+      lines.push(`#define SYM_${f.name} ${f.symbol}`);
+      lines.push(
+        `uint64_t ${f.symbol}_schema(void) { return ${fnv1a64(schemaString(f, m2)).toString()}ULL; }`,
+      );
+    }
+    records.forEach((r, i) => {
+      const c = JSON.stringify(`KNEXTFFI1${JSON.stringify(r)}`);
+      lines.push(`__attribute__((used)) const char knext_manifest_${i}[] = ${c};`);
+    });
+    lines.push(
+      'int32_t SYM_twice(uint32_t v, uint64_t *out) { uint32_t r = v * 2; memcpy(out, &r, sizeof r); return 0; }',
+      'void knext_ffi_v1_free(uint8_t *p, size_t n) { (void)p; (void)n; }',
+    );
+    const source = join(dir, 'other.c');
+    writeFileSync(source, `${lines.join('\n')}\n`);
+    const other = `libother.${EXT}`;
+    const built = join(dir, other);
+    const cc2 = spawnSync('cc', ['-shared', '-fPIC', '-O1', '-o', built, source], {
+      encoding: 'utf8',
+    });
+    expect(cc2.status, cc2.stderr).toBe(0);
+    mkdirSync(join(app, 'src', 'generated', 'other'), { recursive: true });
+    writeFileSync(
+      join(app, 'src', 'generated', 'other', 'index.ts'),
+      renderModule(m2, { libName: 'other', crate: 'rust' }),
+    );
+
+    const exe = image();
+    const native = join(exe, '..', 'native');
+    copyFileSync(built, join(native, 'ffi', TRIPLE, other));
+    const integrity = JSON.parse(readFileSync(join(native, '.integrity.json'), 'utf8'));
+    integrity.files[`ffi/${TRIPLE}/${other}`] = sha256(built);
+    writeFileSync(join(native, '.integrity.json'), JSON.stringify(integrity));
+
+    const r = inBun(
+      async (m, c) => {
+        const first = c(() => m.greet('World'));
+        const second = await import(`${process.cwd()}/src/generated/other/index.ts`);
+        return { first, second: c(() => second.twice(21)), again: c(() => m.add(2, 3)) };
+      },
+      { FAKE_EXEC: exe },
+    );
+    expect(r.result, r.stderr).toEqual({
+      first: { ok: 'Hello, World!' },
+      second: { ok: 42 },
+      again: { ok: 5 },
+    });
   });
 });
 

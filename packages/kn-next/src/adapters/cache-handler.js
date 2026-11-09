@@ -23,7 +23,7 @@
 // This module imports `trackWrite` and re-exports NOTHING new from it: the
 // handler subpaths stay default-only, because they exist to be handed to
 // Next's `cacheHandler` option by path, not called.
-import { trackWrite } from './cache-write-registry.js';
+import { onProcessExit, trackWrite } from './cache-write-registry.js';
 // The CDN purge pipeline (ADR-0068 D6, D7). Inert unless KNEXT_CDN_PROVIDER is
 // set; both calls are total (never throw, never block). See "CDN wire-in" below.
 import { enqueueAppPurge, enqueuePurge, firstReadyPurge } from './cdn-purge/index.js';
@@ -1515,7 +1515,8 @@ function noteCdnPurgeSkipped(tagCount) {
 //    the next probe -- one attempt per cooldown, the breaker's own rate.
 //  - PER PROCESS. The list lives in this process only: a pod that scales to
 //    zero or restarts before Redis is back loses it, and those entries stay
-//    stale until their TTL (a known limit). The `'use cache'` handler's tag
+//    stale until their TTL (a known limit). It is not lost silently: the
+//    process logs what it exits with (`reportReplayLostAtExit`, #2384). The `'use cache'` handler's tag
 //    stamps are replayed by that handler, the same way, from its own list
 //    (use-cache-handler.js, "Tag stamps an outage kept from Redis").
 const REPLAY_MAX_TAGS = 1000;
@@ -1547,10 +1548,32 @@ function resetInvalidationReplay() {
   replayTimer = null;
 }
 
+/**
+ * The exit report (#2384): a process that exits with a backlog loses it, and
+ * those entries (and the edge purge they held back) stay stale until their TTL.
+ * One line says so, with the count, rather than nothing at all.
+ */
+function reportReplayLostAtExit() {
+  if (!replayPending()) return;
+  const what = replayCollapsed
+    ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
+    : `${replayTags.size} tag invalidation(s) and ${replayKeys.size} delete(s)`;
+  console.error(
+    `[CacheHandler] exiting with ${what} not replayed to Redis (it was unreachable): ` +
+      `those ISR entries stay stale until their Redis TTL (${DEFAULT_TTL_SECONDS}s by default, ` +
+      'twice `revalidate` when that is longer), and the edge purge they held back does not run',
+  );
+}
+
+function armReplayExitReport() {
+  onProcessExit(reportReplayLostAtExit);
+}
+
 /** Remember tags whose invalidation did not reach Redis, and try to replay them. */
 function recordSkippedInvalidation(tags) {
   const list = tags.filter((tag) => typeof tag === 'string' && tag.length > 0);
   if (!useRedis || list.length === 0) return;
+  armReplayExitReport();
   replayGeneration += 1;
   if (!replayCollapsed) {
     for (const tag of list) {
@@ -1573,6 +1596,7 @@ function recordSkippedInvalidation(tags) {
 /** Remember a delete that did not reach Redis, and try to replay it (#2889). */
 function recordSkippedDelete(key) {
   if (!useRedis || typeof key !== 'string') return;
+  armReplayExitReport();
   replayGeneration += 1;
   if (!replayCollapsed) {
     if (!replayKeys.has(key) && replayKeys.size + replayTags.size >= REPLAY_MAX_TAGS) {

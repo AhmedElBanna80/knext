@@ -3,9 +3,10 @@
 // app's package.json sets "type": "module", so Next emits an ESM server.js and
 // Node logs "V8 code cache for ESM file://...". The e2e fixture must carry the
 // same module type, or the e2e proves the CommonJS form nobody ships.
+
+import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'bun:test';
 
 const ROOT = join(import.meta.dir, '..');
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
@@ -35,7 +36,9 @@ describe('the compile-cache e2e fixture loads server.js the way production does 
       expect(text).toContain(
         String.raw`/V8 code cache for ESM file:\/\/\/app\/\.next\/standalone\/server\.js was accepted/`,
       );
-      expect(text).not.toMatch(/V8 code cache for CommonJS \\\/app\\\/\\\.next\\\/standalone\\\/server\\\.js/);
+      expect(text).not.toMatch(
+        /V8 code cache for CommonJS \\\/app\\\/\\\.next\\\/standalone\\\/server\\\.js/,
+      );
     });
   }
 });

@@ -972,15 +972,17 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
 
 1. `NextApp.spec.backends[]` gains an optional `httpVersion`, an enum of `"2"` or `"1.1"`. When it is
    set, the operator renders `<NAME>_SERVICE_HTTP_VERSION` beside `<NAME>_SERVICE_URL`, for a Bound
-   entry of the default (gRPC/Connect) flavour only. A `model`-flavour entry (ADR-0065, Proposed) renders
-   its own `KNEXT_AI_<NAME>_*` env instead and ignores the field. When it is unset, nothing is rendered, so a zone that sets no `httpVersion` renders
+   entry. Today every entry is of the default (gRPC/Connect) flavour; the operator has no flavour field
+   yet. When ADR-0065's `model` flavour lands, its entries render `KNEXT_AI_<NAME>_*` instead and must
+   not render this variable (an action item below). When it is unset, nothing is rendered, so a zone that sets no `httpVersion` renders
    exactly as before.
 2. The field lives on the **zone's** entry, not on the `BackendService`. The transport is the zone's own
    choice: a function-side field would let a writer of the `BackendService` change the zone's pod env and
-   roll its revision, which is against Decision 1's consent model. A function serves both versions on its
-   one port (`packages/grpc/src/__tests__/gateway-transport.test.ts` drives h2c and HTTP/1.1 against the
-   same listener, and the Knative Service's `h2c` port name only enables HTTP/2 cleartext, it does not
-   refuse HTTP/1.1). So nothing is rendered into the function, and neither pin (Amendments 3 and 4) is
+   roll its revision, which is against Decision 1's consent model. The generated function servers accept
+   both versions on their one port: the Go template enables HTTP/1 and unencrypted HTTP/2 on the same
+   server (`packages/grpc/templates/go/internal/rpc/rpc.go`), and the Rust template's server does the
+   same (`packages/grpc/templates/rust/src/rpc/mod.rs`). Whether Knative's queue-proxy passes HTTP/1.1
+   through to a port named `h2c` is not yet verified on a cluster; that is an action item below. So nothing is rendered into the function, and neither pin (Amendments 3 and 4) is
    involved.
 3. If the zone already sets the variable in `spec.env` or `spec.secrets.envMap`, the existing
    collision rule applies. The zone's value is kept, and `BackendBindings` names the variable. The rule
@@ -1014,3 +1016,5 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
 - [x] CRD field and render (`backend_bindings.go`); a reconcile-level test and a collision test.
 - [x] `kn-next.config.ts` `backends[].httpVersion`, its validator, and the CR builder emitting it only when set.
 - [x] Docs: the zone-functions env table, the operator field table and the CLI glue note.
+- [ ] When ADR-0065's `model` flavour is built, skip `<NAME>_SERVICE_HTTP_VERSION` for its entries, with a test.
+- [ ] kind: call a function over HTTP/1.1 through its Knative `h2c` port (queue-proxy passthrough).

@@ -373,7 +373,7 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 - Redis faults fail open. A fault in `cache-handler.js:redisCall` (every cache
   command, including the `del` in `set(key, null)`; the best-effort event-log
-  batch is outside it and only logs), an ioredis connect that
+  batch is outside it and drops a failure silently), an ioredis connect that
   fails (`waitForReady`), or a native connect that throws or resolves with the
   client still disconnected (`waitForNativeReady`) calls `markUnhealthy`, which
   opens a circuit breaker for `REDIS_RETRY_COOLDOWN_MS` and closes the current

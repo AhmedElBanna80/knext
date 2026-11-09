@@ -691,7 +691,7 @@ async function replayCollapsedTags(core, client) {
  * @param {object} args
  * @param {string} args.kind  Next's cache kind: `default` or `remote`.
  * @param {object} args.core  The collaborators `cache-handler.js` owns:
- *   `ensureConnected()` (client or null), `redisCall(fn)` (trips the shared
+ *   `ensureConnected()` (client or null), `redisCall(fn, client)` (trips the shared
  *   breaker on a fault), `command(client, name, args)`, `keyPrefix()`,
  *   `buildId()`, `redisConfigured()` and, optionally, `retryInMs()` (how long
  *   until the breaker closes, for the tag replay's probe).

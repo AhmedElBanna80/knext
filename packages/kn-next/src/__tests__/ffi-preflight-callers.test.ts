@@ -406,8 +406,10 @@ describe("this spec never runs a non-dry-run deploy()", () => {
     // One pass over comments and string/template literals, leftmost first, so
     // a quote inside a comment (or a slash inside a string) cannot desync it.
     // Built from a template literal, so the pattern itself is stripped too.
-    const LITERALS =
-        /\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\x60(?:[^\x60\\]|\\.)*\x60/g;
+    const LITERALS = new RegExp(
+        String.raw`/\*[\s\S]*?\*/|//[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\x60(?:[^\x60\\]|\\.)*\x60`,
+        "g",
+    );
     /** Comments removed, strings kept (for the argv literal). */
     const code = SOURCE.replace(LITERALS, (m) => (m.startsWith("/") ? "" : m));
     /** Comments AND strings removed: test names mention the command too. */

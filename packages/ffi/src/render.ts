@@ -18,7 +18,18 @@
  *   It uses only erasable TypeScript, so Node's type stripping can import it
  *   (and then refuse the call with the Bun-only message).
  * - Loading is fail-closed: the library beside the executable must be listed
- *   in `native/.integrity.json` with a matching sha256; the development build
+ *   in `native/.integrity.json` with a matching sha256. On Linux it is loaded
+ *   through the descriptor its bytes were hashed from (`/proc/self/fd/<n>`),
+ *   so a file renamed or linked over the path after the check is not the one
+ *   `dlopen` opens (this needs `/proc` mounted, as every container runtime
+ *   does). On macOS it is loaded by path, since dyld treats
+ *   `/dev/fd/<n>` as a second library: a swap between the check and the load
+ *   is not caught there (macOS is a development platform; images are Linux).
+ *   The check assumes the attacker cannot write to the library file itself or
+ *   to `native/`: the descriptor pins the inode, not its contents, so a write
+ *   into the same file after the hash is loaded. Ship `native/` root-owned and
+ *   read-only.
+ *   The development build
  *   is used only when `NODE_ENV !== 'production'`; every function's `_schema`
  *   value must match the one computed here; any failure is one cached
  *   `FfiLoadError`.
@@ -617,13 +628,16 @@ function $open(): void {
   }
   const ffi = process.getBuiltinModule('bun:ffi') as unknown as $BunFfi | undefined;
   if (!ffi) throw new FfiLoadError('knext ffi: this Bun has no bun:ffi module.');
-  const path = $resolve();
+  const [path, load] = $resolve();
   let symbols: Record<string, $Native>;
   try {
-    symbols = ffi.dlopen(path, $SPEC).symbols;
+    symbols = ffi.dlopen(load, $SPEC).symbols;
   } catch (err) {
+    // A descriptor handed to dlopen is never closed on success; on failure it is.
+    if (load.startsWith('/proc/self/fd/')) $closeSync(Number(load.slice('/proc/self/fd/'.length)));
+    const via = load === path ? '' : \` (opened as \${load}, which needs /proc mounted)\`;
     throw new FfiLoadError(
-      \`knext ffi: could not load \${path}: \${err instanceof Error ? err.message : String(err)}\\n\` +
+      \`knext ffi: could not load \${path}\${via}: \${err instanceof Error ? err.message : String(err)}\\n\` +
         'If the library does not export a function this module calls, the module is stale: run \`knext ffi generate\` and commit the result.',
     );
   }
@@ -681,15 +695,15 @@ function $musl(): boolean {
   return $existsSync('/etc/alpine-release');
 }
 
-function $resolve(): string {
+/** [the library's path, for messages; the name to dlopen]. */
+function $resolve(): readonly [string, string] {
   const triple = $triple();
   const file = \`lib\${$LIB}.\${process.platform === 'darwin' ? 'dylib' : 'so'}\`;
   const native = $join($dirname(process.execPath), 'native');
   const staged = $join(native, 'ffi', triple, file);
   const tried = [staged];
   if ($existsSync(staged)) {
-    $verify(native, \`ffi/\${triple}/\${file}\`, staged);
-    return staged;
+    return [staged, $verify(native, \`ffi/\${triple}/\${file}\`, staged)];
   }
   let others: string[] = [];
   try {
@@ -712,7 +726,7 @@ function $resolve(): string {
       console.warn(
         \`knext ffi: loading the development build \${found[0]} without an integrity check (NODE_ENV is not "production").\`,
       );
-      return found[0];
+      return [found[0], found[0]];
     }
   }
   throw new FfiLoadError(
@@ -721,8 +735,13 @@ function $resolve(): string {
   );
 }
 
-/** Fail closed: the library must be listed in native/.integrity.json with a matching sha256. */
-function $verify(native: string, rel: string, path: string): void {
+/**
+ * Fail closed: the library must be listed in native/.integrity.json with a matching sha256.
+ * Returns the name to dlopen. On Linux that is the descriptor the hashed bytes were read
+ * through, so a file renamed or linked over the path after the check is not the one loaded.
+ * On macOS it is the path: dyld opens /dev/fd/<n> as a separate library instance.
+ */
+function $verify(native: string, rel: string, path: string): string {
   const manifest = $join(native, '.integrity.json');
   if (!$existsSync(manifest)) {
     throw new FfiLoadError(
@@ -746,12 +765,27 @@ function $verify(native: string, rel: string, path: string): void {
   if (typeof expected !== 'string') {
     throw new FfiLoadError(\`knext ffi: refusing to load \${path}: \${rel} is not listed in \${manifest}.\`);
   }
-  const actual = $createHash('sha256').update($readFileSync(path)).digest('hex');
+  const fd = $openSync(path, 'r');
+  let actual: string;
+  try {
+    actual = $createHash('sha256').update($readFileSync(fd)).digest('hex');
+  } catch (err) {
+    $closeSync(fd);
+    throw err;
+  }
   if (actual !== expected) {
+    $closeSync(fd);
     throw new FfiLoadError(
       \`knext ffi: refusing to load \${path}: sha256 mismatch\\n  expected \${expected}\\n  actual   \${actual}\`,
     );
   }
+  if (process.platform !== 'linux') {
+    $closeSync(fd);
+    return path;
+  }
+  // Never closed once dlopen has seen its name: glibc finds an already-loaded
+  // library by that name, and the next open would reuse the number.
+  return \`/proc/self/fd/\${fd}\`;
 }
 
 /** A Rust-owned (ptr, len) pair from the out slot, read as two u32 halves (no BigInt per call). */
@@ -978,7 +1012,9 @@ export function renderModule(manifest: Manifest, options: RenderOptions): string
     "import 'server-only';",
     "import { createHash as $createHash } from 'node:crypto';",
     'import {',
+    '  closeSync as $closeSync,',
     '  existsSync as $existsSync,',
+    '  openSync as $openSync,',
     '  readdirSync as $readdirSync,',
     '  readFileSync as $readFileSync,',
     '  statSync as $statSync,',

@@ -1,0 +1,126 @@
+---
+title: Upgrading to knext 2
+description: What changes in knext 2, the order to upgrade in, and how to go back to 1.x.
+---
+
+knext 2 raises the runtime floors, removes the `kn-next` command that 1.x deprecated, and stops
+exporting a few test-only helpers. It also adds zone functions, which are **Beta**. Your `NextApp`
+resources and the operator do not change version line.
+
+> knext 2.0 is **not yet released**. This page describes what is planned; the release notes of the
+> day are the authority.
+
+## Before you start
+
+Upgrade in this order:
+
+1. **The operator and its CRD first**, the same rule as every upgrade (see
+   [Upgrading](/docs/upgrading)). knext 2 pairs with the same operator line as 1.x, so there is no
+   operator major to move to. Install the latest operator release, then check it:
+
+   ```bash
+   knext doctor
+   ```
+
+2. **Your runtimes**, if they are below the floors below.
+3. **The packages**, all at the same version: `@getknext/core`, plus `@getknext/lib` and
+   `@getknext/db` if you use them. They ship as one set.
+
+## The new floors
+
+knext 2 requires:
+
+{/* runtime-floors:start */}
+
+- Node.js `>=24`
+- Next.js `>=16.4.0 <16.5.0`
+
+{/* runtime-floors:end */}
+
+Use Next.js **16.4.1 or later** within that range: 16.4.0 and earlier are affected by security
+advisories fixed in 16.4.1, and `knext doctor` fails on them.
+
+These are the `engines` and `next` peer range `@getknext/core` declares, so your package manager
+warns about a project outside them. On an older Node.js, `knext` prints one line naming the floor and
+exits non-zero before doing anything else, and `knext doctor` reports your Node.js version against
+the floor.
+
+The Node.js images knext builds, and the GitLab CI template `knext init-ci` writes, use Node.js 24. A
+GitHub Actions workflow you wrote yourself needs `node-version: "24"`.
+
+If you cannot move to these floors yet, stay on 1.x (see [Staying on 1.x](#staying-on-1x)).
+
+## What is removed
+
+- **The `kn-next` command.** `@getknext/core` installs exactly one command, `knext`, with the same
+  subcommands and flags. The old name is no longer installed with `@getknext/core`, so a 1.x script that still calls it through your project's install stops with `command not found`. See
+  [the `kn-next` command is gone](/docs/upgrading#version-specific-step-the-kn-next-command-is-gone)
+  for where to look.
+- **Test-only helpers.** `@getknext/core/adapters/cache-handler` no longer exports
+  `__resetEnvForTests`, `__setRedisClientForTests` or any other `__`-prefixed helper, and
+  `@getknext/core/internal/logger` no longer exports `__resetLoggerForTests`. They were for tests
+  only. An app that uses the handler the documented way is not affected:
+
+  ```ts title="cache-handler.ts"
+  export { default } from '@getknext/core/adapters/cache-handler';
+  ```
+
+  The default export and the `CacheHandler`, `ioredisClient` and `nativeRedisClient` named exports
+  are unchanged.
+
+## What is new
+
+**Zone functions (Beta).** A zone can call Go or Rust functions that run as their own scale-to-zero
+services in the cluster. They are available on the 2.x line only. Nothing changes for an app that
+does not use them. See [Zone functions](/docs/zone-functions).
+
+## Upgrade checklist
+
+1. Upgrade the operator and CRD, and run `knext doctor`.
+2. Move to Node.js 24 and Next.js 16.4.1 or later if you are below them.
+3. Replace every `kn-next` call with `knext`.
+4. Remove any import of a `__`-prefixed test helper.
+5. Upgrade `@getknext/core` (and `@getknext/lib`, `@getknext/db`) to 2.x, then deploy.
+
+## Staying on 1.x
+
+The 1.x line keeps receiving security fixes only, for six months after 2.0 is generally available.
+Once 2.0 is generally available, install it with the `latest-1` dist-tag:
+
+```bash
+npm i @getknext/core@latest-1
+```
+
+Use the same tag for `@getknext/lib` and `@getknext/db` if your app uses them.
+
+The 1.x line keeps its own floors, Node.js `>=22.18` and Next.js `>=16.0.0 <16.5.0`, so it is
+the place to stay while you upgrade your runtimes. Zone functions are on 2.x only.
+
+## Rolling back
+
+Rolling back means going back to 1.x packages. You do **not** need to roll back the operator: 1.x
+and 2.x use the same operator line, and an older CLI against a newer operator is supported. Leave the
+operator where it is and reinstall the packages:
+
+```bash
+npm i @getknext/core@latest-1
+```
+
+Then deploy as usual with `knext`.
+
+**If a zone uses functions, rolling it back takes its functions down.** A 1.x CLI does not know zone
+functions, and `knext deploy` applies the whole `NextApp`, so a 1.x deploy of that zone drops its
+`backends` entries. Removing a zone's `backends` entry deletes the function's Knative Service, and
+the zone's next revision drops the function's variables (see
+[Zone functions](/docs/zone-functions)). The `BackendService` objects themselves stay in the cluster,
+because the 1.x CLI never creates, changes or deletes them, and each one still belongs to its zone.
+Deploying the zone again with 2.x brings the functions back, each with a cold start on its first
+call.
+
+So for a zone that uses functions, either keep it on 2.x, or roll it back knowing its functions stop
+until it is back on 2.x. To remove the functions for good, delete their `BackendService` objects:
+
+```bash
+kubectl get backendservices -n <namespace>
+kubectl delete backendservice <name> -n <namespace>
+```

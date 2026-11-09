@@ -472,6 +472,7 @@ describe('support window and runtime floors agree across the docs and the manife
   for (const [label, path] of [
     ['versioning page', DOCS_PAGE_PATH],
     ['COMPATIBILITY.md', MATRIX_PATH],
+    ['upgrading-to-2 page', resolve(REPO_ROOT, 'apps/docs/content/docs/upgrading-to-2.mdx')],
   ] as const) {
     it(`${label} states the Node and Next floors the manifest declares`, () => {
       const block = floorsBlock(readFileSync(path, 'utf8'), label);

@@ -329,7 +329,9 @@ Where this text omits or disagrees with the 2026-10-10 text on a point no amendm
   - there is no per-process store of any kind;
   - one counter and one warning are emitted per outage;
   - an `updateTags` whose stamps did not reach Redis is **kept for replay** (Amendment 5).
-- **ISR, while Redis is down or the breaker is open:**
+- **ISR, while Redis is down or the breaker is open** (Amendment 8, Proposed, changes this row to a
+  miss like `'use cache'`; until it is accepted, the bullets under this heading are the recorded
+  decision):
   - it falls back to the per-process `memoryCache`;
   - `revalidateTag` clears that pod's map, and the tags whose invalidation did not reach Redis are
     **kept for replay** (Amendment 4).
@@ -934,6 +936,8 @@ on, the amendment governs; for D2, read D2 current text.
     credential lanes (created per the v2 plan, after R5 and at 2.0 GA) complete their windows.
 12. **Tech debt for sprint close:** ISR's per-process outage fallback, and its delete-only handling of
     `revalidateTag(tag, profile)`. Filed as #2122 (milestone v2.0, `priority:P2`).
+13. **ISR outage miss on kind** (Amendment 8): a kind test with Redis down shows no pod serves an
+    ISR entry from its own memory, and measures the render rate during the outage. Filed as #2883.
 
 ## Amendment 1 (2026-10-11): K4 keeps the `adapterPath` shim; the gate is the D4 smoke runs
 
@@ -1359,3 +1363,50 @@ closure, which `bun-base-exe-seam.test.ts` keeps free of any global access:
   `wake-ahead.test.ts` reds if a vinext entry gains the list while the docs still say it has not.
 
 **Status:** Proposed, for the sprint-close design review. Nothing else in D3 changes.
+
+## Amendment 8 (2026-11-09, Proposed): ISR misses on a Redis outage, like `'use cache'` (#2122)
+
+**Context.** On a Redis outage, ISR served from the per-process `memoryCache` while `'use cache'`
+missed. A pod's memory never sees an invalidation another pod processed through Redis, so a
+revalidated page could keep serving on that pod for the length of the outage. The entries are shared
+prerendered pages, so the risk is staleness, not a cross-user leak.
+
+**Decision.** On the 2.x line (integration/v2), ISR misses when `REDIS_URL` is set, its client loaded,
+and the server is unreachable (breaker open, or a connect that failed): `get` returns null so Next
+re-renders from origin, and `set` writes nothing locally. The per-process store stays in use in two
+cases that are not an outage: no `REDIS_URL` (local development), and a Redis client that cannot be
+loaded in the pod. The latter is a build misconfiguration, logged once at startup as
+`[CacheHandler] Redis client unavailable` and covered by `cache-handler-redis-client-unavailable.test.ts`;
+it is unchanged. The 1.x line on `main` is unchanged.
+
+**Options considered** (jev 0.66 over keep 0.19 and a bounded-TTL fallback 0.15).
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Miss on outage (chosen)** | One behaviour with `'use cache'`; no stale serve after a peer's invalidation | More re-rendering while Redis is down |
+| Keep the per-pod fallback | Availability; fewer renders during an outage | The staleness #2122 describes |
+| Bounded-TTL fallback | A middle ground | A second outage mode to reason about; still stale within the bound |
+
+**Consequences.**
+- Every ISR request renders during a Redis outage. The extra origin load is **not measured**: there
+  is no render-amplification number yet, and no bound on several pods rendering the same page at
+  once. Measuring it is part of the open kind action item below.
+- Amendment 4 replay is unchanged. Tags whose invalidation did not reach Redis during the outage are
+  still kept per process and replayed, Redis first and then the edge, once the breaker closes.
+  `revalidateTag` still runs over the pod map, which now holds no ISR entries while Redis is
+  configured.
+- Other sections of this ADR that describe the per-process ISR fallback during an outage (D2's
+  failure-mode row and the later references to it) record the decision as it stood. This amendment
+  supersedes them once accepted.
+- Line: integration/v2 only. The 1.x line ships from `main`, which does not carry this change; a
+  later integration/v2 → `main` merge for 2.0 carries it by design.
+- The `revalidateTag(tag, profile)` stale-once semantics are not changed here; they remain an open
+  item on #2122.
+
+**Proof.** `packages/kn-next/src/__tests__/cache-handler-redis-outage-miss.test.ts`, with Redis
+configured but down: a set then get misses, an image entry misses, and an entry already in pod memory
+is not served. With no Redis configured, the in-memory store still serves. Each guard is
+mutation-proved: removing the `get` guard reds the held-entry case, and removing both guards reds the
+set-then-get case. Open action item 13 (#2883): a kind test with Redis down that shows ISR no longer serves a pod-local entry and
+measures the render rate during the outage.
+

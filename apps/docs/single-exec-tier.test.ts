@@ -20,6 +20,10 @@
  *     (`.github/compat-credential-ref.json`), so a record from an older rc is stale.
  * Anything else is "not met", fail closed: the guard cannot fetch ledgers, so
  * a missing record means not met, never "unknown, allow".
+ * The record is a reviewed artifact, not a computed one: it is committed by the
+ * founder when the credential is banked (it moves a public tier), so a PR that
+ * adds or edits it is the review point. No self-contained cell exists in
+ * CREDENTIAL_CELLS yet, so today the gate refuses on "no credential cell".
  *
  * Then every docs page is scanned: a page's `## Stable` section, and any
  * paragraph that promotes a shape to Stable, may not name a shape whose tier
@@ -130,14 +134,30 @@ export function stableSection(page: string): string {
 /** Promotion wording, matched within one clause of a re-joined paragraph. */
 const PROMOTES =
   /\b(is|are|now|graduat\w*|promoted to|moves? to|moved to|marked|listed as|ships as|becomes?)\s+(\*\*)?Stable\b/i;
-const NEGATED = /\b(not|never|no longer|stays? Beta|remains? Beta|until)\b/i;
+const NEGATED = /\b(not|never|no longer|stays? Beta|remains? Beta)\b/i;
 
-/** Clauses (split on sentence ends and semicolons) that promote something to Stable. */
+/**
+ * Clauses that promote something to Stable. A table row is one clause, so the
+ * shape named in another cell still counts. Prose is re-joined across wrapped
+ * lines and split at sentence ends, semicolons and ", and" / ", but", so a
+ * negation only cancels its own clause.
+ */
 export function promotionsIn(text: string): string[] {
   const out: string[] = [];
+  const keep = (clause: string) => {
+    if (PROMOTES.test(clause) && !NEGATED.test(clause)) out.push(clause.trim());
+  };
   for (const para of text.split(/\n\s*\n/)) {
-    for (const clause of para.replace(/\s+/g, ' ').split(/(?<=[.;!?])\s+|\s*\|\s*/)) {
-      if (PROMOTES.test(clause) && !NEGATED.test(clause)) out.push(clause.trim());
+    const prose: string[] = [];
+    for (const line of para.split('\n')) {
+      if (line.trim().startsWith('|')) keep(line);
+      else prose.push(line);
+    }
+    for (const clause of prose
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .split(/(?<=[.;!?])\s+|,\s+(?:and|but)\s+/)) {
+      keep(clause);
     }
   }
   return out;

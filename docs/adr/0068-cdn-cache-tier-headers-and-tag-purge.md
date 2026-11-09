@@ -159,7 +159,7 @@ Inside the ADR-0061 tripwires, item by item:
    dependency-free SigV4 signer under a pinned, scan-backed bar.)*
 2. **No cloud CLI** invoked by knext.
 3. **No stored cloud-account credential.** *(Amended by Amendment 4: for `cloudfront` the Secret holds a
-   single-action IAM key; ADR-0061 tripwire 3 is amended to permit it.)* The purge token is a user-created, user-owned, data-plane
+   single-action IAM key, once the proposed ADR-0061 tripwire 3 amendment is accepted.)* The purge token is a user-created, user-owned, data-plane
    Secret in the app's namespace, referenced by name. The CRD holds only the reference. For
    Cloudflare the minimal scope is `Zone → Cache Purge` on one zone.
 4. **No per-cloud branch in the operator.** The operator renders `spec.cdn` into env as opaque values.
@@ -181,14 +181,14 @@ purge batch size, and the default purge rate.
 |---|---|---|---|---|
 | `cloudflare` | `Cloudflare-CDN-Cache-Control` | `Cache-Tag`, ≤16 KB total | yes | **yes**: tags, ≤100 per request, `https://api.cloudflare.com/client/v4/zones/{target}/purge_cache`, default 5/min, bucket 25 (Free; the conservative plan) |
 | `google-cloud-cdn` | `CDN-Cache-Control` | `Cache-Tag`, ≤50 tags, ≤120 B, ≤4 KiB | yes | **deferred** (needs an OAuth signer) |
-| `cloudfront` | `s-maxage` inside `Cache-Control` | `Cache-Tag` (the user sets `CacheTagConfig.HeaderName` to match), ≤50 tags | depends on the user's cache policy: treated as no | see Amendment 4 (purge by tag; was deferred, needing SigV4) |
+| `cloudfront` | `s-maxage` inside `Cache-Control` | `Cache-Tag` (the user sets `CacheTagConfig.HeaderName` to match), ≤50 tags | depends on the user's cache policy: treated as no | **deferred**; Amendment 4 (Proposed) designs its tag purge |
 | `azure-front-door` | `s-maxage` inside `Cache-Control` (honour-origin mode) | none | depends on the user's rule: treated as no | **deferred** (path purge, needs an Azure AD token) |
 | `emulator` | `Cloudflare-CDN-Cache-Control` | `Cache-Tag` | yes | **yes**, Cloudflare-shaped, at a `*.svc.cluster.local` endpoint only (D10) |
 
 There is **no OCI row**. OCI has no CDN product. On OKE, the recommended path is Cloudflare in front of
 the Kourier ingress (research pick: Cloudflare **1.00**).
 
-**What each row can claim (gate r1).** Only `cloudflare` gets a live run in this ADR (CDN-4). The
+**What each row can claim (gate r1).** Only `cloudflare` gets a live run in this ADR (CDN-4; Amendment 4 adds one for `cloudfront`). The
 `google-cloud-cdn`, `cloudfront` and `azure-front-door` header rows are unit- and emulator-tested only.
 The user docs and `docs/compat-matrix.md` make **no "verified" or parity claim for any row without a
 recorded live run**. A row's claim follows its evidence, row by row.
@@ -582,7 +582,7 @@ registry (`trackWrite`). A 429 must not hold a Server Action open for a minute.
   3 attempts per batch (Amendment 4 adds the `cloudfront` row's body-aware classes). On 429, honour `Retry-After`, capped at 60 s. On 5xx or a network error, back
   off 1 s then 2 s. Then give up and count it. No unbounded retry.
 - The queue is bounded at 1000 pending tags. On overflow the backlog collapses into **one** purge of the
-  app tag `kn-<p>` (jev: collapse **0.73**, drop 0.27; confidence 0.46). That evicts all of this app's
+  app tag `kn-<p>` (jev: collapse **0.73**, drop 0.27; confidence 0.46; Amendment 4 adds the `cloudfront` budget, which also collapses and drops only once the budget is spent). That evicts all of this app's
   edge HTML, which is correct and costs one call.
 
 **D6.5 Observability.** Both counters are emitted and named bare below, so the docs metric-contract
@@ -677,7 +677,7 @@ adds to the staleness bound. A user who raises it accepts a longer bound.
   single-action key that never leaves the pod: Amendment 4). The `emulator` row never
   reads it and sends a fixed dummy token instead (D2). It is never logged, never
   echoed in an error, never written to status or events, and never sent anywhere but the row's
-  endpoint. CDN-2 carries a scan test for this. Missing or empty token means no call, no throw, and
+  endpoint. CDN-2 carries a scan test for this. Missing or empty token (Amendment 4: or unusable) means no call, no throw, and
   `result="skipped_no_credential"`. Ask for the minimal scope (Cloudflare: Zone → Cache Purge, one
   zone).
 - **Poisoning and auth bypass.** D4 is the defence: the allowlist, the middleware-matcher condition,
@@ -819,6 +819,8 @@ The rule (lead decision on the issue, option B; jev: B **0.60**, C 0.22, A 0.17,
 
 **Revision 3 (2026-11-09).** Two review rounds on #2892 grew the first draft, which covered CloudFront, Google and Azure with workload identity, into a design that kept finding new failure modes. Most of them came from workload identity (the GKE metadata server falls back to the node's own token, ADR-0061 says knext does not own workload identity, and a ServiceAccount-only change rolls no revision) and from Azure, whose only app-wide purge is `/*` across the whole endpoint. This revision narrows the amendment to **CloudFront with a single-action key**, which needs no CRD and no operator change (jev: narrow to CloudFront and a key **0.94**, fix everything and keep all three 0.03, CloudFront with workload identity only 0.03). Google, Azure and workload identity are recorded below as later amendments, with what the reviews found.
 
+**Revision 4 (2026-11-09)** applies the round 3 reviews: a random `CallerReference`, a budget that collapses before it drops, a kind e2e without a CRD change, primitive scans over all of `packages/*/src`, the ADR-0061 amendment as an exit gate, and the remaining unmarked text.
+
 **What it decides.** The `cloudfront` row gets a tag purge through a SigV4 signer knext writes itself. A signer is the code that turns a credential into one authenticated request. `google-cloud-cdn` and `azure-front-door` keep headers only. **It amends:** D1 items 1 and 3, D3's env list, D6.4's retry classes, D10's token bullet, the D2 table's `cloudfront` cell, the Options row "Purge rows now", and the Consequences line "Purge for CloudFront, Google and Azure is deferred". Each of those now points here. It also proposes ADR-0061 amendment text for tripwires 1 and 3 (action item A4-4).
 
 **Facts verified for this amendment (primary sources, 2026-11-09).**
@@ -828,12 +830,12 @@ The rule (lead decision on the issue, option B; jev: B **0.60**, C 0.22, A 0.17,
 **A4.1 The "signer ≠ SDK" bar.** The signer is acceptable under ADR-0061 tripwire 1 only while every line below holds. Each line is marked **scan** (a CI test fails) or **review**. A change that breaks one is a cloud SDK by another name and stops at review.
 
 - **One pinned file (scan).** Signing code lives only in `packages/kn-next/src/adapters/cdn-purge/signers/sigv4.js`. The scan pins that list; a second signer file fails CI until an amendment adds it.
-- **Signing primitives only there (scan).** The existing `cdn-purge-scan.test.ts` case "computes no request signature" is narrowed to crypto **primitives**, so names and host strings in `rows.js` and the `purger.js` import of the signer do not trip it: `createHmac`, `createSign`, `.sign(` on a crypto object, and `crypto.subtle` are forbidden in every file under `cdn-purge/` except `signers/sigv4.js`.
+- **Signing primitives only there (scan).** The existing `cdn-purge-scan.test.ts` case "computes no request signature" is narrowed to crypto **primitives**, so names and host strings in `rows.js` and the `purger.js` import of the signer do not trip it: `createHmac`, `createSign`, `.sign(` on a crypto object, and `crypto.subtle` are forbidden in every source file under `packages/*/src` except `signers/sigv4.js` (no file uses them today), so a signer placed outside `cdn-purge/` is caught too. An HMAC hand-built from `createHash` cannot be told apart from ordinary hashing by a scan; that case is **review** only.
 - **Size and imports (scan).** The signer is at most 200 lines including comments and imports only `node:crypto`.
 - **The walk is recursive and counted (scan).** The scan's `sources()` reads `cdn-purge/` recursively (today it reads only the top level, so `signers/` would escape every D10 scan), and asserts it saw `signers/sigv4.js`, so an empty walk cannot pass.
-- **No SDK anywhere (scan).** Any import in `packages/` of `@aws-sdk/*`, `@google-cloud/*`, `google-auth-library`, `@azure/*` or `@azure/msal-*` fails CI. This extends ADR-0061's tripwire 1 scan; it does not replace it.
+- **No SDK anywhere (scan).** Any import in `packages/` of `@aws-sdk/*`, `@smithy/*`, `aws4fetch`, `@google-cloud/*`, `google-auth-library`, `@azure/*` or `@azure/msal-*` fails CI. This extends ADR-0061's tripwire 1 scan; it does not replace it.
 - **One constant host (scan).** The CloudFront API base is a string constant in `rows.js`, like Cloudflare's (D10). The scan fails on a request URL built from anything but a row constant or the validated emulator endpoint.
-- **One operation, no credential chain (review).** The signer signs exactly the `CreateInvalidation` request. No generic request builder, no second operation, no polling. It reads the key only from the row's Secret-backed env, never from the environment at large, a file or instance metadata.
+- **One operation, no credential chain (review).** The signer signs exactly the `CreateInvalidation` request, with the fixed SigV4 scope `us-east-1/cloudfront/aws4_request` (CloudFront is a global service signed in `us-east-1`). The XML body and the URL are built from the row's constant in `rows.js`, with every tag XML-escaped; the signer only signs. No generic request builder, no second operation, no polling. It reads the key only from the row's Secret-backed env, never from the environment at large, a file or instance metadata.
 - **Published test vectors (scan).** SigV4 is tested against the AWS Signature Version 4 test-suite vectors, byte for byte.
 
 **A4.2 The credential: a single-action key in the user's Secret.** No CRD change: `spec.cdn.purge.secretRef` still names one Secret key, rendered as the existing `KNEXT_CDN_PURGE_TOKEN` `secretKeyRef` env. For `cloudfront` the key holds `{"accessKeyId":"…","secretAccessKey":"…"}` of an IAM user whose only grant is `cloudfront:CreateInvalidation` on the one distribution ARN. That is an IAM credential, which ADR-0061 tripwire 3 names, so this amendment proposes an **ADR-0061 amendment** (A4-4): tripwire 3 permits a credential in a user-created Kubernetes Secret whose only grant is one purge action on one CDN resource, named as a long-lived key in the docs. knext still stores no credential: it reads the user's Secret by reference, as it does for Cloudflare.
@@ -842,23 +844,24 @@ The `cloudflare` row keeps today's printable-ASCII token gate (`TOKEN_PATTERN`).
 
 **A4.3 The target.** `spec.cdn.purge.target` keeps its CRD pattern. The `cloudfront` row requires the distribution id, `^[A-Z0-9]{13,14}$`, and fails closed with `skipped_invalid_target`.
 
-**A4.4 What the row purges, and what it may cost.** Tag purge as `#<tag>` items, at most 50 tags per request, default 6 requests a minute with a bucket of 3; `KNEXT_CDN_PURGE_RPM` still overrides the rate. The app-wide purge (D6.4 overflow, D7 first-ready) is the one item `#kn-<p>`. Each batch carries one `CallerReference`, derived from the pod and a per-process batch counter, and every retry of that batch reuses it, so a retry after a lost response creates no second, billable invalidation.
+**A4.4 What the row purges, and what it may cost.** Tag purge as `#<tag>` items, at most 50 tags per request, default 6 requests a minute with a bucket of 3; `KNEXT_CDN_PURGE_RPM` still overrides the rate. The app-wide purge (D6.4 overflow, D7 first-ready) is the one item `#kn-<p>`. Each batch carries one `CallerReference`, a `crypto.randomUUID()` drawn when the batch is formed, and every retry of that batch reuses it, so a retry after a lost response creates no second, billable invalidation. A pod name plus a counter was rejected: a container restart keeps the pod name and resets the counter, so a later batch could reuse a reference, and CloudFront then either creates nothing while knext counts `ok`, or answers `InvalidationBatchAlreadyExists`.
 
-**Cost bound.** CloudFront bills each tag past a monthly free allowance, and the rate alone is not a bound (6 a minute × 50 tags is 18,000 paths an hour). The row adds a fixed per-pod budget of **30 paths per hour, counting every item it sends, the app-tag collapse included**. Past the budget, pending tags are dropped and counted `ratelimited`, and staleness falls back to the edge TTL (D8). The budget is per pod, because pods do not coordinate, so the worst case is 30 × 730 ≈ 21,900 paths a month **per pod**; the docs state that formula and the price next to it. A user-set budget would need a CRD field, which this amendment does not add, so the budget is a constant (A4-6).
+**Cost bound.** CloudFront bills each tag past a monthly free allowance, and the rate alone is not a bound (6 a minute × 50 tags is 18,000 paths an hour). The row adds a fixed per-pod budget of **30 paths per hour**, counting every item it sends, the app-tag item included. It follows D6.4's rule rather than reversing it: a batch is cut to the remaining budget, and when pending tags exceed the remaining budget they collapse into the one item `#kn-<p>`, which evicts all of this app's edge HTML and is correct. Tags are dropped only when the budget is zero; each dropped tag is counted once under a new result value, `skipped_budget`, kept apart from the provider's `ratelimited`, and staleness then falls back to the edge TTL (D8). The budget is per pod, because pods do not coordinate, so the worst case is 30 × 730 ≈ 21,900 paths a month **per pod**; the docs state that formula and the price next to it. A user-set budget would need a CRD field, which this amendment does not add, so the budget is a constant (A4-6).
 
-**A4.5 Failure classes.** The purger reads at most the first 4 KiB of a non-2xx body, never logs it, and classes the answer. This is a purger change: today `attempt()` maps only status 429 and discards the body.
+**A4.5 Failure classes.** The purger reads at most the first 4 KiB of a non-2xx body, never logs it, and classes the answer. This is a purger change: today `attempt()` treats 429 as the only rate-limit answer and cancels the body unread.
 
 | Answer | Class | Retry |
 |---|---|---|
 | 429, or the error code `Throttling` or `TooManyInvalidationsInProgress` under any status | `ratelimited` | yes, honouring `Retry-After` capped at 60 s, within D6.4's three attempts |
 | 403 (`AccessDenied`, `InvalidClientTokenId`, `SignatureDoesNotMatch`, …), or any other 4xx | `failed` | no |
 | 5xx or network error | `failed` | yes (D6.4 back-off) |
+| 3xx (redirects are never followed) | `failed` | no |
 
 `TooManyInvalidationsInProgress` reports CloudFront's in-flight invalidation limit; the budget keeps knext far below it, and the live run records the limit.
 
-**A4.6 Security additions to D10.** The key is held in memory only, never logged, never put in an error message or metric label, and never sent anywhere except `cloudfront.amazonaws.com`. Only the signature leaves the pod; the secret key itself is never on the wire. The CDN-2 secret scan, now recursive (A4.1), fails if any part of the key reaches a log line, a metric label, an error string or a request.
+**A4.6 Security additions to D10.** The secret access key is held in memory only, never logged, never put in an error message or metric label, and never sent anywhere: only the access key id and the signature leave the pod, and only to `cloudfront.amazonaws.com`. This is what D10 means for this row by the credential never leaving the pod. The CDN-2 secret scan, now recursive (A4.1), fails if any part of the secret access key reaches a log line, a metric label, an error string or a request, and if the access key id reaches a log line, a label or an error string.
 
-**A4.7 What changes.** No CRD change and no operator change: the operator renders the same `secretKeyRef` and carries no per-cloud logic (ADR-0061 tripwire 4). `rows.js` gains the `cloudfront` purge spec and its API constant. The purger gains the sign step, the per-row credential gate (A4.2), the body-aware classes (A4.5), the `CallerReference` and the budget. The metric name, labels and result values are unchanged.
+**A4.7 What changes.** No CRD change and no operator change: the operator renders the same `secretKeyRef` and carries no per-cloud logic (ADR-0061 tripwire 4). `rows.js` gains the `cloudfront` purge spec and its API constant. The purger gains the sign step, the per-row credential gate (A4.2), the body-aware classes (A4.5), the `CallerReference` and the budget. The metric name and labels are unchanged; the closed `result` set gains `skipped_budget`.
 
 **A4.8 Exit.** The row ships its purge when all of these hold:
 
@@ -867,7 +870,7 @@ The `cloudflare` row keeps today's printable-ASCII token gate (`TOKEN_PATTERN`).
 3. The A4.5 classes and the budget, including the collapse counted against it.
 4. The A4.1 scans green and mutation-proved: an SDK import, the signer over its cap, a second signer file, a crypto primitive in `purger.js`, and a request to a non-constant host each turn CI red.
 5. The A4.6 secret scan, recursive and mutation-proved.
-6. **The kind e2e gap, stated.** D13's kind e2e already drives the shared purge path (queue, drain, first-ready, outage replay) through the `emulator` row. A CloudFront-shaped emulator would need a new `provider` enum value, which widens an existing CEL rule (ADR-0017 Amendment 3 cannot waive that), so it is not added. The CloudFront-specific code is covered by the signature vectors and by an in-process fake that verifies each SigV4 request with a fixed dummy key; the live run is the end-to-end proof.
+6. **Kind e2e, as D13 requires of a purge row, with no CRD change.** The kind cluster's DNS answers `cloudfront.amazonaws.com` with an in-cluster CloudFront-shaped fake, which serves a certificate from a test CA that only the e2e app trusts (through `NODE_EXTRA_CA_CERTS`, set only in the e2e manifest). The fake verifies each SigV4 request with the e2e's dummy key and records it, so the queue, budget, collapse, first-ready and drain paths are proved end to end on the real row, its constant host unchanged. A new `provider` enum value was also possible (ADR-0017 allows a new enum value), but it would add a non-product value to the public CRD; the DNS fake keeps the CRD as it is.
 7. A live run on a real distribution with `CacheTagConfig`, recorded in `apps/docs/cdn-live-evidence.json`, before any "verified" word in the docs or `docs/compat-matrix.md`. It needs an AWS account, so it is a founder action.
 
 **Recorded for later amendments.**
@@ -878,10 +881,10 @@ The `cloudflare` row keeps today's printable-ASCII token gate (`TOKEN_PATTERN`).
 
 **Action items for this amendment.**
 
-- **A4-1:** `signers/sigv4.js`, the `cloudfront` purge spec, the purger changes and the scans, exit 1–6.
+- **A4-1:** `signers/sigv4.js`, the `cloudfront` purge spec, the purger changes and the scans, exit 1–6. It does not merge before A4-4 is accepted.
 - **A4-2:** the CloudFront docs page: setup, `CacheTagConfig`, the one grant, the long-lived-key warning, the cost formula, and no "verified" claim.
 - **A4-3 (founder):** the live run (exit 7).
-- **A4-4:** the ADR-0061 amendment for tripwires 1 (this bar) and 3 (the single-action key).
+- **A4-4:** the ADR-0061 amendment for tripwires 1 (this bar) and 3 (the single-action key). An exit gate for A4-1, because until it is accepted the key is a tripwire 3 credential.
 - **A4-5:** the workload identity amendment, then Google.
 - **A4-6:** a user-set CloudFront budget, if the live run shows the constant is wrong; it needs a CRD field.
 
@@ -972,7 +975,7 @@ The `cloudflare` row keeps today's printable-ASCII token gate (`TOKEN_PATTERN`).
 - **`'use cache'`-only tags rely on Next copying them into the page entry.** This is tested in CDN-3b,
   not verified from source. **Verified (2026-10-13, #2302):** read in the Next 16.4.0 source and
   gated by the CDN purge kind lane's `purge-use-cache` check and its red leg (see D5).
-- **Only Cloudflare carries a live claim.** The other rows are unit- and emulator-tested only (D2).
+- **Only Cloudflare carries a live claim.** The other rows are unit- and emulator-tested only (D2). *(Amendment 4: `cloudfront` gets a live run before any claim.)*
 - **Rollback does not purge** if the build's key still exists (D7).
 - **Responses coalesced onto another request's render are not edge-cached** (D5.1). Under a burst on a
   cold key, a few responses miss the edge.

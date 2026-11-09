@@ -45,7 +45,8 @@ async function server(
     const s = createServer((req, res) => {
         seen.push({ path: req.url ?? "", warm: req.headers[SELF_WARM_HEADER] });
         res.statusCode = handler(req.url ?? "", req.headers);
-        if (res.statusCode >= 300 && res.statusCode < 400) res.setHeader("location", "/target");
+        if (res.statusCode >= 300 && res.statusCode < 400)
+            res.setHeader("location", "/target");
         res.end("ok");
     });
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));

@@ -156,6 +156,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `deferred-supervisor-init.ts` exports `createDeferredSupervisorInit`,
   `createLazyMetricsEndpoint`, `isSupervisorInitDeferred` and
   `DEFER_SUPERVISOR_INIT_ENV` (`KNEXT_DEFER_SUPERVISOR_INIT`), which it reads.
+- `self-warm.ts` exports `parseWarmPaths`, `selfWarm`, `SELF_WARM_HEADER`
+  (`x-knext-warm`) and `DEFAULT_WARM_TIMEOUT_MS`; it reads `KNEXT_WARM_PATHS`.
 - `deferred-default-metrics.ts` exports `createDeferredDefaultMetrics`,
   `waitForChildServing`, `probeTcp`, `probeIntervalMs`, `readyDeadlineMs`,
   `CHILD_READY_INTERVAL_ENV` (`KNEXT_CHILD_READY_PROBE_MS`),
@@ -432,6 +434,12 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Supervisor and preloads
 
+- Once the child is serving, the supervisor's first deferred step (`self-warm`, in
+  `node-server.ts`, before the metrics collector) requests each `KNEXT_WARM_PATHS`
+  path (default `/`, empty turns it off, at most 8) on `127.0.0.1:$PORT` with
+  `x-knext-warm: 1`, one at a time, never following a redirect, 5 s per path, and
+  never throwing. Disk mode only: the compiled standalone executable has no
+  supervisor and does not warm.
 - What each runtime path loads before the server:
   - **Disk mode** (`node-server.ts` supervisor, a Node or Bun `server.js` child):
     the supervisor runs every `PROCESS_START_PRIMERS` entry in-process

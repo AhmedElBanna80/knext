@@ -119,6 +119,24 @@ instead of waiting on the app's real first packet. On an affected cluster this m
 wake time dropping from roughly ten seconds to roughly three. It is on by default and a no-op on
 clusters that don't show this pattern; opt out with `KNEXT_ARP_PRIMER=0` if you need to.
 
+### Warming the first route
+
+A woken server is usually listening about half a second before the cluster can send it traffic:
+Kubernetes still has to report the new pod's address and readiness. knext uses that idle time. As
+soon as the server is listening, it requests your app's own `/` once, on the pod's loopback
+interface, so the route's code is loaded and its first render is done before the first visitor
+arrives. On a managed Kubernetes cluster this took the time from "ready" to the first response
+byte from a median of 94 ms to 16 ms on the Bun runtime.
+
+- It is on by default and warms `/`. Set `KNEXT_WARM_PATHS` to a comma-separated list of paths to
+  warm others (up to 8, each starting with `/`), or to an empty value to turn it off.
+- The request is an ordinary `GET` carrying the header `x-knext-warm: 1`, so you can recognise it,
+  for example to leave it out of your analytics. A page that does something on `GET` (writes to a
+  database, calls a paid API) does it once per cold start; point `KNEXT_WARM_PATHS` at a side-effect
+  free page in that case.
+- It never follows a redirect, gives up on a page after 5 seconds, and never fails the start: if the
+  page errors, the server starts the same way it would without it.
+
 ## What's new in this release
 
 Every scaffolded knext app ships with an `instrumentation.ts` hook that Next.js runs once per

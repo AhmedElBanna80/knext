@@ -14,7 +14,8 @@ import { NODE_BIN } from './helpers/runtime-binaries';
  * `V8 code cache for CommonJS <path> was accepted, keeping the in-memory entry`.
  * The two docker e2e files (which need a Docker build and run in CI only) kept the
  * old form and went red on the Node 24 images while chunk caches were being
- * accepted. This runs in the ordinary suite: it asks the real Node for the line,
+ * accepted. This runs in the ordinary suite: it asks the real Node for the line
+ * (in the module type the e2e fixture uses, so ESM for a "type": "module" app),
  * relocates it under /app/.next/standalone, and requires the regexes literally
  * written in those e2e files to match it. A regex that no longer matches reality
  * fails here, not only after a Docker image build.
@@ -26,12 +27,31 @@ const E2E_FILES = [
   'packages/kn-next/src/__tests__/standalone-webpack-build.docker-e2e.test.ts',
 ];
 
-/** Run a cached CJS entry twice (bake, then hit) and return the second run's cache log. */
+/**
+ * The e2e fixture's module type. Its package.json decides whether Next's
+ * server.js loads as ESM or CommonJS (#2247), so the synthetic entry below
+ * uses the same type and the real Node prints the same log form.
+ */
+const FIXTURE_IS_ESM =
+  JSON.parse(
+    readFileSync(
+      resolve(ROOT, 'packages/kn-next/src/__tests__/fixtures/standalone-drain-app/package.json'),
+      'utf8',
+    ),
+  ).type === 'module';
+
+/** Run a cached entry twice (bake, then hit) and return the second run's cache log. */
 function realNodeAcceptedLines(): string[] {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'knext-cc-form-')));
   try {
-    writeFileSync(join(dir, 'server.js'), 'require("./dep");\n');
-    writeFileSync(join(dir, 'dep.js'), 'module.exports = 1;\n');
+    if (FIXTURE_IS_ESM) {
+      writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n');
+      writeFileSync(join(dir, 'server.js'), 'import "./dep.js";\n');
+      writeFileSync(join(dir, 'dep.js'), 'export default 1;\n');
+    } else {
+      writeFileSync(join(dir, 'server.js'), 'require("./dep");\n');
+      writeFileSync(join(dir, 'dep.js'), 'module.exports = 1;\n');
+    }
     const env = {
       ...process.env,
       NODE_OPTIONS: '',

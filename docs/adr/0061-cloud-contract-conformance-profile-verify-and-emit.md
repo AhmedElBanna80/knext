@@ -5,6 +5,8 @@
   of the *Developer Experience sprint* (#1531). Trigger-class (ADR + security: it draws the
   credential-custody line), so the architect and system designer review it at sprint close per
   `.claude/rules/workflow.md` — it is not a merge gate.
+- **Amendment 1 (end of this file): Proposed (2026-11-09)** for #2270: the signer bar under tripwire 1,
+  and a single-action CDN purge key permitted under tripwire 3.
 - **Answers:** the positioning map #614 ("should knext own zero-knowledge onboarding?") — see
   [§ Answer to #614](#answer-to-614).
 - **Relates to:** ADR-0001 (the operator is the single source of truth — this ADR adds **no**
@@ -29,7 +31,8 @@ That ask collides with four standing rules, and the collision is the whole desig
    Next.js adapter for Knative, **not** a PaaS. Resist scope drift.
 2. **ADR-0001:** every CLI cluster write targets the `NextApp` CR and nothing else.
 3. **Credential custody** (`security.md`): secrets live only in Kubernetes Secrets or CI secrets.
-   knext holds **no cloud-account credentials**, ever.
+   knext holds **no cloud-account credentials**, ever. *(Amendment 1: one bounded exception, a
+   user-held, single-action CloudFront purge key, read by reference; see the end of this file.)*
 4. **Measured cost of provisioning** (#617, a child of #614): roughly eight forced upstream
    migrations a year across four clouds, and on AWS **no least-privilege provisioning path can
    exist** — `CreateRole` + `AttachRolePolicy` + `PassRole` is privilege escalation, verified against
@@ -153,7 +156,8 @@ security trigger (`workflow.md`), and the default answer is no:
    user's own asset bucket, are the pre-existing, bounded exception; they do not widen.
 3. **A stored cloud-account / IAM credential** — in config, in a generated file, in a CRD field, in the operator,
    or in any knext-owned state. (Bucket-scoped or data-plane credentials held in Kubernetes Secrets
-   are permitted — e.g. the OKE docs' "Customer Secret Key".)&nbsp;
+   are permitted — e.g. the OKE docs' "Customer Secret Key".) *(Amendment 1 adds one bounded IAM
+   exception: the CloudFront purge key.)*&nbsp;
 4. **A per-cloud branch in the operator.** The operator reconciles `NextApp`; it does not know which
    cloud it runs on.
 5. **Any `kubectl apply` (or API write) from the CLI (`packages/kn-next/src/cli`) or the action
@@ -171,6 +175,8 @@ security trigger (`workflow.md`), and the default answer is no:
   in `packages/kn-next/src/cli/`, against an allowlist of (CLI, subcommand) pairs in
   `utils/asset-upload.ts`.
 - **Tripwire 3** (stored cloud-account credential): review-only + gitleaks for committed secrets.
+  For Amendment 1's exception, knext's scans enforce custody (one constant host, the secret never
+  logged or sent); the key's grant lives in the user's AWS account and knext cannot check it.
 - **Tripwire 4** (per-cloud operator branch): heuristic Go scan for cloud-identity strings in
   non-comment code. The storage-provider switch (e.g. `external_cleaner.go:59 case "s3","minio"`)
   remains legal because it is a row attribute.
@@ -215,7 +221,8 @@ design does not foreclose it.
 ## Consequences
 
 - **Positive.** ADR-0001's `NextApp` CR invariant stays intact; tripwire 5 is scoped to the CLI and
-  action. Credential custody holds (cloud-account credentials never stored); bucket-scoped data-plane
+  action. Credential custody holds (cloud-account credentials never stored; Amendment 1's purge key is
+  the user's, in the user's Secret, read by reference); bucket-scoped data-plane
   credentials in K8s Secrets are permitted. Adding a cloud is a data row plus a verification record.
   The profile gives #1495's authorizer quirk a home that is read, not rediscovered. `doctor` and
   `init-ci` converge into one surface instead of a third. The emitted artifacts are diffable,
@@ -248,3 +255,61 @@ compat credential is the north-star lever; this work does not compete with it fo
    ADR-0001 exception for a `knext cluster install`; (2) token form and rotation; (3) profile
    versioned with the operator or the CLI; (4) generic as baseline row or first-class row;
    (5) storage/registry: docs only or emitted IaC snippets.
+
+## Amendment 1 (Proposed 2026-11-09): a dependency-free signer bar, and a single-action CloudFront purge key
+
+**Proposed (2026-11-09)** for #2270, as ADR-0068 Amendment 4's action item A4-4. Flagged for the next
+sprint-close design review together with that amendment. It gates A4-1, the CloudFront purge
+implementation: that code does not merge before this amendment is accepted. **Revision 1** applies the
+first design review on #2895: the exception is named for one provider, the purge module's imports are
+limited to relative paths and `node:` built-ins, enforcement is stated as the user's, and workload
+identity needs its own amendment. **Revisions 2 and 3** make the import rule transitive, confined to
+`packages/*/src`, and closed to dynamic loading, and put the scans in ADR-0068 A4-1's exit gate.
+
+**Tripwire 1 (cloud SDK imports), cross-reference.** A hand-written request signer is not a cloud SDK
+only while it meets the bar in ADR-0068 Amendment 4 A4.1, which today pins **exactly one** signer,
+`packages/kn-next/src/adapters/cdn-purge/signers/sigv4.js`, for the `cloudfront` row: at most 200 lines,
+importing only `node:crypto`; signing primitives forbidden everywhere else in `packages/*/src`; one
+constant host; one operation, no credential chain; tested byte for byte against AWS's published vectors.
+A second signer, for any provider, needs its own amendment of both ADRs. Because the primitive scan does
+not look inside `node_modules`, a signing package would get past it, so the tripwire 1 scan also
+follows the module graph from every file in `packages/kn-next/src/adapters/cdn-purge/` through its
+relative imports, transitively, and requires every module it reaches to sit under `packages/*/src`
+(never `node_modules` or a vendored copy) and to import only relative paths and `node:` built-ins
+(never `node:module`). Dynamic loading (`require(`, `import(`, `createRequire`) is
+forbidden in every module of that graph. Today the graph is the module's own files,
+`../cache-write-registry.js` (no imports) and `node:crypto`, so the rule passes as written. The scan
+also forbids `@smithy/*`, `@aws-crypto/*`, `aws4`, `aws4fetch` and the unscoped `aws-sdk` anywhere in
+`packages/`. These rules supersede ADR-0068 A4.1's narrower package list, and ADR-0068 A4.2's generic
+"one purge action on one CDN resource" wording reads as the CloudFront-only class below. A signer that breaks a line of that bar is a cloud SDK under this
+tripwire.
+
+**Tripwire 3 (stored cloud credential), a bounded exception for one provider.** Tripwire 3 stops "a
+stored cloud-account / IAM credential". This amendment permits exactly one IAM credential, for the
+`cloudfront` row only: **an AWS IAM-user access key whose only policy is `cloudfront:CreateInvalidation`
+on one distribution ARN.** On these terms:
+
+- it sits in a **user-created Kubernetes Secret** in the app's namespace, referenced by name from the
+  `NextApp` CR, and knext reads it only through the operator-rendered `secretKeyRef` env, as it does for
+  the Cloudflare purge token;
+- knext uses it only to compute SigV4 signatures, and sends only the access key id and a signature, only
+  to `cloudfront.amazonaws.com`; the secret access key never leaves the pod (ADR-0068 A4.6);
+- the docs require the one-action policy, name the key as **long-lived**, and say how to rotate it.
+
+Any other IAM credential, for any provider, is still a tripwire 3 stop, and so is a PR that emits or
+documents this key with a wider grant.
+
+**What knext does not enforce, stated plainly.** knext cannot see the key's grant: it lives in the
+user's AWS account, and no PR, CR or gitleaks run shows it. The user owns it. What bounds a key with a
+wider grant is the code bar (one operation, one constant host), not the grant itself. The risk of a
+leaked key, even a correctly scoped one, is unlimited billable invalidations and origin load across the
+whole distribution, outside ADR-0068's per-app budget; the docs say so, and say to rotate on any
+suspicion.
+
+**Gating.** ADR-0068 A4-1's exit 4 includes these scans, each mutation-proved by exit code: a bare
+package import reached through a relative import, a dynamic `import(` or `createRequire` in the graph,
+and each forbidden signing package. A4-1 does not merge without them.
+
+**Workload identity** would remove the stored key, but it is on the "knext does not own" list above
+(cloud IAM: workload identity, IRSA bindings). Moving it needs a further amendment of this ADR, not only
+ADR-0068's A4-5.

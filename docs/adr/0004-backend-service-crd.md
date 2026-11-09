@@ -980,8 +980,8 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
    choice: a function-side field would let a writer of the `BackendService` change the zone's pod env and
    roll its revision, which is against Decision 1's consent model. The generated function servers accept
    both versions on their one port: the Go template enables HTTP/1 and unencrypted HTTP/2 on the same
-   server (`packages/grpc/templates/go/internal/rpc/rpc.go`), and the Rust template's server does the
-   same (`packages/grpc/templates/rust/src/rpc/mod.rs`). Whether Knative's queue-proxy passes HTTP/1.1
+   server (`templates/go/internal/rpc/rpc.go`), and the Rust template's server does the
+   same (`templates/rust/src/rpc/mod.rs`). Whether Knative's queue-proxy passes HTTP/1.1
    through to a port named `h2c` is not yet verified on a cluster; that is an action item below. So nothing is rendered into the function, and neither pin (Amendments 3 and 4) is
    involved.
 3. If the zone already sets the variable in `spec.env` or `spec.secrets.envMap`, the existing

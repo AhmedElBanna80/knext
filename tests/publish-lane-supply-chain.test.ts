@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -1441,6 +1442,10 @@ const realReleaseSets = (overrides: Record<string, ManifestFields> = {}) =>
  */
 const INSTALL_HOOKS = ['preinstall', 'install', 'postinstall'] as const;
 const ALIAS_BIN_FILES = ['EGM.md', 'kn-next.js'];
+/** sha256 of packages/kn-next-alias/bin/kn-next.js as reviewed (#2438): it loads node:child_process,
+ * node:fs, node:module and node:path, resolves @getknext/core, reads core's package.json and spawns
+ * core's bin with the same argv. */
+const ALIAS_BIN_SHA256 = '46cab348b35e95cfbcda4d8f4c6554cc474d61729721e21bd79551bc03daa6c2';
 
 export function aliasExemptionProblems(
   manifest: {
@@ -1492,22 +1497,16 @@ export function aliasExemptionProblems(
       `kn-next/bin holds [${binFiles.join(', ')}]; the exemption covers only ${ALIAS_BIN_FILES.join(', ')}`,
     );
   }
-  // The forwarding bin may load only Node built-ins, core (resolved), and
-  // core's own package.json: nothing third-party of its own.
-  for (const m of bin.source.matchAll(/\brequire\(\s*((?:[^()]|\([^()]*\))*?)\s*\)/g)) {
-    const arg = m[1] ?? '';
-    if (/^['"]node:[a-z_/]+['"]$/.test(arg)) continue;
-    if (arg === "path.join(dir, 'package.json')") continue;
+  // The forwarding bin is pinned by content, not parsed: a pattern scan of a
+  // dynamic language always leaves a bypass (spacing, aliases, computed calls).
+  // Changing it means updating ALIAS_BIN_SHA256 in the same PR, which is the
+  // review point for whether it still loads only Node built-ins and core.
+  const sha = createHash('sha256').update(bin.source).digest('hex');
+  if (sha !== ALIAS_BIN_SHA256) {
     out.push(
-      `kn-next/bin/kn-next.js requires ${arg}: only node: built-ins and core's own manifest are covered`,
+      `kn-next/bin/kn-next.js changed (sha256 ${sha}); re-review that it loads only node: built-ins and @getknext/core, then update ALIAS_BIN_SHA256`,
     );
   }
-  for (const m of bin.source.matchAll(/\.resolve\(\s*((?:[^()]|\([^()]*\))*?)\s*\)/g)) {
-    if (m[1] !== "'@getknext/core'")
-      out.push(`kn-next/bin/kn-next.js resolves ${m[1]}: only @getknext/core is covered`);
-  }
-  if (/\bimport\s*\(|^\s*import\s/m.test(bin.source))
-    out.push('kn-next/bin/kn-next.js uses import: not covered');
   if (!PUBLISHED.some((p: { name: string }) => p.name === '@getknext/core')) {
     out.push('@getknext/core, the alias target, is no longer in the audit scope');
   }
@@ -1537,9 +1536,15 @@ describe('the kn-next alias exemption holds only while it forwards (ADR-0020, #2
     expect(red({ scripts: { ...manifest.scripts, postinstall: 'node x.js' } })).toBe(1);
     expect(red({ files: [...manifest.files, 'lib'] })).toBe(1);
     expect(red({}, { files: [...bin.files, 'helper.js'] })).toBe(1);
-    expect(red({}, { source: `${bin.source}\nrequire('chalk');\n` })).toBe(1);
-    expect(red({}, { source: `${bin.source}\nreq.resolve('left-pad');\n` })).toBe(1);
-    expect(red({}, { source: `${bin.source}\nimport('chalk');\n` })).toBe(1);
+    // Any edit to the bin reds, including the bypasses a pattern scan misses.
+    for (const edit of [
+      "require ('chalk');",
+      "req('chalk');",
+      "import /**/('x');",
+      "require('node:https');",
+    ]) {
+      expect(red({}, { source: `${bin.source}\n${edit}\n` })).toBe(1);
+    }
   });
 });
 

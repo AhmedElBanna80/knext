@@ -380,7 +380,9 @@ one case. A forwarding alias needs no audit run of its own while all of these ho
   is in the audit scope;
 - it declares no optional, peer or bundled dependencies and no install-time script;
 - it ships only its forwarding bin, its README and its LICENSE, and the bin loads only Node built-ins,
-  its target (resolved), and its target's own `package.json`.
+  its target (resolved), and its target's own `package.json`. The bin is pinned by its sha256 in the
+  guard rather than scanned: any edit reds until the pin is updated in the same PR, which is where
+  that property is reviewed.
 
 Then its installed closure is its target's closure plus one dependency-free file, so the target's
 `npm audit` and SBOM already describe every third-party byte it brings. `tests/publish-lane-supply-chain.test.ts`

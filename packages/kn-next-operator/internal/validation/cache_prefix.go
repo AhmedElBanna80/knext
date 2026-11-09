@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
 )
@@ -68,15 +69,64 @@ func CacheKeyPrefixViolation(namespace, name, prefix string) string {
 	return ""
 }
 
-// ValidateNextAppCacheKeyPrefix is the admission half of CacheKeyPrefixViolation.
-// It needs the object's namespace and name, which the shared spec validator does
-// not see, so the webhook calls it next to that validator.
+// ValidateNextAppCacheKeyPrefix is the admission half of CacheKeyPrefixViolation
+// for spec.cache.keyPrefix. It needs the object's namespace and name, which the
+// shared spec validator does not see, so the webhook calls it next to that
+// validator.
 func ValidateNextAppCacheKeyPrefix(namespace, name string, spec *appsv1alpha1.NextAppSpec) error {
 	if spec == nil || spec.Cache == nil || spec.Cache.KeyPrefix == "" {
 		return nil
 	}
 	if why := CacheKeyPrefixViolation(namespace, name, spec.Cache.KeyPrefix); why != "" {
 		return fmt.Errorf("spec.cache.%s", why)
+	}
+	return nil
+}
+
+// EnvRedisKeyPrefix is the env var the runtime reads its Redis key prefix from.
+const EnvRedisKeyPrefix = "REDIS_KEY_PREFIX"
+
+// keyPrefixMaxRunes and keyPrefixForbidden mirror the CRD's structural rules on
+// spec.cache.keyPrefix (MaxLength=63, Pattern ^[^*?\[\]\\ \t\n\r\f\v]*$).
+const keyPrefixMaxRunes = 63
+
+var keyPrefixForbidden = regexp.MustCompile(`[*?\[\]\\ \t\n\r\f\v]`)
+
+// EnvKeyPrefixViolation says why app <namespace>/<name> may not set REDIS_KEY_PREFIX
+// to v through spec.env (#2451), or "" when it may. It applies spec.cache.keyPrefix's
+// structural rules (at most 63 code points, no whitespace or Redis glob characters)
+// and CacheKeyPrefixViolation (the platform keyspace, another app's derived
+// prefix). Unlike spec.cache.keyPrefix, the shared fallback keyspace kn-next is
+// allowed: pinning REDIS_KEY_PREFIX to it is the documented way to keep the warm
+// cache through the operator upgrade that introduced per-app prefixes. An empty
+// value is unset.
+func EnvKeyPrefixViolation(namespace, name, v string) string {
+	switch {
+	case v == "":
+		return ""
+	case utf8.RuneCountInString(v) > keyPrefixMaxRunes:
+		return fmt.Sprintf("is longer than %d characters", keyPrefixMaxRunes)
+	case keyPrefixForbidden.MatchString(v):
+		return "contains whitespace or a Redis glob character (* ? [ ] \\)"
+	}
+	return CacheKeyPrefixViolation(namespace, name, v)
+}
+
+// ValidateNextAppEnvKeyPrefix is the admission check for spec.env[REDIS_KEY_PREFIX]
+// (EnvKeyPrefixViolation). It is RATCHETED like the CRD's own rules: on update
+// (old != nil) a value that did not change passes, so an app stored before the
+// rule existed can still take unrelated updates such as an image bump. The
+// reconciler does not apply it.
+func ValidateNextAppEnvKeyPrefix(namespace, name string, oldSpec, newSpec *appsv1alpha1.NextAppSpec) error {
+	if newSpec == nil {
+		return nil
+	}
+	v := newSpec.Env[EnvRedisKeyPrefix]
+	if oldSpec != nil && oldSpec.Env[EnvRedisKeyPrefix] == v {
+		return nil
+	}
+	if why := EnvKeyPrefixViolation(namespace, name, v); why != "" {
+		return fmt.Errorf("spec.env[%s] %s", EnvRedisKeyPrefix, why)
 	}
 	return nil
 }

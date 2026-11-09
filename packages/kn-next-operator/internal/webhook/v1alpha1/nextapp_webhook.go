@@ -124,7 +124,10 @@ func (v *NextAppCustomValidator) ValidateCreate(ctx context.Context, nextApp *ap
 	}
 	// ADR-0071 D6a rule 1: needs this object's own namespace and name, which the
 	// shared spec validator does not see.
-	return nil, validation.ValidateNextAppCacheKeyPrefix(nextApp.GetNamespace(), nextApp.GetName(), &nextApp.Spec)
+	if err := validation.ValidateNextAppCacheKeyPrefix(nextApp.GetNamespace(), nextApp.GetName(), &nextApp.Spec); err != nil {
+		return nil, err
+	}
+	return nil, validation.ValidateNextAppEnvKeyPrefix(nextApp.GetNamespace(), nextApp.GetName(), nil, &nextApp.Spec)
 }
 
 // ValidateUpdate validates the spec when a NextApp is updated. The collision
@@ -155,7 +158,10 @@ func (v *NextAppCustomValidator) ValidateUpdate(ctx context.Context, oldApp, new
 	if err := validation.ValidateNextAppSpecUpdateWithBudget(oldSpec, &newApp.Spec, v.connectionBudget(ctx)); err != nil {
 		return nil, err
 	}
-	return nil, validation.ValidateNextAppCacheKeyPrefix(newApp.GetNamespace(), newApp.GetName(), &newApp.Spec)
+	if err := validation.ValidateNextAppCacheKeyPrefix(newApp.GetNamespace(), newApp.GetName(), &newApp.Spec); err != nil {
+		return nil, err
+	}
+	return nil, validation.ValidateNextAppEnvKeyPrefix(newApp.GetNamespace(), newApp.GetName(), oldSpec, &newApp.Spec)
 }
 
 // ValidateDelete is a no-op: deletes are always allowed.

@@ -329,8 +329,9 @@ Where this text omits or disagrees with the 2026-10-10 text on a point no amendm
   - there is no per-process store of any kind;
   - one counter and one warning are emitted per outage;
   - an `updateTags` whose stamps did not reach Redis is **kept for replay** (Amendment 5).
-- **ISR, while Redis is down or the breaker is open:**
-  - it falls back to the per-process `memoryCache`;
+- **ISR, while Redis is down or the breaker is open** (Amendment 8: misses, like `'use cache'`):
+  - `get` is a miss and `set` writes nothing locally; the per-process `memoryCache` is the store only
+    when no Redis is configured;
   - `revalidateTag` clears that pod's map, and the tags whose invalidation did not reach Redis are
     **kept for replay** (Amendment 4).
 - **ISR replay** (Amendment 4).
@@ -1359,3 +1360,34 @@ closure, which `bun-base-exe-seam.test.ts` keeps free of any global access:
   `wake-ahead.test.ts` reds if a vinext entry gains the list while the docs still say it has not.
 
 **Status:** Proposed, for the sprint-close design review. Nothing else in D3 changes.
+
+## Amendment 8 (2026-11-09, Proposed): ISR misses on a Redis outage, like `'use cache'` (#2122)
+
+**Context.** On a Redis outage, ISR served from the per-process `memoryCache` while `'use cache'`
+missed. A pod's memory never sees an invalidation another pod processed through Redis, so a
+revalidated page could keep serving on that pod for the length of the outage. The entries are shared
+prerendered pages, so the risk is staleness, not a cross-user leak.
+
+**Decision.** On the 2.x line, ISR misses when Redis is configured but unreachable (breaker open or
+connect failed): `get` returns null so Next re-renders from origin, and `set` writes nothing locally.
+The per-process store is used only when no Redis is configured (local development). The 1.x line is
+unchanged.
+
+**Options considered** (jev 0.66 over keep 0.19 and a bounded-TTL fallback 0.15).
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Miss on outage (chosen)** | One behaviour with `'use cache'`; no stale serve after a peer's invalidation | More re-rendering while Redis is down |
+| Keep the per-pod fallback | Availability; fewer renders during an outage | The staleness #2122 describes |
+| Bounded-TTL fallback | A middle ground | A second outage mode to reason about; still stale within the bound |
+
+**Consequences.** Origin load rises during a Redis outage, since every ISR request renders. The
+`revalidateTag(tag, profile)` stale-once semantics are not changed here; they remain an open item
+on #2122.
+
+**Proof.** `packages/kn-next/src/__tests__/cache-handler-redis-outage-miss.test.ts`, with Redis
+configured but down: a set then get misses, an image entry misses, and an entry already in pod memory
+is not served. With no Redis configured, the in-memory store still serves. Each guard is
+mutation-proved: removing the `get` guard reds the held-entry case, and removing both guards reds the
+set-then-get case. A kind test with Redis down is an open action item.
+

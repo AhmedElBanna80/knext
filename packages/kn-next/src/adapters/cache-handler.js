@@ -1828,7 +1828,20 @@ class CacheHandler {
           return staleForeignBuildEntry(parsed, ctx, writerIsLive);
       }
 
-      // In-memory fallback
+      // Redis is configured but unreachable (breaker open, connect failed): an
+      // outage, not dev mode. Miss, so Next re-renders from origin. This pod's
+      // memory never saw an invalidation another pod processed through Redis,
+      // so serving it could keep a revalidated page alive here (#2122). The
+      // 'use cache' handler does the same.
+      if (useRedis) {
+        logCacheEvent('MISS', source, key, {
+          durationMs: Date.now() - startTime,
+          details: 'Redis unavailable: not serving a pod-local entry',
+        });
+        return null;
+      }
+
+      // No Redis configured (dev mode): the in-memory store is the cache.
       const entry = memoryCache.get(key) ?? readImageFromMemory(key);
       if (!entry) {
         logCacheEvent('MISS', source, key, {
@@ -1947,10 +1960,10 @@ class CacheHandler {
         await redisCall(() => execAtomic(client, commands));
         // After the write, never before it: liveness must not delay the entry.
         touchBuildLive(client);
-      } else {
-        // In-memory fallback path: store original data with Map/Buffer types preserved
-        // Only used when Redis is NOT available, to avoid unbounded memory growth
-        // and stale entries on revalidateTag (which only clears Redis).
+      } else if (!useRedis) {
+        // In-memory store, used only when no Redis is configured (dev mode). A
+        // Redis that is configured but down writes nothing locally: `get` would
+        // not serve it (#2122), and it would only grow memory during an outage.
         const memEntry = {
           value: cloneCacheValue(data),
           lastModified: Date.now(),
@@ -1968,7 +1981,10 @@ class CacheHandler {
 
       logCacheEvent('SET', source, key, {
         durationMs: Date.now() - startTime,
-        details: `TTL: ${ttl}s, Tags: [${tags.join(', ')}]`,
+        details:
+          !client && useRedis
+            ? 'not stored: Redis unavailable (no pod-local write)'
+            : `TTL: ${ttl}s, Tags: [${tags.join(', ')}]`,
       });
     } catch (error) {
       console.error('[CacheHandler] Error setting cache:', key, error.message);

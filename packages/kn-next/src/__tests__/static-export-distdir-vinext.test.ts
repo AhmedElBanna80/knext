@@ -62,24 +62,116 @@ function expectRefusal(caught: unknown) {
     expect(message).toContain("remove `output: 'export'`");
 }
 
-describe("static-export refusal honours a custom distDir", () => {
-    it("refuses when export-detail.json is in the configured distDir", () => {
+function expectDistDirRefusal(caught: unknown, distDir: string) {
+    expect(caught).toMatchObject({ code: USAGE_ERROR_CODE });
+    const message = (caught as Error).message;
+    expect(message).toContain(`sets \`distDir: '${distDir}'\``);
+    expect(message).toContain("Remove `distDir`");
+}
+
+// #2251: a custom distDir is refused before the build until the build,
+// artifact and standalone steps honour it (they assume `.next`).
+describe("a custom distDir is refused before a Next build", () => {
+    it("refuses distDir: 'build' before any build work", () => {
         const dir = appDir({
             "next.config.mjs": "export default { distDir: 'build' };",
             "build/export-detail.json": EXPORT_DETAIL,
         });
-        expectRefusal(run(dir, false).caught);
+        const { runner, caught } = run(dir, false);
+        expectDistDirRefusal(caught, "build");
+        expect(runner).not.toHaveBeenCalled();
     });
 
-    it("reads the configured distDir, not `.next`: a stray .next file does not refuse", () => {
+    it("refuses a double-quoted distDir in a .ts config", () => {
         const dir = appDir({
-            "next.config.mjs": 'export default { distDir: "build" };',
-            ".next/export-detail.json": EXPORT_DETAIL,
-            "build/.keep": "",
+            "next.config.ts": 'export default { distDir: "dist" };',
         });
-        expect(run(dir, false).caught).toBeUndefined();
+        expectDistDirRefusal(run(dir, false).caught, "dist");
     });
 
+    it("accepts the default spelled out: .next, ./.next and .next/", () => {
+        for (const spelled of [".next", "./.next", ".next/"]) {
+            const dir = appDir({
+                "next.config.mjs": `export default { distDir: '${spelled}' };`,
+            });
+            const { runner, caught } = run(dir, false);
+            expect(caught).toBeUndefined();
+            expect(runner).toHaveBeenCalledTimes(1);
+        }
+    });
+
+    it("refuses a quoted key, an assignment, and an empty value", () => {
+        for (const [config, value] of [
+            ['export default { "distDir": "build" };', "build"],
+            ["const c = {}; c.distDir = 'out'; export default c;", "out"],
+            ["export default { distDir: '' };", ""],
+        ] as const) {
+            const { runner, caught } = run(
+                appDir({ "next.config.mjs": config }),
+                false,
+            );
+            expectDistDirRefusal(caught, value);
+            expect(runner).not.toHaveBeenCalled();
+        }
+    });
+
+    it("refuses a computed-key property and a bracket assignment", () => {
+        for (const config of [
+            "export default { ['distDir']: 'build' };",
+            "const c = {}; c['distDir'] = 'build'; export default c;",
+        ]) {
+            expectDistDirRefusal(
+                run(appDir({ "next.config.mjs": config }), false).caught,
+                "build",
+            );
+        }
+    });
+
+    it("does not treat an arrow function named distDir as an assignment", () => {
+        const dir = appDir({
+            "next.config.mjs": "const distDir => 1;\nexport default {};",
+        });
+        const { runner, caught } = run(dir, false);
+        expect(caught).toBeUndefined();
+        expect(runner).toHaveBeenCalledTimes(1);
+    });
+
+    it("checks every distDir key, so an earlier default one does not mask a later custom one", () => {
+        const dir = appDir({
+            "next.config.mjs":
+                "const base = { distDir: '.next' };\nexport default { ...base, distDir: 'build' };",
+        });
+        expectDistDirRefusal(run(dir, false).caught, "build");
+    });
+
+    it("refuses a computed distDir it cannot read (an env var, a template with ${})", () => {
+        for (const config of [
+            "export default { distDir: process.env.DIST || '.next' };",
+            "export default { distDir: `${'build'}` };",
+        ]) {
+            const { runner, caught } = run(
+                appDir({ "next.config.mjs": config }),
+                false,
+            );
+            expect(caught).toMatchObject({ code: USAGE_ERROR_CODE });
+            expect((caught as Error).message).toContain(
+                "which knext cannot read before the build",
+            );
+            expect(runner).not.toHaveBeenCalled();
+        }
+    });
+
+    it("does not refuse the vinext target, which never reads Next's distDir", () => {
+        const dir = appDir({
+            "package.json": ESM_PKG,
+            "next.config.mjs":
+                "export default { distDir: 'build', output: 'standalone' };",
+        });
+        expect(run(dir, true).caught).toBeUndefined();
+    });
+});
+
+describe("static-export refusal on the default distDir", () => {
     it("ignores a commented-out distDir", () => {
         const dir = appDir({
             "next.config.mjs": "// distDir: 'build'\nexport default {};",

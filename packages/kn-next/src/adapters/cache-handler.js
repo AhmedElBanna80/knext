@@ -261,7 +261,8 @@ let clientLoad = null;
 let connectPromise;
 let useRedis = !!REDIS_URL;
 // While `Date.now() < unhealthyUntil` the breaker is OPEN: ensureConnected()
-// returns null immediately and every caller degrades to origin/memory.
+// returns null immediately: ISR reads miss and render from the origin, and
+// writes are not kept in memory (#2122).
 let unhealthyUntil = 0;
 
 // In-memory fallback

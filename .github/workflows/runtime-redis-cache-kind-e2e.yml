@@ -496,12 +496,13 @@ jobs:
 
           kubectl -n "$APP_NS" scale deploy/redis --replicas=0
           kubectl -n "$APP_NS" wait --for=delete pod -l app=redis --timeout=120s
+          outage="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           requests=8
           start_ms="$(date +%s%3N)"
           : > outage-values.txt
           for _ in $(seq 1 "$requests"); do
-            v="$(value)"
+            v="$(value || true)"
             [ -n "$v" ] || { echo "::error::an ISR read failed during the outage (the app must fail open)"; exit 1; }
             echo "$v" >> outage-values.txt
           done
@@ -514,15 +515,38 @@ jobs:
             exit 1
           }
 
+          # Each read reached the handler and got a miss (no client, so the line
+          # says `(memory)`). This tells a handler that serves memory apart from
+          # one that misses, which distinct values alone cannot.
+          refused=0
+          for p in $(kubectl -n "$APP_NS" get pods -l "serving.knative.dev/service=$APP_NAME" -o name); do
+            n="$(kubectl -n "$APP_NS" logs "$p" -c user-container --since-time="$outage" 2>/dev/null \
+              | grep -c '^\[Cache\] MISS .* (memory)$' || true)"
+            refused=$(( refused + n ))
+          done
+          echo "outage MISS lines: ${refused}"
+          [ "$refused" -ge "$requests" ] || {
+            echo "::error::only ${refused} handler misses for ${requests} reads during the outage"
+            exit 1
+          }
+
           # An invalidation during the outage cannot reach Redis: it is recorded.
           code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Host: ${host}" \
             -H "Authorization: Bearer ${CACHE_INVALIDATE_TOKEN}" -H 'content-type: application/json' \
             -d '{"tag":"isr-smoke"}' http://127.0.0.1:8080/api/cache/invalidate)"
           [ "$code" = "200" ] || { echo "::error::invalidate during the outage returned ${code}"; exit 1; }
 
+          # Keep the pod warm while Redis restarts: the replay state lives in it,
+          # and the replay timer sends no requests of its own.
+          ( while :; do value >/dev/null 2>&1 || true; sleep 2; done ) &
+          warm=$!
+          trap 'kill "$warm" 2>/dev/null || true' EXIT
+          # Captured BEFORE Redis is back: the replay probe can succeed as soon as
+          # Redis listens, before any request. The outage-time invalidation logs
+          # `(memory)`, so it cannot match the `(redis)` line looked for below.
+          back="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           kubectl -n "$APP_NS" scale deploy/redis --replicas=1
           kubectl -n "$APP_NS" rollout status deploy/redis --timeout=180s
-          back="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
           # Requests keep the pod warm (the replay state lives in it) and give it a
           # connection; the breaker closes after its cooldown and the replay runs.
@@ -543,11 +567,15 @@ jobs:
           [ -n "$replayed" ] || { echo "::error::the invalidation made during the outage was not replayed once Redis was back"; exit 1; }
 
           # Recovered: Redis serves again, so two reads return one stored value.
-          first="$(value)"; second="$(value)"
-          [ -n "$first" ] && [ "$first" = "$second" ] || {
-            echo "::error::after recovery the ISR value was not served from Redis (${first} then ${second})"
-            exit 1
-          }
+          # The write after a miss is asynchronous, so poll for a repeat.
+          prev=""; stable=""
+          for _ in $(seq 1 15); do
+            cur="$(value || true)"
+            if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then stable="$cur"; break; fi
+            prev="$cur"; sleep 1
+          done
+          kill "$warm" 2>/dev/null || true
+          [ -n "$stable" ] || { echo "::error::after recovery the ISR value was never served twice from Redis"; exit 1; }
 
           rate="$(awk -v r="$renders" -v ms="$elapsed_ms" 'BEGIN { printf "%.2f", r * 1000 / ms }')"
           per="$(awk -v r="$renders" -v ms="$elapsed_ms" 'BEGIN { printf "%.0f", ms / r }')"

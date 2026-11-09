@@ -34,6 +34,8 @@
   **Amendments 1–3 (end of this file): Accepted (2026-10-15)** at the v2 Sprint 4 close design
   review (#2386), by both reviewers: each fails closed and the kind e2e covers it. They were
   Proposed from 2026-10-12/13 and built meanwhile (#2281, #2298/#2303, #2292).
+  **Amendment 4 (end of this file): Proposed (2026-11-09)** for #2270: dependency-free signers for the
+  CloudFront, Google and Azure purge rows. Flagged for the next sprint-close design review.
 - **Date:** 2026-10-12
 - **Trigger class:** ADR (amends the `CLAUDE.md` §8 "defer global CDN" stance for the header + purge
   slice) + CRD (`spec.cdn` on `NextApp`) + public API (`knext.config.ts` key, CR builder, preflight) +
@@ -806,6 +808,83 @@ The rule (lead decision on the issue, option B; jev: B **0.60**, C 0.22, A 0.17,
 - **D6.3 / D8, the outage case.** A `revalidateTag` that cannot reach a configured Redis (breaker open, or a fault part-way through) still sends no purge at that moment, because the edge would refill from the stale shared entry. That pod now remembers the tags (deduplicated, at most 1000) and, once its breaker closes, replays the Redis invalidation and **then** queues the purge for the tags whose invalidation completed. The order D6.3 requires is kept. Before this amendment the edge stayed stale until its TTL. Now it stays stale until Redis is back plus the purge latency. The TTL bound still applies if the pod restarts or scales to zero first, because the list is kept per process.
 - **D6.2, the hook point.** The replay belongs to the singular handler's own invalidation, deferred, so `updateTags` still never purges and a tag is still purged once.
 - **D6.4, the overflow.** Past 1000 remembered tags, the replay invalidates every ISR entry under the app's key prefix and queues **one** purge of the app tag `kn-<p>` through a new purger entry point, `enqueueApp()`. That is the same collapse the purge queue makes at the same size. jev: collapse **0.99**, log and drop 0.01, drop oldest 0.00.
+
+### Amendment 4 (Proposed 2026-11-09): dependency-free signers for the CloudFront, Google and Azure purge rows
+
+**Proposed (2026-11-09)** for #2270, the follow-up D2 and action item 6 name. Flagged for the next sprint-close design review. No code lands before this amendment is reviewed, and no row is called "verified" before its live run (D2, D13).
+
+**What it decides.** The three deferred rows get a purge, each through a small signer that knext writes itself. A signer is the code that turns a credential into one authenticated request. This amendment fixes the rule that keeps a signer from becoming a cloud SDK, how each row authenticates, and what each row can purge.
+
+**Facts verified for this amendment (primary sources, 2026-11-09).**
+
+1. **CloudFront** purges with `CreateInvalidation`: `POST /2020-05-31/distribution/{DistributionId}/invalidation`, an XML `InvalidationBatch` with a unique `CallerReference` and `Paths.Items`. A tag is an item that starts with `#`, and tag purge only works on a distribution that has `CacheTagConfig.HeaderName` set. Tags are case-insensitive, ASCII 33–126 with no comma, at most 256 characters, with no wildcard. CloudFront stores at most 50 tags per object. Each tag counts as one invalidation path toward the quota of 150 paths or tags per second, and toward invalidation billing. The request is signed with AWS Signature Version 4. ([CreateInvalidation](https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_CreateInvalidation.html), [invalidating tags](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/invalidation-specifying-tags.html), [quotas](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cloudfront-limits.html#limits-invalidations).)
+2. **Google Cloud CDN** purges with `urlMaps.invalidateCache`: `POST https://compute.googleapis.com/compute/v1/projects/{project}/global/urlMaps/{urlMap}/invalidateCache`, a JSON body with `cacheTags` (at most 10 per request, OR-ed) and optional `host`. It needs `compute.urlMaps.invalidateCache` and an OAuth 2.0 bearer token with the `compute` or `cloud-platform` scope. ([invalidateCache](https://cloud.google.com/compute/docs/reference/rest/v1/urlMaps/invalidateCache), [invalidating cached content](https://cloud.google.com/cdn/docs/invalidating-cached-content).)
+3. **Azure Front Door** (Standard/Premium) purges with `POST https://management.azure.com/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Cdn/profiles/{profile}/afdEndpoints/{endpoint}/purge?api-version=2025-04-15`, a JSON body with `contentPaths` (a path or a wildcard directory) and optional `domains`. It has **no tags**. It answers `200` or `202` (asynchronous) and takes a Microsoft Entra ID bearer token. ([purge-content](https://learn.microsoft.com/en-us/rest/api/frontdoor/azurefrontdoorstandardpremium/afd-endpoints/purge-content), [client credentials flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow).)
+4. **Workload identity exists on all three clouds**, and each needs the app's Kubernetes ServiceAccount annotated (and, on Azure, the pod labelled). `NextApp` has no field for that today; the operator owns `<app>-sa`. On GKE the token comes from the metadata server; on EKS from `AssumeRoleWithWebIdentity`, which needs no AWS credential to call; on Azure from a federated client assertion. ([GKE](https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity), [STS](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html), [Entra federated credential](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow).)
+
+**A4.1 The "signer ≠ SDK" bar.** A signer is acceptable under ADR-0061 tripwire 1 only while every line below holds. A change that breaks one is a cloud SDK by another name and stops at review.
+
+- **One file per signer**, in `packages/kn-next/src/adapters/cdn-purge/signers/` (`sigv4.js`, `google-oauth.js`, `entra.js`), each at most 200 lines including comments, with `node:crypto` and the global `fetch` as its only imports (jev: file per signer **0.72**, a shared signed-HTTP helper 0.28).
+- **One operation per row.** Each signer authenticates exactly the purge request its row sends, plus the one token exchange that row needs. There is no generic request builder, no second operation, no pagination, no waiter, and no polling of an operation's status.
+- **Constant endpoints.** Every host a signer talks to is a constant in `rows.js` or the signer: `cloudfront.amazonaws.com`, `compute.googleapis.com`, `oauth2.googleapis.com`, `management.azure.com`, `login.microsoftonline.com`. Nothing in the credential, the CR or the environment can change a host. A Google service-account key's own `token_uri` field is **ignored** for this reason (D10).
+- **No credential chain.** A signer reads one credential from one place: the row's Secret-backed env (A4.2). It does not search the environment, home directory files, instance metadata or a config file.
+- **Published test vectors.** SigV4 is tested against the AWS Signature Version 4 test suite vectors, and the Google JWT against a fixed key and clock, so the signature is checked byte for byte and not only "accepted by a mock".
+- **Scan-backed.** A test fails CI when a signer file exceeds its line cap, imports anything but `node:crypto`, or when any file in `packages/` imports `@aws-sdk/*`, `@google-cloud/*`, `google-auth-library`, `@azure/*` or `@azure/msal-*`. This extends ADR-0061's tripwire 1 scan; it does not replace it.
+
+ADR-0061 gets a one-line cross-reference to this bar under tripwire 1 (action item A4-5). That is the cross-reference D2 asked for.
+
+**A4.2 Credentials: a user Secret now, workload identity in a later amendment** (jev: Secret now, workload identity later **0.94**, both now 0.04, workload identity only 0.02). The CRD does not change. `spec.cdn.purge.secretRef` still names one Secret key, rendered as the existing `secretKeyRef` env. For these three rows the key holds a small JSON document instead of a bare token:
+
+| Row | Secret value | Minimal grant the docs ask for |
+|---|---|---|
+| `cloudfront` | `{"accessKeyId":"…","secretAccessKey":"…"}` of an IAM user | `cloudfront:CreateInvalidation` on the one distribution ARN |
+| `google-cloud-cdn` | the service-account key JSON Google issues | a custom role with only `compute.urlMaps.invalidateCache` |
+| `azure-front-door` | `{"tenantId":"…","clientId":"…","clientSecret":"…"}` | the AFD endpoint purge action on the one endpoint (named in the live run) |
+
+This is the data-plane credential in a user-created Kubernetes Secret that ADR-0061 tripwire 3 permits; knext stores none of it. The JSON is parsed once at startup. A value that does not parse, misses a field, or carries an extra field the row does not know makes the row's state `invalid`, counted `skipped_invalid_target` (the existing reason), and logged once by field **name** only. Workload identity is preferred where the cloud offers it (tripwire 3), so it is the next amendment, not dropped: it needs a `NextApp` field for the ServiceAccount annotations, which is a CRD change and gets its own review. Until then the docs say plainly that these rows use a long-lived key, and how to scope it.
+
+**A4.3 Targets.** `spec.cdn.purge.target` keeps its CRD pattern and 128-character limit. Each row validates its own format and fails closed:
+
+- `cloudfront`: the distribution id, `^[A-Z0-9]{13,14}$`.
+- `google-cloud-cdn`: `<project>:<urlMap>`, a project id and a URL map name joined by `:`.
+- `azure-front-door`: `<subscriptionId>:<resourceGroup>:<profile>:<endpoint>`. A resource path longer than 128 characters is not supported in this amendment, and the docs say so.
+
+**A4.4 What each row purges.**
+
+| Row | Tag purge | Batch | Default rate | App-wide purge (D6.4 overflow, D7 first-ready) |
+|---|---|---|---|---|
+| `cloudfront` | yes, `#<tag>` items | 50 tags | 30/min, bucket 10 | `#kn-<p>`, the app tag |
+| `google-cloud-cdn` | yes, `cacheTags` | 10 tags | 6/min, bucket 5 | `kn-<p>`, the app tag |
+| `azure-front-door` | **no** | none | 5/min, bucket 5 | `contentPaths: ["/*"]` |
+
+The defaults are conservative starting values, not provider limits; the live run for each row records the measured limit and the number moves to it. `KNEXT_CDN_PURGE_RPM` still overrides the rate. CloudFront's per-path billing is a cost the user pays, so the CloudFront docs page states it next to the batch size.
+
+**Azure has no tags, so it purges the whole app or nothing** (jev: app-wide only **0.70**, a tag-to-path index in Redis 0.19, keep Azure deferred 0.11). A `revalidateTag` on this row sends no call and counts a new closed `result` value, `skipped_no_tag_support`. Only the two app-wide purges run, as one `/*` purge: D7's first-ready purge after a rollout, and D6.4's overflow collapse. The staleness of a revalidated page on Azure is therefore the edge TTL (D8), as it is for a deferred row today; the docs say so. A tag-to-path index was rejected because it would need a Redis structure written on every cached response, the one hot path this ADR keeps write-free.
+
+**A4.5 Tokens and retries.** The Google and Entra tokens are cached per process and refreshed when they are within 5 minutes of `exp` (Google's own guidance is 3 min 45 s; 5 minutes is the stricter bound). A token request is part of the purge attempt it serves: it shares the request timeout, and a failed token request counts as that attempt's failure under D6.4's three-attempt rule, so a broken credential never adds retries. A `401` or `403` from the token endpoint or the purge API is final for the batch (no retry), counted `failed`, and logged once with the HTTP status and the row, never the body. Rate-limit answers are mapped per row to the existing `ratelimited` result: HTTP 429 on all three, and CloudFront's `Throttling` error code. `Retry-After` is honoured where it is sent, capped at 60 s as today. A `202` from Azure is success; knext does not poll the operation.
+
+**A4.6 Security additions to D10.** The secret JSON and every token are held in memory only, never logged, never put in an error message, and never sent anywhere except the row's constant hosts. The CDN-2 secret scan test extends to the three rows: it fails if any part of the Secret value or a token reaches a log line, a metric label, an error string or a request to another host. Redirects stay off (`redirect: 'manual'`) for the token requests too.
+
+**A4.7 What changes and what does not.** No CRD change, no operator change: the operator still carries no per-cloud logic (ADR-0061 tripwire 4) and renders the same `secretKeyRef`. `rows.js` gains the three purge specs, and the purger gains a per-row "sign this request" step and one result value. The metric name, labels and the other result values are unchanged.
+
+**A4.8 Exit, per row** (the bar #2270 sets). A row ships its purge when all of these hold, and only its own row:
+
+1. Request-shape tests: method, constant URL, headers, body, and for CloudFront a unique `CallerReference` per call.
+2. Signature tests against published vectors (SigV4) or a fixed key and clock (Google JWT); Entra uses a client secret, so its test checks the exact form body.
+3. The D6.4 contract on each row's rate-limit shape: 429, `Retry-After`, the 60 s cap, three attempts, final 401/403.
+4. The A4.1 scans green and mutation-proved: an added SDK import and a signer over its line cap each turn CI red.
+5. The A4.6 secret scan, extended.
+6. A live run on the real provider, recorded in `apps/docs/cdn-live-evidence.json`, before any "verified" word in the docs or `docs/compat-matrix.md`. Each live run needs a cloud account, so it is a founder action.
+
+**Action items for this amendment.**
+
+- **A4-1:** `signers/sigv4.js` and the `cloudfront` purge spec, exit 1–5. First because CloudFront tag purge maps one to one onto D5's tags.
+- **A4-2:** `signers/google-oauth.js` and the `google-cloud-cdn` purge spec, exit 1–5.
+- **A4-3:** `signers/entra.js` and the `azure-front-door` purge spec (app-wide only), exit 1–5.
+- **A4-4:** the three docs pages: setup, the minimal grant, the long-lived-key warning, cost (CloudFront), and Azure's TTL-bound staleness. No "verified" claim.
+- **A4-5:** the ADR-0061 tripwire 1 cross-reference to A4.1.
+- **A4-6 (founder):** one live run per row (exit 6).
+- **A4-7:** the workload identity amendment (A4.2), with its CRD field.
 
 ## Options considered
 

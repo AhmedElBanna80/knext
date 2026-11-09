@@ -101,7 +101,10 @@ function externalCalls(srcDir: string): { routes: string[]; unmapped: string[] }
       if (!EXTERNAL_CALL.test(readFileSync(p, 'utf8'))) continue;
       const rel = relative(appDir, p);
       if (!rel.startsWith('..') && /(^|\/)page\.(tsx|ts|jsx|js)$/.test(rel)) {
-        const segs = rel.split('/').slice(0, -1).filter((s) => !s.startsWith('('));
+        const segs = rel
+          .split('/')
+          .slice(0, -1)
+          .filter((s) => !s.startsWith('('));
         routes.push(`/${segs.join('/')}`);
       } else {
         unmapped.push(relative(srcDir, p));

@@ -19,7 +19,7 @@ import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   boot,
@@ -59,10 +59,11 @@ const statusOf = (r: RouteResult | undefined) => (r && 'status' in r ? r.status 
  * about the executable. They are left out of the two cross-arm checks (same
  * status, and served-by-disk => served-by-executable); the arms still request
  * them. NETWORK_BOUND_ROUTES must equal the set the source scan finds, so a
- * route that stops calling out, or a new one that starts, fails the check below.
+ * route that stops calling out, or a new literal external call, fails the check below.
  *
- * The scan reads every non-test source file under `src/` for a literal
- * `fetch('http(s)://…')` or `http(s).request('http(s)://…')`. A literal in a
+ * The scan reads every non-test source file under `src/` for any call whose first
+ * argument is a literal `http(s)://` URL (`fetch`, `https.request`, an aliased
+ * request function, a client library). A literal in a
  * `page.*` file maps to that route; a literal anywhere else (a layout, a route
  * handler, a helper) fails the check below, because it cannot be mapped to a
  * route. A URL built from a variable is not seen. Two such calls exist today,
@@ -76,7 +77,9 @@ const statusOf = (r: RouteResult | undefined) => (r && 'status' in r ? r.status 
  */
 const NETWORK_BOUND_ROUTES = ['/cache-tests/fetch-cache'];
 
-const EXTERNAL_CALL = /(?:fetch|https?\.request)\(\s*['"`]https?:\/\//;
+// Any call whose first argument is a literal http(s) URL: fetch, http(s).request/get, an
+// aliased request function, axios, got, ...
+const EXTERNAL_CALL = /\(\s*['"`]https?:\/\//;
 
 /**
  * Scan `src/` for literal external calls. Returns the routes whose `page.*`
@@ -194,6 +197,7 @@ describe.skipIf(skipReason !== null)(
       // an executable that loses the route answers 404 (or nothing), whatever the
       // external host does.
       for (const k of NETWORK_BOUND_ROUTES) {
+        expect(statusOf(A.served[k])).toBeDefined();
         expect({ k, A: statusOf(A.served[k]) }).not.toEqual({ k, A: 404 });
         expect({ k, B: statusOf(B.served[k]) }).not.toEqual({ k, B: 404 });
         expect(statusOf(B.served[k])).toBeDefined();

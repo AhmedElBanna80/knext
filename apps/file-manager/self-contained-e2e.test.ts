@@ -63,9 +63,11 @@ const statusOf = (r: RouteResult | undefined) => (r && 'status' in r ? r.status 
  *
  * The scan's limit: it reads `page.*` files for a literal `fetch('http(s)://…')`.
  * A URL built from a variable or `${…}`, a helper module's fetch, `https.request`
- * or a route handler is not seen. Today the only such call outside a page is the
- * observability Prometheus query, whose host is OBSERVABILITY_PROMETHEUS_URL
- * (an in-cluster service, unset in this lane, so both arms answer the same).
+ * or a route handler is not seen. Two such calls exist today, both inert in this
+ * lane: the observability Prometheus query (OBSERVABILITY_PROMETHEUS_URL is set
+ * in no workflow, so it returns `unconfigured` before any fetch) and the
+ * observability Kubernetes API read (`_k8s/nextapp.ts`, an `https.request` that
+ * stops at its opt-in gate and at `not-in-cluster` before any request).
  */
 const NETWORK_BOUND_ROUTES = ['/cache-tests/fetch-cache'];
 

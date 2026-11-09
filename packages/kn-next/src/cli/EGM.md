@@ -62,7 +62,7 @@ are unknown-command errors.
 
 ### Build pipeline
 
-- `runProjectBuild`, `preflightEsmPackage` (`project-build.ts`): the single seam that runs the app build.
+- `runProjectBuild`, its options type `RunProjectBuildOptions`, and `preflightEsmPackage` (`project-build.ts`): the single seam that runs the app build.
 - `resolveBuildArtifact`, `compileArtifactForDeploy`, `assertCompiledArtifactFresh`, `hashBuildIdentity` (`build-artifact.ts`).
 - `buildVinextExecutable`, `bunMeetsFloor`, `stageSharpNative`, `stageSharpForStandalone`, `fetchImgPackage` (`vinext-build.ts`).
 - `assertNodePresetOutput` (`vinext-node-build.ts`).
@@ -81,7 +81,7 @@ are unknown-command errors.
 ### Guards
 
 - `assertNoPlaceholders` (`placeholder-preflight.ts`).
-- `assertNotStaticExport`, `assertVinextNotStaticExport`, `assertDefaultDistDir`, plus the helpers `classifyStaticExport` and `configuredDistDir` (`static-export-guard.ts`).
+- `assertNotStaticExport`, `assertVinextNotStaticExport`, `assertDefaultDistDir`, plus the helpers `classifyStaticExport` (returning the type `StaticExportDeclaration`: `unconditional`, `conditional` or `none`), `configuredDistDir` and `stripCommentsStringAware` (`static-export-guard.ts`).
 - `assertNoBunTurbopackFragments` (`turbopack-fragments-guard.ts`).
 - `assertVisibilityDowngradeIsExplicit` (`visibility-guard.ts`).
 - `keyPrefixProblem`, `KEY_PREFIX_PATTERN`, `KEY_PREFIX_MAX_LENGTH` (`redis-key-prefix.ts`).
@@ -124,7 +124,7 @@ are unknown-command errors.
 - The deploy image architecture is always `linux-x64`. Self-contained mode is opt-in and defaults to `false` [`build-target.ts`].
 - `deploy --skip-build` refuses a compiled executable whose build-identity stamp does not match the current sources [`build-artifact.ts:assertCompiledArtifactFresh`].
 - A patched-Bun download must match the embedded sha256 pin. It never falls back to stock Bun [`bun-toolchain.ts:ensurePatchedBun`].
-- An unconditional `output: 'export'` is refused, and an unreadable Next config also refuses [`static-export-guard.ts`].
+- An unconditional `output: 'export'` is refused, and an unreadable Next config also refuses. On the Next path the refusal is after the build, from `<distDir>/export-detail.json`; on the vinext path it is before the build, from the config, where a conditional or nested `output: 'export'` only warns [`static-export-guard.ts`].
 - Before a Next build (not the vinext target) every `distDir` key in the config text (a quoted, bare or computed `['distDir']` property, or a dot or bracket assignment; not `==` or `=>`) must be a plain literal for the default (`.next`, `./.next`, `.next/`), else the build is refused, since the build, artifact and standalone steps assume `.next`; a computed value refuses too (fail closed). Best-effort text check (#2250). Not seen: a shorthand `{ distDir }`, `Object.defineProperty`, a value set outside the file, and builds that skip `runProjectBuild` (`build --skip-next`, `deploy --skip-build`, and `deploy --image`, which implies it) [`static-export-guard.ts:assertDefaultDistDir`, `project-build.ts:runProjectBuild`].
 - `runtime=bun` with Turbopack module fragments enabled is refused [`turbopack-fragments-guard.ts`].
 - vinext patches apply all-or-nothing, with rollback on failure [`vinext-patches.ts`].
@@ -164,7 +164,7 @@ are unknown-command errors.
   - Reads `KN_CONTEXT`, `KN_REDIS_URL`, `KN_REGISTRY`, `KN_BUCKET`, `KN_IMAGE_TAG`, `KN_NAMESPACE`, `KN_IMAGE`, `KNEXT_VINEXT_PATCHES`, `KNEXT_VERBOSE` and `npm_config_registry`.
   - Reads `KNEXT_CACHE_DIR`, then `XDG_CACHE_HOME`, for the patched-Bun cache location (`bun-toolchain.ts`), `KNEXT_COMPILE_STRICT_REQUIRES` (`vinext-build.ts`), and `CI` to decide whether `create` prompts (`create-options.ts`).
   - The `knext.config.ts` that `create` scaffolds reads `REDIS_URL`, so loading that config reads it.
-  - `runProjectBuild` sets `KNEXT_RUNTIME` (`project-build.ts:runProjectBuild`, through the constant `../adapters/runtime-env.ts:KNEXT_RUNTIME_ENV`). Its callers set `ASSET_PREFIX` from the storage config when storage is configured (`deploy.ts`; `preview.ts` only with a `storage.publicUrl`) and delete it when it is not (`build.ts`, `deploy.ts`, `preview.ts`). `deploy.ts` and `preview.ts` call `build-id-env.ts:exportBuildIdEnv`, which always sets `KNEXT_BUILD_ID`, sets `NEXT_DEPLOYMENT_ID` only for the vinext builder, and otherwise deletes an inherited `NEXT_DEPLOYMENT_ID`.
+  - `runProjectBuild` sets `KNEXT_RUNTIME` (`project-build.ts:runProjectBuild`, through the constant `../adapters/runtime-env.ts:KNEXT_RUNTIME_ENV`). It also writes warnings to stderr (a vulnerable Next.js version, and the result of the vinext patch step), and on the vinext target it re-applies knext's bundled vinext patches to the installed `vinext` (`ensureVinextPatches`), a no-op when they are already applied. Its callers set `ASSET_PREFIX` from the storage config when storage is configured (`deploy.ts`; `preview.ts` only with a `storage.publicUrl`) and delete it when it is not (`build.ts`, `deploy.ts`, `preview.ts`). `deploy.ts` and `preview.ts` call `build-id-env.ts:exportBuildIdEnv`, which always sets `KNEXT_BUILD_ID`, sets `NEXT_DEPLOYMENT_ID` only for the vinext builder, and otherwise deletes an inherited `NEXT_DEPLOYMENT_ID`.
   - The `static-export-guard.ts` guards write no files and no environment variables. They read `next.config.*` through `readNextConfigStrict`; `readConfigOrRefuse` turns an unreadable file into a `UsageError`. `assertDefaultDistDir` refuses a custom `distDir` before the build, `assertVinextNotStaticExport` refuses an unconditional `output: 'export'` on the vinext path and, for a conditional or nested one, writes a warning to stderr and continues, and `assertNotStaticExport` checks for `<distDir>/export-detail.json` after the build.
 - **Optional packages:** lazily imports `@getknext/grpc`, `@getknext/ffi` and `@getknext/db/migrate`. `db migrate` opens a database connection.
 - **Exit:** `process.exit` with the code returned by each verb's `*Main` function.

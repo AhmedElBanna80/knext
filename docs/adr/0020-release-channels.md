@@ -4,7 +4,8 @@
   amended 2026-07-28: upgrade order — operator/CRD first, then CLI; amended 2026-10-09: the operator
   major is independent of the npm major, and `@getknext/grpc` joins the package set outside the
   fixed group; amended 2026-10-16: optional Beta packages are their own release set, published on
-  the `beta` dist-tag behind the same audit)
+  the `beta` dist-tag behind the same audit; amended 2026-11-09: a forwarding alias is covered by
+  its target's audit and SBOM)
 - **Date:** 2026-07-10
 - **Relates to:** the E1 adoption workstream (issue #53 — first npm publish, the
   #1 adoption blocker), PR #226 (interim GitHub Packages channel), PR #227
@@ -356,4 +357,46 @@ audited on its own. Its own SBOM is a follow-up.
       then remove `private`.
 - [ ] Founder: decide whether `rust-crates.yml` becomes a required status check (needs an
       always-reporting job in place of the path filter, and a `merge_group` trigger).
-- [ ] Follow-up: an SBOM for the `kn-next` alias while it still publishes (#2438).
+- [x] Follow-up: the `kn-next` alias's SBOM (#2438): covered by its target, see the 2026-11-09 amendment.
+
+## Amendment (2026-11-09) — a forwarding alias is covered by its target's audit and SBOM
+
+### Context
+
+`.claude/rules/security.md` asks for an SBOM and an `npm audit` for every published npm package.
+`scripts/audit-published.mjs` packs, installs, audits and SBOMs the fixed group (`@getknext/lib`,
+`@getknext/db`, `@getknext/core`) and every publishable optional Beta package. The `kn-next` alias
+(`packages/kn-next-alias`) is publishable and is not in that scope. It ships one file, `bin/kn-next.js`,
+which resolves `@getknext/core`'s bin and re-runs it, plus its README and LICENSE. Its only dependency
+is `@getknext/core`. It leaves the package set at 2.0 (the 2026-10-09 amendment) and keeps publishing
+on the 1.x line until then.
+
+### Decision
+
+This narrows the "SBOM and audit per published npm package" rule in `.claude/rules/security.md` for
+one case. A forwarding alias needs no audit run of its own while all of these hold:
+
+- its only dependency is the package it forwards to, declared as a workspace range, and that package
+  is in the audit scope;
+- it declares no optional, peer or bundled dependencies and no install-time script;
+- it ships only its forwarding bin, its README and its LICENSE, and the bin loads only Node built-ins,
+  its target (resolved), and its target's own `package.json`. The bin is pinned by its sha256 in the
+  guard rather than scanned: any edit reds until the pin is updated in the same PR, which is where
+  that property is reviewed.
+
+Then its installed closure is its target's closure plus one dependency-free file, so the target's
+`npm audit` and SBOM already describe every third-party byte it brings. `tests/publish-lane-supply-chain.test.ts`
+keeps `kn-next` as the one `AUDIT_EXEMPT` entry and asserts both conditions against the alias's
+manifest and its bin. Any of those breaking turns the exemption red, and the alias must then join
+`auditScope()` and be built in the release `audit` job. The "no release workflow change" below rests on
+that guard staying tight.
+
+Option considered: auditing the alias on its own (its own pack, `npm audit` and SBOM, built in the
+release `audit` job). It would produce an SBOM that repeats the target's, at the cost of a change to
+the publish-blocking release workflow. Rejected while the two conditions hold (jev 0.80 over 0.20).
+
+### Consequences
+
+- No release workflow change. The alias's exposure is reviewed through its target's audit.
+- The exemption can neither outlive the alias (the existing stale-entry check) nor survive a change
+  that gives the alias a dependency or a shipped file of its own (the new manifest check).

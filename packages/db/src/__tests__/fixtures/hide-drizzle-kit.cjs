@@ -2,9 +2,9 @@
  * hide-drizzle-kit.cjs — v3-P3c contract-test fixture (CJS `--require` preload).
  *
  * Makes `drizzle-kit` (and only it) unresolvable, simulating a consumer who never
- * installed the optional peer. @getknext/db ships CommonJS output and probes the peer
- * with `require.resolve('drizzle-kit')`, so we patch `Module._resolveFilename`
- * (the single choke point for CJS resolution AND `require.resolve`) to throw
+ * installed the optional peer. @getknext/db ships ESM and probes the peer with
+ * `createRequire(import.meta.url).resolve('drizzle-kit')`, which goes through
+ * `Module._resolveFilename` like any CJS resolution, so we patch it to throw
  * MODULE_NOT_FOUND for that specifier. Everything else resolves normally.
  *
  * This lets the peer-shape contract test prove, in a real subprocess, that:

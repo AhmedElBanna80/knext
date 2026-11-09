@@ -25,6 +25,10 @@ name: Runtime Redis cache — kind e2e (turbopack + vinext, node + bun)
 #      the static-asset upload to the in-cluster MinIO;
 #   4. the app pods' cache lines say `(redis)` and never `(memory)`, nothing
 #      logged "Redis client unavailable", and the ISR keys exist in Redis.
+#   5. a Redis outage: every ISR read misses and re-renders (no pod serves an
+#      entry from its own memory), the render rate goes to the job summary,
+#      and an invalidation made during the outage is replayed once Redis is
+#      back, after which Redis serves the entry again.
 #
 # Dispatch-only: no schedule, no PR trigger, non-required. (GitHub cannot
 # dispatch a workflow that is not on the default branch yet, so the PR that
@@ -473,6 +477,88 @@ jobs:
           keys="$(kubectl -n "$APP_NS" exec deploy/redis -- redis-cli --scan --pattern '*:cache:*' | wc -l)"
           echo "redis cache keys: ${keys}"
           [ "$keys" -gt 0 ] || { echo "::error::Redis holds no cache entries"; exit 1; }
+
+      # A Redis outage must not turn a pod's memory into a cache: no pod may serve
+      # an ISR entry from its own memory while Redis is down, because that pod
+      # never saw an invalidation another pod processed (#2122). So every read is
+      # a miss and re-renders, and the render rate is recorded. An invalidation
+      # made during the outage is replayed once Redis is back.
+      - name: Redis outage — every ISR read re-renders, no pod-local serve, replay on recovery
+        run: |
+          set -euo pipefail
+          host="$(kubectl -n "$APP_NS" get nextapp "$APP_NAME" -o jsonpath='{.status.url}' | sed -e 's#^https\?://##')"
+          value() {
+            curl -s --max-time 20 -H "Host: ${host}" http://127.0.0.1:8080/isr-smoke \
+              | grep -o 'data-isr-value="[^"]*"' | head -1 | sed -e 's/^data-isr-value="//' -e 's/"$//'
+          }
+          # Wake the pod while Redis is still up, so it has a connected client.
+          [ -n "$(value)" ] || { echo "::error::no ISR value before the outage"; exit 1; }
+
+          kubectl -n "$APP_NS" scale deploy/redis --replicas=0
+          kubectl -n "$APP_NS" wait --for=delete pod -l app=redis --timeout=120s
+
+          requests=8
+          start_ms="$(date +%s%3N)"
+          : > outage-values.txt
+          for _ in $(seq 1 "$requests"); do
+            v="$(value)"
+            [ -n "$v" ] || { echo "::error::an ISR read failed during the outage (the app must fail open)"; exit 1; }
+            echo "$v" >> outage-values.txt
+          done
+          elapsed_ms=$(( $(date +%s%3N) - start_ms ))
+          renders="$(sort -u outage-values.txt | wc -l | tr -d ' ')"
+          cat outage-values.txt
+          # Every read re-rendered: the unstable_cache value is new each time.
+          [ "$renders" = "$requests" ] || {
+            echo "::error::${renders} distinct values for ${requests} reads during the outage: a pod served an ISR entry from its own memory"
+            exit 1
+          }
+
+          # An invalidation during the outage cannot reach Redis: it is recorded.
+          code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Host: ${host}" \
+            -H "Authorization: Bearer ${CACHE_INVALIDATE_TOKEN}" -H 'content-type: application/json' \
+            -d '{"tag":"isr-smoke"}' http://127.0.0.1:8080/api/cache/invalidate)"
+          [ "$code" = "200" ] || { echo "::error::invalidate during the outage returned ${code}"; exit 1; }
+
+          kubectl -n "$APP_NS" scale deploy/redis --replicas=1
+          kubectl -n "$APP_NS" rollout status deploy/redis --timeout=180s
+          back="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # Requests keep the pod warm (the replay state lives in it) and give it a
+          # connection; the breaker closes after its cooldown and the replay runs.
+          # No invalidation is sent after "$back", so an INVALIDATE line logged
+          # since then can only be the replay.
+          replayed=""
+          for _ in $(seq 1 40); do
+            value >/dev/null || true
+            for p in $(kubectl -n "$APP_NS" get pods -l "serving.knative.dev/service=$APP_NAME" -o name); do
+              if kubectl -n "$APP_NS" logs "$p" -c user-container --since-time="$back" 2>/dev/null \
+                | grep -q '^\[Cache\] INVALIDATE tag:isr-smoke (redis)$'; then
+                replayed=yes
+              fi
+            done
+            [ -n "$replayed" ] && break
+            sleep 3
+          done
+          [ -n "$replayed" ] || { echo "::error::the invalidation made during the outage was not replayed once Redis was back"; exit 1; }
+
+          # Recovered: Redis serves again, so two reads return one stored value.
+          first="$(value)"; second="$(value)"
+          [ -n "$first" ] && [ "$first" = "$second" ] || {
+            echo "::error::after recovery the ISR value was not served from Redis (${first} then ${second})"
+            exit 1
+          }
+
+          rate="$(awk -v r="$renders" -v ms="$elapsed_ms" 'BEGIN { printf "%.2f", r * 1000 / ms }')"
+          per="$(awk -v r="$renders" -v ms="$elapsed_ms" 'BEGIN { printf "%.0f", ms / r }')"
+          echo "outage: ${requests} reads, ${renders} renders in ${elapsed_ms} ms (${rate} renders/s, ${per} ms each)"
+          {
+            echo "### Redis outage (${{ matrix.builder }} x ${{ matrix.runtime }})"
+            echo ""
+            echo "| reads | renders | elapsed ms | renders/s | ms per read | replay |"
+            echo "|---|---|---|---|---|---|"
+            echo "| ${requests} | ${renders} | ${elapsed_ms} | ${rate} | ${per} | yes (no CDN configured, so no edge purge) |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Diagnostics on failure
         if: failure()

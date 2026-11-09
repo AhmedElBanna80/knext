@@ -65,7 +65,7 @@ default standalone executable was not part of this benchmark, so do not read the
 The vinext compiled executable **boots** 14× faster and serves **75% more** requests per second than
 the Node standalone. It wins both axes at once because the whole bundle is compiled
 together: minification and bundling remove the per-module boundary cost that made earlier
-file-by-file bytecode approaches trade throughput for cold start.
+file-by-file bytecode approaches trade throughput for boot time.
 
 <Callout type="info">
   These are **process-boot** numbers from a fresh local process. On Knative scale-from-zero the

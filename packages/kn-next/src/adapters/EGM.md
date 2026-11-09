@@ -420,7 +420,7 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   `process.once('exit', runExitReports)` per process. Reporters run
   synchronously and a throwing one is swallowed.
 - A process that exits with a replay backlog logs one
-  `[CacheHandler] exiting with … not replayed to Redis` line per handler (#2384).
+  `[CacheHandler] exiting with … not yet replayed to Redis` line per handler (#2384).
   The ISR handler arms its reporter on the first recorded skip; the
   `'use cache'` handler arms one per core and counts `tagsLostAtExit` once per
   lost tag (once for a collapsed backlog). A backlog already replayed reports

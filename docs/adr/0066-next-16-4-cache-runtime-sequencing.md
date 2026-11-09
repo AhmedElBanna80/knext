@@ -1410,3 +1410,56 @@ mutation-proved: removing the `get` guard reds the held-entry case, and removing
 set-then-get case. Open action item 13 (#2883): a kind test with Redis down that shows ISR no longer serves a pod-local entry and
 measures the render rate during the outage.
 
+
+## Amendment 9 (2026-11-09, Proposed): a replay backlog a process exits with is reported, not replayed (#2384)
+
+**Context.** The Amendment 4 (ISR) and Amendment 5 (`'use cache'`) replay lists live in the process.
+A pod that scales to zero or restarts before Redis is back loses them, and that loss was silent:
+entries stayed stale until their TTL with no line anywhere. Under Knative this is the ordinary path,
+since any outage longer than the scale-down delay hits it. #2384 asked for one bounded replay
+attempt in the SIGTERM drain, plus a log line and a count for whatever is still pending.
+
+**Correction to the record.** D-section text at :346 and :355, Amendment 4 ("enrolled in the SIGTERM
+drain registry") and Amendment 5 ("Enrolled in the SIGTERM drain") overstate it. The replay run is
+`trackWrite`'d, so a drain *can* await it, but `drainCacheWrites` has no production caller. On the
+node target the handler runs in Next's standalone child process, which the supervisor's
+`shutdown.ts` drains cannot see. On the self-contained target the preload installs no cache drain.
+What actually protects a write in flight at SIGTERM is MULTI/EXEC atomicity and Next's own drain
+time before `process.exit`.
+
+**Decision.** Report the loss; do not add a replay attempt at shutdown.
+- `cache-write-registry.js` gains `onProcessExit(report)`. Reporters sit in one `globalThis` set
+  (`Symbol.for('knext.core.cache.exitReports')`, ADR-0027), run by one `process.once('exit')`
+  listener per process, synchronously, each one guarded.
+- Each handler registers a reporter the first time it records a backlog. On exit with anything
+  still pending, it logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
+  count (or "collapsed") and the TTL bound. `'use cache'` also counts the lost tags in
+  `knext_use_cache_events_total{event="tags_lost_at_exit"}`.
+- The `exit` event fires on every way the process ends: Next's own SIGTERM `cleanup()` ends in
+  `process.exit(143|130)`, which the self-contained preload only normalises.
+
+**Options considered.**
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Exit report (chosen, jev 0.89)** | Fires on every exit path; no signal handler added | No last replay attempt |
+| SIGTERM listener in the handler (jev 0.10) | One more replay chance | Suppresses default termination on a runtime without Next's handler |
+| Drain in the supervisor (jev 0.01) | Uses the existing drain hook | Cannot see the child process's lists on the node target |
+
+A replay attempt at drain changes nothing while the breaker is still open, which is the case this
+report is about. The probe timer keeps firing during Next's own drain, so a Redis that comes back in
+that window is still replayed. One seam was not taken: the self-contained preload already runs a
+SIGTERM listener in the handler's process (`standalone-self-contained-supervisor.cjs`), and a
+`globalThis` "replay now" kick from it would add one attempt there without suppressing anything.
+It is left as a follow-up, because it covers only that target and only a Redis that is already back.
+
+**The counter** (jev: keep 0.63, gauge 0.27, drop 0.10). It is incremented as the process exits, so
+an in-process `/metrics` scrape rarely sees it, and a dashboard can read near zero while tags are
+lost. The docs say so and name the log line as the record. A gauge of the outstanding backlog,
+readable during the outage, is the alternative if this proves misleading in practice.
+
+**Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (8 cases). Each case
+asserts the registry's listener is installed on `process` and calls exactly it. Mutation prover
+by exit code: 7/7 killed (no arm on an invalidation, no arm on a delete, an ISR report with nothing
+pending, `'use cache'` never registering, no count, a replayed backlog reported, no listener
+installed).

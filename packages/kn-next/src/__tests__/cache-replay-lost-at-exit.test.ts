@@ -99,7 +99,7 @@ describe("ISR handler: exiting with an invalidation backlog", () => {
         const lines = exitLines();
         expect(lines).toHaveLength(1);
         expect(lines[0]).toContain("2 tag invalidation(s) and 0 delete(s)");
-        expect(lines[0]).toContain("not replayed to Redis");
+        expect(lines[0]).toContain("not yet replayed to Redis");
     });
 
     it("breaker open, one delete recorded, then exit: exactly one line with the count", async () => {

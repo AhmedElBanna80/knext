@@ -494,7 +494,8 @@ function replayArgs(tag, record) {
 //  - OFF THE REQUEST PATH. Started by the first connection this handler gets with
 //    the breaker closed, or by a probe timer set for the moment it closes (an
 //    idle pod would otherwise never replay while other pods serve the stale
-//    entries). Never awaited by a caller; enrolled in the SIGTERM drain.
+//    entries). Never awaited by a caller. `trackWrite`d, so a drain CAN await it,
+//    but no runtime registers that drain today (ADR-0066 Amendment 9).
 //  - NO STORM. One replay at a time, REPLAY_BATCH tags per script call through
 //    `redisCall`: the first fault re-trips the breaker and stops the run, and the
 //    rest waits for the next probe, one attempt per cooldown.
@@ -535,7 +536,7 @@ function reportTagReplayLostAtExit(replay) {
     ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
     : `${replay.tags.size} tag stamp(s)`;
   console.error(
-    `[CacheHandler] exiting with ${what} of 'use cache' not replayed to Redis (it was unreachable): ` +
+    `[CacheHandler] exiting with ${what} of 'use cache' not yet replayed to Redis: ` +
       `those entries keep serving until their TTL (at most ${maxTtlSeconds()}s)`,
   );
 }

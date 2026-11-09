@@ -103,7 +103,7 @@ Redis, this block is the first thing to check.
   `[CacheHandler] Redis client unavailable`. If you see it, cache entries are not shared between
   pods and do not survive scale-to-zero. Check that you built the image with `knext deploy` or
   `knext build` for the same runtime you deploy.
-- When Redis becomes unreachable while the app runs, every ISR read is a miss: the page is rendered
+- When the Redis server becomes unreachable while the app runs, every ISR read is a miss: the page is rendered
   again from your app rather than served from a pod's own memory, which never sees an invalidation
   another pod made. Writes are not kept in the pod either, and the pod tries Redis again every few
   seconds. Expect more rendering while Redis is down. A `revalidateTag` or `revalidatePath` during

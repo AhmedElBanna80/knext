@@ -2024,8 +2024,9 @@ class CacheHandler {
       //
       // Only with NO Redis configured is this the store every pod reads, so
       // only then does it count for the edge purge (D6.7). With Redis
-      // configured but unreachable (breaker open, client unavailable) this
-      // clears one pod's memory while the SHARED entries survive: purging the
+      // configured but unreachable (breaker open) this pod's map holds no ISR
+      // entries at all (#2122: no pod-local write or serve during an outage),
+      // while the SHARED entries survive in Redis: purging the
       // edge now would let other pods refill it from stale Redis, so the purge
       // is held back: the tags are replayed, Redis first and then the edge,
       // once the breaker closes (see `recordSkippedInvalidation`).

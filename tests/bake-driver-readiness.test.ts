@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { connect as netConnect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 // #1686 round 3 — CI flake fix: a fixed 41_200-41_699 port RANGE, reused
@@ -328,7 +329,12 @@ describe('bake readiness: a listening socket is ready — no HTTP round-trip thr
     const { dir, driver } = fakeStandalone({});
     const idle = join(dir, 'idle.js');
     writeFileSync(idle, 'setInterval(() => {}, 1000);');
-    const port = await freePort();
+    // Not freePort(): a free port can be bound by a concurrently running test
+    // before the driver connects, and then the driver gets an answer instead of
+    // silence (#2897). Port 1 is privileged, so no unprivileged process in the
+    // run can bind it; connect is refused. The premise is checked, not assumed.
+    const port = 1;
+    expect(await connectRefused(port)).toBe(true);
     const r = spawnSync('node', [driver], {
       encoding: 'utf8',
       timeout: 80_000,
@@ -395,3 +401,16 @@ describe('bake readiness: the redirect hop limit is exactly 10 (#1686 round 2)',
     expect(r.stdout).not.toContain('status=200');
   }, 90_000);
 });
+
+/** Whether a TCP connect to 127.0.0.1:port is refused (nothing listening). */
+function connectRefused(port: number): Promise<boolean> {
+  return new Promise((resolveConnect) => {
+    const sock = netConnect({ host: '127.0.0.1', port });
+    const done = (refused: boolean) => {
+      sock.destroy();
+      resolveConnect(refused);
+    };
+    sock.once('connect', () => done(false));
+    sock.once('error', (err: NodeJS.ErrnoException) => done(err.code === 'ECONNREFUSED'));
+  });
+}

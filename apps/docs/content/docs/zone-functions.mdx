@@ -246,6 +246,27 @@ zone rolls one new revision with the new `<NAME>_SERVICE_PROTO_VERSION`.
 If your zone's `spec.env` or `spec.secrets.envMap` already sets one of these names, your value is
 kept, and the `BackendBindings` condition names the variable that was not written.
 
+### Waking functions when the zone starts
+
+When a zone process starts, before Next.js boots, knext sends one `GET /healthz` to every function
+named in `KNEXT_WAKE_FUNCTIONS`, at its `<NAME>_SERVICE_URL`. A function that has scaled to zero
+starts waking while the zone is still booting, so the first request to need it waits less.
+
+- The calls never delay the zone: nothing waits for them, and the zone's own health check answers
+  whatever state they are in.
+- Each call gives up after one second, and a failure is logged once and not retried.
+- On shutdown the calls are cancelled before the zone drains its in-flight requests (a
+  single-executable zone without the self-contained supervisor simply exits).
+- A zone scaled out to several pods sends one call per pod per function. They collapse into a
+  single wake of each function.
+
+Zones built on the default and Bun standalone targets wake their functions. A zone built with
+the vinext target does not wake them yet: its functions start on their first call.
+
+To stop waking one function, set `wakeAhead: false` on it (`--no-wake-ahead` on
+`knext deploy function`). To turn the whole feature off for a zone, set `KNEXT_WAKE_AHEAD=0` in
+its `spec.env`.
+
 ## Credentials: what a function may read
 
 A function may reference a Secret (through `env` `secretKeyRef`, `envFrom`, a Secret volume or a

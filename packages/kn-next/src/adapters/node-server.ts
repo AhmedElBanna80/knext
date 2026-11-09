@@ -36,6 +36,7 @@ import {
 } from "./deferred-supervisor-init";
 import { buildChildEnv } from "./env";
 import { runProcessStartPrimers } from "./process-start-run";
+import { parseWarmPaths, selfWarm } from "./self-warm";
 import { type ChildLike, gracefulShutdown, isShuttingDown } from "./shutdown";
 import { childSpawnPlan } from "./standalone-exec";
 
@@ -170,6 +171,21 @@ const bakedCompileCacheDir = resolve(
 const deferredInit = createDeferredSupervisorInit({
     log,
     steps: [
+        {
+            // FIRST, before the metrics collector's ~790 ms load competes for CPU:
+            // render the app's first route on loopback while the pod waits for
+            // kubelet to make it routable (self-warm.ts; KNEXT_WARM_PATHS, "" off).
+            name: "self-warm",
+            run: async () => {
+                const paths = parseWarmPaths(process.env);
+                if (paths.length === 0) return;
+                await selfWarm({
+                    port: Number(process.env.PORT ?? 3000),
+                    paths,
+                    log,
+                });
+            },
+        },
         {
             // Diagnostics-only (#440): warn if an injected NODE_COMPILE_CACHE
             // shadows the populated image-baked compile cache. Cheap (a stat +

@@ -11,8 +11,8 @@
  *
  * Measured on OKE (Bun standalone, n=30 per arm, interleaved): ready -> first
  * byte went from a 94 ms median to 16 ms (paired difference -69 ms, 95% CI
- * [-85, -54]). The total cold start moved by the same amount, which that sample
- * could not separate from platform noise.
+ * [-85, -54]). The total cold start was not measurably shorter in that sample
+ * (its CI spans 0).
  *
  * Opt-in, on ADR-0042's existing surface: it runs only when `KNEXT_WARM_PATH` is
  * set (comma-separated absolute paths), and `KNEXT_EAGER_WARM=0` turns it off.

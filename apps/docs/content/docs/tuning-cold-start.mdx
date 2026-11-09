@@ -131,9 +131,9 @@ response byte from a median of 94 ms to 16 ms; the whole cold start was not meas
 cluster's own startup varies by several hundred milliseconds.
 
 - It is off unless `KNEXT_WARM_PATH` is set, and `KNEXT_EAGER_WARM=0` turns it off. The default
-  build already reads `KNEXT_WARM_PATH` to choose the pages it warms while the image is built; if
-  you set it for that, your pods now also warm those pages when they start. Set
-  `KNEXT_EAGER_WARM=0` to keep the build-only behaviour.
+  image used to ignore `KNEXT_WARM_PATH` (it is the vinext build's warm-up setting): if your app's
+  environment already sets it, for example copied from the vinext example, your pods now warm those
+  pages when they start. Check that they are safe to warm (below), or set `KNEXT_EAGER_WARM=0`.
 - **Only warm pages that render the same for every visitor.** The warm request carries no cookies
   and no authentication, and its render is stored in the shared page cache. Warming a personalised
   or logged-in page would put the logged-out version in front of the first real user. A page that
@@ -142,8 +142,8 @@ cluster's own startup varies by several hundred milliseconds.
   to skip authentication or other checks. knext's cold-start metric and trace span
   (`knext_coldstart_*`, `knext.cold_start`) attach to the first request the server sees, so with the
   warm on they measure the warm request, not your first visitor; your app's own metrics also count it.
-- It never follows a redirect, spends about 5 seconds at most on the whole warm-up, stops when the
-  server is shutting down, and never fails the start. This is the default image's behaviour; the
+- It never follows a redirect, spends about 5 seconds at most on the whole warm-up, starts no new
+  page once the server is shutting down, and never fails the start. This is the default image's behaviour; the
   single-executable image has its own warm-up, described on the [Bun runtime](/docs/bun-runtime)
   page.
 

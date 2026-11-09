@@ -19,8 +19,8 @@
  * computed at runtime is not visible. An unreadable config is refused rather
  * than assumed clean.
  *
- * Known shared debt: build.ts, build-artifact.ts and standalone-layout.ts
- * still assume `.next`; only this guard honours a custom `distDir`.
+ * build.ts, build-artifact.ts and standalone-layout.ts assume `.next`, so a
+ * custom `distDir` is refused before a Next build (`assertDefaultDistDir`).
  */
 
 import { existsSync } from "node:fs";
@@ -153,8 +153,82 @@ function readConfigOrRefuse(
         return readNextConfig();
     } catch (err) {
         throw new UsageError(
-            `Could not read your next.config to check for a static export (\`output: 'export'\`), which knext cannot deploy (${err instanceof Error ? err.message : String(err)}). Fix the file's permissions and try again.`,
+            `Could not read your next.config, which knext checks before it builds (a static export and a custom \`distDir\` are not supported) (${err instanceof Error ? err.message : String(err)}). Fix the file's permissions and try again.`,
         );
+    }
+}
+
+/**
+ * Every `distDir` key in the config text (comments stripped): a property
+ * (`distDir:`, quoted, bare or a computed `['distDir']:`) or an assignment
+ * (`x.distDir =`, `x['distDir'] =`). Each is either
+ * a plain string literal (`literal`) or anything else (`raw`: an env var, a
+ * ternary, a template with `${}`), which this text scan cannot evaluate.
+ */
+function distDirMentions(
+    configText: string,
+): { literal?: string; raw: string }[] {
+    const out: { literal?: string; raw: string }[] = [];
+    const text = stripCommentsStringAware(configText);
+    for (const m of text.matchAll(
+        /["'`]?\bdistDir["'`]?(?:\s*\])?\s*(?::|=(?![=>]))\s*([^,;}\n]*)/g,
+    )) {
+        const raw = (m[1] ?? "").trim();
+        const lit = raw.match(/^(["'`])([^"'`\n]*)\1$/);
+        out.push(
+            lit && !lit[2].includes("${") ? { literal: lit[2], raw } : { raw },
+        );
+    }
+    return out;
+}
+
+const UNREADABLE_DIST_DIR_MESSAGE = (
+    raw: string,
+) => `Your Next.js config sets \`distDir\` to \`${raw}\`, which knext cannot read before the build.
+
+knext does not support a custom build directory yet, and its build, artifact and standalone steps
+read the build output from \`.next\`. Remove \`distDir\` from your Next.js config (the default is
+\`.next\`), or set it to the literal \`".next"\`, and build again.`;
+
+const CUSTOM_DIST_DIR_MESSAGE = (
+    distDir: string,
+) => `Your Next.js config sets \`distDir: '${distDir}'\`, and knext does not support a custom build directory yet.
+
+knext's build, artifact and standalone steps read the build output from \`.next\`, so a different
+directory would produce a wrong artifact or fail later in the pipeline.
+Remove \`distDir\` from your Next.js config (the default is \`.next\`) and build again.`;
+
+/** True when `distDir` names the default `.next` (`.next`, `./.next`, `.next/`). */
+function isDefaultDistDir(distDir: string): boolean {
+    return (
+        distDir.replace(/^\.\//, "").replace(/\/+$/, "") === DEFAULT_DIST_DIR
+    );
+}
+
+/**
+ * Before a Next build: refuse a custom `distDir` (#2251). Only the static-export
+ * guard honours it; the build, artifact and standalone steps assume `.next`, so
+ * half-supporting it gives a wrong artifact path or a confusing late failure.
+ * Refused up front until the resolved value is threaded through. It reads the
+ * config text, like the other guards here, and fails closed: every `distDir`
+ * key must be a plain literal for the default, or the build is refused, so a
+ * computed value (an env var, a ternary, a `${}` template) refuses too. It is a
+ * best-effort text check, not an evaluation (#2250): not seen are a shorthand
+ * property (`{ distDir }`), `Object.defineProperty`, a value set outside the
+ * file, and builds that skip it (`build --skip-next`, `deploy --skip-build`, and
+ * `deploy --image`, which implies `--skip-build`).
+ */
+export function assertDefaultDistDir(
+    cwd: string,
+    readNextConfig: () => string | undefined = () => readNextConfigStrict(cwd),
+): void {
+    const text = readConfigOrRefuse(readNextConfig);
+    if (text === undefined) return;
+    for (const m of distDirMentions(text)) {
+        if (m.literal === undefined)
+            throw new UsageError(UNREADABLE_DIST_DIR_MESSAGE(m.raw));
+        if (!isDefaultDistDir(m.literal))
+            throw new UsageError(CUSTOM_DIST_DIR_MESSAGE(m.literal));
     }
 }
 

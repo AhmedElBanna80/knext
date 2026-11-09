@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 // The script guards its main() behind an entrypoint check, so importing the
@@ -1439,17 +1439,32 @@ const realReleaseSets = (overrides: Record<string, ManifestFields> = {}) =>
  * its target's closure plus its own forwarding bin. Either premise breaking
  * means it must join auditScope() instead.
  */
-export function aliasExemptionProblems(manifest: {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  files?: string[];
-}): string[] {
+const INSTALL_HOOKS = ['preinstall', 'install', 'postinstall'] as const;
+const ALIAS_BIN_FILES = ['EGM.md', 'kn-next.js'];
+
+export function aliasExemptionProblems(
+  manifest: {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    bundleDependencies?: unknown;
+    bundledDependencies?: unknown;
+    scripts?: Record<string, string>;
+    files?: string[];
+  },
+  bin: { files: string[]; source: string },
+): string[] {
   const out: string[] = [];
   const deps = Object.keys(manifest.dependencies ?? {});
   if (deps.length !== 1 || deps[0] !== '@getknext/core') {
     out.push(
       `kn-next must depend on @getknext/core only to stay exempt; it depends on [${deps.join(', ')}]`,
+    );
+  } else if (!/^workspace:/.test(manifest.dependencies?.['@getknext/core'] ?? '')) {
+    // A workspace range is rewritten to the published core version; an npm:
+    // alias, a URL or a git spec would point somewhere the audit does not.
+    out.push(
+      `kn-next's @getknext/core spec must be a workspace range, not ${manifest.dependencies?.['@getknext/core']}`,
     );
   }
   for (const field of ['optionalDependencies', 'peerDependencies'] as const) {
@@ -1457,12 +1472,42 @@ export function aliasExemptionProblems(manifest: {
     if (extra.length > 0)
       out.push(`kn-next declares ${field} [${extra.join(', ')}]: it must join auditScope()`);
   }
+  for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
+    if (manifest[field] !== undefined)
+      out.push(`kn-next declares ${field}: bundled bytes ship outside the audit`);
+  }
+  for (const hook of INSTALL_HOOKS) {
+    if (manifest.scripts?.[hook] !== undefined)
+      out.push(`kn-next declares a ${hook} script: it runs on every install`);
+  }
   const files = [...(manifest.files ?? [])].sort();
   if (JSON.stringify(files) !== JSON.stringify(['LICENSE', 'README.md', 'bin'])) {
     out.push(
       `kn-next ships [${files.join(', ')}]; the exemption covers only bin, README.md and LICENSE`,
     );
   }
+  const binFiles = [...bin.files].sort();
+  if (JSON.stringify(binFiles) !== JSON.stringify(ALIAS_BIN_FILES)) {
+    out.push(
+      `kn-next/bin holds [${binFiles.join(', ')}]; the exemption covers only ${ALIAS_BIN_FILES.join(', ')}`,
+    );
+  }
+  // The forwarding bin may load only Node built-ins, core (resolved), and
+  // core's own package.json: nothing third-party of its own.
+  for (const m of bin.source.matchAll(/\brequire\(\s*((?:[^()]|\([^()]*\))*?)\s*\)/g)) {
+    const arg = m[1] ?? '';
+    if (/^['"]node:[a-z_/]+['"]$/.test(arg)) continue;
+    if (arg === "path.join(dir, 'package.json')") continue;
+    out.push(
+      `kn-next/bin/kn-next.js requires ${arg}: only node: built-ins and core's own manifest are covered`,
+    );
+  }
+  for (const m of bin.source.matchAll(/\.resolve\(\s*((?:[^()]|\([^()]*\))*?)\s*\)/g)) {
+    if (m[1] !== "'@getknext/core'")
+      out.push(`kn-next/bin/kn-next.js resolves ${m[1]}: only @getknext/core is covered`);
+  }
+  if (/\bimport\s*\(|^\s*import\s/m.test(bin.source))
+    out.push('kn-next/bin/kn-next.js uses import: not covered');
   if (!PUBLISHED.some((p: { name: string }) => p.name === '@getknext/core')) {
     out.push('@getknext/core, the alias target, is no longer in the audit scope');
   }
@@ -1470,28 +1515,31 @@ export function aliasExemptionProblems(manifest: {
 }
 
 describe('the kn-next alias exemption holds only while it forwards (ADR-0020, #2438)', () => {
-  const manifest = JSON.parse(
-    readFileSync(resolve(REAL_REPO, 'packages', 'kn-next-alias', 'package.json'), 'utf8'),
-  );
+  const aliasDir = resolve(REAL_REPO, 'packages', 'kn-next-alias');
+  const manifest = JSON.parse(readFileSync(join(aliasDir, 'package.json'), 'utf8'));
+  const bin = {
+    files: readdirSync(join(aliasDir, 'bin')),
+    source: readFileSync(join(aliasDir, 'bin', 'kn-next.js'), 'utf8'),
+  };
 
-  it('the real alias meets both conditions', () => {
-    expect(aliasExemptionProblems(manifest)).toEqual([]);
+  it('the real alias meets every condition', () => {
+    expect(aliasExemptionProblems(manifest, bin)).toEqual([]);
   });
 
-  it('reds on a second dependency, a peer, or a shipped file of its own', () => {
-    expect(
-      aliasExemptionProblems({
-        ...manifest,
-        dependencies: { ...manifest.dependencies, chalk: '^5' },
-      }),
-    ).toHaveLength(1);
-    expect(aliasExemptionProblems({ ...manifest, peerDependencies: { react: '*' } })).toHaveLength(
-      1,
-    );
-    expect(aliasExemptionProblems({ ...manifest, files: [...manifest.files, 'lib'] })).toHaveLength(
-      1,
-    );
-    expect(aliasExemptionProblems({ ...manifest, dependencies: {} })).toHaveLength(1);
+  it('reds on each way the alias could bring bytes the audit does not see', () => {
+    const red = (m: object, b: Partial<typeof bin> = {}) =>
+      aliasExemptionProblems({ ...manifest, ...m }, { ...bin, ...b }).length;
+    expect(red({ dependencies: { ...manifest.dependencies, chalk: '^5' } })).toBe(1);
+    expect(red({ dependencies: {} })).toBe(1);
+    expect(red({ dependencies: { '@getknext/core': 'npm:evil@1' } })).toBe(1);
+    expect(red({ peerDependencies: { react: '*' } })).toBe(1);
+    expect(red({ bundleDependencies: ['x'] })).toBe(1);
+    expect(red({ scripts: { ...manifest.scripts, postinstall: 'node x.js' } })).toBe(1);
+    expect(red({ files: [...manifest.files, 'lib'] })).toBe(1);
+    expect(red({}, { files: [...bin.files, 'helper.js'] })).toBe(1);
+    expect(red({}, { source: `${bin.source}\nrequire('chalk');\n` })).toBe(1);
+    expect(red({}, { source: `${bin.source}\nreq.resolve('left-pad');\n` })).toBe(1);
+    expect(red({}, { source: `${bin.source}\nimport('chalk');\n` })).toBe(1);
   });
 });
 

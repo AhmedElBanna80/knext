@@ -373,16 +373,21 @@ on the 1.x line until then.
 
 ### Decision
 
-A forwarding alias needs no audit run of its own while two things hold:
+This narrows the "SBOM and audit per published npm package" rule in `.claude/rules/security.md` for
+one case. A forwarding alias needs no audit run of its own while all of these hold:
 
-- its only dependency is the package it forwards to, and that package is in the audit scope;
-- it ships only its forwarding bin, its README and its LICENSE.
+- its only dependency is the package it forwards to, declared as a workspace range, and that package
+  is in the audit scope;
+- it declares no optional, peer or bundled dependencies and no install-time script;
+- it ships only its forwarding bin, its README and its LICENSE, and the bin loads only Node built-ins,
+  its target (resolved), and its target's own `package.json`.
 
 Then its installed closure is its target's closure plus one dependency-free file, so the target's
 `npm audit` and SBOM already describe every third-party byte it brings. `tests/publish-lane-supply-chain.test.ts`
 keeps `kn-next` as the one `AUDIT_EXEMPT` entry and asserts both conditions against the alias's
-manifest. A second dependency, or any shipped path beyond `bin`, `README.md` and `LICENSE`, turns the
-exemption red, and the alias must then join `auditScope()` and be built in the release `audit` job.
+manifest and its bin. Any of those breaking turns the exemption red, and the alias must then join
+`auditScope()` and be built in the release `audit` job. The "no release workflow change" below rests on
+that guard staying tight.
 
 Option considered: auditing the alias on its own (its own pack, `npm audit` and SBOM, built in the
 release `audit` job). It would produce an SBOM that repeats the target's, at the cost of a change to

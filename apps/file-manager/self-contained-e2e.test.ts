@@ -56,9 +56,16 @@ const statusOf = (r: RouteResult | undefined) => (r && 'status' in r ? r.status 
  * Routes whose render calls a host on the internet (#2272). Disk mode and the
  * executable request it at different moments, so a slow or failing external
  * service gives one arm a 500 and the other a 200: a flake that says nothing
- * about the executable. They are left out of the status comparison only.
- * NETWORK_BOUND_ROUTES must equal the set the source scan finds, so a route
- * that stops calling out, or a new one that starts, fails the check below.
+ * about the executable. They are left out of the two cross-arm checks (same
+ * status, and served-by-disk => served-by-executable); the arms still request
+ * them. NETWORK_BOUND_ROUTES must equal the set the source scan finds, so a
+ * route that stops calling out, or a new one that starts, fails the check below.
+ *
+ * The scan's limit: it reads `page.*` files for a literal `fetch('http(s)://…')`.
+ * A URL built from a variable or `${…}`, a helper module's fetch, `https.request`
+ * or a route handler is not seen. Today the only such call outside a page is the
+ * observability Prometheus query, whose host is OBSERVABILITY_PROMETHEUS_URL
+ * (an in-cluster service, unset in this lane, so both arms answer the same).
  */
 const NETWORK_BOUND_ROUTES = ['/cache-tests/fetch-cache'];
 
@@ -145,15 +152,17 @@ describe.skipIf(skipReason !== null)(
       const A = await measureArm(a, { routes, staticAsset, runs: 1, env });
       const B = await measureArm(b, { routes, staticAsset, runs: 1, env });
 
-      // Routes that call the internet are compared by nothing here (#2272):
-      // the exclusion list is checked against the source above.
+      // Routes that call the internet are left out of the cross-arm checks
+      // (#2272); the exclusion list is checked against the source above.
       const mismatches = Object.keys(A.served).filter(
         (k) => !NETWORK_BOUND_ROUTES.includes(k) && statusOf(A.served[k]) !== statusOf(B.served[k]),
       );
       expect(mismatches).toEqual([]);
       expect(statusOf(B.served[staticAsset as string])).toBe(200);
       // Every route disk mode serves, the self-contained binary serves.
-      const servedA = Object.keys(A.served).filter((k) => isServed(A.served[k]));
+      const servedA = Object.keys(A.served).filter(
+        (k) => !NETWORK_BOUND_ROUTES.includes(k) && isServed(A.served[k]),
+      );
       expect(servedA.filter((k) => !isServed(B.served[k]))).toEqual([]);
       expect(servedA.length).toBeGreaterThan(routes.length / 2);
 

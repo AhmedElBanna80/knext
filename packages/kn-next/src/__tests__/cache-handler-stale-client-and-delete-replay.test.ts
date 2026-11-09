@@ -142,7 +142,8 @@ describe("#2889 stale-client fault and delete replay", () => {
         await handler.set("/page", null, {});
         expect(r.store.has("stale-del:cache:/page")).toBe(true);
         r.recover();
-        // The breaker reopens for the cooldown; the replay probe then deletes it.
+        // A recovered client is installed (the seam also closes the breaker), and
+        // the next connection starts the replay, which deletes the entry.
         mod.__setRedisClientForTests(r.client);
         await handler.get("/other");
         await waitFor(() => !r.store.has("stale-del:cache:/page"));
@@ -162,10 +163,75 @@ describe("#2889 stale-client fault and delete replay", () => {
         // Breaker open: this delete finds no client at all.
         await handler.set("/held", null, {});
         r.recover();
-        // A fresh client after the cooldown (the test seam closes the breaker).
+        // A recovered client is installed (the seam closes the breaker, standing in
+        // for the cooldown); the next connection starts the replay.
         mod.__setRedisClientForTests(r.client);
         await handler.get("/x");
         await waitFor(() => !r.store.has("stale-del:cache:/held"));
         expect(r.store.has("stale-del:cache:/held")).toBe(false);
+    });
+
+    it("a command fault on a stale client closes only that client and leaves the breaker closed", async () => {
+        process.env.REDIS_RETRY_COOLDOWN_MS = "60000";
+        const mod = await import(CACHE_HANDLER);
+        mod.__resetEnvForTests();
+        let oldClosed = 0;
+        const oldClient: Any = {
+            connected: true,
+            connect: async () => {},
+            get: async () => {
+                await sleep(60);
+                throw new Error("ECONNRESET");
+            },
+            close: () => {
+                oldClosed += 1;
+            },
+        };
+        let newClosed = 0;
+        let newGets = 0;
+        const newClient: Any = {
+            connected: true,
+            connect: async () => {},
+            get: async () => {
+                newGets += 1;
+                return null;
+            },
+            close: () => {
+                newClosed += 1;
+            },
+        };
+        mod.__setRedisClientForTests(oldClient);
+        const handler = new mod.default({});
+        const a = handler.get("/a");
+        await sleep(10);
+        mod.__setRedisClientForTests(newClient);
+        expect(await a).toBeNull();
+        expect(oldClosed).toBe(1);
+        expect(newClosed).toBe(0);
+        await handler.get("/b");
+        expect(newGets).toBe(1);
+    });
+
+    it("with no Redis configured, a delete records nothing to replay", async () => {
+        delete process.env.REDIS_URL;
+        const mod = await import(CACHE_HANDLER);
+        mod.__resetEnvForTests();
+        const handler = new mod.default({});
+        await handler.set("/mem", null, {});
+        // A client installed afterwards finds nothing to replay.
+        const sent: string[] = [];
+        mod.__setRedisClientForTests({
+            connected: true,
+            connect: async () => {},
+            get: async () => null,
+            send: async (cmd: string) => {
+                sent.push(cmd);
+                return null;
+            },
+            close: () => {},
+        });
+        await handler.get("/x");
+        await sleep(50);
+        expect(sent).not.toContain("DEL");
     });
 });

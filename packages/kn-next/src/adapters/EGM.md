@@ -377,8 +377,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   fails (`waitForReady`), or a native connect that throws or resolves with the
   client still disconnected (`waitForNativeReady`) calls `markUnhealthy`, which
   opens a circuit breaker for `REDIS_RETRY_COOLDOWN_MS` and closes the current
-  client. A connect fault on a client that is no longer current closes only that
-  client and leaves the breaker alone. Concurrent callers for the
+  client. A fault on a client that is no longer current (a connect, or a command
+  through `redisCall(fn, client)`) closes only that client and leaves the
+  breaker alone. Concurrent callers for the
   same client share one in-flight connect on both clients (`connectClient`'s
   `connectInFlight`, keyed by client), so a burst of first requests dials that
   client once; a connect settling for a client that was dropped meanwhile hands
@@ -403,7 +404,10 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   `NODE_ENV=production`. Otherwise they need `KNEXT_TEST_SEAMS=1`.
 - A `set(key, null)` delete that could not reach Redis (breaker open, or the
   delete faulted) is remembered and replayed, before the tags, once the breaker
-  closes.
+  closes. Like the tag list it is per process: a restart or scale to zero first
+  drops it, and the entry lives to its TTL. The replayed `DEL` has no generation
+  check, so it can also remove an entry a later `set` wrote meanwhile; the next
+  request re-renders it.
 - The invalidation replay backlog is capped at 1000 tags and deletes together. Past that, it
   collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix
   and the shared legacy default key prefix (bare, or with a `:*` wildcard). A CDN purge is sent only for tags whose Redis

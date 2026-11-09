@@ -288,8 +288,8 @@ console.log(`\n=== hygiene rows: ${HYGIENE_SPEC} ===`);
 hygiene.baseline();
 hygiene.proveCanSeeRed({
   subject: 'guard',
-  anchor: "  const REMOVAL_PAGES = ['upgrading.mdx', 'versioning.mdx'];",
-  replacement: "  const REMOVAL_PAGES = ['upgrading.mdx'];",
+  anchor: "  const REMOVAL_PAGES = ['upgrading.mdx', 'upgrading-to-2.mdx', 'versioning.mdx'];",
+  replacement: "  const REMOVAL_PAGES = ['upgrading.mdx', 'upgrading-to-2.mdx'];",
 });
 for (const m of HYGIENE) {
   hygiene.run({ ...m, expect: 'red' });

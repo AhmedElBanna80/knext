@@ -38,9 +38,10 @@ import { resolve } from "node:path";
 
 const ADAPTERS = resolve(__dirname, "..", "adapters");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { PROCESS_START_PRIMERS } = require("../adapters/process-start-primers.cjs") as {
-    PROCESS_START_PRIMERS: readonly string[];
-};
+const { PROCESS_START_PRIMERS } =
+    require("../adapters/process-start-primers.cjs") as {
+        PROCESS_START_PRIMERS: readonly string[];
+    };
 const NODE_SERVER = readFileSync(resolve(ADAPTERS, "node-server.ts"), "utf8");
 const COMPILE = readFileSync(
     resolve(ADAPTERS, "standalone-compile.mjs"),
@@ -151,7 +152,9 @@ function readPreloadLists(
     const spreads = [...block.matchAll(/\.\.\.\s*(\w+)/g)].map((m) => m[1]);
     for (const name of spreads) {
         if (name !== "PROCESS_START_PRIMERS") {
-            throw new Error(`PRELOAD_NAMES spreads ${name}, which this guard cannot read`);
+            throw new Error(
+                `PRELOAD_NAMES spreads ${name}, which this guard cannot read`,
+            );
         }
     }
     const compile = [

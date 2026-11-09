@@ -37,6 +37,9 @@ with `access: public` and `provenance: true` (`package.json` `publishConfig`).
 - Runtime dependencies are `@getknext/lib` (`workspace:^`), `drizzle-orm` and
   `pg`. `drizzle-kit` is an optional peer (`peerDependenciesMeta.drizzle-kit.optional: true`).
   Only `defineDrizzleConfig` needs it (`src/migrate.ts:assertDrizzleKitPresent`).
+- Every public subpath in `knext.publicApi.public` must have a heading in
+  `docs/PUBLIC_API.md`. `apps/docs/stability-doc.test.ts` enforces this per
+  subpath, so a removed section turns the guard red.
 - The SDK never closes the `@getknext/lib` pools. The migration runner opens its
   own single-connection pool and only targets the writer
   (`src/migrate.ts:defaultMigrateDeps`, `src/migrate.ts:resolveWriterDsn`).

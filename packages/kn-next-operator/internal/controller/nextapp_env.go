@@ -61,6 +61,18 @@ type envMapCollisionReport struct {
 	userWinsExempt []string
 }
 
+// noteUserWins records a name where the envMap value replaced the operator's own
+// entry. A name in validation.EnvMapUserAlwaysWinsEnvNames is the documented
+// pattern, not a real collision: it is kept out of userWinsGrandfathered so
+// computeStatusVerdict can report it as informational (#1391 round 3).
+func (r *envMapCollisionReport) noteUserWins(envName string) {
+	if _, exempt := validation.EnvMapUserAlwaysWinsEnvNames[envName]; exempt {
+		r.userWinsExempt = append(r.userWinsExempt, envName)
+		return
+	}
+	r.userWinsGrandfathered = append(r.userWinsGrandfathered, envName)
+}
+
 func (r envMapCollisionReport) empty() bool {
 	return len(r.operatorWins) == 0 && len(r.userWinsGrandfathered) == 0 && len(r.userWinsExempt) == 0
 }
@@ -270,14 +282,12 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 				// undocumented breaking change on upgrade (e.g. a bound
 				// REDIS_URL Secret silently replaced by an empty default).
 				envVars[reservedIndex[envName]] = fromSecret
-				if _, exempt := validation.EnvMapUserAlwaysWinsEnvNames[envName]; exempt {
-					// The documented pattern, not a real collision — kept
-					// out of userWinsGrandfathered so computeStatusVerdict
-					// can report it as informational (#1391 round 3).
-					report.userWinsExempt = append(report.userWinsExempt, envName)
-				} else {
-					report.userWinsGrandfathered = append(report.userWinsGrandfathered, envName)
+				if isOperatorCacheBinding(nextApp, envName, entry) {
+					// The operator's own isolated-cache binding (ADR-0071 D3), injected
+					// in memory by reconcileCacheCredentials: not a collision.
+					continue
 				}
+				report.noteUserWins(envName)
 				continue
 			}
 			envVars = append(envVars, fromSecret)

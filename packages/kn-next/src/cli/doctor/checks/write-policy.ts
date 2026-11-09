@@ -61,7 +61,7 @@ export const CANONICAL_POLICY_CEL = {
         },
         {
             name: "allowedSecretSuffixes",
-            expression: "['-knext-signing-key']",
+            expression: "['-knext-signing-key', '-redis-credentials']",
         },
         { name: "allowedConfigMapSuffixes", expression: "['-knext-jwks']" },
         { name: "allowedSecretType", expression: "'Opaque'" },

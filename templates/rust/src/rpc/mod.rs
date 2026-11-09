@@ -3,9 +3,10 @@
 //! recovery, the request-body bounds, the token check), and an accept loop
 //! that speaks HTTP/2 cleartext (h2c) and HTTP/1.1 on one port.
 //!
-//! The layers run in this order, the first outermost: every call is traced
-//! (refusals included), a panic is contained, the request body is bounded,
-//! and the token is checked before any of the body is read.
+//! The layers run in this order, the first outermost: the wake-ahead probe
+//! (`/healthz`) is answered first, as it is not an RPC; every other call is
+//! traced (refusals included), a panic is contained, the request body is
+//! bounded, and the token is checked before any of the body is read.
 
 mod body;
 mod layers;
@@ -164,7 +165,10 @@ fn build(router: Router, verifier: Option<Arc<dyn Verifier>>, cfg: Config) -> Fu
         )
         // gzip only. Decompression stops at the message limit.
         .with_compression(CompressionRegistry::new().register(GzipProvider::new()));
+    // The wake-ahead probe is answered outermost, before tracing and the token
+    // check, as the Go template's /healthz is.
     let stack = ServiceBuilder::new()
+        .layer(layers::HealthzLayer)
         .layer(layers::TraceLayer::new(tracer))
         .layer(layers::RecoverLayer)
         .layer(body::BoundedBodyLayer::new(

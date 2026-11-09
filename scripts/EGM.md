@@ -16,6 +16,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - Shared drivers: `lib/prover-report.mjs` (imported by all 166), `lib/mutation-harness.mjs` (97) and `lib/guard-prover.mjs` (95).
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.
+- Kind-lane provers live among them, e.g. `mutation-prove-2461-z7-kind-e2e.mjs` for the Z7 identity lane in `packages/grpc/e2e/z7-identity-kind`, including the SQ1/SQ2 rows for the squatted-JWKS-ConfigMap phase.
 - Other provers: `prove-publish-lane-guard-mutants.mjs`, `mutate-self-contained-dockerfile-proof.mjs`, `use-cache-collapse-keys-mutation.mjs`.
 
 ### Official-harness compat e2e
@@ -62,6 +63,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - CDN: `cdn-e2e-assert.mjs`, `cdn-e2e-purge-assert.mjs`, `cdn-e2e-mutate-preload.mjs`, `cdn-e2e-expect-red.sh`.
 - `use-cache-2pod-e2e-assert.sh`, `public-hosts-e2e-assert.sh`, `deep-health-alert-e2e.sh`, `load-test.sh`, `scale-suite-tolerance.mjs`, `nightly-alert-issue.mjs`.
 - Redis: `redis-acl-spike.mjs`, `redis-commands.mjs` (`REDIS_COMMANDS`).
+- `mutation-prove-2396-redis-acl.mjs` (exports nothing): mutates the operator's Redis ACL surface (the command list, the isolation decision, prefix-ownership ranking, the derived-prefix squat, the command catalog read through `ACL CAT`, provisioner endpoint pinning, the status verdict and requeue, the credentials binding and the finalizer's Secret-over-status decision) and requires the named Go test to go red by exit code. `ONLY=<text>` runs the cases whose name contains it. Its one envtest case needs `KUBEBUILDER_ASSETS` or `packages/kn-next-operator/bin/k8s` (`make setup-envtest`); when that case is selected and neither exists, the prover exits 2. Without `KUBEBUILDER_ASSETS` the operator's suite uses the first version directory under `bin/k8s` in sorted order, as a plain `go test` there does.
 
 ### Other exported symbols
 The scripts below also export these symbols, mostly so `tests/` can import their pure logic. Names already given above are not repeated.
@@ -71,7 +73,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `bun-patched-drift.mjs`: `UPSTREAM_PR`, `pinnedBunVersion`, `stockVersionFromTag`, `driftVerdict`.
 - `cdn-e2e-assert.mjs`: `derivePrefix`, `send`, `headerLines`, `diffResponses`, `isHtml`, `stored`, `hit`, `config`, `CheckFailure`, `must`, `checks`, `zeroDiffProbes`, `runChecks`.
 - `cdn-e2e-mutate-preload.mjs`: `MUTATIONS`, `MARKER`, `FOREIGN_BUILD_MUTATIONS`, `FOREIGN_BUILD_MARKER`, `FOREIGN_STALE_MUTATIONS`, `FOREIGN_STALE_MARKER`, `USE_CACHE_TAGS_MUTATIONS`, `USE_CACHE_TAGS_MARKER`, `locate`, `mutate`.
-- `cdn-e2e-purge-assert.mjs`: `PAGE_TAG`, `UC_TAG`, `UC_PATH`, `nextTagOf`, `appTagOf`, `ORIGIN_PAGES`, `purgeConfig`, `purgeChecks`.
+- `cdn-e2e-purge-assert.mjs`: `PAGE_TAG`, `UC_TAG`, `UC_PATH`, `nextTagOf`, `appTagOf`, `ORIGIN_PAGES`, `purgeConfig`, `purgeChecks`. `rollout-no-old-html` reports each offending edge entry under one of three build-tag lines in a single failure (post-rollout tag: the defect the foreign-build red spec requires; pre-rollout tag: an old-revision refill; no tag: unattributable), so the red leg does not depend on which kind appears first.
 - `check-changeset-required.mjs`: `NO_CHANGESET_LABEL`, `fixedGroupNames`, `derivePackageRoots`, `isTestOrDocsOnly`, `touchedPackages`, `isChangesetEntryPath`, `parseChangesetFrontmatter`, `hasChangesetEntry`, `hasNoChangesetLabel`, `CONSUMER_VISIBLE_DEPENDENCY_KEYS`, `consumerVisibleManifestChanged`, `decide`.
 - `check-config-filename-mentions.mjs`: `trackedFilePaths`, `readTrackedFiles`.
 - `check-escalation-triggers.mjs`: `ACK_LABEL`, `LEGACY_ACK_LABEL`, `isStaticSupplyChainPath`, `LOW_PRIVILEGE_SECRETS`, `workflowHoldsCredential`, `referencedPaths`, `invokedPaths`, `moduleEdges`, `shellSourceGaps`, `releaseClosure`, `releasePathClosure`, `classifyContent`, `mergeFired`, `parseNameStatus`, `PUBLIC_MANIFEST_KEYS`, `publicSurfaceChanged`, `classify`, `isAcknowledged`, `stripComments`.
@@ -152,6 +154,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `check-ffi-crate-rev.mjs` (`CRATE_PATHSPEC`) watches `crates/knext-ffi/` and `crates/knext-ffi-macros/` and excludes `*.md` with the `:(exclude)*.md` pathspec, so docs-only Markdown never requires moving the `packages/ffi/package.json` `knextFfi.crateRev` pin. Its exit-2 paths (shallow history, unresolvable base ref) fail closed.
 
 ## Side Effects
+- `redis-acl-spike.mjs` writes to the Redis at `KNEXT_REDIS_ACL_SPIKE_URL` (never `REDIS_URL`): each run creates two throwaway ACL users and removes them, their keys and a `knext:cdn:purged:<random>:b1` key when done.
 - Release scripts call the npm registry and GitHub (`gh`), and some publish or alter dist-tags (`ensure-published-group.mjs`, `npm-dist-tag-rollback.mjs`).
 - Pack and smoke scripts write tarballs and temp directories. `rewrite-workspace-ranges.mjs` rewrites `package.json` files in the tree. `install-smoke.mjs` guards them with `lib/manifest-restore.mjs:guardManifests`, which restores every workspace `package.json` afterwards.
 - The e2e shell drivers (`e2e-deploy.sh`, `e2e-cleanup.sh`) build and boot an app locally and persist its `BUILD_ID`, `PORT` and `PID` to `.adapter-build.log`; `e2e-cleanup.sh` reads that file and stops the server. The cluster assertion scripts (`deep-health-alert-e2e.sh`, `load-test.sh`, `public-hosts-e2e-assert.sh`, `use-cache-2pod-e2e-assert.sh`) run `kubectl` against the current context.

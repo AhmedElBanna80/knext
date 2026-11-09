@@ -571,9 +571,11 @@ describe("the V8 compile cache is baked into the standalone-node image and LIVE 
                 "the cache is populated but not accepted, the bake most likely ran " +
                 `as a different uid than the runtime (the cache subdirectory is keyed by uid).\n${logs.slice(-3000)}`,
         ).toMatch(
-            // server.js is spawned as `node server.js` (plain CLI arg), so it
-            // loads as CommonJS — the "V8 code cache for CommonJS <path>" log form (Node 24), never the ESM file:// form.
-            /V8 code cache for CommonJS \/app\/\.next\/standalone\/server\.js was accepted/,
+            // server.js is spawned as `node server.js` by the supervisor, and the
+            // fixture's package.json sets "type": "module" like every scaffolded
+            // app (#2247), so it loads as ESM: the "V8 code cache for ESM
+            // file://<path>" form (Node 24) that production pods log.
+            /V8 code cache for ESM file:\/\/\/app\/\.next\/standalone\/server\.js was accepted/,
         );
     });
 

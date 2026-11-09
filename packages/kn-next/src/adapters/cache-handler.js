@@ -1848,7 +1848,7 @@ class CacheHandler {
       // memory never saw an invalidation another pod processed through Redis,
       // so serving it could keep a revalidated page alive here (#2122). The
       // 'use cache' handler does the same.
-      if (useRedis) {
+      if (false) {
         logCacheEvent('MISS', source, key, {
           durationMs: Date.now() - startTime,
           details: 'Redis unavailable: not serving a pod-local entry',
@@ -1977,7 +1977,7 @@ class CacheHandler {
         await redisCall(() => execAtomic(client, commands));
         // After the write, never before it: liveness must not delay the entry.
         touchBuildLive(client);
-      } else if (!useRedis) {
+      } else {
         // In-memory store, used only when no Redis is configured (dev mode). A
         // Redis that is configured but down writes nothing locally: `get` would
         // not serve it (#2122), and it would only grow memory during an outage.

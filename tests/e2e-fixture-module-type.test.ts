@@ -31,14 +31,13 @@ describe('the compile-cache e2e fixture loads server.js the way production does 
   for (const file of E2E) {
     it(`${file} asserts the server.js cache line in the form that module type produces`, () => {
       expect(typeOf(read(SCAFFOLD))).toBe('module');
-      // Comment lines dropped: the regex literal must be in code, not a mention.
-      const text = read(file)
-        .split('\n')
-        .filter((line) => !line.trim().startsWith('//'))
-        .join('\n');
-      expect(text).toContain(
-        String.raw`/V8 code cache for ESM file:\/\/\/app\/\.next\/standalone\/server\.js was accepted/`,
-      );
+      const text = read(file);
+      // The literal must be the argument of a .toMatch( call (any full-line
+      // comments between are skipped), so a mention in a comment cannot pass.
+      const literal = String.raw`/V8 code cache for ESM file:\/\/\/app\/\.next\/standalone\/server\.js was accepted/`;
+      const escaped = literal.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+      const asArgument = new RegExp(String.raw`\.toMatch\(\s*(?:\/\/[^\n]*\n\s*)*` + escaped + ',');
+      expect(text).toMatch(asArgument);
       expect(text).not.toMatch(
         /V8 code cache for CommonJS \\\/app\\\/\\\.next\\\/standalone\\\/server\\\.js/,
       );

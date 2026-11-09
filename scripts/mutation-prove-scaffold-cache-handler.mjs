@@ -70,6 +70,24 @@ const MUTATIONS = [
     replacement: 'cacheMaxMemorySize: 1,',
   },
   {
+    id: 'M1d',
+    expect: 'red',
+    claim: 'the `cacheHandler` wiring is deleted from the DEFAULT (turbopack) next.config template',
+    subject: 'nextConfigDefault',
+    options: HBS,
+    anchor: 'cacheHandler: new URL("./cache-handler.js", import.meta.url).pathname,',
+    replacement: '',
+  },
+  {
+    id: 'M2d',
+    expect: 'red',
+    claim: 'the per-pod in-memory cache is turned back ON in the DEFAULT next.config template',
+    subject: 'nextConfigDefault',
+    options: HBS,
+    anchor: 'cacheMaxMemorySize: 0,',
+    replacement: 'cacheMaxMemorySize: 1,',
+  },
+  {
     id: 'M3',
     expect: 'red',
     claim:
@@ -107,7 +125,11 @@ const prover = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: SPEC,
   subjects: {
-    nextConfig: 'packages/kn-next/templates/app/next.config.ts.hbs',
+    // The guarded next.config assertions scaffold the vinext target, which renders
+    // from the vinext template (create-scaffold.test.ts `scaffoldVinextApp`).
+    nextConfig: 'packages/kn-next/templates/app/next.config.ts.vinext.hbs',
+    // The default (turbopack) builder renders from the plain template.
+    nextConfigDefault: 'packages/kn-next/templates/app/next.config.ts.hbs',
     cacheHandler: 'packages/kn-next/templates/app/cache-handler.js.hbs',
   },
 });

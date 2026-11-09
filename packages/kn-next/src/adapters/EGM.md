@@ -371,9 +371,12 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Cache
 
-- Redis faults fail open. Any fault in `cache-handler.js:redisCall` opens a
-  circuit breaker for `REDIS_RETRY_COOLDOWN_MS`, and requests are served from
-  memory or the origin until it closes. `use-cache-handler.js` has no
+- Redis faults fail open. A fault in `cache-handler.js:redisCall`, or a failed
+  connect (`waitForReady` / `waitForNativeReady` via `markUnhealthy`), opens a
+  circuit breaker for `REDIS_RETRY_COOLDOWN_MS`. Until it closes, ISR `get`
+  misses and Next renders from the origin, and `set` writes nothing locally: the
+  per-process memory store serves only when Redis is not in use (no `REDIS_URL`,
+  or a client that could not be loaded). `use-cache-handler.js` has no
   in-process fallback: while Redis is down, `get` is a miss and `set` is
   dropped. Its `get`, `getExpiration` and `updateTags` never throw.
 - `cache-handler.js:execAtomic` writes the entry and its tag index together in

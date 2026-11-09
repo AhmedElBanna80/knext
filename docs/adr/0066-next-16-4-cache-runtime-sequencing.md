@@ -1446,7 +1446,7 @@ time before `process.exit`.
 
 | Option | For | Against |
 | --- | --- | --- |
-| **Exit report (chosen, jev 0.89)** | Fires on every `process.exit`, which is how every knext runtime ends; no signal handler added | No last replay attempt; a bare default-disposition SIGTERM runs no `exit` listener |
+| **Exit report (chosen, jev 0.89)** | Fires on every `process.exit`, which is how a knext runtime ends short of a SIGKILL; no signal handler added | No last replay attempt; a bare default-disposition SIGTERM runs no `exit` listener |
 | SIGTERM listener in the handler (jev 0.10) | One more replay chance | Suppresses default termination on a runtime without Next's handler |
 | Drain in the supervisor (jev 0.01) | Uses the existing drain hook | Cannot see the child process's lists on the node target |
 
@@ -1467,7 +1467,7 @@ backlog, readable while the outage lasts, is the follow-up if a metric is wanted
 positive case asserts exactly one registry listener is installed on `process` and calls it; the
 no-Redis and nothing-recorded cases assert no reporter was armed; the two "replayed before exit"
 cases arm a reporter, assert the replay ran and that the exit logs nothing; one case removes the
-listener and checks the next ISR arm puts it back. Mutation prover by exit code kills: no arm on an invalidation, no arm on a delete, an
+listener and checks the next ISR arm puts it back. Mutation proof, each mutation killed by the suite (checked by exit code): no arm on an invalidation, no arm on a delete, an
 ISR report with nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never
 registering, a replayed backlog reported, no listener installed, no reinstall. Adding the listener on
 every arm is not visible under Bun, which drops a duplicate `once` for the same function; Node keeps

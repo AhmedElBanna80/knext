@@ -261,9 +261,10 @@ compat credential is the north-star lever; this work does not compete with it fo
 **Proposed (2026-11-09)** for #2270, as ADR-0068 Amendment 4's action item A4-4. Flagged for the next
 sprint-close design review together with that amendment. It gates A4-1, the CloudFront purge
 implementation: that code does not merge before this amendment is accepted. **Revision 1** applies the
-first design review on #2895: the exception is named for one provider, the scan forbids every non-`node:`
-import in the purge module, enforcement is stated as the user's, and workload identity needs its own
-amendment.
+first design review on #2895: the exception is named for one provider, the purge module's imports are
+limited to relative paths and `node:` built-ins, enforcement is stated as the user's, and workload
+identity needs its own amendment. **Revisions 2 and 3** make the import rule transitive, confined to
+`packages/*/src`, and closed to dynamic loading, and put the scans in ADR-0068 A4-1's exit gate.
 
 **Tripwire 1 (cloud SDK imports), cross-reference.** A hand-written request signer is not a cloud SDK
 only while it meets the bar in ADR-0068 Amendment 4 A4.1, which today pins **exactly one** signer,
@@ -273,8 +274,9 @@ constant host; one operation, no credential chain; tested byte for byte against 
 A second signer, for any provider, needs its own amendment of both ADRs. Because the primitive scan does
 not look inside `node_modules`, a signing package would get past it, so the tripwire 1 scan also
 follows the module graph from every file in `packages/kn-next/src/adapters/cdn-purge/` through its
-relative imports, transitively, and requires every module it reaches to import only relative paths and
-`node:` built-ins (never `node:module`). Dynamic loading (`require(`, `import(`, `createRequire`) is
+relative imports, transitively, and requires every module it reaches to sit under `packages/*/src`
+(never `node_modules` or a vendored copy) and to import only relative paths and `node:` built-ins
+(never `node:module`). Dynamic loading (`require(`, `import(`, `createRequire`) is
 forbidden in every module of that graph. Today the graph is the module's own files,
 `../cache-write-registry.js` (no imports) and `node:crypto`, so the rule passes as written. The scan
 also forbids `@smithy/*`, `@aws-crypto/*`, `aws4`, `aws4fetch` and the unscoped `aws-sdk` anywhere in

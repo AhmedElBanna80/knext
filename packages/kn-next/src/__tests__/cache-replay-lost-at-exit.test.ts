@@ -73,10 +73,10 @@ describe("ISR handler: exiting with an invalidation backlog", () => {
         process.env = { ...original };
     });
 
-    async function handler(): Promise<Any> {
+    async function handler(cooldownMs = COOLDOWN_MS): Promise<Any> {
         gen += 1;
         process.env.REDIS_KEY_PREFIX = "exitrep";
-        process.env.REDIS_RETRY_COOLDOWN_MS = String(COOLDOWN_MS);
+        process.env.REDIS_RETRY_COOLDOWN_MS = String(cooldownMs);
         fake = await startFakeRedis({
             errorFor: (cmd) => (failGets && cmd === "get" ? "boom" : undefined),
         });
@@ -110,6 +110,22 @@ describe("ISR handler: exiting with an invalidation backlog", () => {
         const lines = exitLines();
         expect(lines).toHaveLength(1);
         expect(lines[0]).toContain("0 tag invalidation(s) and 1 delete(s)");
+    });
+
+    it("a backlog replayed before the exit is not reported", async () => {
+        const h = await handler(100);
+        await openBreaker(h);
+        await h.revalidateTag("x");
+        // The probe fires when the breaker closes and replays the tag.
+        await sleep(400);
+        const replayed = (
+            console.log as unknown as { mock: { calls: unknown[][] } }
+        ).mock.calls.some((c) =>
+            String(c[0]).includes("INVALIDATE tag:x (redis)"),
+        );
+        expect(replayed).toBe(true);
+        exitNow();
+        expect(exitLines()).toEqual([]);
     });
 
     it("nothing recorded: the exit logs nothing", async () => {

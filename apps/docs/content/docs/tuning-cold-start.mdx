@@ -119,6 +119,34 @@ instead of waiting on the app's real first packet. On an affected cluster this m
 wake time dropping from roughly ten seconds to roughly three. It is on by default and a no-op on
 clusters that don't show this pattern; opt out with `KNEXT_ARP_PRIMER=0` if you need to.
 
+### Warming a route at boot (opt-in)
+
+A woken server is usually listening about half a second before the cluster can send it traffic:
+Kubernetes still has to report the new pod's address and readiness. You can have knext use that
+idle time to render a page before the first visitor arrives. Set `KNEXT_WARM_PATH` to the path (or a
+comma-separated list of paths, up to 8) and, as soon as the server is listening, knext requests each
+one once on the pod's loopback interface. On a managed Kubernetes cluster, warming the page the
+first visitor asked for took the time from the pod passing its readiness check to the first
+response byte from a median of 94 ms to 16 ms; the whole cold start was not measurably shorter in that test, because the
+cluster's own startup varies by several hundred milliseconds.
+
+- It is off unless `KNEXT_WARM_PATH` is set, and `KNEXT_EAGER_WARM=0` turns it off. The default
+  image used to ignore `KNEXT_WARM_PATH` (it is the vinext build's warm-up setting): if your app's
+  environment already sets it, for example copied from the vinext example, your pods now warm those
+  pages when they start. Check that they are safe to warm (below), or set `KNEXT_EAGER_WARM=0`.
+- **Only warm pages that render the same for every visitor.** The warm request carries no cookies
+  and no authentication, and its render is stored in the shared page cache. Warming a personalised
+  or logged-in page would put the logged-out version in front of the first real user. A page that
+  does something on `GET` (writes to a database, calls a paid API) does it on every pod start.
+- The request carries the header `x-knext-warm: 1`. Any client can send that header, so never use it
+  to skip authentication or other checks. knext's cold-start metric and trace span
+  (`knext_coldstart_*`, `knext.cold_start`) attach to the first request the server sees, so with the
+  warm on they measure the warm request, not your first visitor; your app's own metrics also count it.
+- It never follows a redirect, spends about 5 seconds at most on the whole warm-up, starts no new
+  page once the server is shutting down, and never fails the start. This is the default image's behaviour; the
+  single-executable image has its own warm-up, described on the [Bun runtime](/docs/bun-runtime)
+  page.
+
 ## What's new in this release
 
 Every scaffolded knext app ships with an `instrumentation.ts` hook that Next.js runs once per

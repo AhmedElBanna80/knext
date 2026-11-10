@@ -158,6 +158,9 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `deferred-supervisor-init.ts` exports `createDeferredSupervisorInit`,
   `createLazyMetricsEndpoint`, `isSupervisorInitDeferred` and
   `DEFER_SUPERVISOR_INIT_ENV` (`KNEXT_DEFER_SUPERVISOR_INIT`), which it reads.
+- `self-warm.ts` exports `parseWarmPaths`, `selfWarm`, `isListening`,
+  `SELF_WARM_HEADER` (`x-knext-warm`) and `DEFAULT_WARM_TIMEOUT_MS`; it reads
+  `KNEXT_WARM_PATH` and `KNEXT_EAGER_WARM`.
 - `deferred-default-metrics.ts` exports `createDeferredDefaultMetrics`,
   `waitForChildServing`, `probeTcp`, `probeIntervalMs`, `readyDeadlineMs`,
   `CHILD_READY_INTERVAL_ENV` (`KNEXT_CHILD_READY_PROBE_MS`),
@@ -461,6 +464,17 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Supervisor and preloads
 
+- Once the child is serving, the supervisor's first deferred step (`self-warm`, in
+  `node-server.ts`, before the metrics collector) requests each `KNEXT_WARM_PATH`
+  path (opt-in: none unless set; `KNEXT_EAGER_WARM=0` off; at most 8; logs
+  `WARMED:` lines) on `127.0.0.1:$PORT` with
+  `x-knext-warm: 1`, one at a time, never following a redirect, and never
+  throwing; it skips the warm-up if nothing listens yet, shares one 5 s
+  budget across all paths, and stops on shutdown. It runs wherever this
+  supervisor runs: disk mode, and exec mode where the supervisor spawns the
+  compiled executable. The self-contained executable image has no supervisor;
+  it warms through its own entry (`knext-bun-entry.mjs`, on by default with
+  `/api/health`, ADR-0042).
 - What each runtime path loads before the server:
   - **Disk mode** (`node-server.ts` supervisor, a Node or Bun `server.js` child):
     the supervisor runs every `PROCESS_START_PRIMERS` entry in-process

@@ -263,6 +263,13 @@ const NOT_REDIS_RECEIVERS: Record<
       why: 'the pino logger',
     },
   },
+  'packages/kn-next/src/adapters/self-warm.ts': {
+    log: {
+      bindings: ['log: SelfWarmLog;'],
+      commands: ['info'],
+      why: 'an injected logger (the supervisor pino logger)',
+    },
+  },
   'packages/kn-next/src/adapters/sandbox-fetch-debug.cjs': {
     dc: {
       bindings: ["const dc = require('node:diagnostics_channel');"],

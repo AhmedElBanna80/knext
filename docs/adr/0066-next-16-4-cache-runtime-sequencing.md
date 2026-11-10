@@ -938,6 +938,7 @@ on, the amendment governs; for D2, read D2 current text.
     `revalidateTag(tag, profile)`. Filed as #2122 (milestone v2.0, `priority:P2`).
 13. **ISR outage miss on kind** (Amendment 8): a kind test with Redis down shows no pod serves an
     ISR entry from its own memory, and measures the render rate during the outage. Filed as #2883.
+    Done 2026-11-10: see Amendment 8, Proof.
 
 ## Amendment 1 (2026-10-11): K4 keeps the `adapterPath` shim; the gate is the D4 smoke runs
 
@@ -1388,9 +1389,12 @@ it is unchanged. The 1.x line on `main` is unchanged.
 | Bounded-TTL fallback | A middle ground | A second outage mode to reason about; still stale within the bound |
 
 **Consequences.**
-- Every ISR request renders during a Redis outage. The extra origin load is **not measured**: there
-  is no render-amplification number yet, and no bound on several pods rendering the same page at
-  once. Measuring it is part of the open kind action item below.
+- Every ISR request renders during a Redis outage. Measured on kind (2026-11-10, the
+  `runtime-redis-cache-kind-e2e.yml` outage step, one pod, eight sequential reads of an ISR page
+  backed by `unstable_cache`): every read re-rendered (8 distinct values for 8 reads), at 1.6–1.9
+  renders/s, 527–617 ms per read, across turbopack and vinext on node and bun. That is the
+  single-pod sequential rate on a CI runner, not a production bound: nothing yet bounds several pods
+  rendering the same page at once.
 - Amendment 4 replay is unchanged. Tags whose invalidation did not reach Redis during the outage are
   still kept per process and replayed, Redis first and then the edge, once the breaker closes.
   `revalidateTag` still runs over the pod map, which now holds no ISR entries while Redis is
@@ -1407,8 +1411,13 @@ it is unchanged. The 1.x line on `main` is unchanged.
 configured but down: a set then get misses, an image entry misses, and an entry already in pod memory
 is not served. With no Redis configured, the in-memory store still serves. Each guard is
 mutation-proved: removing the `get` guard reds the held-entry case, and removing both guards reds the
-set-then-get case. Open action item 13 (#2883): a kind test with Redis down that shows ISR no longer serves a pod-local entry and
-measures the render rate during the outage.
+set-then-get case. Action item 13 (#2883) is done: the outage step of
+`.github/workflows/runtime-redis-cache-kind-e2e.yml` scales Redis to 0, reads the page eight times,
+and fails unless every read is a new render and every read logs a handler miss. It then checks that
+an invalidation made during the outage is replayed once Redis is back, and that Redis serves the page
+again. It is green on all four cells. Restoring the pod-local serve in `cache-handler.js` turns it red
+at that step on three cells ("1 distinct values for 8 reads"). The fourth (vinext × bun) failed
+before the outage step, at MinIO setup, twice, so that cell's mutation result is inconclusive.
 
 
 ## Amendment 9 (2026-11-09, Proposed): a replay backlog a process exits with is reported, not replayed (#2384)

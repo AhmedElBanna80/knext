@@ -17,25 +17,25 @@
   "dependencies": {
     "@getknext/lib": "workspace:*",
     "@getknext/ui": "workspace:*",
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/api-logs": "^0.212.0",
-    "@opentelemetry/exporter-trace-otlp-grpc": "^0.208.0",
-    "@opentelemetry/instrumentation": "^0.212.0",
+    "@opentelemetry/api": "^1.10.0",
+    "@opentelemetry/api-logs": "^0.223.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.301.0",
+    "@opentelemetry/instrumentation": "^0.301.0",
     "@opentelemetry/resources": "^2.2.0",
     "@opentelemetry/sdk-logs": "^0.212.0",
-    "@opentelemetry/sdk-node": "^0.208.0",
-    "@opentelemetry/semantic-conventions": "^1.38.0",
-    "@vercel/otel": "^2.1.1",
+    "@opentelemetry/sdk-node": "^0.301.0",
+    "@opentelemetry/semantic-conventions": "^1.45.0",
+    "@vercel/otel": "^2.3.0",
     "ioredis": "^5.9.2",
-    "minio": "^8.0.6",
-    "next": "16.4.3",
-    "pg": "^8.16.3",
+    "minio": "^8.0.7",
+    "next": "16.4.5",
+    "pg": "^8.23.1",
     "prom-client": "^15.1.3",
     "react": "~19.3.1",
     "react-dom": "~19.3.1",
     "sharp": "^0.35.5",
     "srvx": "0.11.22",
-    "vinext": "1.3.0"
+    "vinext": "1.4.4"
   },
   "devDependencies": {
     "@getknext/core": "workspace:*",
@@ -51,6 +51,6 @@
     "tailwindcss": "^4",
     "typescript": "^5.9.3",
     "vite": "^8.2.2",
-    "yaml": "^2.8.2"
+    "yaml": "^2.9.1"
   }
 }

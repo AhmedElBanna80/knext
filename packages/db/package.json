@@ -57,8 +57,8 @@
   },
   "dependencies": {
     "@getknext/lib": "workspace:^",
-    "drizzle-orm": "^0.45.2",
-    "pg": "^8.16.3"
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1"
   },
   "peerDependencies": {
     "drizzle-kit": "^0.31.0"
@@ -70,7 +70,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.8.0",
-    "@types/pg": "^8.15.6",
+    "@types/pg": "^8.23.1",
     "drizzle-kit": "^0.31.0",
     "typescript": "^5.9.3"
   },

@@ -44,7 +44,7 @@
     "ioredis": "^6.0.0",
     "ioredis5": "npm:ioredis@^5.9.3",
     "jsdom": "^27.3.0",
-    "minio": "^8.0.6",
+    "minio": "^8.0.7",
     "mvdan-sh": "0.10.1",
     "pg-connection-string": "^2.14.0",
     "tar": "^7.4.3",
@@ -52,14 +52,14 @@
     "turbo": "latest",
     "typescript": "^5.9.3",
     "typescript-tsc7": "npm:typescript@^7.0.2",
-    "yaml": "^2.7.1"
+    "yaml": "^2.9.1"
   },
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "dependencies": {
-    "@next/env": "^16.1.1"
+    "@next/env": "^16.4.5"
   },
   "pnpm": {
     "//overrides": "Trivy HIGH/CRITICAL remediation for the shipped file-manager image (#199; same discipline as the operator fix in #155: bump the deps, don't suppress). Chains: @getknext/lib → @cerbos/grpc (grpc-js, protobufjs) + minio (fast-xml-parser 4); @getknext/core → @google-cloud/storage (fast-xml-parser 5, retry-request → @types/request → form-data 2). Guarded by tests/supply-chain-workflow.test.ts.",

@@ -1390,11 +1390,12 @@ it is unchanged. The 1.x line on `main` is unchanged.
 
 **Consequences.**
 - Every ISR request renders during a Redis outage. Measured on kind (2026-11-10, the
-  `runtime-redis-cache-kind-e2e.yml` outage step, one pod, eight sequential reads of an ISR page
+  `runtime-redis-cache-kind-e2e.yml` outage step, eight sequential reads of an ISR page
   backed by `unstable_cache`): every read re-rendered (8 distinct values for 8 reads), at 1.6–1.9
-  renders/s, 527–617 ms per read, across turbopack and vinext on node and bun. That is the
-  single-pod sequential rate on a CI runner, not a production bound: nothing yet bounds several pods
-  rendering the same page at once.
+  renders/s, 527–617 ms per read, across turbopack and vinext on node and bun. The step does not
+  record how many pods served the reads (the app allows up to two). That is a sequential rate on a
+  CI runner, not a production bound: nothing yet bounds several pods rendering the same page at
+  once.
 - Amendment 4 replay is unchanged. Tags whose invalidation did not reach Redis during the outage are
   still kept per process and replayed, Redis first and then the edge, once the breaker closes.
   `revalidateTag` still runs over the pod map, which now holds no ISR entries while Redis is
@@ -1413,9 +1414,10 @@ is not served. With no Redis configured, the in-memory store still serves. Each 
 mutation-proved: removing the `get` guard reds the held-entry case, and removing both guards reds the
 set-then-get case. Action item 13 (#2883) is done: the outage step of
 `.github/workflows/runtime-redis-cache-kind-e2e.yml` scales Redis to 0, reads the page eight times,
-and fails unless every read is a new render and every read logs a handler miss. It then checks that
-an invalidation made during the outage is replayed once Redis is back, and that Redis serves the page
-again. It is green on all four cells. Restoring the pod-local serve in `cache-handler.js` turns it red
+and fails unless all eight are distinct renders and at least eight handler MISS lines are logged
+across the app's pods during the outage (an aggregate count, not a per-read or per-pod check). It
+then checks that an invalidation made during the outage is replayed to Redis once Redis is back, and
+that two consecutive reads after recovery return the same value. It is green on all four cells. Restoring the pod-local serve in `cache-handler.js` turns it red
 at that step on three cells ("1 distinct values for 8 reads"). The fourth (vinext × bun) failed
 before the outage step, at MinIO setup, twice, so that cell's mutation result is inconclusive.
 

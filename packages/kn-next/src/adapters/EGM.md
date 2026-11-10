@@ -470,13 +470,21 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Supervisor and preloads
 
-- Once the child is serving, the supervisor's first deferred step (`self-warm`, in
-  `node-server.ts`, before the metrics collector) requests each `KNEXT_WARM_PATH`
-  path (opt-in: none unless set; `KNEXT_EAGER_WARM=0` off; at most 8; logs
-  `WARMED:` lines) on `127.0.0.1:$PORT` with
-  `x-knext-warm: 1`, one at a time, never following a redirect, and never
-  throwing; it skips the warm-up if nothing listens yet, shares one 5 s
-  budget across all paths, and stops on shutdown. It runs wherever this
+- The supervisor's first deferred step (`self-warm`, in `node-server.ts`, before
+  the metrics collector) requests each `KNEXT_WARM_PATH` path on
+  `127.0.0.1:$PORT` with `x-knext-warm: 1`, one at a time, never following a
+  redirect (a 3xx is recorded), and never throwing. In the deferred branch it
+  runs once the child is serving; with deferral disabled (the opt-out branch)
+  it runs straight after spawn, and only the listening probe decides whether
+  it does anything. `parseWarmPaths`: nothing unless `KNEXT_WARM_PATH` is set;
+  `KNEXT_EAGER_WARM=0` (exact string) yields none; entries are comma-split and
+  trimmed, those not starting with `/` or starting with `//` are dropped
+  silently, and the first 8 kept. Logs `WARMED:<path> status=<n> ms=<n>` (info)
+  or `WARMED:<path> status=error ms=<n> (<code>)` (warn); with nothing
+  accepting TCP within 300 ms it logs `self-warm skipped: the server is not
+  listening yet` and returns. All paths share one 5 s budget, started after
+  that probe. The shutdown check runs before each path; a request in flight
+  is not aborted. It runs wherever this
   supervisor runs: disk mode, and exec mode where the supervisor spawns the
   compiled executable. The self-contained executable image has no supervisor;
   it warms through its own entry (`knext-bun-entry.mjs`, on by default with

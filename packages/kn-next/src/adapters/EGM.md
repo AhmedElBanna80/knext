@@ -87,8 +87,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `globalThis.Bun.RedisClient`. Both extend `CacheHandler`.
 - `cache-write-registry.js` exports `trackWrite`,
   `drainCacheWrites(timeoutMs = 5000)`, `inFlightCacheWriteCount`,
-  `onProcessExit(report)`, `runExitReports`, `clearExitReportsForTests` and
-  `exitReportCountForTests`.
+  `onProcessExit(report)`, `runExitReports`, `clearExitReportsForTests` (empties
+  the reporter set; the listener stays installed) and `exitReportCountForTests`.
 - `use-cache-handler.js:createUseCacheHandler({kind, core})` returns
   `{get, set, refreshTags, getExpiration, updateTags}`. The metric is
   `USE_CACHE_METRIC = 'knext_use_cache_events_total'`, rendered by
@@ -423,13 +423,18 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `onProcessExit` keeps its reporters in one `globalThis` set
   (`Symbol.for('knext.core.cache.exitReports')`) and installs one
   `process.once('exit', …)` per process (the first copy's `runExitReports`,
-  kept under `Symbol.for('knext.core.cache.exitReportsListener')`). Each call
-  checks the live listeners, so a removed listener is put back by the next
-  `onProcessExit` call. Reporters run synchronously and a throwing one is swallowed.
+  kept under `Symbol.for('knext.core.cache.exitReportsListener')`). It reads
+  `process` through `globalThis.process`, because Next traces this module into
+  the Edge middleware bundle. Where `globalThis.process` lacks `once` or
+  `listeners` (Edge), the reporter is still stored but no listener is installed,
+  so nothing is reported. Each call checks the live listeners, so a removed
+  listener is put back by the next `onProcessExit` call. Reporters run
+  synchronously and a throwing one is swallowed.
 - A process that exits with a replay backlog logs one
   `[CacheHandler] exiting with … not yet replayed to Redis` line per handler (#2384).
   The ISR handler calls `onProcessExit` on every recorded skip (the set dedups
-  the reporter, and the call restores a removed listener); the `'use cache'`
+  the reporter, and the call restores a removed listener), wrapped so a failure
+  there never costs the backlog; the `'use cache'`
   handler arms once per core, so it does not restore one. The ISR line names the edge purge
   only when tags (or a collapse) are lost; deletes hold none back. No counter.
   A backlog already replayed reports nothing.

@@ -142,7 +142,13 @@ export function onProcessExit(report) {
   // and never added twice (Node keeps a duplicate `once`; Bun drops it).
   globalThis[EXIT_LISTENER_KEY] ??= runExitReports;
   const listener = globalThis[EXIT_LISTENER_KEY];
-  if (!process.listeners('exit').includes(listener)) process.once('exit', listener);
+  // Reached through `globalThis`, not the bare `process` identifier: Next traces
+  // this module into the Edge middleware bundle too, where Turbopack rejects a
+  // direct `process.listeners` / `process.once` as an unsupported Node.js API.
+  // On an Edge runtime there is no such process, and nothing is reported.
+  const proc = globalThis.process;
+  if (typeof proc?.once !== 'function' || typeof proc.listeners !== 'function') return;
+  if (!proc.listeners('exit').includes(listener)) proc.once('exit', listener);
 }
 
 /** How many reporters are registered (tests). */

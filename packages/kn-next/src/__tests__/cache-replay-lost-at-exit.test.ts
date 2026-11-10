@@ -245,3 +245,17 @@ describe("'use cache' handler: exiting with a tag backlog", () => {
         expect(exitLines()).toEqual([]);
     });
 });
+
+describe("the registry stays Edge-traceable", () => {
+    it("never names the bare `process` identifier (Next traces it into the Edge middleware bundle, where Turbopack rejects process.once/listeners)", async () => {
+        const { readFileSync } = await import("node:fs");
+        const src = readFileSync(
+            new URL("../adapters/cache-write-registry.js", import.meta.url),
+            "utf8",
+        )
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/\/\/.*$/gm, "");
+        expect(src).toContain("globalThis.process");
+        expect(src.match(/(^|[^.\w$])process\./gm) ?? []).toEqual([]);
+    });
+});

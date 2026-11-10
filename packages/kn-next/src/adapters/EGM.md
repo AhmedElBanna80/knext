@@ -414,8 +414,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   check, so it can also remove an entry a later `set` wrote meanwhile; the next
   request re-renders it.
 - The invalidation replay backlog is capped at 1000 tags and deletes together. Past that, it
-  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix
-  and the shared legacy default key prefix (bare, or with a `:*` wildcard). A CDN purge is sent only for tags whose Redis
+  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix,
+  the shared legacy default key prefix `kn-next`, and any prefix nested under it
+  (for example `kn-next:cache`). A CDN purge is sent only for tags whose Redis
   invalidation completed.
 - `cache-write-registry.js:drainCacheWrites` never rejects and is bounded by
   `timeoutMs`.

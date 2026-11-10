@@ -1410,3 +1410,65 @@ mutation-proved: removing the `get` guard reds the held-entry case, and removing
 set-then-get case. Open action item 13 (#2883): a kind test with Redis down that shows ISR no longer serves a pod-local entry and
 measures the render rate during the outage.
 
+
+## Amendment 9 (2026-11-09, Proposed): a replay backlog a process exits with is reported, not replayed (#2384)
+
+**Context.** The Amendment 4 (ISR) and Amendment 5 (`'use cache'`) replay lists live in the process.
+A pod that scales to zero or restarts before Redis is back loses them, and that loss was silent:
+entries stayed stale until their TTL with no line anywhere. Under Knative this is the ordinary path,
+since any outage longer than the scale-down delay hits it. #2384 asked for one bounded replay
+attempt in the SIGTERM drain, plus a log line and a count for whatever is still pending.
+
+**Correction to the record.** D-section text at :346 and :355, Amendment 4 ("enrolled in the SIGTERM
+drain registry") and Amendment 5 ("Enrolled in the SIGTERM drain") overstate it. The replay run is
+`trackWrite`'d, so a drain *can* await it, but `drainCacheWrites` has no production caller. On the
+node target the handler runs in Next's standalone child process, which the supervisor's
+`shutdown.ts` drains cannot see. On the self-contained target the preload installs no cache drain.
+What actually protects a write in flight at SIGTERM is MULTI/EXEC atomicity and Next's own drain
+time before `process.exit`.
+
+**Decision.** Report the loss; do not add a replay attempt at shutdown.
+- `cache-write-registry.js` gains `onProcessExit(report)`. Reporters sit in one `globalThis` set
+  (`Symbol.for('knext.core.cache.exitReports')`, ADR-0027), run by one `process.once('exit')`
+  listener per process, synchronously, each one guarded.
+- The ISR handler arms its reporter on every recorded skip (the set dedups it, and the call restores a removed listener); the `'use cache'` handler arms once per core. On exit with anything
+  still pending, each handler logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
+  count (or "collapsed") and the TTL bound. No metric (see below).
+- The `exit` event fires whenever a knext runtime ends the process through `process.exit` (SIGKILL is the exception, below): Next's own `cleanup()` ends in
+  `process.exit(143)` on SIGTERM (`process.exit(130)` on SIGINT) (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
+  cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
+  preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`
+  listener; no knext runtime ships that way. A SIGKILL (the kubelet after
+  `terminationGracePeriodSeconds`, an OOM kill) runs none either, so **no line does not prove
+  nothing was lost**: a pod killed that way loses its backlog silently, as before.
+
+**Options considered.**
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Exit report (chosen, jev 0.89)** | Fires on every `process.exit`, which is how a knext runtime ends short of a SIGKILL; no signal handler added | No last replay attempt; a bare default-disposition SIGTERM runs no `exit` listener |
+| SIGTERM listener in the handler (jev 0.10) | One more replay chance | Suppresses default termination on a runtime without Next's handler |
+| Drain in the supervisor (jev 0.01) | Uses the existing drain hook | Cannot see the child process's lists on the node target |
+
+A replay attempt at drain changes nothing while the breaker is still open, which is the case this
+report is about. The probe timer keeps firing during Next's own drain, so a Redis that comes back in
+that window is still replayed. One seam was not taken: the self-contained preload already runs a
+SIGTERM listener in the handler's process (`standalone-self-contained-supervisor.cjs`), and a
+`globalThis` "replay now" kick from it would add one attempt there without suppressing anything.
+It is left as a follow-up, because it covers only that target and only a Redis that is already back.
+
+**No counter.** #2384 asked for one. A count taken in the `exit` listener can never be scraped (the
+process answers no request after it), so a dashboard would always read zero while tags are lost.
+Dropped after code review showed that (jev: drop 0.51, gauge 0.31, keep 0.18; an earlier vote for
+keep assumed it was merely rarely seen). The log line is the record. A gauge of the outstanding
+backlog, readable while the outage lasts, is the follow-up if a metric is wanted.
+
+**Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (11 cases). Each
+positive case asserts exactly one registry listener is installed on `process` and calls it; the
+no-Redis and nothing-recorded cases assert no reporter was armed; the two "replayed before exit"
+cases arm a reporter, assert the replay ran and that the exit logs nothing; one case removes the
+listener and checks the next ISR arm puts it back. Mutation proof, each mutation killed by the suite (checked by exit code): no arm on an invalidation, no arm on a delete, an
+ISR report with nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never
+registering, a replayed backlog reported, no listener installed, no reinstall. Adding the listener on
+every arm is not visible under Bun, which drops a duplicate `once` for the same function; Node keeps
+it (measured: 2 listeners on Node, 1 on Bun), which is why the code checks first.

@@ -86,7 +86,9 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   default-exports `KnextBunCacheHandler`, which uses
   `globalThis.Bun.RedisClient`. Both extend `CacheHandler`.
 - `cache-write-registry.js` exports `trackWrite`,
-  `drainCacheWrites(timeoutMs = 5000)` and `inFlightCacheWriteCount`.
+  `drainCacheWrites(timeoutMs = 5000)`, `inFlightCacheWriteCount`,
+  `onProcessExit(report)`, `runExitReports`, `clearExitReportsForTests` and
+  `exitReportCountForTests`.
 - `use-cache-handler.js:createUseCacheHandler({kind, core})` returns
   `{get, set, refreshTags, getExpiration, updateTags}`. The metric is
   `USE_CACHE_METRIC = 'knext_use_cache_events_total'`, rendered by
@@ -414,6 +416,19 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   invalidation completed.
 - `cache-write-registry.js:drainCacheWrites` never rejects and is bounded by
   `timeoutMs`.
+- `onProcessExit` keeps its reporters in one `globalThis` set
+  (`Symbol.for('knext.core.cache.exitReports')`) and installs one
+  `process.once('exit', …)` per process (the first copy's `runExitReports`,
+  kept under `Symbol.for('knext.core.cache.exitReportsListener')`). Each call
+  checks the live listeners, so a removed listener is put back by the next
+  `onProcessExit` call. Reporters run synchronously and a throwing one is swallowed.
+- A process that exits with a replay backlog logs one
+  `[CacheHandler] exiting with … not yet replayed to Redis` line per handler (#2384).
+  The ISR handler calls `onProcessExit` on every recorded skip (the set dedups
+  the reporter, and the call restores a removed listener); the `'use cache'`
+  handler arms once per core, so it does not restore one. The ISR line names the edge purge
+  only when tags (or a collapse) are lost; deletes hold none back. No counter.
+  A backlog already replayed reports nothing.
 - `cache-control-normalize.cjs:normalizeCacheControl` applies only to GET and
   HEAD and leaves `immutable` responses alone. The CDN edge decision fails
   closed: on any error the edge is skipped and foreign edge headers are

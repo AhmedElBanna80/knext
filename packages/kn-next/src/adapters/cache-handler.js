@@ -23,7 +23,7 @@
 // This module imports `trackWrite` and re-exports NOTHING new from it: the
 // handler subpaths stay default-only, because they exist to be handed to
 // Next's `cacheHandler` option by path, not called.
-import { trackWrite } from './cache-write-registry.js';
+import { onProcessExit, trackWrite } from './cache-write-registry.js';
 // The CDN purge pipeline (ADR-0068 D6, D7). Inert unless KNEXT_CDN_PROVIDER is
 // set; both calls are total (never throw, never block). See "CDN wire-in" below.
 import { enqueueAppPurge, enqueuePurge, firstReadyPurge } from './cdn-purge/index.js';
@@ -1498,7 +1498,7 @@ function noteCdnPurgeSkipped(tagCount) {
 // edge purge for exactly the tags whose invalidation completed (the same order
 // as `revalidateTag`'s, D6.3).
 //
-//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags. One more and the list is
+//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags and deletes together. One more and the list is
 //    dropped for a COLLAPSE: the replay invalidates every ISR entry under this
 //    app's key prefix (a cursor SCAN, DEL per page) and queues one purge of the
 //    app's edge tag -- wider than needed, never stale. The same collapse the
@@ -1509,15 +1509,18 @@ function noteCdnPurgeSkipped(tagCount) {
 //  - OFF THE REQUEST PATH. Started by the first connection that finds the
 //    breaker closed, or by a probe timer set for the moment it closes (an idle
 //    pod would otherwise never replay while other pods serve the stale
-//    entries). Never awaited by a caller; enrolled in the SIGTERM drain.
+//    entries). Never awaited by a caller. `trackWrite`d, so a drain CAN await it,
+//    but no runtime registers that drain today (ADR-0066 Amendment 9).
 //  - NO STORM. One replay at a time, one tag at a time through `redisCall`: the
 //    first fault re-trips the breaker and stops the run, and the rest waits for
 //    the next probe -- one attempt per cooldown, the breaker's own rate.
 //  - PER PROCESS. The list lives in this process only: a pod that scales to
 //    zero or restarts before Redis is back loses it, and those entries stay
-//    stale until their TTL (a known limit). The `'use cache'` handler's tag
-//    stamps are replayed by that handler, the same way, from its own list
-//    (use-cache-handler.js, "Tag stamps an outage kept from Redis").
+//    stale until their TTL (a known limit). It is not lost silently: the
+//    process logs what it exits with (`reportReplayLostAtExit`, #2384).
+//  - The `'use cache'` handler's tag stamps are replayed by that handler, the
+//    same way, from its own list (use-cache-handler.js, "Tag stamps an outage
+//    kept from Redis").
 const REPLAY_MAX_TAGS = 1000;
 const REPLAY_SCAN_COUNT = 100;
 // tag -> the generation it was last recorded at. A Map keeps first-insertion
@@ -1547,10 +1550,39 @@ function resetInvalidationReplay() {
   replayTimer = null;
 }
 
+/**
+ * The exit report (#2384): a process that exits with a backlog loses it, and
+ * those entries (and the edge purge they held back) stay stale until their TTL.
+ * One line says so, with the count, rather than nothing at all.
+ */
+function reportReplayLostAtExit() {
+  if (!replayPending()) return;
+  const what = replayCollapsed
+    ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
+    : `${replayTags.size} tag invalidation(s) and ${replayKeys.size} delete(s)`;
+  // Deletes hold back no edge purge; tags (and a collapse) do.
+  const purge =
+    replayCollapsed || replayTags.size > 0 ? ', and the edge purge they held back does not run' : '';
+  console.error(
+    `[CacheHandler] exiting with ${what} not yet replayed to Redis: ` +
+      "those ISR entries stay stale until their Redis TTL (the route's `expire` when set, " +
+      `otherwise ${DEFAULT_TTL_SECONDS}s or twice \`revalidate\` when that is longer)${purge}`,
+  );
+}
+
+function armReplayExitReport() {
+  try {
+    onProcessExit(reportReplayLostAtExit);
+  } catch {
+    // Reporting is best effort; it must never cost the backlog itself.
+  }
+}
+
 /** Remember tags whose invalidation did not reach Redis, and try to replay them. */
 function recordSkippedInvalidation(tags) {
   const list = tags.filter((tag) => typeof tag === 'string' && tag.length > 0);
   if (!useRedis || list.length === 0) return;
+  armReplayExitReport();
   replayGeneration += 1;
   if (!replayCollapsed) {
     for (const tag of list) {
@@ -1573,6 +1605,7 @@ function recordSkippedInvalidation(tags) {
 /** Remember a delete that did not reach Redis, and try to replay it (#2889). */
 function recordSkippedDelete(key) {
   if (!useRedis || typeof key !== 'string') return;
+  armReplayExitReport();
   replayGeneration += 1;
   if (!replayCollapsed) {
     if (!replayKeys.has(key) && replayKeys.size + replayTags.size >= REPLAY_MAX_TAGS) {

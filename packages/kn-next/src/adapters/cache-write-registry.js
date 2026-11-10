@@ -95,3 +95,68 @@ export async function drainCacheWrites(timeoutMs = 5000) {
 export function inFlightCacheWriteCount() {
   return inFlight().size;
 }
+
+// ─── Work a process exits without (#2384) ───
+//
+// The outage-replay backlogs (ISR invalidations, 'use cache' tag stamps) live
+// in the process. A pod that scales to zero or restarts before Redis is back
+// loses them, and before this nothing said so: the entries stayed stale until
+// their TTL with no line anywhere. Each handler registers a reporter here; ONE
+// `exit` listener per process runs them, synchronously (an `exit` listener
+// cannot await), so whatever shuts the process down -- Next's own SIGTERM
+// handler on the standalone runtimes, a crash, a plain exit -- the loss is
+// logged. Anchored on `globalThis` for the same reason as the write set above:
+// duplicated copies of this module must share one listener and one set.
+
+const EXIT_REPORTS_KEY = Symbol.for('knext.core.cache.exitReports');
+const EXIT_LISTENER_KEY = Symbol.for('knext.core.cache.exitReportsListener');
+
+/** The one `exit` listener; exported so a test can call exactly it. */
+export function runExitReports() {
+  const reports = globalThis[EXIT_REPORTS_KEY];
+  if (!reports) return;
+  for (const report of reports) {
+    try {
+      report();
+    } catch {
+      // A reporter must never turn an exit into a crash.
+    }
+  }
+}
+
+/**
+ * Run `report` when the process exits. Synchronous only; idempotent per
+ * function. Installs the process listener on first use.
+ *
+ * @param {() => void} report
+ */
+export function onProcessExit(report) {
+  let reports = globalThis[EXIT_REPORTS_KEY];
+  if (!reports) {
+    reports = new Set();
+    globalThis[EXIT_REPORTS_KEY] = reports;
+  }
+  reports.add(report);
+  // One listener per process, shared by every copy of this module. Checked
+  // against the live listeners, so one removed by someone else is put back,
+  // and never added twice (Node keeps a duplicate `once`; Bun drops it).
+  globalThis[EXIT_LISTENER_KEY] ??= runExitReports;
+  const listener = globalThis[EXIT_LISTENER_KEY];
+  // Reached through `globalThis`, not the bare `process` identifier: Next traces
+  // this module into the Edge middleware bundle too, where Turbopack rejects a
+  // direct `process.listeners` / `process.once` as an unsupported Node.js API.
+  // On an Edge runtime there is no such process, and nothing is reported.
+  const proc = globalThis.process;
+  if (typeof proc?.once !== 'function' || typeof proc.listeners !== 'function') return;
+  if (!proc.listeners('exit').includes(listener)) proc.once('exit', listener);
+}
+
+/** How many reporters are registered (tests). */
+export function exitReportCountForTests() {
+  return globalThis[EXIT_REPORTS_KEY]?.size ?? 0;
+}
+
+/** Forget every reporter (test isolation). The listener stays installed. */
+export function clearExitReportsForTests() {
+  globalThis[EXIT_REPORTS_KEY]?.clear();
+}

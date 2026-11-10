@@ -30,6 +30,8 @@ name: Runtime Redis cache — kind e2e (turbopack + vinext, node + bun)
 # dispatch a workflow that is not on the default branch yet, so the PR that
 # introduced this lane ran it once through a temporary pull_request trigger.)
 # Ephemeral kind on the runner only — never OKE/GKE.
+# (A push that changes this file is also what registers it with GitHub, so
+# it can be dispatched on a repository whose Actions were enabled later.)
 
 on:
   workflow_dispatch: {}

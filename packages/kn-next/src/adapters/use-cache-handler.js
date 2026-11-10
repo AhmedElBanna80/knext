@@ -641,7 +641,7 @@ async function writeReplayBatch(core, client, args) {
     }
   }
   const fields = args.filter((_, i) => i % 2 === 0);
-  const current = await core.redisCall(() => core.command(client, 'HMGET', [key, ...fields]));
+  const current = await core.redisCall(() => core.command(client, 'HMGET', [key, ...fields]), client);
   const now = Math.round(localNowMs()) + (await clockOffset(core, client));
   const writes = [];
   for (let i = 0; i < fields.length; i++) {
@@ -650,7 +650,7 @@ async function writeReplayBatch(core, client, args) {
     const v = replayStampValue(fields[i], cur, Number(args[2 * i + 1]), now);
     if (v !== null) writes.push(fields[i], String(v));
   }
-  if (writes.length > 0) await core.redisCall(() => core.command(client, 'HSET', [key, ...writes]));
+  if (writes.length > 0) await core.redisCall(() => core.command(client, 'HSET', [key, ...writes]), client);
 }
 
 /**
@@ -674,12 +674,13 @@ async function replayCollapsedTags(core, client) {
   const pattern = `${escapeGlob(prefix)}:uc:*`;
   let cursor = '0';
   do {
-    const reply = await core.redisCall(() =>
-      core.command(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+    const reply = await core.redisCall(
+      () => core.command(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+      client,
     );
     cursor = String(reply?.[0] ?? '0');
     const keys = (Array.isArray(reply?.[1]) ? reply[1].map(String) : []).filter((k) => k !== stamps);
-    if (keys.length > 0) await core.redisCall(() => core.command(client, 'DEL', keys));
+    if (keys.length > 0) await core.redisCall(() => core.command(client, 'DEL', keys), client);
   } while (cursor !== '0');
   // A drop recorded during the sweep may have missed it: keep the collapse.
   if (replay.generation === generation) replay.collapsed = false;
@@ -690,7 +691,7 @@ async function replayCollapsedTags(core, client) {
  * @param {object} args
  * @param {string} args.kind  Next's cache kind: `default` or `remote`.
  * @param {object} args.core  The collaborators `cache-handler.js` owns:
- *   `ensureConnected()` (client or null), `redisCall(fn)` (trips the shared
+ *   `ensureConnected()` (client or null), `redisCall(fn, client)` (trips the shared
  *   breaker on a fault), `command(client, name, args)`, `keyPrefix()`,
  *   `buildId()`, `redisConfigured()` and, optionally, `retryInMs()` (how long
  *   until the breaker closes, for the tag replay's probe).
@@ -751,7 +752,7 @@ export function createUseCacheHandler({ kind, core }) {
     }
     let raw;
     try {
-      raw = await core.redisCall(() => core.command(client, 'GET', [rkey]));
+      raw = await core.redisCall(() => core.command(client, 'GET', [rkey]), client);
     } catch {
       count('error');
       return undefined;
@@ -782,8 +783,9 @@ export function createUseCacheHandler({ kind, core }) {
     if (tags.length > 0) {
       let stamps;
       try {
-        stamps = await core.redisCall(() =>
-          core.command(client, 'HMGET', [tagsKey(), ...tags.flatMap((t) => [`s:${t}`, `e:${t}`])]),
+        stamps = await core.redisCall(
+          () => core.command(client, 'HMGET', [tagsKey(), ...tags.flatMap((t) => [`s:${t}`, `e:${t}`])]),
+          client,
         );
       } catch {
         count('error');
@@ -888,7 +890,7 @@ export function createUseCacheHandler({ kind, core }) {
     });
     const ttl = Math.max(1, Math.min(Math.ceil(entry.expire), maxTtlSeconds()));
     try {
-      await core.redisCall(() => core.command(client, 'SET', [entryKey(cacheKey), envelope, 'EX', String(ttl)]));
+      await core.redisCall(() => core.command(client, 'SET', [entryKey(cacheKey), envelope, 'EX', String(ttl)]), client);
       noteAvailable();
       count('set');
     } catch (err) {
@@ -955,7 +957,7 @@ export function createUseCacheHandler({ kind, core }) {
     const record = mergeStamp(undefined, durations, 0);
     const fields = list.flatMap((tag) => stampFields(tag, record, now));
     try {
-      await core.redisCall(() => core.command(client, 'HSET', [tagsKey(), ...fields]));
+      await core.redisCall(() => core.command(client, 'HSET', [tagsKey(), ...fields]), client);
       noteAvailable();
       count('tagsUpdated');
     } catch (err) {
@@ -988,7 +990,7 @@ export function createUseCacheHandler({ kind, core }) {
     if (!client) return 0;
     let stamps;
     try {
-      stamps = await core.redisCall(() => core.command(client, 'HMGET', [tagsKey(), ...list.map((t) => `e:${t}`)]));
+      stamps = await core.redisCall(() => core.command(client, 'HMGET', [tagsKey(), ...list.map((t) => `e:${t}`)]), client);
     } catch {
       count('error');
       return 0;

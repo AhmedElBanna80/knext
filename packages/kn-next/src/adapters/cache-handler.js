@@ -342,19 +342,28 @@ function readImageFromMemory(key) {
  * connected (with `autoReconnect`) while the next connect built another: one
  * leaked connection per trip.
  */
-function markUnhealthy(reason) {
+function markUnhealthy(reason, faulting) {
+  // A fault on a client that is no longer current (a slow connect settling
+  // after a newer client was loaded) says nothing about the current one: close
+  // the stale client and leave the breaker and the current client alone (#2889).
+  if (faulting && faulting !== redis) {
+    closeClient(faulting);
+    return;
+  }
   unhealthyUntil = Date.now() + RETRY_COOLDOWN_MS;
   const dying = redis;
   redis = undefined;
   connectInFlight = null;
-  if (dying) {
-    try {
-      dying.disconnect();
-    } catch (err) {
-      reportCloseFailure(err);
-    }
-  }
+  if (dying) closeClient(dying);
   if (reason) console.error('[CacheHandler] Redis unhealthy, failing open:', reason);
+}
+
+function closeClient(client) {
+  try {
+    client.disconnect();
+  } catch (err) {
+    reportCloseFailure(err);
+  }
 }
 
 /**
@@ -700,7 +709,7 @@ function waitForReady(client) {
       if (settled) return;
       settled = true;
       cleanup();
-      if (!ok) markUnhealthy(reason);
+      if (!ok) markUnhealthy(reason, client);
       resolve(ok ? client : null);
     };
     function onReady() {
@@ -748,10 +757,10 @@ async function waitForNativeReady(client) {
     if (client.connected) return client;
     // A connect that resolves but leaves the client down is a failed connect
     // too: trip the breaker, or every cache call dials again (#2886).
-    markUnhealthy('native redis connect resolved but the client is not connected');
+    markUnhealthy('native redis connect resolved but the client is not connected', client);
     return null;
   } catch (err) {
-    markUnhealthy(err?.message || 'native redis connect failed');
+    markUnhealthy(err?.message || 'native redis connect failed', client);
     return null;
   }
 }
@@ -888,11 +897,13 @@ async function connectClient() {
  * Deliberately NOT applied to deserialization: a corrupt payload is a data
  * fault, not a connection fault, and must not take the cache offline.
  */
-async function redisCall(fn) {
+async function redisCall(fn, client) {
   try {
     return await fn();
   } catch (err) {
-    markUnhealthy(err?.message);
+    // With the client the command ran on, a fault on a client that is no
+    // longer current closes only that client (#2889).
+    markUnhealthy(err?.message, client);
     throw err;
   }
 }
@@ -921,7 +932,7 @@ function breakerRetryInMs() {
  */
 const USE_CACHE_CORE = {
   ensureConnected: () => ensureConnected(),
-  redisCall: (fn) => redisCall(fn),
+  redisCall: (fn, client) => redisCall(fn, client),
   command: redisCommand,
   keyPrefix: () => KEY_PREFIX,
   buildId: () => currentBuildId,
@@ -1342,6 +1353,7 @@ function touchBuildLive(client) {
     execBatch(client, [
       ['SET', buildLiveKey(currentBuildId), BUILD_LIVE_MARKER, 'EX', String(BUILD_LIVE_TTL_SECONDS)],
     ]),
+    client,
   ).catch(() => {
     // Not published: try again on the next request instead of waiting out the interval.
     lastBuildLiveBeat = 0;
@@ -1357,7 +1369,7 @@ async function isBuildLive(client, buildId) {
   if (known && now - known.at < BUILD_LIVE_LOOKUP_MS) return known.live;
   let live;
   try {
-    live = (await redisCall(() => client.get(buildLiveKey(buildId)))) === BUILD_LIVE_MARKER;
+    live = (await redisCall(() => client.get(buildLiveKey(buildId)), client)) === BUILD_LIVE_MARKER;
   } catch {
     return false;
   }
@@ -1512,17 +1524,22 @@ const REPLAY_SCAN_COUNT = 100;
 // order when a value is updated, and the generation lets a replay that raced a
 // fresh skip of the same tag keep it rather than forget it.
 const replayTags = new Map();
+// cache key -> generation, for `set(key, null)` deletes that did not reach Redis
+// (breaker open, or the delete itself faulted). Replayed before the tags; they
+// share the REPLAY_MAX_TAGS bound and the collapse (#2889).
+const replayKeys = new Map();
 let replayGeneration = 0;
 let replayCollapsed = false;
 let replayRun = null;
 let replayTimer = null;
 
 function replayPending() {
-  return replayCollapsed || replayTags.size > 0;
+  return replayCollapsed || replayTags.size > 0 || replayKeys.size > 0;
 }
 
 function resetInvalidationReplay() {
   replayTags.clear();
+  replayKeys.clear();
   replayGeneration = 0;
   replayCollapsed = false;
   replayRun = null;
@@ -1537,8 +1554,9 @@ function recordSkippedInvalidation(tags) {
   replayGeneration += 1;
   if (!replayCollapsed) {
     for (const tag of list) {
-      if (!replayTags.has(tag) && replayTags.size >= REPLAY_MAX_TAGS) {
+      if (!replayTags.has(tag) && replayTags.size + replayKeys.size >= REPLAY_MAX_TAGS) {
         replayTags.clear();
+        replayKeys.clear();
         replayCollapsed = true;
         console.warn(
           `[CacheHandler] invalidation replay backlog passed ${REPLAY_MAX_TAGS} tags while Redis was unreachable; once it is back, every ISR entry of this app is invalidated and the whole app is purged at the edge`,
@@ -1549,6 +1567,25 @@ function recordSkippedInvalidation(tags) {
     }
   }
   // With the breaker open this finds no client and only sets the probe.
+  startInvalidationReplay();
+}
+
+/** Remember a delete that did not reach Redis, and try to replay it (#2889). */
+function recordSkippedDelete(key) {
+  if (!useRedis || typeof key !== 'string') return;
+  replayGeneration += 1;
+  if (!replayCollapsed) {
+    if (!replayKeys.has(key) && replayKeys.size + replayTags.size >= REPLAY_MAX_TAGS) {
+      replayKeys.clear();
+      replayTags.clear();
+      replayCollapsed = true;
+      console.warn(
+        `[CacheHandler] invalidation replay backlog passed ${REPLAY_MAX_TAGS} entries while Redis was unreachable; once it is back, every ISR entry of this app is invalidated and the whole app is purged at the edge`,
+      );
+    } else {
+      replayKeys.set(key, replayGeneration);
+    }
+  }
   startInvalidationReplay();
 }
 
@@ -1594,6 +1631,11 @@ async function runInvalidationReplay() {
     await replayCollapsedBacklog(replayClient);
     return;
   }
+  for (const [key, generation] of [...replayKeys]) {
+    await redisCall(() => redisCommand(replayClient, 'DEL', [cacheKey(key)]), replayClient);
+    if (replayKeys.get(key) === generation) replayKeys.delete(key);
+    logCacheEvent('DELETE', 'redis', key, { details: 'Replayed after Redis recovered' });
+  }
   const replayed = [];
   try {
     for (const [tag, generation] of [...replayTags]) {
@@ -1631,13 +1673,14 @@ async function replayCollapsedBacklog(client) {
   let cursor = '0';
   let deleted = 0;
   do {
-    const reply = await redisCall(() =>
-      redisCommand(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+    const reply = await redisCall(
+      () => redisCommand(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+      client,
     );
     cursor = String(reply?.[0] ?? '0');
     const keys = Array.isArray(reply?.[1]) ? reply[1].map(String) : [];
     if (keys.length > 0) {
-      await redisCall(() => redisCommand(client, 'DEL', keys));
+      await redisCall(() => redisCommand(client, 'DEL', keys), client);
       deleted += keys.length;
     }
   } while (cursor !== '0');
@@ -1659,7 +1702,7 @@ async function replayCollapsedBacklog(client) {
  */
 async function invalidateTagInRedis(client, tag) {
   const tKey = tagKey(tag);
-  const keys = await redisCall(() => client.smembers(tKey));
+  const keys = await redisCall(() => client.smembers(tKey), client);
   if (keys.length > 0) {
     // Same atomicity guard as `set` (T13): dropping the entries and the tag
     // index must be all-or-nothing, or a death mid-batch leaves the tag set
@@ -1667,7 +1710,7 @@ async function invalidateTagInRedis(client, tag) {
     // invalidation that reported success).
     const commands = keys.map((k) => ['DEL', cacheKey(k)]);
     commands.push(['DEL', tKey]);
-    await redisCall(() => execAtomic(client, commands));
+    await redisCall(() => execAtomic(client, commands), client);
   }
   return keys.length;
 }
@@ -1706,7 +1749,7 @@ function startCdnFirstReady() {
   const redis = async () => {
     const client = await ensureConnected();
     if (!client) return null;
-    return { send: (name, args) => redisCall(() => redisCommand(client, name, args)) };
+    return { send: (name, args) => redisCall(() => redisCommand(client, name, args), client) };
   };
   try {
     const attempt = firstReadyPurge(buildId, { redis }).then(
@@ -1801,7 +1844,7 @@ class CacheHandler {
 
     try {
       if (client) {
-          const data = await redisCall(() => client.get(cacheKey(key)));
+          const data = await redisCall(() => client.get(cacheKey(key)), client);
           if (!data) {
             logCacheEvent('MISS', source, key, {
               durationMs: Date.now() - startTime,
@@ -1912,7 +1955,17 @@ class CacheHandler {
       if (data === null) {
         // Through redisCall like every other command, so a fault trips the
         // breaker instead of leaving the next call on the same client (#2886).
-        if (client) await redisCall(() => client.del(cacheKey(key)));
+        if (client) {
+          try {
+            await redisCall(() => client.del(cacheKey(key)), client);
+          } catch (err) {
+            // The stale entry would otherwise survive until its TTL (#2889).
+            recordSkippedDelete(key);
+            throw err;
+          }
+        } else {
+          recordSkippedDelete(key);
+        }
         memoryCache.delete(key);
         dropImageFromMemory(key);
         logCacheEvent('DELETE', source, key, {
@@ -1974,7 +2027,7 @@ class CacheHandler {
             commands.push(['SADD', tagKey(tag), key]);
           }
         }
-        await redisCall(() => execAtomic(client, commands));
+        await redisCall(() => execAtomic(client, commands), client);
         // After the write, never before it: liveness must not delay the entry.
         touchBuildLive(client);
       } else if (!useRedis) {

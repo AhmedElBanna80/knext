@@ -87,8 +87,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `globalThis.Bun.RedisClient`. Both extend `CacheHandler`.
 - `cache-write-registry.js` exports `trackWrite`,
   `drainCacheWrites(timeoutMs = 5000)`, `inFlightCacheWriteCount`,
-  `onProcessExit(report)`, `runExitReports`, `clearExitReportsForTests` and
-  `exitReportCountForTests`.
+  `onProcessExit(report)`, `runExitReports`, `clearExitReportsForTests` (empties
+  the reporter set; the listener stays installed) and `exitReportCountForTests`.
 - `use-cache-handler.js:createUseCacheHandler({kind, core})` returns
   `{get, set, refreshTags, getExpiration, updateTags}`. The metric is
   `USE_CACHE_METRIC = 'knext_use_cache_events_total'`, rendered by
@@ -414,21 +414,27 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   check, so it can also remove an entry a later `set` wrote meanwhile; the next
   request re-renders it.
 - The invalidation replay backlog is capped at 1000 tags and deletes together. Past that, it
-  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix
-  and the shared legacy default key prefix (bare, or with a `:*` wildcard). A CDN purge is sent only for tags whose Redis
+  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix,
+  the shared legacy default key prefix `kn-next`, and any prefix nested under it
+  (for example `kn-next:cache`). A CDN purge is sent only for tags whose Redis
   invalidation completed.
 - `cache-write-registry.js:drainCacheWrites` never rejects and is bounded by
   `timeoutMs`.
 - `onProcessExit` keeps its reporters in one `globalThis` set
   (`Symbol.for('knext.core.cache.exitReports')`) and installs one
   `process.once('exit', …)` per process (the first copy's `runExitReports`,
-  kept under `Symbol.for('knext.core.cache.exitReportsListener')`). Each call
-  checks the live listeners, so a removed listener is put back by the next
-  `onProcessExit` call. Reporters run synchronously and a throwing one is swallowed.
+  kept under `Symbol.for('knext.core.cache.exitReportsListener')`). It reads
+  `process` through `globalThis.process`, because Next traces this module into
+  the Edge middleware bundle. Where `globalThis.process` lacks `once` or
+  `listeners` (Edge), the reporter is still stored but no listener is installed,
+  so nothing is reported. Each call checks the live listeners, so a removed
+  listener is put back by the next `onProcessExit` call. Reporters run
+  synchronously and a throwing one is swallowed.
 - A process that exits with a replay backlog logs one
   `[CacheHandler] exiting with … not yet replayed to Redis` line per handler (#2384).
   The ISR handler calls `onProcessExit` on every recorded skip (the set dedups
-  the reporter, and the call restores a removed listener); the `'use cache'`
+  the reporter, and the call restores a removed listener), wrapped so a failure
+  there never costs the backlog; the `'use cache'`
   handler arms once per core, so it does not restore one. The ISR line names the edge purge
   only when tags (or a collapse) are lost; deletes hold none back. No counter.
   A backlog already replayed reports nothing.
@@ -464,13 +470,21 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Supervisor and preloads
 
-- Once the child is serving, the supervisor's first deferred step (`self-warm`, in
-  `node-server.ts`, before the metrics collector) requests each `KNEXT_WARM_PATH`
-  path (opt-in: none unless set; `KNEXT_EAGER_WARM=0` off; at most 8; logs
-  `WARMED:` lines) on `127.0.0.1:$PORT` with
-  `x-knext-warm: 1`, one at a time, never following a redirect, and never
-  throwing; it skips the warm-up if nothing listens yet, shares one 5 s
-  budget across all paths, and stops on shutdown. It runs wherever this
+- The supervisor's first deferred step (`self-warm`, in `node-server.ts`, before
+  the metrics collector) requests each `KNEXT_WARM_PATH` path on
+  `127.0.0.1:$PORT` with `x-knext-warm: 1`, one at a time, never following a
+  redirect (a 3xx is recorded), and never throwing. In the deferred branch it
+  runs once the child is serving; with deferral disabled (the opt-out branch)
+  it runs straight after spawn, and only the listening probe decides whether
+  it does anything. `parseWarmPaths`: nothing unless `KNEXT_WARM_PATH` is set;
+  `KNEXT_EAGER_WARM=0` (exact string) yields none; entries are comma-split and
+  trimmed, those not starting with `/` or starting with `//` are dropped
+  silently, and the first 8 kept. Logs `WARMED:<path> status=<n> ms=<n>` (info)
+  or `WARMED:<path> status=error ms=<n> (<code>)` (warn); with nothing
+  accepting TCP within 300 ms it logs `self-warm skipped: the server is not
+  listening yet` and returns. All paths share one 5 s budget, started after
+  that probe. The shutdown check runs before each path; a request in flight
+  is not aborted. It runs wherever this
   supervisor runs: disk mode, and exec mode where the supervisor spawns the
   compiled executable. The self-contained executable image has no supervisor;
   it warms through its own entry (`knext-bun-entry.mjs`, on by default with

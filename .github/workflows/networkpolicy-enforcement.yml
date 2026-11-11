@@ -24,6 +24,7 @@ on:
       - 'packages/kn-next-operator/cmd/policygen/**'
       - 'packages/kn-next-operator/test/h2cecho/**'
       - 'packages/kn-next-operator/test/networkpolicy-enforcement-drill.sh'
+      - 'scripts/kind-manifests/apply-calico.sh'
       - '.github/workflows/networkpolicy-enforcement.yml'
   schedule:
     - cron: '41 4 * * *'

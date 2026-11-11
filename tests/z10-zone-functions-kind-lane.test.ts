@@ -138,7 +138,7 @@ describe("another zone's Secret is refused through every source", () => {
     expect(sv).toContain('for fn in sov-env sov-envfrom sov-volume; do');
     expect(sv).toMatch(/sleep 20/);
     expect(sv).toMatch(/= False\/SecretNotAllowed \] \|\| fail/);
-    expect(sv).toMatch(/get ksvc "\$\{fn\}" >\/dev\/null 2>&1; then fail/);
+    expect(sv).toMatch(/\[ -z "\$\(k -n "\$\{NS\}" get ksvc "\$\{fn\}" --ignore-not-found -o name\)" \] \|\| fail/);
     expect(sv).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
   });
 

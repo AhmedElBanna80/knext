@@ -20,7 +20,7 @@
 #             the 1.0.0 zone, an older one (0.9.0) is refused by the zone's glue
 #             (FailedPrecondition) before any call, the same one (1.0.0) is called again
 #   sovereignty  a second zone lists four functions; three take another zone's Secret
-#             (env, envFrom, volume) and are refused (SecretNotAllowed, nothing rendered),
+#             (env, envFrom, volume) and are refused (SecretNotAllowed, no Knative Service, no pod),
 #             the control takes its own zone's Secret through all three and is rendered
 #
 # Environment: KIND_CLUSTER (default knext-z7-e2e), REGISTRY_PORT (5001),
@@ -453,9 +453,10 @@ YAML
   sleep 20
   for fn in sov-env sov-envfrom sov-volume; do
     [ "$(sov_condition "${fn}")" = False/SecretNotAllowed ] || fail "${fn}: SovereigntyCompliant is $(sov_condition "${fn}") after the hold"
-    if k -n "${NS}" get ksvc "${fn}" >/dev/null 2>&1; then fail "${fn}: refused, but its Knative Service exists"; fi
+    # --ignore-not-found: an API error must fail the lane, not read as "absent".
+    [ -z "$(k -n "${NS}" get ksvc "${fn}" --ignore-not-found -o name)" ] || fail "${fn}: refused, but its Knative Service exists"
     [ "$(all_pods "${fn}")" = 0 ] || fail "${fn}: refused, but it has a pod"
-    ok "${fn}: another zone's Secret is refused (SecretNotAllowed), nothing rendered"
+    ok "${fn}: another zone's Secret is refused (SecretNotAllowed), no Knative Service and no pod"
   done
 }
 

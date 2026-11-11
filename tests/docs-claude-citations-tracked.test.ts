@@ -32,7 +32,8 @@ function lsFiles(...paths: string[]): string[] {
 export function citedClaudePaths(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(/(?<![~/\w])\.claude\/[A-Za-z0-9_./-]+/g)) {
-    out.push(m[0].replace(/[.,;:)]+$/, ''));
+    // The class stops at , ; : ) and spaces, so only a sentence's trailing dot can remain.
+    out.push(m[0].replace(/\.+$/, ''));
   }
   return out;
 }

@@ -16,7 +16,7 @@
 - **Evidence:** maintainer research notes from 2026-10-03, not in the repo: a cold-start config study (classification of every
   cold-start and runtime-performance setting, §5; config sketch, §6; experiments G1–G12 / P1–P9,
   §7; the eleven rule conflicts, §8), a GKE image-cache study, and an OKE
-  registry-mirror vs image-prewarm study. The decisions below restate what this ADR relies on.
+  registry-mirror vs image-prewarm study.
 
 ## Context
 

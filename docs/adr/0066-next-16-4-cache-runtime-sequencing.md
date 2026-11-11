@@ -33,8 +33,8 @@
 - **Evidence:** a Next 16.4 impact study (2026-10-09; questions Q2, Q3, Q7 and tests T1–T5) and
   the v2 plan, both maintainer notes not in the repo. What this ADR takes from the plan is stated
   here: K1, K4 and K5 all edit `packages/kn-next/package.json` and run serially ("K1 → K4" in D1),
-  and credential runs share one concurrency group whose slot count never grows ("Compat budget"
-  under Constraints). Also `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
+  and R5 (#2041) is to put every credential workflow in one concurrency group, so the net slot
+  load never grows ("Compat budget" under Constraints). Also `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
   (wake-ahead timing), and the published `next@16.4.0` package (`dist/server/lib/cache-handlers/types.d.ts`,
   `dist/server/use-cache/use-cache-wrapper.js`, `dist/server/revalidation-utils.js`,
   `dist/server/config-shared.js`).

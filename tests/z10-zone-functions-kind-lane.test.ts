@@ -65,10 +65,12 @@ describe('the cold path is really cold', () => {
 
   it('a cold call requires zero live pods before it and a pod after it', () => {
     const cold = body('cold_call');
-    expect(cold).toMatch(/\[ "\$\(live_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
-    expect(cold).toMatch(/\[ "\$\(live_pods "\$\{fn\}"\)" -ge 1 \] \|\| fail/);
+    // Zero pods of ANY state before (a draining pod could serve the call), so a pod
+    // after can only be one the call created.
+    expect(cold).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
+    expect(cold).toMatch(/\[ -n "\$\(pod_uids "\$\{fn\}"\)" \] \|\| fail/);
     expect(cold.indexOf('= 0 ]')).toBeLessThan(cold.indexOf('zone_call'));
-    expect(cold.indexOf('-ge 1 ]')).toBeGreaterThan(cold.indexOf('zone_call'));
+    expect(cold.indexOf('pod_uids')).toBeGreaterThan(cold.indexOf('zone_call'));
   });
 
   it('every cold call waits for scale-to-zero first, for both functions', () => {
@@ -83,8 +85,13 @@ describe('the cold path is really cold', () => {
     }
   });
 
-  it('live_pods ignores terminating pods', () => {
-    expect(all).toMatch(/live_pods\(\)[\s\S]*?deletionTimestamp == null/);
+  it('scale-to-zero means no pod at all, terminating ones included', () => {
+    expect(body('await_zero')).toContain('all_pods');
+    expect(own).toMatch(/all_pods\(\) \{[^\n]*\n\s*k -n "\$\{NS\}" get pods [^\n]*\| jq '\.items \| length'/);
+  });
+
+  it('turns wake-ahead off on both functions (the operator defaults it on)', () => {
+    expect(body('phase_deploy').match(/^ {2}wakeAhead: false$/gm)?.length).toBe(2);
   });
 });
 
@@ -115,5 +122,12 @@ describe('CI runs the lane on the Z7 cluster', () => {
     expect(z10).toBeLessThan(teardown);
     expect(JSON.stringify(steps[z10])).not.toContain('continue-on-error');
     expect(steps[z10]?.if).toBeUndefined();
+  });
+
+  it('the step sees the cluster and registry the Z7 run built', () => {
+    const env = Object.values(wf.jobs)[0] as unknown as { env?: Record<string, string> };
+    expect(env.env?.KIND_CLUSTER).toBeTruthy();
+    expect(env.env?.REGISTRY_PORT).toBeTruthy();
+    expect(readFileSync(WORKFLOW, 'utf8')).toContain("- 'tests/z10-zone-functions-kind-lane.test.ts'");
   });
 });

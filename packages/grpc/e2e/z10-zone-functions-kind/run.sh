@@ -134,14 +134,16 @@ spec:
   language: rust
   port: 8080
   protoVersion: 1.0.0
+  wakeAhead: false
   scaling:
     minScale: 0
     maxScale: 1"
   fi
 
   # The zone stays warm; the functions may scale to zero, so a call to one goes
-  # through the activator. wakeAhead is off: waking a function when the zone
-  # starts would hide the cold path this lane is about.
+  # through the activator. wakeAhead is set off on each function (the operator's
+  # default is on): a zone that wakes its functions when it starts would hide the
+  # cold path this lane is about.
   k apply --validate=strict -f - <<YAML
 apiVersion: apps.kn-next.dev/v1alpha1
 kind: NextApp
@@ -168,6 +170,7 @@ spec:
   language: go
   port: 8080
   protoVersion: 1.0.0
+  wakeAhead: false
   scaling:
     minScale: 0
     maxScale: 1
@@ -199,24 +202,31 @@ zone_settled() {
 
 # ---------------------------------------------------------------- cold-path helpers
 
-# await_zero <service>: wait until the function has no live pod. Without this a
-# "cold" call could land on a warm pod and prove nothing.
+# await_zero <service>: wait until the function has no pod at all, not even a
+# terminating one: a pod still draining could serve a "cold" call and prove nothing.
 await_zero() {
-  wait_until "${ZERO_TIMEOUT}" 5 "${1} scaled to zero" "[ \"\$(live_pods ${1})\" = 0 ]"
+  wait_until "${ZERO_TIMEOUT}" 5 "${1} scaled to zero" "[ \"\$(all_pods ${1})\" = 0 ]"
   ok "${1} has scaled to zero"
+}
+
+all_pods() { # <service>: every pod of a service, terminating ones included
+  k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json | jq '.items | length'
+}
+pod_uids() { # <service>: the uids of every pod of a service, sorted
+  k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json | jq -r '.items[].metadata.uid' | sort
 }
 
 # cold_call <service> <path?query> <want status> <jq filter> <description>:
 # the service is at zero, the zone call wakes it, and the answer is the one wanted.
 cold_call() {
   local fn=$1 path=$2 want=$3 filter=$4 desc=$5 started elapsed
-  [ "$(live_pods "${fn}")" = 0 ] || fail "${desc}: ${fn} is not at zero before the call"
+  [ "$(all_pods "${fn}")" = 0 ] || fail "${desc}: ${fn} has a pod before the call, so the call would not be cold"
   started=${SECONDS}
   zone_call "${path}"
   elapsed=$((SECONDS - started))
   [ "${ZC_STATUS}" = "${want}" ] || fail "${desc}: status ${ZC_STATUS}, want ${want} (body: ${ZC_BODY})"
   jq -e "${filter}" <<<"${ZC_BODY}" >/dev/null || fail "${desc}: body does not satisfy ${filter} (body: ${ZC_BODY})"
-  [ "$(live_pods "${fn}")" -ge 1 ] || fail "${desc}: the call succeeded but ${fn} has no pod: it did not go through a cold start"
+  [ -n "$(pod_uids "${fn}")" ] || fail "${desc}: the call succeeded but ${fn} has no pod: it did not go through a cold start"
   ok "${desc} (cold, ${elapsed}s through the activator)"
 }
 

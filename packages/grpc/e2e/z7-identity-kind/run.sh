@@ -150,7 +150,6 @@ IMAGE_PREFIX=z7
 # shellcheck source=../lib/kind-lane.sh
 source "${HERE}/../lib/kind-lane.sh"
 
-
 diagnostics() {
   # Never a Secret, never a token: object status, pod state and log tails only.
   echo "---- diagnostics (no Secret is read) ----" >&2
@@ -178,10 +177,8 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- helpers
 
-
 epoch_of() { node -p 'Date.parse(process.argv[1]) / 1000' "$1"; }
 now_s() { node -p 'Date.now() / 1000'; }
-
 
 secret_get() { # <field>: one data field of the zone's key Secret, decoded (kids only!)
   k -n "${NS}" get secret "${KEY_SECRET}" -o json | jq -r --arg f "$1" '.data[$f] // empty | @base64d'
@@ -274,7 +271,6 @@ pod_idents() { # <service>: "<uid> <restarts>" per live pod, sorted
   k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json \
     | jq -r '.items[] | select(.metadata.deletionTimestamp == null) | "\(.metadata.uid) \([.status.containerStatuses[]?.restartCount] | add)"' | sort
 }
-
 
 start_forwards() {
   [ "${FORWARDS_STARTED}" = 1 ] && return 0
@@ -381,7 +377,6 @@ YAML
 
 # ---------------------------------------------------------------- phase: images
 
-
 phase_images() {
   log "images: Go function, zone, Rust function"
   build_push function-go "${REPO}/templates/go"
@@ -389,7 +384,6 @@ phase_images() {
   build_push zone-caller "${WORK}/zone-ctx"
   if [ "${WITH_RUST}" = 1 ]; then build_push function-rust "${REPO}/templates/rust"; fi
 }
-
 
 # ---------------------------------------------------------------- phase: deploy
 

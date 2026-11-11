@@ -57,6 +57,7 @@ on:
       - '.github/actions/docker-hub-mirror/**'
       - '.github/workflows/z7-identity-kind-e2e.yml'
       - 'tests/z7-identity-kind-e2e-lane.test.ts'
+      - 'tests/z10-zone-functions-kind-lane.test.ts'
       - 'bun.lock'
   push:
     branches: [main, 'integration/**']
@@ -79,6 +80,7 @@ on:
       - '.github/actions/docker-hub-mirror/**'
       - '.github/workflows/z7-identity-kind-e2e.yml'
       - 'tests/z7-identity-kind-e2e-lane.test.ts'
+      - 'tests/z10-zone-functions-kind-lane.test.ts'
       - 'bun.lock'
   workflow_dispatch: {}
 

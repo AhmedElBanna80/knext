@@ -11,7 +11,7 @@ PHASES=up packages/grpc/e2e/z7-identity-kind/run.sh   # cluster, Knative, operat
 packages/grpc/e2e/z10-zone-functions-kind/run.sh
 ```
 
-It needs `docker`, `kind`, `kubectl`, `jq` and `bun` on the PATH. The zone and the
+It needs `docker`, `kind`, `kubectl`, `jq`, `curl` and `bun` on the PATH, and the local registry that the Z7 `up` phase creates. The zone and the
 two functions are the same images as the Z7 lane's: the Go and Rust templates, and
 the small Node zone in `../z7-identity-kind/zone-caller`, which calls through the
 real generated glue.
@@ -20,7 +20,7 @@ real generated glue.
 | --- | --- |
 | `images` | Builds and pushes the Go function, the Rust function and the zone. Every image is referenced by digest. |
 | `deploy` | Recreates the namespace (Pod Security `restricted` enforced) and applies the zone at minScale 1 and the functions at minScale 0. It waits until the functions are Ready and the zone is bound to both. |
-| `cold` | Waits until each function has no pod. A write through the zone then wakes it: the generated Server Action for Go, and a call with a zone token for Rust. The call must succeed, and a function pod must exist afterwards. A read then returns the value from the woken pod. |
+| `cold` | Waits until each function has no pod at all, terminating ones included. A write through the zone then wakes it: the generated Server Action for Go, and a call with a zone token for Rust. The call must succeed, and a function pod must exist afterwards. A read then returns the value from the woken pod. |
 | `trailers` | Waits until each function is back at zero. A read of a missing item then comes back as `NotFound` (Go, through the generated glue) or `not_found` (Rust) through the cold activator path. A warm control makes the same call again and must get the same code. |
 
 The functions here use the Connect protocol over h2c, the default for a Node zone.
@@ -28,8 +28,11 @@ In it, a failed unary call travels as an HTTP status plus a JSON error body, not
 gRPC trailers. The `trailers` phase checks that this code survives the activator. A
 code that is lost or rewritten on the way (502, `Unavailable`, `Unknown`) fails it.
 
-Each cold call is checked against two conditions: no live pod before the call, and a
-pod after it. A call that landed on a warm pod would prove nothing.
+Each cold call is checked against two conditions: no pod at all before the call (a pod
+still draining could serve it), and a pod after it, which can only be one the call
+created. A call that landed on a warm pod would prove nothing. Each function sets
+`wakeAhead: false`, because the default is on, and a zone that wakes its functions
+when it starts would hide the cold path.
 
 ## Environment
 

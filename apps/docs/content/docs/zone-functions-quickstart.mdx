@@ -71,7 +71,9 @@ The commands are the same for Go and Rust except for `--lang` and the toolchain 
      --image registry.example.com/shop/orders@sha256:<digest>
    ```
 
-   The served contract version is read from `contract_version` in the contract; pass
+   The served contract version is read from `contract_version` in the function's copy of the
+   contract (`functions/orders/proto`, the one the image is built from). If it differs from the
+   zone's copy, the command stops until you copy the contract over and rebuild. Pass
    `--proto-version` to override it. Use `--dry-run` to print the `BackendService` without
    applying it.
 

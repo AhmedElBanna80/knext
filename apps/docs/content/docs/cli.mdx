@@ -852,10 +852,11 @@ knext deploy function orders \
 - `--zone` names the `NextApp` that owns the function, in the same namespace.
 - `--image` must be pinned by digest; a tag-only reference and `:latest` are refused.
 - The function's language comes from `knext.grpc.json`, where `knext add function` recorded it.
-- The contract version the function serves comes from its contract's
-  `option (knext.v1.contract_version)`. The zone needs it: without it every generated call is
-  refused. `--proto-version` overrides it. If two contract files for the function disagree, the
-  command stops and names them.
+- The contract version the function serves comes from the function's own copy of its contract,
+  `functions/<name>/proto` (the copy its image is built from): `option (knext.v1.contract_version)`.
+  The zone needs it: without it every generated call is refused. If that copy and the zone's
+  `proto/` disagree, the command stops: copy the contract into the function, rebuild the image,
+  and deploy again. `--proto-version` overrides both.
 - Optional: `--namespace`, `--context`, `--port`, `--proto-version`, `--no-wake-ahead`,
   `--min-scale`, `--max-scale`, `--container-concurrency`.
 - `--dry-run` prints the resource and applies nothing, so it pipes into `kubectl apply -f -`.

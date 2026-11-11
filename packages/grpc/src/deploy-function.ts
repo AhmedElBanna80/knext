@@ -219,12 +219,29 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
     const maxScale = intFlag('max-scale', v['max-scale']);
     const containerConcurrency = intFlag('container-concurrency', v['container-concurrency']);
     // Without a served version the zone has no <NAME>_SERVICE_PROTO_VERSION and
-    // its generated glue refuses every call, so default to the contract's own.
-    const protoVersion = v['proto-version'] ?? contractVersionFor(join(cwd, config.proto), name);
-    if (v['proto-version'] === undefined && protoVersion !== undefined && !v['dry-run']) {
-      io.stderr(
-        `serving contract version ${protoVersion} (from the "${name}" contract; --proto-version overrides it)\n`,
-      );
+    // its generated glue refuses every call, so default to the version the IMAGE
+    // serves: the function project's own contract copy (functions/<name>/proto),
+    // which the image is built from. The zone's copy is compared, never used: a
+    // zone bumped ahead of its function must stay refused by the skew guard.
+    let protoVersion = v['proto-version'];
+    if (protoVersion === undefined) {
+      const fnDir = join('functions', name, 'proto');
+      const served = contractVersionFor(join(cwd, fnDir), name);
+      const zone = contractVersionFor(join(cwd, config.proto), name);
+      if (served !== undefined && zone !== undefined && served !== zone) {
+        throw new GrpcUsageError(
+          `the "${name}" function's contract (${fnDir}) is at ${served} but the zone's (${config.proto}) is at ${zone}: ` +
+            'copy the contract into the function, rebuild its image, and deploy again; or pass --proto-version with the version the image serves',
+        );
+      }
+      protoVersion = served;
+      if (!v['dry-run']) {
+        io.stderr(
+          served === undefined
+            ? `no contract under ${fnDir} declares the "${name}" function, so no served version is set and the zone will refuse calls to it; pass --proto-version with the version the image serves\n`
+            : `serving contract version ${served} (from ${fnDir}; --proto-version overrides it)\n`,
+        );
+      }
     }
     const cr = buildBackendServiceCR({
       name,

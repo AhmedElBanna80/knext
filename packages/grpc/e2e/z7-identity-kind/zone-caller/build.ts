@@ -16,7 +16,8 @@
  *
  * `bun build.ts <out-dir> --wake` also stages knext's real wake-ahead preload
  * (packages/kn-next/src/adapters/wake-ahead.cjs and its one sibling) and starts
- * the server with `node --require` on it, as a knext zone's process start does.
+ * the server with `node --require` on it (the real preload file; knext's own
+ * process-start loader is not part of this stand-in).
  * Only the Z10 lane's `wake` phase uses that image: the Z7 lane's functions keep
  * the operator's default (wake-ahead on), and a zone that woke them would change
  * what Z7 measures.

@@ -22,6 +22,9 @@
 #   sovereignty  a second zone lists four functions; three take another zone's Secret
 #             (env, envFrom, volume) and are refused (SecretNotAllowed, no Knative Service, no pod),
 #             the control takes its own zone's Secret through all three and is rendered
+#   wake      the zone restarts on an image that loads knext's wake-ahead preload: an
+#             opted-out function stays at zero; an opted-in one is woken by the zone's
+#             start before any call, and the first call is faster
 #
 # Environment: KIND_CLUSTER (default knext-z7-e2e), REGISTRY_PORT (5001),
 # Z10_NAMESPACE (z10-e2e), Z10_WITH_RUST (1), PHASES, INTERNAL_PORT (18090),
@@ -516,8 +519,10 @@ phase_wake() {
   local wimg off_ms on_ms end
   wimg="$(image_ref zone-caller-wake)"
 
-  # Opted out (the deploy phase set wakeAhead: false): the zone starts, nothing wakes.
-  [ "$(fn_wake_ahead "${GO_FN}")" = false ] || fail "${GO_FN} must start this phase opted out of wake-ahead"
+  # Opted out (set here too, so a rerun after an aborted phase starts clean): the
+  # zone starts, nothing wakes.
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"wakeAhead":false}}' >/dev/null
+  [ "$(fn_wake_ahead "${GO_FN}")" = false ] || fail "${GO_FN} did not take wakeAhead: false"
   await_zero "${GO_FN}"
   zone_roll "${wimg}" wake-off ""
   end=$((SECONDS + 30))
@@ -531,12 +536,12 @@ phase_wake() {
   off_ms=${TIMED_MS}
   ok "opted out: the zone's first call paid the cold start (${off_ms} ms)"
 
-  # Opted in: the operator renders KNEXT_WAKE_FUNCTIONS=example into the zone, and
-  # the zone's start wakes the function before any call.
-  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"wakeAhead":true}}' >/dev/null
-  wait_until 300 3 "the zone renders KNEXT_WAKE_FUNCTIONS=example" "zone_runs wake-off example"
+  # Opted in, with the function at zero first: the operator renders
+  # KNEXT_WAKE_FUNCTIONS=example into the zone, which starts a new zone process,
+  # and that start must wake the function before any call.
   await_zero "${GO_FN}"
-  zone_roll "${wimg}" wake-on example
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"wakeAhead":true}}' >/dev/null
+  wait_until 300 3 "a new zone process with KNEXT_WAKE_FUNCTIONS=example" "zone_runs wake-off example"
   wait_until 60 2 "${GO_FN} has a pod, woken by the zone's start (no call made)" \
     '[ "$(all_pods "${GO_FN}")" -ge 1 ]'
   ok "opted in: the zone's start woke ${GO_FN} before any call"

@@ -187,7 +187,10 @@ describe('wake: the zone start wakes an opted-in function, never an opted-out on
     expect(w).toContain('end=$((SECONDS + 30))');
   });
   it('opted in: a pod before any call, and a faster first call', () => {
-    const roll = w.indexOf('zone_roll "${wimg}" wake-on example');
+    const zero = w.lastIndexOf('await_zero "${GO_FN}"');
+    const roll = w.indexOf('"zone_runs wake-off example"');
+    expect(zero).toBeGreaterThan(w.indexOf('timed_call'));
+    expect(w.indexOf('\'{"spec":{"wakeAhead":true}}\'')).toBeGreaterThan(zero);
     const woke = w.indexOf('has a pod, woken by the zone');
     const call = w.lastIndexOf('timed_call');
     expect(roll).toBeGreaterThan(-1);

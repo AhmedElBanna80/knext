@@ -190,11 +190,16 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
 - A `deployed:<ns>/<name>` baseline with no `DeployedBaselineSource` throws
   `BaselineUnavailableError` rather than passing (`baseline.ts:resolveBaseline`).
 - `createDeployedBaselineSource` reads the served version only through the
-  injected `ServedVersionReader` and returns `<git dir>#tag=<tag>,subdir=<proto>`.
-  It throws `BaselineUnavailableError` on a reader failure, an empty served
-  version, a non-semver version, a cwd outside git, or a missing tag; a tag
-  template without `{version}` or with a comma, `#` or whitespace is refused
-  (`baseline.ts:createDeployedBaselineSource`, `checkTagTemplate`).
+  injected `ServedVersionReader` and returns `<absolute common git dir>#tag=<tag>`
+  plus `,subdir=<cwd relative to the repo root>` when the workspace is not the
+  root (the same workspace buf lints, never the `proto` setting). It throws
+  `BaselineUnavailableError` on a reader failure, an empty served version, a
+  non-semver version, a rendered tag `git check-ref-format` rejects, a cwd
+  outside git, a missing tag, or a git dir or workspace path containing a
+  comma, `#` or whitespace. A tag template must hold `{version}` exactly once,
+  may hold `{name}`, and no other placeholder or comma, `#` or whitespace
+  (`baseline.ts:createDeployedBaselineSource`, `checkTagTemplate`). The tag is a
+  locator only: nothing verifies the tagged tree against the running image.
 
 ### Generated-call policy (runtime)
 

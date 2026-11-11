@@ -111,7 +111,7 @@ are unknown-command errors.
   - `kubectl patch nextapp` in `rollback.ts` and `db-bind.ts`.
   - `kubectl delete nextapp` in `cleanup.ts` and `preview.ts`.
   - `kubectl apply` of the BackendService in `grpc-dispatch.ts:buildDeployHost`.
-  - `grpc-dispatch.ts:buildServedVersionReader` (handed only to `generate`) only reads: one context-bound `kubectl get backendservices.apps.kn-next.dev <name> -o jsonpath={.status.servedProtoVersion}`, after both names pass a Kubernetes-name check.
+  - `grpc-dispatch.ts:buildServedVersionReader` (handed only to `generate`) only reads: one context-bound `kubectl get --request-timeout=30s backendservices.apps.kn-next.dev <name> -n <ns> -o jsonpath={.status.servedProtoVersion}`, after both names pass a Kubernetes-name check.
   - The one non-CR exception is `loadtest.ts`, which applies a manifest pair: a `ConfigMap` holding the k6 script and a `batch/v1` `Job` that runs it (`../generators/loadtest-job.ts`).
 - Every `kubectl apply` the CLI issues passes `--validate=strict` [`deploy.ts`, `preview.ts`, `loadtest.ts`, `grpc-dispatch.ts`].
 - `deploy` runs `assertNoPlaceholders` and the server-side schema preflight (`runPrunePreflight` → `preflightCRSchema`) before the real apply. After the apply it waits for operator reconcile and throws on a held or invalid spec [`deploy.ts`, `deploy-reconcile-wait.ts`].

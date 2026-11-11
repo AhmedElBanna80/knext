@@ -1,17 +1,17 @@
 import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createDeployedBaselineSource, type ServedVersionReader } from '../baseline';
 import { parseConfig, serializeConfig } from '../config';
 import { runGenerate } from '../generate';
-import { capture, copyFixtureZone, removeScratchDirs } from './helpers';
+import { capture, copyFixtureZone, emptyDir, removeScratchDirs } from './helpers';
 
 afterAll(removeScratchDirs);
 
 function git(cwd: string, ...args: string[]): void {
   // Isolated from the user's git config: no signing, no hooks, no prompts.
-  const r = spawnSync('git', args, {
+  const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {
     cwd,
     encoding: 'utf8',
     env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
@@ -19,14 +19,30 @@ function git(cwd: string, ...args: string[]): void {
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 }
 
-/** A zone in its own git repo whose current contract is tagged `tag`. */
+/** Commit everything in `repo` and tag it. */
+function commitAndTag(repo: string, tag: string): void {
+  git(repo, 'init', '-q');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-qm', 'contract');
+  git(repo, 'tag', tag);
+}
+
+/** A zone that is its own git repo, its current contract tagged `tag`. */
 function taggedZone(label: string, tag: string): string {
   const zone = copyFixtureZone(label);
-  git(zone, 'init', '-q');
-  git(zone, 'add', '-A');
-  git(zone, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'contract');
-  git(zone, 'tag', tag);
+  commitAndTag(zone, tag);
   return zone;
+}
+
+/** A repo holding the zone two levels down (apps/web), tagged `tag`. */
+function nestedZone(label: string, tag: string): { repo: string; zone: string } {
+  const repo = emptyDir(label);
+  const zone = join(repo, 'apps', 'web');
+  mkdirSync(join(repo, 'apps'), { recursive: true });
+  cpSync(copyFixtureZone(`${label}-src`), zone, { recursive: true });
+  writeFileSync(join(repo, 'README.md'), 'repo root\n');
+  commitAndTag(repo, tag);
+  return { repo, zone };
 }
 
 function removeTotalCents(zone: string): void {
@@ -49,8 +65,12 @@ function reader(version: string): ServedVersionReader & { asked: unknown[] } {
   };
 }
 
+function gitDirOf(repo: string): string {
+  return join(realpathSync(repo), '.git');
+}
+
 describe('deployed:<namespace>/<name> reads the served version from the live BackendService', () => {
-  it('a breaking change against the served contract fails generate', async () => {
+  it('a breaking change against the served contract fails generate, naming the removed field', async () => {
     const zone = taggedZone('dep-break', 'proto/v1.4.0');
     removeTotalCents(zone);
     const r = reader('1.4.0');
@@ -59,16 +79,13 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
       cwd: zone,
       check: true,
       against: 'deployed:shop/orders',
-      deployedBaseline: createDeployedBaselineSource({
-        cwd: zone,
-        protoDir: 'proto',
-        reader: r,
-        context: 'ctx-a',
-      }),
+      deployedBaseline: createDeployedBaselineSource({ cwd: zone, reader: r, context: 'ctx-a' }),
       io: c.io,
     });
     expect(code).toBe(1);
     expect(c.err()).toContain('break the contract against deployed:shop/orders');
+    // buf's own finding, so a baseline that failed to resolve cannot pass for a contract break.
+    expect(c.err()).toContain('total_cents');
     expect(r.asked).toEqual([{ namespace: 'shop', name: 'orders', context: 'ctx-a' }]);
   });
 
@@ -79,61 +96,102 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
       cwd: zone,
       check: true,
       against: 'deployed:shop/orders',
-      deployedBaseline: createDeployedBaselineSource({
-        cwd: zone,
-        protoDir: 'proto',
-        reader: reader('1.4.0'),
-      }),
+      deployedBaseline: createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0') }),
       io: c.io,
     });
     expect(c.err()).toBe('');
     expect(code).toBe(0);
   });
 
-  it('resolves to the tagged contract in the repository', async () => {
+  it('resolves to the tagged contract through an absolute git directory', async () => {
     const zone = taggedZone('dep-input', 'proto/v2.0.1');
-    const source = createDeployedBaselineSource({
-      cwd: zone,
-      protoDir: 'proto',
-      reader: reader('2.0.1'),
-    });
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('2.0.1') });
     expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
-      '.git#tag=proto/v2.0.1,subdir=proto',
+      `${gitDirOf(zone)}#tag=proto/v2.0.1`,
     );
   });
 
-  it('honours a custom tag template', async () => {
+  it('a zone below the repository root compares the same workspace, as subdir', async () => {
+    const { repo, zone } = nestedZone('dep-nested', 'proto/v1.4.0');
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0') });
+    expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
+      `${gitDirOf(repo)}#tag=proto/v1.4.0,subdir=apps/web`,
+    );
+    removeTotalCents(zone);
+    const c = capture();
+    expect(
+      await runGenerate({
+        cwd: zone,
+        check: true,
+        against: 'deployed:shop/orders',
+        servedVersionReader: reader('1.4.0'),
+        io: c.io,
+      }),
+    ).toBe(1);
+    expect(c.err()).toContain('total_cents');
+  });
+
+  it('works from a git worktree (the .git there is a file)', async () => {
+    const zone = taggedZone('dep-wt', 'proto/v1.4.0');
+    const wt = join(emptyDir('dep-wt-tree'), 'tree');
+    git(zone, 'worktree', 'add', '-q', '--detach', wt);
+    const source = createDeployedBaselineSource({ cwd: wt, reader: reader('1.4.0') });
+    expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
+      `${gitDirOf(zone)}#tag=proto/v1.4.0`,
+    );
+    removeTotalCents(wt);
+    const c = capture();
+    expect(
+      await runGenerate({
+        cwd: wt,
+        check: true,
+        against: 'deployed:shop/orders',
+        servedVersionReader: reader('1.4.0'),
+        io: c.io,
+      }),
+    ).toBe(1);
+    expect(c.err()).toContain('total_cents');
+  });
+
+  it('honours a custom tag template, with the function name', async () => {
     const zone = taggedZone('dep-template', 'orders-contract-3.1.0');
     const source = createDeployedBaselineSource({
       cwd: zone,
-      protoDir: 'proto',
       reader: reader('3.1.0'),
-      tagTemplate: 'orders-contract-{version}',
+      tagTemplate: '{name}-contract-{version}',
     });
     expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
-      '.git#tag=orders-contract-3.1.0,subdir=proto',
+      `${gitDirOf(zone)}#tag=orders-contract-3.1.0`,
     );
   });
 
-  it('fails loudly when the function has no served version yet', async () => {
-    const zone = taggedZone('dep-empty', 'proto/v1.4.0');
+  it('refuses a rendered tag that is not a valid git ref name', async () => {
+    const zone = taggedZone('dep-badref', 'proto/v1.4.0');
     const source = createDeployedBaselineSource({
       cwd: zone,
-      protoDir: 'proto',
-      reader: reader(''),
+      reader: reader('1.4.0'),
+      tagTemplate: 'proto..v{version}',
     });
     await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
-      /shop\/orders has no served contract version yet/,
+      /"proto\.\.v1\.4\.0" .* is not a valid git tag name/,
     );
+  });
+
+  it('fails loudly when the function has no served version, naming every cause', async () => {
+    const zone = taggedZone('dep-empty', 'proto/v1.4.0');
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('') });
+    const err = (await source
+      .resolve({ namespace: 'shop', name: 'orders' })
+      .catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain('shop/orders reports no served contract version');
+    expect(err.message).toContain('--proto-version');
+    expect(err.message).toContain('refused');
+    expect(err.message).toContain('predates the field');
   });
 
   it('refuses a served version that is not a semantic version', async () => {
     const zone = taggedZone('dep-bad', 'proto/v1.4.0');
-    const source = createDeployedBaselineSource({
-      cwd: zone,
-      protoDir: 'proto',
-      reader: reader('1.4.0,subdir=..'),
-    });
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0,subdir=..') });
     await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
       /not a semantic version/,
     );
@@ -141,13 +199,27 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
 
   it('fails loudly when the tag for the served version does not exist', async () => {
     const zone = taggedZone('dep-notag', 'proto/v1.4.0');
-    const source = createDeployedBaselineSource({
-      cwd: zone,
-      protoDir: 'proto',
-      reader: reader('1.5.0'),
-    });
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.5.0') });
     await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
       /serves contract 1\.5\.0, but this repository has no tag proto\/v1\.5\.0/,
+    );
+  });
+
+  it('fails loudly outside a git repository', async () => {
+    const zone = copyFixtureZone('dep-nogit');
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0') });
+    await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
+      /is not inside a git repository/,
+    );
+  });
+
+  it('refuses a workspace path buf cannot carry', async () => {
+    const { zone } = nestedZone('dep-comma', 'proto/v1.4.0');
+    const odd = join(zone, '..', 'we,b');
+    cpSync(zone, odd, { recursive: true });
+    const source = createDeployedBaselineSource({ cwd: odd, reader: reader('1.4.0') });
+    await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
+      /workspace path "apps\/we,b" contains a comma/,
     );
   });
 
@@ -155,7 +227,6 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
     const zone = taggedZone('dep-readfail', 'proto/v1.4.0');
     const source = createDeployedBaselineSource({
       cwd: zone,
-      protoDir: 'proto',
       reader: {
         readServedProtoVersion() {
           throw new Error('backendservices.apps.kn-next.dev "orders" not found');
@@ -171,16 +242,22 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
 describe('knext.grpc.json "deployedTagTemplate"', () => {
   it('is optional and survives a rewrite', () => {
     expect(parseConfig({}).deployedTagTemplate).toBeUndefined();
-    const config = parseConfig({ deployedTagTemplate: 'contract-{version}' });
-    expect(config.deployedTagTemplate).toBe('contract-{version}');
+    const config = parseConfig({ deployedTagTemplate: '{name}-{version}' });
+    expect(config.deployedTagTemplate).toBe('{name}-{version}');
     expect(parseConfig(JSON.parse(serializeConfig(config))).deployedTagTemplate).toBe(
-      'contract-{version}',
+      '{name}-{version}',
     );
   });
 
-  it('refuses a template without {version}, or one that would break the buf input', () => {
+  it('refuses a template without exactly one {version}, an unknown placeholder, or one that would break the buf input', () => {
     expect(() => parseConfig({ deployedTagTemplate: 'proto/latest' })).toThrow(
-      /no \{version\} placeholder/,
+      /\{version\} exactly once/,
+    );
+    expect(() => parseConfig({ deployedTagTemplate: 'v{version}-{version}' })).toThrow(
+      /\{version\} exactly once/,
+    );
+    expect(() => parseConfig({ deployedTagTemplate: '{zone}/v{version}' })).toThrow(
+      /only the \{version\} and \{name\} placeholders/,
     );
     expect(() => parseConfig({ deployedTagTemplate: 'v{version},subdir=..' })).toThrow(
       /comma, # or whitespace/,
@@ -198,10 +275,7 @@ describe('knext.grpc.json "deployedTagTemplate"', () => {
         deployedTagTemplate: 'c-{version}',
       }),
     );
-    git(zone, 'init', '-q');
-    git(zone, 'add', '-A');
-    git(zone, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'contract');
-    git(zone, 'tag', 'c-1.0.0');
+    commitAndTag(zone, 'c-1.0.0');
     removeTotalCents(zone);
     const c = capture();
     expect(
@@ -213,6 +287,6 @@ describe('knext.grpc.json "deployedTagTemplate"', () => {
         io: c.io,
       }),
     ).toBe(1);
-    expect(c.err()).toContain('break the contract against deployed:shop/orders');
+    expect(c.err()).toContain('total_cents');
   });
 });

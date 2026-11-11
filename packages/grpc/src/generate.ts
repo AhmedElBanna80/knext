@@ -353,7 +353,6 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<number> {
         (opts.servedVersionReader
           ? createDeployedBaselineSource({
               cwd,
-              protoDir: config.proto,
               reader: opts.servedVersionReader,
               ...(opts.context === undefined ? {} : { context: opts.context }),
               ...(config.deployedTagTemplate === undefined

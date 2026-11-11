@@ -522,11 +522,21 @@ describe("the served-version reader only reads", () => {
                 context: "ctx-a",
             }),
         ).toBe("1.4.0");
-        expect(argvs).toHaveLength(1);
-        expect(argvs[0]).toContain("get");
-        expect(argvs[0]).toContain("backendservices.apps.kn-next.dev");
-        expect(argvs[0]).toContain("jsonpath={.status.servedProtoVersion}");
-        expect(argvs[0]).toContain("ctx-a");
+        expect(argvs).toEqual([
+            [
+                "kubectl",
+                "--context",
+                "ctx-a",
+                "get",
+                "--request-timeout=30s",
+                "backendservices.apps.kn-next.dev",
+                "orders",
+                "-n",
+                "shop",
+                "-o",
+                "jsonpath={.status.servedProtoVersion}",
+            ],
+        ]);
         for (const verb of [
             "apply",
             "patch",

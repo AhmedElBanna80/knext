@@ -330,6 +330,7 @@ export function buildServedVersionReader(
                     [
                         "kubectl",
                         "get",
+                        "--request-timeout=30s",
                         "backendservices.apps.kn-next.dev",
                         name,
                         "-n",

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createDeployedBaselineSource, type ServedVersionReader } from '../baseline';
 import { parseConfig, serializeConfig } from '../config';
@@ -258,6 +258,42 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
     await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
       /workspace path "apps\/we,b" contains a comma/,
     );
+  });
+
+  it('reports a missing git as such', async () => {
+    const zone = taggedZone('dep-nogitbin', 'proto/v1.4.0');
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0') });
+    const prev = process.env.PATH;
+    process.env.PATH = emptyDir('dep-emptypath');
+    try {
+      await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
+        /needs git, which could not be run/,
+      );
+    } finally {
+      process.env.PATH = prev;
+    }
+  });
+
+  it('reports a git too old for --path-format as such', async () => {
+    const zone = taggedZone('dep-oldgit', 'proto/v1.4.0');
+    const realGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim();
+    const bin = emptyDir('dep-oldgit-bin');
+    // git before 2.31 echoes the unknown --path-format option back and exits 0.
+    writeFileSync(
+      join(bin, 'git'),
+      `#!/bin/sh\ncase "$*" in *--path-format=absolute*) echo --path-format=absolute; echo .git; exit 0;; esac\nexec ${realGit} "$@"\n`,
+    );
+    chmodSync(join(bin, 'git'), 0o755);
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0') });
+    const prev = process.env.PATH;
+    process.env.PATH = `${bin}:${prev}`;
+    try {
+      await expect(source.resolve({ namespace: 'shop', name: 'orders' })).rejects.toThrow(
+        /needs git 2\.31 or newer/,
+      );
+    } finally {
+      process.env.PATH = prev;
+    }
   });
 
   it('a reader failure is reported, never a silent pass', async () => {

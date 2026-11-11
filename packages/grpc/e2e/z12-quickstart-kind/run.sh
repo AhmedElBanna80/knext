@@ -60,7 +60,8 @@ mkdir -p "${STATE}"
 APP="${STATE}/shop"
 export KUBECONFIG="${WORK}/kubeconfig"
 PF_PIDS="${WORK}/pf.pids"
-IMAGE_PREFIX=z12 # shellcheck disable=SC2034 # read by build_push in kind-lane.sh
+# shellcheck disable=SC2034 # read by build_push in kind-lane.sh
+IMAGE_PREFIX=z12
 # shellcheck source=../lib/kind-lane.sh
 source "${HERE}/../lib/kind-lane.sh"
 

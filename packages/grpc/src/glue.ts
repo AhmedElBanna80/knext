@@ -201,6 +201,29 @@ export function wasNotSent(err: unknown): boolean {
   );
 }
 
+/**
+ * Refresh every cached read of a service after a write that may have committed.
+ *
+ * In a Server Action this is `updateTag` (the caller reads its own write). Next
+ * allows `updateTag` only there, and a generated action called from a Route
+ * Handler would otherwise throw AFTER the write committed, reporting a
+ * successful write as a failure. Outside an action, `revalidateTag(tag,
+ * { expire: 0 })` expires the entries immediately instead. The two functions
+ * are passed in from `next/cache` by the generated code, so this module does
+ * not import Next.js.
+ */
+export function refreshAfterWrite(
+  tag: string,
+  updateTag: (tag: string) => void,
+  revalidateTag: (tag: string, profile: { expire: number }) => void,
+): void {
+  try {
+    updateTag(tag);
+  } catch {
+    revalidateTag(tag, { expire: 0 });
+  }
+}
+
 function invalid(schema: DescMessage, err: unknown): ConnectError {
   return new ConnectError(
     `the request does not match ${schema.typeName}: ${(err as Error).message}`,

@@ -105,7 +105,7 @@ console.log('RESULT ' + JSON.stringify({ read: read.status, write: write.id, str
 /** Stand-ins for what only exists inside a Next.js app. */
 const STUBS: Record<string, string> = {
   'next/cache':
-    'export const cacheLife = () => {}; export const cacheTag = () => {}; export const updateTag = () => {};',
+    'export const cacheLife = () => {}; export const cacheTag = () => {}; export const updateTag = () => {}; export const revalidateTag = () => {};',
   'server-only': 'export {};',
   authorize: 'export async function authorize() { return { sub: "alice" }; }',
 };

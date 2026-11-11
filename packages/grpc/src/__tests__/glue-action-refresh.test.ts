@@ -35,9 +35,16 @@ const TAG = 'knext:orders:orders.v1.OrdersService';
 const AUTHORIZE = Symbol.for('knext.test.glueActionRefresh.authorize');
 
 const tags: string[] = [];
+const revalidated: { tag: string; profile: unknown }[] = [];
+// Next allows updateTag only in a Server Action; set to mimic a Route Handler.
+let outsideAction = false;
 mock.module('next/cache', () => ({
   updateTag: (tag: string) => {
+    if (outsideAction) throw new Error('updateTag can only be called from within a Server Action.');
     tags.push(tag);
+  },
+  revalidateTag: (tag: string, profile: unknown) => {
+    revalidated.push({ tag, profile });
   },
   cacheTag: () => {},
   cacheLife: () => {},
@@ -114,7 +121,9 @@ const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
 
 function ready(): void {
   behaviour = 'ok';
+  outsideAction = false;
   tags.length = 0;
+  revalidated.length = 0;
   received.length = 0;
   process.env.ORDERS_SERVICE_URL = url;
   process.env.ORDERS_SERVICE_PROTO_VERSION = '1.2.0';
@@ -176,6 +185,33 @@ describe('a write that reached the function refreshes the cached reads', () => {
     expect(codeOf(err)).toBe(Code.Unavailable);
     expect(received).toHaveLength(1);
     expect(tags).toEqual([TAG]);
+  });
+});
+
+describe('called outside a Server Action (a Route Handler)', () => {
+  it('a committed write is returned, and the reads are expired with revalidateTag instead', async () => {
+    // Next throws from updateTag there; the write already committed, so the
+    // caller must get its result, not that error.
+    ready();
+    outsideAction = true;
+    const res = (await actions.placeOrder(
+      { sku: 's-1', quantity: 1 },
+      { idempotencyKey: 'k-6' },
+    )) as { id: string };
+    expect(res.id).toBe('o-1');
+    expect(tags).toEqual([]);
+    expect(revalidated).toEqual([{ tag: TAG, profile: { expire: 0 } }]);
+  });
+
+  it('a failed write keeps its own error, and is still expired', async () => {
+    ready();
+    outsideAction = true;
+    behaviour = 'unavailable';
+    const err = await failure(
+      actions.placeOrder({ sku: 's-1', quantity: 1 }, { idempotencyKey: 'k-7' }),
+    );
+    expect(codeOf(err)).toBe(Code.Unavailable);
+    expect(revalidated).toEqual([{ tag: TAG, profile: { expire: 0 } }]);
   });
 });
 

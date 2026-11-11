@@ -394,6 +394,8 @@ function emitAction(ctx: FileCtx, p: PlannedMethod): void {
   const normalize = ctx.imports.add(RUNTIME_MODULE, 'normalizeRequest', '$normalizeRequest');
   const wasNotSent = ctx.imports.add(RUNTIME_MODULE, 'wasNotSent', '$wasNotSent');
   const updateTag = ctx.imports.add('next/cache', 'updateTag', '$updateTag');
+  const revalidateTag = ctx.imports.add('next/cache', 'revalidateTag', '$revalidateTag');
+  const refresh = ctx.imports.add(RUNTIME_MODULE, 'refreshAfterWrite', '$refreshAfterWrite');
   const client = clientFor(ctx, method);
   // Every check that can refuse the call runs BEFORE the try: a refusal there
   // provably sent nothing, so it refreshes nothing. From the call on, a failure
@@ -419,7 +421,7 @@ function emitAction(ctx: FileCtx, p: PlannedMethod): void {
     `    mayHaveCommitted = !${wasNotSent}(err);`,
     '    throw err;',
     '  } finally {',
-    `    if (mayHaveCommitted) ${updateTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,
+    `    if (mayHaveCommitted) ${refresh}(${JSON.stringify(serviceTag(ctx.fn, method))}, ${updateTag}, ${revalidateTag});`,
     '  }',
     '}',
     '',

@@ -201,7 +201,7 @@ describe("glue mapping — other unary -> 'use server' action + updateTag", () =
       expect(c[0], name).toBe('userSubject');
       const call = c.lastIndexOf(name);
       expect(call, name).toBeGreaterThan(c.indexOf('mintCallToken'));
-      expect(c.indexOf('updateTag'), name).toBeGreaterThan(call);
+      expect(c.indexOf('refreshAfterWrite'), name).toBeGreaterThan(call);
     }
   });
 
@@ -217,7 +217,13 @@ describe("glue mapping — other unary -> 'use server' action + updateTag", () =
       }
       expect(calls(t.tryBlock), name).toEqual([name]);
       expect(calls(t.catchClause as ts.CatchClause), name).toEqual(['wasNotSent']);
-      expect(calls(t.finallyBlock as ts.Block), name).toEqual(['updateTag']);
+      // updateTag in a Server Action, revalidateTag outside one (a Route
+      // Handler): refreshAfterWrite gets both from next/cache.
+      expect(calls(t.finallyBlock as ts.Block), name).toEqual(['refreshAfterWrite']);
+      const finallyText = (t.finallyBlock as ts.Block).getText(sf);
+      expect(finallyText, name).toMatch(
+        /\$refreshAfterWrite\("knext:[^"]+", \$updateTag, \$revalidateTag\)/,
+      );
     }
   });
 

@@ -131,10 +131,10 @@ const REFUSALS = [
 
 // ── the two-user 'use cache' test ─────────────────────────────────────────
 const KEY_BLOCK =
-  '    `  return ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,\n' +
+  '    `  return ${unwrap}(await ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,\n' +
   "    '}',\n" +
   "    '',\n" +
-  '    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${output}> {`,\n' +
+  '    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${result}<${output}>> {`,\n' +
   '    \'  "use cache";\',\n' +
   '    `  ${cacheLife}(${life});`,\n' +
   '    `  ${cacheTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,\n' +
@@ -156,8 +156,8 @@ const TWO_USER = [
       'the user is dropped from the cache key (it reaches the token through a side channel): B is served A',
     anchor: KEY_BLOCK,
     replacement: KEY_BLOCK.replace(
-      '    `  return ${name}$cached(subject,',
-      '    `  globalThis.__knextSubject = subject;`,\n    `  return ${name}$cached("everyone",',
+      '    `  return ${unwrap}(await ${name}$cached(subject,',
+      '    `  globalThis.__knextSubject = subject;`,\n    `  return ${unwrap}(await ${name}$cached("everyone",',
     ).replace("${mintExpr(ctx, p, 'subject')}", "${mintExpr(ctx, p, 'globalThis.__knextSubject')}"),
   },
   {
@@ -170,10 +170,10 @@ const TWO_USER = [
     // argument; the cached function's own mint is gone.
     replacement:
       "    `  const token = ${mintExpr(ctx, p, 'subject')};`,\n" +
-      '    `  return ${name}$cached(token, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,\n' +
+      '    `  return ${unwrap}(await ${name}$cached(token, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,\n' +
       "    '}',\n" +
       "    '',\n" +
-      '    `async function ${name}$cached(token: string, protoVersion: string, request: string): Promise<${output}> {`,\n' +
+      '    `async function ${name}$cached(token: string, protoVersion: string, request: string): Promise<${result}<${output}>> {`,\n' +
       '    \'  "use cache";\',\n' +
       '    `  ${cacheLife}(${life});`,\n' +
       '    `  ${cacheTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,\n' +
@@ -184,9 +184,9 @@ const TWO_USER = [
     subject: 'plugin',
     claim: 'the served contract version is not in the key: a newer function reuses the old entry',
     anchor:
-      '    `  return ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,',
+      '    `  return ${unwrap}(await ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,',
     replacement:
-      '    `  ${servedVersionExpr(ctx)};`,\n    `  return ${name}$cached(subject, "any-version", ${encode}(${input}, request));`,',
+      '    `  ${servedVersionExpr(ctx)};`,\n    `  return ${unwrap}(await ${name}$cached(subject, "any-version", ${encode}(${input}, request)));`,',
   },
   {
     id: 'U04',

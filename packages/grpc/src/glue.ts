@@ -312,7 +312,8 @@ export type CachedResult<T> =
  * the caller. A ConnectError is returned as a value instead and rethrown by
  * {@link unwrapCached} outside the cache. A definitive answer is cached like
  * data (a write refreshes it); a transient one gets {@link QUERY_ERROR_CACHE_LIFE}
- * through `cacheLife`, the shortest life winning. Anything else is not a
+ * through `cacheLife`, the shortest life winning, as does a refusal the zone
+ * raised before sending (a configuration fault). Anything else is not a
  * function's answer and is thrown as before, never cached.
  */
 export async function cacheableCall<T>(
@@ -323,7 +324,10 @@ export async function cacheableCall<T>(
     return { ok: await call() };
   } catch (err) {
     if (!(err instanceof ConnectError)) throw err;
-    if (TRANSIENT_CODES.has(err.code)) cacheLife(QUERY_ERROR_CACHE_LIFE);
+    // A refusal raised in the zone before any request left (a missing service
+    // URL, signing key or token) is a configuration fault, not the function's
+    // answer: keep its code, but never pin it.
+    if (TRANSIENT_CODES.has(err.code) || wasNotSent(err)) cacheLife(QUERY_ERROR_CACHE_LIFE);
     return { error: { code: err.code, message: err.rawMessage } };
   }
 }

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { Code, ConnectError } from '@connectrpc/connect';
-import { cacheableCall, QUERY_ERROR_CACHE_LIFE, unwrapCached } from '../glue';
+import { cacheableCall, markNotSent, QUERY_ERROR_CACHE_LIFE, unwrapCached } from '../glue';
 
 function recorder() {
   const lives: unknown[] = [];
@@ -72,6 +72,17 @@ describe('cacheableCall and unwrapCached', () => {
       expect(r.lives).toEqual([]);
     });
   }
+
+  it('a refusal the zone raised before sending is kept briefly, whatever its code', async () => {
+    // A missing service URL or signing key: fixed by the operator, not by the
+    // function, so a 5-minute entry would outlive the fix.
+    const r = recorder();
+    const out = await cacheableCall(async () => {
+      throw markNotSent(new ConnectError('ORDERS_SERVICE_URL is not set', Code.FailedPrecondition));
+    }, r.cacheLife);
+    expect(r.lives).toEqual([QUERY_ERROR_CACHE_LIFE]);
+    expect(() => unwrapCached(out)).toThrow('ORDERS_SERVICE_URL is not set');
+  });
 
   it("an error that is not a function's answer is thrown as before, and not turned into a value", async () => {
     const r = recorder();

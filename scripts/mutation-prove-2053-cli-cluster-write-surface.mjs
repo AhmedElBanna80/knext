@@ -677,8 +677,8 @@ const APPLY_ROWS = (spec) => [
           id: 'O12',
           subject: 'dispatch',
           claim: 'core hands the package no cluster host for deploy',
-          anchor: 'return await (verb === "deploy"',
-          replacement: 'return await (verb === "deployx"',
+          anchor: 'if (verb === "deploy") {',
+          replacement: 'if (verb === "deployx") {',
         },
         {
           id: 'O13',

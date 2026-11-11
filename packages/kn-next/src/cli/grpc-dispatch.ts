@@ -342,9 +342,11 @@ export function buildServedVersionReader(
                 ),
             );
             if (!r.ok) {
-                const line =
+                // A cluster failure, not a user mistake: the deployed-baseline
+                // source catches it and reports it as a message, never a stack.
+                const servedReadError =
                     r.stderr.trim().split("\n")[0] || "kubectl get failed";
-                throw new Error(line);
+                throw new Error(servedReadError);
             }
             return r.stdout.trim();
         },

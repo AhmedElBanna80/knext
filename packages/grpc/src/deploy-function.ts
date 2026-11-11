@@ -32,6 +32,7 @@ import { parseArgs } from 'node:util';
 import { buildBackendServiceCR, renderBackendServiceCR } from './backend-service';
 import { GrpcUsageError, loadConfig } from './config';
 import type { Io } from './generate';
+import { compareVersions, parseVersion } from './semver';
 import { backendSpecDigest } from './spec-digest';
 
 /** What core's server-side preflight tells us. A subset of its `PreflightOutcome`. */
@@ -219,19 +220,28 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
     const maxScale = intFlag('max-scale', v['max-scale']);
     const containerConcurrency = intFlag('container-concurrency', v['container-concurrency']);
     // Without a served version the zone has no <NAME>_SERVICE_PROTO_VERSION and
-    // its generated glue refuses every call, so default to the version the IMAGE
-    // serves: the function project's own contract copy (functions/<name>/proto),
-    // which the image is built from. The zone's copy is compared, never used: a
-    // zone bumped ahead of its function must stay refused by the skew guard.
+    // its generated glue refuses every call, so default to the version the
+    // function serves: its own contract copy (functions/<name>/proto), from which
+    // its code is generated. The zone's copy is compared, never used. A function
+    // ahead of its zone is the documented rollout order (a newer function answers
+    // an older zone); a zone ahead of its function must stay refused by the skew
+    // guard, so that case stops here instead of declaring a version the image
+    // does not serve.
     let protoVersion = v['proto-version'];
     if (protoVersion === undefined) {
       const fnDir = join('functions', name, 'proto');
       const served = contractVersionFor(join(cwd, fnDir), name);
       const zone = contractVersionFor(join(cwd, config.proto), name);
-      if (served !== undefined && zone !== undefined && served !== zone) {
+      if (
+        served !== undefined &&
+        zone !== undefined &&
+        parseVersion(served) &&
+        parseVersion(zone) &&
+        compareVersions(zone, served) > 0
+      ) {
         throw new GrpcUsageError(
-          `the "${name}" function's contract (${fnDir}) is at ${served} but the zone's (${config.proto}) is at ${zone}: ` +
-            'copy the contract into the function, rebuild its image, and deploy again; or pass --proto-version with the version the image serves',
+          `the "${name}" function's contract (${fnDir}) is at ${served} but the zone's (${config.proto}) is at ${zone}, ahead of it: ` +
+            'copy the contract into the function, regenerate its code, rebuild its image, and deploy again; or pass --proto-version with the version the image serves',
         );
       }
       protoVersion = served;

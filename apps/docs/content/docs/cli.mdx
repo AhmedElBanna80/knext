@@ -853,10 +853,12 @@ knext deploy function orders \
 - `--image` must be pinned by digest; a tag-only reference and `:latest` are refused.
 - The function's language comes from `knext.grpc.json`, where `knext add function` recorded it.
 - The contract version the function serves comes from the function's own copy of its contract,
-  `functions/<name>/proto` (the copy its image is built from): `option (knext.v1.contract_version)`.
-  The zone needs it: without it every generated call is refused. If that copy and the zone's
-  `proto/` disagree, the command stops: copy the contract into the function, rebuild the image,
-  and deploy again. `--proto-version` overrides both.
+  `functions/<name>/proto`: `option (knext.v1.contract_version)`. Its code is generated from that
+  copy, so regenerate it (`buf generate` or `./codegen.sh`) before you build the image. The zone
+  needs the version: without it every generated call is refused. A function ahead of its zone is
+  fine (deploy the function first). If the zone's `proto/` is ahead of the function's copy, the
+  command stops: copy the contract into the function, regenerate, rebuild the image, and deploy
+  again. `--proto-version` overrides both.
 - Optional: `--namespace`, `--context`, `--port`, `--proto-version`, `--no-wake-ahead`,
   `--min-scale`, `--max-scale`, `--container-concurrency`.
 - `--dry-run` prints the resource and applies nothing, so it pipes into `kubectl apply -f -`.

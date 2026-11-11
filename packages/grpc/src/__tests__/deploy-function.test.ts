@@ -262,7 +262,7 @@ describe('knext deploy function: apply order and strictness', () => {
     expect(c.err()).toContain('serving contract version 1.2.0 (from functions/orders/proto;');
   });
 
-  it("refuses when the function's contract and the zone's disagree, so the skew guard is never bypassed", async () => {
+  it("refuses a zone contract ahead of the function's, so the skew guard is never bypassed", async () => {
     // A zone bumped ahead of its function: declaring the zone's version would
     // tell the zone the old image serves the new contract.
     const dir = zoneWithFunction('deploy-pv-skew');
@@ -275,6 +275,35 @@ describe('knext deploy function: apply order and strictness', () => {
     expect(await run('deploy', ARGS, { ...c.io, cwd: dir, host })).toBe(1);
     expect(calls).toEqual([]);
     expect(c.err()).toContain('is at 1.2.0 but the zone');
+  });
+
+  it('a function ahead of its zone is the documented rollout order: it serves its own version', async () => {
+    const dir = zoneWithFunction('deploy-pv-fn-ahead');
+    for (const f of ['orders.proto', 'catalog.proto']) {
+      const p = join(dir, 'functions/orders/proto/orders/v1', f);
+      writeFileSync(p, readFileSync(p, 'utf8').replace('"1.2.0"', '"1.3.0"'));
+    }
+    const { host, calls } = recordingHost();
+    expect(await run('deploy', ARGS, { ...capture().io, cwd: dir, host })).toBe(0);
+    expect(JSON.parse((calls[1] as Call).crText).spec.protoVersion).toBe('1.3.0');
+  });
+
+  it('a zone ahead of its function is refused under --dry-run too', async () => {
+    const dir = zoneWithFunction('deploy-pv-skew-dry');
+    for (const f of ['orders.proto', 'catalog.proto']) {
+      const p = join(dir, 'proto/orders/v1', f);
+      writeFileSync(p, readFileSync(p, 'utf8').replace('"1.2.0"', '"1.3.0"'));
+    }
+    const c = capture();
+    expect(
+      await run('deploy', [...ARGS, '--dry-run'], {
+        ...c.io,
+        cwd: dir,
+        host: recordingHost().host,
+      }),
+    ).toBe(1);
+    expect(c.out()).toBe('');
+    expect(c.err()).toContain('ahead of it');
   });
 
   it('--proto-version wins over both copies', async () => {

@@ -797,3 +797,4 @@ jobs:
             echo "| without | ${BUILD_TIME_WITHOUT} | ${BUNDLE_SIZE_WITHOUT} |"
             echo "| with | ${BUILD_TIME_WITH} | ${BUNDLE_SIZE_WITH} |"
           } >> "$GITHUB_STEP_SUMMARY"
+# (This file is registered with GitHub Actions by the push that changes it.)

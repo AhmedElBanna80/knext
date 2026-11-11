@@ -294,3 +294,4 @@ jobs:
             exit 1
           }
           echo "compile-cache boot evidence: $(grep -m1 '^COMPILE_CACHE:' /tmp/container.log), $(grep -c 'was accepted' /tmp/container.log) entries accepted"
+# (This file is registered with GitHub Actions by the push that changes it.)

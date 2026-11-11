@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { KNOWN_VERBS } from "../cli/dispatch";
 import {
     addMain,
+    buildServedVersionReader,
     deployFunctionMain,
     dispatchGrpcVerb,
     GRPC_PACKAGE,
@@ -217,6 +218,35 @@ describe("the dispatcher routes generate and add, and nothing else", () => {
         expect(seen.add).toBeUndefined();
         expect(seen.deploy).toBeDefined();
     });
+
+    it("hands the read-only served-version reader to `generate` and to no other verb", async () => {
+        const seen: Record<string, unknown> = {};
+        const { mod } = fakeModule({
+            run: async (verb, _argv, io) => {
+                seen[verb] = io?.servedVersionReader;
+                return 0;
+            },
+        });
+        const kubectl = {
+            capture: () => ({ ok: true, stdout: "", stderr: "" }),
+            run: () => {},
+        };
+        for (const [verb, argv] of [
+            ["generate", []],
+            ["add", ["function", "x", "--lang", "go"]],
+            ["deploy", ["function", "x"]],
+        ] as const) {
+            await dispatchGrpcVerb(verb, argv, "2.0.0", {
+                load: async () => mod,
+                kubectl,
+                ...capture().io,
+            });
+        }
+        expect(seen.generate).toBeDefined();
+        expect(seen.add).toBeUndefined();
+        expect(seen.deploy).toBeUndefined();
+    });
+
 
     it("deployFunctionMain names `knext deploy function` and answers --help without the package", async () => {
         const writes: string[] = [];
@@ -469,5 +499,60 @@ describe("the built bin routes generate and add to the package, never to deploy"
         const r = runBin(["add", "function", "orders", "--lang", "go"], app);
         expect(r.stdout).toContain("fake-grpc add function orders --lang go");
         expect(r.status).toBe(5);
+    });
+});
+
+describe("the served-version reader only reads", () => {
+    it("runs exactly one context-bound `kubectl get` of the BackendService's served version", () => {
+        const argvs: (readonly string[])[] = [];
+        const reader = buildServedVersionReader({
+            capture: (argv) => {
+                argvs.push(argv);
+                return { ok: true, stdout: "1.4.0\n", stderr: "" };
+            },
+            run: () => {
+                throw new Error("the reader must never run an inheriting kubectl");
+            },
+        });
+        expect(
+            reader.readServedProtoVersion({ namespace: "shop", name: "orders", context: "ctx-a" }),
+        ).toBe("1.4.0");
+        expect(argvs).toHaveLength(1);
+        expect(argvs[0]).toContain("get");
+        expect(argvs[0]).toContain("backendservices.apps.kn-next.dev");
+        expect(argvs[0]).toContain("jsonpath={.status.servedProtoVersion}");
+        expect(argvs[0]).toContain("ctx-a");
+        for (const verb of ["apply", "patch", "create", "delete", "replace", "edit", "label", "annotate"]) {
+            expect(argvs[0]).not.toContain(verb);
+        }
+    });
+
+    it("refuses a name that is not a Kubernetes name before kubectl runs", () => {
+        let ran = false;
+        const reader = buildServedVersionReader({
+            capture: () => {
+                ran = true;
+                return { ok: true, stdout: "", stderr: "" };
+            },
+            run: () => {},
+        });
+        expect(() =>
+            reader.readServedProtoVersion({ namespace: "shop", name: "--all" }),
+        ).toThrow(/not a Kubernetes name/);
+        expect(ran).toBe(false);
+    });
+
+    it("reports kubectl's own first error line on failure", () => {
+        const reader = buildServedVersionReader({
+            capture: () => ({
+                ok: false,
+                stdout: "",
+                stderr: 'Error from server (NotFound): backendservices.apps.kn-next.dev "orders" not found\nmore',
+            }),
+            run: () => {},
+        });
+        expect(() =>
+            reader.readServedProtoVersion({ namespace: "shop", name: "orders" }),
+        ).toThrow(/^Error from server \(NotFound\).*not found$/);
     });
 });

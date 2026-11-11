@@ -71,6 +71,18 @@ export interface DeployHost {
     }): void;
 }
 
+/**
+ * The read-only seam `knext generate --against deployed:<ns>/<name>` runs on:
+ * it reads one BackendService's `status.servedProtoVersion`, nothing else.
+ */
+export interface ServedVersionReader {
+    readServedProtoVersion(args: {
+        readonly namespace: string;
+        readonly name: string;
+        readonly context?: string;
+    }): string;
+}
+
 /** What core calls on `@getknext/grpc/cli`. */
 export interface GrpcCliModule {
     readonly DISPATCH_PROTOCOL: number;
@@ -82,6 +94,7 @@ export interface GrpcCliModule {
         argv: readonly string[],
         io?: {
             readonly host?: DeployHost;
+            readonly servedVersionReader?: ServedVersionReader;
             readonly stdout?: (text: string) => void;
             readonly stderr?: (text: string) => void;
         },
@@ -295,6 +308,47 @@ export function buildDeployHost(
     };
 }
 
+const K8S_NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * The reader handed to `knext generate`. One `kubectl get` of one
+ * BackendService, bound to the target context; core builds the argv, so the
+ * package cannot run anything else through it, and it never writes.
+ */
+export function buildServedVersionReader(
+    kubectl: KubectlSeam = defaultKubectl,
+): ServedVersionReader {
+    return {
+        readServedProtoVersion: ({ namespace, name, context }) => {
+            if (!K8S_NAME.test(namespace) || !K8S_NAME.test(name)) {
+                throw new UsageError(
+                    `refusing to read ${namespace}/${name}: not a Kubernetes name`,
+                );
+            }
+            const r = kubectl.capture(
+                withKubeContext(
+                    [
+                        "kubectl",
+                        "get",
+                        "backendservices.apps.kn-next.dev",
+                        name,
+                        "-n",
+                        namespace,
+                        "-o",
+                        "jsonpath={.status.servedProtoVersion}",
+                    ],
+                    context,
+                ),
+            );
+            if (!r.ok) {
+                const line = r.stderr.trim().split("\n")[0] || "kubectl get failed";
+                throw new Error(line);
+            }
+            return r.stdout.trim();
+        },
+    };
+}
+
 export interface DispatchDeps {
     /** Load the package; defaults to resolving it from the app, then from core. */
     readonly load?: () => Promise<GrpcCliModule>;
@@ -495,14 +549,23 @@ export async function dispatchGrpcVerb(
     }
     try {
         // Only `deploy function` writes to the cluster, so only it is handed
-        // the kubectl seam.
-        return await (verb === "deploy"
-            ? mod.run(verb, argv, {
-                  host: buildDeployHost(deps.kubectl),
-                  stdout,
-                  stderr,
-              })
-            : mod.run(verb, argv));
+        // the write seam. `generate` gets the read-only reader for a
+        // `deployed:` baseline; `add` gets neither.
+        if (verb === "deploy") {
+            return await mod.run(verb, argv, {
+                host: buildDeployHost(deps.kubectl),
+                stdout,
+                stderr,
+            });
+        }
+        if (verb === "generate") {
+            return await mod.run(verb, argv, {
+                servedVersionReader: buildServedVersionReader(deps.kubectl),
+                stdout,
+                stderr,
+            });
+        }
+        return await mod.run(verb, argv);
     } catch (err) {
         stderr(`${typed} failed: ${(err as Error)?.message ?? String(err)}\n`);
         return 1;

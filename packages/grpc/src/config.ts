@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
+import { checkTagTemplate } from './baseline';
 import { DEFAULT_DEADLINE_MS, DEFAULT_GATEWAY_TIMEOUT_SECONDS } from './policy';
 
 export const CONFIG_FILE = 'knext.grpc.json';
@@ -36,6 +37,12 @@ export interface GrpcConfig {
    * and `knext generate` refuses to run without it.
    */
   readonly authorize?: string;
+  /**
+   * The git tag a released contract version lives under, for
+   * `knext generate --against deployed:<namespace>/<name>`. Must contain
+   * `{version}`. Default `proto/v{version}`.
+   */
+  readonly deployedTagTemplate?: string;
   readonly functions: Readonly<Record<string, FunctionEntry>>;
 }
 
@@ -52,7 +59,7 @@ export class GrpcUsageError extends Error {
   override name = 'GrpcUsageError';
 }
 
-const KEYS = new Set([...Object.keys(DEFAULT_CONFIG), 'authorize']);
+const KEYS = new Set([...Object.keys(DEFAULT_CONFIG), 'authorize', 'deployedTagTemplate']);
 
 /** Extensions an authorize() module may have; the generated import drops it. */
 export const AUTHORIZE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'] as const;
@@ -236,8 +243,20 @@ export function parseConfig(raw: unknown): GrpcConfig {
     deadlineMs: num('deadlineMs'),
     gatewayTimeoutSeconds: num('gatewayTimeoutSeconds'),
     ...(obj.authorize === undefined ? {} : { authorize: authorizePath(obj.authorize) }),
+    ...(obj.deployedTagTemplate === undefined
+      ? {}
+      : { deployedTagTemplate: tagTemplate(obj.deployedTagTemplate) }),
     functions,
   };
+}
+
+function tagTemplate(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new GrpcUsageError(`${CONFIG_FILE}: "deployedTagTemplate" must be a string`);
+  }
+  const problem = checkTagTemplate(value);
+  if (problem) throw new GrpcUsageError(`${CONFIG_FILE}: ${problem}`);
+  return value;
 }
 
 /** Read `knext.grpc.json` from `cwd`. */
@@ -271,6 +290,9 @@ export function serializeConfig(config: GrpcConfig): string {
       deadlineMs: config.deadlineMs,
       gatewayTimeoutSeconds: config.gatewayTimeoutSeconds,
       ...(config.authorize === undefined ? {} : { authorize: config.authorize }),
+      ...(config.deployedTagTemplate === undefined
+        ? {}
+        : { deployedTagTemplate: config.deployedTagTemplate }),
       functions,
     },
     null,

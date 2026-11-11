@@ -21,7 +21,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { relative, sep } from 'node:path';
+import { isAbsolute, relative, sep } from 'node:path';
 import { parseVersion } from './semver';
 
 export interface DeployedRef {
@@ -91,6 +91,11 @@ export interface DeployedBaselineOptions {
 
 function gitOut(cwd: string, args: readonly string[]): { ok: boolean; out: string } {
   const r = spawnSync('git', [...args], { cwd, encoding: 'utf8' });
+  if (r.error) {
+    throw new BaselineUnavailableError(
+      `a deployed: baseline needs git, which could not be run: ${r.error.message}`,
+    );
+  }
   return { ok: r.status === 0, out: (r.stdout ?? '').trim() };
 }
 
@@ -117,7 +122,7 @@ export function checkTagTemplate(template: string): string | undefined {
  * A {@link DeployedBaselineSource} that reads the served contract version
  * from the live `BackendService` and returns the buf input for the git tag
  * that version was released under:
- * `<absolute git dir>#tag=proto/v1.4.0[,subdir=<workspace path in the repo>]`.
+ * `<absolute git dir>#format=git,tag=proto/v1.4.0[,subdir=<workspace path in the repo>]`.
  *
  * The git directory is absolute (the repository's common git dir, so a
  * worktree works), and the subdirectory is the buf workspace `generate` lints,
@@ -163,6 +168,11 @@ export function createDeployedBaselineSource(
         );
       }
       const tag = template.replaceAll('{name}', ref.name).replace('{version}', served);
+      if (BUF_INPUT_UNSAFE.test(tag)) {
+        throw new BaselineUnavailableError(
+          `the tag "${tag}" contains a comma, # or whitespace, which a buf git input cannot carry`,
+        );
+      }
       const cwd = realpathSync(opts.cwd);
       if (!gitOut(cwd, ['check-ref-format', `refs/tags/${tag}`]).ok) {
         throw new BaselineUnavailableError(
@@ -182,6 +192,12 @@ export function createDeployedBaselineSource(
             'Tag the commit that contract was released from, or fetch tags (git fetch --tags).',
         );
       }
+      if (!isAbsolute(common.out)) {
+        // git older than 2.31 echoes --path-format back instead of a path.
+        throw new BaselineUnavailableError(
+          `a deployed: baseline needs git 2.31 or newer (git rev-parse --path-format), got "${common.out}"`,
+        );
+      }
       const gitDir = realpathSync(common.out);
       const subdir = relative(realpathSync(top.out), cwd).split(sep).join('/');
       for (const [what, value] of [
@@ -194,7 +210,9 @@ export function createDeployedBaselineSource(
           );
         }
       }
-      return `${gitDir}#tag=${tag}${subdir === '' ? '' : `,subdir=${subdir}`}`;
+      // format=git explicitly: buf only infers a git input from a path ending in .git,
+      // and the common git dir of a submodule or a --separate-git-dir repo does not.
+      return `${gitDir}#format=git,tag=${tag}${subdir === '' ? '' : `,subdir=${subdir}`}`;
     },
   };
 }

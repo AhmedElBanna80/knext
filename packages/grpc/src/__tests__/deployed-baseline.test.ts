@@ -107,7 +107,7 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
     const zone = taggedZone('dep-input', 'proto/v2.0.1');
     const source = createDeployedBaselineSource({ cwd: zone, reader: reader('2.0.1') });
     expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
-      `${gitDirOf(zone)}#tag=proto/v2.0.1`,
+      `${gitDirOf(zone)}#format=git,tag=proto/v2.0.1`,
     );
   });
 
@@ -115,7 +115,7 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
     const { repo, zone } = nestedZone('dep-nested', 'proto/v1.4.0');
     const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0') });
     expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
-      `${gitDirOf(repo)}#tag=proto/v1.4.0,subdir=apps/web`,
+      `${gitDirOf(repo)}#format=git,tag=proto/v1.4.0,subdir=apps/web`,
     );
     removeTotalCents(zone);
     const c = capture();
@@ -137,7 +137,7 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
     git(zone, 'worktree', 'add', '-q', '--detach', wt);
     const source = createDeployedBaselineSource({ cwd: wt, reader: reader('1.4.0') });
     expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
-      `${gitDirOf(zone)}#tag=proto/v1.4.0`,
+      `${gitDirOf(zone)}#format=git,tag=proto/v1.4.0`,
     );
     removeTotalCents(wt);
     const c = capture();
@@ -153,6 +153,43 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
     expect(c.err()).toContain('total_cents');
   });
 
+  it('works with a git dir that does not end in .git (--separate-git-dir)', async () => {
+    const zone = copyFixtureZone('dep-sep');
+    const gitDir = join(emptyDir('dep-sep-git'), 'store');
+    git(zone, 'init', '-q', `--separate-git-dir=${gitDir}`);
+    git(zone, 'add', '-A');
+    git(zone, 'commit', '-qm', 'contract');
+    git(zone, 'tag', 'proto/v1.4.0');
+    const source = createDeployedBaselineSource({ cwd: zone, reader: reader('1.4.0') });
+    expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
+      `${realpathSync(gitDir)}#format=git,tag=proto/v1.4.0`,
+    );
+    removeTotalCents(zone);
+    const c = capture();
+    expect(
+      await runGenerate({
+        cwd: zone,
+        check: true,
+        against: 'deployed:shop/orders',
+        servedVersionReader: reader('1.4.0'),
+        io: c.io,
+      }),
+    ).toBe(1);
+    expect(c.err()).toContain('total_cents');
+  });
+
+  it('refuses a function name that would carry buf options into the tag', async () => {
+    const zone = taggedZone('dep-nameinject', 'proto/v1.4.0');
+    const source = createDeployedBaselineSource({
+      cwd: zone,
+      reader: reader('1.4.0'),
+      tagTemplate: '{name}-{version}',
+    });
+    await expect(source.resolve({ namespace: 'shop', name: 'x,format=dir' })).rejects.toThrow(
+      /tag "x,format=dir-1\.4\.0" contains a comma/,
+    );
+  });
+
   it('honours a custom tag template, with the function name', async () => {
     const zone = taggedZone('dep-template', 'orders-contract-3.1.0');
     const source = createDeployedBaselineSource({
@@ -161,7 +198,7 @@ describe('deployed:<namespace>/<name> reads the served version from the live Bac
       tagTemplate: '{name}-contract-{version}',
     });
     expect(await source.resolve({ namespace: 'shop', name: 'orders' })).toBe(
-      `${gitDirOf(zone)}#tag=orders-contract-3.1.0`,
+      `${gitDirOf(zone)}#format=git,tag=orders-contract-3.1.0`,
     );
   });
 

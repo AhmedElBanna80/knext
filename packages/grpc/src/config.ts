@@ -40,7 +40,8 @@ export interface GrpcConfig {
   /**
    * The git tag a released contract version lives under, for
    * `knext generate --against deployed:<namespace>/<name>`. Must contain
-   * `{version}`. Default `proto/v{version}`.
+   * `{version}` exactly once, may contain `{name}` (the function's name), and
+   * no other placeholder, comma, `#` or whitespace. Default `proto/v{version}`.
    */
   readonly deployedTagTemplate?: string;
   readonly functions: Readonly<Record<string, FunctionEntry>>;

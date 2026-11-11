@@ -20,10 +20,11 @@
 #   function  build and push the function image; knext deploy function with no
 #             --proto-version (the served version comes from the contract)
 #   zone      bind the function (backends + the printed specDigest) and knext deploy
-#   calls     a write through the generated action (a Route Handler), a read of it,
-#             a NotFound that keeps its code through 'use cache', a refused caller
-#   wake      a new zone process wakes the function through knext's own
-#             process-start loader, before any call
+#   calls     a write through the generated action (a Route Handler) that wakes the
+#             cold function, a read of it, a NotFound that keeps its code through
+#             'use cache', a refused caller
+#   wake      a new zone revision carries the function in KNEXT_WAKE_FUNCTIONS (what
+#             knext's process-start loader reads), and the function wakes before any call
 #
 # Environment: KIND_CLUSTER (default knext-z7-e2e), REGISTRY_PORT (5001),
 # Z12_NAMESPACE (z12-e2e), PHASES, INTERNAL_PORT (18092), Z12_ZERO_TIMEOUT (600).
@@ -33,8 +34,9 @@
 
 set -euo pipefail
 set +x
-# No umask 077 here: knext deploy COPYs files from the app into an image that runs as
-# a non-root user, so the app's files must stay world-readable (mktemp -d is 0700).
+# No umask 077 here: knext deploy COPYs the app (under STATE) into an image that runs
+# as a non-root user and keeps the host file modes, so the app's files must stay
+# world-readable. WORK is still private: mktemp -d creates it 0700.
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="$(cd "${HERE}/../.." && pwd)"
@@ -52,6 +54,7 @@ E2E_VERSION='2.0.0-e2e.0'
 ZONE=shop
 FN=orders
 ZONE_HOST=""
+ROLL_TAG=""
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/knext-z12-e2e.XXXXXX")"
 # Survives between runs: the packs, the scaffolded app and the recorded digests.
@@ -192,8 +195,10 @@ phase_function() {
       || fail "namespace ${NS} exists and this harness did not create it; refusing to delete it"
     k delete namespace "${NS}" --wait=true --timeout=600s
   fi
-  k create namespace "${NS}"
-  k label namespace "${NS}" e2e.kn-next.dev/z12-owned=true
+  # Created with its label in one step: a label added afterwards can fail and leave
+  # a namespace every later run refuses as not its own.
+  k create namespace "${NS}" --dry-run=client -o json \
+    | jq '.metadata.labels["e2e.kn-next.dev/z12-owned"] = "true"' | k apply -f - >/dev/null
   knext deploy function "${FN}" --zone "${ZONE}" --namespace "${NS}" --image "${image}" >"${STATE}/deploy-fn.log" 2>&1 \
     || { cat "${STATE}/deploy-fn.log" >&2; fail "knext deploy function failed"; }
   grep -q "serving contract version 1.0.0 (from functions/${FN}/proto" "${STATE}/deploy-fn.log" \
@@ -210,12 +215,15 @@ phase_function() {
 phase_zone() {
   log "zone: bind ${FN} and knext deploy"
   local pin
+  [ -s "${STATE}/spec-digest" ] || fail "no specDigest pin recorded (run the function phase)"
   pin="$(cat "${STATE}/spec-digest")"
   node -e '
     const fs = require("fs"); const f = process.argv[1];
     let s = fs.readFileSync(f, "utf8");
     s = s.replace(/registry: "[^"]*",/, `registry: "localhost:${process.argv[2]}",`);
-    if (!s.includes("backends:")) s = s.replace(/\n};\n\nexport default config;/, `\n  backends: [{ name: "${process.argv[3]}", specDigest: "${process.argv[4]}" }],\n};\n\nexport default config;`);
+    // A later run after a function rebuild re-binds to the new pin.
+    s = s.replace(/\n  backends: \[[^\n]*\],\n/, "\n");
+    s = s.replace(/\n};\n\nexport default config;/, `\n  backends: [{ name: "${process.argv[3]}", specDigest: "${process.argv[4]}" }],\n};\n\nexport default config;`);
     fs.writeFileSync(f, s);
   ' "${APP}/knext.config.ts" "${REG_PORT}" "${FN}" "${pin}"
   grep -q "specDigest: \"${pin}\"" "${APP}/knext.config.ts" || fail "could not bind ${FN} in knext.config.ts"
@@ -229,12 +237,17 @@ phase_zone() {
 
 # ---------------------------------------------------------------- calls
 
-# zone_req <method> <path?query> [sub]: ZC_STATUS / ZC_BODY from the zone.
+# zone_req <method> <path?query> [sub]: ZC_STATUS / ZC_BODY from the zone. Like
+# zone_call, a 000 (a dropped port-forward, never the zone's answer) is retried;
+# the write here is idempotent in effect (the same id and value).
 zone_req() {
-  local out hdr=()
-  [ -n "${3:-}" ] && hdr=(-H "x-sub: $3")
-  ensure_forward
-  out="$(curl -s -m 60 -X "$1" -H "Host: ${ZONE_HOST}" "${hdr[@]}" -w '\n%{http_code}' "http://127.0.0.1:${INTERNAL_PORT}$2" 2>/dev/null)" || out=$'\n000'
+  local out _ sub_header="x-knext-z12: none"
+  [ -n "${3:-}" ] && sub_header="x-sub: $3"
+  for _ in 1 2 3; do
+    ensure_forward
+    out="$(curl -s -m 60 -X "$1" -H "Host: ${ZONE_HOST}" -H "${sub_header}" -w '\n%{http_code}' "http://127.0.0.1:${INTERNAL_PORT}$2" 2>/dev/null)" || out=$'\n000'
+    [ "${out##*$'\n'}" = 000 ] || break
+  done
   ZC_STATUS="${out##*$'\n'}"
   ZC_BODY="${out%$'\n'*}"
 }
@@ -268,12 +281,29 @@ phase_calls() {
   await_fn_zero
   expect_req "a write through the generated Server Action, from a Route Handler, wakes the cold function and returns" \
     POST "/api/orders?id=q1&value=hello" alice 200 '.ok == true'
+  [ "$(fn_pods)" -ge 1 ] || fail "the write returned but ${FN} has no pod: the call did not wake it"
+  ok "the write woke ${FN} (it has a pod now, and had none before)"
+  grep -qE "^ *[\"']use cache[\"'];" "${APP}/src/generated/grpc/${FN}/v1/${FN}_knext_server.ts" \
+    || fail "the generated query module has no 'use cache' directive"
   expect_req "a read through the generated 'use cache' query returns it" \
     GET "/api/orders?id=q1" alice 200 '.ok == true and .value == "hello"'
   expect_req "a missing item keeps its NotFound code through 'use cache' in production" \
     GET "/api/orders?id=missing" alice 404 '.ok == false and .code == "NotFound"'
+  # authorize() throws a plain Error, which the route reports as Unknown/500; the
+  # message pins it to that refusal rather than to any unclassified failure.
   expect_req "a caller authorize() refuses is not served" \
-    GET "/api/orders?id=q1" "" 500 '.ok == false'
+    GET "/api/orders?id=q1" "" 500 '.ok == false and .code == "Unknown" and .message == "no signed-in user"'
+}
+
+# The new zone revision's pod is running with Z12_ROLL=<tag>, and the operator has
+# rendered the function into its wake list (what knext's process-start loader reads).
+zone_wakes_fn() {
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${ZONE}" -o json | jq -e --arg r "${ROLL_TAG}" --arg f "${FN}" '
+    [.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running")
+      | .spec.containers[] | select(.name == "user-container") | .env // []
+      | select(any(.[]; .name == "Z12_ROLL" and .value == $r))
+      | select(any(.[]; .name == "KNEXT_WAKE_FUNCTIONS" and (.value | split(",") | index($f))))]
+    | length >= 1' >/dev/null
 }
 
 phase_wake() {
@@ -282,9 +312,9 @@ phase_wake() {
   [ "$(k -n "${NS}" get backendservice "${FN}" -o jsonpath='{.spec.wakeAhead}')" != false ] \
     || fail "${FN} is opted out of wake-ahead"
   await_fn_zero
-  local tag
-  tag="wake-$(date +%s)"
-  k -n "${NS}" patch nextapp "${ZONE}" --type merge -p "{\"spec\":{\"env\":{\"Z12_ROLL\":\"${tag}\"}}}" >/dev/null
+  ROLL_TAG="wake-$(date +%s)"
+  k -n "${NS}" patch nextapp "${ZONE}" --type merge -p "{\"spec\":{\"env\":{\"Z12_ROLL\":\"${ROLL_TAG}\"}}}" >/dev/null
+  wait_until 300 3 "a ready zone pod of the new revision lists ${FN} in KNEXT_WAKE_FUNCTIONS" zone_wakes_fn
   wait_until 120 2 "${FN} has a pod, woken by the zone's start (no call made)" '[ "$(fn_pods)" -ge 1 ]'
   ok "the new zone process woke ${FN} before any call"
 }

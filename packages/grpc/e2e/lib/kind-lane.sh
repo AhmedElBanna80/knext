@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Helpers shared by the zone-function kind lanes (z7-identity-kind, z10-zone-functions-kind)
-# and the z11-activator-drill.
+# Helpers shared by the zone-function kind lanes (z7-identity-kind, z10-zone-functions-kind,
+# z12-quickstart-kind) and the z11-activator-drill.
 # Sourced, never run. The caller sets, before sourcing:
 #   CLUSTER        kind cluster name
 #   WORK           a private temporary directory (removed by the caller's cleanup)
@@ -99,6 +99,6 @@ build_push() { # <name> <context dir>: build, push, record name=<repo>@<digest>
 image_ref() { # <name>
   local ref
   ref="$(sed -n "s/^$1=//p" "${STATE}/images.env" 2>/dev/null | tail -1)"
-  [ -n "${ref}" ] || fail "no image recorded for $1 (run the images phase)"
+  [ -n "${ref}" ] || fail "no image recorded for $1 (build and push it first)"
   echo "${ref}"
 }

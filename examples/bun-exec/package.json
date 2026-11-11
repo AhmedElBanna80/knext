@@ -11,8 +11,8 @@
     "test:image": "node ../../scripts/bun-test.mjs examples/bun-exec/test/alpine-image.docker-e2e.test.ts"
   },
   "dependencies": {
-    "react": "^19.2.6",
-    "react-dom": "^19.2.6",
+    "react": "^19.2.9",
+    "react-dom": "^19.2.9",
     "srvx": "0.11.22",
     "vinext": "1.0.0-beta.4"
   },
@@ -21,7 +21,7 @@
     "@vitejs/plugin-rsc": "^0.5.26",
     "next": "16.4.3",
     "nitro": "3.0.260610-beta",
-    "react-server-dom-webpack": "^19.2.6",
+    "react-server-dom-webpack": "^19.2.9",
     "vite": "^8.3.4"
   },
   "overrides": {

@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Helpers shared by the zone-function kind lanes (z7-identity-kind, z10-zone-functions-kind).
+# Helpers shared by the zone-function kind lanes (z7-identity-kind, z10-zone-functions-kind)
+# and the z11-activator-drill.
 # Sourced, never run. The caller sets, before sourcing:
 #   CLUSTER        kind cluster name
 #   WORK           a private temporary directory (removed by the caller's cleanup)

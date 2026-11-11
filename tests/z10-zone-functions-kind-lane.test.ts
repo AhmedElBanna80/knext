@@ -87,7 +87,9 @@ describe('the cold path is really cold', () => {
 
   it('scale-to-zero means no pod at all, terminating ones included', () => {
     expect(body('await_zero')).toContain('all_pods');
-    expect(own).toMatch(/all_pods\(\) \{[^\n]*\n\s*k -n "\$\{NS\}" get pods [^\n]*\| jq '\.items \| length'/);
+    expect(own).toMatch(
+      /all_pods\(\) \{[^\n]*\n\s*k -n "\$\{NS\}" get pods [^\n]*\| jq '\.items \| length'/,
+    );
   });
 
   it('turns wake-ahead off on both functions (the operator defaults it on)', () => {
@@ -128,6 +130,8 @@ describe('CI runs the lane on the Z7 cluster', () => {
     const env = Object.values(wf.jobs)[0] as unknown as { env?: Record<string, string> };
     expect(env.env?.KIND_CLUSTER).toBeTruthy();
     expect(env.env?.REGISTRY_PORT).toBeTruthy();
-    expect(readFileSync(WORKFLOW, 'utf8')).toContain("- 'tests/z10-zone-functions-kind-lane.test.ts'");
+    expect(readFileSync(WORKFLOW, 'utf8')).toContain(
+      "- 'tests/z10-zone-functions-kind-lane.test.ts'",
+    );
   });
 });

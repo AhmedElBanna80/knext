@@ -629,6 +629,10 @@ Options:
   --react-compiler, --no-react-compiler
                             React Compiler on or off (default: on, for every
                             builder)
+  --cache-components, --no-cache-components
+                            Cache Components ('use cache', partial
+                            prefetching) on or off (default: off;
+                            turbopack/webpack only)
   -y, --yes                Do not ask; use the defaults for anything not given
   --force                  Overwrite existing files
   --dry-run                List the files that would be written, write nothing
@@ -718,6 +722,8 @@ export async function createMain(
         storage?: string;
         "react-compiler"?: boolean;
         "no-react-compiler"?: boolean;
+        "cache-components"?: boolean;
+        "no-cache-components"?: boolean;
         yes?: boolean;
         force?: boolean;
         "dry-run"?: boolean;
@@ -735,6 +741,8 @@ export async function createMain(
                 storage: { type: "string" },
                 "react-compiler": { type: "boolean" },
                 "no-react-compiler": { type: "boolean" },
+                "cache-components": { type: "boolean" },
+                "no-cache-components": { type: "boolean" },
                 yes: { type: "boolean", short: "y" },
                 force: { type: "boolean", default: false },
                 "dry-run": { type: "boolean", default: false },

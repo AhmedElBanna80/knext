@@ -60,6 +60,8 @@ export const CLI_CONTRACT: readonly VerbContract[] = [
             "--storage",
             "--react-compiler",
             "--no-react-compiler",
+            "--cache-components",
+            "--no-cache-components",
             "-y",
             "--yes",
             "--force",

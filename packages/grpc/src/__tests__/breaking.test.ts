@@ -96,14 +96,14 @@ describe('baseline resolution — the deployed-baseline seam', () => {
 
   it('without a source, a deployed baseline fails with a clear message, never a silent pass', async () => {
     await expect(resolveBaseline('deployed:shop/orders')).rejects.toThrow(
-      /deployed contract .* not available yet/,
+      /deployed contract .* not available: .*@getknext\/core/,
     );
     const zone = copyFixtureZone('brk-deployed');
     const c = capture();
     expect(
       await runGenerate({ cwd: zone, check: true, against: 'deployed:shop/orders', io: c.io }),
     ).toBe(1);
-    expect(c.err()).toContain('not available yet');
+    expect(c.err()).toContain('not available');
   });
 
   it('rejects a malformed deployed reference', async () => {

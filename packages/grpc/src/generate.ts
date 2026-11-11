@@ -47,7 +47,13 @@ import {
 } from '@bufbuild/protobuf/wkt';
 import { protocGenEs } from '@bufbuild/protoc-gen-es/dist/cjs/src/protoc-gen-es-plugin.js';
 import type { Plugin } from '@bufbuild/protoplugin';
-import { BaselineUnavailableError, type DeployedBaselineSource, resolveBaseline } from './baseline';
+import {
+  BaselineUnavailableError,
+  createDeployedBaselineSource,
+  type DeployedBaselineSource,
+  resolveBaseline,
+  type ServedVersionReader,
+} from './baseline';
 import { BufIntegrityError, runBuf } from './buf';
 import {
   AUTHORIZE_EXTENSIONS,
@@ -318,6 +324,14 @@ export interface RunGenerateOptions {
   /** A `buf breaking` baseline; see `resolveBaseline`. */
   readonly against?: string;
   readonly deployedBaseline?: DeployedBaselineSource;
+  /**
+   * Reads a function's served contract version from the cluster (core's
+   * read-only kubectl seam). With it, `deployed:` baselines resolve to the
+   * git tag of that version; `deployedBaseline` wins when both are given.
+   */
+  readonly servedVersionReader?: ServedVersionReader;
+  /** The kubectl context the reader uses. */
+  readonly context?: string;
   readonly io: Io;
 }
 
@@ -334,7 +348,19 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<number> {
     }
 
     if (opts.against !== undefined) {
-      const input = await resolveBaseline(opts.against, opts.deployedBaseline);
+      const deployed =
+        opts.deployedBaseline ??
+        (opts.servedVersionReader
+          ? createDeployedBaselineSource({
+              cwd,
+              reader: opts.servedVersionReader,
+              ...(opts.context === undefined ? {} : { context: opts.context }),
+              ...(config.deployedTagTemplate === undefined
+                ? {}
+                : { tagTemplate: config.deployedTagTemplate }),
+            })
+          : undefined);
+      const input = await resolveBaseline(opts.against, deployed);
       const breaking = runBuf(['breaking', '--against', input], { cwd });
       if (breaking.status !== 0) {
         io.stderr(

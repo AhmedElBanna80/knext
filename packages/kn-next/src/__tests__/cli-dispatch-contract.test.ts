@@ -164,6 +164,10 @@ describe("usage mistakes are UsageErrors, so they render as messages", () => {
         ],
         // Injectable exec boundary. Empty argv is a programming error inside
         // knext, never something a user types.
+        // The read-only served-version reader `generate` gets: a failed
+        // `kubectl get` is a cluster failure, and @getknext/grpc catches it
+        // and prints it as a BaselineUnavailableError message.
+        "grpc-dispatch.ts": ["throw new Error(servedReadError)"],
         "exec.ts": [
             "runCapture: empty argv",
             "runInherit: empty argv",

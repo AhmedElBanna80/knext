@@ -883,11 +883,42 @@ Writes the TypeScript a zone uses to call its functions, from the contracts in `
 knext generate                                        # lint, then write the generated code
 knext generate --check                                # fail if the committed code is out of date
 knext generate --check --against ".git#branch=main,subdir=proto"   # also fail on a breaking change
+knext generate --check --against deployed:shop/orders               # ...against what is running now
 ```
 
 It runs `buf lint` first, and with `--against` it runs `buf breaking` against a baseline: a
 directory, an image file, or a git reference. A removed or renumbered field is a breaking change
-and fails the run. Run `knext generate --check` in CI so generated code can never drift from its
+and fails the run.
+
+`--against deployed:<namespace>/<name>` compares against the contract a deployed function serves
+right now. knext reads the function's served version (`status.servedProtoVersion` on its
+`BackendService`; the cluster is only read, never changed) and compares against the git tag that
+version was released under, `proto/v<version>` by default (`proto/v1.4.0`), as it exists in the
+repository you run from. Tag each contract release that way, or set `deployedTagTemplate` in
+`knext.grpc.json`: it must contain `{version}` once, may use `{name}`, the function's name, and
+may not contain any other placeholder, a comma, `#` or whitespace,
+so functions released separately from one repository get their own tags
+(`"{name}-contract-{version}"`). `--context` picks the kubectl context (default: `$KN_CONTEXT`,
+else the current one).
+
+The run fails instead of comparing against nothing when:
+
+- the cluster cannot be read (no such function, no permission, kubectl not installed);
+- the function reports no served version: no Ready revision carries a `protoVersion`, the
+  function is refused, or the cluster's operator is too old to record it;
+- the served version is not a semantic version;
+- git is not installed or is older than 2.31;
+- you are not in a git repository, the tag is not a valid tag name, or the repository has no
+  such tag (in CI, check out with tags, for example `git fetch --tags`);
+- the repository's path or your app's path inside it contains a comma, `#` or whitespace;
+- the installed `@getknext/core` is too old to read the cluster (upgrade it together with
+  `@getknext/grpc`).
+
+The tag says where a released contract lives; it does not prove the running image serves exactly
+that tree. A tag moved after the release compares against whatever it points to now. Nothing runs
+this check for you: add it to CI next to `knext generate --check` if you want it enforced.
+
+Run `knext generate --check` in CI so generated code can never drift from its
 contract. The output goes to `src/generated/grpc` (set `out` in `knext.grpc.json` to move it), and
 is the same bytes on every run; mark that directory as generated for your formatter. `out` must be
 a subdirectory of your app: the app root itself, anything outside it, and anything under

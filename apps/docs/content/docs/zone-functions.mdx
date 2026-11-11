@@ -481,7 +481,8 @@ just called it does not find it cold on the next request.
 
 The served version is `status.servedProtoVersion`: the `protoVersion` of the function's latest
 Ready revision. It is empty until a revision is Ready, and it is the value the zone receives as
-`<NAME>_SERVICE_PROTO_VERSION`.
+`<NAME>_SERVICE_PROTO_VERSION`. `knext generate --against deployed:<namespace>/<name>` compares your
+contract against it: see [`knext generate`](/docs/cli#knext-generate).
 
 | Condition | Meaning |
 | --- | --- |

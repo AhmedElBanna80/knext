@@ -16,6 +16,12 @@
 #   cold      each function scaled to zero; a write then a read through the zone wakes it
 #   trailers  scaled to zero again; a read of a missing item comes back NotFound through
 #             the activator, the same code as the warm control
+#   rollout   the Go function's served version moves: a newer one (1.1.0) is called by
+#             the 1.0.0 zone, an older one (0.9.0) is refused by the zone's glue
+#             (FailedPrecondition) before any call, the same one (1.0.0) is called again
+#   sovereignty  a second zone lists four functions; three take another zone's Secret
+#             (env, envFrom, volume) and are refused (SecretNotAllowed, no Knative Service, no pod),
+#             the control takes its own zone's Secret through all three and is rendered
 #
 # Environment: KIND_CLUSTER (default knext-z7-e2e), REGISTRY_PORT (5001),
 # Z10_NAMESPACE (z10-e2e), Z10_WITH_RUST (1), PHASES, INTERNAL_PORT (18090),
@@ -38,7 +44,7 @@ CLUSTER="${KIND_CLUSTER:-knext-z7-e2e}"
 REG_PORT="${REGISTRY_PORT:-5001}"
 NS="${Z10_NAMESPACE:-z10-e2e}"
 WITH_RUST="${Z10_WITH_RUST:-1}"
-PHASES="${PHASES:-images deploy cold trailers}"
+PHASES="${PHASES:-images deploy cold trailers rollout sovereignty}"
 INTERNAL_PORT="${INTERNAL_PORT:-18090}"
 ZERO_TIMEOUT="${Z10_ZERO_TIMEOUT:-300}"
 OPERATOR_NS='kn-next-operator-system'
@@ -277,6 +283,188 @@ phase_trailers() {
   fi
 }
 
+# ---------------------------------------------------------------- phase: rollout
+
+# set_served <version>: stamp the Go function with <version> and wait until the
+# zone runs a revision that sees it. The zone was generated against contract
+# 1.0.0; the served version reaches it only through its env.
+set_served() {
+  local v=$1
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"protoVersion\":\"${v}\"}}" >/dev/null
+  wait_until 600 3 "${GO_FN} serves ${v}" \
+    "[ \"\$(k -n ${NS} get backendservice ${GO_FN} -o jsonpath='{.status.servedProtoVersion}')\" = ${v} ]"
+  wait_until 600 3 "the zone runs with EXAMPLE_SERVICE_PROTO_VERSION=${v}" "zone_sees_version ${v}"
+  ok "${GO_FN} serves ${v}, and the zone's pod sees it"
+}
+
+zone_sees_version() { # <version>: the zone's single ready pod carries the served version
+  local pod
+  pod="$(pod_json "${ZONE}")" || return 1
+  jq -e --arg v "$1" '
+    .status.phase == "Running" and ([.status.containerStatuses[]? | .ready] | all)
+    and ([.spec.containers[] | select(.name == "user-container") | .env[]?
+          | select(.name == "EXAMPLE_SERVICE_PROTO_VERSION") | .value] == [$v])' <<<"${pod}" >/dev/null || return 1
+  zone_call /api/health
+  [ "${ZC_STATUS}" = 200 ]
+}
+
+phase_rollout() {
+  log "rollout: an old zone may call a newer function; a newer zone may not call an older one"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  # The rule (function-first rollout): the zone's glue refuses a function whose
+  # served contract is OLDER than the one the zone was generated against
+  # (1.0.0 here), and calls one that is the same or newer.
+  set_served 1.1.0
+  expect_zone "an old zone (1.0.0) calls a newer function (1.1.0): accepted" \
+    "/example/put?sub=alice&id=roll-1&value=v" 200 '.ok == true'
+  set_served 0.9.0
+  expect_zone "a zone (1.0.0) newer than its function (0.9.0): refused before the call" \
+    "/example/get?sub=alice&id=roll-1" 502 '.ok == false and .code == "FailedPrecondition"'
+  set_served 1.0.0
+  expect_zone "back on the same contract (1.0.0): accepted again" \
+    "/example/put?sub=alice&id=roll-2&value=v" 200 '.ok == true'
+}
+
+# ---------------------------------------------------------------- phase: sovereignty
+
+SOV_ZONE=ledger
+OTHER_ZONE=payroll
+
+sov_condition() { # <function>: "<status>/<reason>" of SovereigntyCompliant
+  k -n "${NS}" get backendservice "$1" -o json \
+    | jq -r '.status.conditions[]? | select(.type == "SovereigntyCompliant") | "\(.status)/\(.reason)"'
+}
+
+phase_sovereignty() {
+  log "sovereignty: a function may not take another zone's Secret, through any source"
+  local go_img zone_img
+  go_img="$(image_ref function-go)"
+  zone_img="$(image_ref zone-caller)"
+  # Two Secrets, marked for two zones. Neither holds a credential: the lane
+  # proves the operator's refusal, it does not need a database.
+  k -n "${NS}" apply --validate=strict -f - <<YAML >/dev/null
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${OTHER_ZONE}-creds
+  namespace: ${NS}
+  labels:
+    apps.kn-next.dev/zone: ${OTHER_ZONE}
+stringData:
+  token: not-a-real-credential
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${SOV_ZONE}-creds
+  namespace: ${NS}
+  labels:
+    apps.kn-next.dev/zone: ${SOV_ZONE}
+stringData:
+  token: not-a-real-credential
+YAML
+
+  # The zone lists every function, so a refused one is refused BY THE ALLOWLIST:
+  # an unlisted function would not be rendered anyway, and its absence would
+  # prove nothing.
+  local fn fns="sov-env sov-envfrom sov-volume sov-own" docs=""
+  for fn in ${fns}; do
+    local secret="${OTHER_ZONE}-creds" extra
+    [ "${fn}" = sov-own ] && secret="${SOV_ZONE}-creds"
+    case "${fn}" in
+      sov-env) extra="  env:
+    - name: TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: ${secret}
+          key: token" ;;
+      sov-envfrom) extra="  envFrom:
+    - secretRef:
+        name: ${secret}" ;;
+      sov-volume) extra="  volumes:
+    - name: creds
+      mountPath: /var/run/creds
+      secret:
+        secretName: ${secret}" ;;
+      # The control takes its own zone's Secret through all three sources.
+      sov-own) extra="  env:
+    - name: TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: ${secret}
+          key: token
+  envFrom:
+    - secretRef:
+        name: ${secret}
+  volumes:
+    - name: creds
+      mountPath: /var/run/creds
+      secret:
+        secretName: ${secret}" ;;
+    esac
+    docs="${docs}---
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: BackendService
+metadata:
+  name: ${fn}
+  namespace: ${NS}
+spec:
+  zone: ${SOV_ZONE}
+  image: ${go_img}
+  language: go
+  port: 8080
+  protoVersion: 1.0.0
+  wakeAhead: false
+  scaling:
+    minScale: 0
+    maxScale: 1
+${extra}
+"
+  done
+  k apply --validate=strict -f - <<YAML
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: ${SOV_ZONE}
+  namespace: ${NS}
+spec:
+  image: ${zone_img}
+  healthCheckPath: /api/health
+  scaling:
+    minScale: 0
+    maxScale: 1
+  backends:
+    - name: env
+      service: sov-env
+    - name: envfrom
+      service: sov-envfrom
+    - name: volume
+      service: sov-volume
+    - name: own
+      service: sov-own
+${docs}
+YAML
+
+  wait_until 300 3 "the control function sov-own is Ready" \
+    "k -n ${NS} wait --for=condition=Ready --timeout=2s backendservice/sov-own"
+  [ "$(sov_condition sov-own)" = True/Compliant ] || fail "sov-own: SovereigntyCompliant is $(sov_condition sov-own), want True/Compliant"
+  k -n "${NS}" get ksvc sov-own >/dev/null 2>&1 || fail "sov-own: its own zone's Secret was accepted but no Knative Service was rendered"
+  ok "control: a function taking its own zone's Secret (env, envFrom, volume) is compliant and rendered"
+
+  for fn in sov-env sov-envfrom sov-volume; do
+    wait_until 120 3 "${fn} refused by the allowlist" "[ \"\$(sov_condition ${fn})\" = False/SecretNotAllowed ]"
+  done
+  # Hold for a while: a refusal that flaps to rendering is not one.
+  sleep 20
+  for fn in sov-env sov-envfrom sov-volume; do
+    [ "$(sov_condition "${fn}")" = False/SecretNotAllowed ] || fail "${fn}: SovereigntyCompliant is $(sov_condition "${fn}") after the hold"
+    # --ignore-not-found: an API error must fail the lane, not read as "absent".
+    [ -z "$(k -n "${NS}" get ksvc "${fn}" --ignore-not-found -o name)" ] || fail "${fn}: refused, but its Knative Service exists"
+    [ "$(all_pods "${fn}")" = 0 ] || fail "${fn}: refused, but it has a pod"
+    ok "${fn}: another zone's Secret is refused (SecretNotAllowed), no Knative Service and no pod"
+  done
+}
+
 # ---------------------------------------------------------------- main
 
 use_cluster
@@ -284,12 +472,14 @@ k get crd backendservices.apps.kn-next.dev >/dev/null 2>&1 \
   || fail "the cluster has no BackendService CRD: run the Z7 lane's up phase first (PHASES=up ${Z7}/run.sh)"
 for phase in ${PHASES}; do
   case "${phase}" in
-    images | deploy | cold | trailers) ;;
-    *) fail "unknown phase '${phase}' (images deploy cold trailers)" ;;
+    images | deploy | cold | trailers | rollout | sovereignty) ;;
+    *) fail "unknown phase '${phase}' (images deploy cold trailers rollout sovereignty)" ;;
   esac
 done
 has_phase images && phase_images
 has_phase deploy && phase_deploy
 has_phase cold && phase_cold
 has_phase trailers && phase_trailers
+has_phase rollout && phase_rollout
+has_phase sovereignty && phase_sovereignty
 log "Z10 lane: ${PHASES} passed"

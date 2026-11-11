@@ -52,7 +52,7 @@ describe('the harness is as careful as the Z7 lane', () => {
   });
 
   it('runs every phase by default', () => {
-    expect(own).toContain('PHASES="${PHASES:-images deploy cold trailers}"');
+    expect(own).toContain('PHASES="${PHASES:-images deploy cold trailers rollout sovereignty}"');
   });
 });
 
@@ -106,6 +106,51 @@ describe('a failed call keeps its code through the activator', () => {
     expect(t).toMatch(
       /expect_zone "warm control: [^"]*" \\\n\s*"\/example\/get\?sub=alice&id=missing"/,
     );
+  });
+});
+
+describe('a partial rollout is ordered function-first', () => {
+  it('a newer function is called, an older one is refused before the call, both after the zone sees the version', () => {
+    const r = body('phase_rollout');
+    const newer = r.indexOf('set_served 1.1.0');
+    const older = r.indexOf('set_served 0.9.0');
+    expect(newer).toBeGreaterThan(-1);
+    expect(older).toBeGreaterThan(newer);
+    expect(r.slice(newer, older)).toMatch(/200 '\.ok == true'/);
+    expect(r.slice(older)).toMatch(/502 '\.ok == false and \.code == "FailedPrecondition"'/);
+    const set = body('set_served');
+    expect(set).toContain('.status.servedProtoVersion');
+    expect(set).toContain('zone_sees_version');
+    expect(body('zone_sees_version')).toContain('EXAMPLE_SERVICE_PROTO_VERSION');
+  });
+});
+
+describe("another zone's Secret is refused through every source", () => {
+  const sv = body('phase_sovereignty');
+
+  it('the zone lists every function, so a refusal is the allowlist and not a missing binding', () => {
+    for (const fn of ['sov-env', 'sov-envfrom', 'sov-volume', 'sov-own']) {
+      expect(sv).toContain(`service: ${fn}`);
+    }
+  });
+
+  it('each violator is SecretNotAllowed after a hold, with no Knative Service and no pod', () => {
+    expect(sv).toContain('for fn in sov-env sov-envfrom sov-volume; do');
+    expect(sv).toMatch(/sleep 20/);
+    expect(sv).toMatch(/= False\/SecretNotAllowed \] \|\| fail/);
+    expect(sv).toMatch(
+      /\[ -z "\$\(k -n "\$\{NS\}" get ksvc "\$\{fn\}" --ignore-not-found -o name\)" \] \|\| fail/,
+    );
+    expect(sv).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
+  });
+
+  it('each source is used by a violator, and the control uses all three with its own Secret', () => {
+    expect(sv).toMatch(/sov-env\) extra="  env:\n[\s\S]*?secretKeyRef:/);
+    expect(sv).toMatch(/sov-envfrom\) extra="  envFrom:\n[\s\S]*?secretRef:/);
+    expect(sv).toMatch(/sov-volume\) extra="  volumes:\n[\s\S]*?secretName:/);
+    expect(sv).toContain('[ "${fn}" = sov-own ] && secret="${SOV_ZONE}-creds"');
+    expect(sv).toMatch(/\[ "\$\(sov_condition sov-own\)" = True\/Compliant \] \|\| fail/);
+    expect(sv).toMatch(/get ksvc sov-own >\/dev\/null 2>&1 \|\| fail/);
   });
 });
 

@@ -238,7 +238,7 @@ const NEEDLES = [
 const WF_PULL_REQUEST_OPERATOR =
   "  pull_request:\n    paths:\n      # The whole operator: the lane builds its image and installs its CRDs and\n      # RBAC, so any of it can change what a zone's key does. Its own tests and\n      # docs cannot (envtest and unit tests have their own lanes).\n      - 'packages/kn-next-operator/**'\n";
 const WF_PUSH_TAIL =
-  "      - 'templates/rust/**'\n      - 'packages/grpc/src/*.ts'\n      - 'packages/grpc/proto/**'\n      - 'packages/grpc/scripts/**'\n      - 'packages/grpc/e2e/**'\n      - 'packages/grpc/package.json'\n      - 'scripts/kind-manifests/**'\n      - '.github/actions/docker-hub-mirror/**'\n      - '.github/workflows/z7-identity-kind-e2e.yml'\n      - 'tests/z7-identity-kind-e2e-lane.test.ts'\n      - 'bun.lock'\n  workflow_dispatch";
+  "      - 'templates/rust/**'\n      - 'packages/grpc/src/*.ts'\n      - 'packages/grpc/proto/**'\n      - 'packages/grpc/scripts/**'\n      - 'packages/grpc/e2e/**'\n      - 'packages/grpc/package.json'\n      - 'scripts/kind-manifests/**'\n      - '.github/actions/docker-hub-mirror/**'\n      - '.github/workflows/z7-identity-kind-e2e.yml'\n      - 'tests/z7-identity-kind-e2e-lane.test.ts'\n      - 'tests/z10-zone-functions-kind-lane.test.ts'\n      - 'bun.lock'\n  workflow_dispatch";
 
 const LANE_ROWS = [
   {

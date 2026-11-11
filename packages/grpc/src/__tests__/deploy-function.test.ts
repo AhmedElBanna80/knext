@@ -306,6 +306,32 @@ describe('knext deploy function: apply order and strictness', () => {
     expect(c.err()).toContain('ahead of it');
   });
 
+  it('refuses a zone contract_version that is not a version, instead of guessing', async () => {
+    const dir = zoneWithFunction('deploy-pv-zone-bad');
+    for (const f of ['orders.proto', 'catalog.proto']) {
+      const p = join(dir, 'proto/orders/v1', f);
+      writeFileSync(p, readFileSync(p, 'utf8').replace('"1.2.0"', '"1.2"'));
+    }
+    const { host, calls } = recordingHost();
+    const c = capture();
+    expect(await run('deploy', ARGS, { ...c.io, cwd: dir, host })).toBe(1);
+    expect(calls).toEqual([]);
+    expect(c.err()).toContain('"1.2", which is not MAJOR.MINOR.PATCH');
+  });
+
+  it('refuses a function contract_version that is not a version', async () => {
+    const dir = zoneWithFunction('deploy-pv-fn-bad');
+    for (const f of ['orders.proto', 'catalog.proto']) {
+      const p = join(dir, 'functions/orders/proto/orders/v1', f);
+      writeFileSync(p, readFileSync(p, 'utf8').replace('"1.2.0"', '"v1"'));
+    }
+    const { host, calls } = recordingHost();
+    const c = capture();
+    expect(await run('deploy', ARGS, { ...c.io, cwd: dir, host })).toBe(1);
+    expect(calls).toEqual([]);
+    expect(c.err()).toContain('not a semantic version');
+  });
+
   it('--proto-version wins over both copies', async () => {
     const dir = zoneWithFunction('deploy-pv-flag');
     const { host, calls } = recordingHost();

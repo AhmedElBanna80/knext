@@ -854,7 +854,7 @@ knext deploy function orders \
 - The function's language comes from `knext.grpc.json`, where `knext add function` recorded it.
 - The contract version the function serves comes from the function's own copy of its contract,
   `functions/<name>/proto`: `option (knext.v1.contract_version)`. Its code is generated from that
-  copy, so regenerate it (`buf generate` or `./codegen.sh`) before you build the image. The zone
+  copy, so regenerate it (`buf generate` for Go, `./codegen.sh` for Rust) before you build the image. The zone
   needs the version: without it every generated call is refused. A function ahead of its zone is
   fine (deploy the function first). If the zone's `proto/` is ahead of the function's copy, the
   command stops: copy the contract into the function, regenerate, rebuild the image, and deploy

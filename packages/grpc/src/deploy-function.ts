@@ -232,11 +232,17 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
       const fnDir = join('functions', name, 'proto');
       const served = contractVersionFor(join(cwd, fnDir), name);
       const zone = contractVersionFor(join(cwd, config.proto), name);
+      if (zone !== undefined && !parseVersion(zone)) {
+        // Cannot tell which side is ahead: refuse rather than guess.
+        throw new GrpcUsageError(
+          `the zone's "${name}" contract (${config.proto}) has contract_version "${zone}", which is not MAJOR.MINOR.PATCH; fix it and run \`knext generate\``,
+        );
+      }
+      // An invalid `served` is refused by buildBackendServiceCR below.
       if (
         served !== undefined &&
         zone !== undefined &&
         parseVersion(served) &&
-        parseVersion(zone) &&
         compareVersions(zone, served) > 0
       ) {
         throw new GrpcUsageError(

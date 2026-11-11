@@ -26,8 +26,8 @@
  * zone's consent is its own `spec.backends` entry.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildBackendServiceCR, renderBackendServiceCR } from './backend-service';
 import { GrpcUsageError, loadConfig } from './config';
@@ -116,6 +116,51 @@ export function formatPreflightFailure(outcome: PreflightResult): string {
   );
 }
 
+const FUNCTION_OPTION = /^\s*option\s*\(\s*knext\.v1\.function\s*\)\s*=\s*"([^"]*)"\s*;/m;
+const VERSION_OPTION = /^\s*option\s*\(\s*knext\.v1\.contract_version\s*\)\s*=\s*"([^"]*)"\s*;/m;
+
+function protoFiles(dir: string): string[] {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.flatMap((e) => {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) return protoFiles(p);
+    return e.isFile() && e.name.endsWith('.proto') ? [p] : [];
+  });
+}
+
+/**
+ * The contract version a function serves, read from the zone's contract: every
+ * `.proto` under `protoDir` that declares `option (knext.v1.function) = "<name>"`
+ * and its `option (knext.v1.contract_version)`. Undefined when no file declares
+ * the function; a usage error when the files disagree or one carries no version.
+ */
+export function contractVersionFor(protoDir: string, name: string): string | undefined {
+  const found = new Map<string, string>();
+  for (const file of protoFiles(protoDir)) {
+    const src = readFileSync(file, 'utf-8');
+    if (FUNCTION_OPTION.exec(src)?.[1] !== name) continue;
+    const version = VERSION_OPTION.exec(src)?.[1];
+    if (!version) {
+      throw new GrpcUsageError(
+        `${relative(protoDir, file)} declares the "${name}" function but no (knext.v1.contract_version); add it or pass --proto-version`,
+      );
+    }
+    found.set(relative(protoDir, file), version);
+  }
+  const versions = new Set(found.values());
+  if (versions.size > 1) {
+    throw new GrpcUsageError(
+      `the "${name}" contract files disagree on contract_version (${[...found].map(([f, v]) => `${f}: ${v}`).join(', ')}); make them agree or pass --proto-version`,
+    );
+  }
+  return versions.size === 1 ? [...versions][0] : undefined;
+}
+
 export interface DeployFunctionArgs {
   readonly cwd: string;
   readonly argv: readonly string[];
@@ -173,6 +218,14 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
     const minScale = intFlag('min-scale', v['min-scale']);
     const maxScale = intFlag('max-scale', v['max-scale']);
     const containerConcurrency = intFlag('container-concurrency', v['container-concurrency']);
+    // Without a served version the zone has no <NAME>_SERVICE_PROTO_VERSION and
+    // its generated glue refuses every call, so default to the contract's own.
+    const protoVersion = v['proto-version'] ?? contractVersionFor(join(cwd, config.proto), name);
+    if (v['proto-version'] === undefined && protoVersion !== undefined && !v['dry-run']) {
+      io.stderr(
+        `serving contract version ${protoVersion} (from the "${name}" contract; --proto-version overrides it)\n`,
+      );
+    }
     const cr = buildBackendServiceCR({
       name,
       namespace,
@@ -180,7 +233,7 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
       image: v.image,
       language: entry.lang,
       port: intFlag('port', v.port),
-      protoVersion: v['proto-version'],
+      protoVersion,
       ...(v['no-wake-ahead'] ? { wakeAhead: false } : {}),
       ...(minScale === undefined && maxScale === undefined && containerConcurrency === undefined
         ? {}

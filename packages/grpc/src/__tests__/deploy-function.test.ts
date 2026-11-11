@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { helpText, run } from '../cli';
 import type { DeployHost, PreflightResult } from '../deploy-function';
@@ -79,8 +79,9 @@ describe('knext deploy function: apply order and strictness', () => {
     const cr = JSON.parse((calls[1] as Call).crText);
     expect(cr.kind).toBe('BackendService');
     expect(cr.metadata).toEqual({ name: 'orders', namespace: 'prod' });
-    // `lang` comes from knext.grpc.json, where `knext add function` recorded it.
-    expect(cr.spec).toEqual({ zone: 'shop', image: IMAGE, language: 'go' });
+    // `lang` comes from knext.grpc.json, where `knext add function` recorded it;
+    // protoVersion from the contract's (knext.v1.contract_version).
+    expect(cr.spec).toEqual({ zone: 'shop', image: IMAGE, language: 'go', protoVersion: '1.2.0' });
     expect(JSON.stringify(cr)).not.toContain('ownerReferences');
   });
 
@@ -241,6 +242,56 @@ describe('knext deploy function: apply order and strictness', () => {
     expect(code).toBe(1);
     expect(calls.map((x) => x.op)).toEqual(['preflight', 'apply']);
     expect(c.err()).toContain('kubectl apply of the BackendService');
+  });
+
+  it("defaults protoVersion to the contract's version, and says where it came from", async () => {
+    // Without it the zone gets no ORDERS_SERVICE_PROTO_VERSION and its generated
+    // glue refuses every call.
+    const dir = copyFixtureZone('deploy-pv-default');
+    const { host, calls } = recordingHost();
+    const c = capture();
+    expect(await run('deploy', ARGS, { ...c.io, cwd: dir, host })).toBe(0);
+    expect(JSON.parse((calls[1] as Call).crText).spec.protoVersion).toBe('1.2.0');
+    expect(c.err()).toContain('serving contract version 1.2.0 (from the "orders" contract');
+  });
+
+  it('--proto-version wins over the contract', async () => {
+    const dir = copyFixtureZone('deploy-pv-flag');
+    const { host, calls } = recordingHost();
+    const c = capture();
+    expect(
+      await run('deploy', [...ARGS, '--proto-version', '1.3.0'], { ...c.io, cwd: dir, host }),
+    ).toBe(0);
+    expect(JSON.parse((calls[1] as Call).crText).spec.protoVersion).toBe('1.3.0');
+    expect(c.err()).not.toContain('serving contract version');
+  });
+
+  it('refuses contract files that disagree on the version, before any cluster call', async () => {
+    const dir = copyFixtureZone('deploy-pv-split');
+    const catalog = join(dir, 'proto/orders/v1/catalog.proto');
+    writeFileSync(catalog, readFileSync(catalog, 'utf8').replace('"1.2.0"', '"1.1.0"'));
+    const { host, calls } = recordingHost();
+    const c = capture();
+    expect(await run('deploy', ARGS, { ...c.io, cwd: dir, host })).toBe(1);
+    expect(calls).toEqual([]);
+    expect(c.err()).toContain('disagree on contract_version');
+  });
+
+  it('leaves protoVersion out when no contract file declares the function', async () => {
+    const dir = copyFixtureZone('deploy-pv-none');
+    for (const f of ['orders.proto', 'catalog.proto']) {
+      const p = join(dir, 'proto/orders/v1', f);
+      writeFileSync(
+        p,
+        readFileSync(p, 'utf8').replace(
+          'option (knext.v1.function) = "orders";',
+          'option (knext.v1.function) = "other";',
+        ),
+      );
+    }
+    const { host, calls } = recordingHost();
+    expect(await run('deploy', ARGS, { ...capture().io, cwd: dir, host })).toBe(0);
+    expect(JSON.parse((calls[1] as Call).crText).spec.protoVersion).toBeUndefined();
   });
 
   it('--dry-run prints the CR and touches neither the cluster nor the disk', async () => {

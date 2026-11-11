@@ -71,7 +71,9 @@ The commands are the same for Go and Rust except for `--lang` and the toolchain 
      --image registry.example.com/shop/orders@sha256:<digest>
    ```
 
-   Use `--dry-run` to print the `BackendService` without applying it.
+   The served contract version is read from `contract_version` in the contract; pass
+   `--proto-version` to override it. Use `--dry-run` to print the `BackendService` without
+   applying it.
 
 7. **Bind it from the zone and deploy.** Add the function to `backends` in `knext.config.ts`, then
    deploy the zone:

@@ -52,9 +52,7 @@ describe('the harness is as careful as the Z7 lane', () => {
   });
 
   it('runs every phase by default', () => {
-    expect(own).toContain(
-      'PHASES="${PHASES:-images deploy cold trailers rollout sovereignty}"',
-    );
+    expect(own).toContain('PHASES="${PHASES:-images deploy cold trailers rollout sovereignty}"');
   });
 });
 
@@ -140,7 +138,9 @@ describe("another zone's Secret is refused through every source", () => {
     expect(sv).toContain('for fn in sov-env sov-envfrom sov-volume; do');
     expect(sv).toMatch(/sleep 20/);
     expect(sv).toMatch(/= False\/SecretNotAllowed \] \|\| fail/);
-    expect(sv).toMatch(/\[ -z "\$\(k -n "\$\{NS\}" get ksvc "\$\{fn\}" --ignore-not-found -o name\)" \] \|\| fail/);
+    expect(sv).toMatch(
+      /\[ -z "\$\(k -n "\$\{NS\}" get ksvc "\$\{fn\}" --ignore-not-found -o name\)" \] \|\| fail/,
+    );
     expect(sv).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
   });
 

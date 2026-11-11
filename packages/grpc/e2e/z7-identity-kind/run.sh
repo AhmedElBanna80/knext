@@ -996,9 +996,10 @@ spec:
     maxScale: 1
 YAML
 
-  wait_until 180 3 "the pinned function renders with the zone's database Secret mounted" \
-    "fn_ksvc_mounts_db"
-  [ "$(fn_condition Bound)" = "True/Bound" ] || fail "a matching pin did not bind: $(fn_condition Bound)"
+  # Wait for both: the operator writes Bound in a separate status update after it
+  # renders the Knative Service, and a conflict on that update retries on a later pass.
+  wait_until 180 3 "the matching pin binds and the function renders with the zone's database Secret mounted" \
+    '[ "$(fn_condition Bound)" = "True/Bound" ] && fn_ksvc_mounts_db'
   ok "a matching pin renders the function, and it mounts ${PIN_DB}"
 
   log "pin: swap the BackendService image with kubectl"

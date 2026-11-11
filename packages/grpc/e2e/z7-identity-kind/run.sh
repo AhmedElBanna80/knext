@@ -996,8 +996,8 @@ spec:
     maxScale: 1
 YAML
 
-  # Wait for both: the operator writes the Bound condition on a later pass than the
-  # Knative Service, and may retry on a conflict in between.
+  # Wait for both: the operator writes Bound in a separate status update after it
+  # renders the Knative Service, and a conflict on that update retries on a later pass.
   wait_until 180 3 "the matching pin binds and the function renders with the zone's database Secret mounted" \
     '[ "$(fn_condition Bound)" = "True/Bound" ] && fn_ksvc_mounts_db'
   ok "a matching pin renders the function, and it mounts ${PIN_DB}"

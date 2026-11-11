@@ -51,6 +51,18 @@ describe('the harness is as careful as the Z7 lane', () => {
     expect(own).toContain('pod-security.kubernetes.io/enforce=restricted');
   });
 
+  it('keeps errexit inside every phase', () => {
+    // `has_phase x && phase_x` runs the phase with errexit suspended.
+    const code = own
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('#'))
+      .join('\n');
+    expect(code).not.toMatch(/has_phase \w+ && phase_/);
+    for (const p of ['images', 'deploy', 'cold', 'trailers', 'rollout', 'sovereignty']) {
+      expect(own).toContain(`if has_phase ${p}; then phase_${p}; fi`);
+    }
+  });
+
   it('runs every phase by default', () => {
     expect(own).toContain('PHASES="${PHASES:-images deploy cold trailers rollout sovereignty}"');
   });

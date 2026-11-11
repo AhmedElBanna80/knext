@@ -476,10 +476,12 @@ for phase in ${PHASES}; do
     *) fail "unknown phase '${phase}' (images deploy cold trailers rollout sovereignty)" ;;
   esac
 done
-has_phase images && phase_images
-has_phase deploy && phase_deploy
-has_phase cold && phase_cold
-has_phase trailers && phase_trailers
-has_phase rollout && phase_rollout
-has_phase sovereignty && phase_sovereignty
+# `if`, not `has_phase x && phase_x`: a function called from an && list runs
+# with errexit suspended, so a failing command inside a phase would not stop it.
+if has_phase images; then phase_images; fi
+if has_phase deploy; then phase_deploy; fi
+if has_phase cold; then phase_cold; fi
+if has_phase trailers; then phase_trailers; fi
+if has_phase rollout; then phase_rollout; fi
+if has_phase sovereignty; then phase_sovereignty; fi
 log "Z10 lane: ${PHASES} passed"

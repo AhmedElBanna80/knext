@@ -235,9 +235,10 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   idempotency key, endpoint, first token) are marked with `markNotSent`, and
   so is a token refused on a read's retry, an attempt that never left
   (`runtime.ts:defineFunctionClient`); a stream's pre-send errors are not. A
-  generated action refreshes its service tag unless `wasNotSent(err)`, with
-  `refreshAfterWrite`: `updateTag` in a Server Action, `revalidateTag(tag,
-  { expire: 0 })` elsewhere (`glue-plugin.ts:emitAction`).
+  generated action refreshes its service tag unless `wasNotSent(err)`, through
+  `refreshAfterWrite` (`glue-plugin.ts:emitAction`). That helper calls `updateTag`
+  and, when it throws (outside a Server Action), falls back to
+  `revalidateTag(tag, { expire: 0 })` (`glue.ts:refreshAfterWrite`).
 - A generated query calls its function through `cacheableCall` inside its
   `'use cache'` function and rethrows with `unwrapCached` outside it, because
   Next.js hides errors thrown in a cache scope in production builds. A

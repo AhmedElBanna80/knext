@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import type { Config } from 'drizzle-kit';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { migrate as drizzleMigrate } from 'drizzle-orm/node-postgres/migrator';
@@ -34,11 +35,11 @@ export interface DefineDrizzleConfigDeps {
 }
 
 function defaultResolveDrizzleKit(): string {
-  // The compiled output is CommonJS (Node16 module, no package `type: module`),
-  // so the module-global `require` is available and resolves relative to this
-  // file — no runtime import of drizzle-kit, only a resolvability probe. (If this
-  // package ever ships ESM output, swap to `createRequire(import.meta.url)`.)
-  return require.resolve('drizzle-kit');
+  // The package ships ESM (`"type": "module"`, tsup `format: ['esm']`), where the
+  // module-global `require` does not exist. `createRequire` builds one that resolves
+  // relative to this file: a resolvability probe, with no runtime import of
+  // drizzle-kit.
+  return createRequire(import.meta.url).resolve('drizzle-kit');
 }
 
 /**
@@ -50,13 +51,20 @@ function defaultResolveDrizzleKit(): string {
 function assertDrizzleKitPresent(resolve: () => string): void {
   try {
     resolve();
-  } catch {
-    throw new Error(
-      'drizzle-kit is required for defineDrizzleConfig — install it as a devDependency ' +
-        '(`npm i -D drizzle-kit`). It is an optional peer of @getknext/db (ADR-0021): the ' +
-        'main entry (@getknext/db) and the `kn-next db migrate` runner do not need it, but ' +
-        'the drizzle.config.ts produced by defineDrizzleConfig is consumed by ' +
-        '`drizzle-kit generate`/`migrate`, which must be installed.',
+  } catch (cause) {
+    // The resolver's own error rides along as `cause`, so a probe that fails for
+    // another reason (not MODULE_NOT_FOUND) is visible rather than hidden by the
+    // named message. Assigned, not passed to the constructor: this package
+    // targets ES2020, whose Error type has no options argument.
+    throw Object.assign(
+      new Error(
+        'drizzle-kit is required for defineDrizzleConfig — install it as a devDependency ' +
+          '(`npm i -D drizzle-kit`). It is an optional peer of @getknext/db (ADR-0021): the ' +
+          'main entry (@getknext/db) and the `kn-next db migrate` runner do not need it, but ' +
+          'the drizzle.config.ts produced by defineDrizzleConfig is consumed by ' +
+          '`drizzle-kit generate`/`migrate`, which must be installed.',
+      ),
+      { cause },
     );
   }
 }

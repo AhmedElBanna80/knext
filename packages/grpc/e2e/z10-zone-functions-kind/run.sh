@@ -205,7 +205,12 @@ zone_settled() {
 # await_zero <service>: wait until the function has no pod at all, not even a
 # terminating one: a pod still draining could serve a "cold" call and prove nothing.
 await_zero() {
-  wait_until "${ZERO_TIMEOUT}" 5 "${1} scaled to zero" "[ \"\$(all_pods ${1})\" = 0 ]"
+  # A plain loop, not wait_until's eval'd condition string.
+  local end=$((SECONDS + ZERO_TIMEOUT))
+  until [ "$(all_pods "$1")" = 0 ]; do
+    [ "${SECONDS}" -lt "${end}" ] || fail "timed out after ${ZERO_TIMEOUT}s waiting for: $1 scaled to zero"
+    sleep 5
+  done
   ok "${1} has scaled to zero"
 }
 

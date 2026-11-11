@@ -5,7 +5,7 @@
  *   |---------------------------------------|------------------------------------------------|
  *   | unary, NO_SIDE_EFFECTS, AUTH_USER     | server-only query: authorize, then 'use cache' |
  *   | unary, NO_SIDE_EFFECTS, AUTH_PUBLIC   | server-only query, no authorize, public key    |
- *   | any other unary (AUTH_USER)           | 'use server' action, then updateTag            |
+ *   | any other unary (AUTH_USER)           | 'use server' action, then refreshAfterWrite    |
  *   | server-streaming                      | server-only async generator, never an action   |
  *
  * The assertions read the generated TypeScript as a syntax tree (not as text),

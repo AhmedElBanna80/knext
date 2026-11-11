@@ -145,7 +145,7 @@ const KEY_BLOCK =
 // The one line of the emitted action that refreshes the reads, and the one
 // that decides whether a failed call may have committed.
 const REFRESH_LINE =
-  '    `    if (mayHaveCommitted) ${updateTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,';
+  '    `    if (mayHaveCommitted) ${refresh}(${JSON.stringify(serviceTag(ctx.fn, method))}, ${updateTag}, ${revalidateTag});`,';
 const SENT_LINE = '    `    mayHaveCommitted = !${wasNotSent}(err);`,';
 
 const TWO_USER = [
@@ -191,9 +191,9 @@ const TWO_USER = [
   {
     id: 'U04',
     subject: 'plugin',
-    claim: 'a write no longer calls updateTag: cached reads on other pods stay stale',
+    claim: 'a write no longer refreshes the reads: cached reads on other pods stay stale',
     anchor: REFRESH_LINE,
-    replacement: '    `    void mayHaveCommitted, ${updateTag};`,',
+    replacement: '    `    void mayHaveCommitted, ${refresh}, ${updateTag}, ${revalidateTag};`,',
   },
   {
     id: 'U05',
@@ -234,7 +234,7 @@ const ACTION = [
     claim: 'every failed write refreshes the reads, one the client refused before sending included',
     anchor: REFRESH_LINE,
     replacement:
-      '    `    if (true) ${updateTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,',
+      '    `    if (true) ${refresh}(${JSON.stringify(serviceTag(ctx.fn, method))}, ${updateTag}, ${revalidateTag});`,',
   },
   {
     id: 'A03',

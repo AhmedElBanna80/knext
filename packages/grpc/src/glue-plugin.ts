@@ -14,8 +14,9 @@
  *     or a route handler. Never cached, never an action.
  * - `<file>_knext_actions.ts` (`'use server'`): a **Server Action** per other
  *   unary RPC. It runs authorize() first (the fail-closed end-user check),
- *   calls the function with the caller's idempotency key, then `updateTag`s
- *   the service's tag so every cached read of the service is refreshed.
+ *   calls the function with the caller's idempotency key, then refreshes the
+ *   service's tag (`refreshAfterWrite`: `updateTag` in a Server Action,
+ *   `revalidateTag` elsewhere) so every cached read of the service is refreshed.
  *
  * Refused, with the RPC named, and nothing written:
  * - an RPC that does not state `(knext.v1.auth)`, or states anything but

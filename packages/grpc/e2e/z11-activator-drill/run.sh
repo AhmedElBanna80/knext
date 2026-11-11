@@ -31,7 +31,9 @@
 # Environment: KIND_CLUSTER (knext-z11-drill), REGISTRY_NAME (knext-z11-registry),
 # REGISTRY_PORT (5002), Z11_NAMESPACE (z11-e2e), PHASES, INTERNAL_PORT (18100).
 #
-# The script never deletes a cluster, and deletes only namespaces it stamped.
+# The script never deletes a cluster. It deletes the caller namespace only when it
+# carries this drill's label, and the zone namespace only through the Z10 lane's
+# deploy phase, which checks that namespace's own label.
 
 set -euo pipefail
 # Never trace: the lane must not print what it reads.
@@ -75,8 +77,22 @@ diagnostics() {
   k -n kube-system get pods -l k8s-app=calico-node 2>&1 | tail -5 >&2 || true
 }
 
+# Set while a mutation has the function in an unsafe state, so the EXIT trap puts it
+# back even when the drill aborts in between: a kept cluster must never stay with
+# the policy off or on the image without its token check.
+RESTORE_POLICY=0
+RESTORE_IMAGE=""
+
 cleanup() {
   local rc=$?
+  if [ "${RESTORE_POLICY}" = 1 ]; then
+    k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"security":{"networkPolicy":true}}}' >/dev/null 2>&1 \
+      || echo "WARNING: could not turn ${GO_FN}'s NetworkPolicy back on" >&2
+  fi
+  if [ -n "${RESTORE_IMAGE}" ]; then
+    k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"image\":\"${RESTORE_IMAGE}\"}}" >/dev/null 2>&1 \
+      || echo "WARNING: could not put ${GO_FN} back on ${RESTORE_IMAGE}" >&2
+  fi
   if [ -f "${PF_PIDS}" ]; then
     while read -r pid; do kill "${pid}" 2>/dev/null || true; done <"${PF_PIDS}"
   fi
@@ -121,18 +137,35 @@ foreign_get() {
   args+=(-d '{"id":"missing"}' "${FN_URL}${GET_ITEM}")
   out="$(k -n "${FOREIGN}" exec caller -- "${args[@]}" 2>/dev/null)" || out=000
   FC_STATUS="${out}"
-  FC_CODE="$(k -n "${FOREIGN}" exec caller -- cat /tmp/body 2>/dev/null | jq -r '.code // ""' 2>/dev/null || true)"
+  local body
+  body="$(k -n "${FOREIGN}" exec caller -- cat /tmp/body 2>/dev/null || true)"
+  FC_CODE="$(jq -r '.code // ""' <<<"${body}" 2>/dev/null || true)"
+  FC_MESSAGE="$(jq -r '.message // ""' <<<"${body}" 2>/dev/null || true)"
 }
 
-# direct_dial <ip> <port>: 0 if a TCP connection from the foreign pod to <ip>:<port>
-# completes within 5 s (an HTTP answer of any status counts), non-zero otherwise.
-direct_dial() {
-  k -n "${FOREIGN}" exec caller -- curl -s -o /dev/null -m 5 "http://$1:$2/" >/dev/null 2>&1
+# dial_rc <ip> <port>: curl's exit code for an HTTP request from the foreign pod to
+# <ip>:<port> with a 5 s limit. 0 is an HTTP answer of any status; 28 is a timeout,
+# which is what a Calico DROP produces. Anything else (7 refused, a kubectl exec
+# failure) proves nothing about the policy.
+dial_rc() {
+  local rc=0
+  k -n "${FOREIGN}" exec caller -- curl -s -o /dev/null -m 5 "http://$1:$2/" >/dev/null 2>&1 || rc=$?
+  echo "${rc}"
 }
 
 fn_pod_ip() {
   k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
-    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running")] | .[0].status.podIP // ""'
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running"
+              and ([.status.conditions[]? | select(.type == "Ready") | .status] == ["True"]))] | .[0].status.podIP // ""'
+}
+
+# fn_ready_on <image>: the function's LATEST READY revision runs <image>. A Ready
+# condition alone can be a stale one from the previous revision.
+fn_ready_on() {
+  local rev
+  rev="$(k -n "${NS}" get ksvc "${GO_FN}" -o jsonpath='{.status.latestReadyRevisionName}')"
+  [ -n "${rev}" ] || return 1
+  [ "$(k -n "${NS}" get revision "${rev}" -o jsonpath='{.spec.containers[0].image}')" = "$1" ]
 }
 
 # ---------------------------------------------------------------- phase: up
@@ -182,8 +215,16 @@ phase_deploy() {
       || fail "namespace ${FOREIGN} exists and this drill did not create it; refusing to delete it"
     k delete namespace "${FOREIGN}" --wait=true --timeout=300s
   fi
-  k create namespace "${FOREIGN}"
-  k label namespace "${FOREIGN}" e2e.kn-next.dev/z11-owned=true
+  # Created WITH its label in one object, so an abort cannot leave an unlabelled
+  # namespace this drill would then refuse to delete.
+  k apply --validate=strict -f - >/dev/null <<YAML
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${FOREIGN}
+  labels:
+    e2e.kn-next.dev/z11-owned: "true"
+YAML
   k -n "${FOREIGN}" run caller --image="${CURL_IMAGE}" --restart=Never --command -- sleep 86400
   k -n "${FOREIGN}" wait --for=condition=Ready pod/caller --timeout=180s
   ok "foreign caller ready"
@@ -196,14 +237,15 @@ phase_token() {
   [ -n "${ZONE_HOST}" ] || start_forwards
   await_zero "${GO_FN}"
   foreign_get ""
-  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] \
-    || fail "a foreign call with no token: status ${FC_STATUS} code '${FC_CODE}', want 401 unauthenticated"
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
+    || fail "a foreign call with no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
   [ "$(all_pods "${GO_FN}")" -ge 1 ] || fail "the refused call never woke ${GO_FN}: it did not reach the function"
   ok "a foreign call with no token woke the function through the activator and was refused (401 unauthenticated)"
+  await_zero "${GO_FN}"
   foreign_get "Bearer not-a-token"
-  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] \
-    || fail "a foreign call with a garbage token: status ${FC_STATUS} code '${FC_CODE}', want 401 unauthenticated"
-  ok "a foreign call with a garbage token is refused (401 unauthenticated)"
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
+    || fail "a foreign call with a garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
+  ok "a foreign call with a garbage token, also cold, is refused by the verifier (401 unauthenticated, token rejected)"
   expect_zone "control: the zone's own call through its glue reaches the function (NotFound, not 401)" \
     "/example/get?sub=alice&id=missing" 404 '.ok == false and .code == "NotFound"'
 }
@@ -211,6 +253,7 @@ phase_token() {
 # ---------------------------------------------------------------- phase: direct
 
 set_policy() { # true|false: the function's NetworkPolicy toggle, then wait for the object to match
+  if [ "$1" = false ]; then RESTORE_POLICY=1; fi
   k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"security\":{\"networkPolicy\":$1}}}" >/dev/null
   local want=1
   [ "$1" = false ] && want=0
@@ -220,31 +263,42 @@ set_policy() { # true|false: the function's NetworkPolicy toggle, then wait for 
     [ "${SECONDS}" -lt "${end}" ] || fail "the function's NetworkPolicy did not become present=${want} within 120s"
     sleep 3
   done
+  if [ "$1" = true ]; then RESTORE_POLICY=0; fi
 }
 
 phase_direct() {
   log "direct: a foreign pod's direct dial to the warm function pod is dropped"
-  # Wake the function (the zone's call), so a pod is up to dial.
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  # Wake the function through the zone, and require the call to have reached it
+  # (NotFound from the handler), so a Ready pod is up to dial.
   zone_call "/example/get?sub=alice&id=missing"
-  local ip
+  [ "${ZC_STATUS}" = 404 ] || fail "the zone's wake-up call returned ${ZC_STATUS}, want 404 from the function"
+  local ip port rc
   ip="$(fn_pod_ip)"
-  [ -n "${ip}" ] || fail "no running ${GO_FN} pod to dial"
-  if direct_dial "${ip}" 8080; then fail "a foreign pod dialled the function's user port (8080) directly"; fi
-  if direct_dial "${ip}" 8012; then fail "a foreign pod dialled queue-proxy (8012) on the function pod directly"; fi
-  ok "the foreign pod's direct dials to the function pod (8080, 8012) are dropped"
+  [ -n "${ip}" ] || fail "no Ready ${GO_FN} pod to dial"
+  for port in 8080 8012; do
+    rc="$(dial_rc "${ip}" "${port}")"
+    # Only a timeout is a Calico drop. 0 means it connected; anything else (a refused
+    # port, a kubectl failure) is not evidence of the policy.
+    [ "${rc}" = 28 ] || fail "a foreign pod's direct dial to ${ip}:${port}: curl exit ${rc}, want 28 (dropped)"
+  done
+  ok "the foreign pod's direct dials to the function pod (8080, 8012) time out: dropped by the policy"
 
-  log "mutation: with the function's NetworkPolicy off, the same direct dial connects"
+  log "mutation: with the function's NetworkPolicy off, the same direct dials connect"
   set_policy false
   local end=$((SECONDS + 60)) opened=0
   while [ "${SECONDS}" -lt "${end}" ]; do
     ip="$(fn_pod_ip)"
-    if [ -n "${ip}" ] && direct_dial "${ip}" 8080; then opened=1; break; fi
+    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ] && [ "$(dial_rc "${ip}" 8012)" = 0 ]; then
+      opened=1
+      break
+    fi
     zone_call "/example/get?sub=alice&id=missing"
     sleep 3
   done
   set_policy true
-  [ "${opened}" = 1 ] || fail "with the NetworkPolicy off the direct dial still failed: the refusal above was not the policy's doing"
-  ok "with the policy off the direct dial connects: the refusal is the policy's doing (policy restored)"
+  [ "${opened}" = 1 ] || fail "with the NetworkPolicy off the direct dials still failed: the refusal above was not the policy's doing"
+  ok "with the policy off both direct dials connect: the refusal is the policy's doing (policy restored)"
 }
 
 # ---------------------------------------------------------------- phase: noauth
@@ -254,17 +308,20 @@ phase_noauth() {
   local good bad
   # The image the function runs now (the Z10 phase built and recorded it in its own state).
   good="$(k -n "${NS}" get backendservice "${GO_FN}" -o jsonpath='{.spec.image}')"
-  [ -n "${good}" ] || fail "${GO_FN} has no spec.image"
   bad="$(image_ref function-go-noauth)"
+  [ -n "${good}" ] || fail "${GO_FN} has no spec.image"
+  # A previous aborted run could have left the function on the mutation image; taking
+  # that as "good" would restore it and report the drill green.
+  [ "${good}" != "${bad}" ] || fail "${GO_FN} already runs the no-interceptor image: put it back on its own image first"
+  RESTORE_IMAGE="${good}"
   k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"image\":\"${bad}\"}}" >/dev/null
-  wait_until 300 3 "${GO_FN} Ready on the no-interceptor image" \
-    "[ \"\$(k -n ${NS} get ksvc ${GO_FN} -o jsonpath='{.spec.template.spec.containers[0].image}')\" = '${bad}' ] && k -n ${NS} wait --for=condition=Ready --timeout=2s backendservice/${GO_FN}"
+  wait_until 300 3 "${GO_FN}'s latest ready revision runs the no-interceptor image" "fn_ready_on '${bad}'"
   await_zero "${GO_FN}"
   foreign_get ""
   local status=${FC_STATUS} code=${FC_CODE}
   k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"image\":\"${good}\"}}" >/dev/null
-  wait_until 300 3 "${GO_FN} Ready on its own image again" \
-    "[ \"\$(k -n ${NS} get ksvc ${GO_FN} -o jsonpath='{.spec.template.spec.containers[0].image}')\" = '${good}' ] && k -n ${NS} wait --for=condition=Ready --timeout=2s backendservice/${GO_FN}"
+  wait_until 300 3 "${GO_FN}'s latest ready revision runs its own image again" "fn_ready_on '${good}'"
+  RESTORE_IMAGE=""
   [ "${status}" = 404 ] && [ "${code}" = not_found ] \
     || fail "without the interceptor a foreign no-token call got status ${status} code '${code}', want 404 not_found (it should reach the handler)"
   ok "without the interceptor the same foreign call reaches the handler (404 not_found): the token is the control (image restored)"

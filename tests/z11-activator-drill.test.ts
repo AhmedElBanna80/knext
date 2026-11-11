@@ -64,6 +64,10 @@ describe('token: the refusal is the function, on the activator path', () => {
   it('both a missing and a garbage token must be 401 unauthenticated, next to a zone control', () => {
     expect(t.match(/= 401 \] && \[ "\$\{FC_CODE\}" = unauthenticated \]/g)?.length).toBe(2);
     expect(t).toContain('foreign_get "Bearer not-a-token"');
+    expect(t).toContain('[ "${FC_MESSAGE}" = "missing bearer token" ]');
+    expect(t).toContain('[ "${FC_MESSAGE}" = "token rejected" ]');
+    // The garbage-token call is cold too.
+    expect(t.match(/await_zero "\$\{GO_FN\}"/g)?.length).toBe(2);
     expect(t).toMatch(/expect_zone "control: [^"]*" \\\n\s*"[^"]*" 404 '[^']*"NotFound"'/);
   });
   it('the foreign call goes to the cluster-local URL from another namespace', () => {
@@ -75,13 +79,31 @@ describe('token: the refusal is the function, on the activator path', () => {
 
 describe('direct: dropped by the policy, proved by removing it', () => {
   const d = body('phase_direct');
-  it('both ports must be refused, then the dial must connect with the policy off', () => {
-    expect(d).toMatch(/if direct_dial "\$\{ip\}" 8080; then fail/);
-    expect(d).toMatch(/if direct_dial "\$\{ip\}" 8012; then fail/);
-    expect(d.indexOf('direct_dial "${ip}" 8012')).toBeGreaterThan(-1);
-    expect(d.indexOf('set_policy false')).toBeGreaterThan(d.indexOf('direct_dial "${ip}" 8012'));
+  it('only a timeout counts as dropped, on both ports, after a wake that reached the function', () => {
+    expect(d).toContain('for port in 8080 8012; do');
+    expect(d).toMatch(/\[ "\$\{rc\}" = 28 \] \|\| fail/);
+    expect(d).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \] \|\| fail/);
+    expect(body('fn_pod_ip')).toContain('select(.type == "Ready")');
+  });
+
+  it('with the policy off both ports must connect, and the policy is restored', () => {
+    expect(d).toContain('[ "$(dial_rc "${ip}" 8080)" = 0 ] && [ "$(dial_rc "${ip}" 8012)" = 0 ]');
+    expect(d.indexOf('set_policy false')).toBeGreaterThan(d.indexOf('for port in 8080 8012'));
     expect(d).toMatch(/\[ "\$\{opened\}" = 1 \] \|\| fail/);
-    expect(d).toContain('set_policy true');
+    expect(d.indexOf('set_policy true')).toBeLessThan(d.indexOf('[ "${opened}" = 1 ]'));
+  });
+});
+
+describe('an aborted mutation never leaves the function unsafe', () => {
+  it('the exit handler restores the policy and the image when a mutation is in flight', () => {
+    const c = body('cleanup');
+    expect(c).toMatch(/if \[ "\$\{RESTORE_POLICY\}" = 1 \]; then/);
+    expect(c).toContain('{"spec":{"security":{"networkPolicy":true}}}');
+    expect(c).toMatch(/if \[ -n "\$\{RESTORE_IMAGE\}" \]; then/);
+    expect(body('set_policy')).toContain('if [ "$1" = false ]; then RESTORE_POLICY=1; fi');
+    const n = body('phase_noauth');
+    expect(n.indexOf('RESTORE_IMAGE="${good}"')).toBeLessThan(n.indexOf('"image\\":\\"${bad}'));
+    expect(n).toMatch(/\[ "\$\{good\}" != "\$\{bad\}" \] \|\| fail/);
   });
 });
 

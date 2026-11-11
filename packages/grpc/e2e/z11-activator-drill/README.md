@@ -10,16 +10,19 @@ PHASES="token direct noauth" packages/grpc/e2e/z11-activator-drill/run.sh   # ag
 ```
 
 The drill needs `docker`, `kind`, `kubectl`, `jq`, `curl`, `go` and `bun` on the
-PATH. It never deletes a cluster, and it deletes only namespaces it stamped
-`e2e.kn-next.dev/z11-owned=true`.
+PATH. It never deletes a cluster. It deletes the caller namespace only when it
+carries `e2e.kn-next.dev/z11-owned=true`. It deletes the zone namespace only
+through the Z10 lane's deploy phase, which checks that namespace's own label. If
+the drill aborts in the middle of a mutation, its exit handler turns the policy
+back on and puts the function back on its own image.
 
 | Phase | What it does and proves |
 | --- | --- |
 | `up` | Creates a kind cluster with the default CNI disabled, and installs Calico through `scripts/kind-manifests/apply-calico.sh` (checksum-pinned and image-digest-pinned). It then runs the Z7 lane's `up` phase on that cluster: the registry, cert-manager, Knative and Kourier, and the operator built from this checkout. |
 | `deploy` | Runs the Z10 lane's `images` and `deploy` phases (the zone warm, the Go function at minScale 0, wake-ahead off). It builds the same Go function with its token interceptor removed. It also starts a caller pod in a second namespace. |
-| `token` | With the function at zero, the foreign pod calls it on its cluster-local URL, so through Kourier and the activator. The call has no token, and then a garbage token. Both are refused with `401 unauthenticated`, and the call did wake the function. Control: the zone's own call through its generated glue reaches the function (`NotFound`, not 401). |
-| `direct` | The foreign pod dials the warm function pod directly, on 8080 (the function) and 8012 (queue-proxy). Calico drops both. Mutation: with `spec.security.networkPolicy: false` the operator removes the policy, and the dial to 8080 connects. That shows the refusal was the policy's doing. The policy is turned back on afterwards. |
-| `noauth` | Mutation: the function is switched to the image without its token interceptor. The foreign no-token call then reaches the handler (`404 not_found`). On the activator path the token is the control, not the network. The original image is restored, and the drill waits until the function is Ready on it. |
+| `token` | With the function at zero, the foreign pod calls it on its cluster-local URL, so through Kourier and the activator. The call has no token, and then a garbage token, each made with the function at zero. Both are refused with `401 unauthenticated` and the verifier's own message (`missing bearer token`, `token rejected`), and the first call did wake the function. Control: the zone's own call through its generated glue reaches the function (`NotFound`, not 401). |
+| `direct` | The zone wakes the function, and its call must reach the handler. The foreign pod then dials the Ready function pod directly on 8080 (the function) and 8012 (queue-proxy). Both must time out (curl exit 28), which is what a Calico drop produces. A refused port or a tool failure does not count. Mutation: with `spec.security.networkPolicy: false` the operator removes the policy, and both dials connect. That shows the refusal was the policy's doing. The policy is turned back on afterwards. |
+| `noauth` | Mutation: the function is switched to the image without its token interceptor. The foreign no-token call then reaches the handler (`404 not_found`). On the activator path the token is the control, not the network. The original image is restored, and the drill waits until the function's latest ready revision runs it. It refuses to start if the function is already on the mutation image. |
 
 ## Environment
 

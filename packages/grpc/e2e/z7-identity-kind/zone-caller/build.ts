@@ -112,7 +112,7 @@ try {
   if (!result.success) throw new Error(result.logs.map(String).join('\n'));
   const dockerfile = await Bun.file(join(HERE, 'Dockerfile')).text();
   if (wake) {
-    const adapters = join(REPO, 'packages', 'kn-next', 'src', 'adapters');
+    const adapters = join(REPO, 'packages/kn-next/src/adapters');
     for (const f of ['wake-ahead.cjs', 'process-start-abort.cjs'])
       cpSync(join(adapters, f), join(out, f));
     const entry = 'ENTRYPOINT ["node", "/app/zone-caller.mjs"]';

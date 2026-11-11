@@ -276,20 +276,22 @@ phase_direct() {
   local ip port rc
   ip="$(fn_pod_ip)"
   [ -n "${ip}" ] || fail "no Ready ${GO_FN} pod to dial"
-  for port in 8080 8012; do
+  # 8080 is the function; 8013 is queue-proxy's serving port for an h2c function
+  # (8012 is its HTTP/1 port, which an h2c function's queue-proxy does not open).
+  for port in 8080 8013; do
     rc="$(dial_rc "${ip}" "${port}")"
     # Only a timeout is a Calico drop. 0 means it connected; anything else (a refused
     # port, a kubectl failure) is not evidence of the policy.
     [ "${rc}" = 28 ] || fail "a foreign pod's direct dial to ${ip}:${port}: curl exit ${rc}, want 28 (dropped)"
   done
-  ok "the foreign pod's direct dials to the function pod (8080, 8012) time out: dropped by the policy"
+  ok "the foreign pod's direct dials to the function pod (8080, 8013) time out: dropped by the policy"
 
   log "mutation: with the function's NetworkPolicy off, the same direct dials connect"
   set_policy false
   local end=$((SECONDS + 60)) opened=0
   while [ "${SECONDS}" -lt "${end}" ]; do
     ip="$(fn_pod_ip)"
-    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ] && [ "$(dial_rc "${ip}" 8012)" = 0 ]; then
+    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ] && [ "$(dial_rc "${ip}" 8013)" = 0 ]; then
       opened=1
       break
     fi

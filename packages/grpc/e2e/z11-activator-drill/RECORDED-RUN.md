@@ -21,17 +21,24 @@ ok: the zone is Ready and bound; the functions may scale to zero
 ok: function-go-noauth -> sha256:c700da2ef6a71edc934b17040e3d5592be8ef063b2083dc25ebfb7fc94f5a4f8
 == a caller pod in another namespace (z11-e2e-foreign)
 ok: foreign caller ready
+== token: (see the re-run below)
+```
+
+The `token`, `direct` and `noauth` phases were re-run on the same cluster after the direct leg moved from 8012 to 8013 (queue-proxy's serving port for an h2c function; 8012 is not opened), with `PHASES="token direct noauth"`, exit 0:
+
+```
 == token: a foreign pod's call through the activator is refused without a valid token
 ok: example-go has scaled to zero
 ok: a foreign call with no token woke the function through the activator and was refused (401 unauthenticated)
-ok: a foreign call with a garbage token is refused (401 unauthenticated)
+ok: example-go has scaled to zero
+ok: a foreign call with a garbage token, also cold, is refused by the verifier (401 unauthenticated, token rejected)
 ok: control: the zone's own call through its glue reaches the function (NotFound, not 401)
 == direct: a foreign pod's direct dial to the warm function pod is dropped
-ok: the foreign pod's direct dials to the function pod (8080, 8012) are dropped
-== mutation: with the function's NetworkPolicy off, the same direct dial connects
-ok: with the policy off the direct dial connects: the refusal is the policy's doing (policy restored)
+ok: the foreign pod's direct dials to the function pod (8080, 8013) time out: dropped by the policy
+== mutation: with the function's NetworkPolicy off, the same direct dials connect
+ok: with the policy off both direct dials connect: the refusal is the policy's doing (policy restored)
 == noauth: the function WITHOUT its token interceptor answers the foreign call
 ok: example-go has scaled to zero
 ok: without the interceptor the same foreign call reaches the handler (404 not_found): the token is the control (image restored)
-== Z11 drill: up deploy token direct noauth passed
+== Z11 drill: token direct noauth passed
 ```

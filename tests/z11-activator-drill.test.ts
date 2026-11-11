@@ -80,15 +80,15 @@ describe('token: the refusal is the function, on the activator path', () => {
 describe('direct: dropped by the policy, proved by removing it', () => {
   const d = body('phase_direct');
   it('only a timeout counts as dropped, on both ports, after a wake that reached the function', () => {
-    expect(d).toContain('for port in 8080 8012; do');
+    expect(d).toContain('for port in 8080 8013; do');
     expect(d).toMatch(/\[ "\$\{rc\}" = 28 \] \|\| fail/);
     expect(d).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \] \|\| fail/);
     expect(body('fn_pod_ip')).toContain('select(.type == "Ready")');
   });
 
   it('with the policy off both ports must connect, and the policy is restored', () => {
-    expect(d).toContain('[ "$(dial_rc "${ip}" 8080)" = 0 ] && [ "$(dial_rc "${ip}" 8012)" = 0 ]');
-    expect(d.indexOf('set_policy false')).toBeGreaterThan(d.indexOf('for port in 8080 8012'));
+    expect(d).toContain('[ "$(dial_rc "${ip}" 8080)" = 0 ] && [ "$(dial_rc "${ip}" 8013)" = 0 ]');
+    expect(d.indexOf('set_policy false')).toBeGreaterThan(d.indexOf('for port in 8080 8013'));
     expect(d).toMatch(/\[ "\$\{opened\}" = 1 \] \|\| fail/);
     expect(d.indexOf('set_policy true')).toBeLessThan(d.indexOf('[ "${opened}" = 1 ]'));
   });

@@ -24,6 +24,7 @@ real generated glue.
 | `trailers` | Waits until each function is back at zero. A read of a missing item then comes back as `NotFound` (Go, through the generated glue) or `not_found` (Rust) through the cold activator path. A warm control makes the same call again and must get the same code. |
 | `rollout` | Changes the Go function's served contract version and waits until the zone runs with it. A newer function (1.1.0) is called by the zone, which was generated against 1.0.0. An older one (0.9.0) is refused by the zone's glue with `FailedPrecondition` before any call is made. The same version (1.0.0) is called again. |
 | `sovereignty` | A second zone lists four functions. Three of them take another zone's Secret, one through each source (`env` secretKeyRef, `envFrom`, a Secret volume). Each must be refused with `SovereigntyCompliant=False/SecretNotAllowed`, and after a 20 s hold must still have no Knative Service and no pod. The control takes its own zone's Secret through all three sources, and must be compliant and rendered. |
+| `wake` | Wake-ahead. The zone is restarted (a new revision) on an image that runs knext's real wake-ahead preload. With the Go function opted out (`wakeAhead: false`), the function must stay at zero for 30 s after the zone starts, and the zone's first call pays the cold start. With it opted in, the operator renders `KNEXT_WAKE_FUNCTIONS=example` into the zone, the zone's start must wake the function before any call, and the first call must be faster than the opted-out one. |
 
 The functions here use the Connect protocol over h2c, the default for a Node zone.
 In it, a failed unary call travels as an HTTP status plus a JSON error body, not as
@@ -45,7 +46,7 @@ when it starts would hide the cold path.
 | `Z10_NAMESPACE` | `z10-e2e` | The lane's namespace. It is stamped `e2e.kn-next.dev/z10-owned=true`, and a namespace without that label is never deleted. |
 | `Z10_WITH_RUST` | `1` | `0` skips the Rust function. |
 | `Z10_ZERO_TIMEOUT` | `300` | Seconds to wait for a function to scale to zero. A bound function's retention is its zone's retention plus 30 s, followed by Knative's stable window. |
-| `PHASES` | all | Any subset of `images deploy cold trailers rollout sovereignty`. |
+| `PHASES` | all | Any subset of `images deploy cold trailers rollout sovereignty wake`. |
 
 ## What it does not prove (the rest of Z10)
 

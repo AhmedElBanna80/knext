@@ -112,9 +112,11 @@ try {
   const dockerfile = await Bun.file(join(HERE, 'Dockerfile')).text();
   if (wake) {
     const adapters = join(REPO, 'packages', 'kn-next', 'src', 'adapters');
-    for (const f of ['wake-ahead.cjs', 'process-start-abort.cjs']) cpSync(join(adapters, f), join(out, f));
+    for (const f of ['wake-ahead.cjs', 'process-start-abort.cjs'])
+      cpSync(join(adapters, f), join(out, f));
     const entry = 'ENTRYPOINT ["node", "/app/zone-caller.mjs"]';
-    if (dockerfile.split(entry).length !== 2) throw new Error('zone-caller Dockerfile: ENTRYPOINT anchor not found once');
+    if (dockerfile.split(entry).length !== 2)
+      throw new Error('zone-caller Dockerfile: ENTRYPOINT anchor not found once');
     writeFileSync(
       join(out, 'Dockerfile'),
       dockerfile.replace(

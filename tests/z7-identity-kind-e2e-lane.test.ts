@@ -37,6 +37,7 @@ const REPO_ROOT = resolve(import.meta.dirname, '..');
 const WORKFLOW = resolve(REPO_ROOT, '.github/workflows/z7-identity-kind-e2e.yml');
 const LANE_DIR = resolve(REPO_ROOT, 'packages/grpc/e2e/z7-identity-kind');
 const RUN_SH = resolve(LANE_DIR, 'run.sh');
+const LIB_SH = resolve(REPO_ROOT, 'packages/grpc/e2e/lib/kind-lane.sh');
 
 interface Step {
   name?: string;
@@ -66,7 +67,9 @@ interface Workflow {
 
 const wfText = readFileSync(WORKFLOW, 'utf8');
 const wf = parse(wfText) as Workflow;
-const runSh = readFileSync(RUN_SH, 'utf8');
+const runShOwn = readFileSync(RUN_SH, 'utf8');
+// run.sh sources the shared helpers; every rule below holds for both files together.
+const runSh = `${runShOwn}\n${readFileSync(LIB_SH, 'utf8')}`;
 const steps = Object.values(wf.jobs).flatMap((j) => j.steps);
 
 /** GitHub's path-filter glob: `**` crosses `/`, `*` does not. */
@@ -294,6 +297,11 @@ describe('the workflow is as safe as the rest of CI', () => {
 });
 
 describe('the harness never touches what it did not create', () => {
+  it('sources the shared kind-lane helpers the rules below also scan', () => {
+    // Otherwise scanning lib/kind-lane.sh would vouch for helpers run.sh does not use.
+    expect(runShOwn).toMatch(/^source "\$\{HERE\}\/\.\.\/lib\/kind-lane\.sh"$/m);
+  });
+
   it('fails on any error, never traces, and keeps its files private', () => {
     expect(runSh).toMatch(/^set -euo pipefail$/m);
     expect(runSh).toMatch(/^set \+x$/m);

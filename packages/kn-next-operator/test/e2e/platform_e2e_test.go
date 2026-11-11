@@ -309,6 +309,24 @@ func pfMetric(series string) float64 {
 	return total
 }
 
+// pfQuiesceWithin bounds how long a settled wave may take to bring the gauges
+// back to their baseline.
+const pfQuiesceWithin = 2 * time.Minute
+
+// pfExpectQuiescent asserts that once a wave has settled, the limiter and hold
+// gauges are back at their baseline: nothing queued, exactly `held` apps held, and
+// the webhook's budget fallback never taken. An acquire released only on the happy
+// path leaves one of these raised, and envtest does not see that.
+func pfExpectQuiescent(held int) {
+	GinkgoHelper()
+	Eventually(func() float64 { return pfMetric(pfPending) }, pfQuiesceWithin, 5*time.Second).Should(Equal(0.0),
+		"rollout_pending stayed raised after the wave settled: a slot was acquired and never released")
+	Eventually(func() float64 { return pfMetric(pfHeld) }, pfQuiesceWithin, 5*time.Second).Should(Equal(float64(held)),
+		"apps_held did not return to %d after the wave settled", held)
+	Expect(pfMetric(pfFallbackRead)).To(Equal(0.0), "the webhook fell back to the built-in budget (read error)")
+	Expect(pfMetric(pfFallbackInvalid)).To(Equal(0.0), "the webhook fell back to the built-in budget (invalid platform)")
+}
+
 var _ = Describe("platform layer against a live cluster (ADR-0064)", Ordered, func() {
 	SetDefaultEventuallyTimeout(5 * time.Minute)
 	SetDefaultEventuallyPollingInterval(2 * time.Second)
@@ -497,7 +515,7 @@ var _ = Describe("platform layer against a live cluster (ADR-0064)", Ordered, fu
 		By("the limiter observed the queued re-renders and drained")
 		Expect(pfMetric(pfWaitCnt)-waitsBefore).To(BeNumerically(">=", float64(len(pfApps)-1)),
 			"five apps at 2/minute: at least four had to wait for a slot")
-		Eventually(func() float64 { return pfMetric(pfPending) }, 3*time.Minute, 5*time.Second).Should(Equal(0.0))
+		pfExpectQuiescent(0)
 
 		baselineTemplate = pfTemplate(app1)
 		baselineRevision = pfKsvc(app1, "{.status.latestReadyRevisionName}")(Default)
@@ -537,7 +555,7 @@ var _ = Describe("platform layer against a live cluster (ADR-0064)", Ordered, fu
 
 		By("…and no app rendered twice despite the lost limiter state: baseline + 123 + 150")
 		pfExpectRevisionCount(3, pfApps...)
-		Eventually(func() float64 { return pfMetric(pfPending) }, 3*time.Minute, 5*time.Second).Should(Equal(0.0))
+		pfExpectQuiescent(0)
 
 		baselineTemplate = pfTemplate(app1)
 		baselineRevision = pfKsvc(app1, "{.status.latestReadyRevisionName}")(Default)
@@ -584,6 +602,9 @@ var _ = Describe("platform layer against a live cluster (ADR-0064)", Ordered, fu
 		}, 10*time.Second, 3*time.Second).Should(Succeed())
 		pfExpectBody(app1, "Hello rev1!")
 		pfExpectRevisionCount(3, app1)
+
+		By("the held wave settled: every app held, nothing left queued")
+		pfExpectQuiescent(len(pfApps))
 	})
 
 	It("delete while over budget: the app leaves and does not hang in Terminating", func() {
@@ -600,6 +621,7 @@ var _ = Describe("platform layer against a live cluster (ADR-0064)", Ordered, fu
 		By("it left the held gauge with it")
 		Eventually(func() float64 { return pfMetric(pfHeld) }, 2*time.Minute, 5*time.Second).
 			Should(Equal(float64(len(pfApps) - 1)))
+		pfExpectQuiescent(len(pfApps) - 1)
 	})
 
 	It("recovery: restoring the budget applies the held change and clears every hold", func() {
@@ -617,6 +639,7 @@ var _ = Describe("platform layer against a live cluster (ADR-0064)", Ordered, fu
 		Eventually(func() float64 { return pfMetric(pfHeld) }, 2*time.Minute, 5*time.Second).Should(Equal(0.0))
 		Eventually(pfJSONPath([]string{"get", "knextplatform", "default"}, "{.status.rollout.held}")).
 			Should(Or(Equal("0"), BeEmpty()))
+		pfExpectQuiescent(0)
 	})
 
 	It("no silent fallback: the admission webhook never ignored the platform's budget during the run", func() {

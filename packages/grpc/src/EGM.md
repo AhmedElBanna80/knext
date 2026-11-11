@@ -112,9 +112,11 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   `runningOnBun()`, `TransportChoice`, `chooseTransport(opts)`,
   `defineFunctionClient(def, deps)`. It re-exports from `glue.ts`:
   `Authorize`, `AuthorizeContext`, `Principal`, `TokenMinter`, `TokenRequest`,
-  `PUBLIC_SUBJECT`, `QUERY_CACHE_LIFE`, `userSubject`, `subjectSub`,
+  `PUBLIC_SUBJECT`, `QUERY_CACHE_LIFE`, `QUERY_ERROR_CACHE_LIFE`, `CachedResult`,
+  `cacheableCall`, `unwrapCached`, `userSubject`, `subjectSub`,
   `servedVersion`, `registerTokenMinter`, `mintCallToken`, `wasNotSent`,
-  `normalizeRequest`, `encodeRequest`, `decodeRequest`; and from `signer.ts`:
+  `refreshAfterWrite`, `normalizeRequest`, `encodeRequest`, `decodeRequest`;
+  and from `signer.ts`:
   `SIGNING_KEY_DIR`, `ZONE_ISSUER_ENV`, `TOKEN_TTL_SECONDS`,
   `ZoneSignerOptions`, `audienceFromServiceUrl`, `contractKid`,
   `createZoneTokenSigner`. `markNotSent` and `defaultZoneSigner` are not
@@ -123,8 +125,11 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   (`public`), `userSubject(authorize, ctx)`, `subjectSub(subject)`,
   `servedVersion(fn, envName, zoneVersion, env)`, `TokenRequest`, `TokenMinter`,
   `registerTokenMinter(minter)`, `mintCallToken(request)`, `markNotSent(err)`,
-  `wasNotSent(err)`, `normalizeRequest`, `encodeRequest`, `decodeRequest`,
-  `QUERY_CACHE_LIFE` (`stale: 60, revalidate: 300, expire: 3600`).
+  `wasNotSent(err)`, `refreshAfterWrite(tag, updateTag, revalidateTag)`,
+  `normalizeRequest`, `encodeRequest`, `decodeRequest`,
+  `QUERY_CACHE_LIFE` (`stale: 60, revalidate: 300, expire: 3600`),
+  `QUERY_ERROR_CACHE_LIFE` (`stale: 0, revalidate: 1, expire: 2`),
+  `CachedResult`, `cacheableCall(call, cacheLife)`, `unwrapCached(result)`.
 - `signer.ts`: `SIGNING_KEY_DIR` (`/var/run/knext/signing-key`),
   `ZONE_ISSUER_ENV` (`KNEXT_ZONE_ISSUER`), `TOKEN_TTL_SECONDS` (60),
   `ZoneSignerOptions`, `audienceFromServiceUrl(fn, urlEnv, url)`,
@@ -227,10 +232,18 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   a string token. A token must be 1-8192 visible ASCII characters
   (`runtime.ts:tokenFor`).
 - On a unary call, errors raised before the transport call (headers,
-  idempotency key, endpoint, first token) are marked with `markNotSent`
+  idempotency key, endpoint, first token) are marked with `markNotSent`, and
+  so is a token refused on a read's retry, an attempt that never left
   (`runtime.ts:defineFunctionClient`); a stream's pre-send errors are not. A
-  generated action refreshes its service tag unless `wasNotSent(err)`
-  (`glue-plugin.ts:emitAction`).
+  generated action refreshes its service tag unless `wasNotSent(err)`, with
+  `refreshAfterWrite`: `updateTag` in a Server Action, `revalidateTag(tag,
+  { expire: 0 })` elsewhere (`glue-plugin.ts:emitAction`).
+- A generated query calls its function through `cacheableCall` inside its
+  `'use cache'` function and rethrows with `unwrapCached` outside it, because
+  Next.js hides errors thrown in a cache scope in production builds. A
+  definitive ConnectError is cached like data; a transient code or a not-sent
+  refusal gets `QUERY_ERROR_CACHE_LIFE`; any other error is thrown, never
+  cached (`glue.ts:cacheableCall`, `glue-plugin.ts:emitQuery`).
 - `mintCallToken` uses the minter registered with `registerTokenMinter`, else
   `defaultZoneSigner()`, and refuses a returned token that is not 1-8192
   visible ASCII characters (`Unauthenticated`).

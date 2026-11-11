@@ -64,7 +64,7 @@ Both have since been undercut by measurement — cold-start decisively, build-we
 and a third axis has been verified that ADR-0048 never weighed:
 
 - **Cold-start is TIED on a real cluster.** OKE, N=7 paired cold cycles, two operator-reconciled
-  `NextApp` CRs (`.claude/oke-coldstart-bench.md`): node-standalone **3610 ms** (3143–3948) vs
+  `NextApp` CRs (method and numbers: ADR-0048, see the citation note below): node-standalone **3610 ms** (3143–3948) vs
   vinext single-exec **3401 ms** (3226–3761) median — ~6%, ranges fully overlap. Cold-start is
   Knative activate→schedule→container-create bound (~3.4 s), which swamps runtime boot. ADR-0048's
   **61 ms was a local warm-binary process-boot micro-bench** (`examples/bun-exec`, n=10, binary
@@ -238,7 +238,7 @@ packaging is v1.0 or a fast-follow.**
 5. Price the N-target cost / reaffirm the shared `RuntimeContract` (#1152); add the reopen bar (#1154).
 6. If vinext is demoted, re-scope the replacement compat bar (PR #1137) to the chosen axis.
 
-**Gate review record:** `.claude/close-verdict-architect.md`, `.claude/close-verdict-sysdesigner.md`.
+**Gate review record:** the architect's and system designer's close verdicts (maintainer notes, not in the repo).
 
 ## Amendment 6 — the standalone packaging path, and the supervisor as the standalone RuntimeContract (2026-09-22)
 
@@ -572,6 +572,6 @@ supported** (ADR-0058's cell set). It does not change the default axis.
 **Who decides.** The axis is a founder decision (Verdict above). The bar limits what agents and
 design gates may bring back as grounds to reopen. It does not limit what the founder may decide.
 
-**A citation note.** The Context section above cites `.claude/oke-coldstart-bench.md` for the
-N=7 cluster tie. That file is not tracked in git. The same numbers and method are in ADR-0048
+**A citation note.** The Context section above originally cited a local bench note for the
+N=7 cluster tie. That note is not tracked in git. The same numbers and method are in ADR-0048
 Amendment 5, which is the in-tree record R1 measures against.

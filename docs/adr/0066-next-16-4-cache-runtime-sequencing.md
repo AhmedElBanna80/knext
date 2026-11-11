@@ -30,9 +30,11 @@
   not a recipe).
 - **Covers:** #2084 / PR #2100, #2085, K1 #2065, K4 #2066, #2083, #2089, Z6 #2050, Z9 #2054,
   #2090. Release gate: #2102.
-- **Evidence:** `.claude/research/next-16-4-impact-2026-10-09.md` (Q2, Q3, Q7, T1–T5),
-  `.claude/plans/v2-sprint1-close-architect.md` (§4 task graph), `.claude/plans/v2-plan-rev4.md`
-  (§3 slot accounting, K1→K4→K5), `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
+- **Evidence:** a Next 16.4 impact study (2026-10-09; questions Q2, Q3, Q7 and tests T1–T5) and
+  the v2 plan, both maintainer notes not in the repo. What this ADR takes from the plan is stated
+  here: K1, K4 and K5 all edit `packages/kn-next/package.json` and run serially ("K1 → K4" in D1),
+  and credential runs share one concurrency group whose slot count never grows ("Compat budget"
+  under Constraints). Also `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
   (wake-ahead timing), and the published `next@16.4.0` package (`dist/server/lib/cache-handlers/types.d.ts`,
   `dist/server/use-cache/use-cache-wrapper.js`, `dist/server/revalidation-utils.js`,
   `dist/server/config-shared.js`).
@@ -150,7 +152,7 @@ orders, each against a different assumption about the Next floor. jev rated the 
 - **Compat budget.** One dispatch occupies roughly one pool-hour of the **one** shared runner pool,
   which the live 1.x credential windows also use. Cap: two dispatches per agent. Sixteen queued
   dispatches once froze the merge queue. Harness edits land between credential windows. **No v2
-  credential lane exists yet.** Per the v2 plan (§3), R5 (#2041) first puts every credential workflow
+  credential lane exists yet.** Per the v2 plan (a maintainer note), R5 (#2041) first puts every credential workflow
   in one concurrency group. At 2.0 GA the v1.0 lane retires and the four 2.0 cells take the v1.3 slots.
 - **1.4.0 release gate (#2102).** Nothing ships in 1.4.0, and no `operator-v*` bundle that installs
   the KnextPlatform CRD is tagged, until all of these hold:
@@ -199,7 +201,7 @@ jev, placement: **docs now, finding and opt-in in 1.4.0 behind #2102 0.97** / al
 
 **K1 → K4.** K1 (#2065, remove the `kn-next` bin), K4 and K5 all edit
 `packages/kn-next/package.json`, and the v2 plan makes them serial: K4's row lists K1 as its
-dependency (`v2-plan-rev4.md`, "K1 → K4 → K5 are serial"). Round 1 omitted that edge.
+dependency (the v2 plan, a maintainer note: "K1 → K4 → K5 are serial"). Round 1 omitted that edge.
 
 Why this order, edge by edge:
 
@@ -716,7 +718,7 @@ plan's own tasks.
 **Part 2: v2 credential lanes, created later by the v2 plan (not by this ADR).**
 - Today no v2 credential lane exists, and none is started when K4 lands.
 - R5 (#2041) first puts every credential workflow in one concurrency group, landing between windows
-  (`v2-plan-rev4.md` §3).
+  (the v2 plan's slot accounting, a maintainer note).
 - At **2.0 GA the v1.0 lane retires**, and the four 2.0 cells take the v1.3 slots (§3, slot
   accounting). Net load never exceeds today's slot count.
 - Until those lanes complete their windows (14 consecutive green independent runs per cell), docs,
@@ -726,7 +728,7 @@ plan's own tasks.
 jev, round 2: **smoke now with an explicit budget including triage re-dispatches and one full run
 for #2089; credential lanes later per R5 and the 2.0 GA slot swap 1.00** / "existing slots, no extra
 dispatch" 0.00 / a full four-cell run now 0.00 (confidence 1.00). The score adds nothing to the
-evidence: `test-e2e-deploy.yml` inputs (`:69-206`), the smoke manifest, and `v2-plan-rev4.md` §3.
+evidence: `test-e2e-deploy.yml` inputs (`:69-206`), the smoke manifest, and the v2 plan's slot accounting (a maintainer note).
 Round 1's choice of runs before K4 (one triage smoke, then one smoke per remaining stable cell, 0.95)
 stands. Only its budget and its credential wording change.
 

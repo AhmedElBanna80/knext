@@ -76,8 +76,8 @@ What the cold-start evidence says today, stated before the decision because it l
   median than the nitro base (n=10 each, permutation p=0.16, not significant), despite a faster local
   boot (183 vs 241 ms). The gap is not attributed.
 - Locally, first execution of a large compiled binary costs **1789 ms cold vs 83 ms** for the
-  interpreted output (`.claude/bytecode-coldstart-bench.md`).
-- The self-contained spike (`.claude/research/self-contained-exec-spike-2026-09-27.md`, vinext
+  interpreted output (a local bench, maintainer note not in the repo).
+- The self-contained spike (2026-09-27, maintainer note not in the repo; vinext
   file-manager, local darwin, n=11): a **92.5 MiB** binary serves all 13 measurement routes from an
   empty directory, and its local boot is at **parity with the nitro binary — 88 ms vs 85 ms**
   median (77 ms without sharp; 157 ms for prod-server disk mode). With a fresh sharp extract every
@@ -182,7 +182,7 @@ win nobody has measured yet.
 - **Binary growth.** Measured for vinext (spike, L3 vs disk-mode): embedding the app +
   `node_modules` JS (all but sharp) adds ≈+12.5 MB (77,830,770 B vs 65,281,650 B); sharp adds
   +19.1 MB; 92.5 MiB total. An earlier ~170 MB figure (≈3.9× applied to the vinext file-manager's
-  44 MB `node_modules`, `.claude/research/compile-closure-measurement-2026-09-27.md:203-205`) is a
+  44 MB `node_modules`, from a 2026-09-27 compile-closure measurement note not in the repo) is a
   **superseded vinext-only extrapolation** — the spike measured that case directly. The **Next
   standalone tree is unmeasured until N1**; no figure for it is claimed here. Pull time is reported separately in the A/B; a
   large first-exec cost is tested by an eager-extract arm (C) against the lazy one (B).

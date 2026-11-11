@@ -13,10 +13,10 @@
   DaemonSet, "opt-in, never default"), ADR-0044 (8 MiB body cap derived from concurrency 20),
   ADR-0025 and the 2026-06-26 DB-engine scope decision (no DB machinery, kept unchanged), ADR-0063
   (pre-GA release lines on integration branches).
-- **Evidence:** `.claude/research/coldstart-default-config-2026-10-03.md` (classification of every
+- **Evidence:** maintainer research notes from 2026-10-03, not in the repo: a cold-start config study (classification of every
   cold-start and runtime-performance setting, §5; config sketch, §6; experiments G1–G12 / P1–P9,
-  §7; the eleven rule conflicts, §8), `.claude/research/gke-image-cache-2026-10-03.md`,
-  `.claude/research/oke-mirror-vs-prewarm-2026-10-03.md`.
+  §7; the eleven rule conflicts, §8), a GKE image-cache study, and an OKE
+  registry-mirror vs image-prewarm study. The decisions below restate what this ADR relies on.
 
 ## Context
 

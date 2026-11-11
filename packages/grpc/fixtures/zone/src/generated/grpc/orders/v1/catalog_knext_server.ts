@@ -9,7 +9,7 @@ import "server-only";
 import { catalogServiceClient as $catalogService } from "./catalog_knext";
 import { GetMenuRequestSchema, type GetMenuResponse } from "./catalog_pb";
 import { type MessageInitShape } from "@bufbuild/protobuf";
-import { PUBLIC_SUBJECT as $PUBLIC_SUBJECT, QUERY_CACHE_LIFE as $QUERY_CACHE_LIFE, decodeRequest as $decodeRequest, encodeRequest as $encodeRequest, mintCallToken as $mintCallToken, servedVersion as $servedVersion, subjectSub as $subjectSub } from "@getknext/grpc/runtime";
+import { type CachedResult, PUBLIC_SUBJECT as $PUBLIC_SUBJECT, QUERY_CACHE_LIFE as $QUERY_CACHE_LIFE, cacheableCall as $cacheableCall, decodeRequest as $decodeRequest, encodeRequest as $encodeRequest, mintCallToken as $mintCallToken, servedVersion as $servedVersion, subjectSub as $subjectSub, unwrapCached as $unwrapCached } from "@getknext/grpc/runtime";
 import { cacheLife as $cacheLife, cacheTag as $cacheTag } from "next/cache";
 
 /**
@@ -21,16 +21,18 @@ import { cacheLife as $cacheLife, cacheTag as $cacheTag } from "next/cache";
  */
 export async function getMenu(request: MessageInitShape<typeof GetMenuRequestSchema>): Promise<GetMenuResponse> {
   const subject = $PUBLIC_SUBJECT;
-  return getMenu$cached(subject, $servedVersion("orders", "ORDERS_SERVICE_PROTO_VERSION", "1.2.0"), $encodeRequest(GetMenuRequestSchema, request));
+  return $unwrapCached(await getMenu$cached(subject, $servedVersion("orders", "ORDERS_SERVICE_PROTO_VERSION", "1.2.0"), $encodeRequest(GetMenuRequestSchema, request)));
 }
 
-async function getMenu$cached(subject: string, protoVersion: string, request: string): Promise<GetMenuResponse> {
+async function getMenu$cached(subject: string, protoVersion: string, request: string): Promise<CachedResult<GetMenuResponse>> {
   "use cache";
   $cacheLife($QUERY_CACHE_LIFE);
   $cacheTag("knext:orders:orders.v1.CatalogService");
   // protoVersion is part of the cache key only: a function rollout is a new entry.
   void protoVersion;
   const token = async () => await $mintCallToken({ function: "orders", method: "/orders.v1.CatalogService/GetMenu", auth: "public", sub: $subjectSub(subject) });
-  return $catalogService.getMenu($decodeRequest(GetMenuRequestSchema, request), { token });
+  // The function's error is returned, not thrown: Next.js hides errors thrown
+  // in a cache scope in production builds, and the caller needs its code.
+  return $cacheableCall(() => $catalogService.getMenu($decodeRequest(GetMenuRequestSchema, request), { token }), $cacheLife);
 }
 

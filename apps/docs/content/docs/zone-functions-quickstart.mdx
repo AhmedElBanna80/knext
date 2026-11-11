@@ -120,6 +120,11 @@ name. It receives the function, service, method and kind of the call, and return
 session's stable user id) or throws, for example a redirect to sign-in. Each generated query,
 action and stream runs it first, outside any cache. Cached reads are keyed per user.
 
+A cached read that the function answers with an error throws a `ConnectError` with the function's
+code and message, in production builds too. A definitive answer such as `NotFound` or
+`PermissionDenied` is cached like a result, and a write to the service refreshes it. A transient
+one such as `Unavailable` or `DeadlineExceeded` is kept for a couple of seconds only.
+
 ## Limits
 
 - **Beta.** Not covered by the compatibility credential.

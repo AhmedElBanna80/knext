@@ -413,6 +413,8 @@ export function defineFunctionClient<S extends DescService, P extends MethodPoli
 export {
   type Authorize,
   type AuthorizeContext,
+  type CachedResult,
+  cacheableCall,
   decodeRequest,
   encodeRequest,
   mintCallToken,
@@ -420,11 +422,13 @@ export {
   type Principal,
   PUBLIC_SUBJECT,
   QUERY_CACHE_LIFE,
+  QUERY_ERROR_CACHE_LIFE,
   registerTokenMinter,
   servedVersion,
   subjectSub,
   type TokenMinter,
   type TokenRequest,
+  unwrapCached,
   userSubject,
   wasNotSent,
 } from './glue';

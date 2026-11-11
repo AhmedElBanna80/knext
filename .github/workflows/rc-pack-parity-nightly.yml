@@ -67,3 +67,4 @@ jobs:
 
       - name: Verify rc pack parity
         run: node scripts/verify-rc-pack-parity.mjs
+# (This file is registered with GitHub Actions by the push that changes it.)

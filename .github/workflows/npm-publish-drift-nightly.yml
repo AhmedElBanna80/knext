@@ -134,3 +134,4 @@ jobs:
           this workflow after restoring/correcting the ruleset to confirm green, then close this
           issue."
           TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs
+# (This file is registered with GitHub Actions by the push that changes it.)

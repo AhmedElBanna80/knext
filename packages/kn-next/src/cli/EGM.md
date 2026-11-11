@@ -34,7 +34,7 @@ are unknown-command errors.
 | --- | --- | --- |
 | `deploy` | `deploy.ts`, `deploy-reconcile-wait.ts` | `deploy`, `waitForOperatorReconcile`, `RECONCILE_WAIT_MS_DEFAULT` |
 | `build` | `build.ts` | `build`, `buildMain`, `ACCEPTED_BUILD_FLAGS` (`--skip-next`, `--skip-smoke`, `--self-contained`, `--verbose`) |
-| `create` | `create.ts`, `create-options.ts` | `createMain`, `writeScaffold`, `parseChoiceFlags` (`--runtime`, `--builder`, `--cache`, `--storage`, `--react-compiler`/`--no-react-compiler`), plus `--force` and `--dry-run`; prompt helpers `DEFAULT_CREATE_CHOICES`, `shouldPrompt`, `promptCreateChoices`, `terminalPromptIO`, `applyCreateChoices`, `choicesToFlags`, `templateBuilderFor` |
+| `create` | `create.ts`, `create-options.ts` | `createMain`, `writeScaffold`, `parseChoiceFlags` (`--runtime`, `--builder`, `--cache`, `--storage`, `--react-compiler`/`--no-react-compiler`, `--cache-components`/`--no-cache-components`; `--cache-components` is refused with `--builder vinext`), plus `--force` and `--dry-run`; prompt helpers `DEFAULT_CREATE_CHOICES`, `shouldPrompt`, `promptCreateChoices`, `terminalPromptIO`, `applyCreateChoices`, `choicesToFlags`, `templateBuilderFor` |
 | `validate` | `validate-cmd.ts`, `validate.ts` | `validateMain`, `validateConfig`, `ConfigValidationError`, `checkPairing` |
 | `doctor` | `doctor.ts` and [`./doctor/`](./doctor/EGM.md) | `runDoctor`, `doctorMain` |
 | `status` | `status.ts` | `statusMain`, `runStatus` (`--json`, `--watch`), `parseStatusArgs`, `extractStatus`, `renderStatusHuman`, `statusModelToJson` |

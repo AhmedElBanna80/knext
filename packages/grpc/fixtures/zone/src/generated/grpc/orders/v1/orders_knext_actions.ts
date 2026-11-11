@@ -14,8 +14,8 @@ import { authorize as $authorize } from "../../../../knext/authorize";
 import { ordersServiceClient as $ordersService } from "./orders_knext";
 import { CancelOrderRequestSchema, type CancelOrderResponse, PlaceOrderRequestSchema, type PlaceOrderResponse } from "./orders_pb";
 import { type MessageInitShape } from "@bufbuild/protobuf";
-import { mintCallToken as $mintCallToken, normalizeRequest as $normalizeRequest, servedVersion as $servedVersion, subjectSub as $subjectSub, userSubject as $userSubject, wasNotSent as $wasNotSent } from "@getknext/grpc/runtime";
-import { updateTag as $updateTag } from "next/cache";
+import { mintCallToken as $mintCallToken, normalizeRequest as $normalizeRequest, refreshAfterWrite as $refreshAfterWrite, servedVersion as $servedVersion, subjectSub as $subjectSub, userSubject as $userSubject, wasNotSent as $wasNotSent } from "@getknext/grpc/runtime";
+import { revalidateTag as $revalidateTag, updateTag as $updateTag } from "next/cache";
 
 /**
  * orders.v1.OrdersService.PlaceOrder: a Server Action. authorize() runs first; the call is
@@ -36,7 +36,7 @@ export async function placeOrder(request: MessageInitShape<typeof PlaceOrderRequ
     mayHaveCommitted = !$wasNotSent(err);
     throw err;
   } finally {
-    if (mayHaveCommitted) $updateTag("knext:orders:orders.v1.OrdersService");
+    if (mayHaveCommitted) $refreshAfterWrite("knext:orders:orders.v1.OrdersService", $updateTag, $revalidateTag);
   }
 }
 
@@ -59,7 +59,7 @@ export async function cancelOrder(request: MessageInitShape<typeof CancelOrderRe
     mayHaveCommitted = !$wasNotSent(err);
     throw err;
   } finally {
-    if (mayHaveCommitted) $updateTag("knext:orders:orders.v1.OrdersService");
+    if (mayHaveCommitted) $refreshAfterWrite("knext:orders:orders.v1.OrdersService", $updateTag, $revalidateTag);
   }
 }
 

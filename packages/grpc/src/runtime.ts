@@ -432,6 +432,7 @@ export {
   PUBLIC_SUBJECT,
   QUERY_CACHE_LIFE,
   QUERY_ERROR_CACHE_LIFE,
+  refreshAfterWrite,
   registerTokenMinter,
   servedVersion,
   subjectSub,

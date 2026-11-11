@@ -145,7 +145,7 @@ const KEY_BLOCK =
 // The one line of the emitted action that refreshes the reads, and the one
 // that decides whether a failed call may have committed.
 const REFRESH_LINE =
-  '    `    if (mayHaveCommitted) ${updateTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,';
+  '    `    if (mayHaveCommitted) ${refresh}(${JSON.stringify(serviceTag(ctx.fn, method))}, ${updateTag}, ${revalidateTag});`,';
 const SENT_LINE = '    `    mayHaveCommitted = !${wasNotSent}(err);`,';
 
 const TWO_USER = [
@@ -191,9 +191,9 @@ const TWO_USER = [
   {
     id: 'U04',
     subject: 'plugin',
-    claim: 'a write no longer calls updateTag: cached reads on other pods stay stale',
+    claim: 'a write no longer refreshes the reads: cached reads on other pods stay stale',
     anchor: REFRESH_LINE,
-    replacement: '    `    void mayHaveCommitted, ${updateTag};`,',
+    replacement: '    `    void mayHaveCommitted, ${refresh}, ${updateTag}, ${revalidateTag};`,',
   },
   {
     id: 'U05',
@@ -234,14 +234,21 @@ const ACTION = [
     claim: 'every failed write refreshes the reads, one the client refused before sending included',
     anchor: REFRESH_LINE,
     replacement:
-      '    `    if (true) ${updateTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,',
+      '    `    if (true) ${refresh}(${JSON.stringify(serviceTag(ctx.fn, method))}, ${updateTag}, ${revalidateTag});`,',
   },
   {
     id: 'A03',
     subject: 'runtime',
     claim: 'the client no longer marks the failures it raises before sending',
-    anchor: '        throw markNotSent(err);',
-    replacement: '        throw err;',
+    anchor: '        // Nothing has been sent: the function cannot have seen this call.\n        throw markNotSent(err);',
+    replacement: '        // Nothing has been sent: the function cannot have seen this call.\n        throw err;',
+  },
+  {
+    id: 'A03b',
+    subject: 'runtime',
+    claim: 'a retry whose token mint fails is no longer marked as not sent',
+    anchor: '              // signing key, its minter), like one raised before the first.\n              throw markNotSent(err);',
+    replacement: '              // signing key, its minter), like one raised before the first.\n              throw err;',
   },
   {
     id: 'A04',

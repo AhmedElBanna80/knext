@@ -14,8 +14,9 @@
  *     or a route handler. Never cached, never an action.
  * - `<file>_knext_actions.ts` (`'use server'`): a **Server Action** per other
  *   unary RPC. It runs authorize() first (the fail-closed end-user check),
- *   calls the function with the caller's idempotency key, then `updateTag`s
- *   the service's tag so every cached read of the service is refreshed.
+ *   calls the function with the caller's idempotency key, then refreshes the
+ *   service's tag (`refreshAfterWrite`: `updateTag` in a Server Action,
+ *   `revalidateTag` elsewhere) so every cached read of the service is refreshed.
  *
  * Refused, with the RPC named, and nothing written:
  * - an RPC that does not state `(knext.v1.auth)`, or states anything but
@@ -399,6 +400,8 @@ function emitAction(ctx: FileCtx, p: PlannedMethod): void {
   const normalize = ctx.imports.add(RUNTIME_MODULE, 'normalizeRequest', '$normalizeRequest');
   const wasNotSent = ctx.imports.add(RUNTIME_MODULE, 'wasNotSent', '$wasNotSent');
   const updateTag = ctx.imports.add('next/cache', 'updateTag', '$updateTag');
+  const revalidateTag = ctx.imports.add('next/cache', 'revalidateTag', '$revalidateTag');
+  const refresh = ctx.imports.add(RUNTIME_MODULE, 'refreshAfterWrite', '$refreshAfterWrite');
   const client = clientFor(ctx, method);
   // Every check that can refuse the call runs BEFORE the try: a refusal there
   // provably sent nothing, so it refreshes nothing. From the call on, a failure
@@ -424,7 +427,7 @@ function emitAction(ctx: FileCtx, p: PlannedMethod): void {
     `    mayHaveCommitted = !${wasNotSent}(err);`,
     '    throw err;',
     '  } finally {',
-    `    if (mayHaveCommitted) ${updateTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,
+    `    if (mayHaveCommitted) ${refresh}(${JSON.stringify(serviceTag(ctx.fn, method))}, ${updateTag}, ${revalidateTag});`,
     '  }',
     '}',
     '',

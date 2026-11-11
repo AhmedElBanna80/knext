@@ -9,4 +9,5 @@ declare module 'next/cache' {
   }): void;
   export function cacheTag(...tags: string[]): void;
   export function updateTag(tag: string): void;
+  export function revalidateTag(tag: string, profile: string | { expire?: number }): void;
 }

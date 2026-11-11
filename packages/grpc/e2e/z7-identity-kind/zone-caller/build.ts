@@ -75,7 +75,7 @@ try {
   mkdirSync(stubs);
   writeFileSync(
     join(stubs, 'next-cache.mjs'),
-    'export const cacheLife = () => {}; export const cacheTag = () => {}; export const updateTag = () => {};',
+    'export const cacheLife = () => {}; export const cacheTag = () => {}; export const updateTag = () => {}; export const revalidateTag = () => {};',
   );
   writeFileSync(join(stubs, 'server-only.mjs'), 'export {};');
 

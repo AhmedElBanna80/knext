@@ -420,6 +420,7 @@ export {
   type Principal,
   PUBLIC_SUBJECT,
   QUERY_CACHE_LIFE,
+  refreshAfterWrite,
   registerTokenMinter,
   servedVersion,
   subjectSub,

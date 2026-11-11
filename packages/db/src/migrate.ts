@@ -56,13 +56,16 @@ function assertDrizzleKitPresent(resolve: () => string): void {
     // another reason (not MODULE_NOT_FOUND) is visible rather than hidden by the
     // named message. Assigned, not passed to the constructor: this package
     // targets ES2020, whose Error type has no options argument.
-    throw Object.assign(new Error(
-      'drizzle-kit is required for defineDrizzleConfig — install it as a devDependency ' +
-        '(`npm i -D drizzle-kit`). It is an optional peer of @getknext/db (ADR-0021): the ' +
-        'main entry (@getknext/db) and the `kn-next db migrate` runner do not need it, but ' +
-        'the drizzle.config.ts produced by defineDrizzleConfig is consumed by ' +
-        '`drizzle-kit generate`/`migrate`, which must be installed.',
-    ), { cause });
+    throw Object.assign(
+      new Error(
+        'drizzle-kit is required for defineDrizzleConfig — install it as a devDependency ' +
+          '(`npm i -D drizzle-kit`). It is an optional peer of @getknext/db (ADR-0021): the ' +
+          'main entry (@getknext/db) and the `kn-next db migrate` runner do not need it, but ' +
+          'the drizzle.config.ts produced by defineDrizzleConfig is consumed by ' +
+          '`drizzle-kit generate`/`migrate`, which must be installed.',
+      ),
+      { cause },
+    );
   }
 }
 

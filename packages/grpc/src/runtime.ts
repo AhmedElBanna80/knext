@@ -392,7 +392,16 @@ export function defineFunctionClient<S extends DescService, P extends MethodPoli
         try {
           // A new token for each attempt after the first, from a token source:
           // the function refuses a token it has already accepted.
-          const token = attempt === 1 ? firstToken : await tokenFor(options?.token);
+          let token = firstToken;
+          if (attempt > 1) {
+            try {
+              token = await tokenFor(options?.token);
+            } catch (err) {
+              // This attempt never left: a refusal of the zone's own (its
+              // signing key, its minter), like one raised before the first.
+              throw markNotSent(err);
+            }
+          }
           return await call(c, request, {
             timeoutMs: remaining,
             headers: withToken(headers, token),

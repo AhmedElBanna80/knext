@@ -92,7 +92,8 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
 
 - `deploy-function.ts`: `PreflightResult` (`verdict`: `ok` | `skew` | `blocked`),
   `DeployHost` (`preflight`, `apply`), `DEPLOY_USAGE`,
-  `formatPreflightFailure(outcome)`, `DeployFunctionArgs`, `deployFunction(args)`.
+  `formatPreflightFailure(outcome)`, `contractVersionFor(protoDir, name)`,
+  `DeployFunctionArgs`, `deployFunction(args)`.
 - `backend-service.ts`: `BACKEND_SERVICE_API_VERSION` (the same group and version
   as `NextApp`), `BACKEND_SERVICE_KIND` (`BackendService`),
   `BackendServiceScalingInput`, `BackendServiceInput`, `BackendServiceCR`,
@@ -291,6 +292,13 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   verdict other than `ok`. `--dry-run` prints the CR to stdout and writes no
   file. Otherwise, without a `host`, it exits 1. This package never spawns
   kubectl itself (`deploy-function.ts` header).
+- Without `--proto-version`, `deployFunction` sets `protoVersion` to the
+  `(knext.v1.contract_version)` of `functions/<name>/proto` (`contractVersionFor`:
+  every `.proto` declaring `(knext.v1.function) = "<name>"`; files that disagree,
+  or one with no version, are a usage error). A zone `proto/` ahead of that
+  version, or a zone version that is not semver, is refused before any cluster
+  call; a function ahead of its zone is accepted. With no function copy it sets
+  nothing and warns on stderr that the zone will refuse calls.
 - `backendSpecDigest` hashes only `BACKEND_SPEC_PINNED_FIELDS` and needs a
   non-empty `spec.image`. It drops object members that are null, `""`, `false`,
   an empty list or an empty object, keeps list order, sorts keys by UTF-8

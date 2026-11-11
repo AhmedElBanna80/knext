@@ -102,7 +102,10 @@ describe('@getknext/db — built main entry loads with drizzle-kit ABSENT (v3-P3
       // throw the actionable named error, NOT a bare (ERR_)MODULE_NOT_FOUND.
       `let ok = false;`,
       `try { mig.defineDrizzleConfig(); console.error('DID_NOT_THROW'); process.exit(7); }`,
-      `catch (e) { ok = /drizzle-kit/.test(e.message) && /devDependency/i.test(e.message) && e.code !== 'ERR_MODULE_NOT_FOUND' && e.code !== 'MODULE_NOT_FOUND'; }`,
+      // ...and its cause is the resolver's MODULE_NOT_FOUND, so the probe really ran
+      // and found drizzle-kit absent. A probe that crashed for another reason (the
+      // pre-fix bare \`require\` under ESM threw ReferenceError) reds here.
+      `catch (e) { ok = /drizzle-kit/.test(e.message) && /devDependency/i.test(e.message) && e.code !== 'ERR_MODULE_NOT_FOUND' && e.code !== 'MODULE_NOT_FOUND' && e.cause?.code === 'MODULE_NOT_FOUND'; }`,
       `if (!ok) { console.error('WRONG_ERROR'); process.exit(8); }`,
       `console.log('OK');`,
     ].join('\n');

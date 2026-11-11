@@ -56,6 +56,8 @@ describe('the drill is careful', () => {
 describe('token: the refusal is the function, on the activator path', () => {
   const t = body('phase_token');
   it('the function is at zero first, and the refused call woke it', () => {
+    // Present AND before: indexOf of a missing line is -1, which would also sort first.
+    expect(t.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(-1);
     expect(t.indexOf('await_zero "${GO_FN}"')).toBeLessThan(t.indexOf('foreign_get ""'));
     expect(t).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" -ge 1 \] \|\| fail/);
   });
@@ -76,6 +78,7 @@ describe('direct: dropped by the policy, proved by removing it', () => {
   it('both ports must be refused, then the dial must connect with the policy off', () => {
     expect(d).toMatch(/if direct_dial "\$\{ip\}" 8080; then fail/);
     expect(d).toMatch(/if direct_dial "\$\{ip\}" 8012; then fail/);
+    expect(d.indexOf('direct_dial "${ip}" 8012')).toBeGreaterThan(-1);
     expect(d.indexOf('set_policy false')).toBeGreaterThan(d.indexOf('direct_dial "${ip}" 8012'));
     expect(d).toMatch(/\[ "\$\{opened\}" = 1 \] \|\| fail/);
     expect(d).toContain('set_policy true');
@@ -89,6 +92,7 @@ describe('noauth: without the interceptor the same call reaches the handler', ()
     expect(dep).toMatch(/grep -cxF -- "\$\{anchor\}"[^\n]*\)" = 1 \]/);
     const n = body('phase_noauth');
     expect(n).toMatch(/\[ "\$\{status\}" = 404 \] && \[ "\$\{code\}" = not_found \]/);
+    expect(n.indexOf('await_zero')).toBeGreaterThan(-1);
     expect(n.indexOf('await_zero')).toBeLessThan(n.indexOf('foreign_get ""'));
   });
 });

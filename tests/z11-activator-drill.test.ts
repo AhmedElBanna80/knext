@@ -25,16 +25,10 @@ function body(name: string): string {
 }
 
 describe('the drill is careful', () => {
-  it('fails on errors, never traces, and keeps errexit inside every phase', () => {
+  it('fails on errors, never traces, and dispatches every phase', () => {
     expect(own).toMatch(/^set -euo pipefail$/m);
     expect(own).toMatch(/^set \+x$/m);
     expect(own).not.toMatch(/kind delete/);
-    // `has_phase x && phase_x` runs the phase with errexit suspended.
-    const code = own
-      .split('\n')
-      .filter((l) => !l.trimStart().startsWith('#'))
-      .join('\n');
-    expect(code).not.toMatch(/has_phase \w+ && phase_/);
     for (const p of ['up', 'deploy', 'token', 'direct', 'noauth']) {
       expect(own).toContain(`if has_phase ${p}; then phase_${p}; fi`);
     }

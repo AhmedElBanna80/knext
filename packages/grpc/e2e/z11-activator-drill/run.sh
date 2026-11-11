@@ -337,9 +337,6 @@ for phase in ${PHASES}; do
     *) fail "unknown phase '${phase}' (up deploy token direct noauth)" ;;
   esac
 done
-# `if ...; then phase; fi`, never `has_phase x && phase_x`: a function run as part
-# of an && list runs with errexit suspended, so a failing command inside it would
-# not stop the drill.
 if has_phase up; then phase_up; fi
 use_cluster
 k -n kube-system get daemonset calico-node >/dev/null 2>&1 \

@@ -58,6 +58,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LANE = 'packages/grpc/e2e/z7-identity-kind';
 const WORKFLOW = '.github/workflows/z7-identity-kind-e2e.yml';
 const RUN_SH = `${LANE}/run.sh`;
+// The shared kind-lane helpers run.sh sources (zone_call, the gateway forward).
+const LIB_SH = 'packages/grpc/e2e/lib/kind-lane.sh';
 const PROBE_LIB = `${LANE}/probe-lib.ts`;
 const PROBE_SPEC = 'packages/grpc/src/__tests__/z7-e2e-probe.test.ts';
 const LANE_SPEC = 'tests/z7-identity-kind-e2e-lane.test.ts';
@@ -472,14 +474,14 @@ const LANE_ROWS = [
   },
   {
     id: 'K03',
-    subject: 'run',
+    subject: 'lib',
     claim: 'a dropped gateway forward is never re-established for a zone call',
     anchor: '    [ "${out##*$\'\\n\'}" = 000 ] || break\n',
     replacement: '    break\n',
   },
   {
     id: 'K04',
-    subject: 'run',
+    subject: 'lib',
     claim: 'the forward pids are not recorded, so the cleanup cannot stop them',
     anchor: '  echo "$!" >>"${PF_PIDS}"\n',
     replacement: '  : # not recorded\n',
@@ -493,14 +495,14 @@ const LANE_ROWS = [
   },
   {
     id: 'K06',
-    subject: 'run',
+    subject: 'lib',
     claim: 'there is no way to re-establish the forward',
     anchor: 'ensure_forward() {\n  forward_up && return 0\n',
     replacement: 'ensure_forward_disabled() {\n  forward_up && return 0\n',
   },
   {
     id: 'K07',
-    subject: 'run',
+    subject: 'lib',
     claim:
       'the forward is started through the k() wrapper, so the recorded pid is not the one holding the port',
     anchor:
@@ -694,7 +696,7 @@ const needles = createGuardProver({
 const lane = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: LANE_SPEC,
-  subjects: { workflow: WORKFLOW, run: RUN_SH },
+  subjects: { workflow: WORKFLOW, run: RUN_SH, lib: LIB_SH },
 });
 
 // ── preflight, declare, run ──────────────────────────────────────────────────

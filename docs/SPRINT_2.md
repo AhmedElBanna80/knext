@@ -1,7 +1,7 @@
 # Sprint 2 — make the compat window mean something
 
 > Planned by the architect and system-designer gates under `.claude/rules/workflow.md`.
-> Sources: `.claude/verdicts/sprint2-architect.md`, `.claude/verdicts/sprint2-sysdesign.md`.
+> Sources: the architect's and system designer's sprint-planning verdicts (maintainer notes, not in the repo).
 > Plan: `docs/V1_ROADMAP.md`. Predecessor: `docs/SPRINT_1.md`.
 > **Source manifest at the bottom** — every source section is reproduced or explicitly declined
 > there. Sprint 1's synthesis silently dropped four sections; an absence must be visible.

@@ -225,7 +225,7 @@ shape this ADR's own architect gate objected to.
 
 **Re-anchor:** the exception now expires at the **first sprint close after the vinext-axis compat
 lane publishes its first run** (the lane is this sprint's centerpiece, task B1 of
-`.claude/sprint-stability-taskgraph.md`). That event is scheduled work with an owner, not an
+that sprint's task graph). That event is scheduled work with an owner, not an
 aspiration: if B1 lands this sprint, the Option C byte cap becomes next sprint's obligation, and
 this exception may not be renewed past it without a further founder-approved amendment recorded
 here. The v1.0 backstop stays: whichever comes first.

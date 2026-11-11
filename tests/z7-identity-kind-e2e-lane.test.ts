@@ -597,8 +597,10 @@ describe('the lane proves what it claims', () => {
     expect(call).toMatch(/--rpc put\b.*--auth signer\b/);
     const helper = runSh.slice(runSh.indexOf('expect_replay() {'), runSh.indexOf('zone_call() {'));
     expect(helper).toContain('--twice');
-    expect(helper).toMatch(/= 200/);
-    expect(helper).toMatch(/= 401/);
+    // The first use must be accepted and the second refused: bind each status to
+    // its own response, so a check loosened on either one goes red.
+    expect(helper).toContain('[ "$(jq -r .status <<<"${first}")" = 200 ]');
+    expect(helper).toContain('[ "$(jq -r .status <<<"${second}")" = 401 ]');
     expect(helper).toContain('unauthenticated');
     expect(runSh).toMatch(/refusal_matrix go /);
     expect(runSh).toMatch(/refusal_matrix rust /);

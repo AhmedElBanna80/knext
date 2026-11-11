@@ -109,7 +109,7 @@ describe('the module core dispatches to', () => {
     );
     expect(code).toBe(1);
     expect(asked).toEqual([{ namespace: 'shop', name: 'orders', context: 'ctx-b' }]);
-    expect(c.err()).toContain('has no served contract version yet');
+    expect(c.err()).toContain('reports no served contract version');
   });
 
   it('a deployed: baseline reads $KN_CONTEXT when --context is not given', async () => {

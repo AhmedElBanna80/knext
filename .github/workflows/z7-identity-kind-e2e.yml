@@ -22,6 +22,11 @@ name: Z7 identity tokens — kind e2e
 #   - the function pod holds no private key and takes the JWKS as a directory
 #     volume (no subPath, no env); no key material reaches any log or event.
 #
+# Then, on the same cluster, packages/grpc/e2e/z10-zone-functions-kind/run.sh (#2055):
+# the zone warm and its Go and Rust functions at minScale 0, so every call wakes a
+# function through Knative's activator; the call lands, and a failed call's code
+# (NotFound) reaches the zone's glue unchanged, next to a warm control.
+#
 # packages/grpc/e2e/z7-identity-kind/run.sh is the whole lane and runs the same
 # on a developer's kind cluster. Not proved here, and stated in run.sh: the
 # one-hour overlap is a constant (retirement backdates its stamp), NetworkPolicy
@@ -89,7 +94,7 @@ jobs:
   z7-identity-e2e:
     name: Z7 zone identity tokens on kind (key, JWKS, rotation, warm functions)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     env:
       KIND_CLUSTER: z7-identity-e2e
       REGISTRY_NAME: kind-registry
@@ -132,6 +137,13 @@ jobs:
 
       - name: Run the Z7 identity-token e2e on kind
         run: packages/grpc/e2e/z7-identity-kind/run.sh
+
+      # Z10 reuses the cluster, Knative and operator the Z7 run just built, so the
+      # cold path costs only its own phases, not a second cluster.
+      - name: Run the Z10 zone-functions cold-path e2e on the same cluster
+        env:
+          Z10_WITH_RUST: '1'
+        run: packages/grpc/e2e/z10-zone-functions-kind/run.sh
 
       # run.sh prints object status and log tails on failure and never reads a
       # Secret, so nothing more is collected here.

@@ -340,7 +340,7 @@ const INFRA_REPOS = [
   /^(mirror\.gcr\.io\/library\/)?postgres:/,
   /^oven\/bun:/,
   /^node[:@]/,
-  /^curlimages\/curl@/,
+  /^curlimages\/curl[:@]/,
   /^gcr\.io\/distroless\//,
 ];
 /** Built by the lane from a Dockerfile scan 1 checks, or published from one. */

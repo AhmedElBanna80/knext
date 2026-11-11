@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { defineDrizzleConfig } from '../migrate';
 
 // v3-P3c — the @getknext/db peer/dependency shape contract (ADR-0021 amendment,
@@ -114,6 +114,30 @@ describe('@getknext/db — built main entry loads with drizzle-kit ABSENT (v3-P3
       encoding: 'utf8',
       cwd: pkgDir,
     });
+    expect(out.trim()).toContain('OK');
+  });
+
+  // The script above runs as CommonJS, where the built module still sees a working
+  // `require`, so it cannot catch a probe that only breaks under ESM. This case
+  // imports the same built file as ESM: the probe must still run (its cause is the
+  // resolver's MODULE_NOT_FOUND), not crash and get rewrapped.
+  it('under an ESM import, defineDrizzleConfig errors actionably with the resolver as its cause', () => {
+    const script = [
+      `const mig = await import(${JSON.stringify(pathToFileURL(distMigrate).href)});`,
+      `let ok = false;`,
+      `try { mig.defineDrizzleConfig(); console.error('DID_NOT_THROW'); process.exit(7); }`,
+      `catch (e) { ok = /drizzle-kit/.test(e.message) && e.cause?.code === 'MODULE_NOT_FOUND'; if (!ok) console.error('CAUSE', e.cause); }`,
+      `if (!ok) { console.error('WRONG_ERROR'); process.exit(8); }`,
+      `console.log('OK');`,
+    ].join('\n');
+
+    // Real Node, not process.execPath: under `bun test` that is Bun, which gives an
+    // ESM module a working `require` and would hide exactly the bug this guards.
+    const out = execFileSync(
+      process.env.NODE_BINARY ?? 'node',
+      ['--require', preload, '--input-type=module', '-e', script],
+      { encoding: 'utf8', cwd: pkgDir },
+    );
     expect(out.trim()).toContain('OK');
   });
 });

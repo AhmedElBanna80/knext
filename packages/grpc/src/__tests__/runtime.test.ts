@@ -131,6 +131,32 @@ describe('generated client runtime — retry policy', () => {
     expect(seen.calls.getOrder).toBeUndefined();
   });
 
+  it('a token source that fails on a retry is marked not sent: that attempt never left', async () => {
+    // A cached read gives a not-sent refusal the short error life; without the
+    // mark, a signing key gone mid-retry would be pinned for the data's life.
+    const { deps, seen } = fakeFunction(1);
+    const client = defineFunctionClient(DEFINITION, deps);
+    let minted = 0;
+    const err = await client
+      .getOrder(
+        { id: 'o-1' },
+        {
+          token: () => {
+            minted++;
+            if (minted > 1) throw new ConnectError('signing key gone', Code.FailedPrecondition);
+            return 'tok-1';
+          },
+        },
+      )
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    expect(err).toMatchObject({ code: Code.FailedPrecondition });
+    expect(wasNotSent(err)).toBe(true);
+    expect(seen.calls.getOrder).toBe(1);
+  });
+
   it('a stream is never retried, so it takes its token as a string, not a source', () => {
     const { deps } = fakeFunction(0);
     const client = defineFunctionClient(DEFINITION, deps);

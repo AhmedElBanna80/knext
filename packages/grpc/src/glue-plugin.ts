@@ -323,6 +323,9 @@ function emitQuery(ctx: FileCtx, p: PlannedMethod): void {
   const life = ctx.imports.add(RUNTIME_MODULE, 'QUERY_CACHE_LIFE', '$QUERY_CACHE_LIFE');
   const cacheLife = ctx.imports.add('next/cache', 'cacheLife', '$cacheLife');
   const cacheTag = ctx.imports.add('next/cache', 'cacheTag', '$cacheTag');
+  const cacheable = ctx.imports.add(RUNTIME_MODULE, 'cacheableCall', '$cacheableCall');
+  const unwrap = ctx.imports.add(RUNTIME_MODULE, 'unwrapCached', '$unwrapCached');
+  const result = ctx.imports.add(RUNTIME_MODULE, 'CachedResult', 'CachedResult', true);
   const client = clientFor(ctx, method);
   const who =
     p.auth === 'user' ? 'the signed-in user (authorize() runs first)' : 'anyone (AUTH_PUBLIC)';
@@ -336,17 +339,19 @@ function emitQuery(ctx: FileCtx, p: PlannedMethod): void {
     ' */',
     `export async function ${name}(request: ${initShape}<typeof ${input}>): Promise<${output}> {`,
     `  const subject = ${subjectExpr(ctx, p, 'read')};`,
-    `  return ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,
+    `  return ${unwrap}(await ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,
     '}',
     '',
-    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${output}> {`,
+    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${result}<${output}>> {`,
     '  "use cache";',
     `  ${cacheLife}(${life});`,
     `  ${cacheTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,
     '  // protoVersion is part of the cache key only: a function rollout is a new entry.',
     '  void protoVersion;',
     `  const token = async () => ${mintExpr(ctx, p, 'subject')};`,
-    `  return ${client}.${name}(${decode}(${input}, request), { token });`,
+    "  // The function's error is returned, not thrown: Next.js hides errors thrown",
+    '  // in a cache scope in production builds, and the caller needs its code.',
+    `  return ${cacheable}(() => ${client}.${name}(${decode}(${input}, request), { token }), ${cacheLife});`,
     '}',
     '',
   );

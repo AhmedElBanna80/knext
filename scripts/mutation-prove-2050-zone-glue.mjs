@@ -131,10 +131,10 @@ const REFUSALS = [
 
 // ── the two-user 'use cache' test ─────────────────────────────────────────
 const KEY_BLOCK =
-  '    `  return ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,\n' +
+  '    `  return ${unwrap}(await ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,\n' +
   "    '}',\n" +
   "    '',\n" +
-  '    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${output}> {`,\n' +
+  '    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${result}<${output}>> {`,\n' +
   '    \'  "use cache";\',\n' +
   '    `  ${cacheLife}(${life});`,\n' +
   '    `  ${cacheTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,\n' +
@@ -156,8 +156,8 @@ const TWO_USER = [
       'the user is dropped from the cache key (it reaches the token through a side channel): B is served A',
     anchor: KEY_BLOCK,
     replacement: KEY_BLOCK.replace(
-      '    `  return ${name}$cached(subject,',
-      '    `  globalThis.__knextSubject = subject;`,\n    `  return ${name}$cached("everyone",',
+      '    `  return ${unwrap}(await ${name}$cached(subject,',
+      '    `  globalThis.__knextSubject = subject;`,\n    `  return ${unwrap}(await ${name}$cached("everyone",',
     ).replace("${mintExpr(ctx, p, 'subject')}", "${mintExpr(ctx, p, 'globalThis.__knextSubject')}"),
   },
   {
@@ -170,10 +170,10 @@ const TWO_USER = [
     // argument; the cached function's own mint is gone.
     replacement:
       "    `  const token = ${mintExpr(ctx, p, 'subject')};`,\n" +
-      '    `  return ${name}$cached(token, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,\n' +
+      '    `  return ${unwrap}(await ${name}$cached(token, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,\n' +
       "    '}',\n" +
       "    '',\n" +
-      '    `async function ${name}$cached(token: string, protoVersion: string, request: string): Promise<${output}> {`,\n' +
+      '    `async function ${name}$cached(token: string, protoVersion: string, request: string): Promise<${result}<${output}>> {`,\n' +
       '    \'  "use cache";\',\n' +
       '    `  ${cacheLife}(${life});`,\n' +
       '    `  ${cacheTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,\n' +
@@ -184,9 +184,9 @@ const TWO_USER = [
     subject: 'plugin',
     claim: 'the served contract version is not in the key: a newer function reuses the old entry',
     anchor:
-      '    `  return ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,',
+      '    `  return ${unwrap}(await ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,',
     replacement:
-      '    `  ${servedVersionExpr(ctx)};`,\n    `  return ${name}$cached(subject, "any-version", ${encode}(${input}, request));`,',
+      '    `  ${servedVersionExpr(ctx)};`,\n    `  return ${unwrap}(await ${name}$cached(subject, "any-version", ${encode}(${input}, request)));`,',
   },
   {
     id: 'U04',
@@ -240,8 +240,10 @@ const ACTION = [
     id: 'A03',
     subject: 'runtime',
     claim: 'the client no longer marks the failures it raises before sending',
-    anchor: '        throw markNotSent(err);',
-    replacement: '        throw err;',
+    anchor:
+      '        // Nothing has been sent: the function cannot have seen this call.\n        throw markNotSent(err);',
+    replacement:
+      '        // Nothing has been sent: the function cannot have seen this call.\n        throw err;',
   },
   {
     id: 'A04',
@@ -369,6 +371,22 @@ const refusals = createGuardProver({
     generate: 'packages/grpc/src/generate.ts',
   },
 });
+const RETRY = [
+  {
+    id: 'A03b',
+    subject: 'runtime',
+    claim: 'a retry whose token mint fails is no longer marked as not sent',
+    anchor:
+      '              // signing key, its minter), like one raised before the first.\n              throw markNotSent(err);',
+    replacement:
+      '              // signing key, its minter), like one raised before the first.\n              throw err;',
+  },
+];
+const retry = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: 'packages/grpc/src/__tests__/runtime.test.ts',
+  subjects: { runtime: 'packages/grpc/src/runtime.ts' },
+});
 const twoUser = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: 'packages/grpc/src/__tests__/use-cache-two-user.test.ts',
@@ -406,11 +424,13 @@ transport.preflight(TRANSPORT);
 trailer.preflight(TRAILER);
 runtime.preflight(RUNTIME);
 action.preflight(ACTION);
+retry.preflight(RETRY);
 declareMutations(
   REFUSALS.length +
     TWO_USER.length +
     TRANSPORT.length +
     TRAILER.length +
+    RETRY.length +
     RUNTIME.length +
     ACTION.length,
 );
@@ -493,3 +513,16 @@ for (const m of ACTION) {
   recordMutation();
 }
 action.finish(ACTION.length);
+
+console.log('\n=== a retry that never left is marked not sent ===');
+retry.baseline();
+retry.proveCanSeeRed({
+  subject: 'runtime',
+  anchor: '  checkDefinition(def);',
+  replacement: "  throw new Error('canary: no client can be defined');",
+});
+for (const m of RETRY) {
+  retry.run({ ...m, expect: 'red' });
+  recordMutation();
+}
+retry.finish(RETRY.length);

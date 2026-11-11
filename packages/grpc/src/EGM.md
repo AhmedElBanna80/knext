@@ -30,7 +30,8 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
 
 - `CONFIG_FILE` (`knext.grpc.json`), `LANGUAGES` (`go`, `rust`), `Language`,
   `FunctionEntry`, `GrpcConfig` (`proto`, `out`, `deadlineMs`,
-  `gatewayTimeoutSeconds`, optional `authorize`, `functions`), `DEFAULT_CONFIG`
+  `gatewayTimeoutSeconds`, optional `authorize`, optional `deployedTagTemplate`,
+  `functions`), `DEFAULT_CONFIG`
   (`proto`, `src/generated/grpc`, 10000 ms, 300 s), `GrpcUsageError`.
 - `AUTHORIZE_EXTENSIONS`, `exportsAuthorize(source)`, `checkFunctionName(name)`,
   `urlEnvFor(name)` (`<NAME>_SERVICE_URL`), `SERVICE_PROTO_VERSION_SUFFIX`,
@@ -57,7 +58,12 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   (10000), `DEFAULT_GATEWAY_TIMEOUT_SECONDS` (300), `methodKind(method)`,
   `checkBudget(deadlineMs, gatewayTimeoutMs)`.
 - `baseline.ts`: `DeployedRef`, `DeployedBaselineSource`,
-  `BaselineUnavailableError`, `resolveBaseline(spec, deployed)`.
+  `BaselineUnavailableError`, `resolveBaseline(spec, deployed)`,
+  `ServedVersionReader`, `DEFAULT_DEPLOYED_TAG_TEMPLATE` (`proto/v{version}`),
+  `DeployedBaselineOptions`, `checkTagTemplate(template)`,
+  `createDeployedBaselineSource(opts)`. `RunGenerateOptions` also takes
+  `servedVersionReader` and `context`; `RunIo` (`cli.ts`) carries the
+  `servedVersionReader` core supplies to `generate`.
 - `buf.ts`: `BUF_VERSION` (`1.73.0`), `BUF_SHA256` (per-platform npm package and
   sha256), `BufPlatform`, `BufIntegrityError`, `bufPlatform()`,
   `verifyBufBinary(path, expected)`, `ResolveOptions`, `resolveBufBinary(opts)`,
@@ -183,6 +189,12 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   this gap).
 - A `deployed:<ns>/<name>` baseline with no `DeployedBaselineSource` throws
   `BaselineUnavailableError` rather than passing (`baseline.ts:resolveBaseline`).
+- `createDeployedBaselineSource` reads the served version only through the
+  injected `ServedVersionReader` and returns `<git dir>#tag=<tag>,subdir=<proto>`.
+  It throws `BaselineUnavailableError` on a reader failure, an empty served
+  version, a non-semver version, a cwd outside git, or a missing tag; a tag
+  template without `{version}` or with a comma, `#` or whitespace is refused
+  (`baseline.ts:createDeployedBaselineSource`, `checkTagTemplate`).
 
 ### Generated-call policy (runtime)
 

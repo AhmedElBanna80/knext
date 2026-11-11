@@ -92,9 +92,11 @@ function gitOut(cwd: string, args: readonly string[]): { ok: boolean; out: strin
 
 /** Check a tag template before anything reads the cluster. */
 export function checkTagTemplate(template: string): string | undefined {
-  if (!template.includes('{version}')) return `tag template "${template}" has no {version} placeholder`;
+  if (!template.includes('{version}'))
+    return `tag template "${template}" has no {version} placeholder`;
   // A comma or # would end the buf input's tag value and open another option.
-  if (/[,#\s]/.test(template)) return `tag template "${template}" may not contain a comma, # or whitespace`;
+  if (/[,#\s]/.test(template))
+    return `tag template "${template}" may not contain a comma, # or whitespace`;
   return undefined;
 }
 
@@ -107,7 +109,9 @@ export function checkTagTemplate(template: string): string | undefined {
  * stamped version yet, a version that is not semver, a missing tag. None of
  * them falls back to comparing against nothing.
  */
-export function createDeployedBaselineSource(opts: DeployedBaselineOptions): DeployedBaselineSource {
+export function createDeployedBaselineSource(
+  opts: DeployedBaselineOptions,
+): DeployedBaselineSource {
   const template = opts.tagTemplate ?? DEFAULT_DEPLOYED_TAG_TEMPLATE;
   return {
     async resolve(ref) {

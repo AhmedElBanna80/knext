@@ -247,7 +247,6 @@ describe("the dispatcher routes generate and add, and nothing else", () => {
         expect(seen.deploy).toBeUndefined();
     });
 
-
     it("deployFunctionMain names `knext deploy function` and answers --help without the package", async () => {
         const writes: string[] = [];
         const original = process.stdout.write.bind(process.stdout);
@@ -511,18 +510,33 @@ describe("the served-version reader only reads", () => {
                 return { ok: true, stdout: "1.4.0\n", stderr: "" };
             },
             run: () => {
-                throw new Error("the reader must never run an inheriting kubectl");
+                throw new Error(
+                    "the reader must never run an inheriting kubectl",
+                );
             },
         });
         expect(
-            reader.readServedProtoVersion({ namespace: "shop", name: "orders", context: "ctx-a" }),
+            reader.readServedProtoVersion({
+                namespace: "shop",
+                name: "orders",
+                context: "ctx-a",
+            }),
         ).toBe("1.4.0");
         expect(argvs).toHaveLength(1);
         expect(argvs[0]).toContain("get");
         expect(argvs[0]).toContain("backendservices.apps.kn-next.dev");
         expect(argvs[0]).toContain("jsonpath={.status.servedProtoVersion}");
         expect(argvs[0]).toContain("ctx-a");
-        for (const verb of ["apply", "patch", "create", "delete", "replace", "edit", "label", "annotate"]) {
+        for (const verb of [
+            "apply",
+            "patch",
+            "create",
+            "delete",
+            "replace",
+            "edit",
+            "label",
+            "annotate",
+        ]) {
             expect(argvs[0]).not.toContain(verb);
         }
     });
@@ -552,7 +566,10 @@ describe("the served-version reader only reads", () => {
             run: () => {},
         });
         expect(() =>
-            reader.readServedProtoVersion({ namespace: "shop", name: "orders" }),
+            reader.readServedProtoVersion({
+                namespace: "shop",
+                name: "orders",
+            }),
         ).toThrow(/^Error from server \(NotFound\).*not found$/);
     });
 });

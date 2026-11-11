@@ -883,11 +883,22 @@ Writes the TypeScript a zone uses to call its functions, from the contracts in `
 knext generate                                        # lint, then write the generated code
 knext generate --check                                # fail if the committed code is out of date
 knext generate --check --against ".git#branch=main,subdir=proto"   # also fail on a breaking change
+knext generate --check --against deployed:shop/orders               # ...against what is running now
 ```
 
 It runs `buf lint` first, and with `--against` it runs `buf breaking` against a baseline: a
 directory, an image file, or a git reference. A removed or renumbered field is a breaking change
-and fails the run. Run `knext generate --check` in CI so generated code can never drift from its
+and fails the run.
+
+`--against deployed:<namespace>/<name>` compares against the contract a deployed function serves
+right now. knext reads the function's served version (`status.servedProtoVersion` on its
+`BackendService`; the cluster is only read, never changed) and compares against the git tag that
+version was released under, `proto/v<version>` by default (`proto/v1.4.0`). Tag each contract
+release that way, or set `deployedTagTemplate` in `knext.grpc.json` to your own tag name, for
+example `"orders-contract-{version}"`. `--context` picks the kubectl context (default:
+`$KN_CONTEXT`, else the current one). The run fails, rather than comparing against nothing, when
+the function has no served version yet, when that version is not a semantic version, or when
+the repository has no matching tag (fetch tags with `git fetch --tags` in CI). Run `knext generate --check` in CI so generated code can never drift from its
 contract. The output goes to `src/generated/grpc` (set `out` in `knext.grpc.json` to move it), and
 is the same bytes on every run; mark that directory as generated for your formatter. `out` must be
 a subdirectory of your app: the app root itself, anything outside it, and anything under

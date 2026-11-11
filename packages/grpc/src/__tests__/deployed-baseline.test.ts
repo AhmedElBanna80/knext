@@ -173,19 +173,31 @@ describe('knext.grpc.json "deployedTagTemplate"', () => {
     expect(parseConfig({}).deployedTagTemplate).toBeUndefined();
     const config = parseConfig({ deployedTagTemplate: 'contract-{version}' });
     expect(config.deployedTagTemplate).toBe('contract-{version}');
-    expect(parseConfig(JSON.parse(serializeConfig(config))).deployedTagTemplate).toBe('contract-{version}');
+    expect(parseConfig(JSON.parse(serializeConfig(config))).deployedTagTemplate).toBe(
+      'contract-{version}',
+    );
   });
 
   it('refuses a template without {version}, or one that would break the buf input', () => {
-    expect(() => parseConfig({ deployedTagTemplate: 'proto/latest' })).toThrow(/no \{version\} placeholder/);
-    expect(() => parseConfig({ deployedTagTemplate: 'v{version},subdir=..' })).toThrow(/comma, # or whitespace/);
+    expect(() => parseConfig({ deployedTagTemplate: 'proto/latest' })).toThrow(
+      /no \{version\} placeholder/,
+    );
+    expect(() => parseConfig({ deployedTagTemplate: 'v{version},subdir=..' })).toThrow(
+      /comma, # or whitespace/,
+    );
     expect(() => parseConfig({ deployedTagTemplate: 3 })).toThrow(/must be a string/);
   });
 
   it('generate uses the configured template for a deployed: baseline', async () => {
     const zone = copyFixtureZone('dep-config');
     const cfg = join(zone, 'knext.grpc.json');
-    writeFileSync(cfg, JSON.stringify({ ...JSON.parse(readFileSync(cfg, 'utf8')), deployedTagTemplate: 'c-{version}' }));
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        ...JSON.parse(readFileSync(cfg, 'utf8')),
+        deployedTagTemplate: 'c-{version}',
+      }),
+    );
     git(zone, 'init', '-q');
     git(zone, 'add', '-A');
     git(zone, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'contract');
@@ -193,7 +205,13 @@ describe('knext.grpc.json "deployedTagTemplate"', () => {
     removeTotalCents(zone);
     const c = capture();
     expect(
-      await runGenerate({ cwd: zone, check: true, against: 'deployed:shop/orders', servedVersionReader: reader('1.0.0'), io: c.io }),
+      await runGenerate({
+        cwd: zone,
+        check: true,
+        against: 'deployed:shop/orders',
+        servedVersionReader: reader('1.0.0'),
+        io: c.io,
+      }),
     ).toBe(1);
     expect(c.err()).toContain('break the contract against deployed:shop/orders');
   });

@@ -341,7 +341,8 @@ export function buildServedVersionReader(
                 ),
             );
             if (!r.ok) {
-                const line = r.stderr.trim().split("\n")[0] || "kubectl get failed";
+                const line =
+                    r.stderr.trim().split("\n")[0] || "kubectl get failed";
                 throw new Error(line);
             }
             return r.stdout.trim();

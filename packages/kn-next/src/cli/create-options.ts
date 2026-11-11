@@ -593,7 +593,8 @@ export function applyCreateChoices(
             () =>
                 [
                     "// Cache Components rejects route segment configs such as `dynamic`;",
-                    "// awaiting connection() is how a handler opts out of prerendering.",
+                    "// awaiting connection() is how a handler opts out of prerendering. It is",
+                    "// the one import this file allows: it does no I/O.",
                     "import { connection } from 'next/server';",
                     "",
                 ].join("\n"),

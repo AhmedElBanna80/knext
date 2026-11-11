@@ -146,12 +146,9 @@ PIDS=()
 WATCH_PID=""
 FORWARDS_STARTED=0
 PF_PIDS="${WORK}/pf.pids"
-
-log() { printf '\n== %s\n' "$*"; }
-ok() { printf 'ok: %s\n' "$*"; }
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
-has_phase() { case " ${PHASES} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-k() { kubectl "$@"; }
+IMAGE_PREFIX=z7
+# shellcheck source=../lib/kind-lane.sh
+source "${HERE}/../lib/kind-lane.sh"
 
 diagnostics() {
   # Never a Secret, never a token: object status, pod state and log tails only.
@@ -180,27 +177,8 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- helpers
 
-# wait_until <timeout-seconds> <interval-seconds> <description> <condition>
-# The condition is a shell string, evaluated afresh on every attempt (a
-# `$(...)` in it is re-run each time, which an argument list would not do).
-wait_until() {
-  local timeout=$1 interval=$2 desc=$3 cond=$4
-  local end=$((SECONDS + timeout))
-  until eval "${cond}" >/dev/null 2>&1; do
-    [ "${SECONDS}" -lt "${end}" ] || fail "timed out after ${timeout}s waiting for: ${desc}"
-    sleep "${interval}"
-  done
-}
-
 epoch_of() { node -p 'Date.parse(process.argv[1]) / 1000' "$1"; }
 now_s() { node -p 'Date.now() / 1000'; }
-
-use_cluster() {
-  kind get kubeconfig --name "${CLUSTER}" >"${KUBECONFIG}"
-  local ctx
-  ctx="$(kubectl config current-context)"
-  [ "${ctx}" = "kind-${CLUSTER}" ] || fail "kubeconfig context is '${ctx}', want kind-${CLUSTER}"
-}
 
 secret_get() { # <field>: one data field of the zone's key Secret, decoded (kids only!)
   k -n "${NS}" get secret "${KEY_SECRET}" -o json | jq -r --arg f "$1" '.data[$f] // empty | @base64d'
@@ -287,53 +265,11 @@ expect_replay() {
   ok "${desc} (first status=200, second status=401 code=unauthenticated)"
 }
 
-zone_call() { # <path?query>: sets ZC_STATUS / ZC_BODY from the zone, through the cluster-local gateway
-  local out attempt
-  for attempt in 1 2 3; do
-    out="$(curl -s -m 30 -H "Host: ${ZONE_HOST}" -w '\n%{http_code}' "http://127.0.0.1:${INTERNAL_PORT}$1" 2>/dev/null)" || out=$'\n000'
-    # 000 is curl's "no response": only a dropped port-forward gives it. The zone
-    # answering with an error is a status, and is not retried.
-    [ "${out##*$'\n'}" = 000 ] || break
-    ensure_forward
-  done
-  ZC_STATUS="${out##*$'\n'}"
-  ZC_BODY="${out%$'\n'*}"
-}
-zone_status() { # <path?query>: just the status of one request to the zone
-  zone_call "$1"
-  echo "${ZC_STATUS}"
-}
-expect_zone() { # <description> <path?query> <status> <jq filter that must hold>
-  zone_call "$2"
-  [ "${ZC_STATUS}" = "$3" ] || fail "$1: status ${ZC_STATUS}, want $3 (body: ${ZC_BODY})"
-  jq -e "$4" <<<"${ZC_BODY}" >/dev/null || fail "$1: body does not satisfy $4 (body: ${ZC_BODY})"
-  ok "$1"
-}
 zone_kid() { zone_call /kid; jq -r '.kid // ""' <<<"${ZC_BODY}"; }
 
 pod_idents() { # <service>: "<uid> <restarts>" per live pod, sorted
   k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json \
     | jq -r '.items[] | select(.metadata.deletionTimestamp == null) | "\(.metadata.uid) \([.status.containerStatuses[]?.restartCount] | add)"' | sort
-}
-pod_json() { # <service>: the single live pod of a service
-  k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json \
-    | jq '[.items[] | select(.metadata.deletionTimestamp == null)] | if length == 1 then .[0] else error("want exactly one live pod, got \(length)") end'
-}
-
-forward_up() { (exec 3<>/dev/tcp/127.0.0.1/"${INTERNAL_PORT}") 2>/dev/null; }
-
-# ensure_forward: a port-forward to Knative's cluster-local gateway, started if
-# the port is not accepting. `kubectl port-forward` ends when its stream breaks,
-# and a long lane must not fail an assertion because of that. Safe to call from
-# the watcher's subshell: every pid it starts is written to a file the cleanup
-# reads.
-ensure_forward() {
-  forward_up && return 0
-  # kubectl itself, not the k() wrapper: `$!` of a backgrounded shell function is
-  # the function's subshell, and killing that leaves kubectl holding the port.
-  kubectl -n kourier-system port-forward svc/kourier-internal "${INTERNAL_PORT}:80" >>"${WORK}/pf-internal.log" 2>&1 &
-  echo "$!" >>"${PF_PIDS}"
-  wait_until 30 1 "port-forward on ${INTERNAL_PORT}" forward_up
 }
 
 start_forwards() {
@@ -441,31 +377,12 @@ YAML
 
 # ---------------------------------------------------------------- phase: images
 
-build_push() { # <name> <context dir>: build, push, record name=<repo>@<digest>
-  local name=$1 ctx=$2 ref="localhost:${REG_PORT}/z7/$1:e2e" plog="${WORK}/push-$1.log" digest
-  docker build -t "${ref}" "${ctx}"
-  docker push "${ref}" | tee "${plog}"
-  digest="$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' "${plog}" | tail -1)"
-  [ -n "${digest}" ] || fail "could not read the pushed digest of ${name}"
-  grep -v "^${name}=" "${STATE}/images.env" >"${STATE}/images.env.new" 2>/dev/null || true
-  echo "${name}=localhost:${REG_PORT}/z7/${name}@${digest}" >>"${STATE}/images.env.new"
-  mv "${STATE}/images.env.new" "${STATE}/images.env"
-  ok "${name} -> ${digest}"
-}
-
 phase_images() {
   log "images: Go function, zone, Rust function"
   build_push function-go "${REPO}/templates/go"
   bun "${HERE}/zone-caller/build.ts" "${WORK}/zone-ctx"
   build_push zone-caller "${WORK}/zone-ctx"
   if [ "${WITH_RUST}" = 1 ]; then build_push function-rust "${REPO}/templates/rust"; fi
-}
-
-image_ref() { # <name>
-  local ref
-  ref="$(sed -n "s/^$1=//p" "${STATE}/images.env" 2>/dev/null | tail -1)"
-  [ -n "${ref}" ] || fail "no image recorded for $1 (run the images phase)"
-  echo "${ref}"
 }
 
 # ---------------------------------------------------------------- phase: deploy

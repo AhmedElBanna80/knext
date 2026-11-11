@@ -93,13 +93,18 @@ knext() { (cd "${APP}" && npx --no-install knext "$@"); }
 
 phase_pack() {
   log "pack: @getknext/{lib,db,core,grpc} from this checkout, stamped ${E2E_VERSION}"
-  local p
-  for p in lib db kn-next grpc; do
+  # Package directories by path: the docs guard reads a bare core package
+  # name as a command to run.
+  local d p
+  local pack_dirs=(packages/lib packages/db packages/kn-next packages/grpc)
+  for d in "${pack_dirs[@]}"; do
+    p="${d#packages/}"
     (cd "${REPO}/packages/${p}" && bun run build >"${WORK}/build-${p}.log" 2>&1) \
       || { tail -20 "${WORK}/build-${p}.log" >&2; fail "building packages/${p} failed"; }
   done
   rm -rf "${STATE}/packs" && mkdir -p "${STATE}/packs"
-  for p in lib db kn-next grpc; do
+  for d in "${pack_dirs[@]}"; do
+    p="${d#packages/}"
     (cd "${REPO}/packages/${p}" && bun pm pack --destination "${WORK}/raw" >/dev/null) \
       || fail "packing packages/${p} failed"
   done

@@ -309,12 +309,13 @@ zone_wakes_fn() {
 phase_wake() {
   log "wake: a new zone process wakes ${FN} through knext's process-start loader"
   zone_host
+  k -n "${NS}" get backendservice "${FN}" >/dev/null || fail "backendservice/${FN} does not exist (run the function phase)"
   [ "$(k -n "${NS}" get backendservice "${FN}" -o jsonpath='{.spec.wakeAhead}')" != false ] \
     || fail "${FN} is opted out of wake-ahead"
   await_fn_zero
   ROLL_TAG="wake-$(date +%s)"
   k -n "${NS}" patch nextapp "${ZONE}" --type merge -p "{\"spec\":{\"env\":{\"Z12_ROLL\":\"${ROLL_TAG}\"}}}" >/dev/null
-  wait_until 300 3 "a ready zone pod of the new revision lists ${FN} in KNEXT_WAKE_FUNCTIONS" zone_wakes_fn
+  wait_until 300 3 "a running zone pod of the new revision lists ${FN} in KNEXT_WAKE_FUNCTIONS" zone_wakes_fn
   wait_until 120 2 "${FN} has a pod, woken by the zone's start (no call made)" '[ "$(fn_pods)" -ge 1 ]'
   ok "the new zone process woke ${FN} before any call"
 }

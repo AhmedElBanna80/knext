@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * `knext create`'s choices: runtime, builder, cache, storage provider and
- * React Compiler — asked interactively on a TTY, or given as flags.
+ * `knext create`'s choices: runtime, builder, cache, storage provider, React
+ * Compiler and Cache Components — asked interactively on a TTY, or given as flags.
  *
  * The rule that keeps this safe: every answer that differs from the template
  * is a small, anchored edit of a rendered file ({@link applyCreateChoices}),
@@ -34,6 +34,7 @@ export interface CreateChoices {
     cache: CreateCache;
     storage: CreateStorage;
     reactCompiler: boolean;
+    cacheComponents: boolean;
 }
 
 /** Today's scaffold. Changing any of these changes every default app. */
@@ -45,6 +46,9 @@ export const DEFAULT_CREATE_CHOICES: Readonly<CreateChoices> = Object.freeze({
     // On by default for new apps (founder-directed, 1.3 line);
     // `--no-react-compiler` turns it off.
     reactCompiler: true,
+    // Off by default: `--cache-components` writes `cacheComponents` and
+    // `partialPrefetching` into next.config.ts (turbopack/webpack only).
+    cacheComponents: false,
 });
 
 const RUNTIMES: readonly CreateRuntime[] = ["bun", "node"];
@@ -72,6 +76,8 @@ export interface ChoiceFlagValues {
     storage?: string;
     "react-compiler"?: boolean;
     "no-react-compiler"?: boolean;
+    "cache-components"?: boolean;
+    "no-cache-components"?: boolean;
 }
 
 function oneOf<T extends string>(
@@ -102,7 +108,13 @@ export function parseChoiceFlags(values: ChoiceFlagValues): CreateChoices {
         cache: oneOf("cache", values.cache, CACHES, d.cache),
         storage: oneOf("storage", values.storage, STORAGES, d.storage),
         reactCompiler: reactCompilerFlag(values) ?? d.reactCompiler,
+        cacheComponents: cacheComponentsFlag(values) ?? d.cacheComponents,
     };
+    if (choices.cacheComponents && choices.builder === "vinext") {
+        throw new UsageError(
+            "--cache-components needs the next build (--builder turbopack or webpack); vinext does not read next.config's cacheComponents",
+        );
+    }
     return choices;
 }
 
@@ -117,6 +129,17 @@ function reactCompilerFlag(values: ChoiceFlagValues): boolean | undefined {
     return undefined;
 }
 
+function cacheComponentsFlag(values: ChoiceFlagValues): boolean | undefined {
+    if (values["cache-components"] && values["no-cache-components"]) {
+        throw new UsageError(
+            "--cache-components and --no-cache-components contradict each other — pass one",
+        );
+    }
+    if (values["no-cache-components"]) return false;
+    if (values["cache-components"]) return true;
+    return undefined;
+}
+
 /** The flags that reproduce `c` without prompting (printed after the prompts). */
 export function choicesToFlags(c: CreateChoices): string {
     return [
@@ -125,6 +148,7 @@ export function choicesToFlags(c: CreateChoices): string {
         `--cache ${c.cache}`,
         `--storage ${c.storage}`,
         c.reactCompiler ? "--react-compiler" : "--no-react-compiler",
+        c.cacheComponents ? "--cache-components" : "--no-cache-components",
     ].join(" ");
 }
 
@@ -271,7 +295,16 @@ export async function promptCreateChoices(
         "Enable React Compiler? (memoizes components at build time)",
         d.reactCompiler,
     );
-    return { runtime, builder, cache, storage, reactCompiler };
+    // vinext does not read next.config's cacheComponents: not asked there.
+    const cacheComponents =
+        builder === "vinext"
+            ? false
+            : await confirm(
+                  io,
+                  "Enable Cache Components? ('use cache' and partial prefetching; shared across pods with the Redis cache)",
+                  d.cacheComponents,
+              );
+    return { runtime, builder, cache, storage, reactCompiler, cacheComponents };
 }
 
 /**
@@ -532,6 +565,45 @@ export function applyCreateChoices(
             pkg.devDependencies["babel-plugin-react-compiler"] =
                 REACT_COMPILER_BABEL_PLUGIN;
         });
+    }
+
+    if (choices.cacheComponents) {
+        // parseChoiceFlags refuses vinext; the prompt does not ask there.
+        editOnce(files, "next.config.ts", '    output: "standalone",\n', (m) =>
+            [
+                m.trimEnd(),
+                "    // Cache Components: 'use cache', cacheLife/cacheTag and Partial",
+                "    // Prerendering. With the Redis cache, 'use cache' entries are shared",
+                "    // by every pod and kept across scale-to-zero; without it they are",
+                "    // per pod. Route segment configs (`revalidate`, `dynamic`, `fetchCache`)",
+                "    // are not allowed under it: use cacheLife() instead.",
+                "    cacheComponents: true,",
+                "    partialPrefetching: true,",
+                "",
+            ].join("\n"),
+        );
+        // Route segment configs are rejected under Cache Components, and the
+        // health route's `dynamic = 'force-dynamic'` is one. connection() keeps
+        // the guarantee it gave: the probe answer is never prerendered or cached.
+        const health = "src/app/api/health/route.ts";
+        editOnce(
+            files,
+            health,
+            "export const dynamic = 'force-dynamic';\n",
+            () =>
+                [
+                    "// Cache Components rejects route segment configs such as `dynamic`;",
+                    "// awaiting connection() is how a handler opts out of prerendering.",
+                    "import { connection } from 'next/server';",
+                    "",
+                ].join("\n"),
+        );
+        editOnce(
+            files,
+            health,
+            "export function GET() {\n",
+            () => "export async function GET() {\n    await connection();\n",
+        );
     }
 
     return files;

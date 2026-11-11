@@ -1,6 +1,6 @@
 # Z11 drill: recorded run, 2026-11-11
 
-Run with `packages/grpc/e2e/z11-activator-drill/run.sh` (all phases), on kind `knext-z11-drill` with Calico v3.28.2, Knative v1.16.0, and the operator built from this branch. These are the assertion lines from the run log, exit 0:
+The `up` and `deploy` phases, from a run of `packages/grpc/e2e/z11-activator-drill/run.sh` on kind `knext-z11-drill` with Calico v3.28.2, Knative v1.16.0, and the operator built from this branch. That run used an earlier version of the `token`, `direct` and `noauth` checks, which were later tightened, so only its `up` and `deploy` lines are kept here:
 
 ```
 == kind cluster knext-z11-drill with the default CNI disabled, and Calico
@@ -21,10 +21,9 @@ ok: the zone is Ready and bound; the functions may scale to zero
 ok: function-go-noauth -> sha256:c700da2ef6a71edc934b17040e3d5592be8ef063b2083dc25ebfb7fc94f5a4f8
 == a caller pod in another namespace (z11-e2e-foreign)
 ok: foreign caller ready
-== token: (see the re-run below)
 ```
 
-The `token`, `direct` and `noauth` phases were re-run on the same cluster after the direct leg moved from 8012 to 8013 (queue-proxy's serving port for an h2c function; 8012 is not opened), with `PHASES="token direct noauth"`, exit 0:
+After that run, the `token`, `direct` and `noauth` phases were re-run on the same cluster once the direct leg moved from 8012 to 8013 (queue-proxy's serving port for an h2c function; 8012 is not opened), with `PHASES="token direct noauth"`, exit 0:
 
 ```
 == token: a foreign pod's call through the activator is refused without a valid token

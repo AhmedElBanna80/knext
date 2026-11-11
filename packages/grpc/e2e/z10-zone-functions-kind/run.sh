@@ -22,6 +22,9 @@
 #   sovereignty  a second zone lists four functions; three take another zone's Secret
 #             (env, envFrom, volume) and are refused (SecretNotAllowed, no Knative Service, no pod),
 #             the control takes its own zone's Secret through all three and is rendered
+#   wake      the zone restarts on an image that loads knext's wake-ahead preload: an
+#             opted-out function stays at zero; an opted-in one is woken by the zone's
+#             start before any call, and the first call is faster
 #
 # Environment: KIND_CLUSTER (default knext-z7-e2e), REGISTRY_PORT (5001),
 # Z10_NAMESPACE (z10-e2e), Z10_WITH_RUST (1), PHASES, INTERNAL_PORT (18090),
@@ -44,7 +47,7 @@ CLUSTER="${KIND_CLUSTER:-knext-z7-e2e}"
 REG_PORT="${REGISTRY_PORT:-5001}"
 NS="${Z10_NAMESPACE:-z10-e2e}"
 WITH_RUST="${Z10_WITH_RUST:-1}"
-PHASES="${PHASES:-images deploy cold trailers rollout sovereignty}"
+PHASES="${PHASES:-images deploy cold trailers rollout sovereignty wake}"
 INTERNAL_PORT="${INTERNAL_PORT:-18090}"
 ZERO_TIMEOUT="${Z10_ZERO_TIMEOUT:-300}"
 OPERATOR_NS='kn-next-operator-system'
@@ -103,6 +106,11 @@ phase_images() {
   bun "${Z7}/zone-caller/build.ts" "${WORK}/zone-ctx"
   build_push zone-caller "${WORK}/zone-ctx"
   if [ "${WITH_RUST}" = 1 ]; then build_push function-rust "${REPO}/templates/rust"; fi
+  if has_phase wake; then
+    # The same zone started with knext's wake-ahead preload (zone-caller/build.ts --wake).
+    bun "${Z7}/zone-caller/build.ts" "${WORK}/zone-wake-ctx" --wake
+    build_push zone-caller-wake "${WORK}/zone-wake-ctx"
+  fi
 }
 
 # ---------------------------------------------------------------- phase: deploy
@@ -465,6 +473,88 @@ YAML
   done
 }
 
+# ---------------------------------------------------------------- phase: wake
+
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
+fn_wake_ahead() { # <service>: the BackendService's spec.wakeAhead ("true" when unset; not `//`, which maps false to the default)
+  k -n "${NS}" get backendservice "$1" -o json | jq -r 'if .spec.wakeAhead == null then true else .spec.wakeAhead end'
+}
+
+# zone_runs <roll tag> <want KNEXT_WAKE_FUNCTIONS, "" for none>: the zone's single
+# live pod is Ready, carries the roll tag, and the wake list the operator rendered.
+zone_runs() {
+  local pod
+  pod="$(pod_json "${ZONE}")" || return 1
+  jq -e --arg r "$1" --arg w "$2" '
+    .status.phase == "Running" and ([.status.containerStatuses[]? | .ready] | all)
+    and ([.spec.containers[] | select(.name == "user-container") | .env[]?] as $e
+         | ([$e[] | select(.name == "Z10_ROLL") | .value] == [$r])
+           and (([$e[] | select(.name == "KNEXT_WAKE_FUNCTIONS") | .value] | first // "") == $w))' \
+    <<<"${pod}" >/dev/null || return 1
+  zone_call /api/health
+  [ "${ZC_STATUS}" = 200 ]
+}
+
+# zone_roll <image> <roll tag> <want wake list>: start a new zone process (a new
+# revision) on <image>; /api/health calls no function, so nothing but the zone's
+# own start can wake one.
+zone_roll() {
+  k -n "${NS}" patch nextapp "${ZONE}" --type merge \
+    -p "{\"spec\":{\"image\":\"$1\",\"env\":{\"Z10_ROLL\":\"$2\"}}}" >/dev/null
+  wait_until 300 3 "the zone runs revision ${2}" "zone_runs ${2} '${3}'"
+}
+
+# timed_call <path>: the zone call's wall time in ms, in TIMED_MS.
+timed_call() {
+  local t0
+  t0="$(now_ms)"
+  zone_call "$1"
+  TIMED_MS=$(($(now_ms) - t0))
+}
+
+phase_wake() {
+  log "wake: a starting zone wakes its bound functions; an opted-out one stays at zero"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  local wimg off_ms on_ms end
+  wimg="$(image_ref zone-caller-wake)"
+
+  # Opted out (set here too, so a rerun after an aborted phase starts clean): the
+  # zone starts, nothing wakes.
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"wakeAhead":false}}' >/dev/null
+  [ "$(fn_wake_ahead "${GO_FN}")" = false ] || fail "${GO_FN} did not take wakeAhead: false"
+  await_zero "${GO_FN}"
+  zone_roll "${wimg}" wake-off ""
+  end=$((SECONDS + 30))
+  while [ "${SECONDS}" -lt "${end}" ]; do
+    [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN} is opted out of wake-ahead, but a pod started with the zone"
+    sleep 3
+  done
+  ok "opted out: the zone started and ${GO_FN} stayed at zero for 30 s"
+  timed_call "/example/get?sub=alice&id=missing"
+  [ "${ZC_STATUS}" = 404 ] || fail "opted out: the first call returned ${ZC_STATUS}, want 404 (body: ${ZC_BODY})"
+  off_ms=${TIMED_MS}
+  ok "opted out: the zone's first call paid the cold start (${off_ms} ms)"
+
+  # Opted in, with the function at zero first: the operator renders
+  # KNEXT_WAKE_FUNCTIONS=example into the zone, which starts a new zone process,
+  # and that start must wake the function before any call.
+  await_zero "${GO_FN}"
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"wakeAhead":true}}' >/dev/null
+  wait_until 300 3 "a new zone process with KNEXT_WAKE_FUNCTIONS=example" "zone_runs wake-off example"
+  wait_until 60 2 "${GO_FN} has a pod, woken by the zone's start (no call made)" \
+    '[ "$(all_pods "${GO_FN}")" -ge 1 ]'
+  ok "opted in: the zone's start woke ${GO_FN} before any call"
+  timed_call "/example/get?sub=alice&id=missing"
+  [ "${ZC_STATUS}" = 404 ] || fail "opted in: the first call returned ${ZC_STATUS}, want 404 (body: ${ZC_BODY})"
+  on_ms=${TIMED_MS}
+  [ "${on_ms}" -lt "${off_ms}" ] \
+    || fail "wake-ahead did not shorten the zone's first call: ${on_ms} ms on, ${off_ms} ms off"
+  ok "opted in: the zone's first call took ${on_ms} ms, against ${off_ms} ms opted out"
+
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"wakeAhead":false}}' >/dev/null
+}
+
 # ---------------------------------------------------------------- main
 
 use_cluster
@@ -472,8 +562,8 @@ k get crd backendservices.apps.kn-next.dev >/dev/null 2>&1 \
   || fail "the cluster has no BackendService CRD: run the Z7 lane's up phase first (PHASES=up ${Z7}/run.sh)"
 for phase in ${PHASES}; do
   case "${phase}" in
-    images | deploy | cold | trailers | rollout | sovereignty) ;;
-    *) fail "unknown phase '${phase}' (images deploy cold trailers rollout sovereignty)" ;;
+    images | deploy | cold | trailers | rollout | sovereignty | wake) ;;
+    *) fail "unknown phase '${phase}' (images deploy cold trailers rollout sovereignty wake)" ;;
   esac
 done
 has_phase images && phase_images
@@ -482,4 +572,5 @@ has_phase cold && phase_cold
 has_phase trailers && phase_trailers
 has_phase rollout && phase_rollout
 has_phase sovereignty && phase_sovereignty
+has_phase wake && phase_wake
 log "Z10 lane: ${PHASES} passed"

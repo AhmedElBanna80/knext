@@ -52,7 +52,9 @@ describe('the harness is as careful as the Z7 lane', () => {
   });
 
   it('runs every phase by default', () => {
-    expect(own).toContain('PHASES="${PHASES:-images deploy cold trailers rollout sovereignty}"');
+    expect(own).toContain(
+      'PHASES="${PHASES:-images deploy cold trailers rollout sovereignty wake}"',
+    );
   });
 });
 
@@ -145,12 +147,57 @@ describe("another zone's Secret is refused through every source", () => {
   });
 
   it('each source is used by a violator, and the control uses all three with its own Secret', () => {
-    expect(sv).toMatch(/sov-env\) extra="  env:\n[\s\S]*?secretKeyRef:/);
-    expect(sv).toMatch(/sov-envfrom\) extra="  envFrom:\n[\s\S]*?secretRef:/);
-    expect(sv).toMatch(/sov-volume\) extra="  volumes:\n[\s\S]*?secretName:/);
+    expect(sv).toMatch(/sov-env\) extra=" {2}env:\n[\s\S]*?secretKeyRef:/);
+    expect(sv).toMatch(/sov-envfrom\) extra=" {2}envFrom:\n[\s\S]*?secretRef:/);
+    expect(sv).toMatch(/sov-volume\) extra=" {2}volumes:\n[\s\S]*?secretName:/);
     expect(sv).toContain('[ "${fn}" = sov-own ] && secret="${SOV_ZONE}-creds"');
     expect(sv).toMatch(/\[ "\$\(sov_condition sov-own\)" = True\/Compliant \] \|\| fail/);
     expect(sv).toMatch(/get ksvc sov-own >\/dev\/null 2>&1 \|\| fail/);
+  });
+});
+
+describe('wake: the zone start wakes an opted-in function, never an opted-out one', () => {
+  const w = body('phase_wake');
+  const build = readFileSync(
+    resolve(REPO_ROOT, 'packages/grpc/e2e/z7-identity-kind/zone-caller/build.ts'),
+    'utf8',
+  );
+  it("the zone runs knext's real preload, only in the wake image", () => {
+    expect(build).toContain(
+      `'ENTRYPOINT ["node", "--require", "/app/wake-ahead.cjs", "/app/zone-caller.mjs"]'`,
+    );
+    expect(build).toContain("for (const f of ['wake-ahead.cjs', 'process-start-abort.cjs'])");
+    expect(build).toMatch(/if \(wake\) \{/);
+    expect(body('phase_images')).toContain('"${WORK}/zone-wake-ctx" --wake');
+    expect(w).toContain('wimg="$(image_ref zone-caller-wake)"');
+  });
+  it('reads wakeAhead without mapping false to the default', () => {
+    expect(body('fn_wake_ahead')).toContain(
+      'if .spec.wakeAhead == null then true else .spec.wakeAhead end',
+    );
+    expect(body('fn_wake_ahead')).not.toContain('// true');
+  });
+  it('opted out: zero pods for 30 s after the zone starts, before any call', () => {
+    const roll = w.indexOf('zone_roll "${wimg}" wake-off ""');
+    const hold = w.indexOf('[ "$(all_pods "${GO_FN}")" = 0 ] || fail');
+    const call = w.indexOf('timed_call');
+    expect(roll).toBeGreaterThan(-1);
+    expect(hold).toBeGreaterThan(roll);
+    expect(call).toBeGreaterThan(hold);
+    expect(w).toContain('end=$((SECONDS + 30))');
+  });
+  it('opted in: a pod before any call, and a faster first call', () => {
+    const zero = w.lastIndexOf('await_zero "${GO_FN}"');
+    const roll = w.indexOf('"zone_runs wake-off example"');
+    expect(zero).toBeGreaterThan(w.indexOf('timed_call'));
+    expect(w.indexOf('\'{"spec":{"wakeAhead":true}}\'')).toBeGreaterThan(zero);
+    const woke = w.indexOf('has a pod, woken by the zone');
+    const call = w.lastIndexOf('timed_call');
+    expect(roll).toBeGreaterThan(-1);
+    expect(woke).toBeGreaterThan(roll);
+    expect(call).toBeGreaterThan(woke);
+    expect(w).toMatch(/\[ "\$\{on_ms\}" -lt "\$\{off_ms\}" \] \\\n\s*\|\| fail/);
+    expect(body('zone_runs')).toContain('KNEXT_WAKE_FUNCTIONS');
   });
 });
 

@@ -32,5 +32,12 @@ PATH. It never deletes a cluster, and it deletes only namespaces it stamped
 
 ## What it does not prove
 
+- **A correctly signed token with the wrong properties** (another key, another function's audience, another RPC, expired, another issuer, a replay to the same pod). The Z7 lane proves those refusals on warm functions. They are the same interceptor, so the activator path adds nothing to them. This drill sends only no token and a malformed one.
+- **Another zone's legitimate token presented to this zone's function.** It is refused only because each function trusts its own zone's JWKS. That holds by construction (the operator mounts the owning zone's JWKS), but it is not exercised here end to end.
+- **Same-namespace callers.** The caller sits in another namespace. The policy admits Knative peers, not namespaces, so a same-namespace pod meets the same two controls (the token on the activator path, the policy on a direct dial), but no leg runs from inside the namespace.
+- **Replay after scale-to-zero.** A token is single-use per pod, held in memory. A new pod after a scale-to-zero, or another replica, has not seen it, so it can be replayed within its 60-second lifetime. The token does not bind the request body.
+- **The cold-pod key-rotation case and a request held beyond 60 s.** The ADR-0004 Amendment 1 note asks this drill for both, and it covers neither, so that note stays open.
+- **A compromised activator, autoscaler or Kourier gateway.** These are trusted peers of the policy. If one is compromised, the token is the only barrier.
 - **mTLS between pods.** Nothing here encrypts or authenticates the network path. The token is the per-call control.
 - **Other CNIs.** Only Calico is tested. A CNI that does not enforce NetworkPolicy (flannel) leaves only the token.
+- **Continuous verification.** The drill is a manual run: see `RECORDED-RUN.md` for the date and versions. No CI workflow runs it.

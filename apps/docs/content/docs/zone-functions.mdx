@@ -439,11 +439,11 @@ Knative components, the policy cannot tell your zone from another one; the per-c
 is what does that. NetworkPolicy is enforced only by a CNI that supports it (Calico, Cilium);
 flannel enforces none.
 
-This split is verified on a cluster running Calico.
+This split was verified by a manual drill on a cluster running Calico (last run 2026-11-11). It is not part of every CI run.
 
-- **A call from another namespace is refused at the function.** A pod in another namespace can reach a function's cluster-local URL. That call goes through the activator when the function is at zero, so the network admits it. The function still refuses it with `401 unauthenticated` when it carries no token or a token that is not the zone's. The zone's own calls go through.
+- **A call from another namespace is refused at the function.** A pod in another namespace can reach a function's cluster-local URL. That call goes through the activator when the function is at zero, so the network admits it. The function still refuses it with `401 unauthenticated` when it carries no token or a malformed one. The zone's own calls go through. Separate tests refuse a correctly signed token with the wrong properties: one from another key, for another function or RPC, expired, or replayed to the same pod.
 - **A direct dial is dropped by the policy.** The same pod dialling the warm function pod directly, on its own port or queue-proxy's, is dropped. With the policy turned off, that dial connects.
-- **The token is the control on the activator path.** A function built without its token check answers the outside call.
+- **The token is the control on the activator path.** A function built without its token check answers the outside call. What the token binds is the issuing zone, the function, the RPC, and a 60-second lifetime, and it is single-use per pod. It does not bind the request body. A pod that has scaled to zero forgets which tokens it has seen, so a captured token can be replayed to a new pod within its 60 seconds.
 
 ### Turning the policy off
 

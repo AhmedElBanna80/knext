@@ -1,9 +1,9 @@
 # Bun cold start on OKE: patched Bun, phase split, and self-warm (2026-11-09)
 
-Three measurements, run one at a time on the same cluster on the same day. The founder approved
+Four measurements, run one at a time on the same cluster on the same day. The founder approved
 running them on OKE and asked for one improvement at a time, each measured.
 
-**Setup, common to all three.**
+**Setup, common to all four.**
 - Cluster: OKE, context `knext-oke-sa`, namespace `bench-cells`, two worker nodes (`10.0.1.118`, `10.0.1.169`), CRI-O 1.34.
 - App: the default scaffold built from main `14de65d23`, a `GET /` SSR page, with `maxScale: 1`.
 - Images were pre-pulled on both nodes by a throwaway pod per image and node.
@@ -80,11 +80,37 @@ By node (total median):
 
 Neither is in knext's code.
 
+## 4. vinext single executable vs Next standalone, balanced nodes (n=30 per arm, interleaved)
+
+Run 1's arms A and B again, with node placement balanced this time: 15 cycles per arm on each node.
+
+| | bp-a | bp-b (control) |
+|---|---|---|
+| Image | vinext self-contained single executable, stock Bun | Next standalone, Bun, exec mode (arm B above) |
+
+All 60 cycles answered 200. One bp-b cycle has no recorded Ready condition, so the windows that end at Ready use 29 bp-b cycles.
+
+The two images log differently. bp-a's first log line is its listening line (`LISTENING:3000`), so for bp-a the time from the pod being bound to its first log already includes the runtime boot. bp-b logs a line before it boots and logs `Local: http://localhost:3000` when Next is listening. The table splits both arms at those two lines, taking each to mean the server is listening:
+
+| Window (median ms) | bp-a | bp-b |
+|---|---|---|
+| request → Pod object | 107 | 97 |
+| Pod → bound to node | 15 | 16 |
+| bound → listening (sandbox, container start and runtime boot) | **710** | 811 |
+| listening → Ready (the pod becoming routable) | 582 | **541** |
+| Ready → first byte (forward and render) | **22** | 103 |
+| **total: request → first byte** | **1690** | **1666** |
+
+**Total, paired by round:** bp-a − bp-b median **+1 ms, 95% bootstrap CI [−343, +265]**; bp-a was faster in 15 of 30 rounds. By node: `.118` 1745 vs 1650, `.169` 1679 vs 1685.
+
+**Reading.** The single executable is listening about 100 ms sooner (710 vs 811 ms from bound) and answers the first request about 80 ms sooner (22 vs 103 ms), but it then waits about 40 ms longer for the pod to become routable (582 vs 541 ms), and the totals tie. The listening → Ready window, about 540–580 ms, ends when the pod's IP and its Ready condition appear in the API. These rows cannot show when the app first accepted connections within it, because the first probe of the app's port was sent only after the pod IP appeared. Kubelet status reporting is the likely cause, but these rows do not establish it. The sandbox start cannot be separated from the runtime boot for bp-a, because its first log line is the listening line. In 4 of the 30 bp-a cycles the first byte arrived before the Ready condition was recorded; leaving those 4 out moves bp-a's Ready → first byte median from 22 to 23 ms. As in run 3, an app-side saving does not show in the total at this sample size.
+
 ## Data
 
 - `docs/benchmarks/data/bun-patch-3arm-oke-2026-11-09.jsonl`
 - `docs/benchmarks/data/bun-phase-split-oke-2026-11-09.jsonl`
 - `docs/benchmarks/data/bun-self-warm-ab-oke-2026-11-09.jsonl`
+- `docs/benchmarks/data/bun-vinext-vs-standalone-oke-2026-11-09.jsonl` (run 4; the `marker` field is `false` in every row because that page check expects a different app's page; every row answered 200)
 
 ## Limitations
 

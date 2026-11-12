@@ -25,7 +25,7 @@ import (
 
 func restrictedViolations(t *testing.T, spec *corev1.PodSpec) []string {
 	t.Helper()
-	evaluator, err := policy.NewEvaluator(policy.DefaultChecks())
+	evaluator, err := policy.NewEvaluator(policy.DefaultChecks(), nil)
 	if err != nil {
 		t.Fatalf("building the Pod Security evaluator: %v", err)
 	}

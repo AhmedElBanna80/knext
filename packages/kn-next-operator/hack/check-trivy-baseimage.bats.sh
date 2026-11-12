@@ -22,7 +22,7 @@
 # a patched point release, so a stale-cached or unpatched 1.25.x leaks a fixable
 # Go CVE into the binary and trips the gate. The remediation (and the invariant
 # this test enforces) is: the builder MUST be pinned to a specific, patched Go
-# point release (golang:1.25.N, N >= MIN_PATCH) — never a floating minor tag.
+# point release (golang:1.X.N, N >= go_floor(1.X)) — never a floating minor tag.
 #
 # This is the deterministic, offline-checkable proxy for "Trivy goes green":
 # the effective end-to-end test is the CI Trivy scan itself (see
@@ -43,11 +43,12 @@ FAILS=0
 # 12: CVE-2026-39822 (os.Root symlink following, HIGH) fixed in 1.25.12.
 # 1.26.9: CVE-2026-78667 (net/http Range DoS), CVE-2026-78669 (HTTP/2 SETTINGS flood), CVE-2026-97031 (crypto/tls ECH DoS).
 # 1.26.10 / 1.27.3: GO-2026-6809 / CVE-2026-111943 (crypto/x509).
+# 1.26.11 / 1.27.4: GO-2026-6859 (net/http MaxBytesReader header race, HTTP/1 server crash).
 # Explicit per-minor floors: a minor with no entry (1.25, 1.28 until reviewed) and a
-# patch below its minor's floor (1.27.0..1.27.2 are unpatched, fixed in 1.27.3) are
+# patch below its minor's floor (1.27.0..1.27.3 are unpatched, fixed in 1.27.4) are
 # REJECTED, never waved through as "newer".
-#   1.26 -> 10 ; 1.27 -> 3
-go_floor() { case "$1" in 1.26) echo 10 ;; 1.27) echo 3 ;; *) echo "" ;; esac; }
+#   1.26 -> 11 ; 1.27 -> 4
+go_floor() { case "$1" in 1.26) echo 11 ;; 1.27) echo 4 ;; *) echo "" ;; esac; }
 go_patched() { # <major.minor.patch>
   local maj="${1%%.*}" rest="${1#*.}"
   local min="${rest%%.*}" pat="${rest#*.}"
@@ -72,13 +73,13 @@ GO_TAG="$(printf '%s\n' "$BUILDER_LINE" | sed -E 's/.*golang:([0-9A-Za-z._-]+).*
 assert "builder Go tag is a pinned point release golang:X.Y.Z (not floating golang:X.Y)" \
   bash -c "printf '%s' '$GO_TAG' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'"
 
-# 2. The pinned point release must be >= MIN_PATCH on the 1.$MIN_MINOR line (or any newer
-#    minor), so the Go-stdlib CVEs Trivy flags are fixed in the binary.
-assert "builder Go is patched (1.26.10+ or 1.27.3+)" go_patched "$GO_TAG"
-for bad in 1.25.14 1.26.8 1.26.9 1.27.0 1.27.1 1.27.2 1.28.0; do
+# 2. The pinned point release must be >= its minor's go_floor entry (a minor with no
+#    entry is rejected), so the Go-stdlib CVEs Trivy flags are fixed in the binary.
+assert "builder Go is patched (1.26.11+ or 1.27.4+)" go_patched "$GO_TAG"
+for bad in 1.25.14 1.26.8 1.26.9 1.26.10 1.27.0 1.27.1 1.27.2 1.27.3 1.28.0; do
   assert "rejects unpatched/unreviewed Go $bad" not go_patched "$bad"
 done
-for good in 1.26.10 1.26.11 1.27.3 1.27.4; do
+for good in 1.26.11 1.26.12 1.27.4 1.27.5; do
   assert "accepts patched Go $good" go_patched "$good"
 done
 

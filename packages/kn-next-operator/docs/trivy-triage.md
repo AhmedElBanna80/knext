@@ -52,7 +52,7 @@ findings **without** weakening the gate:
 - no `.trivyignore`, no blanket ignore, no severity downgrade;
 - `--ignore-unfixed` is unchanged (it was already the policy).
 
-When a newer Go stdlib CVE lands, bump the pin (and `MIN_PATCH` in
+When a newer Go stdlib CVE lands, bump the pin (and the `go_floor` table in
 `hack/check-trivy-baseimage.bats.sh`) to the next patched release. No CVE here is
 genuinely unfixable, so **no `.trivyignore` entry is warranted**.
 

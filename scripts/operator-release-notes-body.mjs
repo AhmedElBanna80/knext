@@ -11,6 +11,9 @@
  *   - that cert-manager is required, when (and only when) the bundle carries a
  *     cert-manager `Certificate`;
  *   - the CRD API version, read from the bundle's NextApp CRD;
+ *   - the ValidatingAdmissionPolicy that confines the operator's Secret and
+ *     ConfigMap writes, and the Kubernetes 1.30 floor it brings, when (and only
+ *     when) the bundle carries one;
  *   - the upgrade order: operator and CRD first, then the CLI.
  *
  * Everything about the bundle is read from the bundle, never typed, so the notes
@@ -119,6 +122,10 @@ export function parseInstallYaml(text) {
     (d) => /^apiVersion:\s*cert-manager\.io\//m.test(d) && topLevel(d, 'kind') === 'Certificate',
   );
   const webhook = docs.some((d) => topLevel(d, 'kind') === 'ValidatingWebhookConfiguration');
+  const writePolicies = docs
+    .filter((d) => topLevel(d, 'kind') === 'ValidatingAdmissionPolicy')
+    .map((d) => /^ {2}name:\s*(\S+)\s*$/m.exec(d)?.[1])
+    .filter(Boolean);
 
   return {
     image: [...images][0],
@@ -126,6 +133,7 @@ export function parseInstallYaml(text) {
     apiVersion: `${group}/${chosen.name}`,
     certManager,
     webhook,
+    writePolicies,
   };
 }
 
@@ -158,6 +166,7 @@ export function buildOperatorBody({ tag, repo, info }) {
     info.image,
     '```',
     '',
+    ...writePolicyNotes(info.writePolicies ?? []),
     '## Compatibility',
     '',
     `- CRD API version: \`${info.apiVersion}\`.`,
@@ -165,6 +174,16 @@ export function buildOperatorBody({ tag, repo, info }) {
     '- **Upgrade order:** upgrade the operator and CRD first, then the CLI. An older operator rejects fields a newer CLI emits.',
     '',
   ].join('\n');
+}
+
+/** @param {string[]} names the bundle's ValidatingAdmissionPolicy names */
+function writePolicyNotes(names) {
+  if (names.length === 0) return [];
+  const list = names.map((n) => `\`${n}\``).join(', ');
+  return [
+    `The bundle also installs the ValidatingAdmissionPolicy ${list}, which confines the operator's own Secret and ConfigMap writes to the zone signing-key Secrets and JWKS ConfigMaps its \`NextApp\` resources own. It needs **Kubernetes 1.30 or later**: on Kubernetes 1.27 to 1.29 the policy objects fail to apply, and \`kubectl apply\` exits non-zero.`,
+    '',
+  ];
 }
 
 class UsageError extends Error {}

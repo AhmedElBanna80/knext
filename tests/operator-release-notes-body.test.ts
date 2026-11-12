@@ -92,13 +92,37 @@ metadata:
   name: kn-next-operator-validating-webhook-configuration
 `;
 
-function bundle(parts: { crd?: string; deployment?: string; cert?: string } = {}): string {
+// The write policy as kustomize renders it from config/admission: a
+// ValidatingAdmissionPolicy plus its binding (#2482).
+const POLICY_DOCS = `apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: kn-next-operator
+  name: kn-next-operator-secret-configmap-writes
+spec:
+  failurePolicy: Fail
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kn-next-operator-secret-configmap-writes
+spec:
+  policyName: kn-next-operator-secret-configmap-writes
+  validationActions:
+  - Deny
+`;
+
+function bundle(
+  parts: { crd?: string; deployment?: string; cert?: string; policy?: string } = {},
+): string {
   const docs = [
     'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: kn-next-operator-system\n',
     parts.crd ?? CRD_DOC,
     'apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: kn-next-operator-controller-manager\n',
     parts.deployment ?? DEPLOYMENT_DOC,
     parts.cert ?? CERT_DOCS,
+    parts.policy ?? POLICY_DOCS,
   ];
   return docs.join('---\n');
 }
@@ -125,6 +149,22 @@ describe('parseInstallYaml', () => {
       certManager: true,
       webhook: true,
     });
+  });
+
+  it('reads the write policy names from the bundle', () => {
+    expect(parseInstallYaml(bundle()).writePolicies).toEqual([
+      'kn-next-operator-secret-configmap-writes',
+    ]);
+  });
+
+  it('reports no write policy when the bundle has none, even if a comment names one', () => {
+    const parsed = parseInstallYaml(
+      bundle({
+        policy:
+          '# kind: ValidatingAdmissionPolicy\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n',
+      }),
+    );
+    expect(parsed.writePolicies).toEqual([]);
   });
 
   it('does not read a version-like `name:` from inside the schema', () => {
@@ -197,6 +237,35 @@ describe('buildOperatorBody', () => {
       info: { ...info, certManager: false, webhook: false },
     });
     expect(plain).not.toMatch(/cert-manager/i);
+  });
+
+  it('states the write policy and its Kubernetes 1.30 floor when the bundle carries it', () => {
+    expect(body).toContain('`kn-next-operator-secret-configmap-writes`');
+    expect(body).toMatch(/Secret and ConfigMap writes/);
+    expect(body).toMatch(/\*\*Kubernetes 1\.30 or later\*\*/);
+    expect(body).toMatch(/1\.27 to 1\.29/);
+  });
+
+  it('omits the write policy and the 1.30 floor when the bundle has no policy', () => {
+    const plain = buildOperatorBody({
+      tag: 'operator-v1.0.0',
+      repo: REPO,
+      info: { ...info, writePolicies: [] },
+    });
+    expect(plain).not.toMatch(/ValidatingAdmissionPolicy|1\.30/);
+  });
+
+  it('the real operator bundle carries the policy the notes describe', () => {
+    const kustomization = readFileSync(
+      resolve(REPO_ROOT, 'packages/kn-next-operator/config/default/kustomization.yaml'),
+      'utf8',
+    );
+    expect(kustomization).toMatch(/^- \.\.\/admission\s*$/m);
+    const policy = readFileSync(
+      resolve(REPO_ROOT, 'packages/kn-next-operator/config/admission/secret-configmap-writes.yaml'),
+      'utf8',
+    );
+    expect(policy).toMatch(/^kind: ValidatingAdmissionPolicy$/m);
   });
 
   it('states the CRD API version', () => {

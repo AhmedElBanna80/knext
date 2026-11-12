@@ -1,7 +1,7 @@
 # ADR-0047: Object storage is optional — the in-image static tier
 
 - Status: Accepted (2026-08-21; architect design gate ran pre-implementation on the row-3b brief,
-  verdict PROCEED with six conditions — `.claude/architect-design-storage.md`)
+  verdict PROCEED with six conditions, recorded in a maintainer note not in the repo)
 - Date: 2026-08-21
 - Deciders: knext architect (design gate), lead
 - Related: ADR-0006 (image optimization — amended by this ADR), ADR-0011 (asset retention /

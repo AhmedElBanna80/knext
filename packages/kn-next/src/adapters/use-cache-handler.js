@@ -53,7 +53,7 @@
  * promise); `get` returns a NEW stream every time; a `get` that arrives while a
  * `set` for the same key is pending waits for it; the handler owns eviction.
  */
-import { trackWrite } from './cache-write-registry.js';
+import { onProcessExit, trackWrite } from './cache-write-registry.js';
 
 /** Process-wide counters, shared by every copy of this module in the process. */
 const COUNTERS_KEY = Symbol.for('knext.cache.useCache.counters');
@@ -263,7 +263,7 @@ function shared(core) {
       pruneWarned: false,
       replayScriptWarned: false,
       clock: { offset: undefined, sampledAt: 0, retryAt: 0, inflight: null },
-      replay: { tags: new Map(), generation: 0, collapsed: false, run: null, timer: null },
+      replay: { tags: new Map(), generation: 0, collapsed: false, run: null, timer: null, exitArmed: false },
     };
     SHARED.set(core, state);
   }
@@ -493,12 +493,14 @@ function replayArgs(tag, record) {
 //  - OFF THE REQUEST PATH. Started by the first connection this handler gets with
 //    the breaker closed, or by a probe timer set for the moment it closes (an
 //    idle pod would otherwise never replay while other pods serve the stale
-//    entries). Never awaited by a caller; enrolled in the SIGTERM drain.
+//    entries). Never awaited by a caller. `trackWrite`d, so a drain CAN await it,
+//    but no runtime registers that drain today (ADR-0066 Amendment 9).
 //  - NO STORM. One replay at a time, REPLAY_BATCH tags per script call through
 //    `redisCall`: the first fault re-trips the breaker and stops the run, and the
 //    rest waits for the next probe, one attempt per cooldown.
 //  - PER PROCESS. A pod that restarts or scales to zero before Redis is back
 //    loses the list, and those entries stay valid until their TTL (a known limit).
+//    The process logs what it exits with (`reportTagReplayLostAtExit`, #2384).
 const REPLAY_MAX_TAGS = 1000;
 const REPLAY_BATCH = 100;
 const REPLAY_SCAN_COUNT = 100;
@@ -520,10 +522,31 @@ export function resetUseCacheTagReplay(core) {
   replay.timer = null;
 }
 
+/**
+ * The exit report (#2384): a process that exits with a backlog loses it, and
+ * those entries keep serving until their TTL. One line says so. No counter: it
+ * could only be counted inside the exit listener, after which no scrape is
+ * answered (ADR-0066 Amendment 9).
+ */
+function reportTagReplayLostAtExit(replay) {
+  if (!replayPending(replay)) return;
+  const what = replay.collapsed
+    ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
+    : `${replay.tags.size} tag(s)`;
+  console.error(
+    `[CacheHandler] exiting with ${what} of 'use cache' tag invalidations not yet replayed to Redis: ` +
+      `those entries keep serving until their TTL (at most ${maxTtlSeconds()}s)`,
+  );
+}
+
 /** Remember tags whose stamps did not reach Redis, and try to replay them. */
 function recordDroppedTags(core, list, durations) {
   if (!core.redisConfigured()) return;
   const replay = shared(core).replay;
+  if (!replay.exitArmed) {
+    replay.exitArmed = true;
+    onProcessExit(() => reportTagReplayLostAtExit(replay));
+  }
   replay.generation += 1;
   if (!replay.collapsed) {
     for (const tag of list) {
@@ -641,7 +664,7 @@ async function writeReplayBatch(core, client, args) {
     }
   }
   const fields = args.filter((_, i) => i % 2 === 0);
-  const current = await core.redisCall(() => core.command(client, 'HMGET', [key, ...fields]));
+  const current = await core.redisCall(() => core.command(client, 'HMGET', [key, ...fields]), client);
   const now = Math.round(localNowMs()) + (await clockOffset(core, client));
   const writes = [];
   for (let i = 0; i < fields.length; i++) {
@@ -650,7 +673,7 @@ async function writeReplayBatch(core, client, args) {
     const v = replayStampValue(fields[i], cur, Number(args[2 * i + 1]), now);
     if (v !== null) writes.push(fields[i], String(v));
   }
-  if (writes.length > 0) await core.redisCall(() => core.command(client, 'HSET', [key, ...writes]));
+  if (writes.length > 0) await core.redisCall(() => core.command(client, 'HSET', [key, ...writes]), client);
 }
 
 /**
@@ -674,12 +697,13 @@ async function replayCollapsedTags(core, client) {
   const pattern = `${escapeGlob(prefix)}:uc:*`;
   let cursor = '0';
   do {
-    const reply = await core.redisCall(() =>
-      core.command(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+    const reply = await core.redisCall(
+      () => core.command(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+      client,
     );
     cursor = String(reply?.[0] ?? '0');
     const keys = (Array.isArray(reply?.[1]) ? reply[1].map(String) : []).filter((k) => k !== stamps);
-    if (keys.length > 0) await core.redisCall(() => core.command(client, 'DEL', keys));
+    if (keys.length > 0) await core.redisCall(() => core.command(client, 'DEL', keys), client);
   } while (cursor !== '0');
   // A drop recorded during the sweep may have missed it: keep the collapse.
   if (replay.generation === generation) replay.collapsed = false;
@@ -690,7 +714,7 @@ async function replayCollapsedTags(core, client) {
  * @param {object} args
  * @param {string} args.kind  Next's cache kind: `default` or `remote`.
  * @param {object} args.core  The collaborators `cache-handler.js` owns:
- *   `ensureConnected()` (client or null), `redisCall(fn)` (trips the shared
+ *   `ensureConnected()` (client or null), `redisCall(fn, client)` (trips the shared
  *   breaker on a fault), `command(client, name, args)`, `keyPrefix()`,
  *   `buildId()`, `redisConfigured()` and, optionally, `retryInMs()` (how long
  *   until the breaker closes, for the tag replay's probe).
@@ -751,7 +775,7 @@ export function createUseCacheHandler({ kind, core }) {
     }
     let raw;
     try {
-      raw = await core.redisCall(() => core.command(client, 'GET', [rkey]));
+      raw = await core.redisCall(() => core.command(client, 'GET', [rkey]), client);
     } catch {
       count('error');
       return undefined;
@@ -782,8 +806,9 @@ export function createUseCacheHandler({ kind, core }) {
     if (tags.length > 0) {
       let stamps;
       try {
-        stamps = await core.redisCall(() =>
-          core.command(client, 'HMGET', [tagsKey(), ...tags.flatMap((t) => [`s:${t}`, `e:${t}`])]),
+        stamps = await core.redisCall(
+          () => core.command(client, 'HMGET', [tagsKey(), ...tags.flatMap((t) => [`s:${t}`, `e:${t}`])]),
+          client,
         );
       } catch {
         count('error');
@@ -888,7 +913,7 @@ export function createUseCacheHandler({ kind, core }) {
     });
     const ttl = Math.max(1, Math.min(Math.ceil(entry.expire), maxTtlSeconds()));
     try {
-      await core.redisCall(() => core.command(client, 'SET', [entryKey(cacheKey), envelope, 'EX', String(ttl)]));
+      await core.redisCall(() => core.command(client, 'SET', [entryKey(cacheKey), envelope, 'EX', String(ttl)]), client);
       noteAvailable();
       count('set');
     } catch (err) {
@@ -955,7 +980,7 @@ export function createUseCacheHandler({ kind, core }) {
     const record = mergeStamp(undefined, durations, 0);
     const fields = list.flatMap((tag) => stampFields(tag, record, now));
     try {
-      await core.redisCall(() => core.command(client, 'HSET', [tagsKey(), ...fields]));
+      await core.redisCall(() => core.command(client, 'HSET', [tagsKey(), ...fields]), client);
       noteAvailable();
       count('tagsUpdated');
     } catch (err) {
@@ -988,7 +1013,7 @@ export function createUseCacheHandler({ kind, core }) {
     if (!client) return 0;
     let stamps;
     try {
-      stamps = await core.redisCall(() => core.command(client, 'HMGET', [tagsKey(), ...list.map((t) => `e:${t}`)]));
+      stamps = await core.redisCall(() => core.command(client, 'HMGET', [tagsKey(), ...list.map((t) => `e:${t}`)]), client);
     } catch {
       count('error');
       return 0;

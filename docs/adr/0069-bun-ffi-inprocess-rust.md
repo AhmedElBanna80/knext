@@ -19,8 +19,7 @@
   ADR-0048 Amendment 3 (the `native/` + integrity pattern), ADR-0060 (invariant I2, execPath
   anchoring), ADR-0058 (the build × runtime cells).
 - **Supersedes:** the napi-rs, Node + Bun recommendation of the 2026-10-13 research for #2315
-  (a local note, `.claude/research/native-rust-on-bun-2026-10-13.md` §7, summarised in the issue's
-  first comment). Its measurements stand; its recommendation was overruled by the founder.
+  (a local maintainer note, summarised in the issue's first comment). Its measurements stand; its recommendation was overruled by the founder.
 - **Evidence for this ADR:** `docs/benchmarks/bun-ffi-spike-2026-10-14.md` (the spike, measured on
   Bun 1.4.2, macOS arm64). jev scores are cited per decision; they are a gut-check, not the deciding
   vote.

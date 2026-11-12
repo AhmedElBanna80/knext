@@ -30,9 +30,11 @@
   not a recipe).
 - **Covers:** #2084 / PR #2100, #2085, K1 #2065, K4 #2066, #2083, #2089, Z6 #2050, Z9 #2054,
   #2090. Release gate: #2102.
-- **Evidence:** `.claude/research/next-16-4-impact-2026-10-09.md` (Q2, Q3, Q7, T1–T5),
-  `.claude/plans/v2-sprint1-close-architect.md` (§4 task graph), `.claude/plans/v2-plan-rev4.md`
-  (§3 slot accounting, K1→K4→K5), `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
+- **Evidence:** a Next 16.4 impact study (2026-10-09; questions Q2, Q3, Q7 and tests T1–T5) and
+  the v2 plan, both maintainer notes not in the repo. What this ADR takes from the plan is stated
+  here: K1, K4 and K5 all edit `packages/kn-next/package.json` and run serially ("K1 → K4" in D1),
+  and R5 (#2041) is to put every credential workflow in one concurrency group, so the net slot
+  load never grows ("Compat budget" under Constraints). Also `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
   (wake-ahead timing), and the published `next@16.4.0` package (`dist/server/lib/cache-handlers/types.d.ts`,
   `dist/server/use-cache/use-cache-wrapper.js`, `dist/server/revalidation-utils.js`,
   `dist/server/config-shared.js`).
@@ -150,7 +152,7 @@ orders, each against a different assumption about the Next floor. jev rated the 
 - **Compat budget.** One dispatch occupies roughly one pool-hour of the **one** shared runner pool,
   which the live 1.x credential windows also use. Cap: two dispatches per agent. Sixteen queued
   dispatches once froze the merge queue. Harness edits land between credential windows. **No v2
-  credential lane exists yet.** Per the v2 plan (§3), R5 (#2041) first puts every credential workflow
+  credential lane exists yet.** Per the v2 plan (a maintainer note), R5 (#2041) first puts every credential workflow
   in one concurrency group. At 2.0 GA the v1.0 lane retires and the four 2.0 cells take the v1.3 slots.
 - **1.4.0 release gate (#2102).** Nothing ships in 1.4.0, and no `operator-v*` bundle that installs
   the KnextPlatform CRD is tagged, until all of these hold:
@@ -199,7 +201,7 @@ jev, placement: **docs now, finding and opt-in in 1.4.0 behind #2102 0.97** / al
 
 **K1 → K4.** K1 (#2065, remove the `kn-next` bin), K4 and K5 all edit
 `packages/kn-next/package.json`, and the v2 plan makes them serial: K4's row lists K1 as its
-dependency (`v2-plan-rev4.md`, "K1 → K4 → K5 are serial"). Round 1 omitted that edge.
+dependency (the v2 plan, a maintainer note: "K1 → K4 → K5 are serial"). Round 1 omitted that edge.
 
 Why this order, edge by edge:
 
@@ -716,7 +718,7 @@ plan's own tasks.
 **Part 2: v2 credential lanes, created later by the v2 plan (not by this ADR).**
 - Today no v2 credential lane exists, and none is started when K4 lands.
 - R5 (#2041) first puts every credential workflow in one concurrency group, landing between windows
-  (`v2-plan-rev4.md` §3).
+  (the v2 plan's slot accounting, a maintainer note).
 - At **2.0 GA the v1.0 lane retires**, and the four 2.0 cells take the v1.3 slots (§3, slot
   accounting). Net load never exceeds today's slot count.
 - Until those lanes complete their windows (14 consecutive green independent runs per cell), docs,
@@ -726,7 +728,7 @@ plan's own tasks.
 jev, round 2: **smoke now with an explicit budget including triage re-dispatches and one full run
 for #2089; credential lanes later per R5 and the 2.0 GA slot swap 1.00** / "existing slots, no extra
 dispatch" 0.00 / a full four-cell run now 0.00 (confidence 1.00). The score adds nothing to the
-evidence: `test-e2e-deploy.yml` inputs (`:69-206`), the smoke manifest, and `v2-plan-rev4.md` §3.
+evidence: `test-e2e-deploy.yml` inputs (`:69-206`), the smoke manifest, and the v2 plan's slot accounting (a maintainer note).
 Round 1's choice of runs before K4 (one triage smoke, then one smoke per remaining stable cell, 0.95)
 stands. Only its budget and its credential wording change.
 
@@ -938,6 +940,7 @@ on, the amendment governs; for D2, read D2 current text.
     `revalidateTag(tag, profile)`. Filed as #2122 (milestone v2.0, `priority:P2`).
 13. **ISR outage miss on kind** (Amendment 8): a kind test with Redis down shows no pod serves an
     ISR entry from its own memory, and measures the render rate during the outage. Filed as #2883.
+    Done 2026-11-10: see Amendment 8, Proof.
 
 ## Amendment 1 (2026-10-11): K4 keeps the `adapterPath` shim; the gate is the D4 smoke runs
 
@@ -1388,9 +1391,13 @@ it is unchanged. The 1.x line on `main` is unchanged.
 | Bounded-TTL fallback | A middle ground | A second outage mode to reason about; still stale within the bound |
 
 **Consequences.**
-- Every ISR request renders during a Redis outage. The extra origin load is **not measured**: there
-  is no render-amplification number yet, and no bound on several pods rendering the same page at
-  once. Measuring it is part of the open kind action item below.
+- Every ISR request renders during a Redis outage. Measured on kind (2026-11-10, the
+  `runtime-redis-cache-kind-e2e.yml` outage step, eight sequential reads of an ISR page
+  backed by `unstable_cache`): every read re-rendered (8 distinct values for 8 reads), at 1.6–1.9
+  renders/s, 527–617 ms per read, across turbopack and vinext on node and bun. The step does not
+  record how many pods served the reads (the app allows up to two). That is a sequential rate on a
+  CI runner, not a production bound: nothing yet bounds several pods rendering the same page at
+  once.
 - Amendment 4 replay is unchanged. Tags whose invalidation did not reach Redis during the outage are
   still kept per process and replayed, Redis first and then the edge, once the breaker closes.
   `revalidateTag` still runs over the pod map, which now holds no ISR entries while Redis is
@@ -1407,6 +1414,74 @@ it is unchanged. The 1.x line on `main` is unchanged.
 configured but down: a set then get misses, an image entry misses, and an entry already in pod memory
 is not served. With no Redis configured, the in-memory store still serves. Each guard is
 mutation-proved: removing the `get` guard reds the held-entry case, and removing both guards reds the
-set-then-get case. Open action item 13 (#2883): a kind test with Redis down that shows ISR no longer serves a pod-local entry and
-measures the render rate during the outage.
+set-then-get case. Action item 13 (#2883) is done: the outage step of
+`.github/workflows/runtime-redis-cache-kind-e2e.yml` scales Redis to 0, reads the page eight times,
+and fails unless all eight are distinct renders and at least eight handler MISS lines are logged
+across the app's pods during the outage (an aggregate count, not a per-read or per-pod check). It
+then checks that an invalidation made during the outage is replayed to Redis once Redis is back, and
+that two consecutive reads after recovery return the same value. It is green on all four cells. Restoring the pod-local serve in `cache-handler.js` turns it red
+at that step on three cells ("1 distinct values for 8 reads"). The fourth (vinext × bun) failed
+before the outage step, at MinIO setup, twice, so that cell's mutation result is inconclusive.
 
+
+## Amendment 9 (2026-11-09, Proposed): a replay backlog a process exits with is reported, not replayed (#2384)
+
+**Context.** The Amendment 4 (ISR) and Amendment 5 (`'use cache'`) replay lists live in the process.
+A pod that scales to zero or restarts before Redis is back loses them, and that loss was silent:
+entries stayed stale until their TTL with no line anywhere. Under Knative this is the ordinary path,
+since any outage longer than the scale-down delay hits it. #2384 asked for one bounded replay
+attempt in the SIGTERM drain, plus a log line and a count for whatever is still pending.
+
+**Correction to the record.** D-section text at :346 and :355, Amendment 4 ("enrolled in the SIGTERM
+drain registry") and Amendment 5 ("Enrolled in the SIGTERM drain") overstate it. The replay run is
+`trackWrite`'d, so a drain *can* await it, but `drainCacheWrites` has no production caller. On the
+node target the handler runs in Next's standalone child process, which the supervisor's
+`shutdown.ts` drains cannot see. On the self-contained target the preload installs no cache drain.
+What actually protects a write in flight at SIGTERM is MULTI/EXEC atomicity and Next's own drain
+time before `process.exit`.
+
+**Decision.** Report the loss; do not add a replay attempt at shutdown.
+- `cache-write-registry.js` gains `onProcessExit(report)`. Reporters sit in one `globalThis` set
+  (`Symbol.for('knext.core.cache.exitReports')`, ADR-0027), run by one `process.once('exit')`
+  listener per process, synchronously, each one guarded.
+- The ISR handler arms its reporter on every recorded skip (the set dedups it, and the call restores a removed listener); the `'use cache'` handler arms once per core. On exit with anything
+  still pending, each handler logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
+  count (or "collapsed") and the TTL bound. No metric (see below).
+- The `exit` event fires whenever a knext runtime ends the process through `process.exit` (SIGKILL is the exception, below): Next's own `cleanup()` ends in
+  `process.exit(143)` on SIGTERM (`process.exit(130)` on SIGINT) (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
+  cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
+  preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`
+  listener; no knext runtime ships that way. A SIGKILL (the kubelet after
+  `terminationGracePeriodSeconds`, an OOM kill) runs none either, so **no line does not prove
+  nothing was lost**: a pod killed that way loses its backlog silently, as before.
+
+**Options considered.**
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Exit report (chosen, jev 0.89)** | Fires on every `process.exit`, which is how a knext runtime ends short of a SIGKILL; no signal handler added | No last replay attempt; a bare default-disposition SIGTERM runs no `exit` listener |
+| SIGTERM listener in the handler (jev 0.10) | One more replay chance | Suppresses default termination on a runtime without Next's handler |
+| Drain in the supervisor (jev 0.01) | Uses the existing drain hook | Cannot see the child process's lists on the node target |
+
+A replay attempt at drain changes nothing while the breaker is still open, which is the case this
+report is about. The probe timer keeps firing during Next's own drain, so a Redis that comes back in
+that window is still replayed. One seam was not taken: the self-contained preload already runs a
+SIGTERM listener in the handler's process (`standalone-self-contained-supervisor.cjs`), and a
+`globalThis` "replay now" kick from it would add one attempt there without suppressing anything.
+It is left as a follow-up, because it covers only that target and only a Redis that is already back.
+
+**No counter.** #2384 asked for one. A count taken in the `exit` listener can never be scraped (the
+process answers no request after it), so a dashboard would always read zero while tags are lost.
+Dropped after code review showed that (jev: drop 0.51, gauge 0.31, keep 0.18; an earlier vote for
+keep assumed it was merely rarely seen). The log line is the record. A gauge of the outstanding
+backlog, readable while the outage lasts, is the follow-up if a metric is wanted.
+
+**Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (11 cases). Each
+positive case asserts exactly one registry listener is installed on `process` and calls it; the
+no-Redis and nothing-recorded cases assert no reporter was armed; the two "replayed before exit"
+cases arm a reporter, assert the replay ran and that the exit logs nothing; one case removes the
+listener and checks the next ISR arm puts it back. Mutation proof, each mutation killed by the suite (checked by exit code): no arm on an invalidation, no arm on a delete, an
+ISR report with nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never
+registering, a replayed backlog reported, no listener installed, no reinstall. Adding the listener on
+every arm is not visible under Bun, which drops a duplicate `once` for the same function; Node keeps
+it (measured: 2 listeners on Node, 1 on Bun), which is why the code checks first.

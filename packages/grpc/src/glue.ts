@@ -201,6 +201,29 @@ export function wasNotSent(err: unknown): boolean {
   );
 }
 
+/**
+ * Refresh every cached read of a service after a write that may have committed.
+ *
+ * In a Server Action this is `updateTag` (the caller reads its own write). Next
+ * allows `updateTag` only there, and a generated action called from a Route
+ * Handler would otherwise throw AFTER the write committed, reporting a
+ * successful write as a failure. Outside an action, `revalidateTag(tag,
+ * { expire: 0 })` expires the entries immediately instead. The two functions
+ * are passed in from `next/cache` by the generated code, so this module does
+ * not import Next.js.
+ */
+export function refreshAfterWrite(
+  tag: string,
+  updateTag: (tag: string) => void,
+  revalidateTag: (tag: string, profile: { expire: number }) => void,
+): void {
+  try {
+    updateTag(tag);
+  } catch {
+    revalidateTag(tag, { expire: 0 });
+  }
+}
+
 function invalid(schema: DescMessage, err: unknown): ConnectError {
   return new ConnectError(
     `the request does not match ${schema.typeName}: ${(err as Error).message}`,
@@ -281,3 +304,59 @@ export function decodeRequest<Desc extends DescMessage>(
  * expire within an hour (the shared cache's own cap is the backstop).
  */
 export const QUERY_CACHE_LIFE = { stale: 60, revalidate: 300, expire: 3600 } as const;
+
+/**
+ * The cache life of a transient error result (see {@link cacheableCall}): short,
+ * so a cold start's Unavailable is not served for the data's five minutes.
+ */
+export const QUERY_ERROR_CACHE_LIFE = { stale: 0, revalidate: 1, expire: 2 } as const;
+
+/** Codes that say "try again", not "this is the answer": cached only briefly. */
+const TRANSIENT_CODES: ReadonlySet<Code> = new Set([
+  Code.Unavailable,
+  Code.DeadlineExceeded,
+  Code.ResourceExhausted,
+  Code.Aborted,
+  Code.Internal,
+  Code.Unknown,
+  Code.Canceled,
+  Code.DataLoss,
+]);
+
+/** A generated query's cached outcome: the response, or the function's error. */
+export type CachedResult<T> =
+  | { readonly ok: T }
+  | { readonly error: { readonly code: Code; readonly message: string } };
+
+/**
+ * Run a generated query's call INSIDE its `'use cache'` function. In a
+ * production build Next.js replaces any error thrown there with a generic one,
+ * so the function's code (NotFound, PermissionDenied, ...) would never reach
+ * the caller. A ConnectError is returned as a value instead and rethrown by
+ * {@link unwrapCached} outside the cache. A definitive answer is cached like
+ * data (a write refreshes it); a transient one gets {@link QUERY_ERROR_CACHE_LIFE}
+ * through `cacheLife`, the shortest life winning, as does a refusal the zone
+ * raised before sending (a configuration fault). Anything else is not a
+ * function's answer and is thrown as before, never cached.
+ */
+export async function cacheableCall<T>(
+  call: () => Promise<T>,
+  cacheLife: (profile: { stale: number; revalidate: number; expire: number }) => void,
+): Promise<CachedResult<T>> {
+  try {
+    return { ok: await call() };
+  } catch (err) {
+    if (!(err instanceof ConnectError)) throw err;
+    // A refusal raised in the zone before any request left (a missing service
+    // URL, signing key or token) is a configuration fault, not the function's
+    // answer: keep its code, but never pin it.
+    if (TRANSIENT_CODES.has(err.code) || wasNotSent(err)) cacheLife(QUERY_ERROR_CACHE_LIFE);
+    return { error: { code: err.code, message: err.rawMessage } };
+  }
+}
+
+/** Outside the cache: the response, or the function's error as a ConnectError. */
+export function unwrapCached<T>(result: CachedResult<T>): T {
+  if ('error' in result) throw new ConnectError(result.error.message, result.error.code);
+  return result.ok;
+}

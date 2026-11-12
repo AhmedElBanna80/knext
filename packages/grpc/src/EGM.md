@@ -30,7 +30,8 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
 
 - `CONFIG_FILE` (`knext.grpc.json`), `LANGUAGES` (`go`, `rust`), `Language`,
   `FunctionEntry`, `GrpcConfig` (`proto`, `out`, `deadlineMs`,
-  `gatewayTimeoutSeconds`, optional `authorize`, `functions`), `DEFAULT_CONFIG`
+  `gatewayTimeoutSeconds`, optional `authorize`, optional `deployedTagTemplate`,
+  `functions`), `DEFAULT_CONFIG`
   (`proto`, `src/generated/grpc`, 10000 ms, 300 s), `GrpcUsageError`.
 - `AUTHORIZE_EXTENSIONS`, `exportsAuthorize(source)`, `checkFunctionName(name)`,
   `urlEnvFor(name)` (`<NAME>_SERVICE_URL`), `SERVICE_PROTO_VERSION_SUFFIX`,
@@ -57,7 +58,12 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   (10000), `DEFAULT_GATEWAY_TIMEOUT_SECONDS` (300), `methodKind(method)`,
   `checkBudget(deadlineMs, gatewayTimeoutMs)`.
 - `baseline.ts`: `DeployedRef`, `DeployedBaselineSource`,
-  `BaselineUnavailableError`, `resolveBaseline(spec, deployed)`.
+  `BaselineUnavailableError`, `resolveBaseline(spec, deployed)`,
+  `ServedVersionReader`, `DEFAULT_DEPLOYED_TAG_TEMPLATE` (`proto/v{version}`),
+  `DeployedBaselineOptions`, `checkTagTemplate(template)`,
+  `createDeployedBaselineSource(opts)`. `RunGenerateOptions` also takes
+  `servedVersionReader` and `context`; `RunIo` (`cli.ts`) carries the
+  `servedVersionReader` core supplies to `generate`.
 - `buf.ts`: `BUF_VERSION` (`1.73.0`), `BUF_SHA256` (per-platform npm package and
   sha256), `BufPlatform`, `BufIntegrityError`, `bufPlatform()`,
   `verifyBufBinary(path, expected)`, `ResolveOptions`, `resolveBufBinary(opts)`,
@@ -86,7 +92,8 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
 
 - `deploy-function.ts`: `PreflightResult` (`verdict`: `ok` | `skew` | `blocked`),
   `DeployHost` (`preflight`, `apply`), `DEPLOY_USAGE`,
-  `formatPreflightFailure(outcome)`, `DeployFunctionArgs`, `deployFunction(args)`.
+  `formatPreflightFailure(outcome)`, `contractVersionFor(protoDir, name)`,
+  `DeployFunctionArgs`, `deployFunction(args)`.
 - `backend-service.ts`: `BACKEND_SERVICE_API_VERSION` (the same group and version
   as `NextApp`), `BACKEND_SERVICE_KIND` (`BackendService`),
   `BackendServiceScalingInput`, `BackendServiceInput`, `BackendServiceCR`,
@@ -105,9 +112,11 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   `runningOnBun()`, `TransportChoice`, `chooseTransport(opts)`,
   `defineFunctionClient(def, deps)`. It re-exports from `glue.ts`:
   `Authorize`, `AuthorizeContext`, `Principal`, `TokenMinter`, `TokenRequest`,
-  `PUBLIC_SUBJECT`, `QUERY_CACHE_LIFE`, `userSubject`, `subjectSub`,
+  `PUBLIC_SUBJECT`, `QUERY_CACHE_LIFE`, `QUERY_ERROR_CACHE_LIFE`, `CachedResult`,
+  `cacheableCall`, `unwrapCached`, `userSubject`, `subjectSub`,
   `servedVersion`, `registerTokenMinter`, `mintCallToken`, `wasNotSent`,
-  `normalizeRequest`, `encodeRequest`, `decodeRequest`; and from `signer.ts`:
+  `refreshAfterWrite`, `normalizeRequest`, `encodeRequest`, `decodeRequest`;
+  and from `signer.ts`:
   `SIGNING_KEY_DIR`, `ZONE_ISSUER_ENV`, `TOKEN_TTL_SECONDS`,
   `ZoneSignerOptions`, `audienceFromServiceUrl`, `contractKid`,
   `createZoneTokenSigner`. `markNotSent` and `defaultZoneSigner` are not
@@ -116,8 +125,11 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   (`public`), `userSubject(authorize, ctx)`, `subjectSub(subject)`,
   `servedVersion(fn, envName, zoneVersion, env)`, `TokenRequest`, `TokenMinter`,
   `registerTokenMinter(minter)`, `mintCallToken(request)`, `markNotSent(err)`,
-  `wasNotSent(err)`, `normalizeRequest`, `encodeRequest`, `decodeRequest`,
-  `QUERY_CACHE_LIFE` (`stale: 60, revalidate: 300, expire: 3600`).
+  `wasNotSent(err)`, `refreshAfterWrite(tag, updateTag, revalidateTag)`,
+  `normalizeRequest`, `encodeRequest`, `decodeRequest`,
+  `QUERY_CACHE_LIFE` (`stale: 60, revalidate: 300, expire: 3600`),
+  `QUERY_ERROR_CACHE_LIFE` (`stale: 0, revalidate: 1, expire: 2`),
+  `CachedResult`, `cacheableCall(call, cacheLife)`, `unwrapCached(result)`.
 - `signer.ts`: `SIGNING_KEY_DIR` (`/var/run/knext/signing-key`),
   `ZONE_ISSUER_ENV` (`KNEXT_ZONE_ISSUER`), `TOKEN_TTL_SECONDS` (60),
   `ZoneSignerOptions`, `audienceFromServiceUrl(fn, urlEnv, url)`,
@@ -183,6 +195,18 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   this gap).
 - A `deployed:<ns>/<name>` baseline with no `DeployedBaselineSource` throws
   `BaselineUnavailableError` rather than passing (`baseline.ts:resolveBaseline`).
+- `createDeployedBaselineSource` reads the served version only through the
+  injected `ServedVersionReader` and returns `<absolute common git dir>#format=git,tag=<tag>`
+  plus `,subdir=<cwd relative to the repo root>` when the workspace is not the
+  root (the same workspace buf lints, never the `proto` setting). It throws
+  `BaselineUnavailableError` on a reader failure, an empty served version, a
+  non-semver version, a rendered tag `git check-ref-format` rejects, a cwd
+  outside git, a missing tag, or a git dir or workspace path containing a
+  comma, `#` or whitespace (the rendered tag is checked for those first); git
+  missing or older than 2.31 is reported as such. A tag template must hold `{version}` exactly once,
+  may hold `{name}`, and no other placeholder or comma, `#` or whitespace
+  (`baseline.ts:createDeployedBaselineSource`, `checkTagTemplate`). The tag is a
+  locator only: nothing verifies the tagged tree against the running image.
 
 ### Generated-call policy (runtime)
 
@@ -208,10 +232,19 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   a string token. A token must be 1-8192 visible ASCII characters
   (`runtime.ts:tokenFor`).
 - On a unary call, errors raised before the transport call (headers,
-  idempotency key, endpoint, first token) are marked with `markNotSent`
+  idempotency key, endpoint, first token) are marked with `markNotSent`, and
+  so is a token refused on a read's retry, an attempt that never left
   (`runtime.ts:defineFunctionClient`); a stream's pre-send errors are not. A
-  generated action refreshes its service tag unless `wasNotSent(err)`
-  (`glue-plugin.ts:emitAction`).
+  generated action refreshes its service tag unless `wasNotSent(err)`, through
+  `refreshAfterWrite` (`glue-plugin.ts:emitAction`). That helper calls `updateTag`
+  and, when it throws (outside a Server Action), falls back to
+  `revalidateTag(tag, { expire: 0 })` (`glue.ts:refreshAfterWrite`).
+- A generated query calls its function through `cacheableCall` inside its
+  `'use cache'` function and rethrows with `unwrapCached` outside it, because
+  Next.js hides errors thrown in a cache scope in production builds. A
+  definitive ConnectError is cached like data; a transient code or a not-sent
+  refusal gets `QUERY_ERROR_CACHE_LIFE`; any other error is thrown, never
+  cached (`glue.ts:cacheableCall`, `glue-plugin.ts:emitQuery`).
 - `mintCallToken` uses the minter registered with `registerTokenMinter`, else
   `defaultZoneSigner()`, and refuses a returned token that is not 1-8192
   visible ASCII characters (`Unauthenticated`).
@@ -273,6 +306,14 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   verdict other than `ok`. `--dry-run` prints the CR to stdout and writes no
   file. Otherwise, without a `host`, it exits 1. This package never spawns
   kubectl itself (`deploy-function.ts` header).
+- Without `--proto-version`, `deployFunction` sets `protoVersion` to the
+  `(knext.v1.contract_version)` of `functions/<name>/proto` (`contractVersionFor`:
+  every `.proto` declaring `(knext.v1.function) = "<name>"`; files that disagree,
+  or one with no version, are a usage error). A zone `proto/` ahead of that
+  version, or a zone version that is not semver, is refused before any cluster
+  call; a function ahead of its zone is accepted. With no contract under
+  `functions/<name>/proto` declaring the function it sets nothing and warns on stderr
+  (not under `--dry-run`) that the zone will refuse calls.
 - `backendSpecDigest` hashes only `BACKEND_SPEC_PINNED_FIELDS` and needs a
   non-empty `spec.image`. It drops object members that are null, `""`, `false`,
   an empty list or an empty object, keeps list order, sorts keys by UTF-8

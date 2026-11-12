@@ -32,7 +32,12 @@ const ISSUER = 'knext:zone:shop/storefront';
 const AUDIENCE = 'knext:fn:shop/orders';
 const AUTHORIZE = Symbol.for('knext.test.zoneSignerGlue.authorize');
 
-mock.module('next/cache', () => ({ updateTag: () => {}, cacheTag: () => {}, cacheLife: () => {} }));
+mock.module('next/cache', () => ({
+  updateTag: () => {},
+  revalidateTag: () => {},
+  cacheTag: () => {},
+  cacheLife: () => {},
+}));
 mock.module('server-only', () => ({}));
 mock.module('@getknext/grpc/runtime', () => runtime);
 

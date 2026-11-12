@@ -263,6 +263,13 @@ const NOT_REDIS_RECEIVERS: Record<
       why: 'the pino logger',
     },
   },
+  'packages/kn-next/src/adapters/self-warm.ts': {
+    log: {
+      bindings: ['log: SelfWarmLog;'],
+      commands: ['info'],
+      why: 'an injected logger (the supervisor pino logger)',
+    },
+  },
   'packages/kn-next/src/adapters/sandbox-fetch-debug.cjs': {
     dc: {
       bindings: ["const dc = require('node:diagnostics_channel');"],
@@ -398,7 +405,7 @@ const FORWARDERS: Record<string, Record<string, string>> = {
       'redisCommand itself (ioredis branch): every caller passes a literal, scanned at the call site',
     'return await client.send(name, args.map(String));':
       'redisCommand itself (native branch): same',
-    'return { send: (name, args) => redisCall(() => redisCommand(client, name, args)) };':
+    'return { send: (name, args) => redisCall(() => redisCommand(client, name, args), client) };':
       "the CDN purger's client adapter: purger.js's own client.send('SET', …) is scanned",
   },
   'packages/kn-next/src/adapters/cdn-purge/purger.js': {

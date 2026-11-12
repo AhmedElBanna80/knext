@@ -264,7 +264,7 @@ const REPLAY = [
     subject: 'handler',
     claim: "the fallback's write bypasses the breaker (a dead link would not trip it)",
     anchor:
-      "  if (writes.length > 0) await core.redisCall(() => core.command(client, 'HSET', [key, ...writes]));",
+      "  if (writes.length > 0) await core.redisCall(() => core.command(client, 'HSET', [key, ...writes]), client);",
     replacement: "  if (writes.length > 0) await core.command(client, 'HSET', [key, ...writes]);",
   },
 ];

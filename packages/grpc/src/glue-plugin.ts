@@ -14,8 +14,9 @@
  *     or a route handler. Never cached, never an action.
  * - `<file>_knext_actions.ts` (`'use server'`): a **Server Action** per other
  *   unary RPC. It runs authorize() first (the fail-closed end-user check),
- *   calls the function with the caller's idempotency key, then `updateTag`s
- *   the service's tag so every cached read of the service is refreshed.
+ *   calls the function with the caller's idempotency key, then refreshes the
+ *   service's tag (`refreshAfterWrite`: `updateTag` in a Server Action,
+ *   `revalidateTag` elsewhere) so every cached read of the service is refreshed.
  *
  * Refused, with the RPC named, and nothing written:
  * - an RPC that does not state `(knext.v1.auth)`, or states anything but
@@ -322,6 +323,9 @@ function emitQuery(ctx: FileCtx, p: PlannedMethod): void {
   const life = ctx.imports.add(RUNTIME_MODULE, 'QUERY_CACHE_LIFE', '$QUERY_CACHE_LIFE');
   const cacheLife = ctx.imports.add('next/cache', 'cacheLife', '$cacheLife');
   const cacheTag = ctx.imports.add('next/cache', 'cacheTag', '$cacheTag');
+  const cacheable = ctx.imports.add(RUNTIME_MODULE, 'cacheableCall', '$cacheableCall');
+  const unwrap = ctx.imports.add(RUNTIME_MODULE, 'unwrapCached', '$unwrapCached');
+  const result = ctx.imports.add(RUNTIME_MODULE, 'CachedResult', 'CachedResult', true);
   const client = clientFor(ctx, method);
   const who =
     p.auth === 'user' ? 'the signed-in user (authorize() runs first)' : 'anyone (AUTH_PUBLIC)';
@@ -335,17 +339,19 @@ function emitQuery(ctx: FileCtx, p: PlannedMethod): void {
     ' */',
     `export async function ${name}(request: ${initShape}<typeof ${input}>): Promise<${output}> {`,
     `  const subject = ${subjectExpr(ctx, p, 'read')};`,
-    `  return ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request));`,
+    `  return ${unwrap}(await ${name}$cached(subject, ${servedVersionExpr(ctx)}, ${encode}(${input}, request)));`,
     '}',
     '',
-    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${output}> {`,
+    `async function ${name}$cached(subject: string, protoVersion: string, request: string): Promise<${result}<${output}>> {`,
     '  "use cache";',
     `  ${cacheLife}(${life});`,
     `  ${cacheTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,
     '  // protoVersion is part of the cache key only: a function rollout is a new entry.',
     '  void protoVersion;',
     `  const token = async () => ${mintExpr(ctx, p, 'subject')};`,
-    `  return ${client}.${name}(${decode}(${input}, request), { token });`,
+    "  // The function's error is returned, not thrown: Next.js hides errors thrown",
+    '  // in a cache scope in production builds, and the caller needs its code.',
+    `  return ${cacheable}(() => ${client}.${name}(${decode}(${input}, request), { token }), ${cacheLife});`,
     '}',
     '',
   );
@@ -394,6 +400,8 @@ function emitAction(ctx: FileCtx, p: PlannedMethod): void {
   const normalize = ctx.imports.add(RUNTIME_MODULE, 'normalizeRequest', '$normalizeRequest');
   const wasNotSent = ctx.imports.add(RUNTIME_MODULE, 'wasNotSent', '$wasNotSent');
   const updateTag = ctx.imports.add('next/cache', 'updateTag', '$updateTag');
+  const revalidateTag = ctx.imports.add('next/cache', 'revalidateTag', '$revalidateTag');
+  const refresh = ctx.imports.add(RUNTIME_MODULE, 'refreshAfterWrite', '$refreshAfterWrite');
   const client = clientFor(ctx, method);
   // Every check that can refuse the call runs BEFORE the try: a refusal there
   // provably sent nothing, so it refreshes nothing. From the call on, a failure
@@ -419,7 +427,7 @@ function emitAction(ctx: FileCtx, p: PlannedMethod): void {
     `    mayHaveCommitted = !${wasNotSent}(err);`,
     '    throw err;',
     '  } finally {',
-    `    if (mayHaveCommitted) ${updateTag}(${JSON.stringify(serviceTag(ctx.fn, method))});`,
+    `    if (mayHaveCommitted) ${refresh}(${JSON.stringify(serviceTag(ctx.fn, method))}, ${updateTag}, ${revalidateTag});`,
     '  }',
     '}',
     '',

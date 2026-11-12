@@ -38,6 +38,13 @@ permissions:
   contents: read
   pull-requests: read
 
+# A new push to a pull request cancels that PR's superseded run of this
+# workflow. Any other event (push, merge_group, schedule, dispatch) gets its own
+# group from the run id, so it is never cancelled or queued behind another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   changeset-required:
     name: Changeset required for shipped-surface changes

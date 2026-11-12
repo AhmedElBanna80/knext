@@ -139,45 +139,45 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'client.zscanBufferStream(key) in cache-handler.js goes unseen (two suffixes)',
     subject: 'cacheHandler',
-    anchor: '  const keys = await redisCall(() => client.smembers(tKey));',
+    anchor: '  const keys = await redisCall(() => client.smembers(tKey), client);',
     replacement:
-      '  const keys = await redisCall(() => client.smembers(tKey));\n  client.zscanBufferStream(tKey);',
+      '  const keys = await redisCall(() => client.smembers(tKey), client);\n  client.zscanBufferStream(tKey);',
   },
   {
     id: 'R4-I2',
     expect: 'red',
     claim: 'client.sscanBufferStream(key, { match }) in cache-handler.js goes unseen',
     subject: 'cacheHandler',
-    anchor: '  const keys = await redisCall(() => client.smembers(tKey));',
+    anchor: '  const keys = await redisCall(() => client.smembers(tKey), client);',
     replacement:
-      "  const keys = await redisCall(() => client.smembers(tKey));\n  client.sscanBufferStream(tKey, { match: 'x:*' });",
+      "  const keys = await redisCall(() => client.smembers(tKey), client);\n  client.sscanBufferStream(tKey, { match: 'x:*' });",
   },
   {
     id: 'R4-I3',
     expect: 'red',
     claim: 'a zero-argument client.zscanStream() in cache-handler.js is dropped as arity-safe',
     subject: 'cacheHandler',
-    anchor: '  const keys = await redisCall(() => client.smembers(tKey));',
+    anchor: '  const keys = await redisCall(() => client.smembers(tKey), client);',
     replacement:
-      '  const keys = await redisCall(() => client.smembers(tKey));\n  client.zscanStream();',
+      '  const keys = await redisCall(() => client.smembers(tKey), client);\n  client.zscanStream();',
   },
   {
     id: 'R4-I4',
     expect: 'red',
     claim: 'a client-only command (client.hgetdel) in cache-handler.js goes unseen',
     subject: 'cacheHandler',
-    anchor: '  const keys = await redisCall(() => client.smembers(tKey));',
+    anchor: '  const keys = await redisCall(() => client.smembers(tKey), client);',
     replacement:
-      "  const keys = await redisCall(() => client.smembers(tKey));\n  client.hgetdel(tKey, 'FIELDS', '1', 'f');",
+      "  const keys = await redisCall(() => client.smembers(tKey), client);\n  client.hgetdel(tKey, 'FIELDS', '1', 'f');",
   },
   {
     id: 'R4-I5',
     expect: 'red',
     claim: "ioredis's send_command issuer in cache-handler.js goes unseen",
     subject: 'cacheHandler',
-    anchor: '  const keys = await redisCall(() => client.smembers(tKey));',
+    anchor: '  const keys = await redisCall(() => client.smembers(tKey), client);',
     replacement:
-      "  const keys = await redisCall(() => client.smembers(tKey));\n  client.send_command('UNLINK', tKey);",
+      "  const keys = await redisCall(() => client.smembers(tKey), client);\n  client.send_command('UNLINK', tKey);",
   },
   {
     id: 'R4-S9',

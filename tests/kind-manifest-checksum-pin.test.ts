@@ -46,6 +46,7 @@ const KNATIVE_SCRIPT = 'scripts/kind-manifests/apply-knative-kourier.sh';
 const PIN_SCRIPT = 'scripts/kind-manifests/pin-known-images.sh';
 const DIGEST_TABLE = 'scripts/kind-manifests/image-digest-pins.json';
 const NETPOL_DRILL_SCRIPT = 'packages/kn-next-operator/test/networkpolicy-enforcement-drill.sh';
+const CALICO_SCRIPT = 'scripts/kind-manifests/apply-calico.sh';
 const SZPG_PROFILE_B_SCRIPT = 'packages/kn-next-operator/test/e2e/szpg/setup-profile-b.sh';
 
 function gitLsFiles(...pathspecs: string[]): string[] {
@@ -470,7 +471,7 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(offenders.length).toBeGreaterThan(0);
   });
 
-  it('#1716 round 2: the SAME fixture stays clean when poison_tl declares \`local tl\` (a real function-local write, correctly excluded)', () => {
+  it('#1716 round 2: the SAME fixture stays clean when poison_tl declares `local tl` (a real function-local write, correctly excluded)', () => {
     const file = `${D}provision-app.sh`;
     const text = readTracked(file);
     const anchor = 'cmd_destroy() {';
@@ -1498,18 +1499,30 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(firstApplyIdx).toBeGreaterThan(lastShaIdx);
   });
 
-  it('the NetworkPolicy-enforcement drill checksum-verifies AND image-digest-pins Calico before applying it', () => {
-    // #1413 review round 2, finding 4: the describe-block title above claims
-    // "image-digest pinned" for every manifest this file covers, but until
-    // this test the drill only checksummed the Calico MANIFEST — Calico's
-    // three images (docker.io/calico/{cni,node,kube-controllers}:v3.28.2)
-    // stayed tag-only, making the title's claim false for this one case.
-    const text = readFileSync(join(ROOT, NETPOL_DRILL_SCRIPT), 'utf8');
+  it('the NetworkPolicy-enforcement drill installs Calico through the shared script', () => {
+    const drill = readFileSync(join(ROOT, NETPOL_DRILL_SCRIPT), 'utf8');
+    expect(drill).toContain('/scripts/kind-manifests" && pwd)/apply-calico.sh"');
+  });
+
+  it('only the shared script fetches Calico: no tracked shell script carries its own copy', () => {
+    const copies = SHELL_SOURCES().filter(
+      (f) =>
+        f !== CALICO_SCRIPT && readFileSync(join(ROOT, f), 'utf8').includes('projectcalico/calico'),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  it('the shared Calico script checksum-verifies AND image-digest-pins Calico before applying it', () => {
+    // #1413 review round 2, finding 4: Calico's three images
+    // (docker.io/calico/{cni,node,kube-controllers}:v3.28.2) are tag-only, so
+    // the manifest checksum alone would leave them unpinned.
+    const text = readFileSync(join(ROOT, CALICO_SCRIPT), 'utf8');
     expect(text).toContain('curl -fsSL');
     expect(text).toMatch(/sha256sum -c/);
     expect(text).toMatch(/pin-known-images\.sh"[^\n]*--expect \d+/);
     const shaIdx = text.indexOf('sha256sum -c');
-    const pinIdx = text.indexOf('pin-known-images.sh');
+    // The call, not the header comment that names the script.
+    const pinIdx = text.indexOf('pin-known-images.sh" "$OUT" --expect 3');
     const applyIdx = text.indexOf('kubectl apply -f');
     expect(shaIdx).toBeGreaterThan(-1);
     expect(pinIdx).toBeGreaterThan(shaIdx);

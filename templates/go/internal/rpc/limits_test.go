@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -47,21 +48,47 @@ func gzipBomb(t *testing.T, budget int) (body []byte, inflated int64) {
 	return bytes.Repeat(member.Bytes(), n), inflated
 }
 
-// reportedSize is the inflated size connect-go reports when it refuses an
-// oversized message: the bytes it decompressed before giving up.
+// reportedSize is the inflated size connect-go before v2.0.2 reports when it
+// refuses an oversized message: the bytes it decompressed, including the rest
+// it inflated and discarded after passing the limit.
 var reportedSize = regexp.MustCompile(`message size (\d+) is larger than configured max`)
+
+// stoppedAtMax is the refusal connect-go v2.0.2 and later sends instead: it
+// stops decompressing once it has read one byte past the limit, so the
+// refusal names only the limit, and the decompressed bytes are the limit plus
+// one. A limit above MaxRequestBytes fails the caller's bound.
+var stoppedAtMax = regexp.MustCompile(`^message is larger than configured max (\d+)$`)
 
 func inflatedBytes(t *testing.T, what, message string) int64 {
 	t.Helper()
-	m := reportedSize.FindStringSubmatch(message)
-	if m == nil {
-		t.Fatalf("%s: refusal %q does not report the message size", what, message)
+	if m := reportedSize.FindStringSubmatch(message); m != nil {
+		n, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
 	}
-	n, err := strconv.ParseInt(m[1], 10, 64)
-	if err != nil {
-		t.Fatal(err)
+	if m := stoppedAtMax.FindStringSubmatch(extractMessage(message)); m != nil {
+		limit, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return limit + 1
 	}
-	return n
+	t.Fatalf("%s: refusal %q neither reports the message size nor names the limit", what, message)
+	return 0
+}
+
+// extractMessage returns the "message" field of a Connect JSON error body, or
+// the input unchanged (a gRPC Grpc-Message trailer is already bare).
+func extractMessage(s string) string {
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(s), &body); err == nil && body.Message != "" {
+		return body.Message
+	}
+	return s
 }
 
 // The health Check is served without a token, so it is the one procedure any

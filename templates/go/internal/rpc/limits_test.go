@@ -55,8 +55,8 @@ var reportedSize = regexp.MustCompile(`message size (\d+) is larger than configu
 
 // stoppedAtMax is the refusal connect-go v2.0.2 and later sends instead: it
 // stops decompressing once it has read one byte past the limit, so the
-// refusal names only the limit. Inflation is bounded at MaxRequestBytes+1 by
-// construction, provided the limit it names is ours.
+// refusal names only the limit, and the decompressed bytes are the limit plus
+// one. A limit above MaxRequestBytes fails the caller's bound.
 var stoppedAtMax = regexp.MustCompile(`^message is larger than configured max (\d+)$`)
 
 func inflatedBytes(t *testing.T, what, message string) int64 {
@@ -72,9 +72,6 @@ func inflatedBytes(t *testing.T, what, message string) int64 {
 		limit, err := strconv.ParseInt(m[1], 10, 64)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if limit != MaxRequestBytes {
-			t.Fatalf("%s: refusal %q names a limit of %d; want %d", what, message, limit, MaxRequestBytes)
 		}
 		return limit + 1
 	}

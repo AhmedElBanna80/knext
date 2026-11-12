@@ -10,7 +10,7 @@
 # the whole bundle publish (refs #117). 1.26.9 is the first line carrying the fixes (x/net >= 0.60 requires Go 1.26; the 1.25 line is unpatched for the 2026-10 net/http, HTTP/2 and crypto/tls DoS CVEs; 1.25.13 cleared the 7 HIGH stdlib CVEs Trivy flagged in 1.25.12: CVE-2026-33818 asn1 DoS, CVE-2026-39821 idna, +5)
 # (fixes CVE-2026-39822, os.Root symlink following, HIGH).
 # 1.26.11 fixes GO-2026-6859 (net/http MaxBytesReader header race, HTTP/1 server crash).
-# Bump this in lockstep with hack/check-trivy-baseimage.bats.sh (MIN_PATCH).
+# Bump this in lockstep with hack/check-trivy-baseimage.bats.sh (go_floor).
 #
 # DIGEST-PINNED in addition to the patched point release: the tag fixes the Go
 # stdlib version Trivy reads from the binary; the @sha256 digest fixes the exact

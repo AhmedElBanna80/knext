@@ -167,6 +167,15 @@ describe('parseInstallYaml', () => {
     expect(parsed.writePolicies).toEqual([]);
   });
 
+  it('refuses a write policy whose name it cannot read, rather than dropping its 1.30 floor', () => {
+    const unnamed = POLICY_DOCS.replace(
+      '  name: kn-next-operator-secret-configmap-writes\nspec:\n  failurePolicy',
+      'spec:\n  failurePolicy',
+    );
+    expect(unnamed).not.toBe(POLICY_DOCS);
+    expect(() => parseInstallYaml(bundle({ policy: unnamed }))).toThrow(/no metadata\.name/);
+  });
+
   it('does not read a version-like `name:` from inside the schema', () => {
     // `spec.storage.properties.name` and the printer column name sit in the same
     // CRD document; only the version item's own `name:` counts.

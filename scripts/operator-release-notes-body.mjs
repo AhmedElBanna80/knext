@@ -124,8 +124,13 @@ export function parseInstallYaml(text) {
   const webhook = docs.some((d) => topLevel(d, 'kind') === 'ValidatingWebhookConfiguration');
   const writePolicies = docs
     .filter((d) => topLevel(d, 'kind') === 'ValidatingAdmissionPolicy')
-    .map((d) => /^ {2}name:\s*(\S+)\s*$/m.exec(d)?.[1])
-    .filter(Boolean);
+    .map((d) => {
+      const name = /^ {2}name:\s*(\S+)\s*$/m.exec(d)?.[1];
+      // Fail closed: dropping an unnamed policy would also drop the 1.30 floor.
+      if (!name)
+        throw new Error('install.yaml has a ValidatingAdmissionPolicy with no metadata.name');
+      return name;
+    });
 
   return {
     image: [...images][0],
@@ -181,7 +186,7 @@ function writePolicyNotes(names) {
   if (names.length === 0) return [];
   const list = names.map((n) => `\`${n}\``).join(', ');
   return [
-    `The bundle also installs the ValidatingAdmissionPolicy ${list}, which confines the operator's own Secret and ConfigMap writes to the zone signing-key Secrets and JWKS ConfigMaps its \`NextApp\` resources own. It needs **Kubernetes 1.30 or later**: on Kubernetes 1.27 to 1.29 the policy objects fail to apply, and \`kubectl apply\` exits non-zero.`,
+    `The bundle also installs the ValidatingAdmissionPolicy ${list}, which confines the operator's own Secret and ConfigMap writes to the objects it manages for each zone: a fixed set of name suffixes, owned by the zone's \`NextApp\`. It needs **Kubernetes 1.30 or later**: on Kubernetes 1.27 to 1.29 the policy objects fail to apply, and \`kubectl apply\` exits non-zero.`,
     '',
   ];
 }

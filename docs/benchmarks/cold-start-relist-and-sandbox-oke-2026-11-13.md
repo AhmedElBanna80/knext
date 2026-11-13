@@ -16,7 +16,9 @@ From the kubelet's own metrics (`/api/v1/nodes/<n>/proxy/metrics`), cumulative s
 | 10.0.1.169 | 1.0037 s | 224,285 | 3.1 ms |
 
 A container that comes up between two relists is reported at the next one, so it waits 0–1 s, 0.5 s on
-average. This is the "listening → Ready" phase that rows 14–16 of the ledger measure at about 540–620 ms.
+average. That is consistent with the "listening → Ready" phase rows 14–16 of the ledger measure at about
+540–620 ms; those rows name kubelet status reporting as the likely cause, and these reads do not prove the
+relist is all of it.
 EventedPLEG, the supported way around it, made that phase much slower on this cluster (row 16).
 
 One wake's kubelet log shows it directly: the pod's sandbox was ready at 58.341, the next relist reported it
@@ -35,14 +37,15 @@ Wake at 2026-11-13 19:54 on 10.0.1.118, request to first byte 1770 ms:
 | queue-proxy started | 38.622 | 79 ms |
 
 520 ms from sandbox to both containers running. The kubelet creates and starts the two containers one after
-the other. The runtime's share (create and start of two containers) is about 250 ms, so swapping `runc` for
-`crun` is worth at most about 50–100 ms by the usual crun/runc ratio. That was not measured: shipping it needs
+the other. The created→started steps are 41 + 79 ms; with the 128 ms between the user container starting and
+queue-proxy being created (which includes queue-proxy's create), the container work is about 250 ms. Swapping
+`runc` for `crun` is estimated, not measured, at about 50–100 ms of that. It was not tested: shipping it needs
 a cluster-wide Knative feature flag and a NextApp field, and the gain is small next to the relist.
 
 ## 3. What this means for a sub-second median
 
-The current median is about 1.6 s (rows 14–16). The relist wait (~500 ms) is the largest platform phase, and
-it is a compile-time constant in the kubelet. A median under 1 s at true scale-to-zero therefore needs one of:
+The current median is about 1.6 s (rows 14–16). The relist wait (~500 ms on average) is one of the two largest
+platform phases, next to sandbox start, and its period is a compile-time constant in the kubelet. A median under 1 s at true scale-to-zero therefore needs one of:
 
 1. **A kubelet with a shorter relist** (diagnostic only on a managed node pool). The ceiling runbook
    (`scripts/bench-cold-start-phases/ceiling/RUNBOOK.md`) measures it. It predicts a floor near 1.09 s, and it
@@ -50,4 +53,5 @@ it is a compile-time constant in the kubelet. A median under 1 s at true scale-t
    founder-run session.
 2. **Not starting from zero on the request:** an opt-in keep-warm or predictive pre-wake.
 
-Runtime and app-side levers left on this path (crun, CNI tuning) add up to roughly 100–150 ms.
+Runtime and network levers left on this path (crun, CNI tuning) are estimated, not measured, at roughly
+100–150 ms in total.

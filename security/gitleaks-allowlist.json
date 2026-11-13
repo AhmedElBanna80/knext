@@ -45,6 +45,15 @@
       "justification": "Fake test-fixture credential, line 269 of commit 1471b09d: the gate_leak \"13.1 curl -u user:pass\" fixture (fake user admin, fake password hunter2). The value is a made-up test string, not a credential: the suite asserts that the jev hooks' redactor and gate never let it reach the jev stub. Commit 1471b09d exists only on the chore/jev-levels-workflow branch (PR #2211), and CI's secret scan checks out every branch (fetch-depth: 0), so the entry is needed while that branch exists. Retirement condition: retire this entry (in a follow-up PR) when `git branch -r --contains 1471b09d` is empty, i.e. after PR #2211 is squash-merged and its branch is deleted. The fixtures were rebuilt at run time in the next commit, so no later commit trips the rule. No history is rewritten.",
       "added": "2026-10-12",
       "expires": "2027-01-12"
+    },
+    {
+      "fingerprint": "3c2fd77d300c3775a52782ef98a1b6cba6ae9e47:packages/kn-next-operator/internal/controller/redis_acl_reconcile_test.go:generic-api-key:280",
+      "rule": "generic-api-key",
+      "path": "packages/kn-next-operator/internal/controller/redis_acl_reconcile_test.go",
+      "class": "false-positive",
+      "justification": "Test-only value, line 280 of commit 3c2fd77d in redis_acl_reconcile_test.go: the table row `a.Spec.Cache.KeyPrefix = \"kn-0123456789ab\"`, a made-up Redis key PREFIX (the sequential digits 0123456789 followed by ab) that the test uses as the shape of another app's derived prefix. It is a keyspace label, not a credential: it authenticates nothing and grants nothing, and the scanner matches it only because the field name contains \"Key\" next to a hex-looking run. Commit 3c2fd77d was MERGED (not squashed) into integration/v2 with PR #2818, so it is in permanent history on integration/v2 and on every branch cut from it; CI's secret scan checks out every branch (fetch-depth: 0), including from the main-side nightly, so the entry is needed on main, integration/v2 and integration/v1.3 (the scan sees every branch). History is never rewritten, so there is no retirement condition: re-examine the ruling at the expiry date. The later commits compute these prefixes at run time (defaultRedisKeyPrefix of another app), so no later commit trips the rule.",
+      "added": "2026-11-08",
+      "expires": "2027-02-08"
     }
   ]
 }

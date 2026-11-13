@@ -185,8 +185,9 @@ export function buildOperatorBody({ tag, repo, info }) {
 function writePolicyNotes(names) {
   if (names.length === 0) return [];
   const list = names.map((n) => `\`${n}\``).join(', ');
+  const noun = names.length === 1 ? 'ValidatingAdmissionPolicy' : 'ValidatingAdmissionPolicies';
   return [
-    `The bundle also installs the ValidatingAdmissionPolicy ${list}, which confines the operator's own Secret and ConfigMap writes to the objects it manages for each zone: a fixed set of name suffixes, owned by the zone's \`NextApp\`. It needs **Kubernetes 1.30 or later**: on Kubernetes 1.27 to 1.29 the policy objects fail to apply, and \`kubectl apply\` exits non-zero.`,
+    `The bundle also installs the ${noun} ${list}, which confine${names.length === 1 ? 's' : ''} the operator's own Secret and ConfigMap writes to the objects it manages for each zone: a fixed set of name suffixes, owned by the zone's \`NextApp\`. It needs **Kubernetes 1.30 or later**: on Kubernetes 1.27 to 1.29 the policy objects fail to apply, and \`kubectl apply\` exits non-zero.`,
     '',
   ];
 }

@@ -264,17 +264,32 @@ describe('buildOperatorBody', () => {
     expect(plain).not.toMatch(/ValidatingAdmissionPolicy|1\.30/);
   });
 
-  it('the real operator bundle carries the policy the notes describe', () => {
+  it('the default overlay includes the policy, and its prefixed name is the one these fixtures use', () => {
     const kustomization = readFileSync(
       resolve(REPO_ROOT, 'packages/kn-next-operator/config/default/kustomization.yaml'),
       'utf8',
     );
     expect(kustomization).toMatch(/^- \.\.\/admission\s*$/m);
+    const prefix = kustomization.match(/^namePrefix: (\S+)$/m)?.[1];
     const policy = readFileSync(
       resolve(REPO_ROOT, 'packages/kn-next-operator/config/admission/secret-configmap-writes.yaml'),
       'utf8',
     );
-    expect(policy).toMatch(/^kind: ValidatingAdmissionPolicy$/m);
+    const policyDoc = policy
+      .split(/^---$/m)
+      .find((d) => /^kind: ValidatingAdmissionPolicy$/m.test(d));
+    expect(policyDoc).toBeDefined();
+    const name = policyDoc?.match(/^metadata:\n(?:.*\n)*?  name: (\S+)$/m)?.[1];
+    expect(`${prefix}${name}`).toBe('kn-next-operator-secret-configmap-writes');
+  });
+
+  it('names every policy, in the plural, when the bundle has more than one', () => {
+    const two = buildOperatorBody({
+      tag: 'operator-v1.0.0',
+      repo: REPO,
+      info: { ...parseInstallYaml(bundle()), writePolicies: ['a', 'b'] },
+    });
+    expect(two).toContain('the ValidatingAdmissionPolicies `a`, `b`, which confine ');
   });
 
   it('states the CRD API version', () => {

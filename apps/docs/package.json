@@ -31,11 +31,11 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.0",
-    "@vitejs/plugin-rsc": "^0.5.26",
+    "@vitejs/plugin-rsc": "^0.5.39",
     "nitro": "3.0.260610-beta",
     "tailwindcss": "^4.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",
-    "vite": "^8.2.2"
+    "vite": "~8.2.6"
   }
 }

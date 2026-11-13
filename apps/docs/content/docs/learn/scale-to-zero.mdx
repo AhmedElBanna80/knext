@@ -56,9 +56,9 @@ quiet two-node cluster, the scaffolded app with one server-rendered page woke in
 the median, whichever runtime and builder it was built with — and even there, one wake in forty took
 over 10 s.
 
-Roughly a second of every wake is spent on the node before your app runs at all: starting the
-pod, and waiting for the kubelet's one-second status cycle to notice it. No app setting removes
-that, which is why the knob below exists.
+On the cluster measured, about a second of a typical wake was spent on the node before your app
+ran at all: starting the pod, and waiting for the kubelet's one-second status cycle to notice it.
+No app setting removes that, which is why the knob below exists.
 
 See [Scale to zero](/docs/scale-to-zero) for the numbers and how they were taken.
 

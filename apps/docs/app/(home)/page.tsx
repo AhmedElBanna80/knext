@@ -100,8 +100,8 @@ export default function HomePage() {
               <p>
                 Every image bakes in a compiled bytecode cache at build time — every cold pod skips
                 JS recompilation, with nothing to enable. On a real cluster, scheduling and
-                container start dominate the wake time, and about a second of every wake from zero
-                is node-level cost no app setting removes; keep a warm pod where that matters. See{' '}
+                container start dominate the wake time — on the cluster measured, about a second of a
+                typical wake from zero was node-level cost no app setting removes. See{' '}
                 <Link href="/docs/scale-to-zero">scale-to-zero &amp; cold starts</Link> for measured
                 numbers. Self-hosted, on your cluster.
               </p>

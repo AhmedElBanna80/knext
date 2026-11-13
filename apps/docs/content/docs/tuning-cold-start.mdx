@@ -50,13 +50,15 @@ setting changes them:
   container, one after the other.
 
 Kubernetes has an event-driven alternative to the one-second cycle (the `EventedPLEG` feature
-gate). On the same cluster it made wakes **slower, not faster**: the time from container start to
-the pod being reported ready grew from about 0.75 s to about 3.5 s at the median, so it is not a
-lever.
+gate). In one A/B on the same cluster, with one node per arm, it made wakes **slower, not
+faster**: the time from the server listening to the pod becoming Ready grew from about 0.6 s to
+about 3.4 s at the median. That comparison was not swapped between nodes, so treat it as one
+data point, but it gave no reason to pursue the gate on this cluster.
 
-Taken together, a wake from true zero on a stock managed node pool spends roughly a second in the
-platform before your app's own boot starts. If your app needs a first response under a second,
-don't start from zero on that request: keep a pod around with a [warm
+On the cluster measured, those two costs add up to about a second, on average, before your app's
+own boot starts. Expect a similar floor on other clusters that use the same kubelet defaults, but
+measure your own. If your app needs a first response under a second, don't start from zero on
+that request: keep a pod around with a [warm
 window](/docs/scale-to-zero#keeping-the-last-pod-for-a-while-after-traffic-stops) or a [warm
 floor](/docs/warm-floors).
 

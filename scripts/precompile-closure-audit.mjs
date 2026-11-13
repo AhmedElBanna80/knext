@@ -79,7 +79,12 @@ import {
   readAllowlist,
   verifyClosureCoverage,
 } from './lib/precompile-closure.mjs';
-import { advisoryView, vendoredBuiltins } from './lib/vendored-builtins.mjs';
+import {
+  advisoryView,
+  findVendorHosts,
+  relabelViewFindings,
+  vendoredBuiltins,
+} from './lib/vendored-builtins.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -192,11 +197,7 @@ if (appClosure !== null) {
 // react-server-dom-webpack outside the closure (the projection drops it). Both
 // serve RSC requests, so name them under their upstream package names — grype
 // then matches the upstream advisories against the build actually shipped.
-const vendorHosts =
-  appPackageDirs ??
-  [join(nodeModules, 'next'), join(nodeModules, '@vitejs', 'plugin-rsc')].filter((dir) =>
-    existsSync(dir),
-  );
+const vendorHosts = appPackageDirs ?? findVendorHosts(nodeModules);
 const vendored = vendoredBuiltins(vendorHosts);
 if (vendored.unresolved.length > 0) {
   for (const miss of vendored.unresolved) console.error(`  - ${miss}`);
@@ -256,21 +257,10 @@ if (view.length > 0) {
   } catch (err) {
     fail(`grype output for the advisory view is not JSON (${err.message})`);
   }
-  // A release line can stand for several shipped builds (canary AND
-  // experimental), so name every one rather than whichever was seen last.
-  const ships = new Map();
-  for (const c of view) {
-    const key = `${c.name}@${c.version}`;
-    const build = c.properties.find((p) => p.name === 'knext:ships-build').value;
-    ships.set(key, [...new Set([...(ships.get(key) ?? []), build])]);
-  }
   const viewFindings = evaluateFindings(viewReport, { allowlist });
-  const relabel = (f) => ({
-    ...f,
-    version: `${f.version} (vendored build ${(ships.get(`${f.package}@${f.version}`) ?? ['unknown']).join(', ')})`,
-  });
-  blocking.push(...viewFindings.blocking.map(relabel));
-  suppressed.push(...viewFindings.suppressed.map(relabel));
+  const relabel = (findings) => relabelViewFindings(view, findings);
+  blocking.push(...relabel(viewFindings.blocking));
+  suppressed.push(...relabel(viewFindings.suppressed));
   console.log(
     `  advisory view: ${view.length} vendored prerelease(s) evaluated at their release line`,
   );

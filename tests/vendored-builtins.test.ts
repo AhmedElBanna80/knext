@@ -1,9 +1,11 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   advisoryView,
+  findVendorHosts,
+  relabelViewFindings,
   releaseLine,
   vendoredBuiltins,
   vendoredVersion,
@@ -163,5 +165,77 @@ describe('advisory view of vendored prereleases', () => {
       name: 'knext:ships-build',
       value: expect.stringMatching(/^19\.3\.0-/),
     });
+  });
+});
+
+describe('review findings: no silent quiet, nested hosts, relabel, wiring', () => {
+  it('a next whose RSC copies moved is UNRESOLVED, never an empty clean result', () => {
+    const next = tree({
+      'package.json': JSON.stringify({ name: 'next', version: '16.9.0' }),
+      'dist/compiled/react-server/cjs/a.js': cjs(CANARY),
+    });
+    expect(vendoredBuiltins([next])).toEqual({
+      components: [],
+      unresolved: ['next@16.9.0 no vendored react-server-dom copy at the expected paths'],
+    });
+  });
+
+  it('a plugin-rsc without its vendor directory is UNRESOLVED', () => {
+    const plugin = tree({
+      'package.json': JSON.stringify({ name: '@vitejs/plugin-rsc', version: '0.9.0' }),
+    });
+    expect(vendoredBuiltins([plugin]).unresolved).toHaveLength(1);
+  });
+
+  it('findVendorHosts finds top-level, scoped and NESTED (unhoisted) hosts', () => {
+    const root = tree({
+      'node_modules/next/package.json': JSON.stringify({ name: 'next', version: '16.4.3' }),
+      'node_modules/@vitejs/plugin-rsc/package.json': JSON.stringify({
+        name: '@vitejs/plugin-rsc',
+        version: '0.5.39',
+      }),
+      'node_modules/vinext/package.json': JSON.stringify({ name: 'vinext', version: '1.0.0' }),
+      'node_modules/vinext/node_modules/next/package.json': JSON.stringify({
+        name: 'next',
+        version: '16.3.5',
+      }),
+    });
+    const hosts = findVendorHosts(join(root, 'node_modules')).map((d) => d.slice(root.length));
+    expect(hosts.sort()).toEqual(
+      [
+        '/node_modules/@vitejs/plugin-rsc',
+        '/node_modules/next',
+        '/node_modules/vinext/node_modules/next',
+      ].sort(),
+    );
+  });
+
+  it('relabelViewFindings names EVERY shipped build behind a release line', () => {
+    const { components } = vendoredBuiltins([nextPackage()]);
+    const view = advisoryView(components);
+    const [f] = relabelViewFindings(view, [
+      {
+        id: 'GHSA-x',
+        severity: 'critical',
+        package: 'react-server-dom-webpack',
+        version: '19.3.0',
+      },
+    ]);
+    expect(f.version).toBe(`19.3.0 (vendored build ${CANARY}, ${EXPERIMENTAL})`);
+  });
+
+  it('the audit script wires every step: host discovery, fail on unresolved, SBOM append, second pass', () => {
+    const src = readFileSync(
+      join(import.meta.dir, '../scripts/precompile-closure-audit.mjs'),
+      'utf8',
+    );
+    expect(src).toMatch(/appPackageDirs \?\? findVendorHosts\(nodeModules\)/);
+    expect(src).toMatch(/if \(vendored\.unresolved\.length > 0\) \{[\s\S]{0,200}fail\(/);
+    expect(src).toMatch(
+      /components: \[\.\.\.\(sbom\.components \?\? \[\]\), \.\.\.vendored\.components\]/,
+    );
+    expect(src).toMatch(/const view = advisoryView\(vendored\.components\)/);
+    expect(src).toMatch(/run\('grype', \[`sbom:\$\{viewPath\}`/);
+    expect(src).toMatch(/blocking\.push\(\.\.\.relabel\(viewFindings\.blocking\)\)/);
   });
 });

@@ -107,6 +107,15 @@ export function vendoredBuiltins(packageDirs) {
     } else {
       continue;
     }
+    // A known host that ships NONE of its expected RSC copies has changed its
+    // layout; that is a failure, never an empty (clean) result.
+    const rscPresent = copies.some(
+      (copy) => copy.name.startsWith('react-server-dom') && existsSync(join(dir, copy.path)),
+    );
+    if (!rscPresent) {
+      unresolved.push(`${host} no vendored react-server-dom copy at the expected paths`);
+      continue;
+    }
     for (const copy of copies) {
       const copyDir = join(dir, copy.path);
       if (!existsSync(copyDir)) continue;
@@ -162,4 +171,63 @@ export function advisoryView(components) {
     });
   }
   return view;
+}
+
+const HOST_NAMES = new Set(['next', '@vitejs/plugin-rsc']);
+
+/**
+ * Every installed `next` / `@vitejs/plugin-rsc` directory under a node_modules
+ * tree, nested copies included — a version conflict bun could not hoist is
+ * still in the closure, so it must not be missed.
+ */
+export function findVendorHosts(nodeModulesDir) {
+  const hosts = [];
+  const walk = (modulesDir) => {
+    let entries;
+    try {
+      entries = readdirSync(modulesDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      if (entry.name === '.bin' || entry.name === '.cache') continue;
+      const full = join(modulesDir, entry.name);
+      const pkgDirs = entry.name.startsWith('@')
+        ? (() => {
+            try {
+              return readdirSync(full).map((child) => join(full, child));
+            } catch {
+              return [];
+            }
+          })()
+        : [full];
+      for (const pkgDir of pkgDirs) {
+        const name = readJson(join(pkgDir, 'package.json'))?.name;
+        if (name === undefined) continue;
+        if (HOST_NAMES.has(name)) hosts.push(pkgDir);
+        const nested = join(pkgDir, 'node_modules');
+        if (existsSync(nested)) walk(nested);
+      }
+    }
+  };
+  walk(nodeModulesDir);
+  return hosts;
+}
+
+/**
+ * Advisory-view findings relabelled with every build that actually ships for
+ * the matched release line (canary AND experimental can share one).
+ */
+export function relabelViewFindings(view, findings) {
+  const ships = new Map();
+  for (const c of view) {
+    const key = `${c.name}@${c.version}`;
+    const build = c.properties.find((p) => p.name === 'knext:ships-build')?.value ?? 'unknown';
+    ships.set(key, [...new Set([...(ships.get(key) ?? []), build])]);
+  }
+  return findings.map((f) => ({
+    ...f,
+    version: `${f.version} (vendored build ${(ships.get(`${f.package}@${f.version}`) ?? ['unknown']).join(', ')})`,
+  }));
 }

@@ -7,6 +7,7 @@ import {
   fetchScheduledRuns,
   fetchWindowRuns,
   resolveCheckAnchors,
+  resolveRepo,
   runCli,
   runWatchdogFromEnv,
 } from '../scripts/credential-slot-watchdog.mjs';
@@ -2625,5 +2626,15 @@ describe('round 4: a failed listing crashes, and only a first-attempt success an
         expectedStart.toISOString(),
       );
     }
+  });
+});
+
+describe('resolveRepo', () => {
+  it('uses the repository the workflow runs in', () => {
+    expect(resolveRepo({ GITHUB_REPOSITORY: 'someone/fork' })).toBe('someone/fork');
+  });
+  it('falls back to the canonical repository outside Actions', () => {
+    expect(resolveRepo({})).toBe('getknext-dev/knext');
+    expect(resolveRepo({ GITHUB_REPOSITORY: '' })).toBe('getknext-dev/knext');
   });
 });

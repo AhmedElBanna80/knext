@@ -11,6 +11,9 @@
  *   - that cert-manager is required, when (and only when) the bundle carries a
  *     cert-manager `Certificate`;
  *   - the CRD API version, read from the bundle's NextApp CRD;
+ *   - the ValidatingAdmissionPolicy that confines the operator's Secret and
+ *     ConfigMap writes, and the Kubernetes 1.30 floor it brings, when (and only
+ *     when) the bundle carries one;
  *   - the upgrade order: operator and CRD first, then the CLI.
  *
  * Everything about the bundle is read from the bundle, never typed, so the notes
@@ -119,6 +122,15 @@ export function parseInstallYaml(text) {
     (d) => /^apiVersion:\s*cert-manager\.io\//m.test(d) && topLevel(d, 'kind') === 'Certificate',
   );
   const webhook = docs.some((d) => topLevel(d, 'kind') === 'ValidatingWebhookConfiguration');
+  const writePolicies = docs
+    .filter((d) => topLevel(d, 'kind') === 'ValidatingAdmissionPolicy')
+    .map((d) => {
+      const name = /^ {2}name:\s*(\S+)\s*$/m.exec(d)?.[1];
+      // Fail closed: dropping an unnamed policy would also drop the 1.30 floor.
+      if (!name)
+        throw new Error('install.yaml has a ValidatingAdmissionPolicy with no metadata.name');
+      return name;
+    });
 
   return {
     image: [...images][0],
@@ -126,6 +138,7 @@ export function parseInstallYaml(text) {
     apiVersion: `${group}/${chosen.name}`,
     certManager,
     webhook,
+    writePolicies,
   };
 }
 
@@ -158,6 +171,7 @@ export function buildOperatorBody({ tag, repo, info }) {
     info.image,
     '```',
     '',
+    ...writePolicyNotes(info.writePolicies ?? []),
     '## Compatibility',
     '',
     `- CRD API version: \`${info.apiVersion}\`.`,
@@ -165,6 +179,17 @@ export function buildOperatorBody({ tag, repo, info }) {
     '- **Upgrade order:** upgrade the operator and CRD first, then the CLI. An older operator rejects fields a newer CLI emits.',
     '',
   ].join('\n');
+}
+
+/** @param {string[]} names the bundle's ValidatingAdmissionPolicy names */
+function writePolicyNotes(names) {
+  if (names.length === 0) return [];
+  const list = names.map((n) => `\`${n}\``).join(', ');
+  const noun = names.length === 1 ? 'ValidatingAdmissionPolicy' : 'ValidatingAdmissionPolicies';
+  return [
+    `The bundle also installs the ${noun} ${list}, which confine${names.length === 1 ? 's' : ''} the operator's own Secret and ConfigMap writes to the objects it manages for each zone: a fixed set of name suffixes, owned by the zone's \`NextApp\`. It needs **Kubernetes 1.30 or later**: on Kubernetes 1.27 to 1.29 the policy objects fail to apply, and \`kubectl apply\` exits non-zero.`,
+    '',
+  ];
 }
 
 class UsageError extends Error {}

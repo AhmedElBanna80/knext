@@ -79,6 +79,12 @@ import {
   readAllowlist,
   verifyClosureCoverage,
 } from './lib/precompile-closure.mjs';
+import {
+  advisoryView,
+  findVendorHosts,
+  relabelViewFindings,
+  vendoredBuiltins,
+} from './lib/vendored-builtins.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -125,6 +131,7 @@ function run(cmd, args) {
 // symlinks, so neither syft nor the plain tree walker can see past it).
 // `--closure`: the tree on disk, walked directly.
 let appClosure = null;
+let appPackageDirs = null;
 let installed;
 if (appArg === undefined) {
   console.log(`Pre-compile closure: ${nodeModules}`);
@@ -135,6 +142,7 @@ if (appArg === undefined) {
   console.log(`Pre-compile closure of app: ${appDir}`);
   const resolved = resolveAppClosure(appDir);
   appClosure = new Set(resolved.packages.keys());
+  appPackageDirs = [...resolved.packages.values()];
   installed = new Set([...appClosure].map((key) => key.slice(0, key.lastIndexOf('@'))));
   console.log(`  packages in the app's transitive closure: ${appClosure.size}`);
   if (resolved.unresolved.length > 0) {
@@ -182,6 +190,27 @@ if (appClosure !== null) {
   // published closure — say which ones rather than leaving a bare number.
   for (const key of projected.missing) console.log(`    not catalogued: ${key}`);
 }
+
+// ── 2b. vendored React copies (#61) ─────────────────────────────────────────
+// `next` vendors React under dist/compiled with version-less package.json files
+// (syft records them as UNKNOWN), and @vitejs/plugin-rsc vendors
+// react-server-dom-webpack outside the closure (the projection drops it). Both
+// serve RSC requests, so name them under their upstream package names — grype
+// then matches the upstream advisories against the build actually shipped.
+const vendorHosts = appPackageDirs ?? findVendorHosts(nodeModules);
+const vendored = vendoredBuiltins(vendorHosts);
+if (vendored.unresolved.length > 0) {
+  for (const miss of vendored.unresolved) console.error(`  - ${miss}`);
+  fail(
+    `${vendored.unresolved.length} vendored React copy(ies) carry no readable version — the scan ` +
+      'could not tell which build ships, so it cannot report it clean (#61)',
+  );
+}
+for (const c of vendored.components) {
+  console.log(`  vendored: ${c.name}@${c.version} (${c.properties[0].value})`);
+}
+sbom = { ...sbom, components: [...(sbom.components ?? []), ...vendored.components] };
+writeFileSync(sbomPath, JSON.stringify(sbom, null, 2));
 console.log(`  SBOM: ${sbomPath}`);
 
 // ── 3. the emptiness / coverage guard ───────────────────────────────────────
@@ -212,6 +241,30 @@ try {
   fail(`grype output is not JSON (${err.message}) — the scan did not complete`);
 }
 const { blocking, suppressed } = evaluateFindings(report, { allowlist });
+
+// Second pass (#61): grype never matches a release's advisories against a
+// prerelease of it (semver ranks 19.3.0-canary-… below 19.3.0), so the canary
+// React that Next vendors would always read clean. Scan those builds again at
+// their release line. The attested SBOM above keeps the exact version; this
+// view is a separate file, and a finding here names the build that ships.
+const view = advisoryView(vendored.components);
+if (view.length > 0) {
+  const viewPath = `${sbomPath}.advisory-view.json`;
+  writeFileSync(viewPath, JSON.stringify({ ...sbom, components: view }, null, 2));
+  let viewReport;
+  try {
+    viewReport = JSON.parse(run('grype', [`sbom:${viewPath}`, '-o', 'json', '-q']));
+  } catch (err) {
+    fail(`grype output for the advisory view is not JSON (${err.message})`);
+  }
+  const viewFindings = evaluateFindings(viewReport, { allowlist });
+  const relabel = (findings) => relabelViewFindings(view, findings);
+  blocking.push(...relabel(viewFindings.blocking));
+  suppressed.push(...relabel(viewFindings.suppressed));
+  console.log(
+    `  advisory view: ${view.length} vendored prerelease(s) evaluated at their release line`,
+  );
+}
 
 for (const f of suppressed) {
   console.log(

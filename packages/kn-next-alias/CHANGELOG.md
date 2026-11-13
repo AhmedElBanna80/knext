@@ -1,5 +1,15 @@
 # kn-next
 
+## 1.3.2
+
+### Patch Changes
+
+- Updated dependencies [580eb5b]
+- Updated dependencies [ccfd915]
+- Updated dependencies [16dd92b]
+- Updated dependencies [57b4ff5]
+  - @getknext/core@1.3.2
+
 ## 1.3.1
 
 ### Patch Changes

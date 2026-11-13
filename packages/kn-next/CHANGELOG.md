@@ -1,5 +1,26 @@
 # @getknext/core
 
+## 1.3.2
+
+### Patch Changes
+
+- 580eb5b: The compiled-Bun standalone build no longer fails on Next 16.4. Next's server code requires `../../lib/upgrade/nudge` from a development-only branch, and Next deliberately leaves that file out of the standalone output, so the compile stopped with `Could not resolve`. A relative require that cannot be resolved from inside `node_modules/next/dist/` is now left as a runtime require, which still throws if it is ever reached, exactly as the uncompiled server would. The same miss from your own code or from any other package still fails the build. `kn-next build --verbose` names each such specifier.
+- ccfd915: On Next.js 16.4, a previous build's revalidate window is no longer honoured after a deploy. Next 16.4 applies the window a cache handler returns directly, so a cached page written by an earlier build (or by a legacy entry, or under a build id shared across deploys) could be served as fresh for its whole old window after a redeploy, and forever for `revalidate: false`. The handler now hands Next a stored window only for pages the current build wrote; the others are re-rendered. Next 16.0 to 16.3 behave as before.
+- 16dd92b: The `next` peer range is now bounded to the Next.js minors knext has compatibility evidence for: `>=16.0.0 <16.5.0` (was `>=16.0.0`, which admitted every future minor unvetted). Next.js 16.4 stays admitted, and now caches correctly (see the ISR window fix in this release). A Next.js minor above the range is refused until a knext release admits it: npm stops the install with `ERESOLVE` (`--legacy-peer-deps` overrides it), pnpm warns, Bun installs silently. `knext doctor` also gains a `next-minor` row that warns when the installed Next.js is inside the range but not one of the minors covered by the official compatibility suite (`16.3`), or is outside the range.
+- 57b4ff5: Fix `next/image` serving unoptimized originals on the default standalone build. `/_next/image` answered with the source image instead of the negotiated format (for example `image/png` where the browser asked for `image/webp`); Next.js does not report this as an error, because when it cannot load `sharp` it serves the original file.
+  
+  Who was affected, on 1.0.0, 1.0.0-rc.6, 1.3.0 and 1.3.1 (and very likely earlier prereleases):
+  
+  - `build: 'turbopack'` or `'webpack'` with `runtime: 'bun'` (the default, disk mode) never optimized images, wherever it was built: the compiled executable bundled `sharp`, whose native addon could not find `libvips` from inside the executable. `sharp` now loads from the standalone tree beside the executable.
+  - The same builds with `runtime: 'node'` lost image optimization whenever the build machine had no `@img/sharp-linuxmusl-*` package installed — npm on a glibc Linux host (a typical CI runner) or any macOS host — because the image is Alpine (musl) and the tree only carried the build machine's addon. `knext build`, `knext deploy` and `knext preview` now add the image's own addon (`@img/sharp-linuxmusl-x64` and its `libvips`) beside the traced `sharp`.
+  - Self-contained mode and the vinext build targets were not affected.
+  
+  The image's addon is copied from your install when it is there at the exact version the traced `sharp` expects, and is otherwise downloaded at that version as pinned in your lockfile and checked against the lockfile's sha512 integrity hash. Supported lockfiles: `bun.lock`, `package-lock.json`, `pnpm-lock.yaml` (v6 and v9) and Yarn 1's `yarn.lock`. When the addon has to be downloaded and there is no lockfile, the lockfile does not pin it, or its entry has no sha512 hash (always the case for Yarn 2 and later, whose checksum covers Yarn's own cache archive), the build stops and names the lockfile and the package rather than shipping an image that cannot optimize. The image optimization docs list the ways past it. An app with `images: { unoptimized: true }` skips this step entirely and needs neither a lockfile nor registry access for it.
+  
+  The same lockfile support, and the same version check on a copied addon, now also apply to the vinext build targets.
+- @getknext/db@1.3.2
+  - @getknext/lib@1.3.2
+
 ## 1.3.1
 
 ### Patch Changes

@@ -7,7 +7,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"io"
 	"iter"
 	"log/slog"
 	"net"
@@ -15,7 +14,6 @@ import (
 	"time"
 
 	"connectrpc.com/connect/v2"
-	"connectrpc.com/connect/v2/connectgzip"
 	"connectrpc.com/connect/v2/connecthttp"
 	"connectrpc.com/grpchealth/v2"
 	"connectrpc.com/otelconnect"
@@ -48,33 +46,6 @@ const (
 // ShutdownGrace is how long in-flight calls get to finish after SIGTERM.
 const ShutdownGrace = 25 * time.Second
 
-// boundedGzip is gzip whose decompressed stream ends one byte past limit.
-// connect-go reads limit+1 bytes to detect an oversized message and then
-// drains the decompressor to report its size; ending the stream there makes
-// that drain free, so a small compressed body cannot cost the server
-// gigabytes of inflating (the health Check takes a body with no token).
-func boundedGzip(limit int64) connect.Compressor {
-	return limitedDecompressor{Compressor: connectgzip.New(), limit: limit}
-}
-
-type limitedDecompressor struct {
-	*connectgzip.Compressor
-	limit int64
-}
-
-func (c limitedDecompressor) Decompress(src io.Reader) (io.ReadCloser, error) {
-	r, err := c.Compressor.Decompress(src)
-	if err != nil {
-		return nil, err
-	}
-	return limitedReadCloser{Reader: io.LimitReader(r, c.limit+1), Closer: r}, nil
-}
-
-type limitedReadCloser struct {
-	io.Reader
-	io.Closer
-}
-
 // Config is the function's runtime configuration.
 type Config struct {
 	// Addr is the listen address, ":8080" when empty.
@@ -102,6 +73,8 @@ type Function struct {
 	HTTP   *http.Server
 	rpc    *connect.Server
 	logger *slog.Logger
+	// mux is the handler inside the body cap; tests mount probes on it.
+	mux *http.ServeMux
 }
 
 // New assembles the function with the token check reading the JWKS mounted
@@ -152,8 +125,10 @@ func newFunction(cfg Config, verifier auth.Verifier) (*Function, error) {
 
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, rpc,
+		// connect-go v2.0.2+ stops decompressing one byte past this limit, so a
+		// small gzip body cannot inflate to gigabytes (the health Check takes a
+		// body with no token). go.mod requires v2.0.2 or later for that bound.
 		connecthttp.WithReadMaxBytes(MaxRequestBytes),
-		connecthttp.WithCompressors(boundedGzip(MaxRequestBytes)),
 	)
 	// The wake-ahead probe: a plain GET, answered before and outside the token
 	// check. A Connect GET of the health Check is not available, since the
@@ -178,6 +153,7 @@ func newFunction(cfg Config, verifier auth.Verifier) (*Function, error) {
 		},
 		rpc:    rpc,
 		logger: logger,
+		mux:    mux,
 	}, nil
 }
 

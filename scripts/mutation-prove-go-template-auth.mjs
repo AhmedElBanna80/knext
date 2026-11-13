@@ -20,9 +20,9 @@
  *   W*  the binary's wiring (internal/rpc/rpc.go): the interceptor left
  *       out of the chain must RED (the on-the-wire scan of every registered
  *       procedure catches it).
- *   L*  the request-read bounds (internal/rpc/rpc.go): the gzip decompressor
- *       no longer stopping at the limit, the bounded compressor not mounted,
- *       the raw-body cap dropped, the ReadTimeout dropped — each must RED.
+ *   L*  the request-read bounds (internal/rpc/rpc.go): the raw-body cap
+ *       dropped, the ReadTimeout dropped — each must RED. (The gzip bound is
+ *       connect-go's own since v2.0.2, so the template mounts no compressor.)
  *   D*  the SIGTERM drain: closing connections instead of draining them, or
  *       a grace of zero, must RED (an in-flight call is held open across the
  *       shutdown).
@@ -86,7 +86,7 @@ const GO_BUILD = ['go', 'test', '-count=1', '-run', '^$', './internal/auth/', '.
 
 // A row that deletes lines replaces them with '\n', never '': the harness
 // appends its residue marker to a newline-free replacement as a trailing `//`
-// comment, which swallows the line after the anchor. A7, W1 and L2 did that
+// comment, which swallows the line after the anchor. A7, W1 and a since-removed gzip-mount row did that
 // and did not compile (the build check refuses them); L4 compiled only because
 // the line it swallowed was another field, so it mutated two things at once.
 const MUTATIONS = [
@@ -178,22 +178,6 @@ const MUTATIONS = [
     replacement: '\n',
   },
   // ── L: the request-read bounds ────────────────────────────────────────────
-  {
-    id: 'L1',
-    expect: 'red',
-    claim: 'the gzip decompressor no longer stops one byte past the message limit',
-    subject: 'server',
-    anchor: '\treturn limitedReadCloser{Reader: io.LimitReader(r, c.limit+1), Closer: r}, nil\n',
-    replacement: '\treturn r, nil\n',
-  },
-  {
-    id: 'L2',
-    expect: 'red',
-    claim: "the bounded gzip is not mounted (connect-go's default gzip drains a bomb)",
-    subject: 'server',
-    anchor: '\t\tconnecthttp.WithCompressors(boundedGzip(MaxRequestBytes)),\n',
-    replacement: '\n',
-  },
   {
     id: 'L3',
     expect: 'red',

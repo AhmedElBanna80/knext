@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -177,24 +178,6 @@ func TestGzipBombToHealthCheckIsRefusedInBoundedTime(t *testing.T) {
 			t.Errorf("refusing the gzip bomb took %v; want well under 3s", elapsed)
 		}
 	})
-}
-
-// The decompressor the server mounts ends its stream one byte past the
-// message limit, whatever the compressed input would inflate to.
-func TestBoundedGzipStopsOneBytePastTheLimit(t *testing.T) {
-	bomb, _ := gzipBomb(t, MaxRequestBytes-16)
-	r, err := boundedGzip(MaxRequestBytes).Decompress(bytes.NewReader(bomb))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	n, err := io.Copy(io.Discard, r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != MaxRequestBytes+1 {
-		t.Errorf("read %d inflated bytes; want exactly %d (the limit plus the byte that detects it)", n, MaxRequestBytes+1)
-	}
 }
 
 // countingBody counts the request-body bytes the server's handler chain reads.
@@ -434,5 +417,43 @@ func TestReadTimeoutBoundsTheBodyNotTheCall(t *testing.T) {
 			case <-time.After(5 * f.HTTP.ReadTimeout):
 			}
 		})
+	}
+}
+
+// The body cap wraps every handler, not only the RPCs: connect-go's own
+// message limit stops an RPC first, so a probe that drains its body is what
+// shows the cap itself is in place.
+func TestBodyCapWrapsEveryHandler(t *testing.T) {
+	f, err := New(Config{JWKSPath: absentJWKS(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var drained atomic.Int64
+	var tooLarge atomic.Bool
+	f.mux.HandleFunc("POST /drain", func(w http.ResponseWriter, r *http.Request) {
+		n, err := io.Copy(io.Discard, r.Body)
+		drained.Store(n)
+		var mbe *http.MaxBytesError
+		tooLarge.Store(errors.As(err, &mbe))
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	})
+	base := serve(t, f)
+	client := h2cClient()
+	client.Timeout = 20 * time.Second
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/drain", new(zeros))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("an endless body to a draining handler was not answered: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if !tooLarge.Load() {
+		t.Errorf("the handler read %d bytes without hitting the body cap", drained.Load())
+	}
+	if n := drained.Load(); n > MaxRequestBodyBytes {
+		t.Errorf("the handler read %d bytes; want at most %d", n, MaxRequestBodyBytes)
 	}
 }

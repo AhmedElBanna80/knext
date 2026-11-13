@@ -55,7 +55,15 @@ import {
 } from './lib/credential-slot-watchdog.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export const REPO = 'getknext-dev/knext';
+/**
+ * The repository whose runs are checked: the one the workflow runs in
+ * (`GITHUB_REPOSITORY`), so a fork or a moved repository checks itself rather
+ * than 404ing on the canonical one. Outside Actions, the canonical repository.
+ */
+export function resolveRepo(env = process.env) {
+  return env.GITHUB_REPOSITORY || 'getknext-dev/knext';
+}
+export const REPO = resolveRepo();
 export const WORKFLOW_FILE = 'test-e2e-deploy.yml';
 /** This watchdog's own workflow — its previous run anchors the window. */
 export const WATCHDOG_WORKFLOW_FILE = 'credential-slot-watchdog.yml';

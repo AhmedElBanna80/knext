@@ -34,6 +34,35 @@ container start and runtime boot; runtime choice acts on runtime boot; and the b
 app-level cost sits inside "first response", in work the app itself does before it starts
 answering.
 
+## What the platform itself costs
+
+Two parts of the wake happen on the node, before your server runs any code, and no app-level
+setting changes them:
+
+- **The kubelet reports container state on a one-second cycle.** The kubelet notices that a
+  container has started by re-listing containers every second; on the clusters measured it was
+  1.003 s on both nodes. A container that comes up between two cycles is reported at the next
+  one, so a wake waits up to a second, half a second on average, before the pod can go Ready.
+  The cycle length is fixed inside the kubelet, not a cluster setting.
+- **Creating the pod sandbox and starting its two containers took about half a second.** In one
+  traced wake: 272 ms for the sandbox (network namespace and CNI setup) before your container was
+  created, then about 250 ms to create and start your container and the Knative queue-proxy
+  container, one after the other.
+
+Kubernetes has an event-driven alternative to the one-second cycle (the `EventedPLEG` feature
+gate). On the same cluster it made wakes **slower, not faster**: the time from container start to
+the pod being reported ready grew from about 0.75 s to about 3.5 s at the median, so it is not a
+lever.
+
+Taken together, a wake from true zero on a stock managed node pool spends roughly a second in the
+platform before your app's own boot starts. If your app needs a first response under a second,
+don't start from zero on that request: keep a pod around with a [warm
+window](/docs/scale-to-zero#keeping-the-last-pod-for-a-while-after-traffic-stops) or a [warm
+floor](/docs/warm-floors).
+
+Measured on Oracle Kubernetes Engine (Kubernetes 1.34, CRI-O 1.34, `runc`), image already cached
+on the node.
+
 ## Levers you control today
 
 Each lever below states the cluster, machine type, sample size and whether images were already

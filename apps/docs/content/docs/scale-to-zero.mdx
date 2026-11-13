@@ -140,7 +140,10 @@ How to read it:
   size. Pick a runtime and builder for compatibility and operations, not for cold start.
 - **Where the time goes:** roughly the first second is the platform scaling the service up and
   starting the container, the next second is the server booting and passing its first readiness
-  check, and the page render itself is a small remainder.
+  check, and the page render itself is a small remainder. Part of that first second is a fixed
+  node-level cost — the kubelet reports container state on a one-second cycle — so a wake from
+  zero rarely goes much below a second on a stock cluster; see
+  [What the platform itself costs](/docs/tuning-cold-start#what-the-platform-itself-costs).
 - **The slow outlier is the platform, not the runtime.** The single 10.4 s wake was a readiness
   check that timed out once, so the pod was only marked ready at the next check interval — the kind
   of tail any combination can hit. Plan for occasional wakes several times the median.

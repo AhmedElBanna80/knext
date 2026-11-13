@@ -146,6 +146,18 @@ warning. That is the deliberate trade: a known remote code execution is worse th
 credential window. See the [compatibility matrix](/docs/compat-matrix) for where the credential
 stands.
 
+### An advisory with no fixed Next.js release yet
+
+GHSA-xqc2-xf4c-x3h3 (Critical) is an unauthenticated remote code execution flaw in React Server
+Components, fixed in React 19.3.1 and 19.2.9. Next.js does not use your app's own React for this
+code: it bundles its own copy. Every stable 16.4.x release up to the latest, 16.4.6, bundles
+`19.3.0-canary-278794d7-20261002`, a build cut before the fix. Upgrading the `react` packages in
+your app does not change it. Checked on 2026-11-13.
+
+Until a fixed Next.js release ships, there is nothing to upgrade to. Move to it as soon as it
+does, then rebuild and redeploy. The published advisory and the
+[Next.js releases](https://github.com/vercel/next.js/releases) say which version that is.
+
 ## Version-specific step: upgrading a 0.4.x app to 1.0
 
 1.0 changes five things a 0.4.x app needs to walk through, in this order.

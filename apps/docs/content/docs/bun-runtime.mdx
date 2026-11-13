@@ -32,10 +32,10 @@ below carries its own condition — none of them is "Bun is faster":
 - **Cold start is cluster-dependent, and the gap is small or absent, not a Bun win.** On Oracle
   Kubernetes Engine (2 shared-core 4-vCPU nodes, images pre-pulled, a default-scaffold app with no
   database/cache/storage dependency, n=10 per combination), the four runtime x builder
-  combinations cold-started within about 0.3 s of each other at the median (roughly 2.1-2.4 s),
-  and none of the pairwise differences was distinguishable from measurement noise. On that same
-  cluster, **warm** requests were slightly faster on Node (~24 ms) than on Bun (~31 ms) — a real
-  but small (~7 ms) difference, negligible next to a cold start. On Google Kubernetes Engine,
+  combinations cold-started within about 0.4 s of each other at the median (roughly 1.6-2.0 s).
+  Only one pair differed beyond measurement noise: Node with webpack was about 0.4 s slower than
+  the default Bun with Turbopack. **Warm** requests differed by a few milliseconds between the
+  runtimes, and which runtime was ahead changed between builds measured on that cluster. On Google Kubernetes Engine,
   moving the same pod from a shared-core 4-vCPU machine type to a dedicated-core one of the next
   generation shrank the runtime gap from roughly 0.7 s (Bun ahead, ten wakes per runtime) to
   roughly 0.1 s (not distinguishable from noise at that sample size) — see

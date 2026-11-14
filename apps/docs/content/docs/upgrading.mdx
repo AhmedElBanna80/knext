@@ -122,8 +122,9 @@ advisories affect every 16.x release up to and including 16.4.0:
 
 knext serves images through Next.js's optimizer and backs `'use cache'` with its shared cache, so
 both remote code execution paths are reachable on a knext app that has not upgraded. There is no
-16.3.x patch: the fix ships only on the 16.4.x line. New apps from `knext create` already pin
-16.4.3.
+16.3.x patch: the fix ships only on the 16.4.x line. **New apps need this too:** `knext create`
+in the current release (1.3.1) still pins Next.js 16.3.8, so run the upgrade below right after
+creating an app, before its first deploy.
 
 To upgrade an existing app, pin `next` to 16.4.3 (or any later 16.4.x) in its `package.json`,
 reinstall so the lockfile resolves it, then rebuild and redeploy — the running image keeps the old
@@ -153,7 +154,7 @@ Components, fixed in React 19.3.1 and 19.2.9. Next.js does not use your app's ow
 code: it bundles its own copy. Every stable 16.4.x release up to the latest, 16.4.6, bundles
 `19.3.0-canary-278794d7-20261002`, a build cut before the fix. Checked on 2026-11-13.
 
-That includes 16.4.3, which the steps above upgrade to and which new apps pin: those steps clear
+That includes 16.4.3, which the steps above upgrade to: those steps clear
 the three advisories in the table, not this one, and moving to 16.4.6 does not clear it either.
 Upgrading `react`, `react-dom` or `react-server-dom-*` in your app does not change the copy
 Next.js ships.

@@ -52,9 +52,9 @@ knext publishes **measured distributions rather than a headline number**, becaus
 cluster the spread is wide enough that a median misleads. One measured example: on a two-node
 cluster, cold starts came out bimodal — a cluster of samples around ~2.5s and another around ~10.5s,
 with a clean gap between them. A single "average" of those two groups would describe neither. On a
-quiet two-node cluster, the scaffolded app with one server-rendered page woke in about 2.1–2.4 s at
-the median, whichever runtime and builder it was built with — and even there, one wake in forty took
-over 10 s.
+quiet two-node cluster, the scaffolded app with one server-rendered page woke in about 1.6–2.0 s at
+the median, depending on the runtime and builder it was built with. In an earlier sitting on the same
+cluster, one wake in forty took over 10 s.
 
 On the cluster measured, about a second of a typical wake was spent on the node before your app
 ran at all: starting the pod, and waiting for the kubelet's one-second status cycle to notice it.

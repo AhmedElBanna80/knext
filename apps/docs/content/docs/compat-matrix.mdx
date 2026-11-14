@@ -10,10 +10,11 @@ description: Honest, evidence-gated status of what the knext adapter supports.
 <Callout type="warn">
 **Status: a credentialing window is currently in progress, not complete.**
 The credential window now runs against Next.js v16.3.8. Every credential run executes against that
-published release-candidate build, not the fast-moving main branch. New apps scaffold a
-newer Next.js release on the 16.4.x line (16.4.3): every Next.js release up to and including 16.4.0 is
-affected by critical security advisories (GHSA-2464-fhr4-w9xw, GHSA-673q-mjm6-r5xr) that are fixed
-only on 16.4.x, so the scaffold moved ahead of the credential. `knext doctor` reports 16.4 as a
+published release-candidate build, not the fast-moving main branch. Every Next.js
+release up to and including 16.4.0 is affected by critical security advisories (GHSA-2464-fhr4-w9xw,
+GHSA-673q-mjm6-r5xr) that are fixed only on 16.4.x, so apps should run a newer Next.js release on the
+16.4.x line (16.4.3 or later). `knext create` in the current release (1.3.1) still scaffolds 16.3.8, so
+upgrade `next` right after creating an app. `knext doctor` reports 16.4 as a
 supported but not yet credentialed minor until the credential catches up. The separate credential
 for the 1.3 release line has started running against Next.js v16.4.3; no run at that version has
 counted yet. See

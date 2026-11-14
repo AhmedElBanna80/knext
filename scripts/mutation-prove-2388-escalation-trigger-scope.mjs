@@ -530,6 +530,61 @@ const MUTATIONS = [
       '      if (read(`${d}/action.yml`) !== null || read(`${d}/action.yaml`) !== null)\n        expandDir(d, depth);',
     replacement: '      expandDir(d, depth);',
   },
+  {
+    id: 'M68',
+    expect: 'red',
+    claim:
+      'the operator-flags rule is dropped — a changed operator flag in cmd/main.go goes unflagged (#2495)',
+    subject: 'paths',
+    anchor: '    match: (p) => OPERATOR_CMD.test(p) && !isTestPath(p),',
+    replacement: '    match: (p) => false && p,',
+  },
+  {
+    id: 'M69',
+    expect: 'red',
+    claim:
+      'the operator-flags rule stops excluding Go tests — a cmd/*_test.go is mistaken for a flag change (#2495)',
+    subject: 'paths',
+    anchor:
+      '    /(^|\\/)__tests__\\//.test(p) || /\\.(test|spec)\\.[cm]?[jt]sx?$/.test(p) || /_test\\.go$/.test(p)',
+    replacement: '    /(^|\\/)__tests__\\//.test(p) || /\\.(test|spec)\\.[cm]?[jt]sx?$/.test(p)',
+  },
+  {
+    id: 'M70',
+    expect: 'red',
+    claim:
+      'the cluster-write-surface rule is dropped — RBAC and admission policy change unflagged (#2495)',
+    subject: 'paths',
+    anchor: '    match: (p) => OPERATOR_WRITE_SURFACE.test(p),',
+    replacement: '    match: (p) => false && p,',
+  },
+  {
+    id: 'M71',
+    expect: 'red',
+    claim:
+      'the cluster-write-surface rule widens to all of config/ — samples and dashboards fire (#2495)',
+    subject: 'paths',
+    anchor:
+      'const OPERATOR_WRITE_SURFACE = /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook)\\//;',
+    replacement: 'const OPERATOR_WRITE_SURFACE = /^packages\\/kn-next-operator\\/config\\//;',
+  },
+  {
+    id: 'M72',
+    expect: 'red',
+    claim: 'the templates rule is dropped — a function template change goes unflagged (#2495)',
+    subject: 'paths',
+    anchor: "    match: (p) => p.startsWith('templates/') && !isTestPath(p),",
+    replacement: '    match: (p) => false && p,',
+  },
+  {
+    id: 'M73',
+    expect: 'red',
+    claim:
+      'the templates rule matches templates/ at any depth — the CLI scaffold under packages/ fires (#2495)',
+    subject: 'paths',
+    anchor: "    match: (p) => p.startsWith('templates/') && !isTestPath(p),",
+    replacement: "    match: (p) => p.includes('templates/') && !isTestPath(p),",
+  },
 ];
 
 const prover = createGuardProver({

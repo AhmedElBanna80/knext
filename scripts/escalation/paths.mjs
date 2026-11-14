@@ -12,8 +12,16 @@ const CRD_TYPES = /(^|\/)api\/(.+\/)?[^/]+_types\.go$/;
 /** `packages/<pkg>/src/cli.ts` or anything under `packages/<pkg>/src/cli/`. */
 const CLI_SURFACE = /^packages\/[^/]+\/src\/(cli\.[cm]?[jt]s|cli\/.+)$/;
 
+/** The operator's command line: `cmd/main.go` (its flags) and the `cmd/` tools. */
+const OPERATOR_CMD = /^packages\/kn-next-operator\/cmd\/.+\.go$/;
+
+/** What the operator may write to the cluster: its RBAC, admission policy and webhooks. */
+const OPERATOR_WRITE_SURFACE = /^packages\/kn-next-operator\/config\/(rbac|admission|webhook)\//;
+
 export function isTestPath(p) {
-  return /(^|\/)__tests__\//.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p);
+  return (
+    /(^|\/)__tests__\//.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p) || /_test\.go$/.test(p)
+  );
 }
 
 /** Supply-chain paths that need no content to recognise. */
@@ -55,6 +63,21 @@ export const TRIGGERS = [
   {
     id: 'supply-chain',
     match: (p) => isStaticSupplyChainPath(p),
+  },
+  {
+    id: 'operator-flags',
+    // Go sources only: `cmd/EGM.md` describes the flags, it does not change them.
+    match: (p) => OPERATOR_CMD.test(p) && !isTestPath(p),
+  },
+  {
+    id: 'cluster-write-surface',
+    match: (p) => OPERATOR_WRITE_SURFACE.test(p),
+  },
+  {
+    id: 'templates',
+    // The root function templates (Go, Rust). `packages/kn-next/templates/` is
+    // the CLI's own scaffold and is not covered here.
+    match: (p) => p.startsWith('templates/') && !isTestPath(p),
   },
 ];
 

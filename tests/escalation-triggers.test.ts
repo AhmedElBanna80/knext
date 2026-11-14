@@ -333,6 +333,69 @@ describe('#2388 — Rust crates', () => {
   });
 });
 
+describe('#2495 — operator flags', () => {
+  it('a non-test file under the operator cmd/ fires', () => {
+    expect(ids(classify([change('packages/kn-next-operator/cmd/main.go')]))).toContain(
+      'operator-flags',
+    );
+    expect(
+      ids(classify([change('packages/kn-next-operator/cmd/policygen/main.go', 'A')])),
+    ).toContain('operator-flags');
+  });
+
+  it('near miss: cmd/ tests, EGM.md, and a cmd/ elsewhere do not fire', () => {
+    expect(
+      classify([
+        change('packages/kn-next-operator/cmd/zone_key_flag_test.go'),
+        change('packages/kn-next-operator/cmd/EGM.md'),
+        change('packages/scale-zero-pg/gateway/cmd/main.go'),
+        change('packages/kn-next-operator/internal/cmd/main.go'),
+      ]),
+    ).toHaveLength(0);
+  });
+});
+
+describe('#2495 — operator cluster-write surface', () => {
+  it('config/rbac, config/admission and config/webhook fire', () => {
+    for (const dir of ['rbac', 'admission', 'webhook']) {
+      expect(
+        ids(classify([change(`packages/kn-next-operator/config/${dir}/role.yaml`)])),
+        dir,
+      ).toContain('cluster-write-surface');
+    }
+  });
+
+  it('near miss: other operator config directories do not fire', () => {
+    expect(
+      classify([
+        change('packages/kn-next-operator/config/samples/nextapp.yaml'),
+        change('packages/kn-next-operator/config/grafana/dash.json'),
+        change('packages/kn-next-operator/config/rbacx/role.yaml'),
+        change('config/rbac/role.yaml'),
+      ]),
+    ).toHaveLength(0);
+  });
+});
+
+describe('#2495 — function templates', () => {
+  it('a non-test file under templates/ fires', () => {
+    expect(ids(classify([change('templates/go/go.mod')]))).toContain('templates');
+    expect(ids(classify([change('templates/rust/Cargo.lock')]))).toContain('templates');
+    expect(ids(classify([change('templates/go/Dockerfile', 'A')]))).toContain('templates');
+  });
+
+  it('near miss: template tests and a templates/ elsewhere do not fire', () => {
+    expect(
+      classify([
+        change('templates/go/internal/server/server_test.go'),
+        change('templates/rust/src/__tests__/x.test.ts'),
+        change('packages/kn-next/templates/runtime-standalone/Dockerfile.standalone.hbs'),
+        change('docs/templates/index.md'),
+      ]),
+    ).toHaveLength(0);
+  });
+});
+
 describe('#2388 — static supply-chain paths', () => {
   it('security/** fires', () => {
     expect(ids(classify([change('security/npm-audit-allowlist.json')]))).toContain('supply-chain');

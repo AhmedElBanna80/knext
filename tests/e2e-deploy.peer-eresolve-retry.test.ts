@@ -181,10 +181,11 @@ function makeCanaryPinnedApp(): string {
  * This fake goes first on PATH: any `install` without --legacy-peer-deps (the
  * deploy makes exactly one, its first attempt) prints `report` and exits 1;
  * every other npm call, the --legacy-peer-deps retry included, runs real npm,
- * which then really installs the tarballs. The reports are abridged npm
- * output: the code line plus the resolving/found/peer lines, without npm's
- * blank separators or `node_modules/` path lines. The self-check below pins
- * only the line the helper gates on, `npm error code ERESOLVE`, against real npm.
+ * which then really installs the tarballs. The reports are hand-written in
+ * npm's ERESOLVE format (the code line plus resolving/found/peer lines, without
+ * npm's blank separators or `node_modules/` path lines), not captured output.
+ * Against real npm, the self-check below asserts a non-zero exit, the word
+ * ERESOLVE and the `npm error code ERESOLVE` line the helper gates on.
  */
 function fakeFirstInstallNpm(dir: string, report: string): Record<string, string> {
   const realNpm = execFileSync('bash', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim();
@@ -210,7 +211,7 @@ function fakeFirstInstallNpm(dir: string, report: string): Record<string, string
   return { PATH: `${bin}:${process.env.PATH ?? ''}` };
 }
 
-/** npm's ERESOLVE report for the fixture's canary-react pin against next's peer range. */
+/** A hand-written, npm-shaped ERESOLVE report for the fixture's canary-react pin against next's peer range. */
 const FIXTURE_ERESOLVE = [
   'npm error code ERESOLVE',
   'npm error ERESOLVE unable to resolve dependency tree',
@@ -450,11 +451,12 @@ describe("scripts/e2e-deploy.sh — an ERESOLVE in knext's OWN peer range fails 
     const tarballsDir = join(stageDir, 'tarballs');
     mkdirSync(tarballsDir, { recursive: true });
     // @getknext/core with a NON-optional peer the fixture cannot satisfy, which
-    // --legacy-peer-deps would hide. npm's refusal is the canned report below;
+    // --legacy-peer-deps would hide. npm's refusal is the hand-written,
+    // npm-shaped report below;
     // what is under test is the deploy script and the real helper's verdict.
     packKnextStubs(stageDir, tarballsDir, { react: '^99.0.0' });
     appDir = makeCanaryPinnedApp();
-    // npm's report for that conflict: the knext package is the one declaring
+    // An npm-shaped report for that conflict: the knext package is the one declaring
     // the peer. Canned for the same reason as the fixture case.
     const knextReport = [
       'npm error code ERESOLVE',

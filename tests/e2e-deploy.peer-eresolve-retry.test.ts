@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from 'bu
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -171,8 +172,8 @@ function makeCanaryPinnedApp(): string {
   return appDir;
 }
 
-function runDeploy(appDir: string, tarballsDir: string) {
-  return spawnSync('bash', [DEPLOY_SH], {
+function runDeploy(appDir: string, tarballsDir: string, deploySh: string = DEPLOY_SH) {
+  return spawnSync('bash', [deploySh], {
     cwd: appDir,
     env: {
       ...process.env,
@@ -296,6 +297,58 @@ describe('scripts/e2e-deploy.sh — a NON-ERESOLVE install failure still fails t
   it('does not retry with --legacy-peer-deps', () => {
     expect(result.stderr).not.toContain('--legacy-peer-deps');
   });
+
+  it('the helper refused it as not an ERESOLVE, not for some other reason', () => {
+    expect(result.stderr).toContain('e2e-eresolve-retry: no retry: not an ERESOLVE refusal');
+  });
+});
+
+describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing) fails the deploy, never retried (#2319)', () => {
+  // A retryable fixture ERESOLVE (the canary react pin), so the ONLY thing that
+  // stops the retry is the helper's missing verdict. The deploy script and its
+  // lib/ are copied so the helper can be replaced without touching the repo; the
+  // failing install exits before anything resolves outside scripts/.
+  let stageDir = '';
+  let tarballsDir = '';
+  beforeAll(() => {
+    stageDir = mkdtempSync(join(tmpdir(), 'knext-e2e-helper-crash-'));
+    tarballsDir = join(stageDir, 'tarballs');
+    mkdirSync(tarballsDir, { recursive: true });
+    packKnextStubs(stageDir, tarballsDir);
+  }, 150000);
+  afterAll(() => {
+    if (stageDir && existsSync(stageDir)) rmSync(stageDir, { recursive: true, force: true });
+  });
+
+  const withHelper = (name: string, helper: string | null) => {
+    const scripts = join(stageDir, name, 'scripts');
+    cpSync(join(REPO_ROOT, 'scripts/lib'), join(scripts, 'lib'), { recursive: true });
+    writeFileSync(join(scripts, 'e2e-deploy.sh'), readFileSync(DEPLOY_SH, 'utf8'));
+    const helperPath = join(scripts, 'lib', 'e2e-eresolve-retry.mjs');
+    if (helper === null) rmSync(helperPath);
+    else writeFileSync(helperPath, helper);
+    return join(scripts, 'e2e-deploy.sh');
+  };
+
+  for (const [name, helper] of [
+    ['throws', "throw new Error('helper crashed before deciding');\n"],
+    ['exits 0 silently', 'process.exit(0);\n'],
+    ['is missing', null],
+  ] as const) {
+    it(`the helper ${name}: the deploy exits non-zero without retrying`, () => {
+      const appDir = makeCanaryPinnedApp();
+      try {
+        const r = runDeploy(appDir, tarballsDir, withHelper(name.replace(/ /g, '-'), helper));
+        expect(r.status).not.toBe(0);
+        expect(r.stdout.trim()).toBe('');
+        expect(r.stderr).not.toContain('retrying once with --legacy-peer-deps');
+        expect(r.stderr).toContain('was not retried');
+        expect(existsSync(join(appDir, '.knext-npm-install.log'))).toBe(false);
+      } finally {
+        cleanup(appDir);
+      }
+    });
+  }
 });
 
 describe("scripts/e2e-deploy.sh — an ERESOLVE in knext's OWN peer range fails the deploy, never retried (#2319)", () => {

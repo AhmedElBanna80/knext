@@ -6,11 +6,19 @@
  *
  * The retry exists for fixtures that pin a dependency a peer range excludes
  * (vercel/next.js fixtures pinning a react canary, #2296): npm refuses, pnpm only
- * warns, so the deploy retries once. It must never hide a conflict in knext's own
- * packages: if `@getknext/` appears ANYWHERE in the ERESOLVE report (the package
- * being resolved, the one declaring the peer, the one found, or a path line),
- * the retry is refused. That over-refuses a fixture conflict whose report only
- * mentions a knext package in passing; failing closed is the intended trade.
+ * warns, so the deploy retries once. It must not hide a conflict that names
+ * knext's own packages: if `@getknext/` appears ANYWHERE in the ERESOLVE report
+ * (the package being resolved, the one declaring the peer, the one found, or a
+ * path line), the retry is refused. That over-refuses a fixture conflict whose
+ * report only mentions a knext package in passing; failing closed is the
+ * intended trade.
+ *
+ * What it does NOT catch: a conflict deeper in knext's dependency tree. If
+ * `@getknext/core` depends on `foo` and `foo` peers on a range the fixture's pin
+ * excludes, npm's report names `foo` (the declarer), not the knext package above
+ * it, so no `@getknext/` string appears and the retry is allowed. Today no
+ * knext dependency declares a non-optional peer, so the case is hypothetical; a
+ * check for it would have to read the tree, not the report.
  *
  * It fails closed in its output too: the deploy retries only when this script
  * prints exactly `retry` on stdout, so a script that never reaches its decision

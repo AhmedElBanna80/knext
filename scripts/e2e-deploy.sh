@@ -209,7 +209,10 @@ EOF
   # built. Vercel installs those fixtures with pnpm, which only warns on a peer
   # mismatch. Retry ONCE with --legacy-peer-deps, and ONLY on an ERESOLVE that
   # names no @getknext/* package (#2319, scripts/lib/e2e-eresolve-retry.mjs): a
-  # conflict in knext's own peer ranges must fail the deploy, not be hidden.
+  # conflict that names knext's own packages must fail the deploy, not be hidden.
+  # Not covered: a conflict deeper in knext's dependency tree whose report names
+  # only the third-party package declaring the peer (npm names the declarer, not
+  # the knext package above it); that one is retried like a fixture conflict.
   # Every fixture that installs today keeps exactly today's install, and any
   # other failure still fails the deploy. ERESOLVE aborts before reify, so the
   # first attempt leaves node_modules untouched.
@@ -221,12 +224,13 @@ EOF
     cat "${NPM_INSTALL_LOG}" >&2
     # Retry only on the helper's explicit "retry" verdict (fails closed if it never decides).
     if [ "$(node "${SCRIPT_DIR}/lib/e2e-eresolve-retry.mjs" "${NPM_INSTALL_LOG}" || true)" = "retry" ]; then
+      rm -f "${NPM_INSTALL_LOG}"
       log "npm refused the tarball install with ERESOLVE (a fixture-pinned dependency conflicts with a peer range); retrying once with --legacy-peer-deps"
       # shellcheck disable=SC2086
       npm install --legacy-peer-deps --no-save --no-audit --no-fund "${LIB_TGZ}" "${DB_TGZ}" "${CORE_TGZ}" ${TS_PIN} >&2
     else
       rm -f "${NPM_INSTALL_LOG}"
-      log "ERROR: npm install of the knext tarballs failed and was not retried (not an ERESOLVE, an ERESOLVE that involves an @getknext/* package, or an unreadable install log; see the e2e-eresolve-retry line above)"
+      log "ERROR: npm install of the knext tarballs failed and was not retried (not an ERESOLVE, an ERESOLVE that involves an @getknext/* package, or an unreadable install log; the e2e-eresolve-retry line above gives the reason, and its absence means the helper never decided)"
       exit 1
     fi
   fi

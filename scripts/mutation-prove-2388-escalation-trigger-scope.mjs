@@ -565,9 +565,8 @@ const MUTATIONS = [
     claim:
       'the cluster-write-surface rule widens to all of config/ — samples and dashboards fire (#2495)',
     subject: 'paths',
-    anchor:
-      'const OPERATOR_WRITE_SURFACE = /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook)\\//;',
-    replacement: 'const OPERATOR_WRITE_SURFACE = /^packages\\/kn-next-operator\\/config\\//;',
+    anchor: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager)\\//;',
+    replacement: '  /^packages\\/kn-next-operator\\/config\\//;',
   },
   {
     id: 'M72',

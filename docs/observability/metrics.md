@@ -14,7 +14,7 @@ spans these counters mirror) · [structured logging + correlation IDs](./logging
 
 | Target | Process | Port / path | Series |
 | --- | --- | --- | --- |
-| **App runtime (default — compiled executable)** | the single-exec entry (`knext-bun-entry.mjs`) | `:9464/metrics` | `knext_bunexec_*`: http_requests_total{status_class} + duration histogram + in-flight + startup_duration + process RSS/uptime — plus the one forwarded app family `knext_deep_health_state` (tracing on) and, for an app that opts into in-process Rust, the two allowlisted `knext_ffi_*` families; nothing else, on the shipped scrape path |
+| **App runtime (default — compiled executable)** | the single-exec entry (`knext-bun-entry.mjs`) | `:9464/metrics` | `knext_bunexec_*`: http_requests_total{status_class} + duration histogram + in-flight + startup_duration + process RSS/uptime — plus the one forwarded app family `knext_deep_health_state` (tracing on or off) and, for an app that opts into in-process Rust, the two allowlisted `knext_ffi_*` families; nothing else, on the shipped scrape path |
 | **App runtime (legacy standalone supervisor)** | `node-server.ts` | `:9464/metrics` | golden signals + cold-start + DB-wake (merged from the child) and the Node process metrics — this shape only |
 | **Operator** | the controller manager | its `/metrics` (HTTPS `:8443` by default) | reconcile count/duration/errors + `workqueue_depth` + controller-runtime + Go process metrics |
 
@@ -79,6 +79,8 @@ fixed by the library's export list.
 | `knext_bunexec_startup_duration_seconds` | gauge | — | COLD START: seconds from process start to both listeners bound. Set once per process; absent until then |
 | `knext_bunexec_process_uptime_seconds` | gauge | — | seconds since process start |
 | `knext_bunexec_process_resident_memory_bytes` | gauge | — | RSS |
+| `knext_ffi_slow_calls_total` | counter | `fn` | in-process Rust calls slower than `KNEXT_FFI_SLOW_CALL_MS`. Only for an app that opts into in-process Rust, once its library has loaded |
+| `knext_ffi_load_seconds` | gauge | `lib` | time the in-process Rust library took to load. Same opt-in condition |
 
 The `app` label every query uses is added by the scrape, not by the runtime: the
 `PodMonitor` relabels the pod's `app` label onto each series, and pins

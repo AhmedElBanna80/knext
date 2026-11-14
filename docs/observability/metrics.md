@@ -14,7 +14,7 @@ spans these counters mirror) · [structured logging + correlation IDs](./logging
 
 | Target | Process | Port / path | Series |
 | --- | --- | --- | --- |
-| **App runtime (default — compiled executable)** | the single-exec entry (`knext-bun-entry.mjs`) | `:9464/metrics` | `knext_bunexec_*`: http_requests_total{status_class} + duration histogram + in-flight + startup_duration + process RSS/uptime — plus the one forwarded app family `knext_deep_health_state` (tracing on), and nothing else, on the shipped scrape path |
+| **App runtime (default — compiled executable)** | the single-exec entry (`knext-bun-entry.mjs`) | `:9464/metrics` | `knext_bunexec_*`: http_requests_total{status_class} + duration histogram + in-flight + startup_duration + process RSS/uptime — plus the one forwarded app family `knext_deep_health_state` (tracing on) and, for an app that opts into in-process Rust, the two allowlisted `knext_ffi_*` families; nothing else, on the shipped scrape path |
 | **App runtime (legacy standalone supervisor)** | `node-server.ts` | `:9464/metrics` | golden signals + cold-start + DB-wake (merged from the child) and the Node process metrics — this shape only |
 | **Operator** | the controller manager | its `/metrics` (HTTPS `:8443` by default) | reconcile count/duration/errors + `workqueue_depth` + controller-runtime + Go process metrics |
 
@@ -66,7 +66,10 @@ which is unbounded by construction (one crawler mints a series per URL). The
 duration histogram carries no labels at all: its 13 buckets already multiply it,
 and crossing them with `status_class` would make one histogram the dominant term
 in the fleet's series count for no SLO that needs it. **Total: 23 series per
-pod, constant.**
+pod, constant.** An app that opts into in-process Rust also serves
+`knext_ffi_slow_calls_total{fn}` and `knext_ffi_load_seconds{lib}` once its
+library has loaded: one series per exported Rust function plus one per library,
+fixed by the library's export list.
 
 | Series | Type | Labels | Meaning |
 | --- | --- | --- | --- |

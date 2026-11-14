@@ -1247,9 +1247,12 @@ function directLocalDeps(absPath) {
     // The `${VAR}/` prefix is always the SCRIPT'S OWN directory by convention
     // here (`SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`), so
     // it resolves the same as a relative import — strip it, resolve from `dir`.
+    // #2319: `node "${SCRIPT_DIR}/lib/x.mjs"` runs a helper the same way, so it
+    // is followed too, wherever it appears on the line (`$(node "…")` included).
     const shPatterns = [
       /^\s*\.\s+"\$\{[A-Z_]+\}\/([^"]+)"/gm,
       /^\s*source\s+"\$\{[A-Z_]+\}\/([^"]+)"/gm,
+      /(?:^|[\s(;&|])node\s+"\$\{SCRIPT_DIR\}\/([^"]+\.[cm]?js)"/gm,
     ];
     for (const re of shPatterns) {
       for (const m of src.matchAll(re)) specs.push(`./${m[1]}`);

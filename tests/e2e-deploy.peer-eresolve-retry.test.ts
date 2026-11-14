@@ -1,8 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it, setDefaultTimeout } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { decideRetry } from '../scripts/lib/e2e-eresolve-retry.mjs';
 
 /**
  * #2296 — at vercel/next.js v16.4.0 three deploy-suite files that used to set
@@ -16,7 +26,8 @@ import { join, resolve } from 'node:path';
  * not anything knext ships.
  *
  * The fix retries the tarball install ONCE with --legacy-peer-deps, and only
- * when the first attempt failed with ERESOLVE, so every fixture that installs
+ * when the first attempt failed with an ERESOLVE whose report names no
+ * @getknext/* package (#2319, scripts/lib/e2e-eresolve-retry.mjs), so every fixture that installs
  * today keeps exactly today's install. This test runs the REAL deploy script
  * through its REAL npm path, offline, on a tree that reproduces the ERESOLVE,
  * and checks the other half too: a non-ERESOLVE install failure still fails
@@ -84,7 +95,11 @@ function packStub(
   });
 }
 
-function packKnextStubs(stageDir: string, tarballsDir: string): void {
+function packKnextStubs(
+  stageDir: string,
+  tarballsDir: string,
+  corePeers: Record<string, string> = {},
+): void {
   packStub(
     stageDir,
     tarballsDir,
@@ -109,6 +124,7 @@ function packKnextStubs(stageDir: string, tarballsDir: string): void {
         './internal/bun-keepalive-guard': './dist/adapters/bun-keepalive-guard.cjs',
       },
       dependencies: { '@getknext/lib': '0.0.0-test' },
+      ...(Object.keys(corePeers).length > 0 ? { peerDependencies: corePeers } : {}),
     },
     {
       'dist/adapters/next-adapter.js': 'module.exports = {};\n',
@@ -157,8 +173,8 @@ function makeCanaryPinnedApp(): string {
   return appDir;
 }
 
-function runDeploy(appDir: string, tarballsDir: string) {
-  return spawnSync('bash', [DEPLOY_SH], {
+function runDeploy(appDir: string, tarballsDir: string, deploySh: string = DEPLOY_SH) {
+  return spawnSync('bash', [deploySh], {
     cwd: appDir,
     env: {
       ...process.env,
@@ -215,6 +231,8 @@ describe('scripts/e2e-deploy.sh — a fixture pinning a prerelease react still i
       );
       expect(r.status).not.toBe(0);
       expect(`${r.stdout}${r.stderr}`).toContain('ERESOLVE');
+      // the exact line scripts/lib/e2e-eresolve-retry.mjs gates the retry on
+      expect(`${r.stdout}${r.stderr}`).toMatch(/^npm (?:error|ERR!) code ERESOLVE\s*$/m);
     } finally {
       rmSync(probeApp, { recursive: true, force: true });
     }
@@ -279,5 +297,196 @@ describe('scripts/e2e-deploy.sh — a NON-ERESOLVE install failure still fails t
 
   it('does not retry with --legacy-peer-deps', () => {
     expect(result.stderr).not.toContain('--legacy-peer-deps');
+  });
+
+  it('the helper refused it as not an ERESOLVE, not for some other reason', () => {
+    expect(result.stderr).toContain('e2e-eresolve-retry: no retry: not an ERESOLVE refusal');
+  });
+});
+
+describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing) fails the deploy, never retried (#2319)', () => {
+  // A retryable fixture ERESOLVE (the canary react pin), so the ONLY thing that
+  // stops the retry is the helper's missing verdict. The deploy script and its
+  // lib/ are copied so the helper can be replaced without touching the repo; the
+  // failing install exits before anything resolves outside scripts/.
+  let stageDir = '';
+  let tarballsDir = '';
+  beforeAll(() => {
+    stageDir = mkdtempSync(join(tmpdir(), 'knext-e2e-helper-crash-'));
+    tarballsDir = join(stageDir, 'tarballs');
+    mkdirSync(tarballsDir, { recursive: true });
+    packKnextStubs(stageDir, tarballsDir);
+  }, 150000);
+  afterAll(() => {
+    if (stageDir && existsSync(stageDir)) rmSync(stageDir, { recursive: true, force: true });
+  });
+
+  // The stub keeps a copy of the install log it was handed, so the test can ask
+  // the real helper what it would have decided.
+  const KEEP_LOG =
+    "import { copyFileSync } from 'node:fs';\ncopyFileSync(process.argv[2], `${process.argv[2]}.seen`);\n";
+  const withHelper = (name: string, helper: string | null) => {
+    const scripts = join(stageDir, name, 'scripts');
+    cpSync(join(REPO_ROOT, 'scripts/lib'), join(scripts, 'lib'), { recursive: true });
+    writeFileSync(join(scripts, 'e2e-deploy.sh'), readFileSync(DEPLOY_SH, 'utf8'));
+    const helperPath = join(scripts, 'lib', 'e2e-eresolve-retry.mjs');
+    if (helper === null) rmSync(helperPath);
+    else writeFileSync(helperPath, helper);
+    return join(scripts, 'e2e-deploy.sh');
+  };
+
+  for (const [name, helper] of [
+    ['throws', `${KEEP_LOG}throw new Error('helper crashed before deciding');\n`],
+    ['exits 0 silently', `${KEEP_LOG}process.exit(0);\n`],
+    ['is missing', null],
+  ] as const) {
+    it(`the helper ${name}: the deploy exits non-zero without retrying`, () => {
+      const appDir = makeCanaryPinnedApp();
+      try {
+        const r = runDeploy(appDir, tarballsDir, withHelper(name.replace(/ /g, '-'), helper));
+        expect(r.status).not.toBe(0);
+        expect(r.stdout.trim()).toBe('');
+        if (helper === null) {
+          expect(r.stderr).toMatch(/Cannot find module|ERR_MODULE_NOT_FOUND/);
+        } else {
+          // The stub kept the log it was handed: the REAL helper would have
+          // retried it, so only the stub's missing verdict stopped the retry.
+          const seen = readFileSync(join(appDir, '.knext-npm-install.log.seen'), 'utf8');
+          expect(decideRetry(seen).retry, seen.slice(-2000)).toBe(true);
+        }
+        expect(r.stderr).not.toContain('retrying once with --legacy-peer-deps');
+        expect(r.stderr).toContain('was not retried');
+        expect(existsSync(join(appDir, '.knext-npm-install.log'))).toBe(false);
+      } finally {
+        cleanup(appDir);
+      }
+    });
+  }
+});
+
+describe("scripts/e2e-deploy.sh — an ERESOLVE in knext's OWN peer range fails the deploy, never retried (#2319)", () => {
+  let stageDir = '';
+  let appDir = '';
+  let result: ReturnType<typeof runDeploy>;
+
+  beforeAll(() => {
+    stageDir = mkdtempSync(join(tmpdir(), 'knext-e2e-knext-peer-stubs-'));
+    const tarballsDir = join(stageDir, 'tarballs');
+    mkdirSync(tarballsDir, { recursive: true });
+    // @getknext/core with a NON-optional peer the fixture cannot satisfy: a real
+    // conflict in knext's own packages, which --legacy-peer-deps would hide.
+    packKnextStubs(stageDir, tarballsDir, { react: '^99.0.0' });
+    appDir = makeCanaryPinnedApp();
+    result = runDeploy(appDir, tarballsDir);
+  }, 150000);
+
+  afterAll(() => {
+    cleanup(appDir);
+    if (stageDir && existsSync(stageDir)) rmSync(stageDir, { recursive: true, force: true });
+  });
+
+  it('exits non-zero and does not print a URL', () => {
+    expect(result.status).not.toBe(0);
+    expect(result.stdout.trim()).toBe('');
+  });
+
+  it("does not retry with --legacy-peer-deps, and says the conflict is knext's", () => {
+    expect(result.stderr).not.toContain('retrying once with --legacy-peer-deps');
+    expect(result.stderr).toContain("names knext's own package(s): @getknext/core");
+  });
+});
+
+describe('scripts/lib/e2e-eresolve-retry.mjs — which ERESOLVE may be retried (#2319)', () => {
+  const fixtureConflict = [
+    'npm error code ERESOLVE',
+    'npm error ERESOLVE unable to resolve dependency tree',
+    'npm error While resolving: fixture-app@0.0.0',
+    'npm error Found: react@19.3.0-canary-fef12a01-20260413',
+    'npm error Could not resolve dependency:',
+    'npm error peer react@"^19.0.0" from next@16.4.3',
+  ].join('\n');
+
+  it("retries a conflict that is the fixture's own pin", () => {
+    expect(decideRetry(fixtureConflict).retry).toBe(true);
+  });
+  it('refuses when knext declares the conflicting peer', () => {
+    const log = fixtureConflict.replace('from next@16.4.3', 'from @getknext/core@2.0.0');
+    expect(decideRetry(log)).toEqual({
+      retry: false,
+      reason: "the conflict names knext's own package(s): @getknext/core",
+    });
+  });
+  it('refuses when knext is the package being resolved', () => {
+    const log = fixtureConflict.replace(
+      'While resolving: fixture-app@0.0.0',
+      'While resolving: @getknext/db@2.0.0',
+    );
+    expect(decideRetry(log).retry).toBe(false);
+  });
+  it('refuses when knext is only the package found, or only on a path line', () => {
+    expect(decideRetry(`${fixtureConflict}\nnpm error Found: @getknext/core@2.0.0`).retry).toBe(
+      false,
+    );
+    expect(decideRetry(`${fixtureConflict}\nnpm error   node_modules/@getknext/lib`).retry).toBe(
+      false,
+    );
+  });
+  it('refuses a different failure whose log only carries an ERESOLVE warning line', () => {
+    const log = [
+      'npm warn ERESOLVE overriding peer dependency',
+      'npm warn While resolving: fixture-app@0.0.0',
+      'npm error code EINTEGRITY',
+      'npm error sha512-... integrity checksum failed',
+    ].join('\n');
+    expect(decideRetry(log).retry).toBe(false);
+  });
+  it('refuses on any mention of @getknext/, whatever its case or suffix', () => {
+    expect(decideRetry(`${fixtureConflict}\nnpm error see @getknext/`).retry).toBe(false);
+    expect(
+      decideRetry(`${fixtureConflict}\nnpm error peer x@"1" from @GetKnext/Core@2.0.0`).retry,
+    ).toBe(false);
+  });
+  it('refuses a failure that is not ERESOLVE', () => {
+    expect(decideRetry('npm error code EINTEGRITY\n').retry).toBe(false);
+  });
+});
+
+describe('scripts/lib/e2e-eresolve-retry.mjs as a CLI — its verdict is a printed "retry", never just exit 0 (#2319)', () => {
+  const HELPER = resolve(REPO_ROOT, 'scripts/lib/e2e-eresolve-retry.mjs');
+  const LOG = [
+    'npm error code ERESOLVE',
+    'npm error While resolving: fixture-app@0.0.0',
+    'npm error peer react@"^19.0.0" from next@16.4.3',
+  ].join('\n');
+
+  it('prints retry for a fixture conflict, even when the helper lives under a path with a space', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knext eresolve '));
+    try {
+      const copy = join(dir, 'e2e-eresolve-retry.mjs');
+      writeFileSync(copy, readFileSync(HELPER, 'utf8'));
+      const log = join(dir, 'install log.txt');
+      writeFileSync(log, LOG);
+      const r = spawnSync('node', [copy, log], { encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('retry\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prints nothing and exits 2 for an unreadable log', () => {
+    const r = spawnSync('node', [HELPER, join(tmpdir(), 'knext-no-such-install-log')], {
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe('');
+  });
+
+  it('the deploy script retries only on that exact output', () => {
+    const sh = readFileSync(DEPLOY_SH, 'utf8');
+    expect(sh).toContain(
+      'if [ "$(node "${SCRIPT_DIR}/lib/e2e-eresolve-retry.mjs" "${NPM_INSTALL_LOG}" || true)" = "retry" ]; then',
+    );
+    expect(sh).not.toMatch(/grep -q .ERESOLVE./);
   });
 });

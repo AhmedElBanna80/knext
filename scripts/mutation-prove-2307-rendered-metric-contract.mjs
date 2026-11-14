@@ -319,7 +319,7 @@ const MUTATIONS = [
     edits: [
       {
         subject: 'selfContained',
-        anchor: "    readSeam(Symbol.for('knext.core.cdn.renderMetrics')) +",
+        anchor: "    readSeam(Symbol.for('knext.core.cdn.renderMetrics'), CDN_METRIC_FAMILIES) +",
         replacement: "    '' +",
       },
     ],

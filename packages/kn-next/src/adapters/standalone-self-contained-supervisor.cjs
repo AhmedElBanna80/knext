@@ -104,17 +104,41 @@ function metricsBody(state) {
  * @param {symbol} key
  * @returns {string}
  */
-function readSeam(key) {
+function readSeam(key, families) {
   const render = globalThis[key];
   if (typeof render !== 'function') return '';
   try {
     const text = render();
     if (typeof text !== 'string' || text.length === 0) return '';
-    return text.endsWith('\n') ? text : `${text}\n`;
+    return keepFamilies(text, families);
   } catch {
     return '';
   }
 }
+
+/**
+ * Keep only the HELP / TYPE / sample lines of the named families (exact name
+ * match), so a seam cannot put any other family on the metrics port.
+ *
+ * @param {string} body
+ * @param {readonly string[]} families
+ * @returns {string}
+ */
+function keepFamilies(body, families) {
+  const kept = body.split('\n').filter((line) => {
+    const m = /^(?:# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(line);
+    return m !== null && families.includes(m[1]);
+  });
+  return kept.length > 0 ? `${kept.join('\n')}\n` : '';
+}
+
+/** The families each seam may put on the port; mirrors deep-health-lite.ts, pinned by seam-family-allowlists.test.ts. */
+const CDN_METRIC_FAMILIES = Object.freeze([
+  'knext_cdn_edge_decision_total',
+  'knext_cdn_foreign_edge_strip_total',
+  'knext_cdn_purge_total',
+]);
+const USE_CACHE_METRIC_FAMILIES = Object.freeze(['knext_use_cache_events_total']);
 
 /**
  * The counters other modules in this process publish for the metrics port:
@@ -128,8 +152,8 @@ function readSeam(key) {
  */
 function readSeamMetrics() {
   return (
-    readSeam(Symbol.for('knext.core.cdn.renderMetrics')) +
-    readSeam(Symbol.for('knext.core.useCache.renderMetrics'))
+    readSeam(Symbol.for('knext.core.cdn.renderMetrics'), CDN_METRIC_FAMILIES) +
+    readSeam(Symbol.for('knext.core.useCache.renderMetrics'), USE_CACHE_METRIC_FAMILIES)
   );
 }
 
@@ -396,6 +420,9 @@ function install(opts = {}) {
 install();
 
 module.exports = {
+  CDN_METRIC_FAMILIES,
+  USE_CACHE_METRIC_FAMILIES,
+  readSeamMetrics,
   drainHardcapMs,
   hardcapWarning,
   metricsPort,

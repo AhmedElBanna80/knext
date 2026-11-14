@@ -74,8 +74,19 @@ const CDN_METRICS_SEAM = Symbol.for("knext.core.cdn.renderMetrics");
  * the app's metrics port, so the counters reach it without a new port.
  */
 export function readCdnMetrics(): string {
-    return readSeam(CDN_METRICS_SEAM);
+    return keepFamilies(readSeam(CDN_METRICS_SEAM), CDN_METRIC_FAMILIES);
 }
+
+/**
+ * The only families the CDN seam may put on :9464: the two edge counters
+ * `cdn-edge.cjs` renders and the purge counter (`cdn-purge/metrics.js`).
+ * `seam-family-allowlists.test.ts` pins them to the emitters.
+ */
+export const CDN_METRIC_FAMILIES = [
+    "knext_cdn_edge_decision_total",
+    "knext_cdn_foreign_edge_strip_total",
+    "knext_cdn_purge_total",
+] as const;
 
 /**
  * The `'use cache'` metrics seam the use-cache handler publishes when it is
@@ -90,8 +101,16 @@ const USE_CACHE_METRICS_SEAM = Symbol.for("knext.core.useCache.renderMetrics");
  * like {@link readCdnMetrics}.
  */
 export function readUseCacheMetrics(): string {
-    return readSeam(USE_CACHE_METRICS_SEAM);
+    return keepFamilies(
+        readSeam(USE_CACHE_METRICS_SEAM),
+        USE_CACHE_METRIC_FAMILIES,
+    );
 }
+
+/** The only family the `'use cache'` seam may put on :9464 (`USE_CACHE_METRIC`). */
+export const USE_CACHE_METRIC_FAMILIES = [
+    "knext_use_cache_events_total",
+] as const;
 
 /**
  * The in-process Rust seam. The module `knext ffi generate` writes into an app

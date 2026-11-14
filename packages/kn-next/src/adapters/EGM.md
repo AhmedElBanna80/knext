@@ -177,7 +177,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = ...` line.
   `standalone-self-contained-supervisor.cjs` exports `install`,
   `installDrainHandler`, `installExitNormalizer`, `drainHardcapMs`,
-  `hardcapWarning`, `metricsPort`, `metricsBody` and `startMetricsServer`.
+  `hardcapWarning`, `metricsPort`, `metricsBody`, `startMetricsServer`,
+  `readSeamMetrics`, `CDN_METRIC_FAMILIES` and `USE_CACHE_METRIC_FAMILIES`.
 - `standalone-adapter-path.ts` exports `blankStandaloneAdapterPath`,
   `nextCarriesAdapter404Bug`, `resolveStandaloneNextVersion` and
   `ADAPTER_PATH_404_FIXED_IN` (`"16.4.0"`). `standalone-bun-exports.ts` exports
@@ -241,7 +242,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `deep-health-lite.ts` exports `createDeepHealthLite`, `startDeepHealthLite`,
   `resolveLitePort`, `DEEP_HEALTH_LITE_TTL_MS`, `appendExposition` and the seam
   readers `readCdnMetrics`, `readUseCacheMetrics`, `readFfiMetrics` and
-  `readSeamMetrics`, plus `FFI_METRIC_FAMILIES`. It reads `DB_ACTIVITY_BUDGET_MS` (45000) and
+  `readSeamMetrics`, plus `CDN_METRIC_FAMILIES`, `USE_CACHE_METRIC_FAMILIES`
+  and `FFI_METRIC_FAMILIES`. It reads `DB_ACTIVITY_BUDGET_MS` (45000) and
   `KN_CHILD_METRICS_PORT` (9092).
 - `boot-trace.ts` exports `createBootTracer`, `bootTrace`,
   `isBootTraceEnabled` and `BOOT_TRACE_ENV` (`KNEXT_BOOT_TRACE`), which it
@@ -553,9 +555,15 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `deep-health-lite.ts:startDeepHealthLite`'s listener appends the CDN,
   `"use cache"` and in-process FFI metric expositions (`readSeamMetrics`) to
   the deep-health body on every `GET /metrics`, even when the gate gives an
-  empty body. A seam that is absent or throws contributes `""`. The FFI
-  exposition is filtered to `FFI_METRIC_FAMILIES` (`knext_ffi_slow_calls_total`,
-  `knext_ffi_load_seconds`): any other family the seam renders is dropped.
+  empty body. A seam that is absent or throws contributes `""`. Each seam's
+  exposition is filtered to its allowlist, and any other family the seam renders
+  is dropped: `CDN_METRIC_FAMILIES` (`knext_cdn_edge_decision_total`,
+  `knext_cdn_foreign_edge_strip_total`, `knext_cdn_purge_total`),
+  `USE_CACHE_METRIC_FAMILIES` (`knext_use_cache_events_total`) and
+  `FFI_METRIC_FAMILIES` (`knext_ffi_slow_calls_total`, `knext_ffi_load_seconds`).
+- `standalone-self-contained-supervisor.cjs`'s in-process metrics port appends
+  the CDN then the `'use cache'` seam (`readSeamMetrics`), filtered to the same
+  two allowlists. It does not read the in-process Rust seam.
 - The deep-health scrape hook only probes after recent DB activity, runs one
   probe at a time, caches results for 10 s, and fails open.
 - `deep-health-lite.ts:gateOpen` fails closed: with no activity slot, it does
@@ -647,7 +655,8 @@ The compile pipeline fails closed.
   `METRICS_PORT`. It calls `process.exit` when the child
   exits.
 - `metrics.ts:startChildMetricsServer` and `deep-health-lite.ts` listen on
-  `127.0.0.1:9092`, and `fetchChildMetrics` scrapes that address.
+  `127.0.0.1` at `KN_CHILD_METRICS_PORT` (default 9092), and
+  `fetchChildMetrics` scrapes that address.
 - The compile scripts spawn `bun` and the analyzers with `spawnSync`, and write
   `OUTFILE` plus temporary entry files, which are removed in `finally`.
   `compile-embed.mjs` creates and deletes `mkdtemp` directories.
@@ -696,7 +705,8 @@ These keys are set on `globalThis` with `Symbol.for`:
   `knext.sandboxFetchRealmDebug.sockets`
 
 `deep-health-lite.ts` reads, but does not set,
-`knext.lib.clients.lastDbActivityAt` and `knext.ffi.renderMetrics`.
+`knext.lib.clients.lastDbActivityAt`, `knext.core.cdn.renderMetrics`,
+`knext.core.useCache.renderMetrics` and `knext.ffi.renderMetrics`.
 
 These `Symbol.for` keys are stamped on other shared objects, not on
 `globalThis`:

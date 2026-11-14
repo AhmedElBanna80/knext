@@ -148,6 +148,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `musl-native-lockfiles/` (data, no contract): committed `package.json` and `package-lock.json` pairs for the musl native addons (sharp, `@img/sharp-libvips`, sqlite3), plus `next-sharp-resolution.json` and `suite-native-addons.json`.
 
 ## Invariants
+- `compat-window-fingerprint.mjs` freezes the harness closure from its entry scripts: JS files are followed through their local imports; shell files through `.` / `source "${VAR}/…"` and `node "${SCRIPT_DIR}/….{js,mjs,cjs}"` (the last so `e2e-deploy.sh`'s `lib/e2e-eresolve-retry.mjs` is frozen).
 - `lib/prover-lane.mjs` discovers provers only by `PROVER_RE = /^mutation-prove-.*\.mjs$/`. A prover file that does not match is never run by the lane.
 - Every `mutation-prove-*.mjs` imports `lib/prover-report.mjs`, so the lane can compare the number of mutations each prover declared with the number it ran.
 - `bun-test.mjs` isolates each test file in its own process, because bun's `mock.module` registrations last for the whole run (header comment). With `--no-skip`, a file that reports any skipped or todo test fails.

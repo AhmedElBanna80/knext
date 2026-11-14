@@ -321,6 +321,10 @@ describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing)
     if (stageDir && existsSync(stageDir)) rmSync(stageDir, { recursive: true, force: true });
   });
 
+  // The stub keeps a copy of the install log it was handed, so the test can ask
+  // the real helper what it would have decided.
+  const KEEP_LOG =
+    "import { copyFileSync } from 'node:fs';\ncopyFileSync(process.argv[2], `${process.argv[2]}.seen`);\n";
   const withHelper = (name: string, helper: string | null) => {
     const scripts = join(stageDir, name, 'scripts');
     cpSync(join(REPO_ROOT, 'scripts/lib'), join(scripts, 'lib'), { recursive: true });
@@ -332,8 +336,8 @@ describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing)
   };
 
   for (const [name, helper] of [
-    ['throws', "throw new Error('helper crashed before deciding');\n"],
-    ['exits 0 silently', 'process.exit(0);\n'],
+    ['throws', `${KEEP_LOG}throw new Error('helper crashed before deciding');\n`],
+    ['exits 0 silently', `${KEEP_LOG}process.exit(0);\n`],
     ['is missing', null],
   ] as const) {
     it(`the helper ${name}: the deploy exits non-zero without retrying`, () => {
@@ -342,10 +346,14 @@ describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing)
         const r = runDeploy(appDir, tarballsDir, withHelper(name.replace(/ /g, '-'), helper));
         expect(r.status).not.toBe(0);
         expect(r.stdout.trim()).toBe('');
-        // The install failed with ERESOLVE (its log is echoed to stderr). It is
-        // the same fixture the first describe proves the real helper retries,
-        // so only the helper's missing verdict stopped the retry here.
-        expect(r.stderr).toMatch(/^npm (?:error|ERR!) code ERESOLVE\s*$/m);
+        if (helper === null) {
+          expect(r.stderr).toMatch(/Cannot find module|ERR_MODULE_NOT_FOUND/);
+        } else {
+          // The stub kept the log it was handed: the REAL helper would have
+          // retried it, so only the stub's missing verdict stopped the retry.
+          const seen = readFileSync(join(appDir, '.knext-npm-install.log.seen'), 'utf8');
+          expect(decideRetry(seen).retry, seen.slice(-2000)).toBe(true);
+        }
         expect(r.stderr).not.toContain('retrying once with --legacy-peer-deps');
         expect(r.stderr).toContain('was not retried');
         expect(existsSync(join(appDir, '.knext-npm-install.log'))).toBe(false);

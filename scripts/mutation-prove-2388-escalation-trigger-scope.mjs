@@ -555,7 +555,8 @@ const MUTATIONS = [
     claim:
       'the cluster-write-surface rule is dropped — RBAC and admission policy change unflagged (#2495)',
     subject: 'paths',
-    anchor: '    match: (p) => OPERATOR_WRITE_SURFACE.test(p),',
+    anchor:
+      '    match: (p) => OPERATOR_WRITE_SURFACE.test(p) || OPERATOR_BUNDLE_WRITE_SURFACE.test(p),',
     replacement: '    match: (p) => false && p,',
   },
   {
@@ -573,7 +574,8 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the templates rule is dropped — a function template change goes unflagged (#2495)',
     subject: 'paths',
-    anchor: "    match: (p) => p.startsWith('templates/') && !isTestPath(p),",
+    anchor:
+      "    match: (p) => p.startsWith('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
     replacement: '    match: (p) => false && p,',
   },
   {
@@ -582,8 +584,39 @@ const MUTATIONS = [
     claim:
       'the templates rule matches templates/ at any depth — the CLI scaffold under packages/ fires (#2495)',
     subject: 'paths',
-    anchor: "    match: (p) => p.startsWith('templates/') && !isTestPath(p),",
-    replacement: "    match: (p) => p.includes('templates/') && !isTestPath(p),",
+    anchor:
+      "    match: (p) => p.startsWith('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
+    replacement:
+      "    match: (p) => p.includes('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
+  },
+  {
+    id: 'M74',
+    expect: 'red',
+    claim:
+      'the install-bundle half of cluster-write-surface is dropped — config/default/kustomization.yaml can drop ../admission unflagged (#2495)',
+    subject: 'paths',
+    anchor:
+      '    match: (p) => OPERATOR_WRITE_SURFACE.test(p) || OPERATOR_BUNDLE_WRITE_SURFACE.test(p),',
+    replacement: '    match: (p) => OPERATOR_WRITE_SURFACE.test(p),',
+  },
+  {
+    id: 'M75',
+    expect: 'red',
+    claim:
+      'the template non-surface exclusion is dropped — Rust tests, README and .gitignore fire (#2495)',
+    subject: 'paths',
+    anchor:
+      "    match: (p) => p.startsWith('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
+    replacement: "    match: (p) => p.startsWith('templates/') && !isTestPath(p),",
+  },
+  {
+    id: 'M76',
+    expect: 'red',
+    claim:
+      'the template exclusion swallows .dockerignore — what goes into the image changes unflagged (#2495)',
+    subject: 'paths',
+    anchor: '|\\.md$|(^|\\/)\\.gitignore$/;',
+    replacement: '|\\.md$|(^|\\/)\\.(git|docker)ignore$/;',
   },
 ];
 

@@ -18,6 +18,22 @@ const OPERATOR_CMD = /^packages\/kn-next-operator\/cmd\/.+\.go$/;
 /** What the operator may write to the cluster: its RBAC, admission policy and webhooks. */
 const OPERATOR_WRITE_SURFACE = /^packages\/kn-next-operator\/config\/(rbac|admission|webhook)\//;
 
+/**
+ * The parts of the install bundle (`config/default/`) that decide the same thing:
+ * whether `../rbac` / `../admission` are included at all, the admission-policy
+ * patches and the webhook wiring.
+ */
+const OPERATOR_BUNDLE_WRITE_SURFACE =
+  /^packages\/kn-next-operator\/config\/default\/(kustomization\.yaml|[^/]*(admission|webhook)[^/]*)$/;
+
+/**
+ * Not part of what a template ships: Rust test modules and helpers (`tests.rs`,
+ * `*_tests.rs`, `tests/`, `testkit.rs`, `testutil.rs`), Markdown and `.gitignore`.
+ * `.dockerignore` still fires: it decides what goes into the image.
+ */
+const TEMPLATE_NON_SURFACE =
+  /(^|\/)(tests|testkit|testutil)(\/|\.rs$)|_tests\.rs$|\.md$|(^|\/)\.gitignore$/;
+
 export function isTestPath(p) {
   return (
     /(^|\/)__tests__\//.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p) || /_test\.go$/.test(p)
@@ -71,13 +87,13 @@ export const TRIGGERS = [
   },
   {
     id: 'cluster-write-surface',
-    match: (p) => OPERATOR_WRITE_SURFACE.test(p),
+    match: (p) => OPERATOR_WRITE_SURFACE.test(p) || OPERATOR_BUNDLE_WRITE_SURFACE.test(p),
   },
   {
     id: 'templates',
     // The root function templates (Go, Rust). `packages/kn-next/templates/` is
     // the CLI's own scaffold and is not covered here.
-    match: (p) => p.startsWith('templates/') && !isTestPath(p),
+    match: (p) => p.startsWith('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),
   },
 ];
 

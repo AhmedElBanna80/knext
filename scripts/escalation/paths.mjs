@@ -15,8 +15,13 @@ const CLI_SURFACE = /^packages\/[^/]+\/src\/(cli\.[cm]?[jt]s|cli\/.+)$/;
 /** The operator's command line: `cmd/main.go` (its flags) and the `cmd/` tools. */
 const OPERATOR_CMD = /^packages\/kn-next-operator\/cmd\/.+\.go$/;
 
-/** What the operator may write to the cluster: its RBAC, admission policy and webhooks. */
-const OPERATOR_WRITE_SURFACE = /^packages\/kn-next-operator\/config\/(rbac|admission|webhook)\//;
+/**
+ * What the operator may write to the cluster, and the gate in front of every
+ * write: its RBAC, admission policy, webhooks and the webhook serving cert
+ * (`certmanager/`; the webhook is failurePolicy=Fail, so a broken cert blocks writes).
+ */
+const OPERATOR_WRITE_SURFACE =
+  /^packages\/kn-next-operator\/config\/(rbac|admission|webhook|certmanager)\//;
 
 /**
  * The parts of the install bundle (`config/default/`) that decide the same thing:
@@ -27,12 +32,13 @@ const OPERATOR_BUNDLE_WRITE_SURFACE =
   /^packages\/kn-next-operator\/config\/default\/(kustomization\.yaml|[^/]*(admission|webhook)[^/]*)$/;
 
 /**
- * Not part of what a template ships: Rust test modules and helpers (`tests.rs`,
- * `*_tests.rs`, `tests/`, `testkit.rs`, `testutil.rs`), Markdown and `.gitignore`.
+ * Not part of what a template ships: test modules, helpers and vectors (`tests.rs`,
+ * `*_tests.rs`, `tests/`, `testkit.rs`, `testutil.rs`, `testvectors.rs`,
+ * `testvectors/`), the `e2e/` suites, Markdown and `.gitignore`.
  * `.dockerignore` still fires: it decides what goes into the image.
  */
 const TEMPLATE_NON_SURFACE =
-  /(^|\/)(tests|testkit|testutil)(\/|\.rs$)|_tests\.rs$|\.md$|(^|\/)\.gitignore$/;
+  /(^|\/)(tests|testkit|testutil|testvectors|e2e)(\/|\.rs$)|_tests\.rs$|\.md$|(^|\/)\.gitignore$/;
 
 export function isTestPath(p) {
   return (

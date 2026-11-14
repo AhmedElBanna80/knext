@@ -618,6 +618,24 @@ const MUTATIONS = [
     anchor: '|\\.md$|(^|\\/)\\.gitignore$/;',
     replacement: '|\\.md$|(^|\\/)\\.(git|docker)ignore$/;',
   },
+  {
+    id: 'M77',
+    expect: 'red',
+    claim:
+      'certmanager/ leaves the cluster-write surface — the webhook serving cert changes unflagged (#2495)',
+    subject: 'paths',
+    anchor: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager)\\//;',
+    replacement: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook)\\//;',
+  },
+  {
+    id: 'M78',
+    expect: 'red',
+    claim:
+      'test vectors and e2e suites stop being excluded — test-only template files fire (#2495)',
+    subject: 'paths',
+    anchor: '(tests|testkit|testutil|testvectors|e2e)(',
+    replacement: '(tests|testkit|testutil)(',
+  },
 ];
 
 const prover = createGuardProver({

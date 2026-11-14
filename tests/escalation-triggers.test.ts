@@ -356,8 +356,8 @@ describe('#2495 — operator flags', () => {
 });
 
 describe('#2495 — operator cluster-write surface', () => {
-  it('config/rbac, config/admission and config/webhook fire', () => {
-    for (const dir of ['rbac', 'admission', 'webhook']) {
+  it('config/rbac, config/admission, config/webhook and config/certmanager fire', () => {
+    for (const dir of ['rbac', 'admission', 'webhook', 'certmanager']) {
       expect(
         ids(classify([change(`packages/kn-next-operator/config/${dir}/role.yaml`)])),
         dir,
@@ -410,6 +410,9 @@ describe('#2495 — function templates', () => {
         change('templates/rust/src/rpc/tests/vector_wiring.rs'),
         change('templates/rust/src/rpc/testkit.rs'),
         change('templates/rust/src/testutil.rs'),
+        change('templates/rust/src/testvectors.rs'),
+        change('templates/go/internal/testvectors/testvectors.go'),
+        change('templates/rust/e2e/e2e.rs'),
         change('templates/go/README.md'),
         change('templates/rust/.gitignore'),
         change('packages/kn-next/templates/runtime-standalone/Dockerfile.standalone.hbs'),

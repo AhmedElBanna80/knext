@@ -16,12 +16,19 @@
 #   cold      each function scaled to zero; a write then a read through the zone wakes it
 #   trailers  scaled to zero again; a read of a missing item comes back NotFound through
 #             the activator, the same code as the warm control
+#   zerozone  the zone at minScale 0 too: once the zone and the Go function both have no
+#             pod, one call through the zone wakes both, and the function (its Knative
+#             port named h2c, its injected URL plain http) answers over h2c
 #   rollout   the Go function's served version moves: a newer one (1.1.0) is called by
 #             the 1.0.0 zone, an older one (0.9.0) is refused by the zone's glue
-#             (FailedPrecondition) before any call, the same one (1.0.0) is called again
+#             (FailedPrecondition) before any call, the same one (1.0.0) is called again;
+#             each bump rolls exactly one zone revision
 #   sovereignty  a second zone lists four functions; three take another zone's Secret
 #             (env, envFrom, volume) and are refused (SecretNotAllowed, no Knative Service, no pod),
 #             the control takes its own zone's Secret through all three and is rendered
+#   crosszone a zone lists a function that names another zone: the listing zone reports
+#             BackendBindings=False/CrossZoneBinding and renders no URL for it, the function
+#             reports Bound=False/ZoneNotListed and Ready=False, with no Knative Service and no pod
 #   wake      the zone restarts on an image that loads knext's wake-ahead preload: an
 #             opted-out function stays at zero; an opted-in one is woken by the zone's
 #             start before any call, and the first call is faster
@@ -47,7 +54,7 @@ CLUSTER="${KIND_CLUSTER:-knext-z7-e2e}"
 REG_PORT="${REGISTRY_PORT:-5001}"
 NS="${Z10_NAMESPACE:-z10-e2e}"
 WITH_RUST="${Z10_WITH_RUST:-1}"
-PHASES="${PHASES:-images deploy cold trailers rollout sovereignty wake}"
+PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake}"
 INTERNAL_PORT="${INTERNAL_PORT:-18090}"
 ZERO_TIMEOUT="${Z10_ZERO_TIMEOUT:-300}"
 OPERATOR_NS='kn-next-operator-system'
@@ -291,18 +298,84 @@ phase_trailers() {
   fi
 }
 
+# ---------------------------------------------------------------- phase: zerozone
+
+# zone_min_is <n>: the zone's Knative Service is Ready on a revision rendered
+# with min-scale <n>, and has caught up with its spec.
+zone_min_is() {
+  k -n "${NS}" get ksvc "${ZONE}" -o json | jq -e --arg n "$1" '
+    (.spec.template.metadata.annotations["autoscaling.knative.dev/min-scale"] // "") == $n
+    and .status.observedGeneration == .metadata.generation
+    and .status.latestReadyRevisionName == .status.latestCreatedRevisionName' >/dev/null
+}
+
+# set_zone_min <n>: set the zone's spec.scaling.minScale and wait for the revision.
+set_zone_min() {
+  k -n "${NS}" patch nextapp "${ZONE}" --type merge -p "{\"spec\":{\"scaling\":{\"minScale\":$1}}}" >/dev/null
+  wait_until 300 3 "the zone runs a revision with min-scale $1" "zone_min_is $1"
+}
+
+phase_zerozone() {
+  log "zerozone: the zone and its function both at zero; one call wakes both, the function over h2c"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  # h2c is what the operator renders, read from the objects rather than assumed:
+  # the function's Knative port is named h2c (so the activator and queue-proxy
+  # speak HTTP/2 cleartext to it), and the URL injected into the zone is plain
+  # http to the function's cluster-local name.
+  local port url
+  port="$(k -n "${NS}" get ksvc "${GO_FN}" -o json | jq -r '[.spec.template.spec.containers[].ports[]?.name] | join(",")')"
+  [ "${port}" = h2c ] || fail "${GO_FN}: its Knative Service port is '${port}', want h2c"
+  url="$(k -n "${NS}" get ksvc "${ZONE}" -o json \
+    | jq -r '[.spec.template.spec.containers[] | select(.name == "user-container") | .env[]? | select(.name == "EXAMPLE_SERVICE_URL") | .value] | first // ""')"
+  [ "${url}" = "http://${GO_FN}.${NS}.svc.cluster.local" ] \
+    || fail "the zone's EXAMPLE_SERVICE_URL is '${url}', want http://${GO_FN}.${NS}.svc.cluster.local"
+  ok "${GO_FN} is served on an h2c port, and the zone dials it at ${url}"
+
+  set_zone_min 0
+  await_zero "${ZONE}"
+  await_zero "${GO_FN}"
+  local started elapsed
+  started=${SECONDS}
+  zone_call "/example/put?sub=alice&id=zero-1&value=v1"
+  elapsed=$((SECONDS - started))
+  [ "${ZC_STATUS}" = 200 ] || fail "zone and function at zero: status ${ZC_STATUS}, want 200 (body: ${ZC_BODY})"
+  jq -e '.ok == true' <<<"${ZC_BODY}" >/dev/null || fail "zone and function at zero: body ${ZC_BODY}"
+  [ -n "$(pod_uids "${ZONE}")" ] || fail "the call succeeded but the zone has no pod: it did not wake from zero"
+  [ -n "$(pod_uids "${GO_FN}")" ] || fail "the call succeeded but ${GO_FN} has no pod: it did not wake from zero"
+  ok "zone and function both at zero: one call woke both and was answered (${elapsed}s)"
+  expect_zone "a read through the woken zone comes back from the woken function" \
+    "/example/get?sub=alice&id=zero-1" 200 '.ok == true and .value == "v1"'
+
+  set_zone_min 1
+  wait_until 300 3 "the zone settled warm again" zone_settled
+}
+
 # ---------------------------------------------------------------- phase: rollout
 
 # set_served <version>: stamp the Go function with <version> and wait until the
 # zone runs a revision that sees it. The zone was generated against contract
 # 1.0.0; the served version reaches it only through its env.
 set_served() {
-  local v=$1
+  local v=$1 before after rolled want=1
+  # A bump to the version already served changes nothing (a rerun after an
+  # aborted phase), so it must roll nothing.
+  [ "$(k -n "${NS}" get backendservice "${GO_FN}" -o jsonpath='{.status.servedProtoVersion}')" = "${v}" ] && want=0
+  before="$(zone_revisions)"
   k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"protoVersion\":\"${v}\"}}" >/dev/null
   wait_until 600 3 "${GO_FN} serves ${v}" \
     "[ \"\$(k -n ${NS} get backendservice ${GO_FN} -o jsonpath='{.status.servedProtoVersion}')\" = ${v} ]"
   wait_until 600 3 "the zone runs with EXAMPLE_SERVICE_PROTO_VERSION=${v}" "zone_sees_version ${v}"
-  ok "${GO_FN} serves ${v}, and the zone's pod sees it"
+  # Hold: a second re-render that lands after the first would show up here.
+  sleep 20
+  after="$(zone_revisions)"
+  rolled="$(comm -13 <(printf '%s\n' "${before}") <(printf '%s\n' "${after}") | grep -c . || true)"
+  [ "${rolled}" = "${want}" ] \
+    || fail "${GO_FN} ${v}: the bump rolled ${rolled} zone revision(s), want exactly ${want}"
+  ok "${GO_FN} serves ${v}, the zone's pod sees it, and the bump rolled exactly ${want} zone revision(s)"
+}
+
+zone_revisions() { # the zone's revision names, sorted
+  k -n "${NS}" get revisions -l "serving.knative.dev/service=${ZONE}" -o json | jq -r '.items[].metadata.name' | sort
 }
 
 zone_sees_version() { # <version>: the zone's single ready pod carries the served version
@@ -473,6 +546,92 @@ YAML
   done
 }
 
+# ---------------------------------------------------------------- phase: crosszone
+
+XZ_OWNER=xz-owner
+XZ_LISTING=xz-listing
+XZ_FN=xz-fn
+
+cond_of() { # <kind> <name> <type>: "<status>/<reason>" of that condition
+  k -n "${NS}" get "$1" "$2" -o json | jq -r --arg t "$3" '.status.conditions[]? | select(.type == $t) | "\(.status)/\(.reason)"'
+}
+
+phase_crosszone() {
+  log "crosszone: a zone lists a function that names another zone; neither side binds it"
+  local go_img zone_img
+  go_img="$(image_ref function-go)"
+  zone_img="$(image_ref zone-caller)"
+  # The function's own zone exists and does not list it; the listing zone is
+  # another zone. So the refusal is the zone rule, not a missing zone.
+  k apply --validate=strict -f - <<YAML
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: ${XZ_OWNER}
+  namespace: ${NS}
+spec:
+  image: ${zone_img}
+  healthCheckPath: /api/health
+  scaling:
+    minScale: 0
+    maxScale: 1
+---
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: ${XZ_LISTING}
+  namespace: ${NS}
+spec:
+  image: ${zone_img}
+  healthCheckPath: /api/health
+  scaling:
+    minScale: 0
+    maxScale: 1
+  backends:
+    - name: xz
+      service: ${XZ_FN}
+---
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: BackendService
+metadata:
+  name: ${XZ_FN}
+  namespace: ${NS}
+spec:
+  zone: ${XZ_OWNER}
+  image: ${go_img}
+  language: go
+  port: 8080
+  protoVersion: 1.0.0
+  wakeAhead: false
+  scaling:
+    minScale: 0
+    maxScale: 1
+YAML
+
+  wait_until 120 3 "${XZ_LISTING} reports the cross-zone entry" \
+    "[ \"\$(cond_of nextapp ${XZ_LISTING} BackendBindings)\" = False/CrossZoneBinding ]"
+  wait_until 120 3 "${XZ_FN} reports it is not listed by its zone" \
+    "[ \"\$(cond_of backendservice ${XZ_FN} Bound)\" = False/ZoneNotListed ]"
+  wait_until 300 3 "${XZ_LISTING} has a Knative Service" \
+    "[ -n \"\$(k -n ${NS} get ksvc ${XZ_LISTING} --ignore-not-found -o name)\" ]"
+  # Hold for a while: a refusal that flaps to rendering is not one.
+  sleep 20
+  [ "$(cond_of nextapp "${XZ_LISTING}" BackendBindings)" = False/CrossZoneBinding ] \
+    || fail "${XZ_LISTING}: BackendBindings is $(cond_of nextapp "${XZ_LISTING}" BackendBindings) after the hold"
+  [ "$(cond_of backendservice "${XZ_FN}" Bound)" = False/ZoneNotListed ] \
+    || fail "${XZ_FN}: Bound is $(cond_of backendservice "${XZ_FN}" Bound) after the hold"
+  [ "$(cond_of backendservice "${XZ_FN}" Ready | cut -d/ -f1)" = False ] \
+    || fail "${XZ_FN}: Ready is $(cond_of backendservice "${XZ_FN}" Ready), want False"
+  # --ignore-not-found: an API error must fail the lane, not read as "absent".
+  [ -z "$(k -n "${NS}" get ksvc "${XZ_FN}" --ignore-not-found -o name)" ] \
+    || fail "${XZ_FN}: refused, but its Knative Service exists"
+  [ "$(all_pods "${XZ_FN}")" = 0 ] || fail "${XZ_FN}: refused, but it has a pod"
+  [ -z "$(k -n "${NS}" get ksvc "${XZ_LISTING}" -o json \
+    | jq -r '.spec.template.spec.containers[] | select(.name == "user-container") | .env[]? | select(.name | startswith("XZ_SERVICE_")) | .name')" ] \
+    || fail "${XZ_LISTING}: the cross-zone entry was rendered into the zone's env"
+  ok "cross-zone: the listing zone is CrossZoneBinding with no URL rendered; the function is ZoneNotListed, not Ready, with no Knative Service and no pod"
+}
+
 # ---------------------------------------------------------------- phase: wake
 
 now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
@@ -562,15 +721,17 @@ k get crd backendservices.apps.kn-next.dev >/dev/null 2>&1 \
   || fail "the cluster has no BackendService CRD: run the Z7 lane's up phase first (PHASES=up ${Z7}/run.sh)"
 for phase in ${PHASES}; do
   case "${phase}" in
-    images | deploy | cold | trailers | rollout | sovereignty | wake) ;;
-    *) fail "unknown phase '${phase}' (images deploy cold trailers rollout sovereignty wake)" ;;
+    images | deploy | cold | trailers | zerozone | rollout | sovereignty | crosszone | wake) ;;
+    *) fail "unknown phase '${phase}' (images deploy cold trailers zerozone rollout sovereignty crosszone wake)" ;;
   esac
 done
 has_phase images && phase_images
 has_phase deploy && phase_deploy
 has_phase cold && phase_cold
 has_phase trailers && phase_trailers
+has_phase zerozone && phase_zerozone
 has_phase rollout && phase_rollout
 has_phase sovereignty && phase_sovereignty
+has_phase crosszone && phase_crosszone
 has_phase wake && phase_wake
 log "Z10 lane: ${PHASES} passed"

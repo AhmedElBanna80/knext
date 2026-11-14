@@ -68,7 +68,7 @@ The standalone build also serves the `'use cache'` store's counter, `knext_use_c
 [`'use cache'` metrics](/docs/isr-caching#use-cache-metrics).
 
 An app that calls Rust in-process also gets `knext_ffi_slow_calls_total` (labelled `fn`) and
-`knext_ffi_load_seconds` (labelled `lib`) on the standalone build, described in
+`knext_ffi_load_seconds` (labelled `lib`) on the standalone build and the vinext build, described in
 [Slow calls](/docs/rust-in-process#slow-calls).
 
 Ready-made Grafana dashboards ship with knext (see [Dashboards](#dashboards) below). The request

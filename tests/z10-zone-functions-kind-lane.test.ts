@@ -134,13 +134,29 @@ describe('the zone and its function both at zero (#2421)', () => {
     const min0 = z.indexOf('set_zone_min 0');
     const zoneZero = z.indexOf('await_zero "${ZONE}"');
     const fnZero = z.indexOf('await_zero "${GO_FN}"');
-    const call = z.indexOf('zone_call "/example/put');
+    const call = z.indexOf('/example/put?sub=alice&id=zero-1&value=v1');
     expect(min0).toBeGreaterThan(-1);
     expect(zoneZero).toBeGreaterThan(min0);
     expect(fnZero).toBeGreaterThan(min0);
     expect(call).toBeGreaterThan(Math.max(zoneZero, fnZero));
     expect(body('set_zone_min')).toContain('"minScale\\":$1');
     expect(body('zone_min_is')).toContain('autoscaling.knative.dev/min-scale');
+  });
+
+  it('re-checks both are at zero right before the call', () => {
+    const call = z.indexOf('/example/put?sub=alice&id=zero-1&value=v1');
+    const zoneAgain = z.indexOf('[ "$(all_pods "${ZONE}")" = 0 ] || fail');
+    const fnAgain = z.indexOf('[ "$(all_pods "${GO_FN}")" = 0 ] || fail');
+    expect(zoneAgain).toBeGreaterThan(z.indexOf('await_zero "${GO_FN}"'));
+    expect(fnAgain).toBeGreaterThan(z.indexOf('await_zero "${GO_FN}"'));
+    expect(call).toBeGreaterThan(Math.max(zoneAgain, fnAgain));
+  });
+
+  it('makes ONE request, not zone_call (which retries a timed-out request)', () => {
+    expect(z).not.toContain('zone_call "/example/put');
+    expect(z).toMatch(/out="\$\(curl -s -m 120 -H "Host: \$\{ZONE_HOST\}"/);
+    // No loop around the request.
+    expect(z).not.toMatch(/for attempt/);
   });
 
   it('the call must answer 200 and leave a pod on BOTH sides', () => {
@@ -153,11 +169,25 @@ describe('the zone and its function both at zero (#2421)', () => {
     expect(z).toMatch(/\[ "\$\{port\}" = h2c \] \|\| fail/);
     expect(z).toContain('"http://${GO_FN}.${NS}.svc.cluster.local"');
     expect(z).toContain('EXAMPLE_SERVICE_URL');
+    // An explicit HTTP version wins over the Node default, so 1.1 must red.
+    expect(z).toContain('select(.name == "EXAMPLE_SERVICE_HTTP_VERSION")');
+    expect(z).toContain('case "${hv}" in unset | 2) ;; *) fail');
+  });
+
+  it('the woken zone logs that it chose h2c for the function, and never HTTP/1.1', () => {
+    const call = z.indexOf('/example/put?sub=alice&id=zero-1&value=v1');
+    const notice = z.indexOf(
+      "grep -qF 'knext: example function: transport h2c (HTTP/2 cleartext)'",
+    );
+    expect(notice).toBeGreaterThan(call);
+    expect(z).toContain("! grep -qF 'knext: example function: transport HTTP/1.1'");
   });
 
   it('puts the zone back warm, so the phases after it start from the deploy state', () => {
     const tail = z.slice(z.indexOf('set_zone_min 1'));
-    expect(z.indexOf('set_zone_min 1')).toBeGreaterThan(z.indexOf('zone_call "/example/put'));
+    expect(z.indexOf('set_zone_min 1')).toBeGreaterThan(
+      z.indexOf('/example/put?sub=alice&id=zero-1&value=v1'),
+    );
     expect(tail).toContain('zone_settled');
   });
 });
@@ -176,6 +206,10 @@ describe('a served-version bump rolls exactly one zone revision (#2421)', () => 
     expect(after).toBeGreaterThan(hold);
     expect(set).toContain('local v=$1 before after rolled want=1');
     expect(set).toMatch(/\[ "\$\{rolled\}" = "\$\{want\}" \]/);
+    // The count itself: every new revision name, none truncated.
+    expect(set).toContain(
+      `rolled="$(comm -13 <(printf '%s\\n' "\${before}") <(printf '%s\\n' "\${after}") | grep -c . || true)"`,
+    );
     expect(body('zone_revisions')).toContain(
       'get revisions -l "serving.knative.dev/service=${ZONE}"',
     );
@@ -197,7 +231,7 @@ describe('a cross-zone function binds on neither side (#2421)', () => {
     const after = x.slice(hold);
     expect(after).toContain('= False/CrossZoneBinding ]');
     expect(after).toContain('= False/ZoneNotListed ]');
-    expect(after).toMatch(/Ready \| cut -d\/ -f1\)" = False \]/);
+    expect(after).toContain('Ready)" = False/ZoneNotListed ]');
   });
 
   it('no Knative Service, no pod, and no URL rendered into the listing zone', () => {
@@ -207,6 +241,10 @@ describe('a cross-zone function binds on neither side (#2421)', () => {
     );
     expect(after).toMatch(/\[ "\$\(all_pods "\$\{XZ_FN\}"\)" = 0 \] \|\| fail/);
     expect(after).toContain('startswith("XZ_SERVICE_")');
+    // ...and the container that check selects exists, so it is not vacuous.
+    const exists = after.indexOf('select(.name == "user-container")] | length\')" = 1 ]');
+    expect(exists).toBeGreaterThan(-1);
+    expect(exists).toBeLessThan(after.indexOf('startswith("XZ_SERVICE_")'));
   });
 });
 

@@ -69,6 +69,61 @@ const MUTATIONS = [
     replacement: '',
   },
   {
+    id: 'Z06',
+    subject: 'lane',
+    claim: 'an explicit HTTP/1.1 override on the binding is accepted',
+    anchor: '  case "${hv}" in unset | 2) ;; *) fail',
+    replacement: '  case "${hv}" in *) ;; 2) fail',
+  },
+  {
+    id: 'Z07',
+    subject: 'lane',
+    claim: "the zone's h2c transport notice is never read",
+    anchor:
+      '  grep -qF \'knext: example function: transport h2c (HTTP/2 cleartext)\' <<<"${zlog}" \\\n',
+    replacement: '  true \\\n',
+  },
+  {
+    id: 'Z08',
+    subject: 'lane',
+    claim: 'the function is not re-checked at zero right before the call',
+    anchor:
+      '  [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN} has a pod again before the call"\n',
+    replacement: '',
+  },
+  {
+    id: 'Z09',
+    subject: 'lane',
+    claim:
+      'the call goes through the retrying zone_call, so a timed-out first request is retried warm',
+    anchor:
+      '  out="$(curl -s -m 120 -H "Host: ${ZONE_HOST}" -w \'\\n%{http_code}\' \\\n    "http://127.0.0.1:${INTERNAL_PORT}/example/put?sub=alice&id=zero-1&value=v1" 2>/dev/null)" || out=$\'\\n000\'\n',
+    replacement:
+      '  zone_call "/example/put?sub=alice&id=zero-1&value=v1"; out="${ZC_BODY}\n${ZC_STATUS}"\n',
+  },
+  {
+    id: 'R03',
+    subject: 'lane',
+    claim: 'the count is truncated to one, so two revisions read as one',
+    anchor: '<(printf \'%s\\n\' "${after}") | grep -c . || true)"',
+    replacement: '<(printf \'%s\\n\' "${after}") | head -1 | grep -c . || true)"',
+  },
+  {
+    id: 'X05',
+    subject: 'lane',
+    claim: "the function's Ready reason is not checked",
+    anchor: '  [ "$(cond_of backendservice "${XZ_FN}" Ready)" = False/ZoneNotListed ] \\\n',
+    replacement: '  [ "$(cond_of backendservice "${XZ_FN}" Ready | cut -d/ -f1)" = False ] \\\n',
+  },
+  {
+    id: 'X06',
+    subject: 'lane',
+    claim: 'the env-absence check can pass with no user-container at all',
+    anchor:
+      '  [ "$(k -n "${NS}" get ksvc "${XZ_LISTING}" -o json | jq \'[.spec.template.spec.containers[] | select(.name == "user-container")] | length\')" = 1 ] \\\n',
+    replacement: '  [ 1 = 1 ] \\\n',
+  },
+  {
     id: 'R01',
     subject: 'lane',
     claim: 'the revision count is taken before the hold, so a late second revision is missed',

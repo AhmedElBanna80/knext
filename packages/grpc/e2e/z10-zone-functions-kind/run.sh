@@ -17,8 +17,9 @@
 #   trailers  scaled to zero again; a read of a missing item comes back NotFound through
 #             the activator, the same code as the warm control
 #   zerozone  the zone at minScale 0 too: once the zone and the Go function both have no
-#             pod, one call through the zone wakes both, and the function (its Knative
-#             port named h2c, its injected URL plain http) answers over h2c
+#             pod, one call through the zone (a single request, no retry) wakes both; the
+#             woken zone logs that it chose h2c for the function, whose Knative port is
+#             named h2c and whose injected URL is plain http with no HTTP/1.1 override
 #   rollout   the Go function's served version moves: a newer one (1.1.0) is called by
 #             the 1.0.0 zone, an older one (0.9.0) is refused by the zone's glue
 #             (FailedPrecondition) before any call, the same one (1.0.0) is called again;
@@ -28,7 +29,8 @@
 #             the control takes its own zone's Secret through all three and is rendered
 #   crosszone a zone lists a function that names another zone: the listing zone reports
 #             BackendBindings=False/CrossZoneBinding and renders no URL for it, the function
-#             reports Bound=False/ZoneNotListed and Ready=False, with no Knative Service and no pod
+#             reports Bound=False/ZoneNotListed and Ready=False/ZoneNotListed, with no Knative
+#             Service and no pod
 #   wake      the zone restarts on an image that loads knext's wake-ahead preload: an
 #             opted-out function stays at zero; an opted-in one is woken by the zone's
 #             start before any call, and the first call is faster
@@ -329,20 +331,45 @@ phase_zerozone() {
     | jq -r '[.spec.template.spec.containers[] | select(.name == "user-container") | .env[]? | select(.name == "EXAMPLE_SERVICE_URL") | .value] | first // ""')"
   [ "${url}" = "http://${GO_FN}.${NS}.svc.cluster.local" ] \
     || fail "the zone's EXAMPLE_SERVICE_URL is '${url}', want http://${GO_FN}.${NS}.svc.cluster.local"
-  ok "${GO_FN} is served on an h2c port, and the zone dials it at ${url}"
+  # An explicit <NAME>_SERVICE_HTTP_VERSION wins over the Node default (h2c), so
+  # 1.1 here would make the zone's leg HTTP/1.1.
+  local hv
+  hv="$(k -n "${NS}" get ksvc "${ZONE}" -o json \
+    | jq -r '[.spec.template.spec.containers[] | select(.name == "user-container") | .env[]? | select(.name == "EXAMPLE_SERVICE_HTTP_VERSION") | .value] | first // "unset"')"
+  case "${hv}" in unset | 2) ;; *) fail "the zone's EXAMPLE_SERVICE_HTTP_VERSION is '${hv}', want unset or 2" ;; esac
+  ok "${GO_FN} is served on an h2c port, and the zone dials it at ${url} (HTTP version ${hv})"
 
   set_zone_min 0
   await_zero "${ZONE}"
   await_zero "${GO_FN}"
-  local started elapsed
+  # Both still at zero right before the call: await_zero on the function can
+  # take minutes after the zone got there.
+  [ "$(all_pods "${ZONE}")" = 0 ] || fail "the zone has a pod again before the call"
+  [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN} has a pod again before the call"
+  # ONE request, not zone_call: zone_call retries a timed-out request (000) as a
+  # dropped port-forward, and a retry would be answered by pods the first woke.
+  local started elapsed out
+  ensure_forward
   started=${SECONDS}
-  zone_call "/example/put?sub=alice&id=zero-1&value=v1"
+  out="$(curl -s -m 120 -H "Host: ${ZONE_HOST}" -w '\n%{http_code}' \
+    "http://127.0.0.1:${INTERNAL_PORT}/example/put?sub=alice&id=zero-1&value=v1" 2>/dev/null)" || out=$'\n000'
   elapsed=$((SECONDS - started))
+  ZC_STATUS="${out##*$'\n'}"
+  ZC_BODY="${out%$'\n'*}"
   [ "${ZC_STATUS}" = 200 ] || fail "zone and function at zero: status ${ZC_STATUS}, want 200 (body: ${ZC_BODY})"
   jq -e '.ok == true' <<<"${ZC_BODY}" >/dev/null || fail "zone and function at zero: body ${ZC_BODY}"
   [ -n "$(pod_uids "${ZONE}")" ] || fail "the call succeeded but the zone has no pod: it did not wake from zero"
   [ -n "$(pod_uids "${GO_FN}")" ] || fail "the call succeeded but ${GO_FN} has no pod: it did not wake from zero"
   ok "zone and function both at zero: one call woke both and was answered (${elapsed}s)"
+  # The woken zone says which transport it chose for the function (once per
+  # binding, on its first call): h2c, not an HTTP/1.1 fallback.
+  local zlog
+  zlog="$(k -n "${NS}" logs -l "serving.knative.dev/service=${ZONE}" -c user-container --tail=-1)"
+  grep -qF 'knext: example function: transport h2c (HTTP/2 cleartext)' <<<"${zlog}" \
+    || fail "the woken zone did not log an h2c transport for the example function"
+  ! grep -qF 'knext: example function: transport HTTP/1.1' <<<"${zlog}" \
+    || fail "the woken zone logged an HTTP/1.1 transport for the example function"
+  ok "the woken zone called ${GO_FN} over h2c (its transport notice)"
   expect_zone "a read through the woken zone comes back from the woken function" \
     "/example/get?sub=alice&id=zero-1" 200 '.ok == true and .value == "v1"'
 
@@ -620,12 +647,15 @@ YAML
     || fail "${XZ_LISTING}: BackendBindings is $(cond_of nextapp "${XZ_LISTING}" BackendBindings) after the hold"
   [ "$(cond_of backendservice "${XZ_FN}" Bound)" = False/ZoneNotListed ] \
     || fail "${XZ_FN}: Bound is $(cond_of backendservice "${XZ_FN}" Bound) after the hold"
-  [ "$(cond_of backendservice "${XZ_FN}" Ready | cut -d/ -f1)" = False ] \
-    || fail "${XZ_FN}: Ready is $(cond_of backendservice "${XZ_FN}" Ready), want False"
+  [ "$(cond_of backendservice "${XZ_FN}" Ready)" = False/ZoneNotListed ] \
+    || fail "${XZ_FN}: Ready is $(cond_of backendservice "${XZ_FN}" Ready), want False/ZoneNotListed"
   # --ignore-not-found: an API error must fail the lane, not read as "absent".
   [ -z "$(k -n "${NS}" get ksvc "${XZ_FN}" --ignore-not-found -o name)" ] \
     || fail "${XZ_FN}: refused, but its Knative Service exists"
   [ "$(all_pods "${XZ_FN}")" = 0 ] || fail "${XZ_FN}: refused, but it has a pod"
+  # The env check selects the user-container: it must exist, or the check is vacuous.
+  [ "$(k -n "${NS}" get ksvc "${XZ_LISTING}" -o json | jq '[.spec.template.spec.containers[] | select(.name == "user-container")] | length')" = 1 ] \
+    || fail "${XZ_LISTING}: no single user-container in its Knative Service"
   [ -z "$(k -n "${NS}" get ksvc "${XZ_LISTING}" -o json \
     | jq -r '.spec.template.spec.containers[] | select(.name == "user-container") | .env[]? | select(.name | startswith("XZ_SERVICE_")) | .name')" ] \
     || fail "${XZ_LISTING}: the cross-zone entry was rendered into the zone's env"

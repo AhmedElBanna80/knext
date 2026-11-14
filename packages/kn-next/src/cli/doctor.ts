@@ -50,6 +50,7 @@ import { knativeCheck } from "./doctor/checks/knative";
 import { kubectlValidationCheck } from "./doctor/checks/kubectl-validation";
 import { metricsCheck } from "./doctor/checks/metrics";
 import { networkPolicyCheck } from "./doctor/checks/network-policy";
+import { nextAdvisoriesCheck } from "./doctor/checks/next-advisories";
 import {
     nextMinorCheck,
     readInstalledNextVersion,
@@ -145,6 +146,9 @@ export async function runDoctor(
     checks.push(...networkPolicyCheck(ctx));
     // Local; no row unless an installed `next` is injected.
     checks.push(...nextMinorCheck(ctx));
+    // Local; same injected `next` version. FAIL on a published critical/high
+    // advisory that has a fix — the one Next.js row that blocks.
+    checks.push(...nextAdvisoriesCheck(ctx));
     // Opt-in (#1533): a LOCAL file read, not a cluster call, so it does not
     // participate in ctx.skipAll — and it contributes NO row at all when
     // --ci-kubeconfig was not passed, which is what keeps every other
@@ -188,7 +192,8 @@ Checks: NextApp CRD, operator readiness, the installed operator's release
 version and whether it pairs with this CLI (WARN only), cert-manager webhook, Knative
 ingress-class vs its reconciler (#208), operator-image pullability (#198),
 app-image pullability vs the namespace's pull credentials (#952),
-Knative Serving, CNI NetworkPolicy enforcement (whether the cluster can\nenforce the operator's default-on policy — on flannel it cannot), and the\nlocal kubectl's --validate=strict support. Exit 1 on
+Knative Serving, CNI NetworkPolicy enforcement (whether the cluster can\nenforce the operator's default-on policy — on flannel it cannot), and the\nlocal kubectl's --validate=strict support, plus (local) whether the installed
+Next.js has a published critical/high security advisory (FAIL). Exit 1 on
 hard FAILs and on probe ERRORs (a check's kubectl
 probe hit a network/TLS/credential/RBAC failure — the cluster state could not
 be verified); WARN/SKIP never fail; a fully unreachable cluster SKIPs (exit 0).

@@ -135,6 +135,7 @@ describe("the NextApp the CLI emits matches the shipped CRD for spec.backends", 
         );
         expect(emitted).toEqual([
             "spec.backends",
+            "spec.backends.*.httpVersion",
             "spec.backends.*.image",
             "spec.backends.*.name",
             "spec.backends.*.service",

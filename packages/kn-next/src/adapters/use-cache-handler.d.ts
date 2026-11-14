@@ -43,7 +43,7 @@ export interface UseCacheHandler {
 /** What `cache-handler.js` injects: its connection, breaker, prefix and build id. */
 export interface UseCacheCore {
     ensureConnected(): Promise<unknown>;
-    redisCall<T>(fn: () => Promise<T>): Promise<T>;
+    redisCall<T>(fn: () => Promise<T>, client: unknown): Promise<T>;
     command(client: unknown, name: string, args: string[]): Promise<unknown>;
     keyPrefix(): string;
     buildId(): string | undefined;

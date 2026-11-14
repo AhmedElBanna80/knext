@@ -6,7 +6,8 @@ This is the runtime and build layer of `@getknext/core`. It contains:
 
 - the official Next.js Deployment Adapter (`next-adapter.ts`);
 - the standalone-server supervisor (`node-server.ts`), which spawns
-  `.next/standalone/server.js` next to a metrics sidecar;
+  `.next/standalone/server.js` (or, with `STANDALONE_SERVER_EXEC`, the compiled
+  executable) next to a metrics sidecar;
 - the Redis-backed ISR/data-cache and `"use cache"` handlers;
 - preloads that patch `node:http` and `Bun.serve` for cache-control, CDN edge
   headers, body caps, public origins and keep-alive;
@@ -57,9 +58,11 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   - cache: `cache-write-registry.js` (`cache-drain`),
     `cache-handler-{node,bun}.js`, `use-cache-handler{,-remote}-{node,bun}.js`
     and `vinext-cache-adapter{,-node,-bun}.mjs`;
-  - preloads: `cache-control-normalize.cjs`, `bun-keepalive-guard.cjs`,
-    `request-body-cap.cjs`, `arp-primer.cjs`, `bun-serve-keepalive-guard.mjs`
-    and `response-cache-control.mjs`;
+  - preloads (`--require`d into the child): `cache-control-normalize.cjs`,
+    `bun-keepalive-guard.cjs` and `request-body-cap.cjs`; `public-origin.cjs`
+    is one too, but has no subpath. Loaded in-process, never `--require`d:
+    the process-start primers (`arp-primer.cjs`, `wake-ahead.cjs`), and the vinext/Bun runtime modules
+    `bun-serve-keepalive-guard` and `response-cache-control` (dist `.js`);
   - health: `deep-health-lite.ts`;
   - images: `vinext-image-optimizer.ts` (`vinext-image-optimizer`);
   - debug: `sandbox-fetch-debug.cjs` and `sandbox-fetch-realm-debug.cjs`;
@@ -83,7 +86,9 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   default-exports `KnextBunCacheHandler`, which uses
   `globalThis.Bun.RedisClient`. Both extend `CacheHandler`.
 - `cache-write-registry.js` exports `trackWrite`,
-  `drainCacheWrites(timeoutMs = 5000)` and `inFlightCacheWriteCount`.
+  `drainCacheWrites(timeoutMs = 5000)`, `inFlightCacheWriteCount`,
+  `onProcessExit(report)`, `runExitReports`, `clearExitReportsForTests` (empties
+  the reporter set; the listener stays installed) and `exitReportCountForTests`.
 - `use-cache-handler.js:createUseCacheHandler({kind, core})` returns
   `{get, set, refreshTags, getExpiration, updateTags}`. The metric is
   `USE_CACHE_METRIC = 'knext_use_cache_events_total'`, rendered by
@@ -153,6 +158,9 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `deferred-supervisor-init.ts` exports `createDeferredSupervisorInit`,
   `createLazyMetricsEndpoint`, `isSupervisorInitDeferred` and
   `DEFER_SUPERVISOR_INIT_ENV` (`KNEXT_DEFER_SUPERVISOR_INIT`), which it reads.
+- `self-warm.ts` exports `parseWarmPaths`, `selfWarm`, `isListening`,
+  `SELF_WARM_HEADER` (`x-knext-warm`) and `DEFAULT_WARM_TIMEOUT_MS`; it reads
+  `KNEXT_WARM_PATH` and `KNEXT_EAGER_WARM`.
 - `deferred-default-metrics.ts` exports `createDeferredDefaultMetrics`,
   `waitForChildServing`, `probeTcp`, `probeIntervalMs`, `readyDeadlineMs`,
   `CHILD_READY_INTERVAL_ENV` (`KNEXT_CHILD_READY_PROBE_MS`),
@@ -185,6 +193,18 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `arp-primer.cjs` exports `primeArpNow`, `parseDefaultGatewayFromRouteTable`,
   `hexRouteFieldToIp`, `readDefaultGateway` and `ARP_PRIMER_TARGET_PORT`, and
   reads `KNEXT_ARP_PRIMER`.
+- Process-start primers (ADR-0066 D3): `process-start-primers.cjs` is data only,
+  `PROCESS_START_PRIMERS` (frozen, in order: `arp-primer.cjs`, `wake-ahead.cjs`).
+  `process-start-abort.cjs` owns the shared abort: `PRIMER_ABORT_KEY`
+  (`Symbol.for('knext.runtime.primerAbort')`), `primerSignal()` and
+  `abortPrimers()`. `process-start-run.ts` exports `runProcessStartPrimers(deps)`
+  (requires each listed primer, skipping missing or broken files with one stderr
+  line each, and returns the abort function), `describeError`,
+  `PRIMER_LIST_FILE` and `PRIMER_ABORT_FILE`.
+- `wake-ahead.cjs` exports `WAKE_FUNCTIONS_ENV` (`KNEXT_WAKE_FUNCTIONS`),
+  `WAKE_AHEAD_SWITCH_ENV` (`KNEXT_WAKE_AHEAD`; `0` turns it off), `WAKE_PATH`
+  (`/healthz`), `WAKE_TIMEOUT_MS` (1000), `callSignal`, `urlEnvFor`,
+  `wakeTargets`, `wakeUrl` and `wakeAheadNow`, which it calls when required.
 - The keep-alive guards are `bun-keepalive-guard.cjs` (exports
   `shouldInstall`, `isAffectedBunVersion`, `guardServer` and `install`) and
   `bun-serve-keepalive-guard.mjs` (exports `shouldInstall`,
@@ -356,9 +376,22 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Cache
 
-- Redis faults fail open. Any fault in `cache-handler.js:redisCall` opens a
-  circuit breaker for `REDIS_RETRY_COOLDOWN_MS`, and requests are served from
-  memory or the origin until it closes. `use-cache-handler.js` has no
+- Redis faults fail open. A fault in `cache-handler.js:redisCall` (every cache
+  command, including the `del` in `set(key, null)`; the best-effort event-log
+  batch is outside it and drops a failure silently), an ioredis connect that
+  fails (`waitForReady`), or a native connect that throws or resolves with the
+  client still disconnected (`waitForNativeReady`) calls `markUnhealthy`, which
+  opens a circuit breaker for `REDIS_RETRY_COOLDOWN_MS` and closes the current
+  client. A fault on a client that is no longer current (a connect, or a command
+  through `redisCall(fn, client)`) closes only that client and leaves the
+  breaker alone. Concurrent callers for the
+  same client share one in-flight connect on both clients (`connectClient`'s
+  `connectInFlight`, keyed by client), so a burst of first requests dials that
+  client once; a connect settling for a client that was dropped meanwhile hands
+  out nothing. Until the breaker closes, ISR `get`
+  misses and Next renders from the origin, and `set` writes nothing locally: the
+  per-process memory store serves only when Redis is not in use (no `REDIS_URL`,
+  or a client that could not be loaded). `use-cache-handler.js` has no
   in-process fallback: while Redis is down, `get` is a miss and `set` is
   dropped. Its `get`, `getExpiration` and `updateTags` never throw.
 - `cache-handler.js:execAtomic` writes the entry and its tag index together in
@@ -374,12 +407,37 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
     ID at all.
 - Mutating test seams (`assertTestSeamEnabled`) always throw when
   `NODE_ENV=production`. Otherwise they need `KNEXT_TEST_SEAMS=1`.
-- The invalidation replay backlog is capped at 1000 tags. Past that, it
-  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix
-  and the shared legacy default key prefix (bare, or with a `:*` wildcard). A CDN purge is sent only for tags whose Redis
+- A `set(key, null)` delete that could not reach Redis (breaker open, or the
+  delete faulted) is remembered and replayed, before the tags, once the breaker
+  closes. Like the tag list it is per process: a restart or scale to zero first
+  drops it, and the entry lives to its TTL. The replayed `DEL` has no generation
+  check, so it can also remove an entry a later `set` wrote meanwhile; the next
+  request re-renders it.
+- The invalidation replay backlog is capped at 1000 tags and deletes together. Past that, it
+  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix,
+  the shared legacy default key prefix `kn-next`, and any prefix nested under it
+  (for example `kn-next:cache`). A CDN purge is sent only for tags whose Redis
   invalidation completed.
 - `cache-write-registry.js:drainCacheWrites` never rejects and is bounded by
   `timeoutMs`.
+- `onProcessExit` keeps its reporters in one `globalThis` set
+  (`Symbol.for('knext.core.cache.exitReports')`) and installs one
+  `process.once('exit', …)` per process (the first copy's `runExitReports`,
+  kept under `Symbol.for('knext.core.cache.exitReportsListener')`). It reads
+  `process` through `globalThis.process`, because Next traces this module into
+  the Edge middleware bundle. Where `globalThis.process` lacks `once` or
+  `listeners` (Edge), the reporter is still stored but no listener is installed,
+  so nothing is reported. Each call checks the live listeners, so a removed
+  listener is put back by the next `onProcessExit` call. Reporters run
+  synchronously and a throwing one is swallowed.
+- A process that exits with a replay backlog logs one
+  `[CacheHandler] exiting with … not yet replayed to Redis` line per handler (#2384).
+  The ISR handler calls `onProcessExit` on every recorded skip (the set dedups
+  the reporter, and the call restores a removed listener), wrapped so a failure
+  there never costs the backlog; the `'use cache'`
+  handler arms once per core, so it does not restore one. The ISR line names the edge purge
+  only when tags (or a collapse) are lost; deletes hold none back. No counter.
+  A backlog already replayed reports nothing.
 - `cache-control-normalize.cjs:normalizeCacheControl` applies only to GET and
   HEAD and leaves `immutable` responses alone. The CDN edge decision fails
   closed: on any error the edge is skipped and foreign edge headers are
@@ -412,6 +470,50 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 
 ### Supervisor and preloads
 
+- The supervisor's first deferred step (`self-warm`, in `node-server.ts`, before
+  the metrics collector) requests each `KNEXT_WARM_PATH` path on
+  `127.0.0.1:$PORT` with `x-knext-warm: 1`, one at a time, never following a
+  redirect (a 3xx is recorded), and never throwing. In the deferred branch it
+  runs once the child is serving; with deferral disabled (the opt-out branch)
+  it runs straight after spawn, and only the listening probe decides whether
+  it does anything. `parseWarmPaths`: nothing unless `KNEXT_WARM_PATH` is set;
+  `KNEXT_EAGER_WARM=0` (exact string) yields none; entries are comma-split and
+  trimmed, those not starting with `/` or starting with `//` are dropped
+  silently, and the first 8 kept. Logs `WARMED:<path> status=<n> ms=<n>` (info)
+  or `WARMED:<path> status=error ms=<n> (<code>)` (warn); with nothing
+  accepting TCP within 300 ms it logs `self-warm skipped: the server is not
+  listening yet` and returns. All paths share one 5 s budget, started after
+  that probe. The shutdown check runs before each path; a request in flight
+  is not aborted. It runs wherever this
+  supervisor runs: disk mode, and exec mode where the supervisor spawns the
+  compiled executable. The self-contained executable image has no supervisor;
+  it warms through its own entry (`knext-bun-entry.mjs`, on by default with
+  `/api/health`, ADR-0042).
+- What each runtime path loads before the server:
+  - **Disk mode** (`node-server.ts` supervisor, a Node or Bun `server.js` child):
+    the supervisor runs every `PROCESS_START_PRIMERS` entry in-process
+    (`runProcessStartPrimers`) before it spawns the child. The child gets `--require` `cache-control-normalize.cjs`,
+    `request-body-cap.cjs` and `public-origin.cjs` on both runtimes, plus
+    `bun-keepalive-guard.cjs` only when the supervisor runs under Bun
+    (`process.versions.bun`). Each is added only if its file exists.
+  - **Compiled standalone** (`standalone-compile.mjs` `PRELOAD_NAMES`): the
+    executable bakes in, in order, `arp-primer.cjs`, `wake-ahead.cjs` (the
+    `PROCESS_START_PRIMERS` list), `cache-control-normalize.cjs`,
+    `bun-keepalive-guard.cjs`, `public-origin.cjs` and `request-body-cap.cjs`, plus
+    `standalone-self-contained-supervisor.cjs` for a self-contained build. A
+    missing file aborts the compile. In the disk-compiled image the
+    `node-server.ts` supervisor still runs (`STANDALONE_SERVER_EXEC`): it primes
+    ARP itself and drops its own `--require` list, since the executable already
+    carries the preloads (`standalone-exec.ts`). A self-contained build has no
+    `node-server.ts` supervisor process; `standalone-self-contained-supervisor.cjs`
+    takes its place inside the executable.
+  - **vinext** (`vinext-compile.mjs`): the single executable imports
+    `arp-primer.cjs`, `bun-serve-keepalive-guard`, the sidecar installer (not in a
+    self-contained build) and `bun-serve-cache-control-install`, each fail-closed.
+    It does not load `cache-control-normalize.cjs`, `request-body-cap.cjs`,
+    `public-origin.cjs` or `bun-keepalive-guard.cjs`. The vinext-on-Node entry
+    (`templates/app/knext-node-entry.mjs.hbs`) imports `arp-primer.cjs` and
+    `response-cache-control`.
 - `node-server.ts` installs `registerDbPoolDrain` and the SIGTERM/SIGINT
   handlers before it spawns the child. A spawn `error` exits with code 1.
 - `shutdown.ts:gracefulShutdown` guards against re-entry. It closes the
@@ -434,6 +536,10 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `sidecar-runtime.mjs:installSidecarResolution` fails closed with
   `MODULE_NOT_FOUND`. A resolved real path must stay inside the sidecar root.
 - `arp-primer.cjs:primeArpNow` never throws or blocks, and runs only on Linux.
+- `wake-ahead.cjs:wakeAheadNow` never throws or blocks the server start; each call
+  is bounded by `WAKE_TIMEOUT_MS` and by the shared primer abort.
+- On SIGTERM, `node-server.ts` and `standalone-self-contained-supervisor.cjs` call
+  `abortPrimers()` first, so no wake-ahead request outlives the drain.
 - `bun-keepalive-guard.cjs` is never active on Node. By default it applies
   only to Bun versions below 1.4.
 
@@ -521,6 +627,11 @@ The compile pipeline fails closed.
   - `standalone-embed.mjs` also patches `Module.prototype.require`.
 - `arp-primer.cjs` reads `/proc/net/route` and sends one UDP datagram to the
   default gateway on port 9.
+- `wake-ahead.cjs` sends one fire-and-forget `GET <url>/healthz` (1 s timeout) to
+  each function named in `KNEXT_WAKE_FUNCTIONS`, resolved through its
+  `<NAME>_SERVICE_URL`, and logs `[knext] wake-ahead:` lines to stderr.
+  `process-start-run.ts` logs `[knext] process-start` lines for a missing or broken
+  primer.
 - `sandbox-fetch-debug.cjs` and `sandbox-fetch-realm-debug.cjs` are gated by
   `KNEXT_SANDBOX_FETCH_DEBUG=1`. They subscribe to undici diagnostics channels,
   and the realm variant patches `net` and `tls` connects and rewrites Next's
@@ -528,8 +639,10 @@ The compile pipeline fails closed.
 
 ### Processes and listeners
 
-- `node-server.ts` spawns the Next child with `--require` preloads and binds the
-  metrics listener on `METRICS_PORT`. It calls `process.exit` when the child
+- `node-server.ts` spawns the Next child with `--require` preloads (script mode),
+  or, when `STANDALONE_SERVER_EXEC` is set, the compiled executable with no
+  arguments (`standalone-exec.ts`), and binds the metrics listener on
+  `METRICS_PORT`. It calls `process.exit` when the child
   exits.
 - `metrics.ts:startChildMetricsServer` and `deep-health-lite.ts` listen on
   `127.0.0.1:9092`, and `fetchChildMetrics` scrapes that address.

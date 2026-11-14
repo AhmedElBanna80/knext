@@ -65,7 +65,7 @@ default standalone executable was not part of this benchmark, so do not read the
 The vinext compiled executable **boots** 14× faster and serves **75% more** requests per second than
 the Node standalone. It wins both axes at once because the whole bundle is compiled
 together: minification and bundling remove the per-module boundary cost that made earlier
-file-by-file bytecode approaches trade throughput for cold start.
+file-by-file bytecode approaches trade throughput for boot time.
 
 <Callout type="info">
   These are **process-boot** numbers from a fresh local process. On Knative scale-from-zero the
@@ -109,8 +109,9 @@ with `bun upgrade`.
 ## Warm-on-boot (vinext build)
 
 This section applies to the **vinext build**, whose scaffolded server entry does the warming. On the
-default standalone build, `KNEXT_WARM_PATH` only chooses the paths warmed while the image bakes its
-compile cache; nothing fires at pod boot.
+default standalone build, the build-time compile-cache warm-up uses your health-check path, and
+`KNEXT_WARM_PATH`, when set, chooses pages to warm at pod boot (off by default; `KNEXT_EAGER_WARM=0`
+turns it off). See [Tuning cold start](/docs/tuning-cold-start#warming-a-route-at-boot-opt-in).
 
 When a scaled-to-zero vinext app wakes, the very first request pays the full cost of a cold process —
 JIT warm-up and the first render. To keep a real visitor from paying it, the runtime fires a

@@ -7,7 +7,7 @@
   (ADR — a release-line branching decision, founder-delegated, 2026-10-03), reviewed per
   `.claude/rules/workflow.md`'s sprint-close process; not a merge gate.
 - **Amended:** 2026-10-09 — the v2 line, dist-tags, `release/1.x`, 1.x support window (see the
-  amendment at the end).
+  amendment at the end). 2026-11-08 — the 1.4 line lives on `main` (the last amendment).
 - **Relates to:** `CLAUDE.md` §9 (as-built truths on publishing/versioning), ADR-0036 (two build
   targets — the 1.3 line carries vinext/Bun patch work that is separate from the v1.0 GA line),
   and the published-bytes-freeze invariant enforced by
@@ -48,7 +48,8 @@ discipline, extended for this line) pins that tag so the 1.3 line cannot acciden
 - `integration/v1.3` carries the 1.3.0-rc.1 line and everything that follows it until GA, and
   publishes to the npm dist-tag `next`.
 - `main` stays on the v1.0.0-rc.5 bytes until 1.0.0 GA is cut. No commit that changes published
-  bytes lands on `main` before then, outside the version-only GA bump itself.
+  bytes lands on `main` before then, outside the version-only GA bump itself. *(Historical: this
+  held until 1.0.0 GA on 2026-10-08; see Amendment 2026-11-08.)*
 - **`integration/v1.3` must NOT merge into `main` before 1.0.0 GA is cut**, for three concrete
   reasons:
   1. the GA tarball must equal the v1.0.0-rc.5 bytes — a **version-only** delta — and merging in
@@ -138,7 +139,7 @@ produced the accidental `2.0.0` computation from a stale pre-mode marker on 242 
 | Line | Branch | Pre-release tag | GA tag |
 |---|---|---|---|
 | 1.3 (current GA) | `integration/v1.3`, merged to `main` (the original action items) | `next` | `latest` |
-| 1.4 (platform layer, deprecations) | `integration/v1.4` | `next-1.4` | `latest` until 2.0 GA, then `latest-1` |
+| 1.4 (platform layer, deprecations) | `main` (see Amendment 2026-11-08; `integration/v1.4` was never cut) | `next-1.4` (see Amendment 2026-11-08) | `latest` until 2.0 GA, then `latest-1` |
 | 2.0 | `integration/v2`, cut from `main` after the 1.3 merge | `next` (once 1.3 vacates it) | `latest` |
 | 1.x maintenance | **`release/1.x`**, cut from the 1.x tip at 2.0 GA | none | `latest-1` |
 | 1.0 | frozen | `rc` | `latest-1.0` (a dist-tag a maintainer must add; none exists today) |
@@ -176,3 +177,34 @@ produced the accidental `2.0.0` computation from a stale pre-mode marker on 242 
 - [ ] Cut `integration/v2` and enter changesets pre mode with tag `next` (after the 1.3 merge).
 - [ ] Create `release/1.x` and its publish lane at 2.0 GA; add `latest-1` to the rollback scripts.
 - [ ] Founder: add the `latest-1.0` dist-tag; run `npm deprecate kn-next@"<2"` at 2.0 GA.
+
+## Amendment (2026-11-08) — the 1.4 line lives on `main`
+
+**Status of this amendment: Accepted** as a record of what the repository already is; it changes no
+publish behaviour. Trigger-class (ADR); per the 2026-09-22 workflow amendment it is reviewed at
+sprint close, not as a merge gate.
+
+### Context
+
+The 2026-10-09 amendment put the 1.4 line on `integration/v1.4` with the pre-release dist-tag
+`next-1.4`. In practice every 1.4 change landed on `main` (the platform layer and the K0
+deprecations), and `integration/v1.4` was never cut: `git ls-remote` shows no such head. The lane
+table described a branch that does not exist.
+
+### Decision
+
+- **The 1.4 line is `main`** until 1.4.0 ships; the lane table above now says so. There is no
+  `integration/v1.4` branch. This does not break the original rule that nothing changing published
+  bytes lands on `main` before 1.0.0 GA: that rule held only until 1.0.0 GA. 1.0.0 GA published on
+  2026-10-08 and 1.3.0 GA on 2026-10-09 (13:04 UTC); the 1.4 work merged to `main` from 2026-10-09
+  23:31 UTC onward.
+- **Not decided here, left to the maintainer:** whether `next-1.4` is still needed as a dist-tag,
+  and whether `refs/heads/integration/v1.4` should be removed from `PUBLISH_LANES`
+  (`scripts/publish-lane-guard.mjs`). Both are publish-path policy. Keeping the unused lane in the
+  allowlist is harmless (no such branch exists, so nothing can publish from it), and removing it is a
+  reviewed edit to the publish guard and its tests.
+
+### Consequences
+
+- The lane table matches the repository. The publish allowlist still lists a lane with no branch,
+  which is inert until someone creates that branch.

@@ -108,8 +108,8 @@ const RUNTIME = [
     subject: 'runtime',
     claim:
       'a retried read re-sends the first attempt’s token (the function refuses it as a replay)',
-    anchor: 'const token = attempt === 1 ? firstToken : await tokenFor(options?.token);',
-    replacement: 'const token = firstToken;',
+    anchor: 'token = await tokenFor(options?.token);\n            } catch (err) {',
+    replacement: 'token = firstToken;\n            } catch (err) {',
   },
   {
     id: 'R02',
@@ -269,8 +269,8 @@ console.log('\n=== the client runtime: a new token on every attempt ===');
 runtime.baseline();
 runtime.proveCanSeeRed({
   subject: 'runtime',
-  anchor: 'const token = attempt === 1 ? firstToken : await tokenFor(options?.token);',
-  replacement: 'const token = "canary token";',
+  anchor: 'let token = firstToken;',
+  replacement: 'let token = "canary token" as string | undefined;',
 });
 for (const m of RUNTIME) {
   runtime.run({ ...m, expect: 'red' });

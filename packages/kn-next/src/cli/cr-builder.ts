@@ -548,6 +548,9 @@ export function buildNextAppCRObject(
                   // under the same rule: only when set, never rendered into the
                   // zone's pod by the operator.
                   ...(b.specDigest ? { specDigest: b.specDigest } : {}),
+                  // The app's own transport choice, emitted only when set: a CR
+                  // without it is byte-identical to one written before it.
+                  ...(b.httpVersion ? { httpVersion: b.httpVersion } : {}),
               }))
             : undefined;
 

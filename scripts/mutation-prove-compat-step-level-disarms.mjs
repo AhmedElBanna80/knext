@@ -116,6 +116,7 @@ const A = {
     name: '#703 every step in the deploy-tests reporting tail carries an ADMISSIBLE',
   },
   tailVac: { spec: COMPAT_SPEC, name: '#703 the deploy-tests reporting tail is NON-VACUOUS' },
+  tailNames: { spec: COMPAT_SPEC, name: '#2527 the reporting tail is these five steps' },
   spine: { spec: COMPAT_SPEC, name: '#703 no job on the ledger spine can be conditioned off' },
   spineVac: { spec: COMPAT_SPEC, name: '#703 the ledger spine walk is NON-VACUOUS' },
   shapes: { spec: COMPAT_SPEC, name: '#703 every inadmissible' },
@@ -368,6 +369,18 @@ MUTATIONS.push({
   covers: 'spine-shrink',
   reds: A.spineVac,
   green: [A.tail, A.tailVac, A.gateIf],
+});
+
+// F. The RENAME direction: a tail step changes its name but keeps its `if:`.
+//    The count and the admissibility audit both stay green; only the by-name
+//    assertion sees it (#2527).
+MUTATIONS.push({
+  label: 'tail step "Summarize shard result" is renamed (the count holds)',
+  anchor: rawNameLine('Summarize shard result'),
+  replacement: rawNameLine('Summarize shard result').replace('Summarize', 'Summarise'),
+  covers: 'tail-rename',
+  reds: A.tailNames,
+  green: [A.tail, A.tailVac, A.gateIf, A.spine],
 });
 
 // ── preflight ────────────────────────────────────────────────────────────────

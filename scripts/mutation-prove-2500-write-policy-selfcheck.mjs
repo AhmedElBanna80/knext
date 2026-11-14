@@ -240,8 +240,8 @@ const MUTATIONS = [
     id: 'V17',
     claim: 'config/admission changes the shipped CEL without the canonical copy being updated',
     subject: 'shippedPolicy',
-    anchor: `    expression: "['-knext-signing-key']"`,
-    replacement: `    expression: "['-knext-signing-key', '-extra']"`,
+    anchor: `    expression: "['-knext-signing-key', '-redis-credentials']"`,
+    replacement: `    expression: "['-knext-signing-key', '-redis-credentials', '-extra']"`,
     test: CANON,
   },
   {

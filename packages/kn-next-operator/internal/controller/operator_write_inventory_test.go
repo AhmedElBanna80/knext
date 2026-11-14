@@ -96,6 +96,10 @@ var operatorWriters = []operatorWriter{
 		Verbs: []string{"Create", "Update"}, NameFunc: "ZoneSigningKeySecretName", Name: ZoneSigningKeySecretName,
 	},
 	{
+		Func: "(*NextAppReconciler).writeCredentialsSecret", Resource: lcSecrets,
+		Verbs: []string{"Create", "Update"}, NameFunc: "RedisCredentialsSecretName", Name: RedisCredentialsSecretName,
+	},
+	{
 		Func: "(*NextAppReconciler).writeJWKSConfigMap", Resource: lcConfigmaps,
 		Verbs: []string{"Create", "Update"}, NameFunc: "ZoneJWKSConfigMapName", Name: ZoneJWKSConfigMapName,
 	},

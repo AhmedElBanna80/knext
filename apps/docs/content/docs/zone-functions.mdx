@@ -233,6 +233,7 @@ into your `NextApp` spec:
 | --- | --- |
 | `<NAME>_SERVICE_URL` | `http://<service>.<namespace>.svc.cluster.local` |
 | `<NAME>_SERVICE_PROTO_VERSION` | The contract version the function **actually serves**: the `protoVersion` of its latest Ready revision. Unset until one is Ready, so the zone's calls fail closed instead of guessing. |
+| `<NAME>_SERVICE_HTTP_VERSION` | The HTTP version the zone calls the function with: the `httpVersion` of the zone's `backends` entry (`"2"` for h2c, or `"1.1"`). Set only when the entry sets it; otherwise the zone's server picks (h2c on Node, HTTP/1.1 on Bun). If you already set this variable yourself in the zone's `env` or `secrets.envMap`, move it to the `backends` entry: the operator does not overwrite your value, and reports the clash on the `BackendBindings` condition. Changing it rolls one new revision of the zone. |
 | `KNEXT_WAKE_FUNCTIONS` | The bound functions to wake when the zone starts: their names, sorted and comma-separated. A function with `wakeAhead: false` is left out; with none left the variable is not set. |
 
 `<NAME>` is the `backends` entry's name in upper case with `-` replaced by `_`, so `user-profile`
@@ -244,7 +245,29 @@ The variables are sorted, so a reconcile with no change rolls no new revision, a
 zone rolls one new revision with the new `<NAME>_SERVICE_PROTO_VERSION`.
 
 If your zone's `spec.env` or `spec.secrets.envMap` already sets one of these names, your value is
-kept, and the `BackendBindings` condition names the variable that was not written.
+kept, and the `BackendBindings` condition names the variable that was not written. A same-named key
+imported through `envFrom` is not checked: the variable the operator writes wins over it.
+
+### Waking functions when the zone starts
+
+When a zone process starts, before Next.js boots, knext sends one `GET /healthz` to every function
+named in `KNEXT_WAKE_FUNCTIONS`, at its `<NAME>_SERVICE_URL`. A function that has scaled to zero
+starts waking while the zone is still booting, so the first request to need it waits less.
+
+- The calls never delay the zone: nothing waits for them, and the zone's own health check answers
+  whatever state they are in.
+- Each call gives up after one second, and a failure is logged once and not retried.
+- On shutdown the calls are cancelled before the zone drains its in-flight requests (a
+  single-executable zone without the self-contained supervisor simply exits).
+- A zone scaled out to several pods sends one call per pod per function. They collapse into a
+  single wake of each function.
+
+Zones built on the default and Bun standalone targets wake their functions. A zone built with
+the vinext target does not wake them yet: its functions start on their first call.
+
+To stop waking one function, set `wakeAhead: false` on it (`--no-wake-ahead` on
+`knext deploy function`). To turn the whole feature off for a zone, set `KNEXT_WAKE_AHEAD=0` in
+its `spec.env`.
 
 ## Credentials: what a function may read
 
@@ -416,6 +439,12 @@ Knative components, the policy cannot tell your zone from another one; the per-c
 is what does that. NetworkPolicy is enforced only by a CNI that supports it (Calico, Cilium);
 flannel enforces none.
 
+This split was verified by a manual drill on a cluster running Calico (last run 2026-11-11). It is not part of every CI run.
+
+- **A call from another namespace is refused at the function.** A pod in another namespace can reach a function's cluster-local URL. That call goes through the activator when the function is at zero, so the network admits it. The function still refuses it with `401 unauthenticated` when it carries no token or a malformed one. The zone's own calls go through. Separate tests refuse a correctly signed token with the wrong properties: one from another key, for another function or RPC, expired, or replayed to the same pod.
+- **A direct dial is dropped by the policy.** The same pod dialling the warm function pod directly, on its own port or queue-proxy's, is dropped. With the policy turned off, that dial connects.
+- **The token is the control on the activator path.** A function built without its token check answers the outside call. What the token binds is the issuing zone, the function, the RPC, and a 60-second lifetime, and it is single-use per pod. It does not bind the request body. A pod that has scaled to zero forgets which tokens it has seen, so a captured token can be replayed to a new pod within its 60 seconds.
+
 ### Turning the policy off
 
 The policy names the Kourier gateway pods, so Kourier is the only ingress layer it supports. A
@@ -458,7 +487,8 @@ just called it does not find it cold on the next request.
 
 The served version is `status.servedProtoVersion`: the `protoVersion` of the function's latest
 Ready revision. It is empty until a revision is Ready, and it is the value the zone receives as
-`<NAME>_SERVICE_PROTO_VERSION`.
+`<NAME>_SERVICE_PROTO_VERSION`. `knext generate --against deployed:<namespace>/<name>` compares your
+contract against it: see [`knext generate`](/docs/cli#knext-generate).
 
 | Condition | Meaning |
 | --- | --- |
@@ -466,7 +496,7 @@ Ready revision. It is empty until a revision is Ready, and it is the value the z
 | `SovereigntyCompliant` | Every Secret reference passes the allowlist. `SecretNotAllowed` names the ones that do not, including a reference whose name cannot be a Secret name. `Unknown` (`SecretsUnverified`) when the operator could not read a referenced Secret's metadata: see [When Secrets cannot be verified](#when-secrets-cannot-be-verified). |
 | `DatabaseHostLint` | `False` when an env value names another zone's database host. A warning only. |
 | `JWKSTrusted` | `True` when the zone controls its JWKS ConfigMap and the function mounts it. `Unknown` (`NotPublished`) while the ConfigMap does not exist yet. `False` (`JWKSUntrusted`) when another object holds the name: nothing is mounted and every call except the health check is refused. |
-| `Ready` | Bound, compliant, the function's JWKS is not untrusted, and the function's Knative Service is Ready. `False` (`SecretsUnverified`) while a Secret cannot be verified and the function was never rendered, or its latest spec has not been rolled out. |
+| `Ready` | Bound, compliant, the function's JWKS is not untrusted, and the function's Knative Service is Ready. `False` (`InvalidImage`) for an image reference without a `@sha256:` digest, and `False` (`InvalidSpec`) for a spec that cannot be rendered, such as an unparseable `spec.resources` quantity: the message names the field, a running function is removed, and nothing is rendered until it is fixed. `False` (`SecretsUnverified`) while a Secret cannot be verified and the function was never rendered, or its latest spec has not been rolled out. |
 
 ### When Secrets cannot be verified
 

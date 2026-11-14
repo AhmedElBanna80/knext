@@ -23,7 +23,7 @@
 // This module imports `trackWrite` and re-exports NOTHING new from it: the
 // handler subpaths stay default-only, because they exist to be handed to
 // Next's `cacheHandler` option by path, not called.
-import { trackWrite } from './cache-write-registry.js';
+import { onProcessExit, trackWrite } from './cache-write-registry.js';
 // The CDN purge pipeline (ADR-0068 D6, D7). Inert unless KNEXT_CDN_PROVIDER is
 // set; both calls are total (never throw, never block). See "CDN wire-in" below.
 import { enqueueAppPurge, enqueuePurge, firstReadyPurge } from './cdn-purge/index.js';
@@ -221,7 +221,7 @@ function __resetEnvForTests() {
   // `beforeEach` for a case that does not exist. Production must not call this.
   redis = undefined;
   clientLoad = null;
-  connectPromise = undefined;
+  connectInFlight = null;
   useRedis = !!REDIS_URL;
   unhealthyUntil = 0;
   closeFailureReported = false;
@@ -252,16 +252,23 @@ function __setRedisClientForTests(client) {
   redis = client ? budgetNativeClient(client) : undefined;
   useRedis = !!client;
   unhealthyUntil = 0;
-  connectPromise = null;
+  connectInFlight = null;
   clientLoad = null;
 }
 
 let redis;
 let clientLoad = null;
-let connectPromise;
+/**
+ * The connect in flight, keyed by the client it dials: `{ client, promise }`.
+ * Callers for the same client share it; a promise clears only itself, and a
+ * client dropped while it was connecting (breaker trip, reset) is never handed
+ * out (#2887).
+ */
+let connectInFlight = null;
 let useRedis = !!REDIS_URL;
 // While `Date.now() < unhealthyUntil` the breaker is OPEN: ensureConnected()
-// returns null immediately and every caller degrades to origin/memory.
+// returns null immediately: ISR reads miss and render from the origin, and
+// writes are not kept in memory (#2122).
 let unhealthyUntil = 0;
 
 // In-memory fallback
@@ -335,19 +342,28 @@ function readImageFromMemory(key) {
  * connected (with `autoReconnect`) while the next connect built another: one
  * leaked connection per trip.
  */
-function markUnhealthy(reason) {
+function markUnhealthy(reason, faulting) {
+  // A fault on a client that is no longer current (a slow connect settling
+  // after a newer client was loaded) says nothing about the current one: close
+  // the stale client and leave the breaker and the current client alone (#2889).
+  if (faulting && faulting !== redis) {
+    closeClient(faulting);
+    return;
+  }
   unhealthyUntil = Date.now() + RETRY_COOLDOWN_MS;
   const dying = redis;
   redis = undefined;
-  connectPromise = null;
-  if (dying) {
-    try {
-      dying.disconnect();
-    } catch (err) {
-      reportCloseFailure(err);
-    }
-  }
+  connectInFlight = null;
+  if (dying) closeClient(dying);
   if (reason) console.error('[CacheHandler] Redis unhealthy, failing open:', reason);
+}
+
+function closeClient(client) {
+  try {
+    client.disconnect();
+  } catch (err) {
+    reportCloseFailure(err);
+  }
 }
 
 /**
@@ -693,7 +709,7 @@ function waitForReady(client) {
       if (settled) return;
       settled = true;
       cleanup();
-      if (!ok) markUnhealthy(reason);
+      if (!ok) markUnhealthy(reason, client);
       resolve(ok ? client : null);
     };
     function onReady() {
@@ -738,9 +754,13 @@ async function waitForNativeReady(client) {
   if (client.connected) return client;
   try {
     await client.connect();
-    return client.connected ? client : null;
+    if (client.connected) return client;
+    // A connect that resolves but leaves the client down is a failed connect
+    // too: trip the breaker, or every cache call dials again (#2886).
+    markUnhealthy('native redis connect resolved but the client is not connected', client);
+    return null;
   } catch (err) {
-    markUnhealthy(err?.message || 'native redis connect failed');
+    markUnhealthy(err?.message || 'native redis connect failed', client);
     return null;
   }
 }
@@ -849,15 +869,19 @@ async function connectClient() {
   // either the native client or ioredis, and only the latter has `.on`/`.status`.
   // Reading `.status` on the native client yields undefined, which silently fell
   // through to the ioredis path — that is how this reached production.
-  if (typeof client.on !== 'function') return await waitForNativeReady(client);
-  if (client.status === 'ready') return client;
-  if (!connectPromise) {
-    connectPromise = waitForReady(client).then((result) => {
-      connectPromise = null;
-      return result;
+  const native = typeof client.on !== 'function';
+  if (native ? client.connected : client.status === 'ready') return client;
+  // One in-flight connect per client, on both paths: callers that arrive while
+  // it is pending wait on it instead of dialling again (#2887).
+  if (connectInFlight?.client !== client) {
+    const promise = (native ? waitForNativeReady(client) : waitForReady(client)).then((result) => {
+      if (connectInFlight?.promise === promise) connectInFlight = null;
+      // Dropped while connecting: never hand out a client that is no longer current.
+      return result && redis === client ? result : null;
     });
+    connectInFlight = { client, promise };
   }
-  return await connectPromise;
+  return await connectInFlight.promise;
 }
 
 /**
@@ -873,11 +897,13 @@ async function connectClient() {
  * Deliberately NOT applied to deserialization: a corrupt payload is a data
  * fault, not a connection fault, and must not take the cache offline.
  */
-async function redisCall(fn) {
+async function redisCall(fn, client) {
   try {
     return await fn();
   } catch (err) {
-    markUnhealthy(err?.message);
+    // With the client the command ran on, a fault on a client that is no
+    // longer current closes only that client (#2889).
+    markUnhealthy(err?.message, client);
     throw err;
   }
 }
@@ -906,7 +932,7 @@ function breakerRetryInMs() {
  */
 const USE_CACHE_CORE = {
   ensureConnected: () => ensureConnected(),
-  redisCall: (fn) => redisCall(fn),
+  redisCall: (fn, client) => redisCall(fn, client),
   command: redisCommand,
   keyPrefix: () => KEY_PREFIX,
   buildId: () => currentBuildId,
@@ -1327,6 +1353,7 @@ function touchBuildLive(client) {
     execBatch(client, [
       ['SET', buildLiveKey(currentBuildId), BUILD_LIVE_MARKER, 'EX', String(BUILD_LIVE_TTL_SECONDS)],
     ]),
+    client,
   ).catch(() => {
     // Not published: try again on the next request instead of waiting out the interval.
     lastBuildLiveBeat = 0;
@@ -1342,7 +1369,7 @@ async function isBuildLive(client, buildId) {
   if (known && now - known.at < BUILD_LIVE_LOOKUP_MS) return known.live;
   let live;
   try {
-    live = (await redisCall(() => client.get(buildLiveKey(buildId)))) === BUILD_LIVE_MARKER;
+    live = (await redisCall(() => client.get(buildLiveKey(buildId)), client)) === BUILD_LIVE_MARKER;
   } catch {
     return false;
   }
@@ -1471,7 +1498,7 @@ function noteCdnPurgeSkipped(tagCount) {
 // edge purge for exactly the tags whose invalidation completed (the same order
 // as `revalidateTag`'s, D6.3).
 //
-//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags. One more and the list is
+//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags and deletes together. One more and the list is
 //    dropped for a COLLAPSE: the replay invalidates every ISR entry under this
 //    app's key prefix (a cursor SCAN, DEL per page) and queues one purge of the
 //    app's edge tag -- wider than needed, never stale. The same collapse the
@@ -1482,32 +1509,40 @@ function noteCdnPurgeSkipped(tagCount) {
 //  - OFF THE REQUEST PATH. Started by the first connection that finds the
 //    breaker closed, or by a probe timer set for the moment it closes (an idle
 //    pod would otherwise never replay while other pods serve the stale
-//    entries). Never awaited by a caller; enrolled in the SIGTERM drain.
+//    entries). Never awaited by a caller. `trackWrite`d, so a drain CAN await it,
+//    but no runtime registers that drain today (ADR-0066 Amendment 9).
 //  - NO STORM. One replay at a time, one tag at a time through `redisCall`: the
 //    first fault re-trips the breaker and stops the run, and the rest waits for
 //    the next probe -- one attempt per cooldown, the breaker's own rate.
 //  - PER PROCESS. The list lives in this process only: a pod that scales to
 //    zero or restarts before Redis is back loses it, and those entries stay
-//    stale until their TTL (a known limit). The `'use cache'` handler's tag
-//    stamps are replayed by that handler, the same way, from its own list
-//    (use-cache-handler.js, "Tag stamps an outage kept from Redis").
+//    stale until their TTL (a known limit). It is not lost silently: the
+//    process logs what it exits with (`reportReplayLostAtExit`, #2384).
+//  - The `'use cache'` handler's tag stamps are replayed by that handler, the
+//    same way, from its own list (use-cache-handler.js, "Tag stamps an outage
+//    kept from Redis").
 const REPLAY_MAX_TAGS = 1000;
 const REPLAY_SCAN_COUNT = 100;
 // tag -> the generation it was last recorded at. A Map keeps first-insertion
 // order when a value is updated, and the generation lets a replay that raced a
 // fresh skip of the same tag keep it rather than forget it.
 const replayTags = new Map();
+// cache key -> generation, for `set(key, null)` deletes that did not reach Redis
+// (breaker open, or the delete itself faulted). Replayed before the tags; they
+// share the REPLAY_MAX_TAGS bound and the collapse (#2889).
+const replayKeys = new Map();
 let replayGeneration = 0;
 let replayCollapsed = false;
 let replayRun = null;
 let replayTimer = null;
 
 function replayPending() {
-  return replayCollapsed || replayTags.size > 0;
+  return replayCollapsed || replayTags.size > 0 || replayKeys.size > 0;
 }
 
 function resetInvalidationReplay() {
   replayTags.clear();
+  replayKeys.clear();
   replayGeneration = 0;
   replayCollapsed = false;
   replayRun = null;
@@ -1515,15 +1550,45 @@ function resetInvalidationReplay() {
   replayTimer = null;
 }
 
+/**
+ * The exit report (#2384): a process that exits with a backlog loses it, and
+ * those entries (and the edge purge they held back) stay stale until their TTL.
+ * One line says so, with the count, rather than nothing at all.
+ */
+function reportReplayLostAtExit() {
+  if (!replayPending()) return;
+  const what = replayCollapsed
+    ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
+    : `${replayTags.size} tag invalidation(s) and ${replayKeys.size} delete(s)`;
+  // Deletes hold back no edge purge; tags (and a collapse) do.
+  const purge =
+    replayCollapsed || replayTags.size > 0 ? ', and the edge purge they held back does not run' : '';
+  console.error(
+    `[CacheHandler] exiting with ${what} not yet replayed to Redis: ` +
+      "those ISR entries stay stale until their Redis TTL (the route's `expire` when set, " +
+      `otherwise ${DEFAULT_TTL_SECONDS}s or twice \`revalidate\` when that is longer)${purge}`,
+  );
+}
+
+function armReplayExitReport() {
+  try {
+    onProcessExit(reportReplayLostAtExit);
+  } catch {
+    // Reporting is best effort; it must never cost the backlog itself.
+  }
+}
+
 /** Remember tags whose invalidation did not reach Redis, and try to replay them. */
 function recordSkippedInvalidation(tags) {
   const list = tags.filter((tag) => typeof tag === 'string' && tag.length > 0);
   if (!useRedis || list.length === 0) return;
+  armReplayExitReport();
   replayGeneration += 1;
   if (!replayCollapsed) {
     for (const tag of list) {
-      if (!replayTags.has(tag) && replayTags.size >= REPLAY_MAX_TAGS) {
+      if (!replayTags.has(tag) && replayTags.size + replayKeys.size >= REPLAY_MAX_TAGS) {
         replayTags.clear();
+        replayKeys.clear();
         replayCollapsed = true;
         console.warn(
           `[CacheHandler] invalidation replay backlog passed ${REPLAY_MAX_TAGS} tags while Redis was unreachable; once it is back, every ISR entry of this app is invalidated and the whole app is purged at the edge`,
@@ -1534,6 +1599,26 @@ function recordSkippedInvalidation(tags) {
     }
   }
   // With the breaker open this finds no client and only sets the probe.
+  startInvalidationReplay();
+}
+
+/** Remember a delete that did not reach Redis, and try to replay it (#2889). */
+function recordSkippedDelete(key) {
+  if (!useRedis || typeof key !== 'string') return;
+  armReplayExitReport();
+  replayGeneration += 1;
+  if (!replayCollapsed) {
+    if (!replayKeys.has(key) && replayKeys.size + replayTags.size >= REPLAY_MAX_TAGS) {
+      replayKeys.clear();
+      replayTags.clear();
+      replayCollapsed = true;
+      console.warn(
+        `[CacheHandler] invalidation replay backlog passed ${REPLAY_MAX_TAGS} entries while Redis was unreachable; once it is back, every ISR entry of this app is invalidated and the whole app is purged at the edge`,
+      );
+    } else {
+      replayKeys.set(key, replayGeneration);
+    }
+  }
   startInvalidationReplay();
 }
 
@@ -1579,6 +1664,11 @@ async function runInvalidationReplay() {
     await replayCollapsedBacklog(replayClient);
     return;
   }
+  for (const [key, generation] of [...replayKeys]) {
+    await redisCall(() => redisCommand(replayClient, 'DEL', [cacheKey(key)]), replayClient);
+    if (replayKeys.get(key) === generation) replayKeys.delete(key);
+    logCacheEvent('DELETE', 'redis', key, { details: 'Replayed after Redis recovered' });
+  }
   const replayed = [];
   try {
     for (const [tag, generation] of [...replayTags]) {
@@ -1616,13 +1706,14 @@ async function replayCollapsedBacklog(client) {
   let cursor = '0';
   let deleted = 0;
   do {
-    const reply = await redisCall(() =>
-      redisCommand(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+    const reply = await redisCall(
+      () => redisCommand(client, 'SCAN', [cursor, 'MATCH', pattern, 'COUNT', String(REPLAY_SCAN_COUNT)]),
+      client,
     );
     cursor = String(reply?.[0] ?? '0');
     const keys = Array.isArray(reply?.[1]) ? reply[1].map(String) : [];
     if (keys.length > 0) {
-      await redisCall(() => redisCommand(client, 'DEL', keys));
+      await redisCall(() => redisCommand(client, 'DEL', keys), client);
       deleted += keys.length;
     }
   } while (cursor !== '0');
@@ -1644,7 +1735,7 @@ async function replayCollapsedBacklog(client) {
  */
 async function invalidateTagInRedis(client, tag) {
   const tKey = tagKey(tag);
-  const keys = await redisCall(() => client.smembers(tKey));
+  const keys = await redisCall(() => client.smembers(tKey), client);
   if (keys.length > 0) {
     // Same atomicity guard as `set` (T13): dropping the entries and the tag
     // index must be all-or-nothing, or a death mid-batch leaves the tag set
@@ -1652,7 +1743,7 @@ async function invalidateTagInRedis(client, tag) {
     // invalidation that reported success).
     const commands = keys.map((k) => ['DEL', cacheKey(k)]);
     commands.push(['DEL', tKey]);
-    await redisCall(() => execAtomic(client, commands));
+    await redisCall(() => execAtomic(client, commands), client);
   }
   return keys.length;
 }
@@ -1691,7 +1782,7 @@ function startCdnFirstReady() {
   const redis = async () => {
     const client = await ensureConnected();
     if (!client) return null;
-    return { send: (name, args) => redisCall(() => redisCommand(client, name, args)) };
+    return { send: (name, args) => redisCall(() => redisCommand(client, name, args), client) };
   };
   try {
     const attempt = firstReadyPurge(buildId, { redis }).then(
@@ -1786,7 +1877,7 @@ class CacheHandler {
 
     try {
       if (client) {
-          const data = await redisCall(() => client.get(cacheKey(key)));
+          const data = await redisCall(() => client.get(cacheKey(key)), client);
           if (!data) {
             logCacheEvent('MISS', source, key, {
               durationMs: Date.now() - startTime,
@@ -1828,7 +1919,20 @@ class CacheHandler {
           return staleForeignBuildEntry(parsed, ctx, writerIsLive);
       }
 
-      // In-memory fallback
+      // Redis is configured but unreachable (breaker open, connect failed): an
+      // outage, not dev mode. Miss, so Next re-renders from origin. This pod's
+      // memory never saw an invalidation another pod processed through Redis,
+      // so serving it could keep a revalidated page alive here (#2122). The
+      // 'use cache' handler does the same.
+      if (useRedis) {
+        logCacheEvent('MISS', source, key, {
+          durationMs: Date.now() - startTime,
+          details: 'Redis unavailable: not serving a pod-local entry',
+        });
+        return null;
+      }
+
+      // No Redis configured (dev mode): the in-memory store is the cache.
       const entry = memoryCache.get(key) ?? readImageFromMemory(key);
       if (!entry) {
         logCacheEvent('MISS', source, key, {
@@ -1882,7 +1986,19 @@ class CacheHandler {
 
     try {
       if (data === null) {
-        if (client) await client.del(cacheKey(key));
+        // Through redisCall like every other command, so a fault trips the
+        // breaker instead of leaving the next call on the same client (#2886).
+        if (client) {
+          try {
+            await redisCall(() => client.del(cacheKey(key)), client);
+          } catch (err) {
+            // The stale entry would otherwise survive until its TTL (#2889).
+            recordSkippedDelete(key);
+            throw err;
+          }
+        } else {
+          recordSkippedDelete(key);
+        }
         memoryCache.delete(key);
         dropImageFromMemory(key);
         logCacheEvent('DELETE', source, key, {
@@ -1944,13 +2060,13 @@ class CacheHandler {
             commands.push(['SADD', tagKey(tag), key]);
           }
         }
-        await redisCall(() => execAtomic(client, commands));
+        await redisCall(() => execAtomic(client, commands), client);
         // After the write, never before it: liveness must not delay the entry.
         touchBuildLive(client);
-      } else {
-        // In-memory fallback path: store original data with Map/Buffer types preserved
-        // Only used when Redis is NOT available, to avoid unbounded memory growth
-        // and stale entries on revalidateTag (which only clears Redis).
+      } else if (!useRedis) {
+        // In-memory store, used only when no Redis is configured (dev mode). A
+        // Redis that is configured but down writes nothing locally: `get` would
+        // not serve it (#2122), and it would only grow memory during an outage.
         const memEntry = {
           value: cloneCacheValue(data),
           lastModified: Date.now(),
@@ -1968,7 +2084,10 @@ class CacheHandler {
 
       logCacheEvent('SET', source, key, {
         durationMs: Date.now() - startTime,
-        details: `TTL: ${ttl}s, Tags: [${tags.join(', ')}]`,
+        details:
+          !client && useRedis
+            ? 'not stored: Redis unavailable (no pod-local write)'
+            : `TTL: ${ttl}s, Tags: [${tags.join(', ')}]`,
       });
     } catch (error) {
       console.error('[CacheHandler] Error setting cache:', key, error.message);
@@ -2008,8 +2127,9 @@ class CacheHandler {
       //
       // Only with NO Redis configured is this the store every pod reads, so
       // only then does it count for the edge purge (D6.7). With Redis
-      // configured but unreachable (breaker open, client unavailable) this
-      // clears one pod's memory while the SHARED entries survive: purging the
+      // configured but unreachable (breaker open) this pod's map holds no ISR
+      // entries at all (#2122: no pod-local write or serve during an outage),
+      // while the SHARED entries survive in Redis: purging the
       // edge now would let other pods refill it from stale Redis, so the purge
       // is held back: the tags are replayed, Redis first and then the edge,
       // once the breaker closes (see `recordSkippedInvalidation`).

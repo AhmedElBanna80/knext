@@ -246,7 +246,7 @@ func maximalWarmScheduleSpec() appsv1alpha1.NextAppSpec {
 			Endpoint: "https://storage.googleapis.com",
 		},
 		Cache: &appsv1alpha1.CacheSpec{
-			Provider: "redis", URL: "redis://cache:6379", KeyPrefix: "app",
+			Provider: "redis", URL: "redis://cache:6379", KeyPrefix: "app", Isolation: "acl",
 		},
 		Revalidation: &appsv1alpha1.RevalidationSpec{
 			Queue: lcKafka, KafkaBrokerUrl: "kafka:9092", ProvisionKafkaSource: &provisionKafka,
@@ -302,8 +302,9 @@ func maximalWarmScheduleSpec() appsv1alpha1.NextAppSpec {
 		// values here for the leaf walk.
 		Backends: []appsv1alpha1.BackendBinding{{
 			Name: "pricing", Service: "pricing",
-			Image:      "@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
-			SpecDigest: "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+			Image:       "@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+			SpecDigest:  "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1",
+			HTTPVersion: "1.1",
 		}},
 		// spec.cdn renders KNEXT_CDN_* container env, also outside both scans in
 		// this file, and likewise only needs non-zero values here.

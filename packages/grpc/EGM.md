@@ -36,6 +36,29 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
   - scripts: [./scripts/EGM.md](./scripts/EGM.md) - template copy at build time,
     runners for the verbs and the verified buf from source, and the token-vector
     generator.
+  - e2e/z7-identity-kind (no EGM.md): the Z7 zone-identity-token lane on kind.
+    `run.sh` is its entry point (run by `.github/workflows/z7-identity-kind-e2e.yml`),
+    sources the shared `e2e/lib/kind-lane.sh`, and its header describes the
+    phases, including the squatted-JWKS-ConfigMap phase. `mutation-rows.mjs` holds the mutation rows (the operator rows, plus M7 for
+    `run.sh` itself), which
+    `mutation-prove-operator.sh` runs by hand. The lane's workflow, script and lib
+    are guarded from the repo root, and its probe and needle helpers under
+    `packages/grpc/src/__tests__`: see the header of its
+    prover, `scripts/mutation-prove-2461-z7-kind-e2e.mjs`, for the test files it
+    covers, including `tests/z7-identity-kind-e2e-lane.test.ts`.
+  - e2e/z10-zone-functions-kind (no EGM.md): the Z10 zone-functions lane on kind
+    (cold path, trailers, rollout, sovereignty, wake-ahead). The same workflow
+    runs its `run.sh` after Z7, on the same cluster. Its `wake` phase uses a
+    second zone image, `zone-caller-wake`, built by `../z7-identity-kind/zone-caller/build.ts --wake`,
+    which starts the stand-in zone with knext's wake-ahead preload. Guard:
+    `tests/z10-zone-functions-kind-lane.test.ts`.
+  - e2e/lib/kind-lane.sh: helpers sourced (never run) by the Z7, Z10 and Z11
+    scripts.
+  - e2e/z11-activator-drill (no EGM.md): a manual drill on kind with Calico,
+    phases `up deploy token direct noauth`; it proves which control holds on the
+    activator path (the function's token, and the NetworkPolicy on a direct
+    dial). No workflow runs it; `RECORDED-RUN.md` holds the last run. Guard:
+    `tests/z11-activator-drill.test.ts`.
 
 ## Invariants
 
@@ -62,3 +85,5 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
 ## Verification
 
 - Run: `node scripts/bun-test.mjs packages/grpc` (from the repository root).
+- The e2e guards live at the repo root and run by name:
+  `node scripts/bun-test.mjs tests/z7-identity-kind-e2e-lane.test.ts tests/z10-zone-functions-kind-lane.test.ts tests/z11-activator-drill.test.ts`.

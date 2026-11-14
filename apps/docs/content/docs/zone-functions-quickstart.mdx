@@ -71,7 +71,11 @@ The commands are the same for Go and Rust except for `--lang` and the toolchain 
      --image registry.example.com/shop/orders@sha256:<digest>
    ```
 
-   Use `--dry-run` to print the `BackendService` without applying it.
+   The served contract version is read from `contract_version` in the function's copy of the
+   contract (`functions/orders/proto`, which its code is generated from). If the zone's copy is
+   ahead of it, the command stops until you copy the contract over, regenerate and rebuild. Pass
+   `--proto-version` to override it. Use `--dry-run` to print the `BackendService` without
+   applying it.
 
 7. **Bind it from the zone and deploy.** Add the function to `backends` in `knext.config.ts`, then
    deploy the zone:
@@ -119,6 +123,11 @@ first.
 name. It receives the function, service, method and kind of the call, and returns `{ sub }` (your
 session's stable user id) or throws, for example a redirect to sign-in. Each generated query,
 action and stream runs it first, outside any cache. Cached reads are keyed per user.
+
+A cached read that the function answers with an error throws a `ConnectError` with the function's
+code and message, in production builds too. A definitive answer such as `NotFound` or
+`PermissionDenied` is cached like a result, and a write to the service refreshes it. A transient
+one such as `Unavailable` or `DeadlineExceeded` is kept for a couple of seconds only.
 
 ## Limits
 

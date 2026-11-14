@@ -39,6 +39,7 @@ interface BackendsSchema {
             service: Field;
             image: Field;
             specDigest: Field;
+            httpVersion: { enum: string[] };
         };
     };
     "x-kubernetes-validations": { rule: string }[];
@@ -188,6 +189,26 @@ describe("backends mirrors the shipped CRD", () => {
                 rejects(
                     [{ name: "fn", specDigest: value }],
                     /backends\[0\]\.specDigest/,
+                );
+        });
+    }
+
+    it("httpVersion: the CRD enum is exactly 2 and 1.1", () => {
+        expect([...SCHEMA.items.properties.httpVersion.enum].sort()).toEqual([
+            "1.1",
+            "2",
+        ]);
+    });
+    for (const value of ["2", "1.1", "3", "h2c", "1", "", 2]) {
+        it(`httpVersion: agrees with the CRD on ${JSON.stringify(value)}`, () => {
+            const ok = SCHEMA.items.properties.httpVersion.enum.includes(
+                value as string,
+            );
+            if (ok) accepts([{ name: "fn", httpVersion: value }]);
+            else
+                rejects(
+                    [{ name: "fn", httpVersion: value }],
+                    /backends\[0\]\.httpVersion/,
                 );
         });
     }

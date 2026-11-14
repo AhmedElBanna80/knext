@@ -89,6 +89,10 @@ spec:
         # rewrites it from the policy's real, prefixed name (see replacements there), because
         # kustomize's name prefix does not reach an env value.
         env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         - name: WRITE_POLICY_NAME
           value: secret-configmap-writes
         ports: []

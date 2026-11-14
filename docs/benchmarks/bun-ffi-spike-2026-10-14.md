@@ -2,7 +2,7 @@
 
 Date: 2026-10-14. Throwaway spike, measure-first; **no spike code ships** (it lives in the session
 scratchpad). Input to `docs/adr/0069-bun-ffi-inprocess-rust.md`. Builds on the 2026-10-13
-research for #2315 (local note `.claude/research/native-rust-on-bun-2026-10-13.md`, summarised in
+research for #2315 (a local maintainer note, summarised in
 the issue), whose napi-rs recommendation the founder overruled in favour of `bun:ffi`.
 
 Tags: **[measured]** run here; **[read]** read in a doc or source; **[inferred]** reasoning only.

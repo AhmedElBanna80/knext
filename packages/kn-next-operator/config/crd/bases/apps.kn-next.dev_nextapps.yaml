@@ -91,6 +91,18 @@ spec:
                 items:
                   description: BackendBinding is the zone half of a binding to a BackendService.
                   properties:
+                    httpVersion:
+                      description: |-
+                        HTTPVersion is the HTTP version this zone's gateway calls the function
+                        with: "2" (h2c) or "1.1". The operator renders it into the zone as
+                        <NAME>_SERVICE_HTTP_VERSION. Unset: nothing is rendered and the gateway
+                        picks by its own runtime (h2c on Node, HTTP/1.1 on Bun). It is the zone's
+                        own choice, so it lives on the zone's entry, not on the BackendService:
+                        a function writer cannot roll the zone's revision with it.
+                      enum:
+                      - "2"
+                      - "1.1"
+                      type: string
                     image:
                       description: |-
                         Image pins the function image this zone agreed to bind, as a digest:
@@ -242,6 +254,22 @@ spec:
               cache:
                 description: Caching infrastructure
                 properties:
+                  isolation:
+                    description: |-
+                      Isolation selects whether this app's Redis cache runs under its own ACL
+                      user, restricted to its key prefix and the commands the cache needs.
+                        - auto (the default): isolate when spec.cache.url names a Redis endpoint
+                          the platform admin registered on the KnextPlatform; otherwise keep the
+                          shared credential in spec.cache.url.
+                        - acl: require isolation. If it cannot be provided the app fails closed
+                          (REDIS_URL points at a Secret that does not exist, so no pod starts on
+                          the shared credential).
+                        - none: never isolate; spec.cache.url is used as written.
+                    enum:
+                    - auto
+                    - acl
+                    - none
+                    type: string
                   keyPrefix:
                     description: |-
                       KeyPrefix is prepended to every Redis cache key ("<keyPrefix>:..."); maps
@@ -250,6 +278,10 @@ spec:
                       At most 63 characters, with no whitespace and none of the Redis glob
                       characters * ? [ ] \. "kn-next" and any prefix starting "kn-next:" are
                       reserved for the shared fallback keyspace.
+                      "knext" and prefixes under "knext:" are the platform keyspace and are
+                      refused by the webhook and the reconciler (validation.ValidateNextAppSpec),
+                      not by a CEL rule here: the CLI keeps a verbatim copy of this field's CEL
+                      rules, and that copy ships in the published package.
                     maxLength: 63
                     pattern: ^[^*?\[\]\\ \t\n\r\f\v]*$
                     type: string
@@ -1257,6 +1289,26 @@ spec:
           status:
             description: status defines the observed state of NextApp
             properties:
+              cache:
+                description: Cache reports the app's Redis cache isolation.
+                properties:
+                  isolation:
+                    description: |-
+                      Isolation is "acl" only while isolation is in force: the app runs under its
+                      own ACL user AND the endpoint shows no other way to reach its keys (the
+                      CacheCredentialsReady reason is Provisioned). It is "acl-pending" while the
+                      app has its own user but isolation is not in force; the condition says why.
+                      It is absent while the app uses the credential in spec.cache.url.
+                    type: string
+                  secretName:
+                    description: SecretName is the operator-owned Secret that holds
+                      the app's REDIS_URL.
+                    type: string
+                  username:
+                    description: Username is the ACL user (knext-app-<cluster tag>-<app
+                      hash>).
+                    type: string
+                type: object
               conditions:
                 description: |-
                   conditions represent the current state of the NextApp resource.

@@ -320,6 +320,12 @@ export interface BackendBindingConfig {
      * both may be set. Update the pin whenever you change the function.
      */
     specDigest?: string;
+    /**
+     * The HTTP version this app calls the function with: `"2"` (h2c) or
+     * `"1.1"`. Rendered into the app as `<NAME>_SERVICE_HTTP_VERSION`. Left out,
+     * the app's server picks: h2c on Node, HTTP/1.1 on Bun.
+     */
+    httpVersion?: "2" | "1.1";
 }
 
 // Network exposure (#1865): whether the app's Knative Route is reachable from

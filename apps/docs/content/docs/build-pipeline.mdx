@@ -486,7 +486,7 @@ On the vinext target, `knext build` produces the executable in two stages:
    **bytecode** ahead of time, and baked together with the Bun runtime into one binary, cross-built
    for the Linux target your image runs (musl by default, matching the shipped base image).
 
-Compiling the whole bundle at once is what lets the executable win **both** cold start and
+Compiling the whole bundle at once is what lets the executable win **both** process boot and
 throughput at the same time: minification and bundling remove the per-module boundary cost that made
 earlier file-by-file bytecode approaches trade one for the other. The engine never parses your
 server source at boot — that work already happened at build time.

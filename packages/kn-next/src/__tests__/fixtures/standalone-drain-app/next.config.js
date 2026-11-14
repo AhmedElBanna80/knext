@@ -8,7 +8,9 @@
  * installed here and Next 16.3.3 no longer reads an `eslint` key from this
  * file, so there is nothing to bypass on that axis.)
  */
-module.exports = {
+// ESM, like a scaffolded app: package.json sets "type": "module" (#2247), so
+// Next's standalone server.js loads as ESM exactly as it does in production.
+export default {
   output: 'standalone',
   typescript: { ignoreBuildErrors: true },
   // The build id is the deploy tag, exactly as the scaffold template wires it:

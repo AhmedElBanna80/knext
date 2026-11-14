@@ -29,6 +29,7 @@ import { runQuiet } from "./exec";
 import { warnOnVulnerableNext } from "./next-advisory-warning";
 import { UsageError } from "./shared";
 import {
+    assertDefaultDistDir,
     assertNotStaticExport,
     assertVinextNotStaticExport,
 } from "./static-export-guard";
@@ -163,6 +164,11 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
         builder: opts.builderId,
         readNextConfig: () => readNextConfigStrict(cwd),
     });
+
+    // A Next build into a custom distDir is not supported yet (#2251): refuse
+    // before any build work rather than produce a wrong artifact later. The
+    // vinext target builds with vite and never reads Next's distDir.
+    if (!opts.requireEsm) assertDefaultDistDir(cwd);
 
     process.env[KNEXT_RUNTIME_ENV] = opts.runtimeId;
 

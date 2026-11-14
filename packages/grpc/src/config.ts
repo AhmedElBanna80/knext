@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
+import { checkTagTemplate } from './baseline';
 import { DEFAULT_DEADLINE_MS, DEFAULT_GATEWAY_TIMEOUT_SECONDS } from './policy';
 
 export const CONFIG_FILE = 'knext.grpc.json';
@@ -36,6 +37,13 @@ export interface GrpcConfig {
    * and `knext generate` refuses to run without it.
    */
   readonly authorize?: string;
+  /**
+   * The git tag a released contract version lives under, for
+   * `knext generate --against deployed:<namespace>/<name>`. Must contain
+   * `{version}` exactly once, may contain `{name}` (the function's name), and
+   * no other placeholder, comma, `#` or whitespace. Default `proto/v{version}`.
+   */
+  readonly deployedTagTemplate?: string;
   readonly functions: Readonly<Record<string, FunctionEntry>>;
 }
 
@@ -52,7 +60,7 @@ export class GrpcUsageError extends Error {
   override name = 'GrpcUsageError';
 }
 
-const KEYS = new Set([...Object.keys(DEFAULT_CONFIG), 'authorize']);
+const KEYS = new Set([...Object.keys(DEFAULT_CONFIG), 'authorize', 'deployedTagTemplate']);
 
 /** Extensions an authorize() module may have; the generated import drops it. */
 export const AUTHORIZE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'] as const;
@@ -130,6 +138,19 @@ export const SERVICE_PROTO_VERSION_SUFFIX = '_SERVICE_PROTO_VERSION';
 /** `user-profile` -> `USER_PROFILE_SERVICE_PROTO_VERSION`. */
 export function protoVersionEnvFor(functionName: string): string {
   return `${functionName.toUpperCase().replaceAll('-', '_')}${SERVICE_PROTO_VERSION_SUFFIX}`;
+}
+
+/**
+ * The suffix of the variable holding the HTTP version (`2` or `1.1`) the zone's
+ * gateway calls a function with. The operator renders it from the function's
+ * spec.httpVersion; unset, the gateway picks by its own runtime. A contract with
+ * the operator: change it in both places or neither.
+ */
+export const SERVICE_HTTP_VERSION_SUFFIX = '_SERVICE_HTTP_VERSION';
+
+/** `user-profile` -> `USER_PROFILE_SERVICE_HTTP_VERSION`. */
+export function httpVersionEnvFor(functionName: string): string {
+  return `${functionName.toUpperCase().replaceAll('-', '_')}${SERVICE_HTTP_VERSION_SUFFIX}`;
 }
 
 function relativeDir(key: string, value: unknown): string {
@@ -223,8 +244,20 @@ export function parseConfig(raw: unknown): GrpcConfig {
     deadlineMs: num('deadlineMs'),
     gatewayTimeoutSeconds: num('gatewayTimeoutSeconds'),
     ...(obj.authorize === undefined ? {} : { authorize: authorizePath(obj.authorize) }),
+    ...(obj.deployedTagTemplate === undefined
+      ? {}
+      : { deployedTagTemplate: tagTemplate(obj.deployedTagTemplate) }),
     functions,
   };
+}
+
+function tagTemplate(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new GrpcUsageError(`${CONFIG_FILE}: "deployedTagTemplate" must be a string`);
+  }
+  const problem = checkTagTemplate(value);
+  if (problem) throw new GrpcUsageError(`${CONFIG_FILE}: ${problem}`);
+  return value;
 }
 
 /** Read `knext.grpc.json` from `cwd`. */
@@ -258,6 +291,9 @@ export function serializeConfig(config: GrpcConfig): string {
       deadlineMs: config.deadlineMs,
       gatewayTimeoutSeconds: config.gatewayTimeoutSeconds,
       ...(config.authorize === undefined ? {} : { authorize: config.authorize }),
+      ...(config.deployedTagTemplate === undefined
+        ? {}
+        : { deployedTagTemplate: config.deployedTagTemplate }),
       functions,
     },
     null,

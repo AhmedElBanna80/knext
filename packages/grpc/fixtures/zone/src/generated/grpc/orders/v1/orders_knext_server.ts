@@ -12,7 +12,7 @@ import { authorize as $authorize } from "../../../../knext/authorize";
 import { ordersServiceClient as $ordersService } from "./orders_knext";
 import { GetOrderRequestSchema, type GetOrderResponse, WatchOrdersRequestSchema, type WatchOrdersResponse } from "./orders_pb";
 import { type MessageInitShape } from "@bufbuild/protobuf";
-import { QUERY_CACHE_LIFE as $QUERY_CACHE_LIFE, decodeRequest as $decodeRequest, encodeRequest as $encodeRequest, mintCallToken as $mintCallToken, normalizeRequest as $normalizeRequest, servedVersion as $servedVersion, subjectSub as $subjectSub, userSubject as $userSubject } from "@getknext/grpc/runtime";
+import { type CachedResult, QUERY_CACHE_LIFE as $QUERY_CACHE_LIFE, cacheableCall as $cacheableCall, decodeRequest as $decodeRequest, encodeRequest as $encodeRequest, mintCallToken as $mintCallToken, normalizeRequest as $normalizeRequest, servedVersion as $servedVersion, subjectSub as $subjectSub, unwrapCached as $unwrapCached, userSubject as $userSubject } from "@getknext/grpc/runtime";
 import { cacheLife as $cacheLife, cacheTag as $cacheTag } from "next/cache";
 
 /**
@@ -24,17 +24,19 @@ import { cacheLife as $cacheLife, cacheTag as $cacheTag } from "next/cache";
  */
 export async function getOrder(request: MessageInitShape<typeof GetOrderRequestSchema>): Promise<GetOrderResponse> {
   const subject = await $userSubject($authorize, { function: "orders", service: "orders.v1.OrdersService", method: "GetOrder", kind: "read" });
-  return getOrder$cached(subject, $servedVersion("orders", "ORDERS_SERVICE_PROTO_VERSION", "1.2.0"), $encodeRequest(GetOrderRequestSchema, request));
+  return $unwrapCached(await getOrder$cached(subject, $servedVersion("orders", "ORDERS_SERVICE_PROTO_VERSION", "1.2.0"), $encodeRequest(GetOrderRequestSchema, request)));
 }
 
-async function getOrder$cached(subject: string, protoVersion: string, request: string): Promise<GetOrderResponse> {
+async function getOrder$cached(subject: string, protoVersion: string, request: string): Promise<CachedResult<GetOrderResponse>> {
   "use cache";
   $cacheLife($QUERY_CACHE_LIFE);
   $cacheTag("knext:orders:orders.v1.OrdersService");
   // protoVersion is part of the cache key only: a function rollout is a new entry.
   void protoVersion;
   const token = async () => await $mintCallToken({ function: "orders", method: "/orders.v1.OrdersService/GetOrder", auth: "user", sub: $subjectSub(subject) });
-  return $ordersService.getOrder($decodeRequest(GetOrderRequestSchema, request), { token });
+  // The function's error is returned, not thrown: Next.js hides errors thrown
+  // in a cache scope in production builds, and the caller needs its code.
+  return $cacheableCall(() => $ordersService.getOrder($decodeRequest(GetOrderRequestSchema, request), { token }), $cacheLife);
 }
 
 /**

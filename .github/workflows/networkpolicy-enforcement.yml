@@ -24,12 +24,20 @@ on:
       - 'packages/kn-next-operator/cmd/policygen/**'
       - 'packages/kn-next-operator/test/h2cecho/**'
       - 'packages/kn-next-operator/test/networkpolicy-enforcement-drill.sh'
+      - 'scripts/kind-manifests/apply-calico.sh'
       - '.github/workflows/networkpolicy-enforcement.yml'
   schedule:
     - cron: '41 4 * * *'
   workflow_dispatch: {}
 
 permissions: {}
+
+# A new push to a pull request cancels that PR's superseded run of this
+# workflow. Any other event (push, merge_group, schedule, dispatch) gets its own
+# group from the run id, so it is never cancelled or queued behind another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   enforcement-drill:

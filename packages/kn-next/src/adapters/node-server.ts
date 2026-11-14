@@ -35,6 +35,8 @@ import {
     isSupervisorInitDeferred,
 } from "./deferred-supervisor-init";
 import { buildChildEnv } from "./env";
+import { runProcessStartPrimers } from "./process-start-run";
+import { parseWarmPaths, selfWarm } from "./self-warm";
 import { type ChildLike, gracefulShutdown, isShuttingDown } from "./shutdown";
 import { childSpawnPlan } from "./standalone-exec";
 
@@ -64,16 +66,20 @@ bootTrace.mark("entry-eval");
 // child even exists, is earlier than any preload the child itself could
 // run. The compiled standalone-on-Bun executable has no supervisor, so it
 // bakes the same primer in as the FIRST preload instead (standalone-compile.mjs).
-const arpPrimerPath = resolve(import.meta.dirname, "arp-primer.cjs");
-if (existsSync(arpPrimerPath)) {
-    try {
-        createRequire(import.meta.url)(arpPrimerPath);
-    } catch {
-        // arp-primer.cjs's own contract is "never throws"; this catch only
-        // guards module resolution itself (e.g. a corrupted dist file), never
-        // the primer's internal logic.
-    }
-}
+//
+// The ARP primer is the first entry of the process-start primer list
+// (ADR-0066 D3, ./process-start-primers.cjs); the wake-ahead primer (#2054)
+// is the second. runProcessStartPrimers (./process-start-run) is the only
+// place disk mode runs them, in list order, before metrics bind and before
+// the child is spawned. It returns abortPrimers from the owner module
+// (./process-start-abort.cjs), which onSignal calls before draining. It never
+// throws: a primer that cannot load is logged once and skipped.
+const abortPrimers = runProcessStartPrimers({
+    dir: import.meta.dirname,
+    requireFrom: createRequire(import.meta.url),
+    fileExists: existsSync,
+    write: (line) => process.stderr.write(line),
+});
 
 const log = createLogger({ module: "server" });
 // Prometheus metrics port. Defaults to 9464 (no behavior change); overridable via
@@ -165,6 +171,23 @@ const bakedCompileCacheDir = resolve(
 const deferredInit = createDeferredSupervisorInit({
     log,
     steps: [
+        {
+            // FIRST, before the metrics collector's ~790 ms load competes for CPU:
+            // render the app's first route on loopback while the pod waits for
+            // kubelet to make it routable (self-warm.ts). Opt-in: KNEXT_WARM_PATH,
+            // KNEXT_EAGER_WARM=0 off (ADR-0042 surface).
+            name: "self-warm",
+            run: async () => {
+                const paths = parseWarmPaths(process.env);
+                if (paths.length === 0) return;
+                await selfWarm({
+                    port: Number(process.env.PORT ?? 3000),
+                    paths,
+                    log,
+                    shouldStop: isShuttingDown,
+                });
+            },
+        },
         {
             // Diagnostics-only (#440): warn if an injected NODE_COMPILE_CACHE
             // shadows the populated image-baked compile cache. Cheap (a stat +
@@ -354,6 +377,9 @@ const alreadyExitedChild: ChildLike = {
 };
 
 const onSignal = (signal: string) => {
+    // ADR-0066 D3: cancel the process-start primers BEFORE draining, so an
+    // outstanding wake-ahead call can never hold the drain.
+    abortPrimers();
     log.info(
         { signal, graceMs: SHUTDOWN_GRACE_MS },
         "Shutting down gracefully...",

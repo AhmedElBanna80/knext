@@ -46,6 +46,7 @@ const KNATIVE_SCRIPT = 'scripts/kind-manifests/apply-knative-kourier.sh';
 const PIN_SCRIPT = 'scripts/kind-manifests/pin-known-images.sh';
 const DIGEST_TABLE = 'scripts/kind-manifests/image-digest-pins.json';
 const NETPOL_DRILL_SCRIPT = 'packages/kn-next-operator/test/networkpolicy-enforcement-drill.sh';
+const CALICO_SCRIPT = 'scripts/kind-manifests/apply-calico.sh';
 const SZPG_PROFILE_B_SCRIPT = 'packages/kn-next-operator/test/e2e/szpg/setup-profile-b.sh';
 
 function gitLsFiles(...pathspecs: string[]): string[] {
@@ -227,6 +228,66 @@ function runStubbed(script: string, args: string[], env: Record<string, string>)
   }
 }
 
+/**
+ * Drop a shell comment. Fail-closed: a line containing any quote or backslash is
+ * too ambiguous to tokenise with a regex (escaped quotes outside quotes, `$'..'`,
+ * etc.), so it is kept WHOLE unless it is entirely a comment. Only a quote-free,
+ * backslash-free line has a trailing ` #...` cut.
+ */
+function stripComment(line: string): string {
+  if (/^\s*#/.test(line)) return '';
+  if (/["'\\]/.test(line)) return line;
+  const m = /(?:^|\s)#/.exec(line);
+  return m ? line.slice(0, m.index) : line;
+}
+
+/**
+ * Does this workflow/script text perform an INSTALL of `project`, as opposed to
+ * merely mentioning its name? Backslash continuations are folded and comments
+ * stripped (fail-closed: a line with any quote/backslash is kept whole, so
+ * `echo "step #1" && kubectl apply ...` and `echo \\" " # " && ...` keep their install). An install is a `kubectl|$VAR apply|create|replace` or
+ * `helm install|upgrade|template` naming the project, a fetch (`curl`/`wget`)
+ * naming it, or any non-comment URL containing the project name (including docs hosts; deliberately broad).
+ * The install verb and the project name may sit on the same line or within two
+ * non-empty lines either side (a YAML folded scalar splits them), and `$K apply`
+ * counts as kubectl. The rule is "verb AND name nearby", never "is the line
+ * understood", so an unclassifiable install still counts (fail-closed).
+ * Deliberately narrower than "mentions the project": a non-install use such as
+ * `kubectl wait -n cert-manager` does not by itself demand the pinned script.
+ */
+function installsProject(text: string, project: RegExp): boolean {
+  const code = text
+    .replace(/\\\r?\n\s*/g, ' ')
+    .split('\n')
+    .map(stripComment)
+    .filter((l) => l.trim() !== '');
+  const verb =
+    /(?<![\w])(?:(?:kubectl|\$\{?\w+\}?["']?)\s+(?:\S+\s+)*?(?:apply|create|replace)|helm\s+(?:\S+\s+)*?(?:install|upgrade|template)|curl|wget)\b/;
+  const url = new RegExp(`https?://\\S*(?:${project.source})`, 'i');
+  return code.some(
+    (l, i) =>
+      url.test(l) ||
+      (verb.test(l) &&
+        [code[i - 2] ?? '', code[i - 1] ?? '', l, code[i + 1] ?? '', code[i + 2] ?? ''].some((w) =>
+          project.test(w),
+        )),
+  );
+}
+
+/** Workflows (name, text) that install `project` yet never call `script`. */
+function installersMissingScript(
+  files: { name: string; text: string }[],
+  project: RegExp,
+  script: string,
+): string[] {
+  return files
+    .filter((f) => installsProject(f.text, project) && !f.text.includes(script))
+    .map((f) => f.name);
+}
+
+const kindWorkflowFiles = () =>
+  kindWorkflows().map((name) => ({ name, text: readFileSync(join(ROOT, name), 'utf8') }));
+
 describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + image-digest pinned (#1289)', () => {
   // The whole-tree scan (~2.7 s here, more on a loaded CI runner) runs ONCE, up
   // front, under an explicit timeout — never inside whichever test happens to
@@ -248,20 +309,84 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(found).toContain('.github/workflows/networkpolicy-enforcement.yml');
   });
 
+  it('install detection: a comment-only mention is not an install; a real unpinned install is', () => {
+    const K = /knative|kourier/i;
+    const C = /cert-manager/i;
+    // Comment-only mentions stay green.
+    expect(installsProject('# this lane installs no Knative or Kourier\n', K)).toBe(false);
+    expect(installsProject('  run: echo hi # Knative is not used here\n', K)).toBe(false);
+    expect(installsProject('# kubectl apply -f https://x/cert-manager.yaml\n', C)).toBe(false);
+    // Trailing comment on a real install verb: only stripping keeps this false.
+    expect(installsProject('kubectl apply -f ./m.yaml # knative\n', K)).toBe(false);
+    expect(installsProject('curl -s ./x # cert-manager\n', C)).toBe(false);
+    // A `#` inside quotes does not hide the install that follows.
+    expect(
+      installsProject(
+        'echo "step #1" && kubectl apply -f https://github.com/knative/serving/releases/x.yaml\n',
+        K,
+      ),
+    ).toBe(true);
+    expect(installsProject('echo "#" && kubectl apply -f ./kourier.yaml\n', K)).toBe(true);
+    // Escaped quote outside quotes must not fake a quoted region (fail-closed).
+    expect(
+      installsProject(
+        'echo \\" "  # " && kubectl apply -f https://github.com/knative/serving/releases/x.yaml\n',
+        K,
+      ),
+    ).toBe(true);
+    // Name on an EARLIER line than the verb (variable indirection).
+    expect(
+      installsProject('V=knative-v1.16.0\nkubectl apply -f "$BASE/$V/serving.yaml"\n', K),
+    ).toBe(true);
+    // A `#` mid-word is not a comment.
+    expect(installsProject('kubectl apply -f ./a#cert-manager.yaml\n', C)).toBe(true);
+    // Real installs, in each spelling, are caught.
+    expect(
+      installsProject('kubectl apply -f https://github.com/knative/serving/releases/x.yaml\n', K),
+    ).toBe(true);
+    expect(installsProject('kubectl apply \\\n  -f ./kourier.yaml\n', K)).toBe(true);
+    expect(installsProject('helm install cert-manager jetstack/cert-manager\n', C)).toBe(true);
+    expect(installsProject('helm upgrade --install cm ./cert-manager\n', C)).toBe(true);
+    expect(installsProject('helm template cm ./cert-manager\n', C)).toBe(true);
+    expect(installsProject('kubectl create -f ./cert-manager.yaml\n', C)).toBe(true);
+    expect(installsProject('kubectl replace -f ./cert-manager.yaml\n', C)).toBe(true);
+    expect(installsProject('wget -O f "$KNATIVE_URL"\n', K)).toBe(true);
+    expect(
+      installsProject('URL=https://github.com/cert-manager/cert-manager/releases/a.yaml\n', C),
+    ).toBe(true);
+    expect(installsProject('curl -fsSL "$KNATIVE_URL" -o f\n', K)).toBe(true);
+    // Folded YAML scalar: verb and name on different physical lines.
+    expect(
+      installsProject('run: >\n  kubectl apply -f\n  ./deploy/knative/serving.yaml\n', K),
+    ).toBe(true);
+    // kubectl held in a variable.
+    expect(installsProject('$K apply -f ./cert-manager.yaml\n', C)).toBe(true);
+    expect(installsProject('"${KUBECTL}" apply -f ./cert-manager.yaml\n', C)).toBe(true);
+    // Non-install use of the name is not an install (documented narrowing).
+    expect(installsProject('kubectl wait -n cert-manager --for=condition=Ready\n', C)).toBe(false);
+  });
+
+  it('the workflow check flags an installer that skips the shared script (wiring is live)', () => {
+    const K = /knative|kourier/i;
+    const bad = { name: 'bad.yml', text: 'run: kubectl apply -f ./kourier.yaml\n' };
+    const ok = {
+      name: 'ok.yml',
+      text: `run: kubectl apply -f ./kourier.yaml\n${KNATIVE_SCRIPT}\n`,
+    };
+    const none = { name: 'none.yml', text: '# no Knative here\n' };
+    expect(installersMissingScript([bad, ok, none], K, KNATIVE_SCRIPT)).toEqual(['bad.yml']);
+  });
+
   it('every workflow that installs cert-manager calls the shared script', () => {
-    for (const wf of kindWorkflows()) {
-      const text = readFileSync(join(ROOT, wf), 'utf8');
-      if (!/cert-manager/i.test(text)) continue;
-      expect(text).toContain(CERT_MANAGER_SCRIPT);
-    }
+    expect(
+      installersMissingScript(kindWorkflowFiles(), /cert-manager/i, CERT_MANAGER_SCRIPT),
+    ).toEqual([]);
   });
 
   it('every workflow that installs Knative Serving/Kourier calls the shared script', () => {
-    for (const wf of kindWorkflows()) {
-      const text = readFileSync(join(ROOT, wf), 'utf8');
-      if (!/knative|kourier/i.test(text)) continue;
-      expect(text).toContain(KNATIVE_SCRIPT);
-    }
+    expect(
+      installersMissingScript(kindWorkflowFiles(), /knative|kourier/i, KNATIVE_SCRIPT),
+    ).toEqual([]);
   });
 
   it('the source scan covers EVERY tracked shell script and workflow — not a kubectl-grep subset', () => {
@@ -346,7 +471,7 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(offenders.length).toBeGreaterThan(0);
   });
 
-  it('#1716 round 2: the SAME fixture stays clean when poison_tl declares \`local tl\` (a real function-local write, correctly excluded)', () => {
+  it('#1716 round 2: the SAME fixture stays clean when poison_tl declares `local tl` (a real function-local write, correctly excluded)', () => {
     const file = `${D}provision-app.sh`;
     const text = readTracked(file);
     const anchor = 'cmd_destroy() {';
@@ -1374,18 +1499,30 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(firstApplyIdx).toBeGreaterThan(lastShaIdx);
   });
 
-  it('the NetworkPolicy-enforcement drill checksum-verifies AND image-digest-pins Calico before applying it', () => {
-    // #1413 review round 2, finding 4: the describe-block title above claims
-    // "image-digest pinned" for every manifest this file covers, but until
-    // this test the drill only checksummed the Calico MANIFEST — Calico's
-    // three images (docker.io/calico/{cni,node,kube-controllers}:v3.28.2)
-    // stayed tag-only, making the title's claim false for this one case.
-    const text = readFileSync(join(ROOT, NETPOL_DRILL_SCRIPT), 'utf8');
+  it('the NetworkPolicy-enforcement drill installs Calico through the shared script', () => {
+    const drill = readFileSync(join(ROOT, NETPOL_DRILL_SCRIPT), 'utf8');
+    expect(drill).toContain('/scripts/kind-manifests" && pwd)/apply-calico.sh"');
+  });
+
+  it('only the shared script fetches Calico: no tracked shell script carries its own copy', () => {
+    const copies = SHELL_SOURCES().filter(
+      (f) =>
+        f !== CALICO_SCRIPT && readFileSync(join(ROOT, f), 'utf8').includes('projectcalico/calico'),
+    );
+    expect(copies).toEqual([]);
+  });
+
+  it('the shared Calico script checksum-verifies AND image-digest-pins Calico before applying it', () => {
+    // #1413 review round 2, finding 4: Calico's three images
+    // (docker.io/calico/{cni,node,kube-controllers}:v3.28.2) are tag-only, so
+    // the manifest checksum alone would leave them unpinned.
+    const text = readFileSync(join(ROOT, CALICO_SCRIPT), 'utf8');
     expect(text).toContain('curl -fsSL');
     expect(text).toMatch(/sha256sum -c/);
     expect(text).toMatch(/pin-known-images\.sh"[^\n]*--expect \d+/);
     const shaIdx = text.indexOf('sha256sum -c');
-    const pinIdx = text.indexOf('pin-known-images.sh');
+    // The call, not the header comment that names the script.
+    const pinIdx = text.indexOf('pin-known-images.sh" "$OUT" --expect 3');
     const applyIdx = text.indexOf('kubectl apply -f');
     expect(shaIdx).toBeGreaterThan(-1);
     expect(pinIdx).toBeGreaterThan(shaIdx);

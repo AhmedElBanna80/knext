@@ -351,10 +351,16 @@ export default defineConfig([
       'adapters/public-origin': 'src/adapters/public-origin.cjs',
       // #1760 — the ARP/neighbour-table primer: one best-effort outbound UDP
       // datagram to the pod's default gateway, fired as early as possible at
-      // process start (disk-mode: required directly by node-server.ts, before
+      // process start (disk-mode: run by node-server.ts from the primer list, before
       // the child is spawned; compiled exec: baked in as the FIRST preload —
       // see standalone-compile.mjs). Dependency-free, Linux-only, never throws.
       'adapters/arp-primer': 'src/adapters/arp-primer.cjs',
+      // ADR-0066 D3 — the ordered process-start primer list (node-server.ts at
+      // start, standalone-compile.mjs at build), the controller's owner module,
+      // and the wake-ahead primer (#2054) the list names after the ARP primer.
+      'adapters/process-start-primers': 'src/adapters/process-start-primers.cjs',
+      'adapters/process-start-abort': 'src/adapters/process-start-abort.cjs',
+      'adapters/wake-ahead': 'src/adapters/wake-ahead.cjs',
       // #188 path 2 — opt-in edge-sandbox fetch instrumentation (inert unless
       // KNEXT_SANDBOX_FETCH_DEBUG=1; dispatch-only compat investigation lane).
       'adapters/sandbox-fetch-debug': 'src/adapters/sandbox-fetch-debug.cjs',

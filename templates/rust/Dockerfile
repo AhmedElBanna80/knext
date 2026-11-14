@@ -12,7 +12,7 @@
 # scanner (Trivy, syft) sees every crate compiled into it.
 
 # rust:1.99.1-alpine3.23
-FROM rust:1.99.1-alpine3.23@sha256:5ddfbe04e0ab00287676bc5d37dbaca8f547e73144c3e561e3e6ee395120d8f4 AS build
+FROM rust:1.99.1-alpine3.23@sha256:51e1b72c7f236093c084f6e3051239f033fba9e4c0c1430cc2ed479d0a3bd14c AS build
 RUN apk add --no-cache musl-dev
 RUN cargo install --locked --root /usr/local cargo-auditable@0.7.7
 WORKDIR /src

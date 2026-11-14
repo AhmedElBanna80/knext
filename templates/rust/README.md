@@ -16,6 +16,9 @@ mounted, a JWKS holding private key material, the issuer or audience unset, or a
 table, every RPC but the health check is refused with `unauthenticated`. Handlers take the user from
 `auth::Caller::of(&ctx)`, never from the request.
 
+`GET /healthz` is the zone's wake-up probe, not an RPC: it answers `200` with no body and no
+token, and any other method on it gets `405`.
+
 The verifier is tested against the shared token vectors in
 `packages/grpc/testdata/z7-token-vectors.json` (read from the repository; set
 `KNEXT_Z7_VECTORS` to their path in a copy of the template outside it).

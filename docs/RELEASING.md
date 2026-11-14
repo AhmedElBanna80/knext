@@ -81,7 +81,7 @@ map; `release.yml` carries no lane literal of its own (a test asserts that).
 | ref | expected major |
 | --- | --- |
 | `main` | 1 (flipped to 2 at 2.0 GA, before the first 2.x publish) |
-| `integration/v1.3`, `integration/v1.4` | 1 |
+| `integration/v1.3`, `integration/v1.4` (allowlisted, but no such branch exists: the 1.4 line is `main`) | 1 |
 | `integration/v2` | 2 |
 | `release/vX.Y.Z` or `release/vX.Y.Z-rc.N` (a release cut) | X, and the computed version must equal `X.Y.Z[-rc.N]` exactly. Cuts are open for major 1 only. |
 
@@ -652,7 +652,7 @@ Verified on 2026-10-08: `git diff v1.0.0-rc.6 origin/main -- packages/kn-next-op
    ```sh
    gh release download operator-v1.0.0 -p install.yaml -D /tmp/op-v1
    grep -c writableCache /tmp/op-v1/install.yaml          # >= 1 (the CRD knows the field)
-   grep -E 'image: ghcr.io/getknext-dev/kn-next-operator' /tmp/op-v1/install.yaml   # must end in @sha256:<digest>
+   grep -E 'image: ghcr.io/getknext-dev/kn-next-operator' /tmp/op-v1/install.yaml   # image lines only; must end in @sha256:<digest>
    gh release download operator-latest -p install.yaml -D /tmp/op-latest
    diff /tmp/op-v1/install.yaml /tmp/op-latest/install.yaml   # identical: operator-latest re-pointed
    ```
@@ -766,10 +766,10 @@ Confirm every box before starting step 1 below:
    **Bundle-integrity guard.** Before the release body is generated or anything is published, the
    workflow runs `scripts/verify-operator-bundle-image.mjs` against **both** attached assets
    (`install.yaml` and `install-vX.Y.Z.yaml`). It requires each bundle to contain exactly one
-   operator image reference of the form `<registry>/<repo>/kn-next-operator:vX.Y.Z@sha256:<digest>`
+   distinct operator image reference anywhere in the file (image lines, env values, args, flow-style YAML, scheme-qualified values) of the form `<registry>/<repo>/kn-next-operator:vX.Y.Z@sha256:<digest>`
    where the registry and repository are exactly the image this run pushed, the tag is the release
    tag's `vX.Y.Z`, and the digest is the one this run pushed. A mismatch (a stale tag, a foreign
-   registry or repo, a different digest), a missing image line, or an unreadable file **fails the
+   registry or repo, a different digest), no operator image reference at all, more than one distinct reference, or an unreadable file **fails the
    release job before anything is published**, so no release, asset, or `operator-latest` move
    happens. Fix the bundle (usually the version stamp) and cut a new tag; the guard never edits the
    bundle itself.

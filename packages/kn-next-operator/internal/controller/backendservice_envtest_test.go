@@ -416,6 +416,19 @@ var _ = Describe("BackendService reconciler: zone resolution and the two-sided b
 		expectNothingRendered(ctx, ns, "pricing")
 	})
 
+	It("refuses an unparseable spec.resources quantity in status, not with a reconcile error (#2423)", func() {
+		ns := bsNamespace(ctx)
+		createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})
+		createFunction(ctx, ns, "pricing", sovZone, func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Resources = &appsv1alpha1.ResourcesSpec{CPURequest: "lots"}
+		})
+		reconcileFunction(ctx, ns, "pricing") // asserts no error is returned
+		ready := functionCondition(getFunction(ctx, ns, "pricing"), ConditionReady)
+		Expect(ready.Reason).To(Equal(ReasonInvalidSpec))
+		Expect(ready.Message).To(ContainSubstring("spec.resources.cpuRequest"))
+		expectNothingRendered(ctx, ns, "pricing")
+	})
+
 	It("keeps a bound function's retention longer than its zone's", func() {
 		ns := bsNamespace(ctx)
 		zone := createZone(ctx, ns, sovZone, appsv1alpha1.BackendBinding{Name: "pricing", Service: "pricing"})

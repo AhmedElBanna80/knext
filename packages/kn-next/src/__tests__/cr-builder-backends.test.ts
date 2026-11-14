@@ -88,6 +88,20 @@ describe("cr-builder spec.backends", () => {
         expect("specDigest" in (spec.backends as object[])[1]).toBe(false);
     });
 
+    it("carries the zone's httpVersion into the NextApp, and only when set", () => {
+        const spec = specOf(
+            config([
+                { name: "pricing", httpVersion: "1.1" },
+                { name: "search" },
+            ]),
+        );
+        expect(spec.backends).toEqual([
+            { name: "pricing", service: "pricing", httpVersion: "1.1" },
+            { name: "search", service: "search" },
+        ]);
+        expect("httpVersion" in (spec.backends as object[])[1]).toBe(false);
+    });
+
     it("carries both pins when both are set", () => {
         const image = `@sha256:${"ab12".repeat(16)}`;
         const specDigest = `sha256:${"cd34".repeat(16)}`;

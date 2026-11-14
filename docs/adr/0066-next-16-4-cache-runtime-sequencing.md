@@ -30,9 +30,11 @@
   not a recipe).
 - **Covers:** #2084 / PR #2100, #2085, K1 #2065, K4 #2066, #2083, #2089, Z6 #2050, Z9 #2054,
   #2090. Release gate: #2102.
-- **Evidence:** `.claude/research/next-16-4-impact-2026-10-09.md` (Q2, Q3, Q7, T1–T5),
-  `.claude/plans/v2-sprint1-close-architect.md` (§4 task graph), `.claude/plans/v2-plan-rev4.md`
-  (§3 slot accounting, K1→K4→K5), `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
+- **Evidence:** a Next 16.4 impact study (2026-10-09; questions Q2, Q3, Q7 and tests T1–T5) and
+  the v2 plan, both maintainer notes not in the repo. What this ADR takes from the plan is stated
+  here: K1, K4 and K5 all edit `packages/kn-next/package.json` and run serially ("K1 → K4" in D1),
+  and R5 (#2041) is to put every credential workflow in one concurrency group, so the net slot
+  load never grows ("Compat budget" under Constraints). Also `docs/benchmarks/zone-functions-coldstart-kind-2026-10-09.md`
   (wake-ahead timing), and the published `next@16.4.0` package (`dist/server/lib/cache-handlers/types.d.ts`,
   `dist/server/use-cache/use-cache-wrapper.js`, `dist/server/revalidation-utils.js`,
   `dist/server/config-shared.js`).
@@ -74,8 +76,8 @@ orders, each against a different assumption about the Next floor. jev rated the 
   `'use cache'` handler a no-op at size 0, so **`'use cache'` is a silent no-op on every knext
   scaffold today**. At a non-zero size it is per-process and lost on scale-to-zero (measured, research
   Q2).
-- Redis keys are app-scoped: `KEY_PREFIX = REDIS_KEY_PREFIX || 'kn-next'` (`cache-handler.js:112`),
-  and the operator sets the prefix to the app name. The build id is resolved once
+- Redis keys are app-scoped: `KEY_PREFIX = REDIS_KEY_PREFIX || 'kn-next'` (`cache-handler.js:128`),
+  and the operator sets the prefix per app (see Amendment 6). The build id is resolved once
   (`cache-handler.js:1097-1113`, Next's constant id rejected) and today gates only the #1888 seed
   (`:1135`). PR #2100 extends the gate to the read path and adds the env fallback chain
   `.next/BUILD_ID` → `KNEXT_BUILD_ID` → `NEXT_DEPLOYMENT_ID`. `knext build`/`deploy` set
@@ -150,7 +152,7 @@ orders, each against a different assumption about the Next floor. jev rated the 
 - **Compat budget.** One dispatch occupies roughly one pool-hour of the **one** shared runner pool,
   which the live 1.x credential windows also use. Cap: two dispatches per agent. Sixteen queued
   dispatches once froze the merge queue. Harness edits land between credential windows. **No v2
-  credential lane exists yet.** Per the v2 plan (§3), R5 (#2041) first puts every credential workflow
+  credential lane exists yet.** Per the v2 plan (a maintainer note), R5 (#2041) first puts every credential workflow
   in one concurrency group. At 2.0 GA the v1.0 lane retires and the four 2.0 cells take the v1.3 slots.
 - **1.4.0 release gate (#2102).** Nothing ships in 1.4.0, and no `operator-v*` bundle that installs
   the KnextPlatform CRD is tagged, until all of these hold:
@@ -199,7 +201,7 @@ jev, placement: **docs now, finding and opt-in in 1.4.0 behind #2102 0.97** / al
 
 **K1 → K4.** K1 (#2065, remove the `kn-next` bin), K4 and K5 all edit
 `packages/kn-next/package.json`, and the v2 plan makes them serial: K4's row lists K1 as its
-dependency (`v2-plan-rev4.md`, "K1 → K4 → K5 are serial"). Round 1 omitted that edge.
+dependency (the v2 plan, a maintainer note: "K1 → K4 → K5 are serial"). Round 1 omitted that edge.
 
 Why this order, edge by edge:
 
@@ -260,7 +262,7 @@ Where this text omits or disagrees with the 2026-10-10 text on a point no amendm
   entry format, a tag store or an outage mode.
 
 **Keys and build scoping.**
-- Prefix: `REDIS_KEY_PREFIX` (the app name, set by the operator). ISR entries are
+- Prefix: `REDIS_KEY_PREFIX`, set per app by the operator (Amendment 6). ISR entries are
   `<prefix>:cache:<key>`. `'use cache'` entries are `<prefix>:uc:<handler>:<cacheKey>`, with
   `<handler>` = `default` or `remote` and Next's `<cacheKey>` stored opaque.
 - Build id: one resolver, `.next/BUILD_ID` → `KNEXT_BUILD_ID` → `NEXT_DEPLOYMENT_ID`, ignoring Next's
@@ -329,7 +331,9 @@ Where this text omits or disagrees with the 2026-10-10 text on a point no amendm
   - there is no per-process store of any kind;
   - one counter and one warning are emitted per outage;
   - an `updateTags` whose stamps did not reach Redis is **kept for replay** (Amendment 5).
-- **ISR, while Redis is down or the breaker is open:**
+- **ISR, while Redis is down or the breaker is open** (Amendment 8, Proposed, changes this row to a
+  miss like `'use cache'`; until it is accepted, the bullets under this heading are the recorded
+  decision):
   - it falls back to the per-process `memoryCache`;
   - `revalidateTag` clears that pod's map, and the tags whose invalidation did not reach Redis are
     **kept for replay** (Amendment 4).
@@ -419,7 +423,7 @@ false on `main`.
 
 | Element | Rule |
 |---|---|
-| Prefix | `REDIS_KEY_PREFIX` (the app name, operator-set), unchanged |
+| Prefix | `REDIS_KEY_PREFIX` (per app, operator-set; Amendment 6), unchanged |
 | ISR entries | `<prefix>:cache:<key>`, unchanged |
 | `'use cache'` entries | `<prefix>:uc:<handler>:<cacheKey>`. `<handler>` is `default` or `remote`; `<cacheKey>` is Next's key, stored opaque |
 | Build scoping, `'use cache'` | **Next's key already carries it.** The key's implementation part is `deploymentId \|\| buildId`, or a code hash under the durable-entries flag (`use-cache-wrapper.js:1509-1513`, `:2526-2572`). The handler stores `buildId` for diagnostics only and adds **no** foreign-build miss. A second check would be redundant on the default path, and it would defeat the durable-entries flag, whose purpose is reuse across builds when the code is unchanged |
@@ -714,7 +718,7 @@ plan's own tasks.
 **Part 2: v2 credential lanes, created later by the v2 plan (not by this ADR).**
 - Today no v2 credential lane exists, and none is started when K4 lands.
 - R5 (#2041) first puts every credential workflow in one concurrency group, landing between windows
-  (`v2-plan-rev4.md` §3).
+  (the v2 plan's slot accounting, a maintainer note).
 - At **2.0 GA the v1.0 lane retires**, and the four 2.0 cells take the v1.3 slots (§3, slot
   accounting). Net load never exceeds today's slot count.
 - Until those lanes complete their windows (14 consecutive green independent runs per cell), docs,
@@ -724,7 +728,7 @@ plan's own tasks.
 jev, round 2: **smoke now with an explicit budget including triage re-dispatches and one full run
 for #2089; credential lanes later per R5 and the 2.0 GA slot swap 1.00** / "existing slots, no extra
 dispatch" 0.00 / a full four-cell run now 0.00 (confidence 1.00). The score adds nothing to the
-evidence: `test-e2e-deploy.yml` inputs (`:69-206`), the smoke manifest, and `v2-plan-rev4.md` §3.
+evidence: `test-e2e-deploy.yml` inputs (`:69-206`), the smoke manifest, and the v2 plan's slot accounting (a maintainer note).
 Round 1's choice of runs before K4 (one triage smoke, then one smoke per remaining stable cell, 0.95)
 stands. Only its budget and its credential wording change.
 
@@ -934,6 +938,9 @@ on, the amendment governs; for D2, read D2 current text.
     credential lanes (created per the v2 plan, after R5 and at 2.0 GA) complete their windows.
 12. **Tech debt for sprint close:** ISR's per-process outage fallback, and its delete-only handling of
     `revalidateTag(tag, profile)`. Filed as #2122 (milestone v2.0, `priority:P2`).
+13. **ISR outage miss on kind** (Amendment 8): a kind test with Redis down shows no pod serves an
+    ISR entry from its own memory, and measures the render rate during the outage. Filed as #2883.
+    Done 2026-11-10: see Amendment 8, Proof.
 
 ## Amendment 1 (2026-10-11): K4 keeps the `adapterPath` shim; the gate is the D4 smoke runs
 
@@ -1313,3 +1320,168 @@ once the breaker closes. Amendment 4's shape, applied to stamps:
 - **The fallback is not atomic.** On a Redis that refuses scripts, a stamp written between the
   fallback's read and its write can be overwritten: a one-round-trip window, against the outage-long
   window the plain `HSET` had.
+
+## Amendment 6 (2026-11-08): the operator's Redis key prefix is derived, not the app name
+
+The decision text above said the operator sets `REDIS_KEY_PREFIX` to the app name. The per-app
+prefix work replaced that with a derived default. The text is corrected in place; this amendment records the actual rule.
+
+- **Who sets it, in order.** `spec.cache.keyPrefix` wins. Otherwise a `REDIS_KEY_PREFIX` the
+  user sets through `spec.env` (non-empty) or a `spec.secrets.envMap` Secret wins. Otherwise,
+  for a Redis cache, the operator renders `kn-` plus the first 12 lowercase hex characters of
+  sha256("<namespace>/<name>"), the same derivation as the CDN tag prefix
+  (`redis_key_prefix.go:defaultRedisKeyPrefix`). An empty `spec.env` value counts as unset and
+  is replaced by the derived default.
+- **The shared fallback.** A pod with no `REDIS_KEY_PREFIX` at all (not deployed by the operator)
+  falls back to the runtime's literal `kn-next`, and a user can also set it explicitly. No app owns
+  that keyspace, so the finalizer, the cache cleaner and the runtime's collapse sweep
+  refuse to delete under `kn-next` or anything under `kn-next:`
+  (`redis_key_prefix.go:isSharedRedisKeyspace`), and `doctor` flags an app whose CR sets it
+  (a value from a `spec.secrets.envMap` Secret it reports as not verified).
+- **Consequences.** Nothing else in this ADR changes: every key pattern above is still
+  `<prefix>:...`. A `REDIS_KEY_PREFIX` carried only in an `envFrom` Secret or baked into the
+  image is not visible to the operator, so the rendered default overrides it; such an app must
+  set `spec.cache.keyPrefix` or a non-empty `spec.env` `REDIS_KEY_PREFIX` to keep its prefix.
+
+## Amendment 7 (2026-11-08, Proposed): the primer controller has its own owner module
+
+D3 said the primer list module owns the shared AbortController and exposes `abortPrimers()`. As
+built (#2054) the two are split, because the list is imported into `standalone-compile.mjs`'s own
+closure, which `bun-base-exe-seam.test.ts` keeps free of any global access:
+
+- **`process-start-primers.cjs`** holds only `PROCESS_START_PRIMERS`, the ordered list. Disk mode
+  reads it at start (`node-server.ts`, through `process-start-run.ts`, which logs and skips any file
+  it cannot load); the compiled exec reads it at build time (`standalone-compile.mjs` spreads it
+  into `PRELOAD_NAMES`). Neither names a primer.
+- **`process-start-abort.cjs`** owns the `globalThis`-anchored controller (ADR-0027) and exposes
+  `primerSignal()` and `abortPrimers()`. `wake-ahead.cjs`, `process-start-run.ts` and
+  `standalone-self-contained-supervisor.cjs` go through it; nobody else spells the key. If it
+  cannot load, the wake still runs, bounded by its own timeout, and disk mode says SIGTERM cannot
+  cancel it.
+- **SIGTERM.** `node-server.ts` and the self-contained supervisor call `abortPrimers()` before
+  they drain. The plain compiled exec (not self-contained) has no knext SIGTERM handler: Next's
+  own handler exits the process, which ends a wake call with it, and each call is capped at 1 s.
+- **vinext.** `vinext-compile.mjs` and `knext-node-entry.mjs.hbs` still run only the ARP primer
+  directly. A vinext-target zone does not wake its functions yet; the docs say so, and
+  `wake-ahead.test.ts` reds if a vinext entry gains the list while the docs still say it has not.
+
+**Status:** Proposed, for the sprint-close design review. Nothing else in D3 changes.
+
+## Amendment 8 (2026-11-09, Proposed): ISR misses on a Redis outage, like `'use cache'` (#2122)
+
+**Context.** On a Redis outage, ISR served from the per-process `memoryCache` while `'use cache'`
+missed. A pod's memory never sees an invalidation another pod processed through Redis, so a
+revalidated page could keep serving on that pod for the length of the outage. The entries are shared
+prerendered pages, so the risk is staleness, not a cross-user leak.
+
+**Decision.** On the 2.x line (integration/v2), ISR misses when `REDIS_URL` is set, its client loaded,
+and the server is unreachable (breaker open, or a connect that failed): `get` returns null so Next
+re-renders from origin, and `set` writes nothing locally. The per-process store stays in use in two
+cases that are not an outage: no `REDIS_URL` (local development), and a Redis client that cannot be
+loaded in the pod. The latter is a build misconfiguration, logged once at startup as
+`[CacheHandler] Redis client unavailable` and covered by `cache-handler-redis-client-unavailable.test.ts`;
+it is unchanged. The 1.x line on `main` is unchanged.
+
+**Options considered** (jev 0.66 over keep 0.19 and a bounded-TTL fallback 0.15).
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Miss on outage (chosen)** | One behaviour with `'use cache'`; no stale serve after a peer's invalidation | More re-rendering while Redis is down |
+| Keep the per-pod fallback | Availability; fewer renders during an outage | The staleness #2122 describes |
+| Bounded-TTL fallback | A middle ground | A second outage mode to reason about; still stale within the bound |
+
+**Consequences.**
+- Every ISR request renders during a Redis outage. Measured on kind (2026-11-10, the
+  `runtime-redis-cache-kind-e2e.yml` outage step, eight sequential reads of an ISR page
+  backed by `unstable_cache`): every read re-rendered (8 distinct values for 8 reads), at 1.6–1.9
+  renders/s, 527–617 ms per read, across turbopack and vinext on node and bun. The step does not
+  record how many pods served the reads (the app allows up to two). That is a sequential rate on a
+  CI runner, not a production bound: nothing yet bounds several pods rendering the same page at
+  once.
+- Amendment 4 replay is unchanged. Tags whose invalidation did not reach Redis during the outage are
+  still kept per process and replayed, Redis first and then the edge, once the breaker closes.
+  `revalidateTag` still runs over the pod map, which now holds no ISR entries while Redis is
+  configured.
+- Other sections of this ADR that describe the per-process ISR fallback during an outage (D2's
+  failure-mode row and the later references to it) record the decision as it stood. This amendment
+  supersedes them once accepted.
+- Line: integration/v2 only. The 1.x line ships from `main`, which does not carry this change; a
+  later integration/v2 → `main` merge for 2.0 carries it by design.
+- The `revalidateTag(tag, profile)` stale-once semantics are not changed here; they remain an open
+  item on #2122.
+
+**Proof.** `packages/kn-next/src/__tests__/cache-handler-redis-outage-miss.test.ts`, with Redis
+configured but down: a set then get misses, an image entry misses, and an entry already in pod memory
+is not served. With no Redis configured, the in-memory store still serves. Each guard is
+mutation-proved: removing the `get` guard reds the held-entry case, and removing both guards reds the
+set-then-get case. Action item 13 (#2883) is done: the outage step of
+`.github/workflows/runtime-redis-cache-kind-e2e.yml` scales Redis to 0, reads the page eight times,
+and fails unless all eight are distinct renders and at least eight handler MISS lines are logged
+across the app's pods during the outage (an aggregate count, not a per-read or per-pod check). It
+then checks that an invalidation made during the outage is replayed to Redis once Redis is back, and
+that two consecutive reads after recovery return the same value. It is green on all four cells. Restoring the pod-local serve in `cache-handler.js` turns it red
+at that step on three cells ("1 distinct values for 8 reads"). The fourth (vinext × bun) failed
+before the outage step, at MinIO setup, twice, so that cell's mutation result is inconclusive.
+
+
+## Amendment 9 (2026-11-09, Proposed): a replay backlog a process exits with is reported, not replayed (#2384)
+
+**Context.** The Amendment 4 (ISR) and Amendment 5 (`'use cache'`) replay lists live in the process.
+A pod that scales to zero or restarts before Redis is back loses them, and that loss was silent:
+entries stayed stale until their TTL with no line anywhere. Under Knative this is the ordinary path,
+since any outage longer than the scale-down delay hits it. #2384 asked for one bounded replay
+attempt in the SIGTERM drain, plus a log line and a count for whatever is still pending.
+
+**Correction to the record.** D-section text at :346 and :355, Amendment 4 ("enrolled in the SIGTERM
+drain registry") and Amendment 5 ("Enrolled in the SIGTERM drain") overstate it. The replay run is
+`trackWrite`'d, so a drain *can* await it, but `drainCacheWrites` has no production caller. On the
+node target the handler runs in Next's standalone child process, which the supervisor's
+`shutdown.ts` drains cannot see. On the self-contained target the preload installs no cache drain.
+What actually protects a write in flight at SIGTERM is MULTI/EXEC atomicity and Next's own drain
+time before `process.exit`.
+
+**Decision.** Report the loss; do not add a replay attempt at shutdown.
+- `cache-write-registry.js` gains `onProcessExit(report)`. Reporters sit in one `globalThis` set
+  (`Symbol.for('knext.core.cache.exitReports')`, ADR-0027), run by one `process.once('exit')`
+  listener per process, synchronously, each one guarded.
+- The ISR handler arms its reporter on every recorded skip (the set dedups it, and the call restores a removed listener); the `'use cache'` handler arms once per core. On exit with anything
+  still pending, each handler logs one `[CacheHandler] exiting with … not yet replayed to Redis` line with the
+  count (or "collapsed") and the TTL bound. No metric (see below).
+- The `exit` event fires whenever a knext runtime ends the process through `process.exit` (SIGKILL is the exception, below): Next's own `cleanup()` ends in
+  `process.exit(143)` on SIGTERM (`process.exit(130)` on SIGINT) (next@16.3.5 `dist/server/lib/start-server.js`: `process.on('SIGTERM',
+  cleanup)` unless `NEXT_MANUAL_SIG_HANDLE`, then `process.exit(143)`), which the self-contained
+  preload only normalises. A bare default-disposition SIGTERM with no handler runs no `exit`
+  listener; no knext runtime ships that way. A SIGKILL (the kubelet after
+  `terminationGracePeriodSeconds`, an OOM kill) runs none either, so **no line does not prove
+  nothing was lost**: a pod killed that way loses its backlog silently, as before.
+
+**Options considered.**
+
+| Option | For | Against |
+| --- | --- | --- |
+| **Exit report (chosen, jev 0.89)** | Fires on every `process.exit`, which is how a knext runtime ends short of a SIGKILL; no signal handler added | No last replay attempt; a bare default-disposition SIGTERM runs no `exit` listener |
+| SIGTERM listener in the handler (jev 0.10) | One more replay chance | Suppresses default termination on a runtime without Next's handler |
+| Drain in the supervisor (jev 0.01) | Uses the existing drain hook | Cannot see the child process's lists on the node target |
+
+A replay attempt at drain changes nothing while the breaker is still open, which is the case this
+report is about. The probe timer keeps firing during Next's own drain, so a Redis that comes back in
+that window is still replayed. One seam was not taken: the self-contained preload already runs a
+SIGTERM listener in the handler's process (`standalone-self-contained-supervisor.cjs`), and a
+`globalThis` "replay now" kick from it would add one attempt there without suppressing anything.
+It is left as a follow-up, because it covers only that target and only a Redis that is already back.
+
+**No counter.** #2384 asked for one. A count taken in the `exit` listener can never be scraped (the
+process answers no request after it), so a dashboard would always read zero while tags are lost.
+Dropped after code review showed that (jev: drop 0.51, gauge 0.31, keep 0.18; an earlier vote for
+keep assumed it was merely rarely seen). The log line is the record. A gauge of the outstanding
+backlog, readable while the outage lasts, is the follow-up if a metric is wanted.
+
+**Proof.** `packages/kn-next/src/__tests__/cache-replay-lost-at-exit.test.ts` (11 cases). Each
+positive case asserts exactly one registry listener is installed on `process` and calls it; the
+no-Redis and nothing-recorded cases assert no reporter was armed; the two "replayed before exit"
+cases arm a reporter, assert the replay ran and that the exit logs nothing; one case removes the
+listener and checks the next ISR arm puts it back. Mutation proof, each mutation killed by the suite (checked by exit code): no arm on an invalidation, no arm on a delete, an
+ISR report with nothing pending, the edge-purge clause on a delete-only backlog, `'use cache'` never
+registering, a replayed backlog reported, no listener installed, no reinstall. Adding the listener on
+every arm is not visible under Bun, which drops a duplicate `once` for the same function; Node keeps
+it (measured: 2 listeners on Node, 1 on Bun), which is why the code checks first.

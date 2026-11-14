@@ -187,13 +187,14 @@ describe("golden: the defaults are today's scaffold plus React Compiler, nothing
         });
     }
 
-    it("the default choices are bun / turbopack / no cache / no storage / React Compiler on", () => {
+    it("the default choices are bun / turbopack / no cache / no storage / React Compiler on / Cache Components off", () => {
         expect(DEFAULT_CREATE_CHOICES).toEqual({
             runtime: "bun",
             builder: "turbopack",
             cache: "none",
             storage: "none",
             reactCompiler: true,
+            cacheComponents: false,
         });
     });
 
@@ -382,6 +383,76 @@ describe("mapping: each answer changes exactly what it should", () => {
         expect(
             activeKey(render().get("knext.config.ts") ?? "", "storage"),
         ).toBeNull();
+    });
+
+    for (const builder of ["turbopack", "webpack"] as const) {
+        it(`${builder}: Cache Components (off by default) writes cacheComponents and partialPrefetching to next.config.ts`, () => {
+            const off = render({ builder });
+            expect(
+                activeKey(off.get("next.config.ts") ?? "", "cacheComponents"),
+            ).toBeNull();
+            expect(
+                activeKey(
+                    off.get("next.config.ts") ?? "",
+                    "partialPrefetching",
+                ),
+            ).toBeNull();
+            for (const reactCompiler of [true, false]) {
+                const on = render({
+                    builder,
+                    reactCompiler,
+                    cacheComponents: true,
+                });
+                const cfg = on.get("next.config.ts") ?? "";
+                expect(activeKey(cfg, "cacheComponents")).toHaveLength(1);
+                expect(activeKey(cfg, "partialPrefetching")).toHaveLength(1);
+                expect(cfg).toContain(
+                    "    cacheComponents: true,\n    partialPrefetching: true,\n",
+                );
+                expect(activeKey(cfg, "reactCompiler")?.length ?? 0).toBe(
+                    reactCompiler ? 1 : 0,
+                );
+                // Only next.config.ts changes for Cache Components.
+                const without = render({ builder, reactCompiler });
+                const changed = [...on.keys()].filter(
+                    (k) => on.get(k) !== without.get(k),
+                );
+                expect(changed.sort()).toEqual([
+                    "next.config.ts",
+                    "src/app/api/health/route.ts",
+                ]);
+                // The health route keeps "never prerendered" without the
+                // `dynamic` segment config Cache Components rejects.
+                const health = on.get("src/app/api/health/route.ts") ?? "";
+                expect(health).not.toMatch(/export\s+const\s+dynamic\b/);
+                expect(health).toContain(
+                    "import { connection } from 'next/server';",
+                );
+                expect(health).toContain(
+                    "export async function GET() {\n    await connection();\n",
+                );
+                expect(without.get("src/app/api/health/route.ts")).toContain(
+                    "export const dynamic = 'force-dynamic';",
+                );
+            }
+        });
+    }
+
+    it("with Cache Components, no scaffold file exports a route segment config Next rejects under it", () => {
+        // `next build` fails with "Route segment config X is not compatible
+        // with nextConfig.cacheComponents" for these.
+        const rejected = /export\s+const\s+(dynamic|revalidate|fetchCache)\b/;
+        for (const builder of ["turbopack", "webpack"] as const) {
+            for (const [file, src] of render({
+                builder,
+                cacheComponents: true,
+            })) {
+                expect({ file, hit: rejected.test(src) }).toEqual({
+                    file,
+                    hit: false,
+                });
+            }
+        }
     });
 
     for (const builder of ["turbopack", "webpack"] as const) {
@@ -587,19 +658,20 @@ describe("mapping: every combination emits a config the validator accepts", () =
 
 describe("prompts", () => {
     it("Enter on every prompt takes the defaults", async () => {
-        const io = scripted(["", "", "", "", ""]);
+        const io = scripted(["", "", "", "", "", ""]);
         expect(await promptCreateChoices(io)).toEqual(DEFAULT_CREATE_CHOICES);
-        expect(io.asked).toHaveLength(5);
+        expect(io.asked).toHaveLength(6);
     });
 
     it("answers by number or by name map onto the choices", async () => {
-        const io = scripted(["2", "webpack", "redis", "4", "y"]);
+        const io = scripted(["2", "webpack", "redis", "4", "y", "y"]);
         expect(await promptCreateChoices(io)).toEqual({
             runtime: "node",
             builder: "webpack",
             cache: "redis",
             storage: "minio",
             reactCompiler: true,
+            cacheComponents: true,
         });
     });
 
@@ -617,34 +689,52 @@ describe("prompts", () => {
     });
 
     it("an invalid answer is asked again, never guessed", async () => {
-        const io = scripted(["deno", "node", "", "", "", ""]);
+        const io = scripted(["deno", "node", "", "", "", "", ""]);
         const c = await promptCreateChoices(io);
         expect(c.runtime).toBe("node");
-        expect(io.asked).toHaveLength(6);
+        expect(io.asked).toHaveLength(7);
     });
 
-    it("the React Compiler question is asked on vinext too, defaulting to yes", async () => {
+    it("the React Compiler question is asked on vinext too, defaulting to yes; Cache Components is not asked there", async () => {
         const io = scripted(["", "vinext", "", "", ""]);
         const c = await promptCreateChoices(io);
         expect(c.builder).toBe("vinext");
         expect(c.reactCompiler).toBe(true);
+        expect(c.cacheComponents).toBe(false);
         expect(io.asked).toHaveLength(5);
         expect(io.asked[4]).toContain("[Y/n]");
     });
 
     it("answering n turns React Compiler off", async () => {
-        const c = await promptCreateChoices(scripted(["", "", "", "", "n"]));
+        const c = await promptCreateChoices(
+            scripted(["", "", "", "", "n", ""]),
+        );
         expect(c.reactCompiler).toBe(false);
     });
 
-    for (const reactCompiler of [true, false]) {
-        it(`the equivalent flags reproduce the answers non-interactively (React Compiler ${reactCompiler ? "on" : "off"})`, () => {
+    it("the Cache Components question defaults to no; y turns it on", async () => {
+        const io = scripted(["", "", "", "", "", ""]);
+        expect((await promptCreateChoices(io)).cacheComponents).toBe(false);
+        expect(io.asked[5]).toContain("Cache Components");
+        expect(io.asked[5]).toContain("[y/N]");
+        const on = await promptCreateChoices(
+            scripted(["", "", "", "", "", "y"]),
+        );
+        expect(on.cacheComponents).toBe(true);
+    });
+
+    for (const [reactCompiler, cacheComponents] of [
+        [true, false],
+        [false, true],
+    ] as const) {
+        it(`the equivalent flags reproduce the answers non-interactively (React Compiler ${reactCompiler ? "on" : "off"}, Cache Components ${cacheComponents ? "on" : "off"})`, () => {
             const c: CreateChoices = {
                 runtime: "node",
                 builder: "webpack",
                 cache: "redis",
                 storage: "s3",
                 reactCompiler,
+                cacheComponents,
             };
             const flags = choicesToFlags(c).split(" ");
             const parsed = parseChoiceFlags({
@@ -654,6 +744,8 @@ describe("prompts", () => {
                 storage: flags[7],
                 "react-compiler": flags[8] === "--react-compiler",
                 "no-react-compiler": flags[8] === "--no-react-compiler",
+                "cache-components": flags[9] === "--cache-components",
+                "no-cache-components": flags[9] === "--no-cache-components",
             });
             expect(parsed).toEqual(c);
         });
@@ -699,6 +791,34 @@ describe("flags", () => {
         expect(existsSync(join(root, "package.json"))).toBe(false);
     });
 
+    it("Cache Components defaults off; --cache-components turns it on; both together is an error; vinext is refused", async () => {
+        expect(parseChoiceFlags({}).cacheComponents).toBe(false);
+        expect(
+            parseChoiceFlags({ "cache-components": true }).cacheComponents,
+        ).toBe(true);
+        expect(
+            parseChoiceFlags({ "no-cache-components": true }).cacheComponents,
+        ).toBe(false);
+        expect(() =>
+            parseChoiceFlags({
+                "cache-components": true,
+                "no-cache-components": true,
+            }),
+        ).toThrow("contradict");
+        expect(() =>
+            parseChoiceFlags({ "cache-components": true, builder: "vinext" }),
+        ).toThrow("vinext");
+        const { code, err } = await capture([
+            root,
+            "--cache-components",
+            "--builder",
+            "vinext",
+        ]);
+        expect(code).toBe(1);
+        expect(err).toContain("--cache-components");
+        expect(existsSync(join(root, "package.json"))).toBe(false);
+    });
+
     it("--help documents every prompt flag and --yes", async () => {
         const { code, out } = await capture(["--help"]);
         expect(code).toBe(0);
@@ -709,6 +829,8 @@ describe("flags", () => {
             "--storage",
             "--react-compiler",
             "--no-react-compiler",
+            "--cache-components",
+            "--no-cache-components",
             "--yes",
         ])
             expect(out).toContain(f);
@@ -740,7 +862,7 @@ describe("no TTY / CI never prompts", () => {
     it("a TTY with no flags prompts, and the answers land on disk", async () => {
         const appDir = join(root, "asked");
         mkdirSync(appDir);
-        const io = scripted(["node", "", "redis", "", ""]);
+        const io = scripted(["node", "", "redis", "", "", ""]);
         const { code, out } = await capture([appDir], {
             stdinIsTTY: true,
             stdoutIsTTY: true,
@@ -748,7 +870,7 @@ describe("no TTY / CI never prompts", () => {
             prompt: io,
         });
         expect(code).toBe(0);
-        expect(io.asked).toHaveLength(5);
+        expect(io.asked).toHaveLength(6);
         expect(readFileSync(join(appDir, "knext.config.ts"), "utf8")).toContain(
             'runtime: "node",',
         );

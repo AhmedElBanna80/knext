@@ -12,6 +12,7 @@
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { addFunction } from './add-function';
+import type { ServedVersionReader } from './baseline';
 import { DEPLOY_USAGE, type DeployHost, deployFunction } from './deploy-function';
 import { type Io, runGenerate } from './generate';
 
@@ -31,7 +32,7 @@ export const VERBS = ['generate', 'add', 'deploy'] as const;
 
 const GENERATE_HELP = `knext generate — write the server-only clients for this zone's functions (Beta)
 
-Usage: knext generate [--check] [--against <baseline>]
+Usage: knext generate [--check] [--against <baseline>] [--context <ctx>]
 
 Reads knext.grpc.json and the .proto contracts of the buf workspace in the
 current directory, runs buf lint, and writes TypeScript to the configured
@@ -42,7 +43,13 @@ idempotency key on every write.
 Options:
   --check               compare instead of writing; fail if the generated code is out of date
   --against <baseline>  also run buf breaking against a baseline: a directory, an image file,
-                        or a git reference such as ".git#branch=main,subdir=proto"
+                        or a git reference such as ".git#branch=main,subdir=proto", or
+                        deployed:<namespace>/<name>: the contract that function serves now
+                        (its status.servedProtoVersion, read from the cluster), taken from
+                        the git tag proto/v<version> (set "deployedTagTemplate" in
+                        knext.grpc.json for another tag name)
+  --context <ctx>       kubectl context for a deployed: baseline (default: $KN_CONTEXT,
+                        else the current one); the cluster is only read
   -h, --help            show this help
 
 Exit code: 0 on success; 1 on a lint failure, a breaking change, out-of-date
@@ -96,7 +103,8 @@ Options:
   --namespace <ns>             namespace (default: $KN_NAMESPACE, else "default")
   --context <ctx>              kubectl context (default: $KN_CONTEXT, else the current one)
   --port <n>                   the h2c port the function serves (operator default 8080)
-  --proto-version <x.y.z>      the contract version this image serves
+  --proto-version <x.y.z>      the contract version this image serves (default: the
+                               contract_version in functions/<name>/proto)
   --no-wake-ahead              do not wake this function when the zone starts
   --min-scale <n>              warm floor (default 0, scale to zero)
   --max-scale <n>              fan-out cap (0 = the Knative default)
@@ -117,6 +125,11 @@ export interface RunIo extends Io {
   readonly cwd?: string;
   /** The cluster seam `knext deploy function` needs; core supplies it. */
   readonly host?: DeployHost;
+  /**
+   * The read-only seam a `deployed:` baseline needs (`knext generate`); core
+   * supplies it. It can only read a BackendService's served version.
+   */
+  readonly servedVersionReader?: ServedVersionReader;
 }
 
 const defaultIo: Io = {
@@ -155,11 +168,15 @@ export async function run(
   }
 
   if (verb === 'generate') {
-    let values: { check?: boolean; against?: string };
+    let values: { check?: boolean; against?: string; context?: string };
     try {
       ({ values } = parseArgs({
         args: [...argv],
-        options: { check: { type: 'boolean' }, against: { type: 'string' } },
+        options: {
+          check: { type: 'boolean' },
+          against: { type: 'string' },
+          context: { type: 'string' },
+        },
         allowPositionals: false,
         strict: true,
       }));
@@ -168,7 +185,15 @@ export async function run(
       out.stderr(`knext generate: ${msg}\nRun \`knext generate --help\` for usage.\n`);
       return 1;
     }
-    return runGenerate({ cwd, check: values.check, against: values.against, io: out });
+    const context = values.context || process.env.KN_CONTEXT || undefined;
+    return runGenerate({
+      cwd,
+      check: values.check,
+      against: values.against,
+      ...(io.servedVersionReader ? { servedVersionReader: io.servedVersionReader } : {}),
+      ...(context === undefined ? {} : { context }),
+      io: out,
+    });
   }
 
   let parsed: { values: { lang?: string; module?: string }; positionals: string[] };

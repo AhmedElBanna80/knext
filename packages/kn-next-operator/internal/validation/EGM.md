@@ -10,6 +10,7 @@ The single authoritative validation logic for `NextApp` and `KnextPlatform` spec
 - `validate.go:ValidateNextAppSpecUpdate` / `ValidateNextAppSpecUpdateWithBudget(oldSpec, newSpec, budget)`: update-time admission with ratcheting.
 - `validate.go:DatabaseEnvMapCollisions`, `EnvMapReservedCollisions` and `ReservedOperatorEnvNames(spec)`: env-name collision helpers.
 - `validate.go:CDNRendersEnv(spec) bool`.
+- `cache_prefix.go:DerivedCacheKeyPrefix(namespace, name)`, `IsPlatformKeyspace(prefix)`, `CacheKeyPrefixViolation(namespace, name, prefix) string` (empty when allowed), `ValidateNextAppCacheKeyPrefix(namespace, name, spec) error`, `EnvRedisKeyPrefix` (`REDIS_KEY_PREFIX`), `EnvKeyPrefixViolation(namespace, name, value) string` and `ValidateNextAppEnvKeyPrefix(namespace, name, oldSpec, newSpec) error`: the reserved Redis key prefixes. The webhook uses all of them; the reconciler uses `CacheKeyPrefixViolation` only (`internal/controller/redis_acl_reconcile.go`), never the env rule.
 - `validate.go:OperatorAlwaysWinsEnvNames` (`HOSTNAME`) and `EnvMapUserAlwaysWinsEnvNames`.
 - `validate.go:MaxConnections = 100` (documents Postgres `max_connections`) and `MaxAppConnections = defaults.ConnectionBudget` (the enforced budget).
 - `platform.go:ValidatePlatformSpec(*KnextPlatformSpec) error` and `ValidateEffectiveResources(cpuReq, cpuLim, memReq, memLim) (field, error)`.
@@ -18,6 +19,9 @@ The single authoritative validation logic for `NextApp` and `KnextPlatform` spec
 
 ## Invariants
 - `validate.go:ValidateImageRef`: accepts only refs containing `@sha256:`. It rejects `:latest`, tagless refs and tag-only refs.
+- `validate.go:ValidateNextAppSpec` also refuses an unknown `spec.cache.isolation` and a `spec.cache.keyPrefix` of `knext` or under `knext:` (the platform keyspace).
+- `cache_prefix.go:ValidateNextAppEnvKeyPrefix` refuses a non-empty `spec.env[REDIS_KEY_PREFIX]` that is longer than 63 code points, holds whitespace or one of `* ? [ ] \`, or breaks `CacheKeyPrefixViolation` (`EnvKeyPrefixViolation`). Unlike `spec.cache.keyPrefix`, the shared fallback `kn-next` (and `kn-next:*`) is allowed: pinning it is the documented way to keep the warm cache through an upgrade. It is ratcheted: on update an unchanged value passes. Only the webhook applies it; `ValidateNextAppSpec`, and so the reconciler, does not.
+- `cache_prefix.go:CacheKeyPrefixViolation` refuses, for every app, a key prefix that is `knext` or under `knext:`, and a prefix in the derived shape `^kn-[0-9a-f]{12}(:.*)?$` that is not the app's own derived prefix. The own prefix must be equal: a nesting under it is refused too, since `kn-<hash>:isr` is issued `~kn-<hash>:isr:*`, which is the ISR keys of the app the hash derives from. It needs the object's namespace and name, so `ValidateNextAppSpec` (which has neither) applies only the platform-keyspace half and the webhook calls `ValidateNextAppCacheKeyPrefix` for the rest. `DerivedCacheKeyPrefix` must equal the controller's `defaultRedisKeyPrefix` (`TestDerivedPrefixLockstepWithAdmission`).
 - `validate.go:ValidateNextAppSpec` checks:
   - the image is required and digest-pinned;
   - `MinScale`, `MaxScale`, `ContainerConcurrency` and `PoolMax` are non-negative, and `MinScale <= MaxScale` when `MaxScale` is set;

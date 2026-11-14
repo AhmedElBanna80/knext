@@ -2,6 +2,7 @@
   "name": "knext-standalone-drain-fixture",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "description": "Minimal Next.js output:'standalone' app used ONLY by standalone-drain.docker-e2e.test.ts to prove SIGTERM drain under the shipped standalone-on-bun image. NOT a workspace member (its deps are installed into a throwaway build dir by the e2e), so it never inherits or pollutes the root lockfile.",
   "scripts": {
     "build": "next build"

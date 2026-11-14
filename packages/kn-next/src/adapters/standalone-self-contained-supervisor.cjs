@@ -276,6 +276,13 @@ function installDrainHandler(appServer, opts = {}) {
   function onSignal() {
     if (draining) return; // idempotent — a second signal must not double-fire
     draining = true;
+    // ADR-0066 D3: cancel the process-start primers before draining, so an
+    // outstanding wake-ahead call can never hold the drain.
+    try {
+      require('./process-start-abort.cjs').abortPrimers();
+    } catch {
+      // never block the drain
+    }
     armExitNormalizer();
     try {
       opts.metricsServer?.close();

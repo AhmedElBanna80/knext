@@ -86,7 +86,53 @@ describe('the module core dispatches to', () => {
         cwd: zone,
       }),
     ).toBe(1);
-    expect(c.err()).toContain('not available yet');
+    expect(c.err()).toContain('not available');
+  });
+
+  it('hands --context and the core reader to a deployed: baseline', async () => {
+    const zone = copyFixtureZone('cli-reader');
+    const asked: unknown[] = [];
+    const c = capture();
+    const code = await run(
+      'generate',
+      ['--check', '--against', 'deployed:shop/orders', '--context', 'ctx-b'],
+      {
+        ...c.io,
+        cwd: zone,
+        servedVersionReader: {
+          readServedProtoVersion(args) {
+            asked.push(args);
+            return '';
+          },
+        },
+      },
+    );
+    expect(code).toBe(1);
+    expect(asked).toEqual([{ namespace: 'shop', name: 'orders', context: 'ctx-b' }]);
+    expect(c.err()).toContain('reports no served contract version');
+  });
+
+  it('a deployed: baseline reads $KN_CONTEXT when --context is not given', async () => {
+    const zone = copyFixtureZone('cli-reader-env');
+    const asked: unknown[] = [];
+    const prev = process.env.KN_CONTEXT;
+    process.env.KN_CONTEXT = 'ctx-env';
+    try {
+      await run('generate', ['--check', '--against', 'deployed:shop/orders'], {
+        ...capture().io,
+        cwd: zone,
+        servedVersionReader: {
+          readServedProtoVersion(args) {
+            asked.push(args);
+            return '';
+          },
+        },
+      });
+    } finally {
+      if (prev === undefined) delete process.env.KN_CONTEXT;
+      else process.env.KN_CONTEXT = prev;
+    }
+    expect(asked).toEqual([{ namespace: 'shop', name: 'orders', context: 'ctx-env' }]);
   });
 
   it('an unknown verb is refused', async () => {

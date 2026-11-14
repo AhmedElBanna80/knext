@@ -104,7 +104,7 @@ describe("cache-handler chaos: Redis DOWN fails OPEN", () => {
         await expect(handler.revalidateTag(["t1"])).resolves.toBeUndefined();
     });
 
-    it("a get→set→get cycle on a dead Redis never crashes (fail-open via in-memory fallback)", async () => {
+    it("a get→set→get cycle on a dead Redis never crashes (fails open to origin render)", async () => {
         const mod = await import(CACHE_HANDLER);
         const CacheHandler = mod.default;
         const handler = new CacheHandler({});
@@ -114,15 +114,15 @@ describe("cache-handler chaos: Redis DOWN fails OPEN", () => {
         const before = await handler.get("k");
         expect(before).toBeNull();
 
-        // Best-effort write does not throw even though Redis is unreachable. The
-        // handler falls back to the in-memory Map (spec: "in-memory fallback").
+        // Best-effort write does not throw even though Redis is unreachable. With
+        // Redis configured but down it writes nothing locally (#2122).
         await expect(
             handler.set("k", { value: { kind: "PAGE" } }, { revalidate: 30 }),
         ).resolves.toBeUndefined();
 
         // The whole cycle completed without an unhandled rejection / crash. The
-        // in-memory fallback may now serve this pod (that is the documented
-        // fail-OPEN behavior); the load-bearing guarantee is "no throw, no crash".
+        // read is a miss (#2122: no pod-local serve during an outage); the
+        // load-bearing guarantee here is "no throw, no crash".
         const after = await handler.get("k");
         expect(after === null || typeof after === "object").toBe(true);
     });

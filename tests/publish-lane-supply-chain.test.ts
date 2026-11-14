@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 // The script guards its main() behind an entrypoint check, so importing the
@@ -1391,7 +1392,7 @@ const AUDIT_EXEMPT: readonly AuditExemption[] = [
   {
     name: 'kn-next',
     reason:
-      'forwarding alias: ships one bin file whose only dependency is @getknext/core, which the audit covers; it leaves the package set at 2.0 (ADR-0020 amendment 2026-10-09). Its own SBOM is tracked in #2438.',
+      'forwarding alias: ships one bin file whose only dependency is @getknext/core, which the audit covers, so its target SBOM describes it (ADR-0020 amendment 2026-11-09). It leaves the package set at 2.0 (ADR-0020 amendment 2026-10-09).',
   },
 ];
 
@@ -1433,6 +1434,119 @@ const realReleaseSets = (overrides: Record<string, ManifestFields> = {}) =>
     crateWorkflow: CRATE_WORKFLOW,
     overrides,
   });
+
+/**
+ * ADR-0020 amendment 2026-11-09: the alias is exempt only while its closure is
+ * its target's closure plus its own forwarding bin. Either premise breaking
+ * means it must join auditScope() instead.
+ */
+const INSTALL_HOOKS = ['preinstall', 'install', 'postinstall'] as const;
+const ALIAS_BIN_FILES = ['EGM.md', 'kn-next.js'];
+/** sha256 of packages/kn-next-alias/bin/kn-next.js as reviewed (#2438): it loads node:child_process,
+ * node:fs, node:module and node:path, resolves @getknext/core, reads core's package.json and spawns
+ * core's bin with the same argv. */
+const ALIAS_BIN_SHA256 = '46cab348b35e95cfbcda4d8f4c6554cc474d61729721e21bd79551bc03daa6c2';
+
+export function aliasExemptionProblems(
+  manifest: {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    bundleDependencies?: unknown;
+    bundledDependencies?: unknown;
+    scripts?: Record<string, string>;
+    files?: string[];
+  },
+  bin: { files: string[]; source: string },
+): string[] {
+  const out: string[] = [];
+  const deps = Object.keys(manifest.dependencies ?? {});
+  if (deps.length !== 1 || deps[0] !== '@getknext/core') {
+    out.push(
+      `kn-next must depend on @getknext/core only to stay exempt; it depends on [${deps.join(', ')}]`,
+    );
+  } else if (!/^workspace:/.test(manifest.dependencies?.['@getknext/core'] ?? '')) {
+    // A workspace range is rewritten to the published core version; an npm:
+    // alias, a URL or a git spec would point somewhere the audit does not.
+    out.push(
+      `kn-next's @getknext/core spec must be a workspace range, not ${manifest.dependencies?.['@getknext/core']}`,
+    );
+  }
+  for (const field of ['optionalDependencies', 'peerDependencies'] as const) {
+    const extra = Object.keys(manifest[field] ?? {});
+    if (extra.length > 0)
+      out.push(`kn-next declares ${field} [${extra.join(', ')}]: it must join auditScope()`);
+  }
+  for (const field of ['bundleDependencies', 'bundledDependencies'] as const) {
+    if (manifest[field] !== undefined)
+      out.push(`kn-next declares ${field}: bundled bytes ship outside the audit`);
+  }
+  for (const hook of INSTALL_HOOKS) {
+    if (manifest.scripts?.[hook] !== undefined)
+      out.push(`kn-next declares a ${hook} script: it runs on every install`);
+  }
+  const files = [...(manifest.files ?? [])].sort();
+  if (JSON.stringify(files) !== JSON.stringify(['LICENSE', 'README.md', 'bin'])) {
+    out.push(
+      `kn-next ships [${files.join(', ')}]; the exemption covers only bin, README.md and LICENSE`,
+    );
+  }
+  const binFiles = [...bin.files].sort();
+  if (JSON.stringify(binFiles) !== JSON.stringify(ALIAS_BIN_FILES)) {
+    out.push(
+      `kn-next/bin holds [${binFiles.join(', ')}]; the exemption covers only ${ALIAS_BIN_FILES.join(', ')}`,
+    );
+  }
+  // The forwarding bin is pinned by content, not parsed: a pattern scan of a
+  // dynamic language always leaves a bypass (spacing, aliases, computed calls).
+  // Changing it means updating ALIAS_BIN_SHA256 in the same PR, which is the
+  // review point for whether it still loads only Node built-ins and core.
+  const sha = createHash('sha256').update(bin.source).digest('hex');
+  if (sha !== ALIAS_BIN_SHA256) {
+    out.push(
+      `kn-next/bin/kn-next.js changed (sha256 ${sha}); re-review that it loads only node: built-ins and @getknext/core, then update ALIAS_BIN_SHA256`,
+    );
+  }
+  if (!PUBLISHED.some((p: { name: string }) => p.name === '@getknext/core')) {
+    out.push('@getknext/core, the alias target, is no longer in the audit scope');
+  }
+  return out;
+}
+
+describe('the kn-next alias exemption holds only while it forwards (ADR-0020, #2438)', () => {
+  const aliasDir = resolve(REAL_REPO, 'packages', 'kn-next-alias');
+  const manifest = JSON.parse(readFileSync(join(aliasDir, 'package.json'), 'utf8'));
+  const bin = {
+    files: readdirSync(join(aliasDir, 'bin')),
+    source: readFileSync(join(aliasDir, 'bin', 'kn-next.js'), 'utf8'),
+  };
+
+  it('the real alias meets every condition', () => {
+    expect(aliasExemptionProblems(manifest, bin)).toEqual([]);
+  });
+
+  it('reds on each way the alias could bring bytes the audit does not see', () => {
+    const red = (m: object, b: Partial<typeof bin> = {}) =>
+      aliasExemptionProblems({ ...manifest, ...m }, { ...bin, ...b }).length;
+    expect(red({ dependencies: { ...manifest.dependencies, chalk: '^5' } })).toBe(1);
+    expect(red({ dependencies: {} })).toBe(1);
+    expect(red({ dependencies: { '@getknext/core': 'npm:evil@1' } })).toBe(1);
+    expect(red({ peerDependencies: { react: '*' } })).toBe(1);
+    expect(red({ bundleDependencies: ['x'] })).toBe(1);
+    expect(red({ scripts: { ...manifest.scripts, postinstall: 'node x.js' } })).toBe(1);
+    expect(red({ files: [...manifest.files, 'lib'] })).toBe(1);
+    expect(red({}, { files: [...bin.files, 'helper.js'] })).toBe(1);
+    // Any edit to the bin reds, including the bypasses a pattern scan misses.
+    for (const edit of [
+      "require ('chalk');",
+      "req('chalk');",
+      "import /**/('x');",
+      "require('node:https');",
+    ]) {
+      expect(red({}, { source: `${bin.source}\n${edit}\n` })).toBe(1);
+    }
+  });
+});
 
 describe('package scope (#2389): the real tree', () => {
   const audit = realReleaseSets();

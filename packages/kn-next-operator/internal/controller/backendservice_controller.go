@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -145,6 +146,12 @@ func (r *BackendServiceReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var obs functionObservation
 	if err := validation.ValidateImageRef(bs.Spec.Image); err != nil {
 		obs.invalidImage = "spec.image is refused: " + err.Error()
+	}
+	// A spec the render cannot use is a refusal decided from the spec alone,
+	// reported in status (Ready=False InvalidSpec), never a reconcile error
+	// retried on backoff with nothing to say why (#2423).
+	if _, err := functionResources(bs.Spec.Resources); err != nil {
+		obs.invalidSpec = err.Error()
 	}
 
 	// The zone (ADR-0004 Amendment 2 Decision 1): spec.zone names a NextApp in
@@ -665,16 +672,55 @@ func (r *BackendServiceReconciler) zoneKsvcToFunctions(ctx context.Context, obj 
 	return r.functionsOfZone(ctx, obj.GetNamespace(), ref.Name)
 }
 
+// zoneWatchPredicate passes the NextApp events a function's verdict depends on
+// (#2501): a zone created or deleted, its spec changed (generation: backends,
+// database, which also feeds other zones' deny rule; the start of a deletion
+// bumps a custom resource's generation too), and a change to the zone's
+// ZoneSigningKey condition, which is how a JWKS ConfigMap conflict being cleared
+// (the zone publishing its own key set) reaches the functions that read it.
+// Other status-only writes, which the NextApp reconciler makes on every pass,
+// pass nothing; the periodic re-check stays the backstop.
+func zoneWatchPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{
+			CreateFunc:  func(event.CreateEvent) bool { return false },
+			DeleteFunc:  func(event.DeleteEvent) bool { return false },
+			GenericFunc: func(event.GenericEvent) bool { return false },
+			UpdateFunc:  func(e event.UpdateEvent) bool { return zoneSigningKeyChanged(e.ObjectOld, e.ObjectNew) },
+		},
+	)
+}
+
+// zoneSigningKeyChanged reports whether the ZoneSigningKey condition's status or
+// reason differs between two versions of a zone.
+func zoneSigningKeyChanged(oldObj, newObj client.Object) bool {
+	oldApp, ok1 := oldObj.(*appsv1alpha1.NextApp)
+	newApp, ok2 := newObj.(*appsv1alpha1.NextApp)
+	if !ok1 || !ok2 {
+		return false
+	}
+	o := apimeta.FindStatusCondition(oldApp.Status.Conditions, ConditionZoneSigningKey)
+	n := apimeta.FindStatusCondition(newApp.Status.Conditions, ConditionZoneSigningKey)
+	if o == nil || n == nil {
+		return (o == nil) != (n == nil)
+	}
+	return o.Status != n.Status || o.Reason != n.Reason
+}
+
 // SetupWithManager wires the reconciler. Status-only writes to a BackendService
 // do not re-enqueue it (GenerationChangedPredicate on the primary watch, as for
-// NextApp); owned children and zones do.
+// NextApp); owned children and the zone's Knative Service (zoneKsvcToFunctions)
+// do, and so do zones that are created, deleted or have a changed spec
+// (zoneWatchPredicate), but not a zone's status-only writes.
 func (r *BackendServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1alpha1.BackendService{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&servingv1.Service{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&networkingv1.NetworkPolicy{}).
-		Watches(&appsv1alpha1.NextApp{}, handler.EnqueueRequestsFromMapFunc(r.zoneToFunctions)).
+		Watches(&appsv1alpha1.NextApp{}, handler.EnqueueRequestsFromMapFunc(r.zoneToFunctions),
+			builder.WithPredicates(zoneWatchPredicate())).
 		Watches(&servingv1.Service{}, handler.EnqueueRequestsFromMapFunc(r.zoneKsvcToFunctions)).
 		Named("backendservice").
 		Complete(r)

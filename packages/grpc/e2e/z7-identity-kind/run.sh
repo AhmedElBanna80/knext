@@ -45,6 +45,11 @@
 #              so nothing mounts the database Secret, and removing the env
 #              renders it again; a rotation of the spec and the pin together
 #              updates it.
+#   squat      a ConfigMap at the zone's JWKS name that the zone does not control
+#              (pre-created by someone else) is never mounted into a function: the
+#              function reports JWKSTrusted=False, the zone ZoneSigningKey=False
+#              (JWKSConfigMapConflict), the squatter is left untouched, and removing
+#              it lets the operator publish and the function mount the zone's own.
 #   leaks      no key material in the operator's or the pods' logs, the events,
 #              or the objects the operator publishes.
 #
@@ -77,7 +82,7 @@
 #                         testdata/zone-identity-contract.json.
 #   Z7_WITH_RUST          1 (default) also builds and binds the Rust function.
 #   PHASES                space-separated subset of: up images deploy verify
-#                         rotate pin leaks (default: all, in that order).
+#                         rotate pin squat leaks (default: all, in that order).
 #   INTERNAL_PORT         local port of the port-forward to Knative's cluster-local gateway.
 set -euo pipefail
 # This script handles private keys: it must never trace, and what it creates is
@@ -107,7 +112,7 @@ MIN_BOUND_SECONDS="$(jq -er '.rotation.propagationBoundMinimumSeconds' "${BOUND_
   || { echo "cannot read .rotation.propagationBoundMinimumSeconds from ${BOUND_FIXTURE}" >&2; exit 64; }
 BOUND="${Z7_PROPAGATION_BOUND:-${SHIPPED_BOUND_SECONDS}s}"
 WITH_RUST="${Z7_WITH_RUST:-1}"
-PHASES="${PHASES:-up images deploy verify rotate pin leaks}"
+PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"
 INTERNAL_PORT="${INTERNAL_PORT:-18080}"
 KNATIVE_VERSION="${KNATIVE_VERSION:-knative-v1.16.0}"
 REGISTRY_IMAGE='registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373'
@@ -141,12 +146,9 @@ PIDS=()
 WATCH_PID=""
 FORWARDS_STARTED=0
 PF_PIDS="${WORK}/pf.pids"
-
-log() { printf '\n== %s\n' "$*"; }
-ok() { printf 'ok: %s\n' "$*"; }
-fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
-has_phase() { case " ${PHASES} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-k() { kubectl "$@"; }
+IMAGE_PREFIX=z7
+# shellcheck source=../lib/kind-lane.sh
+source "${HERE}/../lib/kind-lane.sh"
 
 diagnostics() {
   # Never a Secret, never a token: object status, pod state and log tails only.
@@ -175,27 +177,8 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- helpers
 
-# wait_until <timeout-seconds> <interval-seconds> <description> <condition>
-# The condition is a shell string, evaluated afresh on every attempt (a
-# `$(...)` in it is re-run each time, which an argument list would not do).
-wait_until() {
-  local timeout=$1 interval=$2 desc=$3 cond=$4
-  local end=$((SECONDS + timeout))
-  until eval "${cond}" >/dev/null 2>&1; do
-    [ "${SECONDS}" -lt "${end}" ] || fail "timed out after ${timeout}s waiting for: ${desc}"
-    sleep "${interval}"
-  done
-}
-
 epoch_of() { node -p 'Date.parse(process.argv[1]) / 1000' "$1"; }
 now_s() { node -p 'Date.now() / 1000'; }
-
-use_cluster() {
-  kind get kubeconfig --name "${CLUSTER}" >"${KUBECONFIG}"
-  local ctx
-  ctx="$(kubectl config current-context)"
-  [ "${ctx}" = "kind-${CLUSTER}" ] || fail "kubeconfig context is '${ctx}', want kind-${CLUSTER}"
-}
 
 secret_get() { # <field>: one data field of the zone's key Secret, decoded (kids only!)
   k -n "${NS}" get secret "${KEY_SECRET}" -o json | jq -r --arg f "$1" '.data[$f] // empty | @base64d'
@@ -282,53 +265,11 @@ expect_replay() {
   ok "${desc} (first status=200, second status=401 code=unauthenticated)"
 }
 
-zone_call() { # <path?query>: sets ZC_STATUS / ZC_BODY from the zone, through the cluster-local gateway
-  local out attempt
-  for attempt in 1 2 3; do
-    out="$(curl -s -m 30 -H "Host: ${ZONE_HOST}" -w '\n%{http_code}' "http://127.0.0.1:${INTERNAL_PORT}$1" 2>/dev/null)" || out=$'\n000'
-    # 000 is curl's "no response": only a dropped port-forward gives it. The zone
-    # answering with an error is a status, and is not retried.
-    [ "${out##*$'\n'}" = 000 ] || break
-    ensure_forward
-  done
-  ZC_STATUS="${out##*$'\n'}"
-  ZC_BODY="${out%$'\n'*}"
-}
-zone_status() { # <path?query>: just the status of one request to the zone
-  zone_call "$1"
-  echo "${ZC_STATUS}"
-}
-expect_zone() { # <description> <path?query> <status> <jq filter that must hold>
-  zone_call "$2"
-  [ "${ZC_STATUS}" = "$3" ] || fail "$1: status ${ZC_STATUS}, want $3 (body: ${ZC_BODY})"
-  jq -e "$4" <<<"${ZC_BODY}" >/dev/null || fail "$1: body does not satisfy $4 (body: ${ZC_BODY})"
-  ok "$1"
-}
 zone_kid() { zone_call /kid; jq -r '.kid // ""' <<<"${ZC_BODY}"; }
 
 pod_idents() { # <service>: "<uid> <restarts>" per live pod, sorted
   k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json \
     | jq -r '.items[] | select(.metadata.deletionTimestamp == null) | "\(.metadata.uid) \([.status.containerStatuses[]?.restartCount] | add)"' | sort
-}
-pod_json() { # <service>: the single live pod of a service
-  k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json \
-    | jq '[.items[] | select(.metadata.deletionTimestamp == null)] | if length == 1 then .[0] else error("want exactly one live pod, got \(length)") end'
-}
-
-forward_up() { (exec 3<>/dev/tcp/127.0.0.1/"${INTERNAL_PORT}") 2>/dev/null; }
-
-# ensure_forward: a port-forward to Knative's cluster-local gateway, started if
-# the port is not accepting. `kubectl port-forward` ends when its stream breaks,
-# and a long lane must not fail an assertion because of that. Safe to call from
-# the watcher's subshell: every pid it starts is written to a file the cleanup
-# reads.
-ensure_forward() {
-  forward_up && return 0
-  # kubectl itself, not the k() wrapper: `$!` of a backgrounded shell function is
-  # the function's subshell, and killing that leaves kubectl holding the port.
-  kubectl -n kourier-system port-forward svc/kourier-internal "${INTERNAL_PORT}:80" >>"${WORK}/pf-internal.log" 2>&1 &
-  echo "$!" >>"${PF_PIDS}"
-  wait_until 30 1 "port-forward on ${INTERNAL_PORT}" forward_up
 }
 
 start_forwards() {
@@ -436,31 +377,12 @@ YAML
 
 # ---------------------------------------------------------------- phase: images
 
-build_push() { # <name> <context dir>: build, push, record name=<repo>@<digest>
-  local name=$1 ctx=$2 ref="localhost:${REG_PORT}/z7/$1:e2e" plog="${WORK}/push-$1.log" digest
-  docker build -t "${ref}" "${ctx}"
-  docker push "${ref}" | tee "${plog}"
-  digest="$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' "${plog}" | tail -1)"
-  [ -n "${digest}" ] || fail "could not read the pushed digest of ${name}"
-  grep -v "^${name}=" "${STATE}/images.env" >"${STATE}/images.env.new" 2>/dev/null || true
-  echo "${name}=localhost:${REG_PORT}/z7/${name}@${digest}" >>"${STATE}/images.env.new"
-  mv "${STATE}/images.env.new" "${STATE}/images.env"
-  ok "${name} -> ${digest}"
-}
-
 phase_images() {
   log "images: Go function, zone, Rust function"
   build_push function-go "${REPO}/templates/go"
   bun "${HERE}/zone-caller/build.ts" "${WORK}/zone-ctx"
   build_push zone-caller "${WORK}/zone-ctx"
   if [ "${WITH_RUST}" = 1 ]; then build_push function-rust "${REPO}/templates/rust"; fi
-}
-
-image_ref() { # <name>
-  local ref
-  ref="$(sed -n "s/^$1=//p" "${STATE}/images.env" 2>/dev/null | tail -1)"
-  [ -n "${ref}" ] || fail "no image recorded for $1 (run the images phase)"
-  echo "${ref}"
 }
 
 # ---------------------------------------------------------------- phase: deploy
@@ -1074,9 +996,10 @@ spec:
     maxScale: 1
 YAML
 
-  wait_until 180 3 "the pinned function renders with the zone's database Secret mounted" \
-    "fn_ksvc_mounts_db"
-  [ "$(fn_condition Bound)" = "True/Bound" ] || fail "a matching pin did not bind: $(fn_condition Bound)"
+  # Wait for both: the operator writes Bound in a separate status update after it
+  # renders the Knative Service, and a conflict on that update retries on a later pass.
+  wait_until 180 3 "the matching pin binds and the function renders with the zone's database Secret mounted" \
+    '[ "$(fn_condition Bound)" = "True/Bound" ] && fn_ksvc_mounts_db'
   ok "a matching pin renders the function, and it mounts ${PIN_DB}"
 
   log "pin: swap the BackendService image with kubectl"
@@ -1171,6 +1094,120 @@ YAML
   k -n "${NS}" delete secret "${PIN_DB}" --ignore-not-found
 }
 
+# ---------------------------------------------------------------- phase: squat
+
+SQ_ZONE=squat-zone
+SQ_FN=squat-fn
+SQ_CM="${SQ_ZONE}-knext-jwks"
+SQ_FORGED='{"keys":[]}'
+
+sq_bs_condition() { # <type>: "<status>/<reason>" of a condition on the squat function
+  k -n "${NS}" get backendservice "${SQ_FN}" -o json \
+    | jq -r --arg t "$1" '[.status.conditions // [] | .[] | select(.type == $t)] | if length == 0 then "none" else .[0] | "\(.status)/\(.reason)" end'
+}
+sq_zone_condition() { # <type>: "<status>/<reason>" of a condition on the squat NextApp
+  k -n "${NS}" get nextapp "${SQ_ZONE}" -o json \
+    | jq -r --arg t "$1" '[.status.conditions // [] | .[] | select(.type == $t)] | if length == 0 then "none" else .[0] | "\(.status)/\(.reason)" end'
+}
+sq_ksvc_exists() { k -n "${NS}" get ksvc "${SQ_FN}" >/dev/null 2>&1; }
+sq_ksvc_mounts_cm() { # <name>: the function's Knative Service mounts this ConfigMap as knext-zone-jwks
+  k -n "${NS}" get ksvc "${SQ_FN}" -o json \
+    | jq -e --arg cm "$1" '[.spec.template.spec.volumes[]? | select(.name == "knext-zone-jwks") | .configMap.name] == [$cm]' >/dev/null
+}
+sq_ksvc_has_jwks_volume() {
+  k -n "${NS}" get ksvc "${SQ_FN}" -o json \
+    | jq -e '[.spec.template.spec.volumes[]? | select(.name == "knext-zone-jwks")] | length > 0' >/dev/null
+}
+sq_pods_mount_jwks() { # any pod of the function carrying the JWKS volume
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${SQ_FN}" -o json \
+    | jq -e '[.items[].spec.volumes[]? | select(.name == "knext-zone-jwks")] | length > 0' >/dev/null
+}
+sq_cm_controlled() { # the zone's JWKS ConfigMap is controlled by the NextApp
+  k -n "${NS}" get configmap "${SQ_CM}" -o json \
+    | jq -e --arg z "${SQ_ZONE}" '.metadata.ownerReferences // [] | map(select(.kind == "NextApp" and .name == $z and .controller == true)) | length == 1' >/dev/null
+}
+
+phase_squat() {
+  log "squat: a ConfigMap at the zone's JWKS name that the zone does not control is never mounted"
+  local go_img zone_img
+  go_img="$(image_ref function-go)"
+  zone_img="$(image_ref zone-caller)"
+
+  k -n "${NS}" delete nextapp "${SQ_ZONE}" --ignore-not-found --wait=true --timeout=300s
+  k -n "${NS}" delete backendservice "${SQ_FN}" --ignore-not-found --wait=true --timeout=300s
+  k -n "${NS}" delete configmap "${SQ_CM}" --ignore-not-found
+
+  # The squatter: created BEFORE the zone, by someone else, with no controller
+  # ownerReference, holding a key set of its own choosing (an empty one here; any
+  # content would do, the point is whose it is).
+  k -n "${NS}" create configmap "${SQ_CM}" --from-literal=jwks.json="${SQ_FORGED}"
+
+  k apply --validate=strict -f - <<YAML
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: NextApp
+metadata:
+  name: ${SQ_ZONE}
+  namespace: ${NS}
+spec:
+  image: ${zone_img}
+  healthCheckPath: /api/health
+  scaling:
+    minScale: 0
+    maxScale: 1
+  backends:
+    - name: squat
+      service: ${SQ_FN}
+---
+apiVersion: apps.kn-next.dev/v1alpha1
+kind: BackendService
+metadata:
+  name: ${SQ_FN}
+  namespace: ${NS}
+spec:
+  zone: ${SQ_ZONE}
+  image: ${go_img}
+  language: go
+  port: 8080
+  protoVersion: 1.0.0
+  scaling:
+    minScale: 0
+    maxScale: 1
+YAML
+
+  # The function is RENDERED (so "not mounted" is a fact about a real Knative
+  # Service, not about one that never existed), reports the untrusted ConfigMap,
+  # and the zone reports the conflict.
+  wait_until 180 3 "the function's Knative Service exists" sq_ksvc_exists
+  wait_until 120 2 "the function reports JWKSTrusted=False JWKSUntrusted" \
+    '[ "$(sq_bs_condition JWKSTrusted)" = "False/JWKSUntrusted" ]'
+  wait_until 120 2 "the zone reports ZoneSigningKey=False JWKSConfigMapConflict" \
+    '[ "$(sq_zone_condition ZoneSigningKey)" = "False/JWKSConfigMapConflict" ]'
+  [ "$(sq_bs_condition Ready)" = "False/JWKSUntrusted" ] \
+    || fail "the function with an untrusted JWKS is $(sq_bs_condition Ready), want False/JWKSUntrusted"
+  ok "the zone reports JWKSConfigMapConflict and the function JWKSTrusted=False/JWKSUntrusted"
+
+  # Hold for a while: a refusal that flaps back to mounting is not one.
+  sleep 20
+  if sq_ksvc_has_jwks_volume; then fail "the squatted JWKS ConfigMap is mounted into the function (its Knative Service has a knext-zone-jwks volume)"; fi
+  if sq_pods_mount_jwks; then fail "the squatted JWKS ConfigMap is mounted into the function (a pod has a knext-zone-jwks volume)"; fi
+  # The operator leaves the squatter alone: same content, still no owner.
+  k -n "${NS}" get configmap "${SQ_CM}" -o json \
+    | jq -e --arg d "${SQ_FORGED}" '(.data["jwks.json"] == $d) and ((.metadata.ownerReferences // []) | length == 0)' >/dev/null \
+    || fail "the squatted ConfigMap ${SQ_CM} was modified or adopted by the operator"
+  ok "the squatted ConfigMap is not mounted and is left untouched (not adopted, not overwritten)"
+
+  log "squat: control - removing the squatter lets the operator publish and the function mount the zone's own JWKS"
+  k -n "${NS}" delete configmap "${SQ_CM}"
+  wait_until 180 3 "the zone publishes its own JWKS ConfigMap, controlled by the NextApp" sq_cm_controlled
+  wait_until 180 3 "the function trusts and mounts it" \
+    '[ "$(sq_bs_condition JWKSTrusted)" = "True/Controlled" ] && sq_ksvc_mounts_cm "${SQ_CM}"'
+  wait_until 60 2 "the zone's conflict clears" '[ "$(sq_zone_condition ZoneSigningKey)" = "True/KeyActive" ]'
+  ok "with the squatter gone the zone's own JWKS is published, mounted, and the conflict clears"
+
+  k -n "${NS}" delete nextapp "${SQ_ZONE}" --ignore-not-found --wait=true --timeout=300s
+  k -n "${NS}" delete backendservice "${SQ_FN}" --ignore-not-found --wait=true --timeout=300s
+}
+
 # ---------------------------------------------------------------- phase: leaks
 
 phase_leaks() {
@@ -1221,7 +1258,7 @@ phase_leaks() {
 # ---------------------------------------------------------------- main
 
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then use_cluster; fi
-for phase in up images deploy verify rotate pin leaks; do
+for phase in up images deploy verify rotate pin squat leaks; do
   if has_phase "${phase}"; then
     "phase_${phase}"
   fi

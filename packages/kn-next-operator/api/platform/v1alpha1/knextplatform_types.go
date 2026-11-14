@@ -70,6 +70,47 @@ type KnextPlatformSpec struct {
 	// Rollout bounds how fast a platform change is applied across apps.
 	// +optional
 	Rollout *PlatformRollout `json:"rollout,omitempty"`
+
+	// Cache registers the Redis endpoints the operator may issue per-app ACL
+	// users on.
+	// +optional
+	Cache *PlatformCache `json:"cache,omitempty"`
+}
+
+// PlatformCache registers Redis endpoints for per-app credentials.
+type PlatformCache struct {
+	// ClusterID names this cluster in the ACL user names it creates, so two
+	// clusters sharing one Redis never overwrite each other's users. Unset means
+	// the uid of the kube-system Namespace. Set it to the old identity before
+	// rebuilding a cluster against the same Redis.
+	// +optional
+	ClusterID string `json:"clusterId,omitempty"`
+
+	// RedisEndpoints lists the Redis endpoints the operator holds a provisioner
+	// credential for. The credential is used only for an app whose
+	// spec.cache.url resolves to exactly one of these endpoints.
+	// +optional
+	// +listType=map
+	// +listMapKey=endpoint
+	// +kubebuilder:validation:MaxItems=16
+	RedisEndpoints []RedisEndpoint `json:"redisEndpoints,omitempty"`
+}
+
+// RedisEndpoint is one registered Redis endpoint.
+type RedisEndpoint struct {
+	// Endpoint is the in-cluster Service FQDN and port, in canonical form:
+	// <service>.<namespace>.svc.cluster.local:<port> (lower case).
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\.svc\.cluster\.local:[0-9]{1,5}$`
+	Endpoint string `json:"endpoint"`
+	// ProvisionerSecretRef names a Secret in the operator's namespace holding a
+	// Redis URL (with the provisioner user's credentials) under Key.
+	ProvisionerSecretRef ProvisionerSecretRef `json:"provisionerSecretRef"`
+}
+
+// ProvisionerSecretRef is a Secret name and key in the operator namespace.
+type ProvisionerSecretRef struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
 }
 
 // PlatformScaling groups the autoscaling defaults.

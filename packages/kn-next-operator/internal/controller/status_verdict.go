@@ -146,6 +146,7 @@ type verdictExtras struct {
 	platform *platformDefaultsState
 	bindings *backendBindingsState
 	zoneKey  *zoneSigningKeyState
+	cache    *cacheCredentialsState
 	// invalidSpecSet records that withInvalidSpec was supplied, independent of the
 	// error's value: the early return keys on this flag so a nil error cannot fall
 	// through to the observed-state roll-up.
@@ -211,6 +212,12 @@ func invalidSpecVerdict(app *appsv1alpha1.NextApp, err error) statusVerdict {
 			message:   fmt.Sprintf("Spec rejected: %s", err.Error()),
 		}},
 	}
+}
+
+// withCacheCredentials supplies the Redis ACL user state (redis_acl_reconcile.go)
+// the CacheCredentialsReady condition is computed from.
+func withCacheCredentials(st cacheCredentialsState) verdictOption {
+	return func(x *verdictExtras) { x.cache = &st }
 }
 
 // withZoneSigningKey supplies the zone signing key's state (zone_signing_key.go)
@@ -1083,6 +1090,43 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 		}
 	} else if extras.zoneKey != nil && prevZoneKey != nil {
 		v.removeConditions = append(v.removeConditions, ConditionZoneSigningKey)
+	}
+
+	// CacheCredentialsReady (ADR-0071): the app's own Redis ACL user. Present only
+	// while isolation is requested or in force. The wording never says "isolated"
+	// until the shared path is observed refused (SharedCredentialLive otherwise).
+	prevCache := apimeta.FindStatusCondition(app.Status.Conditions, ConditionCacheCredentialsReady)
+	if extras.cache != nil && extras.cache.active {
+		cond := metav1.Condition{
+			Type: ConditionCacheCredentialsReady, ObservedGeneration: app.Generation,
+			Status: metav1.ConditionTrue, Reason: extras.cache.reason, Message: extras.cache.message,
+		}
+		if !extras.cache.ready {
+			cond.Status = metav1.ConditionFalse
+		}
+		if prevCache == nil || prevCache.Reason != cond.Reason || prevCache.Message != cond.Message {
+			eventType := corev1.EventTypeNormal
+			if cond.Status != metav1.ConditionTrue || cond.Reason == ReasonCacheSharedCredentialLive {
+				eventType = corev1.EventTypeWarning
+			}
+			v.events = append(v.events, verdictEvent{eventType, cond.Reason, cond.Message})
+		}
+		v.conditions = append(v.conditions, cond)
+		// The verdict owns the requeue of this step: the five-minute re-assert while
+		// it is ready, a short retry while it failed in a way that can clear on its
+		// own (a transient error, a conflict that may resolve).
+		requeue := time.Duration(0)
+		switch {
+		case extras.cache.ready:
+			requeue = cacheResyncInterval
+		case cacheRetries(*extras.cache):
+			requeue = cacheRetryInterval
+		}
+		if requeue > 0 && (v.requeueAfter == 0 || requeue < v.requeueAfter) {
+			v.requeueAfter = requeue
+		}
+	} else if extras.cache != nil && prevCache != nil {
+		v.removeConditions = append(v.removeConditions, ConditionCacheCredentialsReady)
 	}
 
 	// NetworkPolicyDisabled: spec.security.networkPolicy=false silently removes the

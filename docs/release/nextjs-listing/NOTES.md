@@ -41,8 +41,7 @@ branch on the founder's fork are ready to go the moment #1565 confirms the place
 
 ## Placement decision (#1565): platform list vs. verified tier vs. WG request
 
-Per the research (`.claude/research/nextjs-adapter-listing-path-2026-09-27.md`, `-lessons-*.md`,
-both untracked in this worktree, read from the primary checkout):
+Per the 2026-09-27 listing-path research and its lessons note (maintainer notes, not in the repo):
 
 | Option | Cost | Gate | Precedent |
 |---|---|---|---|

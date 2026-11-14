@@ -100,7 +100,8 @@ target never scaffolds that file, since `--self-contained` only applies to the v
 
 ### The questions `create` asks
 
-Run on a terminal with no flags, `create` asks five questions. Press Enter on each to take the
+Run on a terminal with no flags, `create` asks six questions (five with `vinext`, which skips Cache
+Components). Press Enter on each to take the
 default: the scaffold described above, with React Compiler turned on. At the end it prints the
 equivalent flags, so you can repeat the same scaffold in CI.
 
@@ -111,6 +112,7 @@ equivalent flags, so you can repeat the same scaffold in CI.
 | ISR / data cache | `none` (in memory, per pod), `redis` | `none` | `redis` writes a `cache` block that reads `REDIS_URL`. |
 | Object storage | `none`, `gcs`, `s3`, `minio`, `azure` | `none` | Writes a `storage` block for that provider, with `<placeholders>` for you to fill in. |
 | React Compiler | yes / no | **yes** | On `turbopack`/`webpack`: writes `reactCompiler: true` to `next.config.ts` and adds `babel-plugin-react-compiler` to `devDependencies`. On `vinext`: writes `react: { compiler: true }` to the vinext plugin in `vite.config.ts` and adds the four packages it needs. Answer `n`, or pass `--no-react-compiler`, to leave it off. See [React Compiler](/docs/react-compiler). |
+| Cache Components | yes / no (not asked for `vinext`) | **no** | Writes `cacheComponents: true` and `partialPrefetching: true` to `next.config.ts`: `'use cache'`, `cacheLife`/`cacheTag` and Partial Prerendering. With the Redis cache, `'use cache'` entries are shared by every pod; see [`'use cache'` is shared across pods](/docs/isr-caching#use-cache-is-shared-across-pods). Route segment configs such as `export const revalidate` are not allowed under it; use `cacheLife()`. Cache Components is not yet covered by the Next.js compatibility suite knext runs. |
 
 With a Redis cache, set `REDIS_URL` when you run `knext deploy`, and keep the value in a Kubernetes
 Secret or your CI secrets rather than in the file. `knext deploy` stops with an error while it is
@@ -136,6 +138,7 @@ knext create my-app                    # asks the questions on a terminal; defau
 knext create my-app --yes              # defaults, no questions
 knext create my-app --runtime node --cache redis   # Node + Redis, no questions
 knext create my-app --no-react-compiler            # without React Compiler
+knext create my-app --cache-components --cache redis   # Cache Components, shared through Redis
 knext create my-app --builder vinext   # compiled single-executable target
 knext create my-app --dry-run          # list the files it would write, write nothing
 ```
@@ -148,6 +151,7 @@ knext create my-app --dry-run          # list the files it would write, write no
 | `--cache <none\|redis>` | ISR / data cache. Default `none`. |
 | `--storage <none\|gcs\|s3\|minio\|azure>` | Object storage for static assets. Default `none`: assets are served from the container image. |
 | `--react-compiler`, `--no-react-compiler` | Turn React Compiler on or off. Default on, for every builder. Passing both is an error. |
+| `--cache-components`, `--no-cache-components` | Turn Cache Components (and partial prefetching) on or off. Default off. Needs `--builder turbopack` or `webpack`: with `vinext` it is an error. Passing both is an error. |
 | `-y`, `--yes` | Ask nothing; use the defaults for every choice not given as a flag. |
 | `--force` | Overwrite existing files. |
 | `--dry-run` | List the files that would be written and write nothing. |
@@ -155,7 +159,7 @@ knext create my-app --dry-run          # list the files it would write, write no
 
 **Exit code:** `0` on success (including `--dry-run` and `--help`); `1` on a usage error (an
 unrecognized `--runtime`, `--builder`, `--cache` or `--storage` value, both `--react-compiler`
-and `--no-react-compiler`, an unexpected extra argument, or a cancelled question) or a scaffold failure (for example an
+and `--no-react-compiler` (or both Cache Components flags), `--cache-components` with `--builder vinext`, an unexpected extra argument, or a cancelled question) or a scaffold failure (for example an
 invalid app name, or an existing file without `--force`).
 
 The generated `package.json` pins its `@getknext/*` dependencies at the **CLI's own version** — the
@@ -852,6 +856,13 @@ knext deploy function orders \
 - `--zone` names the `NextApp` that owns the function, in the same namespace.
 - `--image` must be pinned by digest; a tag-only reference and `:latest` are refused.
 - The function's language comes from `knext.grpc.json`, where `knext add function` recorded it.
+- The contract version the function serves comes from the function's own copy of its contract,
+  `functions/<name>/proto`: `option (knext.v1.contract_version)`. Its code is generated from that
+  copy, so regenerate it (`buf generate` for Go, `./codegen.sh` for Rust) before you build the image. The zone
+  needs the version: without it every generated call is refused. A function ahead of its zone is
+  fine (deploy the function first). If the zone's `proto/` is ahead of the function's copy, the
+  command stops: copy the contract into the function, regenerate, rebuild the image, and deploy
+  again. `--proto-version` overrides both.
 - Optional: `--namespace`, `--context`, `--port`, `--proto-version`, `--no-wake-ahead`,
   `--min-scale`, `--max-scale`, `--container-concurrency`.
 - `--dry-run` prints the resource and applies nothing, so it pipes into `kubectl apply -f -`.
@@ -883,11 +894,42 @@ Writes the TypeScript a zone uses to call its functions, from the contracts in `
 knext generate                                        # lint, then write the generated code
 knext generate --check                                # fail if the committed code is out of date
 knext generate --check --against ".git#branch=main,subdir=proto"   # also fail on a breaking change
+knext generate --check --against deployed:shop/orders               # ...against what is running now
 ```
 
 It runs `buf lint` first, and with `--against` it runs `buf breaking` against a baseline: a
 directory, an image file, or a git reference. A removed or renumbered field is a breaking change
-and fails the run. Run `knext generate --check` in CI so generated code can never drift from its
+and fails the run.
+
+`--against deployed:<namespace>/<name>` compares against the contract a deployed function serves
+right now. knext reads the function's served version (`status.servedProtoVersion` on its
+`BackendService`; the cluster is only read, never changed) and compares against the git tag that
+version was released under, `proto/v<version>` by default (`proto/v1.4.0`), as it exists in the
+repository you run from. Tag each contract release that way, or set `deployedTagTemplate` in
+`knext.grpc.json`: it must contain `{version}` once, may use `{name}`, the function's name, and
+may not contain any other placeholder, a comma, `#` or whitespace,
+so functions released separately from one repository get their own tags
+(`"{name}-contract-{version}"`). `--context` picks the kubectl context (default: `$KN_CONTEXT`,
+else the current one).
+
+The run fails instead of comparing against nothing when:
+
+- the cluster cannot be read (no such function, no permission, kubectl not installed);
+- the function reports no served version: no Ready revision carries a `protoVersion`, the
+  function is refused, or the cluster's operator is too old to record it;
+- the served version is not a semantic version;
+- git is not installed or is older than 2.31;
+- you are not in a git repository, the tag is not a valid tag name, or the repository has no
+  such tag (in CI, check out with tags, for example `git fetch --tags`);
+- the repository's path or your app's path inside it contains a comma, `#` or whitespace;
+- the installed `@getknext/core` is too old to read the cluster (upgrade it together with
+  `@getknext/grpc`).
+
+The tag says where a released contract lives; it does not prove the running image serves exactly
+that tree. A tag moved after the release compares against whatever it points to now. Nothing runs
+this check for you: add it to CI next to `knext generate --check` if you want it enforced.
+
+Run `knext generate --check` in CI so generated code can never drift from its
 contract. The output goes to `src/generated/grpc` (set `out` in `knext.grpc.json` to move it), and
 is the same bytes on every run; mark that directory as generated for your formatter. `out` must be
 a subdirectory of your app: the app root itself, anything outside it, and anything under
@@ -917,8 +959,9 @@ Each generated client is server-only (`import "server-only"`) and follows one po
 - **The endpoint is read at call time** from `<NAME>_SERVICE_URL` (never baked into the code). On a
   Node server, calls use HTTP/2 cleartext (h2c) by default. On a Bun server they use HTTP/1.1 by
   default, because Bun's HTTP/2 client is not yet verified with Connect; unary and
-  server-streaming calls both work over HTTP/1.1. Setting `ORDERS_SERVICE_HTTP_VERSION` to `2` or
-  `1.1` chooses for that one function on either runtime. The server logs the transport it chose
+  server-streaming calls both work over HTTP/1.1. Setting `httpVersion: "2"` or `"1.1"` on the function's
+  `backends` entry chooses for that one function on either runtime; the operator renders it as
+  `ORDERS_SERVICE_HTTP_VERSION`. The server logs the transport it chose
   once per function, for example
   `knext: orders function: transport HTTP/1.1, falling back from h2c on a Bun gateway (...)`.
 

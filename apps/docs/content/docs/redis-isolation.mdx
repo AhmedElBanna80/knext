@@ -1,0 +1,239 @@
+---
+title: Per-app Redis isolation
+description: Give each app its own Redis user, limited to its own key prefix, so one app's credential cannot read or delete another app's cache. How to enable it, what the platform admin registers, and how to migrate.
+---
+
+By default every app that points `spec.cache.url` at the same Redis uses the same credential. The key
+prefix keeps their keys apart, but nothing enforces it: a bug or a compromised pod in one app can read
+or delete the others' cache.
+
+With isolation on, the operator creates one Redis ACL user per app. The user can touch only keys under
+that app's prefix and can run only the commands the cache needs. The password lives in a Secret the
+operator owns, and the app's `REDIS_URL` is read from it.
+
+<Callout type="warn">
+Isolation is only in force once nothing else on the Redis can reach the app's keys. The operator
+decides that from the Redis itself, per endpoint: it lists every user and reads what each one may
+touch. Until the Redis shows no enabled user (other than the operator's provisioner and the per-app
+users) whose key pattern can reach an app's keys, the operator reports
+`isolation not in force: shared credential live` on the app's `CacheCredentialsReady` condition.
+Do not describe an app as isolated before the status reads `Provisioned`.
+</Callout>
+
+This page describes what ships today. Several parts of the design are not built yet; the
+[Not yet](#not-yet) list below names them, so read it before you rely on isolation in production.
+
+## What the platform admin sets up
+
+Requires Redis or Valkey 7.0 or later, reached through an in-cluster Service. A managed Redis that
+blocks `ACL SETUSER` is not supported yet: bring your own Redis in the cluster.
+
+**1. Create a provisioner user on the Redis.** This is the only credential the operator holds for the
+endpoint. It is root-equivalent on that Redis, because a user that can run `ACL SETUSER` can grant
+itself anything. Keep it in the operator's namespace and nowhere else.
+
+```text
+ACL SETUSER provisioner on >CHOOSE-A-PASSWORD ~* resetchannels -@all
+  +acl|setuser +acl|deluser +acl|getuser +acl|users +acl|whoami +acl|cat
+  +scan +del +ping +info|server +client|setinfo
+```
+
+`+acl|cat` lets the operator ask the Redis which commands it calls administrative or dangerous, so the
+check below uses the server's own list rather than one that can go stale. Without it the operator
+cannot check, and withholds the isolation claim (`SharedCredentialLive`, "the check failed").
+
+**2. Store it as a Secret in the operator's namespace.**
+
+```bash
+kubectl -n kn-next-operator-system create secret generic redis-provisioner \
+  --from-literal=url='redis://provisioner:CHOOSE-A-PASSWORD@redis.cache.svc.cluster.local:6379'
+```
+
+**3. Register the endpoint on the `KnextPlatform`.** Use the Service's full name,
+`<service>.<namespace>.svc.cluster.local:<port>`. The operator uses the provisioner credential only
+for an app whose `spec.cache.url` resolves to exactly this endpoint, so an app cannot send it to a
+host of its choosing.
+
+```yaml
+apiVersion: platform.kn-next.dev/v1alpha1
+kind: KnextPlatform
+metadata:
+  name: default
+spec:
+  cache:
+    redisEndpoints:
+      - endpoint: redis.cache.svc.cluster.local:6379
+        provisionerSecretRef: { name: redis-provisioner, key: url }
+```
+
+If two clusters share one Redis, give each its own `spec.cache.clusterId`. The cluster's identity is
+part of every user name, so two clusters never overwrite each other's users. Set it to the old identity
+before you rebuild a cluster against the same Redis; otherwise the rebuilt cluster's apps stop with
+`PrefixConflict` against the users the old cluster left behind.
+
+## What the app owner sets
+
+```yaml
+spec:
+  cache:
+    provider: redis
+    url: redis://redis.cache.svc.cluster.local:6379   # no username or password
+    keyPrefix: shop-web
+    isolation: auto   # auto (default) | acl | none
+```
+
+| `isolation` | Behaviour |
+| --- | --- |
+| `auto` | Isolate when the endpoint is registered. Otherwise keep using the credential in `url`. |
+| `acl` | Require isolation. If the endpoint is not registered, or isolation cannot be provided, the app fails closed: its pods wait for a Secret that does not exist rather than start on the shared credential. |
+| `none` | Never isolate. `url` is used as written. An app that already has its own Redis user keeps it until the app is deleted; switching to `none` does not remove it. |
+
+An app on the same Redis with `isolation: none` (or with a credential written into its `url` or
+`envMap`) still has a working shared credential, so while it is there no app on that endpoint is
+reported as isolated.
+
+For an isolated app, `spec.cache.url` must carry no credentials and `spec.secrets.envMap` must not set
+`REDIS_URL`. The operator refuses both, because either would put the shared credential back. It does so
+when it reconciles the app, not when you apply it (see *Not yet*): the app reports
+`SharedCredentialInSpec` and waits on a Secret that does not exist.
+
+<Callout type="warn">
+Code that uses `REDIS_URL` for keys outside the app's prefix gets `NOPERM`. The cache handler stays
+inside the prefix; your own code must too. The user also has no `INFO`, `KEYS`, `FLUSHALL`, `ACL` or
+pub/sub access.
+</Callout>
+
+## Reading the status
+
+```bash
+kubectl get nextapp web -o jsonpath='{.status.conditions[?(@.type=="CacheCredentialsReady")]}'
+kubectl get nextapp web -o jsonpath='{.status.cache}'   # isolation, username, secretName; never a password
+```
+
+`status.cache.isolation` is `acl` only while isolation is in force (the reason below is `Provisioned`).
+While the app has its own user but something else can still reach its keys it is `acl-pending`.
+
+| Reason | Meaning |
+| --- | --- |
+| `SharedCredentialLive` | The app has its own user, but something else can still reach app keys: an enabled user on the endpoint (the `default` user included, with or without `requirepass`) whose key pattern covers an app's prefix, an enabled user, another app's `knext-app-*` user included, that can run any command the Redis itself lists as administrative or dangerous (`ACL CAT admin` and `ACL CAT dangerous`: `FLUSHALL`, `FLUSHDB`, `SWAPDB`, `PSYNC`, `SYNC`, `MONITOR`, `CONFIG GET`, `SLOWLOG`, `SHUTDOWN`, `REPLICAOF`, `ACL SETUSER` and the rest), directly or through a rule such as `+@all`, `+@admin`, `+@dangerous`, `+@write` or `+@keyspace`, even if it holds no keys (the operator's provisioner is not counted at all; a `knext-app-*` user, the app's own included, is checked for commands but not for key patterns, since its keys are its own prefix), an app on the endpoint with `isolation: none` or a credential in its spec, a provisioner that logs in as `default`, or the endpoint still accepts a connection without credentials or `AUTH default` with a password nobody issued. The message names which. Isolation is **not** in force. |
+| `Provisioned` | The app has its own user and none of the above holds. Isolation is in force. |
+| `EndpointUnregistered` | `isolation: acl` and the endpoint is not registered. |
+| `PrefixConflict` | Another app owns an overlapping prefix (the same one, one nested inside the other, or one containing the other), or another user on the endpoint already covers keys under it. The app does not get a user, and one it had is removed. The message names the app that owns the prefix. See *Who owns a prefix*. |
+| `PrefixReserved` | The prefix is `knext`, starts with `knext:`, or is a generated `kn-` plus 12 hex characters (or a nesting under one, such as `kn-` plus 12 hex characters then `:isr`) that is not this app's own. A user the app had before is removed. |
+| `PrefixUnknown` | The prefix is set through `env` or an `envMap` Secret, so the operator cannot scope the user. Set `spec.cache.keyPrefix`. |
+| `SharedCredentialInSpec` | `url` carries a credential, or `envMap` sets `REDIS_URL`. |
+| `AclUnsupported` | The Redis is older than 7.0. |
+| `ProvisionerRefused` | The operator could not read the provisioner Secret, connect, or run `ACL SETUSER`, the provisioner Secret does not point at the registered endpoint, or a step failed on an error that may clear (it retries every thirty seconds). |
+
+The command check reads `ACL CAT` from the server, so a command a loaded module adds does not appear in `ACL CAT admin` or `ACL CAT dangerous` and is not checked, and a command renamed in the server's configuration is not seen under its new name.
+
+The operator re-asserts every user on each reconcile and at least every five minutes, so a Redis
+restart that loses its users is repaired without a redeploy.
+
+## Who owns a prefix
+
+Two apps on one Redis must not hold overlapping prefixes. The operator settles a clash by rule, never
+by which app it reconciled first:
+
+1. An app whose prefix is its own generated prefix (`kn-` plus 12 hex characters, derived from its
+   namespace and name) owns it. No other app may use that shape at all, which is why `PrefixReserved`
+   refuses it, at admission and again at reconcile.
+2. Otherwise the oldest `NextApp` (by creation time, to the second) owns the prefix.
+3. Otherwise the one with the smaller `metadata.uid`.
+
+Every app on the endpoint that has a prefix takes part, **including an app that cannot be given a
+user**: one with `isolation: none`, or with a credential in its `url` or `envMap`, still writes under
+its prefix on the shared credential, so it holds that prefix. A newer app that asks for the same prefix
+fails closed, and its deletion does not sweep the older app's keys.
+
+That includes a prefix set the old way, as `REDIS_KEY_PREFIX` in `spec.env`: the operator ranks the
+value as written. When you create the app or change that value, admission checks it: at most 63
+characters, no whitespace and none of `* ? [ ] \`, not `knext` or a prefix starting `knext:`, not
+another app's generated prefix, and not a prefix nested under any generated prefix. Pinning the shared
+fallback keyspace is allowed here, as the upgrade note in [ISR caching](/docs/isr-caching) describes.
+An empty value means unset. A value set before this check existed is left as it is, and the operator
+does not re-check it at reconcile, so change it to fix it. A `REDIS_KEY_PREFIX` that comes from a Secret (`spec.secrets.envMap`) is different:
+the operator does not read your Secrets, so it cannot tell which keys that app writes. It treats the
+app as holding any prefix, and **every newer app on the endpoint that sets an explicit
+`spec.cache.keyPrefix` fails closed behind it** (`PrefixConflict`, naming the app). An app on its own
+generated prefix is not affected. To release the others, set `spec.cache.keyPrefix` on the app whose
+prefix lives in a Secret.
+
+The app that loses fails closed with `PrefixConflict`, loses the user it had, and the message names
+the owner. An older app that already holds an explicit prefix keeps it when a newer app asks for the
+same one: copying another app's prefix does not take it. If the owner is not the app you meant to
+keep it, give the other app a different `spec.cache.keyPrefix`.
+
+## Migrating an app that already runs
+
+1. Register the endpoint (above). Apps on it with `isolation: auto` get a user on their next reconcile.
+   The old shared credential keeps working, so nothing breaks yet.
+2. Remove any credentials from `spec.cache.url` and any `REDIS_URL` from `envMap`.
+3. Check that your own code stays inside the prefix.
+4. When every app reports `SharedCredentialLive` at worst, close the shared path. Turn the `default`
+   user off with `ACL SETUSER default off`, and do the same (`ACL SETUSER <name> off`, or
+   `ACL DELUSER <name>`) for any other shared user, such as one your apps used before. Within one
+   reconcile every app moves to `Provisioned`. Until you do this step, no app on the endpoint is
+   isolated, whatever its status says about its own user.
+
+   `requirepass` is not a way to close the path. It is the `default` user's password, so an endpoint
+   that has one still lets that password read every key, and the operator reports
+   `SharedCredentialLive` for it. Do not remove `requirepass` to "close" it either: that leaves the
+   `default` user with no password at all. Turn the user off.
+
+## Deleting an app
+
+On delete the operator recreates the app's user if a Redis restart lost it, removes the app's keys as
+that user, then runs `ACL DELUSER`. This is decided by the app's `<app>-redis-credentials` Secret, not
+by its status, so an app deleted while it was refused, or after it was switched to `isolation: none`,
+is still cleaned up. It never touches another app's keys: an app that does not own its prefix (see
+*Who owns a prefix*) is neither given a user nor allowed to sweep, and it never sweeps `knext`, a
+generated prefix that is not its own, or the legacy shared prefix. Before it recreates the user or
+sweeps, it asks the Redis whether any other user also covers those keys (a user left by another
+cluster, or a leftover of an app that opted out); if one does, it removes the app's user and leaves the
+keys.
+
+If the cluster's own API fails while the operator is working this out, the deletion waits and the
+operator retries, so the app's user is not left behind. A permanent error (a missing permission) does
+not hold the deletion: the operator warns and lets it go.
+
+If the endpoint was removed from the `KnextPlatform` before the app was deleted, the operator can
+still remove the app's keys with the app's own credential but cannot remove its user. It emits a
+warning event that names the user, so you can run `ACL DELUSER` yourself.
+
+## Known limits
+
+- The cache sweeps need `SCAN`, which lists other apps' key **names** (not their values). Names are not
+  secret from a pod that holds the app's credential.
+- The user may run `EVAL`. A script that never returns can block the whole Redis for every app. Alert
+  on `BUSY` errors from your Redis.
+- Managed Redis that blocks `ACL SETUSER` is not supported.
+- Isolation protects against a pod that holds the app's credential. It does not protect against anyone
+  who holds the provisioner credential (which can grant itself anything on that Redis), or against an
+  app that reaches the Redis through a name or address the operator does not recognise (see *Not yet*).
+
+## Not yet
+
+These parts of the design are not built. Until they are, plan around them:
+
+- **Password rotation.** An app's password is created once and never changes. There is no rotation with
+  an overlap window, no retire step, and no `RotationStalled` state, and no supported way to rotate a
+  password yet.
+- **Fast repair after a Redis restart.** The operator does not yet notice a Redis restart and re-assert
+  every user at once. It re-asserts each app's user on its own five-minute cycle, so after a restart
+  an app sees authentication errors for up to five minutes. The cache fails open during it.
+- **Admission-time refusals.** A credential in `spec.cache.url`, or `REDIS_URL` in `envMap`, is refused
+  when the operator reconciles the app (`SharedCredentialInSpec`), not when you apply it. The app waits
+  on a Secret that does not exist rather than being rejected up front.
+- **Recognising every spelling of the endpoint.** A Redis reached by its ClusterIP, or by a name that is
+  not its in-cluster Service name, is not recognised as the registered endpoint, so such an app keeps
+  whatever credential it has and is not counted when the operator decides whether isolation is in force.
+- **Setting `isolation` from the CLI.** `knext.config.ts` has no `isolation` setting yet. Set
+  `spec.cache.isolation` on the `NextApp`.
+- **`knext doctor` reporting.** `doctor` does not yet list apps on a shared credential or report the
+  `CacheCredentialsReady` state. Read it from the `NextApp` status.
+- **Users left by another cluster.** The operator never touches a user another cluster created, and it
+  does not yet list them. If you rebuild a cluster against the same Redis, set `spec.cache.clusterId`
+  to the old identity before you do, or remove the old users yourself.
+- **Rolling an app back to a shared credential.** Setting `isolation: none` stops the operator managing
+  the app's credential but does not remove its user or Secret; they go when the app is deleted.

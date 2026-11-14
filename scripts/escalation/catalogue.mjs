@@ -37,6 +37,21 @@ export const CATALOGUE = Object.freeze({
     'the supply chain',
     'changes the supply chain — a security invariant (security.md): credentials, scan allowlists, SBOM/audit, or what a credential-bearing workflow runs',
   ),
+  'operator-flags': entry(
+    'operator-flags',
+    "the operator's command line",
+    "changes the operator's command (`cmd/`): its flags, defaults and bounds are public operator API",
+  ),
+  'cluster-write-surface': entry(
+    'cluster-write-surface',
+    "the operator's cluster-write surface",
+    "changes the operator's RBAC, admission policy or webhooks — what it may write to the cluster, a security invariant (security.md)",
+  ),
+  templates: entry(
+    'templates',
+    'the function templates',
+    'changes a function template under `templates/` — a scaffolded public surface and a per-language supply chain (ADR-0052)',
+  ),
   'public-api': entry(
     'public-api',
     'the published package surface',

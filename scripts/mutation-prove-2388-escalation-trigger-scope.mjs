@@ -530,6 +530,122 @@ const MUTATIONS = [
       '      if (read(`${d}/action.yml`) !== null || read(`${d}/action.yaml`) !== null)\n        expandDir(d, depth);',
     replacement: '      expandDir(d, depth);',
   },
+  {
+    id: 'M68',
+    expect: 'red',
+    claim:
+      'the operator-flags rule is dropped — a changed operator flag in cmd/main.go goes unflagged (#2495)',
+    subject: 'paths',
+    anchor: '    match: (p) => OPERATOR_CMD.test(p) && !isTestPath(p),',
+    replacement: '    match: (p) => false && p,',
+  },
+  {
+    id: 'M69',
+    expect: 'red',
+    claim:
+      'the operator-flags rule stops excluding Go tests — a cmd/*_test.go is mistaken for a flag change (#2495)',
+    subject: 'paths',
+    anchor:
+      '    /(^|\\/)__tests__\\//.test(p) || /\\.(test|spec)\\.[cm]?[jt]sx?$/.test(p) || /_test\\.go$/.test(p)',
+    replacement: '    /(^|\\/)__tests__\\//.test(p) || /\\.(test|spec)\\.[cm]?[jt]sx?$/.test(p)',
+  },
+  {
+    id: 'M70',
+    expect: 'red',
+    claim:
+      'the cluster-write-surface rule is dropped — RBAC and admission policy change unflagged (#2495)',
+    subject: 'paths',
+    anchor:
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
+    replacement: '      false && p,',
+  },
+  {
+    id: 'M71',
+    expect: 'red',
+    claim:
+      'the cluster-write-surface rule widens to all of config/ — samples and dashboards fire (#2495)',
+    subject: 'paths',
+    anchor: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager)\\//;',
+    replacement: '  /^packages\\/kn-next-operator\\/config\\//;',
+  },
+  {
+    id: 'M72',
+    expect: 'red',
+    claim: 'the templates rule is dropped — a function template change goes unflagged (#2495)',
+    subject: 'paths',
+    anchor:
+      "    match: (p) => p.startsWith('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
+    replacement: '    match: (p) => false && p,',
+  },
+  {
+    id: 'M73',
+    expect: 'red',
+    claim:
+      'the templates rule matches templates/ at any depth — the CLI scaffold under packages/ fires (#2495)',
+    subject: 'paths',
+    anchor:
+      "    match: (p) => p.startsWith('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
+    replacement:
+      "    match: (p) => p.includes('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
+  },
+  {
+    id: 'M74',
+    expect: 'red',
+    claim:
+      'the install-bundle half of cluster-write-surface is dropped — config/default/kustomization.yaml can drop ../admission unflagged (#2495)',
+    subject: 'paths',
+    anchor:
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
+    replacement: '      OPERATOR_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
+  },
+  {
+    id: 'M75',
+    expect: 'red',
+    claim:
+      'the template non-surface exclusion is dropped — Rust tests, README and .gitignore fire (#2495)',
+    subject: 'paths',
+    anchor:
+      "    match: (p) => p.startsWith('templates/') && !isTestPath(p) && !TEMPLATE_NON_SURFACE.test(p),",
+    replacement: "    match: (p) => p.startsWith('templates/') && !isTestPath(p),",
+  },
+  {
+    id: 'M76',
+    expect: 'red',
+    claim:
+      'the template exclusion swallows .dockerignore — what goes into the image changes unflagged (#2495)',
+    subject: 'paths',
+    anchor: '|\\.md$|(^|\\/)\\.gitignore$/;',
+    replacement: '|\\.md$|(^|\\/)\\.(git|docker)ignore$/;',
+  },
+  {
+    id: 'M77',
+    expect: 'red',
+    claim:
+      'certmanager/ leaves the cluster-write surface — the webhook serving cert changes unflagged (#2495)',
+    subject: 'paths',
+    anchor: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager)\\//;',
+    replacement: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook)\\//;',
+  },
+  {
+    id: 'M78',
+    expect: 'red',
+    claim:
+      'test vectors and e2e suites stop being excluded — test-only template files fire (#2495)',
+    subject: 'paths',
+    anchor: '(tests|testkit|testutil|testvectors|e2e)(',
+    replacement: '(tests|testkit|testutil)(',
+  },
+  {
+    id: 'M79',
+    expect: 'red',
+    claim:
+      'manager.yaml leaves the cluster-write surface — the operator service account changes unflagged (#2495)',
+    subject: 'paths',
+    anchor:
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
+    replacement:
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p),',
+  },
 ];
 
 const prover = createGuardProver({

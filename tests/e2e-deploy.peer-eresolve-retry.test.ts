@@ -175,13 +175,16 @@ function makeCanaryPinnedApp(): string {
 
 /**
  * Offline, real npm answers the canary-react tree with ERESOLVE or ENOTCACHED
- * depending on what ~/.npm already holds (CI has seen both), so a deploy-level
- * case whose premise is "npm refused with ERESOLVE" cannot rest on real npm.
- * This fake goes first on PATH: the FIRST-attempt install (no
- * --legacy-peer-deps) prints `report` and exits 1, exactly as npm would; every
- * other npm call, the --legacy-peer-deps retry included, runs real npm, which
- * then really installs the tarballs. The self-check below keeps real npm honest
- * about the report's shape.
+ * depending on what ~/.npm already holds (CI saw both; with an empty cache it
+ * is ENOTCACHED, measured), so a deploy-level case whose premise is "npm
+ * refused with ERESOLVE" cannot rest on real npm.
+ * This fake goes first on PATH: any `install` without --legacy-peer-deps (the
+ * deploy makes exactly one, its first attempt) prints `report` and exits 1;
+ * every other npm call, the --legacy-peer-deps retry included, runs real npm,
+ * which then really installs the tarballs. The reports are abridged npm
+ * output: the code line plus the resolving/found/peer lines, without npm's
+ * blank separators or `node_modules/` path lines. The self-check below pins
+ * only the line the helper gates on, `npm error code ERESOLVE`, against real npm.
  */
 function fakeFirstInstallNpm(dir: string, report: string): Record<string, string> {
   const realNpm = execFileSync('bash', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim();
@@ -231,6 +234,7 @@ function runDeploy(
       KNEXT_E2E_TARBALLS_DIR: tarballsDir,
       KNEXT_RUNTIME: 'node',
       // Hermetic: every package involved is local; never reach a registry.
+      // (Only the real-npm self-check uses prefer-offline and may.)
       npm_config_offline: 'true',
     },
     encoding: 'utf8',
@@ -283,8 +287,9 @@ describe('scripts/e2e-deploy.sh — a fixture pinning a prerelease react still i
           join(tarballsDir, 'getknext-lib-0.0.0-test.tgz'),
         ],
         // prefer-offline, not offline: strictly offline npm answers this tree
-        // with ENOTCACHED when ~/.npm lacks react's packument, which says
-        // nothing about the report shape this check pins.
+        // with ENOTCACHED when ~/.npm lacks react's packument (measured with an
+        // empty cache), which says nothing about the code line this check pins.
+        // So this one check may reach the registry.
         {
           cwd: probeApp,
           env: { ...process.env, npm_config_prefer_offline: 'true' },
@@ -444,8 +449,9 @@ describe("scripts/e2e-deploy.sh — an ERESOLVE in knext's OWN peer range fails 
     stageDir = mkdtempSync(join(tmpdir(), 'knext-e2e-knext-peer-stubs-'));
     const tarballsDir = join(stageDir, 'tarballs');
     mkdirSync(tarballsDir, { recursive: true });
-    // @getknext/core with a NON-optional peer the fixture cannot satisfy: a real
-    // conflict in knext's own packages, which --legacy-peer-deps would hide.
+    // @getknext/core with a NON-optional peer the fixture cannot satisfy, which
+    // --legacy-peer-deps would hide. npm's refusal is the canned report below;
+    // what is under test is the deploy script and the real helper's verdict.
     packKnextStubs(stageDir, tarballsDir, { react: '^99.0.0' });
     appDir = makeCanaryPinnedApp();
     // npm's report for that conflict: the knext package is the one declaring

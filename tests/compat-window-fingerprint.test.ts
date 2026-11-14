@@ -969,6 +969,21 @@ describe('compat-window fingerprint — the entry scripts’ import/source closu
     expect(after.counts.harness).toBe(before.counts.harness);
   });
 
+  it('a scripts/lib/*.mjs helper a shell entry RUNS with node "${SCRIPT_DIR}/…" moves the digest (#2319)', () => {
+    const { repoRoot, tarballsDir } = makeFixture();
+    mkdirSync(join(repoRoot, 'scripts/lib'), { recursive: true });
+    writeFileSync(join(repoRoot, 'scripts/lib/decide.mjs'), "process.stdout.write('v1');\n");
+    writeFileSync(
+      join(repoRoot, 'scripts/e2e-deploy.sh'),
+      '#!/usr/bin/env bash\nSCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nif [ "$(node "${SCRIPT_DIR}/lib/decide.mjs" log || true)" = "v1" ]; then echo ok; fi\n',
+    );
+    const before = fingerprint(repoRoot, tarballsDir);
+    writeFileSync(join(repoRoot, 'scripts/lib/decide.mjs'), "process.stdout.write('v2');\n");
+    const after = fingerprint(repoRoot, tarballsDir);
+    expect(after.fingerprint).not.toBe(before.fingerprint);
+    expect(after.counts.harness).toBe(before.counts.harness);
+  });
+
   it('a newly-IMPORTED scripts/lib/*.mjs file (no e2e- prefix) moves the digest — the exact #1294 round-2 gap', () => {
     const { repoRoot, tarballsDir } = makeFixture();
     mkdirSync(join(repoRoot, 'scripts/lib'), { recursive: true });

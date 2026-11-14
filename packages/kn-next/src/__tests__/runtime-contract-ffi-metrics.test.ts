@@ -121,6 +121,14 @@ describe.each(COPIES)("runtime contract ffi seam: %s", (copy) => {
         expect(shape(await c.renderScrape(state, NO_CHILD))).toBe(base);
     });
 
+    it("appendExposition joins with exactly one newline, whatever the body ends with", async () => {
+        const c = await load(copy);
+        expect(c.appendExposition("a 1", "b 2\n")).toBe("a 1\nb 2\n");
+        expect(c.appendExposition("a 1\n\n", "b 2\n")).toBe("a 1\nb 2\n");
+        expect(c.appendExposition("a 1\n", "")).toBe("a 1\n");
+        expect(c.appendExposition("", "b 2\n")).toBe("b 2\n");
+    });
+
     it("names the seam with the generator's exact Symbol.for key, once", () => {
         const src = readFileSync(join(REPO_ROOT, copy), "utf8");
         const SQ = "Symbol.for('knext.ffi.renderMetrics')";

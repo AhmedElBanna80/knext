@@ -80,7 +80,9 @@ jobs:
           # `gh api` needs a token for the rate limit; read-only is enough since
           # the check only reads issue bodies and comments.
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/verify-retracted-figures.mjs --repo "${{ github.repository }}"
+        # The cited issues live in getknext-dev/knext whichever repository runs
+        # this job; `github.repository` on a fork makes every lookup 404.
+        run: node scripts/verify-retracted-figures.mjs --repo getknext-dev/knext
 
   # ── Idempotent pinned alert (same pattern as action-pin-resolution-nightly) ──
   # A silent nightly is the same as no check. This gate's entire subject is a

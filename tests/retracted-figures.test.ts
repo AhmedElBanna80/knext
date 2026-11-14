@@ -319,3 +319,20 @@ describe('offence vs correction (the negative half)', () => {
     ]);
   });
 });
+
+describe('the nightly reads the repository the cited issues live in', () => {
+  // The release documents cite issues by number in getknext-dev/knext. When the
+  // workflow runs from any other repository (a fork, a temporary home), passing
+  // `github.repository` makes every lookup 404 and the gate reds on nothing.
+  const workflow = readFileSync(
+    resolve(REPO_ROOT, '.github/workflows/retracted-figure-resolution-nightly.yml'),
+    'utf8',
+  );
+
+  it('passes the canonical repository, not the running one', () => {
+    const runs = workflow.match(/node scripts\/verify-retracted-figures\.mjs[^\n]*/g) ?? [];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toContain('--repo getknext-dev/knext');
+    expect(runs[0]).not.toContain('github.repository');
+  });
+});

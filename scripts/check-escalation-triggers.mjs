@@ -26,12 +26,15 @@
  *   - `config-schema`: `packages/kn-next/src/config.ts` (`paths.mjs`);
  *   - `cli-surface`: every package's CLI (`paths.mjs`);
  *   - `crates`: anything under `crates/` (`paths.mjs`);
- *   - `operator-flags`: Go sources under the operator's `cmd/` (`paths.mjs`);
+ *   - `operator-flags`: non-test Go sources (`*_test.go` excluded) under the
+ *     operator's `cmd/` (`paths.mjs`);
  *   - `cluster-write-surface`: the operator's `config/{rbac,admission,webhook,
  *     certmanager}/`, `config/manager/manager.yaml`, plus
  *     `config/default/kustomization.yaml` and the
  *     `config/default/` files named `*admission*` or `*webhook*` (`paths.mjs`);
- *   - `templates`: the root function templates under `templates/` (`paths.mjs`);
+ *   - `templates`: the root function templates under `templates/`, minus tests,
+ *     test helpers and vectors, `e2e/` suites, Markdown and `.gitignore`
+ *     (`paths.mjs`);
  *   - `public-api`: a package manifest's published surface (`public-surface.mjs`);
  *   - `supply-chain`: `security/**` and other static paths (`paths.mjs`), and a
  *     credential-bearing workflow or a file one names directly

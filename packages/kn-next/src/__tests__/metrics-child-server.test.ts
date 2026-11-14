@@ -126,6 +126,38 @@ describe("startChildMetricsServer + fetchChildMetrics", () => {
     it("exposes a default child metrics port constant", () => {
         expect(typeof CHILD_METRICS_PORT).toBe("number");
     });
+
+    // The child's listener (this constant) and deep-health-lite's listener
+    // must agree on the port, or the supervisor scrapes one and misses the
+    // other. Both now go through resolveLitePort, so an unusable value falls
+    // back to 9092 for both rather than NaN/0 here and 9092 there.
+    it.each([
+        ["9100", 9100],
+        ["junk", 9092],
+        ["", 9092],
+        ["0", 9092],
+        ["70000", 9092],
+        [undefined, 9092],
+    ])("KN_CHILD_METRICS_PORT=%p resolves to %p, as deep-health-lite does", (raw, want) => {
+        const env: Record<string, string> = { ...process.env } as Record<
+            string,
+            string
+        >;
+        delete env.KN_CHILD_METRICS_PORT;
+        if (raw !== undefined) env.KN_CHILD_METRICS_PORT = raw;
+        const out = Bun.spawnSync({
+            cmd: [
+                process.execPath,
+                "-e",
+                `const m = require(${JSON.stringify(require.resolve("../adapters/metrics"))});
+                 const l = require(${JSON.stringify(require.resolve("../adapters/deep-health-lite"))});
+                 console.log(JSON.stringify([m.CHILD_METRICS_PORT, l.resolveLitePort()]));`,
+            ],
+            env,
+        });
+        expect(out.exitCode).toBe(0);
+        expect(JSON.parse(out.stdout.toString().trim())).toEqual([want, want]);
+    });
 });
 
 describe("initRuntimeMetrics singleton", () => {

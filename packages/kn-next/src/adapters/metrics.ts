@@ -52,7 +52,11 @@ import {
     Histogram,
     type Registry,
 } from "prom-client";
-import { appendExposition, readSeamMetrics } from "./deep-health-lite";
+import {
+    appendExposition,
+    readSeamMetrics,
+    resolveLitePort,
+} from "./deep-health-lite";
 import type { KnextSpanProcessor } from "./tracing";
 
 // ── Metric names (exported so tests + docs reference one source of truth) ─────
@@ -536,10 +540,12 @@ export function resetRuntimeMetrics(): void {
 // process-metric exposition with a best-effort fetch of the child's — no app
 // route code, one core-owned scrape target unchanged (:9464).
 
-/** Default port the child binds for its core metrics (supervisor scrapes it). */
-export const CHILD_METRICS_PORT = Number(
-    process.env.KN_CHILD_METRICS_PORT ?? 9092,
-);
+/**
+ * Port the child binds for its core metrics (supervisor scrapes it):
+ * `KN_CHILD_METRICS_PORT` when it is 1..65535, else 9092. Resolved by the same
+ * function deep-health-lite listens with, so the two never disagree.
+ */
+export const CHILD_METRICS_PORT = resolveLitePort();
 
 /**
  * Bind a tiny localhost HTTP server that serves `registry` at `/metrics`. Used

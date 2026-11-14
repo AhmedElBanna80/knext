@@ -43,7 +43,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `createSupervisorMetricsHandler`, `mergeExposition`, `statusClass`,
   `recordColdStart`, `recordDbWake`, `DEEP_HEALTH_PROBE_TTL_MS`,
   `CHILD_METRICS_PORT` and the metric-name constants. `CHILD_METRICS_PORT` is
-  read from `KN_CHILD_METRICS_PORT` (default 9092) when the module loads. The metric names are `knext_http_requests_total`,
+  resolved when the module loads by `deep-health-lite.ts:resolveLitePort`: `KN_CHILD_METRICS_PORT` when it is 1..65535, otherwise 9092. The metric names are `knext_http_requests_total`,
   `knext_http_request_duration_seconds`, `knext_http_inflight_requests`,
   `knext_coldstart_*`, `knext_db_wake_*` and `knext_deep_health_state`.
 - `./adapters/correlation-response` resolves to
@@ -655,7 +655,7 @@ The compile pipeline fails closed.
   `METRICS_PORT`. It calls `process.exit` when the child
   exits.
 - `metrics.ts:startChildMetricsServer` and `deep-health-lite.ts` listen on
-  `127.0.0.1` at `KN_CHILD_METRICS_PORT` (default 9092), and
+  `127.0.0.1` at the port `resolveLitePort` gives (`KN_CHILD_METRICS_PORT` when it is 1..65535, otherwise 9092; both use the same function, so an unusable value cannot split them), and
   `fetchChildMetrics` scrapes that address.
 - The compile scripts spawn `bun` and the analyzers with `spawnSync`, and write
   `OUTFILE` plus temporary entry files, which are removed in `finally`.

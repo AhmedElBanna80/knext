@@ -173,6 +173,50 @@ function makeCanaryPinnedApp(): string {
   return appDir;
 }
 
+/**
+ * Offline, real npm answers the canary-react tree with ERESOLVE or ENOTCACHED
+ * depending on what ~/.npm already holds (CI has seen both), so a deploy-level
+ * case whose premise is "npm refused with ERESOLVE" cannot rest on real npm.
+ * This fake goes first on PATH: the FIRST-attempt install (no
+ * --legacy-peer-deps) prints `report` and exits 1, exactly as npm would; every
+ * other npm call, the --legacy-peer-deps retry included, runs real npm, which
+ * then really installs the tarballs. The self-check below keeps real npm honest
+ * about the report's shape.
+ */
+function fakeFirstInstallNpm(dir: string, report: string): Record<string, string> {
+  const realNpm = execFileSync('bash', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim();
+  const bin = join(dir, 'fake-npm-bin');
+  mkdirSync(bin, { recursive: true });
+  const reportFile = join(bin, 'first-install-report.log');
+  writeFileSync(reportFile, `${report}\n`);
+  writeFileSync(
+    join(bin, 'npm'),
+    [
+      '#!/usr/bin/env bash',
+      'install=0; legacy=0',
+      'for a in "$@"; do',
+      '  [ "$a" = install ] && install=1',
+      '  [ "$a" = --legacy-peer-deps ] && legacy=1',
+      'done',
+      `if [ "$install" = 1 ] && [ "$legacy" = 0 ]; then cat ${JSON.stringify(reportFile)}; exit 1; fi`,
+      `exec ${JSON.stringify(realNpm)} "$@"`,
+      '',
+    ].join('\n'),
+  );
+  chmodSync(join(bin, 'npm'), 0o755);
+  return { PATH: `${bin}:${process.env.PATH ?? ''}` };
+}
+
+/** npm's ERESOLVE report for the fixture's canary-react pin against next's peer range. */
+const FIXTURE_ERESOLVE = [
+  'npm error code ERESOLVE',
+  'npm error ERESOLVE unable to resolve dependency tree',
+  'npm error While resolving: fixture-app@0.0.0',
+  'npm error Found: react@19.3.0-canary-fef12a01-20260413',
+  'npm error Could not resolve dependency:',
+  'npm error peer react@"^19.0.0" from next@16.4.3',
+].join('\n');
+
 function runDeploy(
   appDir: string,
   tarballsDir: string,
@@ -213,7 +257,12 @@ describe('scripts/e2e-deploy.sh — a fixture pinning a prerelease react still i
     mkdirSync(tarballsDir, { recursive: true });
     packKnextStubs(stageDir, tarballsDir);
     appDir = makeCanaryPinnedApp();
-    result = runDeploy(appDir, tarballsDir);
+    result = runDeploy(
+      appDir,
+      tarballsDir,
+      DEPLOY_SH,
+      fakeFirstInstallNpm(stageDir, FIXTURE_ERESOLVE),
+    );
   }, 150000);
 
   afterAll(() => {
@@ -233,7 +282,14 @@ describe('scripts/e2e-deploy.sh — a fixture pinning a prerelease react still i
           '--no-fund',
           join(tarballsDir, 'getknext-lib-0.0.0-test.tgz'),
         ],
-        { cwd: probeApp, env: { ...process.env, npm_config_offline: 'true' }, encoding: 'utf8' },
+        // prefer-offline, not offline: strictly offline npm answers this tree
+        // with ENOTCACHED when ~/.npm lacks react's packument, which says
+        // nothing about the report shape this check pins.
+        {
+          cwd: probeApp,
+          env: { ...process.env, npm_config_prefer_offline: 'true' },
+          encoding: 'utf8',
+        },
       );
       expect(r.status).not.toBe(0);
       expect(`${r.stdout}${r.stderr}`).toContain('ERESOLVE');
@@ -316,19 +372,7 @@ describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing)
   // helper can be replaced without touching the repo; the failing install exits
   // before anything resolves outside scripts/.
   //
-  // The ERESOLVE itself comes from a fake `npm` first on PATH, not from real
-  // npm: offline, real npm answers this tree with ERESOLVE or ENOTCACHED
-  // depending on what its cache holds (CI saw both), and a case whose premise
-  // depends on the cache proves nothing. The fake prints the fixture's real
-  // ERESOLVE report for `install` and defers every other command to real npm.
-  const FIXTURE_ERESOLVE = [
-    'npm error code ERESOLVE',
-    'npm error ERESOLVE unable to resolve dependency tree',
-    'npm error While resolving: fixture-app@0.0.0',
-    'npm error Found: react@19.3.0-canary-fef12a01-20260413',
-    'npm error Could not resolve dependency:',
-    'npm error peer react@"^19.0.0" from next@16.4.3',
-  ].join('\n');
+  // The ERESOLVE itself comes from fakeFirstInstallNpm (see its comment).
   let stageDir = '';
   let tarballsDir = '';
   let fakeNpmEnv: Record<string, string> = {};
@@ -337,16 +381,7 @@ describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing)
     tarballsDir = join(stageDir, 'tarballs');
     mkdirSync(tarballsDir, { recursive: true });
     packKnextStubs(stageDir, tarballsDir);
-    const realNpm = execFileSync('bash', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim();
-    const bin = join(stageDir, 'fake-npm-bin');
-    mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, 'fixture-eresolve.log'), `${FIXTURE_ERESOLVE}\n`);
-    writeFileSync(
-      join(bin, 'npm'),
-      `#!/usr/bin/env bash\nfor a in "$@"; do\n  if [ "$a" = install ]; then cat ${JSON.stringify(join(bin, 'fixture-eresolve.log'))}; exit 1; fi\ndone\nexec ${JSON.stringify(realNpm)} "$@"\n`,
-    );
-    chmodSync(join(bin, 'npm'), 0o755);
-    fakeNpmEnv = { PATH: `${bin}:${process.env.PATH ?? ''}` };
+    fakeNpmEnv = fakeFirstInstallNpm(stageDir, FIXTURE_ERESOLVE);
   }, 150000);
   afterAll(() => {
     if (stageDir && existsSync(stageDir)) rmSync(stageDir, { recursive: true, force: true });
@@ -413,7 +448,17 @@ describe("scripts/e2e-deploy.sh — an ERESOLVE in knext's OWN peer range fails 
     // conflict in knext's own packages, which --legacy-peer-deps would hide.
     packKnextStubs(stageDir, tarballsDir, { react: '^99.0.0' });
     appDir = makeCanaryPinnedApp();
-    result = runDeploy(appDir, tarballsDir);
+    // npm's report for that conflict: the knext package is the one declaring
+    // the peer. Canned for the same reason as the fixture case.
+    const knextReport = [
+      'npm error code ERESOLVE',
+      'npm error ERESOLVE unable to resolve dependency tree',
+      'npm error While resolving: fixture-app@0.0.0',
+      'npm error Found: react@19.3.0-canary-fef12a01-20260413',
+      'npm error Could not resolve dependency:',
+      'npm error peer react@"^99.0.0" from @getknext/core@0.0.0-test',
+    ].join('\n');
+    result = runDeploy(appDir, tarballsDir, DEPLOY_SH, fakeFirstInstallNpm(stageDir, knextReport));
   }, 150000);
 
   afterAll(() => {

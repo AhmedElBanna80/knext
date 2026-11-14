@@ -207,6 +207,33 @@ describe.each(COPIES)("runtime contract bridge: %s", (copy) => {
         expect(c.appMetricsPort({ KN_CHILD_METRICS_PORT: "nope" })).toBe(9092);
     });
 
+    it("resolves every value exactly as core's child listeners do (resolveLitePort)", async () => {
+        const c = await load(copy);
+        const { resolveLitePort } = await import(
+            "../adapters/deep-health-lite"
+        );
+        for (const raw of [
+            undefined,
+            "",
+            "nope",
+            "0",
+            "-1",
+            "1",
+            "9100",
+            "9100abc",
+            "1.5",
+            "65535",
+            "65536",
+            "70000",
+        ]) {
+            const env = raw === undefined ? {} : { KN_CHILD_METRICS_PORT: raw };
+            expect([raw, c.appMetricsPort(env)]).toEqual([
+                raw,
+                resolveLitePort(env),
+            ]);
+        }
+    });
+
     it("the node:http :9464 listener serves the bridged series end to end", async () => {
         const c = await load(copy);
         const child = await fakeChild(() => ({

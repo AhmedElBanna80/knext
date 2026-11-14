@@ -137,6 +137,13 @@ describe("startChildMetricsServer + fetchChildMetrics", () => {
         ["", 9092],
         ["0", 9092],
         ["70000", 9092],
+        ["65535", 65535],
+        ["65536", 9092],
+        ["-1", 9092],
+        // parseInt reads the leading integer: these are accepted, as in
+        // deep-health-lite and the runtime-contract copies.
+        ["9100abc", 9100],
+        ["1.5", 1],
         [undefined, 9092],
     ])("KN_CHILD_METRICS_PORT=%p resolves to %p, as deep-health-lite does", (raw, want) => {
         const env: Record<string, string> = { ...process.env } as Record<

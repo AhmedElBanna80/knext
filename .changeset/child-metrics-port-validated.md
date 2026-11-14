@@ -2,4 +2,4 @@
 "@getknext/core": patch
 ---
 
-An unusable `KN_CHILD_METRICS_PORT` (not a number, 0, or above 65535) now falls back to 9092 for the child's metrics listener too, as it already did for the deep-health listener. Before, the child listener got NaN or 0 and the supervisor's scrape missed one of the two.
+The child's metrics listener now resolves `KN_CHILD_METRICS_PORT` the same way the deep-health listener already did: the leading integer of the value, used when it is 1..65535, otherwise 9092. Before, the child listener used `Number(...)`, so a value with no leading integer (or an empty one) gave NaN or 0 while the deep-health listener fell back to 9092, and the supervisor's scrape missed one of the two.

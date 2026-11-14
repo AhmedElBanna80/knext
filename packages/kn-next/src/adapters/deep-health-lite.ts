@@ -336,8 +336,9 @@ export function createDeepHealthLite(
 }
 
 /**
- * The loopback port: the contract's own rule (`appMetricsPort`) — an integer in
- * 1..65535 from `KN_CHILD_METRICS_PORT`, else 9092.
+ * The loopback port: the contract's own rule (`appMetricsPort`) — the leading
+ * decimal integer of `KN_CHILD_METRICS_PORT` (`Number.parseInt(v, 10)`, so
+ * "9100abc" is 9100 and "1e3" is 1) when it is 1..65535, else 9092.
  */
 export function resolveLitePort(
     env: Record<string, string | undefined> = process.env,

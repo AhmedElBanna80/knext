@@ -144,6 +144,11 @@ describe("startChildMetricsServer + fetchChildMetrics", () => {
         // deep-health-lite and the runtime-contract copies.
         ["9100abc", 9100],
         ["1.5", 1],
+        // Radix 10, so hex is not read as hex; Number() read these as 26 and 1000.
+        ["0x1A", 9092],
+        ["1e3", 1],
+        [" 9100", 9100],
+        ["+9100", 9100],
         [undefined, 9092],
     ])("KN_CHILD_METRICS_PORT=%p resolves to %p, as deep-health-lite does", (raw, want) => {
         const env: Record<string, string> = { ...process.env } as Record<

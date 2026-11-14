@@ -542,7 +542,8 @@ export function resetRuntimeMetrics(): void {
 
 /**
  * Port the child binds for its core metrics (supervisor scrapes it):
- * `KN_CHILD_METRICS_PORT` when it is 1..65535, else 9092. Resolved by the same
+ * the leading decimal integer of `KN_CHILD_METRICS_PORT` when it is 1..65535,
+ * else 9092 (see resolveLitePort). Resolved by the same
  * function deep-health-lite listens with, so the two never disagree.
  */
 export const CHILD_METRICS_PORT = resolveLitePort();

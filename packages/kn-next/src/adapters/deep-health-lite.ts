@@ -104,12 +104,36 @@ export function readUseCacheMetrics(): string {
 const FFI_METRICS_SEAM = Symbol.for("knext.ffi.renderMetrics");
 
 /**
+ * The only families the in-process Rust seam may put on :9464: the ones the
+ * threat model lists for an opted-in app. Mirrors the runtime contract's
+ * `FFI_METRIC_FAMILIES` on the vinext build (#2432).
+ */
+export const FFI_METRIC_FAMILIES = [
+    "knext_ffi_slow_calls_total",
+    "knext_ffi_load_seconds",
+] as const;
+
+/**
  * The in-process Rust counters this process holds, in Prometheus text, or `""`
  * when the app has none (no seam) or the render throws. Fail-open, like
- * {@link readCdnMetrics}.
+ * {@link readCdnMetrics}. Only {@link FFI_METRIC_FAMILIES} pass: the closed set
+ * is enforced here, not trusted to the generator.
  */
 export function readFfiMetrics(): string {
-    return readSeam(FFI_METRICS_SEAM);
+    return keepFamilies(readSeam(FFI_METRICS_SEAM), FFI_METRIC_FAMILIES);
+}
+
+/** Keep only the HELP / TYPE / sample lines of the named families (exact name match). */
+function keepFamilies(body: string, families: readonly string[]): string {
+    if (body.length === 0) return body;
+    const kept = body.split("\n").filter((line) => {
+        const m =
+            /^(?:# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(
+                line,
+            );
+        return m !== null && families.includes(m[1] as string);
+    });
+    return kept.length > 0 ? `${kept.join("\n")}\n` : "";
 }
 
 /**

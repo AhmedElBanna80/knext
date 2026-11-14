@@ -755,18 +755,21 @@ export async function fetchAppMetrics(env = process.env, timeoutMs = APP_METRICS
 // function under this key once its library has loaded. On this build the app
 // runs in this process, so the seam is read here rather than over the loopback
 // bridge. Its families (`knext_ffi_slow_calls_total`, `knext_ffi_load_seconds`)
-// are the same ones the standalone supervisor already serves on :9464, so this
-// adds no disclosure the threat model does not list. Without the opt-in nothing
-// publishes it and the body is unchanged.
+// are the ones the threat model lists for an opted-in app, and ONLY those cross:
+// the seam's text goes through the same family allowlist as the app bridge
+// above, so the closed set is enforced here rather than trusted to the
+// generator. The render is synchronous and bounded by the library's export
+// names. Without the opt-in nothing publishes it and the body is unchanged.
 const FFI_METRICS_SEAM = Symbol.for('knext.ffi.renderMetrics');
+export const FFI_METRIC_FAMILIES = ['knext_ffi_slow_calls_total', 'knext_ffi_load_seconds'];
 
-/** The seam's text, or '' when absent, throwing, or not a string. Fail-open. */
+/** The seam's allowlisted families, or '' when absent, throwing, or not a string. Fail-open. */
 export function readFfiMetrics() {
   const render = globalThis[FFI_METRICS_SEAM];
   if (typeof render !== 'function') return '';
   try {
     const text = render();
-    return typeof text === 'string' ? text : '';
+    return typeof text === 'string' ? filterExposition(text, FFI_METRIC_FAMILIES) : '';
   } catch {
     return '';
   }

@@ -129,10 +129,63 @@ describe.each(COPIES)("runtime contract ffi seam: %s", (copy) => {
         expect(c.appendExposition("", "b 2\n")).toBe("b 2\n");
     });
 
+    it("forwards ONLY the allowlisted ffi families, whatever the seam renders", async () => {
+        const c = await load(copy);
+        g[SEAM] = () =>
+            FFI_TEXT +
+            [
+                "# TYPE knext_ffi_slow_calls_total_extra counter",
+                "knext_ffi_slow_calls_total_extra 1",
+                "# TYPE knext_http_requests_total counter",
+                'knext_http_requests_total{method="GET"} 9',
+                "",
+            ].join("\n");
+        const body: string = await c.renderScrape(
+            c.createMetricsState(),
+            NO_CHILD,
+        );
+        expect(body).toContain('knext_ffi_slow_calls_total{fn="stretch"} 2');
+        expect(body).not.toContain("knext_ffi_slow_calls_total_extra");
+        expect(body).not.toContain("knext_http_requests_total");
+    });
+
+    it("allowlists exactly the families the ffi generator emits", async () => {
+        const c = await load(copy);
+        const render = readFileSync(
+            join(REPO_ROOT, "packages/ffi/src/render.ts"),
+            "utf8",
+        );
+        const emitted = [
+            ...new Set(
+                [...render.matchAll(/# TYPE (knext_ffi_[a-z_]+) /g)].map(
+                    (m) => m[1],
+                ),
+            ),
+        ].sort();
+        expect(emitted.length).toBeGreaterThan(0);
+        expect([...c.FFI_METRIC_FAMILIES].sort()).toEqual(emitted);
+    });
+
     it("names the seam with the generator's exact Symbol.for key, once", () => {
         const src = readFileSync(join(REPO_ROOT, copy), "utf8");
         const SQ = "Symbol.for('knext.ffi.renderMetrics')";
         const DQ = 'Symbol.for("knext.ffi.renderMetrics")';
         expect(src.split(SQ).length - 1 + (src.split(DQ).length - 1)).toBe(1);
+    });
+});
+
+describe("the standalone reader enforces the same allowlist (deep-health-lite)", () => {
+    it("drops a foreign family the seam renders, and allowlists the contract's families", async () => {
+        const lite = await import("../adapters/deep-health-lite");
+        g[SEAM] = () =>
+            `${FFI_TEXT}# TYPE knext_http_requests_total counter\nknext_http_requests_total 9\n`;
+        const text = lite.readFfiMetrics();
+        expect(text).toContain('knext_ffi_slow_calls_total{fn="stretch"} 2');
+        expect(text).toContain('knext_ffi_load_seconds{lib="zone"} 0.004');
+        expect(text).not.toContain("knext_http_requests_total");
+        const c = await load(COPIES[0] as string);
+        expect([...lite.FFI_METRIC_FAMILIES].sort()).toEqual(
+            [...c.FFI_METRIC_FAMILIES].sort(),
+        );
     });
 });

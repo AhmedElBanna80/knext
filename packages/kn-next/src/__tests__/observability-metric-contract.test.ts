@@ -1033,8 +1033,13 @@ describe("the threat model's :9464 disclosure list is the bunexec set (S5)", () 
             "the fenced section names no metrics at all",
         ).toBeGreaterThan(1);
         // :9464 serves the runtime's own series PLUS the allowlisted app family the
-        // contract forwards (APP_METRIC_FAMILIES). Both are real :9464 emitters.
-        const onPort = new Set([...BUNEXEC, ...BRIDGED_APP]);
+        // contract forwards (APP_METRIC_FAMILIES), and for an app that opts into
+        // in-process Rust the allowlisted ffi families (FFI_METRIC_FAMILIES, #2432).
+        const onPort = new Set([
+            ...BUNEXEC,
+            ...BRIDGED_APP,
+            ...contractOf(BUNEXEC_TEMPLATE).FFI_METRIC_FAMILIES,
+        ]);
         const notOnPort = tokens.filter((t) => !docTokenResolves(t, onPort));
         expect(
             notOnPort,
@@ -1068,6 +1073,8 @@ describe("the threat model's :9464 disclosure list is the bunexec set (S5)", () 
             ...BUNEXEC_FAMILIES.keys(),
             // The forwarded app family IS served on :9464, so it is disclosure.
             ...BRIDGED_FAMILIES,
+            // So are the in-process Rust families of an opted-in app (#2432).
+            ...contractOf(BUNEXEC_TEMPLATE).FFI_METRIC_FAMILIES,
         ].sort();
 
         expect(

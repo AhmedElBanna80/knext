@@ -550,7 +550,8 @@ scrape collects, from the first call on. They need the app's metrics listener, w
 `instrumentation.ts` starts. The `fn` and `lib` labels come from the library's own export list, so
 the set of series is fixed.
 
-Both the standalone build and the single-executable (vinext) build serve them on the metrics port.
+Both the standalone build and the single-executable (vinext) build serve them on the metrics port,
+once the library has loaded. Before the first call there are no `knext_ffi_*` series.
 
 One limit:
 

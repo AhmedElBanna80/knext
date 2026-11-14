@@ -834,7 +834,9 @@ supervisor's prom-client registry (`adapters/metrics.ts`), which no longer serve
      renaming it is a three-file change with no informational payoff. -->
 <!-- metric-contract:9091-disclosure start -->
 
-- **Seven series families, and no more.** `knext_bunexec_http_requests_total`,
+- **Seven series families, and no more** (plus `knext_ffi_slow_calls_total` and
+  `knext_ffi_load_seconds` for an app that opts into in-process Rust, allowlisted by the runtime
+  contract's `FFI_METRIC_FAMILIES` and described below). `knext_bunexec_http_requests_total`,
   `knext_bunexec_http_request_duration_seconds`, `knext_bunexec_http_inflight_requests`,
   `knext_bunexec_startup_duration_seconds`, `knext_bunexec_process_resident_memory_bytes`,
   `knext_bunexec_process_uptime_seconds`, and `knext_deep_health_state`. The list is pinned against the

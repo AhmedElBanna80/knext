@@ -741,15 +741,56 @@ export async function fetchAppMetrics(env = process.env, timeoutMs = APP_METRICS
   }
 }
 
+// The in-process Rust seam (#2432). An app that opts into `knext.ffi.json` gets
+// a generated `bun:ffi` wrapper that counts slow calls and publishes a render
+// function under this key once its library has loaded. On this build the app
+// runs in this process, so the seam is read here rather than over the loopback
+// bridge. Its families (`knext_ffi_slow_calls_total`, `knext_ffi_load_seconds`)
+// are the ones the threat model lists for an opted-in app, and ONLY those cross:
+// the seam's text goes through the same family allowlist as the app bridge
+// above, so the closed set is enforced here rather than trusted to the
+// generator. The render is synchronous and bounded by the library's export
+// names. Without the opt-in nothing publishes it and the body is unchanged.
+const FFI_METRICS_SEAM = Symbol.for('knext.ffi.renderMetrics');
+export const FFI_METRIC_FAMILIES = ['knext_ffi_slow_calls_total', 'knext_ffi_load_seconds'];
+
+/** The seam's allowlisted families, or '' when absent, throwing, or not a string. Fail-open. */
+export function readFfiMetrics() {
+  const render = globalThis[FFI_METRICS_SEAM];
+  if (typeof render !== 'function') return '';
+  try {
+    const text = render();
+    return typeof text === 'string' ? filterExposition(text, FFI_METRIC_FAMILIES) : '';
+  } catch {
+    return '';
+  }
+}
+
 /**
- * The full :9464 body: the runtime's own exposition plus the bridged app family.
+ * Join two exposition bodies with exactly one newline at the seam.
+ *
+ * @param {string} body
+ * @param {string} extra
+ */
+export function appendExposition(body, extra) {
+  if (extra.length === 0) return body;
+  if (body.length === 0) return extra;
+  return `${body.replace(/\n*$/, '\n')}${extra}`;
+}
+
+/**
+ * The full :9464 body: the runtime's own exposition, the bridged app family,
+ * and the in-process Rust counters when the app publishes them.
  *
  * @param {ReturnType<typeof createMetricsState>} state
  * @param {Record<string, string | undefined>} [env]
  * @param {number} [timeoutMs]
  */
 export async function renderScrape(state, env = process.env, timeoutMs = APP_METRICS_TIMEOUT_MS) {
-  return renderMetrics(state) + (await fetchAppMetrics(env, timeoutMs));
+  return appendExposition(
+    renderMetrics(state) + (await fetchAppMetrics(env, timeoutMs)),
+    readFfiMetrics(),
+  );
 }
 
 // The `:9464` metrics listener for a plain node:http server (the node entry;

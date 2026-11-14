@@ -550,10 +550,11 @@ scrape collects, from the first call on. They need the app's metrics listener, w
 `instrumentation.ts` starts. The `fn` and `lib` labels come from the library's own export list, so
 the set of series is fixed.
 
-Two limits:
+Both the standalone build and the single-executable (vinext) build serve them on the metrics port,
+once the library has loaded. Before the first call there are no `knext_ffi_*` series.
 
-- **The single-executable (vinext) build does not serve them yet.** The log line works there; the
-  counter does not reach the metrics port.
+One limit:
+
 - **A Bun `Worker` keeps its own count**, which the metrics port does not read. A slow call in a
   Worker is logged but not counted. It also blocks only that Worker, not the requests.
 

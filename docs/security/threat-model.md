@@ -834,7 +834,9 @@ supervisor's prom-client registry (`adapters/metrics.ts`), which no longer serve
      renaming it is a three-file change with no informational payoff. -->
 <!-- metric-contract:9091-disclosure start -->
 
-- **Seven series families, and no more.** `knext_bunexec_http_requests_total`,
+- **Seven series families, and no more** (plus `knext_ffi_slow_calls_total` and
+  `knext_ffi_load_seconds` for an app that opts into in-process Rust, allowlisted by the runtime
+  contract's `FFI_METRIC_FAMILIES` and described below). `knext_bunexec_http_requests_total`,
   `knext_bunexec_http_request_duration_seconds`, `knext_bunexec_http_inflight_requests`,
   `knext_bunexec_startup_duration_seconds`, `knext_bunexec_process_resident_memory_bytes`,
   `knext_bunexec_process_uptime_seconds`, and `knext_deep_health_state`. The list is pinned against the
@@ -872,8 +874,9 @@ the knext build; the vinext binary above has its own cache adapter), the same po
 a cache key, tag, path or argument. It discloses the app's `'use cache'` hit ratio, write volume,
 oversize entries and Redis outages as seen by the cache.
 
-**On the standalone server of an app that opts into in-process Rust** (`knext.ffi.json`; the
-generated module publishes the seam on its first call), the same port also carries
+**On the standalone server, or the vinext single executable, of an app that opts into in-process
+Rust** (`knext.ffi.json`; the generated module publishes the seam on its first call; the vinext
+build reads it in-process in `renderScrape`), the same port also carries
 `knext_ffi_slow_calls_total` (`fn`) and `knext_ffi_load_seconds` (`lib`). The labels are a closed
 set: the Rust export names and the library name from the library's embedded manifest, never an
 argument or a request value. They disclose which Rust functions the app exports, how often each

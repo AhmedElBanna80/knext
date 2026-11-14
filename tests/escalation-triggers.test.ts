@@ -333,6 +333,99 @@ describe('#2388 — Rust crates', () => {
   });
 });
 
+describe('#2495 — operator flags', () => {
+  it('a non-test file under the operator cmd/ fires', () => {
+    expect(ids(classify([change('packages/kn-next-operator/cmd/main.go')]))).toContain(
+      'operator-flags',
+    );
+    expect(
+      ids(classify([change('packages/kn-next-operator/cmd/policygen/main.go', 'A')])),
+    ).toContain('operator-flags');
+  });
+
+  it('near miss: cmd/ tests, EGM.md, and a cmd/ elsewhere do not fire', () => {
+    expect(
+      classify([
+        change('packages/kn-next-operator/cmd/zone_key_flag_test.go'),
+        change('packages/kn-next-operator/cmd/EGM.md'),
+        change('packages/scale-zero-pg/gateway/cmd/main.go'),
+        change('packages/kn-next-operator/internal/cmd/main.go'),
+      ]),
+    ).toHaveLength(0);
+  });
+});
+
+describe('#2495 — operator cluster-write surface', () => {
+  it('config/rbac, config/admission, config/webhook and config/certmanager fire', () => {
+    for (const dir of ['rbac', 'admission', 'webhook', 'certmanager']) {
+      expect(
+        ids(classify([change(`packages/kn-next-operator/config/${dir}/role.yaml`)])),
+        dir,
+      ).toContain('cluster-write-surface');
+    }
+  });
+
+  it('the install bundle parts that include or patch that surface fire', () => {
+    expect(
+      ids(classify([change('packages/kn-next-operator/config/manager/manager.yaml')])),
+    ).toContain('cluster-write-surface');
+    for (const f of [
+      'kustomization.yaml',
+      'admission_clusterscoped.yaml',
+      'manager_webhook_patch.yaml',
+    ]) {
+      expect(ids(classify([change(`packages/kn-next-operator/config/default/${f}`)])), f).toContain(
+        'cluster-write-surface',
+      );
+    }
+  });
+
+  it('near miss: other operator config directories do not fire', () => {
+    expect(
+      classify([
+        change('packages/kn-next-operator/config/samples/nextapp.yaml'),
+        change('packages/kn-next-operator/config/grafana/dash.json'),
+        change('packages/kn-next-operator/config/rbacx/role.yaml'),
+        change('packages/kn-next-operator/config/default/manager_metrics_patch.yaml'),
+        change('packages/kn-next-operator/config/manager/kustomization.yaml'),
+        change('packages/kn-next-operator/config/default/sub/admission.yaml'),
+        change('config/rbac/role.yaml'),
+      ]),
+    ).toHaveLength(0);
+  });
+});
+
+describe('#2495 — function templates', () => {
+  it('a non-test file under templates/ fires', () => {
+    expect(ids(classify([change('templates/go/go.mod')]))).toContain('templates');
+    expect(ids(classify([change('templates/rust/Cargo.lock')]))).toContain('templates');
+    expect(ids(classify([change('templates/go/Dockerfile', 'A')]))).toContain('templates');
+    expect(ids(classify([change('templates/rust/.dockerignore')]))).toContain('templates');
+    expect(ids(classify([change('templates/rust/src/rpc/limits.rs')]))).toContain('templates');
+  });
+
+  it('near miss: template tests and a templates/ elsewhere do not fire', () => {
+    expect(
+      classify([
+        change('templates/go/internal/server/server_test.go'),
+        change('templates/rust/src/__tests__/x.test.ts'),
+        change('templates/rust/src/auth/tests.rs'),
+        change('templates/rust/src/rpc/limits_tests.rs'),
+        change('templates/rust/src/rpc/tests/vector_wiring.rs'),
+        change('templates/rust/src/rpc/testkit.rs'),
+        change('templates/rust/src/testutil.rs'),
+        change('templates/rust/src/testvectors.rs'),
+        change('templates/go/internal/testvectors/testvectors.go'),
+        change('templates/rust/e2e/e2e.rs'),
+        change('templates/go/README.md'),
+        change('templates/rust/.gitignore'),
+        change('packages/kn-next/templates/runtime-standalone/Dockerfile.standalone.hbs'),
+        change('docs/templates/index.md'),
+      ]),
+    ).toHaveLength(0);
+  });
+});
+
 describe('#2388 — static supply-chain paths', () => {
   it('security/** fires', () => {
     expect(ids(classify([change('security/npm-audit-allowlist.json')]))).toContain('supply-chain');

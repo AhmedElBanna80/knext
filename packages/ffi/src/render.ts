@@ -46,8 +46,10 @@
  *   (default 50 ms, 0 = off) is counted per function in a process-wide
  *   registry on `globalThis` and logged the first time. Once the library has
  *   loaded, a render function is published under the `knext.ffi.renderMetrics`
- *   registered symbol for core's loopback metrics listener. This makes a blocking call visible; it cannot interrupt one.
- *   TODO(#2432): the vinext single-executable build does not serve it yet.
+ *   registered symbol, which core's loopback metrics listener (standalone) and
+ *   the runtime contract's `renderScrape` (vinext single executable) append to
+ *   :9464, allowlisted to the two `knext_ffi_*` families. This makes a blocking
+ *   call visible; it cannot interrupt one.
  */
 
 import {

@@ -122,6 +122,7 @@ interface ContractModule {
     observeRequest(state: unknown, status: number, seconds: number): void;
     renderMetrics(state: unknown): string;
     readonly APP_METRIC_FAMILIES: readonly string[];
+    readonly FFI_METRIC_FAMILIES: readonly string[];
 }
 
 // Every copy is written BEFORE the first import: Bun's resolver caches a

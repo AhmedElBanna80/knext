@@ -241,7 +241,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `deep-health-lite.ts` exports `createDeepHealthLite`, `startDeepHealthLite`,
   `resolveLitePort`, `DEEP_HEALTH_LITE_TTL_MS`, `appendExposition` and the seam
   readers `readCdnMetrics`, `readUseCacheMetrics`, `readFfiMetrics` and
-  `readSeamMetrics`. It reads `DB_ACTIVITY_BUDGET_MS` (45000) and
+  `readSeamMetrics`, plus `FFI_METRIC_FAMILIES`. It reads `DB_ACTIVITY_BUDGET_MS` (45000) and
   `KN_CHILD_METRICS_PORT` (9092).
 - `boot-trace.ts` exports `createBootTracer`, `bootTrace`,
   `isBootTraceEnabled` and `BOOT_TRACE_ENV` (`KNEXT_BOOT_TRACE`), which it
@@ -553,7 +553,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `deep-health-lite.ts:startDeepHealthLite`'s listener appends the CDN,
   `"use cache"` and in-process FFI metric expositions (`readSeamMetrics`) to
   the deep-health body on every `GET /metrics`, even when the gate gives an
-  empty body. A seam that is absent or throws contributes `""`.
+  empty body. A seam that is absent or throws contributes `""`. The FFI
+  exposition is filtered to `FFI_METRIC_FAMILIES` (`knext_ffi_slow_calls_total`,
+  `knext_ffi_load_seconds`): any other family the seam renders is dropped.
 - The deep-health scrape hook only probes after recent DB activity, runs one
   probe at a time, caches results for 10 s, and fails open.
 - `deep-health-lite.ts:gateOpen` fails closed: with no activity slot, it does

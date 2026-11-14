@@ -152,8 +152,11 @@ export const DIVERGENT = {
       '\n\nHASH UPDATED for #2728 (checkBearer compares with node:crypto timingSafeEqual over ' +
       'equal-length Buffers instead of a hand-rolled char loop; the node:crypto import and the ' +
       'removed helper): applied to the template and every copy from the same hunks by one script. ' +
-      'The recorded divergence is still ONLY the item-4 comment block.',
-    sha256: '0d85d1e83bd07f3758453addc411ba6de34386b9669a9f29da35698925dc86b6',
+      'The recorded divergence is still ONLY the item-4 comment block.' +
+      '\n\nHASH UPDATED for #2432 (renderScrape appends the in-process Rust seam: FFI_METRICS_SEAM, ' +
+      'FFI_METRIC_FAMILIES, readFfiMetrics, appendExposition): applied to the template and every copy ' +
+      'from the same hunks by one script. The recorded divergence is still ONLY the item-4 comment block.',
+    sha256: 'b0ee61515e18fe56026542fa714980a700c28b0b05cd18e32a638c130ed463c2',
   },
 };
 

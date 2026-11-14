@@ -67,6 +67,12 @@ describe("readFfiMetrics (the reading half) fails open", () => {
         expect(readFfiMetrics()).toBe(FFI_TEXT);
     });
 
+    it("passes only the allowlisted ffi families, whatever the seam renders (#2432)", () => {
+        g[SEAM] = () =>
+            `${FFI_TEXT}# TYPE knext_http_requests_total counter\nknext_http_requests_total 9\n# TYPE knext_ffi_slow_calls_total_extra counter\nknext_ffi_slow_calls_total_extra 1\n`;
+        expect(readFfiMetrics()).toBe(FFI_TEXT);
+    });
+
     it("returns an empty string when the render function throws", () => {
         g[SEAM] = () => {
             throw new Error("boom");

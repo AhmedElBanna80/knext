@@ -158,6 +158,14 @@ const CORE = [
     anchor: 'const FFI_METRICS_SEAM = Symbol.for("knext.ffi.renderMetrics");',
     replacement: 'const FFI_METRICS_SEAM = Symbol.for("knext.core.ffi.renderMetrics");',
   },
+  {
+    id: 'C03',
+    subject: 'lite',
+    claim:
+      "core's reader stops filtering the seam to FFI_METRIC_FAMILIES — any family an app renders reaches :9464 (#2432)",
+    anchor: '    return keepFamilies(readSeam(FFI_METRICS_SEAM), FFI_METRIC_FAMILIES);',
+    replacement: '    return readSeam(FFI_METRICS_SEAM);',
+  },
 ];
 
 const DOCS = [
@@ -255,7 +263,8 @@ console.log("\n=== core's reader (ffi-metrics-seam.test.ts) ===");
 core.baseline();
 core.proveCanSeeRed({
   subject: 'lite',
-  anchor: 'export function readFfiMetrics(): string {\n    return readSeam(FFI_METRICS_SEAM);',
+  anchor:
+    'export function readFfiMetrics(): string {\n    return keepFamilies(readSeam(FFI_METRICS_SEAM), FFI_METRIC_FAMILIES);',
   replacement: 'export function readFfiMetrics(): string {\n    return "";',
 });
 for (const m of CORE) {

@@ -9,8 +9,8 @@
  * merges) and the self-contained supervisor's in-process port. Both now keep
  * only each seam's named families, so the closed set the threat model lists is
  * enforced at the reader rather than trusted to whatever publishes the seam.
- * The allowlists are pinned to the emitters, so a new family reds here until
- * it is added on purpose.
+ * The allowlists are pinned to what the emitters actually render, so a new
+ * family reds here until it is added on purpose.
  */
 
 import { afterEach, describe, expect, it } from "bun:test";
@@ -79,26 +79,40 @@ const typeFamilies = (src: string) =>
         ...new Set([...src.matchAll(/# TYPE ([a-z_]+) /g)].map((m) => m[1])),
     ].sort();
 
-describe("the allowlists are the families the emitters declare", () => {
+describe("the allowlists are the families the emitters render", () => {
+    // Read from each emitter's RENDERED output, not its source text, so a
+    // family added through a template or a constant is still seen.
     it("CDN: the edge counters cdn-edge.cjs renders plus the purge counter", async () => {
-        const edgeSrc = readFileSync(join(ADAPTERS, "cdn-edge.cjs"), "utf8");
-        const { PURGE_METRIC } = await import(
+        // biome-ignore lint/suspicious/noExplicitAny: CJS module without types
+        const edge: any = require(join(ADAPTERS, "cdn-edge.cjs"));
+        const { renderCdnPurgeMetrics } = await import(
             "../adapters/cdn-purge/metrics.js"
         );
-        const emitted = [...typeFamilies(edgeSrc), PURGE_METRIC].sort();
+        const emitted = [
+            ...new Set([
+                ...typeFamilies(edge.renderEdgeDecisionMetrics()),
+                ...typeFamilies(renderCdnPurgeMetrics()),
+            ]),
+        ].sort();
         expect(emitted.length).toBe(3);
-        expect([...lite.CDN_METRIC_FAMILIES].sort() as string[]).toEqual(emitted);
+        expect([...lite.CDN_METRIC_FAMILIES].sort() as string[]).toEqual(
+            emitted,
+        );
         expect([...selfContained.CDN_METRIC_FAMILIES].sort()).toEqual(emitted);
     });
 
-    it("'use cache': the one counter the use-cache handler renders", async () => {
-        const { USE_CACHE_METRIC } = await import(
+    it("'use cache': the families the use-cache handler renders", async () => {
+        const { renderUseCacheMetrics } = await import(
             "../adapters/use-cache-handler.js"
         );
-        expect([...lite.USE_CACHE_METRIC_FAMILIES] as string[]).toEqual([USE_CACHE_METRIC]);
-        expect([...selfContained.USE_CACHE_METRIC_FAMILIES]).toEqual([
-            USE_CACHE_METRIC,
-        ]);
+        const emitted = typeFamilies(renderUseCacheMetrics());
+        expect(emitted.length).toBeGreaterThan(0);
+        expect([...lite.USE_CACHE_METRIC_FAMILIES].sort() as string[]).toEqual(
+            emitted,
+        );
+        expect([...selfContained.USE_CACHE_METRIC_FAMILIES].sort()).toEqual(
+            emitted,
+        );
     });
 });
 

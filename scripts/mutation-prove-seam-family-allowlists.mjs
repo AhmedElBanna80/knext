@@ -43,8 +43,8 @@ const ROWS = [
     id: 'A03',
     subject: 'lite',
     claim: 'the CDN allowlist loses the purge counter',
-    anchor: '    "knext_cdn_purge_total",\n] as const;',
-    replacement: '] as const;',
+    anchor: '    "knext_cdn_purge_total",\n] as const);',
+    replacement: '] as const);',
   },
   {
     id: 'A04',

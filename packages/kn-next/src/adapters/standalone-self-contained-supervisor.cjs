@@ -97,11 +97,13 @@ function metricsBody(state) {
 }
 
 /**
- * What one metrics seam renders, or `''` when nothing is published under `key`
- * or the render throws. Fail-open: a scrape never fails because of a seam. A
- * non-empty text always ends in one newline, so the next one appends cleanly.
+ * What one metrics seam renders, kept to `families`, or `''` when nothing is
+ * published under `key`, the render throws, or no line belongs to `families`.
+ * Fail-open: a scrape never fails because of a seam. A non-empty text always
+ * ends in one newline, so the next one appends cleanly.
  *
  * @param {symbol} key
+ * @param {readonly string[]} families
  * @returns {string}
  */
 function readSeam(key, families) {

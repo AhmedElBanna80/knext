@@ -870,7 +870,7 @@ purges fare. Without `spec.cdn` they do not exist.
 
 **On the standalone server with the `'use cache'` store wired** (Next with `cacheHandlers`, set by
 the knext build; the vinext binary above has its own cache adapter), the same port also carries
-`knext_use_cache_events_total` (`event`). The label is a closed set of fourteen values; none carries
+`knext_use_cache_events_total` (`event`). The label is a closed set of seventeen values; none carries
 a cache key, tag, path or argument. It discloses the app's `'use cache'` hit ratio, write volume,
 oversize entries and Redis outages as seen by the cache.
 

@@ -210,9 +210,9 @@ EOF
   # mismatch. Retry ONCE with --legacy-peer-deps, and ONLY on an ERESOLVE that
   # names no @getknext/* package (#2319, scripts/lib/e2e-eresolve-retry.mjs): a
   # conflict that names knext's own packages must fail the deploy, not be hidden.
-  # Not covered: a conflict deeper in knext's dependency tree whose report names
-  # only the third-party package declaring the peer (npm names the declarer, not
-  # the knext package above it); that one is retried like a fixture conflict.
+  # Not guaranteed: the helper reads npm's report text, not the tree. A conflict
+  # deeper in knext's dependency tree is retried like a fixture conflict if the
+  # report names no @getknext/* package (see the helper's header).
   # Every fixture that installs today keeps exactly today's install, and any
   # other failure still fails the deploy. ERESOLVE aborts before reify, so the
   # first attempt leaves node_modules untouched.

@@ -26,7 +26,8 @@ import { decideRetry } from '../scripts/lib/e2e-eresolve-retry.mjs';
  * not anything knext ships.
  *
  * The fix retries the tarball install ONCE with --legacy-peer-deps, and only
- * when the first attempt failed with ERESOLVE, so every fixture that installs
+ * when the first attempt failed with an ERESOLVE whose report names no
+ * @getknext/* package (#2319, scripts/lib/e2e-eresolve-retry.mjs), so every fixture that installs
  * today keeps exactly today's install. This test runs the REAL deploy script
  * through its REAL npm path, offline, on a tree that reproduces the ERESOLVE,
  * and checks the other half too: a non-ERESOLVE install failure still fails
@@ -341,6 +342,10 @@ describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing)
         const r = runDeploy(appDir, tarballsDir, withHelper(name.replace(/ /g, '-'), helper));
         expect(r.status).not.toBe(0);
         expect(r.stdout.trim()).toBe('');
+        // The install failed with ERESOLVE (its log is echoed to stderr). It is
+        // the same fixture the first describe proves the real helper retries,
+        // so only the helper's missing verdict stopped the retry here.
+        expect(r.stderr).toMatch(/^npm (?:error|ERR!) code ERESOLVE\s*$/m);
         expect(r.stderr).not.toContain('retrying once with --legacy-peer-deps');
         expect(r.stderr).toContain('was not retried');
         expect(existsSync(join(appDir, '.knext-npm-install.log'))).toBe(false);

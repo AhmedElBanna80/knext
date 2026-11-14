@@ -173,11 +173,17 @@ function makeCanaryPinnedApp(): string {
   return appDir;
 }
 
-function runDeploy(appDir: string, tarballsDir: string, deploySh: string = DEPLOY_SH) {
+function runDeploy(
+  appDir: string,
+  tarballsDir: string,
+  deploySh: string = DEPLOY_SH,
+  extraEnv: Record<string, string> = {},
+) {
   return spawnSync('bash', [deploySh], {
     cwd: appDir,
     env: {
       ...process.env,
+      ...extraEnv,
       KNEXT_E2E_TARBALLS_DIR: tarballsDir,
       KNEXT_RUNTIME: 'node',
       // Hermetic: every package involved is local; never reach a registry.
@@ -305,17 +311,42 @@ describe('scripts/e2e-deploy.sh — a NON-ERESOLVE install failure still fails t
 });
 
 describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing) fails the deploy, never retried (#2319)', () => {
-  // A retryable fixture ERESOLVE (the canary react pin), so the ONLY thing that
-  // stops the retry is the helper's missing verdict. The deploy script and its
-  // lib/ are copied so the helper can be replaced without touching the repo; the
-  // failing install exits before anything resolves outside scripts/.
+  // A retryable fixture ERESOLVE, so the ONLY thing that stops the retry is the
+  // helper's missing verdict. The deploy script and its lib/ are copied so the
+  // helper can be replaced without touching the repo; the failing install exits
+  // before anything resolves outside scripts/.
+  //
+  // The ERESOLVE itself comes from a fake `npm` first on PATH, not from real
+  // npm: offline, real npm answers this tree with ERESOLVE or ENOTCACHED
+  // depending on what its cache holds (CI saw both), and a case whose premise
+  // depends on the cache proves nothing. The fake prints the fixture's real
+  // ERESOLVE report for `install` and defers every other command to real npm.
+  const FIXTURE_ERESOLVE = [
+    'npm error code ERESOLVE',
+    'npm error ERESOLVE unable to resolve dependency tree',
+    'npm error While resolving: fixture-app@0.0.0',
+    'npm error Found: react@19.3.0-canary-fef12a01-20260413',
+    'npm error Could not resolve dependency:',
+    'npm error peer react@"^19.0.0" from next@16.4.3',
+  ].join('\n');
   let stageDir = '';
   let tarballsDir = '';
+  let fakeNpmEnv: Record<string, string> = {};
   beforeAll(() => {
     stageDir = mkdtempSync(join(tmpdir(), 'knext-e2e-helper-crash-'));
     tarballsDir = join(stageDir, 'tarballs');
     mkdirSync(tarballsDir, { recursive: true });
     packKnextStubs(stageDir, tarballsDir);
+    const realNpm = execFileSync('bash', ['-c', 'command -v npm'], { encoding: 'utf8' }).trim();
+    const bin = join(stageDir, 'fake-npm-bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'fixture-eresolve.log'), `${FIXTURE_ERESOLVE}\n`);
+    writeFileSync(
+      join(bin, 'npm'),
+      `#!/usr/bin/env bash\nfor a in "$@"; do\n  if [ "$a" = install ]; then cat ${JSON.stringify(join(bin, 'fixture-eresolve.log'))}; exit 1; fi\ndone\nexec ${JSON.stringify(realNpm)} "$@"\n`,
+    );
+    chmodSync(join(bin, 'npm'), 0o755);
+    fakeNpmEnv = { PATH: `${bin}:${process.env.PATH ?? ''}` };
   }, 150000);
   afterAll(() => {
     if (stageDir && existsSync(stageDir)) rmSync(stageDir, { recursive: true, force: true });
@@ -343,7 +374,12 @@ describe('scripts/e2e-deploy.sh — a helper that never decides (crash, missing)
     it(`the helper ${name}: the deploy exits non-zero without retrying`, () => {
       const appDir = makeCanaryPinnedApp();
       try {
-        const r = runDeploy(appDir, tarballsDir, withHelper(name.replace(/ /g, '-'), helper));
+        const r = runDeploy(
+          appDir,
+          tarballsDir,
+          withHelper(name.replace(/ /g, '-'), helper),
+          fakeNpmEnv,
+        );
         expect(r.status).not.toBe(0);
         expect(r.stdout.trim()).toBe('');
         if (helper === null) {

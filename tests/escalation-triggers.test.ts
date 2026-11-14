@@ -366,6 +366,9 @@ describe('#2495 — operator cluster-write surface', () => {
   });
 
   it('the install bundle parts that include or patch that surface fire', () => {
+    expect(
+      ids(classify([change('packages/kn-next-operator/config/manager/manager.yaml')])),
+    ).toContain('cluster-write-surface');
     for (const f of [
       'kustomization.yaml',
       'admission_clusterscoped.yaml',
@@ -384,6 +387,7 @@ describe('#2495 — operator cluster-write surface', () => {
         change('packages/kn-next-operator/config/grafana/dash.json'),
         change('packages/kn-next-operator/config/rbacx/role.yaml'),
         change('packages/kn-next-operator/config/default/manager_metrics_patch.yaml'),
+        change('packages/kn-next-operator/config/manager/kustomization.yaml'),
         change('packages/kn-next-operator/config/default/sub/admission.yaml'),
         change('config/rbac/role.yaml'),
       ]),

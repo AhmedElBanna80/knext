@@ -32,6 +32,13 @@ const OPERATOR_BUNDLE_WRITE_SURFACE =
   /^packages\/kn-next-operator\/config\/default\/(kustomization\.yaml|[^/]*(admission|webhook)[^/]*)$/;
 
 /**
+ * The operator Deployment: its `serviceAccountName` is the identity the admission
+ * policy confines, and `WRITE_POLICY_NAME` names that policy. Change either and
+ * the policy can stop matching the running operator.
+ */
+const OPERATOR_MANAGER = 'packages/kn-next-operator/config/manager/manager.yaml';
+
+/**
  * Not part of what a template ships: test modules, helpers and vectors (`tests.rs`,
  * `*_tests.rs`, `tests/`, `testkit.rs`, `testutil.rs`, `testvectors.rs`,
  * `testvectors/`), the `e2e/` suites, Markdown and `.gitignore`.
@@ -93,7 +100,10 @@ export const TRIGGERS = [
   },
   {
     id: 'cluster-write-surface',
-    match: (p) => OPERATOR_WRITE_SURFACE.test(p) || OPERATOR_BUNDLE_WRITE_SURFACE.test(p),
+    match: (p) =>
+      OPERATOR_WRITE_SURFACE.test(p) ||
+      OPERATOR_BUNDLE_WRITE_SURFACE.test(p) ||
+      p === OPERATOR_MANAGER,
   },
   {
     id: 'templates',

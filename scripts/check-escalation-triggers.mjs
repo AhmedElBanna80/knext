@@ -28,7 +28,8 @@
  *   - `crates`: anything under `crates/` (`paths.mjs`);
  *   - `operator-flags`: Go sources under the operator's `cmd/` (`paths.mjs`);
  *   - `cluster-write-surface`: the operator's `config/{rbac,admission,webhook,
- *     certmanager}/`, plus `config/default/kustomization.yaml` and the
+ *     certmanager}/`, `config/manager/manager.yaml`, plus
+ *     `config/default/kustomization.yaml` and the
  *     `config/default/` files named `*admission*` or `*webhook*` (`paths.mjs`);
  *   - `templates`: the root function templates under `templates/` (`paths.mjs`);
  *   - `public-api`: a package manifest's published surface (`public-surface.mjs`);

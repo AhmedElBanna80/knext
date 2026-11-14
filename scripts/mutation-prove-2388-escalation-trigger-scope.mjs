@@ -556,8 +556,8 @@ const MUTATIONS = [
       'the cluster-write-surface rule is dropped — RBAC and admission policy change unflagged (#2495)',
     subject: 'paths',
     anchor:
-      '    match: (p) => OPERATOR_WRITE_SURFACE.test(p) || OPERATOR_BUNDLE_WRITE_SURFACE.test(p),',
-    replacement: '    match: (p) => false && p,',
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
+    replacement: '      false && p,',
   },
   {
     id: 'M71',
@@ -595,8 +595,8 @@ const MUTATIONS = [
       'the install-bundle half of cluster-write-surface is dropped — config/default/kustomization.yaml can drop ../admission unflagged (#2495)',
     subject: 'paths',
     anchor:
-      '    match: (p) => OPERATOR_WRITE_SURFACE.test(p) || OPERATOR_BUNDLE_WRITE_SURFACE.test(p),',
-    replacement: '    match: (p) => OPERATOR_WRITE_SURFACE.test(p),',
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
+    replacement: '      OPERATOR_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
   },
   {
     id: 'M75',
@@ -634,6 +634,17 @@ const MUTATIONS = [
     subject: 'paths',
     anchor: '(tests|testkit|testutil|testvectors|e2e)(',
     replacement: '(tests|testkit|testutil)(',
+  },
+  {
+    id: 'M79',
+    expect: 'red',
+    claim:
+      'manager.yaml leaves the cluster-write surface — the operator service account changes unflagged (#2495)',
+    subject: 'paths',
+    anchor:
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p) ||\n      p === OPERATOR_MANAGER,',
+    replacement:
+      '      OPERATOR_WRITE_SURFACE.test(p) ||\n      OPERATOR_BUNDLE_WRITE_SURFACE.test(p),',
   },
 ];
 

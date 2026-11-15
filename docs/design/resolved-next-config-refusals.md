@@ -150,3 +150,27 @@ opt-in vinext target, contract-tested.
 - **PR 1, Next path:** adapter facts + nonce + refusals for `distDir` and turbopack fragments. The CLI reads
   the facts for `distDir`/`output`, and the text guards for 1–3 are deleted. The doctor scan stays as a warning.
 - **PR 2, vinext path:** the child-process loader, after the ADR-0036 amendment question is filed for sprint close.
+
+## Revision 2 (discovered while implementing, jev 0.87)
+
+**Discovered fact.** knext deploys apps that have **no** `adapterPath` (`apps/db-demo` builds with a plain
+`next build --webpack` and `output: 'standalone'`). So "no facts after a successful build ⇒ refuse" would
+break a supported setup. In Next 16.4 `adapterPath` defaults to `process.env.NEXT_ADAPTER_PATH`
+(`config-shared.js`), and an app's own `adapterPath` overrides it.
+
+**Changes to the decision:**
+
+- A **facts-only adapter** (`@getknext/core/internal/next-config-facts`) records facts and refuses. It does
+  nothing else: no output default, no cache-handler rewrite, no `onBuildComplete`. The CLI sets
+  `NEXT_ADAPTER_PATH` to it (resolved from the app's `cwd`) unless the env already sets one. An app on
+  knext's full adapter gets the same recording from that adapter, which calls the same function. An app's
+  own non-knext adapter wins, and then facts are missing (below).
+- **The nonce plus the fixed path become one env var.** `KNEXT_CONFIG_FACTS_OUT` is an absolute path to a
+  fresh per-build temp file, created by the CLI. Adapters record and enforce only when it is set and the
+  phase is `phase-production-build`. That rules out `next typegen` and `next dev`, and makes a plain
+  `next build` a no-op. A unique path cannot be stale. It is written tmp-then-rename, because several
+  processes write it.
+- **Missing facts** (a foreign adapter, a script that does not run `next build`, `build --skip-next`): the CLI
+  **falls back to the existing text checks for that build** and prints a warning that the resolved config could
+  not be confirmed. This keeps today's guarantees on the uncommon paths, and the resolved config decides on
+  every path where an adapter ran. This replaces Revision 1 item 6 and the `.knext/` path.

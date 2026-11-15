@@ -153,7 +153,7 @@ export function checkLaneParity({ manifest, readBlob }) {
  */
 export function recordLaneParity({ manifest, readBlob }) {
   const found = checkLaneParity({ manifest, readBlob });
-  if (found.some((f) => f.kind === 'manifest')) return { manifest, changes: [], findings: found };
+  // An invalid manifest yields only `manifest` findings, so nothing below changes it.
   const byKey = new Map(found.map((f) => [`${f.path}\0${f.lane}`, f]));
   const changes = [];
   const divergences = [];

@@ -34,6 +34,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     CONFIG_FACTS_OUT_ENV,
+    isDefaultDistDir,
     KNEXT_BUILDER_ENV,
     type NextConfigFacts,
     readNextConfigFacts,
@@ -180,6 +181,8 @@ function nextWrittenFacts(
     cwd: string,
     buildStartMs: number,
 ): NextConfigFacts | undefined {
+    // No build start, no notion of "this build": never accept every file.
+    if (!(buildStartMs > 0)) return undefined;
     let dirs: string[] = [];
     try {
         dirs = readdirSync(cwd, { withFileTypes: true })
@@ -194,6 +197,11 @@ function nextWrittenFacts(
     } catch {
         dirs = [];
     }
+    // Every fresh candidate, not the first: a `.next` copy that only LOOKS
+    // fresh (a cache restore that rewrote mtimes) must not hide the custom
+    // distDir this build wrote to. Any fresh custom distDir decides (it is
+    // refused); otherwise the newest file does.
+    const fresh: { facts: NextConfigFacts; mtimeMs: number }[] = [];
     for (const dir of [DEFAULT_DIST_DIR, ...dirs]) {
         const path = join(cwd, dir, REQUIRED_SERVER_FILES);
         let mtimeMs: number;
@@ -203,10 +211,12 @@ function nextWrittenFacts(
             continue;
         }
         if (mtimeMs >= buildStartMs - FRESH_SLACK_MS) {
-            return parseRequiredServerFiles(path);
+            fresh.push({ facts: parseRequiredServerFiles(path), mtimeMs });
         }
     }
-    return undefined;
+    const custom = fresh.find((c) => !isDefaultDistDir(c.facts.distDir));
+    if (custom) return custom.facts;
+    return fresh.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]?.facts;
 }
 
 function parseRequiredServerFiles(path: string): NextConfigFacts {

@@ -47,7 +47,7 @@ function appDir(files: Record<string, string>): string {
 const EXPORT_DETAIL = JSON.stringify({ version: 1, success: true });
 const ESM_PKG = JSON.stringify({ type: "module" });
 
-/** A build stub that exports, as Next does: it writes `.next/export-detail.json` (a stale one is removed first). */
+/** A build stub that exports, as Next does: it writes `.next/export-detail.json` during the build. */
 const exportsDuringBuild = (dir: string) => () => {
     mkdirSync(join(dir, ".next"), { recursive: true });
     writeFileSync(join(dir, ".next", "export-detail.json"), EXPORT_DETAIL);
@@ -617,6 +617,31 @@ describe("a Next build without knext's adapter decides from what Next wrote", ()
         });
         expectDistDirRefusal(caught, "build");
         expect(fellBack(warnings)).toBe(false);
+    });
+
+    it("is not fooled by a .next copy that looks fresh when the build wrote a custom distDir", () => {
+        const dir = appDir({
+            "next.config.mjs": "export default withOut({});",
+            // A cache restore gave the old .next copy a new mtime.
+            ".next/required-server-files.json": JSON.stringify({
+                config: { distDir: ".next" },
+            }),
+        });
+        // ...and even NEWER than what this build wrote.
+        const later = new Date(Date.now() + 60_000);
+        utimesSync(
+            join(dir, ".next", "required-server-files.json"),
+            later,
+            later,
+        );
+        const { caught } = run(dir, false, () => {
+            mkdirSync(join(dir, "build"), { recursive: true });
+            writeFileSync(
+                join(dir, "build", "required-server-files.json"),
+                JSON.stringify({ version: 1, config: { distDir: "build" } }),
+            );
+        });
+        expectDistDirRefusal(caught, "build");
     });
 
     it("ignores another directory's file that this build did not write", () => {

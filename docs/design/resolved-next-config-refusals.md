@@ -4,6 +4,30 @@ Status: implemented (Next half). **Read Revision 3 first: it is the design as bu
 Failure modes and Surface changes sections below describe the first proposal (a `.knext/` facts file);
 Revision 1 adjusts it, and Revision 2's adapter injection is superseded by Revision 3. Scope: `packages/kn-next` CLI build guards + the official adapter.
 
+### As built (summary; the revisions below are the history)
+
+After a **Next** build (the vinext target is PR 2), `runProjectBuild` decides from, in order:
+
+1. **knext's adapter record.** `modifyConfig` records `{projectDir, distDir, output, turbopackModuleFragments}`
+   to the per-build file named by `KNEXT_CONFIG_FACTS_OUT`, and refuses there, before compilation. The record
+   is ignored if its `projectDir` is another directory.
+2. **Next's own `required-server-files.json`** written during this build (mtime at or after the build start,
+   with 2 s slack), in `.next` or a top-level app directory. Any fresh file with a custom `distDir` decides;
+   otherwise the newest does. A file that does not parse refuses.
+3. **Neither:** a warning, then the old text checks.
+
+Other rules:
+- Text checks also run before every build, as warnings only.
+- Nothing is deleted and no adapter is injected.
+- A recorded refusal stands even if the build exited 0.
+
+Known limits:
+- a nested, symlinked or out-of-tree `distDir` (falls to case 3);
+- clock skew larger than the build time plus 2 s, or a restore that rewrites mtimes on a default-distDir copy
+  with no custom-distDir build alongside (falls to case 2's newest file);
+- one record shared by two `next build`s in one script;
+- `--skip-next`, `knext doctor` and vinext still decide from text.
+
 ## Problem
 
 Four build decisions read `next.config.*` as **text**:
@@ -209,7 +233,7 @@ and a wrapper-set flag (`turbopackModuleFragments: true` read back). A build who
 **Before the build,** the text checks also run, as warnings only, so a setting the text can see is
 flagged before a slow build.
 
-**R1, amended.** No refusal depends on a text scan **when Next resolved the config in this build**, which
+**R1, amended** (the original R1 and R4 near the top are superseded by this and the addendum below). No refusal depends on a text scan **when Next resolved the config in this build**, which
 is cases 1 and 2. Text scans still decide in case 3, on `build --skip-next` (no build, so no resolved
 config), on the vinext target (PR 2), and in `knext doctor` (advisory).
 

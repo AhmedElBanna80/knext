@@ -280,6 +280,28 @@ describe("filterExposition", () => {
         expect(out).not.toContain("knext_http");
         expect(c.filterExposition("", ["knext_deep_health_state"])).toBe("");
     });
+
+    it.each(
+        COPIES,
+    )("%s keeps a histogram family's _bucket, _sum and _count samples", async (copy) => {
+        const c = await load(copy as string);
+        const hist = [
+            "# TYPE knext_test_seconds histogram",
+            'knext_test_seconds_bucket{le="+Inf"} 2',
+            "knext_test_seconds_sum 0.3",
+            "knext_test_seconds_count 2",
+            "",
+        ].join("\n");
+        const foreign = [
+            "knext_other_seconds_count 1",
+            "knext_test_seconds_extra 1",
+            "# TYPE knext_test_seconds_count counter",
+            "",
+        ].join("\n");
+        expect(c.filterExposition(hist + foreign, ["knext_test_seconds"])).toBe(
+            hist,
+        );
+    });
 });
 
 describe("the entries actually call the bridge", () => {
@@ -310,5 +332,24 @@ describe("the entries actually call the bridge", () => {
             contract.indexOf("export function metricsRequestListener"),
         );
         expect(listener).toMatch(/await renderScrape\(state\)/);
+    });
+});
+
+describe("the documented per-pod series count is the rendered one", () => {
+    it("docs/observability/metrics.md states the number of samples renderMetrics emits", async () => {
+        const c = await load(COPIES[0] as string);
+        const state = c.createMetricsState();
+        // The startup gauge is absent until both listeners are bound; count it.
+        state.startupSeconds = 0.5;
+        const samples = (await c.renderMetrics(state))
+            .split("\n")
+            .filter((l: string) => l !== "" && !l.startsWith("#"));
+        const doc = readFileSync(
+            join(REPO_ROOT, "docs/observability/metrics.md"),
+            "utf8",
+        );
+        expect(doc).toContain(
+            `**Total: ${samples.length} series per\npod, constant**`,
+        );
     });
 });

@@ -691,7 +691,9 @@ export function appMetricsPort(env = process.env) {
 /**
  * Keep only the HELP / TYPE / sample lines of the named families. Matches the
  * family name exactly (followed by whitespace or `{`), so a lookalike such as
- * `knext_deep_health_state_extra` does not slip through on a shared prefix.
+ * `knext_deep_health_state_extra` does not slip through on a shared prefix. A
+ * sample line may also carry a histogram or summary suffix (`_bucket`, `_sum`,
+ * `_count`) on a named family, as its HELP and TYPE lines do not.
  *
  * @param {string} body
  * @param {readonly string[]} families
@@ -699,8 +701,10 @@ export function appMetricsPort(env = process.env) {
 export function filterExposition(body, families) {
   const kept = [];
   for (const line of body.split('\n')) {
-    const m = /^(?:# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(line);
-    if (m && families.includes(m[1])) kept.push(line);
+    const m = /^(# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(line);
+    if (!m) continue;
+    const name = m[1] === undefined ? m[2].replace(/_(?:bucket|sum|count)$/, '') : m[2];
+    if (families.includes(m[2]) || families.includes(name)) kept.push(line);
   }
   return kept.length > 0 ? `${kept.join('\n')}\n` : '';
 }

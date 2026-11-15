@@ -155,8 +155,11 @@ export const DIVERGENT = {
       'The recorded divergence is still ONLY the item-4 comment block.' +
       '\n\nHASH UPDATED for #2432 (renderScrape appends the in-process Rust seam: FFI_METRICS_SEAM, ' +
       'FFI_METRIC_FAMILIES, readFfiMetrics, appendExposition): applied to the template and every copy ' +
-      'from the same hunks by one script. The recorded divergence is still ONLY the item-4 comment block.',
-    sha256: 'b0ee61515e18fe56026542fa714980a700c28b0b05cd18e32a638c130ed463c2',
+      'from the same hunks by one script. The recorded divergence is still ONLY the item-4 comment block.' +
+      "\n\nHASH UPDATED for #96 (filterExposition keeps a named histogram or summary family's " +
+      '_bucket/_sum/_count sample lines): applied to the template and every copy from the same hunks by ' +
+      'one script. The recorded divergence is still ONLY the item-4 comment block.',
+    sha256: '5af0ecfb905526086d84b6412afd749d87af6f5bc871338456a3ef5936c40664',
   },
 };
 

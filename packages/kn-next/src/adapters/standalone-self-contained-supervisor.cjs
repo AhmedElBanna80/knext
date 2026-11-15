@@ -128,8 +128,11 @@ function readSeam(key, families) {
  */
 function keepFamilies(body, families) {
   const kept = body.split('\n').filter((line) => {
-    const m = /^(?:# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(line);
-    return m !== null && families.includes(m[1]);
+    const m = /^(# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(line);
+    if (m === null) return false;
+    // A histogram or summary sample carries a suffix its HELP and TYPE lines do not.
+    const name = m[1] === undefined ? m[2].replace(/_(?:bucket|sum|count)$/, '') : m[2];
+    return families.includes(m[2]) || families.includes(name);
   });
   return kept.length > 0 ? `${kept.join('\n')}\n` : '';
 }
@@ -423,6 +426,7 @@ install();
 
 module.exports = {
   CDN_METRIC_FAMILIES,
+  keepFamilies,
   USE_CACHE_METRIC_FAMILIES,
   readSeamMetrics,
   drainHardcapMs,

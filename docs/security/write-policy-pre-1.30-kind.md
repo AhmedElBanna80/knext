@@ -48,8 +48,8 @@ objects) are not covered here.
 ## What changed in the docs
 
 The pages said the apply "reports `no matches for kind "ValidatingAdmissionPolicy"`
-for the two policy objects". That is accurate for one of the two objects. The
-binding's error names `ValidatingAdmissionPolicyBinding`, and none of the pages
+for the two policy objects", naming only the policy's error. The binding's
+error names `ValidatingAdmissionPolicyBinding`, and none of the pages
 said the apply exits with status 1, which stops any install script that fails
 on the first error. `security.mdx`, `support-matrix.mdx` and
 `operator-upgrade.mdx` now say both, and the security page names the

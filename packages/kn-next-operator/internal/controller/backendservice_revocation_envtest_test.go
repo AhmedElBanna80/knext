@@ -127,6 +127,43 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 		return functionCondition(getFunction(ctx, ns, "pricing"), ConditionSovereigntyCompliant)
 	}
 
+	// #108: an object stored before the CRD refused non-canonical mount paths
+	// still reaches the reconciler. The renderer passes the path through as
+	// written, so the operator itself refuses a path that CLEANS onto its mount
+	// tree, rather than rendering a mount that would shadow the zone's JWKS.
+	for _, path := range []string{"//var/run/knext/jwks", "/./var/run/knext", "/a/../var/run/knext/jwks", "/var/run/knext/"} {
+		It("never renders a stored function whose mount path "+path+" cleans onto /var/run/knext", func() {
+			ns := setup()
+			createFunction(ctx, ns, "pricing", sovZone)
+			r := newBSReconciler()
+			r.Client = specOverrideClient{Client: k8sClient, mutate: func(bs *appsv1alpha1.BackendService) {
+				bs.Spec.Volumes = []appsv1alpha1.FunctionVolume{{Name: "shadow", MountPath: path, EmptyDir: &corev1.EmptyDirVolumeSource{}}}
+			}}
+			// The first pass patches the zone's ownerReference, and the patch
+			// response replaces the in-memory spec with the stored one; from the
+			// second pass on, the reconciler sees the stored-but-invalid spec.
+			_ = reconcileFn(r, ns)
+			_ = reconcileFn(r, ns)
+			Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeFalse(), "a shadowing mount is never left rendered")
+			c := sovereignty(ns)
+			Expect(c).NotTo(BeNil())
+			Expect(c.Status).To(Equal(metav1.ConditionFalse))
+			Expect(c.Message).To(ContainSubstring("/var/run/knext"))
+		})
+	}
+
+	It("still renders a stored function whose canonical mount path only looks similar (/var/run/knexty)", func() {
+		ns := setup()
+		createFunction(ctx, ns, "pricing", sovZone)
+		r := newBSReconciler()
+		r.Client = specOverrideClient{Client: k8sClient, mutate: func(bs *appsv1alpha1.BackendService) {
+			bs.Spec.Volumes = []appsv1alpha1.FunctionVolume{{Name: "v", MountPath: "/var/run/knexty", EmptyDir: &corev1.EmptyDirVolumeSource{}}}
+		}}
+		Expect(reconcileFn(r, ns)).To(Succeed())
+		Expect(reconcileFn(r, ns)).To(Succeed())
+		Expect(functionKsvcExists(ctx, ns, "pricing")).To(BeTrue())
+	})
+
 	It("tears down a running function whose Secret was revoked, even when the NEW spec's Secret cannot be read", func() {
 		ns := setup(lcStripe, "flaky")
 		createFunction(ctx, ns, "pricing", sovZone, envFrom(lcStripe))

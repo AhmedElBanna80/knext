@@ -47,7 +47,8 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     prover, `scripts/mutation-prove-2461-z7-kind-e2e.mjs`, for the test files it
     covers, including `tests/z7-identity-kind-e2e-lane.test.ts`.
   - e2e/z10-zone-functions-kind (no EGM.md): the Z10 zone-functions lane on kind
-    (cold path, trailers, rollout, sovereignty, wake-ahead). The same workflow
+    (cold path, trailers, zone and function both at zero, rollout with one zone
+    revision per served-version bump, sovereignty, cross-zone refusal, wake-ahead). The same workflow
     runs its `run.sh` after Z7, on the same cluster. Its `wake` phase uses a
     second zone image, `zone-caller-wake`, built by `../z7-identity-kind/zone-caller/build.ts --wake`,
     which starts the stand-in zone with knext's wake-ahead preload. Guard:

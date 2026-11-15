@@ -9,8 +9,10 @@ name: Single-exec rollback — kind e2e
 # scripts/single-exec-rollback-kind.sh fails unless every revision serves 200,
 # a pinned revision is the one that serves (each build's mark on /build-mark,
 # rendered per request), a canary reaches both sides, the operator rendered each
-# revision's own command, and the unstable_cache entry /rb-stamp reads from the
-# shared Redis is the same one under every shape.
+# revision's own command, and each switch serves the ISR page an earlier shape
+# stored in the shared Redis. It reports, without asserting, whether the
+# unstable_cache entry /rb-stamp reads is shared across shapes: measured, it is
+# not (a finding tracked separately).
 #
 # The vinext executable is not covered here: it is a different build pipeline
 # and fixture, tracked as a follow-up.

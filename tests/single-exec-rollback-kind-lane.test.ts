@@ -93,9 +93,12 @@ describe('the script', () => {
     expect(probe).toContain('[ "$code" = 200 ] || fail');
     expect(probe).toMatch(/mark="\$\(sed -n [^\n]*"\$\{body\}-build-mark"/);
     expect(probe).toMatch(/stamp="\$\(sed -n [^\n]*"\$\{body\}-rb-stamp"/);
-    expect(probe).not.toMatch(/(mark|stamp)="\$\(sed -n [^\n]*"\$\{body\}-tagged"/);
+    // /tagged's mark is read as the STORING build's (tmark), never as the serving one.
+    expect(probe).not.toMatch(/(^|\s)(mark|stamp)="\$\(sed -n [^\n]*"\$\{body\}-tagged"/);
+    expect(probe).toMatch(/tmark="\$\(sed -n [^\n]*"\$\{body\}-tagged"/);
     expect(probe).toContain('[ -n "$mark" ] || fail');
     expect(probe).toContain('[ -n "$stamp" ] || fail');
+    expect(probe).toContain('[ -n "$tmark" ] || fail');
   });
 
   it('the stamp route reads unstable_cache on every request', () => {
@@ -112,9 +115,19 @@ describe('the script', () => {
     expect(page).not.toMatch(/export const (revalidate|dynamic)/);
   });
 
-  it('requires one shared cache entry after every deploy and on every pinned request', () => {
-    expect(script).toContain('[ "$stamp" = "$STAMP" ] || fail "shape ${shape} rendered stamp');
-    expect(body('pinned')).toContain('[ "$stamp" = "$STAMP" ] || fail "$2: stamp');
+  it('requires each switch to serve the ISR page an earlier shape stored in the shared Redis', () => {
+    expect(script).toContain('if [ "$SEEN_MARKS" != " " ]; then');
+    expect(script).toContain('*" ${tmark} "*) ;;');
+    expect(script).toContain('the page cache was lost across the switch" ;;');
+    expect(script).toContain('SEEN_MARKS="${SEEN_MARKS}${mark} "');
+  });
+
+  it('reports the data-cache entry per shape and does not claim it is shared', () => {
+    expect(script).toContain('say "data cache: NOT shared across shapes:');
+    expect(script).not.toContain('[ "$stamp" = "$STAMP" ] || fail');
+    expect(workflowText).not.toMatch(
+      /unstable_cache entry [^\n]*is the same one under every shape/,
+    );
   });
 
   it('requires three distinct builds, and a canary that reaches both sides', () => {

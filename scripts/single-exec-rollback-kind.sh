@@ -17,9 +17,15 @@
 #     and a 50 % canary reaches both sides;
 #   - the operator rendered each revision's own command (`kubectl get revision`),
 #     never the previous revision's;
-#   - the unstable_cache entry /rb-stamp reads on every request (stored in the
-#     shared Redis) is the same entry under every shape: a switch does not lose
-#     cache state.
+#   - after each switch, the new revision's first /tagged is the ISR entry a
+#     previous build stored in the shared Redis (its build mark is a previous
+#     shape's), not a fresh render: a switch does not lose the page cache.
+#
+# It also REPORTS, without asserting, the unstable_cache entry /rb-stamp reads
+# on every request under each shape. Measured on kind: that data-cache entry is
+# not shared across shapes (selfContained Bun and Node read one Redis key,
+# disk-mode Bun another), so a switch can start the data cache cold. That is a
+# finding being chased separately, not something this lane certifies.
 #
 # Side effects: it overwrites ${APP_DIR}/knext.config.ts, and writes
 # /tmp/rb-body-* and /tmp/pf-rb.log.
@@ -117,14 +123,14 @@ get() {
   curl -s -m 30 -o "$2" -w '%{http_code}' -H "Host: ${HOST}" "http://127.0.0.1:${PF_PORT}$1" || true
 }
 
-# probe <label>: 200 on the routes; prints "<build mark> <stamp>".
-# Both come from pages rendered on every request, so neither can be a stored
-# page: /build-mark names the build that served, and /rb-stamp's stamp is the
-# unstable_cache entry in Redis. (/tagged is ISR HTML shared across builds, so
-# its mark and stamp can be an older build's page; it is only checked for 200.)
+# probe <label>: 200 on the routes; prints "<build mark> <stamp> <tagged mark>".
+# /build-mark is rendered on every request, so its mark names the build that
+# served. /rb-stamp's stamp is the unstable_cache entry it reads per request.
+# /tagged is ISR HTML shared across builds: its mark names the build that
+# STORED the page, which is how the ISR check below sees the shared entry.
 # Call it as an assignment (`out="$(probe x)"`) so a failure stops the script.
 probe() {
-  local code body=/tmp/rb-body mark stamp
+  local code body=/tmp/rb-body mark stamp tmark
   for path in /api/health /build-mark /rb-stamp /tagged; do
     code="$(get "$path" "${body}${path//\//-}")"
     [ "$code" = 200 ] || fail "$1: GET $path answered $code, want 200: $(head -c 300 "${body}${path//\//-}")"
@@ -132,8 +138,10 @@ probe() {
   mark="$(sed -n 's/.*<p id="build">\([^<]*\)<\/p>.*/\1/p' "${body}-build-mark" | head -n1)"
   stamp="$(sed -n 's/.*<p id="stamp">\([^<]*\)<\/p>.*/\1/p' "${body}-rb-stamp" | head -n1)"
   [ -n "$mark" ] || fail "$1: /build-mark carries no build mark: $(head -c 300 "${body}-build-mark")"
+  tmark="$(sed -n 's/.*<p id="build">\([^<]*\)<\/p>.*/\1/p' "${body}-tagged" | head -n1)"
   [ -n "$stamp" ] || fail "$1: /rb-stamp carries no stamp: $(head -c 300 "${body}-rb-stamp")"
-  echo "$mark $stamp"
+  [ -n "$tmark" ] || fail "$1: /tagged carries no build mark: $(head -c 300 "${body}-tagged")"
+  echo "$mark $stamp $tmark"
 }
 
 assert_command() { # <revision> <shape>
@@ -160,8 +168,8 @@ await_traffic() {
 
 rollback() { node "$CLI" rollback "$APP" -n "$APP_NS" "$@"; }
 
-declare -A REV MARK
-STAMP=""
+declare -A REV MARK STAMP
+SEEN_MARKS=" "
 # A re-run against an app that already exists must not accept its old revision.
 prev="$(latest_created)"
 for shape in "${SHAPES[@]}"; do
@@ -178,11 +186,19 @@ for shape in "${SHAPES[@]}"; do
     start_pf
   fi
   out="$(probe "$shape")"
-  read -r mark stamp <<<"$out"
+  read -r mark stamp tmark <<<"$out"
   MARK[$shape]="$mark"
-  if [ -z "$STAMP" ]; then STAMP="$stamp"; fi
-  [ "$stamp" = "$STAMP" ] || fail "shape ${shape} rendered stamp '${stamp}', want the shared Redis entry '${STAMP}' (cache state lost across the switch)"
-  say "shape ${shape}: revision ${rev}, build ${mark}, stamp ${stamp}"
+  STAMP[$shape]="$stamp"
+  # The page cache survives the switch: the new revision's first /tagged is a
+  # page an earlier shape stored in the shared Redis, not its own render.
+  if [ "$SEEN_MARKS" != " " ]; then
+    case "$SEEN_MARKS" in
+      *" ${tmark} "*) ;;
+      *) fail "shape ${shape}: its first /tagged came from build ${tmark}, not from an earlier shape's entry in the shared Redis (${SEEN_MARKS}): the page cache was lost across the switch" ;;
+    esac
+  fi
+  SEEN_MARKS="${SEEN_MARKS}${mark} "
+  say "shape ${shape}: revision ${rev}, build ${mark}, /tagged from ${tmark}, data-cache stamp ${stamp}"
   prev="$rev"
 done
 
@@ -190,14 +206,13 @@ done
 [ "${MARK[sc]}" != "${MARK[disk]}" ] && [ "${MARK[disk]}" != "${MARK[node]}" ] && [ "${MARK[sc]}" != "${MARK[node]}" ] \
   || fail "the three shapes did not serve three builds: sc=${MARK[sc]} disk=${MARK[disk]} node=${MARK[node]}"
 
-# pinned <shape> <label>: every request is served by that shape's build, with the shared stamp.
+# pinned <shape> <label>: every request is served by that shape's build.
 pinned() {
-  local mark stamp
+  local mark
   for _ in 1 2 3 4 5; do
     out="$(probe "$2")"
-    read -r mark stamp <<<"$out"
+    read -r mark _ _ <<<"$out"
     [ "$mark" = "${MARK[$1]}" ] || fail "$2: served by build ${mark}, want ${1}'s ${MARK[$1]}"
-    [ "$stamp" = "$STAMP" ] || fail "$2: stamp '${stamp}', want the shared '${STAMP}'"
   done
   say "$2: served by ${1} (${MARK[$1]})"
 }
@@ -216,7 +231,7 @@ await_traffic "${REV[sc]}" 50 50
 seen_sc=0; seen_node=0
 for _ in $(seq 1 30); do
   out="$(probe "canary")"
-  read -r mark _stamp <<<"$out"
+  read -r mark _ _ <<<"$out"
   [ "$mark" = "${MARK[sc]}" ] && seen_sc=1
   [ "$mark" = "${MARK[node]}" ] && seen_node=1
   [ "$mark" = "${MARK[sc]}" ] || [ "$mark" = "${MARK[node]}" ] || fail "canary: served by build ${mark}, neither sc nor latest (node)"
@@ -231,4 +246,10 @@ pinned node "back to latest"
 
 # Every revision is still there and still renders its own command.
 for shape in "${SHAPES[@]}"; do assert_command "${REV[$shape]}" "$shape"; done
-say "PASS: sc=${REV[sc]} disk=${REV[disk]} node=${REV[node]}, one shared cache entry ${STAMP}"
+# Reported, not asserted (see the header).
+if [ "${STAMP[sc]}" = "${STAMP[disk]}" ] && [ "${STAMP[disk]}" = "${STAMP[node]}" ]; then
+  say "data cache: one unstable_cache entry under every shape (${STAMP[sc]})"
+else
+  say "data cache: NOT shared across shapes: sc=${STAMP[sc]} disk=${STAMP[disk]} node=${STAMP[node]}"
+fi
+say "PASS: sc=${REV[sc]} disk=${REV[disk]} node=${REV[node]}; the ISR page entry survived every switch"

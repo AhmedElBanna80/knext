@@ -54,7 +54,8 @@
  * `set` for the same key is pending waits for it; the handler owns eviction.
  */
 import { onProcessExit, trackWrite } from './cache-write-registry.js';
-import { BACKLOG_MAX_ENTRIES, createTagBacklog } from './tag-backlog.js';
+import { createReplayLoop } from './replay-loop.js';
+import { createTagBacklog } from './tag-backlog.js';
 
 /** Process-wide counters, shared by every copy of this module in the process. */
 const COUNTERS_KEY = Symbol.for('knext.cache.useCache.counters');
@@ -270,16 +271,26 @@ function shared(core) {
         backlog: createTagBacklog({
           onCollapse: () => {
             console.warn(
-              `[CacheHandler] 'use cache' tag replay backlog passed ${BACKLOG_MAX_ENTRIES} tags while Redis was ` +
+              `[CacheHandler] 'use cache' tag replay backlog passed ${state.replay.backlog.max} tags while Redis was ` +
                 "unreachable; once it is back, every 'use cache' entry of this app is deleted",
             );
           },
         }),
-        run: null,
-        timer: null,
+        loop: null,
         exitArmed: false,
       },
     };
+    // The run and the probe (replay-loop.js); never awaited, never throws.
+    state.replay.loop = createReplayLoop({
+      label: "'use cache' tag replay",
+      pending: () => replayPending(state.replay),
+      run: () => runTagReplay(core),
+      retryInMs: () => (typeof core.retryInMs === 'function' ? core.retryInMs() : REPLAY_PROBE_MS),
+      // The client could not be loaded at all: there is nothing a replay could reach.
+      unreachable: () => !core.redisConfigured(),
+      onUnreachable: () => resetUseCacheTagReplay(core),
+      track: trackWrite,
+    });
     SHARED.set(core, state);
   }
   return state;
@@ -530,9 +541,7 @@ function replayPending(replay) {
 export function resetUseCacheTagReplay(core) {
   const replay = shared(core).replay;
   replay.backlog.clear();
-  replay.run = null;
-  if (replay.timer) clearTimeout(replay.timer);
-  replay.timer = null;
+  replay.loop.reset();
 }
 
 /**
@@ -562,43 +571,7 @@ function recordDroppedTags(core, list, durations) {
   }
   replay.backlog.record('tags', list, (prev, generation) => mergeStamp(prev, durations, generation));
   // With the breaker open this finds no client and only sets the probe.
-  startTagReplay(core);
-}
-
-/** Start the replay unless one is running. Never awaited, never throws. */
-function startTagReplay(core) {
-  const replay = shared(core).replay;
-  if (replay.run || !replayPending(replay)) return;
-  replay.run = trackWrite(
-    runTagReplay(core)
-      .catch((err) => {
-        console.error("[CacheHandler] 'use cache' tag replay stopped:", err?.message);
-      })
-      .finally(() => {
-        replay.run = null;
-        scheduleTagProbe(core);
-      }),
-  );
-}
-
-/**
- * Probe again when the breaker closes, while anything is left to replay. One
- * timer at a time, unref'd so it never holds the process open.
- */
-function scheduleTagProbe(core) {
-  if (!core.redisConfigured()) {
-    // The client could not be loaded at all: there is nothing a replay could reach.
-    resetUseCacheTagReplay(core);
-    return;
-  }
-  const replay = shared(core).replay;
-  if (replay.timer || replay.run || !replayPending(replay)) return;
-  const wait = typeof core.retryInMs === 'function' ? core.retryInMs() : REPLAY_PROBE_MS;
-  replay.timer = setTimeout(() => {
-    replay.timer = null;
-    startTagReplay(core);
-  }, wait);
-  replay.timer.unref?.();
+  shared(core).replay.loop.start();
 }
 
 async function runTagReplay(core) {
@@ -736,7 +709,7 @@ export function createUseCacheHandler({ kind, core }) {
    */
   async function connected() {
     const client = await core.ensureConnected();
-    if (client && replayPending(state.replay)) startTagReplay(core);
+    if (client && replayPending(state.replay)) shared(core).replay.loop.start();
     return client;
   }
 

@@ -42,6 +42,7 @@ import {
 // slow (TCP connect vs the ready-check INFO). No timer, no budget, no verdict —
 // see the header of slow-dep-log.js.
 import { instrumentConnectTiming } from './slow-dep-log.js';
+import { createReplayLoop } from './replay-loop.js';
 import { createTagBacklog } from './tag-backlog.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -856,7 +857,7 @@ async function execBatch(client, commands) {
  */
 async function ensureConnected() {
   const client = await connectClient();
-  if (client && replayPending()) startInvalidationReplay();
+  if (client && replayPending()) invalidationReplay.start();
   return client;
 }
 
@@ -1542,8 +1543,18 @@ const replayBacklog = createTagBacklog({
     );
   },
 });
-let replayRun = null;
-let replayTimer = null;
+// The run and the probe (replay-loop.js); never awaited, never throws.
+const invalidationReplay = createReplayLoop({
+  label: 'Invalidation replay',
+  pending: replayPending,
+  run: () => runInvalidationReplay(),
+  retryInMs: () => breakerRetryInMs(),
+  // The client could not be loaded at all: memory is the only store now, and
+  // there is nothing a replay could reach.
+  unreachable: () => !useRedis,
+  onUnreachable: () => resetInvalidationReplay(),
+  track: trackWrite,
+});
 
 function replayPending() {
   return replayBacklog.pending();
@@ -1551,9 +1562,7 @@ function replayPending() {
 
 function resetInvalidationReplay() {
   replayBacklog.clear();
-  replayRun = null;
-  if (replayTimer) clearTimeout(replayTimer);
-  replayTimer = null;
+  invalidationReplay.reset();
 }
 
 /**
@@ -1564,7 +1573,7 @@ function resetInvalidationReplay() {
 function reportReplayLostAtExit() {
   if (!replayPending()) return;
   const what = replayBacklog.collapsed
-    ? `a collapsed backlog (over ${replayBacklog.max} tags)`
+    ? `a collapsed backlog (over ${replayBacklog.max} tags and deletes)`
     : `${replayBacklog.sizeOf('tags')} tag invalidation(s) and ${replayBacklog.sizeOf('keys')} delete(s)`;
   // Deletes hold back no edge purge; tags (and a collapse) do.
   const purge =
@@ -1591,7 +1600,7 @@ function recordSkippedInvalidation(tags) {
   armReplayExitReport();
   replayBacklog.record('tags', list);
   // With the breaker open this finds no client and only sets the probe.
-  startInvalidationReplay();
+  invalidationReplay.start();
 }
 
 /** Remember a delete that did not reach Redis, and try to replay it (#2889). */
@@ -1599,42 +1608,7 @@ function recordSkippedDelete(key) {
   if (!useRedis || typeof key !== 'string') return;
   armReplayExitReport();
   replayBacklog.record('keys', [key]);
-  startInvalidationReplay();
-}
-
-/** Start the replay unless one is running. Never awaited, never throws. */
-function startInvalidationReplay() {
-  if (replayRun || !replayPending()) return;
-  replayRun = trackWrite(
-    runInvalidationReplay()
-      .catch((err) => {
-        console.error('[CacheHandler] Invalidation replay stopped:', err?.message);
-      })
-      .finally(() => {
-        replayRun = null;
-        scheduleReplayProbe();
-      }),
-  );
-}
-
-/**
- * Probe again when the breaker closes, while anything is left to replay. One
- * timer at a time, unref'd so it never holds the process open.
- */
-function scheduleReplayProbe() {
-  if (!useRedis) {
-    // The client could not be loaded at all: memory is the only store now, and
-    // there is nothing a replay could reach.
-    resetInvalidationReplay();
-    return;
-  }
-  if (replayTimer || replayRun || !replayPending()) return;
-  const wait = breakerRetryInMs();
-  replayTimer = setTimeout(() => {
-    replayTimer = null;
-    startInvalidationReplay();
-  }, wait);
-  replayTimer.unref?.();
+  invalidationReplay.start();
 }
 
 async function runInvalidationReplay() {
@@ -1700,7 +1674,7 @@ async function replayCollapsedBacklog(client) {
   // A skip recorded during the sweep may have missed it: keep the collapse.
   replayBacklog.endSweep(sweepStartedAt);
   logCacheEvent('INVALIDATE', 'redis', `${KEY_PREFIX}:cache:*`, {
-    details: `Replayed after Redis recovered: backlog over ${replayBacklog.max} tags, invalidated all ${deleted} entries`,
+    details: `Replayed after Redis recovered: backlog over ${replayBacklog.max} tags and deletes, invalidated all ${deleted} entries`,
   });
   try {
     enqueueAppPurge();

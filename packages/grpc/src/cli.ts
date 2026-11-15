@@ -97,6 +97,10 @@ carries --validate=strict.
 The zone's consent is its own: the NextApp lists this function in spec.backends
 (service: <name>) or the operator renders nothing for it.
 
+Secrets go by reference only: the flags name a Secret and a key, never a value.
+The operator renders the function only if every Secret it references is the
+zone's database Secret or a Secret marked as the zone's.
+
 Options:
   --zone <nextapp>             the NextApp in this namespace that owns the function (required)
   --image <ref@sha256:digest>  the function's image, pinned by digest (required)
@@ -109,6 +113,17 @@ Options:
   --min-scale <n>              warm floor (default 0, scale to zero)
   --max-scale <n>              fan-out cap (0 = the Knative default)
   --container-concurrency <n>  concurrent requests per pod (0 = unlimited)
+  --env NAME=VALUE             a plain (non-secret) environment variable; repeatable.
+                               A name that looks like a secret is refused: use --env-secret
+  --env-secret NAME=<secret>/<key>
+                               an environment variable read from a Secret key; repeatable
+  --env-configmap NAME=<configmap>/<key>
+                               an environment variable read from a ConfigMap key; repeatable
+  --env-from secret:<name>|configmap:<name>
+                               import every key of a Secret or ConfigMap; repeatable
+  --volume <name>:<path>:secret:<secret>|configmap:<configmap>|emptydir
+                               mount a volume; repeatable (/var/run/knext is reserved)
+  --image-pull-secret <name>   a registry pull Secret; repeatable
   --dry-run                    print the resource and apply nothing
   -h, --help                   show this help
 

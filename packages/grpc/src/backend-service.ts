@@ -15,6 +15,7 @@
  */
 
 import { checkFunctionName, GrpcUsageError } from './config';
+import type { FunctionEnvSpec } from './function-env-flags';
 import { parseVersion } from './semver';
 
 /** Same group and version as `NextApp` (`packages/kn-next-operator/api/v1alpha1`). */
@@ -40,6 +41,8 @@ export interface BackendServiceInput {
   readonly protoVersion?: string;
   readonly wakeAhead?: boolean;
   readonly scaling?: BackendServiceScalingInput;
+  /** Environment, volumes and pull Secrets (`function-env-flags.ts`); Secrets by reference only. */
+  readonly envSpec?: FunctionEnvSpec;
 }
 
 export interface BackendServiceCR {
@@ -54,6 +57,10 @@ export interface BackendServiceCR {
     readonly protoVersion?: string;
     readonly wakeAhead?: boolean;
     readonly scaling?: BackendServiceScalingInput;
+    readonly env?: FunctionEnvSpec['env'];
+    readonly envFrom?: FunctionEnvSpec['envFrom'];
+    readonly volumes?: FunctionEnvSpec['volumes'];
+    readonly imagePullSecrets?: FunctionEnvSpec['imagePullSecrets'];
   };
 }
 
@@ -123,6 +130,12 @@ export function buildBackendServiceCR(input: BackendServiceInput): BackendServic
       ...(input.protoVersion === undefined ? {} : { protoVersion: input.protoVersion }),
       ...(input.wakeAhead === undefined ? {} : { wakeAhead: input.wakeAhead }),
       ...(s === undefined ? {} : { scaling: s }),
+      ...(input.envSpec?.env ? { env: input.envSpec.env } : {}),
+      ...(input.envSpec?.envFrom ? { envFrom: input.envSpec.envFrom } : {}),
+      ...(input.envSpec?.volumes ? { volumes: input.envSpec.volumes } : {}),
+      ...(input.envSpec?.imagePullSecrets
+        ? { imagePullSecrets: input.envSpec.imagePullSecrets }
+        : {}),
     },
   };
 }

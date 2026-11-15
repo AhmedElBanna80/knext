@@ -1,0 +1,107 @@
+# Lane parity for the CI guard files (#2170): every guard file in
+# .github/lane-parity.json must be byte-identical on main, integration/v2 and
+# integration/v1.3, or the difference must be recorded there with both blob ids
+# and a reason (scripts/lane-parity-check.mjs, scripts/lib/lane-parity.mjs).
+#
+# Why: a guard fix that lands on one lane and not the others (defect class D)
+# once left integration/v2 without two guard fixes main already had, and
+# nothing noticed. The check reds on an unrecorded difference, on an entry that
+# no longer matches either side, and on a stale entry for a file that is
+# identical again. A lane it cannot fetch is a failure (exit 2), never a pass.
+#
+# On every push to integration/v2 (each merge), so a guard fix that lands on
+# main is compared at the next v2 merge; on pull requests only when the
+# manifest, the checker or a listed guard file changes, so ordinary PRs never
+# inherit a red from another lane. Not a required check. A red push run opens
+# (or updates) the alert issue below, so it reaches someone.
+#
+# NOT a nightly: GitHub runs scheduled workflows only from the default branch
+# (main), and this checker and manifest live on integration/v2. A scheduled run
+# needs a small workflow on main that checks out integration/v2 and runs this
+# script; that is a change to main and waits for a maintainer.
+name: Lane parity (CI guard files)
+
+on:
+  push:
+    branches: [integration/v2]
+  workflow_dispatch: {}
+  pull_request:
+    # Only PRs into integration/v2: this checkout is `self` in the manifest, so a
+    # PR into another lane would compare that lane's tree under v2's name.
+    branches: [integration/v2]
+    paths:
+      - '.github/lane-parity.json'
+      - '.github/workflows/lane-parity.yml'
+      - 'scripts/lane-parity-check.mjs'
+      - 'scripts/lib/lane-parity.mjs'
+      - 'tests/lane-parity-check.test.ts'
+      - '.github/workflows/published-bytes-freeze-guard.yml'
+      - 'scripts/lib/published-bytes-freeze-check.mjs'
+      - 'scripts/published-bytes-freeze-check.mjs'
+      - 'scripts/published-bytes-select-pin.mjs'
+      - 'scripts/mutation-prove-published-bytes-freeze-check.mjs'
+      - 'tests/published-bytes-freeze-guard-workflow.test.ts'
+      - 'tests/published-bytes-freeze-check-cli.test.ts'
+      - 'tests/bun-version-pins.test.ts'
+      - 'scripts/lib/guard-prover.mjs'
+      - 'scripts/lib/prover-report.mjs'
+      - 'scripts/lib/prover-lane.mjs'
+      - 'scripts/run-mutation-provers.mjs'
+      - 'tests/mutation-prover-lane.test.ts'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lane-parity-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  parity:
+    name: Guard files match across lanes, or differ as recorded
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the other lanes
+        # Explicit refspecs: the checker reads origin/<lane>, and a bare branch name
+        # would only reach FETCH_HEAD if checkout set no remote-tracking mapping.
+        run: >-
+          git fetch --no-tags --depth=1 origin
+          +refs/heads/main:refs/remotes/origin/main
+          +refs/heads/integration/v1.3:refs/remotes/origin/integration/v1.3
+      - name: Compare the guard files
+        run: node scripts/lane-parity-check.mjs
+
+  lane-parity-alert:
+    name: Lane-parity red alert (issue)
+    needs: [parity]
+    # Fires on failure OR cancelled, on a push run only: a PR's red is already in
+    # front of its author.
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      (needs.parity.result == 'failure' || needs.parity.result == 'cancelled')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create or update the "Lane parity RED" issue (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.parity.result }}
+        run: |
+          set -euo pipefail
+          title="Lane parity RED (CI guard files)"
+          body="The lane-parity check on integration/v2 ended ${RESULT}: ${RUN_URL}
+
+          A guard file in .github/lane-parity.json differs from another lane in a way that is not recorded, or a recorded difference no longer matches. Port the change, or record the new difference (both blob ids and a reason)."
+          TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs

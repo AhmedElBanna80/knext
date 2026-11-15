@@ -565,7 +565,8 @@ const MUTATIONS = [
     claim:
       'the cluster-write-surface rule widens to all of config/ — samples and dashboards fire (#2495)',
     subject: 'paths',
-    anchor: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager)\\//;',
+    anchor:
+      '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager|network-policy|knative)\\//;',
     replacement: '  /^packages\\/kn-next-operator\\/config\\//;',
   },
   {
@@ -614,8 +615,8 @@ const MUTATIONS = [
     claim:
       'the template exclusion swallows .dockerignore — what goes into the image changes unflagged (#2495)',
     subject: 'paths',
-    anchor: '|\\.md$|(^|\\/)\\.gitignore$/;',
-    replacement: '|\\.md$|(^|\\/)\\.(git|docker)ignore$/;',
+    anchor: '|\\.md$|(^|\\/)\\.gitignore$|',
+    replacement: '|\\.md$|(^|\\/)\\.(git|docker)ignore$|',
   },
   {
     id: 'M77',
@@ -623,8 +624,10 @@ const MUTATIONS = [
     claim:
       'certmanager/ leaves the cluster-write surface — the webhook serving cert changes unflagged (#2495)',
     subject: 'paths',
-    anchor: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager)\\//;',
-    replacement: '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook)\\//;',
+    anchor:
+      '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager|network-policy|knative)\\//;',
+    replacement:
+      '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|network-policy|knative)\\//;',
   },
   {
     id: 'M78',
@@ -632,8 +635,44 @@ const MUTATIONS = [
     claim:
       'test vectors and e2e suites stop being excluded — test-only template files fire (#2495)',
     subject: 'paths',
-    anchor: '(tests|testkit|testutil|testvectors|e2e)(',
-    replacement: '(tests|testkit|testutil)(',
+    anchor: '(tests|testkit|testutil|testvectors|testhelpers|testdata|e2e)(',
+    replacement: '(tests|testkit|testutil|testhelpers|testdata)(',
+  },
+  {
+    id: 'M79a',
+    expect: 'red',
+    claim:
+      'network-policy/ and knative/ leave the cluster-write surface — the network config the bundle installs changes unflagged',
+    subject: 'paths',
+    anchor:
+      '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager|network-policy|knative)\\//;',
+    replacement:
+      '  /^packages\\/kn-next-operator\\/config\\/(rbac|admission|webhook|certmanager)\\//;',
+  },
+  {
+    id: 'M79b',
+    expect: 'red',
+    claim:
+      'the install-bundle match turns case-sensitive — a mixed-case admission patch goes unflagged',
+    subject: 'paths',
+    anchor: '[^/]*(admission|webhook|config_network)[^/]*)$/i;',
+    replacement: '[^/]*(admission|webhook|config_network)[^/]*)$/;',
+  },
+  {
+    id: 'M79c',
+    expect: 'red',
+    claim: 'testdata/ and Go test helpers stop being excluded — template test data fires',
+    subject: 'paths',
+    anchor: '(tests|testkit|testutil|testvectors|testhelpers|testdata|e2e)(',
+    replacement: '(tests|testkit|testutil|testvectors|e2e)(',
+  },
+  {
+    id: 'M79d',
+    expect: 'red',
+    claim: 'the conformance harness exclusion is dropped — a repo-only harness change fires',
+    subject: 'paths',
+    anchor: '|^templates\\/[^/]+\\/(conformance\\.sh$|conformance\\/)/;',
+    replacement: '/;',
   },
   {
     id: 'M79',

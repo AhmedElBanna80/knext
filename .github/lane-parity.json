@@ -96,7 +96,7 @@
       "lane": "main",
       "here": "f34705b20fc163e9f5db8684d9cfe6cc043f9024",
       "there": "b1617cff8191f3f35756cb9806010c0aa3a1d11e",
-      "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. main's cache-handler-on-every-Next-minor step is on v2 too (next-minor-matrix.yml, with wider triggers), so nothing is left to port."
+      "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. main's cache-handler-on-every-Next-minor step is on v2 too (next-minor-matrix.yml, with wider triggers), so nothing is left to port. v2 runs one leg (16.4) by design: its peer range admits 16.4 only, and its handler has no 16.3 seed to prove."
     },
     {
       "path": "tests/bun-version-pins.test.ts",

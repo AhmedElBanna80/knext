@@ -54,9 +54,9 @@ the suite twice:
    token check, because the runner sends no token.
    - `conformance/config.yaml` lists what a function serves: no TLS, and gzip only.
    - Every crate the release binary links is held to the version in `Cargo.lock`; the script
-     fails if one differs. Feature unification with the upstream crate adds crates the release
-     binary does not link (connectrpc's axum, TLS and zstd, tracing-subscriber's env filter); the
-     script lists them.
+     fails if one differs. Feature unification with the upstream conformance crate adds crates the
+     release binary does not link, among them connectrpc's axum, rustls and zstd, tokio's `full`
+     features (parking_lot) and tracing-subscriber's env filter; the script prints the full list.
    - `conformance/known-failing.txt` lists the stream cases the whole-body bound refuses on
      purpose. Any other failure, or one of those passing, fails the run.
 

@@ -1,0 +1,67 @@
+# Lane parity for the CI guard files (#2170): every guard file in
+# .github/lane-parity.json must be byte-identical on main, integration/v2 and
+# integration/v1.3, or the difference must be recorded there with both blob ids
+# and a reason (scripts/lane-parity-check.mjs, scripts/lib/lane-parity.mjs).
+#
+# Why: a guard fix that lands on one lane and not the others (defect class D)
+# once left integration/v2 without two guard fixes main already had, and
+# nothing noticed. The check reds on an unrecorded difference, on an entry that
+# no longer matches either side, and on a stale entry for a file that is
+# identical again. A lane it cannot fetch is a failure (exit 2), never a pass.
+#
+# Nightly, because another lane can move without any change here; on pull
+# requests only when the manifest, the checker or a listed guard file changes,
+# so ordinary PRs never inherit a red from another lane. Not a required check.
+# Schedule 06:47 UTC, clear of the credential slots.
+name: Lane parity (CI guard files)
+
+on:
+  schedule:
+    - cron: '47 6 * * *'
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - '.github/lane-parity.json'
+      - '.github/workflows/lane-parity.yml'
+      - 'scripts/lane-parity-check.mjs'
+      - 'scripts/lib/lane-parity.mjs'
+      - 'tests/lane-parity-check.test.ts'
+      - '.github/workflows/published-bytes-freeze-guard.yml'
+      - 'scripts/lib/published-bytes-freeze-check.mjs'
+      - 'scripts/published-bytes-freeze-check.mjs'
+      - 'scripts/published-bytes-select-pin.mjs'
+      - 'scripts/mutation-prove-published-bytes-freeze-check.mjs'
+      - 'tests/published-bytes-freeze-guard-workflow.test.ts'
+      - 'tests/published-bytes-freeze-check-cli.test.ts'
+      - 'tests/bun-version-pins.test.ts'
+      - 'scripts/lib/guard-prover.mjs'
+      - 'scripts/lib/prover-report.mjs'
+      - 'scripts/lib/prover-lane.mjs'
+      - 'scripts/run-mutation-provers.mjs'
+      - 'tests/mutation-prover-lane.test.ts'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lane-parity-${{ github.event_name == 'pull_request' && github.event.pull_request.number || (github.event_name == 'schedule' && github.run_id || github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  parity:
+    name: Guard files match across lanes, or differ as recorded
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the other lanes
+        # Explicit refspecs: the checker reads origin/<lane>, and a bare branch name
+        # would only reach FETCH_HEAD if checkout set no remote-tracking mapping.
+        run: >-
+          git fetch --no-tags --depth=1 origin
+          +refs/heads/main:refs/remotes/origin/main
+          +refs/heads/integration/v1.3:refs/remotes/origin/integration/v1.3
+      - name: Compare the guard files
+        run: node scripts/lane-parity-check.mjs

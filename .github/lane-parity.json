@@ -1,0 +1,155 @@
+{
+  "$comment": "Lane parity for the CI guard files (scripts/lane-parity-check.mjs, #2170). Each file in 'files' must be byte-identical on every lane in 'lanes', or the difference must be recorded in 'divergences' with both blob ids and a reason. An entry explains one pair of contents only: when either side changes it goes out of date and the check is red until the change is ported or recorded again. A guard file is one that gates a release (the published-bytes freeze guard), pins the CI toolchain (bun-version-pins), or certifies other guards (the mutation-prover lane).",
+  "self": "integration/v2",
+  "lanes": ["main", "integration/v2", "integration/v1.3"],
+  "files": [
+    ".github/workflows/published-bytes-freeze-guard.yml",
+    "scripts/lib/published-bytes-freeze-check.mjs",
+    "scripts/published-bytes-freeze-check.mjs",
+    "scripts/published-bytes-select-pin.mjs",
+    "scripts/mutation-prove-published-bytes-freeze-check.mjs",
+    "tests/published-bytes-freeze-guard-workflow.test.ts",
+    "tests/published-bytes-freeze-check-cli.test.ts",
+    "tests/bun-version-pins.test.ts",
+    "scripts/lib/guard-prover.mjs",
+    "scripts/lib/prover-report.mjs",
+    "scripts/lib/prover-lane.mjs",
+    "scripts/run-mutation-provers.mjs",
+    "tests/mutation-prover-lane.test.ts"
+  ],
+  "divergences": [
+    {
+      "path": ".github/workflows/published-bytes-freeze-guard.yml",
+      "lane": "main",
+      "here": "00fdeca36789b7d31d1ae474e988a62f261d950d",
+      "there": "fb5c44b01514b7697850b2b5e1989a2e17b5e830",
+      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges)."
+    },
+    {
+      "path": ".github/workflows/published-bytes-freeze-guard.yml",
+      "lane": "integration/v1.3",
+      "here": "00fdeca36789b7d31d1ae474e988a62f261d950d",
+      "there": "2503e0a94caf3bf05597e1e29d1d033f08b705fd",
+      "reason": "Line-scoped freeze guard (each release line freezes its own published bytes). integration/v1.3 also carries its port commit and the shared ls-tree-then-show pin reader; whether v2's fail-closed pin reader already covers that is not yet checked (#101)."
+    },
+    {
+      "path": "scripts/mutation-prove-published-bytes-freeze-check.mjs",
+      "lane": "main",
+      "here": "82a4c3c8080ad437181abdfff82050a774372957",
+      "there": "a0e0f58e1171e95813cfc3db0f1068b72a0bac41",
+      "reason": "UNPORTED from main: prover anchors for the freeze guard's release-tag change (#2435) are on main only; port with the forward-merge (#101). v2 also has its own released-base-past-pinned-rc rows."
+    },
+    {
+      "path": "scripts/mutation-prove-published-bytes-freeze-check.mjs",
+      "lane": "integration/v1.3",
+      "here": "82a4c3c8080ad437181abdfff82050a774372957",
+      "there": "68fcdf11f835f5d1b88f56982abf65a1b67589a4",
+      "reason": "Line-scoped freeze guard (each release line freezes its own published bytes). integration/v1.3 also carries its port commit and the shared ls-tree-then-show pin reader; whether v2's fail-closed pin reader already covers that is not yet checked (#101)."
+    },
+    {
+      "path": "tests/published-bytes-freeze-guard-workflow.test.ts",
+      "lane": "main",
+      "here": "3ddb2ebddbf7a5bf1709bda6f6421f39bee48f38",
+      "there": "3fb45a067d52dcd19da699e42c4494fe6319449f",
+      "reason": "UNPORTED from main: the release-tag and merged-in-marker tests (#2429 and the ancestor-tag change) are on main only; port with the forward-merge (#101)."
+    },
+    {
+      "path": "tests/published-bytes-freeze-guard-workflow.test.ts",
+      "lane": "integration/v1.3",
+      "here": "3ddb2ebddbf7a5bf1709bda6f6421f39bee48f38",
+      "there": "85506d1b356cbe435b8011ea9ae52fbf050f5e7c",
+      "reason": "Line-scoped freeze guard (each release line freezes its own published bytes). integration/v1.3 also carries its port commit and the shared ls-tree-then-show pin reader; whether v2's fail-closed pin reader already covers that is not yet checked (#101)."
+    },
+    {
+      "path": "scripts/lib/published-bytes-freeze-check.mjs",
+      "lane": "main",
+      "here": "8b347ddf9fab138e3443c851664556e4a830d029",
+      "there": "5ef7656ab2415020c0995619b9a6170dafb0f509",
+      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges)."
+    },
+    {
+      "path": "scripts/published-bytes-freeze-check.mjs",
+      "lane": "main",
+      "here": "233c5ee652da161536286f02e34229c03f8b734c",
+      "there": "c52d63d9818c2ad0023ff8f508aadc761d40fb87",
+      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges)."
+    },
+    {
+      "path": "tests/published-bytes-freeze-check-cli.test.ts",
+      "lane": "main",
+      "here": "382cb25571d2163d01ab6f48b86d5f68834a31db",
+      "there": "4ab99f990aa77d231b66bc63c49a7ef827b35ca9",
+      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges)."
+    },
+    {
+      "path": "tests/bun-version-pins.test.ts",
+      "lane": "main",
+      "here": "f34705b20fc163e9f5db8684d9cfe6cc043f9024",
+      "there": "b1617cff8191f3f35756cb9806010c0aa3a1d11e",
+      "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. The main-only step's port is part of #101."
+    },
+    {
+      "path": "tests/bun-version-pins.test.ts",
+      "lane": "integration/v1.3",
+      "here": "f34705b20fc163e9f5db8684d9cfe6cc043f9024",
+      "there": "5a7f1dacf9b06a659e916e7dccc2d29abb11b3f6",
+      "reason": "Registry of each lane's own setup-bun steps: v1.3 registers its 1.3-line steps (cache-handler per Next minor, the publish-lane-guard count), v2 its v2-only kind lanes; the lists differ by design."
+    },
+    {
+      "path": "scripts/lib/guard-prover.mjs",
+      "lane": "main",
+      "here": "7c0c6065d352ba8f7ce102c90809d23355de85be",
+      "there": "69998f83e201d0842138312f0b86919fe73f0ab2",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+    },
+    {
+      "path": "scripts/lib/guard-prover.mjs",
+      "lane": "integration/v1.3",
+      "here": "7c0c6065d352ba8f7ce102c90809d23355de85be",
+      "there": "69998f83e201d0842138312f0b86919fe73f0ab2",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+    },
+    {
+      "path": "scripts/lib/prover-lane.mjs",
+      "lane": "main",
+      "here": "7da242b9513fcbcb3a2bbea3b1e6a83182f3170e",
+      "there": "1a6b4a1317f0c3627839dd08a11165180e43509a",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+    },
+    {
+      "path": "scripts/lib/prover-lane.mjs",
+      "lane": "integration/v1.3",
+      "here": "7da242b9513fcbcb3a2bbea3b1e6a83182f3170e",
+      "there": "1a6b4a1317f0c3627839dd08a11165180e43509a",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+    },
+    {
+      "path": "scripts/run-mutation-provers.mjs",
+      "lane": "main",
+      "here": "e97c0e27a34477c7c837a9bd04b83c0b2b139aa8",
+      "there": "f6de362e76fd43adc8ebdaa1e776bedf9d9fbcab",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also has round-4 runner fixes (in-prover sampler, runaway kill, cdn-purge isolation) not on v2; port with #101."
+    },
+    {
+      "path": "scripts/run-mutation-provers.mjs",
+      "lane": "integration/v1.3",
+      "here": "e97c0e27a34477c7c837a9bd04b83c0b2b139aa8",
+      "there": "61495c5c53539f476005e72d8b98c7968a6f7eac",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+    },
+    {
+      "path": "tests/mutation-prover-lane.test.ts",
+      "lane": "main",
+      "here": "2bfe703f11a05f4b980d7704ffaa87b4d8fa21ee",
+      "there": "6d6dc957bdd647b31eeb873eff007057d336c80f",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also re-runs every prover sharded over main and integration/v2; port with #101."
+    },
+    {
+      "path": "tests/mutation-prover-lane.test.ts",
+      "lane": "integration/v1.3",
+      "here": "2bfe703f11a05f4b980d7704ffaa87b4d8fa21ee",
+      "there": "deffb7d17b8be74666e990702d51e42893a34f42",
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+    }
+  ]
+}

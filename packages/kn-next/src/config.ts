@@ -508,10 +508,11 @@ export interface KnativeNextConfig {
      *
      * Overridden per build by `knext build --self-contained`.
      *
-     * The vinext target honours it (the binary embeds the server runtime,
-     * `.output/public` and sharp's native libraries, unpacked to a writable temp
-     * directory on the first image request); the other targets only record it
-     * in the build log for now. It is opt-in and stays opt-in (ADR-0060), so
+     * Honoured by both compiled targets: the compiled standalone-on-Bun target
+     * (the binary embeds `.next/server`) and the vinext target (the binary embeds
+     * the server runtime, `.output/public` and sharp's native libraries,
+     * unpacked to a writable temp directory on the first image request). On any
+     * other target it changes nothing and is only recorded in the build log. It is opt-in and stays opt-in (ADR-0060), so
      * leaving it unset keeps the build output byte-identical.
      *
      * @experimental This mode's on-disk shape is still settling; it may change

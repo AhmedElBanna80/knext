@@ -188,17 +188,17 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the body cap is lifted at the wiring (an endless client stream is read forever)',
     subject: 'server',
-    anchor: '        .layer(body::BoundedBodyLayer::new(max_body, cfg.timeouts.read))\n',
-    replacement: '        .layer(body::BoundedBodyLayer::new(usize::MAX, cfg.timeouts.read))\n',
+    anchor: '            MAX_STREAM_BODY_BYTES.max(max_body + 1),\n',
+    replacement: '            usize::MAX,\n',
   },
   {
     id: 'L3',
     expect: 'red',
     claim: 'the read timeout is lifted at the wiring (a stalled body is never cut off)',
     subject: 'server',
-    anchor: '        .layer(body::BoundedBodyLayer::new(max_body, cfg.timeouts.read))\n',
+    anchor: '            MAX_STREAM_BODY_BYTES.max(max_body + 1),\n            cfg.timeouts.read,\n',
     replacement:
-      '        .layer(body::BoundedBodyLayer::new(max_body, Duration::from_secs(86_400)))\n',
+      '            MAX_STREAM_BODY_BYTES.max(max_body + 1),\n            Duration::from_secs(86_400),\n',
   },
   {
     id: 'L4',

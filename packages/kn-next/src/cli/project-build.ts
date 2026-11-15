@@ -23,11 +23,12 @@
  */
 
 import {
-    existsSync,
     mkdtempSync,
+    readdirSync,
     readFileSync,
     realpathSync,
     rmSync,
+    statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -138,11 +139,12 @@ export interface RunProjectBuildOptions {
 
 /** Where Next writes the resolved config of every build into its distDir. */
 const REQUIRED_SERVER_FILES = "required-server-files.json";
-const EXPORT_DETAIL = "export-detail.json";
+/** Slack for coarse filesystem mtimes when judging a file this build wrote. */
+const FRESH_SLACK_MS = 2000;
 const DEFAULT_DIST_DIR = ".next";
 
 const FACTS_FALLBACK_WARNING =
-    "warning: knext could not read your resolved Next.js config from this build (the app's build script did not run `next build`), so it checked the next.config source text instead.";
+    "warning: knext could not read your resolved Next.js config from this build (the app's build script did not run `next build`, or Next wrote its output somewhere knext does not look), so it checked the next.config source text instead.";
 
 /** Set `name` for the build and hand back a restore for afterwards. */
 function setEnv(name: string, value: string): () => void {
@@ -165,15 +167,49 @@ function real(path: string): string {
 }
 
 /**
- * The resolved config facts Next itself wrote for this build into the default
- * distDir, or undefined when it wrote none there (the build used another
- * distDir, or did not run `next build`). Both marker files are deleted before
- * the build, so a present file belongs to this build. A file that does not
- * parse fails closed.
+ * The resolved config facts Next itself wrote DURING this build, or undefined
+ * when it wrote none knext can find. Every `next build` writes
+ * `<distDir>/required-server-files.json`; `.next` is checked first, then each
+ * top-level directory of the app (a custom distDir; a nested one such as
+ * `out/next` is not searched). Only a file modified at or after the build
+ * started counts, with two seconds of slack for coarse filesystem clocks, so
+ * nothing is deleted beforehand and a file an earlier build left is ignored.
+ * A file that does not parse fails closed.
  */
-function nextWrittenFacts(cwd: string): NextConfigFacts | undefined {
-    const path = join(cwd, DEFAULT_DIST_DIR, REQUIRED_SERVER_FILES);
-    if (!existsSync(path)) return undefined;
+function nextWrittenFacts(
+    cwd: string,
+    buildStartMs: number,
+): NextConfigFacts | undefined {
+    let dirs: string[] = [];
+    try {
+        dirs = readdirSync(cwd, { withFileTypes: true })
+            .filter(
+                (e) =>
+                    e.isDirectory() &&
+                    !["node_modules", ".git", DEFAULT_DIST_DIR].includes(
+                        e.name,
+                    ),
+            )
+            .map((e) => e.name);
+    } catch {
+        dirs = [];
+    }
+    for (const dir of [DEFAULT_DIST_DIR, ...dirs]) {
+        const path = join(cwd, dir, REQUIRED_SERVER_FILES);
+        let mtimeMs: number;
+        try {
+            mtimeMs = statSync(path).mtimeMs;
+        } catch {
+            continue;
+        }
+        if (mtimeMs >= buildStartMs - FRESH_SLACK_MS) {
+            return parseRequiredServerFiles(path);
+        }
+    }
+    return undefined;
+}
+
+function parseRequiredServerFiles(path: string): NextConfigFacts {
     let config: Record<string, unknown> | undefined;
     try {
         config = JSON.parse(readFileSync(path, "utf8"))?.config;
@@ -237,10 +273,10 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
     process.env[KNEXT_RUNTIME_ENV] = opts.runtimeId;
 
     if (opts.requireEsm) {
-        // vinext builds with vite and never runs a Next adapter or reads
-        // Next's distDir; its static-export check ran above.
+        // vinext builds with vite and never runs a Next adapter, reads Next's
+        // distDir or writes `export-detail.json`; its static-export check ran
+        // above, so a marker an earlier Next build left must not refuse it.
         runBuild(run);
-        assertNotStaticExport(cwd);
         return;
     }
 
@@ -251,8 +287,9 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
     //     before compilation (the CLI names the file, so a plain `next build`
     //     is untouched);
     //  2. an app without knext's adapter: after the build, from the resolved
-    //     config Next itself writes to `.next/required-server-files.json`.
-    //     No adapter is injected: any adapterPath changes Next's build output;
+    //     config Next itself writes to `<distDir>/required-server-files.json`
+    //     during the build (`.next`, else a top-level directory). No adapter
+    //     is injected: any adapterPath changes Next's build output;
     //  3. neither (the build script did not run `next build`): the earlier
     //     source-text checks, with a warning.
     // The text checks also run BEFORE the build, as warnings only, so the
@@ -264,6 +301,7 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
     const restores: (() => void)[] = [];
     let factsDir: string | undefined;
     let facts: NextConfigFacts | undefined;
+    let buildStartMs = 0;
     try {
         factsDir = mkdtempSync(join(tmpdir(), "knext-config-facts-"));
         const factsPath = join(factsDir, "facts.json");
@@ -271,17 +309,22 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
             setEnv(CONFIG_FACTS_OUT_ENV, factsPath),
             setEnv(KNEXT_BUILDER_ENV, opts.builderId),
         );
-        for (const marker of [REQUIRED_SERVER_FILES, EXPORT_DETAIL]) {
-            rmSync(join(cwd, DEFAULT_DIST_DIR, marker), { force: true });
-        }
         const recorded = (): NextConfigFacts | undefined => {
-            const f = readNextConfigFacts(factsPath);
+            let f: NextConfigFacts | undefined;
+            try {
+                f = readNextConfigFacts(factsPath);
+            } catch (err) {
+                throw new UsageError(
+                    err instanceof Error ? err.message : String(err),
+                );
+            }
             // One record per build path; a record another app's build wrote
             // (a script that builds several apps) is not this app's.
             return f?.projectDir && real(f.projectDir) !== real(cwd)
                 ? undefined
                 : f;
         };
+        buildStartMs = Date.now();
         try {
             runBuild(run);
         } catch (err) {
@@ -305,7 +348,7 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
         if (factsDir) rmSync(factsDir, { recursive: true, force: true });
     }
 
-    facts ??= nextWrittenFacts(cwd);
+    facts ??= nextWrittenFacts(cwd, buildStartMs);
     if (facts) {
         // Fail closed: a refusal stands even if the build exited 0.
         const refusal = refusalFor(facts, refusalInput(opts));

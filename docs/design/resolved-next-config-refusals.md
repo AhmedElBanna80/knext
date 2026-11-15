@@ -1,6 +1,8 @@
 # Resolved next.config refusals (design note, #2250)
 
-Status: proposed, revised after design review (r1: approve-with-changes). Scope: `packages/kn-next` CLI build guards + the official adapter.
+Status: implemented (Next half). **Read Revision 3 first: it is the design as built.** The Decision,
+Failure modes and Surface changes sections below describe the first proposal (a `.knext/` facts file);
+Revision 1 adjusts it, and Revision 2's adapter injection is superseded by Revision 3. Scope: `packages/kn-next` CLI build guards + the official adapter.
 
 ## Problem
 
@@ -198,8 +200,9 @@ and a wrapper-set flag (`turbopackModuleFragments: true` read back). A build who
    carries `projectDir` (from `modifyConfig`'s ctx), and a record for another app's directory is ignored,
    which covers a script that builds several apps. A recorded refusal throws even if the build exited 0.
 2. **Next's own `.next/required-server-files.json`**, for apps without knext's adapter. The CLI deletes it
-   (and `.next/export-detail.json`) before the build, so a present file belongs to this build; there is no
-   clock comparison. A file that does not parse refuses. These refusals come after the build.
+   (and `.next/export-detail.json`) before the build, so a present file belongs to this build. **Superseded
+   by the round-3 addendum below:** nothing is deleted; freshness is judged by mtime. A file that does not
+   parse refuses. These refusals come after the build.
 3. **Neither** (the build script did not run `next build`, or a custom `distDir` on an adapter-less app):
    the earlier text checks, with a warning.
 
@@ -212,3 +215,32 @@ config), on the vinext target (PR 2), and in `knext doctor` (advisory).
 
 **Not done (dropped):** Revision 1 item 8, logging once per build. The `modifyConfig fired` log predates
 this change, and the nonce it was keyed on no longer exists.
+
+### Revision 3, addendum (design review round 2)
+
+- **A custom `distDir` on an adapter-less app** writes `required-server-files.json` into that directory, so
+  case 2 sees nothing in `.next`. After the build, when neither the adapter nor `.next` recorded anything,
+  the CLI looks for a `required-server-files.json` written **during this build** (mtime at or after the
+  build start, with 2 s of slack for coarse filesystem clocks) in a **top-level** directory of the app, and
+  refuses from the `distDir` it carries. A nested `distDir` (`out/next`) is not searched, and falls to case 3.
+- **R4, amended.** Refusals happen before compilation only on the knext-adapter path. For an app without
+  knext's adapter they happen after the build, because nothing earlier sees the resolved config without
+  changing the build. The text checks run before every build as warnings, so a setting the text can see
+  is still flagged early.
+- **Follow-up.** Add a contract test that a real fixture build's `required-server-files.json` carries
+  `config.distDir`, `config.output` and `config.experimental`, so a Next bump that changes the file fails
+  loudly instead of falling to case 3.
+
+### Revision 3, round-3 addendum (code review round 2)
+
+- **Nothing is deleted before the build.** Deleting `.next/required-server-files.json` changed a deploy whose
+  build script reuses a prebuilt `.next` (the write-free detection reads that file). Freshness is now the same
+  rule everywhere: a `required-server-files.json` in `.next`, then in a top-level directory, modified at or
+  after the build start (2 s slack) belongs to this build. Under heavy clock skew (some network mounts) a
+  fresh file can look old, and the build falls to case 3 with its warning.
+- **vinext never consults Next's export marker.** A leftover `.next/export-detail.json` from an earlier Next
+  export build no longer refuses a vinext build. vinext's own static-export check runs before the build.
+- **Known limits, accepted:** a script that runs two `next build`s shares one record, so the second app's
+  record replaces the first (the first's refusal still fails its own `next build`, which normally stops the
+  script). `realpathSync` is not case-folded on case-insensitive filesystems, so a projectDir spelled
+  differently drops the record to case 2, which still decides from the resolved config.

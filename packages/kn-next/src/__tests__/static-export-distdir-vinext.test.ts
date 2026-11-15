@@ -15,7 +15,9 @@ import {
     existsSync,
     mkdirSync,
     mkdtempSync,
+    realpathSync,
     rmSync,
+    utimesSync,
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -453,11 +455,15 @@ function nextWrites(
                     config: { distDir: ".next", ...config },
                 }),
         );
+        // Next writes the export marker on an export build and deletes it on
+        // every other one.
         if (config.output === "export") {
             writeFileSync(
                 join(dir, ".next", "export-detail.json"),
                 EXPORT_DETAIL,
             );
+        } else {
+            rmSync(join(dir, ".next", "export-detail.json"), { force: true });
         }
     };
 }
@@ -598,17 +604,106 @@ describe("a Next build without knext's adapter decides from what Next wrote", ()
         );
     });
 
-    it("never trusts a file left by an earlier build: it is removed first", () => {
+    it("refuses a custom distDir set by a wrapper, from the file Next wrote into it", () => {
+        const dir = appDir({
+            "next.config.mjs": "export default withOut({});",
+        });
+        const { caught, warnings } = run(dir, false, () => {
+            mkdirSync(join(dir, "build"), { recursive: true });
+            writeFileSync(
+                join(dir, "build", "required-server-files.json"),
+                JSON.stringify({ version: 1, config: { distDir: "build" } }),
+            );
+        });
+        expectDistDirRefusal(caught, "build");
+        expect(fellBack(warnings)).toBe(false);
+    });
+
+    it("ignores another directory's file that this build did not write", () => {
         const dir = appDir({
             "next.config.mjs": "export default {};",
-            ".next/required-server-files.json": JSON.stringify({
-                config: { distDir: ".next" },
+            "old/required-server-files.json": JSON.stringify({
+                config: { distDir: "old" },
             }),
-            ".next/export-detail.json": EXPORT_DETAIL,
         });
+        const past = new Date(Date.now() - 60_000);
+        utimesSync(join(dir, "old", "required-server-files.json"), past, past);
         const { caught, warnings } = run(dir, false);
         expect(caught).toBeUndefined();
         expect(fellBack(warnings)).toBe(true);
+    });
+
+    it("never trusts a file an earlier build left in .next: only this build's counts", () => {
+        const dir = appDir({
+            "next.config.mjs": "export default {};",
+            ".next/required-server-files.json": JSON.stringify({
+                config: { distDir: ".next", output: "export" },
+            }),
+        });
+        const past = new Date(Date.now() - 60_000);
+        utimesSync(
+            join(dir, ".next", "required-server-files.json"),
+            past,
+            past,
+        );
+        const { caught, warnings } = run(dir, false);
+        expect(caught).toBeUndefined();
+        expect(fellBack(warnings)).toBe(true);
+    });
+});
+
+describe("the adapter record and the default app", () => {
+    it("accepts its own record when projectDir names the app through another path", () => {
+        const dir = appDir({ "next.config.mjs": "export default {};" });
+        // macOS tmp dirs: /var/folders/... is /private/var/folders/...
+        const aliased = realpathSync(dir);
+        const { caught } = run(dir, false, () => {
+            writeFileSync(
+                process.env.KNEXT_CONFIG_FACTS_OUT as string,
+                JSON.stringify({
+                    projectDir: aliased === dir ? `${dir}/.` : aliased,
+                    distDir: "build",
+                    output: null,
+                    turbopackModuleFragments: false,
+                    refused: "custom-dist-dir",
+                }),
+            );
+        });
+        expectDistDirRefusal(caught, "build");
+    });
+
+    it("refuses with a usage error when a successful build left a record it cannot read", () => {
+        const dir = appDir({ "next.config.mjs": "export default {};" });
+        const { caught } = run(dir, false, () => {
+            writeFileSync(
+                process.env.KNEXT_CONFIG_FACTS_OUT as string,
+                "{not json",
+            );
+        });
+        expect(caught).toMatchObject({ code: USAGE_ERROR_CODE });
+        expect((caught as Error).message).toMatch(
+            /resolved Next\.js config record/,
+        );
+    });
+
+    it("prints nothing for the default scaffold shape (no distDir, no flag)", () => {
+        const dir = appDir({
+            "next.config.mjs": "export default { output: 'standalone' };",
+        });
+        const { caught, warnings } = run(dir, false, adapterBuild());
+        expect(caught).toBeUndefined();
+        expect(warnings).toEqual([]);
+    });
+});
+
+describe("the vinext target and Next's markers", () => {
+    it("is never refused by an export marker an earlier Next build left", () => {
+        const dir = appDir({
+            "package.json": ESM_PKG,
+            "next.config.mjs": "export default {};",
+            ".next/export-detail.json": EXPORT_DETAIL,
+        });
+        expect(run(dir, true).caught).toBeUndefined();
     });
 });
 

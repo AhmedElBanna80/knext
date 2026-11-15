@@ -25,7 +25,7 @@ Go types for the namespaced `apps.kn-next.dev/v1alpha1` API group: the `NextApp`
 - `backendservice_types.go:BackendServiceSpec.Zone`: required, a DNS-1123 label of 1-63 characters, and immutable (`self == oldSelf`). `Image` is required and non-empty. `Language` is at most 32 characters (`^[a-z][a-z0-9+-]*$`), and `ProtoVersion` must be a semver string (`Pattern`, at most 128 characters).
 - `backendservice_types.go`: env names starting with `KNEXT_TOKEN_` are reserved, and every Secret reference must name a non-empty Secret of at most 253 characters.
 - `backendservice_types.go:FunctionScalingSpec`: `minScale <= maxScale` when `maxScale` is set and non-zero.
-- `backendservice_types.go:FunctionVolume`: exactly one of `secret`, `configMap`, `projected` or `emptyDir`. `/var/run/knext` is reserved for operator mounts, and `/`, `/dev` and `/dev/log` cannot be mounted.
+- `backendservice_types.go:FunctionVolume`: exactly one of `secret`, `configMap`, `projected` or `emptyDir`. `mountPath` must be canonical (no `//`, no `.` or `..` segment, no trailing `/`), which keeps the reserved-path rules from being bypassed; `/var/run/knext` is reserved for operator mounts, and `/`, `/dev` and `/dev/log` cannot be mounted.
 - `backendservice_types.go:FunctionVolumeProjection`: exactly one of `secret` or `configMap`.
 - `backendservice_types.go:BackendServiceCRDInstalled`: a no-match error returns `false, nil`. Any other discovery error is returned, because "unknown is not absent".
 

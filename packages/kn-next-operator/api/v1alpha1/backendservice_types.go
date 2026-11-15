@@ -188,6 +188,11 @@ type FunctionScalingSpec struct {
 // FunctionVolume is one volume and its mount. Exactly one source is set.
 // +kubebuilder:validation:XValidation:rule="!has(self.secret) || (has(self.secret.secretName) && self.secret.secretName.size() > 0 && self.secret.secretName.size() <= 253)",message="a Secret reference must name a Secret: a non-empty name of at most 253 characters"
 // +kubebuilder:validation:XValidation:rule="[has(self.secret), has(self.configMap), has(self.projected), has(self.emptyDir)].filter(x, x).size() == 1",message="a volume sets exactly one of secret, configMap, projected or emptyDir"
+// The reserved-path rules here compare the string, so only the canonical
+// spelling is admitted: no '//', no '.' or '..' segment, no trailing '/'.
+// Otherwise //var/run/knext or /a/../var/run/knext would pass them and the
+// kubelet's cleaned path would land on the operator's mount tree (#108).
+// +kubebuilder:validation:XValidation:rule="!self.mountPath.matches('//|/[.][.]?(/|$)') && (self.mountPath == '/' || !self.mountPath.endsWith('/'))",message="mountPath must be canonical: no '//', no '.' or '..' segment and no trailing '/'"
 // +kubebuilder:validation:XValidation:rule="self.mountPath != '/var/run/knext' && !self.mountPath.startsWith('/var/run/knext/')",message="/var/run/knext is reserved for operator mounts"
 // Knative serving refuses a Service whose container mounts a reserved path (its
 // reservedPaths in pkg/apis/serving/k8s_validation.go: "/", "/dev", "/dev/log"),
@@ -195,9 +200,9 @@ type FunctionScalingSpec struct {
 // so the schema refuses these here, together with the spellings path.Clean folds
 // onto them by repeated or trailing slashes and "." segments (/dev/, //dev,
 // /./dev). A ".." segment needs balanced reasoning no regular expression can do,
-// so a spelling like /a/../dev is left to Knative's own webhook (the reconciler
-// then keeps the old Service and returns the refusal). Other paths, /data/
-// included, are untouched.
+// so this rule leaves a spelling like /a/../dev to the canonical-path rule above,
+// which refuses every '..' segment (and every '//', '.' segment and trailing
+// '/'), for /data/ as much as for /dev/.
 // +kubebuilder:validation:XValidation:rule="!self.mountPath.matches('^((/+[.])*/*|(/+[.])*/+dev(/+[.])*/*|(/+[.])*/+dev(/+[.])*/+log(/+[.])*/*)$')",message="mountPath is reserved by Knative serving: /, /dev and /dev/log cannot be mounted"
 type FunctionVolume struct {
 	// Name of the volume (DNS label).

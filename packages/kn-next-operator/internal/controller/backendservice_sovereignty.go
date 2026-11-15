@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -307,7 +308,29 @@ func checkFunctionSovereignty(
 				fmt.Sprintf("ConfigMap %q is another zone's JWKS; a function mounts only its own zone's (the operator does that)", ref.name)})
 		}
 	}
+	// A volume whose mount path CLEANS onto the operator's mount tree. The CRD
+	// admits only canonical paths (#108), but an object stored before that rule,
+	// or reaching the operator past the schema, still carries the path as
+	// written, and the renderer passes it through: //var/run/knext/jwks would
+	// shadow the zone's JWKS. path.Clean is used only to compare; the path is
+	// never rewritten.
+	for _, v := range bs.Spec.Volumes {
+		if clean := path.Clean(v.MountPath); onOperatorMountTree(clean) {
+			out = append(out, sovereigntyViolation{fmt.Sprintf("volumes[%s].mountPath", v.Name), v.MountPath,
+				fmt.Sprintf("mount path %q resolves to %s, which is reserved for the operator's own mounts", v.MountPath, clean)})
+		}
+	}
 	return out, unverified
+}
+
+// operatorMountRoot is the tree the operator mounts into every function (the
+// zone's JWKS at ZoneJWKSMountDir). No user volume may land on or under it.
+const operatorMountRoot = "/var/run/knext"
+
+// onOperatorMountTree reports whether a cleaned path is on or under the tree
+// the operator mounts into every function.
+func onOperatorMountTree(clean string) bool {
+	return clean == operatorMountRoot || strings.HasPrefix(clean, operatorMountRoot+"/")
 }
 
 // checkRunningSovereignty applies the SAME Secret allowlist to the Secret

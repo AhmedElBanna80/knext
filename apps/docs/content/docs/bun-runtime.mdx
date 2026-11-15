@@ -204,8 +204,8 @@ The selectable standalone targets (`build: 'turbopack'` or `build: 'webpack'` �
 different `next build` bundler; see the [build pipeline](/docs/build-pipeline)) run `next build`'s
 own server. With `runtime: 'bun'`, `knext build` compiles that server into a Bun single executable
 **with bytecode** as well, and the image runs the executable rather than Next's `server.js` (the
-container command still names `server.js`, which in that image is a small shim that starts the
-executable):
+container command still names `server.js`, which in that image is a small shim that starts knext's
+supervisor, and the supervisor runs the executable):
 
 - **What is inside.** Next's server entry and everything it loads up front — the request pipeline,
   the router, the render entry points — bundled, minified and precompiled to bytecode.

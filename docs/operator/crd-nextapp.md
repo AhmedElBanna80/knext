@@ -50,11 +50,12 @@ standalone app is compiled too; the command only names the shim.
 Selects the process that executes the standalone server: `"node"` (default) or `"bun"`.
 Only meaningful for the standalone shape (`build` absent or `"turbopack"`); for
 `build: "vinext"` the runtime is compiled into the executable and this field
-does not affect how the container starts. Which process serves is fixed by
-the image, not by this field: an image built for Bun carries the compiled
-executable and runs it (the container's `bun run server.js` reaches it through
-the shim described above), whatever this field says; an image built for Node
-runs Next's standalone `server.js` under Node.
+does not affect how the container starts. Set it to match the image. An image
+built for Bun carries the compiled executable, and the container's
+`bun run server.js` reaches it through the shim described above. An image built
+for Node runs Next's standalone `server.js` under Node, which needs `runtime`
+to be `"node"` or unset: `"bun"` makes the operator run `bun run server.js`,
+and a Node image has no Bun to run it with, so it does not start.
 ```yaml
 spec:
   runtime: "bun"

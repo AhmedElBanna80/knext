@@ -1,0 +1,224 @@
+name: Single-exec rollback — kind e2e
+
+# The way back from a single executable (#2445, ADR-0070 criterion C7). One
+# NextApp is deployed three times, changing only its artifact shape:
+# selfContained Bun (one compiled executable, no container command), disk-mode
+# Bun (`bun run server.js`) and Node (the image default). Traffic is then pinned
+# back and forth (`knext rollback --to`, a canary, back to latest).
+#
+# scripts/single-exec-rollback-kind.sh fails unless every revision serves 200,
+# a pinned revision is the one that serves (each build's mark on /tagged), the
+# operator rendered each revision's own command, and the unstable_cache entry
+# in the shared Redis is the same one under every shape.
+#
+# The vinext executable is not covered here: it is a different build pipeline
+# and fixture, tracked as a follow-up.
+#
+# Teeth: mutation-proved locally against an operator that renders the previous
+# shape's command (see the PR); the guard test pins this workflow to the script.
+#
+# Triggers: path-filtered PR plus manual dispatch, like the sibling kind lanes.
+# No schedule, no push. Non-required. Ephemeral kind only.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/kn-next-operator/internal/controller/nextapp_ksvc.go'
+      - 'packages/kn-next-operator/api/v1alpha1/nextapp_types.go'
+      - 'packages/kn-next/src/cli/cr-builder.ts'
+      - 'packages/kn-next/src/cli/rollback.ts'
+      - 'packages/kn-next/src/cli/runtime-image.ts'
+      - 'packages/kn-next/src/cli/standalone-exec-build.ts'
+      - 'packages/kn-next/templates/runtime-standalone/**'
+      - 'packages/kn-next/src/adapters/cache-handler*.js'
+      - 'packages/kn-next/src/__tests__/fixtures/cdn-kind-app/**'
+      - 'scripts/single-exec-rollback-kind.sh'
+      - '.github/workflows/single-exec-rollback-kind-e2e.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  single-exec-rollback:
+    name: selfContained Bun, disk Bun, Node, and back, on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLUSTER: single-exec-rollback
+      APP_NS: rb-e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Route Docker Hub pulls through mirror.gcr.io (anonymous rate limit)
+        id: docker-hub-mirror
+        uses: ./.github/actions/docker-hub-mirror
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/kn-next-operator/go.mod
+          cache-dependency-path: packages/kn-next-operator/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      - name: Install kind
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: true
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the workspace packages + the kn-next CLI
+        run: |
+          set -euo pipefail
+          bun run --filter "@getknext/lib" build
+          bun run --filter "@getknext/db" build
+          bun run --filter "@getknext/core" build
+          test -f packages/kn-next/dist/cli/kn-next.js
+
+      - name: Pack knext tarballs (npm pack — the real publish tool)
+        run: |
+          set -euo pipefail
+          DEST="${RUNNER_TEMP}/knext-tarballs"
+          node scripts/pack-release-tarballs.mjs --dest "${DEST}" \
+            --dirs packages/lib,packages/db,packages/kn-next
+          echo "TARBALLS_DIR=${DEST}" >> "$GITHUB_ENV"
+
+      - name: Stage the fixture app outside the repo + install its dependencies
+        run: |
+          set -euo pipefail
+          APP_DIR="${RUNNER_TEMP}/rb-app"
+          cp -R packages/kn-next/src/__tests__/fixtures/cdn-kind-app "$APP_DIR"
+          cd "$APP_DIR"
+          bun install
+          node -e "const v=require('./node_modules/next/package.json').version; if (v !== require('./package.json').dependencies.next) { console.error('next is ' + v); process.exit(1) }"
+          mkdir -p public
+          LIB_TGZ="$(find "${TARBALLS_DIR}" -maxdepth 1 -name 'getknext-lib-*.tgz' | sort | tail -n1)"
+          DB_TGZ="$(find "${TARBALLS_DIR}" -maxdepth 1 -name 'getknext-db-*.tgz' | sort | tail -n1)"
+          CORE_TGZ="$(find "${TARBALLS_DIR}" -maxdepth 1 -name 'getknext-core-*.tgz' | sort | tail -n1)"
+          npm install --no-save --no-audit --no-fund "${LIB_TGZ}" "${DB_TGZ}" "${CORE_TGZ}"
+          test -d node_modules/@getknext/core
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+      - name: Create kind cluster (registry certs.d config_path)
+        run: |
+          set -euo pipefail
+          cat <<'YAML' | kind create cluster --name "$CLUSTER" --wait 120s --config=-
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          containerdConfigPatches:
+          - |-
+            [plugins."io.containerd.grpc.v1.cri".registry]
+              config_path = "/etc/containerd/certs.d"
+          YAML
+
+      - name: Start in-cluster registry + wire the kind node to it
+        run: |
+          set -euo pipefail
+          reg=kind-registry
+          docker run -d --restart=always -p 127.0.0.1:5001:5000 --name "$reg" \
+            registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          docker network connect kind "$reg"
+          node="${CLUSTER}-control-plane"
+          docker exec "$node" mkdir -p /etc/containerd/certs.d/localhost:5001
+          printf '[host."http://%s:5000"]\n' "$reg" \
+            | docker exec -i "$node" cp /dev/stdin /etc/containerd/certs.d/localhost:5001/hosts.toml
+
+      - name: Install cert-manager
+        run: |
+          set -euo pipefail
+          scripts/kind-manifests/apply-cert-manager.sh
+          kubectl wait --for=condition=Available --timeout=300s \
+            -n cert-manager deployment/cert-manager deployment/cert-manager-webhook deployment/cert-manager-cainjector
+
+      - name: Install Knative Serving + Kourier
+        run: |
+          set -euo pipefail
+          V="knative-v1.16.0"
+          scripts/kind-manifests/apply-knative-kourier.sh "${V}"
+          kubectl patch configmap/config-network -n knative-serving --type merge \
+            --patch '{"data":{"ingress-class":"kourier.ingress.networking.knative.dev"}}'
+          kubectl wait --for=condition=Available --timeout=300s \
+            -n knative-serving deployment/controller deployment/webhook deployment/autoscaler deployment/net-kourier-controller
+
+      - name: Build + deploy the operator from this commit
+        working-directory: packages/kn-next-operator
+        run: |
+          set -euo pipefail
+          IMG=example.com/kn-next-operator:e2e
+          for attempt in 1 2 3; do
+            make docker-build IMG="$IMG" && break
+            [ "$attempt" = 3 ] && { echo "::error::operator image build failed 3x"; exit 1; }
+            echo "docker-build attempt $attempt failed; retrying"; sleep 10
+          done
+          kind load docker-image "$IMG" --name "$CLUSTER"
+          make install
+          make deploy IMG="$IMG"
+          kubectl rollout status deployment/kn-next-operator-controller-manager \
+            -n kn-next-operator-system --timeout=180s
+          kubectl wait --for=condition=Ready --timeout=120s \
+            -n kn-next-operator-system certificate/kn-next-operator-serving-cert
+          kubectl wait --for=jsonpath='{.subsets[0].addresses[0]}' --timeout=120s \
+            -n kn-next-operator-system endpoints/kn-next-operator-webhook-service
+          "${GITHUB_WORKSPACE}/scripts/kind-manifests/wait-for-webhook-ready.sh"
+
+      - name: Redis for the shared cache
+        run: |
+          set -euo pipefail
+          kubectl create namespace "$APP_NS"
+          cat <<YAML | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata: { name: redis, namespace: $APP_NS }
+          spec:
+            replicas: 1
+            selector: { matchLabels: { app: redis } }
+            template:
+              metadata: { labels: { app: redis } }
+              spec:
+                containers:
+                  - name: redis
+                    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+                    ports: [{ containerPort: 6379 }]
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata: { name: redis, namespace: $APP_NS }
+          spec:
+            selector: { app: redis }
+            ports: [{ port: 6379 }]
+          YAML
+          kubectl -n "$APP_NS" rollout status deploy/redis --timeout=180s
+
+      - name: Deploy three shapes, then roll back across them
+        env:
+          CLI: ${{ github.workspace }}/packages/kn-next/dist/cli/kn-next.js
+          TAG: rb${{ github.run_id }}
+        run: bash scripts/single-exec-rollback-kind.sh
+
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl -n "$APP_NS" get nextapp,ksvc,revisions,pods -o wide || true
+          kubectl -n "$APP_NS" get ksvc rb -o jsonpath='{.status.traffic}' || true
+          kubectl -n "$APP_NS" logs -l serving.knative.dev/service=rb -c user-container --tail=80 --prefix || true
+          kubectl -n kn-next-operator-system logs deployment/kn-next-operator-controller-manager --tail=100 || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          kind delete cluster --name "$CLUSTER" || true
+          docker rm -f kind-registry || true

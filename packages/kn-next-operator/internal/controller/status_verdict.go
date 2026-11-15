@@ -299,8 +299,8 @@ func platformDefaultsCondition(app *appsv1alpha1.NextApp, pd platformDefaultsSta
 }
 
 // heldAppChangeDropped reports whether this pass is a hold-last-good
-// (EffectiveSpecInvalid) that is holding back a change the APP made, as opposed to
-// one only the platform moved.
+// (EffectiveSpecInvalid, or a CDN app's ClusterIdentityUnavailable) that is
+// holding back a change the APP made, as opposed to one only the platform moved.
 //
 // The distinction is the whole point. A platform-only hold leaves the live
 // Service exactly as the app asked for it, so the Service's own readiness is still
@@ -474,8 +474,10 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 			Reason:             holdReason(extras.platform.gate),
 			Message:            msg,
 		})
-		// No requeue: the way out is a platform edit (the KnextPlatform watch
-		// re-enqueues every app) or an app edit (a new generation), never elapsed time.
+		// No requeue here: for EffectiveSpecInvalid the way out is a platform edit
+		// (the KnextPlatform watch re-enqueues every app) or an app edit (a new
+		// generation), never elapsed time. The identity hold's retry is the
+		// CDNAdvisory block's.
 	} else if ksvcReady {
 		v.conditions = append(v.conditions, metav1.Condition{
 			Type:               ConditionReady,

@@ -190,7 +190,8 @@ ACL SETUSER knext-app-<cluster tag>-<app hash> reset on ><password> [#<sha256 of
 - **The CDN claim key gets a write-only selector**, `%W~knext:cdn:purged:<cdn-tag-prefix>:*`, added
   only when the app has a CDN configured. Measured: it allows the `SET … NX EX` claim and refuses a
   read of the key, `SET … NX GET`, and another app's claim key. The key keeps its current name. *(Since
-  ADR-0068 Amendment 5 the prefix in it changes once, on the upgrade that re-renders every CDN app:
+  ADR-0068 Amendment 5 the prefix in it changes on the upgrade that re-renders every CDN app, and
+  again whenever the cluster identity changes (a rebuild, or a new `clusterId`):
   an old-revision pod that starts before the new revision is ready claims under the old prefix,
   which the new grant no longer covers. The claim is refused, and that pod skips its first-ready
   purge with a warning (`purger.js` `firstReady`); nothing else changes.)* The

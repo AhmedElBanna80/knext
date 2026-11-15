@@ -114,9 +114,15 @@ behind one zone purge only their own pages.
 
 If the operator cannot read the cluster identity, it does not guess a prefix. The app keeps its
 current Knative Service, `kubectl get nextapp` shows the condition `CDNAdvisory` with reason
-`ClusterIdentityUnavailable`, a change to the app is not applied (Ready is `False` with the same
-reason) and the read is retried every 30 seconds. The operator log has the error; the usual cause
-is missing `get` access to Namespaces.
+`ClusterIdentityUnavailable`, a change to the app is not applied (Ready is `False` and Degraded is
+`True`, with the same reason) and the read is retried every 30 seconds. The operator log has the error; the usual cause
+is missing `get` access to Namespaces. To alert on it, use the held-apps gauge:
+
+```yaml
+- alert: KnextCDNClusterIdentityUnavailable
+  expr: max(knext_platform_apps_held{reason="ClusterIdentityUnavailable"}) > 0
+  for: 5m
+```
 
 ## Live verification
 

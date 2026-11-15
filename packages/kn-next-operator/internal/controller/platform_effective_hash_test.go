@@ -22,9 +22,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"testing"
+	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	platformv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/platform/v1alpha1"
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -85,9 +89,12 @@ func TestDecideRollout_APlatformAppearingDoesNotQueueAnUnchangedCDNApp(t *testin
 	snap := platformSnapshot{crdPresent: true, obj: &platformv1alpha1.KnextPlatform{}}
 	snap.obj.Name = "default"
 	eff := resolveEffective(app, snap.active())
-	eff.cdnTagPrefix = "83f9eef439ad"
+	// The platform sets no clusterId: the prefix is still the kube-system uid's.
+	eff.cdnTagPrefix = cdnTagPrefix("ks-uid", app)
 
 	r := &NextAppReconciler{}
+	uid := "ks-uid"
+	r.kubeSystemUID.Store(&uid)
 	defer func() {
 		if p := recover(); p != nil {
 			t.Fatalf("the unchanged CDN app looked changed and the gate read the live Service: %v", p)
@@ -99,19 +106,56 @@ func TestDecideRollout_APlatformAppearingDoesNotQueueAnUnchangedCDNApp(t *testin
 	}
 }
 
-func TestIsHeldByPlatform_CountsAClusterIdentityHold(t *testing.T) {
+func TestDecideRollout_APlatformSettingClusterIDPacesTheCDNRerender(t *testing.T) {
+	// The same app, but the new platform sets clusterId: the prefix moves, so
+	// the re-render must wait for its slot behind the rollout limiter.
+	app := &appsv1alpha1.NextApp{Spec: appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}}}
+	app.Name, app.Namespace, app.Generation = "web", "default", 3
+	apimeta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
+		Type: ConditionReconciling, Status: metav1.ConditionFalse, Reason: reasonReconcileOK, ObservedGeneration: 3,
+	})
+	snap := platformSnapshot{crdPresent: true, obj: &platformv1alpha1.KnextPlatform{
+		Spec: platformv1alpha1.KnextPlatformSpec{
+			Cache:   &platformv1alpha1.PlatformCache{ClusterID: "prod-eu"},
+			Rollout: &platformv1alpha1.PlatformRollout{MaxAppsPerMinute: 1},
+		},
+	}}
+	snap.obj.Name = "default"
+	eff := resolveEffective(app, snap.active())
+	eff.cdnTagPrefix = cdnTagPrefix("prod-eu", app)
+
+	live := &servingv1.Service{}
+	live.Name, live.Namespace = app.Name, app.Namespace
+	c := fake.NewClientBuilder().WithScheme(goldenTestScheme(t, false)).WithObjects(live).Build()
+	now := time.Unix(1_800_000_000, 0)
+	r := &NextAppReconciler{Client: c, Clock: func() time.Time { return now }}
+	uid := "ks-uid"
+	r.kubeSystemUID.Store(&uid)
+	// Another app took this minute's slot.
+	r.rollout.reserve(types.NamespacedName{Namespace: "default", Name: "other"}, now, 1)
+
+	gate, err := r.decideRollout(context.Background(), app, snap, eff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.hold != holdRolloutPending {
+		t.Fatalf("a clusterId that moves the prefix must be paced, got hold %v", gate.hold)
+	}
+}
+
+func TestPlatformRollout_AnIdentityHeldAppIsNeitherHeldNorPending(t *testing.T) {
 	app := &appsv1alpha1.NextApp{}
 	apimeta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
 		Type: ConditionCDNAdvisory, Status: metav1.ConditionTrue, Reason: ReasonClusterIdentityUnavailable,
 	})
-	if !isHeldByPlatform(app) {
-		t.Fatal("an app held on the cluster identity must count as held in the platform's rollout status")
+	if !isIdentityHeld(app) {
+		t.Fatal("the identity hold is not recognised")
+	}
+	if isHeldByPlatform(app) {
+		t.Fatal("an identity hold is not the platform's doing and must not count as platform-held")
 	}
 	apimeta.RemoveStatusCondition(&app.Status.Conditions, ConditionCDNAdvisory)
-	apimeta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
-		Type: ConditionPlatformDefaultsApplied, Status: metav1.ConditionUnknown, Reason: ReasonRolloutPending,
-	})
-	if isHeldByPlatform(app) {
-		t.Fatal("a queued app is pending, not held")
+	if isIdentityHeld(app) {
+		t.Fatal("no advisory, no identity hold")
 	}
 }

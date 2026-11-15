@@ -916,7 +916,12 @@ names the Redis ACL users, and two clusters on one Redis that share it overwrite
 after spec validation and before it renders an app that renders `spec.cdn`, and caches the
 `kube-system` uid for the life of the process. A failed read is a hold (`holdClusterIdentityUnavailable`):
 the live Knative Service is left as it is, `CDNAdvisory` reports `ClusterIdentityUnavailable`,
-Ready is held False for an app change that was not applied, and the verdict requeues in 30 s. It already holds `get` on Namespaces for the ADR-0071 identity.
+Ready is held False for an app change that was not applied, and the verdict requeues in 30 s. The operator already holds `get` on Namespaces for the ADR-0071
+identity, so the read needs no new permission. The platform's rollout counts skip an identity-held
+app (it is neither applied, pending nor platform-held); the held-apps gauge reports it. With no
+`status.platform`, the rollout gate compares against the prefix of the `kube-system` uid, which is
+what an app rendered under no platform used: a platform that appears without `clusterId` leaves CDN
+apps alone, and one that sets `clusterId` paces their re-render.
 
 **Consequences.**
 - The default Redis key prefix and the ACL username keep the app hash `sha256("<namespace>/<name>")`.

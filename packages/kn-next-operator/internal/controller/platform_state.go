@@ -286,14 +286,23 @@ func (r *NextAppReconciler) gateRollout(ctx context.Context, app *appsv1alpha1.N
 // bookkeeping so no early "go now" return can leave a reservation behind.
 func (r *NextAppReconciler) decideRollout(ctx context.Context, app *appsv1alpha1.NextApp, snap platformSnapshot, eff effectiveValues) (platformGate, error) {
 	wantSpecHash := snap.hash()
-	// The built-in render this app had before any platform, with the prefix it
-	// renders now: the prefix is not a platform value, so a platform appearing
-	// does not by itself make a CDN app look changed.
-	base := resolveEffective(app, nil)
-	base.cdnTagPrefix = eff.cdnTagPrefix
-	appliedSpecHash, appliedEffHash := "", effectiveHash(base)
+	var appliedSpecHash, appliedEffHash string
 	if p := app.Status.Platform; p != nil {
 		appliedSpecHash, appliedEffHash = p.SpecHash, p.EffectiveHash
+	} else {
+		// No platform was in force at the last render, so it used the built-in
+		// values and, for a CDN app, the kube-system uid as its identity. A
+		// platform appearing with no clusterId leaves that prefix alone (go now);
+		// one that sets clusterId moves it, and that re-render is paced.
+		base := resolveEffective(app, nil)
+		if eff.cdnTagPrefix != "" {
+			uid, err := r.clusterIdentity(ctx, platformSnapshot{})
+			if err != nil {
+				return platformGate{}, err
+			}
+			base.cdnTagPrefix = cdnTagPrefix(uid, app)
+		}
+		appliedEffHash = effectiveHash(base)
 	}
 	if wantSpecHash == appliedSpecHash {
 		return platformGate{}, nil

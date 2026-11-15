@@ -38,8 +38,9 @@ type heldTracker struct {
 	byApp map[types.NamespacedName]string
 }
 
-// holdReason is the metric label for a gate: the same Reason the app's
-// PlatformDefaultsApplied condition carries, or "" when the pass is not held.
+// holdReason is the metric label for a gate: the Reason the app's condition
+// carries (PlatformDefaultsApplied, or CDNAdvisory for the cluster-identity
+// hold), or "" when the pass is not held.
 func holdReason(g platformGate) string {
 	switch g.hold {
 	case holdEffectiveSpecInvalid:

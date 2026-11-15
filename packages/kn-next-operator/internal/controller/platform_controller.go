@@ -93,9 +93,11 @@ func computePlatformStatus(p *platformv1alpha1.KnextPlatform, apps []appsv1alpha
 	var rollout platformv1alpha1.PlatformRolloutStatus
 	for i := range apps {
 		app := &apps[i]
-		if !app.DeletionTimestamp.IsZero() || isInvalidSpec(app) {
+		if !app.DeletionTimestamp.IsZero() || isInvalidSpec(app) || isIdentityHeld(app) {
 			// Cannot receive the configuration: counting it as pending would hold
-			// DefaultsPropagated at Progressing for the whole cluster.
+			// DefaultsPropagated at Progressing for the whole cluster. An identity
+			// hold is not the platform's doing either, so it is not "held" here;
+			// the app's CDNAdvisory and the held-apps gauge report it.
 			continue
 		}
 		switch {
@@ -140,14 +142,16 @@ func isInvalidSpec(app *appsv1alpha1.NextApp) bool {
 	return c != nil && c.Reason == lcInvalidSpec
 }
 
-// isHeldByPlatform reports whether the app's last verdict held its Knative
-// Service: the platform's values make it invalid, or (a CDN app) the cluster
-// identity its tag prefix needs could not be read.
+// isIdentityHeld reports whether the app's last verdict held its Knative Service
+// because the cluster identity its CDN tag prefix needs could not be read.
+func isIdentityHeld(app *appsv1alpha1.NextApp) bool {
+	c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionCDNAdvisory)
+	return c != nil && c.Reason == ReasonClusterIdentityUnavailable
+}
+
+// isHeldByPlatform reports whether the app's last verdict was a hold because of
+// the platform's values.
 func isHeldByPlatform(app *appsv1alpha1.NextApp) bool {
-	if c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionCDNAdvisory); c != nil &&
-		c.Reason == ReasonClusterIdentityUnavailable {
-		return true
-	}
 	c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionPlatformDefaultsApplied)
 	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == ReasonEffectiveSpecInvalid
 }

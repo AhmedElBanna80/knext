@@ -31,7 +31,6 @@ import { createGuardProver } from './lib/guard-prover.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SUBJECTS = { backlog: 'packages/kn-next/src/adapters/tag-backlog.js' };
 
 const CAP = {
   id: 'B01',
@@ -91,7 +90,11 @@ const PURGE_CANARY = {
 
 const provers = SITES.map((site) => ({
   site,
-  prover: createGuardProver({ repoRoot: REPO_ROOT, spec: site.spec, subjects: SUBJECTS }),
+  prover: createGuardProver({
+    repoRoot: REPO_ROOT,
+    spec: site.spec,
+    subjects: { backlog: 'packages/kn-next/src/adapters/tag-backlog.js' },
+  }),
 }));
 
 console.log('=== mutation proof: the shared tag backlog (#2387) ===');

@@ -99,12 +99,18 @@ function secretLike(name: string): boolean {
 const URL_WITH_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^\s@:/]*:\S*@/i;
 const RESERVED_MOUNT = '/var/run/knext';
 
+/**
+ * Appended to a refusal instead of the offending fragment: a malformed
+ * `--env*` argument may hold a secret, so no part of it is echoed.
+ */
+const NOT_REPEATED = ' (the value is not repeated here, in case it holds a secret)';
+
 function usage(flag: string, problem: string): never {
   throw new GrpcUsageError(`--${flag}: ${problem}`);
 }
 
 function envName(flag: string, name: string): string {
-  if (!ENV_NAME.test(name)) usage(flag, `"${name}" is not a valid environment variable name`);
+  if (!ENV_NAME.test(name)) usage(flag, `not a valid environment variable name${NOT_REPEATED}`);
   if (name.startsWith(RESERVED_ENV_PREFIX)) {
     usage(
       flag,
@@ -118,7 +124,7 @@ function objectName(flag: string, kind: string, name: string): string {
   if (name.length === 0 || name.length > 253 || !DNS_SUBDOMAIN.test(name)) {
     usage(
       flag,
-      `"${name}" is not a valid ${kind} name (lowercase letters, digits, '-' and '.', at most 253 characters)`,
+      `not a valid ${kind} name: lowercase letters, digits, '-' and '.', at most 253 characters${NOT_REPEATED}`,
     );
   }
   return name;
@@ -151,7 +157,7 @@ function splitOnce(
 function keyRef(flag: string, kind: string, raw: string): [string, { name: string; key: string }] {
   const [name, ref] = splitOnce(flag, raw, '=', `NAME=<${kind}>/<key>`, false);
   const [obj, key] = splitOnce(flag, ref, '/', `NAME=<${kind}>/<key>`, false);
-  if (!DATA_KEY.test(key)) usage(flag, `"${key}" is not a valid ${kind} key`);
+  if (!DATA_KEY.test(key)) usage(flag, `not a valid ${kind} key${NOT_REPEATED}`);
   return [envName(flag, name), { name: objectName(flag, kind, obj), key }];
 }
 

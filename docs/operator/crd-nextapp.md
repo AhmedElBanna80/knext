@@ -40,7 +40,9 @@ is also set** (see below), which puts that shape in the same "leave it to the
 image's own `CMD`" bucket as `vinext`. On the Bun runtime that `server.js` is
 not Next's server: it is a small shim that starts knext's supervisor, and the
 supervisor runs the compiled executable the build produced. So a `runtime: bun`
-standalone app is compiled too; the command only names the shim.
+standalone app is compiled too; the command only names the shim. (A
+`selfContained` image has no supervisor: the image starts the executable
+itself.)
 
 > **Upgrade order (#548):** a cluster whose CRD predates `"vinext"` rejects
 > such a CR under `--validate=strict` (which every CLI apply passes) — a loud
@@ -52,7 +54,8 @@ Only meaningful for the standalone shape (`build` absent or `"turbopack"`); for
 `build: "vinext"` the runtime is compiled into the executable and this field
 does not affect how the container starts. Set it to match the image. An image
 built for Bun carries the compiled executable, and the container's
-`bun run server.js` reaches it through the shim described above. An image built
+`bun run server.js` reaches it through the shim described above (or, with
+`selfContained`, the image starts the executable directly). An image built
 for Node runs Next's standalone `server.js` under Node, which needs `runtime`
 to be `"node"` or unset: `"bun"` makes the operator run `bun run server.js`,
 and a Node image has no Bun to run it with, so it does not start.

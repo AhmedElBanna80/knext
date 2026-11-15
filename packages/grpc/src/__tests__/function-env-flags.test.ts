@@ -63,6 +63,27 @@ describe('parseFunctionEnvFlags: the CRD shapes', () => {
     });
   });
 
+  it.each([
+    ['--env with no =', { env: ['sk_live_hunter2'] }],
+    ['--env with an empty name', { env: ['=hunter2'] }],
+    ['--env-secret with no =', { envSecret: ['hunter2'] }],
+    ['--env-configmap with no /', { envConfigMap: ['X=hunter2'] }],
+  ])('never repeats a malformed %s argument (it may be a bare secret)', (_label, flags) => {
+    expect(() => parseFunctionEnvFlags(flags)).toThrow(/not repeated here/);
+    try {
+      parseFunctionEnvFlags(flags);
+    } catch (e) {
+      expect((e as Error).message).not.toContain('hunter2');
+    }
+  });
+
+  it('accepts a URL without a password, and a canonical path', () => {
+    expect(
+      parseFunctionEnvFlags({ env: ['API_BASE_URL=https://api.example.com/v1'] }).env,
+    ).toHaveLength(1);
+    expect(parseFunctionEnvFlags({ volume: ['v:/var/run/app:emptydir'] }).volumes).toHaveLength(1);
+  });
+
   it('emits nothing for no flags (the CR stays as before)', () => {
     expect(parseFunctionEnvFlags({})).toEqual({});
   });
@@ -102,11 +123,36 @@ describe('parseFunctionEnvFlags: the CRD shapes', () => {
       /reserved for operator mounts/,
     ],
     ['a Knative-reserved path', { volume: ['v:/dev:emptydir'] }, /reserved by Knative serving/],
+    ['a non-canonical path (//)', { volume: ['v://dev/./:emptydir'] }, /must be canonical/],
     [
-      'a Knative-reserved path spelled oddly',
-      { volume: ['v://dev/./:emptydir'] },
-      /reserved by Knative serving/,
+      'the operator path with a double slash',
+      { volume: ['v://var/run/knext:emptydir'] },
+      /must be canonical/,
     ],
+    [
+      'the operator path through ..',
+      { volume: ['v:/a/../var/run/knext:emptydir'] },
+      /must be canonical/,
+    ],
+    [
+      'the operator path through .',
+      { volume: ['v:/./var/run/knext:emptydir'] },
+      /must be canonical/,
+    ],
+    ['a trailing slash', { volume: ['v:/data/:emptydir'] }, /must be canonical/],
+    [
+      'a URL with a password',
+      { env: ['DATABASE_URL=postgres://app:hunter2@db:5432/x'] },
+      /URL with a password/,
+    ],
+    [
+      'a DSN as a value',
+      { env: ['SENTRY_DSN=https://k@o.ingest.sentry.io/1'] },
+      /looks like a secret/,
+    ],
+    ['an AUTH segment', { env: ['AUTH_HEADER=Bearer x'] }, /looks like a secret/],
+    ['a passphrase', { env: ['GPG_PASSPHRASE=x'] }, /looks like a secret/],
+    ['an access token run together', { env: ['GH_ACCESSTOKEN=x'] }, /looks like a secret/],
     ['an unknown volume kind', { volume: ['v:/data:hostpath:/x'] }, /expected <name>:<mountPath>/],
     ['emptydir with a source', { volume: ['v:/data:emptydir:x'] }, /expected <name>:<mountPath>/],
     ['a bad volume name', { volume: ['V:/data:emptydir'] }, /must be a DNS label/],

@@ -105,9 +105,11 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   `--image-pull-secret` flags onto the CRD's shapes, and `FUNCTION_ENV_LIMITS`
   holds the CRD's MaxItems (env 128, envFrom 16, volumes 16, imagePullSecrets 8).
   Pure. Secrets only by reference: a plain `--env` whose name looks like a
-  secret is refused, `KNEXT_TOKEN_*` names are reserved, `/var/run/knext` and
-  Knative's `/`, `/dev` and `/dev/log` cannot be mounted, and a duplicate env or
-  volume name is refused. The operator's Secret allowlist is checked against the
+  secret (`secretLike`, a guard: substring words plus whole `_` segments) or
+  whose value is a URL with a password is refused; no `--env*` usage error
+  repeats the raw argument; `KNEXT_TOKEN_*` names are reserved; a mount path
+  must be canonical, then `/var/run/knext` and Knative's `/`, `/dev` and
+  `/dev/log` cannot be mounted; a duplicate env or volume name is refused. The operator's Secret allowlist is checked against the
   cluster, not here.
 - `spec-digest.ts`: `SPEC_DIGEST_DOMAIN` (`knext/backendservice-spec/v1\n`),
   `BACKEND_SPEC_PINNED_FIELDS` (`image`, `env`, `envFrom`, `volumes`),

@@ -866,20 +866,27 @@ knext deploy function orders \
 - Optional: `--namespace`, `--context`, `--port`, `--proto-version`, `--no-wake-ahead`,
   `--min-scale`, `--max-scale`, `--container-concurrency`.
 - The function container's environment, volumes and registry pull Secrets. Each flag can be repeated:
-  - `--env NAME=VALUE` sets a plain environment variable. It is for settings that are not secret: a
-    name that looks like a secret (`*_PASSWORD`, `*_TOKEN`, `*_API_KEY` and similar) is refused, so
-    a secret never lands in your shell history or the process list.
+  - `--env NAME=VALUE` sets a plain environment variable. It is for settings that are not secret.
+    As a guard, it refuses a name that contains `SECRET`, `PASSWORD`, `PASSPHRASE`, `TOKEN`,
+    `CREDENTIAL`, `API_KEY`, `PRIVATE_KEY` or `ACCESS_KEY`, or that has `PASS`, `PWD`, `AUTH`, `KEY`,
+    `DSN` or `CERT` as one of its `_`-separated parts. It also refuses a value that is a URL with a
+    password in it (`postgres://user:pass@host`). It is not a guarantee: anything you pass to
+    `--env` is in your shell history, the process list and the `BackendService`, so put every
+    secret in a Secret. Set a harmless name the guard refuses (`TOKEN_TTL`) with
+    `--env-configmap`.
   - `--env-secret NAME=<secret>/<key>` reads a variable from a key of a Secret, and
     `--env-configmap NAME=<configmap>/<key>` from a key of a ConfigMap.
   - `--env-from secret:<name>` or `--env-from configmap:<name>` imports every key of a Secret or
     ConfigMap.
   - `--volume <name>:<path>:secret:<secret>`, `--volume <name>:<path>:configmap:<configmap>` or
-    `--volume <name>:<path>:emptydir` mounts a volume. `/var/run/knext` is reserved for the
-    operator, and `/`, `/dev` and `/dev/log` cannot be mounted.
+    `--volume <name>:<path>:emptydir` mounts a volume. The path must be absolute and canonical
+    (no `//`, `.` or `..` and no trailing `/`), and cannot contain `:`. `/var/run/knext` is
+    reserved for the operator, and `/`, `/dev` and `/dev/log` cannot be mounted.
   - `--image-pull-secret <name>` names a registry pull Secret.
 
-  Secrets are always named, never passed as values. The operator runs the function only if every
-  Secret it references is the zone's database Secret or a Secret marked as the zone's.
+  Secrets are always named, never passed as values. The operator does not run the function while
+  any Secret it references is something other than the zone's database Secret or a Secret marked as
+  the zone's.
 - `--dry-run` prints the resource and applies nothing, so it pipes into `kubectl apply -f -`.
 
 It applies the way `knext deploy` applies a `NextApp`. First a server-side dry run checks the

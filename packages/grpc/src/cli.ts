@@ -114,7 +114,8 @@ Options:
   --max-scale <n>              fan-out cap (0 = the Knative default)
   --container-concurrency <n>  concurrent requests per pod (0 = unlimited)
   --env NAME=VALUE             a plain (non-secret) environment variable; repeatable.
-                               A name that looks like a secret is refused: use --env-secret
+                               A secret-looking name, or a URL with a password, is refused:
+                               use --env-secret
   --env-secret NAME=<secret>/<key>
                                an environment variable read from a Secret key; repeatable
   --env-configmap NAME=<configmap>/<key>

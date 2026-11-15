@@ -73,7 +73,26 @@ const RESERVED_ENV_PREFIX = 'KNEXT_TOKEN_';
 // A plain `--env` value whose name says it is a secret is refused: the value
 // would sit in shell history and the process list. `--env-secret` takes a
 // reference instead.
-const SECRET_LIKE = /(^|_)(SECRET|PASSWORD|PASSWD|TOKEN|API_?KEY|PRIVATE_?KEY|CREDENTIALS?)(_|$)/i;
+//
+// A GUARD, not a guarantee: it catches the common names, and it over-blocks
+// a few harmless ones (TOKEN_TTL), which `--env-configmap` sets instead. A name
+// is refused when it CONTAINS one of the words, or has one of the short
+// segments as a whole `_`-separated part.
+const SECRET_WORDS =
+  /SECRET|PASSWORD|PASSWD|PASSPHRASE|TOKEN|CREDENTIAL|APIKEY|API_KEY|PRIVATE_KEY|PRIVATEKEY|ACCESS_KEY|ACCESSKEY/i;
+const SECRET_SEGMENTS = new Set(['PASS', 'PWD', 'AUTH', 'KEY', 'DSN', 'CERT']);
+function secretLike(name: string): boolean {
+  return (
+    SECRET_WORDS.test(name) ||
+    name
+      .toUpperCase()
+      .split('_')
+      .some((seg) => SECRET_SEGMENTS.has(seg))
+  );
+}
+// A URL that carries a password in its userinfo (`scheme://user:pass@host`),
+// whatever the variable is called (DATABASE_URL, REDIS_URL).
+const URL_WITH_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]*:[^/\s@]+@/i;
 const RESERVED_MOUNT = '/var/run/knext';
 
 function usage(flag: string, problem: string): never {
@@ -101,16 +120,33 @@ function objectName(flag: string, kind: string, name: string): string {
   return name;
 }
 
-function splitOnce(flag: string, raw: string, sep: string, shape: string): [string, string] {
+/**
+ * Split at the first `sep`. `echo` false never repeats the argument in the
+ * message: an `--env` argument without its `=` may be a bare secret.
+ */
+function splitOnce(
+  flag: string,
+  raw: string,
+  sep: string,
+  shape: string,
+  echo = true,
+): [string, string] {
   const i = raw.indexOf(sep);
-  if (i <= 0) usage(flag, `expected ${shape}, got "${raw}"`);
+  if (i <= 0) {
+    usage(
+      flag,
+      echo
+        ? `expected ${shape}, got "${raw}"`
+        : `expected ${shape} (the argument is not repeated here, in case it holds a secret)`,
+    );
+  }
   return [raw.slice(0, i), raw.slice(i + sep.length)];
 }
 
 /** `NAME=<object>/<key>` for a Secret or ConfigMap key reference. */
 function keyRef(flag: string, kind: string, raw: string): [string, { name: string; key: string }] {
-  const [name, ref] = splitOnce(flag, raw, '=', `NAME=<${kind}>/<key>`);
-  const [obj, key] = splitOnce(flag, ref, '/', `NAME=<${kind}>/<key>`);
+  const [name, ref] = splitOnce(flag, raw, '=', `NAME=<${kind}>/<key>`, false);
+  const [obj, key] = splitOnce(flag, ref, '/', `NAME=<${kind}>/<key>`, false);
   if (!DATA_KEY.test(key)) usage(flag, `"${key}" is not a valid ${kind} key`);
   return [envName(flag, name), { name: objectName(flag, kind, obj), key }];
 }
@@ -125,14 +161,21 @@ function sourceRef(flag: string, raw: string): [string, string] {
 function mountPath(flag: string, path: string): string {
   if (!path.startsWith('/') || path.length > 512)
     usage(flag, `mount path "${path}" must be absolute (at most 512 characters)`);
+  // Only the canonical spelling is accepted (no '//', '.', '..' or trailing '/'),
+  // so the reserved-path checks below compare what the kubelet will mount, and
+  // `//var/run/knext` or `/a/../var/run/knext` cannot slip past them.
+  const segs = path.split('/').slice(1);
+  if (path !== '/' && segs.some((s) => s === '' || s === '.' || s === '..')) {
+    usage(
+      flag,
+      `mount path "${path}" must be canonical: no '//', '.' or '..' segments and no trailing '/'`,
+    );
+  }
   if (path === RESERVED_MOUNT || path.startsWith(`${RESERVED_MOUNT}/`)) {
     usage(flag, `${RESERVED_MOUNT} is reserved for operator mounts`);
   }
-  // Knative serving refuses these mount paths (its reservedPaths), after path.Clean.
-  const clean = `/${path
-    .split('/')
-    .filter((s) => s !== '' && s !== '.')
-    .join('/')}`;
+  // Knative serving refuses these mount paths (its reservedPaths).
+  const clean = path;
   if (clean === '/' || clean === '/dev' || clean === '/dev/log') {
     usage(
       flag,
@@ -145,7 +188,7 @@ function mountPath(flag: string, path: string): string {
 /** `<name>:<mountPath>:secret:<secret>`, `...:configmap:<configmap>` or `...:emptydir`. */
 function volume(flag: string, raw: string): FunctionVolumeInput {
   const shape =
-    '<name>:<mountPath>:secret:<secret>, <name>:<mountPath>:configmap:<configmap> or <name>:<mountPath>:emptydir';
+    "<name>:<mountPath>:secret:<secret>, <name>:<mountPath>:configmap:<configmap> or <name>:<mountPath>:emptydir (a mount path cannot contain ':')";
   const parts = raw.split(':');
   if (parts.length < 3) usage(flag, `expected ${shape}, got "${raw}"`);
   const [name, path, kind, ...rest] = parts;
@@ -180,9 +223,15 @@ export function parseFunctionEnvFlags(flags: FunctionEnvFlags): FunctionEnvSpec 
     env.push(v);
   };
   for (const raw of flags.env ?? []) {
-    const [name, value] = splitOnce('env', raw, '=', 'NAME=VALUE');
+    const [name, value] = splitOnce('env', raw, '=', 'NAME=VALUE', false);
     const checked = envName('env', name);
-    if (SECRET_LIKE.test(checked)) {
+    if (URL_WITH_PASSWORD.test(value)) {
+      usage(
+        'env',
+        `${checked} is a URL with a password in it; put it in a Secret and pass --env-secret ${checked}=<secret>/<key>`,
+      );
+    }
+    if (secretLike(checked)) {
       usage(
         'env',
         `${checked} looks like a secret; pass it by reference with --env-secret ${checked}=<secret>/<key>, never as a value on the command line`,

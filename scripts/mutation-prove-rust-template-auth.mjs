@@ -171,8 +171,8 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the token layer is left out of the server stack',
     subject: 'server',
-    anchor: '        .layer(AuthLayer::new(verifier))\n',
-    replacement: '        .layer(tower::layer::util::Identity::new())\n',
+    anchor: '        Some(AuthLayer::new(verifier)),\n',
+    replacement: '        None,\n',
   },
   // ── L: the request-read bounds ────────────────────────────────────────────
   {
@@ -180,7 +180,7 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the message limit is lifted (a small gzip body inflates without bound)',
     subject: 'server',
-    anchor: '                .with_max_message_size(MAX_REQUEST_BYTES)\n',
+    anchor: '                .with_max_message_size(max_message)\n',
     replacement: '                .with_max_message_size(usize::MAX)\n',
   },
   {
@@ -188,16 +188,16 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the body cap is lifted at the wiring (an endless client stream is read forever)',
     subject: 'server',
-    anchor: '            MAX_REQUEST_BODY_BYTES,\n            cfg.timeouts.read,\n',
-    replacement: '            usize::MAX,\n            cfg.timeouts.read,\n',
+    anchor: '        .layer(body::BoundedBodyLayer::new(max_body, cfg.timeouts.read))\n',
+    replacement: '        .layer(body::BoundedBodyLayer::new(usize::MAX, cfg.timeouts.read))\n',
   },
   {
     id: 'L3',
     expect: 'red',
     claim: 'the read timeout is lifted at the wiring (a stalled body is never cut off)',
     subject: 'server',
-    anchor: '            MAX_REQUEST_BODY_BYTES,\n            cfg.timeouts.read,\n',
-    replacement: '            MAX_REQUEST_BODY_BYTES,\n            Duration::from_secs(86_400),\n',
+    anchor: '        .layer(body::BoundedBodyLayer::new(max_body, cfg.timeouts.read))\n',
+    replacement: '        .layer(body::BoundedBodyLayer::new(max_body, Duration::from_secs(86_400)))\n',
   },
   {
     id: 'L4',

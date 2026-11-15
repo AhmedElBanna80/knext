@@ -1,7 +1,7 @@
 # scripts
 
 ## Overview
-This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 295 top-level files (280 `.mjs`, 13 `.sh`, one `.ts` and one `.json`). 170 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
+This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 296 top-level files (280 `.mjs`, 14 `.sh`, one `.ts` and one `.json`). 170 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
 
 ## Interface
 
@@ -61,6 +61,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 
 ### Kind and cluster e2e assertions
 - CDN: `cdn-e2e-assert.mjs`, `cdn-e2e-purge-assert.mjs`, `cdn-e2e-mutate-preload.mjs`, `cdn-e2e-expect-red.sh`.
+- Rollback across artifact shapes: `single-exec-rollback-kind.sh` (the `single-exec-rollback-kind-e2e.yml` lane, guarded by `tests/single-exec-rollback-kind-lane.test.ts`). It deploys one `cdn-kind-app` NextApp as selfContained Bun, disk-mode Bun and Node, then pins traffic back and forth with `knext rollback`. It requires each revision to render its own container command, `/build-mark` (rendered per request) to name the pinned build, and one shared Redis `unstable_cache` entry across every shape. `/tagged`'s HTML is ISR, shared across builds, so it is not a serving signal.
 - `use-cache-2pod-e2e-assert.sh`, `public-hosts-e2e-assert.sh`, `deep-health-alert-e2e.sh`, `load-test.sh`, `scale-suite-tolerance.mjs`, `nightly-alert-issue.mjs`.
 - Redis: `redis-acl-spike.mjs`, `redis-commands.mjs` (`REDIS_COMMANDS`).
 - `oke-verify-preamble.mjs`: run before an OKE verify. Flags: `--expect-operator-digest sha256:<64 hex>` (required), `--expect-ksvc-generation <n>`, `--context`, `--ksvc` and `--ksvc-namespace` (both default `knext-docs`), `--source-crd` (default `CRD_PATH`); `KUBECTL` overrides the binary. The digest must be lowercase hex and the generation a positive integer. Prints each operator pod's manager `imageID`, whether the live `NextApp` CRD has the source's versions with the same schemas and served/storage flags, and the ksvc generation. Exit 0 match, 1 mismatch, 2 bad arguments or a failed read.

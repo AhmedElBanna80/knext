@@ -50,10 +50,11 @@ standalone app is compiled too; the command only names the shim.
 Selects the process that executes the standalone server: `"node"` (default) or `"bun"`.
 Only meaningful for the standalone shape (`build` absent or `"turbopack"`); for
 `build: "vinext"` the runtime is compiled into the executable and this field
-does not affect how the container starts. With `"bun"`, the standalone build is
-compiled into an executable as well, and the container's `bun run server.js`
-reaches it through the shim described above; with `"node"`, Node runs Next's
-standalone `server.js`.
+does not affect how the container starts. Which process serves is fixed by
+the image, not by this field: an image built for Bun carries the compiled
+executable and runs it (the container's `bun run server.js` reaches it through
+the shim described above), whatever this field says; an image built for Node
+runs Next's standalone `server.js` under Node.
 ```yaml
 spec:
   runtime: "bun"
@@ -62,7 +63,7 @@ spec:
 > **Historical note:** images built by the retired per-file Bun bytecode pass
 > (pre-ADR-0048-Amendment-3) were Bun-only and exited with a `FATAL` message
 > under Node; flipping such an image back to `node` requires rebuilding it.
-> New builds never hit this — bytecode now exists only inside the compiled
+> New builds never hit this — Bun bytecode now exists only inside the compiled
 > executables (vinext, and the standalone shape on `runtime: "bun"`).
 
 ### `selfContained` (Optional, default `false`)

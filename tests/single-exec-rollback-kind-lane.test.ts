@@ -122,34 +122,38 @@ describe('the script', () => {
       '      *) fail "shape ${shape}: its first /tagged came from build ${tmark}',
     );
     expect(script).toContain('the page cache was lost across the switch" ;;');
-    // SEEN_MARKS is written twice: initialised empty, then extended with the
-    // SERVING mark after the check. Never with the page's (tmark) mark.
-    // Every write to SEEN_MARKS, in any form, is one of exactly these two lines.
-    const writes = script
+    // Every line that names SEEN_MARKS at all (an assignment, printf -v, read,
+    // a nameref, a loop variable...) is one of these, in this order: init, the
+    // check, the case, the fail arm, and only then the SERVING mark joins. A
+    // write anywhere else, or the append moved above the check, would let a
+    // fresh render of /tagged find its own mark and pass.
+    const uses = script
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => /\bSEEN_MARKS(\+)?=/.test(l));
-    expect(writes).toEqual(['SEEN_MARKS=" "', 'SEEN_MARKS="${SEEN_MARKS}${mark} "']);
-    // ...and the serving mark joins only AFTER the check, or a fresh render of
-    // /tagged would find its own mark there and pass.
-    const check = script.indexOf('if [ "$SEEN_MARKS" != " " ]; then');
-    const failArm = script.indexOf('      *) fail "shape ${shape}: its first /tagged');
-    const append = script.indexOf('SEEN_MARKS="${SEEN_MARKS}${mark} "');
-    expect(check).toBeGreaterThan(-1);
-    expect(failArm).toBeGreaterThan(check);
-    expect(append).toBeGreaterThan(failArm);
-    expect(script).toContain('SEEN_MARKS="${SEEN_MARKS}${mark} "');
+      .filter((l) => l.includes('SEEN_MARKS'));
+    expect(uses.map((l) => l.slice(0, 40))).toEqual([
+      'SEEN_MARKS=" "',
+      'if [ "$SEEN_MARKS" != " " ]; then',
+      'case "$SEEN_MARKS" in',
+      '*) fail "shape ${shape}: its first /tagg',
+      'SEEN_MARKS="${SEEN_MARKS}${mark} "',
+    ]);
+    expect(uses[3]).toContain('(${SEEN_MARKS}): the page cache was lost across the switch" ;;');
+    expect(uses[4]).toBe('SEEN_MARKS="${SEEN_MARKS}${mark} "');
   });
 
   it('reports the data-cache entry per shape and does not claim it is shared', () => {
     expect(script).toContain('say "data cache: NOT shared across shapes:');
-    // Reported only: no failing line anywhere compares or mentions the stamps.
-    const failing = script
+    // Reported only: the one failing line that names the stamp is the emptiness
+    // check, exactly. Continuation lines are joined, so a split line cannot hide.
+    const stampFails = script
+      .replace(/\\\n/g, ' ')
       .split('\n')
-      .filter((l) => /\bfail\b/.test(l) && !l.trimStart().startsWith('#'));
-    expect(failing.filter((l) => /stamp|STAMP/.test(l) && !l.includes('carries no stamp'))).toEqual(
-      [],
-    );
+      .filter((l) => /\bfail\b/.test(l) && /stamp|STAMP/.test(l) && !l.trimStart().startsWith('#'))
+      .map((l) => l.trim());
+    expect(stampFails).toEqual([
+      '[ -n "$stamp" ] || fail "$1: /rb-stamp carries no stamp: $(head -c 300 "${body}-rb-stamp")"',
+    ]);
     expect(workflowText).not.toMatch(
       /unstable_cache entry [^\n]*is the same one under every shape/,
     );

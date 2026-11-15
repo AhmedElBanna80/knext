@@ -18,13 +18,13 @@ import {
   RUST_GITIGNORE,
   RUST_KEYWORDS_2024,
   RUST_TEMPLATE_EXCLUDES,
-  stripConformanceGate,
   RUST_TOOLCHAIN_CRATES,
   renameLockedPackage,
   resolveRustTemplateDir,
   rustTemplateDir,
   rustTemplateFiles,
   scaffoldedRustFromTemplate,
+  stripConformanceGate,
   upperSnake,
 } from '../scaffold-rust';
 import { isExcludedBy } from '../scaffold-template';

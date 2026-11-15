@@ -19,9 +19,11 @@ const OPERATOR_CMD = /^packages\/kn-next-operator\/cmd\/.+\.go$/;
  * What the operator may write to the cluster, and the gate in front of every
  * write: its RBAC, admission policy, webhooks and the webhook serving cert
  * (`certmanager/`; the webhook is failurePolicy=Fail, so a broken cert blocks writes).
+ * Also the network config the install bundle writes cluster-wide: the
+ * NetworkPolicy (`network-policy/`) and Knative's `config-network` (`knative/`).
  */
 const OPERATOR_WRITE_SURFACE =
-  /^packages\/kn-next-operator\/config\/(rbac|admission|webhook|certmanager)\//;
+  /^packages\/kn-next-operator\/config\/(rbac|admission|webhook|certmanager|network-policy|knative)\//;
 
 /**
  * The parts of the install bundle (`config/default/`) that decide the same thing:
@@ -29,7 +31,7 @@ const OPERATOR_WRITE_SURFACE =
  * patches and the webhook wiring.
  */
 const OPERATOR_BUNDLE_WRITE_SURFACE =
-  /^packages\/kn-next-operator\/config\/default\/(kustomization\.yaml|[^/]*(admission|webhook)[^/]*)$/;
+  /^packages\/kn-next-operator\/config\/default\/(kustomization\.yaml|[^/]*(admission|webhook|config_network)[^/]*)$/i;
 
 /**
  * The operator Deployment: its `serviceAccountName` is the identity the admission
@@ -39,13 +41,16 @@ const OPERATOR_BUNDLE_WRITE_SURFACE =
 const OPERATOR_MANAGER = 'packages/kn-next-operator/config/manager/manager.yaml';
 
 /**
- * Not part of what a template ships: test modules, helpers and vectors (`tests.rs`,
- * `*_tests.rs`, `tests/`, `testkit.rs`, `testutil.rs`, `testvectors.rs`,
- * `testvectors/`), the `e2e/` suites, Markdown and `.gitignore`.
- * `.dockerignore` still fires: it decides what goes into the image.
+ * Not part of what a template ships: test modules, helpers, data and vectors
+ * (`tests.rs`, `*_tests.rs`, `tests/`, `testkit.rs`, `testutil.rs`,
+ * `testvectors.rs`, `testvectors/`, `testhelpers/`, Go's `testdata/`), the `e2e/`
+ * suites, the repo-only Connect conformance harness (`conformance.sh`,
+ * `conformance/`; `src/conformance.rs` is compiled in, so it still fires),
+ * Markdown and `.gitignore`. `.dockerignore` still fires: it decides what goes
+ * into the image. `vendor/` still fires: it is a vendored dependency.
  */
 const TEMPLATE_NON_SURFACE =
-  /(^|\/)(tests|testkit|testutil|testvectors|e2e)(\/|\.rs$)|_tests\.rs$|\.md$|(^|\/)\.gitignore$/;
+  /(^|\/)(tests|testkit|testutil|testvectors|testhelpers|testdata|e2e)(\/|\.rs$)|_tests\.rs$|\.md$|(^|\/)\.gitignore$|^templates\/[^/]+\/(conformance\.sh$|conformance\/)/;
 
 export function isTestPath(p) {
   return (

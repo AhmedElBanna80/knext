@@ -174,3 +174,41 @@ break a supported setup. In Next 16.4 `adapterPath` defaults to `process.env.NEX
   **falls back to the existing text checks for that build** and prints a warning that the resolved config could
   not be confirmed. This keeps today's guarantees on the uncommon paths, and the resolved config decides on
   every path where an adapter ran. This replaces Revision 1 item 6 and the `.knext/` path.
+
+## Revision 3 (PR review, jev 0.68). Supersedes Revision 2's injection
+
+**Discovered fact (design review, read in Next 16.4.3 source).** Setting *any* `adapterPath` changes Next's
+build output, whether or not the adapter does anything:
+- prerender artifact names (`getRouteCacheKey`, `build/index.js`);
+- `useScopedBuildArtifacts` (`export/worker.js`);
+- `fallback: false` misses render a 404 instead of throwing `NoFallbackError` (`pages-handler.js`);
+- the build-cache hash.
+
+`build-artifact.ts` already blanks `adapterPath` in the standalone config for this reason. A facts-only
+adapter injected through `NEXT_ADAPTER_PATH` is therefore **not** behaviour-neutral for adapter-less apps.
+It is removed, together with its export.
+
+**Measured (Next 16.4.3; webpack, Turbopack and a static export).** Every `next build` writes the resolved
+config to `<distDir>/required-server-files.json`, `config` included. That covers a non-standalone build
+and a wrapper-set flag (`turbopackModuleFragments: true` read back). A build whose `distDir` resolves to
+`build` writes it to `build/` and leaves `.next`'s copy untouched.
+
+**Decision order after a Next build:**
+1. **knext's adapter record.** The adapter refuses in `modifyConfig`, before compilation. The record
+   carries `projectDir` (from `modifyConfig`'s ctx), and a record for another app's directory is ignored,
+   which covers a script that builds several apps. A recorded refusal throws even if the build exited 0.
+2. **Next's own `.next/required-server-files.json`**, for apps without knext's adapter. The CLI deletes it
+   (and `.next/export-detail.json`) before the build, so a present file belongs to this build; there is no
+   clock comparison. A file that does not parse refuses. These refusals come after the build.
+3. **Neither** (the build script did not run `next build`, or a custom `distDir` on an adapter-less app):
+   the earlier text checks, with a warning.
+
+**Before the build,** the text checks also run, as warnings only, so a setting the text can see is
+flagged before a slow build.
+
+**R1, amended.** No refusal depends on a text scan **when Next resolved the config in this build**, which
+is cases 1 and 2. Text scans still decide in case 3, on `build --skip-next` (no build, so no resolved
+config), on the vinext target (PR 2), and in `knext doctor` (advisory).
+
+**Not done (dropped):** Revision 1 item 8, logging once per build. The `modifyConfig fired` log predates
+this change, and the nonce it was keyed on no longer exists.

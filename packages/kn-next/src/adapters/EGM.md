@@ -27,10 +27,6 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 
 - `./adapter` resolves to `next-adapter.ts:default`, the `NextAdapter` named
   `knext-adapter`. It provides `modifyConfig` and `onBuildComplete`.
-- `./internal/next-config-facts` resolves to `next-config-facts.js:default`, the
-  facts-only `NextAdapter` named `knext-config-facts`. Its `modifyConfig` records
-  the resolved config facts (below) and returns the config unchanged. It has no
-  `onBuildComplete`. The CLI points `NEXT_ADAPTER_PATH` at it.
 - `./adapters/otel-config` resolves to `otel-config.ts:resolveOtelOptions`.
 - `./adapters/tracing` is `tracing.ts`. It exports `TRACER_NAME`,
   `COLD_START_SPAN_NAME`, `DB_WAKE_SPAN_NAME`, `CORRELATION_ATTRIBUTE`,
@@ -171,8 +167,10 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `readNextConfigFacts(path)`, `refusalFor(facts, {runtime, builder})`,
   `isDefaultDistDir`, `CONFIG_FACTS_OUT_ENV` (`KNEXT_CONFIG_FACTS_OUT`),
   `KNEXT_BUILDER_ENV` (`KNEXT_BUILDER`), `CUSTOM_DIST_DIR_MESSAGE`,
-  `TURBOPACK_FRAGMENTS_BUN_DETAIL` and `TURBOPACK_FRAGMENTS_BUN_HINT`. A facts
-  record is `{distDir, output, turbopackModuleFragments}`, plus `refused` (the
+  `TURBOPACK_FRAGMENTS_BUN_DETAIL` and `TURBOPACK_FRAGMENTS_BUN_HINT`. It has no
+  default export and is not a published subpath: `next-adapter.ts` and the CLI
+  import it. A facts record is `{projectDir?, distDir, output,
+  turbopackModuleFragments}`, plus `refused` (the
   refusal code: `custom-dist-dir` or `bun-turbopack-fragments`) when the adapter refused.
 - `deferred-supervisor-init.ts` exports `createDeferredSupervisorInit`,
   `createLazyMetricsEndpoint`, `isSupervisorInitDeferred` and
@@ -387,8 +385,8 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   carries `images.customCacheHandler` as the boolean `false`, the configured
   `cacheHandler` is knext's own, and `KNEXT_IMAGE_CACHE_HANDLER` is not `"0"`
   at build time.
-- `next-adapter.ts:modifyConfig` and the facts-only adapter both call
-  `recordNextConfigFacts` on the config they hand back to Next, so the recorded
+- `next-adapter.ts:modifyConfig` calls `recordNextConfigFacts` on the config it
+  hands back to Next, with `modifyConfig`'s `projectDir`, so the recorded
   `output` is the one after knext's standalone default. It records and refuses
   only when `KNEXT_CONFIG_FACTS_OUT` is set (by the CLI) and the phase is
   `phase-production-build`, so a plain `next build`, `next typegen` and

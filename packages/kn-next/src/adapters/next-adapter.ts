@@ -226,7 +226,7 @@ function userAskedForStaticExport(
 const adapter: NextAdapter = {
     name: "knext-adapter",
 
-    modifyConfig(config, { phase }) {
+    modifyConfig(config, { phase, projectDir }) {
         const isProductionBuild = phase === "phase-production-build";
 
         console.log(`[knext-adapter] modifyConfig fired for ${phase}`);
@@ -316,7 +316,7 @@ const adapter: NextAdapter = {
         // #2250: record what Next resolved (after this adapter's own output
         // default) and refuse here, from the resolved config, when the CLI
         // asked (KNEXT_CONFIG_FACTS_OUT). A plain `next build` is untouched.
-        recordNextConfigFacts(modified, { phase });
+        recordNextConfigFacts(modified, { phase, projectDir });
         return modified;
     },
 

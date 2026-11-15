@@ -1,6 +1,8 @@
 /** Hand-maintained types for `next-config-facts.js` (#2250). */
 
 export interface NextConfigFacts {
+    /** The app directory Next built (from `modifyConfig`'s ctx), when known. */
+    projectDir?: string;
     distDir: string;
     output: string | null;
     turbopackModuleFragments: boolean;
@@ -31,18 +33,9 @@ export declare function recordNextConfigFacts(
         output?: string;
         experimental?: { turbopackModuleFragments?: boolean };
     },
-    ctx: { phase: string },
+    ctx: { phase: string; projectDir?: string },
     env?: Record<string, string | undefined>,
 ): NextConfigFacts | undefined;
 export declare function readNextConfigFacts(
     path: string,
 ): NextConfigFacts | undefined;
-
-declare const factsAdapter: {
-    name: "knext-config-facts";
-    modifyConfig<C extends Record<string, unknown>>(
-        config: C,
-        ctx: { phase: string },
-    ): C;
-};
-export default factsAdapter;

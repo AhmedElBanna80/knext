@@ -22,7 +22,13 @@
  * a `requireEsm` argument so the target gate cannot be silently skipped.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+    existsSync,
+    mkdtempSync,
+    readFileSync,
+    realpathSync,
+    rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,7 +39,6 @@ import {
     refusalFor,
 } from "../adapters/next-config-facts.js";
 import { KNEXT_RUNTIME_ENV } from "../adapters/runtime-env";
-import { packageRoot } from "./create";
 import { runQuiet } from "./exec";
 import { warnOnVulnerableNext } from "./next-advisory-warning";
 import { UsageError } from "./shared";
@@ -129,32 +134,15 @@ export interface RunProjectBuildOptions {
      * Injectable for tests.
      */
     readonly warn?: (line: string) => void;
-    /**
-     * The facts-only adapter the CLI points `NEXT_ADAPTER_PATH` at (#2250).
-     * Defaults to the one shipped in this package; `null` injects none.
-     * Injectable for tests.
-     */
-    readonly factsAdapterPath?: string | null;
 }
 
-/**
- * The shipped facts-only adapter, resolved from the PACKAGE ROOT (tsup may put
- * this module in a chunk at any depth; see `compileScriptPath`). The built file
- * first, then the source file (a source checkout under `bun test`).
- */
-export function factsAdapterPath(): string | null {
-    const root = packageRoot();
-    for (const p of [
-        join(root, "dist", "adapters", "next-config-facts.js"),
-        join(root, "src", "adapters", "next-config-facts.js"),
-    ]) {
-        if (existsSync(p)) return p;
-    }
-    return null;
-}
+/** Where Next writes the resolved config of every build into its distDir. */
+const REQUIRED_SERVER_FILES = "required-server-files.json";
+const EXPORT_DETAIL = "export-detail.json";
+const DEFAULT_DIST_DIR = ".next";
 
 const FACTS_FALLBACK_WARNING =
-    "warning: knext could not read your resolved Next.js config from this build (the app's build script does not run `next build`, or the app uses its own Next adapter), so it checked the next.config source text instead.";
+    "warning: knext could not read your resolved Next.js config from this build (the app's build script did not run `next build`), so it checked the next.config source text instead.";
 
 /** Set `name` for the build and hand back a restore for afterwards. */
 function setEnv(name: string, value: string): () => void {
@@ -164,6 +152,50 @@ function setEnv(name: string, value: string): () => void {
     return () => {
         if (had) process.env[name] = prev;
         else delete process.env[name];
+    };
+}
+
+/** realpath, or the path itself when it cannot be resolved. */
+function real(path: string): string {
+    try {
+        return realpathSync(path);
+    } catch {
+        return path;
+    }
+}
+
+/**
+ * The resolved config facts Next itself wrote for this build into the default
+ * distDir, or undefined when it wrote none there (the build used another
+ * distDir, or did not run `next build`). Both marker files are deleted before
+ * the build, so a present file belongs to this build. A file that does not
+ * parse fails closed.
+ */
+function nextWrittenFacts(cwd: string): NextConfigFacts | undefined {
+    const path = join(cwd, DEFAULT_DIST_DIR, REQUIRED_SERVER_FILES);
+    if (!existsSync(path)) return undefined;
+    let config: Record<string, unknown> | undefined;
+    try {
+        config = JSON.parse(readFileSync(path, "utf8"))?.config;
+    } catch {
+        config = undefined;
+    }
+    if (!config || typeof config !== "object") {
+        throw new UsageError(
+            `Next.js wrote ${path}, but knext cannot read the resolved config in it, so it cannot confirm your build settings. Build again; if it persists, report it.`,
+        );
+    }
+    const experimental = config.experimental as
+        | Record<string, unknown>
+        | undefined;
+    return {
+        distDir:
+            typeof config.distDir === "string"
+                ? config.distDir
+                : DEFAULT_DIST_DIR,
+        output: typeof config.output === "string" ? config.output : null,
+        turbopackModuleFragments:
+            experimental?.turbopackModuleFragments === true,
     };
 }
 
@@ -214,57 +246,75 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
 
     // #2250: a Next build decides its refusals (a custom distDir, and
     // turbopackModuleFragments on Bun + Turbopack) from the config Next
-    // RESOLVED, recorded by a knext adapter's `modifyConfig` at the start of
-    // the build, never from the next.config source text. The adapter refuses
-    // there, before compilation. An app with no `adapterPath` gets the
-    // facts-only adapter through NEXT_ADAPTER_PATH (its own adapterPath wins).
-    const factsDir = mkdtempSync(join(tmpdir(), "knext-config-facts-"));
-    const factsPath = join(factsDir, "facts.json");
-    const restores = [
-        setEnv(CONFIG_FACTS_OUT_ENV, factsPath),
-        setEnv(KNEXT_BUILDER_ENV, opts.builderId),
-    ];
-    const adapter =
-        opts.factsAdapterPath === undefined
-            ? factsAdapterPath()
-            : opts.factsAdapterPath;
-    if (adapter && !process.env.NEXT_ADAPTER_PATH) {
-        restores.push(setEnv("NEXT_ADAPTER_PATH", adapter));
-    }
+    // RESOLVED, never from the next.config source text:
+    //  1. knext's adapter records it in `modifyConfig` and refuses there,
+    //     before compilation (the CLI names the file, so a plain `next build`
+    //     is untouched);
+    //  2. an app without knext's adapter: after the build, from the resolved
+    //     config Next itself writes to `.next/required-server-files.json`.
+    //     No adapter is injected: any adapterPath changes Next's build output;
+    //  3. neither (the build script did not run `next build`): the earlier
+    //     source-text checks, with a warning.
+    // The text checks also run BEFORE the build, as warnings only, so the
+    // common cases are flagged before a slow build.
+    const say =
+        opts.warn ?? ((line: string) => process.stderr.write(`${line}\n`));
+    predictiveWarnings(cwd, opts, say);
 
+    const restores: (() => void)[] = [];
+    let factsDir: string | undefined;
     let facts: NextConfigFacts | undefined;
     try {
+        factsDir = mkdtempSync(join(tmpdir(), "knext-config-facts-"));
+        const factsPath = join(factsDir, "facts.json");
+        restores.push(
+            setEnv(CONFIG_FACTS_OUT_ENV, factsPath),
+            setEnv(KNEXT_BUILDER_ENV, opts.builderId),
+        );
+        for (const marker of [REQUIRED_SERVER_FILES, EXPORT_DETAIL]) {
+            rmSync(join(cwd, DEFAULT_DIST_DIR, marker), { force: true });
+        }
+        const recorded = (): NextConfigFacts | undefined => {
+            const f = readNextConfigFacts(factsPath);
+            // One record per build path; a record another app's build wrote
+            // (a script that builds several apps) is not this app's.
+            return f?.projectDir && real(f.projectDir) !== real(cwd)
+                ? undefined
+                : f;
+        };
         try {
             runBuild(run);
         } catch (err) {
             // A refusal from the adapter fails `next build`; Next has already
-            // printed it, so say it once more as knext's own usage error.
-            const refused = readNextConfigFacts(factsPath);
+            // printed it, so say it once more as knext's own usage error. A
+            // record that cannot be read never replaces the build's own error.
+            let refused: NextConfigFacts | undefined;
+            try {
+                refused = recorded();
+            } catch {
+                refused = undefined;
+            }
             const refusal =
-                refused?.refused &&
-                refusalFor(refused, {
-                    runtime: opts.runtimeId,
-                    builder: opts.builderId,
-                });
+                refused?.refused && refusalFor(refused, refusalInput(opts));
             if (refusal) throw new UsageError(refusal.message);
             throw err;
         }
-        facts = readNextConfigFacts(factsPath);
+        facts = recorded();
     } finally {
         for (const restore of restores.reverse()) restore();
-        rmSync(factsDir, { recursive: true, force: true });
+        if (factsDir) rmSync(factsDir, { recursive: true, force: true });
     }
 
+    facts ??= nextWrittenFacts(cwd);
     if (facts) {
+        // Fail closed: a refusal stands even if the build exited 0.
+        const refusal = refusalFor(facts, refusalInput(opts));
+        if (refusal) throw new UsageError(refusal.message);
         assertNotStaticExportFromFacts(cwd, facts);
         return;
     }
 
-    // No adapter recorded anything. Keep the earlier source-text checks for
-    // this build rather than pass it unchecked, and say so.
-    (opts.warn ?? ((line) => process.stderr.write(`${line}\n`)))(
-        FACTS_FALLBACK_WARNING,
-    );
+    say(FACTS_FALLBACK_WARNING);
     assertNoBunTurbopackFragments({
         runtime: opts.runtimeId,
         builder: opts.builderId,
@@ -272,6 +322,41 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
     });
     assertDefaultDistDir(cwd);
     assertNotStaticExport(cwd);
+}
+
+function refusalInput(opts: RunProjectBuildOptions) {
+    return { runtime: opts.runtimeId, builder: opts.builderId };
+}
+
+/**
+ * The source-text checks, run before the build as WARNINGS: the resolved
+ * config decides after, but a setting the text can see is flagged before a
+ * slow build. An unreadable config is left for the resolved check.
+ */
+function predictiveWarnings(
+    cwd: string,
+    opts: RunProjectBuildOptions,
+    say: (line: string) => void,
+): void {
+    for (const check of [
+        () =>
+            assertNoBunTurbopackFragments({
+                runtime: opts.runtimeId,
+                builder: opts.builderId,
+                readNextConfig: () => readNextConfigStrict(cwd),
+            }),
+        () => assertDefaultDistDir(cwd),
+    ]) {
+        try {
+            check();
+        } catch (err) {
+            if (err instanceof UsageError) {
+                say(
+                    `warning: read as text, your next.config may be refused; knext decides from the config Next resolves during the build: ${err.message.split("\n")[0]}`,
+                );
+            }
+        }
+    }
 }
 
 /** `npm run build`, with the deps-not-installed failure (127) translated. */

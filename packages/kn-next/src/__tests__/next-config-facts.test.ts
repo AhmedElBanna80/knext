@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import factsAdapter, {
+import {
     CONFIG_FACTS_OUT_ENV,
     isDefaultDistDir,
     KNEXT_BUILDER_ENV,
@@ -205,23 +205,16 @@ describe("recordNextConfigFacts", () => {
     });
 });
 
-describe("the facts-only adapter", () => {
-    it("is a NextAdapter whose modifyConfig returns the config unchanged", async () => {
-        expect(factsAdapter.name).toBe("knext-config-facts");
-        const cfg = {
-            distDir: ".next",
-            output: undefined,
-            experimental: {},
-            images: {},
-        };
-        process.env[CONFIG_FACTS_OUT_ENV] = out;
-        try {
-            const back = await factsAdapter.modifyConfig(cfg, { phase: BUILD });
-            expect(back).toBe(cfg);
-        } finally {
-            delete process.env[CONFIG_FACTS_OUT_ENV];
-        }
-        expect(JSON.parse(readFileSync(out, "utf8")).output).toBeNull();
+describe("recordNextConfigFacts records the app directory", () => {
+    it("records modifyConfig's projectDir so the CLI can tell apps apart", () => {
+        recordNextConfigFacts(
+            { distDir: ".next", experimental: {} },
+            { phase: BUILD, projectDir: "/apps/web" },
+            env(),
+        );
+        expect(JSON.parse(readFileSync(out, "utf8")).projectDir).toBe(
+            "/apps/web",
+        );
     });
 });
 

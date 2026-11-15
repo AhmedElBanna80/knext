@@ -71,7 +71,7 @@ const base: KnativeNextConfig = {
 
 describe("preview refuses bun + turbopackModuleFragments", () => {
     it("refuses (default runtime is bun) from the resolved config, inside the build", async () => {
-        runQuiet.mockImplementation(adapterBuild(FRAGMENTS_ON));
+        runQuiet.mockImplementation(adapterBuild(FRAGMENTS_ON) as AnyFn);
         const { defaultBuildAndPush } = await import("../cli/preview");
         try {
             await expect(

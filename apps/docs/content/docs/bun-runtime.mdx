@@ -257,9 +257,10 @@ Turbopack build. With it on, Turbopack emits chunks that assign to a `const` ins
 that; Bun's parser rejects it when the chunk loads, so the app fails at runtime.
 
 `knext build`, `knext deploy` and `knext preview` therefore all refuse the combination (Bun, Turbopack
-build, flag on), and `knext doctor` reports it. The build refuses from the config Next.js resolved,
-at the start of the build and before anything compiles, so a flag set by a config wrapper or computed
-from the environment is caught. To proceed, either turn `experimental.turbopackModuleFragments` off in
+build, flag on), and `knext doctor` reports it. The check uses the config Next.js resolved, so a flag
+set by a config wrapper or computed from the environment is caught. With knext's adapter (the default
+for apps `knext create` makes) the build stops at its start, before anything compiles; without it, the
+build is refused after it finishes. To proceed, either turn `experimental.turbopackModuleFragments` off in
 your `next.config`, set `runtime: 'node'`, or use a webpack build, which does not emit those chunks. The
 restriction lifts once a Bun release fixes the parser.
 
@@ -267,6 +268,7 @@ Limits of the check:
 
 - The bundler is taken from your knext config (`build`), so a build script that passes its own
   bundler flag to `next build` is not seen.
-- `knext doctor`, `knext build --skip-next`, and a build in which no knext adapter ran read the flag
-  literally from `next.config`, so a flag computed at runtime is not detected there.
+- `knext doctor`, `knext build --skip-next`, and a build whose resolved config could not be read
+  (the build script does not run `next build`) read the flag literally from `next.config`, so a flag
+  computed at runtime is not detected there.
 - `knext deploy --skip-build` ships an already-built artifact without re-checking it.

@@ -339,9 +339,9 @@ export async function build(options: BuildOptions = {}) {
     );
 
     // Bun cannot load the chunks `turbopackModuleFragments` makes Turbopack
-    // emit; refuse before any build work (#2225). See the guard for retirement.
-    // `runProjectBuild` runs the same guard, so this call covers only the path
-    // that skips it (--skip-next); otherwise the guard runs exactly once.
+    // emit (#2225). See the guard for retirement. A Next build decides this from
+    // the resolved config inside `runProjectBuild` (#2250); `--skip-next` runs no
+    // build and has no resolved config, so it keeps the source-text check here.
     if (options.skipNextBuild) {
         assertNoBunTurbopackFragments({
             runtime: config.runtime ?? DEFAULT_RUNTIME_ID,

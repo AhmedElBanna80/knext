@@ -100,7 +100,7 @@ beforeEach(() => {
 
 describe("deploy refuses bun + turbopackModuleFragments", () => {
     it("refuses from the resolved config, inside the build, before anything after it", async () => {
-        runQuiet.mockImplementation(adapterBuild(FRAGMENTS_ON));
+        runQuiet.mockImplementation(adapterBuild(FRAGMENTS_ON) as AnyFn);
         const dir = mkdtempSync(join(tmpdir(), "knext-dep-frag-"));
         writeFileSync(
             join(dir, "next.config.ts"),

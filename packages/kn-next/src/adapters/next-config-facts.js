@@ -5,10 +5,11 @@
  * `modifyConfig` runs at the start of `next build`, after every wrapper and
  * plugin in next.config has run and Next's defaults are applied, so the
  * `distDir`, `output` and `experimental.turbopackModuleFragments` it sees are
- * the values the build uses. Two adapters record them through
- * `recordNextConfigFacts`: knext's full adapter (`next-adapter.ts`), and the
- * facts-only adapter this file default-exports, which the CLI points
- * `NEXT_ADAPTER_PATH` at for apps with no `adapterPath` of their own.
+ * the values the build uses. knext's adapter (`next-adapter.ts`) records them
+ * through `recordNextConfigFacts`. An app without knext's adapter is judged
+ * by the CLI after its build, from the resolved config Next itself writes to
+ * `.next/required-server-files.json`: no adapter is injected, because any
+ * `adapterPath` changes Next's build output.
  *
  * Recording and refusing happen ONLY when the CLI asked: `KNEXT_CONFIG_FACTS_OUT`
  * names a fresh per-build file, and the phase is the production build. So a
@@ -21,8 +22,8 @@
  * `KNEXT_BUILDER`, knext's own setting. A build script that passes a different
  * bundler flag is not seen; the earlier text check had the same limit.
  *
- * Plain JS with no imports beyond node: Next loads the facts-only adapter
- * itself, from the app's build, through `import()`.
+ * Plain JS with no imports beyond node, so the CLI and the adapter bundle
+ * share it without a TypeScript step.
  */
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -93,10 +94,15 @@ export function refusalFor(facts, { runtime, builder }) {
  * workers, so the file is written tmp-then-rename: a reader never sees a
  * partial record, and identical writes simply replace each other.
  */
-export function recordNextConfigFacts(config, { phase }, env = process.env) {
+export function recordNextConfigFacts(
+    config,
+    { phase, projectDir },
+    env = process.env,
+) {
     const outPath = env[CONFIG_FACTS_OUT_ENV];
     if (!outPath || phase !== PRODUCTION_BUILD) return undefined;
     const facts = {
+        ...(projectDir ? { projectDir } : {}),
         distDir: config.distDir ?? DEFAULT_DIST_DIR,
         output: config.output ?? null,
         turbopackModuleFragments:
@@ -154,18 +160,3 @@ export function readNextConfigFacts(path) {
     }
     return facts;
 }
-
-/**
- * The facts-only adapter: records and refuses, and changes nothing. No output
- * default, no cache-handler rewrite, no `onBuildComplete`, so an app built
- * through it behaves exactly as it does without knext's adapter.
- */
-const factsAdapter = {
-    name: "knext-config-facts",
-    modifyConfig(config, ctx) {
-        recordNextConfigFacts(config, ctx);
-        return config;
-    },
-};
-
-export default factsAdapter;

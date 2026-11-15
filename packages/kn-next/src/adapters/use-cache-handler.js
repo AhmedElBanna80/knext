@@ -54,6 +54,7 @@
  * `set` for the same key is pending waits for it; the handler owns eviction.
  */
 import { onProcessExit, trackWrite } from './cache-write-registry.js';
+import { BACKLOG_MAX_ENTRIES, createTagBacklog } from './tag-backlog.js';
 
 /** Process-wide counters, shared by every copy of this module in the process. */
 const COUNTERS_KEY = Symbol.for('knext.cache.useCache.counters');
@@ -263,7 +264,21 @@ function shared(core) {
       pruneWarned: false,
       replayScriptWarned: false,
       clock: { offset: undefined, sampledAt: 0, retryAt: 0, inflight: null },
-      replay: { tags: new Map(), generation: 0, collapsed: false, run: null, timer: null, exitArmed: false },
+      // The bound, the dedup, the generation and the collapse are the shared
+      // backlog's (tag-backlog.js); the run, the probe and the exit report are this handler's.
+      replay: {
+        backlog: createTagBacklog({
+          onCollapse: () => {
+            console.warn(
+              `[CacheHandler] 'use cache' tag replay backlog passed ${BACKLOG_MAX_ENTRIES} tags while Redis was ` +
+                "unreachable; once it is back, every 'use cache' entry of this app is deleted",
+            );
+          },
+        }),
+        run: null,
+        timer: null,
+        exitArmed: false,
+      },
     };
     SHARED.set(core, state);
   }
@@ -482,7 +497,8 @@ function replayArgs(tag, record) {
 //    replayed onto a tag whose expiry is already in effect marks that tag's
 //    entries stale (re-rendered on the next read) but does not schedule the
 //    window's later expiry.
-//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags. One more and the list is
+//  - BOUNDED. At most BACKLOG_MAX_ENTRIES distinct tags (the shared backlog,
+//    tag-backlog.js). One more and the list is
 //    dropped for a COLLAPSE: the replay deletes every `'use cache'` entry under
 //    this app's key prefix (a cursor SCAN, DEL per page; the stamp hash is kept).
 //    Wider than needed, never stale. The ISR replay's bound and collapse.
@@ -501,22 +517,19 @@ function replayArgs(tag, record) {
 //  - PER PROCESS. A pod that restarts or scales to zero before Redis is back
 //    loses the list, and those entries stay valid until their TTL (a known limit).
 //    The process logs what it exits with (`reportTagReplayLostAtExit`, #2384).
-const REPLAY_MAX_TAGS = 1000;
 const REPLAY_BATCH = 100;
 const REPLAY_SCAN_COUNT = 100;
 // The probe delay when the core cannot say when its breaker closes.
 const REPLAY_PROBE_MS = 5_000;
 
 function replayPending(replay) {
-  return replay.collapsed || replay.tags.size > 0;
+  return replay.backlog.pending();
 }
 
 /** Forget the backlog and its probe. Also the test reset, through cache-handler.js. */
 export function resetUseCacheTagReplay(core) {
   const replay = shared(core).replay;
-  replay.tags.clear();
-  replay.generation = 0;
-  replay.collapsed = false;
+  replay.backlog.clear();
   replay.run = null;
   if (replay.timer) clearTimeout(replay.timer);
   replay.timer = null;
@@ -530,9 +543,9 @@ export function resetUseCacheTagReplay(core) {
  */
 function reportTagReplayLostAtExit(replay) {
   if (!replayPending(replay)) return;
-  const what = replay.collapsed
-    ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
-    : `${replay.tags.size} tag(s)`;
+  const what = replay.backlog.collapsed
+    ? `a collapsed backlog (over ${replay.backlog.max} tags)`
+    : `${replay.backlog.size()} tag(s)`;
   console.error(
     `[CacheHandler] exiting with ${what} of 'use cache' tag invalidations not yet replayed to Redis: ` +
       `those entries keep serving until their TTL (at most ${maxTtlSeconds()}s)`,
@@ -547,21 +560,9 @@ function recordDroppedTags(core, list, durations) {
     replay.exitArmed = true;
     onProcessExit(() => reportTagReplayLostAtExit(replay));
   }
-  replay.generation += 1;
-  if (!replay.collapsed) {
-    for (const tag of list) {
-      const prev = replay.tags.get(tag);
-      if (!prev && replay.tags.size >= REPLAY_MAX_TAGS) {
-        replay.tags.clear();
-        replay.collapsed = true;
-        console.warn(
-          `[CacheHandler] 'use cache' tag replay backlog passed ${REPLAY_MAX_TAGS} tags while Redis was ` +
-            "unreachable; once it is back, every 'use cache' entry of this app is deleted",
-        );
-        break;
-      }
-      replay.tags.set(tag, mergeStamp(prev, durations, replay.generation));
-    }
+  replay.backlog.bump();
+  for (const tag of list) {
+    if (!replay.backlog.add('tags', tag, (prev, generation) => mergeStamp(prev, durations, generation))) break;
   }
   // With the breaker open this finds no client and only sets the probe.
   startTagReplay(core);
@@ -607,19 +608,18 @@ async function runTagReplay(core) {
   const replay = shared(core).replay;
   const client = await core.ensureConnected();
   if (!client) return;
-  if (replay.collapsed) {
+  if (replay.backlog.collapsed) {
     await replayCollapsedTags(core, client);
     return;
   }
-  const pending = [...replay.tags];
+  const pending = [...replay.backlog.entries('tags')];
   for (let i = 0; i < pending.length; i += REPLAY_BATCH) {
     const batch = pending.slice(i, i + REPLAY_BATCH);
     await writeReplayBatch(core, client, batch.flatMap(([tag, record]) => replayArgs(tag, record)));
     for (const [tag, record] of batch) {
       // A drop of the same tag recorded while this write was in flight is newer
       // than what was written: keep it for the next run, and count it then.
-      if (replay.tags.get(tag)?.generation !== record.generation) continue;
-      replay.tags.delete(tag);
+      if (!replay.backlog.settle('tags', tag, record.generation)) continue;
       count('tagsReplayed');
     }
   }
@@ -683,12 +683,12 @@ async function writeReplayBatch(core, client, args) {
  */
 async function replayCollapsedTags(core, client) {
   const replay = shared(core).replay;
-  const generation = replay.generation;
+  const sweepStartedAt = replay.backlog.beginSweep();
   const prefix = core.keyPrefix();
   if (!collapseSweepAllowed(prefix)) {
     // The list is already gone; nothing narrower is left to replay. Drop the
     // collapse rather than retry it every probe: the refusal cannot change.
-    replay.collapsed = false;
+    replay.backlog.dropCollapse();
     count('tagsCollapseRefused');
     console.error(collapseRefusedMessage("'use cache' entry", prefix));
     return;
@@ -706,7 +706,7 @@ async function replayCollapsedTags(core, client) {
     if (keys.length > 0) await core.redisCall(() => core.command(client, 'DEL', keys), client);
   } while (cursor !== '0');
   // A drop recorded during the sweep may have missed it: keep the collapse.
-  if (replay.generation === generation) replay.collapsed = false;
+  replay.backlog.endSweep(sweepStartedAt);
   count('tagsCollapsed');
 }
 

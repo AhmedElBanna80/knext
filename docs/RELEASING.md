@@ -294,7 +294,10 @@ from git objects at the PR's **base** commit by `scripts/published-bytes-select-
    is still `v1.3.0-rc.10` — that rc's GA is already cut on this line, so there is no pending
    GA-vs-rc diff left to protect (and the diff itself would only ever reject the version pair
    `rc.10 -> 1.3.1` before comparing a byte). The check skips with the visible reason "has ended on
-   this line". A prerelease base, or a released base **below** the rc's base (a new rc cut ahead of
+   this line". "Released" is never decided from the version string alone: it also requires a
+   `v<version>` tag that is an ancestor of the base commit, so a merged Version PR whose publish has
+   not happened yet (version bumped, tag absent) stays guarded. A checkout without that tag (shallow,
+   tagless) is guarded too. A prerelease base, or a released base **below** the rc's base (a new rc cut ahead of
    its GA), stays guarded.
 
 A base on the credentialed line that is still in its rc window is unchanged: it still packs and
@@ -314,6 +317,33 @@ PR (capped at 14 days from today, same rule as `rcBumpMarker`), and it is honour
 introduces it, not when it is inherited from a marker already on `main`. The check then skips itself
 for that PR; once the real content lands and a new `vX.Y.Z-rc.N+1` tag is cut and pinned, later PRs
 are diffed against the new baseline.
+
+A marker that arrives **through a merge** is inherited too, the same rule the credential freeze
+guard applies to `rcBumpMarker`. A merge PR (an integration branch into `main`, or a feature branch
+that merged one) has a merge base older than the other branch's marker, so the merge base alone would
+read that marker as introduced. The workflow's "Collect the pins at merged-in parents" step
+(`scripts/collect-merged-in-pins.mjs`, logic in `scripts/lib/merged-in-pins.mjs`) reads the
+`publishedBytesBumpMarker` of the selected pin file at every **merged-in parent** (each non-first
+parent of each merge commit in `merge-base..head`) into `inherited-pins.json`. The check
+(`--inherited-pins-file`, required, a JSON array) treats a head marker with the same `date` and
+`reason` as any of them as inherited, announces `MARKER IGNORED` with the reason, and packs and
+diffs as if there were no marker. A merge PR that really is an intentional rc bump adds its **own**
+marker (a new `date` or `reason`) on top of the merge.
+
+- On `merge_group`, the queue's own merge commits are skipped (their second parents are the queued
+  PR heads); merges inside a queued PR are still read. A squash or rebase queue leaves no merge commit
+  to inspect, so only the merge-base rule applies there; the `pull_request` run already applied this
+  one.
+- Only markers that reached the merged-in branch **through a merge commit** are seen. One that
+  landed on the integration branch by squash, rebase or direct push is part of that branch's own
+  history and still reads as introduced by a PR that merges it.
+- Merging the PR's own base branch back in (`git merge main`) is harmless: the base carries no
+  marker the PR wrote.
+- Ambiguity resolves closed: if a marker the PR wrote also comes back through a merged branch, it
+  reads as inherited. Change its `reason` to re-authorize.
+
+`scripts/mutation-prove-inherited-published-bytes-marker.mjs` proves each part red by exit code,
+against unit tests and against the workflow's own steps run in real git fixture repos.
 
 This check fails closed — never silently skips — when the pinned `rcTag` does not resolve to a real
 git tag in the checkout, and it is not yet a required check (same status as the sibling

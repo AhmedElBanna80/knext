@@ -111,6 +111,16 @@ async function pastServerTime(stamp: number) {
     await waitFor(() => Date.now() > stamp + 50);
 }
 
+/**
+ * Let the clock move clear of an entry just written, before a hard
+ * invalidation that must expire it. An entry is expired only by a stamp
+ * strictly AFTER its write time, and both times are compared through a
+ * per-pod clock offset that is only as accurate as half a TIME round trip.
+ * On a loaded runner that error reaches a few ms, so a write and an
+ * invalidation that land within it can tie and the entry is served.
+ */
+const clearOfLastWrite = () => sleep(50);
+
 const CLIENTS = [
     { name: "ioredis", selector: "ioredis" as string | undefined },
     { name: "Bun native", selector: undefined },
@@ -414,6 +424,7 @@ for (const client of CLIENTS) {
             await a.updateTags(["t"], { expire: 3600 });
             expect(stamp("s:t")).toBeUndefined();
             // ... then pod B, whose breaker never opened, expires t outright.
+            await clearOfLastWrite();
             await b.updateTags(["t"]);
             const hard = stamp("e:t") as number;
             expect(hard).toBeGreaterThan(0);
@@ -454,6 +465,7 @@ for (const client of CLIENTS) {
             await openBreaker(a);
             await a.updateTags(["t", "u", "w"], { expire: 3600 });
             await a.updateTags(["h"]);
+            await clearOfLastWrite();
             await b.updateTags(["t"]);
             const hard = stamp("e:t") as number;
             await waitFor(() => stamp("s:u") !== undefined);

@@ -426,6 +426,51 @@ describe('#2495 — function templates', () => {
   });
 });
 
+describe('cluster-write surface and template path gaps', () => {
+  it('the network surface the install bundle writes fires', () => {
+    for (const f of [
+      'config/network-policy/allow-metrics-traffic.yaml',
+      'config/network-policy/kustomization.yaml',
+      'config/knative/config-network.yaml',
+      'config/knative/kustomization.yaml',
+      'config/default/config_network_repin.yaml',
+    ]) {
+      expect(ids(classify([change(`packages/kn-next-operator/${f}`)])), f).toContain(
+        'cluster-write-surface',
+      );
+    }
+  });
+
+  it('the admission/webhook bundle match is case-insensitive', () => {
+    for (const f of ['Admission_Patch.yaml', 'manager_WEBHOOK_patch.yaml']) {
+      expect(ids(classify([change(`packages/kn-next-operator/config/default/${f}`)])), f).toContain(
+        'cluster-write-surface',
+      );
+    }
+  });
+
+  it('template test data, test helpers and the repo-only conformance harness do not fire', () => {
+    expect(
+      classify([
+        change('templates/go/internal/server/testdata/golden.json'),
+        change('templates/go/testdata/x.txt'),
+        change('templates/go/internal/testhelpers/helpers.go'),
+        change('templates/rust/conformance.sh'),
+        change('templates/rust/conformance/known-failing.txt'),
+        change('templates/rust/conformance/main.rs'),
+      ]),
+    ).toHaveLength(0);
+  });
+
+  it('near miss: a vendored crate and a non-test helper still fire', () => {
+    expect(ids(classify([change('templates/rust/vendor/connectrpc-health/src/lib.rs')]))).toContain(
+      'templates',
+    );
+    expect(ids(classify([change('templates/go/internal/helpers/h.go')]))).toContain('templates');
+    expect(ids(classify([change('templates/rust/src/conformance.rs')]))).toContain('templates');
+  });
+});
+
 describe('#2388 — static supply-chain paths', () => {
   it('security/** fires', () => {
     expect(ids(classify([change('security/npm-audit-allowlist.json')]))).toContain('supply-chain');

@@ -196,7 +196,8 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the read timeout is lifted at the wiring (a stalled body is never cut off)',
     subject: 'server',
-    anchor: '            MAX_STREAM_BODY_BYTES.max(max_body + 1),\n            cfg.timeouts.read,\n',
+    anchor:
+      '            MAX_STREAM_BODY_BYTES.max(max_body + 1),\n            cfg.timeouts.read,\n',
     replacement:
       '            MAX_STREAM_BODY_BYTES.max(max_body + 1),\n            Duration::from_secs(86_400),\n',
   },

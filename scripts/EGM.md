@@ -1,7 +1,7 @@
 # scripts
 
 ## Overview
-This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 297 top-level files (281 `.mjs`, 14 `.sh`, one `.ts` and one `.json`). 170 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
+This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 299 top-level files (283 `.mjs`, 14 `.sh`, one `.ts` and one `.json`). 171 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
 
 ## Interface
 
@@ -12,8 +12,8 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - `assert-tree-unchanged.mjs snapshot|check <file>`: compares `git status --porcelain --untracked-files=all` before and after a run.
 
 ### Mutation provers
-- 170 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
-- Shared drivers: `lib/prover-report.mjs` (imported by all 170), `lib/mutation-harness.mjs` (97) and `lib/guard-prover.mjs` (98).
+- 171 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
+- Shared drivers: `lib/prover-report.mjs` (imported by all 171), `lib/mutation-harness.mjs` (98) and `lib/guard-prover.mjs` (99).
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.
 - Kind-lane provers live among them, e.g. `mutation-prove-2461-z7-kind-e2e.mjs` for the Z7 identity lane in `packages/grpc/e2e/z7-identity-kind`, including the SQ1/SQ2 rows for the squatted-JWKS-ConfigMap phase.
@@ -35,7 +35,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 ### Release and publish
 - `publish-preflight.mjs`, `publish-lane-guard.mjs`, `verify-published-group.mjs`, `ensure-published-group.mjs`.
 - `pack-release-tarballs.mjs`, `rewrite-workspace-ranges.mjs`.
-- Tarball and published-bytes checks: `ga-tarball-diff.mjs`, `ga-tarball-diff-gate.mjs`, `published-bytes-freeze-check.mjs`, `published-bytes-select-pin.mjs`, `dependabot-published-bytes-pause.mjs`.
+- Tarball and published-bytes checks: `ga-tarball-diff.mjs`, `ga-tarball-diff-gate.mjs`, `published-bytes-freeze-check.mjs`, `published-bytes-select-pin.mjs`, `collect-merged-in-pins.mjs` (writes the markers at every merged-in parent of a PR's range, for the guard's `--inherited-pins-file`), `dependabot-published-bytes-pause.mjs`.
 - `release-notes-body.mjs`, `operator-release-notes-body.mjs`, `npm-dist-tag-rollback.mjs`, `publish-verify-alert.mjs`, `rename-for-ghp.mjs`.
 - Changesets: `check-changeset-required.mjs`, `list-changeset-marker-branches.mjs`.
 - `verify-publish-environments.mjs`, `check-npm-publish-drift.mjs`, `merge-train.mjs`, `merged-sha-check.mjs`.
@@ -56,7 +56,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - Import and closure checks: `check-ts-import-extensions.mjs`, `adapter-import-closure.mjs` (`computeAdapterClosure`).
 - `check-ratchet-floors.mjs`, `check-ffi-crate-rev.mjs`, `crd-schema-diff.mjs` (`run`, `CRD_PATH`), `crd-narrowing-waivers.json`.
 - `workflow-script-install-guard.mjs`, `verify-phase-gates.mjs`, `verify-retracted-figures.mjs`.
-- `lane-parity-check.mjs` compares the CI guard files listed in `.github/lane-parity.json` on this checkout (HEAD) with `<LANE_PARITY_REMOTE>/<lane>` (default `origin`) for every other lane, using `lib/lane-parity.mjs`. Exit 0 parity, 1 findings, 2 a lane or the manifest cannot be read. Run by `.github/workflows/lane-parity.yml`.
+- `lane-parity-check.mjs` compares the CI guard files listed in `.github/lane-parity.json` on this checkout (HEAD) with `<LANE_PARITY_REMOTE>/<lane>` (default `origin`) for every other lane, using `lib/lane-parity.mjs`. Exit 0 parity, 1 findings (including a malformed manifest), 2 the manifest is unparseable or a lane does not resolve to a commit. Run by `.github/workflows/lane-parity.yml`.
 - Repo scans: `scan-dangling-paths.mjs`, `scan-half-scan-candidates.mjs` (advisory only), `scan-mock-hoisting.mjs`, `scan-mutation-residue.mjs`, `scan-published-seams.mjs`.
 - `bun-patched-drift.mjs`, `ci-resolve-push-base.mjs`, `next-minor-matrix.mjs`, `gen-cr-fields.ts`, `codemod-vitest-to-bun.mjs`, `biome-format.mjs`.
 
@@ -117,7 +117,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - `publish-lane-guard.mjs`: `PUBLISH_LANES`, `PREPARED_LANES`, `PRE_MODE_TAGS`, `checkPreMode`, `RELEASE_CUT_REF`, `RELEASE_CUT_MAJORS`, `parseSemver`, `resolveLane`, `recognisedLane`, `preparedDistTag`, `fixedGroupNames`, `checkLaneMajor`, `main`.
 - `publish-preflight.mjs`: `WORKSPACE_ROOTS`, `REACHABILITY_PROBE`, `DEFAULT_REGISTRY`, `readWorkspaceManifests`, `publishablePackages`, `decide`, `preflight`, `npmViewSucceeds`, `readIgnoreList`, `RegistryUnreachableError`.
 - `publish-verify-alert.mjs`: `verifyAndAlert`.
-- `published-bytes-freeze-check.mjs`: `readPin`, `defaultTagResolves`, `defaultRunDiff`, `main`.
+- `published-bytes-freeze-check.mjs`: `readPin`, `defaultTagResolves`, `defaultBaseReleaseTagged`, `defaultRunDiff`, `main`.
 - `published-bytes-select-pin.mjs`: `readPinTextAt`, `selectPinFromGit`.
 - `redis-acl-spike.mjs`: `MINIMAL_COMMANDS`, `escapeAclGlob`, `aclRulesFor`, `failureKind`, `exitCodeFor`.
 - `redis-commands.mjs`: `REDIS_SUBCOMMANDS`, `REDIS_NO_ARG_COMMANDS`, `CLIENT_COMMANDS`.
@@ -165,6 +165,8 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - The e2e shell drivers (`e2e-deploy.sh`, `e2e-cleanup.sh`) build and boot an app locally and persist its `BUILD_ID`, `PORT` and `PID` to `.adapter-build.log`; `e2e-cleanup.sh` reads that file and stops the server. The cluster assertion scripts (`deep-health-alert-e2e.sh`, `load-test.sh`, `public-hosts-e2e-assert.sh`, `use-cache-2pod-e2e-assert.sh`, `single-exec-rollback-kind.sh`) run `kubectl` against the current context. `single-exec-rollback-kind.sh` also deploys through the CLI, rolls traffic with `knext rollback`, opens a `kourier-internal` port-forward, overwrites `$APP_DIR/knext.config.ts` and writes `/tmp/rb-body-*` and `/tmp/pf-rb.log`. `oke-verify-preamble.mjs` runs only `kubectl get` (the `KUBECTL` binary, against `--context` when given), reads the source CRD (`CRD_PATH` or `--source-crd`), and writes nothing.
 - The mutation provers temporarily edit tracked files and restore them, through `lib/mutation-harness.mjs` or `mutate-prove.sh`.
 - `run-mutation-provers.mjs` (`residueFinding`) runs after every prover, killed or not, and names any tracked file the prover left modified. It restores those files with `git checkout HEAD -- <files>` only in CI (`GITHUB_ACTIONS=true`) or with `KNEXT_LANE_RESTORE_AFTER_KILL=1`; elsewhere the tree stays dirty and the finding says so. A killed prover (`restoreTreeAfterKill`) only removes the untracked files it created, under the same gate, and no path runs a whole-tree `git checkout`. When cleanup is on (CI or `KNEXT_LANE_CLEANUP=1`), `cleanPrivateTmp()` empties the lane's private `TMPDIR` between provers.
+- `lane-parity-check.mjs` runs read-only `git rev-parse` and `git ls-tree` through `gitRun` (`lib/guard-prover.mjs`) against `HEAD` and `<LANE_PARITY_REMOTE>/<lane>`, and writes nothing. When the check is red on an integration/v2 run, the `lane-parity-alert` job in `.github/workflows/lane-parity.yml` creates or updates the `Lane parity RED (CI guard files)` issue through `nightly-alert-issue.mjs`.
+- `collect-merged-in-pins.mjs` runs read-only `git` (`execFileSync`) over the PR's range and writes the JSON array named by `--out`.
 - `secret-scan.mjs` runs gitleaks over the full git history with `--redact=100`, then filters findings against `security/gitleaks-allowlist.json`. A missing or crashed gitleaks is a failure.
 
 ## Verification

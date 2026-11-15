@@ -21,74 +21,51 @@
     {
       "path": ".github/workflows/published-bytes-freeze-guard.yml",
       "lane": "main",
-      "here": "00fdeca36789b7d31d1ae474e988a62f261d950d",
+      "here": "d90a5daba26103e012dcd1f2986f6d99d1f2a5a4",
       "there": "fb5c44b01514b7697850b2b5e1989a2e17b5e830",
-      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges).",
-      "issue": "#101"
+      "reason": "v2-only CI change: a new push to a pull request cancels that PR's superseded run of this workflow (a concurrency block). The freeze-guard logic itself matches main."
     },
     {
       "path": ".github/workflows/published-bytes-freeze-guard.yml",
       "lane": "integration/v1.3",
-      "here": "00fdeca36789b7d31d1ae474e988a62f261d950d",
+      "here": "d90a5daba26103e012dcd1f2986f6d99d1f2a5a4",
       "there": "2503e0a94caf3bf05597e1e29d1d033f08b705fd",
-      "reason": "Line-scoped freeze guard (each release line freezes its own published bytes). integration/v1.3 also carries its port commit and the shared ls-tree-then-show pin reader; whether v2's fail-closed pin reader already covers that is not yet checked (#101).",
-      "issue": "#101"
-    },
-    {
-      "path": "scripts/mutation-prove-published-bytes-freeze-check.mjs",
-      "lane": "main",
-      "here": "82a4c3c8080ad437181abdfff82050a774372957",
-      "there": "a0e0f58e1171e95813cfc3db0f1068b72a0bac41",
-      "reason": "UNPORTED from main: prover anchors for the freeze guard's release-tag change (#2435) are on main only; port with the forward-merge (#101). v2 also has its own released-base-past-pinned-rc rows.",
-      "issue": "#101"
-    },
-    {
-      "path": "scripts/mutation-prove-published-bytes-freeze-check.mjs",
-      "lane": "integration/v1.3",
-      "here": "82a4c3c8080ad437181abdfff82050a774372957",
-      "there": "68fcdf11f835f5d1b88f56982abf65a1b67589a4",
-      "reason": "Line-scoped freeze guard (each release line freezes its own published bytes). integration/v1.3 also carries its port commit and the shared ls-tree-then-show pin reader; whether v2's fail-closed pin reader already covers that is not yet checked (#101).",
-      "issue": "#101"
-    },
-    {
-      "path": "tests/published-bytes-freeze-guard-workflow.test.ts",
-      "lane": "main",
-      "here": "3ddb2ebddbf7a5bf1709bda6f6421f39bee48f38",
-      "there": "3fb45a067d52dcd19da699e42c4494fe6319449f",
-      "reason": "UNPORTED from main: the release-tag and merged-in-marker tests (#2429 and the ancestor-tag change) are on main only; port with the forward-merge (#101).",
-      "issue": "#101"
-    },
-    {
-      "path": "tests/published-bytes-freeze-guard-workflow.test.ts",
-      "lane": "integration/v1.3",
-      "here": "3ddb2ebddbf7a5bf1709bda6f6421f39bee48f38",
-      "there": "85506d1b356cbe435b8011ea9ae52fbf050f5e7c",
-      "reason": "Line-scoped freeze guard (each release line freezes its own published bytes). integration/v1.3 also carries its port commit and the shared ls-tree-then-show pin reader; whether v2's fail-closed pin reader already covers that is not yet checked (#101).",
-      "issue": "#101"
+      "reason": "integration/v2 has main's merged-in-marker and ancestor-tag 'released' fixes (ported from main); integration/v1.3 does not. Whether the 1.3 line needs them is for that line's maintainer; the freeze guard is line-scoped, so it does not affect v2. It also differs as before: the line-scoped port and the shared ls-tree-then-show pin reader on v1.3."
     },
     {
       "path": "scripts/lib/published-bytes-freeze-check.mjs",
-      "lane": "main",
-      "here": "8b347ddf9fab138e3443c851664556e4a830d029",
-      "there": "5ef7656ab2415020c0995619b9a6170dafb0f509",
-      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges).",
-      "issue": "#101"
+      "lane": "integration/v1.3",
+      "here": "5ef7656ab2415020c0995619b9a6170dafb0f509",
+      "there": "8b347ddf9fab138e3443c851664556e4a830d029",
+      "reason": "integration/v2 has main's merged-in-marker and ancestor-tag 'released' fixes (ported from main); integration/v1.3 does not. Whether the 1.3 line needs them is for that line's maintainer; the freeze guard is line-scoped, so it does not affect v2."
     },
     {
       "path": "scripts/published-bytes-freeze-check.mjs",
-      "lane": "main",
-      "here": "233c5ee652da161536286f02e34229c03f8b734c",
-      "there": "c52d63d9818c2ad0023ff8f508aadc761d40fb87",
-      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges).",
-      "issue": "#101"
+      "lane": "integration/v1.3",
+      "here": "c52d63d9818c2ad0023ff8f508aadc761d40fb87",
+      "there": "233c5ee652da161536286f02e34229c03f8b734c",
+      "reason": "integration/v2 has main's merged-in-marker and ancestor-tag 'released' fixes (ported from main); integration/v1.3 does not. Whether the 1.3 line needs them is for that line's maintainer; the freeze guard is line-scoped, so it does not affect v2."
+    },
+    {
+      "path": "scripts/mutation-prove-published-bytes-freeze-check.mjs",
+      "lane": "integration/v1.3",
+      "here": "a0e0f58e1171e95813cfc3db0f1068b72a0bac41",
+      "there": "68fcdf11f835f5d1b88f56982abf65a1b67589a4",
+      "reason": "integration/v2 has main's merged-in-marker and ancestor-tag 'released' fixes (ported from main); integration/v1.3 does not. Whether the 1.3 line needs them is for that line's maintainer; the freeze guard is line-scoped, so it does not affect v2. It also differs as before: the line-scoped port and the shared ls-tree-then-show pin reader on v1.3."
+    },
+    {
+      "path": "tests/published-bytes-freeze-guard-workflow.test.ts",
+      "lane": "integration/v1.3",
+      "here": "3fb45a067d52dcd19da699e42c4494fe6319449f",
+      "there": "85506d1b356cbe435b8011ea9ae52fbf050f5e7c",
+      "reason": "integration/v2 has main's merged-in-marker and ancestor-tag 'released' fixes (ported from main); integration/v1.3 does not. Whether the 1.3 line needs them is for that line's maintainer; the freeze guard is line-scoped, so it does not affect v2. It also differs as before: the line-scoped port and the shared ls-tree-then-show pin reader on v1.3."
     },
     {
       "path": "tests/published-bytes-freeze-check-cli.test.ts",
-      "lane": "main",
-      "here": "382cb25571d2163d01ab6f48b86d5f68834a31db",
-      "there": "4ab99f990aa77d231b66bc63c49a7ef827b35ca9",
-      "reason": "UNPORTED from main: the freeze guard's ancestor-vX.Y.Z-tag 'released' rule and the merged-in bump-marker fix are on main only; port with the next main->v2 forward-merge (#101). Also differs by v2-only CI changes (superseded-run cancellation, earlier forward-merges).",
-      "issue": "#101"
+      "lane": "integration/v1.3",
+      "here": "4ab99f990aa77d231b66bc63c49a7ef827b35ca9",
+      "there": "382cb25571d2163d01ab6f48b86d5f68834a31db",
+      "reason": "integration/v2 has main's merged-in-marker and ancestor-tag 'released' fixes (ported from main); integration/v1.3 does not. Whether the 1.3 line needs them is for that line's maintainer; the freeze guard is line-scoped, so it does not affect v2."
     },
     {
       "path": "tests/bun-version-pins.test.ts",

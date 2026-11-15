@@ -1,7 +1,7 @@
 # scripts/lib
 
 ## Overview
-Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 82 files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~27k lines, so treat each file's header as the authority.
+Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 83 files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~27k lines, so treat each file's header as the authority.
 
 ## Interface
 Grouped by concern. The names listed are the modules' exported symbols.
@@ -67,7 +67,8 @@ Grouped by concern. The names listed are the modules' exported symbols.
 - `pack-parity-diff.mjs`: `comparePackedTarballEntries`. Also exports `formatPackParityReport`, `groupTarEntriesByName`, `compareTarballEntriesTolerant`, `formatTolerantPackParityReport`.
 - `tar-entries.mjs`: `readTarEntries`, which uses node-tar.
 - `ga-tarball-diff.mjs`: `compareTarEntries`, `decideGaTarballDiffGate`. Also exports `validateVersionPair`, `parseRcVersion`, `validateVersionBump`, `countVersionOccurrences`, `substituteVersion`, `diffPackageJson`, `diffFileBytes`, `assertEntrySafe`.
-- `published-bytes-freeze-check.mjs`: `decidePublishedBytesScope`, `PIN_FILE`. Also exports `ROOT_BUILD_INPUT_FILES`, `OVERRIDE_MARKER_FIELD`, `PIN_FILE_V13`, `releaseLine`, `releasedBaseSupersedesRc`, `selectPinFile`, `publishScopeDirs`, `touchesPublishableScope`, `overrideMarkerValidity`, `overrideMarkerIntroducedByPr`.
+- `published-bytes-freeze-check.mjs`: `decidePublishedBytesScope`, `PIN_FILE`. Also exports `ROOT_BUILD_INPUT_FILES`, `OVERRIDE_MARKER_FIELD`, `PIN_FILE_V13`, `releaseLine`, `releasedBaseSupersedesRc`, `selectPinFile`, `publishScopeDirs`, `touchesPublishableScope`, `overrideMarkerValidity`, `overrideMarkerArrivedViaMerge`, `overrideMarkerIntroducedByPr`.
+- `merged-in-pins.mjs`: `markerAt`, `sameAuthorization`, `markerArrivedViaMerge`, `collectMergedInPins`. Pure (it spawns nothing; git reads are passed in). Shared by the published-bytes freeze guard's merged-in-marker rule and its CLI `scripts/collect-merged-in-pins.mjs`.
 - `knext-closure.mjs`: `knextDepsOf`, `assertLocalKnextResolutions`. Also exports `tarballPrefix`.
 - `workspace-protocol.mjs`: `findWorkspaceProtocolDeps`.
 - `workspace-globs.mjs`: `workspaceGlobs`, `workspaceRoots`.

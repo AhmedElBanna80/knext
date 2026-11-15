@@ -31,6 +31,7 @@ import { join, relative } from 'node:path';
 import { parseArgs } from 'node:util';
 import { buildBackendServiceCR, renderBackendServiceCR } from './backend-service';
 import { GrpcUsageError, loadConfig } from './config';
+import { parseFunctionEnvFlags } from './function-env-flags';
 import type { Io } from './generate';
 import { compareVersions, parseVersion } from './semver';
 import { backendSpecDigest } from './spec-digest';
@@ -194,6 +195,13 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
         'max-scale': { type: 'string' },
         'container-concurrency': { type: 'string' },
         'no-wake-ahead': { type: 'boolean' },
+        // Repeatable; Secrets by reference only (function-env-flags.ts).
+        env: { type: 'string', multiple: true },
+        'env-secret': { type: 'string', multiple: true },
+        'env-configmap': { type: 'string', multiple: true },
+        'env-from': { type: 'string', multiple: true },
+        volume: { type: 'string', multiple: true },
+        'image-pull-secret': { type: 'string', multiple: true },
         'dry-run': { type: 'boolean' },
       },
       allowPositionals: true,
@@ -259,7 +267,16 @@ export async function deployFunction(args: DeployFunctionArgs): Promise<number> 
         );
       }
     }
+    const envSpec = parseFunctionEnvFlags({
+      env: v.env,
+      envSecret: v['env-secret'],
+      envConfigMap: v['env-configmap'],
+      envFrom: v['env-from'],
+      volume: v.volume,
+      imagePullSecret: v['image-pull-secret'],
+    });
     const cr = buildBackendServiceCR({
+      envSpec,
       name,
       namespace,
       zone: v.zone,

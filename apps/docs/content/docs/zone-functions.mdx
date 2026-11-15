@@ -142,9 +142,11 @@ count, because the order of `env` decides how `$(VAR)` references expand and the
 decides which source wins when two define the same name; a tool that reorders them makes the pin
 mismatch, and the function is refused rather than run with a different environment.
 
-**If you write `env`, `envFrom` or `volumes` into the `BackendService` yourself.** `knext deploy
-function` has no flags for them, so the digest it prints covers the spec it applied, not the settings
-you add afterwards. The function is then refused until the zone's pin matches, and the message names
+**If you write `env`, `envFrom` or `volumes` into the `BackendService` yourself.** Set them with
+`knext deploy function`'s `--env`, `--env-secret`, `--env-configmap`, `--env-from` and `--volume`
+flags and the digest it prints already covers them. If you add them to the `BackendService` some
+other way, the digest the command printed covers the spec it applied, not the settings you added
+afterwards. The function is then refused until the zone's pin matches, and the message names
 the digest the operator computed from the spec as it stands. Review that spec, then put that digest in
 the zone's entry. Do not copy a digest out of a refusal you have not reviewed: it is the digest of
 whatever is on the cluster now.

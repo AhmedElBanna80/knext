@@ -865,6 +865,30 @@ knext deploy function orders \
   again. `--proto-version` overrides both.
 - Optional: `--namespace`, `--context`, `--port`, `--proto-version`, `--no-wake-ahead`,
   `--min-scale`, `--max-scale`, `--container-concurrency`.
+- The function container's environment, volumes and registry pull Secrets. Each flag can be repeated:
+  - `--env NAME=VALUE` sets a plain environment variable. It is for settings that are not secret.
+    As a guard, it refuses a name that contains `SECRET`, `PASSWORD`, `PASSWD`, `PASSPHRASE`,
+    `TOKEN`, `CREDENTIAL`, `APIKEY`, `API_KEY`, `PRIVATEKEY`, `PRIVATE_KEY`, `ACCESSKEY` or
+    `ACCESS_KEY`, or that has `PASS`, `PWD`, `AUTH`, `KEY`, `DSN` or `CERT` as one of its
+    `_`-separated parts. It also refuses a value that looks like a URL with a password in it
+    (`postgres://user:pass@host`). It is not a guarantee: anything you pass to
+    `--env` is in your shell history, the process list and the `BackendService`, so put every
+    secret in a Secret. The guard also refuses some harmless names and values (`TOKEN_TTL`,
+    `MAX_TOKENS`, `AUTH_URL`, `TLS_CERT_FILE`, `CACHE_KEY_PREFIX`, `SECRET_NAME`, or a URL with a
+    port and an `@` in its path); set those with `--env-configmap`.
+  - `--env-secret NAME=<secret>/<key>` reads a variable from a key of a Secret, and
+    `--env-configmap NAME=<configmap>/<key>` from a key of a ConfigMap.
+  - `--env-from secret:<name>` or `--env-from configmap:<name>` imports every key of a Secret or
+    ConfigMap.
+  - `--volume <name>:<path>:secret:<secret>`, `--volume <name>:<path>:configmap:<configmap>` or
+    `--volume <name>:<path>:emptydir` mounts a volume. The path must be absolute and canonical
+    (no `//`, `.` or `..` and no trailing `/`), and cannot contain `:`. `/var/run/knext` is
+    reserved for the operator, and `/`, `/dev` and `/dev/log` cannot be mounted.
+  - `--image-pull-secret <name>` names a registry pull Secret.
+
+  Secrets are always named, never passed as values. The operator does not run the function while
+  any Secret it references is something other than the zone's database Secret or a Secret marked as
+  the zone's.
 - `--dry-run` prints the resource and applies nothing, so it pipes into `kubectl apply -f -`.
 
 It applies the way `knext deploy` applies a `NextApp`. First a server-side dry run checks the

@@ -57,7 +57,7 @@ RUST_LOG=warn "${RUNNER}" --mode server -- target/release/conformance-server
 # ---- the function's own stack ----
 SRC="conformance/src/bin/server.rs"
 OUT="conformance/src/bin/function-stack-server.rs"
-main_at="$(grep -n '^async fn main() -> Result<()> {$' "${SRC}" | cut -d: -f1)"
+main_at="$(grep -n '^async fn main() -> Result<()> {$' "${SRC}" | cut -d: -f1 || true)"
 if [ "$(printf '%s\n' "${main_at}" | grep -c .)" != "1" ] \
   || [ "$(sed -n "$((main_at - 1))p" "${SRC}")" != '#[tokio::main]' ] \
   || [ "$(tail -n 1 "${SRC}")" != '}' ] \
@@ -122,7 +122,7 @@ TEMPLATE_LOCK="$(cd "${HERE}" && cargo tree --locked -e normal --prefix none --f
 # "<name> <version>" for every crate under `function` in the harness build.
 closure() {
   cargo tree -p connectrpc-conformance --features function-stack -e normal \
-    --prefix depth --no-dedupe --format '{p}' 2>/dev/null \
+    --prefix depth --no-dedupe --format '{p}' \
     | awk 'match($0, /^[0-9]+/) {
         d = substr($0, 1, RLENGTH) + 0; split(substr($0, RLENGTH + 1), a, " ")
         v = a[2]; sub(/^v/, "", v)
@@ -140,6 +140,12 @@ drifted() {
     ((k = $1 SUBSEP series($2)) in lock) && lock[k] != $2 { print $1, $2, lock[k] }' \
     <(printf '%s\n' "${TEMPLATE_LOCK}") -
 }
+# An empty or partial closure (cargo tree failing quietly) would compare nothing.
+built="$(closure)"
+for crate in connectrpc tokio hyper tower; do
+  grep -q "^${crate} " <<<"${built}" \
+    || { echo "conformance.sh: the harness build's closure of the function lacks ${crate}; cannot compare it" >&2; exit 2; }
+done
 for _ in 1 2 3; do
   pending="$(drifted)"
   [ -n "${pending}" ] || break

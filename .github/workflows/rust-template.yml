@@ -251,7 +251,9 @@ jobs:
 
       # conformance.sh refuses a checkout that is not the connectrpc version
       # Cargo.lock pins, builds the upstream conformance server with the
-      # template's buffa/hyper/h2 versions, and runs every server test.
+      # template's buffa/hyper/hyper-util/h2 versions, and runs every server
+      # test; then runs the suite against the function's own stack, with
+      # every crate the release binary links held to Cargo.lock.
       - name: Run every server conformance test (Connect, gRPC, gRPC-Web), upstream server then the function's own stack
         run: templates/rust/conformance.sh connect-rust "${HOME}/.cargo/bin/connectconformance"
 

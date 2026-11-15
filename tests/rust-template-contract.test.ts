@@ -357,15 +357,13 @@ describe('the template workflow scans, gates and holds no credential', () => {
     expect(read('src/rpc/conformance.rs')).toContain(
       'assemble(router, None, Config::default(), max_message)',
     );
-    // Every known failure is the whole-body bound on a stream, nothing else.
+    // The function's own stack passes every case: a stream is bounded in
+    // total, above one message, so a stream of limit-sized messages is served.
     const known = read('conformance/known-failing.txt')
       .split('\n')
       .filter((l) => l && !l.startsWith('#'));
-    expect(known.length).toBeGreaterThan(0);
-    for (const k of known)
-      expect(k).toMatch(
-        /^Server Message Size\/.*(client-stream|bidi-stream)\/.*all-requests-equal-to-server-limit$/,
-      );
+    expect(known).toEqual([]);
+    expect(rpc).toContain('MAX_STREAM_BODY_BYTES.max(max_body + 1)');
     // A function serves h2c: the config asks for no TLS.
     expect(read('conformance/config.yaml')).toContain('supports_tls: false');
   });

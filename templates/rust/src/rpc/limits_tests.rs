@@ -169,8 +169,8 @@ fn endless(
     StreamBody::new(stream::repeat_with(move || Ok(Frame::data(chunk.clone()))))
 }
 
-/// A request body longer than MAX_REQUEST_BODY_BYTES is cut off there, even
-/// on a client stream whose messages are each small.
+/// A client stream longer than MAX_STREAM_BODY_BYTES is cut off there, even
+/// when its messages are each small.
 #[tokio::test]
 async fn an_endless_body_is_cut_off() {
     let running = start(function(admit(), Timeouts::default())).await;
@@ -200,7 +200,49 @@ async fn an_endless_body_is_cut_off() {
     let status = timeout(Duration::from_secs(20), outcome(resp))
         .await
         .expect("the server read an endless client stream for 20s");
-    assert!(status.is_some(), "an endless body was served");
+    // connectrpc reports every failed stream read as internal (gRPC 13), the
+    // cap included. When it carries the cap's own code, this becomes
+    // resource_exhausted (8).
+    assert_eq!(status.as_deref(), Some("13"), "an endless body");
+    running.stop().await.unwrap();
+}
+
+/// A client stream whose messages are each small may carry far more than one
+/// message's worth in total: the stream-total bound, not the per-message one,
+/// applies to it.
+#[tokio::test]
+async fn a_long_client_stream_under_the_stream_bound_is_served() {
+    let running = start(function(admit(), Timeouts::default())).await;
+    let message = envelope(
+        false,
+        &PutItemRequest {
+            id: "x".into(),
+            value: "y".repeat(16 << 10),
+            ..Default::default()
+        }
+        .encode_to_vec(),
+    );
+    let count = 2 * MAX_REQUEST_BODY_BYTES / message.len() + 1;
+    assert!(count * message.len() < MAX_STREAM_BODY_BYTES);
+    let frames =
+        std::iter::repeat_n(message, count).map(|m| Ok::<_, std::io::Error>(Frame::data(m)));
+    let req = Request::post(format!("http://{}{SINK}", running.addr))
+        .header("content-type", "application/grpc")
+        .header("te", "trailers")
+        .header("authorization", "Bearer a.b.c")
+        .body(StreamBody::new(stream::iter(frames)))
+        .unwrap();
+    let resp = timeout(
+        Duration::from_secs(20),
+        raw(running.addr, Transport::H2c, req),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let status = timeout(Duration::from_secs(20), outcome(resp))
+        .await
+        .unwrap();
+    assert_eq!(status, None, "a stream under the stream bound was refused");
     running.stop().await.unwrap();
 }
 

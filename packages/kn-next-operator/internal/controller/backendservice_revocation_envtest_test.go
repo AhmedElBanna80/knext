@@ -301,7 +301,16 @@ var _ = Describe("BackendService reconciler: an unreadable Secret never keeps a 
 				Expect(err.Error()).To(ContainSubstring("reserved by Knative"))
 			})
 		}
-		for _, path := range []string{"/creds", "/dev/shm", "/data.v2/x", "/var/lib/app", "/data/", "//data", "/devices", "/dev/logs", "/.hidden", "/dev/.cache"} {
+		// Non-canonical spellings of an ordinary path are refused too, by the
+		// canonical-path rule (#108), not by this one.
+		for _, path := range []string{"/data/", "//data"} {
+			It("rejects the non-canonical "+path, func() {
+				err := mount(setup(), path)
+				Expect(apierrors.IsInvalid(err)).To(BeTrue(), "got %v", err)
+				Expect(err.Error()).To(ContainSubstring("mountPath must be canonical"))
+			})
+		}
+		for _, path := range []string{"/creds", "/dev/shm", "/data.v2/x", "/var/lib/app", "/devices", "/dev/logs", "/.hidden", "/dev/.cache"} {
 			It("admits "+path, func() {
 				Expect(mount(setup(), path)).To(Succeed())
 			})

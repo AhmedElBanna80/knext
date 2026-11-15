@@ -248,8 +248,9 @@ Node. (On Node and as a self-contained executable, the names agree.)
 In practice this only matters when an app moves between those shapes, for example a rollback from
 the Bun standalone target to Node. The first requests after the switch miss the `unstable_cache`
 entries the other shape wrote, so each entry is computed and stored again under the new name. ISR
-pages are keyed by path, so they are shared across every shape. The cause is Bun's transpiler, not
-your configuration.
+pages are not affected: in the same test, the Bun standalone target, the self-contained executable
+and Node all served each other's cached pages. The cause is Bun's transpiler, not your
+configuration.
 
 ## Known limitation: `turbopackModuleFragments`
 

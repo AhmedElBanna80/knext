@@ -342,8 +342,8 @@ recognised.
 Every embedded file adds its size to the executable, once. The build log prints the count and total
 size, and warns above 64 MiB.
 
-Self-contained mode is supported on the compiled standalone-on-Bun target and the vinext target,
-and on no other: elsewhere, setting it changes nothing about what `knext build` produces, and the
+Self-contained mode is supported on the two compiled targets, standalone and vinext, both on the Bun
+runtime, and on no other: elsewhere, setting it changes nothing about what `knext build` produces, and the
 choice is only recorded in the build log. The value must be a boolean — `knext validate` rejects
 anything else.
 

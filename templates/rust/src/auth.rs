@@ -18,7 +18,10 @@
 //! call with `unauthenticated` before the connect service sees it. The
 //! function is reachable only from its zone (cluster-local), and the token is
 //! the control that decides which calls it serves, so there is no setting
-//! here that turns the check off.
+//! here that turns the check off. (The knext repository's Connect
+//! conformance build of this template assembles the stack without it; that
+//! build refuses to compile in release, and a function created from the
+//! template does not have it.)
 
 mod jwks;
 mod policy;

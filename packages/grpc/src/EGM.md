@@ -85,7 +85,7 @@ The tsup entries are `cli.ts`, `runtime.ts` and `skew.ts`
   `resolveRustTemplateDir`, `rustTemplateDir`, `rustTemplateFiles`,
   `scaffoldedRustFromTemplate`, `RUST_KEYWORDS_2024`, `RUST_TOOLCHAIN_CRATES`,
   `lockedPackageNames`, `checkCrateName`, `RustScaffold`, `upperSnake`,
-  `stripVectorGate`, `renameLockedPackage`, `substituteRust`, `codegenCacheDir`,
+  `stripVectorGate`, `stripConformanceGate`, `renameLockedPackage`, `substituteRust`, `codegenCacheDir`,
   `StagedRustFunction`, `stageRustFunction`.
 
 ### Deploy function (`deploy-function.ts`, `backend-service.ts`, `spec-digest.ts`)

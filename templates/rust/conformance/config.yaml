@@ -1,0 +1,33 @@
+---
+# The Connect conformance suite against the function's own stack
+# (templates/rust/conformance.sh). It lists what a function serves: every
+# protocol and stream type over HTTP/1.1 and h2c, proto and JSON, identity and
+# gzip (the template registers gzip only, and its release binary links no
+# zstd), with no TLS, since a function serves h2c inside the cluster.
+features:
+    versions:
+        - HTTP_VERSION_1
+        - HTTP_VERSION_2
+    protocols:
+        - PROTOCOL_CONNECT
+        - PROTOCOL_GRPC
+        - PROTOCOL_GRPC_WEB
+    codecs:
+        - CODEC_PROTO
+        - CODEC_JSON
+    compressions:
+        - COMPRESSION_IDENTITY
+        - COMPRESSION_GZIP
+    stream_types:
+        - STREAM_TYPE_UNARY
+        - STREAM_TYPE_SERVER_STREAM
+        - STREAM_TYPE_CLIENT_STREAM
+        - STREAM_TYPE_HALF_DUPLEX_BIDI_STREAM
+        - STREAM_TYPE_FULL_DUPLEX_BIDI_STREAM
+    supports_h2c: true
+    supports_tls: false
+    supports_tls_client_certs: false
+    supports_trailers: true
+    supports_connect_get: true
+    supports_message_receive_limit: true
+    supports_half_duplex_bidi_over_http1: true

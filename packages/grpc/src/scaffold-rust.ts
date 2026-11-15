@@ -43,6 +43,10 @@ export const RUST_TEMPLATE_EXCLUDES: readonly TemplateExclude[] = [
   { path: '.codegen', why: 'plugin binaries installed by a local codegen.sh run (git-ignored)' },
   { path: 'README.md', why: 'maintainer documentation for the template, not for a function' },
   {
+    path: 'conformance',
+    why: 'the conformance harness (server main and suite config) that conformance.sh splices onto the upstream service',
+  },
+  {
     path: 'conformance.sh',
     why: "runs the upstream Connect conformance suite against the template's own locked connect-rust",
   },
@@ -56,6 +60,10 @@ export const RUST_TEMPLATE_EXCLUDES: readonly TemplateExclude[] = [
   {
     path: 'src/auth/vector_tests.rs',
     why: 'signed against the example service and read from the knext repository',
+  },
+  {
+    path: 'src/rpc/conformance.rs',
+    why: "the stack without its token check, for the repository's conformance build only",
   },
   {
     path: 'src/rpc/tests/vector_wiring.rs',
@@ -238,6 +246,30 @@ export function stripVectorGate(rel: string, text: string): string {
   return out;
 }
 
+/**
+ * `src/rpc/mod.rs` declares the conformance module behind the repository-only
+ * `conformance` feature. The copy has neither the file nor the feature, so the
+ * declaration is cut out, exactly once, and nothing may still name the feature
+ * (an unknown feature in a `cfg` is a lint error under `-D warnings`).
+ */
+export function stripConformanceGate(text: string): string {
+  const pattern =
+    /^\/\/ Repository only: [^\n]*\n#\[cfg\(feature = "conformance"\)\]\npub mod conformance;\n/gm;
+  const found = text.match(pattern)?.length ?? 0;
+  if (found !== 1) {
+    throw new Error(
+      `the Rust template changed: expected one conformance gate in src/rpc/mod.rs, found ${found}`,
+    );
+  }
+  const out = text.replace(pattern, '');
+  if (out.includes('feature = "conformance"')) {
+    throw new Error(
+      'the Rust template changed: src/rpc/mod.rs still names the conformance feature',
+    );
+  }
+  return out;
+}
+
 function once(text: string, needle: string, file: string, expected: number): void {
   const n = text.split(needle).length - 1;
   if (n !== expected) {
@@ -290,6 +322,7 @@ export function substituteRust(rel: string, text: string, s: RustScaffold): stri
       .replace('target/release/function ', `target/release/${s.name} `);
   }
   if (VECTOR_GATE_FILES.includes(rel)) out = stripVectorGate(rel, out);
+  if (rel === 'src/rpc/mod.rs') out = stripConformanceGate(out);
   const map: Record<string, string> = {
     EXAMPLE_SERVICE_SERVICE_NAME: `${upperSnake(s.service)}_SERVICE_NAME`,
     ExampleService: s.service,

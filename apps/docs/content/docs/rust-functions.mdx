@@ -184,7 +184,12 @@ must serve a contract version greater than or equal to the zone's.
 
 The template uses connect-rust, which has not reached 1.0. Its version is pinned to the 0.9 line
 in `Cargo.toml` and exactly in `Cargo.lock`, and knext's CI runs the Connect conformance suite —
-every server test, on the Connect, gRPC and gRPC-Web protocols — against the locked version. When
+every server test, on the Connect, gRPC and gRPC-Web protocols — against the locked version. It
+runs the suite a second time against the template's own server: its connection handling, timeouts,
+request limits and layers, with only the token check left out, since the suite sends no token. The
+only cases that server fails are the ones the request limit above refuses on purpose: a client or
+bidirectional stream of several messages whose bodies add up to more than one message's limit plus
+64 KiB. Such a call currently ends with the `internal` code rather than `resource_exhausted`. When
 you upgrade connect-rust in your function, upgrade the codegen plugin in `codegen.sh` with it and
 regenerate.
 

@@ -10,6 +10,9 @@
 
 mod body;
 mod layers;
+// Repository only: `knext add function` copies neither this line nor the file.
+#[cfg(feature = "conformance")]
+pub mod conformance;
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -153,6 +156,20 @@ fn example_router() -> Router {
 }
 
 fn build(router: Router, verifier: Option<Arc<dyn Verifier>>, cfg: Config) -> Function {
+    assemble(
+        router,
+        Some(AuthLayer::new(verifier)),
+        cfg,
+        MAX_REQUEST_BYTES,
+    )
+}
+
+/// The one stack. [`build`] always passes the token check. `auth` is an
+/// `Option` so that the knext repository's Connect conformance build of this
+/// template (never compiled in release, and not part of a function created
+/// from it) can run the suite against this exact assembly without it.
+fn assemble(router: Router, auth: Option<AuthLayer>, cfg: Config, max_message: usize) -> Function {
+    let max_body = max_message + (MAX_REQUEST_BODY_BYTES - MAX_REQUEST_BYTES);
     let procedures = router.methods().map(|m| format!("/{m}")).collect();
     let tracer = cfg
         .tracer
@@ -160,8 +177,8 @@ fn build(router: Router, verifier: Option<Arc<dyn Verifier>>, cfg: Config) -> Fu
     let connect = ConnectRpcService::new(router)
         .with_limits(
             Limits::default()
-                .with_max_message_size(MAX_REQUEST_BYTES)
-                .with_max_request_body_size(MAX_REQUEST_BODY_BYTES),
+                .with_max_message_size(max_message)
+                .with_max_request_body_size(max_body),
         )
         // gzip only. Decompression stops at the message limit.
         .with_compression(CompressionRegistry::new().register(GzipProvider::new()));
@@ -171,11 +188,8 @@ fn build(router: Router, verifier: Option<Arc<dyn Verifier>>, cfg: Config) -> Fu
         .layer(layers::HealthzLayer)
         .layer(layers::TraceLayer::new(tracer))
         .layer(layers::RecoverLayer)
-        .layer(body::BoundedBodyLayer::new(
-            MAX_REQUEST_BODY_BYTES,
-            cfg.timeouts.read,
-        ))
-        .layer(AuthLayer::new(verifier))
+        .layer(body::BoundedBodyLayer::new(max_body, cfg.timeouts.read))
+        .option_layer(auth)
         .service(connect);
     Function {
         service: BoxCloneService::new(stack),

@@ -43,7 +43,26 @@ and `proto/knext/v1/options.proto` is the copy `@getknext/grpc` ships;
 `tests/rust-template-contract.test.ts` holds both.
 
 connect-rust is pre-1.0. The `connectrpc` 0.9 line is pinned in `Cargo.toml` and `Cargo.lock`,
-and CI runs the Connect conformance suite against the locked version.
+and CI runs the Connect conformance suite against the locked version (`conformance.sh`). It runs
+the suite twice:
+
+1. against the upstream conformance server, built from the pinned connect-rust commit, every
+   server test;
+2. against this template's own stack: `conformance/main.rs` replaces the upstream server's `main`
+   and serves its `ConformanceService` through `rpc::conformance::unauthenticated`. That stack is
+   the same `assemble` the binary uses (accept loop, timeouts, body bound, layers), without the
+   token check, because the runner sends no token.
+   - `conformance/config.yaml` lists what a function serves: no TLS, and gzip only.
+   - Every crate the release binary links is held to the version in `Cargo.lock`; the script
+     fails if one differs. Feature unification with the upstream conformance crate adds crates the
+     release binary does not link, among them connectrpc's axum, rustls and zstd, tokio's `full`
+     features (parking_lot) and tracing-subscriber's env filter; the script prints the full list.
+   - `conformance/known-failing.txt` lists the stream cases the whole-body bound refuses on
+     purpose. Any other failure, or one of those passing, fails the run.
+
+`src/rpc/conformance.rs` exists only behind the repository-only `conformance` feature. It refuses
+to compile in a release build (CI checks that), and `knext add function` copies neither the file,
+the feature nor the `mod` line.
 
 ## Commands
 

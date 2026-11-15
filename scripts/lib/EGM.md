@@ -1,7 +1,7 @@
 # scripts/lib
 
 ## Overview
-Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 81 files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~27k lines, so treat each file's header as the authority.
+Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 82 files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~27k lines, so treat each file's header as the authority.
 
 ## Interface
 Grouped by concern. The names listed are the modules' exported symbols.

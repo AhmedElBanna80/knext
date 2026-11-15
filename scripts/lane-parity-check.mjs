@@ -59,6 +59,13 @@ function readBlob(lane, path) {
 }
 
 const findings = checkLaneParity({ manifest, readBlob });
+// Recorded known gaps stay visible on a green run.
+for (const d of Array.isArray(manifest.divergences) ? manifest.divergences : []) {
+  if (d.issue)
+    console.log(
+      `::warning::lane-parity: ${d.path} vs ${d.lane} is a recorded gap, tracked in ${d.issue}`,
+    );
+}
 if (findings.length === 0) {
   console.log(
     `lane-parity: ${manifest.files.length} guard file(s) match across ${manifest.lanes.join(', ')}, ` +

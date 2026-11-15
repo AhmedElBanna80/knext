@@ -18,7 +18,7 @@
  */
 
 /**
- * @typedef {{ path: string, lane: string, here: string, there: string | null, reason: string }} Divergence
+ * @typedef {{ path: string, lane: string, here: string, there: string | null, reason: string, issue?: string }} Divergence
  * @typedef {{ self: string, lanes: string[], files: string[], divergences: Divergence[] }} Manifest
  * @typedef {{ kind: string, path?: string, lane?: string, message: string, here?: string | null, there?: string | null }} Finding
  */
@@ -49,6 +49,12 @@ export function validateManifest(manifest) {
       bad(`divergence for ${id}: the lane is not another lane in \`lanes\``);
     if (typeof d?.reason !== 'string' || d.reason.trim().length < 10)
       bad(`divergence for ${id}: \`reason\` must say why (10 characters or more)`);
+    // A known gap (a fix not yet ported) must name where the port is tracked, so
+    // a recorded difference never quietly turns a class-D gap into a green.
+    if (/^UNPORTED/.test(d?.reason ?? '') && !/^#\d+$/.test(d?.issue ?? ''))
+      bad(`divergence for ${id}: an UNPORTED difference must name its tracking \`issue\` (#N)`);
+    if (d?.issue !== undefined && !/^#\d+$/.test(d.issue))
+      bad(`divergence for ${id}: \`issue\` must look like #N`);
     if (typeof d?.here !== 'string')
       bad(`divergence for ${id}: \`here\` must be this lane's blob id`);
     if (d?.there !== null && typeof d?.there !== 'string')
@@ -75,7 +81,6 @@ export function checkLaneParity({ manifest, readBlob }) {
   if (invalid.length > 0) return invalid;
   const findings = [];
   const recorded = new Map(manifest.divergences.map((d) => [`${d.path}\0${d.lane}`, d]));
-  const used = new Set();
   const others = manifest.lanes.filter((l) => l !== manifest.self);
 
   for (const path of manifest.files) {
@@ -92,7 +97,6 @@ export function checkLaneParity({ manifest, readBlob }) {
       const there = readBlob(lane, path);
       const key = `${path}\0${lane}`;
       const entry = recorded.get(key);
-      if (entry) used.add(key);
       if (there === here) {
         if (entry)
           findings.push({

@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { parse } from 'yaml';
 import { checkLaneParity, validateManifest } from '../scripts/lib/lane-parity.mjs';
 
 /**
@@ -18,7 +19,14 @@ const SCRIPT = join(REPO, 'scripts/lane-parity-check.mjs');
 type Blobs = Record<string, Record<string, string | null>>;
 const LANES = ['main', 'v2', 'v1'];
 
-type Entry = { path: string; lane: string; here: string; there: string | null; reason: string };
+type Entry = {
+  path: string;
+  lane: string;
+  here: string;
+  there: string | null;
+  reason: string;
+  issue?: string;
+};
 
 function manifest(divergences: Entry[] = [], files = ['g.mjs']) {
   return { self: 'v2', lanes: LANES, files, divergences };
@@ -108,6 +116,27 @@ describe('checkLaneParity: the rules', () => {
     expect(f.map((x) => x.message).join('\n')).toMatch(msg);
   });
 
+  it('requires a tracking issue on an UNPORTED difference', () => {
+    const e = {
+      path: 'g.mjs',
+      lane: 'main',
+      here: 'a',
+      there: 'b',
+      reason: 'UNPORTED from main: the fix',
+    };
+    expect(
+      validateManifest(manifest([e]))
+        .map((x) => x.message)
+        .join(),
+    ).toMatch(/tracking `issue`/);
+    expect(validateManifest(manifest([{ ...e, issue: '#101' }]))).toEqual([]);
+    expect(
+      validateManifest(manifest([{ ...e, issue: 'soon' }]))
+        .map((x) => x.message)
+        .join(),
+    ).toMatch(/#N/);
+  });
+
   it('rejects a duplicate entry and a self lane missing from lanes', () => {
     const e = { path: 'g.mjs', lane: 'main', here: 'a', there: 'b', reason: REASON };
     expect(
@@ -129,9 +158,28 @@ describe('the committed manifest', () => {
   it('is well formed and names this lane', () => {
     expect(validateManifest(real)).toEqual([]);
     expect(real.self).toBe('integration/v2');
-    expect(real.lanes).toEqual(
-      expect.arrayContaining(['main', 'integration/v2', 'integration/v1.3']),
-    );
+    expect(real.lanes).toEqual(['main', 'integration/v2', 'integration/v1.3']);
+  });
+
+  it('the workflow runs on every v2 push and on a PR touching any listed file', () => {
+    const wf = parse(readFileSync(join(REPO, '.github/workflows/lane-parity.yml'), 'utf8'));
+    expect(wf.on.push.branches).toEqual(['integration/v2']);
+    expect(wf.on.push.paths).toBeUndefined();
+    expect(wf.on.pull_request.branches).toEqual(['integration/v2']);
+    // Both halves: every guard file AND the checker's own files are in the filter.
+    const paths: string[] = wf.on.pull_request.paths;
+    for (const f of [
+      ...real.files,
+      '.github/lane-parity.json',
+      '.github/workflows/lane-parity.yml',
+      'scripts/lane-parity-check.mjs',
+      'scripts/lib/lane-parity.mjs',
+    ]) {
+      expect(paths, f).toContain(f);
+    }
+    // A red push run reaches someone.
+    expect(wf.jobs['lane-parity-alert'].if).toContain("needs.parity.result == 'failure'");
+    expect(wf.jobs['lane-parity-alert'].if).toContain("needs.parity.result == 'cancelled'");
   });
 
   it("matches this checkout's blobs for every recorded difference", () => {

@@ -75,7 +75,8 @@ const RESERVED_ENV_PREFIX = 'KNEXT_TOKEN_';
 // reference instead.
 //
 // A GUARD, not a guarantee: it catches the common names, and it over-blocks
-// a few harmless ones (TOKEN_TTL), which `--env-configmap` sets instead. A name
+// harmless ones (TOKEN_TTL, MAX_TOKENS, AUTH_URL, TLS_CERT_FILE,
+// CACHE_KEY_PREFIX, SECRET_NAME), which `--env-configmap` sets instead. A name
 // is refused when it CONTAINS one of the words, or has one of the short
 // segments as a whole `_`-separated part.
 const SECRET_WORDS =
@@ -92,7 +93,10 @@ function secretLike(name: string): boolean {
 }
 // A URL that carries a password in its userinfo (`scheme://user:pass@host`),
 // whatever the variable is called (DATABASE_URL, REDIS_URL).
-const URL_WITH_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]*:[^/\s@]+@/i;
+// Deliberately wide: a ':' after the scheme followed later by an '@' counts, so a
+// password holding '/' or ':' is caught too. It can also refuse a URL with a port
+// and an '@' in its path; set such a value with --env-configmap.
+const URL_WITH_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^\s@:/]*:\S*@/i;
 const RESERVED_MOUNT = '/var/run/knext';
 
 function usage(flag: string, problem: string): never {

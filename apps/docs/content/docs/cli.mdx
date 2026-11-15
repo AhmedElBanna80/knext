@@ -867,13 +867,15 @@ knext deploy function orders \
   `--min-scale`, `--max-scale`, `--container-concurrency`.
 - The function container's environment, volumes and registry pull Secrets. Each flag can be repeated:
   - `--env NAME=VALUE` sets a plain environment variable. It is for settings that are not secret.
-    As a guard, it refuses a name that contains `SECRET`, `PASSWORD`, `PASSPHRASE`, `TOKEN`,
-    `CREDENTIAL`, `API_KEY`, `PRIVATE_KEY` or `ACCESS_KEY`, or that has `PASS`, `PWD`, `AUTH`, `KEY`,
-    `DSN` or `CERT` as one of its `_`-separated parts. It also refuses a value that is a URL with a
-    password in it (`postgres://user:pass@host`). It is not a guarantee: anything you pass to
+    As a guard, it refuses a name that contains `SECRET`, `PASSWORD`, `PASSWD`, `PASSPHRASE`,
+    `TOKEN`, `CREDENTIAL`, `APIKEY`, `API_KEY`, `PRIVATEKEY`, `PRIVATE_KEY`, `ACCESSKEY` or
+    `ACCESS_KEY`, or that has `PASS`, `PWD`, `AUTH`, `KEY`, `DSN` or `CERT` as one of its
+    `_`-separated parts. It also refuses a value that looks like a URL with a password in it
+    (`postgres://user:pass@host`). It is not a guarantee: anything you pass to
     `--env` is in your shell history, the process list and the `BackendService`, so put every
-    secret in a Secret. Set a harmless name the guard refuses (`TOKEN_TTL`) with
-    `--env-configmap`.
+    secret in a Secret. The guard also refuses some harmless names and values (`TOKEN_TTL`,
+    `MAX_TOKENS`, `AUTH_URL`, `TLS_CERT_FILE`, `CACHE_KEY_PREFIX`, `SECRET_NAME`, or a URL with a
+    port and an `@` in its path); set those with `--env-configmap`.
   - `--env-secret NAME=<secret>/<key>` reads a variable from a key of a Secret, and
     `--env-configmap NAME=<configmap>/<key>` from a key of a ConfigMap.
   - `--env-from secret:<name>` or `--env-from configmap:<name>` imports every key of a Secret or

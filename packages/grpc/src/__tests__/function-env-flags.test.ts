@@ -146,6 +146,17 @@ describe('parseFunctionEnvFlags: the CRD shapes', () => {
       /URL with a password/,
     ],
     [
+      'a URL whose password holds a slash',
+      { env: ['DATABASE_URL=postgres://app:pa/ss@db/x'] },
+      /URL with a password/,
+    ],
+    [
+      'a URL whose password holds a colon',
+      { env: ['DATABASE_URL=postgres://app:pa:ss@db/x'] },
+      /URL with a password/,
+    ],
+    ['exactly /', { volume: ['v:/:emptydir'] }, /reserved by Knative serving/],
+    [
       'a DSN as a value',
       { env: ['SENTRY_DSN=https://k@o.ingest.sentry.io/1'] },
       /looks like a secret/,

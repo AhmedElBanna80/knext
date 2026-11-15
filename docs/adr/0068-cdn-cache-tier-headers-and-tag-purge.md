@@ -910,18 +910,27 @@ The cause was over-eviction, never stale content.
 `<p>` is the first 12 lowercase hex of `sha256("<cluster identity>/<namespace>/<name>")`. The cluster
 identity is the one the Redis ACL users already carry (ADR-0071 D2): the KnextPlatform's
 `spec.cache.clusterId` when it is set, otherwise the `kube-system` Namespace uid. So prefixes differ
-per cluster with no setting, and `spec.cache.clusterId` is the override a deliberate shared prefix
-needs (two clusters set the same value). The operator resolves it before it renders an app that
-renders `spec.cdn`. A failed read requeues the app rather than render a guessed prefix. It already
-holds `get` on Namespaces for the ADR-0071 identity.
+per cluster with no setting. `spec.cache.clusterId` is not a way to share a prefix: the same value
+names the Redis ACL users, and two clusters on one Redis that share it overwrite each other's users
+(ADR-0071). Its use here is keeping one identity across a rebuild. The operator resolves the identity
+after spec validation and before it renders an app that renders `spec.cdn`, and caches the
+`kube-system` uid for the life of the process. A failed read is a hold (`holdClusterIdentityUnavailable`):
+the live Knative Service is left as it is, `PlatformDefaultsApplied` reports
+`ClusterIdentityUnavailable`, Ready is held False for an app change that was not applied, and the
+verdict requeues in 30 s. It already holds `get` on Namespaces for the ADR-0071 identity.
 
 **Consequences.**
 - The default Redis key prefix and the ACL username keep the app hash `sha256("<namespace>/<name>")`.
   They do not move, and no app's cache keys change. The ACL grant for the purge-dedupe keys
   (`knext:cdn:purged:<p>:*`) follows the new `<p>`.
-- Every app with `spec.cdn` re-renders once: one new revision with the new prefix, whose first-ready
-  purge of the new app tag covers the change. A rebuilt cluster (a new `kube-system` uid) re-prefixes
-  once more. That is harmless over-eviction.
+- Every app with `spec.cdn` re-renders once: one new revision with the new prefix. Its first-ready
+  purge of the new app tag does **not** cover the change: entries cached before it carry the old
+  tags, so no purge reaches them, and they are served stale until they expire (at most
+  `htmlTTLSeconds` + `staleWhileRevalidateSeconds`, 7200 s at the field maximums). The upgrade notes
+  say so and suggest a zone purge. A rebuilt cluster or a new `clusterId` does the same again.
+- The prefix is part of `effectiveHash`, so a `clusterId` change re-renders CDN apps behind the
+  rollout limiter (`rollout.maxAppsPerMinute`) instead of all at once. A non-CDN app's hash is
+  unchanged.
 - Apps without `spec.cdn` are unchanged, byte for byte.
 
 | Decision | Chosen | jev | Main alternative(s) | jev | Why the alternative lost |

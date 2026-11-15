@@ -322,7 +322,9 @@ var _ = Describe("A transient failure of the cache-credentials step goes through
 		e.reconcile(ctx, name)
 		Expect(e.cacheCondition(ctx, name).Reason).To(Equal(ReasonCacheProvisioned))
 
-		// The cluster identity can no longer be read (an API blip).
+		// The cluster identity can no longer be read (an API blip). The UID is
+		// cached once read, so model a restarted operator whose first read fails.
+		e.r.kubeSystemUID.Store(nil)
 		e.rdr.fail = true
 		res, err := e.r.Reconcile(ctx, reconcile.Request{Namespace: aclEnvNS, Name: name})
 		Expect(err).NotTo(HaveOccurred(), "the error must reach the verdict, not abort the pass before it runs")

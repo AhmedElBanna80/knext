@@ -244,6 +244,19 @@ before upgrading (this field needs the new operator, and an older one rejects it
 strict-decoding error). Functions have no such opt-out; build them from the Go or Rust template, which
 run as `65532:65532`.
 
+## Version-specific step: CDN tag prefixes include the cluster's identity
+
+The operator now derives each app's CDN tag prefix from the cluster's identity as well as the app's
+namespace and name, so two clusters behind one CDN zone no longer purge each other's pages. See
+[Cloudflare CDN](/docs/cdn-cloudflare).
+
+**What an operator upgrade does.** Every `NextApp` with `spec.cdn` rolls one new revision with the
+new prefix, the first time the new operator reconciles it; apps without `spec.cdn` do not change.
+Pages already at the edge keep their old tags, so a purge no longer reaches them: they are served
+until they expire, at most `htmlTTLSeconds` plus `staleWhileRevalidateSeconds` after they were
+cached. If a page must not be served stale after the upgrade, purge the zone once the new revisions
+are ready.
+
 ## Version-specific step: the `kn-next` command is gone
 
 The CLI is run as **`knext`**. The old `kn-next` command name, which 1.x kept as a deprecated alias

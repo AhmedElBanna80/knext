@@ -145,7 +145,8 @@ ACL SETUSER knext-app-<cluster tag>-<app hash> reset on ><password> [#<sha256 of
 ```
 
 - **Username** `knext-app-<cluster tag>-<app hash>`. `<app hash>` is the first 12 hex of
-  `sha256("<namespace>/<name>")`, the same derivation as the default prefix and the CDN tag prefix.
+  `sha256("<namespace>/<name>")`, the same derivation as the default prefix (the CDN tag prefix also
+  hashes the cluster identity since ADR-0068 Amendment 5).
   `<cluster tag>` is the first 8 hex of `sha256(<cluster identity>)`, where the cluster identity is
   `KnextPlatform` `spec.cache.clusterId` when the platform admin sets one, and otherwise the
   `metadata.uid` of the `kube-system` Namespace. The name is deterministic, unique per app **and per
@@ -188,8 +189,11 @@ ACL SETUSER knext-app-<cluster tag>-<app hash> reset on ><password> [#<sha256 of
   (`enableReadyCheck: false` under a per-app user). The rule set does not change for it.
 - **The CDN claim key gets a write-only selector**, `%W~knext:cdn:purged:<cdn-tag-prefix>:*`, added
   only when the app has a CDN configured. Measured: it allows the `SET … NX EX` claim and refuses a
-  read of the key, `SET … NX GET`, and another app's claim key. The key keeps its current name, so
-  there is no rolling-upgrade split between pods that claim under two different keys. The
+  read of the key, `SET … NX GET`, and another app's claim key. The key keeps its current name. *(Since
+  ADR-0068 Amendment 5 the prefix in it changes once, on the upgrade that re-renders every CDN app:
+  an old-revision pod that starts before the new revision is ready claims under the old prefix,
+  which the new grant no longer covers. The claim is refused, and that pod skips its first-ready
+  purge with a warning (`purger.js` `firstReady`); nothing else changes.)* The
   `<cdn-tag-prefix>` in the selector is the operator's own derivation from the app's identity
   (`cdnTagPrefix` in `cdn.go`), never a value from the CR, so whatever the pod's environment says,
   its user can write only its own claim keys. The claim keys of every app live in one shared

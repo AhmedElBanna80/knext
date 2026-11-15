@@ -46,6 +46,8 @@ func holdReason(g platformGate) string {
 		return ReasonEffectiveSpecInvalid
 	case holdRolloutPending:
 		return ReasonRolloutPending
+	case holdClusterIdentityUnavailable:
+		return ReasonClusterIdentityUnavailable
 	default:
 		return ""
 	}
@@ -88,7 +90,7 @@ func (h *heldTracker) forget(app types.NamespacedName) {
 // publishLocked rewrites the gauge from the current set. Every known reason is
 // written, so a reason whose last app left reads 0 rather than going stale.
 func (h *heldTracker) publishLocked() {
-	counts := map[string]float64{ReasonEffectiveSpecInvalid: 0, ReasonRolloutPending: 0}
+	counts := map[string]float64{ReasonEffectiveSpecInvalid: 0, ReasonRolloutPending: 0, ReasonClusterIdentityUnavailable: 0}
 	for _, reason := range h.byApp {
 		counts[reason]++
 	}

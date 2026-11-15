@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -286,6 +287,9 @@ type NextAppReconciler struct {
 	rollout rolloutLimiter
 	// held remembers which apps are held, for the fleet metrics. Zero value ready.
 	held heldTracker
+	// kubeSystemUID caches the kube-system Namespace UID once it is read: it is
+	// fixed for the cluster's lifetime, so one read serves every pass. Zero value ready.
+	kubeSystemUID atomic.Pointer[string]
 }
 
 // now returns the reconciler's clock (test-injectable), defaulting to time.Now.
@@ -449,16 +453,6 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		return ctrl.Result{}, platErr
 	}
 	eff := resolveEffective(&nextApp, snap.active())
-	// The CDN tag prefix needs the cluster identity (an API read). Resolved
-	// before anything is built and, like the platform read above, an error
-	// requeues: a Knative Service is never rendered with a guessed prefix.
-	if cdnRendersEnv(&nextApp) {
-		identity, idErr := r.clusterIdentity(ctx, snap)
-		if idErr != nil {
-			return ctrl.Result{}, idErr
-		}
-		eff.cdnTagPrefix = cdnTagPrefix(identity, &nextApp)
-	}
 	// A spec that is valid under the built-in budget but not under the platform's
 	// (or whose merged resources a pod would refuse) is the platform's doing, not
 	// the app's: hold the app's current Knative Service (F3) instead of failing it
@@ -475,6 +469,20 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		// a failed write retries with the error's own backoff.
 		_ = r.applyStatusVerdict(ctx, &nextApp, observedStatus, verdict)
 		return ctrl.Result{}, err
+	}
+	// The CDN tag prefix is salted with the cluster identity (an API read). A
+	// Knative Service is never rendered with a guessed prefix: an unreadable
+	// identity is a hold the verdict reports and retries, not an error return
+	// that would skip the verdict.
+	if cdnRendersEnv(&nextApp) {
+		identity, idErr := r.clusterIdentity(ctx, snap)
+		switch {
+		case idErr == nil:
+			eff.cdnTagPrefix = cdnTagPrefix(identity, &nextApp)
+		case gate.hold == holdNone:
+			logger.Error(idErr, "Holding the Knative Service: the cluster identity could not be read")
+			gate = platformGate{hold: holdClusterIdentityUnavailable, detail: idErr.Error()}
+		}
 	}
 
 	// 0. Database binding (ADR-0019). knext is engine-agnostic and provisions NO

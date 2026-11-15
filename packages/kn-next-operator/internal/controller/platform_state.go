@@ -69,7 +69,15 @@ const (
 	// ReasonRolloutPending: a platform change is queued for this app behind
 	// rollout.maxAppsPerMinute; its Knative Service is unchanged until its slot.
 	ReasonRolloutPending = "RolloutPending"
+	// ReasonClusterIdentityUnavailable: the cluster identity the CDN tag prefix is
+	// salted with could not be read; the Knative Service is left unchanged.
+	ReasonClusterIdentityUnavailable = "ClusterIdentityUnavailable"
 )
+
+// clusterIdentityRetry is how soon a pass held on an unreadable cluster identity
+// tries again: the read failing is an API or RBAC condition, not a spec edit, so
+// no watch would re-enqueue the app.
+const clusterIdentityRetry = 30 * time.Second
 
 // platformSnapshot is the platform state one reconcile pass works from.
 type platformSnapshot struct {
@@ -160,6 +168,10 @@ const (
 	holdEffectiveSpecInvalid
 	// holdRolloutPending: the app's re-render is queued behind the rollout limiter.
 	holdRolloutPending
+	// holdClusterIdentityUnavailable: a CDN app's tag prefix needs the cluster
+	// identity and it could not be read. Rendering without it would publish a
+	// guessed prefix, so the live Knative Service is left exactly as it is.
+	holdClusterIdentityUnavailable
 )
 
 // platformGate is the outcome of the platform checks between spec validation and
@@ -222,12 +234,17 @@ func effectiveHash(eff effectiveValues) string {
 		Timeout                          int64
 		SDD                              string
 		TBC, PanicWindow, PanicThreshold *int32
+		// Omitted when empty, so a non-CDN app's hash is the one it always had. A
+		// change of the cluster identity (spec.cache.clusterId) moves it for every
+		// CDN app, and the rollout limiter paces those re-renders.
+		CDNTagPrefix string `json:",omitempty"`
 	}{
 		eff.containerConcurrency,
 		eff.cpuRequest.value, eff.memoryRequest.value, eff.cpuLimit.value, eff.memoryLimit.value,
 		eff.timeoutSeconds,
 		eff.scaleDownDelay,
 		eff.targetBurstCapacity, eff.panicWindowPercentage, eff.panicThresholdPercentage,
+		eff.cdnTagPrefix,
 	})
 	if err != nil {
 		raw = fmt.Appendf(nil, "%+v", eff)

@@ -203,11 +203,23 @@ describe('zero-diff comparator', () => {
     expect(appTagOf('77489686e9ad')).toBe(tags.appTag('77489686e9ad'));
   });
 
-  it('derives the per-app prefix exactly as the operator does: sha256("<ns>/<name>")[:12]', async () => {
+  it('derives the per-app prefix exactly as the operator does: sha256("<identity>/<ns>/<name>")[:12]', async () => {
     const { derivePrefix } = await import(ASSERT);
-    // Independently computed: printf 'cdn-e2e/cdn-a' | sha256sum | cut -c1-12
-    expect(derivePrefix('cdn-e2e', 'cdn-a')).toBe('77489686e9ad');
-    expect(derivePrefix('cdn-e2e', 'cdn-b')).toBe('3903a6817858');
+    // Independently computed: printf 'test-id/cdn-e2e/cdn-a' | sha256sum | cut -c1-12
+    expect(derivePrefix('test-id', 'cdn-e2e', 'cdn-a')).toBe('bdf826bdf03e');
+    expect(derivePrefix('test-id', 'cdn-e2e', 'cdn-b')).toBe('f466e9d70b29');
+    // The identity is the salt: without it there is no prefix to expect.
+    expect(() => derivePrefix('', 'cdn-e2e', 'cdn-a')).toThrow(/cluster identity/);
+  });
+
+  it('expects no prefix without a cluster identity, and a check that needs one fails', async () => {
+    const { config, mustHavePrefixes } = await import(ASSERT);
+    expect(config({}).prefixes).toEqual({ a: null, b: null });
+    expect(() => mustHavePrefixes(config({}).prefixes.a ? [] : [null])).toThrow(
+      /CDN_CLUSTER_IDENTITY/,
+    );
+    expect(config({ CDN_CLUSTER_IDENTITY: 'test-id' }).prefixes.a).toBe('bdf826bdf03e');
+    expect(config({ CDN_PREFIX_A: 'override' }).prefixes.a).toBe('override');
   });
 });
 

@@ -123,7 +123,7 @@ describe('purge-use-cache: the check sees a page the purge cannot reach', () => 
     const tagsMod = await import(TAGS_MODULE);
     const { derivePrefix } = await import(join(ROOT, 'scripts/cdn-e2e-assert.mjs'));
     const { UC_TAG } = await import(PURGE_ASSERT);
-    const p = derivePrefix('cdn-e2e', 'cdn-uc');
+    const p = derivePrefix('test-id', 'cdn-e2e', 'cdn-uc');
     const ucTag = tagsMod.nextTag(p, UC_TAG);
     const headerTags = [
       tagsMod.appTag(p),
@@ -196,6 +196,7 @@ describe('purge-use-cache: the check sees a page the purge cannot reach', () => 
         CDN_EMU_URL: `http://127.0.0.1:${port}`,
         CDN_EMU_ADMIN_URL: `http://127.0.0.1:${port}`,
         CDN_REVALIDATE_TOKEN: 'unit-token',
+        CDN_CLUSTER_IDENTITY: 'test-id',
         CDN_PURGE_WAIT_MS: '600',
         CDN_STATE_FILE: join(dir, `state-${port}.json`),
       });

@@ -407,6 +407,11 @@ jobs:
               || (kubectl -n "$APP_NS" get nextapp,ksvc,pods -o wide; kubectl -n "$APP_NS" describe "nextapp/$app"; exit 1)
           done
           echo "APPS=$apps" >> "$GITHUB_ENV"
+          # The operator salts each CDN tag prefix with the cluster identity: no
+          # KnextPlatform sets spec.cache.clusterId here, so it is the kube-system UID.
+          uid="$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
+          [ -n "$uid" ] || { echo "::error::could not read the kube-system Namespace UID"; exit 1; }
+          echo "CDN_CLUSTER_IDENTITY=$uid" >> "$GITHUB_ENV"
 
       # The operator's half of zero-diff and of the prefix rule, read off the
       # Knative Services it rendered.
@@ -415,9 +420,9 @@ jobs:
           set -euo pipefail
           env_of() { kubectl -n "$APP_NS" get ksvc "$1" -o json | jq -r '.spec.template.spec.containers[0].env[]? | "\(.name)=\(.value // "<ref>")"'; }
           for app in cdn-a cdn-b; do
-            want="$(printf '%s' "${APP_NS}/${app}" | sha256sum | cut -c1-12)"
+            want="$(printf '%s' "${CDN_CLUSTER_IDENTITY}/${APP_NS}/${app}" | sha256sum | cut -c1-12)"
             got="$(env_of "$app" | sed -n 's/^KNEXT_CDN_TAG_PREFIX=//p')"
-            [ "$got" = "$want" ] || { echo "::error::ksvc/$app KNEXT_CDN_TAG_PREFIX='$got', want sha256(ns/name)[:12]='$want'"; exit 1; }
+            [ "$got" = "$want" ] || { echo "::error::ksvc/$app KNEXT_CDN_TAG_PREFIX='$got', want sha256(identity/ns/name)[:12]='$want'"; exit 1; }
             env_of "$app" | grep -qx 'KNEXT_CDN_PROVIDER=emulator' || { echo "::error::ksvc/$app has no KNEXT_CDN_PROVIDER=emulator"; exit 1; }
             echo "ok: ksvc/$app prefix $got"
           done
@@ -506,8 +511,8 @@ jobs:
         if: matrix.variant == 'honest'
         run: |
           set -euo pipefail
-          PA="$(printf '%s' "${APP_NS}/cdn-a" | sha256sum | cut -c1-12)"
-          PB="$(printf '%s' "${APP_NS}/cdn-b" | sha256sum | cut -c1-12)"
+          PA="$(printf '%s' "${CDN_CLUSTER_IDENTITY}/${APP_NS}/cdn-a" | sha256sum | cut -c1-12)"
+          PB="$(printf '%s' "${CDN_CLUSTER_IDENTITY}/${APP_NS}/cdn-b" | sha256sum | cut -c1-12)"
           CDN_APP_A=cdn-off bash scripts/cdn-e2e-expect-red.sh no-cdn-as-a scripts/cdn-e2e-red/no-cdn-as-a.txt -- \
             node scripts/cdn-e2e-assert.mjs --only hit-tagged,rsc-param
           CDN_APP_OFF=cdn-a CDN_OFF_URL="$POD_URL_A" CDN_BASE_URL="$POD_URL_BASE" \

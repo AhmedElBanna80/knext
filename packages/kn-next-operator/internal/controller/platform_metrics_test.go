@@ -93,6 +93,25 @@ func TestHeldTracker_GaugeFollowsTheCurrentHeldSetByReason(t *testing.T) {
 	}
 }
 
+func TestHeldTracker_AClusterIdentityHoldEntersAndLeavesTheGauge(t *testing.T) {
+	var h heldTracker
+	a := types.NamespacedName{Namespace: "ns", Name: "id"}
+	before := holdsCounter(ReasonClusterIdentityUnavailable)
+
+	h.observe(a, platformGate{hold: holdClusterIdentityUnavailable})
+	if got := heldGauge(ReasonClusterIdentityUnavailable); got != 1 {
+		t.Errorf("one app held for ClusterIdentityUnavailable, gauge = %v", got)
+	}
+	if got := holdsCounter(ReasonClusterIdentityUnavailable) - before; got != 1 {
+		t.Errorf("entering the hold must count once, got %v", got)
+	}
+
+	h.observe(a, platformGate{}) // the identity is readable again
+	if got := heldGauge(ReasonClusterIdentityUnavailable); got != 0 {
+		t.Errorf("a released app must leave the gauge, got %v", got)
+	}
+}
+
 func TestHeldTracker_CounterCountsTransitionsIntoAHoldNotPasses(t *testing.T) {
 	var h heldTracker
 	a := types.NamespacedName{Namespace: "ns", Name: "count-a"}

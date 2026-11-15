@@ -261,6 +261,12 @@ func platformDefaultsCondition(app *appsv1alpha1.NextApp, pd platformDefaultsSta
 				"The current Knative Service is held unchanged — fix the app's field or the "+
 				"platform value, and the next reconcile applies it",
 			pd.gate.field, pd.gate.detail)
+	case pd.gate.hold == holdClusterIdentityUnavailable:
+		c.Status = metav1.ConditionUnknown
+		c.Reason = ReasonClusterIdentityUnavailable
+		c.Message = fmt.Sprintf(
+			"the cluster identity this app's CDN tag prefix is derived from could not be read (%s). "+
+				"The current Knative Service is held unchanged and the read is retried", pd.gate.detail)
 	case pd.gate.hold == holdRolloutPending:
 		c.Status = metav1.ConditionUnknown
 		c.Reason = ReasonRolloutPending
@@ -315,7 +321,8 @@ func platformDefaultsCondition(app *appsv1alpha1.NextApp, pd platformDefaultsSta
 // heldReconcilingCondition keep it frozen while the change is held, so the verdict
 // is sticky across passes without a new status field.
 func heldAppChangeDropped(app *appsv1alpha1.NextApp, pd *platformDefaultsState) bool {
-	return pd != nil && pd.gate.hold == holdEffectiveSpecInvalid && appTriggered(app)
+	return pd != nil && appTriggered(app) &&
+		(pd.gate.hold == holdEffectiveSpecInvalid || pd.gate.hold == holdClusterIdentityUnavailable)
 }
 
 // heldReconcilingCondition is Reconciling for a held-and-dropped pass: True (the
@@ -330,22 +337,42 @@ func heldReconcilingCondition(app *appsv1alpha1.NextApp, gate platformGate) meta
 		Type:               ConditionReconciling,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: lastReconciled,
-		Reason:             ReasonEffectiveSpecInvalid,
+		Reason:             holdReason(gate),
 		Message: fmt.Sprintf(
 			"the change at generation %d is held, not applied: %s: %s",
-			app.Generation, gate.field, gate.detail),
+			app.Generation, heldField(gate), gate.detail),
 	}
+}
+
+// heldField names what a held pass is waiting on.
+func heldField(gate platformGate) string {
+	if gate.hold == holdClusterIdentityUnavailable {
+		return "the cluster identity"
+	}
+	return gate.field
 }
 
 // heldReadyMessage is the Ready/Degraded message for a held-and-dropped pass. It
 // is static for a given (generation, platform state): no elapsed time, so a
 // converged object's status write stays a no-op (#98).
 func heldReadyMessage(app *appsv1alpha1.NextApp, gate platformGate, ksvcReady bool, ksvcReadyCond *apis.Condition) string {
+	if gate.hold == holdClusterIdentityUnavailable {
+		return heldNotReadySuffix(fmt.Sprintf(
+			"the change at generation %d is NOT applied: the cluster identity this app's CDN tag prefix "+
+				"is derived from could not be read (%s). The previous Knative Service keeps serving "+
+				"unchanged, and the read is retried",
+			app.Generation, gate.detail), ksvcReady, ksvcReadyCond)
+	}
 	msg := fmt.Sprintf(
 		"the change at generation %d is NOT applied: the platform's defaults make this app's effective spec "+
 			"invalid (%s): %s. The previous Knative Service keeps serving unchanged — fix the app's field "+
 			"or the platform value, and the next reconcile applies the change",
 		app.Generation, gate.field, gate.detail)
+	return heldNotReadySuffix(msg, ksvcReady, ksvcReadyCond)
+}
+
+// heldNotReadySuffix says so when the Knative Service being held is not Ready either.
+func heldNotReadySuffix(msg string, ksvcReady bool, ksvcReadyCond *apis.Condition) string {
 	if !ksvcReady {
 		reason := lcPending
 		if ksvcReadyCond != nil && ksvcReadyCond.Reason != "" {
@@ -443,14 +470,14 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 			Type:               ConditionReady,
 			Status:             metav1.ConditionFalse,
 			ObservedGeneration: app.Generation,
-			Reason:             ReasonEffectiveSpecInvalid,
+			Reason:             holdReason(extras.platform.gate),
 			Message:            msg,
 		})
 		v.conditions = append(v.conditions, metav1.Condition{
 			Type:               ConditionDegraded,
 			Status:             metav1.ConditionTrue,
 			ObservedGeneration: app.Generation,
-			Reason:             ReasonEffectiveSpecInvalid,
+			Reason:             holdReason(extras.platform.gate),
 			Message:            msg,
 		})
 		// No requeue: the way out is a platform edit (the KnextPlatform watch
@@ -990,12 +1017,16 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 		cond := platformDefaultsCondition(app, pd)
 		prev := apimeta.FindStatusCondition(app.Status.Conditions, ConditionPlatformDefaultsApplied)
 		switch cond.Reason {
-		case ReasonEffectiveSpecInvalid, ReasonPlatformNotAccepted:
+		case ReasonEffectiveSpecInvalid, ReasonPlatformNotAccepted, ReasonClusterIdentityUnavailable:
 			if prev == nil || prev.Reason != cond.Reason || prev.Message != cond.Message {
 				v.events = append(v.events, verdictEvent{corev1.EventTypeWarning, cond.Reason, cond.Message})
 			}
 		}
 		v.conditions = append(v.conditions, cond)
+		if pd.gate.hold == holdClusterIdentityUnavailable &&
+			(v.requeueAfter == 0 || clusterIdentityRetry < v.requeueAfter) {
+			v.requeueAfter = clusterIdentityRetry
+		}
 		if pd.gate.hold == holdRolloutPending {
 			// Come back at this app's slot (plus a beat, so the slot has passed by
 			// the time the timer fires), but never later than an earlier requeue.

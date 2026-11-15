@@ -96,9 +96,15 @@ its own zone or its own token scope.
 The prefix also includes the cluster's identity. Two clusters behind one zone, for example staging
 and production with the same app name, get different prefixes, so a deploy or a `revalidateTag` in
 one does not empty the other's cache. The identity is the `kube-system` namespace's uid, unless the
-`KnextPlatform` sets `spec.cache.clusterId`. Set the same `clusterId` on two clusters only if they
-should share, and purge, one set of cached pages. Rebuilding a cluster changes its identity, so the
-first deploy afterwards starts that cluster's edge cache over.
+`KnextPlatform` sets `spec.cache.clusterId`. Give every cluster its own `clusterId`: the same value
+also names the cluster's Redis users, so two clusters that share one Redis and one `clusterId`
+overwrite each other's users and their apps lose their cache credentials.
+
+When a cluster's identity changes (a rebuild, or a new `clusterId`), every app with `spec.cdn` rolls
+one new revision with a new prefix. Pages the edge cached before still carry the old tags, so no
+purge reaches them any more: they stay until they expire, at most `htmlTTLSeconds` plus
+`staleWhileRevalidateSeconds` later. To keep the prefix across a rebuild, set `spec.cache.clusterId`
+on the new cluster to the old identity before its first deploy.
 
 ## Live verification
 

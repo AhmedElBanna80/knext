@@ -1329,7 +1329,8 @@ prefix work replaced that with a derived default. The text is corrected in place
 - **Who sets it, in order.** `spec.cache.keyPrefix` wins. Otherwise a `REDIS_KEY_PREFIX` the
   user sets through `spec.env` (non-empty) or a `spec.secrets.envMap` Secret wins. Otherwise,
   for a Redis cache, the operator renders `kn-` plus the first 12 lowercase hex characters of
-  sha256("<namespace>/<name>"), the same derivation as the CDN tag prefix
+  sha256("<namespace>/<name>") (the CDN tag prefix also hashes the cluster identity, ADR-0068
+  Amendment 5)
   (`redis_key_prefix.go:defaultRedisKeyPrefix`). An empty `spec.env` value counts as unset and
   is replaced by the derived default.
 - **The shared fallback.** A pod with no `REDIS_KEY_PREFIX` at all (not deployed by the operator)

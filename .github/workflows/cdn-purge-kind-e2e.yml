@@ -424,6 +424,11 @@ jobs:
             kubectl -n "$APP_NS" wait --for=condition=Ready --timeout=300s "nextapp/$app" \
               || (kubectl -n "$APP_NS" get nextapp,ksvc,pods -o wide; kubectl -n "$APP_NS" describe "nextapp/$app"; exit 1)
           done
+          # The operator salts each CDN tag prefix with the cluster identity: no
+          # KnextPlatform sets spec.cache.clusterId here, so it is the kube-system UID.
+          uid="$(kubectl get namespace kube-system -o jsonpath='{.metadata.uid}')"
+          [ -n "$uid" ] || { echo "::error::could not read the kube-system Namespace UID"; exit 1; }
+          echo "CDN_CLUSTER_IDENTITY=$uid" >> "$GITHUB_ENV"
 
       - name: Port-forward the emulators
         run: |

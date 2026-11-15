@@ -25,6 +25,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -105,6 +106,73 @@ var _ = Describe("NextApp spec.cdn", func() {
 		tok := env["KNEXT_CDN_PURGE_TOKEN"]
 		Expect(tok.Value).To(BeEmpty())
 		Expect(tok.ValueFrom.SecretKeyRef.Name).To(Equal("cdn-purge"))
+	})
+
+	It("holds the Knative Service when the cluster identity cannot be read, and reports it through the verdict", func() {
+		const name = "cdn-idhold"
+		nn := types.NamespacedName{Name: name, Namespace: namespace}
+		Expect(create(name, appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{
+			Provider: "cloudflare", ExcludePaths: []string{"/before"},
+		}})).To(Succeed())
+		before, _ := reconcile1(name)
+
+		// The app changes while the identity is unreadable (a fresh process: no cached UID).
+		app := &appsv1alpha1.NextApp{}
+		Expect(k8sClient.Get(ctx, nn, app)).To(Succeed())
+		app.Spec.CDN.ExcludePaths = []string{"/after"}
+		Expect(k8sClient.Update(ctx, app)).To(Succeed())
+		rdr := &failingNamespaceReader{Reader: k8sClient, fail: true}
+		r := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), APIReader: rdr, Recorder: record.NewFakeRecorder(64)}
+		res, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+		Expect(err).NotTo(HaveOccurred(), "the failure must reach the verdict, not abort the pass before it")
+		Expect(res.RequeueAfter).To(Equal(clusterIdentityRetry))
+
+		held := &servingv1.Service{}
+		Expect(k8sClient.Get(ctx, nn, held)).To(Succeed())
+		Expect(held.Spec.Template.Spec.Containers[0].Env).To(Equal(before.Spec.Template.Spec.Containers[0].Env),
+			"no Knative Service is rendered with a guessed prefix")
+		got := &appsv1alpha1.NextApp{}
+		Expect(k8sClient.Get(ctx, nn, got)).To(Succeed())
+		pd := apimeta.FindStatusCondition(got.Status.Conditions, ConditionPlatformDefaultsApplied)
+		Expect(pd).NotTo(BeNil())
+		Expect(pd.Status).To(Equal(metav1.ConditionUnknown))
+		Expect(pd.Reason).To(Equal(ReasonClusterIdentityUnavailable))
+		ready := apimeta.FindStatusCondition(got.Status.Conditions, ConditionReady)
+		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+		Expect(ready.Reason).To(Equal(ReasonClusterIdentityUnavailable), "the held change is not reported as applied")
+		rec := apimeta.FindStatusCondition(got.Status.Conditions, ConditionReconciling)
+		Expect(rec.ObservedGeneration).To(BeNumerically("<", got.Generation))
+
+		// The identity is readable again: the held change renders.
+		rdr.fail = false
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+		Expect(err).NotTo(HaveOccurred())
+		after := &servingv1.Service{}
+		Expect(k8sClient.Get(ctx, nn, after)).To(Succeed())
+		Expect(cdnEnv(after)["KNEXT_CDN_EXCLUDE_PATHS"].Value).To(Equal("/after"))
+		Expect(cdnEnv(after)[lcKNEXTCDNTAGPREFIX].Value).To(Equal(cdnEnv(before)[lcKNEXTCDNTAGPREFIX].Value))
+	})
+
+	It("creates no Knative Service for a new CDN app while the cluster identity cannot be read", func() {
+		const name = "cdn-idnew"
+		nn := types.NamespacedName{Name: name, Namespace: namespace}
+		Expect(create(name, appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}})).To(Succeed())
+		r := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
+			APIReader: &failingNamespaceReader{Reader: k8sClient, fail: true}, Recorder: record.NewFakeRecorder(64)}
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, nn, &servingv1.Service{}))).To(BeTrue())
+	})
+
+	It("reads the kube-system UID once per process", func() {
+		rdr := &countingNamespaceReader{Reader: k8sClient}
+		r := &NextAppReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), APIReader: rdr}
+		first, err := r.clusterIdentity(ctx, platformSnapshot{})
+		Expect(err).NotTo(HaveOccurred())
+		second, err := r.clusterIdentity(ctx, platformSnapshot{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(second).To(Equal(first))
+		Expect(rdr.reads).To(Equal(1))
 	})
 
 	It("renders NO KNEXT_CDN_* env and no CDNAdvisory without spec.cdn (zero diff)", func() {
@@ -377,3 +445,16 @@ var _ = Describe("NextApp spec.cdn", func() {
 		Expect(reservedCondition(name)).To(BeNil())
 	})
 })
+
+// countingNamespaceReader counts the Namespace reads that reach the API.
+type countingNamespaceReader struct {
+	client.Reader
+	reads int
+}
+
+func (r *countingNamespaceReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, isNS := obj.(*corev1.Namespace); isNS {
+		r.reads++
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}

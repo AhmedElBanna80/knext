@@ -581,3 +581,34 @@ func (c *recordingCleaner) CleanupCache(_ context.Context, t CacheTarget) error 
 	c.cache = append(c.cache, t)
 	return nil
 }
+
+// ADR-0068 D5.3 as amended: the purge-dedupe grant of an app that renders
+// spec.cdn names the CLUSTER-SALTED tag prefix the app's purger writes under,
+// on provisioning and on the cleanup re-assert alike, never the unsalted hash.
+func TestCacheCredentialsCDNGrantUsesTheClusterSaltedPrefix(t *testing.T) {
+	h := newACLHarness(t, true)
+	app := aclApp("shop", "web", "shop-web", "")
+	app.Spec.CDN = &appsv1alpha1.CDNSpec{Provider: "cloudflare"}
+	if !cdnRendersEnv(app) {
+		t.Fatal("the fixture must render spec.cdn")
+	}
+	st, err := h.r.reconcileCacheCredentials(context.Background(), app, h.snap)
+	if err != nil || !st.ready {
+		t.Fatalf("state=%+v err=%v", st, err)
+	}
+	salted := "%W~knext:cdn:purged:" + cdnTagPrefix("ks-uid-1", app) + ":*"
+	unsalted := "%W~knext:cdn:purged:" + appHash(app) + ":*"
+	rules := h.prov.users[st.username]
+	if !contains(rules, salted) || contains(rules, unsalted) {
+		t.Fatalf("provisioned rules %q: want %q, not %q", rules, salted, unsalted)
+	}
+
+	prov := newFakeProvisioner()
+	if err := reassertForCleanup(context.Background(), prov, app, "shop-web", st.username,
+		"redis://"+st.username+":pw@"+aclTestEndpoint, "ks-uid-1"); err != nil {
+		t.Fatalf("reassertForCleanup: %v", err)
+	}
+	if r := prov.users[st.username]; !contains(r, salted) || contains(r, unsalted) {
+		t.Fatalf("cleanup re-assert rules %q: want %q, not %q", r, salted, unsalted)
+	}
+}

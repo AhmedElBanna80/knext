@@ -7,6 +7,9 @@
     "scripts/lib/published-bytes-freeze-check.mjs",
     "scripts/published-bytes-freeze-check.mjs",
     "scripts/published-bytes-select-pin.mjs",
+    "scripts/lib/merged-in-pins.mjs",
+    "scripts/collect-merged-in-pins.mjs",
+    "tests/merged-in-pins.test.ts",
     "scripts/mutation-prove-published-bytes-freeze-check.mjs",
     "tests/published-bytes-freeze-guard-workflow.test.ts",
     "tests/published-bytes-freeze-check-cli.test.ts",
@@ -45,6 +48,27 @@
       "here": "c52d63d9818c2ad0023ff8f508aadc761d40fb87",
       "there": "233c5ee652da161536286f02e34229c03f8b734c",
       "reason": "integration/v2 has main's merged-in-marker and ancestor-tag 'released' fixes (ported from main); integration/v1.3 does not. Whether the 1.3 line needs them is for that line's maintainer; the freeze guard is line-scoped, so it does not affect v2."
+    },
+    {
+      "path": "scripts/lib/merged-in-pins.mjs",
+      "lane": "integration/v1.3",
+      "here": "80bcce691b43ae43eeb27e4c12c97104c30b46ca",
+      "there": null,
+      "reason": "Absent on integration/v1.3: the merged-in-marker rule (ported to v2 from main) never reached the 1.3 line. Whether that line needs it is for its maintainer; the freeze guard is line-scoped, so it does not affect v2."
+    },
+    {
+      "path": "scripts/collect-merged-in-pins.mjs",
+      "lane": "integration/v1.3",
+      "here": "c414d2db36d164ee2a35e29e3fd5c7b9a5c6d7fc",
+      "there": null,
+      "reason": "Absent on integration/v1.3: the merged-in-marker rule (ported to v2 from main) never reached the 1.3 line. Whether that line needs it is for its maintainer; the freeze guard is line-scoped, so it does not affect v2."
+    },
+    {
+      "path": "tests/merged-in-pins.test.ts",
+      "lane": "integration/v1.3",
+      "here": "b79aebf4a93f03d6f73646d145a8888e78962c0e",
+      "there": null,
+      "reason": "Absent on integration/v1.3: the merged-in-marker rule (ported to v2 from main) never reached the 1.3 line. Whether that line needs it is for its maintainer; the freeze guard is line-scoped, so it does not affect v2."
     },
     {
       "path": "scripts/mutation-prove-published-bytes-freeze-check.mjs",

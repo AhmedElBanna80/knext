@@ -742,7 +742,10 @@ write_pending_restore() {
   }
 }
 PENDING
-  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  if ! mv -f "$tmp" "$f" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    log "WARNING: could not write the pending-restore record ${f}; a SIGKILLed run cannot be restored from it"
+  fi
 }
 
 clear_pending_restore() { rm -f "$(pending_restore_path)" 2>/dev/null || true; }

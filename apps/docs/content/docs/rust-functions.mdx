@@ -28,9 +28,11 @@ starts from. The [Go template](/docs/go-functions) is the same function in Go.
   (`ctx.extensions().get::<opentelemetry::Context>()`) to continue the trace on its own calls.
 - **Panic recovery**: a panicking handler returns `internal` and the process keeps running.
 - **Request limits**: 4 MiB per request message, as sent and once decompressed, so a small
-  gzip body cannot inflate into gigabytes. A request body longer than 4 MiB and 64 KiB is cut off
-  rather than read to the end, on streaming calls too, and a request body that stops arriving is
-  cut off after 30 seconds. That limit is on sending the request, not on the call: a handler may
+  gzip body cannot inflate into gigabytes. A unary or server-streaming request body longer than
+  4 MiB and 64 KiB is refused with `resource_exhausted` rather than read to the end. A client or
+  bidirectional stream may send many messages, up to 64 MiB in all; past that it is cut off, and
+  the handler sees the failed read as `internal`. A request body that stops arriving is cut off
+  after 30 seconds. That limit is on sending the request, not on the call: a handler may
   take longer.
 - **Connection limits**: a connection that does not start a request within 10 seconds is
   closed, and an idle connection, with no call in flight, is closed within 2 minutes.
@@ -186,10 +188,8 @@ The template uses connect-rust, which has not reached 1.0. Its version is pinned
 in `Cargo.toml` and exactly in `Cargo.lock`, and knext's CI runs the Connect conformance suite —
 every server test, on the Connect, gRPC and gRPC-Web protocols — against the locked version. It
 runs the suite a second time against the template's own server: its connection handling, timeouts,
-request limits and layers, with only the token check left out, since the suite sends no token. The
-only cases that server fails are the ones the request limit above refuses on purpose: a client or
-bidirectional stream of several messages whose bodies add up to more than one message's limit plus
-64 KiB. Such a call currently ends with the `internal` code rather than `resource_exhausted`. When
+request limits and layers, with only the token check left out, since the suite sends no token. It
+passes every case there too. When
 you upgrade connect-rust in your function, upgrade the codegen plugin in `codegen.sh` with it and
 regenerate.
 

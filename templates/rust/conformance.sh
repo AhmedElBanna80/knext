@@ -163,7 +163,7 @@ extra="$(closure | awk "${SERIES}"' NR == FNR { lock[$1 SUBSEP series($2)] = 1; 
   !(($1 SUBSEP series($2)) in lock) { print $1 "@" $2 }' <(printf '%s\n' "${TEMPLATE_LOCK}") - | paste -sd ' ' -)"
 echo "every crate the release binary links matches its Cargo.lock; feature unification adds: ${extra:-nothing}"
 cargo build -p connectrpc-conformance --features function-stack --bin function-stack-server
-# known-failing.txt lists the cases the function's whole-body bound refuses on
-# purpose; any other failure, or one of those passing, fails the run.
+# known-failing.txt lists any case the function's own stack fails on purpose
+# (none today); any other failure, or a listed case passing, fails the run.
 RUST_LOG=warn "${RUNNER}" --mode server --conf "${HERE}/conformance/config.yaml" \
   --known-failing "@${HERE}/conformance/known-failing.txt" -- target/debug/function-stack-server

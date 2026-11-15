@@ -45,10 +45,18 @@ pub use body::{BodyError, BoundedBody};
 /// Bounds one request message, both as sent and after it is decompressed.
 pub const MAX_REQUEST_BYTES: usize = 4 << 20;
 
-/// Bounds a whole request body as read off the wire: one message at
-/// [`MAX_REQUEST_BYTES`] plus its framing. Reading stops there, on every
-/// RPC, streaming ones included, instead of draining the rest.
+/// Bounds a unary or server-streaming request body as read off the wire: one
+/// message at [`MAX_REQUEST_BYTES`] plus its framing. Reading stops there
+/// instead of draining the rest.
 pub const MAX_REQUEST_BODY_BYTES: usize = MAX_REQUEST_BYTES + (64 << 10);
+
+/// Bounds the whole body of a client or bidi stream, all its messages
+/// together, as read off the wire. Each message is still bounded by
+/// [`MAX_REQUEST_BYTES`]; a unary or server-streaming body, which holds one
+/// message, stays bounded by [`MAX_REQUEST_BODY_BYTES`]. Reading a stream
+/// stops here. connectrpc reports that to the handler as `internal`, since it
+/// reports every failed stream read that way.
+pub const MAX_STREAM_BODY_BYTES: usize = 64 << 20;
 
 /// How long a new connection may take to start a request, and an HTTP/1.1
 /// request to send its headers.
@@ -188,7 +196,14 @@ fn assemble(router: Router, auth: Option<AuthLayer>, cfg: Config, max_message: u
         .layer(layers::HealthzLayer)
         .layer(layers::TraceLayer::new(tracer))
         .layer(layers::RecoverLayer)
-        .layer(body::BoundedBodyLayer::new(max_body, cfg.timeouts.read))
+        // connectrpc reads a unary or server-streaming body itself and refuses
+        // one past `max_body` with resource_exhausted. This layer bounds the
+        // client and bidi streams, which connectrpc does not, so its cap sits
+        // above `max_body` and never fires before connectrpc's own.
+        .layer(body::BoundedBodyLayer::new(
+            MAX_STREAM_BODY_BYTES.max(max_body + 1),
+            cfg.timeouts.read,
+        ))
         .option_layer(auth)
         .service(connect);
     Function {

@@ -65,8 +65,10 @@ only (five values, fixed) — never the raw status, and never a route/path label
 which is unbounded by construction (one crawler mints a series per URL). The
 duration histogram carries no labels at all: its 13 buckets already multiply it,
 and crossing them with `status_class` would make one histogram the dominant term
-in the fleet's series count for no SLO that needs it. **Total: 23 series per
-pod, constant.** An app that opts into in-process Rust also serves
+in the fleet's series count for no SLO that needs it. **Total: 24 series per
+pod, constant** (five request counters, the histogram's 13 buckets plus its
+`_sum` and `_count`, and four gauges), plus the twelve `knext_deep_health_state`
+series below, only while the app is using its database. An app that opts into in-process Rust also serves
 `knext_ffi_slow_calls_total{fn}` and `knext_ffi_load_seconds{lib}` once its
 library has loaded: one series per exported Rust function plus one per library,
 fixed by the library's export list.

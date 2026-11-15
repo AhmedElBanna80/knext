@@ -7,9 +7,10 @@ name: Single-exec rollback — kind e2e
 # back and forth (`knext rollback --to`, a canary, back to latest).
 #
 # scripts/single-exec-rollback-kind.sh fails unless every revision serves 200,
-# a pinned revision is the one that serves (each build's mark on /tagged), the
-# operator rendered each revision's own command, and the unstable_cache entry
-# in the shared Redis is the same one under every shape.
+# a pinned revision is the one that serves (each build's mark on /build-mark,
+# rendered per request), a canary reaches both sides, the operator rendered each
+# revision's own command, and the unstable_cache entry /rb-stamp reads from the
+# shared Redis is the same one under every shape.
 #
 # The vinext executable is not covered here: it is a different build pipeline
 # and fixture, tracked as a follow-up.

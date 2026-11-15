@@ -12,12 +12,17 @@
 # between them (`knext rollback --to`, a canary, and back to latest). The
 # script fails unless:
 #
-#   - every revision answers 200 on /api/health, /build-mark and /tagged, and a
-#     pinned revision is the one that serves (the build mark on /build-mark);
+#   - every revision answers 200 on /api/health, /build-mark, /rb-stamp and
+#     /tagged, a pinned revision is the one that serves (the mark on /build-mark),
+#     and a 50 % canary reaches both sides;
 #   - the operator rendered each revision's own command (`kubectl get revision`),
 #     never the previous revision's;
-#   - the unstable_cache entry /tagged renders (stored in the shared Redis) is
-#     the same entry under every shape: a switch does not lose cache state.
+#   - the unstable_cache entry /rb-stamp reads on every request (stored in the
+#     shared Redis) is the same entry under every shape: a switch does not lose
+#     cache state.
+#
+# Side effects: it overwrites ${APP_DIR}/knext.config.ts, and writes
+# /tmp/rb-body-* and /tmp/pf-rb.log.
 #
 # Expects a cluster with Knative + Kourier, the operator, a Redis Service named
 # `redis` in $APP_NS, and a registry the node pulls from. The workflow
@@ -109,25 +114,25 @@ start_pf() {
 
 # get <path> <outfile>: the status code; the body lands in outfile.
 get() {
-  curl -s -m 30 -o "$2" -w '%{http_code}' -H "Host: ${HOST}" "http://127.0.0.1:${PF_PORT}$1" || echo 000
+  curl -s -m 30 -o "$2" -w '%{http_code}' -H "Host: ${HOST}" "http://127.0.0.1:${PF_PORT}$1" || true
 }
 
-# probe <label>: 200 on the three routes; prints "<build mark> <stamp>".
-# The mark comes from /build-mark, rendered per request, so it names the build
-# that served. The stamp comes from /tagged: an unstable_cache entry in Redis.
-# (/tagged's own HTML is ISR, shared across builds, so its mark can be an older
-# build's until it re-renders; it is not a serving signal.)
+# probe <label>: 200 on the routes; prints "<build mark> <stamp>".
+# Both come from pages rendered on every request, so neither can be a stored
+# page: /build-mark names the build that served, and /rb-stamp's stamp is the
+# unstable_cache entry in Redis. (/tagged is ISR HTML shared across builds, so
+# its mark and stamp can be an older build's page; it is only checked for 200.)
 # Call it as an assignment (`out="$(probe x)"`) so a failure stops the script.
 probe() {
   local code body=/tmp/rb-body mark stamp
-  for path in /api/health /build-mark /tagged; do
+  for path in /api/health /build-mark /rb-stamp /tagged; do
     code="$(get "$path" "${body}${path//\//-}")"
     [ "$code" = 200 ] || fail "$1: GET $path answered $code, want 200: $(head -c 300 "${body}${path//\//-}")"
   done
   mark="$(sed -n 's/.*<p id="build">\([^<]*\)<\/p>.*/\1/p' "${body}-build-mark" | head -n1)"
-  stamp="$(sed -n 's/.*<p id="stamp">\([^<]*\)<\/p>.*/\1/p' "${body}-tagged" | head -n1)"
+  stamp="$(sed -n 's/.*<p id="stamp">\([^<]*\)<\/p>.*/\1/p' "${body}-rb-stamp" | head -n1)"
   [ -n "$mark" ] || fail "$1: /build-mark carries no build mark: $(head -c 300 "${body}-build-mark")"
-  [ -n "$stamp" ] || fail "$1: /tagged carries no stamp: $(head -c 300 "${body}-tagged")"
+  [ -n "$stamp" ] || fail "$1: /rb-stamp carries no stamp: $(head -c 300 "${body}-rb-stamp")"
   echo "$mark $stamp"
 }
 
@@ -216,7 +221,9 @@ for _ in $(seq 1 30); do
   [ "$mark" = "${MARK[node]}" ] && seen_node=1
   [ "$mark" = "${MARK[sc]}" ] || [ "$mark" = "${MARK[node]}" ] || fail "canary: served by build ${mark}, neither sc nor latest (node)"
 done
-say "canary: sc served=${seen_sc}, latest (node) served=${seen_node}"
+[ "$seen_sc" = 1 ] && [ "$seen_node" = 1 ] \
+  || fail "canary: 30 requests did not reach both sides (sc=${seen_sc}, latest node=${seen_node})"
+say "canary: sc and latest (node) both served"
 
 rollback
 await_traffic latest 100

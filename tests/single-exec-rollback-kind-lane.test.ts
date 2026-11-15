@@ -87,16 +87,45 @@ describe('the script', () => {
     );
   });
 
-  it('takes the serving build from a per-request route, never from ISR HTML', () => {
+  it('takes the serving build and the cache stamp from per-request routes, never from ISR HTML', () => {
     const probe = body('probe');
-    expect(probe).toContain('"${body}-build-mark"');
+    expect(probe).toContain('for path in /api/health /build-mark /rb-stamp /tagged; do');
+    expect(probe).toContain('[ "$code" = 200 ] || fail');
     expect(probe).toMatch(/mark="\$\(sed -n [^\n]*"\$\{body\}-build-mark"/);
-    expect(probe).not.toMatch(/mark="\$\(sed -n [^\n]*"\$\{body\}-tagged"/);
+    expect(probe).toMatch(/stamp="\$\(sed -n [^\n]*"\$\{body\}-rb-stamp"/);
+    expect(probe).not.toMatch(/(mark|stamp)="\$\(sed -n [^\n]*"\$\{body\}-tagged"/);
+    expect(probe).toContain('[ -n "$mark" ] || fail');
+    expect(probe).toContain('[ -n "$stamp" ] || fail');
   });
 
-  it('requires one shared cache entry across every shape and every pinned request', () => {
-    expect(script).toContain('[ "$stamp" = "$STAMP" ] || fail');
-    expect(body('pinned')).toContain('[ "$stamp" = "$STAMP" ] || fail');
+  it('the stamp route reads unstable_cache on every request', () => {
+    const page = readFileSync(
+      resolve(
+        REPO_ROOT,
+        'packages/kn-next/src/__tests__/fixtures/cdn-kind-app/app/rb-stamp/page.tsx',
+      ),
+      'utf8',
+    );
+    expect(page).toContain('await connection();');
+    expect(page).toContain('unstable_cache(');
+    expect(page).toContain('<p id="stamp">{await stamp()}</p>');
+    expect(page).not.toMatch(/export const (revalidate|dynamic)/);
+  });
+
+  it('requires one shared cache entry after every deploy and on every pinned request', () => {
+    expect(script).toContain('[ "$stamp" = "$STAMP" ] || fail "shape ${shape} rendered stamp');
+    expect(body('pinned')).toContain('[ "$stamp" = "$STAMP" ] || fail "$2: stamp');
+  });
+
+  it('requires three distinct builds, and a canary that reaches both sides', () => {
+    expect(script).toContain('|| fail "the three shapes did not serve three builds');
+    expect(script).toContain('[ "$seen_sc" = 1 ] && [ "$seen_node" = 1 ] \\\n  || fail "canary:');
+  });
+
+  it('compares the programmed traffic split, and fails when it never matches', () => {
+    const t = body('await_traffic');
+    expect(t).toContain('.status.traffic[]?');
+    expect(t).toContain('fail "ksvc traffic is');
   });
 
   it('pins back to the single executable, then disk-mode Bun, a canary, and latest', () => {

@@ -228,6 +228,7 @@ describe('bun-version pins (#754) — scanned across every workflow', () => {
       // one "Setup bun" step (installs the workspace + builds the fixture's
       // own `next build` before `kn-next deploy` compiles it).
       'standalone-self-contained-operator-e2e.yml': 1,
+      'single-exec-rollback-kind-e2e.yml': 1,
       // NEW (#1417): the default-builder standalone deploy kind e2e — one
       // "Setup bun" step (workspace install + the fixture's own `next build`).
       'standalone-deploy-kind-e2e.yml': 1,

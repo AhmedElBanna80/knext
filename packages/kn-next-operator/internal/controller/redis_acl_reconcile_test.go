@@ -528,7 +528,7 @@ func TestIsolatedAppRendersRedisURLFromTheSecret(t *testing.T) {
 	r := &NextAppReconciler{}
 	app := aclApp("shop", "web", "shop-web", "acl")
 	injectCacheCredentialsEnv(app, failClosedCache(app, ReasonCacheEndpointUnregistered, "x"))
-	env, _, report := r.buildKsvcEnv(app)
+	env, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 	var found bool
 	for _, ev := range env {
 		if ev.Name != "REDIS_URL" {

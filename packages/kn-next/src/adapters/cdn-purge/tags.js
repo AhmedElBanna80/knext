@@ -12,7 +12,8 @@
  *                                                    the implicit `_N_T_<path>` ones
  *
  * `<p>` is the operator-derived prefix (first 12 hex of
- * sha256("<namespace>/<name>"), rendered as `KNEXT_CDN_TAG_PREFIX`).
+ * sha256("<cluster identity>/<namespace>/<name>"), rendered as
+ * `KNEXT_CDN_TAG_PREFIX`).
  *
  * The purge side applies THE SAME FUNCTION to the tag `revalidateTag` receives
  * that the response side applied when it emitted the header — that is the whole

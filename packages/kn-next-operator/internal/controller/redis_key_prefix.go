@@ -51,7 +51,7 @@ func isSharedRedisKeyspace(prefix string) bool {
 
 // defaultRedisKeyPrefix is the Redis key prefix of an app that sets no
 // spec.cache.keyPrefix: "kn-" plus the first 12 lowercase hex of
-// sha256("<namespace>/<name>") — the CDN tag prefix's derivation. Without it the
+// sha256("<namespace>/<name>") (appHash). Without it the
 // runtime falls back to the literal "kn-next", which every such app on a shared
 // Redis would share: each would read the others' entries, and one app's outage
 // collapse (a prefix-wide SCAN + DEL) would delete the others' caches.
@@ -59,7 +59,7 @@ func isSharedRedisKeyspace(prefix string) bool {
 // Lockstep with the CLI's doctor (defaultRedisKeyPrefix in
 // packages/kn-next/src/cli/doctor/checks/redis-prefix.ts); both pin the same vector.
 func defaultRedisKeyPrefix(app *appsv1alpha1.NextApp) string {
-	return "kn-" + cdnTagPrefix(app)
+	return "kn-" + appHash(app)
 }
 
 func cacheIsRedis(app *appsv1alpha1.NextApp) bool {

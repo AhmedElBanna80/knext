@@ -94,6 +94,13 @@ var _ = Describe("NextApp spec.cdn", func() {
 		// The CRD default (30) was applied by the apiserver, not by the Go code.
 		Expect(env["KNEXT_CDN_HTML_TTL_SECONDS"].Value).To(Equal("30"))
 		Expect(env[lcKNEXTCDNTAGPREFIX].Value).To(HaveLen(12))
+		// D5.3 as amended: the prefix is salted with this cluster's identity
+		// (the kube-system Namespace uid; no KnextPlatform here), not
+		// sha256("<namespace>/<name>") alone.
+		kubeSystem := &corev1.Namespace{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "kube-system"}, kubeSystem)).To(Succeed())
+		Expect(env[lcKNEXTCDNTAGPREFIX].Value).To(Equal(cdnTagPrefix(string(kubeSystem.UID), stored)))
+		Expect(env[lcKNEXTCDNTAGPREFIX].Value).NotTo(Equal(appHash(stored)))
 		Expect(env["KNEXT_CDN_EXCLUDE_PATHS"].Value).To(Equal("/account"))
 		tok := env["KNEXT_CDN_PURGE_TOKEN"]
 		Expect(tok.Value).To(BeEmpty())

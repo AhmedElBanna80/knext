@@ -102,10 +102,10 @@ func redisClusterTag(clusterIdentity string) string {
 }
 
 // redisACLUsername is knext-app-<cluster tag>-<app hash>. The app hash is the
-// one the default key prefix and the CDN tag prefix use, so the name is
+// one the default key prefix uses (appHash), so the name is
 // deterministic and does not expose the app's name.
 func redisACLUsername(clusterIdentity string, app *appsv1alpha1.NextApp) string {
-	return redisACLUsernamePrefix + redisClusterTag(clusterIdentity) + "-" + cdnTagPrefix(app)
+	return redisACLUsernamePrefix + redisClusterTag(clusterIdentity) + "-" + appHash(app)
 }
 
 // appRedisCommands is the exact command list granted to an app's user: the

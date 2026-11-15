@@ -74,18 +74,30 @@ func cdnRendersEnv(app *appsv1alpha1.NextApp) bool {
 	return validation.CDNRendersEnv(&app.Spec)
 }
 
-// cdnTagPrefix is the per-app cache-tag prefix (ADR-0068 D5.3): the first 12
-// lowercase hex of sha256("<namespace>/<name>"). It is derived, never a field, so
-// a CR cannot choose another app's prefix.
-func cdnTagPrefix(app *appsv1alpha1.NextApp) string {
+// appHash is the first 12 lowercase hex of sha256("<namespace>/<name>"): the
+// default Redis key prefix and the app's ACL username suffix (ADR-0071). It is
+// derived, never a field, so a CR cannot choose another app's.
+func appHash(app *appsv1alpha1.NextApp) string {
 	sum := sha256.Sum256([]byte(app.Namespace + "/" + app.Name))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// cdnTagPrefix is the per-app cache-tag prefix (ADR-0068 D5.3, as amended): the
+// first 12 lowercase hex of sha256("<cluster identity>/<namespace>/<name>"). The
+// cluster identity is the one the Redis ACL users use (clusterIdentity: the
+// KnextPlatform's spec.cache.clusterId, else the kube-system Namespace uid), so
+// two clusters that run the same namespace/name behind one CDN zone get
+// different tags and one cluster's purge cannot evict the other's edge. It is
+// derived, never a field, so a CR cannot choose another app's prefix.
+func cdnTagPrefix(clusterIdentity string, app *appsv1alpha1.NextApp) string {
+	sum := sha256.Sum256([]byte(clusterIdentity + "/" + app.Namespace + "/" + app.Name))
 	return hex.EncodeToString(sum[:])[:12]
 }
 
 // cdnEnvVars renders spec.cdn. It returns nil when nothing is to be rendered, so
 // an app without spec.cdn is byte-identical to one written before the field
 // existed. The order is fixed (it is part of the revision template).
-func cdnEnvVars(app *appsv1alpha1.NextApp) []corev1.EnvVar {
+func cdnEnvVars(app *appsv1alpha1.NextApp, tagPrefix string) []corev1.EnvVar {
 	if !cdnRendersEnv(app) {
 		return nil
 	}
@@ -96,7 +108,7 @@ func cdnEnvVars(app *appsv1alpha1.NextApp) []corev1.EnvVar {
 	}
 	env := []corev1.EnvVar{
 		{Name: "KNEXT_CDN_PROVIDER", Value: cdn.Provider},
-		{Name: lcKNEXTCDNTAGPREFIX, Value: cdnTagPrefix(app)},
+		{Name: lcKNEXTCDNTAGPREFIX, Value: tagPrefix},
 		{Name: "KNEXT_CDN_HTML_TTL_SECONDS", Value: strconv.Itoa(int(ttl))},
 		{Name: "KNEXT_CDN_SWR_SECONDS", Value: strconv.Itoa(int(cdn.StaleWhileRevalidateSeconds))},
 	}

@@ -449,6 +449,16 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		return ctrl.Result{}, platErr
 	}
 	eff := resolveEffective(&nextApp, snap.active())
+	// The CDN tag prefix needs the cluster identity (an API read). Resolved
+	// before anything is built and, like the platform read above, an error
+	// requeues: a Knative Service is never rendered with a guessed prefix.
+	if cdnRendersEnv(&nextApp) {
+		identity, idErr := r.clusterIdentity(ctx, snap)
+		if idErr != nil {
+			return ctrl.Result{}, idErr
+		}
+		eff.cdnTagPrefix = cdnTagPrefix(identity, &nextApp)
+	}
 	// A spec that is valid under the built-in budget but not under the platform's
 	// (or whose merged resources a pod would refuse) is the platform's doing, not
 	// the app's: hold the app's current Knative Service (F3) instead of failing it
@@ -608,7 +618,7 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		if getErr := r.Get(ctx, client.ObjectKeyFromObject(ksvc), ksvc); getErr != nil && !errors.IsNotFound(getErr) {
 			return ctrl.Result{}, getErr
 		}
-		_, _, envMapCollision = r.buildKsvcEnv(&nextApp)
+		_, _, envMapCollision = r.buildKsvcEnv(&nextApp, eff.cdnTagPrefix)
 	} else {
 		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, ksvc, func() error {
 			var buildErr error

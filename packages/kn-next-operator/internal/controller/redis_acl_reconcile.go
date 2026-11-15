@@ -350,7 +350,7 @@ func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *
 	}
 	cdn := ""
 	if cdnRendersEnv(app) {
-		cdn = cdnTagPrefix(app)
+		cdn = cdnTagPrefix(identity, app)
 	}
 	if err := prov.SetUser(ctx, st.username, redisACLRules(prefix, password, "", cdn)); err != nil {
 		return fail(ReasonCacheProvisionerRefused, "ACL SETUSER was refused: "+redactErr(err))

@@ -155,7 +155,7 @@ func (r *NextAppReconciler) cleanupIsolatedCache(ctx context.Context, app *appsv
 	appURL := string(sec.Data[redisCredentialsSecretKey])
 	if owns && appURL != "" && r.Cleaner != nil {
 		if prov != nil {
-			if err := reassertForCleanup(ctx, prov, app, keyPrefix, username, appURL); err != nil {
+			if err := reassertForCleanup(ctx, prov, app, keyPrefix, username, appURL, identity); err != nil {
 				logger.Error(err, "re-asserting the app's ACL user before the sweep failed", "keyPrefix", keyPrefix)
 			}
 		}
@@ -226,7 +226,7 @@ func (r *NextAppReconciler) mayPlainSweep(ctx context.Context, app *appsv1alpha1
 // reassertForCleanup runs ACL SETUSER from the Secret's credential, the same
 // arguments a reconcile would use, so the sweep does not run as a user a Redis
 // restart removed.
-func reassertForCleanup(ctx context.Context, prov RedisProvisioner, app *appsv1alpha1.NextApp, prefix, username, appURL string) error {
+func reassertForCleanup(ctx context.Context, prov RedisProvisioner, app *appsv1alpha1.NextApp, prefix, username, appURL, identity string) error {
 	u, err := url.Parse(appURL)
 	if err != nil || u.User == nil || u.User.Username() != username {
 		return errors.New("the credentials Secret does not hold this app's user")
@@ -237,7 +237,7 @@ func reassertForCleanup(ctx context.Context, prov RedisProvisioner, app *appsv1a
 	}
 	cdn := ""
 	if cdnRendersEnv(app) {
-		cdn = cdnTagPrefix(app)
+		cdn = cdnTagPrefix(identity, app)
 	}
 	return prov.SetUser(ctx, username, redisACLRules(prefix, password, "", cdn))
 }

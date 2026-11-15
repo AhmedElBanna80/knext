@@ -80,7 +80,7 @@ func TestBuildKsvcEnv_HostnameCollision_OperatorAlwaysWins(t *testing.T) {
 		"UNRELATED": {SecretName: "s", SecretKey: "k2"},
 	})
 	r := &NextAppReconciler{}
-	env, _, report := r.buildKsvcEnv(app)
+	env, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 
 	if got := countNamed(env, lcHOSTNAME); got != 1 {
 		t.Fatalf("HOSTNAME appears %d times in the rendered env, want exactly 1 (the operator's own)", got)
@@ -117,7 +117,7 @@ func TestBuildKsvcEnv_UnconditionalReservedNameCollision_UserWins(t *testing.T) 
 		"UNRELATED": {SecretName: "s", SecretKey: "k2"},
 	})
 	r := &NextAppReconciler{}
-	env, _, report := r.buildKsvcEnv(app)
+	env, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 
 	if got := countNamed(env, "NODE_ENV"); got != 1 {
 		t.Fatalf("NODE_ENV appears %d times in the rendered env, want exactly 1 — a second entry means "+
@@ -157,7 +157,7 @@ func TestBuildKsvcEnv_ConditionalReservedNameCollision_UserWins(t *testing.T) {
 	})
 	app.Spec.Storage = &appsv1alpha1.StorageSpec{Provider: "s3", Bucket: "b"}
 	r := &NextAppReconciler{}
-	env, _, report := r.buildKsvcEnv(app)
+	env, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 
 	if got := countNamed(env, "STORAGE_PROVIDER"); got != 1 {
 		t.Fatalf("STORAGE_PROVIDER appears %d times, want exactly 1", got)
@@ -183,7 +183,7 @@ func TestBuildKsvcEnv_ExemptConnectionStringCollision_UserWinsExempt(t *testing.
 	})
 	app.Spec.Cache = &appsv1alpha1.CacheSpec{Provider: "redis", URL: "redis://placeholder"}
 	r := &NextAppReconciler{}
-	env, _, report := r.buildKsvcEnv(app)
+	env, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 
 	if got := countNamed(env, "REDIS_URL"); got != 1 {
 		t.Fatalf("REDIS_URL appears %d times, want exactly 1", got)
@@ -206,7 +206,7 @@ func TestBuildKsvcEnv_NoCollision_ReportEmpty(t *testing.T) {
 		"API_TOKEN": {SecretName: "s", SecretKey: "k"},
 	})
 	r := &NextAppReconciler{}
-	_, _, report := r.buildKsvcEnv(app)
+	_, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 	if !report.empty() {
 		t.Fatalf("report: got %+v, want empty", report)
 	}

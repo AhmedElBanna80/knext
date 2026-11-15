@@ -36,6 +36,9 @@
   Proposed from 2026-10-12/13 and built meanwhile (#2281, #2298/#2303, #2292).
   **Amendment 4 (end of this file): Proposed (2026-11-09)** for #2270: a dependency-free SigV4 signer
   for the CloudFront purge row; Google and Azure stay deferred. Flagged for the next sprint-close design review.
+  **Amendment 5 (end of this file): Proposed (2026-11-15)** for #2383: the tag prefix includes the
+  cluster identity, so two clusters behind one CDN zone do not purge each other. Flagged for the next
+  sprint-close design review.
 - **Date:** 2026-10-12
 - **Trigger class:** ADR (amends the `CLAUDE.md` §8 "defer global CDN" stance for the header + purge
   slice) + CRD (`spec.cdn` on `NextApp`) + public API (`knext.config.ts` key, CR builder, preflight) +
@@ -543,7 +546,9 @@ header. It also keeps every tag inside Google's 120-byte limit. Where a row forw
 
 **D5.3 Prefix: operator-derived, not user-settable (A5; SD pick 0.86, confidence 0.72; jev on format:
 hash **0.90**, readable 0.10).** `<p>` is the first 12 lowercase hex of `sha256("<namespace>/<name>")`,
-rendered as `KNEXT_CDN_TAG_PREFIX`. D3 makes it unforgeable from the CR. The prefix stops one app's
+rendered as `KNEXT_CDN_TAG_PREFIX`. *(Amended by Amendment 5: the hash input starts with the cluster
+identity, `sha256("<cluster identity>/<namespace>/<name>")`, because the prefix did not separate two
+clusters that share a zone.)* D3 makes it unforgeable from the CR. The prefix stops one app's
 purge from evicting another app's pages on a shared CDN zone by accident. **It is not a security
 boundary against a token holder.** A Cloudflare `Zone.Cache Purge` token can purge any tag in its zone,
 so hard isolation between knext zones (or tenants) means one Cloudflare zone, or one token, per knext
@@ -891,7 +896,33 @@ The `cloudflare` row keeps today's printable-ASCII token gate (`TOKEN_PATTERN`).
 - **A4-5:** the workload identity amendment, then Google.
 - **A4-6:** a user-set CloudFront budget, if the live run shows the constant is wrong; it needs a CRD field.
 
-## Options considered
+### Amendment 5 (Proposed 2026-11-15): the tag prefix includes the cluster identity
+
+**Context.** D5.3 says the prefix stops one app's purge from evicting another app's pages. That held
+within a cluster, not across clusters. Two clusters running a NextApp with the same namespace and name
+behind one CDN zone got the same prefix. That is the common case: `staging.example.com` and
+`example.com` usually share one Cloudflare zone, and `default/web` is a common name. Each new build's
+first-ready purge of the app tag in one cluster then emptied the other cluster's edge presence. Every
+`revalidateTag` purge evicted the same tag in the other cluster, and both drew on one purge rate limit.
+The cause was over-eviction, never stale content.
+
+**Decision** (jev: cluster identity 0.71, identity with an override flag 0.27, an opt-in flag 0.02).
+`<p>` is the first 12 lowercase hex of `sha256("<cluster identity>/<namespace>/<name>")`. The cluster
+identity is the one the Redis ACL users already carry (ADR-0071 D2): the KnextPlatform's
+`spec.cache.clusterId` when it is set, otherwise the `kube-system` Namespace uid. So prefixes differ
+per cluster with no setting, and `spec.cache.clusterId` is the override a deliberate shared prefix
+needs (two clusters set the same value). The operator resolves it before it renders an app that
+renders `spec.cdn`. A failed read requeues the app rather than render a guessed prefix. It already
+holds `get` on Namespaces for the ADR-0071 identity.
+
+**Consequences.**
+- The default Redis key prefix and the ACL username keep the app hash `sha256("<namespace>/<name>")`.
+  They do not move, and no app's cache keys change. The ACL grant for the purge-dedupe keys
+  (`knext:cdn:purged:<p>:*`) follows the new `<p>`.
+- Every app with `spec.cdn` re-renders once: one new revision with the new prefix, whose first-ready
+  purge of the new app tag covers the change. A rebuilt cluster (a new `kube-system` uid) re-prefixes
+  once more. That is harmless over-eviction.
+- Apps without `spec.cdn` are unchanged, byte for byte.
 
 | Decision | Chosen | jev | Main alternative(s) | jev | Why the alternative lost |
 |---|---|---|---|---|---|

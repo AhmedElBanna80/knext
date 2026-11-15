@@ -48,7 +48,7 @@ func reservedEnvNamesParityApp(spec appsv1alpha1.NextAppSpec) *appsv1alpha1.Next
 func renderedEnvNames(t *testing.T, app *appsv1alpha1.NextApp) map[string]struct{} {
 	t.Helper()
 	r := &NextAppReconciler{}
-	env, _, report := r.buildKsvcEnv(app)
+	env, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 	if !report.empty() {
 		t.Fatalf("fixture must not itself trigger a collision (spec.Secrets is nil): got %+v", report)
 	}

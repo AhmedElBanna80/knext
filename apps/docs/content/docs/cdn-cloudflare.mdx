@@ -93,6 +93,13 @@ The tag prefix keeps two knext apps on one zone from evicting each other by acci
 Purge token can purge any tag in its zone. If apps must not be able to purge each other, give each
 its own zone or its own token scope.
 
+The prefix also includes the cluster's identity. Two clusters behind one zone, for example staging
+and production with the same app name, get different prefixes, so a deploy or a `revalidateTag` in
+one does not empty the other's cache. The identity is the `kube-system` namespace's uid, unless the
+`KnextPlatform` sets `spec.cache.clusterId`. Set the same `clusterId` on two clusters only if they
+should share, and purge, one set of cached pages. Rebuilding a cluster changes its identity, so the
+first deploy afterwards starts that cluster's edge cache over.
+
 ## Live verification
 
 **Live verification:** not recorded

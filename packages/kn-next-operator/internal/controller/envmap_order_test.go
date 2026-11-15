@@ -47,9 +47,9 @@ func TestBuildKsvcEnv_EnvMapOrderIsDeterministic(t *testing.T) {
 		},
 	}
 	r := &NextAppReconciler{}
-	first, _, _ := r.buildKsvcEnv(app)
+	first, _, _ := r.buildKsvcEnv(app, testCDNPrefix(app))
 	for i := range 200 {
-		got, _, _ := r.buildKsvcEnv(app)
+		got, _, _ := r.buildKsvcEnv(app, testCDNPrefix(app))
 		if !reflect.DeepEqual(first, got) {
 			t.Fatalf("env order changed between reconciles (iteration %d):\n first: %v\n  got: %v", i, names(first), names(got))
 		}

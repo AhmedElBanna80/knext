@@ -325,7 +325,7 @@ func (r *NextAppReconciler) buildDesiredKsvc(nextApp *appsv1alpha1.NextApp, ksvc
 		delete(annotations, "autoscaling.knative.dev/scale-down-delay")
 	}
 
-	envVars, envFrom, envMapCollision := r.buildKsvcEnv(nextApp)
+	envVars, envFrom, envMapCollision := r.buildKsvcEnv(nextApp, eff.cdnTagPrefix)
 
 	// readOnlyRootFilesystem (#1332): default-on, same posture as the
 	// image-prewarm job container (image_prewarm.go) and the same

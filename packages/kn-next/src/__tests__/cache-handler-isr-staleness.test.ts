@@ -194,6 +194,29 @@ describe("ISR stale-while-revalidate — the Redis path", () => {
         expect(Number(ex)).toBeGreaterThan(1);
     });
 
+    // vinext hands a `revalidate = false` page to the handler as
+    // `revalidate: Infinity`. `EX Infinity` is not an integer, so Redis
+    // refuses it and the whole MULTI/EXEC write is dropped: the page is
+    // re-rendered on every request instead of being served from the cache.
+    it("writes a revalidate = false (Infinity) page with an integer EX", async () => {
+        const { handler, sent } = await redisBackedHandler();
+        await handler.set(
+            "isr-redis-forever",
+            { kind: "APP_PAGE" },
+            { revalidate: Infinity, cacheControl: { revalidate: Infinity } },
+        );
+        const set = sent.find((cmd) => cmd[0] === "SET");
+        expect(
+            set,
+            `no SET was issued — commands were ${JSON.stringify(sent)}`,
+        ).toBeTruthy();
+        const ex = (set as string[])[(set as string[]).indexOf("EX") + 1];
+        expect(
+            Number.isSafeInteger(Number(ex)) && Number(ex) > 0,
+            `EX must be a positive integer Redis accepts, got ${ex}`,
+        ).toBe(true);
+    });
+
     it("labels a read past the revalidate window STALE", async () => {
         const stored = JSON.stringify({
             value: { kind: "APP_PAGE" },

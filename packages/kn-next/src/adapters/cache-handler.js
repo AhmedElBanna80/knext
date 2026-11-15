@@ -1097,7 +1097,11 @@ function __redisTtlSeconds(ctx) {
   const expire = cacheControlSeconds(ctx, 'expire');
   if (expire !== undefined) return expire;
   const revalidate = ctx?.revalidate;
-  if (typeof revalidate === 'number' && revalidate > 0) {
+  // Finite only: vinext passes `revalidate = false` as `Infinity`, and
+  // `EX Infinity` makes Redis refuse the whole MULTI/EXEC write, so the page
+  // was never stored and re-rendered on every request (#114). Such a page
+  // takes the default TTL, as Next's own `revalidate: false` already does.
+  if (typeof revalidate === 'number' && Number.isFinite(revalidate) && revalidate > 0) {
     // A route may legitimately revalidate less often than the default TTL; the
     // entry must never be evicted before it is even due for revalidation.
     return Math.max(revalidate * 2, DEFAULT_TTL_SECONDS);

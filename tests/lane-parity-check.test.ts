@@ -214,6 +214,25 @@ describe('recordLaneParity: --record keeps the reasons and re-pins the blobs', (
     expect(r.findings[0]?.kind).toBe('manifest');
   });
 
+  it('re-pins an UNPORTED entry and it stays valid (reason and tracking issue kept)', () => {
+    const b = { main: { 'g.mjs': 'c' }, v2: { 'g.mjs': 'd' }, v1: { 'g.mjs': 'd' } };
+    const unported = entry('a', 'b', { reason: 'UNPORTED: fix not on main yet', issue: '#9' });
+    const r = recordLaneParity({ manifest: manifest([unported]), readBlob: reader(b) });
+    expect(r.manifest.divergences).toEqual([
+      entry('d', 'c', { reason: 'UNPORTED: fix not on main yet', issue: '#9' }),
+    ]);
+    expect(validateManifest(r.manifest)).toEqual([]);
+  });
+
+  it('formatManifest keeps escaped strings intact and long arrays multi-line', () => {
+    const long = Array.from({ length: 8 }, (_, i) => `scripts/some/long/guard-path-${i}.mjs`);
+    const m = { ...manifest([], ['a\\"b,\\\\c.mjs', 'short "q", x.mjs']), lanes: long };
+    const text = formatManifest(m);
+    expect(JSON.parse(text)).toEqual(m);
+    expect(text).toContain('"lanes": [\n');
+    for (const line of text.split('\n')) expect(line.length).toBeLessThanOrEqual(100);
+  });
+
   it('formatManifest writes the committed manifest back byte for byte', () => {
     const text = readFileSync(join(REPO, '.github/lane-parity.json'), 'utf8');
     expect(formatManifest(JSON.parse(text))).toBe(text);

@@ -70,7 +70,7 @@ if (args.includes('--record')) {
       console.log(`lane-parity: removed ${c.path} vs ${c.lane} (identical again)`);
     else
       console.log(
-        `lane-parity: re-pinned ${c.path} vs ${c.lane}: ${c.from.join(' / ')} -> ${c.to.join(' / ')} (reason kept; review it)`,
+        `lane-parity: re-pinned ${c.path} vs ${c.lane}: ${c.from.map((b) => b ?? '(absent)').join(' / ')} -> ${c.to.map((b) => b ?? '(absent)').join(' / ')} (reason kept; review it)`,
       );
   }
   if (r.changes.length > 0) {

@@ -96,8 +96,7 @@
       "lane": "main",
       "here": "f34705b20fc163e9f5db8684d9cfe6cc043f9024",
       "there": "b1617cff8191f3f35756cb9806010c0aa3a1d11e",
-      "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. The main-only step's port is part of #101.",
-      "issue": "#101"
+      "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. main's cache-handler-on-every-Next-minor step is on v2 too (next-minor-matrix.yml, with wider triggers), so nothing is left to port."
     },
     {
       "path": "tests/bun-version-pins.test.ts",
@@ -139,8 +138,7 @@
       "lane": "main",
       "here": "e97c0e27a34477c7c837a9bd04b83c0b2b139aa8",
       "there": "f6de362e76fd43adc8ebdaa1e776bedf9d9fbcab",
-      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also carries its own commits of the round-4 runner fixes (in-prover sampler, runaway kill, cdn-purge isolation); v2 has an equivalent runaway kill (runawayReason), and whether the rest are on v2 is checked in #101.",
-      "issue": "#101"
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also carries its own commits of the round-4 runner fixes (in-prover sampler, runaway kill, cdn-purge isolation); v2 carries each of them (runawayReason, the resource tripwire, between-prover cleanup, the meminfo fixture) plus later fixes main lacks (tracked-residue restore after every prover, private-tmp cleanup), so nothing is left to port."
     },
     {
       "path": "scripts/run-mutation-provers.mjs",
@@ -154,8 +152,7 @@
       "lane": "main",
       "here": "2bfe703f11a05f4b980d7704ffaa87b4d8fa21ee",
       "there": "6d6dc957bdd647b31eeb873eff007057d336c80f",
-      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also re-runs every prover sharded over main and integration/v2; port with #101.",
-      "issue": "#101"
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. v2 runs the same sharded re-run over main and integration/v2, plus a daily integration/v2 leg, so nothing is left to port."
     },
     {
       "path": "tests/mutation-prover-lane.test.ts",

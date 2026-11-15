@@ -223,6 +223,13 @@ const NOT_REDIS_RECEIVERS: Record<
   string,
   Record<string, { bindings: string[]; commands: string[]; why: string }>
 > = {
+  'packages/kn-next/src/adapters/cache-handler.js': {
+    invalidationReplay: {
+      bindings: ['const invalidationReplay = createReplayLoop({'],
+      commands: ['reset'],
+      why: 'the replay loop (replay-loop.js): reset drops its run and probe timer',
+    },
+  },
   'packages/kn-next/src/adapters/deferred-default-metrics.ts': {
     log: {
       bindings: ['readonly log?: { info: (obj: object, msg: string) => void };'],
@@ -359,6 +366,10 @@ const NOT_REDIS_LINES: Record<string, Record<string, string>> = {
       'the module specifiers `module` / `node:module`, not a MODULE command tuple',
     'const SKIP_KEYS = new Set(["type", "start", "end"]);':
       'AST property names, not a TYPE command tuple',
+  },
+  'packages/kn-next/src/adapters/use-cache-handler.js': {
+    'replay.loop.reset();':
+      'the replay loop (replay-loop.js): reset drops its run and probe timer, not RESET',
   },
   'packages/kn-next/src/utils/logger.ts': {
     "* log.info({ imageTag: 'v1.0.0' }, 'Starting deployment');": 'a doc-comment example',

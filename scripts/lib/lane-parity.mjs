@@ -137,3 +137,67 @@ export function checkLaneParity({ manifest, readBlob }) {
   }
   return findings;
 }
+
+/**
+ * `--record`: bring the recorded differences up to date after a deliberate
+ * change, keeping every reason. An out-of-date entry gets the current blob ids,
+ * and a stale entry (the file is identical again) is removed. An unexplained
+ * difference is never recorded: it has no reason to keep, so writing one is a
+ * person's decision, not a script's. Anything that is not out-of-date or stale
+ * stays a finding.
+ *
+ * @param {object} args
+ * @param {Manifest} args.manifest
+ * @param {(lane: string, path: string) => string | null} args.readBlob
+ * @returns {{ manifest: Manifest, changes: object[], findings: Finding[] }}
+ */
+export function recordLaneParity({ manifest, readBlob }) {
+  const found = checkLaneParity({ manifest, readBlob });
+  // An invalid manifest yields only `manifest` findings, so nothing below changes it.
+  const byKey = new Map(found.map((f) => [`${f.path}\0${f.lane}`, f]));
+  const changes = [];
+  const divergences = [];
+  for (const d of manifest.divergences) {
+    const f = byKey.get(`${d.path}\0${d.lane}`);
+    if (f?.kind === 'stale') {
+      changes.push({ kind: 'removed', path: d.path, lane: d.lane });
+      continue;
+    }
+    if (f?.kind === 'out-of-date') {
+      changes.push({
+        kind: 're-pinned',
+        path: d.path,
+        lane: d.lane,
+        from: [d.here, d.there],
+        to: [f.here, f.there],
+      });
+      divergences.push({ ...d, here: f.here, there: f.there });
+      continue;
+    }
+    divergences.push(d);
+  }
+  const findings = found.filter((f) => f.kind !== 'stale' && f.kind !== 'out-of-date');
+  return { manifest: { ...manifest, divergences }, changes, findings };
+}
+
+/**
+ * The manifest as committed: two-space JSON, with an array of strings kept on
+ * one line when it fits in 100 columns (the repo formatter's rule).
+ *
+ * @param {Manifest} manifest
+ * @returns {string}
+ */
+export function formatManifest(manifest) {
+  const text = JSON.stringify(manifest, null, 2);
+  return `${text.replace(
+    /^( *)("[^"\n]*": )\[\n((?: *"(?:[^"\\\n]|\\.)*",?\n)+) *\]/gm,
+    (whole, indent, key, body) => {
+      const items = body
+        .trim()
+        .split(/,?\n\s*/)
+        .map((s) => s.replace(/,$/, ''));
+      const line = `${indent}${key}[${items.join(', ')}]`;
+      return line.length <= 100 ? line : whole;
+    },
+  )}\n`;
+}

@@ -4,7 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
-import { checkLaneParity, validateManifest } from '../scripts/lib/lane-parity.mjs';
+import {
+  checkLaneParity,
+  formatManifest,
+  recordLaneParity,
+  validateManifest,
+} from '../scripts/lib/lane-parity.mjs';
 
 /**
  * #2170: the CI guard files must match across the release lanes, or the
@@ -152,6 +157,88 @@ describe('checkLaneParity: the rules', () => {
   });
 });
 
+describe('recordLaneParity: --record keeps the reasons and re-pins the blobs', () => {
+  const entry = (here: string, there: string | null, extra: Partial<Entry> = {}): Entry => ({
+    path: 'g.mjs',
+    lane: 'main',
+    here,
+    there,
+    reason: REASON,
+    ...extra,
+  });
+
+  it('re-pins an out-of-date entry, keeping its reason and issue', () => {
+    const b = { main: { 'g.mjs': 'c' }, v2: { 'g.mjs': 'd' }, v1: { 'g.mjs': 'd' } };
+    const m = manifest([entry('a', 'b', { issue: '#7' })]);
+    const r = recordLaneParity({ manifest: m, readBlob: reader(b) });
+    expect(r.findings).toEqual([]);
+    expect(r.manifest.divergences).toEqual([entry('d', 'c', { issue: '#7' })]);
+    expect(r.changes).toEqual([
+      { kind: 're-pinned', path: 'g.mjs', lane: 'main', from: ['a', 'b'], to: ['d', 'c'] },
+    ]);
+    // The input is not mutated.
+    expect(m.divergences[0]?.here).toBe('a');
+    // And the result passes the check.
+    expect(checkLaneParity({ manifest: r.manifest, readBlob: reader(b) })).toEqual([]);
+  });
+
+  it('re-pins a file now absent on the other lane (there: null)', () => {
+    const b = { main: {}, v2: { 'g.mjs': 'd' }, v1: { 'g.mjs': 'd' } };
+    const r = recordLaneParity({ manifest: manifest([entry('a', 'b')]), readBlob: reader(b) });
+    expect(r.manifest.divergences).toEqual([entry('d', null)]);
+  });
+
+  it('removes a stale entry (the file is identical again)', () => {
+    const b = { main: { 'g.mjs': 'a' }, v2: { 'g.mjs': 'a' }, v1: { 'g.mjs': 'a' } };
+    const r = recordLaneParity({ manifest: manifest([entry('a', 'b')]), readBlob: reader(b) });
+    expect(r.manifest.divergences).toEqual([]);
+    expect(r.changes).toEqual([{ kind: 'removed', path: 'g.mjs', lane: 'main' }]);
+    expect(r.findings).toEqual([]);
+  });
+
+  it('never records an unexplained difference: there is no reason to keep', () => {
+    const b = { main: { 'g.mjs': 'b' }, v2: { 'g.mjs': 'a' }, v1: { 'g.mjs': 'a' } };
+    const m = manifest();
+    const r = recordLaneParity({ manifest: m, readBlob: reader(b) });
+    expect(r.manifest).toEqual(m);
+    expect(r.changes).toEqual([]);
+    expect(r.findings.map((f) => f.kind)).toEqual(['unexplained']);
+  });
+
+  it('changes nothing in an invalid manifest', () => {
+    const m = { ...manifest([entry('a', 'b', { reason: 'short' })]) };
+    const b = { main: { 'g.mjs': 'c' }, v2: { 'g.mjs': 'd' }, v1: { 'g.mjs': 'd' } };
+    const r = recordLaneParity({ manifest: m, readBlob: reader(b) });
+    expect(r.manifest).toEqual(m);
+    expect(r.changes).toEqual([]);
+    expect(r.findings[0]?.kind).toBe('manifest');
+  });
+
+  it('re-pins an UNPORTED entry and it stays valid (reason and tracking issue kept)', () => {
+    const b = { main: { 'g.mjs': 'c' }, v2: { 'g.mjs': 'd' }, v1: { 'g.mjs': 'd' } };
+    const unported = entry('a', 'b', { reason: 'UNPORTED: fix not on main yet', issue: '#9' });
+    const r = recordLaneParity({ manifest: manifest([unported]), readBlob: reader(b) });
+    expect(r.manifest.divergences).toEqual([
+      entry('d', 'c', { reason: 'UNPORTED: fix not on main yet', issue: '#9' }),
+    ]);
+    expect(validateManifest(r.manifest)).toEqual([]);
+  });
+
+  it('formatManifest keeps escaped strings intact and long arrays multi-line', () => {
+    const long = Array.from({ length: 8 }, (_, i) => `scripts/some/long/guard-path-${i}.mjs`);
+    const m = { ...manifest([], ['a\\"b,\\\\c.mjs', 'short "q", x.mjs']), lanes: long };
+    const text = formatManifest(m);
+    expect(JSON.parse(text)).toEqual(m);
+    expect(text).toContain('"lanes": [\n');
+    for (const line of text.split('\n')) expect(line.length).toBeLessThanOrEqual(100);
+  });
+
+  it('formatManifest writes the committed manifest back byte for byte', () => {
+    const text = readFileSync(join(REPO, '.github/lane-parity.json'), 'utf8');
+    expect(formatManifest(JSON.parse(text))).toBe(text);
+  });
+});
+
 describe('the committed manifest', () => {
   const real = JSON.parse(readFileSync(join(REPO, '.github/lane-parity.json'), 'utf8'));
 
@@ -260,6 +347,60 @@ describe('lane-parity-check.mjs on a real repository', () => {
       JSON.stringify(manifest([{ path: 'g.mjs', lane: 'main', here, there, reason: REASON }])),
     );
     expect(run(clone, m).status).toBe(0);
+  });
+
+  it('--record re-pins a changed difference, keeps its reason, and the plain check then passes', () => {
+    const { origin, clone, m } = setup('record');
+    git(origin, 'checkout', '-q', 'main');
+    writeFileSync(join(origin, 'g.mjs'), 'export const guard = 2;\n');
+    git(origin, 'commit', '-q', '-am', 'main only');
+    git(clone, 'fetch', '-q', 'origin');
+    const here = git(clone, 'rev-parse', 'HEAD:g.mjs');
+    writeFileSync(
+      m,
+      formatManifest(
+        manifest([
+          { path: 'g.mjs', lane: 'main', here, there: 'old', reason: REASON, issue: '#7' },
+        ]),
+      ),
+    );
+    expect(run(clone, m).status).toBe(1);
+    const r = spawnSync('node', [SCRIPT, '--manifest', m, '--record'], {
+      cwd: clone,
+      encoding: 'utf8',
+      env: { ...process.env, LANE_PARITY_REMOTE: 'origin' },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('re-pinned g.mjs vs main');
+    const written = JSON.parse(readFileSync(m, 'utf8'));
+    expect(written.divergences).toEqual([
+      {
+        path: 'g.mjs',
+        lane: 'main',
+        here,
+        there: git(clone, 'rev-parse', 'origin/main:g.mjs'),
+        reason: REASON,
+        issue: '#7',
+      },
+    ]);
+    expect(run(clone, m).status).toBe(0);
+  });
+
+  it('--record leaves the manifest untouched and exits 1 on an unexplained difference', () => {
+    const { origin, clone, m } = setup('record-unexplained');
+    git(origin, 'checkout', '-q', 'main');
+    writeFileSync(join(origin, 'g.mjs'), 'export const guard = 2;\n');
+    git(origin, 'commit', '-q', '-am', 'main only');
+    git(clone, 'fetch', '-q', 'origin');
+    const before = readFileSync(m, 'utf8');
+    const r = spawnSync('node', [SCRIPT, '--manifest', m, '--record'], {
+      cwd: clone,
+      encoding: 'utf8',
+      env: { ...process.env, LANE_PARITY_REMOTE: 'origin' },
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('no divergence is recorded');
+    expect(readFileSync(m, 'utf8')).toBe(before);
   });
 
   it('fails closed (exit 2) when another lane cannot be read', () => {

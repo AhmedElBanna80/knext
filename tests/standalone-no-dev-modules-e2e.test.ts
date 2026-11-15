@@ -39,7 +39,10 @@
 //   M1 tracer requires `next/dist/server/dev/next-dev-server`
 //   M2 the server is launched under NODE_ENV=development
 //   M3 the tracer output gains a `*.runtime.dev.js` / React `*.development.js` path
-// M1 and M3 must turn this file red. M2 deliberately does NOT: the built page
+//   M4 `/render-probe` requires React's `*.development.js` server build while it
+//      renders (a dev module reached only on a successful render)
+//   M5 `/render-probe` stops answering 200 (the render-path probe goes vacuous)
+// M1, M3, M4 and M5 must turn this file red. M2 deliberately does NOT: the built page
 // chunk pins the production runtime and server.js hardcodes `dev: false`, so
 // NODE_ENV alone does not change which modules load (NODE_ENV in the images is
 // pinned by tests/runtime-image-node-env.test.ts).
@@ -187,9 +190,17 @@ process.on('SIGUSR2', () => {
 });
 `;
 
+interface Rendered {
+  status: number;
+  contentType: string;
+  body: string;
+}
+
 interface Booted {
   loaded: string[];
   statuses: Record<string, number>;
+  /** The DB-free `/render-probe` route, fetched as HTML and as an RSC payload. */
+  rendered: { html: Rendered; rsc: Rendered };
 }
 
 function waitForPort(port: number, proc: ChildProcess, getErr: () => string): Promise<void> {
@@ -259,6 +270,19 @@ async function bootAndTrace(runtime: 'node' | 'bun', nodeEnv: string): Promise<B
       await res.arrayBuffer();
       statuses[path] = res.status;
     }
+    // A SUCCESSFUL render, as HTML and as an RSC payload. The two requests above
+    // never finish a 200 render (a 404 and db-demo's DB-backed `/`), and React's
+    // server renderer and Next's render-path modules load lazily, so without a
+    // 200 a dev module pulled only by a successful render would stay invisible.
+    const probe = async (headers: Record<string, string>): Promise<Rendered> => {
+      const res = await fetch(`http://127.0.0.1:${port}/render-probe`, { headers });
+      return {
+        status: res.status,
+        contentType: res.headers.get('content-type') ?? '',
+        body: await res.text(),
+      };
+    };
+    const rendered = { html: await probe({}), rsc: await probe({ RSC: '1' }) };
     // Snapshot the require cache too (see TRACER) and wait for it to land.
     proc.kill('SIGUSR2');
     const cacheFile = `${traceOut}.cache`;
@@ -274,7 +298,7 @@ async function bootAndTrace(runtime: 'node' | 'bun', nodeEnv: string): Promise<B
     const loaded = [
       ...new Set(lines.filter((l) => l.length > 0).map((l) => l.replaceAll('\\', '/'))),
     ];
-    return { loaded, statuses };
+    return { loaded, statuses, rendered };
   } finally {
     proc.kill('SIGKILL');
   }
@@ -321,6 +345,20 @@ function assertProductionServerLoaded(loaded: string[]): void {
   expect(loaded.some((f) => f.endsWith('/request-body-cap.cjs'))).toBe(true);
 }
 
+/**
+ * Non-vacuity for the render path: the module list only proves something about a
+ * successful render if one happened. Both halves are checked: a 200, and a body
+ * that is the page's own output (not an error shell that also answers 200).
+ */
+function assertRendered(rendered: Booted['rendered']): void {
+  expect(rendered.html.status).toBe(200);
+  expect(rendered.html.contentType).toContain('text/html');
+  expect(rendered.html.body).toContain('render probe');
+  expect(rendered.rsc.status).toBe(200);
+  expect(rendered.rsc.contentType).toContain('text/x-component');
+  expect(rendered.rsc.body).toContain('render probe');
+}
+
 describe.skipIf(skipReason !== null)('standalone server loads no dev-only Next modules', () => {
   it('the allowlisted dev/ files are leaves: they require only node builtins', async () => {
     const { loaded } = await bootAndTrace('node', 'production');
@@ -339,17 +377,19 @@ describe.skipIf(skipReason !== null)('standalone server loads no dev-only Next m
   });
 
   it('node: production server.js under NODE_ENV=production', async () => {
-    const { loaded, statuses } = await bootAndTrace('node', 'production');
+    const { loaded, statuses, rendered } = await bootAndTrace('node', 'production');
     expect(statuses['/__knext_probe_not_found']).toBe(404);
     expect([200, 500]).toContain(statuses['/']);
+    assertRendered(rendered);
     assertProductionServerLoaded(loaded);
     assertNoDevModules(loaded);
   });
 
   it('bun: the same server.js under `bun`', async () => {
-    const { loaded, statuses } = await bootAndTrace('bun', 'production');
+    const { loaded, statuses, rendered } = await bootAndTrace('bun', 'production');
     expect(statuses['/__knext_probe_not_found']).toBe(404);
     expect([200, 500]).toContain(statuses['/']);
+    assertRendered(rendered);
     assertProductionServerLoaded(loaded);
     assertNoDevModules(loaded);
   });

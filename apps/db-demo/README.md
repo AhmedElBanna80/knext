@@ -17,6 +17,7 @@ The companion user guide is [`docs/guides/drizzle-sdk.md`](../../docs/guides/dri
 | RO read | `src/db/queries.ts` → `listMessages()` | `getDbRO()` (bounded-stale) |
 | Writer server action | `src/app/actions.ts` → `postMessage()` | `getDb()` (read-your-writes) |
 | App Router page | `src/app/page.tsx` | server component + `<form action>` |
+| Test-only render probe | `src/app/render-probe/` | DB-free dynamic page; the production-modules runtime test renders it |
 
 **Nothing is auto-routed.** The read uses `getDbRO()`, the write uses `getDb()` —
 the explicit two-client contract (ADR-0021 §1). If `DATABASE_URL_RO` is unset,

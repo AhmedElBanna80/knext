@@ -1,7 +1,7 @@
 # scripts
 
 ## Overview
-This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 297 top-level files (281 `.mjs`, 14 `.sh`, one `.ts` and one `.json`). 171 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
+This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 298 top-level files (282 `.mjs`, 14 `.sh`, one `.ts` and one `.json`). 171 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
 
 ## Interface
 
@@ -56,6 +56,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - Import and closure checks: `check-ts-import-extensions.mjs`, `adapter-import-closure.mjs` (`computeAdapterClosure`).
 - `check-ratchet-floors.mjs`, `check-ffi-crate-rev.mjs`, `crd-schema-diff.mjs` (`run`, `CRD_PATH`), `crd-narrowing-waivers.json`.
 - `workflow-script-install-guard.mjs`, `verify-phase-gates.mjs`, `verify-retracted-figures.mjs`.
+- `lane-parity-check.mjs` compares the CI guard files listed in `.github/lane-parity.json` on this checkout (HEAD) with `<LANE_PARITY_REMOTE>/<lane>` (default `origin`) for every other lane, using `lib/lane-parity.mjs`. Exit 0 parity, 1 findings, 2 a lane or the manifest cannot be read. Run by `.github/workflows/lane-parity.yml`.
 - Repo scans: `scan-dangling-paths.mjs`, `scan-half-scan-candidates.mjs` (advisory only), `scan-mock-hoisting.mjs`, `scan-mutation-residue.mjs`, `scan-published-seams.mjs`.
 - `bun-patched-drift.mjs`, `ci-resolve-push-base.mjs`, `next-minor-matrix.mjs`, `gen-cr-fields.ts`, `codemod-vitest-to-bun.mjs`, `biome-format.mjs`.
 

@@ -148,13 +148,19 @@ describe('the script', () => {
     // these, exactly: read it, require it non-empty, pass it on, record it, and
     // print it. A comparison that fails or exits, on one line or split across
     // several, would add a line here.
-    // Any code line naming the word (so `${#stamp}`, `unset stamp` and the
-    // `read` that fills it are covered too), not only `$stamp`-shaped uses.
+    // Any line containing the letters "stamp", in any case and inside any name
+    // (`${#stamp}`, `stamp_ok`, `Stamp`, `unset stamp`, the `read` that fills
+    // it), comments included: a heredoc line that looks like a comment still
+    // expands `${...}`.
     const stampLines = script
       .split('\n')
-      .filter((l) => /\bstamp\b|STAMP/.test(l) && !l.trimStart().startsWith('#'))
+      .filter((l) => /stamp/i.test(l))
       .map((l) => l.trim());
     expect(stampLines).toEqual([
+      '#   - every revision answers 200 on /api/health, /build-mark, /rb-stamp and',
+      '# It also REPORTS, without asserting, the unstable_cache entry /rb-stamp reads',
+      '# probe <label>: 200 on the routes; prints "<build mark> <stamp> <tagged mark>".',
+      "# served. /rb-stamp's stamp is the unstable_cache entry it reads per request.",
       'local code body=/tmp/rb-body mark stamp tmark',
       'for path in /api/health /build-mark /rb-stamp /tagged; do',
       `stamp="$(sed -n 's/.*<p id="stamp">\\([^<]*\\)<\\/p>.*/\\1/p' "\${body}-rb-stamp" | head -n1)"`,

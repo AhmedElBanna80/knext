@@ -6,7 +6,7 @@
  * The lane proves the way back from a single executable. Its claims only hold
  * if it deploys all three shapes, checks each revision's own command, takes its
  * "which build served" signal from a route that is rendered per request, and
- * compares one shared cache entry across the shapes. Each rule below reds when
+ * checks that each shape switch serves the ISR page an earlier shape stored. Each rule below reds when
  * one of those is weakened.
  */
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the strings are shell parameter expansions matched as literal text
@@ -118,7 +118,14 @@ describe('the script', () => {
   it('requires each switch to serve the ISR page an earlier shape stored in the shared Redis', () => {
     expect(script).toContain('if [ "$SEEN_MARKS" != " " ]; then');
     expect(script).toContain('*" ${tmark} "*) ;;');
+    expect(script).toContain(
+      '      *) fail "shape ${shape}: its first /tagged came from build ${tmark}',
+    );
     expect(script).toContain('the page cache was lost across the switch" ;;');
+    // SEEN_MARKS is written twice: initialised empty, then extended with the
+    // SERVING mark after the check. Never with the page's (tmark) mark.
+    expect(script.match(/SEEN_MARKS="/g)?.length).toBe(2);
+    expect(script).not.toContain('${SEEN_MARKS}${tmark}');
     expect(script).toContain('SEEN_MARKS="${SEEN_MARKS}${mark} "');
   });
 

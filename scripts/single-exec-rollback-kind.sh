@@ -17,9 +17,11 @@
 #     and a 50 % canary reaches both sides;
 #   - the operator rendered each revision's own command (`kubectl get revision`),
 #     never the previous revision's;
-#   - after each switch, the new revision's first /tagged is the ISR entry a
-#     previous build stored in the shared Redis (its build mark is a previous
-#     shape's), not a fresh render: a switch does not lose the page cache.
+#   - after each deploy that switches the shape, the new revision's first
+#     /tagged is the ISR entry a previous build stored in the shared Redis (its
+#     build mark is a previous shape's), not a fresh render: the switch does not
+#     lose the page cache. (The rollback pins return to revisions that already
+#     served; they are checked for the serving build, not for the page cache.)
 #
 # It also REPORTS, without asserting, the unstable_cache entry /rb-stamp reads
 # on every request under each shape. Measured on kind: that data-cache entry is
@@ -252,4 +254,4 @@ if [ "${STAMP[sc]}" = "${STAMP[disk]}" ] && [ "${STAMP[disk]}" = "${STAMP[node]}
 else
   say "data cache: NOT shared across shapes: sc=${STAMP[sc]} disk=${STAMP[disk]} node=${STAMP[node]}"
 fi
-say "PASS: sc=${REV[sc]} disk=${REV[disk]} node=${REV[node]}; the ISR page entry survived every switch"
+say "PASS: sc=${REV[sc]} disk=${REV[disk]} node=${REV[node]}; the ISR page entry survived both shape switches"

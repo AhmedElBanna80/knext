@@ -114,10 +114,10 @@ async function pastServerTime(stamp: number) {
 /**
  * Let the clock move clear of an entry just written, before a hard
  * invalidation that must expire it. An entry is expired only by a stamp
- * strictly AFTER its write time, and both times are compared through a
- * per-pod clock offset that is only as accurate as half a TIME round trip.
- * On a loaded runner that error reaches a few ms, so a write and an
- * invalidation that land within it can tie and the entry is served.
+ * strictly AFTER its write time (`expired > madeAt`, Next's own rule), at
+ * millisecond resolution, so a write and an invalidation in the same
+ * millisecond tie and the entry is served. These tests assert the ordering,
+ * not the tie.
  */
 const clearOfLastWrite = () => sleep(50);
 
@@ -399,6 +399,7 @@ for (const client of CLIENTS) {
             const a = await pod();
             const b = await pod();
             await a.set("x", Promise.resolve(entryOf(["t"])));
+            await clearOfLastWrite();
             let faults = 0;
             errorFor = (cmd) => {
                 if (cmd === "hset" && faults === 0) {

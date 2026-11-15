@@ -310,8 +310,8 @@ spec:
 - The operator renders this block as `KNEXT_CDN_*` environment variables and nothing
   else; the runtime does the rest. The purge token is a `secretKeyRef`, so its value
   never appears in the resource, the revision template or the status.
-- The tag prefix is **derived** by the operator from the app's namespace and name.
-  There is no field for it, so a resource cannot choose another app's prefix.
+- The tag prefix is **derived** by the operator from the cluster's identity and the app's
+  namespace and name. There is no field for it, so a resource cannot choose another app's prefix.
 - **Reserved names.** `KNEXT_CDN_*` names in `spec.env` and `spec.secrets.envMap` are reserved: the
   operator ignores such entries (they are never set on the container, whether or not
   this field is set) and reports their names, never their values, in a

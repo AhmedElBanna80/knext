@@ -48,7 +48,7 @@ func redisApp(namespace, name, keyPrefix string) *appsv1alpha1.NextApp {
 
 func renderedRedisPrefix(t *testing.T, app *appsv1alpha1.NextApp) (corev1.EnvVar, int) {
 	t.Helper()
-	env, _, _ := (&NextAppReconciler{}).buildKsvcEnv(app)
+	env, _, _ := (&NextAppReconciler{}).buildKsvcEnv(app, testCDNPrefix(app))
 	var found corev1.EnvVar
 	n := 0
 	for _, ev := range env {
@@ -119,7 +119,7 @@ func TestRedisKeyPrefix_UserEnvWins(t *testing.T) {
 	app.Spec.Secrets = &appsv1alpha1.SecretsSpec{EnvMap: map[string]appsv1alpha1.EnvMapEntry{
 		"REDIS_KEY_PREFIX": {SecretName: "s", SecretKey: "k"},
 	}}
-	env, _, report := (&NextAppReconciler{}).buildKsvcEnv(app)
+	env, _, report := (&NextAppReconciler{}).buildKsvcEnv(app, testCDNPrefix(app))
 	if got := countNamed(env, "REDIS_KEY_PREFIX"); got != 1 {
 		t.Fatalf("envMap REDIS_KEY_PREFIX appears %d times, want exactly 1", got)
 	}

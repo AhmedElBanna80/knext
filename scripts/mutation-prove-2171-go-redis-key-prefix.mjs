@@ -72,7 +72,7 @@ const MUTATIONS = [
     id: 'G02',
     claim: 'the default ignores the namespace (same name in two namespaces collides)',
     subject: 'prefix',
-    anchor: '\treturn "kn-" + cdnTagPrefix(app)',
+    anchor: '\treturn "kn-" + appHash(app)',
     replacement: '\treturn "kn-" + app.Name',
   },
   {

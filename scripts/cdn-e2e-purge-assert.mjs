@@ -51,6 +51,7 @@ import {
   hit,
   isHtml,
   must,
+  mustHavePrefixes,
   runChecks,
   send,
   stored,
@@ -104,7 +105,7 @@ export function purgeConfig(env = process.env) {
       np: `${np}.${c.ns}.svc.cluster.local`,
       uc: `${uc}.${c.ns}.svc.cluster.local`,
     },
-    prefixes: { ...c.prefixes, uc: derivePrefix(c.ns, uc) },
+    prefixes: { ...c.prefixes, uc: c.identity ? derivePrefix(c.identity, c.ns, uc) : null },
     token: env.CDN_REVALIDATE_TOKEN || '',
     stateFile: env.CDN_STATE_FILE || '/tmp/cdn-e2e-purge-state.json',
     waitMs: Number(env.CDN_PURGE_WAIT_MS || 20000),
@@ -182,7 +183,11 @@ function latestRevisions(ns) {
 
 export function purgeChecks(c) {
   const k = (id) => `k=${id}-${c.run}`;
-  const pA = c.prefixes.a;
+  // Resolved when a check runs, so building the list never needs an identity.
+  const pA = () => {
+    mustHavePrefixes([c.prefixes.a]);
+    return c.prefixes.a;
+  };
   return [
     {
       // HIT, then revalidateTag in the app, then a MISS with fresh content.
@@ -190,7 +195,7 @@ export function purgeChecks(c) {
       async run() {
         const path = `/tagged?${k('rv')}`;
         const before = await storeHit(c, c.hosts.a, path);
-        const tag = nextTagOf(pA, PAGE_TAG);
+        const tag = nextTagOf(pA(), PAGE_TAG);
         const t0 = Date.now();
         await revalidate(c, c.hosts.a);
         const purge = await waitForPurge(c, tag, t0);
@@ -217,7 +222,7 @@ export function purgeChecks(c) {
         await storeHit(c, c.hosts.a, pathA);
         const t0 = Date.now();
         await revalidate(c, c.hosts.a);
-        const purge = await waitForPurge(c, nextTagOf(pA, PAGE_TAG), t0);
+        const purge = await waitForPurge(c, nextTagOf(pA(), PAGE_TAG), t0);
         must(purge !== null, `precondition: app A's purge did not reach the emulator`);
         const b = await send(c.emu, { host: c.hosts.b, path: pathB });
         must(
@@ -249,7 +254,7 @@ export function purgeChecks(c) {
         );
         const t0 = Date.now();
         await revalidate(c, c.hosts.a);
-        const purge = await waitForPurge(c, nextTagOf(pA, PAGE_TAG), t0);
+        const purge = await waitForPurge(c, nextTagOf(pA(), PAGE_TAG), t0);
         const refused = (await purgeLog(c)).some((p) => p.at >= t0 && p.status === status);
         must(refused, `precondition: the emulator did not refuse a purge with ${status}`);
         const after = await send(c.emu, { host: c.hosts.a, path });
@@ -270,6 +275,7 @@ export function purgeChecks(c) {
       id: 'purge-use-cache',
       async run() {
         const host = c.hosts.uc;
+        mustHavePrefixes([c.prefixes.uc]);
         const pUc = c.prefixes.uc;
         const path = `${UC_PATH}?${k('uc')}`;
         const before = await storeHit(c, host, path);
@@ -351,7 +357,7 @@ export function purgeChecks(c) {
           current && current !== s.mark,
           `precondition: the running build is ${current ?? 'unreadable (/build-mark)'}, the stored pages are ${s.mark} (no rollout happened?)`,
         );
-        const purge = await waitForPurge(c, appTagOf(pA), s.t0);
+        const purge = await waitForPurge(c, appTagOf(pA()), s.t0);
         const left = JSON.parse(
           (await send(c.admin, { path: '/__emu/entries' })).text,
         ).entries.filter((e) => e.host === c.hosts.a && e.tags.includes(s.buildTag));
@@ -364,13 +370,13 @@ export function purgeChecks(c) {
         }
         must(
           left.length === 0 && fromEdge.length === 0,
-          `pre-rollout HTML was still served from the edge after the rollout (first-ready purge of ${appTagOf(pA)} seen: ${purge ? 'yes' : 'no'}; old-build entries left: ${left.length}; edge HITs on pre-rollout keys: ${fromEdge.join(', ') || 'none'})`,
+          `pre-rollout HTML was still served from the edge after the rollout (first-ready purge of ${appTagOf(pA())} seen: ${purge ? 'yes' : 'no'}; old-build entries left: ${left.length}; edge HITs on pre-rollout keys: ${fromEdge.join(', ') || 'none'})`,
         );
         must(
           purge !== null,
-          `no first-ready purge of the app tag ${appTagOf(pA)} reached the emulator after the rollout`,
+          `no first-ready purge of the app tag ${appTagOf(pA())} reached the emulator after the rollout`,
         );
-        return `build ${s.mark} -> ${current}: first-ready purge of ${appTagOf(pA)} arrived, no pre-rollout entry left at the edge`;
+        return `build ${s.mark} -> ${current}: first-ready purge of ${appTagOf(pA())} arrived, no pre-rollout entry left at the edge`;
       },
     },
     {

@@ -87,6 +87,11 @@ type effectiveValues struct {
 	// supplied by the platform. Fields that fell back to the built-in are not
 	// listed — "inherited from the platform" must mean exactly that.
 	inherited []string
+
+	// cdnTagPrefix is the app's KNEXT_CDN_TAG_PREFIX (cdnTagPrefix), set by
+	// Reconcile for an app that renders spec.cdn; empty otherwise. It needs the
+	// cluster identity, an API read, so it is resolved before the build.
+	cdnTagPrefix string
 }
 
 // resolveEffective merges the app over the platform over the built-ins.

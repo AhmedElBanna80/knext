@@ -68,7 +68,10 @@ spec:
                       ClusterID names this cluster in the ACL user names it creates, so two
                       clusters sharing one Redis never overwrite each other's users. Unset means
                       the uid of the kube-system Namespace. Set it to the old identity before
-                      rebuilding a cluster against the same Redis.
+                      rebuilding a cluster against the same Redis. It also salts every CDN app's
+                      tag prefix: changing it re-renders every app with spec.cdn (paced by
+                      rollout.maxAppsPerMinute), and pages already at the edge keep their old
+                      tags until they expire. Never give two clusters the same value.
                     type: string
                   redisEndpoints:
                     description: |-

@@ -36,6 +36,9 @@
   Proposed from 2026-10-12/13 and built meanwhile (#2281, #2298/#2303, #2292).
   **Amendment 4 (end of this file): Proposed (2026-11-09)** for #2270: a dependency-free SigV4 signer
   for the CloudFront purge row; Google and Azure stay deferred. Flagged for the next sprint-close design review.
+  **Amendment 5 (end of this file): Proposed (2026-11-15)** for #2383: the tag prefix includes the
+  cluster identity, so two clusters behind one CDN zone do not purge each other. Flagged for the next
+  sprint-close design review.
 - **Date:** 2026-10-12
 - **Trigger class:** ADR (amends the `CLAUDE.md` §8 "defer global CDN" stance for the header + purge
   slice) + CRD (`spec.cdn` on `NextApp`) + public API (`knext.config.ts` key, CR builder, preflight) +
@@ -543,7 +546,9 @@ header. It also keeps every tag inside Google's 120-byte limit. Where a row forw
 
 **D5.3 Prefix: operator-derived, not user-settable (A5; SD pick 0.86, confidence 0.72; jev on format:
 hash **0.90**, readable 0.10).** `<p>` is the first 12 lowercase hex of `sha256("<namespace>/<name>")`,
-rendered as `KNEXT_CDN_TAG_PREFIX`. D3 makes it unforgeable from the CR. The prefix stops one app's
+rendered as `KNEXT_CDN_TAG_PREFIX`. *(Amended by Amendment 5: the hash input starts with the cluster
+identity, `sha256("<cluster identity>/<namespace>/<name>")`, because the prefix did not separate two
+clusters that share a zone.)* D3 makes it unforgeable from the CR. The prefix stops one app's
 purge from evicting another app's pages on a shared CDN zone by accident. **It is not a security
 boundary against a token holder.** A Cloudflare `Zone.Cache Purge` token can purge any tag in its zone,
 so hard isolation between knext zones (or tenants) means one Cloudflare zone, or one token, per knext
@@ -891,7 +896,77 @@ The `cloudflare` row keeps today's printable-ASCII token gate (`TOKEN_PATTERN`).
 - **A4-5:** the workload identity amendment, then Google.
 - **A4-6:** a user-set CloudFront budget, if the live run shows the constant is wrong; it needs a CRD field.
 
-## Options considered
+### Amendment 5 (Proposed 2026-11-15): the tag prefix includes the cluster identity
+
+**Context.** D5.3 says the prefix stops one app's purge from evicting another app's pages. That held
+within a cluster, not across clusters. Two clusters running a NextApp with the same namespace and name
+behind one CDN zone got the same prefix. That is the common case: `staging.example.com` and
+`example.com` usually share one Cloudflare zone, and `default/web` is a common name. Each new build's
+first-ready purge of the app tag in one cluster then emptied the other cluster's edge presence. Every
+`revalidateTag` purge evicted the same tag in the other cluster, and both drew on one purge rate limit.
+The cause was over-eviction, never stale content.
+
+**Decision** (jev: cluster identity 0.71, identity with an override flag 0.27, an opt-in flag 0.02).
+`<p>` is the first 12 lowercase hex of `sha256("<cluster identity>/<namespace>/<name>")`. The cluster
+identity is the one the Redis ACL users already carry (ADR-0071 D2): the KnextPlatform's
+`spec.cache.clusterId` when it is set, otherwise the `kube-system` Namespace uid. So prefixes differ
+per cluster with no setting. `spec.cache.clusterId` is not a way to share a prefix: the same value
+names the Redis ACL users, and two clusters on one Redis that share it overwrite each other's users
+(ADR-0071). Its use here is keeping one identity across a rebuild. The operator resolves the identity
+after spec validation and before it renders an app that renders `spec.cdn`, and caches the
+`kube-system` uid for the life of the process. A failed read is a hold (`holdClusterIdentityUnavailable`):
+the live Knative Service is left as it is, `CDNAdvisory` reports `ClusterIdentityUnavailable`,
+Ready is held False for an app change that was not applied, and the verdict requeues in 30 s. The operator already holds `get` on Namespaces for the ADR-0071
+identity, so the read needs no new permission. The platform's rollout counts skip an identity-held
+app (it is neither applied, pending nor platform-held); the held-apps gauge reports it. With no
+`status.platform`, the rollout gate compares against the prefix the live Knative Service renders
+(the identity behind it is not recorded anywhere else: the `kube-system` uid, or an unaccepted
+platform's `clusterId`). A platform that appears and leaves the prefix (and every other rendered
+value) alone does not queue a CDN app; one that moves it paces the re-render.
+
+**Consequences.**
+- The default Redis key prefix and the ACL username keep the app hash `sha256("<namespace>/<name>")`.
+  They do not move, and no app's cache keys change. The ACL grant for the purge-dedupe keys
+  (`knext:cdn:purged:<p>:*`) follows the new `<p>`.
+- Every app with `spec.cdn` re-renders once: one new revision with the new prefix. Its first-ready
+  purge of the new app tag does **not** cover the change: entries cached before it carry the old
+  tags, so no purge reaches them, and they are served stale until they expire (at most
+  `htmlTTLSeconds` + `staleWhileRevalidateSeconds`, 7200 s at the field maximums). The upgrade notes
+  say so and suggest a zone purge. A rebuilt cluster or a new `clusterId` does the same again.
+- The prefix is part of `effectiveHash`, so a `clusterId` change re-renders CDN apps behind the
+  rollout limiter (`rollout.maxAppsPerMinute`) instead of all at once. A non-CDN app's hash is
+  unchanged.
+- Apps without `spec.cdn` are unchanged, byte for byte.
+- The stale window starts when the last revision that renders the old prefix stops serving, not at
+  the upgrade: a canary, or a pinned revision from before the change, keeps storing old-tag pages.
+  The ACL `SETUSER … reset` moves the dedupe grant to the new prefix, so such a pod that starts in
+  that window gets NOPERM on its claim and skips its first-ready purge (`purger.js` `firstReady`,
+  fail-closed). The same is true of any pod that starts while a `clusterId` change waits for its
+  rollout slot: the Secret and the grant change at once, the render at the pod's turn. The bound is
+  still the TTL.
+- The operator-upgrade re-render is not paced (the platform spec hash does not move); the upgrade
+  notes say it rolls every CDN app at once. The exception is an upgrade that lands together with a
+  new platform, which is paced like any platform change.
+- **Given up:** two clusters serving one host behind one zone used to purge each other's entries.
+  No supported setting restores that: `spec.cache.clusterId` also names the Redis ACL users, and two
+  clusters sharing it on one Redis overwrite each other's users.
+- **Reporting:** an unreadable identity is the `holdClusterIdentityUnavailable` gate, reported on
+  `CDNAdvisory` (reason `ClusterIdentityUnavailable`; the one advisory that is a hold), not on
+  `PlatformDefaultsApplied`, which stays about the platform (ADR-0064's hold-last-good is for platform
+  values). Ready follows the dropped-hold path. The message is static; the error is logged.
+
+| Decision | Chosen | jev | Alternative(s) | jev | Why the alternative lost |
+|---|---|---|---|---|---|
+| Prefix salt | cluster identity | 0.71 | identity + override flag; opt-in flag | 0.27 / 0.02 | an extra knob for a case no user asked for; opt-in leaves the default colliding |
+| `clusterId`'s two jobs | document; never share it | 0.56 | a separate CDN salt field | 0.44 | a CRD field for a sharing case no user has asked for |
+| Unreadable identity | hold, report on `CDNAdvisory` | 0.68 | a new condition type; `PlatformDefaultsApplied` | 0.24 / 0.08 | more status surface; the platform condition would hide `NoPlatform*` |
+| Grant vs render while queued | document the window | 0.60 | grant both prefixes until the render catches up; grant the rendered one only | 0.27 / 0.13 | a live-Service read and two selectors on the ACL path, for a rare admin action whose failure is a skipped purge |
+
+**Action items.**
+- A5-1: the identity is read from a `KnextPlatform` even when the platform is not accepted (it is the
+  ADR-0071 identity read), so a `clusterId` edit on an unaccepted platform re-renders CDN apps
+  without pacing. Tech debt; fix with the ADR-0071 read.
+- A5-2: a separate CDN salt field, only if a user asks for a shared prefix.
 
 | Decision | Chosen | jev | Main alternative(s) | jev | Why the alternative lost |
 |---|---|---|---|---|---|

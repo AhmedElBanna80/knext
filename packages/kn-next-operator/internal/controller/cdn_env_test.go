@@ -51,10 +51,22 @@ func cdnEnvOf(env []corev1.EnvVar) map[string]corev1.EnvVar {
 	return out
 }
 
+// testClusterIdentity stands in for clusterIdentity (the kube-system uid) in
+// the env tests.
+const testClusterIdentity = "test-cluster"
+
+// testCDNPrefix is what Reconcile puts in eff.cdnTagPrefix for app.
+func testCDNPrefix(app *appsv1alpha1.NextApp) string {
+	if !cdnRendersEnv(app) {
+		return ""
+	}
+	return cdnTagPrefix(testClusterIdentity, app)
+}
+
 func buildEnvFor(t *testing.T, app *appsv1alpha1.NextApp) []corev1.EnvVar {
 	t.Helper()
 	r := &NextAppReconciler{}
-	env, _, _ := r.buildKsvcEnv(app)
+	env, _, _ := r.buildKsvcEnv(app, testCDNPrefix(app))
 	return env
 }
 
@@ -75,7 +87,7 @@ func TestCDNEnv_RendersEveryField(t *testing.T) {
 
 	want := map[string]string{
 		"KNEXT_CDN_PROVIDER":         "cloudflare",
-		lcKNEXTCDNTAGPREFIX:          lcV24116dd4a062, // first 12 hex of sha256("default/my-app")
+		lcKNEXTCDNTAGPREFIX:          "83f9eef439ad", // first 12 hex of sha256("test-cluster/default/my-app")
 		"KNEXT_CDN_HTML_TTL_SECONDS": "45",
 		"KNEXT_CDN_SWR_SECONDS":      "10",
 		"KNEXT_CDN_EXCLUDE_PATHS":    "/account,/admin",
@@ -139,16 +151,40 @@ func TestCDNEnv_EmulatorEndpoint(t *testing.T) {
 	}
 }
 
-// D5.3: the prefix is a pure function of namespace/name, so two apps cannot
-// collide by accident and a CR cannot pick one.
+// D5.3: the prefix is a pure function of cluster identity, namespace and name,
+// so two apps cannot collide by accident and a CR cannot pick one.
 func TestCDNEnv_TagPrefixIsDerivedFromNamespaceAndName(t *testing.T) {
 	a := cdnApp(appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}})
 	b := cdnApp(appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}})
 	b.Namespace = "other"
 	pa := cdnEnvOf(buildEnvFor(t, a))[lcKNEXTCDNTAGPREFIX].Value
 	pb := cdnEnvOf(buildEnvFor(t, b))[lcKNEXTCDNTAGPREFIX].Value
-	if pa != lcV24116dd4a062 || pb != "222f2582e8eb" {
-		t.Errorf("prefixes = %q / %q, want 24116dd4a062 / 222f2582e8eb (sha256 of namespace/name)", pa, pb)
+	if pa != "83f9eef439ad" || pb != "92e3eacd07f8" {
+		t.Errorf("prefixes = %q / %q, want 83f9eef439ad / 92e3eacd07f8 (sha256 of cluster/namespace/name)", pa, pb)
+	}
+}
+
+// D5.3 as amended: the same namespace/name in two clusters (two cluster
+// identities) gets two prefixes, so staging and prod behind one CDN zone do
+// not purge each other's tags; the same cluster gets the same prefix on every
+// reconcile, so nothing re-rolls.
+func TestCDNEnv_TagPrefixDiffersAcrossClustersAndIsStableWithinOne(t *testing.T) {
+	app := cdnApp(appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}})
+	staging := cdnTagPrefix("staging-kube-system-uid", app)
+	prod := cdnTagPrefix("prod-kube-system-uid", app)
+	if staging == prod {
+		t.Fatalf("two clusters rendered the same prefix %q for default/my-app", staging)
+	}
+	if again := cdnTagPrefix("staging-kube-system-uid", app); again != staging {
+		t.Fatalf("the same cluster rendered %q then %q", staging, again)
+	}
+	if cdnTagPrefix("other-cluster", app) != "3e0201171791" {
+		t.Fatalf("prefix for other-cluster/default/my-app = %q, want 3e0201171791", cdnTagPrefix("other-cluster", app))
+	}
+	// The Redis key prefix and ACL username do not move with the cluster: they
+	// stay on the app hash.
+	if appHash(app) != lcV24116dd4a062 || defaultRedisKeyPrefix(app) != "kn-"+lcV24116dd4a062 {
+		t.Fatalf("appHash = %q, defaultRedisKeyPrefix = %q", appHash(app), defaultRedisKeyPrefix(app))
 	}
 }
 
@@ -182,7 +218,7 @@ func TestCDNEnv_EnvMapReservedNamesAreDroppedWithoutSpecCDN(t *testing.T) {
 		},
 	}})
 	r := &NextAppReconciler{}
-	env, _, report := r.buildKsvcEnv(app)
+	env, _, report := r.buildKsvcEnv(app, testCDNPrefix(app))
 	if got := cdnEnvOf(env); len(got) != 0 {
 		t.Fatalf("envMap KNEXT_CDN_TAG_PREFIX must not reach the container, got %v", got)
 	}
@@ -214,7 +250,7 @@ func TestCDNEnv_EnvMapCannotOverrideARenderedName(t *testing.T) {
 	for _, ev := range got {
 		if ev.Name == lcKNEXTCDNTAGPREFIX {
 			n++
-			if ev.ValueFrom != nil || ev.Value != lcV24116dd4a062 {
+			if ev.ValueFrom != nil || ev.Value != "83f9eef439ad" {
 				t.Errorf("operator value must win, got %+v", ev)
 			}
 		}
@@ -241,7 +277,7 @@ func TestCDNEnv_SpecEnvReservedNamesAreDroppedWithAWarning(t *testing.T) {
 			})
 			rec := record.NewFakeRecorder(64)
 			r := &NextAppReconciler{Recorder: rec}
-			env, _, _ := r.buildKsvcEnv(app)
+			env, _, _ := r.buildKsvcEnv(app, testCDNPrefix(app))
 			keep := false
 			for _, ev := range env {
 				if ev.Name == "KNEXT_CDN_EMULATOR_ENDPOINT" {
@@ -373,7 +409,7 @@ func TestCDNEnv_RenderedPrefixIsAPlainValueThatEnvFromCannotOverride(t *testing.
 		Secrets: &appsv1alpha1.SecretsSpec{EnvFrom: []string{"leaky-secret"}},
 	})
 	r := &NextAppReconciler{}
-	env, envFrom, _ := r.buildKsvcEnv(app)
+	env, envFrom, _ := r.buildKsvcEnv(app, testCDNPrefix(app))
 
 	var prefix []corev1.EnvVar
 	for _, ev := range env {
@@ -384,7 +420,7 @@ func TestCDNEnv_RenderedPrefixIsAPlainValueThatEnvFromCannotOverride(t *testing.
 	if len(prefix) != 1 {
 		t.Fatalf("want exactly one KNEXT_CDN_TAG_PREFIX env entry, got %+v", prefix)
 	}
-	if prefix[0].ValueFrom != nil || prefix[0].Value != lcV24116dd4a062 {
+	if prefix[0].ValueFrom != nil || prefix[0].Value != "83f9eef439ad" {
 		t.Errorf("the rendered prefix must be a plain value entry, got %+v", prefix[0])
 	}
 	// envFrom is a separate list, applied by Kubernetes BEFORE env: the Secret is
@@ -399,7 +435,7 @@ func TestCDNEnv_EnvFromIsNotFilteredWithoutSpecCDN(t *testing.T) {
 		Secrets: &appsv1alpha1.SecretsSpec{EnvFrom: []string{"leaky-secret"}},
 	})
 	r := &NextAppReconciler{}
-	env, envFrom, _ := r.buildKsvcEnv(app)
+	env, envFrom, _ := r.buildKsvcEnv(app, testCDNPrefix(app))
 	if got := cdnEnvOf(env); len(got) != 0 {
 		t.Errorf("no spec.cdn must render no KNEXT_CDN_* env, got %v", got)
 	}

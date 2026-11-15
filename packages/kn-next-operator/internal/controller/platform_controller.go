@@ -93,9 +93,11 @@ func computePlatformStatus(p *platformv1alpha1.KnextPlatform, apps []appsv1alpha
 	var rollout platformv1alpha1.PlatformRolloutStatus
 	for i := range apps {
 		app := &apps[i]
-		if !app.DeletionTimestamp.IsZero() || isInvalidSpec(app) {
+		if !app.DeletionTimestamp.IsZero() || isInvalidSpec(app) || isIdentityHeld(app) {
 			// Cannot receive the configuration: counting it as pending would hold
-			// DefaultsPropagated at Progressing for the whole cluster.
+			// DefaultsPropagated at Progressing for the whole cluster. An identity
+			// hold is not the platform's doing either, so it is not "held" here;
+			// the app's CDNAdvisory and the held-apps gauge report it.
 			continue
 		}
 		switch {
@@ -138,6 +140,13 @@ func computePlatformStatus(p *platformv1alpha1.KnextPlatform, apps []appsv1alpha
 func isInvalidSpec(app *appsv1alpha1.NextApp) bool {
 	c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionReady)
 	return c != nil && c.Reason == lcInvalidSpec
+}
+
+// isIdentityHeld reports whether the app's last verdict held its Knative Service
+// because the cluster identity its CDN tag prefix needs could not be read.
+func isIdentityHeld(app *appsv1alpha1.NextApp) bool {
+	c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionCDNAdvisory)
+	return c != nil && c.Reason == ReasonClusterIdentityUnavailable
 }
 
 // isHeldByPlatform reports whether the app's last verdict was a hold because of
@@ -193,7 +202,8 @@ func nextAppToPlatformRequests(context.Context, client.Object) []reconcile.Reque
 // platformRelevantNextAppChange fires only when something the platform status is
 // computed from moved: the app appeared or went away, its status.platform
 // changed, its PlatformDefaultsApplied condition changed, or it entered/left the
-// set of apps that can receive the configuration at all. Every other NextApp
+// set of apps that can receive the configuration at all (InvalidSpec, the
+// cluster-identity hold, deletion). Every other NextApp
 // status write (URL, traffic, ...) would otherwise re-run a list over every app.
 var platformRelevantNextAppChange = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
@@ -213,6 +223,7 @@ var platformRelevantNextAppChange = predicate.Funcs{
 		// An app entering or leaving InvalidSpec, or starting to delete, changes
 		// whether it is counted at all.
 		return isInvalidSpec(oldApp) != isInvalidSpec(newApp) ||
+			isIdentityHeld(oldApp) != isIdentityHeld(newApp) ||
 			oldApp.DeletionTimestamp.IsZero() != newApp.DeletionTimestamp.IsZero()
 	},
 }

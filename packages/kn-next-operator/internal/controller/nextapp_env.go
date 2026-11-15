@@ -89,7 +89,7 @@ func (r envMapCollisionReport) empty() bool {
 // EnvMapCollision condition + Warning event (#1288/#1391; architecture.md:
 // new honest-status conditions/events go in computeStatusVerdict, never as
 // new branches in Reconcile).
-func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev1.EnvVar, []corev1.EnvFromSource, envMapCollisionReport) {
+func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp, cdnPrefix string) ([]corev1.EnvVar, []corev1.EnvFromSource, envMapCollisionReport) {
 	var envVars []corev1.EnvVar
 	// HOSTNAME=0.0.0.0 overrides kubelet's HOSTNAME=<pod-name> so a bare
 	// `next start`/server.js entrypoint binds all interfaces instead of the
@@ -198,7 +198,7 @@ func (r *NextAppReconciler) buildKsvcEnv(nextApp *appsv1alpha1.NextApp) ([]corev
 
 	// spec.cdn -> KNEXT_CDN_* (ADR-0068). Operator-managed like the rest of this
 	// block, so a spec.secrets.envMap entry of the same name can never replace it.
-	envVars = append(envVars, cdnEnvVars(nextApp)...)
+	envVars = append(envVars, cdnEnvVars(nextApp, cdnPrefix)...)
 
 	var envFrom []corev1.EnvFromSource
 	if nextApp.Spec.Secrets != nil {

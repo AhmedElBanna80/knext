@@ -89,8 +89,8 @@ func TestRedisACLUsernameIsClusterTaggedAndDoesNotExposeTheApp(t *testing.T) {
 		t.Fatal("two apps must not share a user")
 	}
 	// The app hash is the one the default prefix and the CDN tag prefix use.
-	if !strings.HasSuffix(u, "-"+cdnTagPrefix(app)) {
-		t.Fatalf("username %q does not end in the CDN tag prefix %q", u, cdnTagPrefix(app))
+	if !strings.HasSuffix(u, "-"+appHash(app)) {
+		t.Fatalf("username %q does not end in the app hash %q", u, appHash(app))
 	}
 }
 

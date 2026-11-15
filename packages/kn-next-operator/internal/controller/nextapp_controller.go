@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -286,6 +287,9 @@ type NextAppReconciler struct {
 	rollout rolloutLimiter
 	// held remembers which apps are held, for the fleet metrics. Zero value ready.
 	held heldTracker
+	// kubeSystemUID caches the kube-system Namespace UID once it is read: it is
+	// fixed for the cluster's lifetime, so one read serves every pass. Zero value ready.
+	kubeSystemUID atomic.Pointer[string]
 }
 
 // now returns the reconciler's clock (test-injectable), defaulting to time.Now.
@@ -466,6 +470,22 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		_ = r.applyStatusVerdict(ctx, &nextApp, observedStatus, verdict)
 		return ctrl.Result{}, err
 	}
+	// The CDN tag prefix is salted with the cluster identity (an API read). A
+	// Knative Service is never rendered with a guessed prefix: an unreadable
+	// identity is a hold the verdict reports and retries, not an error return
+	// that would skip the verdict.
+	if cdnRendersEnv(&nextApp) {
+		identity, idErr := r.clusterIdentity(ctx, snap)
+		switch {
+		case idErr == nil:
+			eff.cdnTagPrefix = cdnTagPrefix(identity, &nextApp)
+		case gate.hold == holdNone:
+			logger.Error(idErr, "Holding the Knative Service: the cluster identity could not be read")
+			// The error goes to the log only: a message that embeds it would churn
+			// the status (and re-fire the Warning) whenever its text varies.
+			gate = platformGate{hold: holdClusterIdentityUnavailable}
+		}
+	}
 
 	// 0. Database binding (ADR-0019). knext is engine-agnostic and provisions NO
 	// database (the managed scale-to-zero-Postgres mode was removed — ADR-0025).
@@ -608,7 +628,7 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		if getErr := r.Get(ctx, client.ObjectKeyFromObject(ksvc), ksvc); getErr != nil && !errors.IsNotFound(getErr) {
 			return ctrl.Result{}, getErr
 		}
-		_, _, envMapCollision = r.buildKsvcEnv(&nextApp)
+		_, _, envMapCollision = r.buildKsvcEnv(&nextApp, eff.cdnTagPrefix)
 	} else {
 		_, err = controllerutil.CreateOrUpdate(ctx, r.Client, ksvc, func() error {
 			var buildErr error

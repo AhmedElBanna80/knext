@@ -20,7 +20,7 @@ Go types for the namespaced `apps.kn-next.dev/v1alpha1` API group: the `NextApp`
 - `nextapp_types.go:NetworkingSpec.PublicHosts`: at most 32 entries of at most 253 characters, each a lowercase RFC 1123 hostname, and never the wildcard address `0.0.0.0`.
 - `nextapp_types.go:CacheSpec.KeyPrefix`: at most 63 characters, no whitespace and none of the Redis glob characters `* ? [ ] \`. The legacy shared fallback prefix and any prefix under it are rejected by CEL.
 - `nextapp_types.go:CacheSpec.Isolation`: the enum `auto;acl;none`; empty means `auto`. `knext` and `knext:*` are reserved key prefixes, refused by `internal/validation` and the reconciler, deliberately not by CEL (the CLI keeps a verbatim copy of this field's CEL rules).
-- `nextapp_types.go:CDNSpec`: `emulatorEndpoint` is allowed only with `provider: emulator`, the emulator provider requires it, and it must match `http(s)://<host>.svc.cluster.local[:port]`.
+- `nextapp_types.go:CDNSpec`: the tag prefix is not a field; the operator derives it from the cluster identity, namespace and name. `emulatorEndpoint` is allowed only with `provider: emulator`, the emulator provider requires it, and it must match `http(s)://<host>.svc.cluster.local[:port]`.
 - `nextapp_types.go:DatabaseSpec`: `roSecretRef` requires `secretRef`.
 - `backendservice_types.go:BackendServiceSpec.Zone`: required, a DNS-1123 label of 1-63 characters, and immutable (`self == oldSelf`). `Image` is required and non-empty. `Language` is at most 32 characters (`^[a-z][a-z0-9+-]*$`), and `ProtoVersion` must be a semver string (`Pattern`, at most 128 characters).
 - `backendservice_types.go`: env names starting with `KNEXT_TOKEN_` are reserved, and every Secret reference must name a non-empty Secret of at most 253 characters.

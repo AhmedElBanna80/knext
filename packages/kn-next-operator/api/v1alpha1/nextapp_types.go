@@ -238,8 +238,8 @@ type NextAppSpec struct {
 	//
 	// The operator renders this field as KNEXT_CDN_* environment variables and
 	// nothing else; the runtime does the rest. The tag prefix is derived by the
-	// operator from the app's namespace and name and is NOT a field, so a CR
-	// cannot choose another app's prefix.
+	// operator from the cluster identity and the app's namespace and name and is
+	// NOT a field, so a CR cannot choose another app's prefix.
 	//
 	// KNEXT_CDN_* names in spec.env and spec.secrets.envMap are reserved: the
 	// operator ignores such entries (they are never set on the container, whether

@@ -71,6 +71,11 @@ const (
 	ReasonRolloutPending = "RolloutPending"
 )
 
+// clusterIdentityRetry is how soon a pass held on an unreadable cluster identity
+// tries again: the read failing is an API or RBAC condition, not a spec edit, so
+// no watch would re-enqueue the app.
+const clusterIdentityRetry = 30 * time.Second
+
 // platformSnapshot is the platform state one reconcile pass works from.
 type platformSnapshot struct {
 	// crdPresent: the KnextPlatform kind is served by the cluster.
@@ -160,6 +165,10 @@ const (
 	holdEffectiveSpecInvalid
 	// holdRolloutPending: the app's re-render is queued behind the rollout limiter.
 	holdRolloutPending
+	// holdClusterIdentityUnavailable: a CDN app's tag prefix needs the cluster
+	// identity and it could not be read. Rendering without it would publish a
+	// guessed prefix, so the live Knative Service is left exactly as it is.
+	holdClusterIdentityUnavailable
 )
 
 // platformGate is the outcome of the platform checks between spec validation and
@@ -222,12 +231,17 @@ func effectiveHash(eff effectiveValues) string {
 		Timeout                          int64
 		SDD                              string
 		TBC, PanicWindow, PanicThreshold *int32
+		// Omitted when empty, so a non-CDN app's hash is the one it always had. A
+		// change of the cluster identity (spec.cache.clusterId) moves it for every
+		// CDN app, and the rollout limiter paces those re-renders.
+		CDNTagPrefix string `json:",omitempty"`
 	}{
 		eff.containerConcurrency,
 		eff.cpuRequest.value, eff.memoryRequest.value, eff.cpuLimit.value, eff.memoryLimit.value,
 		eff.timeoutSeconds,
 		eff.scaleDownDelay,
 		eff.targetBurstCapacity, eff.panicWindowPercentage, eff.panicThresholdPercentage,
+		eff.cdnTagPrefix,
 	})
 	if err != nil {
 		raw = fmt.Appendf(nil, "%+v", eff)
@@ -272,12 +286,31 @@ func (r *NextAppReconciler) gateRollout(ctx context.Context, app *appsv1alpha1.N
 // bookkeeping so no early "go now" return can leave a reservation behind.
 func (r *NextAppReconciler) decideRollout(ctx context.Context, app *appsv1alpha1.NextApp, snap platformSnapshot, eff effectiveValues) (platformGate, error) {
 	wantSpecHash := snap.hash()
-	appliedSpecHash, appliedEffHash := "", effectiveHash(resolveEffective(app, nil))
+	var appliedSpecHash, appliedEffHash string
 	if p := app.Status.Platform; p != nil {
 		appliedSpecHash, appliedEffHash = p.SpecHash, p.EffectiveHash
 	}
 	if wantSpecHash == appliedSpecHash {
 		return platformGate{}, nil
+	}
+	// haveLive records that the live Service was already read (it exists), so
+	// the second read below is skipped.
+	haveLive := false
+	if app.Status.Platform == nil {
+		// No platform was in force at the last render, so it used the built-in
+		// values. Its CDN tag prefix is whatever the live Service renders: the
+		// identity it was derived from (the kube-system uid, or a clusterId read
+		// from a platform that was not accepted) is not recorded anywhere else.
+		base := resolveEffective(app, nil)
+		if eff.cdnTagPrefix != "" {
+			live, found, err := r.liveKsvc(ctx, app)
+			if err != nil || !found {
+				return platformGate{}, err
+			}
+			haveLive = true
+			base.cdnTagPrefix = renderedCDNTagPrefix(live)
+		}
+		appliedEffHash = effectiveHash(base)
 	}
 	if effectiveHash(eff) == appliedEffHash {
 		return platformGate{}, nil
@@ -285,18 +318,42 @@ func (r *NextAppReconciler) decideRollout(ctx context.Context, app *appsv1alpha1
 	if appTriggered(app) {
 		return platformGate{}, nil
 	}
-	live := &servingv1.Service{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, live); err != nil {
-		if errors.IsNotFound(err) {
-			return platformGate{}, nil
+	if !haveLive {
+		_, found, err := r.liveKsvc(ctx, app)
+		if err != nil || !found {
+			return platformGate{}, err
 		}
-		return platformGate{}, err
 	}
+
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}
 	if wait := r.rollout.reserve(key, r.now(), snap.maxAppsPerMinute()); wait > 0 {
 		return platformGate{hold: holdRolloutPending, wait: wait}, nil
 	}
 	return platformGate{}, nil
+}
+
+// liveKsvc reads the app's Knative Service; found is false when there is none.
+func (r *NextAppReconciler) liveKsvc(ctx context.Context, app *appsv1alpha1.NextApp) (*servingv1.Service, bool, error) {
+	live := &servingv1.Service{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: app.Namespace, Name: app.Name}, live); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return live, true, nil
+}
+
+// renderedCDNTagPrefix is the KNEXT_CDN_TAG_PREFIX a live Service renders, or "".
+func renderedCDNTagPrefix(live *servingv1.Service) string {
+	for _, c := range live.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == lcKNEXTCDNTAGPREFIX {
+				return e.Value
+			}
+		}
+	}
+	return ""
 }
 
 // platformDefaultsState is everything the pure verdict needs to compute the

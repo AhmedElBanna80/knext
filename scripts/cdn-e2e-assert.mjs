@@ -35,16 +35,38 @@
  *   CDN_RUN_ID           makes every cache key unique to this run (default: now)
  *   CDN_OFF_URL / CDN_BASE_URL  zero-diff compares these pod-direct URLs
  *                        (the user container, no ingress) instead of the emulator path
+ *   CDN_CLUSTER_IDENTITY the cluster identity the operator salts the prefix with:
+ *                        the KnextPlatform's spec.cache.clusterId, else the
+ *                        kube-system Namespace UID
  *   CDN_PREFIX_A/_B      override the expected tag prefix (default: derived
- *                        exactly as the operator derives it, sha256("<ns>/<name>"))
+ *                        exactly as the operator derives it,
+ *                        sha256("<identity>/<ns>/<name>")[:12])
  */
 
 import { createHash } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { pathToFileURL } from 'node:url';
 
-export function derivePrefix(ns, name) {
-  return createHash('sha256').update(`${ns}/${name}`, 'utf8').digest('hex').slice(0, 12);
+export function derivePrefix(identity, ns, name) {
+  if (!identity) throw new Error('derivePrefix: the cluster identity is required');
+  return createHash('sha256')
+    .update(`${identity}/${ns}/${name}`, 'utf8')
+    .digest('hex')
+    .slice(0, 12);
+}
+
+/** The expected prefix, or null when no cluster identity is known (a check that needs it fails). */
+function expectedPrefix(identity, ns, name) {
+  return identity ? derivePrefix(identity, ns, name) : null;
+}
+
+/** Fails the check when an expected prefix could not be derived. */
+export function mustHavePrefixes(prefixes) {
+  if (prefixes.some((p) => !p)) {
+    throw new Error(
+      'precondition: no expected tag prefix: set CDN_CLUSTER_IDENTITY (or CDN_PREFIX_A/_B)',
+    );
+  }
 }
 
 function sha256(buf) {
@@ -146,15 +168,17 @@ export function config(env = process.env) {
     base: env.CDN_APP_BASE || 'cdn-base',
   };
   const host = (n) => `${n}.${ns}.svc.cluster.local`;
+  const identity = env.CDN_CLUSTER_IDENTITY || '';
   return {
     emu: env.CDN_EMU_URL || 'http://127.0.0.1:18080',
     admin: env.CDN_EMU_ADMIN_URL || 'http://127.0.0.1:18081',
     ns,
     names,
     hosts: { a: host(names.a), b: host(names.b), off: host(names.off), base: host(names.base) },
+    identity,
     prefixes: {
-      a: env.CDN_PREFIX_A || derivePrefix(ns, names.a),
-      b: env.CDN_PREFIX_B || derivePrefix(ns, names.b),
+      a: env.CDN_PREFIX_A || expectedPrefix(identity, ns, names.a),
+      b: env.CDN_PREFIX_B || expectedPrefix(identity, ns, names.b),
     },
     publicHosts: [
       env.CDN_PUBLIC_HOST_1 || 'a.example.test',
@@ -216,6 +240,7 @@ export function checks(c) {
         const tags = String(r1.headers['cache-tag'] || '')
           .split(',')
           .filter(Boolean);
+        mustHavePrefixes([c.prefixes.a]);
         const own = `kn-${c.prefixes.a}`;
         must(
           tags.length >= 3,
@@ -579,6 +604,7 @@ export function checks(c) {
     {
       id: 'two-apps-prefix',
       async run() {
+        mustHavePrefixes([c.prefixes.a, c.prefixes.b]);
         must(c.prefixes.a !== c.prefixes.b, 'precondition: the two apps derive the same prefix');
         for (const [app, host] of [
           ['a', c.hosts.a],

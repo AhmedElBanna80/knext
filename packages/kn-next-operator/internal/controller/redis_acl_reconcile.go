@@ -241,11 +241,19 @@ func (r *NextAppReconciler) clusterIdentity(ctx context.Context, snap platformSn
 	if snap.obj != nil && snap.obj.Spec.Cache != nil && snap.obj.Spec.Cache.ClusterID != "" {
 		return snap.obj.Spec.Cache.ClusterID, nil
 	}
+	if uid := r.kubeSystemUID.Load(); uid != nil {
+		return *uid, nil
+	}
 	var ns corev1.Namespace
 	if err := r.reader().Get(ctx, types.NamespacedName{Name: "kube-system"}, &ns); err != nil {
 		return "", fmt.Errorf("read the kube-system Namespace for the cluster identity: %w", err)
 	}
-	return string(ns.UID), nil
+	if ns.UID == "" {
+		return "", fmt.Errorf("the kube-system Namespace has no UID")
+	}
+	uid := string(ns.UID)
+	r.kubeSystemUID.Store(&uid)
+	return uid, nil
 }
 
 // reconcileCacheCredentials is the cache-credentials step (ADR-0071 D2/D3/D6).
@@ -350,7 +358,7 @@ func (r *NextAppReconciler) reconcileCacheCredentials(ctx context.Context, app *
 	}
 	cdn := ""
 	if cdnRendersEnv(app) {
-		cdn = cdnTagPrefix(app)
+		cdn = cdnTagPrefix(identity, app)
 	}
 	if err := prov.SetUser(ctx, st.username, redisACLRules(prefix, password, "", cdn)); err != nil {
 		return fail(ReasonCacheProvisionerRefused, "ACL SETUSER was refused: "+redactErr(err))

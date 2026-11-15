@@ -661,7 +661,7 @@ const cases = [
     name: 'M2: the lost user is not re-asserted before the sweep',
     file: 'packages/kn-next-operator/internal/controller/redis_acl_cleanup.go',
     anchor:
-      '\t\t\tif err := reassertForCleanup(ctx, prov, app, keyPrefix, username, appURL); err != nil {',
+      '\t\t\tif err := reassertForCleanup(ctx, prov, app, keyPrefix, username, appURL, identity); err != nil {',
     to: '\t\t\tif err := error(nil); err != nil {',
     pkg: './internal/controller',
     test: 'TestFinalizerReassertsALostUserBeforeTheSweep',

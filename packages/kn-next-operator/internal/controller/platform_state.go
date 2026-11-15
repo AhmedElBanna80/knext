@@ -293,7 +293,9 @@ func (r *NextAppReconciler) decideRollout(ctx context.Context, app *appsv1alpha1
 	if wantSpecHash == appliedSpecHash {
 		return platformGate{}, nil
 	}
-	var live *servingv1.Service
+	// haveLive records that the live Service was already read (it exists), so
+	// the second read below is skipped.
+	haveLive := false
 	if app.Status.Platform == nil {
 		// No platform was in force at the last render, so it used the built-in
 		// values. Its CDN tag prefix is whatever the live Service renders: the
@@ -301,11 +303,11 @@ func (r *NextAppReconciler) decideRollout(ctx context.Context, app *appsv1alpha1
 		// from a platform that was not accepted) is not recorded anywhere else.
 		base := resolveEffective(app, nil)
 		if eff.cdnTagPrefix != "" {
-			l, found, err := r.liveKsvc(ctx, app)
+			live, found, err := r.liveKsvc(ctx, app)
 			if err != nil || !found {
 				return platformGate{}, err
 			}
-			live = l
+			haveLive = true
 			base.cdnTagPrefix = renderedCDNTagPrefix(live)
 		}
 		appliedEffHash = effectiveHash(base)
@@ -316,12 +318,11 @@ func (r *NextAppReconciler) decideRollout(ctx context.Context, app *appsv1alpha1
 	if appTriggered(app) {
 		return platformGate{}, nil
 	}
-	if live == nil {
-		l, found, err := r.liveKsvc(ctx, app)
+	if !haveLive {
+		_, found, err := r.liveKsvc(ctx, app)
 		if err != nil || !found {
 			return platformGate{}, err
 		}
-		live = l
 	}
 
 	key := types.NamespacedName{Namespace: app.Namespace, Name: app.Name}

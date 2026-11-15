@@ -237,6 +237,20 @@ Earlier knext versions offered an optional per-file bytecode pass for the standa
 boundary on every request. Whole-bundle compilation — of the vinext build, and of the standalone
 server on Bun as described above — replaced it.
 
+## Known limitation: `unstable_cache` entries are not shared with Node
+
+Next.js names an `unstable_cache` entry partly by the source text of the function it wraps. On the
+Bun standalone target (`runtime: 'bun'` without `selfContained: true`), each route's chunk is loaded
+from `.next/server` through Bun's transpiler, which prints the function's source with different
+spacing. The same build therefore names the entry differently under Bun than under Node or as a
+self-contained executable.
+
+In practice this only matters when an app moves between those shapes, for example a rollback from
+the Bun standalone target to Node. The first requests after the switch miss the `unstable_cache`
+entries the other shape wrote and fill them again. Nothing is served wrong, and ISR pages are keyed
+by path, so they are shared across every shape. The limitation lifts once a Bun release returns a
+function's exact source text.
+
 ## Known limitation: `turbopackModuleFragments`
 
 Next's experimental `turbopackModuleFragments` flag is not supported on the Bun runtime with a

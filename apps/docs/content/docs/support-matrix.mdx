@@ -18,7 +18,8 @@ too, rather than left implied.
   limits the operator's Secret and ConfigMap writes (see
   [Security](/docs/security#write-policy)), and that API is generally available from 1.30. Before
   1.30 the API server does not serve it, so applying `install.yaml` reports
-  `no matches for kind "ValidatingAdmissionPolicy"` for the two policy objects and the operator
+  `no matches for kind "ValidatingAdmissionPolicy"` (and `"ValidatingAdmissionPolicyBinding"`) for
+  the two policy objects, exits with status 1 after applying the rest, and the operator
   runs without the restriction.
 - The kind-based CI gates, the operator's API tests and the reference OKE cluster all run
   Kubernetes versions above this floor.

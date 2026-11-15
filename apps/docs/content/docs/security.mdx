@@ -554,8 +554,10 @@ the bundle sets, so a renamed install is checked under its own name.
 The policy needs **Kubernetes 1.30 or later**, where `ValidatingAdmissionPolicy` became generally
 available. That is the same server floor as the rest of knext (see the
 [support matrix](/docs/support-matrix#kubernetes)). On an older cluster the API server does not
-serve the kind, so applying `install.yaml` reports `no matches for kind "ValidatingAdmissionPolicy"`
-for these two objects, and the operator would run without the restriction.
+serve the kind. Applying `install.yaml` then reports `no matches for kind "ValidatingAdmissionPolicy"`
+and `no matches for kind "ValidatingAdmissionPolicyBinding"` for these two objects, applies the rest
+of the bundle, and exits with status 1. The operator starts and runs without the restriction, and
+logs `WARNING: the operator write policy is NOT in force` with reason `PolicyMissing`.
 
 <Callout type="info">
 **Honest scope.** Zone functions and their identity tokens are **Beta**. They are available on the **v2** line only; released 1.x has none of this. A zone's calls to its functions are authenticated with a

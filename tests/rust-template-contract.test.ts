@@ -13,7 +13,9 @@
  * connect-rust is pre-1.0: the conformance suite in the workflow runs the
  * upstream conformance server built from the commit of the connectrpc
  * version Cargo.lock pins, so a lockfile bump without a matching conformance
- * checkout reds here (and in the workflow's own step).
+ * checkout reds here (and in the workflow's own step). The same suite then
+ * runs against the template's own stack with only the token check left out
+ * (src/rpc/conformance.rs, never in release), which this file also pins.
  *
  * The workflow half asserts the template image is scanned on every event
  * (SBOM, then Trivy HIGH/CRITICAL exit 1) and that the workflow holds no
@@ -335,6 +337,14 @@ describe('the template workflow scans, gates and holds no credential', () => {
     );
     expect(script).toContain(
       'RUST_LOG=warn "${RUNNER}" --mode server --conf "${HERE}/conformance/config.yaml" \\\n  --known-failing "@${HERE}/conformance/known-failing.txt" -- target/debug/function-stack-server',
+    );
+    // Every crate the release binary links is held to Cargo.lock, and a difference fails.
+    expect(script).toContain(
+      'cd "${HERE}" && cargo tree --locked -e normal --prefix none --format \'{p}\'',
+    );
+    expect(script).toContain('cargo update --quiet -p "${name}@${have}" --precise "${want}"');
+    expect(script).toMatch(
+      /pending="\$\(drifted\)"\nif \[ -n "\$\{pending\}" \]; then\n[^\n]*\n[^\n]*\n  exit 2\n/,
     );
     // The harness serves through the template's stack, not the upstream Server.
     const main = read('conformance/main.rs');

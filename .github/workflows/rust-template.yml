@@ -16,7 +16,11 @@ name: Rust function template
 #                the connectrpc version in templates/rust/Cargo.lock with the
 #                template's protocol stack, against the pinned,
 #                sha256-verified connectconformance runner, every server test
-#                on every protocol.
+#                on every protocol. Then the same suite against the template's
+#                OWN stack (accept loop, timeouts, body bound, layers; only the
+#                token check left out, dev profile only), with every crate the
+#                release binary links held to templates/rust/Cargo.lock and the
+#                deliberate stream-body refusals in conformance/known-failing.txt.
 #   image        contents: read only, every event: build locally -> SBOM (syft,
 #                SPDX) -> Trivy gate (FAIL on HIGH/CRITICAL). The binary is
 #                built with `cargo auditable`, so the scan sees its crates.
@@ -216,7 +220,7 @@ jobs:
         run: cargo audit --deny warnings
 
   conformance:
-    name: connect-rust conformance (the pinned connectrpc, every server test)
+    name: Connect conformance (the pinned connectrpc server, then the function's own stack)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # Builds and runs third-party code (the upstream conformance server), so
@@ -248,7 +252,7 @@ jobs:
       # conformance.sh refuses a checkout that is not the connectrpc version
       # Cargo.lock pins, builds the upstream conformance server with the
       # template's buffa/hyper/h2 versions, and runs every server test.
-      - name: Run every server conformance test (Connect, gRPC, gRPC-Web)
+      - name: Run every server conformance test (Connect, gRPC, gRPC-Web), upstream server then the function's own stack
         run: templates/rust/conformance.sh connect-rust "${HOME}/.cargo/bin/connectconformance"
 
   image:

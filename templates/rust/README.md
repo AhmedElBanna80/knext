@@ -53,6 +53,10 @@ the suite twice:
    the same `assemble` the binary uses (accept loop, timeouts, body bound, layers), without the
    token check, because the runner sends no token.
    - `conformance/config.yaml` lists what a function serves: no TLS, and gzip only.
+   - Every crate the release binary links is held to the version in `Cargo.lock`; the script
+     fails if one differs. Feature unification with the upstream crate adds crates the release
+     binary does not link (connectrpc's axum, TLS and zstd, tracing-subscriber's env filter); the
+     script lists them.
    - `conformance/known-failing.txt` lists the stream cases the whole-body bound refuses on
      purpose. Any other failure, or one of those passing, fails the run.
 

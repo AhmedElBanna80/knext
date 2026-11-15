@@ -81,6 +81,14 @@ const CANARY = {
   replacement: '      return false;',
 };
 
+// The purge queue does not record through the backlog, so its canary is a
+// different cap value (a bound of two), not the B01 row itself.
+const PURGE_CANARY = {
+  subject: 'backlog',
+  anchor: 'export const BACKLOG_MAX_ENTRIES = 1000;',
+  replacement: 'export const BACKLOG_MAX_ENTRIES = 2;',
+};
+
 const provers = SITES.map((site) => ({
   site,
   prover: createGuardProver({ repoRoot: REPO_ROOT, spec: site.spec, subjects: SUBJECTS }),
@@ -93,9 +101,7 @@ declareMutations(SITES.reduce((n, s) => n + s.rows.length, 0));
 for (const { site, prover } of provers) {
   console.log(`\n=== ${site.name}: ${site.spec} ===`);
   prover.baseline();
-  // The purge queue does not record through the backlog, so its canary is the
-  // cap row itself; the replays get the never-records canary.
-  prover.proveCanSeeRed(site.rows.length === 1 ? CAP : CANARY);
+  prover.proveCanSeeRed(site.rows.length === 1 ? PURGE_CANARY : CANARY);
   for (const m of site.rows) {
     prover.run({ ...m, expect: 'red' });
     recordMutation();

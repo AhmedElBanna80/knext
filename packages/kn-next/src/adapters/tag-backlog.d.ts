@@ -12,13 +12,13 @@ export interface TagBacklog {
     readonly max: number;
     readonly collapsed: boolean;
     readonly generation: number;
-    entries(ns: string): Map<string, BacklogValue>;
+    snapshot(ns: string): Array<[string, BacklogValue]>;
+    sizeOf(ns: string): number;
     size(): number;
     pending(): boolean;
-    bump(): number;
-    add(
+    record(
         ns: string,
-        name: string,
+        names: Iterable<string>,
         value?: (
             prev: BacklogValue | undefined,
             generation: number,

@@ -18,30 +18,35 @@ import {
 describe("createTagBacklog", () => {
     it("deduplicates: recording a name again updates it in place", () => {
         const b = createTagBacklog();
-        b.bump();
-        expect(b.add("tags", "a")).toBe(true);
-        b.bump();
-        expect(b.add("tags", "a")).toBe(true);
+        expect(b.record("tags", ["a"])).toBe(true);
+        expect(b.record("tags", ["a"])).toBe(true);
         expect(b.size()).toBe(1);
-        expect(b.entries("tags").get("a")).toBe(2);
+        expect(b.snapshot("tags")).toEqual([["a", 2]]);
+    });
+
+    it("moves the generation once per call, not once per name", () => {
+        const b = createTagBacklog();
+        b.record("tags", ["a", "b", "c"]);
+        expect(b.generation).toBe(1);
+        expect(b.snapshot("tags").map(([, g]) => g)).toEqual([1, 1, 1]);
+        b.record("tags", []);
+        expect(b.generation).toBe(2);
     });
 
     it("passes the previous value and the generation to the value function", () => {
         const b = createTagBacklog();
         const seen: unknown[] = [];
-        b.bump();
-        b.add("tags", "a", (prev, g) => {
+        b.record("tags", ["a"], (prev, g) => {
             seen.push([prev, g]);
-            return { generation: g, n: 1 };
+            return { generation: g };
         });
-        b.bump();
-        b.add("tags", "a", (prev, g) => {
+        b.record("tags", ["a"], (prev, g) => {
             seen.push([prev, g]);
-            return { generation: g, n: 2 };
+            return { generation: g };
         });
         expect(seen).toEqual([
             [undefined, 1],
-            [{ generation: 1, n: 1 }, 2],
+            [{ generation: 1 }, 2],
         ]);
     });
 
@@ -51,17 +56,16 @@ describe("createTagBacklog", () => {
             max: 3,
             onCollapse: (ns) => collapses.push(ns),
         });
-        b.bump();
-        for (const t of ["a", "b", "c"]) expect(b.add("tags", t)).toBe(true);
+        expect(b.record("tags", ["a", "b", "c"])).toBe(true);
         // A name already held is not new: no collapse at the bound.
-        expect(b.add("tags", "a")).toBe(true);
+        expect(b.record("tags", ["a"])).toBe(true);
         expect(b.collapsed).toBe(false);
-        expect(b.add("tags", "d")).toBe(false);
+        expect(b.record("tags", ["d", "e"])).toBe(false);
         expect(b.collapsed).toBe(true);
         expect(b.size()).toBe(0);
         expect(b.pending()).toBe(true);
         // Collapsed: every later record is refused, and the callback does not repeat.
-        expect(b.add("tags", "e")).toBe(false);
+        expect(b.record("tags", ["f"])).toBe(false);
         expect(b.size()).toBe(0);
         expect(collapses).toEqual(["tags"]);
     });
@@ -73,41 +77,51 @@ describe("createTagBacklog", () => {
             max: 2,
             onCollapse: (ns) => collapses.push(ns),
         });
-        b.bump();
-        expect(b.add("tags", "t1")).toBe(true);
-        expect(b.add("keys", "k1")).toBe(true);
-        expect(b.add("keys", "k2")).toBe(false);
+        b.record("tags", ["t1"]);
+        b.record("keys", ["k1"]);
+        expect(b.sizeOf("tags") + b.sizeOf("keys")).toBe(2);
+        expect(b.record("keys", ["k2"])).toBe(false);
         expect(collapses).toEqual(["keys"]);
-        expect(b.entries("tags").size + b.entries("keys").size).toBe(0);
+        expect(b.sizeOf("tags") + b.sizeOf("keys")).toBe(0);
     });
 
     it("refuses an unknown namespace rather than inventing one", () => {
-        expect(() => createTagBacklog().add("keys", "k")).toThrow(
+        expect(() => createTagBacklog().record("keys", ["k"])).toThrow(
             /unknown namespace keys/,
         );
     });
 
-    it("settle removes an entry only when it was not recorded again since", () => {
-        const b = createTagBacklog();
-        const g1 = b.bump();
-        b.add("tags", "a");
-        b.add("tags", "b", (_p, g) => ({ generation: g }));
-        b.bump();
-        b.add("tags", "a"); // recorded again while a replay of g1 was in flight
-        expect(b.settle("tags", "a", g1)).toBe(false);
-        expect(b.entries("tags").has("a")).toBe(true);
-        expect(b.settle("tags", "b", g1)).toBe(true);
-        expect(b.entries("tags").has("b")).toBe(false);
+    it("hands out copies: a snapshot cannot bypass the bound", () => {
+        const b = createTagBacklog({ max: 1 });
+        b.record("tags", ["a"]);
+        const snap = b.snapshot("tags");
+        snap.push(["b", 9]);
+        expect(b.size()).toBe(1);
     });
 
-    it("a sweep clears the collapse only if nothing was recorded during it", () => {
+    it("settle removes an entry only when it was not recorded again since", () => {
+        const b = createTagBacklog();
+        b.record("tags", ["a"]);
+        b.record("tags", ["b"], (_p, g) => ({ generation: g }));
+        const [[, ga], [, gb]] = b.snapshot("tags") as [
+            string,
+            number | { generation: number },
+        ][];
+        b.record("tags", ["a"]); // recorded again while a replay of `a` was in flight
+        expect(b.settle("tags", "a", ga as number)).toBe(false);
+        expect(b.sizeOf("tags")).toBe(2);
+        expect(
+            b.settle("tags", "b", (gb as { generation: number }).generation),
+        ).toBe(true);
+        expect(b.snapshot("tags").map(([n]) => n)).toEqual(["a"]);
+    });
+
+    it("a sweep clears the collapse only if nothing was recorded during it, even into a collapsed backlog", () => {
         const b = createTagBacklog({ max: 1 });
-        b.bump();
-        b.add("tags", "a");
-        b.add("tags", "b");
+        b.record("tags", ["a", "b"]);
         expect(b.collapsed).toBe(true);
         const raced = b.beginSweep();
-        b.bump(); // a record lands mid-sweep
+        b.record("tags", ["c"]); // refused (collapsed), but it still moves the generation
         b.endSweep(raced);
         expect(b.collapsed).toBe(true);
         const clean = b.beginSweep();
@@ -118,13 +132,10 @@ describe("createTagBacklog", () => {
 
     it("dropCollapse and clear", () => {
         const b = createTagBacklog({ max: 1 });
-        b.bump();
-        b.add("tags", "a");
-        b.add("tags", "b");
+        b.record("tags", ["a", "b"]);
         b.dropCollapse();
         expect(b.collapsed).toBe(false);
-        b.bump();
-        b.add("tags", "c");
+        b.record("tags", ["c"]);
         b.clear();
         expect(b.pending()).toBe(false);
         expect(b.generation).toBe(0);
@@ -153,7 +164,8 @@ function walk(dir: string): string[] {
 
 // A cap of this shape: a constant whose name says it bounds a backlog of tags,
 // pending work or entries, set to a number.
-const CAP = /\bconst\s+(\w*(?:MAX_TAGS|MAX_PENDING|MAX_ENTRIES)\w*)\s*=\s*\d/g;
+const CAP =
+    /\b(?:const|let|var)\s+(\w*(?:MAX_TAGS|MAX_PENDING|MAX_ENTRIES|BACKLOG_MAX)\w*)\s*=\s*\d/g;
 
 describe("the cache runtime has one bounded tag backlog", () => {
     const files = walk(ADAPTERS).map((p) => ({

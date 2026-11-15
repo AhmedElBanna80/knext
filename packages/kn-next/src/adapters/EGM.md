@@ -97,9 +97,9 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `collapseSweepAllowed`, `collapseRefusedMessage`, `escapeGlob`,
   `PRUNE_STAMPS_SCRIPT`, `REPLAY_STAMPS_SCRIPT` and `resetUseCacheTagReplay`.
 - `tag-backlog.js` exports `createTagBacklog({namespaces, max, onCollapse})` and
-  `BACKLOG_MAX_ENTRIES` (1000). The backlog's methods are `entries(ns)`,
-  `size`, `pending`, `bump`, `add(ns, name, value?)`, `settle(ns, name,
-  recordedAt)`, `beginSweep`, `endSweep(startedAt)`, `dropCollapse` and
+  `BACKLOG_MAX_ENTRIES` (1000). The backlog's methods are `record(ns, names,
+  value?)`, `snapshot(ns)` (a copy), `sizeOf(ns)`, `size`, `pending`,
+  `settle(ns, name, recordedAt)`, `beginSweep`, `endSweep(startedAt)`, `dropCollapse` and
   `clear`, plus the read-only `max`, `collapsed` and `generation`. The ISR
   invalidation replay (one backlog per process, namespaces `tags` and `keys`)
   and the `'use cache'` tag replay (one per core object) both use it. The CDN
@@ -458,8 +458,8 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `tag-backlog.js` is the only bounded tag backlog under `adapters/`: both
   replays use it, the CDN purge queue takes its cap, and
   `tag-backlog.test.ts` fails if another `*MAX_TAGS`, `*MAX_PENDING` or
-  `*MAX_ENTRIES` constant is set to a number here. A record call bumps the
-  generation once. `add` refuses while collapsed. A replay removes an entry
+  `*MAX_ENTRIES` constant is set to a number here. `record` moves the
+  generation once per call, even while collapsed, and refuses while collapsed. A replay removes an entry
   only through `settle`, which keeps one recorded again since. A collapse
   sweep clears the collapse only through `endSweep`, which keeps it if a
   record landed during the sweep.

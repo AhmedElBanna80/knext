@@ -91,8 +91,8 @@ const REPLAY = [
     id: 'R05',
     subject: 'backlog',
     claim: 'the backlog bound is off by one (1001 tags kept)',
-    anchor: '      if (prev === undefined && size() >= max) {',
-    replacement: '      if (prev === undefined && size() > max) {',
+    anchor: '        if (prev === undefined && size() >= max) {',
+    replacement: '        if (prev === undefined && size() > max) {',
   },
   {
     id: 'R06',

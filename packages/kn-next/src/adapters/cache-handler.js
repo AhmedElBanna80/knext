@@ -1538,8 +1538,6 @@ const replayBacklog = createTagBacklog({
     );
   },
 });
-const replayTags = replayBacklog.entries('tags');
-const replayKeys = replayBacklog.entries('keys');
 let replayRun = null;
 let replayTimer = null;
 
@@ -1563,10 +1561,10 @@ function reportReplayLostAtExit() {
   if (!replayPending()) return;
   const what = replayBacklog.collapsed
     ? `a collapsed backlog (over ${replayBacklog.max} tags)`
-    : `${replayTags.size} tag invalidation(s) and ${replayKeys.size} delete(s)`;
+    : `${replayBacklog.sizeOf('tags')} tag invalidation(s) and ${replayBacklog.sizeOf('keys')} delete(s)`;
   // Deletes hold back no edge purge; tags (and a collapse) do.
   const purge =
-    replayBacklog.collapsed || replayTags.size > 0 ? ', and the edge purge they held back does not run' : '';
+    replayBacklog.collapsed || replayBacklog.sizeOf('tags') > 0 ? ', and the edge purge they held back does not run' : '';
   console.error(
     `[CacheHandler] exiting with ${what} not yet replayed to Redis: ` +
       "those ISR entries stay stale until their Redis TTL (the route's `expire` when set, " +
@@ -1587,10 +1585,7 @@ function recordSkippedInvalidation(tags) {
   const list = tags.filter((tag) => typeof tag === 'string' && tag.length > 0);
   if (!useRedis || list.length === 0) return;
   armReplayExitReport();
-  replayBacklog.bump();
-  for (const tag of list) {
-    if (!replayBacklog.add('tags', tag)) break;
-  }
+  replayBacklog.record('tags', list);
   // With the breaker open this finds no client and only sets the probe.
   startInvalidationReplay();
 }
@@ -1599,8 +1594,7 @@ function recordSkippedInvalidation(tags) {
 function recordSkippedDelete(key) {
   if (!useRedis || typeof key !== 'string') return;
   armReplayExitReport();
-  replayBacklog.bump();
-  replayBacklog.add('keys', key);
+  replayBacklog.record('keys', [key]);
   startInvalidationReplay();
 }
 
@@ -1646,14 +1640,14 @@ async function runInvalidationReplay() {
     await replayCollapsedBacklog(replayClient);
     return;
   }
-  for (const [key, generation] of [...replayKeys]) {
+  for (const [key, generation] of replayBacklog.snapshot('keys')) {
     await redisCall(() => redisCommand(replayClient, 'DEL', [cacheKey(key)]), replayClient);
     replayBacklog.settle('keys', key, generation);
     logCacheEvent('DELETE', 'redis', key, { details: 'Replayed after Redis recovered' });
   }
   const replayed = [];
   try {
-    for (const [tag, generation] of [...replayTags]) {
+    for (const [tag, generation] of replayBacklog.snapshot('tags')) {
       const count = await invalidateTagInRedis(replayClient, tag);
       replayBacklog.settle('tags', tag, generation);
       replayed.push(tag);

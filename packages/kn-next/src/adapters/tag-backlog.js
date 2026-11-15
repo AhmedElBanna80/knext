@@ -68,8 +68,14 @@ export function createTagBacklog({ namespaces = ['tags'], max = BACKLOG_MAX_ENTR
 
   return {
     max,
-    /** The live entries of one namespace (name -> value). Read-only by contract. */
-    entries: list,
+    /** A copy of one namespace's entries, as [name, value] pairs in record order. */
+    snapshot(ns) {
+      return [...list(ns)];
+    },
+    /** Entries in one namespace. */
+    sizeOf(ns) {
+      return list(ns).size;
+    },
     /** Entries across every namespace. */
     size,
     get collapsed() {
@@ -82,27 +88,27 @@ export function createTagBacklog({ namespaces = ['tags'], max = BACKLOG_MAX_ENTR
     pending() {
       return collapsed || size() > 0;
     },
-    /** Start one record call: returns the generation its entries are recorded at. */
-    bump() {
-      generation += 1;
-      return generation;
-    },
     /**
-     * Record one name at the current generation. `value(prev, generation)` gives
-     * what is stored (default: the generation itself). Returns false when the
-     * backlog is, or just became, collapsed, so a caller recording a list stops.
+     * Record names that did not reach Redis, as one call: the generation moves on
+     * ONCE (even while collapsed, so a sweep in flight keeps the collapse), then
+     * each name is stored at it. `value(prev, generation)` gives what is stored
+     * (default: the generation itself). The first NEW name past the bound
+     * collapses the backlog and stops. Returns false when it is collapsed.
      */
-    add(ns, name, value) {
+    record(ns, names, value) {
+      generation += 1;
       if (collapsed) return false;
       const m = list(ns);
-      const prev = m.get(name);
-      if (prev === undefined && size() >= max) {
-        clearEntries();
-        collapsed = true;
-        onCollapse?.(ns);
-        return false;
+      for (const name of names) {
+        const prev = m.get(name);
+        if (prev === undefined && size() >= max) {
+          clearEntries();
+          collapsed = true;
+          onCollapse?.(ns);
+          return false;
+        }
+        m.set(name, value ? value(prev, generation) : generation);
       }
-      m.set(name, value ? value(prev, generation) : generation);
       return true;
     },
     /**

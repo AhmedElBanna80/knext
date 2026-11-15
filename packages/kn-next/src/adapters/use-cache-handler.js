@@ -560,10 +560,7 @@ function recordDroppedTags(core, list, durations) {
     replay.exitArmed = true;
     onProcessExit(() => reportTagReplayLostAtExit(replay));
   }
-  replay.backlog.bump();
-  for (const tag of list) {
-    if (!replay.backlog.add('tags', tag, (prev, generation) => mergeStamp(prev, durations, generation))) break;
-  }
+  replay.backlog.record('tags', list, (prev, generation) => mergeStamp(prev, durations, generation));
   // With the breaker open this finds no client and only sets the probe.
   startTagReplay(core);
 }
@@ -612,7 +609,7 @@ async function runTagReplay(core) {
     await replayCollapsedTags(core, client);
     return;
   }
-  const pending = [...replay.backlog.entries('tags')];
+  const pending = replay.backlog.snapshot('tags');
   for (let i = 0; i < pending.length; i += REPLAY_BATCH) {
     const batch = pending.slice(i, i + REPLAY_BATCH);
     await writeReplayBatch(core, client, batch.flatMap(([tag, record]) => replayArgs(tag, record)));

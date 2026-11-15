@@ -197,7 +197,8 @@ const MUTATIONS = [
     claim: 'the read timeout is lifted at the wiring (a stalled body is never cut off)',
     subject: 'server',
     anchor: '        .layer(body::BoundedBodyLayer::new(max_body, cfg.timeouts.read))\n',
-    replacement: '        .layer(body::BoundedBodyLayer::new(max_body, Duration::from_secs(86_400)))\n',
+    replacement:
+      '        .layer(body::BoundedBodyLayer::new(max_body, Duration::from_secs(86_400)))\n',
   },
   {
     id: 'L4',

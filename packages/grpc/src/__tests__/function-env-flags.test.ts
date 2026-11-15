@@ -71,12 +71,27 @@ describe('parseFunctionEnvFlags: the CRD shapes', () => {
     ['--env-from with no :', { envFrom: ['hunter2'] }],
     ['--env-from with an unknown kind', { envFrom: ['vault:hunter2'] }],
     ['--env-from with an invalid name', { envFrom: ['secret:hunter2_x'] }],
-    ['--env-secret with a URL after the /', { envSecret: ['X=postgres://app:hunter2@db/key'] }],
+    [
+      '--env-secret with a URL where the key goes',
+      { envSecret: ['X=postgres://app:hunter2@db/key'] },
+    ],
     ['--env-secret with an invalid Secret name', { envSecret: ['X=hunter2_x/key'] }],
     ['--env-secret with an invalid env name', { envSecret: ['hunter2-x=s/key'] }],
     ['--env with an invalid name', { env: ['hunter2-x=v'] }],
   ])('never repeats a malformed %s argument (it may be a bare secret)', (_label, flags) => {
     expect(() => parseFunctionEnvFlags(flags)).toThrow(/not repeated here/);
+    try {
+      parseFunctionEnvFlags(flags);
+    } catch (e) {
+      expect((e as Error).message).not.toContain('hunter2');
+    }
+  });
+
+  it.each([
+    ['a secret-looking name', { env: ['DB_PASSWORD=hunter2'] }],
+    ['a URL with a password', { env: ['DATABASE_URL=postgres://app:hunter2@db:5432/x'] }],
+  ])('refuses %s without repeating the value (it names only the variable)', (_label, flags) => {
+    expect(() => parseFunctionEnvFlags(flags)).toThrow(/^--env: (DB_PASSWORD|DATABASE_URL) /);
     try {
       parseFunctionEnvFlags(flags);
     } catch (e) {

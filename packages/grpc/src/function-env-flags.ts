@@ -101,7 +101,9 @@ const RESERVED_MOUNT = '/var/run/knext';
 
 /**
  * Appended to a refusal instead of the offending fragment: a malformed
- * `--env*` argument may hold a secret, so no part of it is echoed.
+ * `--env*` argument may hold a secret, so no unvalidated part of it is echoed.
+ * A refusal may name the variable once its name has passed `ENV_NAME`, but
+ * never repeats a value.
  */
 const NOT_REPEATED = ' (the value is not repeated here, in case it holds a secret)';
 

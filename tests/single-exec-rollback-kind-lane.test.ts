@@ -148,15 +148,20 @@ describe('the script', () => {
     // these, exactly: read it, require it non-empty, pass it on, record it, and
     // print it. A comparison that fails or exits, on one line or split across
     // several, would add a line here.
+    // Any code line naming the word (so `${#stamp}`, `unset stamp` and the
+    // `read` that fills it are covered too), not only `$stamp`-shaped uses.
     const stampLines = script
       .split('\n')
-      .filter((l) => /\$stamp|\$\{stamp|STAMP|stamp=/.test(l))
+      .filter((l) => /\bstamp\b|STAMP/.test(l) && !l.trimStart().startsWith('#'))
       .map((l) => l.trim());
     expect(stampLines).toEqual([
+      'local code body=/tmp/rb-body mark stamp tmark',
+      'for path in /api/health /build-mark /rb-stamp /tagged; do',
       `stamp="$(sed -n 's/.*<p id="stamp">\\([^<]*\\)<\\/p>.*/\\1/p' "\${body}-rb-stamp" | head -n1)"`,
       '[ -n "$stamp" ] || fail "$1: /rb-stamp carries no stamp: $(head -c 300 "${body}-rb-stamp")"',
       'echo "$mark $stamp $tmark"',
       'declare -A REV MARK STAMP',
+      'read -r mark stamp tmark <<<"$out"',
       'STAMP[$shape]="$stamp"',
       'say "shape ${shape}: revision ${rev}, build ${mark}, /tagged from ${tmark}, data-cache stamp ${stamp}"',
       'if [ "${STAMP[sc]}" = "${STAMP[disk]}" ] && [ "${STAMP[disk]}" = "${STAMP[node]}" ]; then',

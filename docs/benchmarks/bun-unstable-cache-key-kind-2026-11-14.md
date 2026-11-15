@@ -2,7 +2,13 @@
 
 Measurement record behind the "`unstable_cache` entries are not shared with Node" limitation on the
 Bun runtime docs page. Local kind cluster, next 16.4.3, one fixture app (`cdn-kind-app`, route
-`/rb-stamp`), three artifact shapes deployed in turn against one shared Redis.
+`/rb-stamp`), three artifact shapes deployed in turn against one shared Redis. All three are the default
+(standalone, not vinext) build target:
+
+- `sc`: `runtime: 'bun'`, `selfContained: true`: the standalone server compiled into one executable
+  that embeds `.next/server`; the operator renders no container command.
+- `disk`: `runtime: 'bun'`, `selfContained: false`: the standalone tree, run as `bun run server.js`.
+- `node`: `runtime: 'node'`: the image default command.
 
 ## 1. Redis keys per shape
 
@@ -30,7 +36,17 @@ Loading the same minified chunk line and printing the callback:
 - Bun returns re-printed text (`async () => …`, spaces added by the runtime transpiler).
 - With a `// @bun` first line (which skips Bun's transform) Bun returns the exact text.
 
+## 4. ISR pages are shared
+
+The ISR page `/tagged` carries the mark of the build that stored it. After each shape switch the
+new shape served the HTML the previous shape had stored (the mark did not change until
+revalidation), so ISR entries, keyed by path, were read across all three shapes. This is why the
+lane uses a per-request route, not the ISR page, as its serving signal.
+
 ## What was not measured
+
+The repro in section 3 loads the chunk with `bun` directly rather than inside the `disk` image; it
+is the same loader `bun run server.js` uses.
 
 The refill cost after a shape switch was not timed; the docs state only that the entries are
 computed and stored again under the new key, which follows from a key miss.

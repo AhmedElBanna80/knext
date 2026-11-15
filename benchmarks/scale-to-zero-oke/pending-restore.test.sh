@@ -86,6 +86,42 @@ rm -f "$PF"
 
 echo "== pending-restore.test.sh =="
 
+# ── Test 0: the file never exists half-written ─────────────────────────────
+# The file is the only record of the originals once a run is SIGKILLed, so it
+# must appear complete or not at all. A `date` shim slows the capture
+# timestamp (the one command run while the file is written) so the window a
+# non-atomic write leaves open is seconds wide, not microseconds: the first
+# moment the file exists, it must already hold the originals.
+echo
+echo "[0] the pending-restore file is never visible half-written"
+T0="$(mktemp -d)"; make_stub "$T0"
+echo 30 > "${T0}/patch_hang_s"
+mkdir -p "${T0}/slowbin"
+cat > "${T0}/slowbin/date" <<'SHIM'
+#!/usr/bin/env bash
+for a in "$@"; do [ "$a" = '+%Y-%m-%dT%H:%M:%SZ' ] && sleep 3; done
+exec /bin/date "$@"
+SHIM
+chmod +x "${T0}/slowbin/date"
+PATH="${T0}/slowbin:${PATH}" DRY_RUN=1 DRY_RUN_EXERCISE_KC=1 DRY_RUN_EXERCISE_PENDING=1 KUBECTL_BIN="${T0}/kubectl" \
+OUT="${T0}/results.txt" SCALE_DOWN_TIMEOUT=0 APPLY_SETTLE_SECONDS=0 \
+POD_SAMPLE_BUDGET=1 SCHEDULE_CHECK_TIMEOUT=0 K6_JOB_TIMEOUT=5 \
+  bash "$RUN_SH" --context "$CTX" --namespace "$NS" --service "$SVC" \
+    --phases cold --cold-samples 1 > "${T0}/out.txt" 2>&1 &
+KILL0=$!
+SEEN=""
+for _ in $(seq 1 600); do
+  if [ -f "$PF" ]; then SEEN="$(cat "$PF" 2>/dev/null)"; break; fi
+  sleep 0.05
+done
+kill -9 "$KILL0" 2>/dev/null; wait "$KILL0" 2>/dev/null
+if printf '%s' "$SEEN" | grep -q '"maxScale": "17"' && printf '%s' "$SEEN" | grep -q '"containerConcurrency": "23"'; then
+  ok "the first time the file exists it already holds the originals"
+else
+  nope "the file existed before it held the originals (saw: $(printf '%s' "$SEEN" | head -c 80))"
+fi
+rm -f "$PF" "$PF".tmp.* 2>/dev/null
+
 # ── Test 1: SIGKILL leaves the file behind ──────────────────────────────────
 # The whole point. A trap cannot run on SIGKILL, so this is proven by actually
 # killing a run — reading the source would prove nothing about signal behaviour.

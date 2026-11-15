@@ -24,11 +24,13 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	servingv1 "knative.dev/serving/pkg/apis/serving/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	platformv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/platform/v1alpha1"
 	appsv1alpha1 "github.com/AhmedElBanna80/knext/packages/kn-next-operator/api/v1alpha1"
@@ -75,71 +77,65 @@ func TestEffectiveHash_TagPrefixMovesIt(t *testing.T) {
 	}
 }
 
-func TestDecideRollout_APlatformAppearingDoesNotQueueAnUnchangedCDNApp(t *testing.T) {
-	// A CDN app rendered before any platform existed (no status.platform). The
-	// first KnextPlatform carries no value this app would render differently,
-	// so its pass must go now. If the hash fallback ignored the prefix, the app
-	// would look changed and the gate would go on to read the live Service: the
-	// reconciler here has no client, so that read panics.
+// cdnRolloutCase is a CDN app rendered before any platform existed (no
+// status.platform), its live Service rendering prefix `rendered`, against a
+// platform that renders `want`. The limiter's slot for this minute is already
+// taken, so any pass that reaches it is queued.
+func cdnRolloutCase(t *testing.T, rendered, want string, clusterID string) platformGate {
+	t.Helper()
 	app := &appsv1alpha1.NextApp{Spec: appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}}}
 	app.Name, app.Namespace, app.Generation = "web", "default", 3
 	apimeta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
 		Type: ConditionReconciling, Status: metav1.ConditionFalse, Reason: reasonReconcileOK, ObservedGeneration: 3,
 	})
-	snap := platformSnapshot{crdPresent: true, obj: &platformv1alpha1.KnextPlatform{}}
-	snap.obj.Name = "default"
-	eff := resolveEffective(app, snap.active())
-	// The platform sets no clusterId: the prefix is still the kube-system uid's.
-	eff.cdnTagPrefix = cdnTagPrefix("ks-uid", app)
-
-	r := &NextAppReconciler{}
-	uid := "ks-uid"
-	r.kubeSystemUID.Store(&uid)
-	defer func() {
-		if p := recover(); p != nil {
-			t.Fatalf("the unchanged CDN app looked changed and the gate read the live Service: %v", p)
-		}
-	}()
-	gate, err := r.decideRollout(context.Background(), app, snap, eff)
-	if err != nil || gate.hold != holdNone {
-		t.Fatalf("want go now, got hold %v err %v", gate.hold, err)
+	spec := platformv1alpha1.KnextPlatformSpec{Rollout: &platformv1alpha1.PlatformRollout{MaxAppsPerMinute: 1}}
+	if clusterID != "" {
+		spec.Cache = &platformv1alpha1.PlatformCache{ClusterID: clusterID}
 	}
-}
-
-func TestDecideRollout_APlatformSettingClusterIDPacesTheCDNRerender(t *testing.T) {
-	// The same app, but the new platform sets clusterId: the prefix moves, so
-	// the re-render must wait for its slot behind the rollout limiter.
-	app := &appsv1alpha1.NextApp{Spec: appsv1alpha1.NextAppSpec{CDN: &appsv1alpha1.CDNSpec{Provider: "cloudflare"}}}
-	app.Name, app.Namespace, app.Generation = "web", "default", 3
-	apimeta.SetStatusCondition(&app.Status.Conditions, metav1.Condition{
-		Type: ConditionReconciling, Status: metav1.ConditionFalse, Reason: reasonReconcileOK, ObservedGeneration: 3,
-	})
-	snap := platformSnapshot{crdPresent: true, obj: &platformv1alpha1.KnextPlatform{
-		Spec: platformv1alpha1.KnextPlatformSpec{
-			Cache:   &platformv1alpha1.PlatformCache{ClusterID: "prod-eu"},
-			Rollout: &platformv1alpha1.PlatformRollout{MaxAppsPerMinute: 1},
-		},
-	}}
+	snap := platformSnapshot{crdPresent: true, obj: &platformv1alpha1.KnextPlatform{Spec: spec}}
 	snap.obj.Name = "default"
 	eff := resolveEffective(app, snap.active())
-	eff.cdnTagPrefix = cdnTagPrefix("prod-eu", app)
+	eff.cdnTagPrefix = want
 
 	live := &servingv1.Service{}
 	live.Name, live.Namespace = app.Name, app.Namespace
+	live.Spec.Template.Spec.Containers = []corev1.Container{{
+		Name: "user-container",
+		Env:  []corev1.EnvVar{{Name: lcKNEXTCDNTAGPREFIX, Value: rendered}},
+	}}
 	c := fake.NewClientBuilder().WithScheme(goldenTestScheme(t, false)).WithObjects(live).Build()
 	now := time.Unix(1_800_000_000, 0)
 	r := &NextAppReconciler{Client: c, Clock: func() time.Time { return now }}
-	uid := "ks-uid"
-	r.kubeSystemUID.Store(&uid)
-	// Another app took this minute's slot.
 	r.rollout.reserve(types.NamespacedName{Namespace: "default", Name: "other"}, now, 1)
 
 	gate, err := r.decideRollout(context.Background(), app, snap, eff)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gate.hold != holdRolloutPending {
+	return gate
+}
+
+func TestDecideRollout_APlatformAppearingDoesNotQueueAnUnchangedCDNApp(t *testing.T) {
+	// No clusterId: the prefix the app renders is the one it will render. Go now.
+	p := "1a2b3c4d5e6f"
+	if gate := cdnRolloutCase(t, p, p, ""); gate.hold != holdNone {
+		t.Fatalf("an unchanged CDN app was queued behind the limiter: hold %v", gate.hold)
+	}
+}
+
+func TestDecideRollout_APlatformSettingClusterIDPacesTheCDNRerender(t *testing.T) {
+	// The new platform sets clusterId: the prefix moves, so the re-render waits.
+	if gate := cdnRolloutCase(t, "1a2b3c4d5e6f", "6f5e4d3c2b1a", "prod-eu"); gate.hold != holdRolloutPending {
 		t.Fatalf("a clusterId that moves the prefix must be paced, got hold %v", gate.hold)
+	}
+}
+
+func TestDecideRollout_APlatformRemovingAnUnacceptedClusterIDIsPaced(t *testing.T) {
+	// The app last rendered a prefix from an unaccepted platform's clusterId
+	// (status.platform stays nil then). Once a platform without it is accepted
+	// the prefix moves back: the baseline is the live render, so this is paced.
+	if gate := cdnRolloutCase(t, "aaaaaaaaaaaa", "bbbbbbbbbbbb", ""); gate.hold != holdRolloutPending {
+		t.Fatalf("a prefix move from an unaccepted platform's clusterId must be paced, got hold %v", gate.hold)
 	}
 }
 
@@ -157,5 +153,24 @@ func TestPlatformRollout_AnIdentityHeldAppIsNeitherHeldNorPending(t *testing.T) 
 	apimeta.RemoveStatusCondition(&app.Status.Conditions, ConditionCDNAdvisory)
 	if isIdentityHeld(app) {
 		t.Fatal("no advisory, no identity hold")
+	}
+}
+
+func TestPlatformWatch_FiresWhenAnAppEntersOrLeavesTheIdentityHold(t *testing.T) {
+	plain := &appsv1alpha1.NextApp{}
+	held := plain.DeepCopy()
+	apimeta.SetStatusCondition(&held.Status.Conditions, metav1.Condition{
+		Type: ConditionCDNAdvisory, Status: metav1.ConditionTrue, Reason: ReasonClusterIdentityUnavailable,
+	})
+	for _, tc := range []struct {
+		name     string
+		old, new *appsv1alpha1.NextApp
+	}{{"enters", plain, held}, {"leaves", held, plain}} {
+		if !platformRelevantNextAppChange.Update(event.UpdateEvent{ObjectOld: tc.old, ObjectNew: tc.new}) {
+			t.Errorf("an app that %s the identity hold changes the platform's counts; the watch must fire", tc.name)
+		}
+	}
+	if platformRelevantNextAppChange.Update(event.UpdateEvent{ObjectOld: held, ObjectNew: held.DeepCopy()}) {
+		t.Error("no change, no event")
 	}
 }

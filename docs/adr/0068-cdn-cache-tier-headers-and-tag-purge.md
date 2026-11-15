@@ -919,9 +919,10 @@ the live Knative Service is left as it is, `CDNAdvisory` reports `ClusterIdentit
 Ready is held False for an app change that was not applied, and the verdict requeues in 30 s. The operator already holds `get` on Namespaces for the ADR-0071
 identity, so the read needs no new permission. The platform's rollout counts skip an identity-held
 app (it is neither applied, pending nor platform-held); the held-apps gauge reports it. With no
-`status.platform`, the rollout gate compares against the prefix of the `kube-system` uid, which is
-what an app rendered under no platform used: a platform that appears without `clusterId` leaves CDN
-apps alone, and one that sets `clusterId` paces their re-render.
+`status.platform`, the rollout gate compares against the prefix the live Knative Service renders
+(the identity behind it is not recorded anywhere else: the `kube-system` uid, or an unaccepted
+platform's `clusterId`). A platform that appears and leaves the prefix alone does not queue a CDN
+app; one that moves it paces the re-render.
 
 **Consequences.**
 - The default Redis key prefix and the ACL username keep the app hash `sha256("<namespace>/<name>")`.

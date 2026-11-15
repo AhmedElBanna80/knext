@@ -202,7 +202,8 @@ func nextAppToPlatformRequests(context.Context, client.Object) []reconcile.Reque
 // platformRelevantNextAppChange fires only when something the platform status is
 // computed from moved: the app appeared or went away, its status.platform
 // changed, its PlatformDefaultsApplied condition changed, or it entered/left the
-// set of apps that can receive the configuration at all. Every other NextApp
+// set of apps that can receive the configuration at all (InvalidSpec, the
+// cluster-identity hold, deletion). Every other NextApp
 // status write (URL, traffic, ...) would otherwise re-run a list over every app.
 var platformRelevantNextAppChange = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
@@ -222,6 +223,7 @@ var platformRelevantNextAppChange = predicate.Funcs{
 		// An app entering or leaving InvalidSpec, or starting to delete, changes
 		// whether it is counted at all.
 		return isInvalidSpec(oldApp) != isInvalidSpec(newApp) ||
+			isIdentityHeld(oldApp) != isIdentityHeld(newApp) ||
 			oldApp.DeletionTimestamp.IsZero() != newApp.DeletionTimestamp.IsZero()
 	},
 }

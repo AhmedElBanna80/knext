@@ -22,15 +22,25 @@
  * a `requireEsm` argument so the target gate cannot be silently skipped.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+    CONFIG_FACTS_OUT_ENV,
+    KNEXT_BUILDER_ENV,
+    type NextConfigFacts,
+    readNextConfigFacts,
+    refusalFor,
+} from "../adapters/next-config-facts.js";
 import { KNEXT_RUNTIME_ENV } from "../adapters/runtime-env";
+import { packageRoot } from "./create";
 import { runQuiet } from "./exec";
 import { warnOnVulnerableNext } from "./next-advisory-warning";
 import { UsageError } from "./shared";
 import {
     assertDefaultDistDir,
     assertNotStaticExport,
+    assertNotStaticExportFromFacts,
     assertVinextNotStaticExport,
 } from "./static-export-guard";
 import {
@@ -119,6 +129,42 @@ export interface RunProjectBuildOptions {
      * Injectable for tests.
      */
     readonly warn?: (line: string) => void;
+    /**
+     * The facts-only adapter the CLI points `NEXT_ADAPTER_PATH` at (#2250).
+     * Defaults to the one shipped in this package; `null` injects none.
+     * Injectable for tests.
+     */
+    readonly factsAdapterPath?: string | null;
+}
+
+/**
+ * The shipped facts-only adapter, resolved from the PACKAGE ROOT (tsup may put
+ * this module in a chunk at any depth; see `compileScriptPath`). The built file
+ * first, then the source file (a source checkout under `bun test`).
+ */
+export function factsAdapterPath(): string | null {
+    const root = packageRoot();
+    for (const p of [
+        join(root, "dist", "adapters", "next-config-facts.js"),
+        join(root, "src", "adapters", "next-config-facts.js"),
+    ]) {
+        if (existsSync(p)) return p;
+    }
+    return null;
+}
+
+const FACTS_FALLBACK_WARNING =
+    "warning: knext could not read your resolved Next.js config from this build (the app's build script does not run `next build`, or the app uses its own Next adapter), so it checked the next.config source text instead.";
+
+/** Set `name` for the build and hand back a restore for afterwards. */
+function setEnv(name: string, value: string): () => void {
+    const had = Object.hasOwn(process.env, name);
+    const prev = process.env[name];
+    process.env[name] = value;
+    return () => {
+        if (had) process.env[name] = prev;
+        else delete process.env[name];
+    };
 }
 
 /**
@@ -156,22 +202,80 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
         }
     }
 
-    // Bun cannot load the chunks `turbopackModuleFragments` makes Turbopack
-    // emit (#2225). Here, not in each caller, so build, deploy and preview all
-    // refuse before any build work.
+    process.env[KNEXT_RUNTIME_ENV] = opts.runtimeId;
+
+    if (opts.requireEsm) {
+        // vinext builds with vite and never runs a Next adapter or reads
+        // Next's distDir; its static-export check ran above.
+        runBuild(run);
+        assertNotStaticExport(cwd);
+        return;
+    }
+
+    // #2250: a Next build decides its refusals (a custom distDir, and
+    // turbopackModuleFragments on Bun + Turbopack) from the config Next
+    // RESOLVED, recorded by a knext adapter's `modifyConfig` at the start of
+    // the build, never from the next.config source text. The adapter refuses
+    // there, before compilation. An app with no `adapterPath` gets the
+    // facts-only adapter through NEXT_ADAPTER_PATH (its own adapterPath wins).
+    const factsDir = mkdtempSync(join(tmpdir(), "knext-config-facts-"));
+    const factsPath = join(factsDir, "facts.json");
+    const restores = [
+        setEnv(CONFIG_FACTS_OUT_ENV, factsPath),
+        setEnv(KNEXT_BUILDER_ENV, opts.builderId),
+    ];
+    const adapter =
+        opts.factsAdapterPath === undefined
+            ? factsAdapterPath()
+            : opts.factsAdapterPath;
+    if (adapter && !process.env.NEXT_ADAPTER_PATH) {
+        restores.push(setEnv("NEXT_ADAPTER_PATH", adapter));
+    }
+
+    let facts: NextConfigFacts | undefined;
+    try {
+        try {
+            runBuild(run);
+        } catch (err) {
+            // A refusal from the adapter fails `next build`; Next has already
+            // printed it, so say it once more as knext's own usage error.
+            const refused = readNextConfigFacts(factsPath);
+            const refusal =
+                refused?.refused &&
+                refusalFor(refused, {
+                    runtime: opts.runtimeId,
+                    builder: opts.builderId,
+                });
+            if (refusal) throw new UsageError(refusal.message);
+            throw err;
+        }
+        facts = readNextConfigFacts(factsPath);
+    } finally {
+        for (const restore of restores.reverse()) restore();
+        rmSync(factsDir, { recursive: true, force: true });
+    }
+
+    if (facts) {
+        assertNotStaticExportFromFacts(cwd, facts);
+        return;
+    }
+
+    // No adapter recorded anything. Keep the earlier source-text checks for
+    // this build rather than pass it unchecked, and say so.
+    (opts.warn ?? ((line) => process.stderr.write(`${line}\n`)))(
+        FACTS_FALLBACK_WARNING,
+    );
     assertNoBunTurbopackFragments({
         runtime: opts.runtimeId,
         builder: opts.builderId,
         readNextConfig: () => readNextConfigStrict(cwd),
     });
+    assertDefaultDistDir(cwd);
+    assertNotStaticExport(cwd);
+}
 
-    // A Next build into a custom distDir is not supported yet (#2251): refuse
-    // before any build work rather than produce a wrong artifact later. The
-    // vinext target builds with vite and never reads Next's distDir.
-    if (!opts.requireEsm) assertDefaultDistDir(cwd);
-
-    process.env[KNEXT_RUNTIME_ENV] = opts.runtimeId;
-
+/** `npm run build`, with the deps-not-installed failure (127) translated. */
+function runBuild(run: (argv: readonly string[]) => void): void {
     try {
         run(["npm", "run", "build"]);
     } catch (err) {
@@ -184,6 +288,4 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
         }
         throw err;
     }
-
-    assertNotStaticExport(cwd);
 }

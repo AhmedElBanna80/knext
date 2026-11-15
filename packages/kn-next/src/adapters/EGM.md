@@ -27,6 +27,10 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 
 - `./adapter` resolves to `next-adapter.ts:default`, the `NextAdapter` named
   `knext-adapter`. It provides `modifyConfig` and `onBuildComplete`.
+- `./internal/next-config-facts` resolves to `next-config-facts.js:default`, the
+  facts-only `NextAdapter` named `knext-config-facts`. Its `modifyConfig` records
+  the resolved config facts (below) and returns the config unchanged. It has no
+  `onBuildComplete`. The CLI points `NEXT_ADAPTER_PATH` at it.
 - `./adapters/otel-config` resolves to `otel-config.ts:resolveOtelOptions`.
 - `./adapters/tracing` is `tracing.ts`. It exports `TRACER_NAME`,
   `COLD_START_SPAN_NAME`, `DB_WAKE_SPAN_NAME`, `CORRELATION_ATTRIBUTE`,
@@ -163,6 +167,13 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `drainDbPools` and `registerDbPoolDrain`.
 - `env.ts` exports `buildChildEnv` and `deriveBunTranspilerCachePath`.
   `runtime-env.ts` exports `KNEXT_RUNTIME_ENV = "KNEXT_RUNTIME"`.
+- `next-config-facts.js` exports `recordNextConfigFacts(config, {phase}, env?)`,
+  `readNextConfigFacts(path)`, `refusalFor(facts, {runtime, builder})`,
+  `isDefaultDistDir`, `CONFIG_FACTS_OUT_ENV` (`KNEXT_CONFIG_FACTS_OUT`),
+  `KNEXT_BUILDER_ENV` (`KNEXT_BUILDER`), `CUSTOM_DIST_DIR_MESSAGE`,
+  `TURBOPACK_FRAGMENTS_BUN_DETAIL` and `TURBOPACK_FRAGMENTS_BUN_HINT`. A facts
+  record is `{distDir, output, turbopackModuleFragments}`, plus `refused` (the
+  refusal code: `custom-dist-dir` or `bun-turbopack-fragments`) when the adapter refused.
 - `deferred-supervisor-init.ts` exports `createDeferredSupervisorInit`,
   `createLazyMetricsEndpoint`, `isSupervisorInitDeferred` and
   `DEFER_SUPERVISOR_INIT_ENV` (`KNEXT_DEFER_SUPERVISOR_INIT`), which it reads.
@@ -351,7 +362,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 The `.js`, `.mjs` and `.cjs` modules that TypeScript code imports have
 hand-written declarations beside them, which must be kept in step with the
 module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
-`use-cache-handler.d.ts`, `slow-dep-log.d.ts`, `tag-backlog.d.ts`, and 19 `*.d.mts` files
+`use-cache-handler.d.ts`, `slow-dep-log.d.ts`, `tag-backlog.d.ts`, `next-config-facts.d.ts`, and 19 `*.d.mts` files
 (`app-data-alias`, `app-data-embed`, `asset-anchor-analyze`, `bun-base-exe`,
 `bun-serve-cache-control`, `bun-serve-keepalive-guard`,
 `bytecode-exec-verify`, `compile-embed`, `computed-require-scan`,
@@ -376,6 +387,16 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   carries `images.customCacheHandler` as the boolean `false`, the configured
   `cacheHandler` is knext's own, and `KNEXT_IMAGE_CACHE_HANDLER` is not `"0"`
   at build time.
+- `next-adapter.ts:modifyConfig` and the facts-only adapter both call
+  `recordNextConfigFacts` on the config they hand back to Next, so the recorded
+  `output` is the one after knext's standalone default. It records and refuses
+  only when `KNEXT_CONFIG_FACTS_OUT` is set (by the CLI) and the phase is
+  `phase-production-build`, so a plain `next build`, `next typegen` and
+  `next dev` are untouched. A refusal throws an `Error` whose message starts
+  with `[knext-refuse:<code>] `, which fails `next build` before compilation.
+  A static export is never refused here (Next validates it first). The bundler
+  is read from `KNEXT_BUILDER`, not from the resolved config, which does not
+  carry it at that point.
 - `modifyConfig` replaces `webpack` with a wrapper that calls the app's own
   hook first. If that hook returns `undefined`, the wrapper throws a named
   `[knext-adapter]` error. For `nextRuntime === "edge"` it then appends an
@@ -704,6 +725,10 @@ The compile pipeline fails closed.
   It carries the HarfBuzz licence text only when `hb.wasm` was embedded.
 - `sharp-native-extract.mjs` writes native files under
   `<tmp>/knext-native-<uid>-<hash>`.
+- `next-config-facts.js:recordNextConfigFacts` writes the facts record to the
+  path in `KNEXT_CONFIG_FACTS_OUT`, through `<path>.<pid>.tmp` then a rename,
+  because `modifyConfig` runs in the main build process and in each bundler
+  worker. A failed write throws a named `[knext-adapter]` error.
 
 ### Globals
 

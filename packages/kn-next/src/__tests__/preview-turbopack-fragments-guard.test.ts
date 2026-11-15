@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireIsolatedProcess } from "../../../../tests/helpers/require-isolated-process";
 import type { KnativeNextConfig } from "../config";
+import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
 
 requireIsolatedProcess("preview-turbopack-fragments-guard.test.ts");
 
@@ -69,7 +70,8 @@ const base: KnativeNextConfig = {
 };
 
 describe("preview refuses bun + turbopackModuleFragments", () => {
-    it("refuses (default runtime is bun) before running the project build", async () => {
+    it("refuses (default runtime is bun) from the resolved config, inside the build", async () => {
+        runQuiet.mockImplementation(adapterBuild(FRAGMENTS_ON));
         const { defaultBuildAndPush } = await import("../cli/preview");
         try {
             await expect(
@@ -79,7 +81,8 @@ describe("preview refuses bun + turbopackModuleFragments", () => {
                     "f/x",
                 ),
             ).rejects.toThrow(/turbopackModuleFragments/);
-            expect(runQuiet).not.toHaveBeenCalled();
+            // The build is the only command run: no image build or push after it.
+            expect(runQuiet.mock.calls).toEqual([[["npm", "run", "build"]]]);
         } finally {
             process.chdir(saved);
             rmSync(dir, { recursive: true, force: true });

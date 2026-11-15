@@ -119,6 +119,9 @@ export default defineConfig([
       // imported by name, so it needs its own entry or it never reaches dist and
       // the alias resolves to nothing.
       'adapters/sharp-addon-dlopen': 'src/adapters/sharp-addon-dlopen.mjs',
+      // The facts-only Next adapter (#2250). Not imported by the CLI: the CLI
+      // points NEXT_ADAPTER_PATH at the built file, and Next loads it.
+      'adapters/next-config-facts': 'src/adapters/next-config-facts.js',
       // The vinext single-exec compile. Spawned as a SCRIPT (`bun run …`) by
       // `knext build`, not imported, because it needs `Bun.build` plugins and
       // the published CLI runs under node.

@@ -60,6 +60,7 @@
     "./internal/bun-keepalive-guard": "./dist/adapters/bun-keepalive-guard.cjs",
     "./internal/request-body-cap": "./dist/adapters/request-body-cap.cjs",
     "./internal/arp-primer": "./dist/adapters/arp-primer.cjs",
+    "./internal/next-config-facts": "./dist/adapters/next-config-facts.js",
     "./internal/deep-health-lite": {
       "types": "./dist/adapters/deep-health-lite.d.ts",
       "import": "./dist/adapters/deep-health-lite.js",

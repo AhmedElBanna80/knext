@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProjectBuild } from "../cli/project-build";
 import { USAGE_ERROR_CODE } from "../cli/shared";
+import { adapterBuild } from "./helpers/next-adapter-build";
 
 const scratchDirs: string[] = [];
 
@@ -38,8 +39,13 @@ function appDir(files: Record<string, string>): string {
 const EXPORT_DETAIL = JSON.stringify({ version: 1, success: true });
 const ESM_PKG = JSON.stringify({ type: "module" });
 
-function run(dir: string, requireEsm: boolean) {
-    const runner = mock();
+function run(
+    dir: string,
+    requireEsm: boolean,
+    build: (argv: readonly unknown[]) => void = () => {},
+) {
+    const runner = mock(build);
+    const warnings: string[] = [];
     let caught: unknown;
     try {
         runProjectBuild({
@@ -48,11 +54,12 @@ function run(dir: string, requireEsm: boolean) {
             builderId: requireEsm ? "vinext" : "webpack",
             cwd: dir,
             run: runner,
+            warn: (line) => warnings.push(line),
         });
     } catch (err) {
         caught = err;
     }
-    return { runner, caught };
+    return { runner, caught, warnings };
 }
 
 function expectRefusal(caught: unknown) {
@@ -69,17 +76,19 @@ function expectDistDirRefusal(caught: unknown, distDir: string) {
     expect(message).toContain("Remove `distDir`");
 }
 
-// #2251: a custom distDir is refused before the build until the build,
-// artifact and standalone steps honour it (they assume `.next`).
-describe("a custom distDir is refused before a Next build", () => {
-    it("refuses distDir: 'build' before any build work", () => {
+// #2251: a custom distDir is refused until the build, artifact and standalone
+// steps honour it (they assume `.next`). These stub the build with no adapter,
+// so they exercise the source-text FALLBACK (#2250), which refuses after the
+// build; the resolved-config path is below.
+describe("a custom distDir is refused by the text fallback when no adapter ran", () => {
+    it("refuses distDir: 'build'", () => {
         const dir = appDir({
             "next.config.mjs": "export default { distDir: 'build' };",
             "build/export-detail.json": EXPORT_DETAIL,
         });
         const { runner, caught } = run(dir, false);
         expectDistDirRefusal(caught, "build");
-        expect(runner).not.toHaveBeenCalled();
+        expect(runner).toHaveBeenCalledTimes(1);
     });
 
     it("refuses a double-quoted distDir in a .ts config", () => {
@@ -111,7 +120,7 @@ describe("a custom distDir is refused before a Next build", () => {
                 false,
             );
             expectDistDirRefusal(caught, value);
-            expect(runner).not.toHaveBeenCalled();
+            expect(runner).toHaveBeenCalledTimes(1);
         }
     });
 
@@ -155,9 +164,9 @@ describe("a custom distDir is refused before a Next build", () => {
             );
             expect(caught).toMatchObject({ code: USAGE_ERROR_CODE });
             expect((caught as Error).message).toContain(
-                "which knext cannot read before the build",
+                "which knext cannot read from the next.config source",
             );
-            expect(runner).not.toHaveBeenCalled();
+            expect(runner).toHaveBeenCalledTimes(1);
         }
     });
 
@@ -409,5 +418,104 @@ describe("vinext: a bound config exported through wrapper calls is still refused
             "next.config.mjs": `${base}export default process.env.X ? withX(nextConfig) : {};`,
         });
         expect(run(dir, true).caught).toBeUndefined();
+    });
+});
+
+// #2250: with a knext adapter in the build, the decisions come from the config
+// Next resolved, so shapes the text cannot evaluate are decided correctly.
+describe("a Next build decides from the resolved config an adapter recorded", () => {
+    it("refuses a custom distDir from the resolved value, inside the build", () => {
+        const dir = appDir({
+            "next.config.mjs":
+                "export default withPlugins({ distDir: process.env.OUT });",
+        });
+        const { runner, caught, warnings } = run(
+            dir,
+            false,
+            adapterBuild({ distDir: "build" }),
+        );
+        expectDistDirRefusal(caught, "build");
+        expect(runner).toHaveBeenCalledTimes(1);
+        expect(warnings).toEqual([]);
+    });
+
+    it("allows a computed distDir the text check would refuse, when it resolves to .next", () => {
+        const dir = appDir({
+            "next.config.mjs":
+                "export default { distDir: process.env.OUT ?? '.next' };",
+        });
+        expect(run(dir, false).caught).toMatchObject({
+            code: USAGE_ERROR_CODE,
+        });
+        const { caught, warnings } = run(
+            dir,
+            false,
+            adapterBuild({ distDir: "./.next" }),
+        );
+        expect(caught).toBeUndefined();
+        expect(warnings).toEqual([]);
+    });
+
+    it("refuses a static export from the resolved output, even with no export-detail.json", () => {
+        const dir = appDir({
+            "next.config.mjs": "export default makeConfig();",
+        });
+        expectRefusal(
+            run(dir, false, adapterBuild({ output: "export" })).caught,
+        );
+    });
+
+    it("refuses a static export Next marked in the resolved distDir", () => {
+        const dir = appDir({
+            "next.config.mjs": "export default {};",
+            ".next/export-detail.json": EXPORT_DETAIL,
+        });
+        expectRefusal(run(dir, false, adapterBuild()).caught);
+    });
+
+    it("warns that it fell back to the source text when no adapter recorded anything", () => {
+        const dir = appDir({ "next.config.mjs": "export default {};" });
+        const { caught, warnings } = run(dir, false);
+        expect(caught).toBeUndefined();
+        expect(warnings.join("\n")).toMatch(
+            /checked the next\.config source text instead/,
+        );
+    });
+
+    it("never leaks its build env into the caller's process", () => {
+        const dir = appDir({ "next.config.mjs": "export default {};" });
+        const before = {
+            out: process.env.KNEXT_CONFIG_FACTS_OUT,
+            builder: process.env.KNEXT_BUILDER,
+            adapter: process.env.NEXT_ADAPTER_PATH,
+        };
+        const seen: (string | undefined)[] = [];
+        run(dir, false, () => {
+            seen.push(
+                process.env.KNEXT_CONFIG_FACTS_OUT,
+                process.env.NEXT_ADAPTER_PATH,
+            );
+        });
+        expect(seen[0]).toMatch(/facts\.json$/);
+        expect(seen[1]).toMatch(/next-config-facts\.js$/);
+        expect({
+            out: process.env.KNEXT_CONFIG_FACTS_OUT,
+            builder: process.env.KNEXT_BUILDER,
+            adapter: process.env.NEXT_ADAPTER_PATH,
+        }).toEqual(before);
+    });
+
+    it("keeps an adapter the caller's env already names", () => {
+        const dir = appDir({ "next.config.mjs": "export default {};" });
+        process.env.NEXT_ADAPTER_PATH = "/their/adapter.js";
+        try {
+            let seen: string | undefined;
+            run(dir, false, () => {
+                seen = process.env.NEXT_ADAPTER_PATH;
+            });
+            expect(seen).toBe("/their/adapter.js");
+        } finally {
+            delete process.env.NEXT_ADAPTER_PATH;
+        }
     });
 });

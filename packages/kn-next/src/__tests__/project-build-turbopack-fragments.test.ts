@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProjectBuild } from "../cli/project-build";
+import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
 
 let dir: string;
 beforeEach(() => {
@@ -20,8 +21,11 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+// The build stub records the resolved config the way knext's adapter does in
+// `modifyConfig` (#2250), so this exercises the real decision path.
 const go = (runtimeId: string, builderId: string) => {
     const calls: unknown[] = [];
+    const build = adapterBuild(FRAGMENTS_ON);
     const attempt = () =>
         runProjectBuild({
             requireEsm: false,
@@ -30,16 +34,17 @@ const go = (runtimeId: string, builderId: string) => {
             builderId,
             run: (argv) => {
                 calls.push(argv);
+                build(argv);
             },
         });
     return { calls, attempt };
 };
 
 describe("runProjectBuild guards turbopackModuleFragments on Bun", () => {
-    it("refuses bun + turbopack and never runs the build", () => {
+    it("refuses bun + turbopack from the resolved config, inside the one build", () => {
         const { calls, attempt } = go("bun", "turbopack");
         expect(attempt).toThrow(/turbopackModuleFragments/);
-        expect(calls).toHaveLength(0);
+        expect(calls).toHaveLength(1);
     });
     it("allows node, webpack and vinext, running the build exactly once", () => {
         for (const [r, b] of [

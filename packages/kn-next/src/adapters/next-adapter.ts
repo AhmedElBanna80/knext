@@ -8,7 +8,8 @@
  *
  * Hooks:
  *  - modifyConfig: default output to 'standalone' on phase-production-build
- *    (an explicit output:'export' is left for Next to validate), and
+ *    (an explicit output:'export' is left for Next to validate), record the
+ *    resolved config facts the CLI's build guards decide on (#2250), and
  *    inject the edge-scoped webpack IgnorePlugin that excludes
  *    `instrumentation-node` from the EDGE bundle (#342/#356, ADR-0031) — the
  *    platform-owned half of the guarded-instrumentation fence, composed after
@@ -31,6 +32,7 @@ import type { NextAdapter } from "next";
 // AdapterOutputs is not re-exported from the 'next' public barrel; import directly.
 import type { AdapterOutputs } from "next/dist/build/adapter/build-complete";
 import { writeCdnRoutingArtifact } from "./cdn-routing-artifact";
+import { recordNextConfigFacts } from "./next-config-facts.js";
 import { KNEXT_RUNTIME_ENV } from "./runtime-env";
 import { healBunExportTargets } from "./standalone-bun-exports";
 
@@ -272,7 +274,7 @@ const adapter: NextAdapter = {
             ...runtimeCacheHandler(config),
             ...runtimeUseCacheHandlers(config),
         };
-        return {
+        const modified: typeof config = {
             ...withRuntimeHandler,
             ...(isProductionBuild && !userAskedForStaticExport(config)
                 ? { output: "standalone" as const }
@@ -311,6 +313,11 @@ const adapter: NextAdapter = {
                 return cfg;
             },
         };
+        // #2250: record what Next resolved (after this adapter's own output
+        // default) and refuse here, from the resolved config, when the CLI
+        // asked (KNEXT_CONFIG_FACTS_OUT). A plain `next build` is untouched.
+        recordNextConfigFacts(modified, { phase });
+        return modified;
     },
 
     async onBuildComplete(ctx) {

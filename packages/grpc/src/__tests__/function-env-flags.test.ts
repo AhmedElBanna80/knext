@@ -68,6 +68,8 @@ describe('parseFunctionEnvFlags: the CRD shapes', () => {
     ['--env with an empty name', { env: ['=hunter2'] }],
     ['--env-secret with no =', { envSecret: ['hunter2'] }],
     ['--env-configmap with no /', { envConfigMap: ['X=hunter2'] }],
+    ['--env-from with no :', { envFrom: ['hunter2'] }],
+    ['--env-from with an unknown kind', { envFrom: ['vault:hunter2'] }],
   ])('never repeats a malformed %s argument (it may be a bare secret)', (_label, flags) => {
     expect(() => parseFunctionEnvFlags(flags)).toThrow(/not repeated here/);
     try {

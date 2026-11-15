@@ -156,9 +156,12 @@ function keyRef(flag: string, kind: string, raw: string): [string, { name: strin
 }
 
 function sourceRef(flag: string, raw: string): [string, string] {
-  const [kind, name] = splitOnce(flag, raw, ':', 'secret:<name> or configmap:<name>');
+  const [kind, name] = splitOnce(flag, raw, ':', 'secret:<name> or configmap:<name>', false);
   if (kind !== 'secret' && kind !== 'configmap')
-    usage(flag, `expected secret:<name> or configmap:<name>, got "${raw}"`);
+    usage(
+      flag,
+      'expected secret:<name> or configmap:<name> (the argument is not repeated here, in case it holds a secret)',
+    );
   return [kind, objectName(flag, kind === 'secret' ? 'Secret' : 'ConfigMap', name)];
 }
 

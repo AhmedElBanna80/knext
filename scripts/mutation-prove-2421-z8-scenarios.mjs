@@ -84,6 +84,29 @@ const MUTATIONS = [
     replacement: '  true \\\n',
   },
   {
+    id: 'Z10',
+    subject: 'lane',
+    claim: 'a missing h2c notice no longer fails the lane',
+    anchor: '    || fail "the woken zone did not log an h2c transport for the example function"\n',
+    replacement: '    || true\n',
+  },
+  {
+    id: 'Z11',
+    subject: 'lane',
+    claim: 'an HTTP/1.1 notice no longer fails the lane',
+    anchor: '    || fail "the woken zone logged an HTTP/1.1 transport for the example function"\n',
+    replacement: '    || true\n',
+  },
+  {
+    id: 'Z12',
+    subject: 'lane',
+    claim: "the notice is read from the function's log, not the zone's",
+    anchor:
+      '  zlog="$(k -n "${NS}" logs -l "serving.knative.dev/service=${ZONE}" -c user-container --tail=-1)"\n',
+    replacement:
+      '  zlog="$(k -n "${NS}" logs -l "serving.knative.dev/service=${GO_FN}" -c user-container --tail=-1)"\n',
+  },
+  {
     id: 'Z08',
     subject: 'lane',
     claim: 'the function is not re-checked at zero right before the call',

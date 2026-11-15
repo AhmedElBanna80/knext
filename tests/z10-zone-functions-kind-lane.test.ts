@@ -180,7 +180,16 @@ describe('the zone and its function both at zero (#2421)', () => {
       "grep -qF 'knext: example function: transport h2c (HTTP/2 cleartext)'",
     );
     expect(notice).toBeGreaterThan(call);
-    expect(z).toContain("! grep -qF 'knext: example function: transport HTTP/1.1'");
+    // Both greps read the woken zone's own log, and each one fails the lane.
+    expect(z).toContain(
+      'zlog="$(k -n "${NS}" logs -l "serving.knative.dev/service=${ZONE}" -c user-container --tail=-1)"',
+    );
+    expect(z).toContain(
+      'grep -qF \'knext: example function: transport h2c (HTTP/2 cleartext)\' <<<"${zlog}" \\\n    || fail ',
+    );
+    expect(z).toContain(
+      '! grep -qF \'knext: example function: transport HTTP/1.1\' <<<"${zlog}" \\\n    || fail ',
+    );
   });
 
   it('puts the zone back warm, so the phases after it start from the deploy state', () => {

@@ -251,7 +251,8 @@ namespace and name, so two clusters behind one CDN zone no longer purge each oth
 [Cloudflare CDN](/docs/cdn-cloudflare).
 
 **What an operator upgrade does.** Every `NextApp` with `spec.cdn` rolls one new revision with the
-new prefix, the first time the new operator reconciles it; apps without `spec.cdn` do not change.
+new prefix, the first time the new operator reconciles it, all at once (an operator upgrade is not
+paced by the platform's rollout limit); apps without `spec.cdn` do not change.
 Pages already at the edge keep their old tags, so a purge no longer reaches them: they are served
 until they expire, at most `htmlTTLSeconds` plus `staleWhileRevalidateSeconds` after they were
 cached. If a page must not be served stale after the upgrade, purge the zone once the new revisions

@@ -140,9 +140,14 @@ func isInvalidSpec(app *appsv1alpha1.NextApp) bool {
 	return c != nil && c.Reason == lcInvalidSpec
 }
 
-// isHeldByPlatform reports whether the app's last verdict was a hold because of
-// the platform's values.
+// isHeldByPlatform reports whether the app's last verdict held its Knative
+// Service: the platform's values make it invalid, or (a CDN app) the cluster
+// identity its tag prefix needs could not be read.
 func isHeldByPlatform(app *appsv1alpha1.NextApp) bool {
+	if c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionCDNAdvisory); c != nil &&
+		c.Reason == ReasonClusterIdentityUnavailable {
+		return true
+	}
 	c := apimeta.FindStatusCondition(app.Status.Conditions, ConditionPlatformDefaultsApplied)
 	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == ReasonEffectiveSpecInvalid
 }

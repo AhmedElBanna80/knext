@@ -261,12 +261,6 @@ func platformDefaultsCondition(app *appsv1alpha1.NextApp, pd platformDefaultsSta
 				"The current Knative Service is held unchanged — fix the app's field or the "+
 				"platform value, and the next reconcile applies it",
 			pd.gate.field, pd.gate.detail)
-	case pd.gate.hold == holdClusterIdentityUnavailable:
-		c.Status = metav1.ConditionUnknown
-		c.Reason = ReasonClusterIdentityUnavailable
-		c.Message = fmt.Sprintf(
-			"the cluster identity this app's CDN tag prefix is derived from could not be read (%s). "+
-				"The current Knative Service is held unchanged and the read is retried", pd.gate.detail)
 	case pd.gate.hold == holdRolloutPending:
 		c.Status = metav1.ConditionUnknown
 		c.Reason = ReasonRolloutPending
@@ -338,18 +332,18 @@ func heldReconcilingCondition(app *appsv1alpha1.NextApp, gate platformGate) meta
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: lastReconciled,
 		Reason:             holdReason(gate),
-		Message: fmt.Sprintf(
-			"the change at generation %d is held, not applied: %s: %s",
-			app.Generation, heldField(gate), gate.detail),
+		Message:            heldReconcilingMessage(app, gate),
 	}
 }
 
-// heldField names what a held pass is waiting on.
-func heldField(gate platformGate) string {
+// heldReconcilingMessage says what a held-and-dropped pass is waiting on.
+func heldReconcilingMessage(app *appsv1alpha1.NextApp, gate platformGate) string {
 	if gate.hold == holdClusterIdentityUnavailable {
-		return "the cluster identity"
+		return fmt.Sprintf("the change at generation %d is held, not applied: the cluster identity could not be read",
+			app.Generation)
 	}
-	return gate.field
+	return fmt.Sprintf("the change at generation %d is held, not applied: %s: %s",
+		app.Generation, gate.field, gate.detail)
 }
 
 // heldReadyMessage is the Ready/Degraded message for a held-and-dropped pass. It
@@ -359,9 +353,9 @@ func heldReadyMessage(app *appsv1alpha1.NextApp, gate platformGate, ksvcReady bo
 	if gate.hold == holdClusterIdentityUnavailable {
 		return heldNotReadySuffix(fmt.Sprintf(
 			"the change at generation %d is NOT applied: the cluster identity this app's CDN tag prefix "+
-				"is derived from could not be read (%s). The previous Knative Service keeps serving "+
-				"unchanged, and the read is retried",
-			app.Generation, gate.detail), ksvcReady, ksvcReadyCond)
+				"is derived from could not be read (the operator log has the error). The previous Knative "+
+				"Service keeps serving unchanged, and the read is retried",
+			app.Generation), ksvcReady, ksvcReadyCond)
 	}
 	msg := fmt.Sprintf(
 		"the change at generation %d is NOT applied: the platform's defaults make this app's effective spec "+
@@ -1017,16 +1011,12 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 		cond := platformDefaultsCondition(app, pd)
 		prev := apimeta.FindStatusCondition(app.Status.Conditions, ConditionPlatformDefaultsApplied)
 		switch cond.Reason {
-		case ReasonEffectiveSpecInvalid, ReasonPlatformNotAccepted, ReasonClusterIdentityUnavailable:
+		case ReasonEffectiveSpecInvalid, ReasonPlatformNotAccepted:
 			if prev == nil || prev.Reason != cond.Reason || prev.Message != cond.Message {
 				v.events = append(v.events, verdictEvent{corev1.EventTypeWarning, cond.Reason, cond.Message})
 			}
 		}
 		v.conditions = append(v.conditions, cond)
-		if pd.gate.hold == holdClusterIdentityUnavailable &&
-			(v.requeueAfter == 0 || clusterIdentityRetry < v.requeueAfter) {
-			v.requeueAfter = clusterIdentityRetry
-		}
 		if pd.gate.hold == holdRolloutPending {
 			// Come back at this app's slot (plus a beat, so the slot has passed by
 			// the time the timer fires), but never later than an earlier requeue.
@@ -1037,12 +1027,34 @@ func computeStatusVerdict( //nolint:gocyclo // long branch-per-condition orchest
 		}
 	}
 
-	// CDNAdvisory (ADR-0068 D9/D11): informational only — Ready is untouched.
+	// CDNAdvisory (ADR-0068 D9/D11): informational only — Ready is untouched,
+	// except for the cluster-identity hold (Amendment 5), whose Ready is the
+	// dropped-hold path's above.
 	// Absent whenever there is nothing to say, and removed only if it was
 	// previously reported, so an app that never set spec.cdn keeps its persisted
 	// conditions byte-identical (#98).
 	prevCDN := apimeta.FindStatusCondition(app.Status.Conditions, ConditionCDNAdvisory)
-	if reason, message, ok := cdnAdvisory(app); ok {
+	if extras.platform != nil && extras.platform.gate.hold == holdClusterIdentityUnavailable {
+		// The one advisory that reports a hold (ADR-0068 Amendment 5): the
+		// prefix could not be derived, so nothing was rendered. Static message,
+		// transition-gated Warning, and the verdict owns the retry.
+		message := "the cluster identity this app's CDN tag prefix is derived from could not be read " +
+			"(the operator log has the error). The current Knative Service is held unchanged and the " +
+			"read is retried"
+		v.conditions = append(v.conditions, metav1.Condition{
+			Type:               ConditionCDNAdvisory,
+			Status:             metav1.ConditionTrue,
+			ObservedGeneration: app.Generation,
+			Reason:             ReasonClusterIdentityUnavailable,
+			Message:            message,
+		})
+		if prevCDN == nil || prevCDN.Reason != ReasonClusterIdentityUnavailable {
+			v.events = append(v.events, verdictEvent{corev1.EventTypeWarning, ReasonClusterIdentityUnavailable, message})
+		}
+		if v.requeueAfter == 0 || clusterIdentityRetry < v.requeueAfter {
+			v.requeueAfter = clusterIdentityRetry
+		}
+	} else if reason, message, ok := cdnAdvisory(app); ok {
 		v.conditions = append(v.conditions, metav1.Condition{
 			Type:               ConditionCDNAdvisory,
 			Status:             metav1.ConditionTrue,

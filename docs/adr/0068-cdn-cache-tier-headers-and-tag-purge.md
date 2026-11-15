@@ -915,9 +915,8 @@ names the Redis ACL users, and two clusters on one Redis that share it overwrite
 (ADR-0071). Its use here is keeping one identity across a rebuild. The operator resolves the identity
 after spec validation and before it renders an app that renders `spec.cdn`, and caches the
 `kube-system` uid for the life of the process. A failed read is a hold (`holdClusterIdentityUnavailable`):
-the live Knative Service is left as it is, `PlatformDefaultsApplied` reports
-`ClusterIdentityUnavailable`, Ready is held False for an app change that was not applied, and the
-verdict requeues in 30 s. It already holds `get` on Namespaces for the ADR-0071 identity.
+the live Knative Service is left as it is, `CDNAdvisory` reports `ClusterIdentityUnavailable`,
+Ready is held False for an app change that was not applied, and the verdict requeues in 30 s. It already holds `get` on Namespaces for the ADR-0071 identity.
 
 **Consequences.**
 - The default Redis key prefix and the ACL username keep the app hash `sha256("<namespace>/<name>")`.
@@ -932,6 +931,35 @@ verdict requeues in 30 s. It already holds `get` on Namespaces for the ADR-0071 
   rollout limiter (`rollout.maxAppsPerMinute`) instead of all at once. A non-CDN app's hash is
   unchanged.
 - Apps without `spec.cdn` are unchanged, byte for byte.
+- The stale window starts when the last revision that renders the old prefix stops serving, not at
+  the upgrade: a canary, or a pinned revision from before the change, keeps storing old-tag pages.
+  The ACL `SETUSER … reset` moves the dedupe grant to the new prefix, so such a pod that starts in
+  that window gets NOPERM on its claim and skips its first-ready purge (`purger.js` `firstReady`,
+  fail-closed). The same is true of any pod that starts while a `clusterId` change waits for its
+  rollout slot: the Secret and the grant change at once, the render at the pod's turn. The bound is
+  still the TTL.
+- The operator-upgrade re-render is not paced (the platform spec hash does not move); the upgrade
+  notes say it rolls every CDN app at once.
+- **Given up:** two clusters serving one host behind one zone used to purge each other's entries.
+  No supported setting restores that: `spec.cache.clusterId` also names the Redis ACL users, and two
+  clusters sharing it on one Redis overwrite each other's users.
+- **Reporting:** an unreadable identity is the `holdClusterIdentityUnavailable` gate, reported on
+  `CDNAdvisory` (reason `ClusterIdentityUnavailable`; the one advisory that is a hold), not on
+  `PlatformDefaultsApplied`, which stays about the platform (ADR-0064's hold-last-good is for platform
+  values). Ready follows the dropped-hold path. The message is static; the error is logged.
+
+| Decision | Chosen | jev | Alternative(s) | jev | Why the alternative lost |
+|---|---|---|---|---|---|
+| Prefix salt | cluster identity | 0.71 | identity + override flag; opt-in flag | 0.27 / 0.02 | an extra knob for a case no user asked for; opt-in leaves the default colliding |
+| `clusterId`'s two jobs | document; never share it | 0.56 | a separate CDN salt field | 0.44 | a CRD field for a sharing case no user has asked for |
+| Unreadable identity | hold, report on `CDNAdvisory` | 0.68 | a new condition type; `PlatformDefaultsApplied` | 0.24 / 0.08 | more status surface; the platform condition would hide `NoPlatform*` |
+| Grant vs render while queued | document the window | 0.60 | grant both prefixes until the render catches up; grant the rendered one only | 0.27 / 0.13 | a live-Service read and two selectors on the ACL path, for a rare admin action whose failure is a skipped purge |
+
+**Action items.**
+- A5-1: the identity is read from a `KnextPlatform` even when the platform is not accepted (it is the
+  ADR-0071 identity read), so a `clusterId` edit on an unaccepted platform re-renders CDN apps
+  without pacing. Tech debt; fix with the ADR-0071 read.
+- A5-2: a separate CDN salt field, only if a user asks for a shared prefix.
 
 | Decision | Chosen | jev | Main alternative(s) | jev | Why the alternative lost |
 |---|---|---|---|---|---|

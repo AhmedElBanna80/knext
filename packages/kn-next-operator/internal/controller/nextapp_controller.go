@@ -481,7 +481,9 @@ func (r *NextAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 			eff.cdnTagPrefix = cdnTagPrefix(identity, &nextApp)
 		case gate.hold == holdNone:
 			logger.Error(idErr, "Holding the Knative Service: the cluster identity could not be read")
-			gate = platformGate{hold: holdClusterIdentityUnavailable, detail: idErr.Error()}
+			// The error goes to the log only: a message that embeds it would churn
+			// the status (and re-fire the Warning) whenever its text varies.
+			gate = platformGate{hold: holdClusterIdentityUnavailable}
 		}
 	}
 

@@ -69,9 +69,6 @@ const (
 	// ReasonRolloutPending: a platform change is queued for this app behind
 	// rollout.maxAppsPerMinute; its Knative Service is unchanged until its slot.
 	ReasonRolloutPending = "RolloutPending"
-	// ReasonClusterIdentityUnavailable: the cluster identity the CDN tag prefix is
-	// salted with could not be read; the Knative Service is left unchanged.
-	ReasonClusterIdentityUnavailable = "ClusterIdentityUnavailable"
 )
 
 // clusterIdentityRetry is how soon a pass held on an unreadable cluster identity
@@ -289,7 +286,12 @@ func (r *NextAppReconciler) gateRollout(ctx context.Context, app *appsv1alpha1.N
 // bookkeeping so no early "go now" return can leave a reservation behind.
 func (r *NextAppReconciler) decideRollout(ctx context.Context, app *appsv1alpha1.NextApp, snap platformSnapshot, eff effectiveValues) (platformGate, error) {
 	wantSpecHash := snap.hash()
-	appliedSpecHash, appliedEffHash := "", effectiveHash(resolveEffective(app, nil))
+	// The built-in render this app had before any platform, with the prefix it
+	// renders now: the prefix is not a platform value, so a platform appearing
+	// does not by itself make a CDN app look changed.
+	base := resolveEffective(app, nil)
+	base.cdnTagPrefix = eff.cdnTagPrefix
+	appliedSpecHash, appliedEffHash := "", effectiveHash(base)
 	if p := app.Status.Platform; p != nil {
 		appliedSpecHash, appliedEffHash = p.SpecHash, p.EffectiveHash
 	}

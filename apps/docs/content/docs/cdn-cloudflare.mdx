@@ -103,8 +103,20 @@ overwrite each other's users and their apps lose their cache credentials.
 When a cluster's identity changes (a rebuild, or a new `clusterId`), every app with `spec.cdn` rolls
 one new revision with a new prefix. Pages the edge cached before still carry the old tags, so no
 purge reaches them any more: they stay until they expire, at most `htmlTTLSeconds` plus
-`staleWhileRevalidateSeconds` later. To keep the prefix across a rebuild, set `spec.cache.clusterId`
-on the new cluster to the old identity before its first deploy.
+`staleWhileRevalidateSeconds` after the last revision that still uses the old prefix stops serving
+(a canary or a revision pinned from before the change keeps adding old-tag pages until then). To
+keep the prefix across a rebuild, set `spec.cache.clusterId` on the new cluster to the old identity
+before its first deploy. A `clusterId` change rolls the apps out at the platform's
+`rollout.maxAppsPerMinute` pace.
+
+There is no supported way for two clusters to share a prefix, so two clusters serving the same host
+behind one zone purge only their own pages.
+
+If the operator cannot read the cluster identity, it does not guess a prefix. The app keeps its
+current Knative Service, `kubectl get nextapp` shows the condition `CDNAdvisory` with reason
+`ClusterIdentityUnavailable`, a change to the app is not applied (Ready is `False` with the same
+reason) and the read is retried every 30 seconds. The operator log has the error; the usual cause
+is missing `get` access to Namespaces.
 
 ## Live verification
 

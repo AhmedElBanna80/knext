@@ -42,6 +42,13 @@ const (
 	// set spec.cdn, so every other app's conditions stay byte-identical, #98).
 	ConditionCDNAdvisory = "CDNAdvisory"
 
+	// ReasonClusterIdentityUnavailable marks a CDN app whose tag prefix could not
+	// be derived because the cluster identity could not be read. Unlike the other
+	// advisories it reports a hold: the Knative Service is left unchanged (and an
+	// app change it drops holds Ready False under the same reason) until the read
+	// succeeds.
+	ReasonClusterIdentityUnavailable = "ClusterIdentityUnavailable"
+
 	// ReasonCDNInertOnVinext marks spec.cdn on build "vinext" (Beta): the vinext
 	// runtime has a different cache adapter and a Bun.serve seam, so the first
 	// cut renders no KNEXT_CDN_* env there (ADR-0068 D11).

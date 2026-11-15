@@ -133,10 +133,13 @@ var _ = Describe("NextApp spec.cdn", func() {
 			"no Knative Service is rendered with a guessed prefix")
 		got := &appsv1alpha1.NextApp{}
 		Expect(k8sClient.Get(ctx, nn, got)).To(Succeed())
+		adv := apimeta.FindStatusCondition(got.Status.Conditions, ConditionCDNAdvisory)
+		Expect(adv).NotTo(BeNil())
+		Expect(adv.Reason).To(Equal(ReasonClusterIdentityUnavailable))
+		// The platform condition stays about the platform: none exists here.
 		pd := apimeta.FindStatusCondition(got.Status.Conditions, ConditionPlatformDefaultsApplied)
 		Expect(pd).NotTo(BeNil())
-		Expect(pd.Status).To(Equal(metav1.ConditionUnknown))
-		Expect(pd.Reason).To(Equal(ReasonClusterIdentityUnavailable))
+		Expect(pd.Reason).NotTo(Equal(ReasonClusterIdentityUnavailable))
 		ready := apimeta.FindStatusCondition(got.Status.Conditions, ConditionReady)
 		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
 		Expect(ready.Reason).To(Equal(ReasonClusterIdentityUnavailable), "the held change is not reported as applied")
@@ -151,6 +154,10 @@ var _ = Describe("NextApp spec.cdn", func() {
 		Expect(k8sClient.Get(ctx, nn, after)).To(Succeed())
 		Expect(cdnEnv(after)["KNEXT_CDN_EXCLUDE_PATHS"].Value).To(Equal("/after"))
 		Expect(cdnEnv(after)[lcKNEXTCDNTAGPREFIX].Value).To(Equal(cdnEnv(before)[lcKNEXTCDNTAGPREFIX].Value))
+		recovered := &appsv1alpha1.NextApp{}
+		Expect(k8sClient.Get(ctx, nn, recovered)).To(Succeed())
+		Expect(apimeta.FindStatusCondition(recovered.Status.Conditions, ConditionCDNAdvisory)).To(BeNil(),
+			"the hold's advisory clears once the identity is read")
 	})
 
 	It("creates no Knative Service for a new CDN app while the cluster identity cannot be read", func() {

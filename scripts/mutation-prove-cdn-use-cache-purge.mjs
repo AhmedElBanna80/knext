@@ -88,8 +88,9 @@ const MUTATIONS = [
     id: 'M08',
     subject: 'assert',
     claim: "the expected prefix is derived from another app's name",
-    anchor: 'prefixes: { ...c.prefixes, uc: derivePrefix(c.ns, uc) },',
-    replacement: "prefixes: { ...c.prefixes, uc: derivePrefix(c.ns, 'cdn-a') },",
+    anchor: 'prefixes: { ...c.prefixes, uc: c.identity ? derivePrefix(c.identity, c.ns, uc) : null },',
+    replacement:
+      "prefixes: { ...c.prefixes, uc: c.identity ? derivePrefix(c.identity, c.ns, 'cdn-a') : null },",
   },
   // ── the red leg's mutation ────────────────────────────────────────────────
   {

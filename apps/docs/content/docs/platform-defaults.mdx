@@ -34,7 +34,7 @@ leave out keeps its built-in value.
 | Database | `database.connectionBudget` | `80` | the cap that `maxScale × poolMax` must fit within |
 | Rollout | `rollout.maxAppsPerMinute` | `10` | how fast a platform change reaches your apps |
 | Cache | `cache.redisEndpoints` | none | not a default for an app field: the Redis endpoints that get per-app users, see [Per-app Redis isolation](/docs/redis-isolation) |
-| | `cache.clusterId` | the `kube-system` Namespace uid | not a default for an app field: the cluster identity in every per-app Redis user name |
+| | `cache.clusterId` | the `kube-system` Namespace uid | not a default for an app field: the cluster identity in every per-app Redis user name and every CDN tag prefix; give each cluster its own |
 
 It does **not** choose your runtime (Node or Bun stays a per-app choice), change any Knative
 configuration, or create a database, cache or ingress.
@@ -105,7 +105,6 @@ platform is in force. The `PlatformDefaultsApplied` condition says what happened
 | `PlatformNotAccepted` | The object failed the operator's own validation and is **ignored**. |
 | `EffectiveSpecInvalid` | The platform's value would make this app invalid. The app's current service is **held** (see below). |
 | `RolloutPending` | A platform change is queued for this app (see below). |
-| `ClusterIdentityUnavailable` | An app with `spec.cdn` needs the cluster's identity for its tag prefix, and it could not be read. The app's current service is **held** and the read is retried every 30 seconds. |
 
 The platform reports on itself too: `Accepted`, `DefaultsPropagated` and `Ready`, plus how many
 apps are applied, pending and held.
@@ -178,7 +177,7 @@ you can alert on it without listing every app.
 
 | Metric | Type | What it tells you |
 | --- | --- | --- |
-| `knext_platform_apps_held` | gauge, label `reason` | How many apps are held right now. `reason` is `EffectiveSpecInvalid`, `RolloutPending` or `ClusterIdentityUnavailable`. |
+| `knext_platform_apps_held` | gauge, label `reason` | How many apps are held right now. `reason` is `EffectiveSpecInvalid`, `RolloutPending` or `ClusterIdentityUnavailable` (a CDN app whose tag prefix could not be derived, see [Cloudflare CDN](/docs/cdn-cloudflare)). |
 | `knext_platform_holds_total` | counter, label `reason` | How many times an app entered a hold. A hold that lasts many reconciles counts once. |
 | `knext_platform_rollout_pending` | gauge | Re-renders waiting for their turn behind `rollout.maxAppsPerMinute`. |
 | `knext_platform_rollout_wait_seconds` | histogram | How long a queued re-render was told to wait for its turn. Re-renders that go straight through are not observed. |

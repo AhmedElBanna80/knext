@@ -240,14 +240,14 @@ server on Bun as described above — replaced it.
 ## Known limitation: `unstable_cache` entries are not shared with Node
 
 Next.js names an `unstable_cache` entry partly by the source text of the function it wraps. On the
-Bun standalone target (`runtime: 'bun'` without `selfContained: true`), each route's chunk is loaded
-from `.next/server` through Bun's transpiler, which prints the function's source with different
-spacing. So an app on the Bun standalone target names its entries differently from the same app on
+Bun standalone target (`runtime: 'bun'` without the experimental `selfContained: true`), each
+route's chunk is loaded from `.next/server` through Bun's transpiler, which prints the function's
+source with different spacing. So an app on the Bun standalone target names its entries differently from the same app on
 Node. (On Node and as a self-contained executable, the names agree.)
 
 In practice this only matters when an app moves between those shapes, for example a rollback from
 the Bun standalone target to Node. The first requests after the switch miss the `unstable_cache`
-entries the other shape wrote, and compute and store them again: the cost is one cache refill. ISR
+entries the other shape wrote, so each entry is computed and stored again under the new name. ISR
 pages are keyed by path, so they are shared across every shape. The cause is Bun's transpiler, not
 your configuration.
 

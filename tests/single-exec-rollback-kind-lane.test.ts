@@ -144,15 +144,24 @@ describe('the script', () => {
 
   it('reports the data-cache entry per shape and does not claim it is shared', () => {
     expect(script).toContain('say "data cache: NOT shared across shapes:');
-    // Reported only: the one failing line that names the stamp is the emptiness
-    // check, exactly. Continuation lines are joined, so a split line cannot hide.
-    const stampFails = script
-      .replace(/\\\n/g, ' ')
+    // Reported only. Every line that touches the stamp variables is one of
+    // these, exactly: read it, require it non-empty, pass it on, record it, and
+    // print it. A comparison that fails or exits, on one line or split across
+    // several, would add a line here.
+    const stampLines = script
       .split('\n')
-      .filter((l) => /\bfail\b/.test(l) && /stamp|STAMP/.test(l) && !l.trimStart().startsWith('#'))
+      .filter((l) => /\$stamp|\$\{stamp|STAMP|stamp=/.test(l))
       .map((l) => l.trim());
-    expect(stampFails).toEqual([
+    expect(stampLines).toEqual([
+      `stamp="$(sed -n 's/.*<p id="stamp">\\([^<]*\\)<\\/p>.*/\\1/p' "\${body}-rb-stamp" | head -n1)"`,
       '[ -n "$stamp" ] || fail "$1: /rb-stamp carries no stamp: $(head -c 300 "${body}-rb-stamp")"',
+      'echo "$mark $stamp $tmark"',
+      'declare -A REV MARK STAMP',
+      'STAMP[$shape]="$stamp"',
+      'say "shape ${shape}: revision ${rev}, build ${mark}, /tagged from ${tmark}, data-cache stamp ${stamp}"',
+      'if [ "${STAMP[sc]}" = "${STAMP[disk]}" ] && [ "${STAMP[disk]}" = "${STAMP[node]}" ]; then',
+      'say "data cache: one unstable_cache entry under every shape (${STAMP[sc]})"',
+      'say "data cache: NOT shared across shapes: sc=${STAMP[sc]} disk=${STAMP[disk]} node=${STAMP[node]}"',
     ]);
     expect(workflowText).not.toMatch(
       /unstable_cache entry [^\n]*is the same one under every shape/,

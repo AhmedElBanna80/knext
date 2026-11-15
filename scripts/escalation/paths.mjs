@@ -45,7 +45,9 @@ const OPERATOR_MANAGER = 'packages/kn-next-operator/config/manager/manager.yaml'
  * (`tests.rs`, `*_tests.rs`, `tests/`, `testkit.rs`, `testutil.rs`,
  * `testvectors.rs`, `testvectors/`, `testhelpers/`, Go's `testdata/`), the `e2e/`
  * suites, the repo-only Connect conformance harness (`conformance.sh`,
- * `conformance/`; `src/conformance.rs` is compiled in, so it still fires),
+ * `conformance/`: packed, but `RUST_TEMPLATE_EXCLUDES` in
+ * `packages/grpc/src/scaffold-rust.ts` keeps them out of every function;
+ * `src/conformance.rs` still fires, as it drops the token check),
  * Markdown and `.gitignore`. `.dockerignore` still fires: it decides what goes
  * into the image. `vendor/` still fires: it is a vendored dependency.
  */

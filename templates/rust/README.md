@@ -57,8 +57,8 @@ the suite twice:
      fails if one differs. Feature unification with the upstream conformance crate adds crates the
      release binary does not link, among them connectrpc's axum, rustls and zstd, tokio's `full`
      features (parking_lot) and tracing-subscriber's env filter; the script prints the full list.
-   - `conformance/known-failing.txt` lists the stream cases the whole-body bound refuses on
-     purpose. Any other failure, or one of those passing, fails the run.
+   - `conformance/known-failing.txt` lists any case the function's own stack fails on purpose
+     (none today). Any other failure, or a listed case passing, fails the run.
 
 `src/rpc/conformance.rs` exists only behind the repository-only `conformance` feature. It refuses
 to compile in a release build (CI checks that), and `knext add function` copies neither the file,

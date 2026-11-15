@@ -266,8 +266,8 @@ const WIRING_MUTATIONS = [
     expect: 'red',
     claim: 'the CLI reads the inherited pins but never hands them to main()',
     subject: 'check',
-    anchor: 'main({ changedFiles, basePin, headPin, mergeBasePin, inheritedPins, baseVersion })',
-    replacement: 'main({ changedFiles, basePin, headPin, mergeBasePin, baseVersion })',
+    anchor: 'main({ changedFiles, basePin, headPin, mergeBasePin, inheritedPins, baseVersion, baseSha })',
+    replacement: 'main({ changedFiles, basePin, headPin, mergeBasePin, baseVersion, baseSha })',
   },
 ];
 

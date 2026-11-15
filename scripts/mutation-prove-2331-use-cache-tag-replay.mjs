@@ -2,7 +2,8 @@
 /**
  * Mutation proof for the `'use cache'` tag replay (issue #2331).
  *
- * Two specs, two tables, one subject (`use-cache-handler.js`):
+ * Two specs, two tables, two subjects (`use-cache-handler.js`, and since #2387
+ * the shared `tag-backlog.js`, which holds the bound and the generation checks):
  *
  *  - REPLAY rows grade `use-cache-breaker-tag-replay.test.ts`: what an outage
  *    records, how the backlog is bounded, deduplicated and kept across a run,
@@ -88,10 +89,10 @@ const REPLAY = [
   // ── the bound and the collapse ────────────────────────────────────────────
   {
     id: 'R05',
-    subject: 'handler',
+    subject: 'backlog',
     claim: 'the backlog bound is off by one (1001 tags kept)',
-    anchor: '      if (!prev && replay.tags.size >= REPLAY_MAX_TAGS) {',
-    replacement: '      if (!prev && replay.tags.size > REPLAY_MAX_TAGS) {',
+    anchor: '        if (prev === undefined && size() >= max) {',
+    replacement: '        if (prev === undefined && size() > max) {',
   },
   {
     id: 'R06',
@@ -103,10 +104,10 @@ const REPLAY = [
   },
   {
     id: 'R07',
-    subject: 'handler',
+    subject: 'backlog',
     claim: 'a drop recorded during the collapse sweep is lost (no generation check)',
-    anchor: '  if (replay.generation === generation) replay.collapsed = false;',
-    replacement: '  replay.collapsed = false;',
+    anchor: '      if (generation === startedAt) collapsed = false;',
+    replacement: '      collapsed = false;',
   },
   {
     id: 'R08',
@@ -136,19 +137,17 @@ const REPLAY = [
   },
   {
     id: 'R11',
-    subject: 'handler',
+    subject: 'backlog',
     claim: 'a drop recorded while its write was in flight is forgotten (no generation check)',
-    anchor: '      if (replay.tags.get(tag)?.generation !== record.generation) continue;',
+    anchor: '      if (generationOf(m.get(name)) !== recordedAt) return false;',
     replacement: '',
   },
   {
     id: 'R12',
     subject: 'handler',
     claim: 'a superseded write is counted as replayed',
-    anchor:
-      '      if (replay.tags.get(tag)?.generation !== record.generation) continue;\n      replay.tags.delete(tag);',
-    replacement:
-      '      if (replay.tags.get(tag)?.generation === record.generation) replay.tags.delete(tag);',
+    anchor: "      if (!replay.backlog.settle('tags', tag, record.generation)) continue;",
+    replacement: "      replay.backlog.settle('tags', tag, record.generation);",
   },
   {
     id: 'R13',
@@ -371,7 +370,12 @@ const LUA = [
 const replay = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: REPLAY_SPEC,
-  subjects: { handler: 'packages/kn-next/src/adapters/use-cache-handler.js' },
+  subjects: {
+    handler: 'packages/kn-next/src/adapters/use-cache-handler.js',
+    // The bound, the generation checks and the collapse live in the shared
+    // backlog since #2387; these rows mutate it there.
+    backlog: 'packages/kn-next/src/adapters/tag-backlog.js',
+  },
 });
 const live = createGuardProver({
   repoRoot: REPO_ROOT,
@@ -387,9 +391,9 @@ declareMutations(REPLAY.length + LUA.length);
 console.log(`\n=== replay rows: ${REPLAY_SPEC} ===`);
 replay.baseline();
 replay.proveCanSeeRed({
-  subject: 'handler',
-  anchor: 'const REPLAY_MAX_TAGS = 1000;',
-  replacement: 'const REPLAY_MAX_TAGS = 1;',
+  subject: 'backlog',
+  anchor: 'export const BACKLOG_MAX_ENTRIES = 1000;',
+  replacement: 'export const BACKLOG_MAX_ENTRIES = 1;',
 });
 for (const m of REPLAY) {
   replay.run({ ...m, expect: 'red' });

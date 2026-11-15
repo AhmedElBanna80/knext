@@ -114,6 +114,7 @@ const HANDLER_FILES = [
     "cache-write-registry.js",
     "use-cache-handler.js",
     "slow-dep-log.js",
+    "tag-backlog.js",
     // The CDN purge module the handler wires in (ADR-0068 D6/D7).
     "cdn-purge/index.js",
     "cdn-purge/metrics.js",

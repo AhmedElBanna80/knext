@@ -65,7 +65,8 @@ it.
   - On a 5xx or network error, it backs off by `BACKOFF_MS`.
   - Any other non-2xx response is final.
 - Each request is aborted after `DEFAULT_REQUEST_TIMEOUT_MS` (10000 ms).
-- `purger.js:overBudget` checks two limits: more than `MAX_PENDING` (1000)
+- `purger.js:overBudget` checks two limits: more than `MAX_PENDING` (1000, the
+  cache runtime's shared `BACKLOG_MAX_ENTRIES` from `../tag-backlog.js`)
   pending tags, or a projected drain time over `MAX_DRAIN_MS` (300000 ms). If
   either is exceeded, the backlog is replaced by a single `appTag` purge.
 - Redirects are never followed (`redirect: 'manual'`). The token goes only in

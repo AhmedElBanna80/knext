@@ -96,6 +96,14 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `USE_CACHE_METRICS_SEAM_KEY`, `LEGACY_SHARED_KEY_PREFIX`,
   `collapseSweepAllowed`, `collapseRefusedMessage`, `escapeGlob`,
   `PRUNE_STAMPS_SCRIPT`, `REPLAY_STAMPS_SCRIPT` and `resetUseCacheTagReplay`.
+- `tag-backlog.js` exports `createTagBacklog({namespaces, max, onCollapse})` and
+  `BACKLOG_MAX_ENTRIES` (1000). The backlog's methods are `record(ns, names,
+  value?)`, `snapshot(ns)` (a copy), `sizeOf(ns)`, `size`, `pending`,
+  `settle(ns, name, recordedAt)`, `beginSweep`, `endSweep(startedAt)`, `dropCollapse` and
+  `clear`, plus the read-only `max`, `collapsed` and `generation`. The ISR
+  invalidation replay (one backlog per process, namespaces `tags` and `keys`)
+  and the `'use cache'` tag replay (one per core object) both use it. The CDN
+  purge queue takes only its cap, `BACKLOG_MAX_ENTRIES`.
 - `vinext-cache-adapter*.mjs` provides the factory
   `createKnextVinextDataCacheAdapter` and a named `KnextCacheHandler` export:
   `CacheHandler` in `vinext-cache-adapter.mjs`, `KnextNodeCacheHandler` in
@@ -343,7 +351,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 The `.js`, `.mjs` and `.cjs` modules that TypeScript code imports have
 hand-written declarations beside them, which must be kept in step with the
 module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
-`use-cache-handler.d.ts`, `slow-dep-log.d.ts`, and 19 `*.d.mts` files
+`use-cache-handler.d.ts`, `slow-dep-log.d.ts`, `tag-backlog.d.ts`, and 19 `*.d.mts` files
 (`app-data-alias`, `app-data-embed`, `asset-anchor-analyze`, `bun-base-exe`,
 `bun-serve-cache-control`, `bun-serve-keepalive-guard`,
 `bytecode-exec-verify`, `compile-embed`, `computed-require-scan`,
@@ -415,8 +423,8 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   drops it, and the entry lives to its TTL. The replayed `DEL` has no generation
   check, so it can also remove an entry a later `set` wrote meanwhile; the next
   request re-renders it.
-- The invalidation replay backlog is capped at 1000 tags and deletes together. Past that, it
-  collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix,
+- The invalidation replay backlog is capped at `BACKLOG_MAX_ENTRIES` (1000) tags
+  and deletes together. Past that, it collapses to a prefix sweep. `collapseSweepAllowed` refuses the empty prefix,
   the shared legacy default key prefix `kn-next`, and any prefix nested under it
   (for example `kn-next:cache`). A CDN purge is sent only for tags whose Redis
   invalidation completed.
@@ -447,6 +455,14 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `collapseSweepAllowed` lives in `use-cache-handler.js` and is the one guard
   both collapse sweeps share (the ISR handler's and the `"use cache"`
   handler's).
+- `tag-backlog.js` is the only bounded tag backlog under `adapters/`: both
+  replays use it, the CDN purge queue takes its cap, and
+  `tag-backlog.test.ts` fails if another `*MAX_TAGS`, `*MAX_PENDING` or
+  `*MAX_ENTRIES` constant is set to a number here. `record` moves the
+  generation once per call, even while collapsed, and refuses while collapsed. A replay removes an entry
+  only through `settle`, which keeps one recorded again since. A collapse
+  sweep clears the collapse only through `endSweep`, which keeps it if a
+  record landed during the sweep.
 
 ### CDN
 

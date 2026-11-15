@@ -42,6 +42,7 @@ import {
 // slow (TCP connect vs the ready-check INFO). No timer, no budget, no verdict —
 // see the header of slow-dep-log.js.
 import { instrumentConnectTiming } from './slow-dep-log.js';
+import { createTagBacklog } from './tag-backlog.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
@@ -1498,8 +1499,8 @@ function noteCdnPurgeSkipped(tagCount) {
 // edge purge for exactly the tags whose invalidation completed (the same order
 // as `revalidateTag`'s, D6.3).
 //
-//  - BOUNDED. At most REPLAY_MAX_TAGS distinct tags and deletes together. One more and the list is
-//    dropped for a COLLAPSE: the replay invalidates every ISR entry under this
+//  - BOUNDED. At most BACKLOG_MAX_ENTRIES distinct tags and deletes together
+//    (the shared backlog, tag-backlog.js). One more and the list is dropped for a COLLAPSE: the replay invalidates every ISR entry under this
 //    app's key prefix (a cursor SCAN, DEL per page) and queues one purge of the
 //    app's edge tag -- wider than needed, never stale. The same collapse the
 //    CDN purge queue makes at the same size (D6.4). REFUSED under the shared
@@ -1521,30 +1522,31 @@ function noteCdnPurgeSkipped(tagCount) {
 //  - The `'use cache'` handler's tag stamps are replayed by that handler, the
 //    same way, from its own list (use-cache-handler.js, "Tag stamps an outage
 //    kept from Redis").
-const REPLAY_MAX_TAGS = 1000;
 const REPLAY_SCAN_COUNT = 100;
-// tag -> the generation it was last recorded at. A Map keeps first-insertion
-// order when a value is updated, and the generation lets a replay that raced a
-// fresh skip of the same tag keep it rather than forget it.
-const replayTags = new Map();
-// cache key -> generation, for `set(key, null)` deletes that did not reach Redis
-// (breaker open, or the delete itself faulted). Replayed before the tags; they
-// share the REPLAY_MAX_TAGS bound and the collapse (#2889).
-const replayKeys = new Map();
-let replayGeneration = 0;
-let replayCollapsed = false;
+// Two namespaces under one bound (tag-backlog.js): `tags` holds tag ->
+// generation; `keys` holds cache key -> generation, for `set(key, null)` deletes
+// that did not reach Redis (breaker open, or the delete itself faulted).
+// Deletes are replayed before the tags; they share the bound and the collapse
+// (#2889). The generation lets a replay that raced a fresh skip keep the entry
+// rather than forget it.
+const replayBacklog = createTagBacklog({
+  namespaces: ['tags', 'keys'],
+  onCollapse: (ns) => {
+    const what = ns === 'tags' ? 'tags' : 'entries';
+    console.warn(
+      `[CacheHandler] invalidation replay backlog passed ${replayBacklog.max} ${what} while Redis was unreachable; once it is back, every ISR entry of this app is invalidated and the whole app is purged at the edge`,
+    );
+  },
+});
 let replayRun = null;
 let replayTimer = null;
 
 function replayPending() {
-  return replayCollapsed || replayTags.size > 0 || replayKeys.size > 0;
+  return replayBacklog.pending();
 }
 
 function resetInvalidationReplay() {
-  replayTags.clear();
-  replayKeys.clear();
-  replayGeneration = 0;
-  replayCollapsed = false;
+  replayBacklog.clear();
   replayRun = null;
   if (replayTimer) clearTimeout(replayTimer);
   replayTimer = null;
@@ -1557,12 +1559,12 @@ function resetInvalidationReplay() {
  */
 function reportReplayLostAtExit() {
   if (!replayPending()) return;
-  const what = replayCollapsed
-    ? `a collapsed backlog (over ${REPLAY_MAX_TAGS} tags)`
-    : `${replayTags.size} tag invalidation(s) and ${replayKeys.size} delete(s)`;
+  const what = replayBacklog.collapsed
+    ? `a collapsed backlog (over ${replayBacklog.max} tags)`
+    : `${replayBacklog.sizeOf('tags')} tag invalidation(s) and ${replayBacklog.sizeOf('keys')} delete(s)`;
   // Deletes hold back no edge purge; tags (and a collapse) do.
   const purge =
-    replayCollapsed || replayTags.size > 0 ? ', and the edge purge they held back does not run' : '';
+    replayBacklog.collapsed || replayBacklog.sizeOf('tags') > 0 ? ', and the edge purge they held back does not run' : '';
   console.error(
     `[CacheHandler] exiting with ${what} not yet replayed to Redis: ` +
       "those ISR entries stay stale until their Redis TTL (the route's `expire` when set, " +
@@ -1583,21 +1585,7 @@ function recordSkippedInvalidation(tags) {
   const list = tags.filter((tag) => typeof tag === 'string' && tag.length > 0);
   if (!useRedis || list.length === 0) return;
   armReplayExitReport();
-  replayGeneration += 1;
-  if (!replayCollapsed) {
-    for (const tag of list) {
-      if (!replayTags.has(tag) && replayTags.size + replayKeys.size >= REPLAY_MAX_TAGS) {
-        replayTags.clear();
-        replayKeys.clear();
-        replayCollapsed = true;
-        console.warn(
-          `[CacheHandler] invalidation replay backlog passed ${REPLAY_MAX_TAGS} tags while Redis was unreachable; once it is back, every ISR entry of this app is invalidated and the whole app is purged at the edge`,
-        );
-        break;
-      }
-      replayTags.set(tag, replayGeneration);
-    }
-  }
+  replayBacklog.record('tags', list);
   // With the breaker open this finds no client and only sets the probe.
   startInvalidationReplay();
 }
@@ -1606,19 +1594,7 @@ function recordSkippedInvalidation(tags) {
 function recordSkippedDelete(key) {
   if (!useRedis || typeof key !== 'string') return;
   armReplayExitReport();
-  replayGeneration += 1;
-  if (!replayCollapsed) {
-    if (!replayKeys.has(key) && replayKeys.size + replayTags.size >= REPLAY_MAX_TAGS) {
-      replayKeys.clear();
-      replayTags.clear();
-      replayCollapsed = true;
-      console.warn(
-        `[CacheHandler] invalidation replay backlog passed ${REPLAY_MAX_TAGS} entries while Redis was unreachable; once it is back, every ISR entry of this app is invalidated and the whole app is purged at the edge`,
-      );
-    } else {
-      replayKeys.set(key, replayGeneration);
-    }
-  }
+  replayBacklog.record('keys', [key]);
   startInvalidationReplay();
 }
 
@@ -1660,20 +1636,20 @@ function scheduleReplayProbe() {
 async function runInvalidationReplay() {
   const replayClient = await ensureConnected();
   if (!replayClient) return;
-  if (replayCollapsed) {
+  if (replayBacklog.collapsed) {
     await replayCollapsedBacklog(replayClient);
     return;
   }
-  for (const [key, generation] of [...replayKeys]) {
+  for (const [key, generation] of replayBacklog.snapshot('keys')) {
     await redisCall(() => redisCommand(replayClient, 'DEL', [cacheKey(key)]), replayClient);
-    if (replayKeys.get(key) === generation) replayKeys.delete(key);
+    replayBacklog.settle('keys', key, generation);
     logCacheEvent('DELETE', 'redis', key, { details: 'Replayed after Redis recovered' });
   }
   const replayed = [];
   try {
-    for (const [tag, generation] of [...replayTags]) {
+    for (const [tag, generation] of replayBacklog.snapshot('tags')) {
       const count = await invalidateTagInRedis(replayClient, tag);
-      if (replayTags.get(tag) === generation) replayTags.delete(tag);
+      replayBacklog.settle('tags', tag, generation);
       replayed.push(tag);
       logCacheEvent('INVALIDATE', 'redis', `tag:${tag}`, {
         details: `Replayed after Redis recovered: invalidated ${count} keys`,
@@ -1692,13 +1668,13 @@ async function runInvalidationReplay() {
  * deleted key is harmless (the next invalidation deletes nothing).
  */
 async function replayCollapsedBacklog(client) {
-  const generation = replayGeneration;
+  const sweepStartedAt = replayBacklog.beginSweep();
   if (!collapseSweepAllowed(KEY_PREFIX)) {
     // Nothing narrower is left to replay (the list was dropped for the
     // collapse), and the refusal cannot change: drop the collapse rather than
     // retry it every probe. No edge purge either: it would only refill from
     // the entries this refusal leaves in Redis.
-    replayCollapsed = false;
+    replayBacklog.dropCollapse();
     console.error(collapseRefusedMessage('ISR entry', KEY_PREFIX));
     return;
   }
@@ -1718,9 +1694,9 @@ async function replayCollapsedBacklog(client) {
     }
   } while (cursor !== '0');
   // A skip recorded during the sweep may have missed it: keep the collapse.
-  if (replayGeneration === generation) replayCollapsed = false;
+  replayBacklog.endSweep(sweepStartedAt);
   logCacheEvent('INVALIDATE', 'redis', `${KEY_PREFIX}:cache:*`, {
-    details: `Replayed after Redis recovered: backlog over ${REPLAY_MAX_TAGS} tags, invalidated all ${deleted} entries`,
+    details: `Replayed after Redis recovered: backlog over ${replayBacklog.max} tags, invalidated all ${deleted} entries`,
   });
   try {
     enqueueAppPurge();

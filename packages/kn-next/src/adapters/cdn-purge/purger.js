@@ -49,12 +49,16 @@
  */
 
 import { trackWrite } from '../cache-write-registry.js';
+import { BACKLOG_MAX_ENTRIES } from '../tag-backlog.js';
 import { defaultMetricsRegistry, PURGE_METRIC } from './metrics.js';
 import { EMULATOR_DUMMY_TOKEN, PURGE_ROWS } from './rows.js';
 import { appTag, nextTag } from './tags.js';
 
-/** Pending tags the queue holds before collapsing to the app tag (D6.4). */
-const MAX_PENDING = 1000;
+/**
+ * Pending tags the queue holds before collapsing to the app tag (D6.4): the same
+ * bound as the cache runtime's replay backlogs (tag-backlog.js).
+ */
+const MAX_PENDING = BACKLOG_MAX_ENTRIES;
 /**
  * Longest the backlog may take to drain at the current rate before it collapses
  * into one app-tag purge. A purge that lands later than the edge TTL evicts

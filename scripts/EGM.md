@@ -56,6 +56,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - Import and closure checks: `check-ts-import-extensions.mjs`, `adapter-import-closure.mjs` (`computeAdapterClosure`).
 - `check-ratchet-floors.mjs`, `check-ffi-crate-rev.mjs`, `crd-schema-diff.mjs` (`run`, `CRD_PATH`), `crd-narrowing-waivers.json`.
 - `workflow-script-install-guard.mjs`, `verify-phase-gates.mjs`, `verify-retracted-figures.mjs`.
+- `lane-parity-check.mjs` compares the CI guard files listed in `.github/lane-parity.json` on this checkout (HEAD) with `<LANE_PARITY_REMOTE>/<lane>` (default `origin`) for every other lane, using `lib/lane-parity.mjs`. Exit 0 parity, 1 findings, 2 a lane or the manifest cannot be read. Run by `.github/workflows/lane-parity.yml`.
 - Repo scans: `scan-dangling-paths.mjs`, `scan-half-scan-candidates.mjs` (advisory only), `scan-mock-hoisting.mjs`, `scan-mutation-residue.mjs`, `scan-published-seams.mjs`.
 - `bun-patched-drift.mjs`, `ci-resolve-push-base.mjs`, `next-minor-matrix.mjs`, `gen-cr-fields.ts`, `codemod-vitest-to-bun.mjs`, `biome-format.mjs`.
 

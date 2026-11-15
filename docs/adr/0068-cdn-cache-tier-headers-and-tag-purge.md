@@ -921,8 +921,8 @@ identity, so the read needs no new permission. The platform's rollout counts ski
 app (it is neither applied, pending nor platform-held); the held-apps gauge reports it. With no
 `status.platform`, the rollout gate compares against the prefix the live Knative Service renders
 (the identity behind it is not recorded anywhere else: the `kube-system` uid, or an unaccepted
-platform's `clusterId`). A platform that appears and leaves the prefix alone does not queue a CDN
-app; one that moves it paces the re-render.
+platform's `clusterId`). A platform that appears and leaves the prefix (and every other rendered
+value) alone does not queue a CDN app; one that moves it paces the re-render.
 
 **Consequences.**
 - The default Redis key prefix and the ACL username keep the app hash `sha256("<namespace>/<name>")`.
@@ -945,7 +945,8 @@ app; one that moves it paces the re-render.
   rollout slot: the Secret and the grant change at once, the render at the pod's turn. The bound is
   still the TTL.
 - The operator-upgrade re-render is not paced (the platform spec hash does not move); the upgrade
-  notes say it rolls every CDN app at once.
+  notes say it rolls every CDN app at once. The exception is an upgrade that lands together with a
+  new platform, which is paced like any platform change.
 - **Given up:** two clusters serving one host behind one zone used to purge each other's entries.
   No supported setting restores that: `spec.cache.clusterId` also names the Redis ACL users, and two
   clusters sharing it on one Redis overwrite each other's users.

@@ -104,6 +104,10 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   invalidation replay (one backlog per process, namespaces `tags` and `keys`)
   and the `'use cache'` tag replay (one per core object) both use it. The CDN
   purge queue takes only its cap, `BACKLOG_MAX_ENTRIES`.
+- `replay-loop.js` exports `createReplayLoop({label, pending, run, retryInMs,
+  unreachable, onUnreachable, track, log})`, which returns `{start, reset}`: one run at a
+  time, then one unref'd probe timer while the backlog is pending. Both replays
+  drive their backlog through it; it holds no module state.
 - `vinext-cache-adapter*.mjs` provides the factory
   `createKnextVinextDataCacheAdapter` and a named `KnextCacheHandler` export:
   `CacheHandler` in `vinext-cache-adapter.mjs`, `KnextNodeCacheHandler` in
@@ -351,7 +355,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 The `.js`, `.mjs` and `.cjs` modules that TypeScript code imports have
 hand-written declarations beside them, which must be kept in step with the
 module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
-`use-cache-handler.d.ts`, `slow-dep-log.d.ts`, `tag-backlog.d.ts`, and 19 `*.d.mts` files
+`use-cache-handler.d.ts`, `slow-dep-log.d.ts`, `tag-backlog.d.ts`, `replay-loop.d.ts`, and 19 `*.d.mts` files
 (`app-data-alias`, `app-data-embed`, `asset-anchor-analyze`, `bun-base-exe`,
 `bun-serve-cache-control`, `bun-serve-keepalive-guard`,
 `bytecode-exec-verify`, `compile-embed`, `computed-require-scan`,

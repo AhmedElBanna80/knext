@@ -30,6 +30,9 @@ required-features = ["e2e"]
 # src/rpc/tests/vector_wiring.rs. On here, in this template.
 default = ["shared-vectors"]
 shared-vectors = []
+# The Connect conformance build (src/rpc/conformance.rs, conformance.sh): the
+# stack without its token check, dev profile only.
+conformance = []
 # END repository-only tests
 e2e = []
 

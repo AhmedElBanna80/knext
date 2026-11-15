@@ -163,6 +163,17 @@ jobs:
       - name: cargo test
         run: cargo test --locked
 
+      - name: The conformance feature (no token check) refuses to build in release
+        # src/rpc/conformance.rs drops the token check for the Connect suite;
+        # its compile_error! must stop any release build that turns it on.
+        run: |
+          set -euo pipefail
+          if cargo check --release --locked --features conformance 2>build.err; then
+            echo "a release build with the conformance feature compiled" >&2
+            exit 1
+          fi
+          grep -q 'must never build in release' build.err
+
       - name: A scaffolded function builds, lints and passes its own tests
         # `knext add function --lang rust` copies this template; the copy must
         # build and pass outside the template directory. It generates its code

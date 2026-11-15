@@ -18,6 +18,7 @@ import {
   RUST_GITIGNORE,
   RUST_KEYWORDS_2024,
   RUST_TEMPLATE_EXCLUDES,
+  stripConformanceGate,
   RUST_TOOLCHAIN_CRATES,
   renameLockedPackage,
   resolveRustTemplateDir,
@@ -315,6 +316,24 @@ describe('the scaffolded manifest and scripts', () => {
     // The files the repository-only tests need are not there.
     expect(existsSync(join(root, 'src/testvectors.rs'))).toBe(false);
     expect(existsSync(join(root, 'src/auth/vector_tests.rs'))).toBe(false);
+    // Nor does the conformance build: no feature, no gate, no unauthenticated stack.
+    expect(manifest).not.toMatch(/^conformance = /m);
+    expect(existsSync(join(root, 'src/rpc/conformance.rs'))).toBe(false);
+    expect(existsSync(join(root, 'conformance'))).toBe(false);
+    for (const f of walk(root).filter((p) => p.endsWith('.rs') && !p.startsWith('vendor/'))) {
+      const text = readFileSync(join(root, f), 'utf8');
+      expect(
+        text.includes('feature = "conformance"'),
+        `${f} still names the conformance feature`,
+      ).toBe(false);
+      expect(text.includes('mod conformance'), `${f} still declares the conformance module`).toBe(
+        false,
+      );
+      expect(
+        text.includes('conformance::unauthenticated'),
+        `${f} still builds the stack without its token check`,
+      ).toBe(false);
+    }
   });
 });
 
@@ -612,17 +631,19 @@ describe('the Rust scaffold copies templates/rust minus a counted exclude list',
       '.gitignore',
       '.codegen',
       'README.md',
+      'conformance',
       'conformance.sh',
       'e2e/kind-e2e.sh',
       'e2e/ksvc.yaml',
       'gen',
       'proto',
       'src/auth/vector_tests.rs',
+      'src/rpc/conformance.rs',
       'src/rpc/tests/vector_wiring.rs',
       'src/testvectors.rs',
       'target',
     ]);
-    expect(RUST_TEMPLATE_EXCLUDES.length).toBe(12);
+    expect(RUST_TEMPLATE_EXCLUDES.length).toBe(14);
     for (const e of RUST_TEMPLATE_EXCLUDES) expect(e.why.length).toBeGreaterThan(10);
   });
 
@@ -764,6 +785,31 @@ describe('which template a run scaffolds from', () => {
       }),
     ).toThrow(/template changed/);
     expect(walk(app)).toEqual([]);
+  });
+});
+
+describe('the conformance gate in src/rpc/mod.rs (#2437)', () => {
+  it('stripConformanceGate removes the one declaration and nothing names the feature after it', () => {
+    const rpc = readFileSync(join(TEMPLATE, 'src/rpc/mod.rs'), 'utf8');
+    const out = stripConformanceGate(rpc);
+    expect(out).not.toContain('feature = "conformance"');
+    expect(out).not.toContain('mod conformance');
+    expect(rpc.length - out.length).toBeGreaterThan(0);
+  });
+
+  it('refuses a template whose gate moved or doubled, rather than copying it half-stripped', () => {
+    const rpc = readFileSync(join(TEMPLATE, 'src/rpc/mod.rs'), 'utf8');
+    const gate = rpc.match(
+      /^\/\/ Repository only: [^\n]*\n#\[cfg\(feature = "conformance"\)\]\npub mod conformance;\n/m,
+    )?.[0];
+    expect(gate).toBeDefined();
+    expect(() => stripConformanceGate(rpc.replace(gate as string, ''))).toThrow(/template changed/);
+    expect(() => stripConformanceGate(rpc + (gate as string))).toThrow(/template changed/);
+    expect(() =>
+      stripConformanceGate(
+        rpc.replace(gate as string, '#[cfg(feature = "conformance")]\npub mod conformance;\n'),
+      ),
+    ).toThrow(/template changed/);
   });
 });
 

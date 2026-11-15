@@ -310,11 +310,65 @@ describe('the template workflow scans, gates and holds no credential', () => {
     expect(script).toContain(
       'RUST_LOG=warn "${RUNNER}" --mode server -- target/release/conformance-server',
     );
-    expect(script).not.toContain('--conf');
+    // The upstream server runs every test, with no config narrowing it.
+    const upstreamRun = script
+      .split('\n')
+      .find((l) => l.includes('target/release/conformance-server'));
+    expect(upstreamRun).not.toContain('--conf');
+    expect(upstreamRun).not.toContain('--known-failing');
     expect(script).toMatch(/the checkout is connectrpc \$\{have\}; Cargo.lock locks \$\{want\}/);
     expect(conformance).toContain('echo "${CONFORMANCE_SHA256}  ${tarball}" | sha256sum -c -');
     expect(wf.env?.CONFORMANCE_SHA256).toMatch(/^[0-9a-f]{64}$/);
     expect((wf.jobs.conformance as Job).if).toBeUndefined();
+  });
+
+  it("the same suite runs against the function's own stack, with only the token check left out (#2437)", () => {
+    const script = read('conformance.sh');
+    // The upstream service is reused; its `main` is replaced by the harness.
+    expect(script).toContain('cat "${HERE}/conformance/main.rs"');
+    expect(script).toContain('grep -n \'^async fn main() -> Result<()> {$\' "${SRC}"');
+    // The harness is optional on the upstream crate, so the release build above never compiles it.
+    expect(script).toContain('required-features = ["function-stack"]');
+    expect(script).toContain('optional = true');
+    expect(script).toContain(
+      'cargo build -p connectrpc-conformance --features function-stack --bin function-stack-server',
+    );
+    expect(script).toContain(
+      'RUST_LOG=warn "${RUNNER}" --mode server --conf "${HERE}/conformance/config.yaml" \\\n  --known-failing "@${HERE}/conformance/known-failing.txt" -- target/debug/function-stack-server',
+    );
+    // The harness serves through the template's stack, not the upstream Server.
+    const main = read('conformance/main.rs');
+    expect(main).toContain('function::rpc::conformance::unauthenticated(');
+    expect(main).toContain('function.serve(listener,');
+    expect(main).not.toMatch(/Server::bind|serve_with_service/);
+    // The only difference from the binary's stack is the missing token check.
+    const rpc = read('src/rpc/mod.rs');
+    expect(rpc).toContain('assemble(\n        router,\n        Some(AuthLayer::new(verifier)),');
+    expect(read('src/rpc/conformance.rs')).toContain(
+      'assemble(router, None, Config::default(), max_message)',
+    );
+    // Every known failure is the whole-body bound on a stream, nothing else.
+    const known = read('conformance/known-failing.txt')
+      .split('\n')
+      .filter((l) => l && !l.startsWith('#'));
+    expect(known.length).toBeGreaterThan(0);
+    for (const k of known)
+      expect(k).toMatch(
+        /^Server Message Size\/.*(client-stream|bidi-stream)\/.*all-requests-equal-to-server-limit$/,
+      );
+    // A function serves h2c: the config asks for no TLS.
+    expect(read('conformance/config.yaml')).toContain('supports_tls: false');
+  });
+
+  it('the conformance build can never be a release build', () => {
+    const gate = read('src/rpc/conformance.rs');
+    expect(gate).toContain('#[cfg(not(debug_assertions))]\ncompile_error!(');
+    expect(runs('check')).toContain('cargo check --release --locked --features conformance');
+    expect(runs('check')).toContain("grep -q 'must never build in release' build.err");
+    // The image build turns on no feature.
+    const docker = read('Dockerfile');
+    expect(docker).toContain('cargo auditable build --release --locked --bin function');
+    expect(docker).not.toMatch(/--features|--all-features/);
   });
 
   it('the image and kind-e2e jobs need the check job', () => {
@@ -392,7 +446,7 @@ describe('`knext add function --lang rust` copies the template, and this workflo
     expect(manifest).toContain('default = ["shared-vectors"]');
     // The block the scaffold leaves out is delimited, and holds the feature.
     expect(manifest).toMatch(
-      /# BEGIN repository-only tests[^\n]*\n(?:#[^\n]*\n)*default = \["shared-vectors"\]\nshared-vectors = \[\]\n# END repository-only tests\n/,
+      /# BEGIN repository-only tests[^\n]*\n(?:#[^\n]*\n)*default = \["shared-vectors"\]\nshared-vectors = \[\]\n(?:#[^\n]*\n)*conformance = \[\]\n# END repository-only tests\n/,
     );
     expect(read('src/lib.rs')).toContain(
       '#[cfg(all(test, feature = "shared-vectors"))]\nmod testvectors;',

@@ -85,7 +85,7 @@ const MUTATIONS = [
     label: 'test-e2e-deploy.yml: bump the workflow_dispatch nextjsRef DEFAULT to a drifted value',
     subject: 'testE2eDeploy',
     anchor:
-      "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.4.3'",
+      "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.4.5'",
     replacement:
       "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.3.3'",
   },
@@ -111,32 +111,32 @@ const MUTATIONS = [
   {
     label: 'docs/compat-matrix.md: drift the cited vercel/next.js version from the manifest',
     subject: 'docsMatrixMd',
-    anchor: 'against `vercel/next.js` **v16.4.3**',
+    anchor: 'against `vercel/next.js` **v16.4.5**',
     replacement: 'against `vercel/next.js` **v16.3.3**',
   },
   {
     label: 'compat-matrix.mdx: drift the cited Next.js version from the manifest',
     subject: 'docsMatrixMdx',
-    anchor: 'the official suite now runs against Next.js v16.4.3.',
+    anchor: 'the official suite now runs against Next.js v16.4.5.',
     replacement: 'the official suite now runs against Next.js v16.3.3.',
   },
   {
-    // #2602: the harness moved to the shipped 16.4.3, so the divergence is
-    // CLOSED and the docs must not claim a "newer" scaffold release. Re-add
-    // that stale claim to the callout (everything else converged) and require
-    // the converged branch of the docs check to go red.
+    // 2026-11-16: the harness moved WITH the shipped pin to 16.4.5, so the
+    // divergence is CLOSED and the docs must not claim a "newer" scaffold
+    // release. Re-add that stale claim to the callout (everything else
+    // converged) and require the converged branch of the docs check to go red.
     label:
       'compat-matrix.mdx: claim a "newer Next.js release" than the credentialed one while credentialedNextRef equals shippedNextPin',
     subject: 'docsMatrixMdx',
-    anchor: 'That is the patched release `knext create` scaffolds.',
+    anchor: 'That is the patched release `knext create` scaffolds;',
     replacement:
-      'That is a newer Next.js release than the credentialed one, which `knext create` scaffolds.',
+      'That is a newer Next.js release than the credentialed one, which `knext create` scaffolds;',
   },
   {
     label:
       'manifest: move credentialedNextRef away from the value the workflows carry (v16.4.3 -> v16.2.12)',
     subject: 'manifest',
-    anchor: '"credentialedNextRef": "v16.4.3",',
+    anchor: '"credentialedNextRef": "v16.4.5",',
     replacement: '"credentialedNextRef": "v16.2.12",',
   },
 
@@ -175,28 +175,28 @@ const MUTATIONS = [
     edits: [
       {
         subject: 'scaffoldPkg',
-        anchor: '"next": "16.4.3",',
+        anchor: '"next": "16.4.5",',
         replacement: '"next": "16.5.0",',
       },
       {
         subject: 'manifest',
-        anchor: '"shippedNextPin": "16.4.3",',
+        anchor: '"shippedNextPin": "16.4.5",',
         replacement: '"shippedNextPin": "16.5.0",',
       },
     ],
   },
   {
     label:
-      'scaffold pin bumped to 16.4.4 with the manifest still documenting 16.4.3 (silent drift)',
+      'scaffold pin bumped to 16.4.6 with the manifest still documenting 16.4.5 (silent drift)',
     subject: 'scaffoldPkg',
-    anchor: '"next": "16.4.3",',
-    replacement: '"next": "16.4.4",',
+    anchor: '"next": "16.4.5",',
+    replacement: '"next": "16.4.6",',
   },
   {
     label:
-      'scaffold pin put back to 16.3.8 (below the peer floor) with the manifest still documenting 16.4.3',
+      'scaffold pin put back to 16.3.8 (below the peer floor) with the manifest still documenting 16.4.5',
     subject: 'scaffoldPkg',
-    anchor: '"next": "16.4.3",',
+    anchor: '"next": "16.4.5",',
     replacement: '"next": "16.3.8",',
   },
 

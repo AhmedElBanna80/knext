@@ -4,13 +4,19 @@
 > real, on-disk evidence and a mechanical guard test (`tests/compat-matrix.test.ts`) fails CI if a
 > ✅ ("supported") row cannot be backed up. When in doubt we mark ⚠️, not ✅.
 >
-> **On the 2.x line the harness now runs against `vercel/next.js` **v16.4.3**** (#2602,
+> **On the 2.x line the harness now runs against `vercel/next.js` **v16.4.5**** (2026-11-16, moved
+> together with the scaffold for GHSA-mfr8-8qww-v76h under a founder-approved rcBumpMarker; it ran v16.4.3 from #2602,
 > 2026-11-01), the patched release `knext create` scaffolds and every app knext deploys pins, so
 > the harness and the scaffold agree again. It ran v16.4.0 from #2296 (2026-10-13) until then,
 > the floor `packages/kn-next/src/next-compat.ts` declares. The scaffold moved to 16.4.3 first
 > (#2594, 2026-10-27) because GHSA-2464-fhr4-w9xw / GHSA-673q-mjm6-r5xr (critical) and
 > GHSA-p3m5-59mp-jv5r (high) affect 16.4.0; that patch-only divergence closed when `NEXTJS_REF`
 > moved to v16.4.3, which restarts the credential windows. The peer range still starts at 16.4.0.
+> **2026-11-16:** the harness, the scaffolds, knext's own apps and every fixture move together to
+> 16.4.5 for GHSA-mfr8-8qww-v76h (medium, `'use cache'` root-param information disclosure,
+> affects 16.3.0 through 16.4.4). The upstream compare v16.4.3...v16.4.5 (16 commits, 258 files)
+> touches none of the 18 quarantined test files, so the ledger entries are re-stamped reaudited
+> v16.4.5 by source equivalence; the credential windows restart at v16.4.5.
 > `tests/next-compat-e2e-deploy-ref.test.ts` reds if `test-e2e-deploy.yml`'s defaults drift from
 > the first matrix leg (on the floor's minor, at or above the floor). **No dispatch has run at
 > v16.4.3 yet.** **Evidence at v16.4.0 is two dispatched node × turbopack runs.** Run 38384745675

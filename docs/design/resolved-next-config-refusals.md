@@ -26,7 +26,8 @@ Other rules:
 - A recorded refusal stands even if the build exited 0.
 
 Known limits:
-- a nested, symlinked or out-of-tree `distDir` (falls to case 3);
+- on an app WITHOUT knext's adapter, a nested, symlinked or out-of-tree `distDir` (falls to case 4; with the
+  adapter, any non-default `distDir` is refused before the build);
 - clock skew larger than the build time plus 2 s, or a restore that rewrites mtimes on a default-distDir copy
   with no custom-distDir build alongside (falls to case 2's newest file);
 - one record shared by two `next build`s of the SAME app in one script (a sibling app's build neither records
@@ -34,7 +35,7 @@ Known limits:
   different directory (`cd web && next build`, `next build ./web`), the adapter leaves that directory in
   `<facts>.foreign` and the CLI, with no record of its own, fails closed naming it rather than text-checking
   the wrong next.config. Only knext's adapter writes that marker: a different-directory build WITHOUT the
-  adapter, or one whose env was filtered (turbo strict env mode), still falls to case 3 of the wrong
+  adapter, or one whose env was filtered (turbo strict env mode), still falls to case 4 (the text check) of the wrong
   directory, with its warning, as before #2250;
 - `--skip-next`, `knext doctor` and vinext still decide from text, and the text scans keep string literals, so a
   setting written inside a string can trip them.

@@ -128,8 +128,10 @@ export function foreignMarkerPath(outPath) {
 
 /** The directory a foreign build left at `outPath`'s marker, if any. */
 export function readForeignProjectDir(outPath) {
+    const marker = foreignMarkerPath(outPath);
+    if (!existsSync(marker)) return undefined;
     try {
-        return readFileSync(foreignMarkerPath(outPath), "utf8").trim() || undefined;
+        return readFileSync(marker, "utf8").trim() || undefined;
     } catch {
         return undefined;
     }

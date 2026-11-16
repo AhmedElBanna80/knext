@@ -3,7 +3,8 @@
  * that stub the build runner. On `npm run build` it records `resolved` the way
  * the adapter's `modifyConfig` does, through the real `recordNextConfigFacts`
  * and the env the CLI set, and lets its refusal throw, failing the build as
- * Next would. Any other command is a no-op.
+ * Next would. Any other command is a no-op. `projectDir` is what Next passes
+ * to `modifyConfig`; set it to stand in for a build of another directory.
  */
 
 import { recordNextConfigFacts } from "../../adapters/next-config-facts.js";

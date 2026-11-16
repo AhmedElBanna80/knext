@@ -117,15 +117,6 @@ export function factsTempPath(outPath) {
 }
 
 /**
- * Record the resolved facts of `config` (the config the adapter hands back to
- * Next) and throw a marked refusal when they call for one. Returns the facts,
- * or undefined when the CLI did not ask (see the file comment).
- *
- * `modifyConfig` runs in the main build process and again in the bundler's
- * workers, so the file is written tmp-then-rename: a reader never sees a
- * partial record, and identical writes simply replace each other.
- */
-/**
  * Where a build for ANOTHER directory leaves its directory. The record file
  * stays the CLI app's alone; this side file lets the CLI tell "Next built a
  * different directory" (a build script that cd's, or `next build ./web`) from
@@ -144,6 +135,15 @@ export function readForeignProjectDir(outPath) {
     }
 }
 
+/**
+ * Record the resolved facts of `config` (the config the adapter hands back to
+ * Next) and throw a marked refusal when they call for one. Returns the facts,
+ * or undefined when the CLI did not ask (see the file comment).
+ *
+ * `modifyConfig` runs in the main build process and again in the bundler's
+ * workers, so the file is written tmp-then-rename: a reader never sees a
+ * partial record, and identical writes simply replace each other.
+ */
 export function recordNextConfigFacts(
     config,
     { phase, projectDir },

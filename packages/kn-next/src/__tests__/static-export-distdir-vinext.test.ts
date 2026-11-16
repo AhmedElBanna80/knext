@@ -766,6 +766,7 @@ describe("a Next build in a different directory than the CLI's app", () => {
 describe("the build env and temp files", () => {
     it("sets its env for the build only, removes its temp dir, and never injects an adapter", () => {
         const dir = appDir({ "next.config.mjs": "export default {};" });
+        const builderBefore = process.env.KNEXT_BUILDER;
         process.env.KNEXT_BUILDER = "preset-by-user";
         const before = {
             out: process.env.KNEXT_CONFIG_FACTS_OUT,
@@ -799,7 +800,8 @@ describe("the build env and temp files", () => {
                 adapter: process.env.NEXT_ADAPTER_PATH,
             }).toEqual(before);
         } finally {
-            delete process.env.KNEXT_BUILDER;
+            if (builderBefore === undefined) delete process.env.KNEXT_BUILDER;
+            else process.env.KNEXT_BUILDER = builderBefore;
         }
     });
 });

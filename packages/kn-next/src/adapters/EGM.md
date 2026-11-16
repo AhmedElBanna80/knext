@@ -167,7 +167,7 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `drainDbPools` and `registerDbPoolDrain`.
 - `env.ts` exports `buildChildEnv` and `deriveBunTranspilerCachePath`.
   `runtime-env.ts` exports `KNEXT_RUNTIME_ENV = "KNEXT_RUNTIME"`.
-- `next-config-facts.js` exports `recordNextConfigFacts(config, {phase}, env?)`,
+- `next-config-facts.js` exports `recordNextConfigFacts(config, {phase, projectDir}, env?)`,
   `readNextConfigFacts(path)`, `refusalFor(facts, {runtime, builder})`,
   `isDefaultDistDir`, `CONFIG_FACTS_OUT_ENV` (`KNEXT_CONFIG_FACTS_OUT`),
   `KNEXT_BUILDER_ENV` (`KNEXT_BUILDER`), `CONFIG_FACTS_PROJECT_ENV`

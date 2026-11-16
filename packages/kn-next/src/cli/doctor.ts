@@ -43,6 +43,7 @@ import { appImageCheck } from "./doctor/checks/app-image";
 import { certManagerCheck } from "./doctor/checks/cert-manager";
 import { ciKubeconfigCheck } from "./doctor/checks/ci-kubeconfig";
 import { clusterCheck } from "./doctor/checks/cluster";
+import { k8sFloorCheck } from "./doctor/checks/k8s-floor";
 import { crdCheck } from "./doctor/checks/crd";
 import { crdSchemaCheck } from "./doctor/checks/crd-schema";
 import { ingressCheck } from "./doctor/checks/ingress";
@@ -148,6 +149,7 @@ export async function runDoctor(
     checks.push(...crdSchemaCheck(ctx));
     checks.push(...operatorCheck(ctx)); // sets ctx.operatorImage + ctx.operatorManager
     checks.push(...operatorVersionCheck(ctx)); // reads ctx.operatorManager (#1947)
+    checks.push(...k8sFloorCheck(ctx)); // reads ctx.operatorManager: floor warning when no operator row owns it
     checks.push(...writePolicyCheck(ctx)); // reads ctx.operatorManager: is the operator's Secret/ConfigMap write policy in force?
     checks.push(...unverifiedSecretsCheck(ctx)); // no row unless a function is held as SecretsUnverified: can the operator read its Secrets?
     checks.push(...certManagerCheck(ctx));

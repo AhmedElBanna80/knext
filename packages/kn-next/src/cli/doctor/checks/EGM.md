@@ -17,6 +17,7 @@ Result shape for every check: `{ id, title, status, detail, hint? }`, where
 Cluster checks:
 
 - `clusterCheck(deps, verbose)` (`cluster.ts`): apiserver reachability through `kubectl get --raw /version`. Returns `{ checks, reachable }`, and `reachable` gates the other cluster checks.
+- `k8sFloorCheck` (`k8s-floor.ts`): warns when the server is below the 1.30 floor (`FLOOR` and `serverVersion` are reused from `write-policy.ts`). It returns no row when the cluster is unreachable or an operator Deployment exists, because `write-policy` then owns the floor warning [`k8s-floor.ts`].
 - `crdCheck` (`crd.ts`): the NextApp CRD is installed and its served version pairs with the CLI.
 - `crdSchemaCheck` (`crd-schema.ts`): the installed CRD schema covers every field the CLI emits.
 - `operatorCheck` (`operator.ts`): the operator Deployment exists and is ready in `kn-next-operator-system`.

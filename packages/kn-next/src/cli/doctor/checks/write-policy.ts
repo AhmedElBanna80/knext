@@ -112,7 +112,7 @@ export const CANONICAL_POLICY_CEL = {
 } as const;
 
 /** ValidatingAdmissionPolicy is admissionregistration.k8s.io/v1 from here. */
-const FLOOR = { major: 1, minor: 30 } as const;
+export const FLOOR = { major: 1, minor: 30 } as const;
 
 export type WritePolicyReason =
     | "Enforced"
@@ -375,7 +375,7 @@ export function evaluateWritePolicy(
 }
 
 /** The server's major.minor from `/version`, or undefined when unreadable. */
-function serverVersion(
+export function serverVersion(
     stdout: string,
 ): { major: number; minor: number } | undefined {
     const v = safeJson<{

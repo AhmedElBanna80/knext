@@ -9,12 +9,16 @@ Revision 1 adjusts it, and Revision 2's adapter injection is superseded by Revis
 After a **Next** build (the vinext target is PR 2), `runProjectBuild` decides from, in order:
 
 1. **knext's adapter record.** `modifyConfig` records `{projectDir, distDir, output, turbopackModuleFragments}`
-   to the per-build file named by `KNEXT_CONFIG_FACTS_OUT`, and refuses there, before compilation. The record
-   is ignored if its `projectDir` is another directory.
+   to the per-build file named by `KNEXT_CONFIG_FACTS_OUT`, and refuses a custom `distDir` or Bun+Turbopack
+   fragments there, before compilation (a static export is refused by the CLI after the build). The adapter
+   records only for the CLI's app (`KNEXT_CONFIG_FACTS_PROJECT`); the CLI ignores a record whose `projectDir`
+   is another directory.
 2. **Next's own `required-server-files.json`** written during this build (mtime at or after the build start,
    with 2 s slack), in `.next` or a top-level app directory. Any fresh file with a custom `distDir` decides;
    otherwise the newest does. A file that does not parse refuses.
-3. **Neither:** a warning, then the old text checks.
+3. **knext's adapter built a different directory** (the `<facts>.foreign` marker, e.g. `cd web && next
+   build`): a refusal naming that directory, instead of text-checking the wrong `next.config`.
+4. **None of these:** a warning, then the old text checks.
 
 Other rules:
 - Text checks also run before every build, as warnings only.

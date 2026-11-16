@@ -43,8 +43,8 @@ export default adapter;
   and an `output: 'export'` under a condition or inside a nested value only prints a warning.
 - **The build checks read the config Next.js resolved, not the file.** When `knext build`, `deploy` or
   `preview` runs the Next.js build, the adapter's `modifyConfig` records the resolved `distDir`, `output`
-  and `experimental.turbopackModuleFragments`, and refuses an unsupported setting right there, before
-  anything compiles. Config wrappers, plugins and values computed from the environment are all seen. A
+  and `experimental.turbopackModuleFragments`, and refuses a custom `distDir` or the Bun + Turbopack
+  fragments setting right there, before anything compiles; a static export is refused after the build. Config wrappers, plugins and values computed from the environment are all seen. A
   plain `next build` you run yourself is not checked. For an app without knext's adapter, the CLI reads
   the resolved config Next.js writes into its build directory during every build, and refuses after the
   build. If neither is available (for example, the app's build script does not run `next build`), the

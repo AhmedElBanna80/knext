@@ -25,7 +25,8 @@ Known limits:
 - a nested, symlinked or out-of-tree `distDir` (falls to case 3);
 - clock skew larger than the build time plus 2 s, or a restore that rewrites mtimes on a default-distDir copy
   with no custom-distDir build alongside (falls to case 2's newest file);
-- one record shared by two `next build`s in one script;
+- one record shared by two `next build`s of the SAME app in one script (a sibling app's build neither records
+  nor refuses: the CLI names its app in `KNEXT_CONFIG_FACTS_PROJECT`);
 - `--skip-next`, `knext doctor` and vinext still decide from text.
 
 ## Problem

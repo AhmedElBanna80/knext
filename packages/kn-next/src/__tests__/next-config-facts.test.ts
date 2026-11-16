@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     CONFIG_FACTS_OUT_ENV,
+    CONFIG_FACTS_PROJECT_ENV,
+    factsTempPath,
     isDefaultDistDir,
     KNEXT_BUILDER_ENV,
     readNextConfigFacts,
@@ -215,6 +217,50 @@ describe("recordNextConfigFacts records the app directory", () => {
         expect(JSON.parse(readFileSync(out, "utf8")).projectDir).toBe(
             "/apps/web",
         );
+    });
+});
+
+// A build script that builds several apps (a monorepo) runs every app's
+// `next build` with the CLI's env. Only the app the CLI is building may record
+// or refuse; a sibling app with the knext adapter is left alone.
+describe("recordNextConfigFacts skips a sibling app's build", () => {
+    it("neither records nor refuses for a projectDir that is not the CLI's app", () => {
+        const app = mkdtempSync(join(dir, "app-"));
+        const sibling = mkdtempSync(join(dir, "sibling-"));
+        const refusing = { distDir: "build", experimental: {} };
+        expect(
+            recordNextConfigFacts(
+                refusing,
+                { phase: BUILD, projectDir: sibling },
+                env({ [CONFIG_FACTS_PROJECT_ENV]: app }),
+            ),
+        ).toBeUndefined();
+        expect(existsSync(out)).toBe(false);
+    });
+
+    it("still records and refuses for the CLI's own app, through a symlinked path", () => {
+        const app = mkdtempSync(join(dir, "app-"));
+        const { symlinkSync } = require("node:fs") as typeof import("node:fs");
+        const link = join(dir, "link");
+        symlinkSync(app, link);
+        expect(() =>
+            recordNextConfigFacts(
+                { distDir: "build", experimental: {} },
+                { phase: BUILD, projectDir: link },
+                env({ [CONFIG_FACTS_PROJECT_ENV]: app }),
+            ),
+        ).toThrow(/knext-refuse/);
+        expect(JSON.parse(readFileSync(out, "utf8")).refused).toBeDefined();
+    });
+});
+
+describe("factsTempPath", () => {
+    it("differs per call in one process, so workers sharing a pid never collide", () => {
+        const a = factsTempPath(out);
+        const b = factsTempPath(out);
+        expect(a).not.toBe(b);
+        expect(a.startsWith(`${out}.${process.pid}.`)).toBe(true);
+        expect(a.endsWith(".tmp")).toBe(true);
     });
 });
 

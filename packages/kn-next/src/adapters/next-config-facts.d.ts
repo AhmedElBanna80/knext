@@ -17,10 +17,12 @@ export interface NextConfigRefusal {
 
 export declare const CONFIG_FACTS_OUT_ENV: "KNEXT_CONFIG_FACTS_OUT";
 export declare const KNEXT_BUILDER_ENV: "KNEXT_BUILDER";
+export declare const CONFIG_FACTS_PROJECT_ENV: "KNEXT_CONFIG_FACTS_PROJECT";
 export declare const CUSTOM_DIST_DIR_MESSAGE: (distDir: string) => string;
 export declare const TURBOPACK_FRAGMENTS_BUN_DETAIL: string;
 export declare const TURBOPACK_FRAGMENTS_BUN_HINT: string;
 
+export declare function factsTempPath(outPath: string): string;
 export declare function isDefaultDistDir(distDir: unknown): boolean;
 export declare function refusalFor(
     facts: Pick<NextConfigFacts, "distDir" | "turbopackModuleFragments"> &

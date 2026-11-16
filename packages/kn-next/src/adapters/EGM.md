@@ -170,7 +170,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
 - `next-config-facts.js` exports `recordNextConfigFacts(config, {phase}, env?)`,
   `readNextConfigFacts(path)`, `refusalFor(facts, {runtime, builder})`,
   `isDefaultDistDir`, `CONFIG_FACTS_OUT_ENV` (`KNEXT_CONFIG_FACTS_OUT`),
-  `KNEXT_BUILDER_ENV` (`KNEXT_BUILDER`), `CUSTOM_DIST_DIR_MESSAGE`,
+  `KNEXT_BUILDER_ENV` (`KNEXT_BUILDER`), `CONFIG_FACTS_PROJECT_ENV`
+  (`KNEXT_CONFIG_FACTS_PROJECT`), `factsTempPath`, `CUSTOM_DIST_DIR_MESSAGE`,
   `TURBOPACK_FRAGMENTS_BUN_DETAIL` and `TURBOPACK_FRAGMENTS_BUN_HINT`. It has no
   default export and is not a published subpath: `next-adapter.ts` and the CLI
   import it. A facts record is `{projectDir?, distDir, output,
@@ -394,7 +395,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   `output` is the one after knext's standalone default. It records and refuses
   only when `KNEXT_CONFIG_FACTS_OUT` is set (by the CLI) and the phase is
   `phase-production-build`, so a plain `next build`, `next typegen` and
-  `next dev` are untouched. A refusal throws an `Error` whose message starts
+  `next dev` are untouched. When `KNEXT_CONFIG_FACTS_PROJECT` names the app the
+  CLI is building and `projectDir` resolves elsewhere (a sibling app in a
+  script that builds several), it neither records nor refuses. A refusal throws an `Error` whose message starts
   with `[knext-refuse:<code>] `, which fails `next build` before compilation.
   A static export is never refused here (Next validates it first). The bundler
   is read from `KNEXT_BUILDER`, not from the resolved config, which does not
@@ -728,9 +731,9 @@ The compile pipeline fails closed.
 - `sharp-native-extract.mjs` writes native files under
   `<tmp>/knext-native-<uid>-<hash>`.
 - `next-config-facts.js:recordNextConfigFacts` writes the facts record to the
-  path in `KNEXT_CONFIG_FACTS_OUT`, through `<path>.<pid>.tmp` then a rename,
-  because `modifyConfig` runs in the main build process and in each bundler
-  worker. A failed write throws a named `[knext-adapter]` error.
+  path in `KNEXT_CONFIG_FACTS_OUT`, through `factsTempPath` (`<path>.<pid>.<threadId>.<random>.tmp`)
+  then a rename, because `modifyConfig` runs in the main build process and in
+  each bundler worker, and worker threads share the pid. A failed write throws a named `[knext-adapter]` error.
 
 ### Globals
 

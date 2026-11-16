@@ -34,6 +34,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     CONFIG_FACTS_OUT_ENV,
+    CONFIG_FACTS_PROJECT_ENV,
     isDefaultDistDir,
     KNEXT_BUILDER_ENV,
     type NextConfigFacts,
@@ -317,6 +318,7 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
         const factsPath = join(factsDir, "facts.json");
         restores.push(
             setEnv(CONFIG_FACTS_OUT_ENV, factsPath),
+            setEnv(CONFIG_FACTS_PROJECT_ENV, cwd),
             setEnv(KNEXT_BUILDER_ENV, opts.builderId),
         );
         const recorded = (): NextConfigFacts | undefined => {

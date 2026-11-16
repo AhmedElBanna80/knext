@@ -26,12 +26,26 @@
  * share it without a TypeScript step.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+    existsSync,
+    readFileSync,
+    realpathSync,
+    renameSync,
+    writeFileSync,
+} from "node:fs";
+import { threadId } from "node:worker_threads";
 
 /** The CLI-created file the adapter writes the facts to. Unset = do nothing. */
 export const CONFIG_FACTS_OUT_ENV = "KNEXT_CONFIG_FACTS_OUT";
 /** knext's builder id (`turbopack`, `webpack`), set by the CLI for the build. */
 export const KNEXT_BUILDER_ENV = "KNEXT_BUILDER";
+/**
+ * The app directory the CLI is building. A build script that builds several
+ * apps passes the CLI's env to every `next build`; only this app records or
+ * refuses, so a sibling app with the knext adapter is left alone.
+ */
+export const CONFIG_FACTS_PROJECT_ENV = "KNEXT_CONFIG_FACTS_PROJECT";
 /** Same value as `runtime-env.ts`'s KNEXT_RUNTIME_ENV (lockstep-tested). */
 const RUNTIME_ENV = "KNEXT_RUNTIME";
 
@@ -94,6 +108,23 @@ export function refusalFor(facts, { runtime, builder }) {
  * workers, so the file is written tmp-then-rename: a reader never sees a
  * partial record, and identical writes simply replace each other.
  */
+/** Resolve symlinks when the path exists, so two spellings of one app match. */
+function canonical(path) {
+    try {
+        return realpathSync(path);
+    } catch {
+        return path;
+    }
+}
+
+/**
+ * A temp name unique per call: pid, thread and a random suffix. `modifyConfig`
+ * also runs in the bundler's workers, and worker threads share the pid.
+ */
+export function factsTempPath(outPath) {
+    return `${outPath}.${process.pid}.${threadId}.${randomBytes(4).toString("hex")}.tmp`;
+}
+
 export function recordNextConfigFacts(
     config,
     { phase, projectDir },
@@ -101,6 +132,10 @@ export function recordNextConfigFacts(
 ) {
     const outPath = env[CONFIG_FACTS_OUT_ENV];
     if (!outPath || phase !== PRODUCTION_BUILD) return undefined;
+    const target = env[CONFIG_FACTS_PROJECT_ENV];
+    if (target && projectDir && canonical(projectDir) !== canonical(target)) {
+        return undefined;
+    }
     const facts = {
         ...(projectDir ? { projectDir } : {}),
         distDir: config.distDir ?? DEFAULT_DIST_DIR,
@@ -113,7 +148,7 @@ export function recordNextConfigFacts(
         builder: env[KNEXT_BUILDER_ENV],
     });
     const record = refusal ? { ...facts, refused: refusal.code } : facts;
-    const tmp = `${outPath}.${process.pid}.tmp`;
+    const tmp = factsTempPath(outPath);
     try {
         writeFileSync(tmp, `${JSON.stringify(record)}\n`);
         renameSync(tmp, outPath);

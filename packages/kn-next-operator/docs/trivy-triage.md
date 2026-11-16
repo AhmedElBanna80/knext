@@ -25,9 +25,12 @@ The scanned image is `gcr.io/distroless/static:nonroot` + a single
   flags (a) the **Go stdlib version** it was compiled with and (b) any
   vulnerable module dependencies. This is the only fixable surface.
 
-The module graph is already on patched releases (`golang.org/x/net v0.49.0`,
-`x/text v0.33.0`, `x/oauth2 v0.32.0`, `k8s.io/* v0.35.0`, etc.). The actual
-exposure was the **builder tag**: the Dockerfile used a floating
+When this triage was written the module graph was already on patched
+releases, and the actual exposure was the **builder tag**. (Module CVEs do
+still reach this gate: CVE-2026-78661, HIGH, in `golang.org/x/net` v0.61.0
+blocked the 2026-11-16 operator publish until x/net moved to v0.62.0. Read the
+current versions from `go.mod`, not from this page.) At the time, the Dockerfile
+used a floating
 `FROM golang:1.25`, which is not pinned to a patched point release. A
 floating/stale-cached `1.25.x` bakes an unpatched Go stdlib into the binary, and
 Trivy then reports fixed-version Go stdlib CVEs (the `stdlib` package, e.g. the
@@ -35,6 +38,12 @@ Trivy then reports fixed-version Go stdlib CVEs (the `stdlib` package, e.g. the
 HIGH/CRITICAL.
 
 ## Remediation (preferred path — base-image upgrade, no ignore)
+
+> **History, not instructions.** The diff below is the original 1.25-era fix.
+> The builder has since moved on (see the `FROM golang:…@sha256:…` line in
+> `../Dockerfile` and the `go` line in `../go.mod`); a later bump pins the
+> newest patched point release of THAT line, digest-pinned, and raises the
+> `go_floor` table in `hack/check-trivy-baseimage.bats.sh` in lockstep.
 
 Pin the builder to the latest patched Go point release:
 

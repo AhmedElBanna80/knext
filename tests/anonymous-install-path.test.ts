@@ -158,9 +158,10 @@ describe('verify-anonymous-install.mjs --print-url — discovery only, no networ
     // A DNS-black-holed run still succeeds: --print-url never calls fetchInstallBundle
     // or resolveAnonymousManifest, so it cannot be flaky on network reachability,
     // which the step BEFORE cluster stand-up must not be.
+    const { KNEXT_INSTALL_REPO: _r, KNEXT_INSTALL_CHANNEL: _c, ...base } = process.env;
     const result = Bun.spawnSync(['node', SCRIPT, '--print-url', '--root', REPO_ROOT], {
       cwd: '/',
-      env: { ...process.env, HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1' },
+      env: { ...base, HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1' },
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString('utf8').trim()).toBe(discoverInstallUrl(REPO_ROOT).url);
@@ -276,6 +277,13 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
     );
     expect(step).toContain(
       "KNEXT_INSTALL_CHANNEL: ${{ github.repository != 'getknext-dev/knext' && 'operator-edge' || '' }}",
+    );
+    // The record step carries its OWN env (not the apply step's), so its
+    // summary can label a stand-in.
+    const recordStart = wf.indexOf('- name: Record the operator image digest actually pulled');
+    const recordStep = wf.slice(recordStart, wf.indexOf('\n      - name:', recordStart + 1));
+    expect(recordStep).toContain(
+      "KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}",
     );
     // The step summary and the red-alert issue both label a stand-in as one.
     expect(wf).toContain(

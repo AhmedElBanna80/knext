@@ -173,6 +173,10 @@ jobs:
             -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')"
           echo "operator image actually pulled: ${IMAGE_ID}"
           {
+            echo "### Install URL applied"
+            echo '```'
+            echo "${INSTALL_URL}"
+            echo '```'
             echo "### Operator image actually pulled"
             echo '```'
             echo "${IMAGE_ID}"
@@ -320,10 +324,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CHECK_RESULT: ${{ needs.published-bundle-kind.result }}
           EVENT: ${{ github.event_name }}
+          BUNDLE: ${{ github.repository != 'getknext-dev/knext' && format('the STAND-IN bundle ({0} operator-edge release, not the documented one)', github.repository) || 'the documented, unmodified' }}
         run: |
           set -euo pipefail
           title='Published install bundle does not apply cleanly on kind'
-          body="The nightly published-bundle-on-kind check FAILED: the documented, unmodified
+          body="The nightly published-bundle-on-kind check FAILED: ${BUNDLE}
           install.yaml — the real GHCR image, no credentials — did not apply, the operator did not
           become Available, the NextApp CRD did not reach Established, or the CLI-rendered NextApp
           did not reconcile to Ready. The job log names the exact step and, if it got far enough, the

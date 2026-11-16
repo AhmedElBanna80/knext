@@ -64,7 +64,8 @@
  * install step, so a check auditing the supply chain cannot itself become part
  * of it. That is why the bundle is scanned rather than parsed with `yaml`.
  *
- * Usage: node scripts/verify-anonymous-install.mjs [--root <repo-root>] [--scrub]
+ * Usage: node scripts/verify-anonymous-install.mjs [--root <repo-root>] [--scrub] [--print-url]
+ *   env KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL: an explicit stand-in (see retargetInstallUrl).
  * Exits 1 on any finding.
  *
  * `--scrub` removes credential-shaped variables from the process ENVIRONMENT
@@ -1890,7 +1891,9 @@ async function main(argv) {
     );
     return 0;
   }
-  console.error(`\n${findings.length} finding(s):`);
+  console.error(
+    `\n${findings.length} finding(s)${standIn ? ' (STAND-IN bundle, not the documented one)' : ''}:`,
+  );
   for (const finding of findings) console.error(formatFinding(finding));
   return 1;
 }

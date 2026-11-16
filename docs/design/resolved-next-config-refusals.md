@@ -28,8 +28,9 @@ Other rules:
 Known limits:
 - on an app WITHOUT knext's adapter, a nested, symlinked or out-of-tree `distDir` (falls to case 4; with the
   adapter, any non-default `distDir` is refused before the build);
-- clock skew larger than the build time plus 2 s, or a restore that rewrites mtimes on a default-distDir copy
-  with no custom-distDir build alongside (falls to case 2's newest file);
+- on an app without the adapter, clock skew larger than the build time plus 2 s makes Next's fresh file look
+  old (falls to case 3 or 4); a restore that rewrites mtimes on a default-distDir copy with no custom-distDir
+  build alongside falls to case 2's newest file;
 - one record shared by two `next build`s of the SAME app in one script (a sibling app's build neither records
   nor refuses: the CLI names its app in `KNEXT_CONFIG_FACTS_PROJECT`). When the build script runs Next in a
   different directory (`cd web && next build`, `next build ./web`), the adapter leaves that directory in

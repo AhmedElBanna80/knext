@@ -11,7 +11,11 @@
  * contains the upstream parser fix (oven-sh/bun#45010, tracking issue
  * oven-sh/bun#45007) is the minimum Bun knext supports. Until then it stays.
  *
- * Detection reuses the doctor's next.config text scan (no second parser): a
+ * On a Next build the decision is made from the RESOLVED config, in a knext
+ * adapter's `modifyConfig` (`adapters/next-config-facts.js`, #2250), so a flag
+ * set by a wrapper or a computed value is seen. The text scan here remains for
+ * the paths with no resolved config: `build --skip-next`, a build no knext
+ * adapter ran in (runProjectBuild's fallback), and doctor's advisory row. A
  * flag set through a computed value is not visible to it. FAIL CLOSED where it
  * can be: a next.config that exists but cannot be read is refused on Bun,
  * rather than assumed clean.
@@ -20,6 +24,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripComments } from "../adapters/js-source-lexer.mjs";
+import {
+    TURBOPACK_FRAGMENTS_BUN_DETAIL,
+    TURBOPACK_FRAGMENTS_BUN_HINT,
+} from "../adapters/next-config-facts.js";
 import { NEXT_CONFIG_FILES } from "./doctor/checks/use-cache";
 import { UsageError } from "./shared";
 
@@ -42,10 +50,7 @@ export function readNextConfigStrict(cwd = process.cwd()): string | undefined {
     return undefined;
 }
 
-export const TURBOPACK_FRAGMENTS_BUN_DETAIL =
-    "experimental.turbopackModuleFragments is on, the build is Turbopack and the runtime is Bun, whose parser rejects the chunks that flag makes Turbopack emit (they assign to a const in code that never runs), so the app fails when those chunks load. Node and non-Turbopack (webpack, vinext) builds are not affected.";
-export const TURBOPACK_FRAGMENTS_BUN_HINT =
-    'turn experimental.turbopackModuleFragments off in your next.config, or set runtime: "node" in your knext config';
+export { TURBOPACK_FRAGMENTS_BUN_DETAIL, TURBOPACK_FRAGMENTS_BUN_HINT };
 
 export function assertNoBunTurbopackFragments(opts: {
     runtime: string;

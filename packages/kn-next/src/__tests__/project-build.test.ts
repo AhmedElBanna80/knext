@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runProjectBuild } from "../cli/project-build";
 import { handleUsageError, USAGE_ERROR_CODE } from "../cli/shared";
+import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
 
 /** What execFileSync throws when the spawned script exits non-zero. */
 function exitError(status: number): Error & { status: number } {
@@ -266,7 +267,9 @@ describe("runProjectBuild requires its ids by type (the guard cannot be skipped 
             join(dir, "next.config.mjs"),
             "export default { experimental: { turbopackModuleFragments: true } };",
         );
-        const run = mock();
+        // With an adapter in the build (#2250) the refusal comes from the
+        // resolved config, inside that build.
+        const run = mock(adapterBuild(FRAGMENTS_ON));
         try {
             expect(() =>
                 runProjectBuild({
@@ -277,7 +280,18 @@ describe("runProjectBuild requires its ids by type (the guard cannot be skipped 
                     run,
                 }),
             ).toThrow(/turbopackModuleFragments/);
-            expect(run).not.toHaveBeenCalled();
+            expect(run).toHaveBeenCalledTimes(1);
+            // With no adapter, the source-text fallback still refuses it.
+            expect(() =>
+                runProjectBuild({
+                    requireEsm: false,
+                    runtimeId: "bun",
+                    builderId: "turbopack",
+                    cwd: dir,
+                    run: mock(),
+                    warn: () => {},
+                }),
+            ).toThrow(/turbopackModuleFragments/);
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }

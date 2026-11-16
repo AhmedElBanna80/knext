@@ -37,15 +37,30 @@ export default adapter;
 
 - **`modifyConfig`** defaults `output` to `'standalone'` during the production build. An explicit
   `output: 'export'` is left untouched, so Next.js runs its own static-export validation, and the
-  knext CLI then refuses the build (on both the Next.js and vinext build targets; both read `next.config` literally, so a value computed at runtime is not detected, and on vinext an `output: 'export'` that sits under a condition or inside a nested value only prints a warning): a static export is not a server deployment, and knext deploys a
-  Next.js server. Remove `output: 'export'`, or host the `out/` folder on a static host.
+  knext CLI then refuses the build: a static export is not a server deployment, and knext deploys a
+  Next.js server. Remove `output: 'export'`, or host the `out/` folder on a static host. On the vinext
+  target the check reads `next.config` literally, so a value computed at runtime is not detected there,
+  and an `output: 'export'` under a condition or inside a nested value only prints a warning.
+- **The build checks read the config Next.js resolved, not the file.** When `knext build`, `deploy` or
+  `preview` runs the Next.js build, the adapter's `modifyConfig` records the resolved `distDir`, `output`
+  and `experimental.turbopackModuleFragments`, and refuses a custom `distDir` or the Bun + Turbopack
+  fragments setting right there, before anything compiles; a static export is refused after the build. Config wrappers, plugins and values computed from the environment are all seen. A
+  plain `next build` you run yourself is not checked. For an app without knext's adapter, the CLI reads
+  the resolved config Next.js writes into its build directory during every build, and refuses after the
+  build. If neither is available (for example, the app's build script does not run `next build`), the
+  CLI falls back to reading `next.config` as text after the build, and prints a
+  warning saying so. Before the build, the text check also runs as an early warning only. If the build
+  script runs Next.js in a different directory (for example `cd web && next build`) and that app uses
+  knext's adapter, the CLI cannot check your app's config and stops with an error naming that directory:
+  run knext from the directory Next.js builds. Without knext's adapter there, or when a task runner such
+  as turbo filters the build's environment, the CLI falls back to the text check of the directory knext
+  runs in, with the warning above.
 - **A custom `distDir` is not supported yet.** knext's build and packaging steps read the output
-  from `.next`, so leave `distDir` unset (or set it to `.next`). When `knext build`, `deploy` or
-  `preview` runs the Next.js build, it checks `next.config` first and refuses a `distDir` property or
-  assignment set to anything else, or to a value it cannot read from the file (an environment
-  variable, a template with `${}`). The check reads the file as text, so it does not see a shorthand
-  `{ distDir }`, `Object.defineProperty`, or a value set outside the file, and it does not run when
-  knext does not build (`build --skip-next`, `deploy --skip-build`, `deploy --image`). The vinext target does not use `distDir`.
+  from `.next`, so leave `distDir` unset (or set it to `.next`, `./.next` or `.next/`); any other
+  resolved value is refused. For an app without knext's adapter, a custom `distDir` is found when it is
+  a top-level directory of the app (`build`, `dist`); a nested one (`out/next`) is only caught by the
+  text check. `distDir` is not checked when knext does not build (`build --skip-next`,
+  `deploy --skip-build`, `deploy --image`). The vinext target does not use `distDir`.
 - **`onBuildComplete`** uploads the build's static artifacts to the configured object store, keyed
   by `buildId`.
 

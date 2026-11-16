@@ -8,24 +8,31 @@
  * `runProjectBuild` so build, deploy and preview all share it.
  *
  * Two signals, one per build path:
- *  - Next build: Next writes `<distDir>/export-detail.json` when it exports,
- *    and deletes it on every non-export build, so a present file always
- *    belongs to the build that just ran. `distDir` is read from next.config.
+ *  - Next build: the resolved `output` and `distDir` a knext adapter recorded
+ *    in `modifyConfig` (#2250, `assertNotStaticExportFromFacts`), corroborated
+ *    by `<distDir>/export-detail.json`, which Next writes when it exports and
+ *    deletes on every non-export build. When no adapter recorded anything,
+ *    `distDir` falls back to the next.config text (`assertNotStaticExport`).
  *  - vinext build: vinext handles `output: 'export'` itself and never writes
  *    that file, so the literal `output` in next.config is checked BEFORE the
  *    build (it would only waste a `vite build`).
  *
- * Both read next.config as text, like the turbopack-fragments guard: a value
- * computed at runtime is not visible. An unreadable config is refused rather
- * than assumed clean.
+ * The text fallbacks read next.config as source: a value computed at runtime
+ * is not visible. An unreadable config is refused rather than assumed clean.
  *
  * build.ts, build-artifact.ts and standalone-layout.ts assume `.next`, so a
- * custom `distDir` is refused before a Next build (`assertDefaultDistDir`).
+ * custom `distDir` is refused: by the adapter from the resolved config, or by
+ * `assertDefaultDistDir` from the text when no adapter recorded one.
  */
 
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { stripComments } from "../adapters/js-source-lexer.mjs";
+import {
+    CUSTOM_DIST_DIR_MESSAGE,
+    isDefaultDistDir,
+    type NextConfigFacts,
+} from "../adapters/next-config-facts.js";
 import { UsageError } from "./shared";
 import { readNextConfigStrict } from "./turbopack-fragments-guard";
 
@@ -184,32 +191,20 @@ function distDirMentions(
 
 const UNREADABLE_DIST_DIR_MESSAGE = (
     raw: string,
-) => `Your Next.js config sets \`distDir\` to \`${raw}\`, which knext cannot read before the build.
+) => `Your Next.js config sets \`distDir\` to \`${raw}\`, which knext cannot read from the next.config source.
 
 knext does not support a custom build directory yet, and its build, artifact and standalone steps
 read the build output from \`.next\`. Remove \`distDir\` from your Next.js config (the default is
 \`.next\`), or set it to the literal \`".next"\`, and build again.`;
 
-const CUSTOM_DIST_DIR_MESSAGE = (
-    distDir: string,
-) => `Your Next.js config sets \`distDir: '${distDir}'\`, and knext does not support a custom build directory yet.
-
-knext's build, artifact and standalone steps read the build output from \`.next\`, so a different
-directory would produce a wrong artifact or fail later in the pipeline.
-Remove \`distDir\` from your Next.js config (the default is \`.next\`) and build again.`;
-
-/** True when `distDir` names the default `.next` (`.next`, `./.next`, `.next/`). */
-function isDefaultDistDir(distDir: string): boolean {
-    return (
-        distDir.replace(/^\.\//, "").replace(/\/+$/, "") === DEFAULT_DIST_DIR
-    );
-}
-
 /**
- * Before a Next build: refuse a custom `distDir` (#2251). Only the static-export
+ * The TEXT check for a custom `distDir` (#2251). Since #2250 a Next build decides
+ * from the resolved config (`project-build.ts`); this text check runs before the
+ * build as a warning only, and refuses only where no resolved config exists:
+ * `build --skip-next`, the vinext target, and the no-facts fallback. Only the static-export
  * guard honours it; the build, artifact and standalone steps assume `.next`, so
  * half-supporting it gives a wrong artifact path or a confusing late failure.
- * Refused up front until the resolved value is threaded through. It reads the
+ * It reads the
  * config text, like the other guards here, and fails closed: every `distDir`
  * key must be a plain literal for the default, or the build is refused, so a
  * computed value (an env var, a ternary, a `${}` template) refuses too. It is a
@@ -232,7 +227,25 @@ export function assertDefaultDistDir(
     }
 }
 
-/** After a Next build: refuse if it wrote an export marker into `distDir`. */
+/**
+ * After a Next build whose adapter recorded the resolved config (#2250): refuse
+ * a static export. The recorded `output` (after knext's own standalone
+ * default) is the primary signal; Next's `export-detail.json` in the recorded
+ * `distDir` corroborates it.
+ */
+export function assertNotStaticExportFromFacts(
+    cwd: string,
+    facts: Pick<NextConfigFacts, "distDir" | "output">,
+): void {
+    if (
+        facts.output === "export" ||
+        existsSync(resolve(cwd, facts.distDir, EXPORT_DETAIL_FILE))
+    ) {
+        throw new UsageError(STATIC_EXPORT_MESSAGE);
+    }
+}
+
+/** After a Next build no adapter recorded: refuse if it wrote an export marker into `distDir`. */
 export function assertNotStaticExport(
     cwd: string,
     readNextConfig: () => string | undefined = () => readNextConfigStrict(cwd),

@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireIsolatedProcess } from "../../../../tests/helpers/require-isolated-process";
 import type { KnativeNextConfig } from "../config";
+import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
 import { reconciledNextAppCapture } from "./helpers/reconciled-nextapp";
 
 requireIsolatedProcess("deploy-turbopack-fragments-guard.test.ts");
@@ -98,7 +99,8 @@ beforeEach(() => {
 });
 
 describe("deploy refuses bun + turbopackModuleFragments", () => {
-    it("refuses before running the project build", async () => {
+    it("refuses from the resolved config, inside the build, before anything after it", async () => {
+        runQuiet.mockImplementation(adapterBuild(FRAGMENTS_ON) as AnyFn);
         const dir = mkdtempSync(join(tmpdir(), "knext-dep-frag-"));
         writeFileSync(
             join(dir, "next.config.ts"),
@@ -112,7 +114,8 @@ describe("deploy refuses bun + turbopackModuleFragments", () => {
                 deploy: () => Promise<void>;
             };
             await expect(deploy()).rejects.toThrow(/turbopackModuleFragments/);
-            expect(runQuiet).not.toHaveBeenCalled();
+            // The build is the only command run: nothing after the refusal.
+            expect(runQuiet.mock.calls).toEqual([[["npm", "run", "build"]]]);
         } finally {
             process.chdir(saved);
             process.argv = savedArgv;

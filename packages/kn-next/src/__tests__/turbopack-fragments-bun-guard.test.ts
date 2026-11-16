@@ -29,6 +29,7 @@ import {
     assertNoBunTurbopackFragments,
     enablesTurbopackModuleFragments,
 } from "../cli/turbopack-fragments-guard";
+import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
 
 requireIsolatedProcess("turbopack-fragments-bun-guard.test.ts");
 
@@ -170,11 +171,17 @@ describe("build() wiring", () => {
         ...over,
     });
 
-    it("refuses on bun (explicit) before running the project build", async () => {
+    it("refuses on bun (explicit) from the resolved config, inside the build", async () => {
         writeFileSync(join(dir, "next.config.ts"), ON);
         loadConfig.mockResolvedValue(cfg({ runtime: "bun" }));
-        await expect(build({})).rejects.toThrow(/turbopackModuleFragments/);
-        expect(runQuiet).not.toHaveBeenCalled();
+        runQuiet.mockImplementation(adapterBuild(FRAGMENTS_ON));
+        try {
+            await expect(build({})).rejects.toThrow(/turbopackModuleFragments/);
+            // The build is the only command run: nothing after the refusal.
+            expect(runQuiet.mock.calls).toEqual([[["npm", "run", "build"]]]);
+        } finally {
+            runQuiet.mockImplementation(() => undefined);
+        }
     });
     it("refuses when runtime is unset (bun is the default)", async () => {
         writeFileSync(join(dir, "next.config.ts"), ON);

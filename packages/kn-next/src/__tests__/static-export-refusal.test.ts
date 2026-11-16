@@ -27,6 +27,11 @@ afterEach(() => {
 function appDirWithExport(): string {
     const dir = mkdtempSync(join(tmpdir(), "knext-static-export-"));
     scratchDirs.push(dir);
+    return dir;
+}
+
+/** The build stub exports, as Next does: it writes the marker during the build. */
+const exportingBuild = (dir: string) => () => {
     mkdirSync(join(dir, ".next"), { recursive: true });
     writeFileSync(
         join(dir, ".next", "export-detail.json"),
@@ -36,13 +41,12 @@ function appDirWithExport(): string {
             success: true,
         }),
     );
-    return dir;
-}
+};
 
 describe("runProjectBuild static-export refusal", () => {
     it("refuses a build that produced a static export, with actionable guidance", () => {
         const dir = appDirWithExport();
-        const run = mock();
+        const run = mock(exportingBuild(dir));
         let caught: unknown;
         try {
             runProjectBuild({

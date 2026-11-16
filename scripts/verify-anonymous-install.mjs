@@ -1758,7 +1758,11 @@ export async function runAnonymousInstallCheck(root, options = {}) {
   findings.push(...findUrlDriftFindings(documented.url, allUrls));
 
   const recorder = createRecordingHttp(http);
-  const download = await fetchInstallBundle(retargetInstallUrl(documented.url, env), { fetchImpl });
+  // The URL actually fetched: the documented one, or an explicit stand-in
+  // (KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL). Returned, so a report can never
+  // present a stand-in's verdict as the documented bundle's.
+  const fetchedUrl = retargetInstallUrl(documented.url, env);
+  const download = await fetchInstallBundle(fetchedUrl, { fetchImpl });
   findings.push(...download.findings);
 
   // `!== null`, NOT `!== ''`. An empty body is a body: it has to reach
@@ -1774,7 +1778,15 @@ export async function runAnonymousInstallCheck(root, options = {}) {
   }
 
   findings.push(...findRequestCredentialLeaks(recorder.requests));
-  return { documented, allUrls, download, images, findings, requests: recorder.requests };
+  return {
+    documented,
+    fetchedUrl,
+    allUrls,
+    download,
+    images,
+    findings,
+    requests: recorder.requests,
+  };
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -1818,7 +1830,9 @@ async function main(argv) {
   // `discoverInstallUrl` rather than re-deriving the URL from the docs a
   // second time — one discovery, walked twice for two different reasons
   // (#586's anonymous-pull check here, #1552's real-apply-on-kind
-  // elsewhere), never a second regex that can drift from the first.
+  // elsewhere), never a second regex that can drift from the first. An explicit
+  // KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL retargets the printed URL to a
+  // stand-in (see `retargetInstallUrl`); unset, it is the documented URL.
   if (printUrl) {
     try {
       const { url } = discoverInstallUrl(root);
@@ -1849,10 +1863,15 @@ async function main(argv) {
     console.error(`FATAL: ${error.message}`);
     return 1;
   }
-  const { documented, allUrls, download, images, findings, requests } = result;
+  const { documented, fetchedUrl, allUrls, download, images, findings, requests } = result;
+  const standIn = fetchedUrl !== documented.url;
 
   console.log(`documented install URL (from ${documented.file}:${documented.line}):`);
   console.log(`  ${documented.url}`);
+  if (standIn) {
+    console.log('STAND-IN (KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL): fetched instead:');
+    console.log(`  ${fetchedUrl}`);
+  }
   console.log(`  ${allUrls.length} published copy/copies across the tree\n`);
 
   if (download.body !== null) {
@@ -1864,7 +1883,11 @@ async function main(argv) {
   console.log(`\n${requests.length} registry request(s) made, all unauthenticated by construction`);
 
   if (findings.length === 0) {
-    console.log('\nOK: a stranger can fetch the documented bundle and pull every image in it.');
+    console.log(
+      standIn
+        ? '\nOK (STAND-IN, not the documented bundle): a stranger can fetch the stand-in bundle and pull every image in it.'
+        : '\nOK: a stranger can fetch the documented bundle and pull every image in it.',
+    );
     return 0;
   }
   console.error(`\n${findings.length} finding(s):`);

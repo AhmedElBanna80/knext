@@ -247,7 +247,7 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
 
   it('the full check downloads from the retargeted URL, and drift is still judged on the docs', async () => {
     const fetched: string[] = [];
-    await runAnonymousInstallCheck(REPO_ROOT, {
+    const result = await runAnonymousInstallCheck(REPO_ROOT, {
       env: { KNEXT_INSTALL_REPO: 'o/r', KNEXT_INSTALL_CHANNEL: 'operator-edge' },
       home: '/nonexistent-home',
       exists: () => false,
@@ -256,8 +256,29 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
         return new Response('', { status: 404 });
       }) as unknown as typeof fetch,
       http: async () => ({ status: 404, headers: {}, body: '' }),
-    }).catch(() => undefined);
-    expect(fetched[0]).toBe('https://github.com/o/r/releases/download/operator-edge/install.yaml');
+    });
+    const standIn = 'https://github.com/o/r/releases/download/operator-edge/install.yaml';
+    expect(fetched[0]).toBe(standIn);
+    // The report sees both, so it can label a stand-in verdict as one.
+    expect(result.fetchedUrl).toBe(standIn);
+    expect(result.documented.url).not.toBe(standIn);
+    // Drift is judged on the documented URL: the docs agree with themselves, so
+    // retargeting the fetch adds no drift finding.
+    expect(result.findings.filter((f) => f.reason === 'documented-url-drift')).toEqual([]);
+  });
+
+  it('the published-bundle nightly retargets only off getknext-dev/knext, to operator-edge', () => {
+    const wf = read(resolve(REPO_ROOT, '.github/workflows/published-bundle-kind-nightly.yml'));
+    const step = wf.slice(wf.indexOf('- name: Apply the documented install.yaml, unmodified'));
+    expect(step).toContain(
+      "KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}",
+    );
+    expect(step).toContain(
+      "KNEXT_INSTALL_CHANNEL: ${{ github.repository != 'getknext-dev/knext' && 'operator-edge' || '' }}",
+    );
+    // The anonymous-install nightly forbids expressions in step env by design;
+    // the stand-in must not leak into it.
+    expect(read(WORKFLOW)).not.toContain('KNEXT_INSTALL_');
   });
 });
 

@@ -128,7 +128,7 @@ jobs:
 
       # THE STEP THIS WHOLE WORKFLOW EXISTS FOR: the exact URL the install
       # docs publish (discovered by #586's own `discoverInstallUrl`, never a
-      # second copy of the regex), applied UNMODIFIED — no manager-image
+      # second copy of the regex; on a stand-in repo, retargeted — see below), applied UNMODIFIED — no manager-image
       # override, no local build, no load into kind. kind's containerd pulls
       # every image anonymously, the same way a stranger's cluster would.
       #
@@ -145,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           INSTALL_URL="$(node scripts/verify-anonymous-install.mjs --print-url)"
-          echo "documented install URL: ${INSTALL_URL}"
+          echo "install URL (documented, or the stand-in when KNEXT_INSTALL_REPO is set): ${INSTALL_URL}"
           echo "INSTALL_URL=${INSTALL_URL}" >> "$GITHUB_ENV"
           kubectl apply --server-side --validate=strict -f "${INSTALL_URL}"
 

@@ -11,7 +11,7 @@
 > (#2594, 2026-10-27) because GHSA-2464-fhr4-w9xw / GHSA-673q-mjm6-r5xr (critical) and
 > GHSA-p3m5-59mp-jv5r (high) affect 16.4.0; that patch-only divergence closed when `NEXTJS_REF`
 > moved to v16.4.3, which restarts the credential windows. The peer range still starts at 16.4.0.
-> **Patch-only divergence again (2026-11-16):** the scaffold and every app knext deploys move to
+> **Patch-only divergence again (2026-11-16):** the scaffolds and knext's own apps move to
 > 16.4.5 (still the 16.4.x line) for GHSA-mfr8-8qww-v76h (medium, `'use cache'` root-param
 > information disclosure, affects 16.3.0 through 16.4.4), while `NEXTJS_REF` stays at v16.4.3: moving it is a
 > frozen-file change during a credential window.

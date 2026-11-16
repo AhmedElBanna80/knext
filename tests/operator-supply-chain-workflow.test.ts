@@ -294,6 +294,20 @@ describe('operator release asset (install.yaml) is gated behind the Trivy gate +
     ).toBe(true);
   });
 
+  it('install.yaml names the image this run PUSHED, not a hardcoded owner (a fork or stand-in repo publishes its own)', () => {
+    // The push goes to ghcr.io/${OWNER,,}/kn-next-operator; the kustomization's
+    // newName is ghcr.io/getknext-dev/kn-next-operator. Pinning only the digest
+    // shipped a bundle naming getknext-dev's (hidden) package at a digest that
+    // was pushed elsewhere: the 2026-11-16 stand-in nightly could not pull it.
+    const installer = stepBlock(INSTALLER_RE);
+    expect(installer).toContain('IMAGE: ${{ env.IMAGE }}');
+    expect(installer).toMatch(/s\|\(newName: \)\.\*\|\\\\1\$\{IMAGE\}\|/);
+    // ...and the rendered bundle is checked for it, fail-closed.
+    expect(installer).toContain('grep -qF "image: ${IMAGE}:" dist/install.yaml');
+    // The re-pin runs BEFORE the render.
+    expect(installer.indexOf('newName: ')).toBeLessThan(installer.indexOf('make build-installer'));
+  });
+
   it('the operator-latest release attach comes after gate, push, sign and verify', () => {
     const releaseIdx = stepIndex(RELEASE_RE);
     expect(releaseIdx, 'expected the softprops/action-gh-release step').toBeGreaterThanOrEqual(0);

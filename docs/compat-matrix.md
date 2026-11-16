@@ -13,7 +13,7 @@
 > moved to v16.4.3, which restarts the credential windows. The peer range still starts at 16.4.0.
 > **Patch-only divergence again (2026-11-16):** the scaffold and every app knext deploys move to
 > 16.4.5 (still the 16.4.x line) for GHSA-mfr8-8qww-v76h (medium, `'use cache'` root-param
-> information disclosure, affects <=16.4.4), while `NEXTJS_REF` stays at v16.4.3: moving it is a
+> information disclosure, affects 16.3.0 through 16.4.4), while `NEXTJS_REF` stays at v16.4.3: moving it is a
 > frozen-file change during a credential window.
 > `tests/next-compat-e2e-deploy-ref.test.ts` reds if `test-e2e-deploy.yml`'s defaults drift from
 > the first matrix leg (on the floor's minor, at or above the floor). **No dispatch has run at

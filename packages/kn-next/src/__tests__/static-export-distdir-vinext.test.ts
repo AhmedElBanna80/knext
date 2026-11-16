@@ -732,6 +732,37 @@ describe("the vinext target and Next's markers", () => {
     });
 });
 
+// The build script runs Next somewhere other than the CLI's app directory
+// (`cd web && next build`, `next build ./web`). The adapter does not record or
+// refuse for that directory, so the CLI has no resolved config for its own app,
+// and must not fall to a text check of the wrong next.config: it fails closed.
+describe("a Next build in a different directory than the CLI's app", () => {
+    it("fails closed, naming the directory Next built, instead of the text fallback", () => {
+        const dir = appDir({ "next.config.mjs": "export default {};" });
+        const web = join(dir, "web");
+        mkdirSync(web);
+        const { caught, warnings } = run(
+            dir,
+            false,
+            adapterBuild({ distDir: "build" }, web),
+        );
+        expect(caught).toMatchObject({ code: USAGE_ERROR_CODE });
+        expect((caught as Error).message).toContain(realpathSync(web));
+        expect(fellBack(warnings)).toBe(false);
+    });
+
+    it("still decides from its own record when a sibling app also built in the script", () => {
+        const dir = appDir({ "next.config.mjs": "export default {};" });
+        const sibling = join(dir, "packages", "other");
+        mkdirSync(sibling, { recursive: true });
+        const { caught } = run(dir, false, (argv) => {
+            adapterBuild({ distDir: "build" }, sibling)(argv);
+            adapterBuild({}, dir)(argv);
+        });
+        expect(caught).toBeUndefined();
+    });
+});
+
 describe("the build env and temp files", () => {
     it("sets its env for the build only, removes its temp dir, and never injects an adapter", () => {
         const dir = appDir({ "next.config.mjs": "export default {};" });

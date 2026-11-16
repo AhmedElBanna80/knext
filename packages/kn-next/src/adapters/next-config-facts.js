@@ -125,6 +125,25 @@ export function factsTempPath(outPath) {
  * workers, so the file is written tmp-then-rename: a reader never sees a
  * partial record, and identical writes simply replace each other.
  */
+/**
+ * Where a build for ANOTHER directory leaves its directory. The record file
+ * stays the CLI app's alone; this side file lets the CLI tell "Next built a
+ * different directory" (a build script that cd's, or `next build ./web`) from
+ * "no adapter ran", and fail closed instead of text-checking the wrong config.
+ */
+export function foreignMarkerPath(outPath) {
+    return `${outPath}.foreign`;
+}
+
+/** The directory a foreign build left at `outPath`'s marker, if any. */
+export function readForeignProjectDir(outPath) {
+    try {
+        return readFileSync(foreignMarkerPath(outPath), "utf8").trim() || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 export function recordNextConfigFacts(
     config,
     { phase, projectDir },
@@ -134,6 +153,12 @@ export function recordNextConfigFacts(
     if (!outPath || phase !== PRODUCTION_BUILD) return undefined;
     const target = env[CONFIG_FACTS_PROJECT_ENV];
     if (target && projectDir && canonical(projectDir) !== canonical(target)) {
+        // Not the CLI's app: neither record nor refuse, but say which
+        // directory Next built. Best effort: a sibling's build must not fail
+        // because the marker could not be written.
+        try {
+            writeFileSync(foreignMarkerPath(outPath), `${canonical(projectDir)}\n`);
+        } catch {}
         return undefined;
     }
     const facts = {

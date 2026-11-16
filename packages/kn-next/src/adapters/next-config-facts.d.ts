@@ -23,6 +23,10 @@ export declare const TURBOPACK_FRAGMENTS_BUN_DETAIL: string;
 export declare const TURBOPACK_FRAGMENTS_BUN_HINT: string;
 
 export declare function factsTempPath(outPath: string): string;
+export declare function foreignMarkerPath(outPath: string): string;
+export declare function readForeignProjectDir(
+    outPath: string,
+): string | undefined;
 export declare function isDefaultDistDir(distDir: unknown): boolean;
 export declare function refusalFor(
     facts: Pick<NextConfigFacts, "distDir" | "turbopackModuleFragments"> &

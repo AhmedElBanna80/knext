@@ -38,6 +38,7 @@ import {
     isDefaultDistDir,
     KNEXT_BUILDER_ENV,
     type NextConfigFacts,
+    readForeignProjectDir,
     readNextConfigFacts,
     refusalFor,
 } from "../adapters/next-config-facts.js";
@@ -312,6 +313,7 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
     const restores: (() => void)[] = [];
     let factsDir: string | undefined;
     let facts: NextConfigFacts | undefined;
+    let foreignDir: string | undefined;
     let buildStartMs = 0;
     try {
         factsDir = mkdtempSync(join(tmpdir(), "knext-config-facts-"));
@@ -355,6 +357,7 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
             throw err;
         }
         facts = recorded();
+        foreignDir = readForeignProjectDir(factsPath);
     } finally {
         for (const restore of restores.reverse()) restore();
         if (factsDir) rmSync(factsDir, { recursive: true, force: true });
@@ -367,6 +370,15 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
         if (refusal) throw new UsageError(refusal.message);
         assertNotStaticExportFromFacts(cwd, facts);
         return;
+    }
+
+    // Next built a different directory than this app (the build script cd's,
+    // or runs `next build <dir>`): the text check below would read the wrong
+    // next.config, so fail closed rather than pass unchecked.
+    if (foreignDir) {
+        throw new UsageError(
+            `the build ran Next.js in ${foreignDir}, not in ${cwd}, so knext could not check this app's resolved config. Run knext from the directory Next.js builds (the one with next.config), or make the build script build this directory.`,
+        );
     }
 
     say(FACTS_FALLBACK_WARNING);

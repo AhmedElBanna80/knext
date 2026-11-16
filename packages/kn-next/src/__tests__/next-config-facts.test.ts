@@ -199,7 +199,7 @@ describe("recordNextConfigFacts", () => {
         ).toThrow(/could not record the resolved Next\.js config/);
     });
 
-    it("leaves no temp file behind (written tmp-then-rename)", () => {
+    it("leaves nothing in the facts directory but the record (no temp file left behind)", () => {
         recordNextConfigFacts(config(), { phase: BUILD }, env());
         recordNextConfigFacts(config(), { phase: BUILD }, env());
         const { readdirSync } = require("node:fs") as typeof import("node:fs");

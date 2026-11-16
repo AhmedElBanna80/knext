@@ -171,7 +171,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `readNextConfigFacts(path)`, `refusalFor(facts, {runtime, builder})`,
   `isDefaultDistDir`, `CONFIG_FACTS_OUT_ENV` (`KNEXT_CONFIG_FACTS_OUT`),
   `KNEXT_BUILDER_ENV` (`KNEXT_BUILDER`), `CONFIG_FACTS_PROJECT_ENV`
-  (`KNEXT_CONFIG_FACTS_PROJECT`), `factsTempPath`, `CUSTOM_DIST_DIR_MESSAGE`,
+  (`KNEXT_CONFIG_FACTS_PROJECT`), `factsTempPath`, `foreignMarkerPath`,
+  `readForeignProjectDir`, `CUSTOM_DIST_DIR_MESSAGE`,
   `TURBOPACK_FRAGMENTS_BUN_DETAIL` and `TURBOPACK_FRAGMENTS_BUN_HINT`. It has no
   default export and is not a published subpath: `next-adapter.ts` and the CLI
   import it. A facts record is `{projectDir?, distDir, output,
@@ -397,7 +398,10 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   `phase-production-build`, so a plain `next build`, `next typegen` and
   `next dev` are untouched. When `KNEXT_CONFIG_FACTS_PROJECT` names the app the
   CLI is building and `projectDir` resolves elsewhere (a sibling app in a
-  script that builds several), it neither records nor refuses. A refusal throws an `Error` whose message starts
+  script that builds several), it neither records nor refuses, and writes that
+  directory to `<facts path>.foreign` (best effort). Without a `projectDir`
+  (or without `KNEXT_CONFIG_FACTS_PROJECT`) there is no filter: the record is
+  written, and the CLI accepts it, for whichever app built. A refusal throws an `Error` whose message starts
   with `[knext-refuse:<code>] `, which fails `next build` before compilation.
   A static export is never refused here (Next validates it first). The bundler
   is read from `KNEXT_BUILDER`, not from the resolved config, which does not

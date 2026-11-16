@@ -14,7 +14,10 @@ export interface ResolvedNextConfig {
     experimental?: { turbopackModuleFragments?: boolean };
 }
 
-export function adapterBuild(resolved: ResolvedNextConfig = {}) {
+export function adapterBuild(
+    resolved: ResolvedNextConfig = {},
+    projectDir?: string,
+) {
     return (argv: readonly unknown[]): void => {
         if (argv[0] === "npm" && argv[1] === "run" && argv[2] === "build") {
             recordNextConfigFacts(
@@ -24,7 +27,7 @@ export function adapterBuild(resolved: ResolvedNextConfig = {}) {
                     experimental: {},
                     ...resolved,
                 },
-                { phase: "phase-production-build" },
+                { phase: "phase-production-build", projectDir },
             );
         }
     };

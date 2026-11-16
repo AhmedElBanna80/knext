@@ -26,7 +26,10 @@ Known limits:
 - clock skew larger than the build time plus 2 s, or a restore that rewrites mtimes on a default-distDir copy
   with no custom-distDir build alongside (falls to case 2's newest file);
 - one record shared by two `next build`s of the SAME app in one script (a sibling app's build neither records
-  nor refuses: the CLI names its app in `KNEXT_CONFIG_FACTS_PROJECT`);
+  nor refuses: the CLI names its app in `KNEXT_CONFIG_FACTS_PROJECT`). When the build script runs Next in a
+  different directory (`cd web && next build`, `next build ./web`), the adapter leaves that directory in
+  `<facts>.foreign` and the CLI, with no record of its own, fails closed naming it rather than text-checking
+  the wrong next.config;
 - `--skip-next`, `knext doctor` and vinext still decide from text, and the text scans keep string literals, so a
   setting written inside a string can trip them.
 
@@ -266,7 +269,7 @@ this change, and the nonce it was keyed on no longer exists.
   fresh file can look old, and the build falls to case 3 with its warning.
 - **vinext never consults Next's export marker.** A leftover `.next/export-detail.json` from an earlier Next
   export build no longer refuses a vinext build. vinext's own static-export check runs before the build.
-- **Known limits, accepted:** a script that runs two `next build`s shares one record, so the second app's
-  record replaces the first (the first's refusal still fails its own `next build`, which normally stops the
-  script). `realpathSync` is not case-folded on case-insensitive filesystems, so a projectDir spelled
+- **Known limits, accepted:** ~~a script that runs two `next build`s shares one record~~ (superseded in round
+  4: the CLI names its app in `KNEXT_CONFIG_FACTS_PROJECT`, a sibling app's build neither records nor
+  refuses, and a build of a different directory fails closed; see Known limits at the top). `realpathSync` is not case-folded on case-insensitive filesystems, so a projectDir spelled
   differently drops the record to case 2, which still decides from the resolved config.

@@ -39,6 +39,12 @@ HIGH/CRITICAL.
 
 ## Remediation (preferred path — base-image upgrade, no ignore)
 
+> **History, not instructions.** The diff below is the original 1.25-era fix.
+> The builder has since moved on (see the `FROM golang:…@sha256:…` line in
+> `../Dockerfile` and the `go` line in `../go.mod`); a later bump pins the
+> newest patched point release of THAT line, digest-pinned, and raises the
+> `go_floor` table in `hack/check-trivy-baseimage.bats.sh` in lockstep.
+
 Pin the builder to the latest patched Go point release:
 
 ```diff

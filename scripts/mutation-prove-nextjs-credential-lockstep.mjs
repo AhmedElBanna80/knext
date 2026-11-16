@@ -121,16 +121,15 @@ const MUTATIONS = [
     replacement: 'the official suite now runs against Next.js v16.3.3.',
   },
   {
-    // #2602: the harness moved to the shipped 16.4.3, so the divergence is
-    // CLOSED and the docs must not claim a "newer" scaffold release. Re-add
-    // that stale claim to the callout (everything else converged) and require
-    // the converged branch of the docs check to go red.
+    // GHSA-mfr8-8qww-v76h (2026-11-16): the scaffold moved to 16.4.5 while the
+    // harness stays at v16.4.3, so the divergence is OPEN again and the docs
+    // must explain it. Drop the "newer Next.js release" explanation from the
+    // callout and require the diverged branch of the docs check to go red.
     label:
-      'compat-matrix.mdx: claim a "newer Next.js release" than the credentialed one while credentialedNextRef equals shippedNextPin',
+      'compat-matrix.mdx: drop the "newer Next.js release" explanation while shippedNextPin diverges from credentialedNextRef',
     subject: 'docsMatrixMdx',
-    anchor: 'That is the patched release `knext create` scaffolds.',
-    replacement:
-      'That is a newer Next.js release than the credentialed one, which `knext create` scaffolds.',
+    anchor: '`knext create` scaffolds a newer Next.js release on the same 16.4.x line, 16.4.5,',
+    replacement: '`knext create` scaffolds a Next.js release on the same 16.4.x line, 16.4.5,',
   },
   {
     label:
@@ -175,28 +174,28 @@ const MUTATIONS = [
     edits: [
       {
         subject: 'scaffoldPkg',
-        anchor: '"next": "16.4.3",',
+        anchor: '"next": "16.4.5",',
         replacement: '"next": "16.5.0",',
       },
       {
         subject: 'manifest',
-        anchor: '"shippedNextPin": "16.4.3",',
+        anchor: '"shippedNextPin": "16.4.5",',
         replacement: '"shippedNextPin": "16.5.0",',
       },
     ],
   },
   {
     label:
-      'scaffold pin bumped to 16.4.4 with the manifest still documenting 16.4.3 (silent drift)',
+      'scaffold pin bumped to 16.4.6 with the manifest still documenting 16.4.5 (silent drift)',
     subject: 'scaffoldPkg',
-    anchor: '"next": "16.4.3",',
-    replacement: '"next": "16.4.4",',
+    anchor: '"next": "16.4.5",',
+    replacement: '"next": "16.4.6",',
   },
   {
     label:
-      'scaffold pin put back to 16.3.8 (below the peer floor) with the manifest still documenting 16.4.3',
+      'scaffold pin put back to 16.3.8 (below the peer floor) with the manifest still documenting 16.4.5',
     subject: 'scaffoldPkg',
-    anchor: '"next": "16.4.3",',
+    anchor: '"next": "16.4.5",',
     replacement: '"next": "16.3.8",',
   },
 

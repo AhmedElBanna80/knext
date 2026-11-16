@@ -119,23 +119,25 @@ advisories affect every 16.x release up to and including 16.4.0:
 | GHSA-2464-fhr4-w9xw | Critical | Unauthenticated remote code execution in the Image Optimization API when SVG files are used |
 | GHSA-673q-mjm6-r5xr | Critical | Unauthenticated remote code execution in `'use cache'` functions that return typed arrays |
 | GHSA-p3m5-59mp-jv5r | High | Denial of service in the App Router through Server Actions |
+| GHSA-mfr8-8qww-v76h | Medium | Information disclosure across root params when a `'use cache'` function is called (affects up to 16.4.4, fixed in 16.4.5) |
 
 knext serves images through Next.js's optimizer and backs `'use cache'` with its shared cache, so
 both remote code execution paths are reachable on a knext app that has not upgraded. New apps from
-`knext create` already pin 16.4.3.
+`knext create` already pin 16.4.5, which also fixes the medium-severity `'use cache'` advisory.
 
-To upgrade an existing app, pin `next` to 16.4.3 (or any later 16.4.x) in its `package.json`,
+To upgrade an existing app, pin `next` to 16.4.5 (or any later 16.4.x) in its `package.json`,
 reinstall so the lockfile resolves it, then rebuild and redeploy — the running image keeps the old
 Next.js until you deploy a new one:
 
 ```bash
-npm install next@16.4.3      # or: bun add next@16.4.3 / pnpm add next@16.4.3
+npm install next@16.4.5      # or: bun add next@16.4.5 / pnpm add next@16.4.5
 knext doctor                 # the Next.js advisory row should now PASS
 knext deploy
 ```
 
 `knext doctor` reads the Next.js your app actually resolves and reports **FAIL** (exit code 1),
-naming each advisory, while it is still on an affected version, so you can gate CI on it. 16.4.3
+naming each critical or high advisory, while it is still on an affected version, so you can gate CI on
+it (the medium `'use cache'` advisory is not a `doctor` FAIL). 16.4.5
 stays on the 16.4 minor the official compatibility suite covers, so the upgrade does not change
 which Next.js minor your app is on. Apps still on knext 1.x with Next.js 15.x are affected by the
 image optimizer and Server Actions advisories up to 15.5.27; the fix there is 15.5.28.

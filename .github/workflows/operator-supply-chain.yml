@@ -539,9 +539,14 @@ jobs:
         if: steps.channel.outputs.publish == 'true' && steps.trivy.outcome == 'success'
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ${{ env.IMAGE }}
         run: |
           set -euo pipefail
           cd packages/kn-next-operator
+          # Name the image this run PUSHED (ghcr.io/<owner>/kn-next-operator). The
+          # committed newName is getknext-dev's; a fork or stand-in repo pushes to
+          # its own owner, and a digest pinned under the wrong name is unpullable.
+          sed -i -E "s|(newName: ).*|\\1${IMAGE}|" config/manager/kustomization.yaml
           # Pin the real digest into the manager kustomization (single combined
           # newTag form, so hack/check-no-latest.sh stays happy), then render.
           # The tag part is matched loosely (`v[^@ ]+`) so a prerelease tag
@@ -557,6 +562,7 @@ jobs:
           # digest — if the sed pattern ever stops matching (kustomization
           # format drift), a stale previously-pinned digest would ship silently.
           grep -q "${DIGEST}" dist/install.yaml || { echo "::error::dist/install.yaml does not contain the signed digest ${DIGEST}"; exit 1; }
+          grep -qF "image: ${IMAGE}:" dist/install.yaml || { echo "::error::dist/install.yaml does not name the pushed image ${IMAGE}"; exit 1; }
           bash hack/check-no-latest.sh
           # PUBLISHED-CONTEXT guard (#117): now that the real digest is pinned, the
           # all-zeros bootstrap placeholder must be GONE from the rendered bundle.

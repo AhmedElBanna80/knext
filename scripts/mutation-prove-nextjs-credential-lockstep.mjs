@@ -129,7 +129,8 @@ const MUTATIONS = [
       'compat-matrix.mdx: claim a "newer Next.js release" than the credentialed one while credentialedNextRef equals shippedNextPin',
     subject: 'docsMatrixMdx',
     anchor: 'That is the patched release `knext create` scaffolds;',
-    replacement: 'That is a newer Next.js release than the credentialed one, which `knext create` scaffolds;',
+    replacement:
+      'That is a newer Next.js release than the credentialed one, which `knext create` scaffolds;',
   },
   {
     label:

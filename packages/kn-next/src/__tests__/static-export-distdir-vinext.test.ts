@@ -743,12 +743,19 @@ describe("the build env and temp files", () => {
         };
         let seenOut: string | undefined;
         let seenAdapter: string | undefined;
+        let seenProject: string | undefined;
+        const projectBefore = process.env.KNEXT_CONFIG_FACTS_PROJECT;
         try {
             run(dir, false, () => {
                 seenOut = process.env.KNEXT_CONFIG_FACTS_OUT;
                 seenAdapter = process.env.NEXT_ADAPTER_PATH;
+                seenProject = process.env.KNEXT_CONFIG_FACTS_PROJECT;
             });
             expect(seenOut).toMatch(/facts\.json$/);
+            // The app the CLI is building, so a sibling app's build in the
+            // same script neither records nor refuses.
+            expect(seenProject).toBe(dir);
+            expect(process.env.KNEXT_CONFIG_FACTS_PROJECT).toBe(projectBefore);
             expect(seenAdapter).toBe(before.adapter);
             expect(existsSync(join(seenOut as string, ".."))).toBe(false);
             expect({

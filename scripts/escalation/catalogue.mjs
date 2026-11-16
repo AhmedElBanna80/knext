@@ -45,7 +45,7 @@ export const CATALOGUE = Object.freeze({
   'cluster-write-surface': entry(
     'cluster-write-surface',
     "the operator's cluster-write surface",
-    "changes the operator's RBAC, admission policy or webhooks — what it may write to the cluster, a security invariant (security.md)",
+    "changes the operator's RBAC, admission policy, webhooks or the cluster network config its bundle installs (NetworkPolicy, Knative config-network) — what it may write to the cluster, a security invariant (security.md)",
   ),
   templates: entry(
     'templates',

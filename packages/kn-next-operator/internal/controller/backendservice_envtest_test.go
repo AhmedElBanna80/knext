@@ -571,6 +571,43 @@ var _ = Describe("BackendService reconciler: the credential allowlist (one It pe
 		Expect(err.Error()).To(ContainSubstring("/var/run/knext is reserved"))
 	})
 
+	// #108: the reserved-path rules compare the string, so only the canonical
+	// spelling is admitted; otherwise //var/run/knext or /a/../var/run/knext would
+	// pass them and the kubelet's cleaned path would land on the operator's mount.
+	DescribeTable("rejects a non-canonical mountPath at admission",
+		func(path string) {
+			ns := bsNamespace(ctx)
+			bs := &appsv1alpha1.BackendService{
+				Name: "pricing", Namespace: ns,
+				Spec: appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage, Volumes: []appsv1alpha1.FunctionVolume{{
+					Name: "shadow", MountPath: path, EmptyDir: &corev1.EmptyDirVolumeSource{},
+				}}},
+			}
+			err := k8sClient.Create(ctx, bs)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("mountPath must be canonical"))
+		},
+		Entry("a double slash before the operator mount", "//var/run/knext"),
+		Entry("a dot segment before the operator mount", "/./var/run/knext"),
+		Entry("a dot-dot segment onto the operator mount", "/a/../var/run/knext"),
+		Entry("a dot-dot segment at the end", "/var/run/knext/x/.."),
+		Entry("a trailing slash", "/data/"),
+		Entry("a double slash inside", "/data//x"),
+	)
+
+	It("admits a canonical mountPath that only looks similar (/var/run/knexty, /data.d, /a..b)", func() {
+		ns := bsNamespace(ctx)
+		for i, path := range []string{"/var/run/knexty", "/data.d", "/a..b"} {
+			bs := &appsv1alpha1.BackendService{
+				Name: fmt.Sprintf("pricing%d", i), Namespace: ns,
+				Spec: appsv1alpha1.BackendServiceSpec{Zone: sovZone, Image: bsImage, Volumes: []appsv1alpha1.FunctionVolume{{
+					Name: "v", MountPath: path, EmptyDir: &corev1.EmptyDirVolumeSource{},
+				}}},
+			}
+			Expect(k8sClient.Create(ctx, bs)).To(Succeed(), path)
+		}
+	})
+
 	It("rejects a change of spec.zone at admission (immutable)", func() {
 		ns := bsNamespace(ctx)
 		bs := createFunction(ctx, ns, "pricing", sovZone)

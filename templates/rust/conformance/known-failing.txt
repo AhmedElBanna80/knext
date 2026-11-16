@@ -1,25 +1,2 @@
 # Cases the function's own stack fails ON PURPOSE (conformance.sh, second run).
-#
-# Every one is a client or bidi stream whose messages each equal the runner's
-# per-message limit. The function bounds the WHOLE request body to one message
-# plus its framing (MAX_REQUEST_BODY_BYTES in src/rpc/mod.rs), on streaming
-# RPCs too, so a stream of several such messages is refused. That bound is a
-# deliberate limit on what one call may make a pod read; the upstream server
-# has none and passes these. Any other failure, or one of these passing,
-# fails the run: change this list only together with that bound.
-Server Message Size/HTTPVersion:1/Protocol:PROTOCOL_CONNECT/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/half-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:1/Protocol:PROTOCOL_CONNECT/Compression:COMPRESSION_IDENTITY/TLS:false/client-stream/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:1/Protocol:PROTOCOL_GRPC_WEB/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/half-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:1/Protocol:PROTOCOL_GRPC_WEB/Compression:COMPRESSION_IDENTITY/TLS:false/client-stream/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_CONNECT/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/full-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_CONNECT/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/half-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_CONNECT/Compression:COMPRESSION_IDENTITY/TLS:false/client-stream/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC_WEB/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/full-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC_WEB/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/half-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC_WEB/Compression:COMPRESSION_IDENTITY/TLS:false/client-stream/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC/Compression:COMPRESSION_IDENTITY/TLS:false/(grpc client impl)/bidi-stream/full-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC/Compression:COMPRESSION_IDENTITY/TLS:false/(grpc client impl)/bidi-stream/half-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC/Compression:COMPRESSION_IDENTITY/TLS:false/(grpc client impl)/client-stream/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/full-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC/Compression:COMPRESSION_IDENTITY/TLS:false/bidi-stream/half-duplex/all-requests-equal-to-server-limit
-Server Message Size/HTTPVersion:2/Protocol:PROTOCOL_GRPC/Compression:COMPRESSION_IDENTITY/TLS:false/client-stream/all-requests-equal-to-server-limit
+# None today. Any failure, or a listed case passing, fails the run.

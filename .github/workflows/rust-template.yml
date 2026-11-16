@@ -19,8 +19,8 @@ name: Rust function template
 #                on every protocol. Then the same suite against the template's
 #                OWN stack (accept loop, timeouts, body bound, layers; only the
 #                token check left out, dev profile only), with every crate the
-#                release binary links held to templates/rust/Cargo.lock and the
-#                deliberate stream-body refusals in conformance/known-failing.txt.
+#                release binary links held to templates/rust/Cargo.lock and any
+#                deliberate refusals listed in conformance/known-failing.txt.
 #   image        contents: read only, every event: build locally -> SBOM (syft,
 #                SPDX) -> Trivy gate (FAIL on HIGH/CRITICAL). The binary is
 #                built with `cargo auditable`, so the scan sees its crates.

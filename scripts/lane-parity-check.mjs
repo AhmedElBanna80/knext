@@ -10,15 +10,19 @@
  *
  * Usage:
  *   git fetch --no-tags origin main integration/v1.3
- *   node scripts/lane-parity-check.mjs [--manifest .github/lane-parity.json]
+ *   node scripts/lane-parity-check.mjs [--manifest .github/lane-parity.json] [--record]
+ *
+ * --record rewrites the manifest after a deliberate change: out-of-date entries
+ * get the current blob ids (their reasons kept), stale ones are removed. It never
+ * records an unexplained difference. Review the manifest diff before committing.
  *
  * Exit: 0 parity holds, 1 findings, 2 a lane or the manifest could not be read.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { gitRun } from './lib/guard-prover.mjs';
-import { checkLaneParity } from './lib/lane-parity.mjs';
+import { checkLaneParity, formatManifest, recordLaneParity } from './lib/lane-parity.mjs';
 
 const args = process.argv.slice(2);
 const at = args.indexOf('--manifest');
@@ -58,7 +62,25 @@ function readBlob(lane, path) {
   return type === 'blob' ? id : null;
 }
 
-const findings = checkLaneParity({ manifest, readBlob });
+let findings;
+if (args.includes('--record')) {
+  const r = recordLaneParity({ manifest, readBlob });
+  for (const c of r.changes) {
+    if (c.kind === 'removed')
+      console.log(`lane-parity: removed ${c.path} vs ${c.lane} (identical again)`);
+    else
+      console.log(
+        `lane-parity: re-pinned ${c.path} vs ${c.lane}: ${c.from.map((b) => b ?? '(absent)').join(' / ')} -> ${c.to.map((b) => b ?? '(absent)').join(' / ')} (reason kept; review it)`,
+      );
+  }
+  if (r.changes.length > 0) {
+    writeFileSync(manifestPath, formatManifest(r.manifest));
+    manifest = r.manifest;
+  }
+  findings = r.findings;
+} else {
+  findings = checkLaneParity({ manifest, readBlob });
+}
 // Recorded known gaps stay visible on a green run.
 for (const d of Array.isArray(manifest.divergences) ? manifest.divergences : []) {
   if (d.issue)

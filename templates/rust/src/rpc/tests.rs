@@ -378,6 +378,28 @@ async fn a_panicking_handler_answers_internal() {
     running.stop().await.unwrap();
 }
 
+/// A unary body larger than MAX_REQUEST_BODY_BYTES is refused with
+/// resource_exhausted: connectrpc's own body bound, which the stream bound
+/// above it never preempts.
+#[tokio::test]
+async fn unary_body_limit() {
+    let running = start(function(admit(), Timeouts::default())).await;
+    let headers = [
+        ("content-type", "application/proto"),
+        ("authorization", "Bearer a.b.c"),
+    ];
+    let body = Bytes::from(vec![0u8; 2 * MAX_REQUEST_BODY_BYTES]);
+    let resp = raw(
+        running.addr,
+        Transport::H2c,
+        post(running.addr, PUT_ITEM, &headers, body),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome(resp).await.as_deref(), Some("resource_exhausted"));
+    running.stop().await.unwrap();
+}
+
 /// A message larger than MAX_REQUEST_BYTES is refused before the handler.
 #[tokio::test]
 async fn read_limit() {

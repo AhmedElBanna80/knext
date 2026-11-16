@@ -182,37 +182,36 @@ const REPLAY = [
     id: 'R17',
     subject: 'handler',
     claim: 'a request that finds the breaker closed does not start the replay',
-    anchor: '    if (client && replayPending(state.replay)) startTagReplay(core);',
+    anchor: '    if (client && replayPending(state.replay)) shared(core).replay.loop.start();',
     replacement: '',
   },
   {
     id: 'R18',
-    subject: 'handler',
+    subject: 'loop',
     claim: 'no probe is set after a run, so an idle pod never replays',
-    anchor: '        replay.run = null;\n        scheduleTagProbe(core);',
-    replacement: '        replay.run = null;',
+    anchor: '          running = null;\n          probe();',
+    replacement: '          running = null;',
   },
   {
     id: 'R19',
-    subject: 'handler',
+    subject: 'loop',
     claim: "the probe timer is not unref'd and holds the process open",
-    anchor: '  replay.timer.unref?.();',
+    anchor: '    timer.unref?.();',
     replacement: '',
   },
   {
     id: 'R20',
     subject: 'handler',
     claim: 'the replay run is not enrolled in the SIGTERM drain registry',
-    anchor: '  replay.run = trackWrite(',
-    replacement: '  replay.run = (',
+    anchor: '      track: trackWrite,',
+    replacement: '      track: (p) => p,',
   },
   {
     id: 'R21',
     subject: 'handler',
     claim: 'a client that can no longer be loaded keeps the backlog (and a probe) forever',
-    anchor:
-      '  if (!core.redisConfigured()) {\n    // The client could not be loaded at all: there is nothing a replay could reach.\n    resetUseCacheTagReplay(core);\n    return;\n  }',
-    replacement: '',
+    anchor: '      unreachable: () => !core.redisConfigured(),',
+    replacement: '      unreachable: () => false,',
   },
   // ── the script call and its read-then-write fallback ──────────────────────
   {
@@ -375,6 +374,8 @@ const replay = createGuardProver({
     // The bound, the generation checks and the collapse live in the shared
     // backlog since #2387; these rows mutate it there.
     backlog: 'packages/kn-next/src/adapters/tag-backlog.js',
+    // The run, the probe and the reset live in the shared loop since #106.
+    loop: 'packages/kn-next/src/adapters/replay-loop.js',
   },
 });
 const live = createGuardProver({

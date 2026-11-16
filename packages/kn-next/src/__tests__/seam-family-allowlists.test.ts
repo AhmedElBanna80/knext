@@ -76,7 +76,11 @@ const USE_CACHE_TEXT = [
 
 const typeFamilies = (src: string) =>
     [
-        ...new Set([...src.matchAll(/# TYPE ([a-z_]+) /g)].map((m) => m[1])),
+        ...new Set(
+            [...src.matchAll(/^# TYPE ([a-zA-Z_:][a-zA-Z0-9_:]*) /gm)].map(
+                (m) => m[1],
+            ),
+        ),
     ].sort();
 
 describe("the allowlists are the families the emitters render", () => {
@@ -137,5 +141,39 @@ describe("the self-contained in-process port drops it too", () => {
 
     it("is empty without the seams", () => {
         expect(selfContained.readSeamMetrics()).toBe("");
+    });
+});
+
+// A histogram (or summary) family's sample lines carry a `_bucket` / `_sum` /
+// `_count` suffix its HELP and TYPE lines do not. Matching the family name
+// exactly would keep the TYPE line and drop every sample.
+const HISTOGRAM = [
+    "# HELP knext_test_seconds a histogram",
+    "# TYPE knext_test_seconds histogram",
+    'knext_test_seconds_bucket{le="0.1"} 1',
+    'knext_test_seconds_bucket{le="+Inf"} 2',
+    "knext_test_seconds_sum 0.3",
+    "knext_test_seconds_count 2",
+    "",
+].join("\n");
+// Suffixed names whose base is NOT allowed, and an allowed base with a suffix
+// the exposition format does not define: all dropped.
+const HISTOGRAM_FOREIGN = [
+    "knext_other_seconds_bucket 1",
+    "knext_other_seconds_count 1",
+    "knext_test_seconds_extra 1",
+    "# TYPE knext_test_seconds_count counter",
+    "",
+].join("\n");
+
+describe("a histogram family keeps its _bucket, _sum and _count samples", () => {
+    it.each([
+        ["deep-health-lite", () => lite.keepFamilies],
+        ["the self-contained supervisor", () => selfContained.keepFamilies],
+    ])("%s", (_name, get) => {
+        const keep = get() as (b: string, f: readonly string[]) => string;
+        expect(
+            keep(HISTOGRAM + HISTOGRAM_FOREIGN, ["knext_test_seconds"]),
+        ).toBe(HISTOGRAM);
     });
 });

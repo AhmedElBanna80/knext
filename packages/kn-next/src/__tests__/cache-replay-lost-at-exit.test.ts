@@ -129,7 +129,10 @@ describe("ISR handler: exiting with an invalidation backlog", () => {
         exitNow();
         const lines = exitLines();
         expect(lines).toHaveLength(1);
-        expect(lines[0]).toContain(`a collapsed backlog (over ${BOUND} tags)`);
+        // The bound covers tags and deletes together, so the line names both.
+        expect(lines[0]).toContain(
+            `a collapsed backlog (over ${BOUND} tags and deletes)`,
+        );
     });
 
     it("a backlog replayed before the exit is not reported", async () => {

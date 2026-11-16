@@ -172,6 +172,40 @@ describe("startChildMetricsServer + fetchChildMetrics", () => {
     });
 });
 
+describe("the child listener binds the port KN_CHILD_METRICS_PORT names", () => {
+    it("startChildMetricsServer and fetchChildMetrics with no port argument meet on it", async () => {
+        const free = await new Promise<number>((r) => {
+            const s = http.createServer().listen(0, "127.0.0.1", () => {
+                const p = (s.address() as { port: number }).port;
+                s.close(() => r(p));
+            });
+        });
+        const env: Record<string, string> = {
+            ...process.env,
+            KN_CHILD_METRICS_PORT: String(free),
+        } as Record<string, string>;
+        const out = Bun.spawnSync({
+            cmd: [
+                process.execPath,
+                "-e",
+                `const { Counter, Registry } = require(${JSON.stringify(require.resolve("prom-client"))});
+                 const m = require(${JSON.stringify(require.resolve("../adapters/metrics"))});
+                 const reg = new Registry();
+                 new Counter({ name: "knext_child_port_probe_total", help: "probe", registers: [reg] }).inc();
+                 const server = m.startChildMetricsServer(reg);
+                 server.once("listening", async () => {
+                   const body = await m.fetchChildMetrics();
+                   console.log(JSON.stringify([server.address().port, body.includes("knext_child_port_probe_total 1")]));
+                   server.close();
+                 });`,
+            ],
+            env,
+        });
+        expect(out.exitCode, out.stderr.toString()).toBe(0);
+        expect(JSON.parse(out.stdout.toString().trim())).toEqual([free, true]);
+    });
+});
+
 describe("initRuntimeMetrics singleton", () => {
     it("is idempotent and returns the same instance", () => {
         const reg = new Registry();

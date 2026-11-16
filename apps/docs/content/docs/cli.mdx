@@ -95,7 +95,7 @@ the compiled single-executable target — its own `Dockerfile`, `vite.config.ts`
 `build: 'vinext'` pinned in `knext.config.ts`, plus a `Dockerfile.self-contained` reference
 recipe for the optional `--self-contained` single-executable build (see
 [Self-contained mode](/docs/build-pipeline#self-contained-mode-experimental)) — the standalone
-target never scaffolds that file, since `--self-contained` only applies to the vinext build. See
+target never scaffolds that file, since that reference recipe is for the vinext build. See
 [the adapter and the compiled build](/docs/official-adapter) for the trade-off between the two.
 
 ### The questions `create` asks
@@ -431,7 +431,7 @@ builds exactly as before.
 | `--skip-next` | Reuse the existing project build (`.next/`, or `.output/` on the vinext target) instead of running it again. With `knext.ffi.json`, `knext ffi build` does not run either: the Rust library already staged under `native/ffi/` is reused as it is, and the build stops with an error if nothing is staged there for the image's architecture. |
 | `--skip-smoke` | Do not boot the compiled executable. For CI that cannot execute it (a foreign-architecture runner). The build prints a loud warning and the artifact ships unverified. |
 | `--verbose` | List every compile and closure note. By default they are folded into one line, such as `[knext standalone-compile] 12 notes; rerun with --verbose for details`. Warnings and errors always print in full. |
-| `--self-contained` | Opt in to the self-contained single-executable mode, overriding `selfContained` in `knext.config.ts`. Experimental: on the vinext target the binary needs nothing beside it; the other targets do not use it yet, so there it only shows up in the build log and the build output is unchanged. Refused for an app with `knext.ffi.json`. |
+| `--self-contained` | Opt in to the self-contained single-executable mode, overriding `selfContained` in `knext.config.ts`. Experimental: on the two compiled targets (standalone and vinext, both on the Bun runtime) the binary needs nothing beside it; on any other target or runtime it only shows up in the build log and the build output is unchanged. Refused for an app with `knext.ffi.json`. |
 | `-h`, `--help` | Show the usage help. |
 
 **Exit code:** `0` on success (including `--help`); `1` on a usage error (an unknown flag), a missing

@@ -142,15 +142,29 @@ export function readFfiMetrics(): string {
     return keepFamilies(readSeam(FFI_METRICS_SEAM), FFI_METRIC_FAMILIES);
 }
 
-/** Keep only the HELP / TYPE / sample lines of the named families (exact name match). */
-function keepFamilies(body: string, families: readonly string[]): string {
+/**
+ * Keep only the HELP / TYPE / sample lines of the named families (exact name
+ * match). A sample line may also carry a histogram or summary suffix
+ * (`_bucket`, `_sum`, `_count`) on a named family, as its HELP and TYPE lines
+ * do not.
+ */
+export function keepFamilies(
+    body: string,
+    families: readonly string[],
+): string {
     if (body.length === 0) return body;
     const kept = body.split("\n").filter((line) => {
         const m =
-            /^(?:# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(
+            /^(# (?:HELP|TYPE) )?([a-zA-Z_:][a-zA-Z0-9_:]*)(?=[\s{]|$)/.exec(
                 line,
             );
-        return m !== null && families.includes(m[1] as string);
+        if (m === null) return false;
+        const full = m[2] as string;
+        const name =
+            m[1] === undefined
+                ? full.replace(/_(?:bucket|sum|count)$/, "")
+                : full;
+        return families.includes(full) || families.includes(name);
     });
     return kept.length > 0 ? `${kept.join("\n")}\n` : "";
 }

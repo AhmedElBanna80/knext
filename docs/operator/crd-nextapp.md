@@ -37,7 +37,12 @@ leaves the command to the image's own `CMD` (forcing the standalone command
 would CrashLoop — there is no `server.js` in that image); for `turbopack` or
 absence, `runtime: bun` execs `bun run server.js` — **unless `selfContained`
 is also set** (see below), which puts that shape in the same "leave it to the
-image's own `CMD`" bucket as `vinext`.
+image's own `CMD`" bucket as `vinext`. On the Bun runtime that `server.js` is
+not Next's server: it is a small shim that starts knext's supervisor, and the
+supervisor runs the compiled executable the build produced. So a `runtime: bun`
+standalone app is compiled too; the command only names the shim. (A
+`selfContained` image has no supervisor: the image starts the executable
+itself.)
 
 > **Upgrade order (#548):** a cluster whose CRD predates `"vinext"` rejects
 > such a CR under `--validate=strict` (which every CLI apply passes) — a loud
@@ -47,7 +52,13 @@ image's own `CMD`" bucket as `vinext`.
 Selects the process that executes the standalone server: `"node"` (default) or `"bun"`.
 Only meaningful for the standalone shape (`build` absent or `"turbopack"`); for
 `build: "vinext"` the runtime is compiled into the executable and this field
-does not affect how the container starts.
+does not affect how the container starts. Set it to match the image. An image
+built for Bun carries the compiled executable, and the container's
+`bun run server.js` reaches it through the shim described above (or, with
+`selfContained`, the image starts the executable directly). An image built
+for Node runs Next's standalone `server.js` under Node, which needs `runtime`
+to be `"node"` or unset: `"bun"` makes the operator run `bun run server.js`,
+and a Node image has no Bun to run it with, so it does not start.
 ```yaml
 spec:
   runtime: "bun"
@@ -56,8 +67,8 @@ spec:
 > **Historical note:** images built by the retired per-file Bun bytecode pass
 > (pre-ADR-0048-Amendment-3) were Bun-only and exited with a `FATAL` message
 > under Node; flipping such an image back to `node` requires rebuilding it.
-> New builds never hit this — bytecode now exists only inside the vinext
-> single executable.
+> New builds never hit this — Bun bytecode now exists only inside the compiled
+> executables (vinext, and the standalone shape on `runtime: "bun"`).
 
 ### `selfContained` (Optional, default `false`)
 Marks the standalone shape as a self-contained single executable — the image

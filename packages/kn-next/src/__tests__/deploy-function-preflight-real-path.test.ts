@@ -35,8 +35,8 @@ afterAll(() => {
     for (const d of scratch) rmSync(d, { recursive: true, force: true });
 });
 
-/** The shipped BackendService CRD with `spec.wakeAhead` removed: an older operator. */
-function oldBackendServiceCrd(): string {
+/** The shipped BackendService CRD; with `withoutWakeAhead`, `spec.wakeAhead` is removed (an older operator). */
+function backendServiceCrd(withoutWakeAhead: boolean): string {
     const crd = YAML.parse(
         readFileSync(
             join(BASES, "apps.kn-next.dev_backendservices.yaml"),
@@ -47,11 +47,11 @@ function oldBackendServiceCrd(): string {
     const spec = crd.spec.versions[0].schema.openAPIV3Schema.properties
         .spec as any;
     expect(spec.properties.wakeAhead).toBeDefined();
-    delete spec.properties.wakeAhead;
+    if (withoutWakeAhead) delete spec.properties.wakeAhead;
     return JSON.stringify(crd);
 }
 
-async function deployAgainstOldCrd() {
+async function deployAgainstCrd(withoutWakeAhead: boolean) {
     const dir = mkdtempSync(join(tmpdir(), "knext-2481-real-path-"));
     scratch.push(dir);
     cpSync(FIXTURE, dir, { recursive: true });
@@ -64,13 +64,19 @@ async function deployAgainstOldCrd() {
                 return {
                     ok: false,
                     stdout: "",
-                    stderr: 'Error from server (BadRequest): strict decoding error: unknown field "spec.wakeAhead"',
+                    // Generic on purpose: it names NO field, so a field named in the output
+                    // can only have come from diffing the CR against the served CRD.
+                    stderr: "Error from server (BadRequest): strict decoding error",
                 };
             }
             if (a.includes("--raw"))
                 return { ok: false, stdout: "", stderr: "forbidden" };
             if (a.includes("get crd backendservices.apps.kn-next.dev")) {
-                return { ok: true, stdout: oldBackendServiceCrd(), stderr: "" };
+                return {
+                    ok: true,
+                    stdout: backendServiceCrd(withoutWakeAhead),
+                    stderr: "",
+                };
             }
             return {
                 ok: false,
@@ -108,28 +114,46 @@ async function deployAgainstOldCrd() {
 }
 
 describe("knext deploy function: preflight skew on the real path (#2481)", () => {
-    it("reads the BackendService CRD, names BackendService, and names the unknown field", async () => {
-        const { code, err, argvs } = await deployAgainstOldCrd();
+    it("old CRD: reads the BackendService CRD, names BackendService, and names the unknown field from the diff", async () => {
+        const { code, err, argvs } = await deployAgainstCrd(true);
         expect(code).toBe(1);
 
-        // (a) the known-field set came from the BackendService CRD, never NextApp's.
-        const crdReads = argvs
-            .filter((a) => a.includes("crd"))
-            .map((a) => a.join(" "));
+        // The known-field set was read from the BackendService CRD...
+        const reads = argvs.map((a) => a.join(" "));
         expect(
-            crdReads.some((a) =>
-                a.includes("backendservices.apps.kn-next.dev"),
+            reads.some(
+                (a) =>
+                    a.includes("get crd") &&
+                    a.includes("backendservices.apps.kn-next.dev"),
             ),
         ).toBe(true);
-        expect(argvs.flat().some((a) => a.includes("nextapps"))).toBe(false);
+        // ...and kubectl was never asked for NextApp's CRD (this can fail; the
+        // message-text check below cannot, grpc hardcodes its wording).
+        expect(reads.some((a) => a.includes("nextapps.apps.kn-next.dev"))).toBe(
+            false,
+        );
 
-        // (b) the printed message names BackendService.
         expect(err).toContain("PREFLIGHT FAILED");
         expect(err).toContain("BackendService CRD");
         expect(err).toContain("backendservices.apps.kn-next.dev");
-        expect(err).not.toMatch(/NextApp/);
 
-        // (c) the unknown field is named.
+        // The stubbed apiserver error is generic, so this name is proof the
+        // field came from the CR-vs-served-CRD diff.
         expect(err).toContain("spec.wakeAhead");
+    });
+
+    it("current CRD: wakeAhead is known, so it is NOT reported and the outcome differs", async () => {
+        const { code, err, argvs } = await deployAgainstCrd(false);
+        expect(code).toBe(1);
+        expect(
+            argvs.some((a) =>
+                a
+                    .join(" ")
+                    .includes("get crd backendservices.apps.kn-next.dev"),
+            ),
+        ).toBe(true);
+        expect(err).toContain("PREFLIGHT FAILED");
+        expect(err).not.toContain("spec.wakeAhead");
+        expect(err).toContain("the apiserver did not name the field");
     });
 });

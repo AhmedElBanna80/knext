@@ -64,7 +64,8 @@
  * install step, so a check auditing the supply chain cannot itself become part
  * of it. That is why the bundle is scanned rather than parsed with `yaml`.
  *
- * Usage: node scripts/verify-anonymous-install.mjs [--root <repo-root>] [--scrub]
+ * Usage: node scripts/verify-anonymous-install.mjs [--root <repo-root>] [--scrub] [--print-url]
+ *   env KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL: an explicit stand-in (see retargetInstallUrl).
  * Exits 1 on any finding.
  *
  * `--scrub` removes credential-shaped variables from the process ENVIRONMENT
@@ -153,6 +154,47 @@ export function discoverInstallUrl(repoRoot, options = {}) {
     );
   }
   return { url: distinct[0], file, line: hits[0].line };
+}
+
+const REPO_SLUG_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*)\/[A-Za-z0-9._-]+$/;
+const CHANNEL_RE = /^[A-Za-z0-9][A-Za-z0-9.+_-]*$/;
+const RELEASE_URL_PARTS_RE =
+  /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/releases\/(latest\/download|download\/[\w.+-]+)\/install\.yaml$/;
+
+/**
+ * Point the documented install URL at a stand-in repo and/or release channel.
+ *
+ * For when the documented repo is temporarily unreachable to strangers (a
+ * hosting restriction) and the nightlies must keep walking the same path
+ * against a stand-in. EXPLICIT ONLY: with neither `KNEXT_INSTALL_REPO` nor
+ * `KNEXT_INSTALL_CHANNEL` set, the documented URL is returned untouched. A
+ * malformed value throws rather than building a URL nobody published, and a
+ * `latest/download` URL has no tag segment for a channel to replace.
+ *
+ * @param {string} url the documented URL (from `discoverInstallUrl`)
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export function retargetInstallUrl(url, env) {
+  const repo = env.KNEXT_INSTALL_REPO || '';
+  const channel = env.KNEXT_INSTALL_CHANNEL || '';
+  if (!repo && !channel) return url;
+  if (repo && (!REPO_SLUG_RE.test(repo) || /\/\.{1,2}$/.test(repo))) {
+    throw new Error(`KNEXT_INSTALL_REPO=${JSON.stringify(repo)} is not an owner/name repo slug`);
+  }
+  if (channel && (!CHANNEL_RE.test(channel) || channel.includes('..'))) {
+    throw new Error(`KNEXT_INSTALL_CHANNEL=${JSON.stringify(channel)} is not a release tag`);
+  }
+  const m = RELEASE_URL_PARTS_RE.exec(url);
+  if (!m) throw new Error(`cannot retarget ${url}: not a GitHub release-asset install.yaml URL`);
+  let release = m[2];
+  if (channel) {
+    if (release === 'latest/download') {
+      throw new Error(`cannot set a channel on ${url}: a latest/download URL has no release tag`);
+    }
+    release = `download/${channel}`;
+  }
+  return `https://github.com/${repo || m[1]}/releases/${release}/install.yaml`;
 }
 
 /** Directories that never contain published prose. */
@@ -1717,7 +1759,11 @@ export async function runAnonymousInstallCheck(root, options = {}) {
   findings.push(...findUrlDriftFindings(documented.url, allUrls));
 
   const recorder = createRecordingHttp(http);
-  const download = await fetchInstallBundle(documented.url, { fetchImpl });
+  // The URL actually fetched: the documented one, or an explicit stand-in
+  // (KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL). Returned, so a report can never
+  // present a stand-in's verdict as the documented bundle's.
+  const fetchedUrl = retargetInstallUrl(documented.url, env);
+  const download = await fetchInstallBundle(fetchedUrl, { fetchImpl });
   findings.push(...download.findings);
 
   // `!== null`, NOT `!== ''`. An empty body is a body: it has to reach
@@ -1733,7 +1779,15 @@ export async function runAnonymousInstallCheck(root, options = {}) {
   }
 
   findings.push(...findRequestCredentialLeaks(recorder.requests));
-  return { documented, allUrls, download, images, findings, requests: recorder.requests };
+  return {
+    documented,
+    fetchedUrl,
+    allUrls,
+    download,
+    images,
+    findings,
+    requests: recorder.requests,
+  };
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -1777,11 +1831,13 @@ async function main(argv) {
   // `discoverInstallUrl` rather than re-deriving the URL from the docs a
   // second time — one discovery, walked twice for two different reasons
   // (#586's anonymous-pull check here, #1552's real-apply-on-kind
-  // elsewhere), never a second regex that can drift from the first.
+  // elsewhere), never a second regex that can drift from the first. An explicit
+  // KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL retargets the printed URL to a
+  // stand-in (see `retargetInstallUrl`); unset, it is the documented URL.
   if (printUrl) {
     try {
       const { url } = discoverInstallUrl(root);
-      console.log(url);
+      console.log(retargetInstallUrl(url, process.env));
       return 0;
     } catch (error) {
       console.error(`FATAL: ${error.message}`);
@@ -1808,10 +1864,15 @@ async function main(argv) {
     console.error(`FATAL: ${error.message}`);
     return 1;
   }
-  const { documented, allUrls, download, images, findings, requests } = result;
+  const { documented, fetchedUrl, allUrls, download, images, findings, requests } = result;
+  const standIn = fetchedUrl !== documented.url;
 
   console.log(`documented install URL (from ${documented.file}:${documented.line}):`);
   console.log(`  ${documented.url}`);
+  if (standIn) {
+    console.log('STAND-IN (KNEXT_INSTALL_REPO / KNEXT_INSTALL_CHANNEL): fetched instead:');
+    console.log(`  ${fetchedUrl}`);
+  }
   console.log(`  ${allUrls.length} published copy/copies across the tree\n`);
 
   if (download.body !== null) {
@@ -1823,10 +1884,16 @@ async function main(argv) {
   console.log(`\n${requests.length} registry request(s) made, all unauthenticated by construction`);
 
   if (findings.length === 0) {
-    console.log('\nOK: a stranger can fetch the documented bundle and pull every image in it.');
+    console.log(
+      standIn
+        ? '\nOK (STAND-IN, not the documented bundle): a stranger can fetch the stand-in bundle and pull every image in it.'
+        : '\nOK: a stranger can fetch the documented bundle and pull every image in it.',
+    );
     return 0;
   }
-  console.error(`\n${findings.length} finding(s):`);
+  console.error(
+    `\n${findings.length} finding(s)${standIn ? ' (STAND-IN bundle, not the documented one)' : ''}:`,
+  );
   for (const finding of findings) console.error(formatFinding(finding));
   return 1;
 }

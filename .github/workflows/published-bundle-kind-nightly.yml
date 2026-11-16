@@ -128,14 +128,24 @@ jobs:
 
       # THE STEP THIS WHOLE WORKFLOW EXISTS FOR: the exact URL the install
       # docs publish (discovered by #586's own `discoverInstallUrl`, never a
-      # second copy of the regex), applied UNMODIFIED — no manager-image
+      # second copy of the regex; on a stand-in repo, retargeted — see below), applied UNMODIFIED — no manager-image
       # override, no local build, no load into kind. kind's containerd pulls
       # every image anonymously, the same way a stranger's cluster would.
+      #
+      # STAND-IN REPO: on any repo other than getknext-dev/knext (the temporary
+      # home while that repo is hidden from anonymous users by a hosting
+      # restriction), the same documented path is walked against THIS repo's
+      # rolling `operator-edge` release, published by operator-supply-chain on
+      # main. On getknext-dev/knext both values are empty and the documented
+      # URL is used untouched. Remove this env block on the move back.
       - name: Apply the documented install.yaml, unmodified
+        env:
+          KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}
+          KNEXT_INSTALL_CHANNEL: ${{ github.repository != 'getknext-dev/knext' && 'operator-edge' || '' }}
         run: |
           set -euo pipefail
           INSTALL_URL="$(node scripts/verify-anonymous-install.mjs --print-url)"
-          echo "documented install URL: ${INSTALL_URL}"
+          echo "install URL (documented, or the stand-in when KNEXT_INSTALL_REPO is set): ${INSTALL_URL}"
           echo "INSTALL_URL=${INSTALL_URL}" >> "$GITHUB_ENV"
           kubectl apply --server-side --validate=strict -f "${INSTALL_URL}"
 
@@ -156,6 +166,8 @@ jobs:
       # real pull, so this is proof of what ran, not a restatement of the
       # bundle's own claim.
       - name: Record the operator image digest actually pulled
+        env:
+          KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}
         run: |
           set -euo pipefail
           IMAGE_ID="$(kubectl get pod -n kn-next-operator-system \
@@ -163,6 +175,14 @@ jobs:
             -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')"
           echo "operator image actually pulled: ${IMAGE_ID}"
           {
+            if [ -n "${KNEXT_INSTALL_REPO:-}" ]; then
+              echo "### Install URL applied (STAND-IN for ${KNEXT_INSTALL_REPO}, not the documented bundle)"
+            else
+              echo "### Install URL applied"
+            fi
+            echo '```'
+            echo "${INSTALL_URL}"
+            echo '```'
             echo "### Operator image actually pulled"
             echo '```'
             echo "${IMAGE_ID}"
@@ -310,10 +330,11 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CHECK_RESULT: ${{ needs.published-bundle-kind.result }}
           EVENT: ${{ github.event_name }}
+          BUNDLE: ${{ github.repository != 'getknext-dev/knext' && format('the STAND-IN bundle ({0} operator-edge release, not the documented one)', github.repository) || 'the documented, unmodified' }}
         run: |
           set -euo pipefail
           title='Published install bundle does not apply cleanly on kind'
-          body="The nightly published-bundle-on-kind check FAILED: the documented, unmodified
+          body="The nightly published-bundle-on-kind check FAILED: ${BUNDLE}
           install.yaml — the real GHCR image, no credentials — did not apply, the operator did not
           become Available, the NextApp CRD did not reach Established, or the CLI-rendered NextApp
           did not reconcile to Ready. The job log names the exact step and, if it got far enough, the

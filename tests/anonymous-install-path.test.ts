@@ -60,6 +60,7 @@ import {
   findRequestCredentialLeaks,
   findUrlDriftFindings,
   parseImageRef,
+  retargetInstallUrl,
   runAnonymousInstallCheck,
   splitYamlDocuments,
   verifyAnonymousPull,
@@ -142,7 +143,8 @@ describe('verify-anonymous-install.mjs --print-url — discovery only, no networ
   const SCRIPT = resolve(REPO_ROOT, 'scripts/verify-anonymous-install.mjs');
 
   it('prints exactly the discovered URL and nothing else, exit 0', () => {
-    const result = Bun.spawnSync(['node', SCRIPT, '--print-url'], { cwd: REPO_ROOT });
+    const { KNEXT_INSTALL_REPO: _r, KNEXT_INSTALL_CHANNEL: _c, ...env } = process.env;
+    const result = Bun.spawnSync(['node', SCRIPT, '--print-url'], { cwd: REPO_ROOT, env });
     expect(result.exitCode).toBe(0);
     const stdout = result.stdout.toString('utf8');
     const found = discoverInstallUrl(REPO_ROOT);
@@ -156,9 +158,10 @@ describe('verify-anonymous-install.mjs --print-url — discovery only, no networ
     // A DNS-black-holed run still succeeds: --print-url never calls fetchInstallBundle
     // or resolveAnonymousManifest, so it cannot be flaky on network reachability,
     // which the step BEFORE cluster stand-up must not be.
+    const { KNEXT_INSTALL_REPO: _r, KNEXT_INSTALL_CHANNEL: _c, ...base } = process.env;
     const result = Bun.spawnSync(['node', SCRIPT, '--print-url', '--root', REPO_ROOT], {
       cwd: '/',
-      env: { ...process.env, HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1' },
+      env: { ...base, HTTP_PROXY: 'http://127.0.0.1:1', HTTPS_PROXY: 'http://127.0.0.1:1' },
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString('utf8').trim()).toBe(discoverInstallUrl(REPO_ROOT).url);
@@ -176,6 +179,123 @@ describe('verify-anonymous-install.mjs --print-url — discovery only, no networ
     } finally {
       Bun.spawnSync(['rm', '-rf', scratch]);
     }
+  });
+});
+
+// While the documented repo is unreachable to strangers (a hosting restriction),
+// the nightlies can walk the same path against a stand-in repo and channel. The
+// documented URL stays the source of truth; the override only rewrites which
+// repo and release it is fetched from, and only when the env asks for it.
+describe('retargetInstallUrl — an explicit stand-in repo/channel, never a silent one', () => {
+  const DOC =
+    'https://github.com/getknext-dev/knext/releases/download/operator-latest/install.yaml';
+
+  it('returns the documented URL unchanged when no override is set', () => {
+    expect(retargetInstallUrl(DOC, {})).toBe(DOC);
+    expect(retargetInstallUrl(DOC, { KNEXT_INSTALL_REPO: '', KNEXT_INSTALL_CHANNEL: '' })).toBe(
+      DOC,
+    );
+  });
+
+  it('rewrites the repo and the release channel', () => {
+    expect(
+      retargetInstallUrl(DOC, {
+        KNEXT_INSTALL_REPO: 'AhmedElBanna80/knext',
+        KNEXT_INSTALL_CHANNEL: 'operator-edge',
+      }),
+    ).toBe('https://github.com/AhmedElBanna80/knext/releases/download/operator-edge/install.yaml');
+  });
+
+  it('rewrites the repo alone and keeps the documented channel', () => {
+    expect(retargetInstallUrl(DOC, { KNEXT_INSTALL_REPO: 'AhmedElBanna80/knext' })).toBe(
+      'https://github.com/AhmedElBanna80/knext/releases/download/operator-latest/install.yaml',
+    );
+  });
+
+  it('refuses a malformed repo or channel rather than building a URL nobody published', () => {
+    for (const repo of ['knext', 'a/b/c', 'a/b?x=1', '../evil/x', 'a /b', 'a/..', 'a/.']) {
+      expect(() => retargetInstallUrl(DOC, { KNEXT_INSTALL_REPO: repo })).toThrow(
+        /KNEXT_INSTALL_REPO/,
+      );
+    }
+    for (const channel of ['a/b', 'x?y', '..', 'a b']) {
+      expect(() => retargetInstallUrl(DOC, { KNEXT_INSTALL_CHANNEL: channel })).toThrow(
+        /KNEXT_INSTALL_CHANNEL/,
+      );
+    }
+  });
+
+  it('refuses to retarget a latest/download URL to a channel (no tag segment to replace)', () => {
+    const latest = 'https://github.com/getknext-dev/knext/releases/latest/download/install.yaml';
+    expect(retargetInstallUrl(latest, { KNEXT_INSTALL_REPO: 'o/r' })).toBe(
+      'https://github.com/o/r/releases/latest/download/install.yaml',
+    );
+    expect(() => retargetInstallUrl(latest, { KNEXT_INSTALL_CHANNEL: 'operator-edge' })).toThrow(
+      /channel/,
+    );
+  });
+
+  it('--print-url applies the override from the environment', () => {
+    const SCRIPT = resolve(REPO_ROOT, 'scripts/verify-anonymous-install.mjs');
+    const result = Bun.spawnSync(['node', SCRIPT, '--print-url'], {
+      cwd: REPO_ROOT,
+      env: { ...process.env, KNEXT_INSTALL_REPO: 'o/r', KNEXT_INSTALL_CHANNEL: 'operator-edge' },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString('utf8').trim()).toBe(
+      'https://github.com/o/r/releases/download/operator-edge/install.yaml',
+    );
+  });
+
+  it('the full check downloads from the retargeted URL, and drift is still judged on the docs', async () => {
+    const fetched: string[] = [];
+    const result = await runAnonymousInstallCheck(REPO_ROOT, {
+      env: { KNEXT_INSTALL_REPO: 'o/r', KNEXT_INSTALL_CHANNEL: 'operator-edge' },
+      home: '/nonexistent-home',
+      exists: () => false,
+      fetchImpl: (async (url: string) => {
+        fetched.push(String(url));
+        return new Response('', { status: 404 });
+      }) as unknown as typeof fetch,
+      http: async () => ({ status: 404, headers: {}, body: '' }),
+    });
+    const standIn = 'https://github.com/o/r/releases/download/operator-edge/install.yaml';
+    expect(fetched[0]).toBe(standIn);
+    // The report sees both, so it can label a stand-in verdict as one.
+    expect(result.fetchedUrl).toBe(standIn);
+    expect(result.documented.url).not.toBe(standIn);
+    // Drift is judged on the documented URL: the docs agree with themselves, so
+    // retargeting the fetch adds no drift finding.
+    expect(result.findings.filter((f) => f.reason === 'documented-url-drift')).toEqual([]);
+  });
+
+  it('the published-bundle nightly retargets only off getknext-dev/knext, to operator-edge', () => {
+    const wf = read(resolve(REPO_ROOT, '.github/workflows/published-bundle-kind-nightly.yml'));
+    const step = wf.slice(wf.indexOf('- name: Apply the documented install.yaml, unmodified'));
+    expect(step).toContain(
+      "KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}",
+    );
+    expect(step).toContain(
+      "KNEXT_INSTALL_CHANNEL: ${{ github.repository != 'getknext-dev/knext' && 'operator-edge' || '' }}",
+    );
+    // The record step carries its OWN env (not the apply step's), so its
+    // summary can label a stand-in.
+    const recordStart = wf.indexOf('- name: Record the operator image digest actually pulled');
+    const recordStep = wf.slice(recordStart, wf.indexOf('\n      - name:', recordStart + 1));
+    expect(recordStep).toContain(
+      "KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}",
+    );
+    // The step summary and the red-alert issue both label a stand-in as one.
+    expect(wf).toContain(
+      'echo "### Install URL applied (STAND-IN for ${KNEXT_INSTALL_REPO}, not the documented bundle)"',
+    );
+    expect(wf).toContain(
+      "BUNDLE: ${{ github.repository != 'getknext-dev/knext' && format('the STAND-IN bundle ({0} operator-edge release, not the documented one)', github.repository) || 'the documented, unmodified' }}",
+    );
+    expect(wf).toContain('FAILED: ${BUNDLE}');
+    // The anonymous-install nightly forbids expressions in step env by design;
+    // the stand-in must not leak into it.
+    expect(read(WORKFLOW)).not.toContain('KNEXT_INSTALL_');
   });
 });
 

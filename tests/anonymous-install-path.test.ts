@@ -143,7 +143,8 @@ describe('verify-anonymous-install.mjs --print-url — discovery only, no networ
   const SCRIPT = resolve(REPO_ROOT, 'scripts/verify-anonymous-install.mjs');
 
   it('prints exactly the discovered URL and nothing else, exit 0', () => {
-    const result = Bun.spawnSync(['node', SCRIPT, '--print-url'], { cwd: REPO_ROOT });
+    const { KNEXT_INSTALL_REPO: _r, KNEXT_INSTALL_CHANNEL: _c, ...env } = process.env;
+    const result = Bun.spawnSync(['node', SCRIPT, '--print-url'], { cwd: REPO_ROOT, env });
     expect(result.exitCode).toBe(0);
     const stdout = result.stdout.toString('utf8');
     const found = discoverInstallUrl(REPO_ROOT);
@@ -276,6 +277,14 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
     expect(step).toContain(
       "KNEXT_INSTALL_CHANNEL: ${{ github.repository != 'getknext-dev/knext' && 'operator-edge' || '' }}",
     );
+    // The step summary and the red-alert issue both label a stand-in as one.
+    expect(wf).toContain(
+      'echo "### Install URL applied (STAND-IN for ${KNEXT_INSTALL_REPO}, not the documented bundle)"',
+    );
+    expect(wf).toContain(
+      "BUNDLE: ${{ github.repository != 'getknext-dev/knext' && format('the STAND-IN bundle ({0} operator-edge release, not the documented one)', github.repository) || 'the documented, unmodified' }}",
+    );
+    expect(wf).toContain('FAILED: ${BUNDLE}');
     // The anonymous-install nightly forbids expressions in step env by design;
     // the stand-in must not leak into it.
     expect(read(WORKFLOW)).not.toContain('KNEXT_INSTALL_');

@@ -166,6 +166,8 @@ jobs:
       # real pull, so this is proof of what ran, not a restatement of the
       # bundle's own claim.
       - name: Record the operator image digest actually pulled
+        env:
+          KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}
         run: |
           set -euo pipefail
           IMAGE_ID="$(kubectl get pod -n kn-next-operator-system \
@@ -173,7 +175,11 @@ jobs:
             -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')"
           echo "operator image actually pulled: ${IMAGE_ID}"
           {
-            echo "### Install URL applied"
+            if [ -n "${KNEXT_INSTALL_REPO:-}" ]; then
+              echo "### Install URL applied (STAND-IN for ${KNEXT_INSTALL_REPO}, not the documented bundle)"
+            else
+              echo "### Install URL applied"
+            fi
             echo '```'
             echo "${INSTALL_URL}"
             echo '```'

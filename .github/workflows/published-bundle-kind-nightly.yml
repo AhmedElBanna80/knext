@@ -131,7 +131,17 @@ jobs:
       # second copy of the regex), applied UNMODIFIED — no manager-image
       # override, no local build, no load into kind. kind's containerd pulls
       # every image anonymously, the same way a stranger's cluster would.
+      #
+      # STAND-IN REPO: on any repo other than getknext-dev/knext (the temporary
+      # home while that repo is hidden from anonymous users by a hosting
+      # restriction), the same documented path is walked against THIS repo's
+      # rolling `operator-edge` release, published by operator-supply-chain on
+      # main. On getknext-dev/knext both values are empty and the documented
+      # URL is used untouched. Remove this env block on the move back.
       - name: Apply the documented install.yaml, unmodified
+        env:
+          KNEXT_INSTALL_REPO: ${{ github.repository != 'getknext-dev/knext' && github.repository || '' }}
+          KNEXT_INSTALL_CHANNEL: ${{ github.repository != 'getknext-dev/knext' && 'operator-edge' || '' }}
         run: |
           set -euo pipefail
           INSTALL_URL="$(node scripts/verify-anonymous-install.mjs --print-url)"

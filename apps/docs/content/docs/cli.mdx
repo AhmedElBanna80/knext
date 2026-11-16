@@ -496,7 +496,8 @@ guessing; "cannot determine" is reported as its own outcome, never as "enforced"
 **Kubernetes version.** Doctor reads the server version and warns when it is older than Kubernetes
 1.30, the first release where `ValidatingAdmissionPolicy` is generally available, so you hear about it
 before you install the operator. Provider suffixes such as `v1.29.5-gke.1` are handled. If the version
-cannot be read, the row is skipped and says so. Once the operator is installed, the operator write
+cannot be read, the row is skipped and says so. When the cluster is unreachable the row is absent,
+because the cluster row already reports that. Once the operator is installed, the operator write
 policy row below reports the same floor with its consequence, so the warning is not repeated.
 
 **Operator write policy.** The operator's Secret and ConfigMap writes are limited by a

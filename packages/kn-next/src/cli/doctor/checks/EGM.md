@@ -50,7 +50,7 @@ Local checks:
 
 - A probe that itself failed (network, auth, forbidden) reports `"error"` through `infraFailure`. A confirmed cluster fact, such as a missing CRD or Deployment, reports `"fail"` [`crd.ts:crdCheck`, `operator.ts:operatorCheck`, `knative.ts:knativeCheck`].
 - A server version that cannot be read or parsed makes `k8s-floor` report `skip`, never `pass` or `warn`, because nothing was compared with the floor [`k8s-floor.ts:k8sFloorCheck`].
-- An unreachable cluster is `warn`, and the dependent cluster checks report `SKIP_UNREACHABLE` [`cluster.ts:clusterCheck`].
+- An unreachable cluster is `warn`, and the dependent cluster checks report `SKIP_UNREACHABLE`, except k8s-floor, which returns no row because the cluster row already reports it [`cluster.ts:clusterCheck`, `k8s-floor.ts:k8sFloorCheck`].
 - A kubectl client below v1.25 is `fail`, because `--validate` is a boolean flag there and deploy would die at flag parsing. A version that cannot be determined is `warn` [`kubectl-validation.ts:kubectlValidationCheck`].
 - A Node major below `NODE_FLOOR_MAJOR` is `fail` [`node-floor.ts:nodeFloorCheck`].
 - An emitted CR field missing from the installed CRD schema is `fail` [`crd-schema.ts:crdSchemaCheck`].

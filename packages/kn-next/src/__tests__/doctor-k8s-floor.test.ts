@@ -59,6 +59,14 @@ describe("doctor k8s-floor check", () => {
         expect(floor?.detail).toContain("1.29");
     });
 
+    it("falls back to major/minor when gitVersion is unusable", async () => {
+        const warn = await rows('{"major":"1","minor":"29+","gitVersion":""}');
+        expect(warn.floor?.status).toBe("warn");
+        expect(warn.floor?.detail).toContain("1.29");
+        const pass = await rows('{"major":"1","minor":"31"}');
+        expect(pass.floor?.status).toBe("pass");
+    });
+
     it("PASS on v1.30", async () => {
         const { floor } = await rows(
             '{"major":"1","minor":"30","gitVersion":"v1.30.0"}',

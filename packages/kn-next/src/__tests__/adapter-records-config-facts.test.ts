@@ -9,8 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_FACTS_OUT_ENV } from "../adapters/next-config-facts.js";
 import adapter from "../adapters/next-adapter";
+import { CONFIG_FACTS_OUT_ENV } from "../adapters/next-config-facts.js";
 
 type ModifyConfig = NonNullable<typeof adapter.modifyConfig>;
 const modifyConfig = adapter.modifyConfig as ModifyConfig;

@@ -23,13 +23,13 @@ import {
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
 import { requireIsolatedProcess } from "../../../../tests/helpers/require-isolated-process";
 import { type KubectlFn, type ProbeOutcome, runDoctor } from "../cli/doctor";
 import {
     assertNoBunTurbopackFragments,
     enablesTurbopackModuleFragments,
 } from "../cli/turbopack-fragments-guard";
+import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
 
 requireIsolatedProcess("turbopack-fragments-bun-guard.test.ts");
 

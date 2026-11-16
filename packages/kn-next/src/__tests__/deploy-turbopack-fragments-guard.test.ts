@@ -19,8 +19,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { requireIsolatedProcess } from "../../../../tests/helpers/require-isolated-process";
 import type { KnativeNextConfig } from "../config";
-import { reconciledNextAppCapture } from "./helpers/reconciled-nextapp";
 import { adapterBuild, FRAGMENTS_ON } from "./helpers/next-adapter-build";
+import { reconciledNextAppCapture } from "./helpers/reconciled-nextapp";
 
 requireIsolatedProcess("deploy-turbopack-fragments-guard.test.ts");
 

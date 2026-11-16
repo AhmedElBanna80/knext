@@ -744,17 +744,21 @@ describe("the build env and temp files", () => {
         let seenOut: string | undefined;
         let seenAdapter: string | undefined;
         let seenProject: string | undefined;
+        let seenBuilder: string | undefined;
         const projectBefore = process.env.KNEXT_CONFIG_FACTS_PROJECT;
         try {
             run(dir, false, () => {
                 seenOut = process.env.KNEXT_CONFIG_FACTS_OUT;
                 seenAdapter = process.env.NEXT_ADAPTER_PATH;
                 seenProject = process.env.KNEXT_CONFIG_FACTS_PROJECT;
+                seenBuilder = process.env.KNEXT_BUILDER;
             });
             expect(seenOut).toMatch(/facts\.json$/);
             // The app the CLI is building, so a sibling app's build in the
             // same script neither records nor refuses.
             expect(seenProject).toBe(dir);
+            // knext's builder, not the inherited value, inside the build.
+            expect(seenBuilder).toBe("webpack");
             expect(process.env.KNEXT_CONFIG_FACTS_PROJECT).toBe(projectBefore);
             expect(seenAdapter).toBe(before.adapter);
             expect(existsSync(join(seenOut as string, ".."))).toBe(false);

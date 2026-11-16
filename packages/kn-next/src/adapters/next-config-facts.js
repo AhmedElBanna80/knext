@@ -99,15 +99,6 @@ export function refusalFor(facts, { runtime, builder }) {
     return undefined;
 }
 
-/**
- * Record the resolved facts of `config` (the config the adapter hands back to
- * Next) and throw a marked refusal when they call for one. Returns the facts,
- * or undefined when the CLI did not ask (see the file comment).
- *
- * `modifyConfig` runs in the main build process and again in the bundler's
- * workers, so the file is written tmp-then-rename: a reader never sees a
- * partial record, and identical writes simply replace each other.
- */
 /** Resolve symlinks when the path exists, so two spellings of one app match. */
 function canonical(path) {
     try {
@@ -125,6 +116,15 @@ export function factsTempPath(outPath) {
     return `${outPath}.${process.pid}.${threadId}.${randomBytes(4).toString("hex")}.tmp`;
 }
 
+/**
+ * Record the resolved facts of `config` (the config the adapter hands back to
+ * Next) and throw a marked refusal when they call for one. Returns the facts,
+ * or undefined when the CLI did not ask (see the file comment).
+ *
+ * `modifyConfig` runs in the main build process and again in the bundler's
+ * workers, so the file is written tmp-then-rename: a reader never sees a
+ * partial record, and identical writes simply replace each other.
+ */
 export function recordNextConfigFacts(
     config,
     { phase, projectDir },

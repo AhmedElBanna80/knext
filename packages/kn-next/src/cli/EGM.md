@@ -82,7 +82,7 @@ are unknown-command errors.
 
 - `assertNoPlaceholders` (`placeholder-preflight.ts`).
 - `assertNotStaticExport`, `assertNotStaticExportFromFacts`, `assertVinextNotStaticExport`, `assertDefaultDistDir`, plus the helpers `classifyStaticExport` (returning the type `StaticExportDeclaration`: `unconditional`, `conditional` or `none`), `configuredDistDir` and `stripCommentsStringAware` (`static-export-guard.ts`).
-- `assertNoBunTurbopackFragments` (`turbopack-fragments-guard.ts`).
+- `assertNoBunTurbopackFragments`, `enablesTurbopackModuleFragments` (`turbopack-fragments-guard.ts`). The text scans keep string literals, so a setting written inside a string can trip them; they decide only where no resolved config exists.
 - `assertVisibilityDowngradeIsExplicit` (`visibility-guard.ts`).
 - `keyPrefixProblem`, `KEY_PREFIX_PATTERN`, `KEY_PREFIX_MAX_LENGTH` (`redis-key-prefix.ts`).
 - `checkNodeFloor` (`node-floor.ts` and `node-floor-guard.cjs`).

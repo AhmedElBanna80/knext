@@ -27,7 +27,8 @@ Known limits:
   with no custom-distDir build alongside (falls to case 2's newest file);
 - one record shared by two `next build`s of the SAME app in one script (a sibling app's build neither records
   nor refuses: the CLI names its app in `KNEXT_CONFIG_FACTS_PROJECT`);
-- `--skip-next`, `knext doctor` and vinext still decide from text.
+- `--skip-next`, `knext doctor` and vinext still decide from text, and the text scans keep string literals, so a
+  setting written inside a string can trip them.
 
 ## Problem
 

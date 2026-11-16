@@ -198,10 +198,13 @@ read the build output from \`.next\`. Remove \`distDir\` from your Next.js confi
 \`.next\`), or set it to the literal \`".next"\`, and build again.`;
 
 /**
- * Before a Next build: refuse a custom `distDir` (#2251). Only the static-export
+ * The TEXT check for a custom `distDir` (#2251). Since #2250 a Next build decides
+ * from the resolved config (`project-build.ts`); this text check runs before the
+ * build as a warning only, and refuses only where no resolved config exists:
+ * `build --skip-next`, the vinext target, and the no-facts fallback. Only the static-export
  * guard honours it; the build, artifact and standalone steps assume `.next`, so
  * half-supporting it gives a wrong artifact path or a confusing late failure.
- * Refused up front until the resolved value is threaded through. It reads the
+ * It reads the
  * config text, like the other guards here, and fails closed: every `distDir`
  * key must be a plain literal for the default, or the build is refused, so a
  * computed value (an env var, a ternary, a `${}` template) refuses too. It is a

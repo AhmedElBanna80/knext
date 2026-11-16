@@ -6,9 +6,10 @@
 trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
 ```
 
-On `main` this step is **enforcing** (fails the run), and every publishing step
-(cosign sign/verify, `build-installer` + digest re-pin, Release-asset upload) is
-gated `if: ref == main` **after** Trivy. So a single un-ignored HIGH/CRITICAL
+On a publishing channel (`main`, and `operator-v*` release tags) this step is
+**enforcing** (fails the run), and every publishing step (cosign sign/verify,
+`build-installer` + digest re-pin, Release-asset upload) is gated on
+`steps.channel.outputs.publish == 'true'` and on the Trivy step succeeding. So a single un-ignored HIGH/CRITICAL
 finding blocks the whole bundle publish and leaves `dist/install.yaml` pinned to
 the all-zeros placeholder digest — a clean-cluster `kubectl apply -f
 dist/install.yaml` would then `ImagePullBackOff`.

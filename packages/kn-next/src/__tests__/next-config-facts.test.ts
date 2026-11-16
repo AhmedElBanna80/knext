@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
     existsSync,
+    mkdirSync,
     mkdtempSync,
     readFileSync,
     rmSync,
@@ -225,8 +226,10 @@ describe("recordNextConfigFacts records the app directory", () => {
 // or refuse; a sibling app with the knext adapter is left alone.
 describe("recordNextConfigFacts skips a sibling app's build", () => {
     it("neither records nor refuses for a projectDir that is not the CLI's app", () => {
-        const app = mkdtempSync(join(dir, "app-"));
-        const sibling = mkdtempSync(join(dir, "sibling-"));
+        const app = join(dir, "app");
+        mkdirSync(app);
+        const sibling = join(dir, "sibling");
+        mkdirSync(sibling);
         const refusing = { distDir: "build", experimental: {} };
         expect(
             recordNextConfigFacts(
@@ -239,7 +242,8 @@ describe("recordNextConfigFacts skips a sibling app's build", () => {
     });
 
     it("still records and refuses for the CLI's own app, through a symlinked path", () => {
-        const app = mkdtempSync(join(dir, "app-"));
+        const app = join(dir, "app");
+        mkdirSync(app);
         const { symlinkSync } = require("node:fs") as typeof import("node:fs");
         const link = join(dir, "link");
         symlinkSync(app, link);

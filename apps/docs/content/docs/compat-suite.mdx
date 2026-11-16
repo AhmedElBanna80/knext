@@ -57,12 +57,13 @@ is the scope-and-methodology reference, not the scoreboard.
 ## The Next.js version under credential
 
 The credential runs against a **pinned Next.js release tag**, never `canary`, so an upstream
-regression is never mistaken for a knext defect. On the knext 2.x line the pinned tag is `v16.4.3`.
+regression is never mistaken for a knext defect. On the knext 2.x line the pinned tag is `v16.4.5`.
 That is the Next.js release `knext create` scaffolds, so the suite tests what a new app ships
 with. It is a patch release of the same 16.4 line as the minimum knext 2.0 supports. The pin
 moves whenever the scaffolded release moves to a new patch or minor. The evidence so far was
 gathered at `v16.4.0` (the previous pin on the same line) and is dispatched runs of one cell, not
-a credential. At `v16.4.3` only a single cell has been dispatched (Turbopack on Node), which surfaced
+a credential. No cell has been dispatched at `v16.4.5` yet; at the previous pin, `v16.4.3`, only a
+single cell was dispatched (Turbopack on Node), which surfaced
 one new upstream test that asserts Vercel's request-tracing topology; it is quarantined, not counted
 as a pass. The
 [compatibility matrix](/docs/compat-matrix) has the counts.

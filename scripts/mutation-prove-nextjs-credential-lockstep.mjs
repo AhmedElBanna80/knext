@@ -85,7 +85,7 @@ const MUTATIONS = [
     label: 'test-e2e-deploy.yml: bump the workflow_dispatch nextjsRef DEFAULT to a drifted value',
     subject: 'testE2eDeploy',
     anchor:
-      "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.4.3'",
+      "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.4.5'",
     replacement:
       "        description: 'vercel/next.js git ref to test against (pinned tag ≥ v16.2.0; do NOT use canary)'\n        required: false\n        default: 'v16.3.3'",
   },
@@ -111,31 +111,31 @@ const MUTATIONS = [
   {
     label: 'docs/compat-matrix.md: drift the cited vercel/next.js version from the manifest',
     subject: 'docsMatrixMd',
-    anchor: 'against `vercel/next.js` **v16.4.3**',
+    anchor: 'against `vercel/next.js` **v16.4.5**',
     replacement: 'against `vercel/next.js` **v16.3.3**',
   },
   {
     label: 'compat-matrix.mdx: drift the cited Next.js version from the manifest',
     subject: 'docsMatrixMdx',
-    anchor: 'the official suite now runs against Next.js v16.4.3.',
+    anchor: 'the official suite now runs against Next.js v16.4.5.',
     replacement: 'the official suite now runs against Next.js v16.3.3.',
   },
   {
-    // GHSA-mfr8-8qww-v76h (2026-11-16): the scaffold moved to 16.4.5 while the
-    // harness stays at v16.4.3, so the divergence is OPEN again and the docs
-    // must explain it. Drop the "newer Next.js release" explanation from the
-    // callout and require the diverged branch of the docs check to go red.
+    // 2026-11-16: the harness moved WITH the shipped pin to 16.4.5, so the
+    // divergence is CLOSED and the docs must not claim a "newer" scaffold
+    // release. Re-add that stale claim to the callout (everything else
+    // converged) and require the converged branch of the docs check to go red.
     label:
-      'compat-matrix.mdx: drop the "newer Next.js release" explanation while shippedNextPin diverges from credentialedNextRef',
+      'compat-matrix.mdx: claim a "newer Next.js release" than the credentialed one while credentialedNextRef equals shippedNextPin',
     subject: 'docsMatrixMdx',
-    anchor: '`knext create` scaffolds a newer Next.js release on the same 16.4.x line, 16.4.5,',
-    replacement: '`knext create` scaffolds a Next.js release on the same 16.4.x line, 16.4.5,',
+    anchor: 'That is the patched release `knext create` scaffolds;',
+    replacement: 'That is a newer Next.js release than the credentialed one, which `knext create` scaffolds;',
   },
   {
     label:
       'manifest: move credentialedNextRef away from the value the workflows carry (v16.4.3 -> v16.2.12)',
     subject: 'manifest',
-    anchor: '"credentialedNextRef": "v16.4.3",',
+    anchor: '"credentialedNextRef": "v16.4.5",',
     replacement: '"credentialedNextRef": "v16.2.12",',
   },
 

@@ -29,9 +29,9 @@ export const CREDENTIALED_NEXT_MINORS: readonly string[] = ["16.4"];
  * further minor `NEXT_PEER_RANGE` admits. Widening the range without adding the
  * minor here, or the reverse, fails `tests/next-minor-matrix.test.ts`.
  *
- * 16.4.3, which is also the credential ref: every next through 16.4.0 carries
+ * 16.4.5, which is also the credential ref: every next through 16.4.0 carries
  * GHSA-2464-fhr4-w9xw / GHSA-673q-mjm6-r5xr (critical) and GHSA-p3m5-59mp-jv5r
- * (high), fixed in 16.4.1. New apps pin 16.4.5 (GHSA-mfr8-8qww-v76h, medium); the
- * spec leg stays on the harness's 16.4.3, the same 16.4.x minor, until NEXTJS_REF moves.
+ * (high), fixed in 16.4.1, and GHSA-mfr8-8qww-v76h (medium) through 16.4.4, fixed
+ * in 16.4.5; the spec leg runs the version users get.
  */
-export const NEXT_MATRIX_VERSIONS: readonly string[] = ["16.4.3"];
+export const NEXT_MATRIX_VERSIONS: readonly string[] = ["16.4.5"];

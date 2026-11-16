@@ -23,7 +23,7 @@ contract. `__tests__/` holds test code and fixtures only and has no contract.
   `./internal/loader`.
 - `next-compat.ts`: `NEXT_PEER_RANGE` (`>=16.4.0 <16.5.0`),
   `CREDENTIALED_NEXT_MINORS` (`["16.4"]`) and `NEXT_MATRIX_VERSIONS`
-  (`["16.4.3"]`).
+  (`["16.4.5"]`).
 - `next-advisories.ts`: `NEXT_ADVISORIES`, `NextAdvisory`, `NextAdvisoryRange`,
   `NextAdvisoryHit`, `isComparableNextVersion`, `minorWithoutFixedRelease` and
   `nextAdvisoriesFor`.

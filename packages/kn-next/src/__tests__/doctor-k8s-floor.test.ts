@@ -74,6 +74,30 @@ describe("doctor k8s-floor check", () => {
         expect(floor?.detail).toContain("1.29");
     });
 
+    it.each([
+        "v1.31.2-gke.1",
+        "v1.30.0+k3s1",
+    ])("PASS at or above the floor with provider suffix %s", async (gitVersion) => {
+        const minor = gitVersion.split(".")[1];
+        const { floor } = await rows(
+            JSON.stringify({ major: "1", minor: `${minor}+`, gitVersion }),
+        );
+        expect(floor?.status).toBe("pass");
+    });
+
+    it("unreachable cluster: contributes no k8s-floor row", async () => {
+        const kubectl: KubectlFn = () => ({
+            ok: false,
+            stdout: "",
+            stderr: "connection refused",
+        });
+        const report = await runDoctor({
+            kubectl,
+            probeImage: async () => "ok",
+        });
+        expect(report.checks.find((c) => c.id === "k8s-floor")).toBeUndefined();
+    });
+
     it("unparseable version: honest skip, no crash", async () => {
         const { floor } = await rows("not json");
         expect(floor?.status).toBe("skip");
@@ -85,7 +109,7 @@ describe("doctor k8s-floor check", () => {
             '{"major":"1","minor":"29","gitVersion":"v1.29.4"}',
             true,
         );
-        expect(floor?.status).not.toBe("warn");
+        expect(floor).toBeUndefined();
         expect(all.find((c) => c.id === "write-policy")?.status).toBe("warn");
     });
 });

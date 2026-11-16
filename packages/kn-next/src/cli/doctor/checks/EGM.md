@@ -49,12 +49,13 @@ Local checks:
 ## Invariants
 
 - A probe that itself failed (network, auth, forbidden) reports `"error"` through `infraFailure`. A confirmed cluster fact, such as a missing CRD or Deployment, reports `"fail"` [`crd.ts:crdCheck`, `operator.ts:operatorCheck`, `knative.ts:knativeCheck`].
+- A server version that cannot be read or parsed makes `k8s-floor` report `skip`, never `pass` or `warn`, because nothing was compared with the floor [`k8s-floor.ts:k8sFloorCheck`].
 - An unreachable cluster is `warn`, and the dependent cluster checks report `SKIP_UNREACHABLE` [`cluster.ts:clusterCheck`].
 - A kubectl client below v1.25 is `fail`, because `--validate` is a boolean flag there and deploy would die at flag parsing. A version that cannot be determined is `warn` [`kubectl-validation.ts:kubectlValidationCheck`].
 - A Node major below `NODE_FLOOR_MAJOR` is `fail` [`node-floor.ts:nodeFloorCheck`].
 - An emitted CR field missing from the installed CRD schema is `fail` [`crd-schema.ts:crdSchemaCheck`].
 - A CI kubeconfig that needs cloud credentials is `fail`. An unreadable file is `error` [`ci-kubeconfig.ts:ciKubeconfigCheck`].
-- These checks warn at worst: operator-version, network-policy, redis-prefix, unverified-secrets, next-minor, use-cache, node-entry-staleness and app-image. write-policy also warns at worst, but returns `error` on an infrastructure failure [`write-policy.ts:writePolicyCheck`].
+- These checks warn at worst: k8s-floor, operator-version, network-policy, redis-prefix, unverified-secrets, next-minor, use-cache, node-entry-staleness and app-image. write-policy also warns at worst, but returns `error` on an infrastructure failure [`write-policy.ts:writePolicyCheck`].
 - `evaluateWritePolicy` mirrors the Go operator verdict and is held to `packages/kn-next-operator/internal/writepolicy/testdata/verdict-cases.json`. When the result is unknown it reports "not verified", never "enforced" [`write-policy.ts`].
 - `app-image` probes under a total time budget and stops probing the images the budget cuts off [`app-image.ts:appImageCheck`].
 - A config load error in `storage-mode` yields no config instead of throwing, so doctor never crashes on the state it diagnoses [`storage-mode.ts:loadAppConfigOrUndefined`].

@@ -88,8 +88,6 @@ export interface PreflightOutcome {
     stderr: string;
     /** How the schema read went — surfaced so a degraded message says so. */
     diagnosisDetail: string;
-    /** The kind of the CR preflighted (NextApp when it names none). Every message names it (#2481). */
-    kind: string;
 }
 
 const STRICT_DECODING = /strict decoding error|unknown field "/;
@@ -217,30 +215,6 @@ function kindOfCR(cr: unknown): string {
     return typeof kind === "string" && kind ? kind : NEXTAPP_KIND;
 }
 
-/** The CRD name for a kind the CLI applies, or undefined for any other kind. */
-function crdNameOfKind(kind: string): string | undefined {
-    return Object.hasOwn(CRD_NAME_OF_KIND, kind)
-        ? CRD_NAME_OF_KIND[kind]
-        : undefined;
-}
-
-/** The resource word a user's RBAC names for `kind` (nextapps, backendservices). */
-function resourceOfKind(kind: string): string {
-    const crd = crdNameOfKind(kind);
-    return crd ? (crd.split(".")[0] ?? crd) : `${kind.toLowerCase()}s`;
-}
-
-/**
- * The `kubectl get crd` hint for `kind`'s CRD (#2481). An unmapped kind gets a
- * group-wide listing instead of another kind's CRD name.
- */
-function crdHintOfKind(kind: string): string {
-    const crd = crdNameOfKind(kind);
-    return crd
-        ? `  kubectl get crd ${crd} -o jsonpath='{.spec.versions[*].name}'`
-        : "  kubectl api-resources --api-group=apps.kn-next.dev";
-}
-
 /**
  * The NextApp field paths of the CR actually being applied (#1897). Falls back
  * to the full static vocabulary only when the CR file cannot be read or parsed —
@@ -288,14 +262,9 @@ export function preflightCRSchema(
     deps: { kubectl: KubectlCapture },
     args: { crPath: string; namespace: string },
 ): PreflightOutcome {
-    // The kind names every message below (#2481): a BackendService CR is never
-    // described as a NextApp.
-    const cr = readCR(args.crPath);
-    const kind = kindOfCR(cr);
     const apply = deps.kubectl(dryRunApplyArgv(args.crPath, args.namespace));
     if (apply.ok) {
         return {
-            kind,
             verdict: "ok",
             reason: "none",
             unknownFields: [],
@@ -310,7 +279,6 @@ export function preflightCRSchema(
 
     if (CLIENT_TOO_OLD.test(stderr)) {
         return {
-            kind,
             verdict: "blocked",
             reason: "client-too-old",
             unknownFields: [],
@@ -323,19 +291,18 @@ export function preflightCRSchema(
 
     if (WEBHOOK_DOWN.test(stderr)) {
         return {
-            kind,
             verdict: "blocked",
             reason: "webhook-unavailable",
             unknownFields: [],
             diagnosis: "none",
             stderr,
-            diagnosisDetail: `the ${kind} admission webhook could not be reached — this is NOT field skew`,
+            diagnosisDetail:
+                "the NextApp admission webhook could not be reached — this is NOT field skew",
         };
     }
 
     if (!STRICT_DECODING.test(stderr)) {
         return {
-            kind,
             verdict: "blocked",
             reason: "apply-failed",
             unknownFields: [],
@@ -347,6 +314,8 @@ export function preflightCRSchema(
     }
 
     // Skew. The verdict is already decided; everything below only names fields.
+    const cr = readCR(args.crPath);
+    const kind = kindOfCR(cr);
     const read = readKnownCRDFields(deps.kubectl, kind);
     if (read.known) {
         const missing =
@@ -355,7 +324,6 @@ export function preflightCRSchema(
                 : unknownFieldsOfCR(cr, read.known);
         if (missing.length > 0) {
             return {
-                kind,
                 verdict: "skew",
                 reason: "unknown-field",
                 unknownFields: missing,
@@ -370,7 +338,6 @@ export function preflightCRSchema(
     // the answer in the error it returned.
     const named = parseUnknownFieldsFromError(stderr);
     return {
-        kind,
         verdict: "skew",
         reason: "unknown-field",
         unknownFields: named,
@@ -430,14 +397,14 @@ export function formatPreflightFailure(
               "least-privilege downgrade on a CR that would still report Ready=True."
             : "";
         return (
-            `PREFLIGHT FAILED: the ${outcome.kind} CRD installed on this cluster does not know ` +
+            "PREFLIGHT FAILED: the NextApp CRD installed on this cluster does not know " +
             "field(s) this CLI emits, so the CR would be rejected (or, under a client that does " +
             "not assert strict validation, SILENTLY PRUNED):\n" +
             `${fields}\n${roNote}\n` +
             `Diagnosis source: ${outcome.diagnosis} (${outcome.diagnosisDetail}).\n` +
             `${UPGRADE_ORDER}\n` +
             "Nothing was built, uploaded or applied — this ran before any side effect.\n" +
-            `${crdHintOfKind(outcome.kind)}\n` +
+            "  kubectl get crd nextapps.apps.kn-next.dev -o jsonpath='{.spec.versions[*].name}'\n" +
             "  knext doctor"
         );
     }
@@ -457,7 +424,7 @@ export function formatPreflightFailure(
 
     if (outcome.reason === "webhook-unavailable") {
         return (
-            `PREFLIGHT FAILED: the ${outcome.kind} admission webhook could not be reached, so the ` +
+            "PREFLIGHT FAILED: the NextApp admission webhook could not be reached, so the " +
             "apiserver could not evaluate this CR. This is an availability problem, NOT " +
             "CLI/operator field skew — do not upgrade anything on the strength of it.\n" +
             `kubectl said: ${firstLine(outcome.stderr)}\n` +
@@ -467,11 +434,11 @@ export function formatPreflightFailure(
     }
 
     return (
-        `PREFLIGHT FAILED: the server-side dry-run apply of the ${outcome.kind} CR did not complete, so ` +
+        "PREFLIGHT FAILED: the server-side dry-run apply of the NextApp CR did not complete, so " +
         "knext cannot say whether this cluster would store the CR intact. Nothing was built, " +
         "uploaded or applied.\n" +
         `kubectl said: ${firstLine(outcome.stderr)}\n` +
-        `The preflight needs exactly what the deploy needs — \`create\`/\`patch\` on ${resourceOfKind(outcome.kind)} in the ` +
+        "The preflight needs exactly what the deploy needs — `create`/`patch` on nextapps in the " +
         "target namespace — so a denial here is a denial of the deploy itself, surfaced before " +
         "any side effect rather than after.\n" +
         "  knext doctor"

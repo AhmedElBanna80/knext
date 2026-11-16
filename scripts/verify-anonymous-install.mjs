@@ -155,6 +155,47 @@ export function discoverInstallUrl(repoRoot, options = {}) {
   return { url: distinct[0], file, line: hits[0].line };
 }
 
+const REPO_SLUG_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]*)\/[A-Za-z0-9._-]+$/;
+const CHANNEL_RE = /^[A-Za-z0-9][A-Za-z0-9.+_-]*$/;
+const RELEASE_URL_PARTS_RE =
+  /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/releases\/(latest\/download|download\/[\w.+-]+)\/install\.yaml$/;
+
+/**
+ * Point the documented install URL at a stand-in repo and/or release channel.
+ *
+ * For when the documented repo is temporarily unreachable to strangers (a
+ * hosting restriction) and the nightlies must keep walking the same path
+ * against a stand-in. EXPLICIT ONLY: with neither `KNEXT_INSTALL_REPO` nor
+ * `KNEXT_INSTALL_CHANNEL` set, the documented URL is returned untouched. A
+ * malformed value throws rather than building a URL nobody published, and a
+ * `latest/download` URL has no tag segment for a channel to replace.
+ *
+ * @param {string} url the documented URL (from `discoverInstallUrl`)
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export function retargetInstallUrl(url, env) {
+  const repo = env.KNEXT_INSTALL_REPO || '';
+  const channel = env.KNEXT_INSTALL_CHANNEL || '';
+  if (!repo && !channel) return url;
+  if (repo && (!REPO_SLUG_RE.test(repo) || /\/\.{1,2}$/.test(repo))) {
+    throw new Error(`KNEXT_INSTALL_REPO=${JSON.stringify(repo)} is not an owner/name repo slug`);
+  }
+  if (channel && (!CHANNEL_RE.test(channel) || channel.includes('..'))) {
+    throw new Error(`KNEXT_INSTALL_CHANNEL=${JSON.stringify(channel)} is not a release tag`);
+  }
+  const m = RELEASE_URL_PARTS_RE.exec(url);
+  if (!m) throw new Error(`cannot retarget ${url}: not a GitHub release-asset install.yaml URL`);
+  let release = m[2];
+  if (channel) {
+    if (release === 'latest/download') {
+      throw new Error(`cannot set a channel on ${url}: a latest/download URL has no release tag`);
+    }
+    release = `download/${channel}`;
+  }
+  return `https://github.com/${repo || m[1]}/releases/${release}/install.yaml`;
+}
+
 /** Directories that never contain published prose. */
 const DOC_WALK_SKIP = new Set([
   'node_modules',
@@ -1717,7 +1758,7 @@ export async function runAnonymousInstallCheck(root, options = {}) {
   findings.push(...findUrlDriftFindings(documented.url, allUrls));
 
   const recorder = createRecordingHttp(http);
-  const download = await fetchInstallBundle(documented.url, { fetchImpl });
+  const download = await fetchInstallBundle(retargetInstallUrl(documented.url, env), { fetchImpl });
   findings.push(...download.findings);
 
   // `!== null`, NOT `!== ''`. An empty body is a body: it has to reach
@@ -1781,7 +1822,7 @@ async function main(argv) {
   if (printUrl) {
     try {
       const { url } = discoverInstallUrl(root);
-      console.log(url);
+      console.log(retargetInstallUrl(url, process.env));
       return 0;
     } catch (error) {
       console.error(`FATAL: ${error.message}`);

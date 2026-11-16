@@ -50,9 +50,11 @@ export default adapter;
   build. If neither is available (for example, the app's build script does not run `next build`), the
   CLI falls back to reading `next.config` as text after the build, and prints a
   warning saying so. Before the build, the text check also runs as an early warning only. If the build
-  script runs Next.js in a different directory (for example `cd web && next build`), the CLI cannot check
-  your app's config and stops with an error naming that directory: run knext from the directory Next.js
-  builds.
+  script runs Next.js in a different directory (for example `cd web && next build`) and that app uses
+  knext's adapter, the CLI cannot check your app's config and stops with an error naming that directory:
+  run knext from the directory Next.js builds. Without knext's adapter there, or when a task runner such
+  as turbo filters the build's environment, the CLI falls back to the text check of the directory knext
+  runs in, with the warning above.
 - **A custom `distDir` is not supported yet.** knext's build and packaging steps read the output
   from `.next`, so leave `distDir` unset (or set it to `.next`, `./.next` or `.next/`); any other
   resolved value is refused. For an app without knext's adapter, a custom `distDir` is found when it is

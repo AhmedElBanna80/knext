@@ -377,7 +377,7 @@ export function runProjectBuild(opts: RunProjectBuildOptions): void {
     // next.config, so fail closed rather than pass unchecked.
     if (foreignDir) {
         throw new UsageError(
-            `the build ran Next.js in ${foreignDir}, not in ${cwd}, so knext could not check this app's resolved config. Run knext from the directory Next.js builds (the one with next.config), or make the build script build this directory.`,
+            `the build ran Next.js in ${foreignDir}, not in ${cwd}, so knext could not check this app's resolved config. Run knext from the directory Next.js builds (the one with next.config), or make the build script build this directory. (If a task runner such as turbo filters the environment, pass KNEXT_CONFIG_FACTS_OUT, KNEXT_CONFIG_FACTS_PROJECT, KNEXT_BUILDER and KNEXT_RUNTIME through to the build.)`,
         );
     }
 

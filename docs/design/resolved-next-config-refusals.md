@@ -29,7 +29,9 @@ Known limits:
   nor refuses: the CLI names its app in `KNEXT_CONFIG_FACTS_PROJECT`). When the build script runs Next in a
   different directory (`cd web && next build`, `next build ./web`), the adapter leaves that directory in
   `<facts>.foreign` and the CLI, with no record of its own, fails closed naming it rather than text-checking
-  the wrong next.config;
+  the wrong next.config. Only knext's adapter writes that marker: a different-directory build WITHOUT the
+  adapter, or one whose env was filtered (turbo strict env mode), still falls to case 3 of the wrong
+  directory, with its warning, as before #2250;
 - `--skip-next`, `knext doctor` and vinext still decide from text, and the text scans keep string literals, so a
   setting written inside a string can trip them.
 

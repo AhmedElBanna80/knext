@@ -157,7 +157,10 @@ export function recordNextConfigFacts(
         // directory Next built. Best effort: a sibling's build must not fail
         // because the marker could not be written.
         try {
-            writeFileSync(foreignMarkerPath(outPath), `${canonical(projectDir)}\n`);
+            const marker = foreignMarkerPath(outPath);
+            const tmp = factsTempPath(marker);
+            writeFileSync(tmp, `${canonical(projectDir)}\n`);
+            renameSync(tmp, marker);
         } catch {}
         return undefined;
     }

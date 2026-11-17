@@ -60,7 +60,7 @@ See the [v1.0 GA milestone](https://github.com/getknext-dev/knext/milestone/10) 
 
 **Explicitly not committed:** cold-start *latency* numbers (§4), the `bun-exec` build target
 (ADR-0036, opt-in and unsupported), zones/PWA/MFE recipes, the gRPC `BackendService` module,
-and anything upstream-gated (edge middleware, PPR/Cache Components).
+and edge-runtime middleware and PPR/Cache Components (opt-in, outside the credential, no parity claim).
 
 ### The open decision: CRD version at 1.0
 

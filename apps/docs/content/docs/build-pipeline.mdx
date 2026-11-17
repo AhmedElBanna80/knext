@@ -943,8 +943,8 @@ published as it is measured, even when it is low.
   that path is covered by a red-on-fail check.
 - **Partial Prerendering and Cache Components are opt-in.** `knext create --cache-components` turns
   them on for a new Turbopack or webpack app. They are not part of the compatibility credential, so
-  this page makes no parity claim for them. On the Node and Bun runtimes, the `'use cache'` directive
-  is backed by knext's shared Redis handler when the app uses knext's `cacheHandler`.
+  this page makes no parity claim for them. On the Node and Bun runtimes, a shared Redis handler for
+  the `'use cache'` directive is implemented, but it is not yet covered by the compatibility suite.
 - **Internationalized routing has no dedicated matrix row.** The vinext axis row records its test
   results, and nothing else is claimed.
 

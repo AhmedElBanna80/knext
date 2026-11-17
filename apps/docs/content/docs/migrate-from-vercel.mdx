@@ -29,10 +29,10 @@ zero-ops workflow.
 | ISR and the data cache | A Redis-backed cache handler shared by all pods. See [ISR & the Redis cache](/docs/isr-caching) | Supported. You run the Redis |
 | `next/image` optimization | Served in your pod with sharp. Variants persist to object storage if you configure it. See [Image optimization](/docs/image-optimization) | Supported. It uses your CPU, not Vercel's image service |
 | Middleware (Node runtime) | Runs on the Node runtime | Supported |
-| Edge Middleware (Edge runtime) | Not supported | **Not supported.** It is not yet standardised for adapters. See [Compatibility matrix](/docs/compat-matrix) |
+| Edge Middleware (Edge runtime) | Not supported | **Not supported.** knext middleware runs on the Node runtime only. See [Compatibility matrix](/docs/compat-matrix) |
 | Edge Functions / Edge runtime routes | Not supported | **Not supported.** Move them to the Node runtime |
 | Global edge network and CDN | No equivalent | **Not supported.** Put a CDN in front yourself if you need one |
-| Partial Prerendering / Cache Components | Not supported | **Not supported** for now. Not yet standardised for adapters |
+| Partial Prerendering / Cache Components | Opt-in (`knext create --cache-components`) | **Different.** Outside the compatibility credential, with no parity claim. A shared Redis handler for `'use cache'` is implemented but not yet covered by the compatibility suite |
 | Cron Jobs | No knext feature | **Different.** Use a Kubernetes `CronJob` that calls an authenticated route handler |
 | Web Analytics / Speed Insights | Opt-in Web Vitals collection that you scrape and chart yourself. See [Observability](/docs/observability) | Different: no hosted dashboard |
 | Observability, logs, metrics | Prometheus metrics, Grafana dashboards, OpenTelemetry tracing, JSON logs. See [Observability](/docs/observability) and [Logging](/docs/logging) | Supported, self-hosted. Nothing is hosted for you |
@@ -96,7 +96,7 @@ export default config;
 - Delete `export const runtime = 'edge'` from routes and move them to the Node runtime.
 - Replace `@vercel/kv`, `@vercel/blob`, `@vercel/postgres` and `@vercel/edge-config` with a Redis client, an S3-compatible client and a Postgres client.
 - Remove the `crons` block from `vercel.json`. You recreate each entry as a `CronJob` in step 8.
-- If you use Partial Prerendering or Cache Components, turn them off.
+- If you use Partial Prerendering or Cache Components, they are opt-in and carry no parity claim; turn them off unless you accept that.
 
 ### 3. Write the deploy config
 
@@ -252,7 +252,7 @@ Your numbers will differ. Measure your own app.
 ## What you lose
 
 - **The global edge.** Vercel serves from many regions close to users. knext serves from the cluster you run, in the regions you build. A CDN in front of your cluster helps with static files and cacheable responses, but you set it up and pay for it.
-- **Edge runtime features.** Edge Middleware, Edge Functions and Partial Prerendering are not supported. Code that depends on them must change.
+- **Edge runtime features.** Edge Middleware and Edge Functions are not supported, and Partial Prerendering is opt-in with no parity claim. Code that depends on them must change.
 - **A managed platform.** Nobody patches your cluster, upgrades Knative or the operator, rotates your certificates or carries the pager for you. See [Upgrading](/docs/upgrading) and [Incident response](/docs/incident-response).
 - **Zero ops.** Git push to production, automatic preview comments, automatic TLS and one dashboard are things you build from parts. A first migration takes real time.
 - **Hosted analytics and team features.** There is no hosted Web Analytics, Speed Insights, firewall, SSO or audit log.

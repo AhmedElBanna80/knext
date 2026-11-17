@@ -1,38 +1,118 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 
 /**
- * GUARD TEST for the "upstream-gated" doc drift (#2086).
+ * GUARD TEST for the "upstream-gated" doc drift.
  *
- * ROADMAP.md (Tier C) and apps/docs/content/docs/build-pipeline.mdx used to say that
- * edge Middleware/Proxy and PPR/Cache Components are "not yet adapter-standardizable" as one
- * blanket claim. That is not what the code or the compatibility matrix says:
- *   - Node-runtime `middleware.ts` IS supported and backed by a red-on-fail smoke check
- *     (the `Middleware (Node runtime ...)` row is ✅ in docs/compat-matrix.md).
- *   - Edge-runtime middleware is NOT supported (knext middleware runs on Node only; ⛔).
+ * Docs used to say edge Middleware/Proxy and PPR/Cache Components are "upstream-gated" /
+ * "not yet adapter-standardizable" as one blanket claim. That is not what the code or the
+ * compatibility matrix says:
+ *   - Node-runtime `middleware.ts` IS supported (red-on-fail smoke check, ✅ in the matrix).
+ *   - Edge-runtime middleware is NOT supported (Node runtime only; ⛔).
  *   - PPR / Cache Components are opt-in (`knext create --cache-components`), outside the
- *     compatibility credential, and make no parity claim (⛔ in the matrix).
+ *     compatibility credential, with no parity claim (⛔).
+ *   - The `'use cache'` Redis handler is implemented but NOT covered by the compatibility suite.
  *
- * Both halves are checked: the docs must match the matrix's live status for each row, so a
- * promotion in the matrix (for example PPR moving to ✅) fails this test until the prose is
- * updated, and the stale blanket sentence can never come back unnoticed.
+ * This guard SCANS every user doc page, docs/*.md and ROADMAP.md (no enumerated file list), so a
+ * new or reworded page cannot reintroduce the stale claim. CLAUDE.md is deliberately out of
+ * scope (founder-owned; not editable by agents).
  */
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
-const MATRIX = readFileSync(resolve(REPO_ROOT, 'docs/compat-matrix.md'), 'utf-8');
-const ROADMAP = readFileSync(resolve(REPO_ROOT, 'ROADMAP.md'), 'utf-8');
-const BUILD_PIPELINE = readFileSync(
-  resolve(REPO_ROOT, 'apps/docs/content/docs/build-pipeline.mdx'),
-  'utf-8',
-);
 
-/** The blanket sentence this guard exists to keep out of the two docs. */
-const STALE_BLANKET = /not yet\s+adapter-standardizable/i;
+function walk(dir: string, ext: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) return walk(p, ext);
+    return e.name.endsWith(ext) ? [p] : [];
+  });
+}
+
+const DOCS_DIR = resolve(REPO_ROOT, 'docs');
+const FILES: string[] = [
+  ...walk(resolve(REPO_ROOT, 'apps/docs/content/docs'), '.mdx'),
+  ...readdirSync(DOCS_DIR)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => join(DOCS_DIR, f)),
+  resolve(REPO_ROOT, 'ROADMAP.md'),
+];
+const read = (p: string): string => readFileSync(p, 'utf-8');
+const rel = (p: string): string => relative(REPO_ROOT, p);
+
+/** The stale blanket phrases for these capabilities. */
+const STALE_BLANKET =
+  /upstream-gated|not\s+yet\s+(?:adapter-standardi[sz]able|standardi[sz]ed\s+for\s+adapters)|not\s+yet\s+stabili[sz]ed\s+for\s+adapters/i;
+
+/** A positive support claim about `'use cache'`. */
+const USE_CACHE_CLAIM = /'use cache'/;
+const SUPPORT_WORD = /\b(?:supported|backed\s+by|support\s+for)\b/i;
+const NEGATED = /\bnot\s+(?:yet\s+)?(?:supported|backed)|\bunsupported\b/i;
+const CAVEAT = /not\s+yet\s+covered\s+by\s+the\s+compatibility/i;
+
+/**
+ * Units that claim `'use cache'` support without the caveat. A unit is a table row, or a sentence
+ * of prose (a paragraph's wrapped lines rejoined). The caveat may sit anywhere in the same
+ * paragraph/row, so a caveat sentence next to the claim clears it.
+ */
+function uncaveatedUseCacheClaims(text: string): string[] {
+  const out: string[] = [];
+  for (const para of text.split(/\n\s*\n/)) {
+    const isTable = para.includes('\n|') || para.trimStart().startsWith('|');
+    const groups = isTable ? para.split('\n') : [para.replace(/\s*\n\s*(?:>\s*)?/g, ' ')];
+    for (const group of groups) {
+      if (CAVEAT.test(group)) continue;
+      for (const sentence of group.split(/(?<=[.!?])\s+/)) {
+        if (
+          USE_CACHE_CLAIM.test(sentence) &&
+          SUPPORT_WORD.test(sentence) &&
+          !NEGATED.test(sentence)
+        ) {
+          out.push(sentence);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+describe('scan coverage', () => {
+  it('scans many pages, including the previously-missed ones', () => {
+    const names = FILES.map(rel);
+    expect(FILES.length).toBeGreaterThan(30);
+    for (const must of [
+      'apps/docs/content/docs/compat-suite.mdx',
+      'apps/docs/content/docs/migrate-from-vercel.mdx',
+      'apps/docs/content/docs/compat-matrix.mdx',
+      'apps/docs/content/docs/build-pipeline.mdx',
+      'docs/compat-matrix.md',
+      'docs/V1_ROADMAP.md',
+      'ROADMAP.md',
+    ]) {
+      expect(names).toContain(must);
+    }
+  });
+});
+
+describe('no page carries the stale blanket claim', () => {
+  for (const f of FILES) {
+    it(rel(f), () => {
+      expect(read(f)).not.toMatch(STALE_BLANKET);
+    });
+  }
+});
+
+describe("no page claims 'use cache' is supported without the coverage caveat", () => {
+  for (const f of FILES) {
+    it(rel(f), () => {
+      expect(uncaveatedUseCacheClaims(read(f))).toEqual([]);
+    });
+  }
+});
 
 /** Status marker for the first matrix row whose Feature cell starts with `prefix`. */
-function matrixStatus(prefix: string): string {
-  const row = MATRIX.split('\n').find((line) => {
+function matrixStatus(matrix: string, prefix: string): string {
+  const row = matrix.split('\n').find((line) => {
     const cells = line.split('|').map((c) => c.trim());
     return cells.length > 2 && cells[1].startsWith(prefix);
   });
@@ -40,90 +120,49 @@ function matrixStatus(prefix: string): string {
   return row.split('|')[2].trim();
 }
 
-/** The ROADMAP Tier C section: from its heading to the next level-2 heading. */
-function tierC(): string {
-  const start = ROADMAP.indexOf('## Tier C');
-  if (start < 0) throw new Error('ROADMAP.md has no Tier C section');
-  const rest = ROADMAP.slice(start + 1);
-  const next = rest.indexOf('\n## ');
-  return next < 0 ? ROADMAP.slice(start) : ROADMAP.slice(start, start + 1 + next);
-}
-
-/** The build-pipeline paragraph that lists what is still unverified. */
-function remainingGaps(): string {
-  const start = BUILD_PIPELINE.indexOf('The remaining gaps');
-  if (start < 0) throw new Error('build-pipeline.mdx has no "remaining gaps" paragraph');
-  const end = BUILD_PIPELINE.indexOf('</Callout>', start);
-  return BUILD_PIPELINE.slice(start, end < 0 ? start + 2000 : end);
-}
-
 describe('matrix status the docs are written against', () => {
-  it('Node-runtime middleware is ✅ (red-on-fail smoke f)', () => {
-    expect(matrixStatus('Middleware (Node runtime')).toBe('✅');
+  const MATRIX = read(resolve(REPO_ROOT, 'docs/compat-matrix.md'));
+
+  it('Node-runtime middleware is ✅', () => {
+    expect(matrixStatus(MATRIX, 'Middleware (Node runtime')).toBe('✅');
   });
 
   it('edge-runtime middleware is ⛔ (Node only)', () => {
-    expect(matrixStatus('Edge Middleware (edge runtime)')).toBe('⛔');
+    expect(matrixStatus(MATRIX, 'Edge Middleware (edge runtime)')).toBe('⛔');
   });
 
-  it('PPR / Cache Components is ⛔ and outside the compatibility suite', () => {
-    expect(matrixStatus('PPR / Cache Components')).toBe('⛔');
+  it('PPR / Cache Components is ⛔, outside the suite, and the handler is flagged uncovered', () => {
+    expect(matrixStatus(MATRIX, 'PPR / Cache Components')).toBe('⛔');
     expect(MATRIX).toMatch(
       /PPR \/ Cache Components[^\n]*\*\*not\*\* covered by the compatibility suite/,
     );
+    expect(MATRIX).toMatch(/PPR \/ Cache Components[^\n]*not yet covered by the compatibility/);
   });
 });
 
-describe('ROADMAP.md Tier C matches the matrix', () => {
-  it('drops the blanket "not yet adapter-standardizable" claim', () => {
-    expect(tierC()).not.toMatch(STALE_BLANKET);
+describe('ROADMAP.md Tier C and build-pipeline state the accurate status', () => {
+  const ROADMAP = read(resolve(REPO_ROOT, 'ROADMAP.md'));
+  const start = ROADMAP.indexOf('## Tier C');
+  const rest = ROADMAP.slice(start + 1);
+  const next = rest.indexOf('\n## ');
+  const tierC =
+    start < 0 ? '' : next < 0 ? ROADMAP.slice(start) : ROADMAP.slice(start, start + 1 + next);
+
+  it('Tier C: Node middleware supported, edge not, PPR opt-in with no parity claim', () => {
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(tierC).toMatch(/Node-runtime `middleware\.ts` is supported\b/i);
+    expect(tierC).toMatch(/edge-runtime middleware[^\n]*(?:Node only|not supported)/i);
+    expect(tierC).toMatch(/opt-in/i);
+    expect(tierC).toMatch(/no parity claim/i);
   });
 
-  it('states Node-runtime middleware is supported', () => {
-    // `\bis supported` rather than /supported/: "unsupported" would otherwise pass.
-    expect(tierC()).toMatch(/Node-runtime `middleware\.ts` is supported\b/i);
-  });
-
-  it('keeps edge-runtime middleware as an open gap', () => {
-    expect(tierC()).toMatch(/edge-runtime middleware/i);
-    expect(tierC()).toMatch(/not supported|Node only|Node runtime only/i);
-  });
-
-  it('describes PPR / Cache Components as opt-in with no parity claim', () => {
-    expect(tierC()).toMatch(/PPR|Partial Prerendering/);
-    expect(tierC()).toMatch(/opt-in/i);
-    expect(tierC()).toMatch(/no parity claim|not covered by the compatibility/i);
-  });
-});
-
-describe('build-pipeline.mdx remaining-gaps paragraph matches the matrix', () => {
-  it('is free of the blanket "not yet adapter-standardizable" claim', () => {
-    expect(BUILD_PIPELINE).not.toMatch(STALE_BLANKET);
-  });
-
-  it('names edge-runtime middleware as not supported (Node runtime only)', () => {
-    expect(remainingGaps()).toMatch(/edge-runtime middleware/i);
-    expect(remainingGaps()).toMatch(/Node runtime only|Node only|not supported/i);
-  });
-
-  it('describes Partial Prerendering and Cache Components as opt-in with no parity claim', () => {
-    expect(remainingGaps()).toMatch(/Partial Prerendering/);
-    expect(remainingGaps()).toMatch(/Cache Components/);
-    expect(remainingGaps()).toMatch(/opt-in/i);
-    expect(remainingGaps()).toMatch(/no parity claim|not covered by the compatibility/i);
-  });
-});
-
-describe('mutation control: the blanket-claim matcher is not vacuous', () => {
-  it('matches the exact stale sentence this guard exists to catch', () => {
-    expect(
-      STALE_BLANKET.test(
-        'Edge Middleware/Proxy and PPR/Cache Components are not yet\nadapter-standardizable',
-      ),
-    ).toBe(true);
-  });
-
-  it('does not match the corrected wording', () => {
-    expect(STALE_BLANKET.test('edge-runtime middleware is not supported')).toBe(false);
+  it('build-pipeline names edge middleware unsupported and PPR opt-in with the handler caveat', () => {
+    const bp = read(resolve(REPO_ROOT, 'apps/docs/content/docs/build-pipeline.mdx'));
+    const gapStart = bp.indexOf('Edge-runtime middleware is not supported');
+    expect(gapStart).toBeGreaterThanOrEqual(0);
+    const gaps = bp.slice(gapStart, gapStart + 1200);
+    expect(gaps).toMatch(/Partial Prerendering and Cache Components are opt-in/);
+    expect(gaps).toMatch(/no parity claim/);
+    expect(gaps).toMatch(/not yet covered by the compatibility suite/);
   });
 });

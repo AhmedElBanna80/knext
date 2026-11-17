@@ -119,8 +119,8 @@ they test, not because the tests fail unpredictably:
 |---|---|
 | Edge Runtime | knext runs a Node/Bun standalone server; it has no V8-isolate edge runtime. |
 | Edge Middleware | Edge Middleware requires the Edge Runtime; knext supports only the Node middleware convention. |
-| Partial Prerendering (PPR) | Not yet adapter-standardizable upstream. |
-| Cache Components (`'use cache'`) | An evolving upstream API, not yet stabilized for adapters. |
+| Partial Prerendering (PPR) | Opt-in (`knext create --cache-components`) and outside the compatibility credential; no parity claim. |
+| Cache Components (`'use cache'`) | Opt-in and outside the compatibility credential; no parity claim. A shared Redis handler is implemented but not yet covered by the compatibility suite. |
 
 These are also documented on the [compatibility matrix](/docs/compat-matrix) as explicit `⛔`
 rows — out of scope today, not silently skipped.

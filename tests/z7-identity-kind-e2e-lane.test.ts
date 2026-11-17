@@ -60,6 +60,7 @@ interface Workflow {
     pull_request: { paths: string[]; branches?: string[] };
     push: { paths: string[]; branches: string[] };
     workflow_dispatch?: unknown;
+    schedule?: { cron?: string }[];
   };
   permissions?: Record<string, string>;
   jobs: Record<string, Job>;
@@ -274,7 +275,10 @@ describe('the workflow is as safe as the rest of CI', () => {
       // everything else 55 (the one-hour overlap does not fit the default bound).
       const t = job['timeout-minutes'];
       if (typeof t === 'number') expect(t).toBeLessThanOrEqual(75);
-      else expect(String(t)).toMatch(/^\$\{\{ inputs\.rotation_realtime && 120 \|\| 55 \}\}$/);
+      else
+        expect(String(t)).toMatch(
+          /^\$\{\{ \(inputs\.rotation_realtime \|\| github\.event_name == 'schedule'\) && 120 \|\| 55 \}\}$/,
+        );
     }
     // No default step overrides the phases: only the dispatch-input step does.
     expect(wfText.match(/\bPHASES\b/g)).toHaveLength(1);
@@ -743,6 +747,7 @@ describe('the real-time rotation phase proves the three exit properties and stay
     const rt = steps.filter((s) => (s.env as Record<string, string> | undefined)?.PHASES);
     expect(rt).toHaveLength(1);
     expect((rt[0] as Step).if).toMatch(/inputs\.rotation_realtime/);
+    expect((rt[0] as Step).if).toMatch(/github\.event_name == 'schedule'/);
     expect((rt[0] as Step).if).not.toMatch(/!/);
     expect(((rt[0] as Step).env as Record<string, string>).PHASES).toBe(
       'up images deploy verify rotation',
@@ -750,10 +755,25 @@ describe('the real-time rotation phase proves the three exit properties and stay
     // The default steps are skipped on that dispatch, and run on everything else.
     const defaults = steps.filter((s) => /run\.sh/.test(s.run ?? '') && s !== rt[0]);
     expect(defaults.length).toBeGreaterThanOrEqual(2);
-    for (const s of defaults) expect(s.if).toMatch(/!inputs\.rotation_realtime/);
+    for (const s of defaults)
+      expect(s.if).toMatch(
+        /^\$\{\{ !\(inputs\.rotation_realtime \|\| github\.event_name == 'schedule'\) \}\}$/,
+      );
     // The longer bound is only for that run.
     const job = wf.jobs['z7-identity-e2e'] as Job;
-    expect(String(job['timeout-minutes'])).toMatch(/inputs\.rotation_realtime && 120 \|\| 55/);
+    expect(String(job['timeout-minutes'])).toMatch(
+      /\(inputs\.rotation_realtime \|\| github\.event_name == 'schedule'\) && 120 \|\| 55/,
+    );
+  });
+
+  it('runs on a WEEKLY schedule, and a push cannot cancel that run mid-overlap', () => {
+    const sched = wf.on.schedule ?? [];
+    expect(sched).toHaveLength(1);
+    // minute hour day-of-month month day-of-week: one fixed weekday, every other field fixed or *.
+    expect(String(sched[0]?.cron)).toMatch(/^\d{1,2} \d{1,2} \* \* [0-6]$/);
+    expect(wfText).toMatch(
+      /^ {2}group: z7-identity-kind-e2e-\$\{\{ github\.ref \}\}-\$\{\{ github\.event_name \}\}$/m,
+    );
   });
 
   it('reads the overlap from the operator fixture and never backdates a stamp or restarts the operator', () => {
@@ -764,7 +784,6 @@ describe('the real-time rotation phase proves the three exit properties and stay
 
   it('(c) refuses a token of the staged key before it propagates, while the operator still signs with the old key', () => {
     expect(body).toContain('rotation 2/5: before propagation');
-    expect(body).toContain('was already accepted by the warm function on the first probe');
     expect(body).toContain('the operator signed with a key that was not yet published');
   });
 
@@ -782,9 +801,17 @@ describe('the real-time rotation phase proves the three exit properties and stay
 
   it('asserts BOTH halves: the refusals are 401 (not just present), the overlap check wants 200', () => {
     // The wanted status sits on a line of its own, so a mutation of it is a one-line diff.
-    expect(body).toMatch(/^ {2}local want_first=401$/m);
     expect(body).toMatch(/^ {2}local retired_want_status=401$/m);
-    expect(body).toContain('[ "${first}" = "${want_first}" ]');
+    // (c) is decided by rotation-verdict.ts (unit-tested without a cluster) from probes
+    // recorded AFTER the publish was confirmed, not by the one probe sent before it.
+    expect(body).toContain('bun "${ROTATION_VERDICT}" "${rt_probes}"');
+    expect(body).toContain('record_staged_probe post "${rt_probes}"');
+    expect(body).toMatch(
+      /\{ \[ "\$\{status\}" = 401 \] && \[ "\$\{code\}" = unauthenticated \]; \}/,
+    );
+    // The wait loop has its own bound and a message that names it.
+    expect(body).toContain('loop_end=$((SECONDS + BOUND_SECONDS + 60))');
+    expect(body).toContain('did not accept the staged key within the propagation bound');
     expect(body).toContain('"${retired_want_status}" unauthenticated');
     const hold = runSh.slice(
       runSh.indexOf('rotation_hold_check() {'),

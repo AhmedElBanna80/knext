@@ -45,7 +45,10 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     are guarded from the repo root, and its probe and needle helpers under
     `packages/grpc/src/__tests__`: see the header of its
     prover, `scripts/mutation-prove-2461-z7-kind-e2e.mjs`, for the test files it
-    covers, including `tests/z7-identity-kind-e2e-lane.test.ts`.
+    covers, including `tests/z7-identity-kind-e2e-lane.test.ts`. The real-time rotation's
+    property (c) is decided by `rotation-verdict.ts` from probes `run.sh` records
+    (unit-tested without a cluster in `src/__tests__/z7-rotation-verdict.test.ts`); the
+    workflow runs that phase weekly on a schedule and on the `rotation_realtime` dispatch input.
   - e2e/z10-zone-functions-kind (no EGM.md): the Z10 zone-functions lane on kind
     (cold path, trailers, zone and function both at zero, rollout with one zone
     revision per served-version bump, sovereignty, cross-zone refusal, wake-ahead). The same workflow

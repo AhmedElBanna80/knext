@@ -100,6 +100,7 @@ PKG="$(cd "${HERE}/../.." && pwd)"
 REPO="$(cd "${PKG}/../.." && pwd)"
 OPERATOR="${REPO}/packages/kn-next-operator"
 PROBE="${HERE}/probe.ts"
+ROTATION_VERDICT="${HERE}/rotation-verdict.ts"
 NEEDLES="${HERE}/key-needles.ts"
 SPEC_DIGEST="${HERE}/spec-digest.ts"
 
@@ -937,6 +938,17 @@ rotation_hold_check() {
   [ "${s}" = 200 ] || fail "the previous key was refused during the overlap (status ${s})"
 }
 
+# record_staged_probe <pre|post> <file>: one probe of the staged key's token against
+# the warm Go function, appended to <file> as {"phase","status","code"} (status null
+# when the function did not answer). Decided by rotation-verdict.ts.
+record_staged_probe() {
+  local out
+  out="$(probe --host "${GO_HOST}" --issuer "${ISSUER}" --sub alice --rpc put --id staged --value s --auth signer --key-dir "${WORK}/key-new" 2>/dev/null)" || out=''
+  [ -n "${out}" ] || out='{}'
+  jq -c --arg phase "$1" '{phase: $phase, status: (.status // null), code: (.code // "")}' <<<"${out}" >>"$2" \
+    || printf '{"phase":"%s","status":null,"code":""}\n' "$1" >>"$2"
+}
+
 phase_rotation() {
   log "rotation: the zone's key in real time (bound ${BOUND_SECONDS}s, overlap ${OVERLAP_SECONDS}s, nothing backdated, no operator restart)"
   start_forwards
@@ -967,8 +979,12 @@ phase_rotation() {
   # The staged key's token is tried at once, before the kubelet can have carried
   # the new JWKS to the warm pod: the first probe is the pre-propagation refusal.
   export_key "${WORK}/key-new" next
-  local first
-  first="$(probe_status --host "${GO_HOST}" --issuer "${ISSUER}" --sub alice --rpc put --id staged --value s --auth signer --key-dir "${WORK}/key-new")"
+  # Every staged-key probe is recorded (phase, status, code) for rotation-verdict.ts.
+  # This one is sent BEFORE the publish is confirmed, so it cannot show that a refusal
+  # outlasted the publish: only the probes after it count.
+  local rt_probes="${WORK}/rt-staged-probes.jsonl"
+  : >"${rt_probes}"
+  record_staged_probe pre "${rt_probes}"
   wait_until 30 1 "the JWKS to publish both keys" '[ "$(jwks_kids)" = "$(pair_kids "${old_kid}" "${new_kid}")" ]'
   wait_until 30 1 "the next-published-at stamp" '[ -n "$(secret_annotation apps.kn-next.dev/signing-key-next-published-at)" ]'
   local published_at
@@ -976,20 +992,28 @@ phase_rotation() {
   ok "staged key ${new_kid} published beside ${old_kid}"
 
   log "rotation 2/5: before propagation, a token of the staged key is refused and the operator still signs with the old key"
-  local status propagated_after n=0
+  # The loop has its own bound: the operator switches signing once the propagation
+  # bound has passed, so a warm function that has not accepted the staged key by then
+  # (plus a margin for the kubelet's sync) never will.
+  local status code propagated_after n=0 loop_end=$((SECONDS + BOUND_SECONDS + 60))
   while :; do
     n=$((n + 1))
-    status="$(probe_status --host "${GO_HOST}" --issuer "${ISSUER}" --sub alice --rpc put --id staged --value s --auth signer --key-dir "${WORK}/key-new")"
+    [ "${SECONDS}" -lt "${loop_end}" ] \
+      || fail "the warm function did not accept the staged key within the propagation bound (${BOUND_SECONDS}s) plus a 60s margin after the publish (${n} probes)"
+    record_staged_probe post "${rt_probes}"
+    status="$(tail -n 1 "${rt_probes}" | jq -r '.status // ""')"
+    code="$(tail -n 1 "${rt_probes}" | jq -r '.code // ""')"
     [ "$(secret_get current.kid)" = "${old_kid}" ] \
       || fail "the operator signed with a key that was not yet published: signing switched before the warm function accepted the staged key"
     [ "$(zone_kid)" = "${old_kid}" ] || fail "the zone signs with a key that has not propagated"
     if [ "${status}" = 200 ]; then break; fi
-    [ "${status}" = 401 ] || fail "status '${status}' while the staged key propagates; want 401 until it does"
+    { [ "${status}" = 401 ] && [ "${code}" = unauthenticated ]; } \
+      || fail "status '${status}' code '${code}' while the staged key propagates; want 401 unauthenticated until it does"
     sleep 2
   done
-  local want_first=401
-  [ "${first}" = "${want_first}" ] \
-    || fail "a token of the staged key was already accepted by the warm function on the first probe: the refusal before propagation was not observed"
+  # (c) needs a refusal seen AFTER the publish was confirmed, not only before it.
+  bun "${ROTATION_VERDICT}" "${rt_probes}" >/dev/null \
+    || fail "(c) not shown: $(bun "${ROTATION_VERDICT}" "${rt_probes}" 2>&1 >/dev/null || true)"
   propagated_after="$(node -p "(Date.now() / 1000 - ${published_at}).toFixed(1)")"
   ok "(c) the warm function refused the staged key's token (${n} probes, 401) until ${propagated_after}s after the publish, and the operator kept signing with ${old_kid} throughout"
 

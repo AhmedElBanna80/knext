@@ -65,6 +65,8 @@ const PROBE_SPEC = 'packages/grpc/src/__tests__/z7-e2e-probe.test.ts';
 const LANE_SPEC = 'tests/z7-identity-kind-e2e-lane.test.ts';
 const NEEDLES_LIB = `${LANE}/key-needles.ts`;
 const NEEDLES_SPEC = 'packages/grpc/src/__tests__/z7-key-needles.test.ts';
+const VERDICT_LIB = `${LANE}/rotation-verdict.ts`;
+const VERDICT_SPEC = 'packages/grpc/src/__tests__/z7-rotation-verdict.test.ts';
 
 // ── validity: a mutation must leave its subject parseable ────────────────────
 const validateYaml = (text) => {
@@ -369,13 +371,30 @@ const LANE_ROWS = [
     anchor: '  local retired_want_status=401',
     replacement: '  local retired_want_status=200',
   },
+  // RT2 (retargeted), RT2b: property (c). RT2 is BEHAVIOURAL (it breaks the
+  // verdict's decision, and the unit test fed recorded probe sequences goes red);
+  // RT2b only proves run.sh still CALLS the verdict, which is a string-level check.
   {
-    id: 'RT2',
+    id: 'RT2b',
     subject: 'run',
-    claim:
-      'the real-time rotation no longer requires the pre-propagation refusal of the staged key',
-    anchor: '  local want_first=401',
-    replacement: '  local want_first=200',
+    claim: 'the real-time rotation stops calling the (c) verdict, so nothing decides (c)',
+    anchor: '  bun "${ROTATION_VERDICT}" "${rt_probes}" >/dev/null \\\n',
+    replacement: '  true \\\n',
+  },
+  {
+    id: 'RT7',
+    subject: 'run',
+    claim: 'the staged-key wait loop loses its own bound (string-level: no run reaches it)',
+    anchor: '    [ "${SECONDS}" -lt "${loop_end}" ] \\\n',
+    replacement: '    true \\\n',
+  },
+  {
+    id: 'RT8',
+    subject: 'workflow',
+    claim: 'the weekly schedule is removed, so the real-time rotation runs only by hand',
+    anchor: "  schedule:\n    - cron: '23 3 * * 0'\n",
+    replacement: '  # the weekly schedule is gone\n',
+    validate: validateYaml,
   },
   {
     id: 'RT3',
@@ -397,6 +416,9 @@ const LANE_ROWS = [
   {
     id: 'RT5',
     subject: 'run',
+    // STRING-LEVEL, said plainly: the overlap loop's in-loop check is invisible at
+    // runtime (the call after the loop still runs), so only the lane test's regex on
+    // the loop body kills this row. It is not a behavioural proof.
     claim: 'the overlap loop stops checking the previous key still verifies',
     anchor: '    rotation_hold_check "${old_kid}" "${new_kid}"\n    ticks=$((ticks + 1))',
     replacement: '    ticks=$((ticks + 1))',
@@ -405,7 +427,8 @@ const LANE_ROWS = [
     id: 'RT6',
     subject: 'workflow',
     claim: 'the real-time rotation step runs on every event, not only on the dispatch input',
-    anchor: '        if: ${{ inputs.rotation_realtime }}\n        env:',
+    anchor:
+      "        if: ${{ (inputs.rotation_realtime || github.event_name == 'schedule') }}\n        env:",
     replacement: '        if: ${{ always() }}\n        env:',
     validate: validateYaml,
   },
@@ -727,7 +750,43 @@ const LANE_ROWS = [
   },
 ];
 
+// The (c) verdict: BEHAVIOURAL rows. Each mutates the decision and the unit test, which
+// feeds it recorded probe sequences, goes red on the changed verdict.
+const VERDICT = [
+  {
+    id: 'RT2',
+    subject: 'verdict',
+    claim: 'a 200 on the FIRST probe after the publish is no longer a failure',
+    anchor: 'if (postRefusals < 1) {',
+    replacement: 'if (postRefusals < 0) {',
+  },
+  {
+    id: 'RT9',
+    subject: 'verdict',
+    claim: 'a refusal need not carry the unauthenticated code',
+    anchor:
+      "const refused = (p: StaleKeyProbe) => p.status === 401 && p.code === 'unauthenticated';",
+    replacement: 'const refused = (p: StaleKeyProbe) => p.status === 401;',
+  },
+  {
+    id: 'RT10',
+    subject: 'verdict',
+    claim: 'post-publish refusals are no longer counted',
+    anchor: '    postRefusals++;',
+    replacement: '    postRefusals += 0;',
+  },
+  {
+    id: 'RT11',
+    subject: 'verdict',
+    claim: 'a run that never sees the staged key accepted passes',
+    anchor: '  return {\n    ok: false,\n    reason: `the warm function never accepted',
+    replacement:
+      '  return { ok: true, postRefusals };\n  return {\n    ok: false,\n    reason: `the warm function never accepted',
+  },
+];
+
 // Validators for the probe and needle rows (TypeScript).
+for (const m of VERDICT) m.validate = validateTs;
 for (const m of PROBE) m.validate = validateTs;
 for (const m of NEEDLES) m.validate = validateTs;
 
@@ -741,6 +800,11 @@ const needles = createGuardProver({
   spec: NEEDLES_SPEC,
   subjects: { needles: NEEDLES_LIB },
 });
+const verdict = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: VERDICT_SPEC,
+  subjects: { verdict: VERDICT_LIB },
+});
 const lane = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: LANE_SPEC,
@@ -750,6 +814,7 @@ const lane = createGuardProver({
 // ── preflight, declare, run ──────────────────────────────────────────────────
 probe.preflight(PROBE);
 needles.preflight(NEEDLES);
+verdict.preflight(VERDICT);
 lane.preflight(LANE_ROWS);
 
 // The harness stamps a residue marker on every mutation: INLINE, as a trailing
@@ -760,6 +825,7 @@ lane.preflight(LANE_ROWS);
 for (const [rows, files] of [
   [PROBE, { probe: PROBE_LIB }],
   [NEEDLES, { needles: NEEDLES_LIB }],
+  [VERDICT, { verdict: VERDICT_LIB }],
   [LANE_ROWS, { workflow: WORKFLOW, run: RUN_SH }],
 ]) {
   for (const m of rows) {
@@ -775,7 +841,7 @@ for (const [rows, files] of [
     }
   }
 }
-declareMutations(PROBE.length + NEEDLES.length + LANE_ROWS.length);
+declareMutations(PROBE.length + NEEDLES.length + VERDICT.length + LANE_ROWS.length);
 
 console.log("\n=== the probe's tokens differ from the control in exactly one property ===");
 probe.baseline();
@@ -802,6 +868,19 @@ for (const m of NEEDLES) {
   recordMutation();
 }
 needles.finish(NEEDLES.length);
+
+console.log('\n=== the (c) verdict decides from recorded probes (behavioural, no cluster) ===');
+verdict.baseline();
+verdict.proveCanSeeRed({
+  subject: 'verdict',
+  anchor: 'if (!refused(p)) {\n      return {\n        ok: false,\n        reason: `a probe after',
+  replacement: 'if (false) {\n      return {\n        ok: false,\n        reason: `a probe after',
+});
+for (const m of VERDICT) {
+  verdict.run({ ...m, expect: 'red' });
+  recordMutation();
+}
+verdict.finish(VERDICT.length);
 
 console.log("\n=== the lane's workflow, path filter and script ===");
 lane.baseline();

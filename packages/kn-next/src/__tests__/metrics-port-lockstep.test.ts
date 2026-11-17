@@ -381,9 +381,11 @@ function sourceFilesUnder(root: string): string[] {
 }
 
 const isTestPath = (p: string): boolean =>
-    /(^|[\\/])(__tests__|e2e|conformance)[\\/]/.test(p) ||
-    /\.test\.[cm]?[jt]s$/.test(p) ||
+    /(^|[\\/])(__tests__|tests?|e2e|conformance)[\\/]/.test(p) ||
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(p) ||
     /_test\.go$/.test(p) ||
+    /(^|[\\/])tests\.rs$/.test(p) ||
+    /_tests\.rs$/.test(p) ||
     /(^|[\\/])(testkit|testutil|testvectors)\.rs$/.test(p);
 
 /** Drop block and line comments (a `//` inside a URL string is kept). */
@@ -458,8 +460,12 @@ const RUST_LISTENER_HEADS: RegExp[] = [
 const ARG_PORT_LITERAL = /(?::|,\s*)(\d{2,5})(?![\d.])/g;
 // A metrics port ASSIGNED in the template source: `metrics_port: u16 = 9091`,
 // `METRICS_PORT = 9091`, `prometheus_addr = ":9091"`.
+// Any identifier containing metric/port/prometheus, assigned a 4-5 digit literal
+// via Go `:=`/`=`, TS `const x =`, Rust `let x: u16 =` / `const X: u16 =`, or `key:`.
 const METRICS_PORT_ASSIGN =
-    /\b(?:metrics?|prometheus)\w*\s*(?::\s*[\w<>:]+)?\s*[:=]\s*"?:?(\d{4,5})\b/gi;
+    /\b\w*(?:(?<![a-z])(?:metrics?|port|prometheus)|Metrics?|Port|Prometheus|METRICS?|PORT|PROMETHEUS)\w*\s*(?::\s*[\w<>:]+)?\s*(?::=|=|:)\s*"?:?(\d{4,5})\b/g;
+// Go `http.Server{ ... Addr: X ... }`: a listener whose address is the struct field.
+const GO_SERVER_LITERAL = /\bhttp\.Server\s*\{/g;
 // The only port literal a function template may carry: the serving default.
 const SERVING_DEFAULT = 8080;
 // Port-shaped literals outside a bind (the PORT-unset default): Go `":8080"`,
@@ -505,10 +511,31 @@ function scanTemplateText(
         }
     }
     for (const m of code.matchAll(METRICS_PORT_ASSIGN)) {
+        if (Number(m[1]) === SERVING_DEFAULT) continue;
         findings.push({
             file,
             what: `a metrics port is assigned (${m[0].trim()}); function templates open none`,
         });
+    }
+    if (lang === "go") {
+        for (const m of code.matchAll(GO_SERVER_LITERAL)) {
+            const start = (m.index ?? 0) + m[0].length;
+            let depth = 1;
+            let i = start;
+            for (; i < code.length && depth > 0; i++) {
+                if (code[i] === "{") depth++;
+                else if (code[i] === "}") depth--;
+            }
+            const body = code.slice(start, i);
+            listeners.push(m[0].trim());
+            const addr = body.match(/\bAddr\s*:\s*([^\n]+?)\s*,?\s*(?:\n|$)/);
+            if (addr && /\d{2,5}/.test(addr[1])) {
+                findings.push({
+                    file,
+                    what: `http.Server Addr is built from a literal port (${addr[1]}), not $PORT`,
+                });
+            }
+        }
     }
     if (production) {
         for (const re of DEFAULT_PORT_LITERALS) {
@@ -526,7 +553,9 @@ function scanTemplateText(
         lang === "go"
             ? /\b(?:getenv|Getenv|LookupEnv)\s*\(\s*"PORT"\s*\)/.test(code)
             : /\bvar\s*\(\s*"PORT"\s*\)/.test(code);
-    return { listeners, findings, readsPortEnv };
+    // Test code may bind literal ports (ephemeral / fixtures): listeners are
+    // still recorded, but no finding is raised against a test path.
+    return { listeners, findings: production ? findings : [], readsPortEnv };
 }
 
 function scanFunctionTemplates(): {
@@ -675,10 +704,38 @@ describe("metrics-port lockstep — Go and Rust function templates (#2432)", () 
         ).toEqual([]);
         // A non-serving default port is a finding.
         expect(go('return ":9091"').findings.length).toBe(1);
-        // "symmetric" is not a metrics word: no finding.
+        // "symmetric" is not a metrics/port word: no finding.
         expect(
-            rust("let symmetric_port: u16 = 4242; // symmetric key").findings,
+            rust("let symmetric_key: u16 = 4242; // symmetric key").findings,
         ).toEqual([]);
+        // Go http.Server literal Addr, plain / formatted; PORT-derived is clean.
+        const srv = (a: string) =>
+            go(`s := &http.Server{\n\tAddr: ${a},\n\tHandler: h,\n}`).findings;
+        expect(srv('":8080"').length).toBe(1);
+        expect(srv('fmt.Sprintf(":%d", 9091)').length).toBe(1);
+        expect(srv("addr")).toEqual([]);
+        // Assignment spellings across Go / TS / Rust.
+        expect(go("metricsPort := 9091").findings.length).toBe(1);
+        expect(go("var metricsPort = 9091").findings.length).toBe(1);
+        expect(rust("let metrics_port: u16 = 9091;").findings.length).toBe(1);
+        expect(rust("const METRICS_PORT: u16 = 9091;").findings.length).toBe(1);
+        expect(go("const port = 9091").findings.length).toBe(1);
+        // Test paths raise no findings.
+        expect(
+            scanTemplateText("metricsPort := 9091", "x_test.go", "go", false)
+                .findings,
+        ).toEqual([]);
+        for (const p of [
+            "a/tests.rs",
+            "a/foo_tests.rs",
+            "a/tests/x.rs",
+            "a/x_test.go",
+            "a/x.test.ts",
+            "a/__tests__/x.ts",
+        ]) {
+            expect(isTestPath(p), p).toBe(true);
+        }
+        expect(isTestPath("templates/rust/src/main.rs")).toBe(false);
         // Comments mentioning a port are not code.
         expect(go('// net.Listen("tcp", ":9091")\nx := 1').listeners).toEqual(
             [],

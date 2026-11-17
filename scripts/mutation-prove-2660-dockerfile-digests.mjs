@@ -32,7 +32,7 @@ const SPEC = 'tests/dockerfile-base-image-digests.test.ts';
 const DOCKER = { commentPrefix: '#' };
 const JS = { commentPrefix: '/*' };
 
-const CURRENT = 'sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329';
+const CURRENT = 'sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931';
 // Real digests the registry served before; deliberately NOT fabricated.
 const OLD_OPERATOR = 'sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240';
 const OLD_OTHERS = 'sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3';

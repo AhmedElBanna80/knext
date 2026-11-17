@@ -194,8 +194,9 @@ const MUTATIONS = [
     subject: 'lane',
     claim: 'the new phases are not in the default run',
     anchor:
-      'PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake}"',
-    replacement: 'PHASES="${PHASES:-images deploy cold trailers rollout sovereignty wake}"',
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"',
+    replacement:
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers rollout sovereignty wake}"',
   },
   {
     id: 'P02',

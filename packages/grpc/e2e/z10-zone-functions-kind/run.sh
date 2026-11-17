@@ -16,6 +16,10 @@
 #   cold      each function scaled to zero; a write then a read through the zone wakes it
 #   trailers  scaled to zero again; a read of a missing item comes back NotFound through
 #             the activator, the same code as the warm control
+#   grpctrailers  the same, over the gRPC protocol (HTTP/2, not Connect): scaled to zero, a call
+#             made with createGrpcTransport must get its code from the grpc-status trailer
+#             (0 for a success, 5 for a missing item) and the same code as a warm control;
+#             a call whose status never arrives fails the phase
 #   zerozone  the zone at minScale 0 too: once the zone and the Go function both have no
 #             pod, one call through the zone (a single request, no retry) wakes both; the
 #             woken zone logs that it chose h2c for the function, whose Knative port is
@@ -56,7 +60,7 @@ CLUSTER="${KIND_CLUSTER:-knext-z7-e2e}"
 REG_PORT="${REGISTRY_PORT:-5001}"
 NS="${Z10_NAMESPACE:-z10-e2e}"
 WITH_RUST="${Z10_WITH_RUST:-1}"
-PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake}"
+PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"
 INTERNAL_PORT="${INTERNAL_PORT:-18090}"
 ZERO_TIMEOUT="${Z10_ZERO_TIMEOUT:-300}"
 OPERATOR_NS='kn-next-operator-system'
@@ -298,6 +302,60 @@ phase_trailers() {
     expect_zone "warm control: the same read on the warm Rust pod comes back not_found" \
       "/inventory/get?sub=alice&id=missing" 404 '.ok == false and .code == "not_found"'
   fi
+}
+
+# ---------------------------------------------------------------- phase: grpctrailers
+
+# grpc_probe <description> <rpc> <query> <want code> <want grpc-status>: one call over the
+# gRPC protocol (HTTP/2), made by the zone through createGrpcTransport. The zone reports the
+# code its client derived AND the raw grpc-status the wire carried. Fails closed: a call with
+# no grpc-status, a status that disagrees with the code, or the wrong code, fails the phase.
+# Sets GP_CODE and GP_STATUS.
+grpc_probe() {
+  local desc=$1 rpc=$2 query=$3 want_code=$4 want_status=$5
+  zone_call "/example/grpc?rpc=${rpc}&sub=alice&${query}"
+  [ "${ZC_STATUS}" = 200 ] || fail "${desc}: the zone answered ${ZC_STATUS}, want 200 (body: ${ZC_BODY})"
+  jq -e '.protocol == "grpc"' <<<"${ZC_BODY}" >/dev/null || fail "${desc}: the call was not made over the gRPC protocol (body: ${ZC_BODY})"
+  GP_CODE="$(jq -r '.code' <<<"${ZC_BODY}")"
+  GP_STATUS="$(jq -r '.grpcStatus // "none"' <<<"${ZC_BODY}")"
+  [ "${GP_STATUS}" != none ] \
+    || fail "${desc}: no grpc-status trailer reached the client (it reported code ${GP_CODE}); the trailer was lost on the way"
+  [ "${GP_STATUS}" = "${want_status}" ] || fail "${desc}: grpc-status ${GP_STATUS}, want ${want_status} (code ${GP_CODE})"
+  [ "${GP_CODE}" = "${want_code}" ] \
+    || fail "${desc}: the client's code is ${GP_CODE}, want ${want_code}: it does not match the grpc-status ${GP_STATUS} the wire carried"
+}
+
+# grpc_cold <description> <rpc> <query> <want code> <want grpc-status>: grpc_probe against
+# a function with no pod at all, which must have a pod afterwards (the call woke it).
+grpc_cold() {
+  local fn=$GO_FN desc=$1 started elapsed
+  [ "$(all_pods "${fn}")" = 0 ] || fail "${desc}: ${fn} has a pod before the call, so the call would not be cold"
+  started=${SECONDS}
+  grpc_probe "$@"
+  elapsed=$((SECONDS - started))
+  [ -n "$(pod_uids "${fn}")" ] || fail "${desc}: the call was answered but ${fn} has no pod: it did not go through a cold start"
+  ok "${desc} (cold, grpc-status ${GP_STATUS}, code ${GP_CODE}, ${elapsed}s through the activator)"
+}
+
+phase_grpctrailers() {
+  log "grpctrailers: the gRPC status trailer survives the cold activator path (HTTP/2, not Connect)"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  # A success first: the call wakes the function, and its trailer carries grpc-status 0.
+  await_zero "${GO_FN}"
+  grpc_cold "a gRPC write to the cold Go function succeeds with grpc-status 0" \
+    PutItem "id=grpc-1&value=v1" OK 0
+  # Then the error: NotFound is what the function raises for a missing item, and over gRPC
+  # it travels ONLY as the grpc-status trailer (5), not as an HTTP status or a JSON body.
+  await_zero "${GO_FN}"
+  grpc_cold "a gRPC read of a missing item through the cold activator comes back NotFound from the grpc-status trailer" \
+    GetItem "id=missing" NotFound 5
+  local cold_code=$GP_CODE cold_status=$GP_STATUS
+  grpc_probe "warm control: the same gRPC read on the warm pod" GetItem "id=missing" NotFound 5
+  [ "${GP_CODE}" = "${cold_code}" ] && [ "${GP_STATUS}" = "${cold_status}" ] \
+    || fail "the cold call came back ${cold_code} (grpc-status ${cold_status}) but the warm control ${GP_CODE} (grpc-status ${GP_STATUS})"
+  ok "the cold and the warm call agree: ${GP_CODE} from grpc-status ${GP_STATUS}"
+  grpc_probe "a warm gRPC write carries grpc-status 0" PutItem "id=grpc-2&value=v2" OK 0
+  ok "the status trailer survives the activator on the gRPC protocol (success 0, NotFound 5)"
 }
 
 # ---------------------------------------------------------------- phase: zerozone
@@ -751,14 +809,15 @@ k get crd backendservices.apps.kn-next.dev >/dev/null 2>&1 \
   || fail "the cluster has no BackendService CRD: run the Z7 lane's up phase first (PHASES=up ${Z7}/run.sh)"
 for phase in ${PHASES}; do
   case "${phase}" in
-    images | deploy | cold | trailers | zerozone | rollout | sovereignty | crosszone | wake) ;;
-    *) fail "unknown phase '${phase}' (images deploy cold trailers zerozone rollout sovereignty crosszone wake)" ;;
+    images | deploy | cold | trailers | grpctrailers | zerozone | rollout | sovereignty | crosszone | wake) ;;
+    *) fail "unknown phase '${phase}' (images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake)" ;;
   esac
 done
 has_phase images && phase_images
 has_phase deploy && phase_deploy
 has_phase cold && phase_cold
 has_phase trailers && phase_trailers
+has_phase grpctrailers && phase_grpctrailers
 has_phase zerozone && phase_zerozone
 has_phase rollout && phase_rollout
 has_phase sovereignty && phase_sovereignty

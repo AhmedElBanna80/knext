@@ -53,7 +53,7 @@ describe('the harness is as careful as the Z7 lane', () => {
 
   it('runs every phase by default', () => {
     expect(own).toContain(
-      'PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake}"',
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"',
     );
   });
 });
@@ -107,6 +107,82 @@ describe('a failed call keeps its code through the activator', () => {
     expect(t).toMatch(/cold_call "\$\{GO_FN\}" "\/example\/get\?sub=alice&id=missing"/);
     expect(t).toMatch(
       /expect_zone "warm control: [^"]*" \\\n\s*"\/example\/get\?sub=alice&id=missing"/,
+    );
+  });
+});
+
+describe('the gRPC status trailer survives the cold activator path (Z11 / D15)', () => {
+  const g = body('phase_grpctrailers');
+  const probeSrc = readFileSync(
+    resolve(REPO_ROOT, 'packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts'),
+    'utf8',
+  );
+  const serverSrc = readFileSync(
+    resolve(REPO_ROOT, 'packages/grpc/e2e/z7-identity-kind/zone-caller/server.ts'),
+    'utf8',
+  );
+
+  it('the phase exists, is dispatched, and is in the default run and the phase allowlist', () => {
+    expect(own).toMatch(/^has_phase grpctrailers && phase_grpctrailers$/m);
+    expect(own).toContain('| trailers | grpctrailers | zerozone |');
+    // The CI job runs run.sh with no PHASES override, so the default run IS the CI run.
+    const wf = readFileSync(WORKFLOW, 'utf8');
+    expect(wf).toContain('packages/grpc/e2e/z10-zone-functions-kind/run.sh');
+    expect(wf).not.toMatch(/z10-zone-functions-kind\/run\.sh[\s\S]{0,40}PHASES/);
+    expect(wf).not.toMatch(/Z10_[A-Z_]*PHASES/);
+  });
+
+  it('the client speaks the gRPC protocol over HTTP/2, never Connect', () => {
+    expect(probeSrc).toContain('createGrpcTransport');
+    expect(probeSrc).not.toContain('createConnectTransport');
+    expect(probeSrc).toMatch(/httpVersion: '2'/);
+    expect(serverSrc).toMatch(/case '\/example\/grpc':/);
+    expect(serverSrc).toContain('grpcProbe(');
+    // The lane's route is the gRPC one, and requires the reply to say so.
+    expect(own).toContain('/example/grpc?rpc=');
+    expect(body('grpc_probe')).toContain('.protocol == "grpc"');
+  });
+
+  it('the probe reads the raw grpc-status off the trailer (or header) and off an error', () => {
+    expect(probeSrc).toContain("res.trailer.get('grpc-status')");
+    expect(probeSrc).toContain(".metadata.get('grpc-status')");
+  });
+
+  it('waits for scale-to-zero before each cold call, and a cold call needs zero pods then a pod', () => {
+    expect(g.match(/await_zero "\$\{GO_FN\}"/g)?.length).toBe(2);
+    const cold = body('grpc_cold');
+    expect(cold).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
+    expect(cold).toMatch(/\[ -n "\$\(pod_uids "\$\{fn\}"\)" \] \|\| fail/);
+    expect(cold.indexOf('= 0 ]')).toBeLessThan(cold.indexOf('grpc_probe'));
+    expect(cold.indexOf('pod_uids')).toBeGreaterThan(cold.indexOf('grpc_probe'));
+    for (const m of g.matchAll(/await_zero "\$\{GO_FN\}"/g)) {
+      expect(g.indexOf('grpc_cold', m.index)).toBeGreaterThan(m.index as number);
+    }
+  });
+
+  it('fails closed: a missing trailer, a wrong status, or a code that disagrees with it all fail', () => {
+    const p = body('grpc_probe');
+    expect(p).toContain('.grpcStatus // "none"');
+    expect(p).toMatch(
+      /\[ "\$\{GP_STATUS\}" != none \] \\\n\s*\|\| fail "[^"]*no grpc-status trailer/,
+    );
+    expect(p).toMatch(/\[ "\$\{GP_STATUS\}" = "\$\{want_status\}" \] \|\| fail/);
+    expect(p).toMatch(/\[ "\$\{GP_CODE\}" = "\$\{want_code\}" \] \\\n\s*\|\| fail/);
+    // The missing-trailer check runs before the status is compared.
+    expect(p.indexOf('!= none')).toBeLessThan(p.indexOf('= "${want_status}"'));
+  });
+
+  it('a success carries grpc-status 0 and a missing item is NotFound from grpc-status 5', () => {
+    expect(g).toMatch(/PutItem "id=grpc-1&value=v1" OK 0/);
+    expect(g).toMatch(/GetItem "id=missing" NotFound 5/);
+  });
+
+  it('the cold code is compared with a warm control, not only with a constant', () => {
+    const warm = g.indexOf('grpc_probe "warm control');
+    expect(warm).toBeGreaterThan(g.indexOf('GetItem "id=missing" NotFound 5'));
+    expect(g).toContain('local cold_code=$GP_CODE cold_status=$GP_STATUS');
+    expect(g).toMatch(
+      /\[ "\$\{GP_CODE\}" = "\$\{cold_code\}" \] && \[ "\$\{GP_STATUS\}" = "\$\{cold_status\}" \] \\\n\s*\|\| fail/,
     );
   });
 });
@@ -261,6 +337,7 @@ describe('every phase runs, in order (#2421)', () => {
   it('the dispatch calls each new phase between its neighbours', () => {
     const order = [
       'phase_trailers',
+      'phase_grpctrailers',
       'phase_zerozone',
       'phase_rollout',
       'phase_sovereignty',

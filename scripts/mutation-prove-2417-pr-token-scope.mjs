@@ -184,7 +184,8 @@ const MUTATIONS = [
     subject: 'sc',
     anchor:
       'uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: image-scanned-layout-',
-    replacement: 'run: echo "no download"\n        with:\n          name: image-scanned-layout-',
+    replacement:
+      'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          name: image-scanned-layout-',
   },
   {
     id: 'D2',

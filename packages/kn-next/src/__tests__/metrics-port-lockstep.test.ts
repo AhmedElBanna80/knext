@@ -39,8 +39,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { QUEUE_PROXY_OWNED_PORTS } from "../cli/doctor";
 
 // repo root: packages/kn-next/src/__tests__ -> up 4
@@ -323,5 +323,472 @@ describe("metrics-port lockstep (runtime defaults ↔ operator annotation ↔ Ne
             'annotations["prometheus.io/port"] = "9099"',
         );
         expect(drifted).not.toBe(9464);
+    });
+});
+
+// ── #2432 (S7-8): the FFI package and the function templates ───────────────
+//
+// Neither surface owns a metrics port, and that is the invariant this block
+// binds to code (not to prose):
+//
+//   * packages/ffi opens NO listener. Its slow-call counters and load gauge are
+//     published on a globalThis seam (`Symbol.for('knext.ffi.renderMetrics')`);
+//     the app runtime's metrics listener reads that seam and appends it to the
+//     exposition it serves on :9464. So the FFI metrics are on 9464 BY
+//     CONSTRUCTION: there is no FFI port to drift.
+//   * the Go and Rust function templates bind only the serving $PORT (Knative
+//     sets it; default 8080). A literal metrics port in either — `:9091`, a
+//     `metrics_port: u16 = 9091` — would race queue-proxy exactly as #951 did.
+//
+// Scanning, not enumerating: whole files are read (multi-line safe) and every
+// listener construct found is checked, so a new one in any file turns this red.
+
+const FFI_SRC = resolve(REPO_ROOT, "packages", "ffi", "src");
+const FFI_RENDER = resolve(FFI_SRC, "render.ts");
+const RUNTIME_CONTRACT = resolve(
+    REPO_ROOT,
+    "packages",
+    "kn-next",
+    "templates",
+    "app",
+    "runtime-contract.mjs.hbs",
+);
+const FFI_SEAM_KEY = "knext.ffi.renderMetrics";
+const FUNCTION_TEMPLATE_ROOTS = [
+    resolve(REPO_ROOT, "templates", "go"),
+    resolve(REPO_ROOT, "templates", "rust"),
+];
+// Build output and dependency trees are not source. `vendor/` and generated
+// `gen/` code are third-party / protoc output, not the function's own binds.
+const SCAN_SKIP_DIRS = new Set([
+    "node_modules",
+    "target",
+    "dist",
+    ".git",
+    "vendor",
+    "gen",
+]);
+
+function sourceFilesUnder(root: string): string[] {
+    const out: string[] = [];
+    for (const ent of readdirSync(root, { withFileTypes: true })) {
+        if (SCAN_SKIP_DIRS.has(ent.name)) continue;
+        const p = join(root, ent.name);
+        if (ent.isDirectory()) out.push(...sourceFilesUnder(p));
+        else if (ent.isFile()) out.push(p);
+    }
+    return out;
+}
+
+const isTestPath = (p: string): boolean =>
+    /(^|[\\/])(__tests__|tests?|e2e|conformance)[\\/]/.test(p) ||
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(p) ||
+    /_test\.go$/.test(p) ||
+    /(^|[\\/])tests\.rs$/.test(p) ||
+    /_tests\.rs$/.test(p) ||
+    /(^|[\\/])(testkit|testutil|testvectors)\.rs$/.test(p);
+
+/** Drop block and line comments (a `//` inside a URL string is kept). */
+function stripComments(text: string): string {
+    return text
+        .replace(/\/\*[\s\S]*?\*\//g, " ")
+        .replace(/(^|[^:"'`\w])\/\/.*$/gm, "$1");
+}
+
+/** The balanced `( ... )` argument text starting at `open` (an index of `(`). */
+function balancedArgs(text: string, open: number): string {
+    let depth = 0;
+    for (let i = open; i < text.length; i++) {
+        if (text[i] === "(") depth++;
+        else if (text[i] === ")" && --depth === 0) {
+            return text.slice(open + 1, i);
+        }
+    }
+    return text.slice(open + 1);
+}
+
+/** Every call matching `head` (a regex ending at the opening paren), with its full args, across lines. */
+function callsMatching(
+    text: string,
+    head: RegExp,
+): { call: string; args: string }[] {
+    const out: { call: string; args: string }[] = [];
+    const re = new RegExp(head.source, `${head.flags.replace("g", "")}g`);
+    for (const m of text.matchAll(re)) {
+        const open = (m.index ?? 0) + m[0].length - 1;
+        out.push({ call: m[0], args: balancedArgs(text, open) });
+    }
+    return out;
+}
+
+// packages/ffi (TypeScript / Bun): anything that opens a network listener.
+const TS_LISTENER_HEADS: RegExp[] = [
+    /\bcreateServer\s*\(/,
+    /\.listen\s*\(/,
+    /\bBun\.(?:serve|listen|udpSocket)\s*\(/,
+    /\bDeno\.(?:serve|listen)\s*\(/,
+    /\bserve\s*\(/,
+    /\bnew\s+(?:\w+\.)?(?:Server|WebSocketServer)\s*\(/,
+];
+// A port number handed to a bind: `port: 9091`, `{ port: 9091 }`.
+const TS_PORT_LITERAL = /\bport\s*:\s*\d{2,5}\b/;
+
+function tsListeners(text: string): string[] {
+    const code = stripComments(text);
+    const found = TS_LISTENER_HEADS.flatMap((h) =>
+        callsMatching(code, h).map((c) => c.call.trim()),
+    );
+    for (const m of code.matchAll(new RegExp(TS_PORT_LITERAL.source, "g"))) {
+        found.push(m[0]);
+    }
+    return found;
+}
+
+// Go and Rust listener constructs.
+const GO_LISTENER_HEADS: RegExp[] = [
+    /\bnet\.Listen(?:Config)?\s*\(/,
+    /\b(?:ListenAndServe(?:TLS)?|ListenPacket|ListenTCP|ListenUDP)\s*\(/,
+    /\.Listen\s*\(/,
+];
+const RUST_LISTENER_HEADS: RegExp[] = [
+    /\b(?:TcpListener|UdpSocket|UnixListener|Server|HttpServer)::bind\s*\(/,
+    /\baxum::serve\s*\(/,
+    /\.bind\s*\(/,
+];
+// A port number inside a bind's own arguments: `":9091"`, `, 9091)`, `([0,0,0,0], 9091)`.
+// `127.0.0.1:0` (ephemeral, test-only) is not port-shaped here.
+const ARG_PORT_LITERAL = /(?::|,\s*)(\d{2,5})(?![\d.])/g;
+// A metrics port ASSIGNED in the template source: `metrics_port: u16 = 9091`,
+// `METRICS_PORT = 9091`, `prometheus_addr = ":9091"`.
+// Any identifier containing metric/port/prometheus, assigned a 4-5 digit literal
+// via Go `:=`/`=`, TS `const x =`, Rust `let x: u16 =` / `const X: u16 =`, or `key:`.
+const METRICS_PORT_ASSIGN =
+    /\b\w*(?:(?<![a-z])(?:metrics?|port|prometheus)|Metrics?|Port|Prometheus|METRICS?|PORT|PROMETHEUS)\w*\s*(?::\s*[\w<>:]+)?\s*(?::=|=|:)\s*"?:?(\d{4,5})\b/g;
+// Go `http.Server{ ... Addr: X ... }`: a listener whose address is the struct field.
+const GO_SERVER_LITERAL = /\bhttp\.Server\s*\{/g;
+// The only port literal a function template may carry: the serving default.
+const SERVING_DEFAULT = 8080;
+// Port-shaped literals outside a bind (the PORT-unset default): Go `":8080"`,
+// Rust `unwrap_or(8080)`.
+const DEFAULT_PORT_LITERALS = [
+    /"\s*:(\d{4,5})\s*"/g,
+    /unwrap_or\s*\(\s*(\d{4,5})\s*\)/g,
+];
+
+interface Finding {
+    file: string;
+    what: string;
+}
+
+interface TemplateScan {
+    listeners: { file: string; call: string; production: boolean }[];
+    findings: Finding[];
+    readsPortEnv: boolean;
+}
+
+function scanTemplateText(
+    text: string,
+    file: string,
+    lang: "go" | "rust",
+    production: boolean,
+): { listeners: string[]; findings: Finding[]; readsPortEnv: boolean } {
+    const code = stripComments(text);
+    const heads = lang === "go" ? GO_LISTENER_HEADS : RUST_LISTENER_HEADS;
+    const findings: Finding[] = [];
+    const listeners: string[] = [];
+    const seen = new Set<string>();
+    for (const h of heads) {
+        for (const { call, args } of callsMatching(code, h)) {
+            if (seen.has(args)) continue; // two heads matched the same call
+            seen.add(args);
+            listeners.push(call.trim());
+            for (const m of args.matchAll(ARG_PORT_LITERAL)) {
+                findings.push({
+                    file,
+                    what: `${call.trim()} binds a literal port ${m[1]}, not $PORT`,
+                });
+            }
+        }
+    }
+    for (const m of code.matchAll(METRICS_PORT_ASSIGN)) {
+        if (Number(m[1]) === SERVING_DEFAULT) continue;
+        findings.push({
+            file,
+            what: `a metrics port is assigned (${m[0].trim()}); function templates open none`,
+        });
+    }
+    if (lang === "go") {
+        for (const m of code.matchAll(GO_SERVER_LITERAL)) {
+            const start = (m.index ?? 0) + m[0].length;
+            let depth = 1;
+            let i = start;
+            for (; i < code.length && depth > 0; i++) {
+                if (code[i] === "{") depth++;
+                else if (code[i] === "}") depth--;
+            }
+            const body = code.slice(start, i);
+            listeners.push(m[0].trim());
+            const addr = body.match(/\bAddr\s*:\s*([^\n]+?)\s*,?\s*(?:\n|$)/);
+            if (addr && /\d{2,5}/.test(addr[1])) {
+                findings.push({
+                    file,
+                    what: `http.Server Addr is built from a literal port (${addr[1]}), not $PORT`,
+                });
+            }
+        }
+    }
+    if (production) {
+        for (const re of DEFAULT_PORT_LITERALS) {
+            for (const m of code.matchAll(re)) {
+                if (Number(m[1]) !== SERVING_DEFAULT) {
+                    findings.push({
+                        file,
+                        what: `port literal ${m[1]} (the only allowed default is ${SERVING_DEFAULT})`,
+                    });
+                }
+            }
+        }
+    }
+    const readsPortEnv =
+        lang === "go"
+            ? /\b(?:getenv|Getenv|LookupEnv)\s*\(\s*"PORT"\s*\)/.test(code)
+            : /\bvar\s*\(\s*"PORT"\s*\)/.test(code);
+    // Test code may bind literal ports (ephemeral / fixtures): listeners are
+    // still recorded, but no finding is raised against a test path.
+    return { listeners, findings: production ? findings : [], readsPortEnv };
+}
+
+function scanFunctionTemplates(): {
+    go: TemplateScan;
+    rust: TemplateScan;
+} {
+    const run = (root: string, ext: string, lang: "go" | "rust") => {
+        const scan: TemplateScan = {
+            listeners: [],
+            findings: [],
+            readsPortEnv: false,
+        };
+        for (const file of sourceFilesUnder(root)) {
+            if (!file.endsWith(ext)) continue;
+            const production = !isTestPath(file);
+            const r = scanTemplateText(
+                readFileSync(file, "utf8"),
+                relative(REPO_ROOT, file),
+                lang,
+                production,
+            );
+            for (const call of r.listeners) {
+                scan.listeners.push({
+                    file: relative(REPO_ROOT, file),
+                    call,
+                    production,
+                });
+            }
+            scan.findings.push(...r.findings);
+            if (production && r.readsPortEnv) scan.readsPortEnv = true;
+        }
+        return scan;
+    };
+    return {
+        go: run(FUNCTION_TEMPLATE_ROOTS[0], ".go", "go"),
+        rust: run(FUNCTION_TEMPLATE_ROOTS[1], ".rs", "rust"),
+    };
+}
+
+describe("metrics-port lockstep — FFI package (#2432)", () => {
+    it("packages/ffi opens no network listener of its own", () => {
+        const files = sourceFilesUnder(FFI_SRC).filter(
+            (f) => /\.[cm]?[jt]s$/.test(f) && !isTestPath(f),
+        );
+        expect(
+            files.length,
+            "the FFI source scan read no files",
+        ).toBeGreaterThan(0);
+        const hits = files.flatMap((f) =>
+            tsListeners(readFileSync(f, "utf8")).map(
+                (h) => `${relative(REPO_ROOT, f)}: ${h}`,
+            ),
+        );
+        expect(
+            hits,
+            "packages/ffi must open no listener: its metrics ride the globalThis seam into the " +
+                `app's registry on :9464. Found:\n  ${hits.join("\n  ")}`,
+        ).toEqual([]);
+    });
+
+    it("FFI metrics are registered through the seam the app's :9464 listener reads", () => {
+        const render = stripComments(readFileSync(FFI_RENDER, "utf8"));
+        // Producer: the generated module publishes $renderMetrics on the seam key.
+        expect(
+            render,
+            "render.ts no longer assigns $renderMetrics to globalThis[Symbol.for('" +
+                `${FFI_SEAM_KEY}')] — the FFI metrics would reach no port`,
+        ).toMatch(
+            new RegExp(
+                `globalThis[^;]*\\[\\s*Symbol\\.for\\(\\s*'${FFI_SEAM_KEY.replaceAll(".", "\\.")}'\\s*\\)\\s*\\]\\s*=\\s*\\$renderMetrics\\b`,
+            ),
+        );
+        // ...and $renderMetrics really emits the two families (not an empty stub).
+        expect(render).toMatch(/function\s+\$renderMetrics\s*\(/);
+        expect(render).toContain("knext_ffi_slow_calls_total");
+        expect(render).toContain("knext_ffi_load_seconds");
+
+        // Consumer: the app runtime reads the SAME key and appends it to the
+        // scrape body it serves on the shared metrics port.
+        const runtime = stripComments(readFileSync(RUNTIME_CONTRACT, "utf8"));
+        expect(runtime).toMatch(
+            new RegExp(
+                `FFI_METRICS_SEAM\\s*=\\s*Symbol\\.for\\(\\s*'${FFI_SEAM_KEY.replaceAll(".", "\\.")}'\\s*\\)`,
+            ),
+        );
+        expect(runtime).toMatch(/globalThis\[\s*FFI_METRICS_SEAM\s*\]/);
+        const scrape = runtime.slice(
+            runtime.indexOf("export async function renderScrape"),
+        );
+        expect(
+            scrape.slice(0, scrape.indexOf("\n}\n")),
+            "renderScrape no longer appends readFfiMetrics() to the :9464 body",
+        ).toMatch(/appendExposition\([\s\S]*readFfiMetrics\(\)/);
+    });
+});
+
+describe("metrics-port lockstep — Go and Rust function templates (#2432)", () => {
+    const scans = scanFunctionTemplates();
+
+    for (const lang of ["go", "rust"] as const) {
+        it(`the ${lang} template binds only the serving $PORT, never a literal port`, () => {
+            const scan = scans[lang];
+            const prod = scan.listeners.filter((l) => l.production);
+            expect(
+                prod.length,
+                `the ${lang} template scan found no production listener — the scan is blind`,
+            ).toBeGreaterThan(0);
+            expect(
+                scan.readsPortEnv,
+                `the ${lang} template never reads the PORT env, so its bind is not the serving port`,
+            ).toBe(true);
+            const msgs = scan.findings.map((f) => `${f.file}: ${f.what}`);
+            expect(msgs, `\n  ${msgs.join("\n  ")}`).toEqual([]);
+        });
+    }
+
+    it("self-test: multi-line binds, typed metrics ports and the 'symmetric' trap", () => {
+        const rust = (t: string) => scanTemplateText(t, "x.rs", "rust", true);
+        const go = (t: string) => scanTemplateText(t, "x.go", "go", true);
+        // Multi-line Rust bind with a literal port.
+        expect(
+            rust(
+                "let l = TcpListener::bind(\n  SocketAddr::from((\n    Ipv4Addr::UNSPECIFIED,\n    9091,\n  )),\n).await?;",
+            ).findings.length,
+        ).toBe(1);
+        // Typed metrics-port assignment.
+        expect(
+            rust("const X: () = (); let metrics_port: u16 = 9091;").findings
+                .length,
+        ).toBe(1);
+        // Multi-line Go listener with a literal.
+        expect(
+            go('ln, err := net.Listen(\n\t"tcp",\n\t":9091",\n)').findings
+                .length,
+        ).toBeGreaterThanOrEqual(1);
+        // PORT-derived binds are clean, and the serving default is allowed.
+        expect(
+            rust(
+                'let p = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080); TcpListener::bind(SocketAddr::from((a, p)))',
+            ).findings,
+        ).toEqual([]);
+        expect(
+            go(
+                'func a(g func(string) string) string { if p := g("PORT"); p != "" { return ":" + p }; return ":8080" }\nln, _ := net.Listen("tcp", fn.HTTP.Addr)',
+            ).findings,
+        ).toEqual([]);
+        // A non-serving default port is a finding.
+        expect(go('return ":9091"').findings.length).toBe(1);
+        // "symmetric" is not a metrics/port word: no finding.
+        expect(
+            rust("let symmetric_key: u16 = 4242; // symmetric key").findings,
+        ).toEqual([]);
+        // Go http.Server literal Addr, plain / formatted; PORT-derived is clean.
+        const srv = (a: string) =>
+            go(`s := &http.Server{\n\tAddr: ${a},\n\tHandler: h,\n}`).findings;
+        expect(srv('":8080"').length).toBe(1);
+        expect(srv('fmt.Sprintf(":%d", 9091)').length).toBe(1);
+        expect(srv("addr")).toEqual([]);
+        // Assignment spellings across Go / TS / Rust.
+        expect(go("metricsPort := 9091").findings.length).toBe(1);
+        expect(go("var metricsPort = 9091").findings.length).toBe(1);
+        expect(rust("let metrics_port: u16 = 9091;").findings.length).toBe(1);
+        expect(rust("const METRICS_PORT: u16 = 9091;").findings.length).toBe(1);
+        expect(go("const port = 9091").findings.length).toBe(1);
+        // Test paths raise no findings.
+        expect(
+            scanTemplateText("metricsPort := 9091", "x_test.go", "go", false)
+                .findings,
+        ).toEqual([]);
+        for (const p of [
+            "a/tests.rs",
+            "a/foo_tests.rs",
+            "a/tests/x.rs",
+            "a/x_test.go",
+            "a/x.test.ts",
+            "a/__tests__/x.ts",
+        ]) {
+            expect(isTestPath(p), p).toBe(true);
+        }
+        expect(isTestPath("templates/rust/src/main.rs")).toBe(false);
+        // Comments mentioning a port are not code.
+        expect(go('// net.Listen("tcp", ":9091")\nx := 1').listeners).toEqual(
+            [],
+        );
+    });
+
+    it("self-test: the FFI scanner reads Bun.serve, multi-line listen and a literal port", () => {
+        expect(
+            tsListeners("Bun.serve({ port: 9091, fetch() {} })").length,
+        ).toBeGreaterThanOrEqual(2);
+        expect(tsListeners("srv\n  .listen(\n    9091,\n  )").length).toBe(1);
+        expect(tsListeners("// Bun.serve({port: 1})\nconst a = 1;")).toEqual(
+            [],
+        );
+        expect(
+            tsListeners("const r = process.getBuiltinModule.bind(p);"),
+        ).toEqual([]);
+    });
+});
+
+// Secondary: the prose agrees. This is NOT what makes the guard non-vacuous —
+// the structural checks above do — it only catches a doc that names a stale
+// port next to the word metrics/Prometheus.
+describe("metrics-port lockstep — FFI docs agree (#2432, secondary)", () => {
+    it("FFI docs that name the metrics port name 9464", () => {
+        const pages = [
+            resolve(REPO_ROOT, "packages", "ffi", "src", "EGM.md"),
+            resolve(
+                REPO_ROOT,
+                "apps",
+                "docs",
+                "content",
+                "docs",
+                "rust-in-process.mdx",
+            ),
+        ];
+        const drift: string[] = [];
+        for (const page of pages) {
+            readFileSync(page, "utf8")
+                .split("\n")
+                .forEach((line, i) => {
+                    if (!/\b(?:metrics?|prometheus)\b/i.test(line)) return;
+                    for (const m of line.matchAll(
+                        /(?:^|[^a-z])ports?(?![a-z])\D{0,24}?(\d{4,5})(?![\d.])|:(\d{4,5})(?![\d.])/gi,
+                    )) {
+                        const port = Number(m[1] ?? m[2]);
+                        if (port !== 9464)
+                            drift.push(
+                                `${relative(REPO_ROOT, page)}:${i + 1} -> ${port}`,
+                            );
+                    }
+                });
+        }
+        expect(drift).toEqual([]);
     });
 });

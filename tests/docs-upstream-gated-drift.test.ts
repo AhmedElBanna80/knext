@@ -81,7 +81,7 @@ describe('ROADMAP.md Tier C matches the matrix', () => {
 
   it('states Node-runtime middleware is supported', () => {
     // `\bis supported` rather than /supported/: "unsupported" would otherwise pass.
-    expect(tierC()).toMatch(/Node-runtime `?middleware[^.]*\bis supported\b/i);
+    expect(tierC()).toMatch(/Node-runtime `middleware\.ts` is supported\b/i);
   });
 
   it('keeps edge-runtime middleware as an open gap', () => {

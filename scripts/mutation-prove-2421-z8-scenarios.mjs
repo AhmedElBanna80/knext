@@ -217,9 +217,9 @@ const MUTATIONS = [
   {
     id: 'G03',
     subject: 'lane',
-    claim: 'a call with no grpc-status is no longer a failure',
-    anchor: '  [ "${GP_STATUS}" != none ] \\\n',
-    replacement: '  [ -n "${GP_STATUS}" ] \\\n',
+    claim: 'the grpc-status is never checked against the status the case expects',
+    anchor: '  [ "${GP_STATUS}" = "${want_status}" ] || fail',
+    replacement: '  true || fail',
   },
   {
     id: 'G04',

@@ -21,24 +21,53 @@ const ROOT = join(import.meta.dirname, '..');
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
 const DOCS = 'apps/docs/content/docs';
 
-// The canonical fresh-install apply, which the probe must directly precede.
-const APPLY_URL =
-  /kubectl apply --server-side -f (https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/releases\/download\/[^\s/]+\/install\.yaml)/;
-
 // `kubectl apply`, any flags, then -f/--filename and its target (quotes stripped).
-const APPLY_FILE = /\bkubectl\s+apply\b.*?\s(?:-f|--filename)(?:\s+|=)["']?([^\s"']+)/;
+const APPLY_FILE = /\bkubectl\s+apply\b.*?\s(?:-f|--filename)(?:\s+|=)["']?([^\s"'`]+)/;
 const VAR_TARGET = /^\$\{?([A-Za-z_]\w*)\}?$/;
 
-const EXCLUDED: Record<string, string> = {
-  'upgrading.mdx':
-    'upgrade of an existing 0.4.x cluster: Knative Serving is already serving there, so the fresh-install webhook race does not apply',
-  'operator-upgrade.mdx':
-    'rollback: re-applies a previous release bundle to a running operator; Knative Serving is already serving there',
+// Exemptions are per page AND per apply line (the exact trimmed logical line), each with
+// the true reason. A page with a non-listed install apply must carry the probe.
+const EXCLUDED: Record<string, Record<string, string>> = {
+  'upgrading.mdx': {
+    'kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/download/operator-vX.Y.Z/install-vX.Y.Z.yaml':
+      'operator upgrade on an existing cluster: Knative Serving is already serving there, so the fresh-install webhook race does not apply',
+    'kubectl apply -f https://github.com/getknext-dev/knext/releases/download/operator-latest/install.yaml':
+      'operator upgrade of an existing 0.4.x cluster: Knative Serving is already serving there, so the fresh-install webhook race does not apply',
+  },
+  'operator-upgrade.mdx': {
+    'kubectl apply --server-side -f install-new.yaml':
+      'upgrade: applies a newer release bundle to a running operator; Knative Serving is already serving there',
+    '3. Apply the new bundle: `kubectl apply --server-side -f install-new.yaml`.':
+      'upgrade: applies a newer release bundle (breaking-CRD path) to a running operator; Knative Serving is already serving there',
+    'kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/download/<last-good-tag>/install.yaml':
+      'rollback: re-applies the previous release bundle to a running operator; Knative Serving is already serving there',
+  },
+  'versioning.mdx': {
+    'kubectl apply --server-side -f "https://github.com/getknext-dev/knext/releases/download/operator-v${NEW_VERSION}/install-v${NEW_VERSION}.yaml"':
+      'upgrade: applies a newer release bundle to a running operator; Knative Serving is already serving there',
+    'kubectl apply --server-side -f "https://github.com/getknext-dev/knext/releases/download/operator-v${PREVIOUS_VERSION}/install-v${PREVIOUS_VERSION}.yaml"':
+      'rollback: re-applies the previous release bundle to a running operator; Knative Serving is already serving there',
+  },
 };
 
-/** Joins backslash-continued lines so a URL on the next line stays with its kubectl apply. */
-function logicalLines(text: string): string[] {
-  return text.replace(/\\\r?\n[ \t]*/g, ' ').split('\n');
+/** Logical lines (backslash continuations joined, whitespace collapsed) with the raw offset where each starts. */
+function logicalLines(text: string): { line: string; start: number }[] {
+  const out: { line: string; start: number }[] = [];
+  let pos = 0;
+  let cur: { line: string; start: number } | undefined;
+  for (const phys of text.split('\n')) {
+    const cont = /\\\r?$/.test(phys);
+    const piece = phys.replace(/\\\r?$/, '');
+    if (cur) cur.line += ` ${piece.trim()}`;
+    else cur = { line: piece, start: pos };
+    pos += phys.length + 1;
+    if (!cont) {
+      out.push(cur);
+      cur = undefined;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 
 /** A literal target is returned as-is; a ${VAR} target resolves to its assignment in `doc`. */
@@ -49,33 +78,35 @@ function resolveTarget(target: string, doc: string): string | undefined {
   return assign.exec(doc)?.[1];
 }
 
-/** Logical lines in `text` that run kubectl apply on an install.yaml target. Variables resolve against `doc`. */
-function installApplies(text: string, doc: string = text): string[] {
-  return logicalLines(text).filter((line) => {
+/** Any install*.yaml file name (install.yaml, install-vX.yaml, dist/install.yaml, install-new.yaml), path or URL. */
+const INSTALL_FILE = /(^|\/)install[^/]*\.yaml$/;
+
+/** Logical lines in `text` that run kubectl apply on an install*.yaml target. Variables resolve against `doc`. */
+function installAppliesAt(text: string, doc: string = text) {
+  return logicalLines(text).filter(({ line }) => {
     const m = APPLY_FILE.exec(line);
     if (!m) return false;
     const target = resolveTarget(m[1], doc);
-    return target !== undefined && target.includes('install.yaml');
+    return target !== undefined && INSTALL_FILE.test(target.split(/[?#]/)[0]);
   });
 }
+const installApplies = (text: string, doc: string = text): string[] =>
+  installAppliesAt(text, doc).map((l) => l.line);
 
 const FILES = readdirSync(join(ROOT, DOCS))
   .filter((f) => f.endsWith('.mdx'))
   .map((f) => `${DOCS}/${f}`);
 const MATCHING = FILES.filter((p) => installApplies(read(p)).length > 0);
-const PAGES = MATCHING.filter((p) => !Object.hasOwn(EXCLUDED, basename(p)));
 
-/**
- * The fenced block carrying the published-bundle apply (APPLY_URL). A locally built
- * dist/install.yaml apply on the same page (fork builds) is a separate block and is
- * not the published-bundle block this probe guards.
- */
-function applyBlock(doc: string): { lang: string; body: string } {
-  const blocks = [...doc.matchAll(/```(\S*)[^\n]*\n([\s\S]*?)```/g)];
-  const hit = blocks.filter((b) => installApplies(b[2], doc).length > 0 && APPLY_URL.test(b[2]));
-  expect(hit.length).toBe(1);
-  return { lang: hit[0][1], body: hit[0][2] };
+/** Apply lines on a page that are not exempted by name: each must be probed. */
+function freshApplies(page: string) {
+  const doc = read(page);
+  const ex = EXCLUDED[basename(page)] ?? {};
+  return installAppliesAt(doc).filter((l) => !Object.hasOwn(ex, extractKey(l.line)));
 }
+/** The allowlist key of a logical line: its trimmed text. */
+const extractKey = (line: string) => line.trim().replace(/\s+/g, ' ');
+const PAGES = MATCHING.filter((p) => freshApplies(p).length > 0);
 
 /** What the probe must contain, shared by docs and the workflow. */
 function expectProbe(block: string) {
@@ -102,6 +133,16 @@ describe('matcher self-test: which lines count as an apply of install.yaml', () 
       `URL="${URL_}"\nkubectl apply --server-side -f "\${URL}"`,
     ],
     ['URL on the continuation line', `kubectl apply --server-side -f \\\n  ${URL_}`],
+    [
+      'install-v${VERSION}.yaml pinned bundle',
+      'kubectl apply --server-side -f "https://github.com/o/r/releases/download/operator-v${VERSION}/install-v${VERSION}.yaml"',
+    ],
+    ['local dist/install.yaml', 'kubectl apply --server-side -f dist/install.yaml'],
+    ['local install-new.yaml', 'kubectl apply --server-side -f install-new.yaml'],
+    [
+      'inline prose apply of install-new.yaml',
+      'Apply it: `kubectl apply --server-side -f install-new.yaml`.',
+    ],
   ];
   for (const [name, src] of caught) {
     it(`catches: ${name}`, () => {
@@ -137,26 +178,35 @@ describe('docs wait for the Knative webhook with a portable dry-run probe', () =
     );
   });
 
-  for (const [name, reason] of Object.entries(EXCLUDED)) {
-    it(`allowlist: ${name} exists, has a reason, and still matches the scan`, () => {
-      expect(FILES).toContain(`${DOCS}/${name}`);
-      expect(reason.trim().length).toBeGreaterThan(20);
-      expect(MATCHING).toContain(`${DOCS}/${name}`);
-    });
+  for (const [name, entries] of Object.entries(EXCLUDED)) {
+    for (const [key, reason] of Object.entries(entries)) {
+      it(`allowlist: ${name} :: ${key.slice(0, 70)} exists once, has a reason, and still matches the scan`, () => {
+        expect(FILES).toContain(`${DOCS}/${name}`);
+        expect(reason.trim().length).toBeGreaterThan(20);
+        const hits = installAppliesAt(read(`${DOCS}/${name}`)).filter(
+          (l) => extractKey(l.line) === key,
+        );
+        expect(hits).toHaveLength(1);
+      });
+    }
   }
 
   for (const page of PAGES) {
-    it(`${page}: the probe block gates the apply and exits inside a subshell`, () => {
-      const { lang, body } = applyBlock(read(page));
-      expect(lang).toBe('sh');
-      const marker = body.indexOf(') && kubectl apply');
-      expect(marker).toBeGreaterThan(0);
-      const probe = body.slice(0, marker);
-      expectProbe(probe);
-      expect(probe.trimStart().startsWith('(')).toBe(true);
-      const apply = body.slice(marker + 5);
-      expect(apply).toMatch(APPLY_URL);
-      expect(apply).toContain('kubectl apply --server-side -f ');
+    it(`${page}: every non-exempt install apply is gated by the probe inside a subshell`, () => {
+      const doc = read(page);
+      const applies = freshApplies(page);
+      expect(applies.length).toBeGreaterThan(0);
+      for (const { line, start } of applies) {
+        expect(line.trimStart().startsWith(') && kubectl apply --server-side -f ')).toBe(true);
+        const before = doc.slice(0, start);
+        const open = before.lastIndexOf('\n(\n');
+        expect(open).toBeGreaterThanOrEqual(0);
+        const probe = before.slice(open + 1);
+        expectProbe(probe);
+        // the probe sits directly above the apply: no other apply or fence close in between
+        expect(probe).not.toContain('```');
+        expect(probe).not.toMatch(/kubectl apply/);
+      }
     });
 
     it(`${page}: no existence-only jsonpath wait (newer than the kubectl floor)`, () => {

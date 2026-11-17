@@ -135,7 +135,18 @@ release of its own. Generate the bundle locally instead, from the operator sourc
 
 ```sh title="shell"
 make build-installer IMG=<some-registry>/kn-next-operator:tag
-kubectl apply --server-side -f dist/install.yaml
+(
+  i=0
+  until kubectl patch configmap/config-network -n knative-serving \
+      --type=merge -p '{"data":{}}' --dry-run=server >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 60 ]; then
+      echo "Knative's config webhook is not answering after 2 minutes; check the knative-serving pods." >&2
+      exit 1
+    fi
+    sleep 2
+  done
+) && kubectl apply --server-side -f dist/install.yaml
 ```
 
 The manifests in the source tree carry a clearly-fake all-zeros placeholder digest; the release

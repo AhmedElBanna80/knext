@@ -259,7 +259,18 @@ Apply the versioned bundle of the release you tested, instead of a moving addres
 
 ```sh title="shell"
 VERSION=1.3.0   # an operator-vX.Y.Z release from the project's GitHub Releases page
-kubectl apply --server-side -f \
+(
+  i=0
+  until kubectl patch configmap/config-network -n knative-serving \
+      --type=merge -p '{"data":{}}' --dry-run=server >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 60 ]; then
+      echo "Knative's config webhook is not answering after 2 minutes; check the knative-serving pods." >&2
+      exit 1
+    fi
+    sleep 2
+  done
+) && kubectl apply --server-side -f \
   "https://github.com/getknext-dev/knext/releases/download/operator-v${VERSION}/install-v${VERSION}.yaml"
 ```
 

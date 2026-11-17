@@ -281,11 +281,12 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
     // (install.yaml carries a knative-serving ConfigMap the webhook validates).
     // The probe is a server-side dry-run no-op patch of that ConfigMap.
     expect(step).toMatch(
-      /patch configmap\/config-network -n knative-serving\s*\\\s*--type merge --patch '\{"data":\{\}\}' --dry-run=server/,
+      /until kubectl patch configmap\/config-network -n knative-serving\s*\\\s*--type=merge -p '\{"data":\{\}\}' --dry-run=server/,
     );
     // Bounded retry that fails loudly rather than hanging or passing.
-    expect(step).toContain('seq 1 60');
+    expect(step).toMatch(/-ge 60\b/);
     expect(step).toContain('exit 1');
+    expect(step).not.toContain('seq ');
     // Ordering: Knative install < wait < apply.
     const install = wf.indexOf('- name: Install Knative Serving + Kourier');
     expect(install).toBeGreaterThan(0);

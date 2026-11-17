@@ -18,10 +18,22 @@ Knative Service  →  scaled-to-zero, reachable
 
 The operator ships as one digest-pinned `install.yaml` bundle (CRDs + RBAC + manager
 Deployment + webhook), regenerated for every release. Install the control plane with one
-command, after cert-manager:
+command, after cert-manager and Knative Serving (the command first waits, up to two minutes, until
+Knative's config webhook answers):
 
 ```sh title="shell"
-kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/download/operator-latest/install.yaml
+(
+  i=0
+  until kubectl patch configmap/config-network -n knative-serving \
+      --type=merge -p '{"data":{}}' --dry-run=server >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 60 ]; then
+      echo "Knative's config webhook is not answering after 2 minutes; check the knative-serving pods." >&2
+      exit 1
+    fi
+    sleep 2
+  done
+) && kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/download/operator-latest/install.yaml
 ```
 
 `operator-latest` always points at the newest **stable** release — it moves only when a stable

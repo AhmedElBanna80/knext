@@ -136,13 +136,16 @@ jobs:
           set -euo pipefail
           # Prove the admission path answers: a server-side dry-run of a no-op
           # patch on a Knative ConfigMap goes through config-validation.
-          for i in $(seq 1 60); do
-            kubectl patch configmap/config-network -n knative-serving \
-              --type merge --patch '{"data":{}}' --dry-run=server >/dev/null 2>&1 && exit 0
-            [ "$i" -eq 60 ] && echo "Knative webhook is not answering; check the knative-serving pods" >&2
+          i=0
+          until kubectl patch configmap/config-network -n knative-serving \
+              --type=merge -p '{"data":{}}' --dry-run=server >/dev/null 2>&1; do
+            i=$((i + 1))
+            if [ "$i" -ge 60 ]; then
+              echo "Knative's config webhook is not answering after 2 minutes; check the knative-serving pods." >&2
+              exit 1
+            fi
             sleep 2
           done
-          exit 1
 
       # THE STEP THIS WHOLE WORKFLOW EXISTS FOR: the exact URL the install
       # docs publish (discovered by #586's own `discoverInstallUrl`, never a

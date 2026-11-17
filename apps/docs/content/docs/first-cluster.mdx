@@ -91,22 +91,22 @@ kubectl wait --for=condition=Available --timeout=300s \
 The operator is knext's control plane: it watches for `NextApp` resources and turns each one into
 a running, scale-to-zero Knative service. One bundle installs it.
 
-The operator bundle includes a Knative config that Knative validates, so wait until that check is up
-(this retries for up to two minutes) before applying it:
+The operator bundle includes a Knative config that Knative validates, so the command below first
+waits (up to two minutes) until that check is up, then applies the bundle:
 
-```bash title="shell"
-for i in $(seq 1 60); do
-  kubectl patch configmap/config-network -n knative-serving \
-    --type merge --patch '{"data":{}}' --dry-run=server >/dev/null 2>&1 && break
-  [ "$i" -eq 60 ] && echo "Knative webhook is not answering; check the knative-serving pods" >&2
-  sleep 2
-done
-```
-
-Then apply the bundle:
-
-```bash title="shell"
-kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/download/operator-latest/install.yaml
+```sh title="shell"
+(
+  i=0
+  until kubectl patch configmap/config-network -n knative-serving \
+      --type=merge -p '{"data":{}}' --dry-run=server >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [ "$i" -ge 60 ]; then
+      echo "Knative's config webhook is not answering after 2 minutes; check the knative-serving pods." >&2
+      exit 1
+    fi
+    sleep 2
+  done
+) && kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/download/operator-latest/install.yaml
 kubectl wait --for=condition=Available -n kn-next-operator-system \
   deployment/kn-next-operator-controller-manager --timeout=120s
 ```

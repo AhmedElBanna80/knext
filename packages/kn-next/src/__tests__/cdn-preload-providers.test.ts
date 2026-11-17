@@ -160,5 +160,56 @@ for (const runtime of ["node", "bun"] as Runtime[]) {
                 }
             }
         });
+
+        it("CloudFront/Azure never edge-cache a URL with a query string (their key may drop it)", async () => {
+            for (const provider of ["cloudfront", "azure-front-door"]) {
+                const srv = await startServer({
+                    runtime,
+                    env: { ...CDN_ENV, KNEXT_CDN_PROVIDER: provider },
+                    artifact: artifact(),
+                });
+                try {
+                    const r = await get(srv.port, "/blog?page=2", {
+                        cc: ISR_CC,
+                        ct: "text/html",
+                        tags: OWN_TAGS,
+                    });
+                    // No s-maxage reaches the CDN, and no tags.
+                    expect(r.header("cache-control"), provider).toBe(COMPAT);
+                    expect(r.header("cache-tag"), provider).toBeUndefined();
+                    // The same page without a query is still shared.
+                    const bare = await get(srv.port, "/blog", {
+                        cc: ISR_CC,
+                        ct: "text/html",
+                        tags: OWN_TAGS,
+                    });
+                    expect(bare.header("cache-control"), provider).toBe(
+                        "public, max-age=0, s-maxage=30",
+                    );
+                } finally {
+                    srv.stop();
+                }
+            }
+        });
+
+        it("Cloudflare keys on the query, so a query URL keeps its edge directive", async () => {
+            const srv = await startServer({
+                runtime,
+                env: { ...CDN_ENV, KNEXT_CDN_PROVIDER: "cloudflare" },
+                artifact: artifact(),
+            });
+            try {
+                const r = await get(srv.port, "/blog?page=2", {
+                    cc: ISR_CC,
+                    ct: "text/html",
+                    tags: OWN_TAGS,
+                });
+                expect(r.header("cloudflare-cdn-cache-control")).toBe(
+                    "max-age=30",
+                );
+            } finally {
+                srv.stop();
+            }
+        });
     });
 }

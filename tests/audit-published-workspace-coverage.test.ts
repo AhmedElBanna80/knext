@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-// @ts-expect-error untyped .mjs
 import { auditScope } from '../scripts/audit-published.mjs';
 
 /**

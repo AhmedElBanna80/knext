@@ -680,6 +680,8 @@ jobs:
         if: github.ref == 'refs/heads/main'
         env:
           CRANE_VERSION: v0.21.7
+          # sha256 of go-containerregistry_Linux_x86_64.tar.gz from the v0.21.7
+          # release's checksums.txt (github.com/google/go-containerregistry).
           CRANE_SHA256: 1a57bc98207fa1c0d04bf760699099e26f8383499bfd55b99c1b919a928a7230
         run: |
           set -euo pipefail

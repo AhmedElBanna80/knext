@@ -275,6 +275,7 @@ describe('self-contained single-exec image lane (supply-chain.yml)', () => {
   it('the SBOM, Trivy and attest targets are all derived from the built image', () => {
     const { dest, view, sbom, trivy, attest } = parts();
     expect(dest).toBeTruthy();
+    if (!dest) throw new Error('no oci dest derived from the build step');
     // The SBOM scans a view whose blobs are symlinked from the build's dest...
     const viewRun = String(view?.run ?? '');
     expect(viewRun).toContain(`$(pwd)/${dest}/blobs`);

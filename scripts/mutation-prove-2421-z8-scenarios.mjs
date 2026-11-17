@@ -214,6 +214,37 @@ const lane = createGuardProver({
   subjects: { lane: 'packages/grpc/e2e/z10-zone-functions-kind/run.sh' },
 });
 
+// The Z10 step must stay unconditional on push/pull_request. Rows mutate the
+// workflow's Z10 step condition; each must turn the lane guard red.
+const Z10_STEP =
+  "      - name: Run the Z10 zone-functions cold-path e2e on the same cluster\n        if: ${{ !(inputs.rotation_realtime || github.event_name == 'schedule') }}\n";
+const WORKFLOW_MUTATIONS = [
+  {
+    id: 'W01',
+    subject: 'workflow',
+    claim: 'Z10 is skipped on pull_request (condition made always false)',
+    anchor: Z10_STEP,
+    replacement: Z10_STEP.replace(/if: .*\n/, "if: ${{ github.event_name == 'schedule' }}\n"),
+  },
+  {
+    id: 'W02',
+    subject: 'workflow',
+    claim: 'Z10 skipped on push (arbitrary condition not matching the rotation skip)',
+    anchor: Z10_STEP,
+    replacement: Z10_STEP.replace(/if: .*\n/, "if: ${{ github.event_name != 'push' }}\n"),
+  },
+];
+const wfLane = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: 'tests/z10-zone-functions-kind-lane.test.ts',
+  subjects: { workflow: '.github/workflows/z7-identity-kind-e2e.yml' },
+});
+wfLane.preflight(WORKFLOW_MUTATIONS);
+wfLane.baseline();
+for (const m of WORKFLOW_MUTATIONS) {
+  wfLane.run({ ...m, expect: 'red' });
+}
+
 console.log('=== mutation proof: Z8 BackendService scenarios in the Z10 lane (#2421) ===');
 lane.preflight(MUTATIONS);
 declareMutations(MUTATIONS.length);

@@ -42,10 +42,20 @@ function backendServiceCrd(withoutWakeAhead: boolean): string {
             join(BASES, "apps.kn-next.dev_backendservices.yaml"),
             "utf8",
         ),
-    );
-    // biome-ignore lint/suspicious/noExplicitAny: walking a parsed CRD document
-    const spec = crd.spec.versions[0].schema.openAPIV3Schema.properties
-        .spec as any;
+    ) as {
+        spec: {
+            versions: {
+                schema: {
+                    openAPIV3Schema: {
+                        properties: {
+                            spec: { properties: Record<string, unknown> };
+                        };
+                    };
+                };
+            }[];
+        };
+    };
+    const spec = crd.spec.versions[0].schema.openAPIV3Schema.properties.spec;
     expect(spec.properties.wakeAhead).toBeDefined();
     if (withoutWakeAhead) delete spec.properties.wakeAhead;
     return JSON.stringify(crd);

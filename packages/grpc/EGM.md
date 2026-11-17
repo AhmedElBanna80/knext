@@ -50,7 +50,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     (unit-tested without a cluster in `src/__tests__/z7-rotation-verdict.test.ts`); the
     workflow runs that phase weekly on a schedule and on the `rotation_realtime` dispatch input.
   - e2e/z10-zone-functions-kind (no EGM.md): the Z10 zone-functions lane on kind
-    (cold path, trailers, zone and function both at zero, rollout with one zone
+    (cold path, Connect trailers, gRPC-protocol `grpc-status` trailers via `zone-caller/grpc-probe.ts` (tested cluster-free by `src/__tests__/z10-grpc-trailer-probe.test.ts`), zone and function both at zero, rollout with one zone
     revision per served-version bump, sovereignty, cross-zone refusal, wake-ahead). The same workflow
     runs its `run.sh` after Z7, on the same cluster. Its `wake` phase uses a
     second zone image, `zone-caller-wake`, built by `../z7-identity-kind/zone-caller/build.ts --wake`,

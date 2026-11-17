@@ -66,6 +66,7 @@ try {
   cpSync(join(HERE, 'authorize.ts'), join(zone, 'src', 'knext', 'authorize.ts'));
   cpSync(join(HERE, 'context.ts'), join(zone, 'src', 'knext', 'context.ts'));
   cpSync(join(HERE, 'server.ts'), join(zone, 'src', 'server.ts'));
+  cpSync(join(HERE, 'grpc-probe.ts'), join(zone, 'src', 'grpc-probe.ts'));
 
   const gen = spawnSync('bun', [CLI, 'generate'], { cwd: zone, stdio: 'inherit' });
   if (gen.status !== 0) throw new Error(`knext generate exited ${gen.status}`);

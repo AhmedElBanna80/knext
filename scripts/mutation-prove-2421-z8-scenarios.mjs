@@ -194,8 +194,39 @@ const MUTATIONS = [
     subject: 'lane',
     claim: 'the new phases are not in the default run',
     anchor:
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"',
+    replacement:
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers rollout sovereignty wake}"',
+  },
+  {
+    id: 'G01',
+    subject: 'lane',
+    claim: 'the grpctrailers phase is not in the lane default phase list',
+    anchor:
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"',
+    replacement:
       'PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake}"',
-    replacement: 'PHASES="${PHASES:-images deploy cold trailers rollout sovereignty wake}"',
+  },
+  {
+    id: 'G02',
+    subject: 'lane',
+    claim: 'the grpctrailers phase is never dispatched (CI runs the default dispatch)',
+    anchor: 'has_phase grpctrailers && phase_grpctrailers\n',
+    replacement: '',
+  },
+  {
+    id: 'G03',
+    subject: 'lane',
+    claim: 'the grpc-status is never checked against the status the case expects',
+    anchor: '  [ "${GP_STATUS}" = "${want_status}" ] || fail',
+    replacement: '  true || fail',
+  },
+  {
+    id: 'G04',
+    subject: 'lane',
+    claim: 'a success may take its grpc-status from the headers, not the trailer',
+    anchor: '    trailer) [ "${GP_SOURCE}" = trailer ] || fail',
+    replacement: '    trailer) [ -n "${GP_SOURCE}" ] || fail',
   },
   {
     id: 'P02',
@@ -204,6 +235,27 @@ const MUTATIONS = [
     anchor: 'has_phase crosszone && phase_crosszone\n',
     replacement: '',
   },
+  {
+    id: 'H01',
+    subject: 'probe',
+    claim: 'the probe stops using the gRPC transport',
+    anchor: '  const transport = createGrpcTransport({',
+    replacement: '  const transport = createConnectTransport({',
+  },
+  {
+    id: 'H02',
+    subject: 'probe',
+    claim: 'the probe stops using its own HTTP/2 session manager',
+    anchor: '    sessionManager: sessions,\n',
+    replacement: '',
+  },
+  {
+    id: 'H03',
+    subject: 'probe',
+    claim: 'the probe no longer types its HTTP/2 stream from node:http2',
+    anchor: "from 'node:http2';",
+    replacement: "from 'node:http';",
+  },
 ];
 
 // The subjects are inline literals, not a shared constant: the lane's
@@ -211,7 +263,10 @@ const MUTATIONS = [
 const lane = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: 'tests/z10-zone-functions-kind-lane.test.ts',
-  subjects: { lane: 'packages/grpc/e2e/z10-zone-functions-kind/run.sh' },
+  subjects: {
+    lane: 'packages/grpc/e2e/z10-zone-functions-kind/run.sh',
+    probe: 'packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts',
+  },
 });
 
 // The Z10 step must stay unconditional on push/pull_request. Rows mutate the

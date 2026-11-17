@@ -7,6 +7,9 @@
 //   /inventory/*  the second function, called with a token from the same
 //                 mintCallToken() (the Rust function serves the same contract,
 //                 and one zone cannot generate the same function name twice);
+//   /example/grpc  the Go function over the gRPC protocol (HTTP/2), not Connect, so a
+//                 status travels as the `grpc-status` trailer; the reply is the code the
+//                 client derived and the raw trailer it came from (grpc-probe.ts);
 //   /kid          the kid of the key the zone's signer signs with RIGHT NOW.
 //
 // The signer is the default one: the key is read from the Secret volume the
@@ -23,6 +26,8 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { mintCallToken } from '@getknext/grpc/runtime';
 import { putItem } from './generated/grpc/example/v1/example_knext_actions';
 import { getItem } from './generated/grpc/example/v1/example_knext_server';
+import { ExampleService } from './generated/grpc/example/v1/example_pb';
+import { grpcProbe } from './grpc-probe';
 import { user } from './knext/context';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -93,6 +98,33 @@ const server = createServer(async (req, res) => {
         return reply(res, 200, { ok: true });
       case '/kid':
         return reply(res, 200, { ok: true, kid: await signingKid() });
+      case '/example/grpc': {
+        const rpc = q.get('rpc');
+        if (rpc !== 'GetItem' && rpc !== 'PutItem')
+          return reply(res, 400, { ok: false, code: 'bad_rpc' });
+        const base = process.env.EXAMPLE_SERVICE_URL;
+        if (!base)
+          throw new ConnectError('EXAMPLE_SERVICE_URL is not set', Code.FailedPrecondition);
+        const token = await mintCallToken({
+          function: 'example',
+          method: `${EXAMPLE}/${rpc}`,
+          auth: 'user',
+          sub,
+        });
+        const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+        if (rpc === 'PutItem') headers['idempotency-key'] = crypto.randomUUID();
+        return reply(
+          res,
+          200,
+          await grpcProbe({
+            service: ExampleService,
+            method: rpc === 'GetItem' ? 'getItem' : 'putItem',
+            baseUrl: base,
+            headers,
+            input: { id: q.get('id') ?? '', value: q.get('value') ?? '' },
+          }),
+        );
+      }
       case '/example/put': {
         await user.run({ sub }, () =>
           putItem(

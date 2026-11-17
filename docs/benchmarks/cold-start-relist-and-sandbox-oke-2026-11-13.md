@@ -51,7 +51,9 @@ platform phases, next to sandbox start, and its period is a compile-time constan
    (`scripts/bench-cold-start-phases/ceiling/RUNBOOK.md`) measures it. It predicts a floor near 1.09 s, and it
    needs an SSH or serial-console route to the node that does not depend on the kubelet, so it is a
    founder-run session.
-2. **Not starting from zero on the request:** an opt-in keep-warm or predictive pre-wake.
+2. **Not starting from zero on the request:** an opt-in keep-warm or predictive pre-wake. The pre-wake
+   design is Proposed in [ADR-0073](../adr/0073-opt-in-predictive-prewake.md), with a kind-relative A/B
+   and a founder runbook for the OKE A/B ([`prewake-ab-oke-runbook.md`](prewake-ab-oke-runbook.md)).
 
 Runtime and network levers left on this path (crun, CNI tuning) are estimated, not measured, at roughly
 100–150 ms in total.

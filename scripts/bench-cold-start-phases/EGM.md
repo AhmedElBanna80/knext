@@ -11,6 +11,7 @@ This directory measures the per-phase cold start of a Knative Service on any clu
 - `stats.py run.jsonl <metric> <groupA> <groupB>`: `u_stat`, `exact_p` (exact Mann-Whitney), `boot_ci` (bootstrap CI), `compare`.
 - Study drivers: `baseline-stability-drive.py`, `bunexec-ab-incluster.py`, `burst-ab-incluster.py`, `prepull-ab-incluster.py`.
 - Study analyzers: `baseline-stability-analyze.py`, `bunexec-ab-analyze.py`, `burst-ab-analyze.py`, `cpu-boost-analyze.py`, `node-diagnosis-analyze.py`, `prepull-ab-analyze.py`.
+- `prewake-ab.sh --context <ctx> [--allow-non-kind] [--namespace] [--ksvc] [--rounds] [--leads ms,...] [--minscale-leads ms,...] [--out] [--setup] [--image] [--boot-delay-ms] [--zero-timeout] [--settle] [--dry-run]`: relative A/B of cold-start latency with and without a pre-wake GET sent a fixed lead before the request (ADR-0073). Arms `cold`, `get@<ms>` (a plain GET through the activator from the client pod; the default) and, only with `--minscale-leads`, the secondary `minscale@<ms>`, interleaved and rotated per round; appends one JSON line per cycle and prints medians and ranges with deltas relative to `cold`, labelling an arm whose range overlaps cold "not distinguishable from cold". The founder's OKE procedure is `docs/benchmarks/prewake-ab-oke-runbook.md`. The summary table is printed by `prewake-ab-summary.py <jsonl>` (stdlib only, run as `python3 -I`).
 - Other tools:
   - `compact.py in.jsonl out.jsonl`: trims harness JSONL for committing.
   - `dns-probe.js`: times resolver lookups inside an app container and prints JSON.
@@ -22,13 +23,15 @@ This directory measures the per-phase cold start of a Knative Service on any clu
 - `cold-cycle.mjs` throws if the arm does not have zero pods at the start (`${ARM} has N pod(s); not at zero`) and if no namespace can be found. Apart from `HEAL=1`, which execs one DNS lookup in the new container, it is read-only against the cluster (header comment).
 - `drive.py`: each round waits for every arm to reach zero pods and then rotates the wake order. `wake` starts the harness detached and guarded by `[ -e out ]`, so it never starts a second run. `take_lock` takes a non-blocking `fcntl.flock` and exits if another restore-mode driver holds the lock, so only one runs per workstation. `check_unchanged` stops the run if someone else changed a cordon this run manages.
 - `kubelet-snapshot.sh` requires a context (argument or `KNEXT_BENCH_CONTEXT`). Without one it exits 2.
+- `prewake-ab.sh` exits 2 on a context not starting with `kind-` unless `--allow-non-kind` is given, on `--setup` with a non-kind context, and on an `--image` not pinned by digest. `--dry-run` makes no `kubectl` call. Its EXIT trap removes the min-scale annotation if a cycle aborts while it is set and restores the grace period `--setup` changed.
 
 ## Side Effects
 - `drive.py`: `kubectl cp` and `kubectl exec` into the harness pod. In placement modes it also runs `kubectl cordon` and `uncordon` (`set_cordon`). It writes the output JSONL.
 - `burst-ab-incluster.py` and `prepull-ab-incluster.py`: `kubectl apply --validate=strict`, `kubectl patch nextapp ... --type merge`, and (prepull only) `kubectl create` of pull pods. `prepull-ab-incluster.py` also pushes images with `crane append` and `crane export`.
 - `cold-cycle.mjs`: Kubernetes API GET and watch calls using the pod's service-account token. Also TCP connects and `K-Network-Probe: queue` probes to the new pod, and agent polls.
+- `prewake-ab.sh`: the default `get@` arm only runs `kubectl exec` into the client pod (no cluster write). Per `minscale@` cycle (opt-in), `kubectl annotate podautoscaler <revision> autoscaling.knative.dev/min-scale=1` and its removal (a Knative-internal object; a measurement knob, not a product surface), plus the same exec. `--setup` (kind only) applies a namespace, a target ksvc and a client pod, and patches `config-autoscaler` `scale-to-zero-grace-period` to `10s`, restoring the prior value on exit. Appends to `--out`.
 - `kubelet-snapshot.sh`: read-only `kubectl get --raw` calls through the node proxy. It writes files under the outdir (default `$TMPDIR/kubelet-snapshot`).
 - The analyzers read JSONL and print. Some write `--json` output.
 
 ## Verification
-- Run: `node scripts/bun-test.mjs tests/bench-cold-start-harness.test.ts tests/bench-cold-start-analyzers.test.ts tests/bench-cold-start-drivers.test.ts tests/bench-cold-start-incluster-drivers.test.ts tests/bench-cold-start-remaining-analyzers.test.ts` (from the repo root)
+- Run: `node scripts/bun-test.mjs tests/bench-cold-start-harness.test.ts tests/bench-cold-start-analyzers.test.ts tests/bench-cold-start-drivers.test.ts tests/bench-cold-start-incluster-drivers.test.ts tests/bench-cold-start-remaining-analyzers.test.ts tests/prewake-ab-harness.test.ts` (from the repo root)

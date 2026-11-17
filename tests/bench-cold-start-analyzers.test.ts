@@ -37,6 +37,7 @@ const STATS = 'scripts/bench-cold-start-phases/stats.py';
 const COMPACT = 'scripts/bench-cold-start-phases/compact.py';
 const COMPARE = 'scripts/bench-cold-start-phases/gke/compare.py';
 const CPUPROFILE = 'scripts/bench-cold-start-phases/gke/cpuprofile-window.py';
+const PREWAKE_SUMMARY = 'scripts/bench-cold-start-phases/prewake-ab-summary.py';
 
 function py(script: string, args: string[]): { out: string; code: number; err: string } {
   const r = spawnSync('python3', [join(ROOT, script), ...args], {
@@ -381,6 +382,98 @@ describe('gke/cpuprofile-window.py: .cpuprofile timeline', () => {
       const early = py(CPUPROFILE, [f, '0', '0.1']).out;
       expect(early).toContain('99.0 ms  pkg-a/index.js');
       expect(early).not.toContain('pkg-b');
+    });
+  });
+});
+
+describe('prewake-ab-summary.py: per-arm medians against cold', () => {
+  // Rows exactly as prewake-ab.sh writes them, one object per cycle. The values are
+  // chosen so each figure can be derived by hand and so a wrong statistic shows:
+  //   cold:      1000, 1300, 1100 -> median 1100 (mean 1133, min 1000, max 1300)
+  //   get@500:   1010, 1190, 1120 -> median 1120 (mean 1107); range overlaps cold
+  //   get@1500:  300, 340, 310    -> median 310; range sits wholly below cold
+  // The 503 row (9999 ms) must be excluded from every figure and counted once.
+  const cycle = (
+    round: number,
+    arm: string,
+    mechanism: string,
+    lead: number | null,
+    request_ms: number,
+    status = '200',
+  ): string =>
+    JSON.stringify({
+      round,
+      arm,
+      mechanism,
+      lead_ms: lead,
+      request_ms,
+      status,
+      context: 'kind-prewake',
+      revision: 'prewake-target-00001',
+    });
+  const rows = [
+    cycle(1, 'cold', 'none', null, 1000),
+    cycle(1, 'get@500', 'get', 500, 1010),
+    cycle(1, 'get@1500', 'get', 1500, 300),
+    cycle(2, 'cold', 'none', null, 1300),
+    cycle(2, 'get@500', 'get', 500, 1190),
+    cycle(2, 'get@1500', 'get', 1500, 340),
+    cycle(3, 'cold', 'none', null, 1100),
+    cycle(3, 'get@500', 'get', 500, 1120),
+    cycle(3, 'get@1500', 'get', 1500, 310),
+    cycle(4, 'get@500', 'get', 500, 9999, '503'),
+  ];
+
+  const summarise = (dir: string, lines: string[]) => {
+    const f = join(dir, 'ab.jsonl');
+    writeFileSync(f, `${lines.join('\n')}\n`);
+    return py(PREWAKE_SUMMARY, [f]);
+  };
+  const armRows = (out: string) =>
+    out
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .slice(1)
+      .filter((l) => !l.startsWith('non-200') && !l.startsWith('kind absolute'))
+      .map((l) => l.trim().split(/\s+/));
+
+  it('reports n, median and min-max per arm, with the cold arm first and leads sorted numerically', () => {
+    withTmp((dir) => {
+      const r = summarise(dir, rows);
+      expect(r.code).toBe(0);
+      const arms = armRows(r.out);
+      // "get@1500" sorts before "get@500" as a string; the lead must sort as a number.
+      expect(arms.map((c) => c[0])).toEqual(['cold', 'get@500', 'get@1500']);
+      // columns: arm, n, median_ms, min-max_ms, delta_vs_cold_ms, relative, verdict...
+      expect(arms[0].slice(0, 6)).toEqual(['cold', '3', '1100', '1000-1300', '0', '1.00']);
+      expect(arms[1].slice(0, 6)).toEqual(['get@500', '3', '1120', '1010-1190', '20', '1.02']);
+      expect(arms[2].slice(0, 6)).toEqual(['get@1500', '3', '310', '300-340', '-790', '0.28']);
+    });
+  });
+
+  it('marks an arm whose range overlaps cold as not distinguishable, and a wholly separated arm as separated', () => {
+    withTmp((dir) => {
+      const arms = armRows(summarise(dir, rows).out);
+      expect(arms[0].slice(6).join(' ')).toBe('');
+      expect(arms[1].slice(6).join(' ')).toBe('not distinguishable from cold');
+      expect(arms[2].slice(6).join(' ')).toBe('separated from cold');
+    });
+  });
+
+  it('excludes non-200 cycles from every figure and says how many it dropped', () => {
+    withTmp((dir) => {
+      const r = summarise(dir, rows);
+      expect(r.out).toContain('non-200 cycles excluded: 1');
+      expect(r.out).not.toContain('9999');
+      expect(armRows(r.out)[1][2]).toBe('1120');
+    });
+  });
+
+  it('refuses to compute relative deltas when no cold cycle succeeded', () => {
+    withTmp((dir) => {
+      const r = summarise(dir, [cycle(1, 'get@500', 'get', 500, 1010)]);
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain('no successful cold cycles');
     });
   });
 });

@@ -176,14 +176,20 @@ updates:
   # published package's manifest. That is intended and unchanged: the bump comes
   # back on the next weekly run once the window closes.
   #
-  # UNPROVEN until the first run: Dependabot's `bun` ecosystem reads `bun.lock`
-  # and the workspace `package.json` files (dependabot-core ships a `bun`
-  # ecosystem with a bun.lock file fetcher), but this repo's `workspace:` and
-  # `catalog:` specifiers have not been seen by it. Check the Dependabot run log
-  # on the first Monday after merge.
+  # UNVERIFIED at run time: Dependabot's `bun` ecosystem reads `bun.lock` and
+  # the workspace `package.json` files, but nothing has confirmed that it
+  # resolves this repo's `workspace:` and `catalog:` specifiers. Do not read this
+  # entry as "workspace bumping works". What IS enforced is coverage on paper:
+  # tests/dependabot-workspace-coverage.test.ts requires every workspace member
+  # directory (derived from the root `workspaces` globs) to be named here, so a
+  # new member cannot sit outside every entry. Read the Dependabot run log after
+  # the first weekly run and, if the workspace members fail, add per-directory
+  # `npm` entries as the fallback.
   - package-ecosystem: 'bun'
     directories:
       - '/'
+      - '/apps/*'
+      - '/packages/*'
       - '/examples/bun-exec'
     schedule:
       interval: 'weekly'

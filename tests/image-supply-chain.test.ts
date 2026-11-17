@@ -210,6 +210,57 @@ describe('operator and app lanes: removing a gate from the REAL workflows reds',
   });
 });
 
+describe('self-contained single-exec image lane (supply-chain.yml)', () => {
+  const SC = 'supply-chain.yml';
+  const PUBLISH = 'self-contained-image-publish';
+  const SCAN = 'self-contained-image-supply-chain';
+  const laneNames = () => discoverImageLanes(wfs).lanes.map((l) => `${l.wf.file}#${l.id}`);
+
+  it('is discovered as a publish lane, by behaviour', () => {
+    expect(laneNames()).toContain(`${SC}#${PUBLISH}`);
+  });
+  it('has enforcing Trivy, SBOM and cosign (no findings for this lane)', () => {
+    expect(auditImageLanes(wfs, real).filter((f) => f.subject.includes(`#${PUBLISH}`))).toEqual([]);
+  });
+  // The two jobs belong to this image only, so a step dropped from them (not from
+  // the file-manager jobs) must red. Scoped drop, so the file-manager lane cannot
+  // satisfy the check on its behalf.
+  // biome-ignore lint/suspicious/noExplicitAny: fixture editing of parsed YAML
+  const dropIn = (jobIds: string[], match: (s: any) => boolean) =>
+    withWf(SC, (d) => {
+      for (const id of jobIds)
+        d.jobs[id].steps = (d.jobs[id].steps ?? []).filter((s: unknown) => !match(s));
+    });
+  const subjects = (f: Finding[]) => f.filter((x) => x.subject.includes(`#${PUBLISH}`));
+  it('no Trivy step in the self-contained jobs reds', () => {
+    const m = dropIn([SCAN, PUBLISH], (s) => /trivy-action/.test(s.uses ?? ''));
+    expect(checks(subjects(auditImageLanes(m, real)))).toContain('trivy');
+  });
+  it('no SBOM step in the self-contained jobs reds', () => {
+    const m = dropIn(
+      [SCAN, PUBLISH],
+      (s) =>
+        /sbom-action/.test(s.uses ?? '') || /\b(syft|cyclonedx-npm)\b/.test(String(s.run ?? '')),
+    );
+    expect(checks(subjects(auditImageLanes(m, real)))).toContain('sbom');
+  });
+  it('no cosign sign/attest step in the publish job reds', () => {
+    const m = dropIn([PUBLISH], (s) => /\bcosign\s+(sign|attest)\b/.test(s.run ?? ''));
+    expect(checks(subjects(auditImageLanes(m, real)))).toContain('cosign');
+  });
+  it('the publish job verifies the signature it just made', () => {
+    const steps = (jobsOf(wfNamed(SC))[PUBLISH]?.steps as Array<Record<string, unknown>>) ?? [];
+    expect(steps.some((s) => /cosign-verify\.sh|cosign\s+verify\b/.test(String(s.run ?? '')))).toBe(
+      true,
+    );
+  });
+  it('publish runs only on main (the publish channel), never on PR or merge_group', () => {
+    const job = jobsOf(wfNamed(SC))[PUBLISH] as Record<string, unknown>;
+    expect(String(job.if)).toMatch(/refs\/heads\/main/);
+    expect(String(job.if)).not.toMatch(/pull_request|merge_group/);
+  });
+});
+
 // ───────────────────────── fixtures: lane engine ─────────────────────────
 
 type Any = Record<string, unknown>;

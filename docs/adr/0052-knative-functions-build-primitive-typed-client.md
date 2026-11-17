@@ -157,10 +157,20 @@ only a *build* tool.
       Confirms Decision 10: the Bun gateway needs no Connect shim to reach gRPC-only, any-language
       backends. **Still open:** trailer survival through the **Knative activator cold path** (a proxy
       property, not a Bun one — needs a live/kind cluster).
-- [ ] **Trailer survival:** verify `grpc-status` HTTP/2 trailers survive the **through-activator cold
+- [x] **Trailer survival:** verify `grpc-status` HTTP/2 trailers survive the **through-activator cold
       path**; the client treats a missing trailer as fail-closed non-retryable.
-      *Not ticked (2026-11-17), open until S7-3:* the z10 `trailers` phase is Connect-only; it does not
-      test `grpc-status` trailers (`packages/grpc/e2e/z10-zone-functions-kind/run.sh:285-288`).
+      *Ticked (2026-11-17), scope: (a) verified on kind for the Go function (connect-go) through the
+      Knative activator at scale-to-zero; (b) fail-closed, i.e. a missing, mismatched or timed-out
+      status fails the phase; non-retryable by construction (connect-es does not retry unary calls).*
+      Evidence: CI run https://github.com/AhmedElBanna80/knext/actions/runs/44124762843 (integration/v2,
+      Z7 job, Z10 step). Its log shows "grpc-status 0 from the trailer" on a write to the function scaled
+      to zero, and "NotFound ... grpc-status 5 from the trailer", with the scale-from-zero and warm calls
+      agreeing. Code: `phase_grpctrailers` (`packages/grpc/e2e/z10-zone-functions-kind/run.sh:352-375`)
+      and its fail-closed `grpc_probe` (`run.sh:317-335`), which reads the status through
+      `packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts:65-109` (`createGrpcTransport`;
+      the trailer is read at `:72`, the 30 s timeout default at `:95`). Not covered: Rust is not
+      separately run (trailer survival is a proxy property, not a language one); no OKE run.
+      The earlier Connect-only `trailers` phase (`run.sh:285-288`) remains and is not the evidence.
 - [ ] **Per-language token interceptor:** each template ships the fail-closed token-verifying server
       interceptor; a **mutation-proof test** (delete the check → red), including a **flannel/no-
       NetworkPolicy** case proving the interceptor — not the CNI — is the control.

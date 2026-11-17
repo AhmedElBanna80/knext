@@ -48,11 +48,16 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     covers, including `tests/z7-identity-kind-e2e-lane.test.ts`. The real-time rotation's
     property (c) is decided by `rotation-verdict.ts` from probes `run.sh` records
     (unit-tested without a cluster in `src/__tests__/z7-rotation-verdict.test.ts`); the
+    `rotation` phase (`z7-identity-kind/run.sh:952`, dispatch/weekly only) is decided by that verdict; the
     workflow runs that phase weekly on a schedule and on the `rotation_realtime` dispatch input.
   - e2e/z10-zone-functions-kind (no EGM.md): the Z10 zone-functions lane on kind
     (cold path, Connect trailers, gRPC-protocol `grpc-status` trailers via `zone-caller/grpc-probe.ts` (tested cluster-free by `src/__tests__/z10-grpc-trailer-probe.test.ts`), zone and function both at zero, rollout with one zone
     revision per served-version bump, sovereignty, cross-zone refusal, wake-ahead). The same workflow
-    runs its `run.sh` after Z7, on the same cluster. Its `wake` phase uses a
+    runs its `run.sh` after Z7, on the same cluster, on push, PR and normal dispatch runs; it is
+    skipped on the weekly scheduled or `rotation_realtime` dispatch run
+    (`.github/workflows/z7-identity-kind-e2e.yml:171`). Its `grpctrailers` phase
+    (`z10-zone-functions-kind/run.sh:352`) proves the gRPC `grpc-status` trailer survives the
+    activator, fail-closed. Its `wake` phase uses a
     second zone image, `zone-caller-wake`, built by `../z7-identity-kind/zone-caller/build.ts --wake`,
     which starts the stand-in zone with knext's wake-ahead preload. Guard:
     `tests/z10-zone-functions-kind-lane.test.ts`.

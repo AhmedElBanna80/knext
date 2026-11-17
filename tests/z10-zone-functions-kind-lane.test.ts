@@ -135,7 +135,11 @@ describe('the gRPC status trailer survives the cold activator path (Z11 / D15)',
   it('the client speaks the gRPC protocol over HTTP/2, never Connect', () => {
     expect(probeSrc).toContain('createGrpcTransport');
     expect(probeSrc).not.toContain('createConnectTransport');
-    expect(probeSrc).toMatch(/httpVersion: '2'/);
+    // createGrpcTransport is HTTP/2-only (it has no httpVersion option); the probe
+    // also owns its HTTP/2 session, so the cold-path trailer is read off a real h2 stream.
+    expect(probeSrc).toContain('Http2SessionManager');
+    expect(probeSrc).toContain("from 'node:http2'");
+    expect(probeSrc).toContain('sessionManager: sessions');
     expect(serverSrc).toMatch(/case '\/example\/grpc':/);
     expect(serverSrc).toContain('grpcProbe(');
     // The lane's route is the gRPC one, and requires the reply to say so.

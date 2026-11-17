@@ -235,6 +235,27 @@ const MUTATIONS = [
     anchor: 'has_phase crosszone && phase_crosszone\n',
     replacement: '',
   },
+  {
+    id: 'H01',
+    subject: 'probe',
+    claim: 'the probe stops using the gRPC transport',
+    anchor: '  const transport = createGrpcTransport({',
+    replacement: '  const transport = createConnectTransport({',
+  },
+  {
+    id: 'H02',
+    subject: 'probe',
+    claim: 'the probe stops using its own HTTP/2 session manager',
+    anchor: '    sessionManager: sessions,\n',
+    replacement: '',
+  },
+  {
+    id: 'H03',
+    subject: 'probe',
+    claim: 'the probe no longer types its HTTP/2 stream from node:http2',
+    anchor: "from 'node:http2';",
+    replacement: "from 'node:http';",
+  },
 ];
 
 // The subjects are inline literals, not a shared constant: the lane's
@@ -242,7 +263,10 @@ const MUTATIONS = [
 const lane = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: 'tests/z10-zone-functions-kind-lane.test.ts',
-  subjects: { lane: 'packages/grpc/e2e/z10-zone-functions-kind/run.sh' },
+  subjects: {
+    lane: 'packages/grpc/e2e/z10-zone-functions-kind/run.sh',
+    probe: 'packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts',
+  },
 });
 
 console.log('=== mutation proof: Z8 BackendService scenarios in the Z10 lane (#2421) ===');

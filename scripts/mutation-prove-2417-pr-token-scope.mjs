@@ -205,8 +205,10 @@ const MUTATIONS = [
     id: 'D4',
     claim: 'supply-chain.yml build/scan job stops exporting the layout digest',
     subject: 'sc',
-    anchor: 'Trivy gate approved.\n      layout_sha256: ${{ steps.layout.outputs.sha256 }}\n',
-    replacement: 'Trivy gate approved.\n      layout_ref: ${{ steps.layout.outputs.sha256 }}\n',
+    anchor:
+      '      # its index down, so this one value names every byte the Trivy gate approved.\n      layout_sha256: ${{ steps.layout.outputs.sha256 }}\n',
+    replacement:
+      '      # its index down, so this one value names every byte the Trivy gate approved.\n      layout_ref: ${{ steps.layout.outputs.sha256 }}\n',
   },
   {
     id: 'D4b',

@@ -79,7 +79,6 @@ export async function grpcProbe(opts: GrpcProbeOptions): Promise<GrpcProbeResult
   const sessions = new ObservingSessionManager(opts.baseUrl);
   const transport = createGrpcTransport({
     baseUrl: opts.baseUrl,
-    httpVersion: '2',
     sessionManager: sessions,
     interceptors: [watch],
   });

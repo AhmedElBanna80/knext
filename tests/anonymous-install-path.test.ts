@@ -283,6 +283,16 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
     // And the admission path must actually answer (the install.yaml carries a
     // knative-serving ConfigMap that the webhook validates).
     expect(step).toContain('--dry-run=server');
+    // The probe targets the Knative ConfigMap in the knative-serving namespace.
+    expect(step).toMatch(/patch configmap\/config-network -n knative-serving[\s\S]*--dry-run=server/);
+    // Bounded retry that fails loudly rather than hanging or passing.
+    expect(step).toContain('seq 1 30');
+    expect(step).toContain('exit 1');
+    // Ordering: Knative install < wait < apply.
+    const install = wf.indexOf('- name: Install Knative Serving + Kourier');
+    expect(install).toBeGreaterThan(0);
+    expect(install).toBeLessThan(wait);
+    expect(wait).toBeLessThan(apply);
   });
 
   it('the published-bundle nightly retargets only off getknext-dev/knext, to operator-edge', () => {

@@ -89,7 +89,17 @@ kubectl wait --for=condition=Available --timeout=300s \
 ## 5 · Install the knext operator
 
 The operator is knext's control plane: it watches for `NextApp` resources and turns each one into
-a running, scale-to-zero Knative service. One bundle installs it:
+a running, scale-to-zero Knative service. One bundle installs it.
+
+Knative's admission webhook can take a few seconds longer than its Deployment to start answering.
+Wait until it has an address, or the install below can fail with `connection refused`:
+
+```bash title="shell"
+kubectl wait --for=jsonpath='{.subsets[0].addresses[0]}' --timeout=120s \
+  -n knative-serving endpoints/webhook
+```
+
+Then apply the bundle:
 
 ```bash title="shell"
 kubectl apply --server-side -f https://github.com/getknext-dev/knext/releases/download/operator-latest/install.yaml

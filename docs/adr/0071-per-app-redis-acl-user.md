@@ -618,6 +618,23 @@ scope (they hold the provisioner credential by design).
     deletes: it is what lets a platform admin tell a rebuilt cluster's orphans from a live second
     cluster before sweeping them, and the docs carry the `clusterId`-before-rebuild step.
 
+11. **Kind exit evidence (recorded; no decision changes).** The drill
+    `packages/kn-next-operator/test/redis-acl-kind-drill.sh` ran green on a local kind cluster
+    (Redis `e7723ff…`, operator built from this tree): legs L1-L9, including L4b/L4c/L7b, 53 passed, 0 failed,
+    1m50s. Met by it, each cited to the leg that asserts it:
+    - Status condition 4 (no isolation claim while the shared credential is live; observed only
+      after both probes are refused): L1 (`redis-acl-kind-drill.sh:256`), L5 (`:349`), L9 (`:397`,
+      the `requirepass` Redis keeps reporting `SharedCredentialLive`).
+    - Status condition 5 (after `ACL SETUSER default off`, the old shared URL is refused on zone A's
+      keys): L5 (`:349`), run from zone B's probe pod.
+    - Action item 1's kind acceptance, **in part**: two apps on one Redis, A refused `NOPERM` on B's
+      keys (L2, `:282`), the password only in the Secret (L3, `:296`), delete sweeps keys and user
+      (L8, `:389`).
+    Evidence: local kind run 2026-11-17 (to be replaced by the CI run link once
+    `.github/workflows/redis-acl-kind-drill.yml` has run on `integration/v2`). **Not met by this
+    run, and left open:** the ISR and `'use cache'` paths including the outage replay (the drill
+    does not cover them; `scripts/redis-acl-spike.mjs` runs them in the live lane).
+
 ## Amendment (2026-11-08, design review of the #2396 build, round 4): the command rule and the wording that follows it
 
 The build's review found three places where the text said less than the code does. The code is the

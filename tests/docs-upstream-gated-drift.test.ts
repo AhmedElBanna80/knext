@@ -44,36 +44,63 @@ const rel = (p: string): string => relative(REPO_ROOT, p);
 const STALE_BLANKET =
   /upstream-gated|not\s+yet\s+(?:adapter-standardi[sz]able|standardi[sz]ed\s+for\s+adapters)|not\s+yet\s+stabili[sz]ed\s+for\s+adapters/i;
 
-/** A positive support claim about `'use cache'`. */
-const USE_CACHE_CLAIM = /'use cache'/;
-const SUPPORT_WORD = /\b(?:supported|backed\s+by|support\s+for)\b/i;
-const NEGATED = /\bnot\s+(?:yet\s+)?(?:supported|backed)|\bunsupported\b/i;
-const CAVEAT = /not\s+yet\s+covered\s+by\s+the\s+compatibility/i;
-
 /**
- * Units that claim `'use cache'` support without the caveat. A unit is a table row, or a sentence
- * of prose (a paragraph's wrapped lines rejoined). The caveat may sit anywhere in the same
- * paragraph/row, so a caveat sentence next to the claim clears it.
+ * A capability subject: `'use cache'`, Cache Components, PPR / Partial Prerendering. A sentence
+ * naming one of these AND asserting a positive state is a claim that needs the coverage caveat.
  */
-function uncaveatedUseCacheClaims(text: string): string[] {
+const SUBJECT = /'use cache|Cache Components|\bPPR\b|Partial Prerendering/i;
+const CLAIM_WORD =
+  /\b(?:supported|backed\s+by|backs|support\s+for|shared|works|implemented|is\s+a\s+hit)\b/i;
+const NEGATED =
+  /\bnot\s+(?:yet\s+)?(?:supported|backed|covered|implemented|shared)|\bunsupported\b|\bno\s+parity\s+claim/i;
+const CAVEAT = /not\s+yet\s+covered\s+by\s+the\s+(?:official\s+)?(?:Next\.js\s+)?compatibility/i;
+
+/** "does not implement" / "architectural exclusion" asserted for these capabilities. */
+const EXCLUSION =
+  /(?:does\s+not|doesn't|do\s+not)\s+implement|architectural(?:ly)?\s+exclusions?|architecturally\s+out\s+of\s+reach/i;
+
+/** Sentences of a page; a table row is one sentence-like unit, list bullets split too. */
+function sentences(text: string): string[] {
   const out: string[] = [];
   for (const para of text.split(/\n\s*\n/)) {
-    const isTable = para.includes('\n|') || para.trimStart().startsWith('|');
-    const groups = isTable ? para.split('\n') : [para.replace(/\s*\n\s*(?:>\s*)?/g, ' ')];
-    for (const group of groups) {
-      if (CAVEAT.test(group)) continue;
-      for (const sentence of group.split(/(?<=[.!?])\s+/)) {
-        if (
-          USE_CACHE_CLAIM.test(sentence) &&
-          SUPPORT_WORD.test(sentence) &&
-          !NEGATED.test(sentence)
-        ) {
-          out.push(sentence);
-        }
-      }
+    const isTable = para.trimStart().startsWith('|') || para.includes('\n|');
+    if (isTable) {
+      for (const row of para.split('\n'))
+        for (const cell of row.split(/(?<!\\)\|/)) out.push(...cell.split(/(?<=[.!?])\s+/));
+      continue;
+    }
+    for (const item of para.split(/\n(?=\s*(?:[-*]|\d+\.)\s)/)) {
+      const flat = item.replace(/\s*\n\s*(?:>\s*)?/g, ' ');
+      out.push(...flat.split(/(?<=[.!?])\s+/));
     }
   }
   return out;
+}
+
+/** Claims about these capabilities with no caveat in the same sentence or the next one. */
+function uncaveatedClaims(text: string): string[] {
+  const ss = sentences(text);
+  const out: string[] = [];
+  ss.forEach((s, i) => {
+    if (/^\s*#{1,6}\s/.test(s)) return; // a heading names a section; its body carries the caveat
+    if (!SUBJECT.test(s) || !CLAIM_WORD.test(s) || NEGATED.test(s)) return;
+    if (CAVEAT.test(s) || CAVEAT.test(ss[i + 1] ?? '')) return;
+    out.push(s);
+  });
+  return out;
+}
+
+/** Sentences that call these capabilities an exclusion or "not implemented". */
+function exclusionClaims(text: string): string[] {
+  // Proximity, not co-occurrence: a long table row can mention both far apart without linking them.
+  const near = (s: string): boolean => {
+    for (const m of s.matchAll(new RegExp(EXCLUSION.source, 'gi'))) {
+      const at = m.index ?? 0;
+      if (SUBJECT.test(s.slice(Math.max(0, at - 120), at + m[0].length + 120))) return true;
+    }
+    return false;
+  };
+  return sentences(text).filter(near);
 }
 
 describe('scan coverage', () => {
@@ -97,15 +124,61 @@ describe('scan coverage', () => {
 describe('no page carries the stale blanket claim', () => {
   for (const f of FILES) {
     it(rel(f), () => {
-      expect(read(f)).not.toMatch(STALE_BLANKET);
+      // the unchanged ⛔ legend line legitimately uses the phrase; everything else may not
+      const body = read(f)
+        .split('\n')
+        .filter((l) => !l.startsWith('| ⛔ | **Upstream-gated**'))
+        .join('\n');
+      expect(body).not.toMatch(STALE_BLANKET);
     });
   }
 });
 
-describe("no page claims 'use cache' is supported without the coverage caveat", () => {
+describe("no page claims 'use cache' / Cache Components / PPR works without the caveat", () => {
   for (const f of FILES) {
     it(rel(f), () => {
-      expect(uncaveatedUseCacheClaims(read(f))).toEqual([]);
+      expect(uncaveatedClaims(read(f))).toEqual([]);
+    });
+  }
+});
+
+describe('no page calls PPR / Cache Components "not implemented" or an architectural exclusion', () => {
+  for (const f of FILES) {
+    it(rel(f), () => {
+      expect(exclusionClaims(read(f))).toEqual([]);
+    });
+  }
+});
+
+describe('the marker legend is never redefined', () => {
+  // Verbatim from the integration/v2 base: the whole Marker/Meaning table, exact lines.
+  const COMMON = [
+    '| Marker | Meaning |',
+    '|---|---|',
+    '| ✅ | **Supported** — backed by a red-on-fail check (the per-PR `compat-smoke` gate) or test-covered source on disk. |',
+  ];
+  const TAIL = [
+    '| ❌ | **Unsupported / unverified** — no working implementation or no evidence; treat as a gap. |',
+    '| ⛔ | **Upstream-gated** — architecturally out of reach today (global edge, not yet adapter-standardizable upstream). |',
+  ];
+  const LEGENDS: Record<string, string[]> = {
+    'docs/compat-matrix.md': [
+      ...COMMON,
+      '| ⚠️ | **Partial** — implemented but **not** guarded by a hard correctness check, or with a known caveat (see Notes). Do not rely on it as "verified." |',
+      ...TAIL,
+    ],
+    'apps/docs/content/docs/compat-matrix.mdx': [
+      ...COMMON,
+      '| ⚠️ | **Partial** — implemented but **not** guarded by a hard correctness check, or with a known caveat. Do not rely on it as "verified." |',
+      ...TAIL,
+    ],
+  };
+  for (const [f, legend] of Object.entries(LEGENDS)) {
+    it(f, () => {
+      const lines = read(resolve(REPO_ROOT, f)).split('\n');
+      const at = lines.indexOf(legend[0]);
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(lines.slice(at, at + legend.length)).toEqual(legend);
     });
   }
 });

@@ -210,6 +210,120 @@ describe('operator and app lanes: removing a gate from the REAL workflows reds',
   });
 });
 
+describe('self-contained single-exec image lane (supply-chain.yml)', () => {
+  const SC = 'supply-chain.yml';
+  const PUBLISH = 'self-contained-image-publish';
+  const SCAN = 'self-contained-image-supply-chain';
+  const laneNames = () => discoverImageLanes(wfs).lanes.map((l) => `${l.wf.file}#${l.id}`);
+
+  it('is discovered as a publish lane, by behaviour', () => {
+    expect(laneNames()).toContain(`${SC}#${PUBLISH}`);
+  });
+  it('has enforcing Trivy, SBOM and cosign (no findings for this lane)', () => {
+    expect(auditImageLanes(wfs, real).filter((f) => f.subject.includes(`#${PUBLISH}`))).toEqual([]);
+  });
+  // The two jobs belong to this image only, so a step dropped from them (not from
+  // the file-manager jobs) must red. Scoped drop, so the file-manager lane cannot
+  // satisfy the check on its behalf.
+  // biome-ignore lint/suspicious/noExplicitAny: fixture editing of parsed YAML
+  const dropIn = (jobIds: string[], match: (s: any) => boolean) =>
+    withWf(SC, (d) => {
+      for (const id of jobIds)
+        d.jobs[id].steps = (d.jobs[id].steps ?? []).filter((s: unknown) => !match(s));
+    });
+  const subjects = (f: Finding[]) => f.filter((x) => x.subject.includes(`#${PUBLISH}`));
+  it('no Trivy step in the self-contained jobs reds', () => {
+    const m = dropIn([SCAN, PUBLISH], (s) => /trivy-action/.test(s.uses ?? ''));
+    expect(checks(subjects(auditImageLanes(m, real)))).toContain('trivy');
+  });
+  it('no SBOM step in the self-contained jobs reds', () => {
+    const m = dropIn(
+      [SCAN, PUBLISH],
+      (s) =>
+        /sbom-action/.test(s.uses ?? '') || /\b(syft|cyclonedx-npm)\b/.test(String(s.run ?? '')),
+    );
+    expect(checks(subjects(auditImageLanes(m, real)))).toContain('sbom');
+  });
+  it('no cosign sign/attest step in the publish job reds', () => {
+    const m = dropIn([PUBLISH], (s) => /\bcosign\s+(sign|attest)\b/.test(s.run ?? ''));
+    expect(checks(subjects(auditImageLanes(m, real)))).toContain('cosign');
+  });
+  it('the publish job verifies the signature it just made', () => {
+    const steps = (jobsOf(wfNamed(SC))[PUBLISH]?.steps as Array<Record<string, unknown>>) ?? [];
+    expect(steps.some((s) => /cosign-verify\.sh|cosign\s+verify\b/.test(String(s.run ?? '')))).toBe(
+      true,
+    );
+  });
+  // Tie SBOM, Trivy and attest to the image that was built: the guard above only
+  // proves the steps exist, not that they look at the same bytes.
+  type Step = Record<string, unknown>;
+  const stepsOf = (id: string, wf: Workflow = wfNamed(SC)) =>
+    (jobsOf(wf)[id]?.steps as Step[] | undefined) ?? [];
+  const wth = (s: Step | undefined) => (s?.with ?? {}) as Record<string, string>;
+  const parts = (wf: Workflow = wfNamed(SC)) => {
+    const steps = stepsOf(SCAN, wf);
+    const build = steps.find((s) => /build-push-action/.test(String(s.uses ?? '')));
+    const view = steps.find((s) => /SBOM view/.test(String(s.name ?? '')));
+    const sbom = steps.find((s) => /sbom-action/.test(String(s.uses ?? '')));
+    const trivy = steps.find((s) => /trivy-action/.test(String(s.uses ?? '')));
+    const dest = /type=oci,dest=([^,\s]+)/.exec(wth(build).outputs ?? '')?.[1];
+    const attest = stepsOf(PUBLISH, wf)
+      .map((s) => String(s.run ?? ''))
+      .join('\n');
+    return { dest, view, sbom, trivy, attest };
+  };
+  it('the SBOM, Trivy and attest targets are all derived from the built image', () => {
+    const { dest, view, sbom, trivy, attest } = parts();
+    expect(dest).toBeTruthy();
+    if (!dest) throw new Error('no oci dest derived from the build step');
+    // The SBOM scans a view whose blobs are symlinked from the build's dest...
+    const viewRun = String(view?.run ?? '');
+    expect(viewRun).toContain(`$(pwd)/${dest}/blobs`);
+    const viewDir = /mkdir (\S+)/.exec(viewRun)?.[1];
+    expect(viewDir).toBeTruthy();
+    expect(wth(sbom).image).toBe(`oci-dir:${viewDir}`);
+    // ...Trivy scans the dest itself...
+    expect(wth(trivy).input).toBe(dest);
+    // ...and cosign attests exactly the SBOM the sbom step wrote.
+    const out = wth(sbom)['output-file'];
+    expect(out).toBeTruthy();
+    expect(attest).toMatch(new RegExp(`cosign attest .*--predicate ${out}\\b`));
+  });
+  it('mutation: pointing the SBOM at another path reds the tie', () => {
+    const m = withWf(SC, (d) => {
+      const st = d.jobs[SCAN].steps.find((x: Step) => /sbom-action/.test(String(x.uses)));
+      st.with.image = 'oci-dir:elsewhere';
+    });
+    const { sbom, view } = parts(wfNamed(SC, m));
+    const viewDir = /mkdir (\S+)/.exec(String(view?.run ?? ''))?.[1];
+    expect(wth(sbom).image).not.toBe(`oci-dir:${viewDir}`);
+  });
+  it('Trivy is advisory on PRs and enforcing exactly on main and integration/**', () => {
+    const { trivy } = parts();
+    expect(wth(trivy)['exit-code']).toBe('1');
+    const coe = String(trivy?.['continue-on-error']);
+    expect(coe).toContain("github.ref != 'refs/heads/main'");
+    expect(coe).toContain("!startsWith(github.ref, 'refs/heads/integration/')");
+    // The file-manager scan uses the identical gate, so the two cannot drift.
+    const fm = stepsOf('image-supply-chain').find((s) => /trivy-action/.test(String(s.uses)));
+    expect(String(fm?.['continue-on-error'])).toBe(coe);
+  });
+  it('the publish job verifies the SBOM attestation against the pushed digest, with identity constraints', () => {
+    const run = stepsOf(PUBLISH)
+      .map((s) => String(s.run ?? ''))
+      .join('\n');
+    expect(run).toMatch(/cosign verify-attestation\s+"\$\{IMAGE\}@\$\{DIGEST\}"/);
+    expect(run).toMatch(/verify-attestation[\s\S]*--type spdxjson/);
+    expect(run).toMatch(/--certificate-identity-regexp/);
+    expect(run).toMatch(/--certificate-oidc-issuer/);
+  });
+  it('publish runs only on main (the publish channel), never on PR or merge_group', () => {
+    const job = jobsOf(wfNamed(SC))[PUBLISH] as Record<string, unknown>;
+    expect(String(job.if)).toMatch(/refs\/heads\/main/);
+    expect(String(job.if)).not.toMatch(/pull_request|merge_group/);
+  });
+});
+
 // ───────────────────────── fixtures: lane engine ─────────────────────────
 
 type Any = Record<string, unknown>;

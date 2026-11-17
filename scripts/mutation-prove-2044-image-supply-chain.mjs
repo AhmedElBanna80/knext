@@ -130,8 +130,10 @@ const MUTATIONS = [
     id: 'S4',
     subject: 'app',
     claim: 'the app image is signed by mutable tag instead of digest',
-    anchor: 'cosign sign --yes "${IMAGE}@${DIGEST}"',
-    replacement: 'cosign sign --yes "${IMAGE}:${GITHUB_SHA}"',
+    anchor:
+      'cosign sign --yes "${IMAGE}@${DIGEST}"\n          cosign attest --yes --predicate sbom.spdx.json',
+    replacement:
+      'cosign sign --yes "${IMAGE}:${GITHUB_SHA}"\n          cosign attest --yes --predicate sbom.spdx.json',
   },
   {
     id: 'S5',

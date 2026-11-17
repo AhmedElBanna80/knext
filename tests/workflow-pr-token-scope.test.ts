@@ -206,6 +206,13 @@ const SPLITS = [
     gate: /github\.ref\s*==\s*'refs\/heads\/main'/,
   },
   {
+    file: 'supply-chain.yml',
+    build: 'self-contained-image-supply-chain',
+    publish: 'self-contained-image-publish',
+    layout: 'sc-image-oci',
+    gate: /github\.ref\s*==\s*'refs\/heads\/main'/,
+  },
+  {
     file: 'operator-supply-chain.yml',
     build: 'operator-image-supply-chain',
     publish: 'operator-image-publish',
@@ -311,7 +318,7 @@ for (const split of SPLITS) {
 
     it('no job outside the publish job holds a write grant', () => {
       for (const [id, job] of Object.entries(doc.jobs)) {
-        if (id === split.publish) continue;
+        if (SPLITS.some((o) => o.file === split.file && o.publish === id)) continue;
         expect(grantsOf(job.permissions ?? doc.permissions), `job ${id}`).toEqual([]);
       }
     });

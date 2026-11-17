@@ -54,6 +54,12 @@ const ALLOWLIST: AllowEntry[] = [
     step: /^Trivy scan BUILT image — FAIL on HIGH\/CRITICAL$/,
     reason: 'blocking gate on main and integration/*; advisory only on PRs (phased rollout)',
   },
+  {
+    workflow: 'supply-chain.yml',
+    job: 'self-contained-image-supply-chain',
+    step: /^Trivy scan self-contained image — HIGH\/CRITICAL \(advisory on PRs, enforcing on main\)$/,
+    reason: 'blocking gate on main and integration/*; advisory only on PRs (phased rollout)',
+  },
 ];
 
 interface Tolerated {

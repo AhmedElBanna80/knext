@@ -51,3 +51,15 @@ They are not templated: each records the cluster one study ran on and starts wit
 - `spec.nodeName` on the agent and harness pods to node names from `kubectl get nodes`, and put the
   same names in the `agentPods` map (or rely on the `--agent-label` lookup);
 - the kubectl context in any `kubectl --context ...` example comment to yours.
+
+## Pre-wake A/B
+
+`prewake-ab.sh` measures cold-start latency with and without a pre-wake GET (a plain GET through the
+activator, from a client pod) sent a fixed lead before the request, and reports each lead's delta relative to a cold wake. On kind:
+
+```sh
+scripts/bench-cold-start-phases/prewake-ab.sh --context kind-<name> --setup --rounds 6
+```
+
+It refuses a non-kind context without `--allow-non-kind`. The OKE procedure is the founder's
+runbook, [`docs/benchmarks/prewake-ab-oke-runbook.md`](../../docs/benchmarks/prewake-ab-oke-runbook.md).

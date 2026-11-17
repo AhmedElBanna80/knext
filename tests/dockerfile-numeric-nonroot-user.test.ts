@@ -321,6 +321,12 @@ export const IMAGE_TABLE: Record<string, Disposition> = {
       user: '65532:65532',
       note: 'bench image (bun runtime, turbopack build, serves on 3000) for the bunexec A/B and cpu-boost runs',
     },
+  // --- kind-only bench fixtures: plain Knative Service + client Pod, not a NextApp/BackendService
+  'docker.io/library/node@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a':
+    {
+      kind: 'infra',
+      note: 'crane config 2026-11-17: User is null (root). The pre-wake A/B harness uses it as a throwaway delayed-boot server and a sleep client on kind only; no knext-rendered pod, so no runAsNonRoot to opt out of',
+    },
   // --- apps, root, with the opt-out exercised live
   'ghcr.io/knative/helloworld-go@sha256:c2b7412fbea6f1ef24a0cac60698e88df7ae3c4278e42d0cb34fe7d4b2641bba':
     {

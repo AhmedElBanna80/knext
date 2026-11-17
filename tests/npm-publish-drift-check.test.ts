@@ -14,6 +14,7 @@ import {
   runDriftCheck,
   tagRulesetCoversVStar,
 } from '../scripts/lib/npm-publish-drift-check.mjs';
+import { PUBLISH_LANES } from '../scripts/publish-lane-guard.mjs';
 
 /**
  * #1638 item 2: nightly detector for the `npm-publish` environment's missing
@@ -582,8 +583,11 @@ describe('evaluateBranchPolicy', () => {
   });
 
   it('passes the exact lane allowlist, taken from publish-lane-guard', () => {
-    // `release/1.x` is deliberately absent: it is a prepared lane, not yet publishable (R4p).
-    const names = ['main', 'integration/v1.3', 'integration/v1.4', 'integration/v2'];
+    // Derived from the guard itself, so the pin cannot drift from the real allowlist.
+    // `release/1.x` is a prepared lane (R4p), absent from PUBLISH_LANES, hence from the policy.
+    const names = [...PUBLISH_LANES.keys()].map((ref) => ref.replace(/^refs\/heads\//, ''));
+    expect(names).toContain('main');
+    expect(names).not.toContain('integration/v1.4');
     const r = evaluateBranchPolicy(
       custom,
       names.map((name) => ({ name, type: 'branch' })),

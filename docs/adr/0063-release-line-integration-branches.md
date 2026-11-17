@@ -208,3 +208,19 @@ table described a branch that does not exist.
 
 - The lane table matches the repository. The publish allowlist still lists a lane with no branch,
   which is inert until someone creates that branch.
+
+### Correction (2026-11-17) — the unused lane is removed from the allowlist
+
+The Decision text above is left as written; this section records what changed afterwards.
+
+The amendment above called the allowlisted `integration/v1.4` entry harmless because no such branch
+exists. That reasoning fails the moment anyone creates the branch: the allowlist matches the ref
+name, so a new `integration/v1.4` could be dispatched to publish. `refs/heads/integration/v1.4` has
+been removed from `PUBLISH_LANES` (`scripts/publish-lane-guard.mjs`).
+
+`PUBLISH_LANES` now admits exactly three lanes: `main`, `integration/v1.3` and `integration/v2`.
+`release/1.x` is not in `PUBLISH_LANES`: it is a prepared lane (`PREPARED_LANES`), recognised by the
+guards but not yet publishable, so the "Publish allowlist" bullet's mention of it describes the
+intended end state, not the current allowlist. The guard refuses a dispatch from
+`refs/heads/integration/v1.4` (`tests/publish-lane-guard.test.ts`), and re-adding the entry turns
+that test red.

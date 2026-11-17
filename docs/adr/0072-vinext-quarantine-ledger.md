@@ -22,8 +22,9 @@ ledgers bound what may be reclassified, and both are vinext-only (`lane: bun-vin
 | **Structural-gap** | `test/compat-vinext-structural-gaps.json` | `STRUCTURAL_FILE_CAP = 41` (`scripts/compat-vinext-structural-gaps.mjs:61`) | **39 files** | `STRUCTURAL_MAX_REVIEW_DAYS = 92` (`:121`); `gap.reviewBy` is 2027-01-08, `recorded` 2026-10-09 |
 
 The counts were read by parsing both JSON files at the commit that adds this ADR (2026-11-17). The two
-ledgers share no file (0 overlap), so **47 distinct files** are reclassified today. The v2 plan's
-"49 expected" (`.claude/plans/v2-plan-rev4.md:260`) is the structural ledger's original count; it was
+ledgers share no file (0 overlap), so **47 distinct files** are reclassified today. The v2 release
+plan's exit criterion V0a reads: "cap frozen at the actual quarantined count at V0 merge (49 expected),
+ratchet down only". That "49 expected" is the structural ledger's original count; it was
 lowered to 41 after the vinext 1.1.0 measurement (the ledger's own `$comment`) and holds 39 now.
 
 Where the bounds stand today:

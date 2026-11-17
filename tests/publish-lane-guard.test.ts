@@ -67,7 +67,6 @@ describe('the lane map is the one place a lane major lives', () => {
     expect(Object.fromEntries(PUBLISH_LANES)).toEqual({
       'refs/heads/main': 1,
       'refs/heads/integration/v1.3': 1,
-      'refs/heads/integration/v1.4': 1,
       'refs/heads/integration/v2': 2,
       // `release/1.x` is a PREPARED lane (recognised, not publishable) until R4:
       // see tests/publish-lane-guard-prepared.test.ts.
@@ -315,6 +314,21 @@ describe('checkLaneMajor — the computed major must match the lane', () => {
   });
 });
 
+describe('integration/v1.4 is not a publish lane (the 1.4 line is main)', () => {
+  const V14 = 'refs/heads/integration/v1.4';
+  it('resolveLane refuses it and recognisedLane does not know it', () => {
+    expect(PUBLISH_LANES.has(V14)).toBe(false);
+    expect(resolveLane(V14).ok).toBe(false);
+    expect(recognisedLane(V14)).toBeNull();
+  });
+  it('`ref` and `major` CLI modes exit 1 for a dispatch from it', () => {
+    const ref = runGuard(['ref', '--ref', V14]);
+    expect(ref.status).toBe(1);
+    expect(ref.out).toContain('integration/v1.4');
+    expect(runGuard(['major', '--ref', V14, '--root', REPO_ROOT]).status).toBe(1);
+  });
+});
+
 describe('CLI exit codes (the workflow branches on these, never on output)', () => {
   it('`ref` exits 0 for main and 1 for integration/v1-coldstart and a scratch branch', () => {
     expect(runGuard(['ref', '--ref', 'refs/heads/main']).status).toBe(0);
@@ -489,7 +503,6 @@ describe('integration/v2 pre-mode lane (#2038, v2 task R3a)', () => {
     'refs/heads/main',
     'refs/heads/release/1.x',
     'refs/heads/integration/v1.3',
-    'refs/heads/integration/v1.4',
     'refs/heads/release/v1.3.0',
   ])('checkPreMode REDS %s when pre.json exists, and says how to fix it', (ref) => {
     const problems = checkPreMode({ lane: laneOf(ref), pre: { mode: 'pre', tag: 'next' } });

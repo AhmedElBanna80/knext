@@ -66,7 +66,6 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const PUBLISH_LANES = new Map([
   ['refs/heads/main', 1],
   ['refs/heads/integration/v1.3', 1],
-  ['refs/heads/integration/v1.4', 1],
   ['refs/heads/integration/v2', 2],
 ]);
 

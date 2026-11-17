@@ -158,7 +158,7 @@ produced the accidental `2.0.0` computation from a stale pre-mode marker on 242 
 - **Forward-merge discipline:** the newest 1.x line (later `release/1.x`) is merged into
   `integration/v2` before every 2.0 release candidate, so no 1.x fix is missing from 2.0.
 - **Publish allowlist:** a publish may run only from an exact, glob-free ref list (`main`,
-  `integration/v1.3`, `integration/v1.4`, `integration/v2`, `release/1.x`), with a runtime check that
+  `integration/v1.3`, `integration/v2`, `release/1.x`), with a runtime check that
   the computed major matches the lane's expected major. Adding a lane is a reviewed edit to that
   list. Moving `latest` or `latest-1` needs a required reviewer on a separate environment.
 - **Ordering:** `2.0.0-rc.1` does not publish until 1.4.0 is released, so the deprecation notices
@@ -199,12 +199,18 @@ table described a branch that does not exist.
   2026-10-08 and 1.3.0 GA on 2026-10-09 (13:04 UTC); the 1.4 work merged to `main` from 2026-10-09
   23:31 UTC onward.
 - **Not decided here, left to the maintainer:** whether `next-1.4` is still needed as a dist-tag,
-  and whether `refs/heads/integration/v1.4` should be removed from `PUBLISH_LANES`
-  (`scripts/publish-lane-guard.mjs`). Both are publish-path policy. Keeping the unused lane in the
-  allowlist is harmless (no such branch exists, so nothing can publish from it), and removing it is a
-  reviewed edit to the publish guard and its tests.
+  (a publish-path policy). `refs/heads/integration/v1.4` has since been removed from
+  `PUBLISH_LANES` (`scripts/publish-lane-guard.mjs`); see the correction below.
 
 ### Consequences
 
-- The lane table matches the repository. The publish allowlist still lists a lane with no branch,
-  which is inert until someone creates that branch.
+- The lane table matches the repository.
+
+### Correction (2026-11-17) — the unused lane is removed from the allowlist
+
+The first version of this amendment called the allowlisted `integration/v1.4` entry harmless because
+no such branch exists. That reasoning fails the moment anyone creates the branch: the allowlist
+matches the ref name, so a new `integration/v1.4` could be dispatched to publish. The entry is
+removed. The guard now refuses a dispatch from `refs/heads/integration/v1.4`
+(`tests/publish-lane-guard.test.ts`), and re-adding the entry turns that test red. This corrects
+the lane text only; no Decision above changes.

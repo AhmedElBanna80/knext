@@ -204,8 +204,15 @@ const MUTATIONS = [
     id: 'D4',
     claim: 'supply-chain.yml build/scan job stops exporting the layout digest',
     subject: 'sc',
-    anchor: '      layout_sha256: ${{ steps.layout.outputs.sha256 }}\n',
-    replacement: '      layout_ref: ${{ steps.layout.outputs.sha256 }}\n',
+    anchor: 'Trivy gate approved.\n      layout_sha256: ${{ steps.layout.outputs.sha256 }}\n',
+    replacement: 'Trivy gate approved.\n      layout_ref: ${{ steps.layout.outputs.sha256 }}\n',
+  },
+  {
+    id: 'D4b',
+    claim: 'supply-chain.yml self-contained build/scan job stops exporting the layout digest',
+    subject: 'sc',
+    anchor: '    outputs:\n      layout_sha256: ${{ steps.layout.outputs.sha256 }}\n',
+    replacement: '    outputs:\n      layout_ref: ${{ steps.layout.outputs.sha256 }}\n',
   },
   {
     id: 'L1',

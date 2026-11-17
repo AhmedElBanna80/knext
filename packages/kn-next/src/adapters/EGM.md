@@ -518,7 +518,7 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   - `non_canonical_path`: the raw request path is missing or not canonical.
   - `excluded_path`: the path is undecodable, under `/api/cache`, or under
     `KNEXT_CDN_EXCLUDE_PATHS`.
-  - `routing_artifact_missing`: no routing artifact is loaded.
+  - `routing_artifact_missing`: no usable routing artifact: missing, corrupt or unparseable.
   - `middleware_matched`: the path is matched by middleware and is not under
     `KNEXT_CDN_INCLUDE_PATHS` (`includePaths` overrides only the middleware
     rule).

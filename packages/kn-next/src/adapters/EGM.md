@@ -499,24 +499,45 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
 - `cdn-edge.cjs:loadCdnConfig` returns `null` unless the provider is a known
   row and the prefix matches `/^[0-9a-f]{12}$/`.
 - `decideEdge` caches at the edge only for GET/HEAD responses with status 200
-  and an `s-maxage`, and only when the request has no private, no-store,
-  no-cache, set-cookie, authorization or draft-mode marker.
+  and an `s-maxage`, and only when the response has no private, no-store,
+  no-cache or set-cookie, and the request has no authorization header or
+  draft-mode marker.
 - `decideEdge` returns `result: 'immutable'` (no edge headers, Next's own
   `Cache-Control` kept) for an `immutable` response, separately from a skip.
-- `decideEdge` fails closed (skips the edge) in all of these cases:
-  - a non-canonical or undecodable path, `/api/cache`, or a path under
-    `KNEXT_CDN_EXCLUDE_PATHS` (`excluded_path`);
-  - a missing routing artifact;
-  - a middleware-matched path, unless it is under `KNEXT_CDN_INCLUDE_PATHS`
-    (`includePaths` overrides only the middleware rule);
-  - the RSC rules: `rsc_without_rsc_param`, `rsc_param_without_rsc_header`,
-    `rsc_content_type_mismatch` and `rsc_not_query_keyed`;
-  - any request with a query string on a row whose cache key does not include
-    the query (`keysOnQuery: false`: CloudFront, Azure Front Door), reason
-    `query_not_query_keyed`, so two queries never share one edge entry;
-  - an unresolved or foreign build;
-  - no `_N_T_` tag among the request's own tags (`tags_missing`);
-  - tag overflow, or a zero TTL.
+- `decideEdge` fails closed: every refusal is a skip (`result: 'skipped'`) with
+  one of the reasons below, counted as
+  `knext_cdn_edge_decision_total{result="skipped",reason=…}`:
+  - `method`: the request is not GET or HEAD.
+  - `status`: the origin status is not 200.
+  - `no_shared_directive`: the origin `Cache-Control` has no `s-maxage`.
+  - `private_or_no_store`: the response `Cache-Control` has `private`,
+    `no-store` or `no-cache`.
+  - `set_cookie`: the response has a `Set-Cookie` header.
+  - `auth_or_draft`: the request has an `Authorization` header or a draft-mode
+    marker.
+  - `non_canonical_path`: the raw request path is missing or not canonical.
+  - `excluded_path`: the path is undecodable, under `/api/cache`, or under
+    `KNEXT_CDN_EXCLUDE_PATHS`.
+  - `routing_artifact_missing`: no routing artifact is loaded.
+  - `middleware_matched`: the path is matched by middleware and is not under
+    `KNEXT_CDN_INCLUDE_PATHS` (`includePaths` overrides only the middleware
+    rule).
+  - `rsc_without_rsc_param`: an RSC request without the RSC query parameter.
+  - `rsc_param_without_rsc_header`: the RSC query parameter without the RSC
+    request header.
+  - `rsc_content_type_mismatch`: the `Content-Type` is not `text/x-component`
+    for an RSC request, or is `text/x-component` for a non-RSC request.
+  - `rsc_not_query_keyed`: an RSC response on a row whose cache key does not
+    include the query.
+  - `query_not_query_keyed`: a request with a query string on a row whose cache
+    key does not include the query (`keysOnQuery: false`: CloudFront, Azure
+    Front Door), so two queries never share one edge entry.
+  - `build_id_unresolved`: the build id cannot be resolved, so there is no
+    build tag.
+  - `foreign_build_body`: the body was written by another build.
+  - `tags_missing`: no `_N_T_` tag among the request's own tags.
+  - `tag_overflow`: the tag set does not fit the row's limit.
+  - `zero_ttl`: the edge max-age would be zero.
 - The edge max-age is `min(s-maxage, htmlTtlSeconds)`.
 
 ### Supervisor and preloads

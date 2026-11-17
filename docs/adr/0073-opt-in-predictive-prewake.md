@@ -47,7 +47,8 @@ So the remaining large lever is time: start the pod before the request that need
   health URL. The request goes through the activator, so the function starts while the zone boots.
   It writes nothing to the cluster. On the Z10 kind lane it takes the zone's first call from
   609–804 ms (opted out) to 41–69 ms (opted in) across seven `integration/v2` runs; the margin is
-  566–738 ms, median 662 ms
+  566–738 ms, median 662 ms (all seven runs are committed in
+  [`z9-wake-margin-2026-11-17.jsonl`](../benchmarks/data/z9-wake-margin-2026-11-17.jsonl))
   ([run 43987101504](https://github.com/AhmedElBanna80/knext/actions/runs/43987101504): 55 ms
   against 659 ms).
 
@@ -56,35 +57,45 @@ Neither covers the unscheduled first visit to a zone that is at zero.
 ### Kind-relative evidence: how much lead does a pre-wake need?
 
 [`scripts/bench-cold-start-phases/prewake-ab.sh`](../../scripts/bench-cold-start-phases/prewake-ab.sh)
-(this ADR's harness) wakes a scale-to-zero Knative
-Service with and without a pre-wake fired a fixed lead before the request. The pre-wake sets
-`autoscaling.knative.dev/min-scale=1` on the revision's PodAutoscaler and removes it after the
-request. That is a measurement knob, not a product surface: the PodAutoscaler is Knative-internal.
-Measured on kind first: the same annotation on the **Revision** is not copied to an existing
-PodAutoscaler (no pod in 12 s), so a product surface cannot be a Revision annotation either.
+(this ADR's harness) wakes a scale-to-zero Knative Service with and without a pre-wake sent a fixed
+lead before the request. The pre-wake is the mechanism Decision 1 recommends: **one plain GET through
+the activator, sent from a client pod in the cluster, not awaited**; the measured GET follows
+`lead` ms later from the same pod, on its own connection. The harness writes nothing to the cluster
+for this arm.
 
 One run, 2026-11-17, kind cluster `knext-s7-11` (one node, Kubernetes v1.29.14, Knative Serving
 and Kourier v1.16.0), a stand-in target (a Node HTTP server that waits 300 ms before listening), the
-request timed inside a client pod, 6 rounds with the arm order rotated each round, every cycle from
-zero pods. Data: [`prewake-ab-kind-2026-11-17.jsonl`](../benchmarks/data/prewake-ab-kind-2026-11-17.jsonl).
+request timed inside the client pod, 8 rounds with the arm order rotated each round, every cycle from
+zero pods. Data: [`prewake-ab-kind-get-2026-11-17.jsonl`](../benchmarks/data/prewake-ab-kind-get-2026-11-17.jsonl).
 
-| Arm | n | Median (ms) | Range (ms) | Delta vs cold (ms) | Relative to cold |
-|---|---|---|---|---|---|
-| cold (no pre-wake) | 6 | 943 | 898–1443 | 0 | 1.00 |
-| pre-wake 500 ms ahead | 6 | 818 | 250–1060 | −126 | 0.87 |
-| pre-wake 1500 ms ahead | 6 | 50 | 44–57 | −893 | 0.05 |
-| pre-wake 3000 ms ahead | 6 | 47 | 43–49 | −896 | 0.05 |
+| Arm | n | Median (ms) | Range (ms) | Delta vs cold (ms) | Relative to cold | Verdict |
+|---|---|---|---|---|---|---|
+| cold (no pre-wake) | 8 | 1106 | 913–1644 | 0 | 1.00 | |
+| GET 500 ms ahead | 8 | 1051 | 492–1074 | −55 | 0.95 | not distinguishable from cold |
+| GET 1000 ms ahead | 8 | 568 | 518–632 | −538 | 0.51 | separated from cold |
+| GET 1500 ms ahead | 8 | 50 | 20–88 | −1056 | 0.05 | separated from cold |
+| GET 3000 ms ahead | 8 | 8 | 4–10 | −1098 | 0.01 | separated from cold |
 
-The shape: a lead shorter than the cold start helps only partly and unevenly (500 ms: two cycles
-near warm, four close to cold). Once the lead covers the cold start, the request costs what a warm
-one does (≈5% of cold here), and a longer lead buys nothing more. On kind the crossover sits between
-500 and 1500 ms; on OKE the cold start is ~1.6 s, so the lead needed there is expected to be longer.
-That is the number the OKE A/B must produce.
+The shape: a GET sent 500 ms ahead is **not distinguishable from cold** here (its range lies inside
+cold's). At 1000 ms the request still pays about half of the cold start, and a pre-wake hides less
+than its lead (about 540 ms of a 1000 ms lead): the wake does not start the instant the GET leaves.
+Only at 1500 ms, about 1.4 times this rig's cold median, does the request cost what a warm one does,
+and a longer lead buys nothing more. So the useful lead is longer than the cold start itself. The OKE
+cold start is ~1.6 s, so the lead needed there is expected to be longer still; that is the number the
+OKE A/B must produce.
+
+A secondary arm, min-scale set on the revision's PodAutoscaler 1500 ms ahead (8 runs, 12–16 ms), is
+recorded in the same file as `minscale@1500`. It is a **different scale-up path**: it does not go
+through the activator and it writes a Knative-internal object. It is a comparison only and is **not
+evidence for option B**. An earlier min-scale-only run that preceded this one is kept as
+[`prewake-ab-kind-minscale-2026-11-17.jsonl`](../benchmarks/data/prewake-ab-kind-minscale-2026-11-17.jsonl)
+for the record and is superseded by the table above.
 
 Kind absolute numbers are not OKE numbers: kind runs one node on a laptop, with a different
 container runtime and network from OKE's, and the target is a stand-in Node server, not a knext app. Read only the relative
-column and the shape: whether a lead shorter than the cold start helps partly, and at which lead the
-request costs the same as a warm one. The OKE A/B is the founder's
+column and the shape: that a lead shorter than the cold start hides only part of it (or, at 500 ms
+here, nothing distinguishable), and at which lead the request costs the same as a warm one. An arm
+whose range overlaps cold is reported as not distinguishable from cold, never as a win. The OKE A/B is the founder's
 ([`prewake-ab-oke-runbook.md`](../benchmarks/prewake-ab-oke-runbook.md)).
 
 ## Decision
@@ -109,7 +120,8 @@ default.
    per session, and accepts only targets from the owner's declared list. No unauthenticated wake
    endpoint ships, ever.
 4. **The lead has to be measured, not assumed.** A pre-wake helps only if it fires early enough. The
-   kind A/B above shows the shape; the OKE A/B in the runbook gives the number. The pre-wake is
+   kind A/B above shows the shape (a lead about 1.4 times the cold start before the request is
+   needed, and a shorter lead hides less than its length); the OKE A/B in the runbook gives the number. The pre-wake is
    reported as a ledger row with its lead before it is described to users as making cold start
    faster.
 
@@ -140,8 +152,9 @@ lead available in real navigation is too short to matter.
 - **No effect on a cold first request with no warm app in front of it.** The very first visit to a
   fully idle site still pays the full cold start; only the schedule (A) or the ceiling test helps
   there.
-- **Measurement knob, not product surface.** The harness's PodAutoscaler annotation is not a design
-  for production; a product pre-wake must never write Knative-internal objects.
+- **No cluster write.** The measured arm is a plain GET, exactly the product mechanism. The harness's
+  optional min-scale arm writes a Knative-internal PodAutoscaler and is a measurement knob only; a
+  product pre-wake must never write Knative-internal objects.
 
 ## Action items
 

@@ -331,7 +331,7 @@ and is not what this row measures.
 **Next lever under study (no OKE row yet):** after row 16 the largest platform phases are the relist
 wait and the sandbox start, and neither has an app-side lever left. Not starting from zero on the
 request is Proposed in [ADR-0073](../adr/0073-opt-in-predictive-prewake.md) (`0073-opt-in-predictive-prewake.md`),
-with a kind-relative A/B. Its OKE A/B is founder-run
+with a kind-relative A/B of a plain GET through the activator. Its OKE A/B is founder-run
 ([`prewake-ab-oke-runbook.md`](prewake-ab-oke-runbook.md)) and becomes the next row here.
 
 

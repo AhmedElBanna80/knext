@@ -2,7 +2,8 @@
 
 **Who runs this:** the founder. Agents do not touch OKE.
 **What it measures:** cold-start latency of one scale-to-zero Knative Service with and without a
-pre-wake fired a fixed lead before the request, interleaved. It feeds
+pre-wake fired a fixed lead before the request, interleaved. The pre-wake is a plain GET through the
+activator, sent from a client pod: the mechanism ADR-0073 recommends. It feeds
 [ADR-0073](../adr/0073-opt-in-predictive-prewake.md) (`0073-opt-in-predictive-prewake.md`), which
 holds the kind-relative result this run replaces with an OKE number.
 **Harness:** `scripts/bench-cold-start-phases/prewake-ab.sh` (`--help` lists every flag).
@@ -10,11 +11,21 @@ holds the kind-relative result this run replaces with an OKE number.
 ## What the run changes on the cluster
 
 - It creates one client pod in the target's namespace (you create it, step 2) and deletes nothing.
-- For each pre-wake cycle it sets `autoscaling.knative.dev/min-scale=1` on the target revision's
-  PodAutoscaler, sends one request, then removes the annotation. If the script is interrupted, its
-  exit trap removes the annotation; step 6 checks it.
+- The default GET arm writes nothing to the cluster: it sends a plain GET, then the measured GET
+  `<lead>` ms later, both from the client pod.
+- Only if you pass `--minscale-leads` (a secondary arm, a different scale-up path from the GET,
+  reported separately) does it set `autoscaling.knative.dev/min-scale=1` on the target revision's
+  PodAutoscaler for a cycle and remove it after. If the script is interrupted, its exit trap removes
+  the annotation; step 6 checks it.
 - It does **not** change node settings, the Knative config, or the NextApp. `--setup` is refused on
   a non-kind context.
+
+## What this does not measure
+
+This runbook measures an **app's** pre-wake GET. It does **not** measure Z9's zone-to-function primer
+(a zone's process-start GET to its bound functions), and there is no zone-to-function leg here yet:
+the Z9 chained-cold firing lead is unmeasured on OKE. That leg needs a zone and a bound function on
+the cluster and is a named gap (ADR-0004, Z9 action item), not a step below.
 
 ## 1. Preconditions
 
@@ -57,7 +68,7 @@ scripts/bench-cold-start-phases/prewake-ab.sh --context "$CTX" --allow-non-kind 
 
 ## 4. The run
 
-Ten rounds by four leads plus cold is 50 cycles. Each waits for zero pods first, so allow about an
+Ten rounds by four GET leads plus cold is 50 cycles. Each waits for zero pods first, so allow about an
 hour with the default scale-to-zero settings.
 
 ```sh
@@ -66,7 +77,8 @@ scripts/bench-cold-start-phases/prewake-ab.sh --context "$CTX" --allow-non-kind 
   --zero-timeout 600 --out "docs/benchmarks/data/prewake-ab-oke-$(date +%F).jsonl"
 ```
 
-The summary prints each arm's median, its delta against `cold` and the ratio. Note which node each
+The summary prints each arm's median, range, its delta against `cold` and the ratio, and marks an
+arm whose range overlaps cold as "not distinguishable from cold"; report it that way. Note which node each
 cold wake landed on if the nodes differ, as rows 15-16 do; this harness does not place pods.
 
 ## 5. Record the result
@@ -75,6 +87,8 @@ Append a row to [`cold-start-ledger.md`](cold-start-ledger.md) with the JSONL pa
 medians and the deltas, and update the evidence section of ADR-0073.
 
 ## 6. Restore
+
+Only needed if you ran `--minscale-leads`; the GET arm leaves nothing behind except the client pod.
 
 ```sh
 kubectl --context "$CTX" -n "$NS" get podautoscaler \

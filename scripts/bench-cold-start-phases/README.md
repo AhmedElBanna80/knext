@@ -54,8 +54,8 @@ They are not templated: each records the cluster one study ran on and starts wit
 
 ## Pre-wake A/B
 
-`prewake-ab.sh` measures cold-start latency with and without a pre-wake fired a fixed lead before
-the request, and reports each lead's delta relative to a cold wake. On kind:
+`prewake-ab.sh` measures cold-start latency with and without a pre-wake GET (a plain GET through the
+activator, from a client pod) sent a fixed lead before the request, and reports each lead's delta relative to a cold wake. On kind:
 
 ```sh
 scripts/bench-cold-start-phases/prewake-ab.sh --context kind-<name> --setup --rounds 6

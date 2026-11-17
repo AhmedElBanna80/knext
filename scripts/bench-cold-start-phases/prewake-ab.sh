@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
 # prewake-ab.sh — relative A/B of cold-start latency with and without a pre-wake.
 #
-# Question: if something raises a scale-to-zero Knative Service's min-scale to 1
-# a fixed lead time BEFORE the request arrives, how much of the cold start does
-# the request still pay? The pre-wake uses an existing knob only: the
-# `autoscaling.knative.dev/min-scale` annotation, set on the latest ready
-# revision's PodAutoscaler (same name as the revision). The annotation on the
-# Revision itself is NOT copied to an existing PodAutoscaler (measured on kind,
-# Knative v1.16: no pod in 12 s), so the harness annotates the PodAutoscaler.
-# That object is Knative-internal; this is a measurement knob, not a product
-# surface. No knext CRD field or operator change is involved; this is evidence
-# for a Proposed ADR.
+# Question: if something sends a plain GET to a scale-to-zero Knative Service a fixed
+# lead time BEFORE the request that matters arrives, how much of the cold start does
+# that request still pay?
+#
+# The default pre-wake is exactly what ADR-0073 Decision 1 recommends and what Z9's
+# wake-ahead does: one plain GET through the activator, sent from a client pod in the
+# cluster. It writes nothing to the cluster. A secondary arm, minscale@<ms>, is kept only
+# for comparison and is labelled as such: it sets the `autoscaling.knative.dev/min-scale`
+# annotation on the latest ready revision's PodAutoscaler (a Knative-internal object; a
+# measurement knob, never a product surface) and is a DIFFERENT scale-up path, so its
+# numbers do not stand in for the GET's. It is off unless --minscale-leads is given.
 #
 # Arms, interleaved per round with the order rotated each round:
 #   cold          no pre-wake: the request wakes the service from zero.
-#   prewake@<ms>  min-scale=1 is set <ms> before the request, removed after it.
+#   get@<ms>      a plain GET is fired (not awaited) <ms> before the measured request.
+#   minscale@<ms> (secondary, opt-in) min-scale=1 is set <ms> before the request,
+#                 removed after it.
 #
-# The request is timed INSIDE a client pod (node fetch, performance.now), so
-# kubectl exec latency is not in the number. Output: one JSON line per cycle,
+# Both the pre-wake GET and the measured request run inside ONE client-pod process
+# (node fetch, performance.now), so kubectl exec latency is in neither the lead nor
+# the number. Output: one JSON line per cycle,
 # then a summary of medians and of each arm's delta RELATIVE to `cold`.
 # Absolute numbers from kind are not OKE numbers; read the deltas only.
 #
@@ -28,7 +32,7 @@ usage() {
   cat <<'EOF'
 Usage: prewake-ab.sh --context <ctx> [options]
 
-Relative A/B of cold-start latency with and without a min-scale pre-wake.
+Relative A/B of cold-start latency with and without a pre-wake GET.
 
 Options:
   --context <ctx>       kube context (required). Must start with "kind-" unless
@@ -38,11 +42,16 @@ Options:
   --namespace <ns>      namespace (default: prewake-ab)
   --ksvc <name>         Knative Service under test (default: prewake-target)
   --rounds <n>          rounds; each round runs every arm once (default: 5)
-  --leads <ms,ms,...>   pre-wake lead times in ms (default: 500,1500,3000)
+  --leads <ms,ms,...>   pre-wake GET lead times in ms (default: 500,1500,3000)
+  --minscale-leads <ms,...>
+                        ALSO run the secondary min-scale arm at these leads (a
+                        different scale-up path from the GET; writes a
+                        Knative-internal object; default: none)
   --out <file>          JSONL output, appended (default: ./prewake-ab.jsonl)
   --setup               create the namespace, the target ksvc and the client
                         pod (kind contexts only; also shortens the kind
-                        cluster's scale-to-zero grace period to 10s)
+                        cluster's scale-to-zero grace period to 10s and
+                        restores the prior value on exit)
   --image <ref>         image for target and client, digest-pinned
                         (default: node:22-alpine pinned by digest)
   --boot-delay-ms <n>   target's simulated app boot before listening (default: 300)
@@ -60,6 +69,7 @@ NS="prewake-ab"
 KSVC="prewake-target"
 ROUNDS=5
 LEADS="500,1500,3000"
+MINSCALE_LEADS=""
 OUT="./prewake-ab.jsonl"
 SETUP=0
 IMAGE="docker.io/library/node@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a"
@@ -81,6 +91,7 @@ while [ "$#" -gt 0 ]; do
     --ksvc) need_val "$@"; KSVC="$2"; shift 2 ;;
     --rounds) need_val "$@"; ROUNDS="$2"; shift 2 ;;
     --leads) need_val "$@"; LEADS="$2"; shift 2 ;;
+    --minscale-leads) need_val "$@"; MINSCALE_LEADS="$2"; shift 2 ;;
     --out) need_val "$@"; OUT="$2"; shift 2 ;;
     --setup) SETUP=1; shift ;;
     --image) need_val "$@"; IMAGE="$2"; shift 2 ;;
@@ -106,6 +117,7 @@ if [ "${SETUP}" = 1 ] && [ "${IS_KIND}" = 0 ]; then
 fi
 [[ "${ROUNDS}" =~ ^[1-9][0-9]*$ ]] || die_usage "--rounds must be a positive integer"
 [[ "${LEADS}" =~ ^[0-9]+(,[0-9]+)*$ ]] || die_usage "--leads must be comma-separated integers (ms)"
+[ -z "${MINSCALE_LEADS}" ] || [[ "${MINSCALE_LEADS}" =~ ^[0-9]+(,[0-9]+)*$ ]] || die_usage "--minscale-leads must be comma-separated integers (ms)"
 [[ "${BOOT_DELAY_MS}" =~ ^[0-9]+$ ]] || die_usage "--boot-delay-ms must be an integer"
 [[ "${ZERO_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || die_usage "--zero-timeout must be a positive integer"
 [[ "${SETTLE}" =~ ^[0-9]+$ ]] || die_usage "--settle must be an integer (seconds)"
@@ -116,7 +128,11 @@ esac
 
 ARMS=(cold)
 IFS=',' read -r -a LEAD_LIST <<<"${LEADS}"
-for l in "${LEAD_LIST[@]}"; do ARMS+=("prewake@${l}"); done
+for l in "${LEAD_LIST[@]}"; do ARMS+=("get@${l}"); done
+if [ -n "${MINSCALE_LEADS}" ]; then
+  IFS=',' read -r -a MS_LIST <<<"${MINSCALE_LEADS}"
+  for l in "${MS_LIST[@]}"; do ARMS+=("minscale@${l}"); done
+fi
 
 # Round r runs the arms rotated left by (r-1) mod n.
 round_order() {
@@ -127,8 +143,11 @@ round_order() {
 k() { kubectl --context "${CONTEXT}" "$@"; }
 
 TARGET_URL="http://${KSVC}.${NS}.svc.cluster.local/"
-# The request, timed inside the client pod. Prints "<ms> <status>".
-CLIENT_JS='const u=process.argv[1];const t=performance.now();fetch(u,{signal:AbortSignal.timeout(120000)}).then(async r=>{await r.text();console.log(Math.round(performance.now()-t),r.status)}).catch(e=>{console.log(Math.round(performance.now()-t),"ERR")})'
+# Runs in the client pod. argv: url, lead. lead "none" = no pre-wake. Otherwise a plain GET
+# is fired and NOT awaited, then the measured request starts <lead> ms later. Prints
+# "<ms> <status>" for the measured request only. `agent:false` gives every request its own
+# connection, so the measured request never reuses the pre-wake's and every arm pays its own connect.
+CLIENT_JS='const h=require("http"),u=process.argv[1],l=process.argv[2];const f=(cb)=>h.get(u,{agent:false,timeout:120000},(r)=>{r.resume();r.on("end",()=>cb(r.statusCode))}).on("error",()=>cb("ERR")).on("timeout",function(){this.destroy()});const go=()=>{const t=performance.now();f((s)=>{console.log(Math.round(performance.now()-t),s);process.exit(0)})};if(l==="none"){go()}else{f(()=>{});setTimeout(go,Number(l))}'
 
 if [ "${DRY_RUN}" = 1 ]; then
   echo "prewake-ab dry run (nothing is touched)"
@@ -137,10 +156,10 @@ if [ "${DRY_RUN}" = 1 ]; then
   for ((r = 1; r <= ROUNDS; r++)); do echo "round ${r}: $(round_order "${r}")"; done
   echo "per cycle:"
   echo "  wait until ksvc ${KSVC} has 0 pods (timeout ${ZERO_TIMEOUT}s)"
-  echo "  prewake@<ms>: kubectl annotate podautoscaler <latest-ready> ${ANNOTATION}=1 --overwrite; sleep <ms>"
-  echo "  kubectl exec ${CLIENT_POD} -- node -e <timed fetch> ${TARGET_URL}"
-  echo "  prewake@<ms>: kubectl annotate podautoscaler <latest-ready> ${ANNOTATION}-"
-  [ "${SETUP}" = 1 ] && echo "setup: namespace ${NS}, ksvc ${KSVC} (boot delay ${BOOT_DELAY_MS} ms), client pod, config-autoscaler grace 10s"
+  echo "  get@<ms>: kubectl exec ${CLIENT_POD} -- node -e <plain GET, not awaited; measured GET <ms> later> ${TARGET_URL} <ms>  (no cluster write)"
+  echo "  cold: kubectl exec ${CLIENT_POD} -- node -e <measured GET> ${TARGET_URL} none"
+  [ -z "${MINSCALE_LEADS}" ] || echo "  minscale@<ms> (secondary arm): kubectl annotate podautoscaler <latest-ready> ${ANNOTATION}=1 --overwrite; sleep <ms>; exec as cold; annotate ${ANNOTATION}-"
+  [ "${SETUP}" = 1 ] && echo "setup: namespace ${NS}, ksvc ${KSVC} (boot delay ${BOOT_DELAY_MS} ms), client pod, config-autoscaler grace 10s (restored on exit)"
   exit 0
 fi
 
@@ -149,7 +168,10 @@ command -v python3 >/dev/null || { echo "prewake-ab.sh: python3 not found" >&2; 
 
 setup() {
   k create namespace "${NS}" --dry-run=client -o yaml | k apply --validate=strict -f - >/dev/null
-  # kind only: a shorter grace period so each cycle reaches zero sooner.
+  # kind only: a shorter grace period so each cycle reaches zero sooner. The prior value is
+  # recorded first and put back by the EXIT trap.
+  PRIOR_GRACE="$(k -n knative-serving get configmap config-autoscaler -o jsonpath='{.data.scale-to-zero-grace-period}')"
+  GRACE_CHANGED=1
   k -n knative-serving patch configmap config-autoscaler --type merge \
     -p '{"data":{"scale-to-zero-grace-period":"10s"}}' >/dev/null
   k apply --validate=strict -f - >/dev/null <<EOF
@@ -215,25 +237,32 @@ wait_zero() {
 revision() { k -n "${NS}" get ksvc "${KSVC}" -o jsonpath='{.status.latestReadyRevisionName}'; }
 
 cycle() { # <round> <arm>
-  local round="$1" arm="$2" lead="" rev res ms status
+  local round="$1" arm="$2" lead="" mech="none" rev res ms status
   rev="$(revision)"
   [ -n "${rev}" ] || { echo "prewake-ab.sh: ${KSVC} has no ready revision" >&2; exit 1; }
   wait_zero
-  if [ "${arm}" != cold ]; then
-    lead="${arm#prewake@}"
-    PINNED_PA="${rev}"
-    k -n "${NS}" annotate podautoscaler "${rev}" "${ANNOTATION}=1" --overwrite >/dev/null
-    python3 -I -c "import time; time.sleep(${lead}/1000)"
-  fi
-  res="$(k -n "${NS}" exec "${CLIENT_POD}" -- node -e "${CLIENT_JS}" "${TARGET_URL}")"
-  if [ "${arm}" != cold ]; then
-    k -n "${NS}" annotate podautoscaler "${rev}" "${ANNOTATION}-" >/dev/null
-    PINNED_PA=""
-  fi
+  case "${arm}" in
+    cold) res="$(k -n "${NS}" exec "${CLIENT_POD}" -- node -e "${CLIENT_JS}" "${TARGET_URL}" none)" ;;
+    get@*)
+      lead="${arm#get@}"
+      mech="get"
+      res="$(k -n "${NS}" exec "${CLIENT_POD}" -- node -e "${CLIENT_JS}" "${TARGET_URL}" "${lead}")"
+      ;;
+    minscale@*)
+      lead="${arm#minscale@}"
+      mech="minscale"
+      PINNED_PA="${rev}"
+      k -n "${NS}" annotate podautoscaler "${rev}" "${ANNOTATION}=1" --overwrite >/dev/null
+      python3 -I -c "import time; time.sleep(${lead}/1000)"
+      res="$(k -n "${NS}" exec "${CLIENT_POD}" -- node -e "${CLIENT_JS}" "${TARGET_URL}" none)"
+      k -n "${NS}" annotate podautoscaler "${rev}" "${ANNOTATION}-" >/dev/null
+      PINNED_PA=""
+      ;;
+  esac
   ms="${res%% *}"
   status="${res##* }"
-  printf '{"round":%s,"arm":"%s","lead_ms":%s,"request_ms":%s,"status":"%s","context":"%s","revision":"%s"}\n' \
-    "${round}" "${arm}" "${lead:-null}" "${ms}" "${status}" "${CONTEXT}" "${rev}" | tee -a "${OUT}" "${RUN_OUT}"
+  printf '{"round":%s,"arm":"%s","mechanism":"%s","lead_ms":%s,"request_ms":%s,"status":"%s","context":"%s","revision":"%s"}\n' \
+    "${round}" "${arm}" "${mech}" "${lead:-null}" "${ms}" "${status}" "${CONTEXT}" "${rev}" | tee -a "${OUT}" "${RUN_OUT}"
 }
 
 summarize() { # <jsonl>
@@ -248,31 +277,48 @@ for r in ok:
 if "cold" not in by:
     sys.exit("no successful cold cycles; cannot compute relative deltas")
 cold = statistics.median(by["cold"])
-print("arm            n  median_ms  delta_vs_cold_ms  relative")
+cmin, cmax = min(by["cold"]), max(by["cold"])
+print("arm               n  median_ms  min-max_ms     delta_vs_cold_ms  relative  verdict")
 def key(a):
-    return -1 if a == "cold" else int(a.split("@")[1])
+    if a == "cold":
+        return (-1, 0)
+    kind, lead = a.split("@")
+    return (0 if kind == "get" else 1, int(lead))
 for arm in sorted(by, key=key):
-    m = statistics.median(by[arm])
-    print(f"{arm:<13}{len(by[arm]):>3}  {m:>9.0f}  {m - cold:>16.0f}  {m / cold:>8.2f}")
+    v = by[arm]
+    m = statistics.median(v)
+    # An arm whose whole range overlaps the cold range is not shown to differ from cold.
+    verdict = "" if arm == "cold" else ("not distinguishable from cold" if min(v) <= cmax and max(v) >= cmin else "separated from cold")
+    print(f"{arm:<16}{len(v):>3}  {m:>9.0f}  {min(v):>5.0f}-{max(v):<5.0f}  {m - cold:>16.0f}  {m / cold:>8.2f}  {verdict}")
 if bad:
     print(f"non-200 cycles excluded: {bad}")
 print("kind absolute numbers are not OKE numbers; read the relative column.")
 PY
 }
 
-[ "${SETUP}" = 1 ] && setup
-k -n "${NS}" get pod "${CLIENT_POD}" >/dev/null || { echo "prewake-ab.sh: client pod ${CLIENT_POD} missing (run with --setup on kind)" >&2; exit 1; }
-
 RUN_OUT="$(mktemp "${TMPDIR:-/tmp}/prewake-ab.XXXXXX")"
 PINNED_PA=""
-# An aborted cycle must not leave the service pinned at min-scale 1.
+PRIOR_GRACE=""
+GRACE_CHANGED=0
+# An aborted cycle must not leave the service pinned at min-scale 1, and --setup must not leave
+# the cluster's scale-to-zero grace period changed.
 cleanup() {
   rm -f "${RUN_OUT}"
   if [ -n "${PINNED_PA}" ]; then
     k -n "${NS}" annotate podautoscaler "${PINNED_PA}" "${ANNOTATION}-" >/dev/null 2>&1 || true
   fi
+  if [ "${GRACE_CHANGED}" = 1 ]; then
+    local v="null"
+    [ -z "${PRIOR_GRACE}" ] || v="\"${PRIOR_GRACE}\""
+    k -n knative-serving patch configmap config-autoscaler --type merge \
+      -p "{\"data\":{\"scale-to-zero-grace-period\":${v}}}" >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
+
+[ "${SETUP}" = 1 ] && setup
+k -n "${NS}" get pod "${CLIENT_POD}" >/dev/null || { echo "prewake-ab.sh: client pod ${CLIENT_POD} missing (run with --setup on kind)" >&2; exit 1; }
+
 for ((r = 1; r <= ROUNDS; r++)); do
   for arm in $(round_order "${r}"); do
     cycle "${r}" "${arm}" # in the main shell, so the EXIT trap sees PINNED_PA

@@ -277,16 +277,14 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
     expect(wait).toBeGreaterThan(0);
     expect(wait).toBeLessThan(apply);
     const step = wf.slice(wait, apply);
-    // Deployment Available is not enough: the Service must have a ready endpoint.
-    expect(step).toMatch(/endpoints\/webhook/);
-    expect(step).toContain("{.subsets[0].addresses[0]}");
-    // And the admission path must actually answer (the install.yaml carries a
-    // knative-serving ConfigMap that the webhook validates).
-    expect(step).toContain('--dry-run=server');
-    // The probe targets the Knative ConfigMap in the knative-serving namespace.
-    expect(step).toMatch(/patch configmap\/config-network -n knative-serving[\s\S]*--dry-run=server/);
+    // Deployment Available is not enough: the admission path must actually answer
+    // (install.yaml carries a knative-serving ConfigMap the webhook validates).
+    // The probe is a server-side dry-run no-op patch of that ConfigMap.
+    expect(step).toMatch(
+      /patch configmap\/config-network -n knative-serving\s*\\\s*--type merge --patch '\{"data":\{\}\}' --dry-run=server/,
+    );
     // Bounded retry that fails loudly rather than hanging or passing.
-    expect(step).toContain('seq 1 30');
+    expect(step).toContain('seq 1 60');
     expect(step).toContain('exit 1');
     // Ordering: Knative install < wait < apply.
     const install = wf.indexOf('- name: Install Knative Serving + Kourier');

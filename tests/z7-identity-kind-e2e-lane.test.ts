@@ -804,13 +804,18 @@ describe('the real-time rotation phase proves the three exit properties and stay
     expect(body).toMatch(/^ {2}local retired_want_status=401$/m);
     // (c) is decided by rotation-verdict.ts (unit-tested without a cluster) from probes
     // recorded AFTER the publish was confirmed, not by the one probe sent before it.
-    expect(body).toContain('bun "${ROTATION_VERDICT}" "${rt_probes}"');
+    expect(body).toMatch(
+      /\n {2}bun "\$\{ROTATION_VERDICT\}" "\$\{rt_probes\}" >\/dev\/null \\\n {4}\|\| fail "\(c\) not shown/,
+    );
     expect(body).toContain('record_staged_probe post "${rt_probes}"');
     expect(body).toMatch(
       /\{ \[ "\$\{status\}" = 401 \] && \[ "\$\{code\}" = unauthenticated \]; \}/,
     );
     // The wait loop has its own bound and a message that names it.
     expect(body).toContain('loop_end=$((SECONDS + BOUND_SECONDS + 60))');
+    expect(body).toMatch(
+      /\n {4}\[ "\$\{SECONDS\}" -lt "\$\{loop_end\}" \] \\\n {6}\|\| fail "the warm function did not accept/,
+    );
     expect(body).toContain('did not accept the staged key within the propagation bound');
     expect(body).toContain('"${retired_want_status}" unauthenticated');
     const hold = runSh.slice(

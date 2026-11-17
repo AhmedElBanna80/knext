@@ -254,6 +254,68 @@ describe('self-contained single-exec image lane (supply-chain.yml)', () => {
       true,
     );
   });
+  // Tie SBOM, Trivy and attest to the image that was built: the guard above only
+  // proves the steps exist, not that they look at the same bytes.
+  type Step = Record<string, unknown>;
+  const stepsOf = (id: string, wf: Workflow = wfNamed(SC)) =>
+    (jobsOf(wf)[id]?.steps as Step[] | undefined) ?? [];
+  const wth = (s: Step | undefined) => (s?.with ?? {}) as Record<string, string>;
+  const parts = (wf: Workflow = wfNamed(SC)) => {
+    const steps = stepsOf(SCAN, wf);
+    const build = steps.find((s) => /build-push-action/.test(String(s.uses ?? '')));
+    const view = steps.find((s) => /SBOM view/.test(String(s.name ?? '')));
+    const sbom = steps.find((s) => /sbom-action/.test(String(s.uses ?? '')));
+    const trivy = steps.find((s) => /trivy-action/.test(String(s.uses ?? '')));
+    const dest = /type=oci,dest=([^,\s]+)/.exec(wth(build).outputs ?? '')?.[1];
+    const attest = stepsOf(PUBLISH, wf)
+      .map((s) => String(s.run ?? ''))
+      .join('\n');
+    return { dest, view, sbom, trivy, attest };
+  };
+  it('the SBOM, Trivy and attest targets are all derived from the built image', () => {
+    const { dest, view, sbom, trivy, attest } = parts();
+    expect(dest).toBeTruthy();
+    // The SBOM scans a view whose blobs are symlinked from the build's dest...
+    const viewRun = String(view?.run ?? '');
+    expect(viewRun).toContain(`$(pwd)/${dest}/blobs`);
+    const viewDir = /mkdir (\S+)/.exec(viewRun)?.[1];
+    expect(viewDir).toBeTruthy();
+    expect(wth(sbom).image).toBe(`oci-dir:${viewDir}`);
+    // ...Trivy scans the dest itself...
+    expect(wth(trivy).input).toBe(dest);
+    // ...and cosign attests exactly the SBOM the sbom step wrote.
+    const out = wth(sbom)['output-file'];
+    expect(out).toBeTruthy();
+    expect(attest).toMatch(new RegExp(`cosign attest .*--predicate ${out}\\b`));
+  });
+  it('mutation: pointing the SBOM at another path reds the tie', () => {
+    const m = withWf(SC, (d) => {
+      const st = d.jobs[SCAN].steps.find((x: Step) => /sbom-action/.test(String(x.uses)));
+      st.with.image = 'oci-dir:elsewhere';
+    });
+    const { sbom, view } = parts(wfNamed(SC, m));
+    const viewDir = /mkdir (\S+)/.exec(String(view?.run ?? ''))?.[1];
+    expect(wth(sbom).image).not.toBe(`oci-dir:${viewDir}`);
+  });
+  it('Trivy is advisory on PRs and enforcing exactly on main and integration/**', () => {
+    const { trivy } = parts();
+    expect(wth(trivy)['exit-code']).toBe('1');
+    const coe = String(trivy?.['continue-on-error']);
+    expect(coe).toContain("github.ref != 'refs/heads/main'");
+    expect(coe).toContain("!startsWith(github.ref, 'refs/heads/integration/')");
+    // The file-manager scan uses the identical gate, so the two cannot drift.
+    const fm = stepsOf('image-supply-chain').find((s) => /trivy-action/.test(String(s.uses)));
+    expect(String(fm?.['continue-on-error'])).toBe(coe);
+  });
+  it('the publish job verifies the SBOM attestation against the pushed digest, with identity constraints', () => {
+    const run = stepsOf(PUBLISH)
+      .map((s) => String(s.run ?? ''))
+      .join('\n');
+    expect(run).toMatch(/cosign verify-attestation\s+"\$\{IMAGE\}@\$\{DIGEST\}"/);
+    expect(run).toMatch(/verify-attestation[\s\S]*--type spdxjson/);
+    expect(run).toMatch(/--certificate-identity-regexp/);
+    expect(run).toMatch(/--certificate-oidc-issuer/);
+  });
   it('publish runs only on main (the publish channel), never on PR or merge_group', () => {
     const job = jobsOf(wfNamed(SC))[PUBLISH] as Record<string, unknown>;
     expect(String(job.if)).toMatch(/refs\/heads\/main/);

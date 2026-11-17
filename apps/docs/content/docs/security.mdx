@@ -345,6 +345,10 @@ it passes the scan, and signing happens on the digest that was actually pushed.
 - **Signing + attestation on the pushed digest** — **cosign** keyless signing (OIDC / Sigstore) of
   the digest that was pushed, plus an SBOM attestation (`cosign attest --type spdxjson`) bound to
   that digest.
+- **Reference image, not a user image** — the single-executable image that is signed and attested
+  is a reference image built from a fixture; knext publishes no user app image. Its SBOM covers the
+  image's OS packages only, and the attestation is verified (`cosign verify-attestation`) against
+  the pushed digest. The vulnerability scan is advisory on pull requests and enforcing on `main`.
 - **SLSA provenance** — the build carries a BuildKit SLSA provenance attestation, and the pipeline
   asserts it survived the push before anything is signed.
 - **Digest-pinned release bundle** — the operator's `install.yaml` release asset is regenerated

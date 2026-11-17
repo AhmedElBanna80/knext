@@ -595,7 +595,10 @@ jobs:
           name: sbom-self-contained-${{ github.sha }}
           path: sbom-self-contained.spdx.json
 
-      - name: Trivy scan self-contained image — FAIL on HIGH/CRITICAL
+      # Enforcing on main and integration/** (exit-code 1 fails the job); advisory on
+      # pull requests (continue-on-error), the same ref gate as the file-manager image
+      # scan above. Publishing only ever happens from main, behind the enforcing run.
+      - name: Trivy scan self-contained image — HIGH/CRITICAL (advisory on PRs, enforcing on main)
         continue-on-error: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/integration/') }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -647,6 +650,9 @@ jobs:
         with:
           name: sc-image-scanned-layout-${{ github.sha }}
 
+      # index.json is not a shallow check: it names the nested index by sha256, which
+      # names the image manifest, config and layers by sha256, so equal index.json
+      # bytes pin every blob transitively (blobs are content-addressed).
       - name: Verify the downloaded layout is the one that was scanned
         env:
           EXPECTED: ${{ needs.self-contained-image-supply-chain.outputs.layout_sha256 }}
@@ -718,6 +724,20 @@ jobs:
           IDENTITY_REGEXP: https://github.com/${{ github.repository }}/.*
           DIGEST: ${{ steps.push.outputs.digest }}
         run: bash apps/file-manager/hack/cosign-verify.sh "${IMAGE}@${DIGEST}"
+
+      # The attestation is verified too, not just made: same identity + issuer
+      # constraints as hack/cosign-verify.sh, against the pushed digest.
+      - name: Verify self-contained SBOM attestation (cosign verify-attestation, main only)
+        if: github.ref == 'refs/heads/main'
+        env:
+          IDENTITY_REGEXP: https://github.com/${{ github.repository }}/.*
+          OIDC_ISSUER: https://token.actions.githubusercontent.com
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign verify-attestation "${IMAGE}@${DIGEST}" --type spdxjson \
+            --certificate-identity-regexp "${IDENTITY_REGEXP}" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" > /dev/null
 
   # ── BASE-IMAGE CVE HYGIENE (#971) ────────────────────────────────────────
   #

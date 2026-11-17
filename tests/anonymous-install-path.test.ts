@@ -269,6 +269,22 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
     expect(result.findings.filter((f) => f.reason === 'documented-url-drift')).toEqual([]);
   });
 
+  it('the published-bundle nightly waits for the Knative webhook to be routable BEFORE applying install.yaml', () => {
+    const wf = read(resolve(REPO_ROOT, '.github/workflows/published-bundle-kind-nightly.yml'));
+    const apply = wf.indexOf('- name: Apply the documented install.yaml, unmodified');
+    const wait = wf.indexOf('- name: Wait for the Knative webhook to be routable');
+    expect(apply).toBeGreaterThan(0);
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThan(apply);
+    const step = wf.slice(wait, apply);
+    // Deployment Available is not enough: the Service must have a ready endpoint.
+    expect(step).toMatch(/endpoints\/webhook/);
+    expect(step).toContain("{.subsets[0].addresses[0]}");
+    // And the admission path must actually answer (the install.yaml carries a
+    // knative-serving ConfigMap that the webhook validates).
+    expect(step).toContain('--dry-run=server');
+  });
+
   it('the published-bundle nightly retargets only off getknext-dev/knext, to operator-edge', () => {
     const wf = read(resolve(REPO_ROOT, '.github/workflows/published-bundle-kind-nightly.yml'));
     const step = wf.slice(wf.indexOf('- name: Apply the documented install.yaml, unmodified'));

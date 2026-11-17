@@ -126,6 +126,27 @@ jobs:
           kubectl wait --for=condition=Available --timeout=300s \
             -n knative-serving deployment/controller deployment/webhook deployment/autoscaler
 
+      # `deployment/webhook` Available only means the pod passed its readiness
+      # probe once. install.yaml carries a knative-serving ConfigMap, so its
+      # apply is admitted by Knative's config-validation webhook; if that
+      # Service has no routable endpoint at that instant kube-proxy answers
+      # "connection refused" and the apply fails. Close the window first.
+      - name: Wait for the Knative webhook to be routable
+        run: |
+          set -euo pipefail
+          kubectl wait --for=jsonpath='{.subsets[0].addresses[0]}' --timeout=120s \
+            -n knative-serving endpoints/webhook
+          # Prove the admission path answers: a server-side dry-run of a no-op
+          # patch on a Knative ConfigMap goes through config-validation.
+          for i in $(seq 1 30); do
+            if kubectl patch configmap/config-network -n knative-serving \
+              --type merge --patch '{"data":{}}' --dry-run=server >/dev/null; then
+              exit 0
+            fi
+            echo "Knative webhook not answering yet (attempt ${i}/30)"; sleep 4
+          done
+          echo "Knative webhook never became routable" >&2; exit 1
+
       # THE STEP THIS WHOLE WORKFLOW EXISTS FOR: the exact URL the install
       # docs publish (discovered by #586's own `discoverInstallUrl`, never a
       # second copy of the regex; on a stand-in repo, retargeted — see below), applied UNMODIFIED — no manager-image

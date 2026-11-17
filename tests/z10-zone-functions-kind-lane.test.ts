@@ -172,6 +172,19 @@ describe('the gRPC status trailer survives the cold activator path (Z11 / D15)',
     expect(p.indexOf('!= none')).toBeLessThan(p.indexOf('= "${want_status}"'));
   });
 
+  it('the status source is read off the HTTP/2 stream and required to be the trailer for a success', () => {
+    expect(probeSrc).toContain("stream.on('trailers'");
+    expect(probeSrc).toContain("stream.on('response'");
+    const p = body('grpc_probe');
+    expect(p).toContain('.source // "none"');
+    expect(p).toMatch(/trailer\) \[ "\$\{GP_SOURCE\}" = trailer \] \|\| fail/);
+    // success calls demand the trailer; error calls accept either source
+    expect(g).toMatch(/PutItem "id=grpc-1&value=v1" OK 0 trailer/);
+    expect(g).toMatch(/PutItem "id=grpc-2&value=v2" OK 0 trailer/);
+    expect(g.match(/GetItem "id=missing" NotFound 5 any/g)?.length).toBe(2);
+    expect(body('grpc_cold')).toContain('from the ${GP_SOURCE}');
+  });
+
   it('a success carries grpc-status 0 and a missing item is NotFound from grpc-status 5', () => {
     expect(g).toMatch(/PutItem "id=grpc-1&value=v1" OK 0/);
     expect(g).toMatch(/GetItem "id=missing" NotFound 5/);

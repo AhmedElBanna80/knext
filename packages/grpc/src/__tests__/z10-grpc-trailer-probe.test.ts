@@ -24,7 +24,7 @@ afterAll(() => {
   for (const s of servers) s.close();
 });
 
-type Reply = 'ok' | 'notfound' | 'notfound-trailers-only';
+type Reply = 'ok' | 'ok-header-only' | 'notfound' | 'notfound-trailers-only';
 
 function envelope(body: Uint8Array): Buffer {
   const head = Buffer.alloc(5);
@@ -43,6 +43,12 @@ async function serve(mode: Reply): Promise<{ url: string; saw: { contentType: st
         toBinary(GetOrderResponseSchema, create(GetOrderResponseSchema, { id: 'o-1' })),
       );
       const head = { ':status': 200, 'content-type': 'application/grpc+proto' };
+      if (mode === 'ok-header-only') {
+        // status 0 after a message, but in the HEADERS and no trailer at all
+        stream.respond({ ...head, 'grpc-status': '0' });
+        stream.end(msg);
+        return;
+      }
       if (mode === 'notfound-trailers-only') {
         stream.respond(
           { ...head, 'grpc-status': '5', 'grpc-message': 'item not found' },
@@ -100,6 +106,7 @@ describe('the gRPC probe reports the status the wire carried', () => {
       ok: false,
       code: 'NotFound',
       grpcStatus: '5',
+      source: 'trailer',
     });
     expect(s.saw.contentType[0]).toStartWith('application/grpc');
   });
@@ -111,17 +118,32 @@ describe('the gRPC probe reports the status the wire carried', () => {
       ok: false,
       code: 'NotFound',
       grpcStatus: '5',
+      source: 'header',
     });
   });
 
   it('a success carries grpc-status 0', async () => {
     const s = await serve('ok');
-    expect(await call(s.url)).toEqual({ protocol: 'grpc', ok: true, code: 'OK', grpcStatus: '0' });
+    expect(await call(s.url)).toEqual({
+      protocol: 'grpc',
+      ok: true,
+      code: 'OK',
+      grpcStatus: '0',
+      source: 'trailer',
+    });
+  });
+
+  it('a success whose status 0 is only in the headers reports source=header (the lane fails it)', async () => {
+    const s = await serve('ok-header-only');
+    const r = await call(s.url);
+    expect(r.grpcStatus).toBe('0');
+    expect(r.source).toBe('header');
   });
 
   it('a response that lost its status reports NO grpc-status, and is not OK', async () => {
     const r = await call(await statusless());
     expect(r.grpcStatus).toBeNull();
+    expect(r.source).toBeNull();
     expect(r.ok).toBe(false);
     expect(r.code).not.toBe('NotFound');
   });

@@ -199,6 +199,36 @@ const MUTATIONS = [
       'PHASES="${PHASES:-images deploy cold trailers grpctrailers rollout sovereignty wake}"',
   },
   {
+    id: 'G01',
+    subject: 'lane',
+    claim: 'the grpctrailers phase is not in the lane default phase list',
+    anchor:
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"',
+    replacement:
+      'PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake}"',
+  },
+  {
+    id: 'G02',
+    subject: 'lane',
+    claim: 'the grpctrailers phase is never dispatched (CI runs the default dispatch)',
+    anchor: 'has_phase grpctrailers && phase_grpctrailers\n',
+    replacement: '',
+  },
+  {
+    id: 'G03',
+    subject: 'lane',
+    claim: 'a call with no grpc-status is no longer a failure',
+    anchor: '  [ "${GP_STATUS}" != none ] \\\n',
+    replacement: '  [ -n "${GP_STATUS}" ] \\\n',
+  },
+  {
+    id: 'G04',
+    subject: 'lane',
+    claim: 'a success may take its grpc-status from the headers, not the trailer',
+    anchor: '    trailer) [ "${GP_SOURCE}" = trailer ] || fail',
+    replacement: '    trailer) [ -n "${GP_SOURCE}" ] || fail',
+  },
+  {
     id: 'P02',
     subject: 'lane',
     claim: 'the crosszone phase is never dispatched',

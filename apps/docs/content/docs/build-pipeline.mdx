@@ -926,7 +926,7 @@ the compiled vinext executable. None of those cells is credentialed yet; see
 [the compatibility credential](/docs/compat-suite). The suite runs against the
 standalone server directly, so the result covers that output rather than the supervisor knext boots
 it with. The `vinext` build (Bun runtime) is **measured, not credentialed**: its latest run passed
-1016 of 1099 files. Of the rest, 41 are disclosed known-gap files (vinext does not implement the Next.js
+1016 of 1099 files. Of the rest, 41 are disclosed known-gap files (vinext has not yet implemented the Next.js
 16.3 client-router architecture), 6 are individually quarantined and 36 fail. On the official suite minus
 those 41 known-gap files, 1016 of 1058 pass; vinext remains Beta. The **Node** runtime for the vinext target has not
 been run through this 778-test suite at all — it is proven to build, boot and serve a live
@@ -934,12 +934,21 @@ request against the published package, but has no official-suite number yet. Rea
 status on the [compatibility matrix](/docs/compat-matrix) rather than assuming the standalone
 number, or the Bun vinext number, carries over to Node.
 
-The remaining gaps are largely a function of how far the underlying vinext framework has matured on
-areas such as streaming/Suspense flushing, Partial Prerendering, Cache Components (`'use cache'`),
-edge middleware, and internationalized routing. The matrix marks each honestly — ✅ only where a
+The remaining gaps are specific, and the matrix marks each one honestly — ✅ only where a
 red-on-fail check backs it, ⚠️ where something is implemented but unguarded, and ❌/⛔ where it is a
-known or upstream-gated gap. Nothing there is papered over, and the vinext number is published as it
-is measured, even when it is low. Track current known gaps on the project's public issue tracker.
+known gap or is not yet supported upstream. Nothing there is papered over, and the vinext number is
+published as it is measured, even when it is low.
+
+- **Edge-runtime middleware is not supported.** knext runs `middleware.ts` on the Node runtime, and
+  that path is covered by a red-on-fail check.
+- **Partial Prerendering and Cache Components are opt-in.** `knext create --cache-components` turns
+  them on for a new Turbopack or webpack app. They are not part of the compatibility credential, so
+  this page makes no parity claim for them. On the Node and Bun runtimes, a shared Redis handler for
+  the `'use cache'` directive is implemented, but it is not yet covered by the compatibility suite.
+- **Internationalized routing has no dedicated matrix row.** The vinext axis row records its test
+  results, and nothing else is claimed.
+
+Track current known gaps on the project's public issue tracker.
 
 <Callout type="info">
 **Which page answers what.** This page covers *how* the build works and what it needs. For the

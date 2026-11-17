@@ -110,17 +110,18 @@ The credential is scoped against Next.js's own deploy-eligible test selection, m
 documented, auditable categories of subtraction. All three shrink toward zero over time and none
 is added pre-emptively — only from an observed, evidenced failure.
 
-### 1 · Architectural exclusions
+### 1 · Documented exclusions
 
-A small, fixed set of test categories is excluded because knext does not implement the capability
-they test, not because the tests fail unpredictably:
+A small, fixed set of test categories is excluded because knext does not support the capability
+they test, or because it is opt-in and the compatibility suite does not cover it yet, not because the
+tests fail unpredictably:
 
 | Category | Why it's excluded |
 |---|---|
 | Edge Runtime | knext runs a Node/Bun standalone server; it has no V8-isolate edge runtime. |
 | Edge Middleware | Edge Middleware requires the Edge Runtime; knext supports only the Node middleware convention. |
-| Partial Prerendering (PPR) | Not yet adapter-standardizable upstream. |
-| Cache Components (`'use cache'`) | An evolving upstream API, not yet stabilized for adapters. |
+| Partial Prerendering (PPR) | Off by default. An opt-in exists (`knext create --cache-components`, turbopack or webpack only), but the compatibility suite does not cover it and knext makes no parity claim. |
+| Cache Components (`'use cache'`) | Off by default; the same opt-in. The `'use cache'` handler is implemented and shared through Redis, but it is not yet covered by the compatibility suite. |
 
 These are also documented on the [compatibility matrix](/docs/compat-matrix) as explicit `⛔`
 rows — out of scope today, not silently skipped.
@@ -200,9 +201,10 @@ infer it from an absence:
   number is published, but it does not carry a 14-run credential window and is not one of the
   four v1.0 cells above — see [Bun & the compiled executable](/docs/bun-runtime) for its own,
   separately-tracked status.
-- **Edge Middleware and Partial Prerendering / Cache Components.** Listed above as architectural
-  exclusions — they are outside what the suite can even test against knext, because knext does not
-  implement them, not because of a credentialing gap.
+- **Edge Middleware.** Listed above — the suite cannot test it against knext, because knext does
+  not support it, not because of a credentialing gap.
+- **Partial Prerendering and Cache Components.** Listed above — the suite does not cover them, and
+  knext makes no parity claim for them.
 - **Cluster-level behavior.** The suite validates one deployed app's HTTP behavior against a real
   Next.js corpus. It does not exercise Knative autoscaling, multi-tenant cluster behavior, the
   operator's reconciliation logic, or anything above the single-app HTTP surface — those are

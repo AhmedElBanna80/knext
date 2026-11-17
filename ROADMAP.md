@@ -39,9 +39,13 @@ The credibility gate. Nothing in later tiers ships before this is green.
   **skew protection** (BUILD_ID-versioned assets), **RUM**.
 *Exit:* signed/scanned images; all mutating endpoints authenticated; preview+rollback demoed.
 
-## Tier C — Edge (partly upstream-gated)
-CDN, multi-region, WAF. **Edge Middleware/Proxy and PPR/Cache Components are not yet
-adapter-standardizable** — track upstream, do not force. Lower priority for the fame phase.
+## Tier C — Edge
+CDN, multi-region, WAF. **Node-runtime `middleware.ts` is supported** on the official adapter and
+backed by a red-on-fail check (the Middleware row of [docs/compat-matrix.md](docs/compat-matrix.md)).
+**Still open:** edge-runtime middleware (⛔ — knext middleware runs on Node only) and **PPR /
+Cache Components**, which are opt-in (`knext create --cache-components`), sit outside the
+compatibility credential, and make no parity claim. Next 16's `proxy.ts` has no matrix row yet, so
+it makes no claim either way. Track upstream, do not force. Lower priority for the fame phase.
 **Cache-Control normalization moves to the edge if a knext CDN tier lands:** today the runtime
 entry normalizes origin `s-maxage` responses to the client-facing value by default (#175/#179,
 opt-out `KNEXT_CACHE_CONTROL_NORMALIZE=0` for user-fronted CDNs). A knext-managed CDN must be
@@ -60,7 +64,7 @@ that owns them (same-zone only, proto-only contracts, signed short-lived identit
 ADR-0052 (2026-10-09) + `docs/design/grpc-layer.md`.
 
 ## Vercel-parity buckets (what to chase vs defer)
-1. **Architectural edge** (global CDN, edge middleware/PPR) — defer / upstream-gated.
+1. **Architectural edge** (global CDN, edge-runtime middleware, PPR/Cache Components) — defer.
 2. **Buildable-but-unbuilt** — image optimization, endpoint auth, previews, rollback, skew, RUM
    → **do these (cheap wins)** in Tiers A/B.
 3. **Deliberate differences** — Prometheus/Grafana (not Web Analytics), multi-cloud/no lock-in.
@@ -71,7 +75,7 @@ ADR-0052 (2026-10-09) + `docs/design/grpc-layer.md`.
 | Phase 0 migration | Phase 0 + Phase 1 (correctness start) |
 | Tier A | Phase 1 (correctness, incl. graceful shutdown) + Phase 2 (control-plane) + image opt from Phase 4 |
 | Tier B | Phase 3 (security) + previews/rollback |
-| Tier C | (new — edge, upstream-gated) |
+| Tier C | (new — edge) |
 | Track P | Phase 5 (release) + docs |
 | gRPC module | Phase 6 |
 

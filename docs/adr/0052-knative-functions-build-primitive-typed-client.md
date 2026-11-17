@@ -193,10 +193,11 @@ only a *build* tool.
       never shells `func deploy` / `kn service`). Fold codegen into `kn-next generate`, not a new path.
       *Evidence (2026-11-17):* the guard is `scripts/lib/cli-spawn-scan.mjs:51` (scope: `packages/kn-next/src/cli`,
       `packages/grpc`), refusing `kn` at `:253` and `func deploy` at `:256`; test `tests/cli-spawn-scan.test.ts`;
-      mutation proof `scripts/mutation-prove-2053-cli-cluster-write-surface.mjs`. `func` emits an image only:
-      `packages/grpc/src/deploy-function.ts:20-25`. The package builds the `BackendService` and core applies it with
-      `--validate=strict`: `packages/grpc/src/deploy-function.ts:5-10`, `packages/kn-next/src/cli/grpc-dispatch.ts:48-49`.
-      Codegen is dispatched from `knext generate`: `packages/kn-next/src/cli/grpc-dispatch.ts:2`.
+      mutation proof `scripts/mutation-prove-2053-cli-cluster-write-surface.mjs`. The package builds the
+      `BackendService` and runs the preflight before the apply: `packages/grpc/src/deploy-function.ts:320`
+      (`host.preflight`), then `:329` (`host.apply`). The apply is `kubectl apply --validate=strict` at
+      `packages/kn-next/src/cli/grpc-dispatch.ts:293-298`. Codegen is routed by `GRPC_VERBS`
+      (`packages/kn-next/src/cli/grpc-dispatch.ts:41`).
 
 ## Amendment (2026-10-09) — D9 re-sequenced into v2; D10 Rust is Connect-capable; D3 the CLI may emit the CR
 

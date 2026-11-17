@@ -82,7 +82,12 @@ on:
       - 'tests/z7-identity-kind-e2e-lane.test.ts'
       - 'tests/z10-zone-functions-kind-lane.test.ts'
       - 'bun.lock'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      rotation_realtime:
+        description: 'Also run the real-time key rotation (waits the real one-hour overlap; over an hour)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -149,6 +154,62 @@ jobs:
 
       # run.sh prints object status and log tails on failure and never reads a
       # Secret, so nothing more is collected here.
+      - name: Delete the kind cluster and its registry
+        if: always()
+        run: |
+          kind delete cluster --name "${KIND_CLUSTER}" || true
+          docker rm -f "${REGISTRY_NAME}" || true
+
+  # The rotation in real time: the operator's one-hour overlap is a constant, so
+  # the only way to see the previous key retire on the operator's own schedule is
+  # to wait it. Dispatch-only (never on a push or pull request) so the default
+  # lane stays fast; it builds its own cluster and registry.
+  z7-rotation-realtime:
+    name: Z7 zone key rotation in real time (propagation bound, one-hour overlap)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.rotation_realtime }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      KIND_CLUSTER: z7-rotation-realtime
+      REGISTRY_NAME: kind-registry
+      REGISTRY_PORT: '5001'
+      Z7_WITH_RUST: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Route Docker Hub pulls through mirror.gcr.io (anonymous rate limit)
+        id: docker-hub-mirror
+        uses: ./.github/actions/docker-hub-mirror
+
+      - name: Set up Go (the operator builds its tools and image from go.mod)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/kn-next-operator/go.mod
+          cache-dependency-path: packages/kn-next-operator/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      - name: Install kind
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: true
+
+      - name: Install workspace dependencies (the pinned buf, the Connect runtime)
+        run: bun install --frozen-lockfile
+
+      - name: Run the real-time key rotation on kind
+        run: PHASES="up images deploy verify rotation" packages/grpc/e2e/z7-identity-kind/run.sh
+
       - name: Delete the kind cluster and its registry
         if: always()
         run: |

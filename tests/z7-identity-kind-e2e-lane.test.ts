@@ -271,9 +271,12 @@ describe('the workflow is as safe as the rest of CI', () => {
   it('bounds the job and runs the lane with every phase and the Rust function', () => {
     for (const job of Object.values(wf.jobs)) {
       expect(typeof job['timeout-minutes']).toBe('number');
-      expect(job['timeout-minutes'] as number).toBeLessThanOrEqual(75);
+      // The real-time rotation waits a one-hour constant: it alone may run longer.
+      const cap = job === wf.jobs['z7-rotation-realtime'] ? 120 : 75;
+      expect(job['timeout-minutes'] as number).toBeLessThanOrEqual(cap);
     }
-    expect(wfText).not.toMatch(/\bPHASES\b/);
+    // The default job runs every default phase: only the dispatch-only job names any.
+    expect(JSON.stringify(wf.jobs['z7-identity-e2e'])).not.toMatch(/\bPHASES\b/);
     const env = Object.values(wf.jobs).flatMap((j) => Object.entries(j.env ?? {}));
     expect(Object.fromEntries(env).Z7_WITH_RUST).toBe('1');
     const run = steps.map((s) => s.run ?? '').join('\n');
@@ -289,9 +292,11 @@ describe('the workflow is as safe as the rest of CI', () => {
 
   it('deletes the cluster it created, even on failure, and nothing else', () => {
     const teardown = steps.filter((s) => (s.run ?? '').includes('kind delete cluster'));
-    expect(teardown).toHaveLength(1);
-    expect((teardown[0] as Step).if).toMatch(/always\(\)/);
-    expect((teardown[0] as Step).run).toContain('--name "${KIND_CLUSTER}"');
+    expect(teardown).toHaveLength(Object.keys(wf.jobs).length);
+    for (const t of teardown) {
+      expect(t.if).toMatch(/always\(\)/);
+      expect(t.run).toContain('--name "${KIND_CLUSTER}"');
+    }
     expect(wfText).toContain('KIND_CLUSTER: z7-identity-e2e');
   });
 });
@@ -403,7 +408,7 @@ describe('the lane proves what it claims', () => {
     const main = runSh.slice(
       runSh.lastIndexOf('# ---------------------------------------------------------------- main'),
     );
-    expect(main).toContain('for phase in up images deploy verify rotate pin squat leaks');
+    expect(main).toContain('for phase in up images deploy verify rotate rotation pin squat leaks');
   });
 
   it('the squat phase pre-creates an unowned JWKS ConfigMap, asserts it is never mounted, the conflict is reported on both objects, and removing it recovers', () => {
@@ -721,6 +726,88 @@ describe('the lane proves what it claims', () => {
   });
 });
 
+describe('the real-time rotation phase proves the three exit properties and stays off the fast path', () => {
+  const body = runSh.slice(
+    runSh.indexOf('phase_rotation() {'),
+    runSh.indexOf('# ---------------------------------------------------------------- phase: pin'),
+  );
+
+  it('exists, is NOT in the default phase list, and is a dispatch-only job in the workflow', () => {
+    expect(runSh.indexOf('phase_rotation() {')).toBeGreaterThan(0);
+    const def = runSh.match(/^PHASES="\$\{PHASES:-([^}]*)\}"$/m);
+    expect(def?.[1]?.split(' ')).not.toContain('rotation');
+    const job = wf.jobs['z7-rotation-realtime'] as (Job & { if?: string }) | undefined;
+    expect(job, 'the real-time job is missing').toBeDefined();
+    expect(job?.if).toMatch(/workflow_dispatch/);
+    expect(job?.if).not.toMatch(/pull_request|push/);
+    const run = (job?.steps ?? []).map((s) => s.run ?? '').join('\n');
+    expect(run).toContain('PHASES="up images deploy verify rotation"');
+    // The main job still runs every default phase.
+    expect(JSON.stringify(wf.jobs['z7-identity-e2e'])).not.toContain('PHASES');
+  });
+
+  it('reads the overlap from the operator fixture and never backdates a stamp or restarts the operator', () => {
+    expect(runSh).toMatch(/jq -er '\.rotation\.overlapSeconds'/);
+    expect(body).not.toContain('signing-key-switched-at=');
+    expect(body).not.toContain('rollout restart');
+  });
+
+  it('(c) refuses a token of the staged key before it propagates, while the operator still signs with the old key', () => {
+    expect(body).toContain('rotation 2/5: before propagation');
+    expect(body).toContain('was already accepted by the warm function on the first probe');
+    expect(body).toContain('the operator signed with a key that was not yet published');
+  });
+
+  it('(a) a warm pod accepts the new key once the bound has passed', () => {
+    expect(body).toContain('rotation 3/5: after the propagation bound');
+    expect(body).toContain('a token signed by the NEW key is accepted after the bound');
+  });
+
+  it('(b) the previous key verifies through the overlap and a warm pod refuses it after', () => {
+    expect(body).toContain('rotation 4/5: the overlap, in real time');
+    expect(body).toContain('rotation 5/5: after the overlap');
+    expect(body).toContain('the previous key was retired before the overlap had passed');
+    expect(body).toContain('the retired previous key is refused by the warm');
+  });
+
+  it('asserts BOTH halves: the refusals are 401 (not just present), the overlap check wants 200', () => {
+    // The wanted status sits on a line of its own, so a mutation of it is a one-line diff.
+    expect(body).toMatch(/^ {2}local want_first=401$/m);
+    expect(body).toMatch(/^ {2}local retired_want_status=401$/m);
+    expect(body).toContain('[ "${first}" = "${want_first}" ]');
+    expect(body).toContain('"${retired_want_status}" unauthenticated');
+    const hold = runSh.slice(
+      runSh.indexOf('rotation_hold_check() {'),
+      runSh.indexOf('phase_rotation() {'),
+    );
+    expect(hold.length).toBeGreaterThan(100);
+    expect(hold).toMatch(
+      /\[ "\$\{s\}" = 200 \] \|\| fail "the previous key was refused during the overlap/,
+    );
+    expect(hold).toContain('--key-dir "${WORK}/key-old"');
+    // The loop itself runs the check on every tick (not only after it).
+    expect(body).toMatch(
+      /\n {4}rotation_hold_check "\$\{old_kid\}" "\$\{new_kid\}"\n {4}ticks=\$\(\(ticks \+ 1\)\)/,
+    );
+    // It also runs the check on the last minute, after the loop.
+    expect(body).toMatch(
+      /\n {2}rotation_hold_check "\$\{old_kid\}" "\$\{new_kid\}"\n {2}ok "\(b\)/,
+    );
+  });
+
+  it('runs the phases in order', () => {
+    const order = [
+      'rotation 1/5',
+      'rotation 2/5',
+      'rotation 3/5',
+      'rotation 4/5',
+      'rotation 5/5',
+    ].map((n) => body.indexOf(n));
+    for (const i of order) expect(i).toBeGreaterThan(0);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+});
+
 describe('the leak scan looks for every shape the operator itself redacts', () => {
   it('builds the needles with key-needles.ts, one class at a time, and names a class, never a needle', () => {
     expect(runSh).toContain('key-needles.ts');
@@ -802,7 +889,17 @@ describe('the mutation proof is anchored to the code it mutates', () => {
   // and 10 to 15 minutes each. These
   // checks need neither: they catch the cheap way a proof rots, an anchor that
   // no longer occurs once, or a reason the lane no longer prints.
-  const phases = ['up', 'images', 'deploy', 'verify', 'rotate', 'pin', 'squat', 'leaks'];
+  const phases = [
+    'up',
+    'images',
+    'deploy',
+    'verify',
+    'rotate',
+    'rotation',
+    'pin',
+    'squat',
+    'leaks',
+  ];
 
   it('has at least one row per property the lane claims', () => {
     expect(ROWS.map((r) => r.id)).toEqual([

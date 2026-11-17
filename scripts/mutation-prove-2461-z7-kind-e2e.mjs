@@ -362,6 +362,45 @@ const LANE_ROWS = [
     replacement: 'PHASES="${PHASES:-up images deploy verify rotate pin squat}"',
   },
   {
+    id: 'RT1',
+    subject: 'run',
+    claim: 'the real-time rotation no longer requires the old key to be REFUSED after the overlap',
+    anchor: '  local retired_want_status=401',
+    replacement: '  local retired_want_status=200',
+  },
+  {
+    id: 'RT2',
+    subject: 'run',
+    claim:
+      'the real-time rotation no longer requires the pre-propagation refusal of the staged key',
+    anchor: '  local want_first=401',
+    replacement: '  local want_first=200',
+  },
+  {
+    id: 'RT3',
+    subject: 'run',
+    claim: 'the one-hour real-time rotation joins the default (fast) phases',
+    anchor: 'PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"',
+    replacement: 'PHASES="${PHASES:-up images deploy verify rotate rotation pin squat leaks}"',
+  },
+  {
+    id: 'RT4',
+    subject: 'run',
+    claim:
+      'the real-time rotation restarts the operator, so retirement is no longer its own schedule',
+    anchor:
+      '  log "rotation 5/5: after the overlap the operator retires the previous key and a warm pod refuses it"',
+    replacement:
+      '  k -n "${OPERATOR_NS}" rollout restart deployment/kn-next-operator-controller-manager\n  log "rotation 5/5: after the overlap the operator retires the previous key and a warm pod refuses it"',
+  },
+  {
+    id: 'RT5',
+    subject: 'run',
+    claim: 'the overlap loop stops checking the previous key still verifies',
+    anchor: '    rotation_hold_check "${old_kid}" "${new_kid}"\n    ticks=$((ticks + 1))',
+    replacement: '    ticks=$((ticks + 1))',
+  },
+  {
     id: 'SQ1',
     subject: 'run',
     claim: 'the default phases drop the squatted-JWKS phase',

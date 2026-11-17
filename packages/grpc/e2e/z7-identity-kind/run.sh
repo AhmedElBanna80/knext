@@ -54,10 +54,13 @@
 #              or the objects the operator publishes.
 #
 # What is NOT proved here, stated rather than implied:
-#   - The overlap is a one-hour constant in the operator (no flag). Step 4
-#     backdates the Secret's switched-at stamp by two hours and restarts the
-#     operator, which re-derives the whole state from the Secret; the elapsed
-#     time logic itself is covered by the operator's unit tests.
+#   - The overlap is a one-hour constant in the operator (no flag). In the default
+#     run, step 4 of `rotate` backdates the Secret's switched-at stamp by two hours
+#     and restarts the operator, which re-derives the whole state from the Secret;
+#     the elapsed-time logic itself is covered by the operator's unit tests and the
+#     constant's value by its contract fixture. The `rotation` phase waits the
+#     real hour out instead (no backdating, no restart); it is off the default
+#     path because it takes over an hour.
 #   - NetworkPolicy enforcement needs a policy-capable CNI (that drill is
 #     packages/kn-next-operator/test/networkpolicy-enforcement-drill.sh).
 #   - The zone is a small Node server in front of the real generated glue, not a
@@ -82,7 +85,9 @@
 #                         testdata/zone-identity-contract.json.
 #   Z7_WITH_RUST          1 (default) also builds and binds the Rust function.
 #   PHASES                space-separated subset of: up images deploy verify
-#                         rotate pin squat leaks (default: all, in that order).
+#                         rotate rotation pin squat leaks (default: all but
+#                         `rotation`, in that order). `rotation` is the real-time
+#                         one-hour-overlap run (over an hour); ask for it by name.
 #   INTERNAL_PORT         local port of the port-forward to Knative's cluster-local gateway.
 set -euo pipefail
 # This script handles private keys: it must never trace, and what it creates is
@@ -110,6 +115,10 @@ SHIPPED_BOUND_SECONDS="$(jq -er '.rotation.propagationBoundSeconds' "${BOUND_FIX
   || { echo "cannot read .rotation.propagationBoundSeconds from ${BOUND_FIXTURE}" >&2; exit 64; }
 MIN_BOUND_SECONDS="$(jq -er '.rotation.propagationBoundMinimumSeconds' "${BOUND_FIXTURE}")" \
   || { echo "cannot read .rotation.propagationBoundMinimumSeconds from ${BOUND_FIXTURE}" >&2; exit 64; }
+# The overlap is a Go constant with no flag; the same fixture pins it, and the
+# rotation phase waits it out in real time.
+OVERLAP_SECONDS="$(jq -er '.rotation.overlapSeconds' "${BOUND_FIXTURE}")" \
+  || { echo "cannot read .rotation.overlapSeconds from ${BOUND_FIXTURE}" >&2; exit 64; }
 BOUND="${Z7_PROPAGATION_BOUND:-${SHIPPED_BOUND_SECONDS}s}"
 WITH_RUST="${Z7_WITH_RUST:-1}"
 PHASES="${PHASES:-up images deploy verify rotate pin squat leaks}"
@@ -899,6 +908,165 @@ phase_rotate() {
   printf '  retire requested -> old key refused     %s\n' "$(node -p "(${t_retired_refused} - ${t_retire}).toFixed(1)")"
 }
 
+# ---------------------------------------------------------------- phase: rotation
+#
+# The rotation in REAL TIME. Same operator, same warm pods, but nothing is
+# backdated and the operator is never restarted: the one-hour overlap is waited
+# out, and the operator itself retires the previous key. Three properties:
+#   (c) before the staged key reaches a warm pod, a token signed by it is
+#       refused, and the operator is still signing with the old key (it never
+#       signs with a key that is not yet published);
+#   (a) once the propagation bound has passed, a warm pod accepts the new key;
+#   (b) the previous key keeps verifying through the overlap and, after it, a
+#       warm pod refuses it.
+# The overlap is not tunable (a Go constant), so this takes OVERLAP_SECONDS plus
+# the bound: over an hour. The constant's value is pinned by the operator's unit
+# tests and the contract fixture this script reads it from.
+
+# rotation_hold_check <old kid> <new kid>: one tick of the overlap. The zone's call
+# succeeds, the zone signs with the new key, the previous key still verifies on a
+# warm function, and both keys are published.
+rotation_hold_check() {
+  local old=$1 new=$2 s
+  [ "$(secret_get current.kid)" = "${new}" ] || fail "the signing key changed during the overlap"
+  [ "$(secret_get previous.kid)" = "${old}" ] || fail "the previous key was retired before the overlap had passed"
+  [ "$(jwks_kids)" = "$(pair_kids "${old}" "${new}")" ] || fail "the JWKS stopped publishing both keys during the overlap"
+  zone_call '/example/get?id=after&sub=alice'
+  [ "${ZC_STATUS}" = 200 ] || fail "a call through the zone failed during the overlap (status ${ZC_STATUS})"
+  s="$(probe_status --host "${GO_HOST}" --issuer "${ISSUER}" --sub alice --rpc put --id hold --value h --auth signer --key-dir "${WORK}/key-old")"
+  [ "${s}" = 200 ] || fail "the previous key was refused during the overlap (status ${s})"
+}
+
+phase_rotation() {
+  log "rotation: the zone's key in real time (bound ${BOUND_SECONDS}s, overlap ${OVERLAP_SECONDS}s, nothing backdated, no operator restart)"
+  start_forwards
+  zone_settled || fail "the zone is not settled; run the deploy phase first"
+  local old_kid new_kid
+  old_kid="$(secret_get current.kid)"
+  [ -n "${old_kid}" ] || fail "no current key"
+  [ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] || fail "a rotation is already in flight; run the deploy phase for a clean zone"
+  export_key "${WORK}/key-old" current
+  local go_before zone_before operator_before rust_before=''
+  go_before="$(pod_idents "${GO_FN}")"
+  zone_before="$(pod_idents "${ZONE}")"
+  operator_before="$(k -n "${OPERATOR_NS}" get pods -l control-plane=controller-manager -o json | jq -r '[.items[] | "\(.metadata.uid) \([.status.containerStatuses[]?.restartCount] | add)"] | sort | join(",")')"
+  if [ "${WITH_RUST}" = 1 ]; then rust_before="$(pod_idents "${RUST_FN}")"; fi
+  [ "$(wc -l <<<"${go_before}")" -eq 1 ] || fail "want one Go function pod, got: ${go_before}"
+
+  log "rotation 1/5: request a rotation"
+  local nonce t_request
+  nonce="z7rt-$(date +%s)"
+  t_request="$(now_s)"
+  k -n "${NS}" annotate nextapp "${ZONE}" "apps.kn-next.dev/rotate-signing-key=${nonce}" --overwrite
+  wait_until 60 1 "the operator to take the rotation request" \
+    '[ "$(secret_annotation apps.kn-next.dev/signing-key-rotation-nonce)" = "${nonce}" ]'
+  [ "$(secret_get current.kid)" = "${old_kid}" ] \
+    || fail "the operator signed with a key that was not yet published (signing switched in the step that took the request)"
+  new_kid="$(secret_get next.kid)"
+  [ -n "${new_kid}" ] && [ "${new_kid}" != "${old_kid}" ] || fail "no distinct staged key after the request"
+  # The staged key's token is tried at once, before the kubelet can have carried
+  # the new JWKS to the warm pod: the first probe is the pre-propagation refusal.
+  export_key "${WORK}/key-new" next
+  local first
+  first="$(probe_status --host "${GO_HOST}" --issuer "${ISSUER}" --sub alice --rpc put --id staged --value s --auth signer --key-dir "${WORK}/key-new")"
+  wait_until 30 1 "the JWKS to publish both keys" '[ "$(jwks_kids)" = "$(pair_kids "${old_kid}" "${new_kid}")" ]'
+  wait_until 30 1 "the next-published-at stamp" '[ -n "$(secret_annotation apps.kn-next.dev/signing-key-next-published-at)" ]'
+  local published_at
+  published_at="$(epoch_of "$(secret_annotation apps.kn-next.dev/signing-key-next-published-at)")"
+  ok "staged key ${new_kid} published beside ${old_kid}"
+
+  log "rotation 2/5: before propagation, a token of the staged key is refused and the operator still signs with the old key"
+  local status propagated_after n=0
+  while :; do
+    n=$((n + 1))
+    status="$(probe_status --host "${GO_HOST}" --issuer "${ISSUER}" --sub alice --rpc put --id staged --value s --auth signer --key-dir "${WORK}/key-new")"
+    [ "$(secret_get current.kid)" = "${old_kid}" ] \
+      || fail "the operator signed with a key that was not yet published: signing switched before the warm function accepted the staged key"
+    [ "$(zone_kid)" = "${old_kid}" ] || fail "the zone signs with a key that has not propagated"
+    if [ "${status}" = 200 ]; then break; fi
+    [ "${status}" = 401 ] || fail "status '${status}' while the staged key propagates; want 401 until it does"
+    sleep 2
+  done
+  local want_first=401
+  [ "${first}" = "${want_first}" ] \
+    || fail "a token of the staged key was already accepted by the warm function on the first probe: the refusal before propagation was not observed"
+  propagated_after="$(node -p "(Date.now() / 1000 - ${published_at}).toFixed(1)")"
+  ok "(c) the warm function refused the staged key's token (${n} probes, 401) until ${propagated_after}s after the publish, and the operator kept signing with ${old_kid} throughout"
+
+  log "rotation 3/5: after the propagation bound the operator switches and a warm pod accepts the new key"
+  wait_until $((BOUND_SECONDS + 90)) 2 "signing to switch to the new key" '[ "$(secret_get current.kid)" = "${new_kid}" ]'
+  local switched_stamp bound_held
+  switched_stamp="$(epoch_of "$(secret_annotation apps.kn-next.dev/signing-key-current-since)")"
+  bound_held="$(node -p "(${switched_stamp} - ${published_at}).toFixed(1)")"
+  node -e "process.exit(${switched_stamp} - ${published_at} >= ${BOUND_SECONDS} ? 0 : 1)" \
+    || fail "the operator switched ${bound_held}s after publishing; the bound is ${BOUND_SECONDS}s"
+  wait_until 300 3 "the zone's signer to use the new key" '[ "$(zone_kid)" = "${new_kid}" ]'
+  local fn host
+  for fn in go rust; do
+    [ "${fn}" = rust ] && [ "${WITH_RUST}" != 1 ] && continue
+    host="${GO_HOST}"
+    [ "${fn}" = rust ] && host="${RUST_HOST}"
+    expect "(a) ${fn}: a token signed by the NEW key is accepted after the bound" 200 "" \
+      --host "${host}" --issuer "${ISSUER}" --sub alice --rpc put --id "rt-n-${fn}" --value n --auth signer --key-dir "${WORK}/key-new"
+  done
+  expect_zone "Go: a call through the zone, signed with the new key, succeeds" '/example/put?id=after&value=v2&sub=alice' 200 '.ok == true'
+  ok "switched ${bound_held}s after the publish (bound ${BOUND_SECONDS}s); the new key signs and verifies on the warm pods"
+
+  log "rotation 4/5: the overlap, in real time (${OVERLAP_SECONDS}s from the operator's switch stamp)"
+  wait_until 60 1 "the operator's switch stamp" '[ -n "$(secret_annotation apps.kn-next.dev/signing-key-switched-at)" ]'
+  local switched_at overlap_end
+  switched_at="$(epoch_of "$(secret_annotation apps.kn-next.dev/signing-key-switched-at)")"
+  overlap_end="$(node -p "${switched_at} + ${OVERLAP_SECONDS}")"
+  ok "overlap started $(node -p "new Date(${switched_at} * 1000).toISOString()") and ends $(node -p "new Date(${overlap_end} * 1000).toISOString()")"
+  # Hold until a minute before the end, checking every tick that the previous key
+  # still verifies, calls through the zone succeed and both keys are published.
+  local ticks=0
+  while [ "$(node -p "Date.now() / 1000 < ${overlap_end} - 60 ? 1 : 0")" = 1 ]; do
+    rotation_hold_check "${old_kid}" "${new_kid}"
+    ticks=$((ticks + 1))
+    [ $((ticks % 20)) -ne 0 ] || ok "overlap tick ${ticks}: $(node -p "(${overlap_end} - Date.now() / 1000).toFixed(0)")s left; the previous key still verifies"
+    sleep 20
+  done
+  [ "${ticks}" -ge 10 ] || fail "only ${ticks} overlap checks ran; too few to say the previous key verified through the overlap"
+  rotation_hold_check "${old_kid}" "${new_kid}"
+  ok "(b) the previous key verified on every one of ${ticks} checks through the overlap, up to the last minute"
+
+  log "rotation 5/5: after the overlap the operator retires the previous key and a warm pod refuses it"
+  local retired_want_status=401
+  wait_until 900 5 "the operator to retire the previous key by itself" '[ -z "$(secret_get previous.kid)" ]'
+  local t_retired
+  t_retired="$(now_s)"
+  node -e "process.exit(${t_retired} >= ${overlap_end} ? 0 : 1)" \
+    || fail "the previous key was retired before the overlap had passed"
+  [ "$(secret_get current.kid)" = "${new_kid}" ] || fail "retirement changed the signing key"
+  wait_until 30 1 "the JWKS to publish only the new key" '[ "$(jwks_kids)" = "${new_kid}" ]'
+  wait_until 30 1 "KeyActive" '[ "$(zone_condition ZoneSigningKey)" = "True/KeyActive" ]'
+  for fn in go rust; do
+    [ "${fn}" = rust ] && [ "${WITH_RUST}" != 1 ] && continue
+    host="${GO_HOST}"
+    [ "${fn}" = rust ] && host="${RUST_HOST}"
+    wait_until $((BOUND_SECONDS + 150)) 2 "the warm ${fn} function to refuse the retired key" \
+      "[ \"\$(probe_status --host ${host} --issuer ${ISSUER} --sub alice --rpc put --id r --value r --auth signer --key-dir ${WORK}/key-old)\" = 401 ]"
+    expect "(b) ${fn}: the retired previous key is refused by the warm function after the overlap" "${retired_want_status}" unauthenticated \
+      --host "${host}" --issuer "${ISSUER}" --sub alice --rpc put --id r --value r --auth signer --key-dir "${WORK}/key-old"
+    expect "${fn}: the new key's token is still accepted" 200 "" \
+      --host "${host}" --issuer "${ISSUER}" --sub alice --rpc put --id n2 --value n --auth signer --key-dir "${WORK}/key-new"
+  done
+  expect_zone "Go: the zone's calls still succeed after retirement" '/example/get?id=after&sub=alice' 200 '.value == "v2"'
+  [ "$(pod_idents "${GO_FN}")" = "${go_before}" ] || fail "the Go function pod was restarted or replaced during the rotation"
+  [ "$(pod_idents "${ZONE}")" = "${zone_before}" ] || fail "the zone pod was restarted or replaced during the rotation"
+  if [ "${WITH_RUST}" = 1 ]; then
+    [ "$(pod_idents "${RUST_FN}")" = "${rust_before}" ] || fail "the Rust function pod was restarted or replaced during the rotation"
+  fi
+  [ "$(k -n "${OPERATOR_NS}" get pods -l control-plane=controller-manager -o json | jq -r '[.items[] | "\(.metadata.uid) \([.status.containerStatuses[]?.restartCount] | add)"] | sort | join(",")')" = "${operator_before}" ] \
+    || fail "the operator restarted during the real-time rotation: retirement must come from its own schedule"
+  log "real-time rotation timeline (seconds)"
+  printf '  requested -> warm fn accepts staged key  %s   (bound %s)\n' "${propagated_after}" "${BOUND_SECONDS}"
+  printf '  published -> signing switched            %s\n' "${bound_held}"
+  printf '  switch stamp -> previous key retired     %s   (overlap %s)\n' "$(node -p "(${t_retired} - ${switched_at}).toFixed(1)")" "${OVERLAP_SECONDS}"
+  printf '  whole run                                %s\n' "$(node -p "(${t_retired} - ${t_request}).toFixed(1)")"
+}
+
 # ---------------------------------------------------------------- phase: pin
 
 # A second zone, so the first one's key and rotation state are untouched. It has
@@ -1258,7 +1426,7 @@ phase_leaks() {
 # ---------------------------------------------------------------- main
 
 if kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then use_cluster; fi
-for phase in up images deploy verify rotate pin squat leaks; do
+for phase in up images deploy verify rotate rotation pin squat leaks; do
   if has_phase "${phase}"; then
     "phase_${phase}"
   fi

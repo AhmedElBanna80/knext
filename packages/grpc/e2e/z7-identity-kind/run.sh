@@ -999,7 +999,7 @@ phase_rotation() {
   switched_stamp="$(epoch_of "$(secret_annotation apps.kn-next.dev/signing-key-current-since)")"
   bound_held="$(node -p "(${switched_stamp} - ${published_at}).toFixed(1)")"
   node -e "process.exit(${switched_stamp} - ${published_at} >= ${BOUND_SECONDS} ? 0 : 1)" \
-    || fail "the operator switched ${bound_held}s after publishing; the bound is ${BOUND_SECONDS}s"
+    || fail "real-time: signing switched ${bound_held}s after the publish; the bound is ${BOUND_SECONDS}s"
   wait_until 300 3 "the zone's signer to use the new key" '[ "$(zone_kid)" = "${new_kid}" ]'
   local fn host
   for fn in go rust; do

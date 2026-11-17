@@ -245,9 +245,10 @@ const LANE_ROWS = [
     id: 'L01',
     subject: 'workflow',
     claim: 'a red step is allowed to pass (continue-on-error)',
-    anchor: '        run: packages/grpc/e2e/z7-identity-kind/run.sh\n',
+    anchor:
+      '        if: ${{ !inputs.rotation_realtime }}\n        run: packages/grpc/e2e/z7-identity-kind/run.sh\n',
     replacement:
-      '        run: packages/grpc/e2e/z7-identity-kind/run.sh\n        continue-on-error: true\n',
+      '        if: ${{ !inputs.rotation_realtime }}\n        run: packages/grpc/e2e/z7-identity-kind/run.sh\n        continue-on-error: true\n',
     validate: validateYaml,
   },
   {

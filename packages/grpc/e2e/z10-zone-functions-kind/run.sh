@@ -334,16 +334,19 @@ grpc_probe() {
     || fail "${desc}: the client's code is ${GP_CODE}, want ${want_code}: it does not match the grpc-status ${GP_STATUS} the wire carried"
 }
 
-# grpc_cold <description> <rpc> <query> <want code> <want grpc-status>: grpc_probe against
-# a function with no pod at all, which must have a pod afterwards (the call woke it).
-grpc_cold() {
-  local fn=$GO_FN desc=$1 started elapsed
-  [ "$(all_pods "${fn}")" = 0 ] || fail "${desc}: ${fn} has a pod before the call, so the call would not be cold"
-  started=${SECONDS}
-  grpc_probe "$@"
-  elapsed=$((SECONDS - started))
-  [ -n "$(pod_uids "${fn}")" ] || fail "${desc}: the call was answered but ${fn} has no pod: it did not go through a cold start"
-  ok "${desc} (cold, grpc-status ${GP_STATUS} from the ${GP_SOURCE}, code ${GP_CODE}, ${elapsed}s through the activator)"
+# grpc_cold_pre / grpc_cold_post <description>: bracket a grpc_probe against a function with
+# no pod at all: before it the function must have no pod, after it it must have one (the call
+# woke it). Two helpers, not one wrapper around grpc_probe: the apply-safety scan follows
+# calls to a bounded depth and a wrapper pushes the phase past it.
+grpc_cold_pre() {
+  local fn=$GO_FN
+  [ "$(all_pods "${fn}")" = 0 ] || fail "$1: ${fn} has a pod before the call, so the call would not be cold"
+  GC_STARTED=${SECONDS}
+}
+grpc_cold_post() {
+  local fn=$GO_FN elapsed=$((SECONDS - GC_STARTED))
+  [ -n "$(pod_uids "${fn}")" ] || fail "$1: the call was answered but ${fn} has no pod: it did not go through a cold start"
+  ok "$1 (cold, grpc-status ${GP_STATUS} from the ${GP_SOURCE}, code ${GP_CODE}, ${elapsed}s through the activator)"
 }
 
 phase_grpctrailers() {
@@ -351,13 +354,17 @@ phase_grpctrailers() {
   [ -n "${ZONE_HOST}" ] || start_forwards
   # A success first: the call wakes the function, and its trailer carries grpc-status 0.
   await_zero "${GO_FN}"
-  grpc_cold "a gRPC write to the cold Go function succeeds with grpc-status 0" \
-    PutItem "id=grpc-1&value=v1" OK 0 trailer
+  local d1="a gRPC write to the cold Go function succeeds with grpc-status 0"
+  grpc_cold_pre "${d1}"
+  grpc_probe "${d1}" PutItem "id=grpc-1&value=v1" OK 0 trailer
+  grpc_cold_post "${d1}"
   # Then the error: NotFound is what the function raises for a missing item, and over gRPC
   # it travels ONLY as the grpc-status trailer (5), not as an HTTP status or a JSON body.
   await_zero "${GO_FN}"
-  grpc_cold "a gRPC read of a missing item through the cold activator comes back NotFound from the grpc-status trailer" \
-    GetItem "id=missing" NotFound 5 any
+  local d2="a gRPC read of a missing item through the cold activator comes back NotFound from the grpc-status trailer"
+  grpc_cold_pre "${d2}"
+  grpc_probe "${d2}" GetItem "id=missing" NotFound 5 any
+  grpc_cold_post "${d2}"
   local cold_code=$GP_CODE cold_status=$GP_STATUS
   grpc_probe "warm control: the same gRPC read on the warm pod" GetItem "id=missing" NotFound 5 any
   [ "${GP_CODE}" = "${cold_code}" ] && [ "${GP_STATUS}" = "${cold_status}" ] \

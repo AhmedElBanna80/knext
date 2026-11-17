@@ -154,14 +154,22 @@ describe('the gRPC status trailer survives the cold activator path (Z11 / D15)',
 
   it('waits for scale-to-zero before each cold call, and a cold call needs zero pods then a pod', () => {
     expect(g.match(/await_zero "\$\{GO_FN\}"/g)?.length).toBe(2);
-    const cold = body('grpc_cold');
-    expect(cold).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
-    expect(cold).toMatch(/\[ -n "\$\(pod_uids "\$\{fn\}"\)" \] \|\| fail/);
-    expect(cold.indexOf('= 0 ]')).toBeLessThan(cold.indexOf('grpc_probe'));
-    expect(cold.indexOf('pod_uids')).toBeGreaterThan(cold.indexOf('grpc_probe'));
+    const pre = body('grpc_cold_pre');
+    const post = body('grpc_cold_post');
+    expect(pre).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
+    expect(post).toMatch(/\[ -n "\$\(pod_uids "\$\{fn\}"\)" \] \|\| fail/);
+    // Each cold call is await_zero, then pre, then the probe, then post, in that order.
     for (const m of g.matchAll(/await_zero "\$\{GO_FN\}"/g)) {
-      expect(g.indexOf('grpc_cold', m.index)).toBeGreaterThan(m.index as number);
+      const at = m.index as number;
+      const p1 = g.indexOf('grpc_cold_pre', at);
+      const p2 = g.indexOf('grpc_probe', p1);
+      const p3 = g.indexOf('grpc_cold_post', p2);
+      expect(p1).toBeGreaterThan(at);
+      expect(p2).toBeGreaterThan(p1);
+      expect(p3).toBeGreaterThan(p2);
     }
+    expect(g.match(/grpc_cold_pre "/g)?.length).toBe(2);
+    expect(g.match(/grpc_cold_post "/g)?.length).toBe(2);
   });
 
   it('fails closed: a missing trailer, a wrong status, or a code that disagrees with it all fail', () => {
@@ -186,7 +194,7 @@ describe('the gRPC status trailer survives the cold activator path (Z11 / D15)',
     expect(g).toMatch(/PutItem "id=grpc-1&value=v1" OK 0 trailer/);
     expect(g).toMatch(/PutItem "id=grpc-2&value=v2" OK 0 trailer/);
     expect(g.match(/GetItem "id=missing" NotFound 5 any/g)?.length).toBe(2);
-    expect(body('grpc_cold')).toContain('from the ${GP_SOURCE}');
+    expect(body('grpc_cold_post')).toContain('from the ${GP_SOURCE}');
   });
 
   it('a success carries grpc-status 0 and a missing item is NotFound from grpc-status 5', () => {

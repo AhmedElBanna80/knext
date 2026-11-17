@@ -134,12 +134,14 @@ mkdir -p "$WORK/img"
 (cd "$OP" && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -o "$WORK/img/manager" ./cmd)
 printf 'FROM %s\nCOPY manager /manager\nENTRYPOINT ["/manager"]\n' "$BASE_IMAGE" >"$WORK/img/Dockerfile"
 docker build -q -t "$OP_IMAGE" "$WORK/img" >/dev/null
-docker image inspect "$REDIS_IMAGE" >/dev/null 2>&1 || docker pull -q "$REDIS_IMAGE" >/dev/null
 
 echo "== kind cluster $CLUSTER"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
 kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 180s >/dev/null
-kind load docker-image "$OP_IMAGE" "$REDIS_IMAGE" --name "$CLUSTER" >/dev/null
+# Only the locally built operator image is loaded. The Redis image is a multi-platform index:
+# `kind load` imports it with --all-platforms and fails ("content digest ... not found") when
+# the host holds one platform. The node pulls the digest-pinned image itself, as the other kind lanes do.
+kind load docker-image "$OP_IMAGE" --name "$CLUSTER" >/dev/null
 
 echo "== CRDs (knext + Knative Serving CRDs only), Redis, operator"
 k apply -f "$OP/config/crd/bases" >/dev/null

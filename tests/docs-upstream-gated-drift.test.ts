@@ -68,7 +68,9 @@ describe('matrix status the docs are written against', () => {
 
   it('PPR / Cache Components is ⛔ and outside the compatibility suite', () => {
     expect(matrixStatus('PPR / Cache Components')).toBe('⛔');
-    expect(MATRIX).toMatch(/PPR \/ Cache Components[^\n]*not covered by the compatibility suite/);
+    expect(MATRIX).toMatch(
+      /PPR \/ Cache Components[^\n]*\*\*not\*\* covered by the compatibility suite/,
+    );
   });
 });
 

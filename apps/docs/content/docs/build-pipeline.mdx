@@ -934,12 +934,21 @@ request against the published package, but has no official-suite number yet. Rea
 status on the [compatibility matrix](/docs/compat-matrix) rather than assuming the standalone
 number, or the Bun vinext number, carries over to Node.
 
-The remaining gaps are largely a function of how far the underlying vinext framework has matured on
-areas such as streaming/Suspense flushing, Partial Prerendering, Cache Components (`'use cache'`),
-edge middleware, and internationalized routing. The matrix marks each honestly — ✅ only where a
+The remaining gaps are specific, and the matrix marks each one honestly — ✅ only where a
 red-on-fail check backs it, ⚠️ where something is implemented but unguarded, and ❌/⛔ where it is a
-known or upstream-gated gap. Nothing there is papered over, and the vinext number is published as it
-is measured, even when it is low. Track current known gaps on the project's public issue tracker.
+known gap or is not yet supported upstream. Nothing there is papered over, and the vinext number is
+published as it is measured, even when it is low.
+
+- **Edge-runtime middleware is not supported.** knext runs `middleware.ts` on the Node runtime, and
+  that path is covered by a red-on-fail check.
+- **Partial Prerendering and Cache Components are opt-in.** `knext create --cache-components` turns
+  them on for a new Turbopack or webpack app. They are not part of the compatibility credential, so
+  this page makes no parity claim for them. On the Node and Bun runtimes, the `'use cache'` directive
+  is backed by knext's shared Redis handler when the app uses knext's `cacheHandler`.
+- **Internationalized routing has no dedicated matrix row.** The vinext axis row records its test
+  results, and nothing else is claimed.
+
+Track current known gaps on the project's public issue tracker.
 
 <Callout type="info">
 **Which page answers what.** This page covers *how* the build works and what it needs. For the

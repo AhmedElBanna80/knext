@@ -255,8 +255,19 @@ These came from the system designer as tech-debt or test items, not blockers. Th
 
 - [x] Types and reconciler (Z8 #2419, Z8b #2477, #2490; the ownerRef wording is superseded by Amendment 2): ownerRef, same-zone rejection, allowlist (owning zone's `db-bind`,
       same-zone-marked Secrets, `imagePullSecrets` exempt), retention, served version.
-- [ ] Open, Z9 #2054 (cluster-local bound: #2276). Wake-ahead through a function-agnostic core seam; the firing point and seam chosen by Z9's
+- [x] Z9 #2054 (cluster-local bound: #2276). Wake-ahead through a function-agnostic core seam; the firing point and seam chosen by Z9's
       measurement (#2054); the seam's bounds from Decision 4, with the never-answering-GET test.
+      *(Closed 2026-11-17, S7-11.)* Seam: a process-start primer (`wake-ahead.cjs`), fired before Next
+      boots, as the Z2 bench recommended; the never-answering-GET test is `wake-ahead.test.ts`. Margin,
+      from the Z10 kind lane's `wake` phase on `integration/v2` (`z7-identity-kind-e2e.yml`): the zone's
+      first call took 41–69 ms opted in against 609–804 ms opted out over seven runs, a margin of
+      566–738 ms (median 662 ms); latest
+      [run 43987101504](https://github.com/AhmedElBanna80/knext/actions/runs/43987101504): 55 ms against
+      659 ms. **Gap, named:** the lane waits for the function's pod before the zone's first call, so it
+      proves the wake removes the function's cold start once it lands, not how early the primer fires
+      inside a real chained cold start (the Z2 prediction of up to ~1.3 s off a Node chain was made on a
+      Rosetta laptop and is not re-measured on CI). No OKE number exists. The opt-in generalisation to
+      apps is Proposed in [ADR-0073](0073-opt-in-predictive-prewake.md).
 - [x] Docs (D3, #2071): the namespace is the trust boundary; zones whose owners do not trust each
       other go in separate namespaces.
 - [x] Per-zone key Secret and JWKS ConfigMap; rotation in the order above (Z7 #2458/#2459/#2460/#2473/#2491; OKE rotation proofs open: #2461, #2483).

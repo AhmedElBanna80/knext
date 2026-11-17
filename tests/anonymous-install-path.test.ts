@@ -269,6 +269,31 @@ describe('retargetInstallUrl — an explicit stand-in repo/channel, never a sile
     expect(result.findings.filter((f) => f.reason === 'documented-url-drift')).toEqual([]);
   });
 
+  it('the published-bundle nightly waits for the Knative webhook to be routable BEFORE applying install.yaml', () => {
+    const wf = read(resolve(REPO_ROOT, '.github/workflows/published-bundle-kind-nightly.yml'));
+    const apply = wf.indexOf('- name: Apply the documented install.yaml, unmodified');
+    const wait = wf.indexOf('- name: Wait for the Knative webhook to be routable');
+    expect(apply).toBeGreaterThan(0);
+    expect(wait).toBeGreaterThan(0);
+    expect(wait).toBeLessThan(apply);
+    const step = wf.slice(wait, apply);
+    // Deployment Available is not enough: the admission path must actually answer
+    // (install.yaml carries a knative-serving ConfigMap the webhook validates).
+    // The probe is a server-side dry-run no-op patch of that ConfigMap.
+    expect(step).toMatch(
+      /until kubectl patch configmap\/config-network -n knative-serving\s*\\\s*--type=merge -p '\{"data":\{\}\}' --dry-run=server/,
+    );
+    // Bounded retry that fails loudly rather than hanging or passing.
+    expect(step).toMatch(/-ge 60\b/);
+    expect(step).toContain('exit 1');
+    expect(step).not.toContain('seq ');
+    // Ordering: Knative install < wait < apply.
+    const install = wf.indexOf('- name: Install Knative Serving + Kourier');
+    expect(install).toBeGreaterThan(0);
+    expect(install).toBeLessThan(wait);
+    expect(wait).toBeLessThan(apply);
+  });
+
   it('the published-bundle nightly retargets only off getknext-dev/knext, to operator-edge', () => {
     const wf = read(resolve(REPO_ROOT, '.github/workflows/published-bundle-kind-nightly.yml'));
     const step = wf.slice(wf.indexOf('- name: Apply the documented install.yaml, unmodified'));

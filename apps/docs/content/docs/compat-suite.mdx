@@ -112,8 +112,9 @@ is added pre-emptively — only from an observed, evidenced failure.
 
 ### 1 · Documented exclusions
 
-A small, fixed set of test categories is excluded because knext does not implement the capability
-they test, or because the suite does not cover it, not because the tests fail unpredictably:
+A small, fixed set of test categories is excluded because knext does not support the capability
+they test, or because it is opt-in and the compatibility suite does not cover it yet, not because the
+tests fail unpredictably:
 
 | Category | Why it's excluded |
 |---|---|
@@ -201,7 +202,7 @@ infer it from an absence:
   four v1.0 cells above — see [Bun & the compiled executable](/docs/bun-runtime) for its own,
   separately-tracked status.
 - **Edge Middleware.** Listed above — the suite cannot test it against knext, because knext does
-  not implement it, not because of a credentialing gap.
+  not support it, not because of a credentialing gap.
 - **Partial Prerendering and Cache Components.** Listed above — the suite does not cover them, and
   knext makes no parity claim for them.
 - **Cluster-level behavior.** The suite validates one deployed app's HTTP behavior against a real

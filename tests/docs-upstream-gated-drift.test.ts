@@ -90,17 +90,41 @@ function uncaveatedClaims(text: string): string[] {
   return out;
 }
 
-/** Sentences that call these capabilities an exclusion or "not implemented". */
+/**
+ * Exclusion claims ("does not implement", "architectural exclusion") checked per SECTION: the
+ * claim's line up to the next markdown heading, tables included. A section that makes such a
+ * claim and also names a capability subject (PPR, Cache Components, 'use cache') is flagged —
+ * the subject may sit in a table or paragraph far from the sentence, so proximity is not enough.
+ * Returns the flagged claim lines.
+ */
 function exclusionClaims(text: string): string[] {
-  // Proximity, not co-occurrence: a long table row can mention both far apart without linking them.
-  const near = (s: string): boolean => {
-    for (const m of s.matchAll(new RegExp(EXCLUSION.source, 'gi'))) {
-      const at = m.index ?? 0;
-      if (SUBJECT.test(s.slice(Math.max(0, at - 120), at + m[0].length + 120))) return true;
+  const lines = text.split('\n');
+  const lineStarts: number[] = [];
+  let offset = 0;
+  for (const l of lines) {
+    lineStarts.push(offset);
+    offset += l.length + 1;
+  }
+  const lineOf = (pos: number): number => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((lineStarts[mid] ?? 0) <= pos) lo = mid;
+      else hi = mid - 1;
     }
-    return false;
+    return lo;
   };
-  return sentences(text).filter(near);
+  const isHeading = (i: number): boolean => /^\s*#{1,6}\s/.test(lines[i] ?? '');
+  const flagged = new Set<number>();
+  for (const m of text.matchAll(new RegExp(EXCLUSION.source, 'gi'))) {
+    const start = lineOf(m.index ?? 0);
+    if (flagged.has(start)) continue;
+    let end = start + 1;
+    while (end < lines.length && !isHeading(end)) end++;
+    if (SUBJECT.test(lines.slice(start, end).join('\n'))) flagged.add(start);
+  }
+  return [...flagged].map((i) => (lines[i] ?? '').trim());
 }
 
 describe('scan coverage', () => {

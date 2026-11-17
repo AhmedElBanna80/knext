@@ -270,13 +270,14 @@ describe('the workflow is as safe as the rest of CI', () => {
 
   it('bounds the job and runs the lane with every phase and the Rust function', () => {
     for (const job of Object.values(wf.jobs)) {
-      expect(typeof job['timeout-minutes']).toBe('number');
-      // The real-time rotation waits a one-hour constant: it alone may run longer.
-      const cap = job === wf.jobs['z7-rotation-realtime'] ? 120 : 75;
-      expect(job['timeout-minutes'] as number).toBeLessThanOrEqual(cap);
+      // A number, or the one expression that gives the real-time dispatch 120 and
+      // everything else 55 (the one-hour overlap does not fit the default bound).
+      const t = job['timeout-minutes'];
+      if (typeof t === 'number') expect(t).toBeLessThanOrEqual(75);
+      else expect(String(t)).toMatch(/^\$\{\{ inputs\.rotation_realtime && 120 \|\| 55 \}\}$/);
     }
-    // The default job runs every default phase: only the dispatch-only job names any.
-    expect(JSON.stringify(wf.jobs['z7-identity-e2e'])).not.toMatch(/\bPHASES\b/);
+    // No default step overrides the phases: only the dispatch-input step does.
+    expect(wfText.match(/\bPHASES\b/g)).toHaveLength(1);
     const env = Object.values(wf.jobs).flatMap((j) => Object.entries(j.env ?? {}));
     expect(Object.fromEntries(env).Z7_WITH_RUST).toBe('1');
     const run = steps.map((s) => s.run ?? '').join('\n');
@@ -292,11 +293,9 @@ describe('the workflow is as safe as the rest of CI', () => {
 
   it('deletes the cluster it created, even on failure, and nothing else', () => {
     const teardown = steps.filter((s) => (s.run ?? '').includes('kind delete cluster'));
-    expect(teardown).toHaveLength(Object.keys(wf.jobs).length);
-    for (const t of teardown) {
-      expect(t.if).toMatch(/always\(\)/);
-      expect(t.run).toContain('--name "${KIND_CLUSTER}"');
-    }
+    expect(teardown).toHaveLength(1);
+    expect((teardown[0] as Step).if).toMatch(/always\(\)/);
+    expect((teardown[0] as Step).run).toContain('--name "${KIND_CLUSTER}"');
     expect(wfText).toContain('KIND_CLUSTER: z7-identity-e2e');
   });
 });
@@ -732,18 +731,29 @@ describe('the real-time rotation phase proves the three exit properties and stay
     runSh.indexOf('# ---------------------------------------------------------------- phase: pin'),
   );
 
-  it('exists, is NOT in the default phase list, and is a dispatch-only job in the workflow', () => {
+  it('exists, is NOT in the default phase list, and is reached only by a dispatch input', () => {
     expect(runSh.indexOf('phase_rotation() {')).toBeGreaterThan(0);
     const def = runSh.match(/^PHASES="\$\{PHASES:-([^}]*)\}"$/m);
     expect(def?.[1]?.split(' ')).not.toContain('rotation');
-    const job = wf.jobs['z7-rotation-realtime'] as (Job & { if?: string }) | undefined;
-    expect(job, 'the real-time job is missing').toBeDefined();
-    expect(job?.if).toMatch(/workflow_dispatch/);
-    expect(job?.if).not.toMatch(/pull_request|push/);
-    const run = (job?.steps ?? []).map((s) => s.run ?? '').join('\n');
-    expect(run).toContain('PHASES="up images deploy verify rotation"');
-    // The main job still runs every default phase.
-    expect(JSON.stringify(wf.jobs['z7-identity-e2e'])).not.toContain('PHASES');
+    const dispatch = wf.on.workflow_dispatch as {
+      inputs?: Record<string, { type?: string; default?: unknown }>;
+    };
+    expect(dispatch.inputs?.rotation_realtime?.type).toBe('boolean');
+    expect(dispatch.inputs?.rotation_realtime?.default).toBe(false);
+    const rt = steps.filter((s) => (s.env as Record<string, string> | undefined)?.PHASES);
+    expect(rt).toHaveLength(1);
+    expect((rt[0] as Step).if).toMatch(/inputs\.rotation_realtime/);
+    expect((rt[0] as Step).if).not.toMatch(/!/);
+    expect(((rt[0] as Step).env as Record<string, string>).PHASES).toBe(
+      'up images deploy verify rotation',
+    );
+    // The default steps are skipped on that dispatch, and run on everything else.
+    const defaults = steps.filter((s) => /run\.sh/.test(s.run ?? '') && s !== rt[0]);
+    expect(defaults.length).toBeGreaterThanOrEqual(2);
+    for (const s of defaults) expect(s.if).toMatch(/!inputs\.rotation_realtime/);
+    // The longer bound is only for that run.
+    const job = wf.jobs['z7-identity-e2e'] as Job;
+    expect(String(job['timeout-minutes'])).toMatch(/inputs\.rotation_realtime && 120 \|\| 55/);
   });
 
   it('reads the overlap from the operator fixture and never backdates a stamp or restarts the operator', () => {

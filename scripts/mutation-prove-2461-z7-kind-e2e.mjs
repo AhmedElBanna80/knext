@@ -401,6 +401,14 @@ const LANE_ROWS = [
     replacement: '    ticks=$((ticks + 1))',
   },
   {
+    id: 'RT6',
+    subject: 'workflow',
+    claim: 'the real-time rotation step runs on every event, not only on the dispatch input',
+    anchor: '        if: ${{ inputs.rotation_realtime }}\n        env:',
+    replacement: '        if: ${{ always() }}\n        env:',
+    validate: validateYaml,
+  },
+  {
     id: 'SQ1',
     subject: 'run',
     claim: 'the default phases drop the squatted-JWKS phase',

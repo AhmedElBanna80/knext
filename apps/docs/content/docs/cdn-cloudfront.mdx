@@ -9,8 +9,12 @@ invalidation need AWS request signing, which knext does not do. Read [CDN cachin
 ## What you do
 
 - Create a CloudFront distribution whose origin is the app's public hostname.
-- Use a cache policy that honours the origin's `Cache-Control` (minimum TTL 0), and do not add the
-  query string to the cache key unless you need it.
+- Use a cache policy that honours the origin's `Cache-Control` (minimum TTL 0).
+- Expect no edge caching for query strings. knext never edge-caches a URL that has a query string,
+  even if your cache policy includes the query, and there is no opt-in. Landing pages with tracking
+  parameters (`?utm_*`, `?fbclid`) therefore go to the origin uncached. If you need pages that vary
+  by query string cached at the edge, use a CDN whose cache key includes the query string, such as
+  [Cloudflare](/docs/cdn-cloudflare).
 - knext sends a `Cache-Tag` header. Check CloudFront's own documentation for whether and how a
   distribution can use cache tags; knext does not depend on it.
 
@@ -38,10 +42,17 @@ This differs from the value the Next.js compatibility suite checks (`must-revali
 because it would disable stale-while-revalidate at the shared cache). **A CloudFront configuration is
 therefore outside the compat-verified setup.** Do not describe it as compatibility-verified.
 
-No request with a query string is edge-cached on this provider, `_rsc` navigations included: the
-cache key depends on a policy knext cannot see, and a key without the query would let one query's
-answer be served for another. Those requests still work; they go to the origin. The same page
-without a query string is edge-cached as usual.
+No request with a query string is edge-cached on this provider, `_rsc` navigations included. There is
+no opt-in: knext never edge-caches a URL that has a query string, even if your cache policy includes
+the query, because the cache key depends on a policy knext cannot see. Those requests still work;
+they go to the origin. The same page without a query string is edge-cached as usual.
+
+The default cache policy, `CachingOptimized`, leaves the query string out of the cache key and does
+not forward it to the origin. So `/search?q=b` is answered with the page rendered for `/search`, and
+that page is cached under `/search`. The risky setup is an origin request policy that forwards the
+query string: then the origin renders each query, but the cache key still ignores it, so one answer
+would be served for every query. knext's rule above covers that case, because query-string requests
+are never edge-cached.
 
 ## Freshness without purge
 

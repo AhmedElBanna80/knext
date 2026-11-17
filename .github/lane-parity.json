@@ -94,16 +94,16 @@
     {
       "path": "tests/bun-version-pins.test.ts",
       "lane": "main",
-      "here": "f34705b20fc163e9f5db8684d9cfe6cc043f9024",
+      "here": "ab28009e012762d07212fb39ac3d045388c6befe",
       "there": "b1617cff8191f3f35756cb9806010c0aa3a1d11e",
-      "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. main's cache-handler-on-every-Next-minor step is on v2 too (next-minor-matrix.yml, with wider triggers), so nothing is left to port. v2 runs one leg (16.4) by design: its peer range admits 16.4 only, and its handler has no 16.3 seed to prove."
+      "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. main's cache-handler-on-every-Next-minor step is on v2 too (next-minor-matrix.yml, with wider triggers), so nothing is left to port. v2 runs one leg (16.4) by design: its peer range admits 16.4 only, and its handler has no 16.3 seed to prove. v2 also registers the self-contained reference-image supply-chain job's setup-bun step (S7-7); main ships no self-contained image job."
     },
     {
       "path": "tests/bun-version-pins.test.ts",
       "lane": "integration/v1.3",
-      "here": "f34705b20fc163e9f5db8684d9cfe6cc043f9024",
+      "here": "ab28009e012762d07212fb39ac3d045388c6befe",
       "there": "5a7f1dacf9b06a659e916e7dccc2d29abb11b3f6",
-      "reason": "Registry of each lane's own setup-bun steps: v1.3 registers its 1.3-line steps (cache-handler per Next minor, the publish-lane-guard count), v2 its v2-only kind lanes; the lists differ by design."
+      "reason": "Registry of each lane's own setup-bun steps: v1.3 registers its 1.3-line steps (cache-handler per Next minor, the publish-lane-guard count), v2 its v2-only kind lanes; the lists differ by design; v2 also registers the self-contained reference-image supply-chain job (S7-7), which v1.3 does not have."
     },
     {
       "path": "scripts/lib/guard-prover.mjs",

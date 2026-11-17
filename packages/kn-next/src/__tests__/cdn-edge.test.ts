@@ -771,6 +771,87 @@ describe("decideEdge — the allowlist (D4.1)", () => {
             }
         });
     });
+
+    describe("query isolation — two queries never share an edge entry", () => {
+        // The CDN's cache key, as each row's `keysOnQuery` says it is built: the
+        // full target where the default key includes the query string, the bare
+        // path where it does not (or depends on a policy knext cannot see).
+        const cdnKey = (row: { keysOnQuery: boolean }, target: string) =>
+            row.keysOnQuery ? target : (edge.rawPathOf(target) as string);
+        const TARGETS = [
+            "/blog",
+            "/blog?",
+            "/blog?page=1",
+            "/blog?page=2",
+            "/blog?page=2&utm_source=x",
+            "/blog?__nextDataReq=1",
+        ];
+
+        it("for every row, no two distinct edge-cached targets share one key", () => {
+            const rows = Object.entries(PROVIDER_ROWS) as Array<
+                [string, { keysOnQuery: boolean }]
+            >;
+            expect(rows.length).toBeGreaterThan(0);
+            for (const [p, row] of rows) {
+                const keyOwner = new Map<string, string>();
+                let cached = 0;
+                for (const t of TARGETS) {
+                    if (
+                        !decideEdge(base({ cfg: cfg({}, p), rawTarget: t }))
+                            .edge
+                    )
+                        continue;
+                    cached++;
+                    const k = cdnKey(row, t);
+                    const prev = keyOwner.get(k);
+                    expect(
+                        prev,
+                        `${p}: ${t} would share the edge entry of ${prev}`,
+                    ).toBeUndefined();
+                    keyOwner.set(k, t);
+                }
+                // The bare path stays edge-cacheable on every row, so the
+                // assertion above is never vacuous.
+                expect(cached, p).toBeGreaterThan(0);
+            }
+        });
+
+        it("rows whose key ignores the query never edge-cache a request with one", () => {
+            const rows = Object.entries(PROVIDER_ROWS).filter(
+                ([, r]) => !(r as { keysOnQuery: boolean }).keysOnQuery,
+            );
+            expect(rows.map(([p]) => p).sort()).toEqual([
+                "azure-front-door",
+                "cloudfront",
+            ]);
+            for (const [p] of rows) {
+                for (const t of TARGETS.filter((x) => x.includes("?"))) {
+                    expect(
+                        decideEdge(base({ cfg: cfg({}, p), rawTarget: t })),
+                        `${p} ${t}`,
+                    ).toMatchObject({
+                        edge: false,
+                        reason: "query_not_query_keyed",
+                    });
+                }
+                expect(decideEdge(base({ cfg: cfg({}, p) })).edge, p).toBe(
+                    true,
+                );
+            }
+        });
+
+        it("rows whose key includes the query still edge-cache a query request", () => {
+            for (const [p, r] of Object.entries(PROVIDER_ROWS)) {
+                if (!(r as { keysOnQuery: boolean }).keysOnQuery) continue;
+                expect(
+                    decideEdge(
+                        base({ cfg: cfg({}, p), rawTarget: "/blog?page=2" }),
+                    ).edge,
+                    p,
+                ).toBe(true);
+            }
+        });
+    });
 });
 
 describe("edgeHeaders — golden headers per provider (D2, D4.2)", () => {

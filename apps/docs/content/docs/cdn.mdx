@@ -47,6 +47,11 @@ alone, so a new kind of response is uncached until it has been shown safe.
   without `_rsc` in the URL is never cached, nor is `_rsc` without the `RSC: 1` header, and the
   response content type must match the cache key. RSC responses are cached only on providers whose
   default cache key includes the query string (Cloudflare and Google Cloud CDN).
+- On CloudFront and Azure Front Door, the request URL has no query string. Their cache key depends on
+  a policy you set, so knext cannot assume it includes the query. If it did not, `/search?q=a` and
+  `/search?q=b` would share one entry, and a crafted query could fill it for everyone. Requests with
+  a query string go to your origin on these providers. Cloudflare and Google Cloud CDN key on the
+  query string by default, so each query gets its own entry there.
 - The page's own cache entry was recorded with its tags (including its path tag), and the tags fit
   the provider's limits. Over the limit means not cached, never truncated.
 - The page's cache entry was written by the build that is serving it. Cached pages are shared across

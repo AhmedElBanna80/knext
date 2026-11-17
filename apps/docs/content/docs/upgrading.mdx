@@ -122,7 +122,7 @@ medium-severity one affects 16.3.0 through 16.4.4 (fixed in 16.4.5):
 | GHSA-p3m5-59mp-jv5r | High | Denial of service in the App Router through Server Actions |
 | GHSA-mfr8-8qww-v76h | Medium | Information disclosure across root params when a `'use cache'` function is called (affects 16.3.0 through 16.4.4, fixed in 16.4.5) |
 
-knext serves images through Next.js's optimizer and backs `'use cache'` with its shared cache, so
+knext serves images through Next.js's optimizer and uses its shared Redis cache for `'use cache'` (not yet covered by the compatibility suite), so
 both remote code execution paths are reachable on a knext app still on 16.4.0 or earlier. New apps from
 `knext create` already pin 16.4.5, which also fixes the medium-severity `'use cache'` advisory.
 

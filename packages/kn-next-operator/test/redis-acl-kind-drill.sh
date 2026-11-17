@@ -134,12 +134,14 @@ mkdir -p "$WORK/img"
 (cd "$OP" && CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -o "$WORK/img/manager" ./cmd)
 printf 'FROM %s\nCOPY manager /manager\nENTRYPOINT ["/manager"]\n' "$BASE_IMAGE" >"$WORK/img/Dockerfile"
 docker build -q -t "$OP_IMAGE" "$WORK/img" >/dev/null
-docker image inspect "$REDIS_IMAGE" >/dev/null 2>&1 || docker pull -q "$REDIS_IMAGE" >/dev/null
 
 echo "== kind cluster $CLUSTER"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
 kind create cluster --name "$CLUSTER" --kubeconfig "$KUBECONFIG" --wait 180s >/dev/null
-kind load docker-image "$OP_IMAGE" "$REDIS_IMAGE" --name "$CLUSTER" >/dev/null
+# Only the locally built operator image is loaded. The Redis image is a multi-platform index:
+# `kind load` imports it with --all-platforms and fails ("content digest ... not found") when
+# the host holds one platform. The node pulls the digest-pinned image itself, as the other kind lanes do.
+kind load docker-image "$OP_IMAGE" --name "$CLUSTER" >/dev/null
 
 echo "== CRDs (knext + Knative Serving CRDs only), Redis, operator"
 k apply -f "$OP/config/crd/bases" >/dev/null
@@ -352,9 +354,11 @@ rcli_admin ACL SETUSER default off >/dev/null
 prov_cli ACL SETUSER drilladmin off >/dev/null
 ADMIN_WRAPPED=1
 OUT="$(shared_probe GET zone-a:k)"
-case "$OUT" in *NOAUTH*|*WRONGPASS*|*NOPERM*) ok "L5 shared URL refused on zone A's keys: $OUT" ;; *) bad "L5 shared URL not refused: $OUT" ;; esac
+# The shared URL carries no credential, so with default off Redis answers NOAUTH (an
+# unauthenticated connection), not NOPERM/WRONGPASS; both are asserted, each where it applies.
+case "$OUT" in *NOAUTH*) ok "L5 shared URL (no credential) refused NOAUTH on zone A's keys: $OUT" ;; *) bad "L5 shared URL not refused NOAUTH: $OUT" ;; esac
 OUT="$(shared_probe --user default --pass nope GET zone-a:k)"
-case "$OUT" in *WRONGPASS*|*NOAUTH*|*NOPERM*) ok "L5 AUTH default refused: $OUT" ;; *) bad "L5 AUTH default not refused: $OUT" ;; esac
+case "$OUT" in *WRONGPASS*) ok "L5 AUTH default refused WRONGPASS: $OUT" ;; *) bad "L5 AUTH default not refused WRONGPASS: $OUT" ;; esac
 expect_eq "L5 app A still works under its own user" "$(probe zone-a probe GET zone-a:k)" "va"
 # Nudge a reconcile (a spec change; the operator re-probes on every pass).
 k -n zone-a patch nextapp web --type=merge -p '{"spec":{"env":{"DRILL_NUDGE":"1"}}}' >/dev/null

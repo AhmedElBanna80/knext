@@ -58,7 +58,6 @@ describe('the prepared-lane map', () => {
     expect(Object.fromEntries(PUBLISH_LANES)).toEqual({
       'refs/heads/main': 1,
       'refs/heads/integration/v1.3': 1,
-      'refs/heads/integration/v1.4': 1,
       'refs/heads/integration/v2': 2,
     });
   });

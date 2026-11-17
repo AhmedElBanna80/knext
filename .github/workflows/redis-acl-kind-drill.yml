@@ -1,0 +1,98 @@
+name: Redis per-app ACL — kind drill
+
+# The Redis ACL user is proved by unit and envtest tests, which have no Redis
+# server, no kubelet and no second pod. This lane runs
+# packages/kn-next-operator/test/redis-acl-kind-drill.sh on a real kind cluster:
+# one Redis, the operator built from this checkout under the shipped ClusterRole
+# and the shipped Secret/ConfigMap write policy, and two apps on that Redis.
+#
+# Legs (see the script header): L1 isolation not claimed while the shared
+# credential is live; L2 cross-app NOPERM; L3 password only in the Secret; L4
+# the shared URL still reads (the hole); L5 shared credential closed, then
+# isolation observed; L6 unregistered endpoint fails closed; L7 prefix
+# conflicts fail closed; L8 delete sweeps keys and user; L9 a requirepass Redis
+# keeps reporting SharedCredentialLive.
+#
+# No continue-on-error: every leg is an exit-code assertion. Path-filtered to the
+# Redis ACL operator code and what the drill installs; not a required check.
+
+on:
+  pull_request:
+    paths:
+      - 'packages/kn-next-operator/**/redis_acl*'
+      # The drill builds the operator from this tree (go build ./cmd), and the asserted
+      # CacheCredentialsReady condition is produced by status_verdict.go, so any operator
+      # Go source or module change can change what it asserts.
+      - 'packages/kn-next-operator/cmd/**'
+      - 'packages/kn-next-operator/api/**'
+      - 'packages/kn-next-operator/internal/**'
+      - 'packages/kn-next-operator/go.mod'
+      - 'packages/kn-next-operator/go.sum'
+      - 'packages/kn-next-operator/test/redis-acl-kind-drill.sh'
+      - 'packages/kn-next-operator/config/admission/secret-configmap-writes*.yaml'
+      - 'packages/kn-next-operator/config/rbac/role.yaml'
+      - 'packages/kn-next-operator/config/crd/bases/**'
+      - '.github/actions/docker-hub-mirror/**'
+      - '.github/workflows/redis-acl-kind-drill.yml'
+      - 'tests/redis-acl-kind-drill-lane.test.ts'
+  push:
+    branches: [main, 'integration/**']
+    paths:
+      - 'packages/kn-next-operator/**/redis_acl*'
+      # The drill builds the operator from this tree (go build ./cmd), and the asserted
+      # CacheCredentialsReady condition is produced by status_verdict.go, so any operator
+      # Go source or module change can change what it asserts.
+      - 'packages/kn-next-operator/cmd/**'
+      - 'packages/kn-next-operator/api/**'
+      - 'packages/kn-next-operator/internal/**'
+      - 'packages/kn-next-operator/go.mod'
+      - 'packages/kn-next-operator/go.sum'
+      - 'packages/kn-next-operator/test/redis-acl-kind-drill.sh'
+      - 'packages/kn-next-operator/config/admission/secret-configmap-writes*.yaml'
+      - 'packages/kn-next-operator/config/rbac/role.yaml'
+      - 'packages/kn-next-operator/config/crd/bases/**'
+      - '.github/actions/docker-hub-mirror/**'
+      - '.github/workflows/redis-acl-kind-drill.yml'
+      - 'tests/redis-acl-kind-drill-lane.test.ts'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: redis-acl-kind-drill-${{ github.ref }}
+  # Publishes nothing, so a superseded run on the same ref is safe to cancel.
+  cancel-in-progress: true
+
+jobs:
+  redis-acl-drill:
+    name: Redis ACL drill L1-L9 on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLUSTER: knext-redis-acl-drill
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Route Docker Hub pulls through mirror.gcr.io (anonymous rate limit)
+        uses: ./.github/actions/docker-hub-mirror
+
+      - name: Set up Go (the drill builds the operator image from go.mod)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/kn-next-operator/go.mod
+          cache-dependency-path: packages/kn-next-operator/go.sum
+
+      - name: Install kind
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: true
+
+      - name: Fetch the Knative Serving CRDs the drill installs
+        working-directory: packages/kn-next-operator
+        run: go mod download knative.dev/serving
+
+      - name: Run the Redis ACL drill (legs L1-L9)
+        run: packages/kn-next-operator/test/redis-acl-kind-drill.sh

@@ -244,8 +244,9 @@ Next.js runs the `'use cache'` directive (Cache Components) through a different 
 build wires `cacheHandlers` to the same Redis for you, so you add nothing to `next.config.ts`:
 
 - A `'use cache'` entry written by one pod is a hit on every other pod behind the same Service,
-  and it survives scale-to-zero.
-- `'use cache: remote'` is backed by the same Redis, under its own key namespace.
+  and it survives scale-to-zero. This handler is implemented but not yet covered by the
+  compatibility suite.
+- `'use cache: remote'` is backed by the same Redis, under its own key namespace, and is likewise not yet covered by the compatibility suite.
 - `revalidateTag` (and `updateTag`) on one pod invalidates the entry on all of them.
   `revalidateTag(tag, profile)` keeps its stale-while-revalidate behaviour: the entry is served
   once more while a fresh one is produced.

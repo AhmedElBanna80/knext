@@ -159,11 +159,28 @@ only a *build* tool.
       property, not a Bun one — needs a live/kind cluster).
 - [ ] **Trailer survival:** verify `grpc-status` HTTP/2 trailers survive the **through-activator cold
       path**; the client treats a missing trailer as fail-closed non-retryable.
+      *Not ticked (2026-11-17), open until S7-3:* the z10 `trailers` phase is Connect-only; it does not
+      test `grpc-status` trailers (`packages/grpc/e2e/z10-zone-functions-kind/run.sh:285-288`).
 - [ ] **Per-language token interceptor:** each template ships the fail-closed token-verifying server
       interceptor; a **mutation-proof test** (delete the check → red), including a **flannel/no-
       NetworkPolicy** case proving the interceptor — not the CNI — is the control.
+      *Evidence (2026-11-17), box stays open: the per-template parts are built; the no-NetworkPolicy leg is not proven.*
+      Built: Go `templates/go/internal/auth/auth.go:82-106` (`NewInterceptor`, fails closed), wired at
+      `templates/go/internal/rpc/rpc.go:121`; Rust `templates/rust/src/auth.rs:359-363` (no-token refusal, fails
+      closed), wired at `templates/rust/src/rpc/mod.rs:169`. Mutation provers:
+      `scripts/mutation-prove-go-template-auth.mjs`, `scripts/mutation-prove-rust-template-auth.mjs`.
+      Gap: the z11 drill's policy-off leg (`packages/grpc/e2e/z11-activator-drill/run.sh:290-302`) and its
+      `noauth` leg (`:308-329`) never run with the policy off. `phase_direct` restores the policy (`:301`) before
+      `phase_noauth` runs, so no run shows a token-less call reaching a handler with the policy off. The drill
+      runs on Calico (`:194`), not flannel.
 - [ ] **Per-language supply-chain:** a language enters the matrix only with Trivy + SBOM + cosign on
       its image *and* an ecosystem advisory scan on its pinned server deps.
+      *Evidence (2026-11-17), box stays open: cosign is not in place for either template.* Trivy and SBOM run per
+      template image: `.github/workflows/go-template.yml:191` (syft SPDX), `:205-206` (Trivy, FAIL on HIGH/CRITICAL);
+      `.github/workflows/rust-template.yml:286`, `:306-307`. Ecosystem advisory scans: govulncheck
+      `go-template.yml:157-163`; `cargo deny` `rust-template.yml:216`; `cargo audit --deny warnings`
+      `rust-template.yml:219-220`. Cosign is deferred for both (`go-template.yml:25-26`, `rust-template.yml:38-39`):
+      no template-image signing workflow exists.
 - [~] **Bun func template — runtime mechanism proven locally (2026-09;** `docs/release/bun-func-runtime-spike.md`**).**
       A `bun build --compile` single-exec **serves** `connect-es`/gRPC over h2c (writes status
       trailers), ~60 MB. **Still to build:** the generator (proto + handler → `main` + `buf generate`
@@ -172,8 +189,15 @@ only a *build* tool.
       layer from reproducible-build assertions.
 - [ ] Per-language template matrix: pin the Connect **or** gRPC h2c server lib per language; drop
       languages with neither.
-- [ ] `func` emits image only; CLI renders/applies the `BackendService` CR (guard test: deploy path
+- [x] `func` emits image only; CLI renders/applies the `BackendService` CR (guard test: deploy path
       never shells `func deploy` / `kn service`). Fold codegen into `kn-next generate`, not a new path.
+      *Evidence (2026-11-17):* the guard is `scripts/lib/cli-spawn-scan.mjs:51` (scope: `packages/kn-next/src/cli`,
+      `packages/grpc`), refusing `kn` at `:253` and `func deploy` at `:256`; test `tests/cli-spawn-scan.test.ts`;
+      mutation proof `scripts/mutation-prove-2053-cli-cluster-write-surface.mjs`. The package builds the
+      `BackendService` and runs the preflight before the apply: `packages/grpc/src/deploy-function.ts:320`
+      (`host.preflight`), then `:329` (`host.apply`). The apply is `kubectl apply --validate=strict` at
+      `packages/kn-next/src/cli/grpc-dispatch.ts:293-298`. Codegen is routed by `GRPC_VERBS`
+      (`packages/kn-next/src/cli/grpc-dispatch.ts:41`).
 
 ## Amendment (2026-10-09) — D9 re-sequenced into v2; D10 Rust is Connect-capable; D3 the CLI may emit the CR
 

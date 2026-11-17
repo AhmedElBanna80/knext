@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { parse } from 'yaml';
 import {
@@ -115,6 +115,18 @@ describe('dependabot.yml: ecosystems', () => {
     for (const eco of ['bun', 'cargo', 'gomod'] as const) {
       for (const entry of byEco(eco)) {
         for (const dir of dirsOf(entry)) {
+          // A `/apps/*`-style glob names bun WORKSPACE members: they share the
+          // root bun.lock and have no lockfile of their own, so for them the
+          // manifest must exist and the root lockfile must.
+          if (eco === 'bun' && dir.endsWith('/*')) {
+            const base = resolve(REPO_ROOT, `.${dir.slice(0, -2)}`);
+            const members = readdirSync(base, { withFileTypes: true }).filter(
+              (e) => e.isDirectory() && existsSync(resolve(base, e.name, MANIFEST.bun.manifest)),
+            );
+            expect(members.length, `bun ${dir} matches workspace members`).toBeGreaterThan(0);
+            expect(existsSync(resolve(REPO_ROOT, MANIFEST.bun.lock)), 'root bun.lock').toBe(true);
+            continue;
+          }
           const abs = resolve(REPO_ROOT, `.${dir}`);
           expect(existsSync(resolve(abs, MANIFEST[eco].manifest)), `${eco} ${dir} manifest`).toBe(
             true,

@@ -247,7 +247,10 @@ describe('bun-version pins (#754) — scanned across every workflow', () => {
       // through `kn-next build`/`docker buildx`, so it needs its own pinned
       // setup-bun step (same pin as the C1/#785 job below). A count RISING is
       // a decision too — this one is it.
-      'supply-chain.yml': 2,
+      // 3, was 2: the self-contained-image-supply-chain job builds the
+      // workspace and the staged app, so it needs its own pinned setup-bun
+      // step. A count RISING is a decision too — this one is it.
+      'supply-chain.yml': 3,
       // 2, was 1: the Prepare job's knext-deps install moved from pnpm to a
       // pinned setup-bun after the bun migration merged — pnpm refuses a
       // bun-pinned workspace ("This project is configured to use bun"), which

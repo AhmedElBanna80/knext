@@ -189,7 +189,8 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
   `NODE_ENV` and `NEXT_PHASE`. It keeps a process-wide metrics registry at
   `globalThis[Symbol.for('knext.ffi.metrics')]`, publishes a Prometheus renderer at
   `Symbol.for('knext.ffi.renderMetrics')` after the first successful load
-  (`knext_ffi_slow_calls_total`, `knext_ffi_load_seconds`), and logs with `console.warn` on the
+  (`knext_ffi_slow_calls_total`, `knext_ffi_load_seconds`), which the app serves on its metrics port
+  (`METRICS_PORT`, `:9464` by default), and logs with `console.warn` on the
   first slow call per function, on a development-build load, and on an unparseable
   `KNEXT_FFI_SLOW_CALL_MS`.
 

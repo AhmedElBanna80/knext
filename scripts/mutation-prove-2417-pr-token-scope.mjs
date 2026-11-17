@@ -64,7 +64,9 @@ const SC_BUILD_PERMS = '      contents: read\n    outputs:\n      # sha256 of th
 const SCSC_BUILD_PERMS = '      contents: read\n    outputs:\n      layout_sha256:';
 const OP_BUILD_PERMS = '      contents: read\n    outputs:\n';
 
+const SC_NEEDS = '    needs: [image-supply-chain]\n';
 const SC_IF =
+  SC_NEEDS +
   "    if: >-\n      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&\n      github.ref == 'refs/heads/main'";
 const OP_NEEDS_IF =
   "    needs: [operator-image-supply-chain]\n    if: >-\n      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&\n      needs.operator-image-supply-chain.outputs.ready == 'true'";
@@ -75,14 +77,30 @@ const MUTATIONS = [
     claim: 'supply-chain.yml build/scan job regains packages: write',
     subject: 'sc',
     anchor: SC_BUILD_PERMS,
-    replacement: '      contents: read\n      packages: write\n    outputs:\n',
+    replacement:
+      '      contents: read\n      packages: write\n    outputs:\n      # sha256 of the scanned',
+  },
+  {
+    id: 'W1b',
+    claim: 'supply-chain.yml self-contained build/scan job regains packages: write',
+    subject: 'sc',
+    anchor: SCSC_BUILD_PERMS,
+    replacement: '      contents: read\n      packages: write\n    outputs:\n      layout_sha256:',
   },
   {
     id: 'W2',
     claim: 'supply-chain.yml build/scan job regains id-token: write',
     subject: 'sc',
     anchor: SC_BUILD_PERMS,
-    replacement: '      contents: read\n      id-token: write\n    outputs:\n',
+    replacement:
+      '      contents: read\n      id-token: write\n    outputs:\n      # sha256 of the scanned',
+  },
+  {
+    id: 'W2b',
+    claim: 'supply-chain.yml self-contained build/scan job regains id-token: write',
+    subject: 'sc',
+    anchor: SCSC_BUILD_PERMS,
+    replacement: '      contents: read\n      id-token: write\n    outputs:\n      layout_sha256:',
   },
   {
     id: 'W3',
@@ -110,7 +128,7 @@ const MUTATIONS = [
     claim: 'supply-chain.yml publish job loses its PR exclusion',
     subject: 'sc',
     anchor: SC_IF,
-    replacement: "    if: needs.image-supply-chain.result == 'success'",
+    replacement: SC_NEEDS + "    if: needs.image-supply-chain.result == 'success'",
   },
   {
     id: 'P2',
@@ -118,7 +136,7 @@ const MUTATIONS = [
       "supply-chain.yml publish job is excluded only by != 'pull_request' (admits merge_group)",
     subject: 'sc',
     anchor: SC_IF,
-    replacement: "    if: github.event_name != 'pull_request'",
+    replacement: SC_NEEDS + "    if: github.event_name != 'pull_request'",
   },
   {
     id: 'P3',
@@ -127,6 +145,7 @@ const MUTATIONS = [
     subject: 'sc',
     anchor: SC_IF,
     replacement:
+      SC_NEEDS +
       "    if: github.ref == 'refs/heads/main' || needs.image-supply-chain.result == 'success'",
   },
   {
@@ -226,6 +245,7 @@ const MUTATIONS = [
     subject: 'sc',
     anchor: SC_IF,
     replacement:
+      SC_NEEDS +
       "    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')",
   },
 ].map((m) => ({

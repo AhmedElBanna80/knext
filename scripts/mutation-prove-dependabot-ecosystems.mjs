@@ -75,8 +75,8 @@ const MUTATIONS = [
     id: 'E4',
     claim: 'the bun entry drops examples/bun-exec',
     subject: 'dep',
-    anchor: "      - '/'\n      - '/examples/bun-exec'\n",
-    replacement: "      - '/'\n",
+    anchor: "      - '/packages/*'\n      - '/examples/bun-exec'\n",
+    replacement: "      - '/packages/*'\n",
   },
   {
     id: 'E5',

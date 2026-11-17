@@ -352,9 +352,11 @@ rcli_admin ACL SETUSER default off >/dev/null
 prov_cli ACL SETUSER drilladmin off >/dev/null
 ADMIN_WRAPPED=1
 OUT="$(shared_probe GET zone-a:k)"
-case "$OUT" in *NOAUTH*|*WRONGPASS*|*NOPERM*) ok "L5 shared URL refused on zone A's keys: $OUT" ;; *) bad "L5 shared URL not refused: $OUT" ;; esac
+# The shared URL carries no credential, so with default off Redis answers NOAUTH (an
+# unauthenticated connection), not NOPERM/WRONGPASS; both are asserted, each where it applies.
+case "$OUT" in *NOAUTH*) ok "L5 shared URL (no credential) refused NOAUTH on zone A's keys: $OUT" ;; *) bad "L5 shared URL not refused NOAUTH: $OUT" ;; esac
 OUT="$(shared_probe --user default --pass nope GET zone-a:k)"
-case "$OUT" in *WRONGPASS*|*NOAUTH*|*NOPERM*) ok "L5 AUTH default refused: $OUT" ;; *) bad "L5 AUTH default not refused: $OUT" ;; esac
+case "$OUT" in *WRONGPASS*) ok "L5 AUTH default refused WRONGPASS: $OUT" ;; *) bad "L5 AUTH default not refused WRONGPASS: $OUT" ;; esac
 expect_eq "L5 app A still works under its own user" "$(probe zone-a probe GET zone-a:k)" "va"
 # Nudge a reconcile (a spec change; the operator re-probes on every pass).
 k -n zone-a patch nextapp web --type=merge -p '{"spec":{"env":{"DRILL_NUDGE":"1"}}}' >/dev/null

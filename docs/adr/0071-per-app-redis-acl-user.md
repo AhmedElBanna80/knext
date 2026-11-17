@@ -620,16 +620,33 @@ scope (they hold the provisioner credential by design).
 
 11. **Kind exit evidence (recorded; no decision changes).** The drill
     `packages/kn-next-operator/test/redis-acl-kind-drill.sh` ran green on a local kind cluster
-    (Redis `e7723ff…`, operator built from this tree): legs L1-L9, including L4b/L4c/L7b, 53 passed, 0 failed,
-    1m50s. Met by it, each cited to the leg that asserts it:
-    - Status condition 4 (no isolation claim while the shared credential is live; observed only
-      after both probes are refused): L1 (`redis-acl-kind-drill.sh:256`), L5 (`:349`), L9 (`:397`,
-      the `requirepass` Redis keeps reporting `SharedCredentialLive`).
-    - Status condition 5 (after `ACL SETUSER default off`, the old shared URL is refused on zone A's
-      keys): L5 (`:349`), run from zone B's probe pod.
+    (Redis `e7723ff…`, operator built from this tree): legs L1-L9, including L4b/L4c/L7b, 53 passed, 0 failed.
+    Each item below says what the drill proves, cites the asserting line, and names what it does not.
+    - **Condition 4, met in part: the `CacheCredentialsReady` message and reason, not the rest.**
+      Proved: while the shared credential is live the condition message reads
+      `isolation not in force: shared credential live` and never contains "isolated" (L1,
+      `redis-acl-kind-drill.sh:258-259`); the same holds on a `requirepass` Redis, where both probes
+      are refused (NOAUTH `:461`, WRONGPASS `:462`) yet the shared password still reads the app's key
+      (`:463`) and the reason stays `SharedCredentialLive` (`:464`); the message stops saying "not in
+      force" only after `ACL SETUSER default off` and the reason reaches `Provisioned` (L5
+      `:364-366`, L9 `:471`). **Still open:** `knext doctor` does not report this state at all (the
+      docs list it as not yet built, `apps/docs/content/docs/redis-isolation.mdx:233`), so condition
+      4's `doctor` wording and "`doctor` attempts `AUTH default` and a no-auth connect" are unmet.
+      The docs wording (`redis-isolation.mdx:14-20`) matches the message but is not asserted by the
+      drill; the drill does not run the operator-side probe code path in isolation either.
+    - **Condition 5, met in part: the refusal after `ACL SETUSER default off`, with the errors
+      Redis really returns.** From zone B's probe pod, the old shared URL on zone A's key is refused
+      (L5 `:357`) and `AUTH default` is refused (`:359`). Redis answers **`NOAUTH`** to the shared
+      URL (it carries no credential, so the connection is unauthenticated, and a disabled default
+      user is not asked for a password) and **`WRONGPASS`** to `AUTH default <anything>` ("invalid
+      username-password pair or user is disabled"). The drill asserts exactly these two. `NOPERM`
+      is not what that URL gets here; it is what an app user gets on another app's keys (L2,
+      `:286-289`). The condition's "`NOPERM` / `WRONGPASS`" is therefore read as "refused", with
+      `NOAUTH` the correct answer for a credential-less URL; this is an evidence note, not a change to
+      the Decision.
     - Action item 1's kind acceptance, **in part**: two apps on one Redis, A refused `NOPERM` on B's
-      keys (L2, `:282`), the password only in the Secret (L3, `:296`), delete sweeps keys and user
-      (L8, `:389`).
+      keys (L2, `:286-289`), the password only in the Secret and absent from the NextApp and Events
+      (L3, `:300`), delete sweeps keys and user (L8, `:395-397`).
     Evidence: local kind run 2026-11-17 (to be replaced by the CI run link once
     `.github/workflows/redis-acl-kind-drill.yml` has run on `integration/v2`). **Not met by this
     run, and left open:** the ISR and `'use cache'` paths including the outage replay (the drill

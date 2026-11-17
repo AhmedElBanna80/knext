@@ -78,6 +78,38 @@ function filtered(paths: string[], file: string): boolean {
   return hit;
 }
 
+function goSources(dir: string, prefix = ''): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) out.push(...goSources(resolve(dir, e.name), `${prefix}${e.name}/`));
+    else if (/\.go$/.test(e.name) && !/_test\.go$/.test(e.name)) out.push(`${prefix}${e.name}`);
+  }
+  return out;
+}
+
+/**
+ * Split the drill into legs (each `echo "== Lx..."` banner to the next) and count the
+ * real assertion calls in each. Header comment lines are not assertions.
+ */
+const ASSERT_CALL =
+  /^\s*(?:expect_eq|expect_contains|expect_not_contains|ok|bad)\b|\bok "|\bbad "|\|\| *bad\b/;
+export function legAssertions(drill: string): Map<string, number> {
+  const legs = new Map<string, number>();
+  let cur: string | undefined;
+  for (const line of drill.split('\n')) {
+    const m = line.match(/^echo "== (L\d+[a-z]?)[:. ]/);
+    if (m) {
+      cur = m[1] as string;
+      legs.set(cur, legs.get(cur) ?? 0);
+      continue;
+    }
+    if (cur && !line.trim().startsWith('#') && ASSERT_CALL.test(line)) {
+      legs.set(cur, (legs.get(cur) as number) + 1);
+    }
+  }
+  return legs;
+}
+
 describe('the drill runs in CI', () => {
   it('the drill script exists and the workflow runs it in a step', () => {
     expect(existsSync(resolve(ROOT, DRILL_REL))).toBe(true);
@@ -91,6 +123,29 @@ describe('the drill runs in CI', () => {
         new RegExp(`^#\\s+${leg}\\. `, 'm'),
       );
     }
+  });
+
+  it('every leg and sub-leg executes at least one real assertion (an emptied leg reds)', () => {
+    const drill = readFileSync(resolve(ROOT, DRILL_REL), 'utf8');
+    const legs = legAssertions(drill);
+    for (const leg of ['L1', 'L2', 'L3', 'L4', 'L4b', 'L4c', 'L5', 'L6', 'L7', 'L7b', 'L8', 'L9']) {
+      expect(legs.has(leg), `leg ${leg} has no "== ${leg}" banner`).toBe(true);
+      expect(legs.get(leg), `leg ${leg} has no assertion call`).toBeGreaterThan(0);
+    }
+  });
+
+  it('the leg scanner is not vacuous (negative samples)', () => {
+    const emptied =
+      'echo "== L1: a"\n# expect_eq "only a comment" 1 1\nk apply -f -\necho "== L2: b"\nexpect_eq "x" 1 1\n';
+    const m = legAssertions(emptied);
+    expect(m.get('L1')).toBe(0);
+    expect(m.get('L2')).toBe(1);
+    expect(
+      legAssertions('echo "== L3: c"\nif wait_reason a b R; then ok "m"; else bad "n"; fi\n').get(
+        'L3',
+      ),
+    ).toBe(1);
+    expect(legAssertions('expect_eq "orphan before any leg" 1 1\n').size).toBe(0);
   });
 });
 
@@ -112,6 +167,21 @@ describe('the path filter', () => {
     }
   });
 
+  it('matches every operator Go source the drill builds, status_verdict.go and the module files', () => {
+    const OP = 'packages/kn-next-operator';
+    expect(filtered(pr, `${CTRL}/status_verdict.go`)).toBe(true);
+    expect(filtered(pr, `${OP}/go.mod`)).toBe(true);
+    expect(filtered(pr, `${OP}/go.sum`)).toBe(true);
+    for (const dir of ['cmd', 'api', 'internal']) {
+      const files = goSources(resolve(ROOT, OP, dir));
+      expect(files.length, `no Go sources under ${dir}`).toBeGreaterThan(0);
+      for (const f of files) {
+        const rel = `${OP}/${dir}/${f}`;
+        expect(filtered(pr, rel), `${rel} is not matched by the path filter`).toBe(true);
+      }
+    }
+  });
+
   it('matches the drill, its workflow and this guard, but not unrelated operator code', () => {
     for (const f of [
       DRILL_REL,
@@ -120,7 +190,8 @@ describe('the path filter', () => {
     ]) {
       expect(filtered(pr, f), `${f} is not matched`).toBe(true);
     }
-    expect(filtered(pr, `${CTRL}/zone_signing_key.go`)).toBe(false);
+    expect(filtered(pr, 'packages/kn-next-operator/README.md')).toBe(false);
+    expect(filtered(pr, 'packages/kn-next-operator/hack/boilerplate.go.txt')).toBe(false);
   });
 });
 

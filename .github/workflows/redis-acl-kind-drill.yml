@@ -20,6 +20,14 @@ on:
   pull_request:
     paths:
       - 'packages/kn-next-operator/**/redis_acl*'
+      # The drill builds the operator from this tree (go build ./cmd), and the asserted
+      # CacheCredentialsReady condition is produced by status_verdict.go, so any operator
+      # Go source or module change can change what it asserts.
+      - 'packages/kn-next-operator/cmd/**'
+      - 'packages/kn-next-operator/api/**'
+      - 'packages/kn-next-operator/internal/**'
+      - 'packages/kn-next-operator/go.mod'
+      - 'packages/kn-next-operator/go.sum'
       - 'packages/kn-next-operator/test/redis-acl-kind-drill.sh'
       - 'packages/kn-next-operator/config/admission/secret-configmap-writes*.yaml'
       - 'packages/kn-next-operator/config/rbac/role.yaml'
@@ -31,6 +39,14 @@ on:
     branches: [main, 'integration/**']
     paths:
       - 'packages/kn-next-operator/**/redis_acl*'
+      # The drill builds the operator from this tree (go build ./cmd), and the asserted
+      # CacheCredentialsReady condition is produced by status_verdict.go, so any operator
+      # Go source or module change can change what it asserts.
+      - 'packages/kn-next-operator/cmd/**'
+      - 'packages/kn-next-operator/api/**'
+      - 'packages/kn-next-operator/internal/**'
+      - 'packages/kn-next-operator/go.mod'
+      - 'packages/kn-next-operator/go.sum'
       - 'packages/kn-next-operator/test/redis-acl-kind-drill.sh'
       - 'packages/kn-next-operator/config/admission/secret-configmap-writes*.yaml'
       - 'packages/kn-next-operator/config/rbac/role.yaml'

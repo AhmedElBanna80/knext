@@ -71,7 +71,8 @@ The two-ledgers summary ("at most 15 files, 30-day expiry" plus "cap 41, only ev
    - **Per-file, `flaky`:** removed after `FLAKY_WINDOW = 3` consecutive informative runs in which it
      passes (`flakyWindow`, `:591-611`). It is reclassified out of `flaky` if all 3 fail.
    - **Structural:** a file is removed the first run in which it passes in full (`staleStructural`,
-     `scripts/compat-vinext-structural-gaps.mjs:341-365`, "stale structural-gap entry"). A partial
+     `scripts/compat-vinext-structural-gaps.mjs:341-365`; the "stale structural-gap entry" message is
+     emitted at `scripts/compat-vinext-ledger.mjs:1513`). A partial
      improvement only warns and the file's `cases` snapshot shrinks. The whole ledger retires when
      vinext implements the client-router architecture (the `gap` record's upstream links), which empties
      it through the same stale rule.
@@ -132,7 +133,7 @@ this ADR.
 ## Action items
 
 1. **Founder / sprint-close review:** accept, amend or reject this ADR. The review also rules on the
-   ADR-0007 amendment, which every option except B and D needs, and on the V-C3 N definition (Decision 6).
+   ADR-0007 amendment, which every option except B needs, and on the V-C3 N definition (Decision 6).
 2. **On acceptance, credential-frozen change (needs the founder marker):** set `LEDGER_FILE_CAP` to 8
    in `scripts/compat-vinext-ledger.mjs:193` and `STRUCTURAL_FILE_CAP` to 39 in
    `scripts/compat-vinext-structural-gaps.mjs:61`. Both files are in `frozenFileSet`

@@ -60,7 +60,8 @@ const parses = (text) => {
   }
 };
 
-const SC_BUILD_PERMS = '      contents: read\n    outputs:\n';
+const SC_BUILD_PERMS = '      contents: read\n    outputs:\n      # sha256 of the scanned';
+const SCSC_BUILD_PERMS = '      contents: read\n    outputs:\n      layout_sha256:';
 const OP_BUILD_PERMS = '      contents: read\n    outputs:\n';
 
 const SC_IF =

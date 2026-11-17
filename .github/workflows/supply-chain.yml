@@ -725,7 +725,11 @@ jobs:
         env:
           IDENTITY_REGEXP: https://github.com/${{ github.repository }}/.*
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: bash apps/file-manager/hack/cosign-verify.sh "${IMAGE}@${DIGEST}"
+        run: |
+          set -euo pipefail
+          cosign verify "${IMAGE}@${DIGEST}" \
+            --certificate-identity-regexp "${IDENTITY_REGEXP}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" > /dev/null
 
       # The attestation is verified too, not just made: same identity + issuer
       # constraints as hack/cosign-verify.sh, against the pushed digest.

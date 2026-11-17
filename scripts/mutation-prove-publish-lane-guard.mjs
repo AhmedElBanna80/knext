@@ -267,6 +267,15 @@ const MUTATIONS = [
     expect: 'red',
   },
   {
+    id: 'M22',
+    claim: 'the dormant integration/v1.4 lane is re-added to PUBLISH_LANES',
+    subject: 'guard',
+    spec: UNIT_SPEC,
+    anchor: "  ['refs/heads/integration/v1.3', 1],\n",
+    replacement: "  ['refs/heads/integration/v1.3', 1],\n  ['refs/heads/integration/v1.4', 1],\n",
+    expect: 'red',
+  },
+  {
     id: 'NEG',
     claim: 'NEGATIVE CONTROL: a doc-comment sentence is reworded (must stay GREEN)',
     subject: 'guard',

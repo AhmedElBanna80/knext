@@ -34,8 +34,9 @@ Cache-Control: public, max-age=0, s-maxage=30
 ```
 
 This differs from the value the Next.js compatibility suite checks, so **an Azure Front Door
-configuration is outside the compat-verified setup.** React Server Components responses carrying
-`_rsc` are not edge-cached on this provider.
+configuration is outside the compat-verified setup.** No request with a query string is
+edge-cached on this provider, React Server Components `_rsc` requests included, because the cache
+key depends on your caching rule and may leave the query out. Those requests go to the origin.
 
 ## Freshness without purge
 

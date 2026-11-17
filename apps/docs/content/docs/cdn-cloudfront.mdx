@@ -38,8 +38,10 @@ This differs from the value the Next.js compatibility suite checks (`must-revali
 because it would disable stale-while-revalidate at the shared cache). **A CloudFront configuration is
 therefore outside the compat-verified setup.** Do not describe it as compatibility-verified.
 
-React Server Components responses carrying `_rsc` are not edge-cached on this provider, because the
-cache key depends on a policy knext cannot see. Navigations still work; they go to the origin.
+No request with a query string is edge-cached on this provider, `_rsc` navigations included: the
+cache key depends on a policy knext cannot see, and a key without the query would let one query's
+answer be served for another. Those requests still work; they go to the origin. The same page
+without a query string is edge-cached as usual.
 
 ## Freshness without purge
 

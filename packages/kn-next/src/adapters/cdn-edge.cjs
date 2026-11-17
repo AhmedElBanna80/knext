@@ -578,6 +578,16 @@ function decideEdge(i) {
     return skip('rsc_content_type_mismatch');
   }
 
+  // Query isolation: a row whose cache key does not provably include the query
+  // string (CloudFront, Azure: the user's policy decides) would store
+  // `/p?a=1` and `/p?a=2` under one entry, so one visitor's query-dependent
+  // answer, or a crafted query's, would be served for every query. Any request
+  // carrying a query is therefore not edge-cacheable on those rows. Rows that
+  // key on the query give each query its own entry and are unaffected.
+  if (!cfg.row.keysOnQuery && typeof i.rawTarget === 'string' && i.rawTarget.includes('?')) {
+    return skip('query_not_query_keyed');
+  }
+
   // An unresolved build id means no build tag: a tag set a build-scoped purge
   // cannot reach. Not edge-cacheable.
   if (!i.buildId) return skip('build_id_unresolved');

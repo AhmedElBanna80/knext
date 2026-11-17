@@ -511,6 +511,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
     (`includePaths` overrides only the middleware rule);
   - the RSC rules: `rsc_without_rsc_param`, `rsc_param_without_rsc_header`,
     `rsc_content_type_mismatch` and `rsc_not_query_keyed`;
+  - any request with a query string on a row whose cache key does not include
+    the query (`keysOnQuery: false`: CloudFront, Azure Front Door), reason
+    `query_not_query_keyed`, so two queries never share one edge entry;
   - an unresolved or foreign build;
   - no `_N_T_` tag among the request's own tags (`tags_missing`);
   - tag overflow, or a zero TTL.

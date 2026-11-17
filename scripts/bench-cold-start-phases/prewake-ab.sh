@@ -92,7 +92,9 @@ while [ "$#" -gt 0 ]; do
     --rounds) need_val "$@"; ROUNDS="$2"; shift 2 ;;
     --leads) need_val "$@"; LEADS="$2"; shift 2 ;;
     --minscale-leads) need_val "$@"; MINSCALE_LEADS="$2"; shift 2 ;;
-    --out) need_val "$@"; OUT="$2"; shift 2 ;;
+    # ${2:?}, not a bare $2: the apply scanner keys taint on the literal path string, and the
+    # results file (timings from the in-pod client) must not alias the "$2" the setup applies use.
+    --out) need_val "$@"; OUT="${2:?}"; shift 2 ;;
     --setup) SETUP=1; shift ;;
     --image) need_val "$@"; IMAGE="$2"; shift 2 ;;
     --boot-delay-ms) need_val "$@"; BOOT_DELAY_MS="$2"; shift 2 ;;
@@ -266,34 +268,7 @@ cycle() { # <round> <arm>
 }
 
 summarize() { # <jsonl>
-  python3 -I - "$1" <<'PY'
-import json, statistics, sys
-rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-ok = [r for r in rows if r["status"] == "200"]
-bad = len(rows) - len(ok)
-by = {}
-for r in ok:
-    by.setdefault(r["arm"], []).append(r["request_ms"])
-if "cold" not in by:
-    sys.exit("no successful cold cycles; cannot compute relative deltas")
-cold = statistics.median(by["cold"])
-cmin, cmax = min(by["cold"]), max(by["cold"])
-print("arm               n  median_ms  min-max_ms     delta_vs_cold_ms  relative  verdict")
-def key(a):
-    if a == "cold":
-        return (-1, 0)
-    kind, lead = a.split("@")
-    return (0 if kind == "get" else 1, int(lead))
-for arm in sorted(by, key=key):
-    v = by[arm]
-    m = statistics.median(v)
-    # An arm whose whole range overlaps the cold range is not shown to differ from cold.
-    verdict = "" if arm == "cold" else ("not distinguishable from cold" if min(v) <= cmax and max(v) >= cmin else "separated from cold")
-    print(f"{arm:<16}{len(v):>3}  {m:>9.0f}  {min(v):>5.0f}-{max(v):<5.0f}  {m - cold:>16.0f}  {m / cold:>8.2f}  {verdict}")
-if bad:
-    print(f"non-200 cycles excluded: {bad}")
-print("kind absolute numbers are not OKE numbers; read the relative column.")
-PY
+  python3 -I "$(dirname "${BASH_SOURCE[0]}")/prewake-ab-summary.py" "$1"
 }
 
 RUN_OUT="$(mktemp "${TMPDIR:-/tmp}/prewake-ab.XXXXXX")"

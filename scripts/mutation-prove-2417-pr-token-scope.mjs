@@ -183,9 +183,9 @@ const MUTATIONS = [
     claim: 'supply-chain.yml publish job stops downloading the scanned layout',
     subject: 'sc',
     anchor:
-      'uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: image-scanned-layout-',
+      '      - name: Download the scanned layout + SBOMs\n        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n',
     replacement:
-      'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          name: image-scanned-layout-',
+      '      - name: Download the scanned layout + SBOMs\n        run: echo "no download"\n',
   },
   {
     id: 'D2',

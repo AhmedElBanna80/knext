@@ -39,8 +39,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { QUEUE_PROXY_OWNED_PORTS } from "../cli/doctor";
 
 // repo root: packages/kn-next/src/__tests__ -> up 4
@@ -323,5 +323,148 @@ describe("metrics-port lockstep (runtime defaults ↔ operator annotation ↔ Ne
             'annotations["prometheus.io/port"] = "9099"',
         );
         expect(drifted).not.toBe(9464);
+    });
+});
+
+// ── #2432 (S7-8): the FFI package and the function templates ───────────────
+//
+// Neither surface assigned a metrics port number when this block was written:
+// the FFI slow-call counters and load gauge are published on a globalThis seam
+// and appended to the app's :9464 exposition, and the Rust/Go function templates
+// bind only the serving $PORT (default 8080), which is not a metrics port. So the
+// check SCANS rather than enumerating call sites: every line that talks about
+// metrics or Prometheus and carries a port-shaped number must carry 9464. A new
+// `metrics_port = 9091` in a crate, or a stale `port 9091` in the FFI docs, turns
+// this red with no file added to a list.
+
+const FFI_SCAN_ROOTS = [
+    resolve(REPO_ROOT, "packages", "ffi"),
+    resolve(REPO_ROOT, "templates", "rust"),
+    resolve(REPO_ROOT, "templates", "go"),
+];
+// The user-facing page for the FFI metrics. It lives in apps/docs, outside the
+// package roots, so it is named explicitly.
+const FFI_DOC_PAGE = resolve(
+    REPO_ROOT,
+    "apps",
+    "docs",
+    "content",
+    "docs",
+    "rust-in-process.mdx",
+);
+// Build output and dependency trees are not source. `vendor/` is deliberately
+// NOT skipped: a vendored crate is scanned like any other file.
+const SCAN_SKIP_DIRS = new Set(["node_modules", "target", "dist", ".git"]);
+
+const METRIC_LINE = /metric|prometheus/i;
+const PORT_FORMS: RegExp[] = [
+    // host:port, e.g. http://127.0.0.1:9464/metrics
+    /:(\d{4,5})(?![\d.])/g,
+    // port: 9464 · METRICS_PORT=9464 · metrics port `9464` · prometheus.io/port"] = "9464"
+    /(?:^|[^a-z])ports?(?![a-z])\D{0,24}?(\d{4,5})(?![\d.])/gi,
+];
+
+interface PortOccurrence {
+    file: string;
+    line: number;
+    port: number;
+}
+
+/**
+ * Every port-shaped number on a metrics or Prometheus line. A line with no
+ * metrics word is not a metrics surface, so the serving `$PORT` is ignored.
+ */
+function metricsPortsIn(text: string, file: string): PortOccurrence[] {
+    const out: PortOccurrence[] = [];
+    text.split("\n").forEach((line, i) => {
+        if (!METRIC_LINE.test(line)) return;
+        for (const re of PORT_FORMS) {
+            for (const m of line.matchAll(re)) {
+                out.push({ file, line: i + 1, port: Number(m[1]) });
+            }
+        }
+    });
+    return out;
+}
+
+function sourceFilesUnder(root: string): string[] {
+    const out: string[] = [];
+    for (const ent of readdirSync(root, { withFileTypes: true })) {
+        if (SCAN_SKIP_DIRS.has(ent.name)) continue;
+        const p = join(root, ent.name);
+        if (ent.isDirectory()) out.push(...sourceFilesUnder(p));
+        else if (ent.isFile()) out.push(p);
+    }
+    return out;
+}
+
+function ffiSurfaceMetricsPorts(): {
+    scanned: number;
+    occurrences: PortOccurrence[];
+} {
+    const files = [...FFI_SCAN_ROOTS.flatMap(sourceFilesUnder), FFI_DOC_PAGE];
+    const occurrences: PortOccurrence[] = [];
+    let scanned = 0;
+    for (const file of files) {
+        const buf = readFileSync(file);
+        if (buf.includes(0)) continue; // binary: no metrics text to read
+        scanned++;
+        occurrences.push(...metricsPortsIn(buf.toString("utf8"), file));
+    }
+    return { scanned, occurrences };
+}
+
+describe("metrics-port lockstep — FFI package and function templates (#2432)", () => {
+    it("every metrics port the FFI package and the function templates set or document is 9464", () => {
+        const { occurrences } = ffiSurfaceMetricsPorts();
+        const drift = occurrences
+            .filter((o) => o.port !== 9464)
+            .map(
+                (o) => `${relative(REPO_ROOT, o.file)}:${o.line} -> ${o.port}`,
+            );
+        expect(
+            drift,
+            `FFI / function-template metrics port drift — must be 9464 (the app's ` +
+                `shared metrics port, locksteped by the tests above):\n  ${drift.join("\n  ")}`,
+        ).toEqual([]);
+    });
+
+    it("the scan is not vacuous: the FFI package names the metrics port it is locked to", () => {
+        const { scanned, occurrences } = ffiSurfaceMetricsPorts();
+        expect(scanned, "the FFI scan read no files").toBeGreaterThan(0);
+        const ffiRoot = resolve(REPO_ROOT, "packages", "ffi") + sep;
+        const inFfi = occurrences.filter((o) => o.file.startsWith(ffiRoot));
+        expect(
+            inFfi.length,
+            "packages/ffi names no metrics port, so the lock above has nothing to bind to. " +
+                "Document the port where the FFI metrics are described (packages/ffi/src/EGM.md).",
+        ).toBeGreaterThan(0);
+    });
+
+    it("self-test: reads each port form, ignores serving ports and non-metrics numbers", () => {
+        const ports = (text: string) =>
+            metricsPortsIn(text, "inline").map((o) => o.port);
+        // The env-default form the runtime entries use.
+        expect(
+            ports(
+                "const METRICS_PORT = Number(process.env.METRICS_PORT ?? 9464);",
+            ),
+        ).toEqual([9464]);
+        // A scrape URL.
+        expect(ports("GET http://127.0.0.1:9464/metrics")).toEqual([9464]);
+        // A prose port, backticked.
+        expect(ports("served on the app's metrics port `9464`")).toEqual([
+            9464,
+        ]);
+        // A drifted value is read, so the lock above would report it.
+        expect(ports("metrics port `9091`")).toEqual([9091]);
+        // The serving port is not a metrics port: no metrics word, no finding.
+        expect(
+            ports('PORT=8080 serves the function; listen_port(Some("9090"))'),
+        ).toEqual([]);
+        // A metrics line with no port form (a year, a count) is not a port.
+        expect(
+            ports("the metrics exposition since 2026, 1024 entries"),
+        ).toEqual([]);
     });
 });

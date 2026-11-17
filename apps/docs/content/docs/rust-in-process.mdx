@@ -545,8 +545,8 @@ path cannot flood the log.
 | `knext_ffi_slow_calls_total` | Counter, labelled `fn` | Calls slower than the threshold, per Rust function. Every function is listed, at 0, once the library has loaded. |
 | `knext_ffi_load_seconds` | Gauge, labelled `lib` | How long the first call spent loading the library: finding it, checking its sha256 against the integrity manifest, and opening it. Set once per process. |
 
-On the default standalone build, both are served on the app's metrics port, the one the shipped
-scrape collects, from the first call on. They need the app's metrics listener, which the scaffolded
+On the default standalone build, both are served on the app's metrics port (`METRICS_PORT`, `:9464`
+by default), the one the shipped scrape collects, from the first call on. They need the app's metrics listener, which the scaffolded
 `instrumentation.ts` starts. The `fn` and `lib` labels come from the library's own export list, so
 the set of series is fixed.
 

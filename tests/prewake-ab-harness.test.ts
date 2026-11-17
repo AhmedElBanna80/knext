@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -9,6 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -346,6 +347,51 @@ describe('prewake-ab.sh: a real run against a stand-in cluster', () => {
       );
       expect(calls(dir).filter((l) => l.includes('config-autoscaler'))).toEqual([]);
     });
+  });
+});
+
+describe('prewake-ab.sh: the client program the harness runs in the pod', () => {
+  // The fake kubectl cannot see what the client does, so run the real program, taken from the
+  // script itself, against a local server that records when each request arrives.
+  const clientJs = (() => {
+    const m = readFileSync(join(ROOT, HARNESS), 'utf8').match(/^CLIENT_JS='(.*)'$/m);
+    if (!m) throw new Error('CLIENT_JS not found in the harness');
+    return m[1];
+  })();
+
+  async function runClient(lead: string) {
+    const hits: number[] = [];
+    const t0 = Date.now();
+    const server = createServer((_q, res) => {
+      hits.push(Date.now() - t0);
+      res.end('ok');
+    });
+    await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    const { port } = server.address() as { port: number };
+    const out = await new Promise<string>((ok) => {
+      const p = spawn('node', ['-e', clientJs, `http://127.0.0.1:${port}/`, lead]);
+      let buf = '';
+      p.stdout.on('data', (d) => {
+        buf += d;
+      });
+      p.on('close', () => ok(buf));
+    });
+    server.close();
+    return { hits, out: out.trim() };
+  }
+
+  it('cold sends exactly one request and reports its time and status', async () => {
+    const r = await runClient('none');
+    expect(r.hits).toHaveLength(1);
+    expect(r.out).toMatch(/^\d+ 200$/);
+  });
+
+  it('a lead sends a pre-wake GET first, then the measured GET that lead later', async () => {
+    const r = await runClient('400');
+    expect(r.hits).toHaveLength(2);
+    expect(r.hits[0]).toBeLessThan(300);
+    expect(r.hits[1] - r.hits[0]).toBeGreaterThanOrEqual(380);
+    expect(r.out).toMatch(/^\d+ 200$/);
   });
 });
 

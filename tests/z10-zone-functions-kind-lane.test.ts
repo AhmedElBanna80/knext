@@ -53,7 +53,7 @@ describe('the harness is as careful as the Z7 lane', () => {
 
   it('runs every phase by default', () => {
     expect(own).toContain(
-      'PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake}"',
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"',
     );
   });
 });
@@ -107,6 +107,107 @@ describe('a failed call keeps its code through the activator', () => {
     expect(t).toMatch(/cold_call "\$\{GO_FN\}" "\/example\/get\?sub=alice&id=missing"/);
     expect(t).toMatch(
       /expect_zone "warm control: [^"]*" \\\n\s*"\/example\/get\?sub=alice&id=missing"/,
+    );
+  });
+});
+
+describe('the gRPC status trailer survives the cold activator path (Z11 / D15)', () => {
+  const g = body('phase_grpctrailers');
+  const probeSrc = readFileSync(
+    resolve(REPO_ROOT, 'packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts'),
+    'utf8',
+  );
+  const serverSrc = readFileSync(
+    resolve(REPO_ROOT, 'packages/grpc/e2e/z7-identity-kind/zone-caller/server.ts'),
+    'utf8',
+  );
+
+  it('the phase exists, is dispatched, and is in the default run and the phase allowlist', () => {
+    expect(own).toMatch(/^has_phase grpctrailers && phase_grpctrailers$/m);
+    expect(own).toContain('| trailers | grpctrailers | zerozone |');
+    // The CI job runs run.sh with no PHASES override, so the default run IS the CI run.
+    const wf = readFileSync(WORKFLOW, 'utf8');
+    expect(wf).toContain('packages/grpc/e2e/z10-zone-functions-kind/run.sh');
+    expect(wf).not.toMatch(/z10-zone-functions-kind\/run\.sh[\s\S]{0,40}PHASES/);
+    expect(wf).not.toMatch(/Z10_[A-Z_]*PHASES/);
+  });
+
+  it('the client speaks the gRPC protocol over HTTP/2, never Connect', () => {
+    expect(probeSrc).toContain('createGrpcTransport');
+    expect(probeSrc).not.toContain('createConnectTransport');
+    // createGrpcTransport is HTTP/2-only (it has no httpVersion option); the probe
+    // also owns its HTTP/2 session, so the cold-path trailer is read off a real h2 stream.
+    expect(probeSrc).toContain('Http2SessionManager');
+    expect(probeSrc).toContain("from 'node:http2'");
+    expect(probeSrc).toContain('sessionManager: sessions');
+    expect(serverSrc).toMatch(/case '\/example\/grpc':/);
+    expect(serverSrc).toContain('grpcProbe(');
+    // The lane's route is the gRPC one, and requires the reply to say so.
+    expect(own).toContain('/example/grpc?rpc=');
+    expect(body('grpc_probe')).toContain('.protocol == "grpc"');
+  });
+
+  it('the probe reads the raw grpc-status off the trailer (or header) and off an error', () => {
+    expect(probeSrc).toContain("res.trailer.get('grpc-status')");
+    expect(probeSrc).toContain(".metadata.get('grpc-status')");
+  });
+
+  it('waits for scale-to-zero before each cold call, and a cold call needs zero pods then a pod', () => {
+    expect(g.match(/await_zero "\$\{GO_FN\}"/g)?.length).toBe(2);
+    const pre = body('grpc_cold_pre');
+    const post = body('grpc_cold_post');
+    expect(pre).toMatch(/\[ "\$\(all_pods "\$\{fn\}"\)" = 0 \] \|\| fail/);
+    expect(post).toMatch(/\[ -n "\$\(pod_uids "\$\{fn\}"\)" \] \|\| fail/);
+    // Each cold call is await_zero, then pre, then the probe, then post, in that order.
+    for (const m of g.matchAll(/await_zero "\$\{GO_FN\}"/g)) {
+      const at = m.index as number;
+      const p1 = g.indexOf('grpc_cold_pre', at);
+      const p2 = g.indexOf('grpc_probe', p1);
+      const p3 = g.indexOf('grpc_cold_post', p2);
+      expect(p1).toBeGreaterThan(at);
+      expect(p2).toBeGreaterThan(p1);
+      expect(p3).toBeGreaterThan(p2);
+    }
+    expect(g.match(/grpc_cold_pre "/g)?.length).toBe(2);
+    expect(g.match(/grpc_cold_post "/g)?.length).toBe(2);
+  });
+
+  it('fails closed: a missing trailer, a wrong status, or a code that disagrees with it all fail', () => {
+    const p = body('grpc_probe');
+    expect(p).toContain('.grpcStatus // "none"');
+    expect(p).toMatch(
+      /\[ "\$\{GP_STATUS\}" != none \] \\\n\s*\|\| fail "[^"]*no grpc-status trailer/,
+    );
+    expect(p).toMatch(/\[ "\$\{GP_STATUS\}" = "\$\{want_status\}" \] \|\| fail/);
+    expect(p).toMatch(/\[ "\$\{GP_CODE\}" = "\$\{want_code\}" \] \\\n\s*\|\| fail/);
+    // The missing-trailer check runs before the status is compared.
+    expect(p.indexOf('!= none')).toBeLessThan(p.indexOf('= "${want_status}"'));
+  });
+
+  it('the status source is read off the HTTP/2 stream and required to be the trailer for a success', () => {
+    expect(probeSrc).toContain("stream.on('trailers'");
+    expect(probeSrc).toContain("stream.on('response'");
+    const p = body('grpc_probe');
+    expect(p).toContain('.source // "none"');
+    expect(p).toMatch(/trailer\) \[ "\$\{GP_SOURCE\}" = trailer \] \|\| fail/);
+    // success calls demand the trailer; error calls accept either source
+    expect(g).toMatch(/PutItem "id=grpc-1&value=v1" OK 0 trailer/);
+    expect(g).toMatch(/PutItem "id=grpc-2&value=v2" OK 0 trailer/);
+    expect(g.match(/GetItem "id=missing" NotFound 5 any/g)?.length).toBe(2);
+    expect(body('grpc_cold_post')).toContain('from the ${GP_SOURCE}');
+  });
+
+  it('a success carries grpc-status 0 and a missing item is NotFound from grpc-status 5', () => {
+    expect(g).toMatch(/PutItem "id=grpc-1&value=v1" OK 0/);
+    expect(g).toMatch(/GetItem "id=missing" NotFound 5/);
+  });
+
+  it('the cold code is compared with a warm control, not only with a constant', () => {
+    const warm = g.indexOf('grpc_probe "warm control');
+    expect(warm).toBeGreaterThan(g.indexOf('GetItem "id=missing" NotFound 5'));
+    expect(g).toContain('local cold_code=$GP_CODE cold_status=$GP_STATUS');
+    expect(g).toMatch(
+      /\[ "\$\{GP_CODE\}" = "\$\{cold_code\}" \] && \[ "\$\{GP_STATUS\}" = "\$\{cold_status\}" \] \\\n\s*\|\| fail/,
     );
   });
 });
@@ -261,6 +362,7 @@ describe('every phase runs, in order (#2421)', () => {
   it('the dispatch calls each new phase between its neighbours', () => {
     const order = [
       'phase_trailers',
+      'phase_grpctrailers',
       'phase_zerozone',
       'phase_rollout',
       'phase_sovereignty',
@@ -359,7 +461,23 @@ describe('CI runs the lane on the Z7 cluster', () => {
     const teardown = steps.findIndex((s) => (s.run ?? '').includes('kind delete cluster'));
     expect(z10).toBeLessThan(teardown);
     expect(JSON.stringify(steps[z10])).not.toContain('continue-on-error');
-    expect(steps[z10]?.if).toBeUndefined();
+    // The only condition allowed is the one that skips Z10 on the rotation-only
+    // (weekly schedule / dispatch with rotation_realtime) run, which replaces the
+    // default phases. It must be exactly that text, and TRUE on every other event.
+    const cond = steps[z10]?.if;
+    if (cond !== undefined) {
+      expect(cond).toBe("${{ !(inputs.rotation_realtime || github.event_name == 'schedule') }}");
+      const evalFor = (event: string, rotation: boolean | undefined) =>
+        new Function('inputs', 'github', `return ${cond.replace(/^\$\{\{\s*|\s*\}\}$/g, '')};`)(
+          { rotation_realtime: rotation },
+          { event_name: event },
+        );
+      expect(evalFor('push', undefined)).toBe(true);
+      expect(evalFor('pull_request', undefined)).toBe(true);
+      expect(evalFor('workflow_dispatch', false)).toBe(true);
+      expect(evalFor('schedule', undefined)).toBe(false);
+      expect(evalFor('workflow_dispatch', true)).toBe(false);
+    }
   });
 
   it('the step sees the cluster and registry the Z7 run built', () => {

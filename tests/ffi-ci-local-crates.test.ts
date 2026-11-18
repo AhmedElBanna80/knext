@@ -9,10 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import {
-  assertRevOnBase,
-  localCrateSourceEnv,
-} from '../crates/harness/local-crates-source';
+import { assertRevOnBase, localCrateSourceEnv } from '../crates/harness/local-crates-source';
 import { CRATE_GIT, recordedCrateRev, runInit } from '../packages/ffi/src/init';
 
 const ROOT = resolve(import.meta.dir, '..');

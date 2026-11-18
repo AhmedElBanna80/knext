@@ -68,7 +68,9 @@ describe('every direct dial wakes the function and waits for a Ready pod first',
       expect(b.indexOf('wake_ready'), `${f} wakes`).toBeGreaterThan(-1);
       expect(b.indexOf('wake_ready')).toBeLessThan(b.indexOf('dial_rc'));
     }
-    expect(body('phase_direct').indexOf('wake_ready')).toBeLessThan(body('phase_direct').indexOf('fn_pod_ip'));
+    expect(body('phase_direct').indexOf('wake_ready')).toBeLessThan(
+      body('phase_direct').indexOf('fn_pod_ip'),
+    );
   });
 });
 

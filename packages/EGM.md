@@ -5,8 +5,8 @@
 The knext workspace packages. Three of them publish together under the
 `@getknext/*` scope as the user-facing SDK: `core`, `lib` and `db`.
 `kn-next-alias` also publishes, as a forwarding alias. The other packages are
-private: the Go operator, the database layer, two opt-in Beta modules, a UI kit
-and a GitHub Action. Each package has its own contract below.
+private: the Go operator, `scale-zero-pg`, two opt-in Beta modules, a UI kit and
+a GitHub Action. Each package has its own contract below.
 
 ## Subdirectories & Boundaries
 

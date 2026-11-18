@@ -5,10 +5,14 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { localCrateSourceEnv } from '../../../../crates/harness/local-crates-source';
+import {
+  assertRevOnBase,
+  localCrateSourceEnv,
+} from '../../../../crates/harness/local-crates-source';
 import { CRATE_GIT, recordedCrateRev, runInit } from '../init';
 
 const ROOT = resolve(import.meta.dir, '..', '..', '..', '..');
@@ -27,6 +31,44 @@ function initStep(): string {
 describe('rust-crates generator step is independent of the restricted remote', () => {
   it('serves the knext crates from the checkout (the step sets KNEXT_FFI_LOCAL_REPO)', () => {
     expect(initStep()).toMatch(/KNEXT_FFI_LOCAL_REPO:\s*\$\{\{\s*github\.workspace\s*\}\}/);
+  });
+
+  it('the local-source env appears ONLY on that step (no workflow- or job-level env)', () => {
+    const step = initStep();
+    const rest = WORKFLOW.replace(step, '');
+    expect(rest).not.toMatch(/KNEXT_FFI_LOCAL/);
+    expect(rest).not.toMatch(/GIT_CONFIG_/);
+    expect(step).toMatch(/KNEXT_FFI_LOCAL_BASE_REF:/);
+  });
+
+  it('requires the recorded rev to be merged (ancestor of the base) before rewriting', () => {
+    expect(HARNESS).toMatch(/assertRevOnBase\(/);
+    expect(HARNESS.indexOf('assertRevOnBase(')).toBeLessThan(
+      HARNESS.indexOf('localCrateSourceEnv(localRepo'),
+    );
+  });
+
+  it('assertRevOnBase fails closed on unmerged, malformed and unresolvable input', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'knext-ci-anc-'));
+    try {
+      const g = (...a: string[]) =>
+        execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], {
+          encoding: 'utf8',
+        }).trim();
+      g('init', '-q', '-b', 'main');
+      g('commit', '-q', '--allow-empty', '-m', 'a');
+      const merged = g('rev-parse', 'HEAD');
+      g('checkout', '-q', '-b', 'pr');
+      g('commit', '-q', '--allow-empty', '-m', 'b');
+      const unmerged = g('rev-parse', 'HEAD');
+      expect(() => assertRevOnBase(repo, merged, 'main')).not.toThrow();
+      expect(() => assertRevOnBase(repo, unmerged, 'main')).toThrow(/not an ancestor/);
+      expect(() => assertRevOnBase(repo, merged, undefined)).toThrow(/unset/);
+      expect(() => assertRevOnBase(repo, merged, 'nope')).toThrow(/does not resolve/);
+      expect(() => assertRevOnBase(repo, 'abc', 'main')).toThrow(/40-hex/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it('checks out full history so the recorded revision exists in the clone', () => {

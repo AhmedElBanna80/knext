@@ -56,10 +56,13 @@ generated server-only Connect client reads this env var (same pattern as `getDbP
 - [x] `NextApp.backends` + `<NAME>_SERVICE_URL` env injection. Evidence: `Backends` in
       `packages/kn-next-operator/api/v1alpha1/nextapp_types.go`, and
       `packages/kn-next-operator/internal/controller/backend_bindings.go`.
-- [x] Token-auth interceptor (gen) + NetworkPolicy. Evidence: zone identity token signing in
-      `packages/grpc/src/signer.ts`, and `DesiredFunctionNetworkPolicy` in
-      `packages/kn-next-operator/internal/controller/nextapp_networkpolicy.go`.
-- [ ] mTLS follow-up ADR. Not written. Open. The Amendment on mTLS (line ~252) defers mTLS to a later mesh layer.
+- [x] Token-auth interceptor (gen) + NetworkPolicy. Evidence: the function-side verifying interceptor
+      in `templates/go/internal/auth/auth.go` (`NewInterceptor`, l.82, wired in
+      `templates/go/internal/rpc/rpc.go` l.121) and `templates/rust/src/auth.rs` (`AuthLayer`, l.307,
+      wired in `templates/rust/src/rpc/mod.rs` l.169); the gateway-side minter in
+      `packages/grpc/src/signer.ts` (`createZoneTokenSigner`, l.217); and `DesiredFunctionNetworkPolicy` in
+      `packages/kn-next-operator/internal/controller/backendservice_render.go` (l.123).
+- [ ] mTLS follow-up ADR. Not written. Open. The 2026-10-09 amendment's Consequences (line 262) defers mTLS to a later mesh layer.
 
 ## Amendment (2026-10-09) — same-zone bindings, identity token, retention and wake-ahead
 

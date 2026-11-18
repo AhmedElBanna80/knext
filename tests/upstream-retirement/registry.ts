@@ -83,7 +83,7 @@ const inconclusive = (id: string, why: string): never => {
 };
 
 /**
- * oven-sh/bun#45007 (#2805; the defect is recorded in ADR-0007's 2026-10-12 amendment). Exit codes of the import
+ * oven-sh/bun#45007 (#2805; the defect is recorded in ADR-0007, 2026-10-12 amendment (bun#45007)). Exit codes of the import
  * harness below — the probe reads nothing else.
  */
 export const CONST_ASSIGN_EXIT = { OK: 0, TYPE_ERROR: 42, OTHER_ERROR: 43 } as const;

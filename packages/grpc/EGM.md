@@ -49,12 +49,12 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     property (c) is decided by `rotation-verdict.ts` from probes `run.sh` records
     (unit-tested without a cluster in `src/__tests__/z7-rotation-verdict.test.ts`); the
     `rotation` phase (`z7-identity-kind/run.sh:952`, dispatch/weekly only) is decided by that verdict; the
-    workflow runs that phase weekly on a schedule and on the `rotation_realtime` dispatch input.
+    workflow runs that phase through the `rotation_realtime` input, by dispatch or by the weekly caller on main (`z7-rotation-weekly.yml`, which `uses:` this workflow through `workflow_call`; the cron cannot live here because GitHub fires `schedule:` only from the default branch).
   - e2e/z10-zone-functions-kind (no EGM.md): the Z10 zone-functions lane on kind
     (cold path, Connect trailers, gRPC-protocol `grpc-status` trailers via `zone-caller/grpc-probe.ts` (tested cluster-free by `src/__tests__/z10-grpc-trailer-probe.test.ts`), zone and function both at zero, rollout with one zone
     revision per served-version bump, sovereignty, cross-zone refusal, wake-ahead). The same workflow
     runs its `run.sh` after Z7, on the same cluster, on push, PR and normal dispatch runs; it is
-    skipped on the weekly scheduled or `rotation_realtime` dispatch run
+    skipped on the weekly called or `rotation_realtime` dispatch run
     (`.github/workflows/z7-identity-kind-e2e.yml:171`). Its `grpctrailers` phase
     (`z10-zone-functions-kind/run.sh:352`) proves the gRPC `grpc-status` trailer survives the
     activator, fail-closed. Its `wake` phase uses a

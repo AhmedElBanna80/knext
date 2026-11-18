@@ -326,7 +326,9 @@ export function isOwnRepoReusableWorkflow(action, ref) {
   const parts = action.split('/');
   if (parts.length < 4 || !OWN_REPOS.has(`${parts[0]}/${parts[1]}`)) return false;
   const path = parts.slice(2);
-  if (path.some((segment) => segment === '' || segment === '.' || segment === '..')) return false;
+  // Fail-closed: exactly `.github/workflows/<file>.ya?ml`. The fixed segments and
+  // length 3 already rule out empty, `.` and `..` segments (a `..` can only sit in
+  // the file slot, where the extension test rejects it).
   return (
     path[0] === '.github' &&
     path[1] === 'workflows' &&
@@ -1139,14 +1141,18 @@ export async function verifyPinInputs(pin, fetchInputs = fetchDeclaredInputs) {
     return [{ ...pin, line: pin.withUnreadable, reason: 'with-unreadable' }];
   }
   if (!pin.withKeys?.length) return [];
-  if (!pin.sha) return [];
+  // An exempted own-repo reusable workflow has no SHA by design; its declared
+  // inputs are read at the protected branch ref instead. Everything else with no
+  // 40-hex SHA is already red as `not-sha-pinned`.
+  const ref = pin.sha ?? (isOwnRepoReusableWorkflow(pin.action, pin.ref) ? pin.ref : undefined);
+  if (!ref) return [];
   if (pin.action.startsWith('docker://')) return [];
 
   const meta = await fetchInputs({
     owner: pin.owner,
     repo: pin.repo,
     subpath: pin.subpath,
-    sha: pin.sha,
+    sha: ref,
   });
   if (meta.kind === 'metadata-missing') {
     return [{ ...pin, reason: 'action-metadata-missing', tried: meta.tried }];
@@ -1477,10 +1483,12 @@ async function verifyFileSet(files, api, lsRemote = gitLsRemoteTag, catFile = gi
       continue;
     }
     for (const pin of pins) {
-      // The one narrow, shared exemption: own-repo reusable workflow on a protected branch.
-      if (isOwnRepoReusableWorkflow(pin.action, pin.ref)) continue;
-      const finding = await verifyPin(pin, { api: memoApi, lsRemote: memoLsRemote });
-      if (finding) findings.push(finding);
+      // The one narrow, shared exemption: own-repo reusable workflow on a protected
+      // branch. It skips ONLY the SHA/tag resolution; the input check below still runs.
+      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {
+        const finding = await verifyPin(pin, { api: memoApi, lsRemote: memoLsRemote });
+        if (finding) findings.push(finding);
+      }
       // Input existence (#750), IN ADDITION to the SHA↔tag verdict — neither
       // masks the other. Memoised per action target: the declared-input set is
       // a fact about `<owner>/<repo>[/<path>]@<sha>`, not about the file that

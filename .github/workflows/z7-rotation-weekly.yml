@@ -14,11 +14,14 @@ name: Z7 key rotation weekly (real time)
 # ref, main) and applies its own 120-minute bound.
 #
 # Depends on the lane having `workflow_call` on integration/v2 (the lane PR must merge
-# BEFORE this one). If the called file is missing or lacks `workflow_call`, GitHub fails
-# the whole run at startup and NO job runs, so `rotation-red-alert` cannot fire for that
-# case. The `wiring-check` job below does not depend on the call and covers it, but it
-# is itself a job of this run: a startup failure of the whole file is visible only as a
-# red run in the Actions tab.
+# BEFORE this one). If the called file is missing, lacks `workflow_call`, or this file
+# passes an input it does not declare, GitHub fails the whole run at startup and NO job
+# runs. So neither `rotation-red-alert` nor `wiring-check` can fire for drift in the
+# called file or its inputs; a startup failure is visible only as a red run in the
+# Actions tab. The drift DETECTOR is the nightly action-pin resolver
+# (`scripts/verify-action-pins.mjs`): it reads the called file at its branch ref and
+# compares this file's `with:` keys against the declared `workflow_call` inputs.
+# `wiring-check` below covers only the narrower case where the run still starts.
 #
 # `preflight` fails loudly when this file runs in a repository other than the one the
 # `uses:` line names (the owner is hardcoded: update both after the move back).

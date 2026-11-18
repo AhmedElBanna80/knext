@@ -9,6 +9,7 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
+import { isOwnRepoReusableWorkflow } from '../scripts/verify-action-pins.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const text = readFileSync(resolve(REPO_ROOT, '.github/workflows/z7-rotation-weekly.yml'), 'utf8');
@@ -105,7 +106,11 @@ describe('z7-rotation-weekly.yml', () => {
   it('every remote action step is pinned by full SHA with a version comment', () => {
     const uses = [...text.matchAll(/^\s*-?\s*uses:\s*(\S+)(.*)$/gm)].filter(
       // The caller's own-repo reusable workflow is a branch ref by design (asserted above).
-      ([, r]) => !r.startsWith('./') && !r.startsWith('AhmedElBanna80/knext/'),
+      ([, r]) => {
+        if (r.startsWith('./')) return false;
+        const at = r.lastIndexOf('@');
+        return !isOwnRepoReusableWorkflow(r.slice(0, at), r.slice(at + 1));
+      },
     );
     expect(uses.length).toBeGreaterThan(0);
     for (const [, ref, rest] of uses) {

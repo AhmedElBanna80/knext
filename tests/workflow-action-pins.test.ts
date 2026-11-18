@@ -172,6 +172,10 @@ describe('every workflow SHA-pins every action (#528)', () => {
       ['lookalike repo', `AhmedElBanna80/knextx${wf}`, 'main'],
       ['path traversal', 'AhmedElBanna80/knext/.github/workflows/../actions/x.yml', 'main'],
       ['nested workflow path', 'AhmedElBanna80/knext/.github/workflows/sub/x.yml', 'main'],
+      ['full ref refs/heads/main', `AhmedElBanna80/knext${wf}`, 'refs/heads/main'],
+      ['unlisted nested branch', `AhmedElBanna80/knext${wf}`, 'integration/v2/x'],
+      ['branch@sha', `AhmedElBanna80/knext${wf}`, `main@${'a'.repeat(40)}`],
+      ['lowercase owner', `ahmedelbanna80/knext${wf}`, 'main'],
     ])('rejects %s', (_label, action, ref) => {
       expect(isOwnRepoReusableWorkflow(action, ref)).toBe(false);
     });

@@ -2,7 +2,7 @@
 /**
  * Mutation proof for the narrow own-repo reusable-workflow exemption in
  * `scripts/verify-action-pins.mjs` (`isOwnRepoReusableWorkflow`), guarded by
- * `tests/workflow-action-pins.test.ts`.
+ * `tests/workflow-action-pins.test.ts` and `tests/action-pin-own-repo-nightly.test.ts`.
  *   1. Removing the exemption reds the REAL file (z7-rotation-weekly.yml).
  *   2. Widening it to any repo reds the lookalike/third-party rejection cases.
  * Anchors must occur exactly once (harness aborts otherwise); judged on exit
@@ -18,15 +18,19 @@ import { mutate, restore, snapshot } from './lib/mutation-harness.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SPEC = 'tests/workflow-action-pins.test.ts';
+const SPECS = ['tests/workflow-action-pins.test.ts', 'tests/action-pin-own-repo-nightly.test.ts'];
 const SUBJECT = 'scripts/verify-action-pins.mjs';
 const RUNNER = resolveSpecRunner(REPO_ROOT);
 
 function specPasses() {
-  const r = spawnSync(RUNNER.command, [...RUNNER.args, ...RUNNER.runArgs(SPEC)], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-  });
+  const r = spawnSync(
+    RUNNER.command,
+    [...RUNNER.args, ...SPECS.flatMap((s) => RUNNER.runArgs(s))],
+    {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    },
+  );
   return r.status === 0;
 }
 
@@ -40,6 +44,22 @@ const MUTATIONS = [
     label: 'widen the exemption to any owner/repo',
     anchor: '!OWN_REPOS.has(`${parts[0]}/${parts[1]}`)',
     replacement: 'false',
+  },
+  {
+    label: 'delete the nightly call-site exemption (every own-repo call SHA-resolved)',
+    anchor: '      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
+    replacement: '      if (true) {',
+  },
+  {
+    label: 'widen the nightly call-site exemption to owner/repo only',
+    anchor: '      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
+    replacement: '      if (!OWN_REPOS.has(`${pin.owner}/${pin.repo}`)) {',
+  },
+  {
+    label: 'skip the input check for exempted calls',
+    anchor:
+      'const ref = pin.sha ?? (isOwnRepoReusableWorkflow(pin.action, pin.ref) ? pin.ref : undefined);',
+    replacement: 'const ref = pin.sha;',
   },
 ];
 

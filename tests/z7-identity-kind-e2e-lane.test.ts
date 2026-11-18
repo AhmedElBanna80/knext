@@ -46,6 +46,7 @@ interface Step {
   run?: string;
   uses?: string;
   env?: Record<string, unknown>;
+  with?: Record<string, unknown>;
   'continue-on-error'?: unknown;
 }
 interface Job {
@@ -776,8 +777,7 @@ describe('the real-time rotation phase proves the three exit properties and stay
     expect(wf.on.workflow_dispatch).not.toHaveProperty('inputs.checkout_ref');
     const checkouts = steps.filter((s) => s.uses?.startsWith('actions/checkout@'));
     expect(checkouts.length).toBeGreaterThan(0);
-    for (const c of checkouts)
-      expect((c.with as Record<string, unknown>)?.ref).toBe('${{ inputs.checkout_ref }}');
+    for (const c of checkouts) expect(c.with?.ref).toBe('${{ inputs.checkout_ref }}');
     expect(wfText).toMatch(
       /^ {2}group: z7-identity-kind-e2e-\$\{\{ github\.ref \}\}-\$\{\{ github\.event_name \}\}$/m,
     );

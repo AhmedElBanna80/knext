@@ -272,7 +272,7 @@ const lane = createGuardProver({
 // The Z10 step must stay unconditional on push/pull_request. Rows mutate the
 // workflow's Z10 step condition; each must turn the lane guard red.
 const Z10_STEP =
-  "      - name: Run the Z10 zone-functions cold-path e2e on the same cluster\n        if: ${{ !(inputs.rotation_realtime || github.event_name == 'schedule') }}\n";
+  '      - name: Run the Z10 zone-functions cold-path e2e on the same cluster\n        if: ${{ !inputs.rotation_realtime }}\n';
 const WORKFLOW_MUTATIONS = [
   {
     id: 'W01',

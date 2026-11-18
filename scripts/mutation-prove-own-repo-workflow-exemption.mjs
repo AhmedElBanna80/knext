@@ -20,6 +20,9 @@ import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SPECS = ['tests/workflow-action-pins.test.ts', 'tests/action-pin-own-repo-nightly.test.ts'];
 const SUBJECT = 'scripts/verify-action-pins.mjs';
+// Named `subjects` map: the PR-time prover-lane audit reads this shape to check every
+// `{ subject, anchor }` entry below resolves exactly once in its file.
+const PROVER = { specs: SPECS, subjects: { verify: SUBJECT } };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
 
 function specPasses() {
@@ -36,26 +39,31 @@ function specPasses() {
 
 const MUTATIONS = [
   {
+    subject: 'verify',
     label: 'remove the exemption entirely (always false)',
     anchor: "  if (typeof action !== 'string' || !PROTECTED_REFS.has(ref)) return false;",
     replacement: '  return false;',
   },
   {
+    subject: 'verify',
     label: 'widen the exemption to any owner/repo',
     anchor: '!OWN_REPOS.has(`${parts[0]}/${parts[1]}`)',
     replacement: 'false',
   },
   {
+    subject: 'verify',
     label: 'delete the nightly call-site exemption (every own-repo call SHA-resolved)',
     anchor: '      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
     replacement: '      if (true) {',
   },
   {
+    subject: 'verify',
     label: 'widen the nightly call-site exemption to owner/repo only',
     anchor: '      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
     replacement: '      if (!OWN_REPOS.has(`${pin.owner}/${pin.repo}`)) {',
   },
   {
+    subject: 'verify',
     label: 'skip the input check for exempted calls',
     anchor:
       'const ref = pin.sha ?? (isOwnRepoReusableWorkflow(pin.action, pin.ref) ? pin.ref : undefined);',
@@ -72,7 +80,7 @@ if (!specPasses()) {
 const decorative = [];
 for (const m of MUTATIONS) {
   console.log(`-- mutation: ${m.label}`);
-  const snap = snapshot(resolve(REPO_ROOT, SUBJECT));
+  const snap = snapshot(resolve(REPO_ROOT, PROVER.subjects[m.subject]));
   try {
     mutate(snap, m.anchor, m.replacement);
     if (specPasses()) {

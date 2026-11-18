@@ -32,7 +32,8 @@ const MUTATIONS = [
     id: 'P2',
     subject: 'run',
     claim: 'the policy-off phase stops proving the policy object is gone',
-    anchor: '|| fail "the function\'s NetworkPolicy still exists: the leg would not be a policy-off leg"',
+    anchor:
+      '|| fail "the function\'s NetworkPolicy still exists: the leg would not be a policy-off leg"',
     replacement: '|| true',
   },
   {
@@ -81,7 +82,8 @@ const MUTATIONS = [
     id: 'W1',
     subject: 'workflow',
     claim: 'the workflow runs only a subset of phases',
-    anchor: '      - name: Run the Z11 activator-path drill (all phases, including policyoff)\n        run:',
+    anchor:
+      '      - name: Run the Z11 activator-path drill (all phases, including policyoff)\n        run:',
     replacement:
       '      - name: Run the Z11 activator-path drill (all phases, including policyoff)\n        env:\n          PHASES: up deploy token\n        run:',
   },
@@ -97,7 +99,7 @@ const MUTATIONS = [
     subject: 'workflow',
     claim: 'the workflow stops running on integration pushes',
     anchor: "    branches: [main, 'integration/**']",
-    replacement: "    branches: [main]",
+    replacement: '    branches: [main]',
   },
 ];
 

@@ -11,7 +11,11 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const WORKFLOW = resolve(import.meta.dirname, '..', '.github/workflows/z11-activator-drill-e2e.yml');
+const WORKFLOW = resolve(
+  import.meta.dirname,
+  '..',
+  '.github/workflows/z11-activator-drill-e2e.yml',
+);
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const own = readFileSync(
@@ -119,7 +123,9 @@ describe('policyoff: with the NetworkPolicy off the function itself refuses a to
   const p = body('phase_policyoff');
   it('turns the policy off, proves the object is gone, and restores it afterwards', () => {
     expect(p).toContain('set_policy false');
-    expect(p).toMatch(/networkpolicy "\$\{GO_FN\}-function-ingress"[^\n]*grep -c \.\)" = 0 \] \\\n\s*\|\| fail/);
+    expect(p).toMatch(
+      /networkpolicy "\$\{GO_FN\}-function-ingress"[^\n]*grep -c \.\)" = 0 \] \\\n\s*\|\| fail/,
+    );
     expect(p.indexOf('set_policy false')).toBeLessThan(p.indexOf('foreign_get ""'));
     expect(p.indexOf('set_policy true')).toBeGreaterThan(p.indexOf('foreign_post "http://'));
   });

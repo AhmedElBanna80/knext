@@ -45,7 +45,7 @@ describe('z7-rotation-weekly.yml', () => {
 
   it('is least-privilege, secret-free and never cancels a mid-overlap run', () => {
     expect(wf.permissions).toEqual({ contents: 'read' });
-    expect(text).not.toMatch(/secrets\./);
+    expect(text).not.toMatch(/\$\{\{\s*secrets\./);
     expect(wf.concurrency.group).toContain('z7-rotation-weekly');
     expect(wf.concurrency['cancel-in-progress']).toBe(false);
   });

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { discoverPinnableFiles, mentionsUses } from '../scripts/verify-action-pins.mjs';
+import {
+  discoverPinnableFiles,
+  isOwnRepoReusableWorkflow,
+  mentionsUses,
+} from '../scripts/verify-action-pins.mjs';
 
 /**
  * GUARD TESTS for action SHA-pinning across EVERY workflow (#528).
@@ -99,7 +103,7 @@ describe('every workflow SHA-pins every action (#528)', () => {
   });
 
   it.each([...COVERED])('%s pins every `uses:` to an immutable 40-hex SHA', (file) => {
-    for (const entry of usesRefs(file)) {
+    for (const entry of usesRefs(file).filter((e) => !isOwnRepoReusableWorkflow(e.action, e.ref))) {
       expect(
         /^[0-9a-f]{40}$/.test(entry.ref),
         `${file}:${entry.line} — ${entry.action}@${entry.ref} is a MUTABLE ref. ` +
@@ -110,7 +114,7 @@ describe('every workflow SHA-pins every action (#528)', () => {
   });
 
   it.each([...COVERED])('%s annotates every pin with the tag it claims', (file) => {
-    for (const entry of usesRefs(file)) {
+    for (const entry of usesRefs(file).filter((e) => !isOwnRepoReusableWorkflow(e.action, e.ref))) {
       expect(
         entry.comment,
         `${file}:${entry.line} — ${entry.action} needs a trailing "# vX.Y.Z" comment. ` +
@@ -145,6 +149,36 @@ describe('every workflow SHA-pins every action (#528)', () => {
       parsed,
       'no pins parsed anywhere — the extractor or the tree changed shape',
     ).toBeGreaterThan(20);
+  });
+
+  describe('own-repo reusable-workflow exemption (narrow)', () => {
+    const wf = '/.github/workflows/z7-identity-kind-e2e.yml';
+    it.each([
+      ['AhmedElBanna80/knext', 'main'],
+      ['AhmedElBanna80/knext', 'integration/v2'],
+      ['getknext-dev/knext', 'main'],
+      ['getknext-dev/knext', 'integration/v2'],
+    ])('accepts %s on %s', (repo, ref) => {
+      expect(isOwnRepoReusableWorkflow(`${repo}${wf}`, ref)).toBe(true);
+      expect(isOwnRepoReusableWorkflow(`${repo}/.github/workflows/x.yaml`, ref)).toBe(true);
+    });
+    it.each([
+      ['third-party repo on a branch', 'someone/else/.github/workflows/x.yml', 'main'],
+      ['same repo, action dir', 'AhmedElBanna80/knext/.github/actions/foo', 'main'],
+      ['same repo, non-workflow file', 'AhmedElBanna80/knext/.github/workflows/x.txt', 'main'],
+      ['same repo, other branch', `AhmedElBanna80/knext${wf}`, 'feature/x'],
+      ['same repo, @v1', `AhmedElBanna80/knext${wf}`, 'v1'],
+      ['lookalike owner', `AhmedElBanna80x/knext${wf}`, 'main'],
+      ['lookalike repo', `AhmedElBanna80/knextx${wf}`, 'main'],
+      ['path traversal', 'AhmedElBanna80/knext/.github/workflows/../actions/x.yml', 'main'],
+      ['nested workflow path', 'AhmedElBanna80/knext/.github/workflows/sub/x.yml', 'main'],
+      ['full ref refs/heads/main', `AhmedElBanna80/knext${wf}`, 'refs/heads/main'],
+      ['unlisted nested branch', `AhmedElBanna80/knext${wf}`, 'integration/v2/x'],
+      ['branch@sha', `AhmedElBanna80/knext${wf}`, `main@${'a'.repeat(40)}`],
+      ['lowercase owner', `ahmedelbanna80/knext${wf}`, 'main'],
+    ])('rejects %s', (_label, action, ref) => {
+      expect(isOwnRepoReusableWorkflow(action, ref)).toBe(false);
+    });
   });
 
   it('carries no stale pin exemption', () => {

@@ -98,6 +98,14 @@ here, nothing distinguishable), and at which lead the request costs the same as 
 whose range overlaps cold is reported as not distinguishable from cold, never as a win. The OKE A/B is the founder's
 ([`prewake-ab-oke-runbook.md`](../benchmarks/prewake-ab-oke-runbook.md)).
 
+**Non-200 cycles are excluded from every median.** `prewake-ab-summary.py` keeps only cycles whose
+`status` is `"200"` (line 4), and the medians, ranges and verdicts are computed over those alone. It
+prints `non-200 cycles excluded: N` (line 26) when N is non-zero. A cycle that returns a non-200 is
+therefore never counted as a fast or slow cold start. If the cold arm has no successful cycle, the
+summary exits rather than compute deltas. The 2026-11-17 kind run above had no excluded cycles: all
+48 cycles (six arms, 8 rounds) returned 200, so the table is over the full sample. Any future run that
+prints the exclusion line must report its N alongside the table.
+
 ## Decision
 
 **Proposed:** knext adds an **opt-in, signal-driven pre-wake** that reuses Z9's mechanism, and keeps

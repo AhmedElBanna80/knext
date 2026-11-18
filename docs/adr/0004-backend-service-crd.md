@@ -50,9 +50,16 @@ generated server-only Connect client reads this env var (same pattern as `getDbP
 - h2c verified on the target Knative/networking layer (tie to the Phase-4 ingress ADR).
 
 ## Action items
-- [ ] `BackendService` types + controller (cluster-local h2c Knative service).
-- [ ] `NextApp.backends` + `<NAME>_SERVICE_URL` env injection.
-- [ ] Token-auth interceptor (gen) + NetworkPolicy; mTLS follow-up ADR.
+- [x] `BackendService` types + controller (cluster-local h2c Knative service). Evidence:
+      `packages/kn-next-operator/api/v1alpha1/backendservice_types.go` and
+      `packages/kn-next-operator/internal/controller/backendservice_controller.go`.
+- [x] `NextApp.backends` + `<NAME>_SERVICE_URL` env injection. Evidence: `Backends` in
+      `packages/kn-next-operator/api/v1alpha1/nextapp_types.go`, and
+      `packages/kn-next-operator/internal/controller/backend_bindings.go`.
+- [x] Token-auth interceptor (gen) + NetworkPolicy. Evidence: zone identity token signing in
+      `packages/grpc/src/signer.ts`, and `DesiredFunctionNetworkPolicy` in
+      `packages/kn-next-operator/internal/controller/nextapp_networkpolicy.go`.
+- [ ] mTLS follow-up ADR. Not written. Open. The Amendment on mTLS (line ~252) defers mTLS to a later mesh layer.
 
 ## Amendment (2026-10-09) — same-zone bindings, identity token, retention and wake-ahead
 
@@ -743,7 +750,7 @@ the positive-evidence model of the revocation work, and the zone-env golden.
       the CLI tests, and prover rows in `scripts/mutation-prove-2052-backendservice.mjs`.
 - [x] Docs: the threat model residual, the zone-functions page, the CLI and operator references.
 - [ ] kind: swap the image with `kubectl` and assert no database Secret mount (extends the Z8 kind lane).
-- [ ] Sprint-6 close review: accept, amend or reject this amendment.
+- [ ] The founder's ratification decision: accept, amend or reject this amendment.
 
 
 ## Amendment 4 (2026-10-17) — the zone pins the function's whole spec, not only its image (Proposed)
@@ -914,7 +921,7 @@ Context and the tests below.
 - [x] Docs: the zone-functions page, the threat models, the CLI and operator references.
 - [x] kind: the Z7 lane pin phase adds an env with `kubectl patch` and asserts the refusal and that no pod
       or Knative Service mounts the database Secret (runs in CI; not run locally).
-- [ ] Sprint-6 close review: accept, amend or reject this amendment.
+- [ ] The founder's ratification decision: accept, amend or reject this amendment.
 
 ## Amendment 5 (2026-10-28) — the operator write policy binds writes to ownership (#2487)
 

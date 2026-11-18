@@ -192,7 +192,7 @@ only a *build* tool.
       `packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts:65-107` (`createGrpcTransport`;
       the trailer is read at `:72`, the 30 s timeout default at `:95`). Not covered: Rust is not
       separately run (trailer survival is a proxy property, not a language one); no OKE run.
-      The earlier Connect-only `trailers` phase (`run.sh:285-288`) remains and is not the evidence.
+      The Connect-only phase (`connecterr`, `run.sh:285-288`, formerly named `trailers`) checks the error code over the Connect protocol, not gRPC trailers, and is not the evidence.
 - [ ] **Per-language token interceptor:** each template ships the fail-closed token-verifying server
       interceptor; a **mutation-proof test** (delete the check → red), including a **flannel/no-
       NetworkPolicy** case proving the interceptor — not the CNI — is the control.

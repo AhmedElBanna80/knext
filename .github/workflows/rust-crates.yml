@@ -118,8 +118,10 @@ jobs:
       run:
         working-directory: crates
     steps:
-      - name: Checkout
+      - name: Checkout (full history — the generator step serves the recorded crate revision from this clone)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Install the pinned Rust toolchain (crates/rust-toolchain.toml)
         run: |
@@ -176,6 +178,16 @@ jobs:
         run: bun harness/ffi-generated.ts wrapper target/release/libknext_ffi_fixture.so
 
       - name: Generator — knext ffi init, then generate/check build the crate as written (git dependency at the recorded revision)
+        # The knext crates are served from THIS checkout, not github.com/getknext-dev/knext
+        # (which may be unreachable): harness/local-crates-source.ts makes git rewrite
+        # that URL to the local clone for this step only. The generated Cargo.toml is
+        # unchanged (git + rev) and cargo fetches the recorded rev from the clone.
+        # TODO(getknext-dev restored): drop this env and the local rewrite, or add a
+        # remote-reachability check. Removal condition: crates/harness/local-crates-source.ts.
+        env:
+          KNEXT_FFI_LOCAL_REPO: ${{ github.workspace }}
+          # The recorded rev must be an ancestor of this (already merged); push: HEAD.
+          KNEXT_FFI_LOCAL_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
         run: bun harness/ffi-generated.ts init
 
   # cargo deny over the crates' Cargo.lock. Its own job with NO `if:` and no

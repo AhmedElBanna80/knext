@@ -18,7 +18,7 @@ Bun test tooling for the knext-ffi crates. It loads the real fixture library bui
 - `ffi-generated.ts`, run as `bun crates/harness/ffi-generated.ts wrapper <lib> | init`:
   - Imports `runGenerate` (`packages/ffi/src/generate`), `CRATE_GIT`, `recordedCrateRev`, `runInit` (`packages/ffi/src/init`), `scanManifest` (`packages/ffi/src/manifest`), `libNameOf`, `renderModule` (`packages/ffi/src/render`) and `integerMatrix` (`packages/ffi/src/__tests__/integer-matrix`).
   - `wrapper`: scans and renders the module, stages the library under `native/ffi/<triple>/` with a sha256 `.integrity.json`, and calls through the generated module in a child Bun process (`inBun`, `--conditions=react-server`, `NODE_ENV=production`), including the `integerMatrix` integer-argument cases.
-  - `init`: runs `runInit`, then `runGenerate` (with and without `check`, including a deliberately drifted wrapper), then calls `greet` through the generated module.
+  - `init`: runs `runInit`, then (when `KNEXT_FFI_LOCAL_REPO` is set, CI only) points git's `url.insteadOf` for `CRATE_GIT` at that checkout via `localCrateSourceEnv` (`local-crates-source.ts`), so cargo fetches the recorded rev from the local clone with no network access to the remote; then `runGenerate` (with and without `check`, including a deliberately drifted wrapper), then calls `greet` through the generated module.
 
 ## Invariants
 - `ffi-harness.ts:load` computes every buffer argument's pointer only after all arguments are encoded into the growable scratch buffer, so growing the buffer cannot invalidate an earlier pointer. An empty buffer is passed as `(null, 0)`.
@@ -28,6 +28,7 @@ Bun test tooling for the knext-ffi crates. It loads the real fixture library bui
 - `ffi-generated.ts:init` requires `recordedCrateRev()` to be a 40-hex revision, and the written `rust/Cargo.toml` to contain `knext-ffi = { git = "<CRATE_GIT>", rev = "<rev>" }`.
 
 ## Side Effects
+- With `KNEXT_FFI_LOCAL_REPO`, `ffi-generated.ts:init` sets `GIT_CONFIG_*` and `CARGO_NET_GIT_FETCH_WITH_CLI` in its own process env only; no git config file is written. The checkout must hold the recorded revision (full history).
 - Loads native code with `dlopen` and spawns child processes (`Bun.spawnSync` in `ffi-harness.ts`, `spawnSync` in `ffi-generated.ts`).
 - `ffi-generated.ts` writes temporary directories under `tmpdir()` (prefix `knext-ffi-gen-`) and removes them in `cleanup`.
 - `ffi-generated.ts:init` runs cargo through `runGenerate`, which fetches `knext-ffi` from GitHub at the recorded revision.

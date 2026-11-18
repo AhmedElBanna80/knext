@@ -45,6 +45,7 @@ import { runGenerate } from '../../packages/ffi/src/generate';
 import { CRATE_GIT, recordedCrateRev, runInit } from '../../packages/ffi/src/init';
 import { scanManifest } from '../../packages/ffi/src/manifest';
 import { libNameOf, renderModule } from '../../packages/ffi/src/render';
+import { assertRevOnBase, localCrateSourceEnv } from './local-crates-source';
 
 const HARNESS_ERROR = 10;
 const FIXTURE_SRC = resolve(import.meta.dir, '..', 'knext-ffi-fixture', 'src', 'lib.rs');
@@ -369,8 +370,19 @@ async function init(): Promise<void> {
   );
   app(dir);
 
+  // CI only (KNEXT_FFI_LOCAL_REPO=<checkout root>): getknext-dev may be
+  // unreachable, so git serves CRATE_GIT from this checkout. The user-facing
+  // Cargo.toml asserted above is untouched; see local-crates-source.ts.
+  const localRepo = process.env.KNEXT_FFI_LOCAL_REPO;
+  if (localRepo) {
+    // Fail closed: the recorded rev must already be on the PR's base, i.e. published.
+    assertRevOnBase(localRepo, recordedCrateRev(), process.env.KNEXT_FFI_LOCAL_BASE_REF);
+    Object.assign(process.env, localCrateSourceEnv(localRepo, CRATE_GIT));
+  }
+
   // generate: cargo builds the crate exactly as written (no patch, no path
-  // override), fetching knext-ffi at the recorded revision.
+  // override), fetching knext-ffi at the recorded revision (from the local
+  // clone when KNEXT_FFI_LOCAL_REPO is set).
   const generated = await runGenerate({ cwd: dir, io });
   same(generated, 0, 'knext ffi generate exits 0 (cargo built the crate as written)');
   if (generated !== 0) return; // nothing below can run without the library

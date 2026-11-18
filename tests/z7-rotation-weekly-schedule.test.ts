@@ -40,7 +40,8 @@ describe('z7-rotation-weekly.yml', () => {
     expect(call.uses).toBe(
       'AhmedElBanna80/knext/.github/workflows/z7-identity-kind-e2e.yml@integration/v2',
     );
-    expect(call.with).toEqual({ rotation_realtime: true });
+    expect(call.with).toEqual({ rotation_realtime: true, checkout_ref: 'integration/v2' });
+    expect(call.needs).toEqual(['preflight']);
     // The called workflow needs only contents: read; the caller grants no more.
     expect(call.permissions).toEqual({ contents: 'read' });
     expect(wf.permissions).toEqual({ contents: 'read' });
@@ -51,25 +52,42 @@ describe('z7-rotation-weekly.yml', () => {
     const [, call] = callers[0] as [string, Job];
     for (const k of ['steps', 'runs-on', 'env', 'timeout-minutes'])
       expect(call, k).not.toHaveProperty(k);
-    // The only other job is the alert, and the lane's run.sh is never invoked here.
-    expect(others).toHaveLength(1);
+    // The only other jobs are preflight, wiring-check and the alert; run.sh is never invoked here.
+    expect(others.map(([n]) => n).sort()).toEqual(['preflight', 'rotation-red-alert', 'wiring-check']);
     expect(text).not.toContain('z7-identity-kind/run.sh');
     expect(text).not.toMatch(/\bkind\b.*\binstall_only\b|helm\/kind-action|setup-go|setup-bun/);
   });
 
   it('has a red alert that fires on failure or cancel of the call and files an issue without pinning', () => {
-    const [name, alert] = others[0] as [string, Job];
-    expect(name).toBe('rotation-red-alert');
-    expect(alert.needs).toEqual(['rotation']);
-    const cond = String(alert.if);
-    expect(cond).toContain('always()');
-    expect(cond).toContain("github.event_name == 'schedule'");
-    expect(cond).toContain("needs.rotation.result == 'failure'");
-    expect(cond).toContain("needs.rotation.result == 'cancelled'");
+    const alert = jobs['rotation-red-alert'] as Job;
+    expect(alert.needs).toEqual(['preflight', 'rotation']);
+    expect(String(alert.if).replace(/\s+/g, ' ').trim()).toBe(
+      "always() && github.event_name == 'schedule' && (needs.preflight.result == 'failure' || needs.rotation.result == 'failure' || needs.rotation.result == 'cancelled')",
+    );
     expect(alert.permissions).toEqual({ issues: 'write', actions: 'read' });
     const run = (alert.steps ?? []).map((s) => s.run ?? '').join('\n');
     expect(run).toContain('node scripts/nightly-alert-issue.mjs');
     expect(run).not.toContain('gh issue pin');
+  });
+
+  it('preflight expects exactly the repository the uses: line names', () => {
+    const [, call] = callers[0] as [string, Job];
+    const usesRepo = String(call.uses).split('/').slice(0, 2).join('/');
+    const pre = jobs.preflight as Job;
+    const step = (pre.steps ?? []).find((s) => s.env?.EXPECTED_REPOSITORY !== undefined);
+    expect(step, 'preflight step with EXPECTED_REPOSITORY').toBeDefined();
+    expect(step?.env?.EXPECTED_REPOSITORY).toBe(usesRepo);
+    expect(step?.env?.ACTUAL_REPOSITORY).toBe('${{ github.repository }}');
+    expect(step?.run).toContain('exit 1');
+    expect(step?.run).toContain('getknext-dev');
+  });
+
+  it('wiring-check does not depend on the call and checks workflow_call on integration/v2', () => {
+    const w = jobs['wiring-check'] as Job;
+    expect(w.needs).toEqual(['preflight']);
+    const step = (w.steps ?? []).find((s) => s.run?.includes('workflow_call'));
+    expect(step?.env?.LANE_REF).toBe('integration/v2');
+    expect(step?.env?.LANE_PATH).toBe('.github/workflows/z7-identity-kind-e2e.yml');
   });
 
   it('is secret-free, never cancels a mid-overlap run, and does not claim to be a copy', () => {

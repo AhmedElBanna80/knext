@@ -13,8 +13,15 @@ name: Z7 key rotation weekly (real time)
 # workflow checks integration/v2 out itself (a called workflow inherits the caller's
 # ref, main) and applies its own 120-minute bound.
 #
-# Depends on the lane having `workflow_call` on integration/v2; until that is merged
-# the call cannot resolve and the run fails red (and alerts).
+# Depends on the lane having `workflow_call` on integration/v2 (the lane PR must merge
+# BEFORE this one). If the called file is missing or lacks `workflow_call`, GitHub fails
+# the whole run at startup and NO job runs, so `rotation-red-alert` cannot fire for that
+# case. The `wiring-check` job below does not depend on the call and covers it, but it
+# is itself a job of this run: a startup failure of the whole file is visible only as a
+# red run in the Actions tab.
+#
+# `preflight` fails loudly when this file runs in a repository other than the one the
+# `uses:` line names (the owner is hardcoded: update both after the move back).
 #
 # A red run is signal: every assertion in run.sh is state-based. The alert job opens
 # or updates one issue (never pinned) the same way mutation-prover-nightly.yml does.
@@ -34,26 +41,84 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The `uses:` owner below is hardcoded to the temporary home. Keep EXPECTED_REPOSITORY
+  # equal to it (tests/z7-rotation-weekly-schedule.test.ts ties them together).
+  preflight:
+    name: Caller repository matches the uses owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fail if this repository is not the one named in uses
+        env:
+          EXPECTED_REPOSITORY: AhmedElBanna80/knext
+          ACTUAL_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "${ACTUAL_REPOSITORY}" != "${EXPECTED_REPOSITORY}" ]; then
+            echo "::error::z7-rotation-weekly.yml runs in ${ACTUAL_REPOSITORY} but its uses: line names ${EXPECTED_REPOSITORY}. After the move back to getknext-dev, update the uses: owner (and EXPECTED_REPOSITORY) in this file."
+            exit 1
+          fi
+
+  # Independent of the call: checks the called file exists on integration/v2 with a
+  # workflow_call trigger, and files the issue if not. Best effort for the case where
+  # the whole run still starts; a startup failure is not reachable from inside a job.
+  wiring-check:
+    name: Called lane exists on integration/v2 with workflow_call
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify the called workflow and alert if it is not callable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          LANE_PATH: .github/workflows/z7-identity-kind-e2e.yml
+          LANE_REF: integration/v2
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/contents/${LANE_PATH}?ref=${LANE_REF}" --jq .content 2>/dev/null \
+              | base64 -d | grep -Eq '^[[:space:]]*workflow_call:'; then
+            echo "Lane present with workflow_call."
+            exit 0
+          fi
+          echo "::error::${LANE_PATH} is missing on ${LANE_REF} or has no workflow_call trigger"
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            TITLE='Z7 weekly key rotation WIRING BROKEN' \
+            BODY="The weekly rotation caller on main cannot call ${LANE_PATH} on ${LANE_REF}: the file is missing or has no workflow_call trigger. The call fails at startup, so the rotation did not run. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            node scripts/nightly-alert-issue.mjs
+          fi
+          exit 1
+
   rotation:
     name: Z7 real-time key rotation on kind (integration/v2 lane)
     # The called workflow needs only contents: read.
     permissions:
       contents: read
+    needs: [preflight]
     uses: AhmedElBanna80/knext/.github/workflows/z7-identity-kind-e2e.yml@integration/v2
     with:
       rotation_realtime: true
+      checkout_ref: integration/v2
 
   # ── Idempotent alert (same pattern as mutation-prover-nightly) ─────────────
   rotation-red-alert:
     name: Weekly rotation red alert (issue)
-    needs: [rotation]
+    needs: [preflight, rotation]
     # always() so this is not skipped when the call fails; a cancelled or timed-out
     # run alerts too (a silent cancelled run is the failure mode #1645 fixed). The
     # event check scopes it to the schedule.
     if: >-
       always() &&
       github.event_name == 'schedule' &&
-      (needs.rotation.result == 'failure' || needs.rotation.result == 'cancelled')
+      (needs.preflight.result == 'failure' || needs.rotation.result == 'failure' || needs.rotation.result == 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -98,8 +163,9 @@ jobs:
           ${jobs}
 
           Triage: open the failing step in the called lane's log first. A call that never started
-          (workflow not found, or the called file has no workflow_call) is a wiring failure, not a
-          rotation failure. Re-run the workflow to confirm the fix, then close this issue."
+          (or a failed preflight) is a wiring failure, not a rotation failure. A missing
+          called file or missing workflow_call fails the run at startup with no job, so no
+          issue is filed for that case by this job (see wiring-check, and the red run itself). Re-run the workflow to confirm the fix, then close this issue."
           # Create-or-update via the shared, never-pinning helper (GitHub caps pinned
           # issues at 3, and a failed pin must never hide a red).
           TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs

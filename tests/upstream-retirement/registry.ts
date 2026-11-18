@@ -83,7 +83,7 @@ const inconclusive = (id: string, why: string): never => {
 };
 
 /**
- * oven-sh/bun#45007 (#2805, ADR-0072 action item 4). Exit codes of the import
+ * oven-sh/bun#45007 (#2805; the defect is recorded in ADR-0007, 2026-10-12 amendment (bun#45007)). Exit codes of the import
  * harness below — the probe reads nothing else.
  */
 export const CONST_ASSIGN_EXIT = { OK: 0, TYPE_ERROR: 42, OTHER_ERROR: 43 } as const;
@@ -1117,7 +1117,7 @@ export const REGISTRY: RetirementEntry[] = [
     // marked shim) and the compat ledger deselects two files on bun x
     // turbopack. Red once the stock Bun on PATH loads the repro (exit 0) AND
     // still throws a runtime TypeError when the assignment runs; Node is the
-    // control that shows the oracle can read "fixed" (ADR-0072 action item 4).
+    // control that shows the oracle can read "fixed" (#2805).
     retire:
       `${CONST_ASSIGN_RETIRE.guard} (the Bun build refusal), its doctor row ` +
       `${CONST_ASSIGN_RETIRE.doctorRow} (and their tests), and both oven-sh/bun#45007 ` +

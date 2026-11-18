@@ -1,5 +1,5 @@
 /**
- * The oven-sh/bun#45007 retirement probe (#2805, ADR-0072 action item 4).
+ * The oven-sh/bun#45007 retirement probe (#2805; the defect is recorded in ADR-0007, 2026-10-12 amendment (bun#45007)).
  *
  * Bun 1.4.2 rejects an assignment to a `const` at LOAD time, even in code that
  * never runs; Node defers it to a runtime TypeError. knext carries a Bun

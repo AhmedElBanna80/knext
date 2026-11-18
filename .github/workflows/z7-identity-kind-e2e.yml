@@ -127,8 +127,8 @@ jobs:
     runs-on: ubuntu-latest
     # The real-time rotation (the rotation_realtime input, by dispatch or the weekly caller) waits a one-hour
     # constant, so a run that does it gets the longer bound; every other run gets 65 minutes: the 55 it had,
-    # plus 10 for the two phases added after wake (imagepin, http11), which on a healthy run cost about 6 and
-    # 4 minutes (a pin refusal, a drain to zero and a recovery; a zone roll and a call from zero). A failing
+    # plus 10 for the two phases added after wake (imagepin, http11), each of which waits out a drain to
+    # zero and a zone roll or a recovery (a few minutes on a healthy run; the sum is a bound, not measured). A failing
     # wait fails its phase at its own bound, so 65 is not a license to hang, only room for a healthy run.
     timeout-minutes: ${{ inputs.rotation_realtime && 120 || 65 }}
     env:

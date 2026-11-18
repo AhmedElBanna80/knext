@@ -66,7 +66,7 @@ describe('z7-rotation-weekly.yml', () => {
     const alert = jobs['rotation-red-alert'] as Job;
     expect(alert.needs).toEqual(['preflight', 'rotation']);
     expect(String(alert.if).replace(/\s+/g, ' ').trim()).toBe(
-      "always() && github.event_name == 'schedule' && (needs.preflight.result == 'failure' || needs.rotation.result == 'failure' || needs.rotation.result == 'cancelled')",
+      "always() && github.event_name == 'schedule' && (needs.preflight.result == 'failure' || needs.preflight.result == 'cancelled' || needs.rotation.result == 'failure' || needs.rotation.result == 'cancelled')",
     );
     expect(alert.permissions).toEqual({ issues: 'write', actions: 'read' });
     const run = (alert.steps ?? []).map((s) => s.run ?? '').join('\n');

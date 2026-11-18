@@ -16,11 +16,16 @@
 #             function's NetworkPolicy switched off (spec.security.networkPolicy:
 #             false), the direct dial to the user port connects, so the refusal is
 #             the policy's doing.
+#   policyoff  with the function's NetworkPolicy switched OFF (so no policy object
+#             exists), a token-less call is still refused by the function itself:
+#             through the activator while cold, and by a direct dial to the warm
+#             pod's user port (which the policy would otherwise have dropped). The
+#             in-process token check is the control, not the network.
 #   noauth    mutation: the function rebuilt WITHOUT its token interceptor answers
 #             the foreign no-token call (not_found, not 401). The token, not the
 #             network, is the control on the activator path.
 #
-# Phases (PHASES, space-separated; default all): up deploy token direct noauth.
+# Phases (PHASES, space-separated; default all): up deploy token direct policyoff noauth.
 #   up        a kind cluster with the default CNI disabled and Calico installed,
 #             then the Z7 lane's up phase on it (registry, cert-manager, Knative,
 #             the operator from this checkout)
@@ -51,7 +56,7 @@ REG_NAME="${REGISTRY_NAME:-knext-z11-registry}"
 REG_PORT="${REGISTRY_PORT:-5002}"
 NS="${Z11_NAMESPACE:-z11-e2e}"
 FOREIGN="${NS}-foreign"
-PHASES="${PHASES:-up deploy token direct noauth}"
+PHASES="${PHASES:-up deploy token direct policyoff noauth}"
 INTERNAL_PORT="${INTERNAL_PORT:-18100}"
 CURL_IMAGE='curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69'
 
@@ -129,12 +134,15 @@ start_forwards() {
 # foreign_get <authorization header value or "">: the foreign pod calls GetItem on the
 # function's cluster-local URL (through Kourier and, at zero, the activator). Sets
 # FC_STATUS (HTTP status, 000 if no response) and FC_CODE (the Connect error code).
-foreign_get() {
-  local auth=$1 out
+foreign_get() { foreign_post "${FN_URL}${GET_ITEM}" "$1"; }
+
+# foreign_post <url> <authorization header value or "">: the same call to any URL.
+foreign_post() {
+  local url=$1 auth=$2 out
   local args=(curl -s -m 60 -o /tmp/body -w '%{http_code}' -X POST
     -H 'content-type: application/json' -H 'connect-protocol-version: 1')
   [ -n "${auth}" ] && args+=(-H "authorization: ${auth}")
-  args+=(-d '{"id":"missing"}' "${FN_URL}${GET_ITEM}")
+  args+=(-d '{"id":"missing"}' "${url}")
   out="$(k -n "${FOREIGN}" exec caller -- "${args[@]}" 2>/dev/null)" || out=000
   FC_STATUS="${out}"
   local body
@@ -303,6 +311,42 @@ phase_direct() {
   ok "with the policy off both direct dials connect: the refusal is the policy's doing (policy restored)"
 }
 
+# ---------------------------------------------------------------- phase: policyoff
+
+phase_policyoff() {
+  log "policyoff: with the NetworkPolicy OFF a token-less call is refused by the function itself"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  set_policy false
+  # set_policy returned only once the object is gone; assert it again here so this
+  # phase's claim never rests on a helper's wait.
+  [ "$(k -n "${NS}" get networkpolicy "${GO_FN}-function-ingress" --ignore-not-found -o name | grep -c .)" = 0 ] \
+    || fail "the function's NetworkPolicy still exists: the leg would not be a policy-off leg"
+  # Cold, through the activator.
+  await_zero "${GO_FN}"
+  foreign_get ""
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
+    || fail "policy off, cold, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
+  [ "$(all_pods "${GO_FN}")" -ge 1 ] || fail "the refused call never woke ${GO_FN}: it did not reach the function"
+  ok "policy off: a cold no-token call through the activator woke the function and was refused (401 unauthenticated)"
+  # Warm and direct: the dial the policy would drop now connects, and the function answers.
+  local ip end=$((SECONDS + 90)) reached=0
+  while [ "${SECONDS}" -lt "${end}" ]; do
+    ip="$(fn_pod_ip)"
+    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ]; then reached=1; break; fi
+    sleep 3
+  done
+  [ "${reached}" = 1 ] || fail "policy off: the foreign pod could not reach the warm function pod, so the direct leg proves nothing"
+  foreign_post "http://${ip}:8080${GET_ITEM}" ""
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
+    || fail "policy off, direct to the pod, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
+  foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer not-a-token"
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
+    || fail "policy off, direct to the pod, garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
+  echo "REFUSED-BY-FUNCTION-WITH-POLICY-OFF: direct ${ip}:8080 no token -> 401 unauthenticated; garbage token -> 401 unauthenticated"
+  set_policy true
+  ok "policy off: a foreign pod reached the function pod directly and the function itself refused it (policy restored)"
+}
+
 # ---------------------------------------------------------------- phase: noauth
 
 phase_noauth() {
@@ -333,8 +377,8 @@ phase_noauth() {
 
 for phase in ${PHASES}; do
   case "${phase}" in
-    up | deploy | token | direct | noauth) ;;
-    *) fail "unknown phase '${phase}' (up deploy token direct noauth)" ;;
+    up | deploy | token | direct | policyoff | noauth) ;;
+    *) fail "unknown phase '${phase}' (up deploy token direct policyoff noauth)" ;;
   esac
 done
 if has_phase up; then phase_up; fi
@@ -344,5 +388,6 @@ k -n kube-system get daemonset calico-node >/dev/null 2>&1 \
 if has_phase deploy; then phase_deploy; fi
 if has_phase token; then phase_token; fi
 if has_phase direct; then phase_direct; fi
+if has_phase policyoff; then phase_policyoff; fi
 if has_phase noauth; then phase_noauth; fi
 log "Z11 drill: ${PHASES} passed"

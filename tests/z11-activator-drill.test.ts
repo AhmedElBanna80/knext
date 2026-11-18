@@ -11,6 +11,8 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+const WORKFLOW = resolve(import.meta.dirname, '..', '.github/workflows/z11-activator-drill-e2e.yml');
+
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const own = readFileSync(
   resolve(REPO_ROOT, 'packages/grpc/e2e/z11-activator-drill/run.sh'),
@@ -29,7 +31,7 @@ describe('the drill is careful', () => {
     expect(own).toMatch(/^set -euo pipefail$/m);
     expect(own).toMatch(/^set \+x$/m);
     expect(own).not.toMatch(/kind delete/);
-    for (const p of ['up', 'deploy', 'token', 'direct', 'noauth']) {
+    for (const p of ['up', 'deploy', 'token', 'direct', 'policyoff', 'noauth']) {
       expect(own).toContain(`if has_phase ${p}; then phase_${p}; fi`);
     }
   });
@@ -110,5 +112,43 @@ describe('noauth: without the interceptor the same call reaches the handler', ()
     expect(n).toMatch(/\[ "\$\{status\}" = 404 \] && \[ "\$\{code\}" = not_found \]/);
     expect(n.indexOf('await_zero')).toBeGreaterThan(-1);
     expect(n.indexOf('await_zero')).toBeLessThan(n.indexOf('foreign_get ""'));
+  });
+});
+
+describe('policyoff: with the NetworkPolicy off the function itself refuses a token-less call', () => {
+  const p = body('phase_policyoff');
+  it('turns the policy off, proves the object is gone, and restores it afterwards', () => {
+    expect(p).toContain('set_policy false');
+    expect(p).toMatch(/networkpolicy "\$\{GO_FN\}-function-ingress"[^\n]*grep -c \.\)" = 0 \] \\\n\s*\|\| fail/);
+    expect(p.indexOf('set_policy false')).toBeLessThan(p.indexOf('foreign_get ""'));
+    expect(p.indexOf('set_policy true')).toBeGreaterThan(p.indexOf('foreign_post "http://'));
+  });
+  it('the cold call is refused 401 unauthenticated after waking the function', () => {
+    expect(p.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(p.indexOf('set_policy false'));
+    expect(p.indexOf('await_zero "${GO_FN}"')).toBeLessThan(p.indexOf('foreign_get ""'));
+    expect(p).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" -ge 1 \] \|\| fail/);
+  });
+  it('the direct dial must connect (rc 0), and the function answers 401 for no token and a garbage token', () => {
+    expect(p).toMatch(/dial_rc "\$\{ip\}" 8080\)" = 0 \]/);
+    expect(p).toMatch(/\[ "\$\{reached\}" = 1 \] \|\| fail/);
+    expect(p).toContain('foreign_post "http://${ip}:8080${GET_ITEM}" ""');
+    expect(p).toContain('foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer not-a-token"');
+    expect(p.match(/= 401 \] && \[ "\$\{FC_CODE\}" = unauthenticated \]/g)?.length).toBe(3);
+    expect(p).toContain('"missing bearer token"');
+    expect(p).toContain('"token rejected"');
+  });
+});
+
+describe('CI runs the drill by default, including the policy-off leg', () => {
+  const wf = readFileSync(WORKFLOW, 'utf8');
+  it('runs run.sh with no PHASES override, on integration and main, with no continue-on-error', () => {
+    expect(wf).toContain('packages/grpc/e2e/z11-activator-drill/run.sh');
+    expect(wf).not.toMatch(/^\s*PHASES:/m);
+    expect(wf).not.toMatch(/continue-on-error/);
+    expect(wf).toMatch(/push:\n\s+branches: \[main, 'integration\/\*\*'\]/);
+    expect(wf).toContain("'packages/grpc/e2e/**'");
+  });
+  it('the default phase list of the script includes policyoff', () => {
+    expect(own).toMatch(/PHASES="\$\{PHASES:-up deploy token direct policyoff noauth\}"/);
   });
 });

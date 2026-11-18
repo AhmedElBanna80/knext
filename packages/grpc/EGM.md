@@ -64,11 +64,14 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `tests/z10-zone-functions-kind-lane.test.ts`.
   - e2e/lib/kind-lane.sh: helpers sourced (never run) by the Z7, Z10 and Z11
     scripts.
-  - e2e/z11-activator-drill (no EGM.md): a manual drill on kind with Calico,
-    phases `up deploy token direct noauth`; it proves which control holds on the
+  - e2e/z11-activator-drill (no EGM.md): a drill on kind with Calico, phases
+    `up deploy token direct policyoff noauth`; it proves which control holds on the
     activator path (the function's token, and the NetworkPolicy on a direct
-    dial). No workflow runs it; `RECORDED-RUN.md` holds the last run. Guard:
-    `tests/z11-activator-drill.test.ts`.
+    dial), and that with the NetworkPolicy off a token-less call is still refused
+    by the function itself (`policyoff`). `.github/workflows/z11-activator-drill-e2e.yml`
+    runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
+    Guard: `tests/z11-activator-drill.test.ts`, mutation-proved by
+    `scripts/mutation-prove-s8-1-z11-policyoff.mjs`.
 
 ## Invariants
 

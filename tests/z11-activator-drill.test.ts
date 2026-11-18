@@ -53,6 +53,25 @@ describe('the drill is careful', () => {
   });
 });
 
+describe('every direct dial wakes the function and waits for a Ready pod first', () => {
+  const w = body('wake_ready');
+  it('wake_ready calls the zone, waits bounded for 404 and a Ready pod, and fails closed', () => {
+    expect(w).toContain('zone_call "/example/get?sub=alice&id=missing"');
+    expect(w).toContain('fn_pod_ip');
+    expect(w).toContain('SECONDS + 180');
+    expect(w).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \] && \[ -n "\$\{ip\}" \]/);
+    expect(w).toMatch(/\n {2}fail "no Ready/);
+  });
+  it('phase_direct and await_direct_ip call wake_ready before any pod lookup or dial', () => {
+    for (const f of ['phase_direct', 'await_direct_ip']) {
+      const b = body(f);
+      expect(b.indexOf('wake_ready'), `${f} wakes`).toBeGreaterThan(-1);
+      expect(b.indexOf('wake_ready')).toBeLessThan(b.indexOf('dial_rc'));
+    }
+    expect(body('phase_direct').indexOf('wake_ready')).toBeLessThan(body('phase_direct').indexOf('fn_pod_ip'));
+  });
+});
+
 describe('token: the refusal is the function, on the activator path', () => {
   const t = body('phase_token');
   it('the function is at zero first, and the refused call woke it', () => {

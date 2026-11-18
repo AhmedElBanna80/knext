@@ -115,6 +115,27 @@ const MUTATIONS = [
       '  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \\\n    || fail "policy off, cold',
   },
   {
+    id: 'WK1',
+    subject: 'run',
+    claim: 'phase_direct stops waking the function before it looks for a pod',
+    anchor: '  wake_ready\n  ip="${WARM_IP}"\n',
+    replacement: '  ip="$(fn_pod_ip)"\n',
+  },
+  {
+    id: 'WK2',
+    subject: 'run',
+    claim: 'the policy-off direct wait stops waking the function first',
+    anchor: '  DIRECT_IP=""\n  wake_ready\n',
+    replacement: '  DIRECT_IP=""\n',
+  },
+  {
+    id: 'WK3',
+    subject: 'run',
+    claim: 'wake_ready stops failing closed when no pod becomes Ready',
+    anchor: '  fail "no Ready ${GO_FN} pod to dial after waking',
+    replacement: '  true "no Ready ${GO_FN} pod to dial after waking',
+  },
+  {
     id: 'K1',
     subject: 'run',
     claim: 'the policy-off direct wait stops keeping the pod warm',

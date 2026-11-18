@@ -276,16 +276,30 @@ set_policy() { # true|false: the function's NetworkPolicy toggle, then wait for 
   if [ "$1" = true ]; then RESTORE_POLICY=0; fi
 }
 
+# wake_ready: wake the function through the zone with the authenticated call and WAIT,
+# bounded, until the call reached the handler (404 not_found) AND a Ready pod exists;
+# set WARM_IP. Fails closed when no pod ever becomes Ready, so a direct dial is never
+# attempted at a scaled-to-zero function (and never counted as a pass).
+wake_ready() {
+  local end=$((SECONDS + 180)) ip
+  WARM_IP=""
+  while [ "${SECONDS}" -lt "${end}" ]; do
+    zone_call "/example/get?sub=alice&id=missing"
+    ip="$(fn_pod_ip)"
+    if [ "${ZC_STATUS}" = 404 ] && [ -n "${ip}" ]; then WARM_IP="${ip}"; return 0; fi
+    sleep 3
+  done
+  fail "no Ready ${GO_FN} pod to dial after waking it through the zone (last status ${ZC_STATUS})"
+}
+
 phase_direct() {
   log "direct: a foreign pod's direct dial to the warm function pod is dropped"
   [ -n "${ZONE_HOST}" ] || start_forwards
-  # Wake the function through the zone, and require the call to have reached it
-  # (NotFound from the handler), so a Ready pod is up to dial.
-  zone_call "/example/get?sub=alice&id=missing"
-  [ "${ZC_STATUS}" = 404 ] || fail "the zone's wake-up call returned ${ZC_STATUS}, want 404 from the function"
+  # The function may have scaled to zero while earlier phases ran (a slow runner):
+  # wake it through the zone and WAIT for a Ready pod before the first lookup.
   local ip port rc
-  ip="$(fn_pod_ip)"
-  [ -n "${ip}" ] || fail "no Ready ${GO_FN} pod to dial"
+  wake_ready
+  ip="${WARM_IP}"
   # 8080 is the function; 8013 is queue-proxy's serving port for an h2c function
   # (8012 is its HTTP/1 port, which an h2c function's queue-proxy does not open).
   for port in 8080 8013; do
@@ -317,8 +331,10 @@ phase_direct() {
 # function pod's user port, and set DIRECT_IP. Each round keeps the pod warm through
 # the zone (the same way phase_direct does), so an idle scale-down cannot race the dial.
 await_direct_ip() {
-  local end=$((SECONDS + 90)) ip
+  local end ip
   DIRECT_IP=""
+  wake_ready
+  end=$((SECONDS + 90))
   while [ "${SECONDS}" -lt "${end}" ]; do
     zone_call "/example/get?sub=alice&id=missing"
     ip="$(fn_pod_ip)"

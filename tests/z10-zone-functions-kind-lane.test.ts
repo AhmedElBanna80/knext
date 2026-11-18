@@ -53,7 +53,7 @@ describe('the harness is as careful as the Z7 lane', () => {
 
   it('runs every phase by default', () => {
     expect(own).toContain(
-      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"',
+      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
     );
   });
 });
@@ -444,6 +444,70 @@ describe('wake: the zone start wakes an opted-in function, never an opted-out on
     expect(call).toBeGreaterThan(woke);
     expect(w).toMatch(/\[ "\$\{on_ms\}" -lt "\$\{off_ms\}" \] \\\n\s*\|\| fail/);
     expect(body('zone_runs')).toContain('KNEXT_WAKE_FUNCTIONS');
+  });
+});
+
+describe('imagepin: a pinned zone refuses a swapped function image and recovers (ADR-0004 Am3)', () => {
+  const p = body('phase_imagepin');
+  it('is a default phase, run last, and a known phase', () => {
+    expect(own).toContain('crosszone wake imagepin http11}"');
+    expect(own).toMatch(/images \| deploy .* \| wake \| imagepin \| http11\) ;;/);
+    expect(own).toContain('has_phase imagepin && phase_imagepin');
+  });
+  it('pins the digest the function really runs, then swaps to a different image', () => {
+    expect(p).toContain('go_img="$(image_ref function-go)"');
+    expect(p).toContain('pin="@${go_img#*@}"');
+    expect(p).toContain('\\"path\\":\\"/spec/backends/0/image\\",\\"value\\":\\"${pin}\\"');
+    expect(p).toContain('swap_img="$(image_ref zone-caller)"');
+    expect(p).toMatch(/\[ "\$\{swap_img#\*@\}" != "\$\{go_img#\*@\}" \] \|\| fail/);
+  });
+  it('refuses on BindingImageMismatch, on both objects, and holds', () => {
+    expect(p).toContain('= False/BindingImageMismatch');
+    expect(p).toMatch(/cond_of backendservice "\$\{GO_FN\}" Bound/);
+    expect(p).toMatch(/cond_of nextapp "\$\{ZONE\}" BackendBindings/);
+    expect(p.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(-1);
+    expect(p.indexOf('sleep 20')).toBeGreaterThan(p.indexOf('await_zero "${GO_FN}"'));
+    expect(p).toMatch(/get ksvc "\$\{GO_FN\}" --ignore-not-found -o name\)" \] \\\n\s*\|\| fail/);
+    expect(p).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" = 0 \] \|\| fail/);
+  });
+  it('recovers on the pinned image and the zone calls it, then removes the pin', () => {
+    const back = p.indexOf('\\"value\\":\\"${go_img}\\"');
+    const bound = p.indexOf('= True/Bound', back);
+    const call = p.indexOf('expect_zone', bound);
+    const unpin = p.indexOf('"op":"remove","path":"/spec/backends/0/image"');
+    expect(back).toBeGreaterThan(p.indexOf('= False/BindingImageMismatch'));
+    expect(bound).toBeGreaterThan(back);
+    expect(call).toBeGreaterThan(bound);
+    expect(unpin).toBeGreaterThan(call);
+  });
+});
+
+describe('http11: backends[].httpVersion 1.1 is called over HTTP/1.1 through the h2c port (ADR-0004 Am6)', () => {
+  const p = body('phase_http11');
+  it('sets 1.1 on the zone entry and waits for the zone to run with it', () => {
+    expect(p).toContain('"path":"/spec/backends/0/httpVersion","value":"1.1"');
+    expect(p).toContain('zone_http_version 1.1');
+    expect(body('zone_http_version')).toContain('EXAMPLE_SERVICE_HTTP_VERSION');
+  });
+  it('the function port stays h2c before and after, and the zone logs HTTP/1.1, never h2c', () => {
+    expect(body('fn_port_names')).toContain('.ports[]?.name');
+    expect(p.match(/\[ "\$\(fn_port_names\)" = h2c \] \|\| fail/g)?.length).toBe(2);
+    expect(p).toContain('zpod="$(pod_json "${ZONE}" | jq -r \'.metadata.name\')"');
+    expect(p).toContain('logs "${zpod}" -c user-container');
+    expect(p).not.toContain('logs -l');
+    expect(p).toContain('knext: example function: transport HTTP/1.1');
+    expect(p).toMatch(/! grep -qF 'knext: example function: transport h2c[^\n]*\n?[^\n]*\|\| fail/);
+  });
+  it('a call at HTTP/1.1 lands, warm and from zero, and leaves a pod', () => {
+    expect(p).toContain('expect_zone');
+    const zero = p.indexOf('await_zero "${GO_FN}"');
+    const cold = p.indexOf('cold_call', zero);
+    expect(zero).toBeGreaterThan(-1);
+    expect(cold).toBeGreaterThan(zero);
+  });
+  it('restores the zone to no httpVersion', () => {
+    expect(p).toContain('"op":"remove","path":"/spec/backends/0/httpVersion"');
+    expect(p).toContain('zone_http_version unset');
   });
 });
 

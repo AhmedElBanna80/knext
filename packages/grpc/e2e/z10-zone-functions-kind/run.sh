@@ -38,6 +38,13 @@
 #   wake      the zone restarts on an image that loads knext's wake-ahead preload: an
 #             opted-out function stays at zero; an opted-in one is woken by the zone's
 #             start before any call, and the first call is faster
+#   imagepin  the zone pins the Go function's image digest (backends[].image); swapping the
+#             function's image for another one is refused (Bound=False/BindingImageMismatch,
+#             no Knative Service, no pod, the zone's BackendBindings likewise), and putting
+#             the pinned image back binds again and the zone calls it
+#   http11    the zone sets backends[].httpVersion 1.1: the operator renders
+#             EXAMPLE_SERVICE_HTTP_VERSION=1.1, the function's port stays h2c, and the zone
+#             calls the function over HTTP/1.1, warm and from zero (through the activator)
 #
 # Environment: KIND_CLUSTER (default knext-z7-e2e), REGISTRY_PORT (5001),
 # Z10_NAMESPACE (z10-e2e), Z10_WITH_RUST (1), PHASES, INTERNAL_PORT (18090),
@@ -60,7 +67,7 @@ CLUSTER="${KIND_CLUSTER:-knext-z7-e2e}"
 REG_PORT="${REGISTRY_PORT:-5001}"
 NS="${Z10_NAMESPACE:-z10-e2e}"
 WITH_RUST="${Z10_WITH_RUST:-1}"
-PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"
+PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"
 INTERNAL_PORT="${INTERNAL_PORT:-18090}"
 ZERO_TIMEOUT="${Z10_ZERO_TIMEOUT:-300}"
 OPERATOR_NS='kn-next-operator-system'
@@ -818,6 +825,121 @@ phase_wake() {
   k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"wakeAhead":false}}' >/dev/null
 }
 
+# ---------------------------------------------------------------- phase: imagepin
+
+phase_imagepin() {
+  log "imagepin: a zone that pins its function's digest refuses a swapped image and recovers"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  local go_img swap_img pin
+  go_img="$(image_ref function-go)"
+  # Any other image will do: the refusal comes before anything is rendered.
+  swap_img="$(image_ref zone-caller)"
+  [ "${swap_img#*@}" != "${go_img#*@}" ] || fail "the swap image has the function's digest, so it would prove nothing"
+  pin="@${go_img#*@}"
+  # The entry for the Go function is the first of the zone's backends.
+  [ "$(k -n "${NS}" get nextapp "${ZONE}" -o json | jq -r '.spec.backends[0].service')" = "${GO_FN}" ] \
+    || fail "the zone's first backend is not ${GO_FN}"
+  k -n "${NS}" patch nextapp "${ZONE}" --type json \
+    -p "[{\"op\":\"add\",\"path\":\"/spec/backends/0/image\",\"value\":\"${pin}\"}]" >/dev/null
+  wait_until 120 3 "${GO_FN} still Bound under the matching pin" \
+    "[ \"\$(cond_of backendservice ${GO_FN} Bound)\" = True/Bound ]"
+  expect_zone "pinned and matching: the zone calls ${GO_FN}" \
+    "/example/put?sub=alice&id=pin-1&value=v" 200 '.ok == true'
+
+  # The swap: someone with update on backendservices changes the image only.
+  k -n "${NS}" patch backendservice "${GO_FN}" --type json \
+    -p "[{\"op\":\"replace\",\"path\":\"/spec/image\",\"value\":\"${swap_img}\"}]" >/dev/null
+  wait_until 180 3 "${GO_FN} refused for the image swap" \
+    "[ \"\$(cond_of backendservice ${GO_FN} Bound)\" = False/BindingImageMismatch ]"
+  wait_until 180 3 "${GO_FN}'s Knative Service is removed" \
+    "[ -z \"\$(k -n ${NS} get ksvc ${GO_FN} --ignore-not-found -o name)\" ]"
+  # The pod the pinned image was serving drains first; then none may come back.
+  await_zero "${GO_FN}"
+  # Hold: a refusal that flaps back to rendering is not one.
+  sleep 20
+  [ "$(cond_of backendservice "${GO_FN}" Bound)" = False/BindingImageMismatch ] \
+    || fail "${GO_FN}: Bound is $(cond_of backendservice "${GO_FN}" Bound) after the hold"
+  [ "$(cond_of nextapp "${ZONE}" BackendBindings)" = False/BindingImageMismatch ] \
+    || fail "${ZONE}: BackendBindings is $(cond_of nextapp "${ZONE}" BackendBindings), want False/BindingImageMismatch"
+  # --ignore-not-found: an API error must fail the lane, not read as "absent".
+  [ -z "$(k -n "${NS}" get ksvc "${GO_FN}" --ignore-not-found -o name)" ] \
+    || fail "${GO_FN}: refused, but its Knative Service exists"
+  [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN}: refused, but it has a pod"
+  ok "image swap: ${GO_FN} is BindingImageMismatch, with no Knative Service and no pod; the zone's bindings report it"
+
+  # Put the pinned image back: bound again, rendered, called.
+  k -n "${NS}" patch backendservice "${GO_FN}" --type json \
+    -p "[{\"op\":\"replace\",\"path\":\"/spec/image\",\"value\":\"${go_img}\"}]" >/dev/null
+  wait_until 600 3 "${GO_FN} Bound again on the pinned image" \
+    "[ \"\$(cond_of backendservice ${GO_FN} Bound)\" = True/Bound ] && k -n ${NS} wait --for=condition=Ready --timeout=2s backendservice/${GO_FN}"
+  wait_until 300 3 "the zone bound to ${GO_FN} again and calling it" \
+    "[ \"\$(cond_of nextapp ${ZONE} BackendBindings)\" = True/Bound ] && zone_status '/example/put?sub=alice&id=pin-r&value=v' | grep -q '^200\$'"
+  expect_zone "the pinned image is back: the zone calls ${GO_FN} again" \
+    "/example/put?sub=alice&id=pin-2&value=v" 200 '.ok == true'
+
+  # Leave the zone as the other phases expect: no pin.
+  k -n "${NS}" patch nextapp "${ZONE}" --type json \
+    -p '[{"op":"remove","path":"/spec/backends/0/image"}]' >/dev/null
+  [ "$(k -n "${NS}" get nextapp "${ZONE}" -o json | jq -r '.spec.backends[0].image // "unset"')" = unset ] \
+    || fail "the pin is still on the zone's entry"
+}
+
+# ---------------------------------------------------------------- phase: http11
+
+fn_port_names() { # the function's Knative container port names, comma-joined
+  k -n "${NS}" get ksvc "${GO_FN}" -o json | jq -r '[.spec.template.spec.containers[].ports[]?.name] | join(",")'
+}
+
+# zone_http_version <want|unset>: the zone's single live pod is Ready and carries
+# EXAMPLE_SERVICE_HTTP_VERSION=<want> (or none), and answers.
+zone_http_version() {
+  local pod
+  pod="$(pod_json "${ZONE}")" || return 1
+  jq -e --arg v "$1" '
+    .status.phase == "Running" and ([.status.containerStatuses[]? | .ready] | all)
+    and (([.spec.containers[] | select(.name == "user-container") | .env[]?
+           | select(.name == "EXAMPLE_SERVICE_HTTP_VERSION") | .value] | first // "unset") == $v)' \
+    <<<"${pod}" >/dev/null || return 1
+  zone_call /api/health
+  [ "${ZC_STATUS}" = 200 ]
+}
+
+phase_http11() {
+  log "http11: the zone calls the function over HTTP/1.1; the function's port stays h2c"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  [ "$(k -n "${NS}" get nextapp "${ZONE}" -o json | jq -r '.spec.backends[0].service')" = "${GO_FN}" ] \
+    || fail "the zone's first backend is not ${GO_FN}"
+  [ "$(fn_port_names)" = h2c ] || fail "${GO_FN}: its Knative Service port is '$(fn_port_names)', want h2c"
+  k -n "${NS}" patch nextapp "${ZONE}" --type json \
+    -p '[{"op":"add","path":"/spec/backends/0/httpVersion","value":"1.1"}]' >/dev/null
+  wait_until 300 3 "the zone runs with EXAMPLE_SERVICE_HTTP_VERSION=1.1" "zone_http_version 1.1"
+  expect_zone "httpVersion 1.1: a write through the zone lands" \
+    "/example/put?sub=alice&id=h11-1&value=v1" 200 '.ok == true'
+  expect_zone "httpVersion 1.1: a read returns the value" \
+    "/example/get?sub=alice&id=h11-1" 200 '.ok == true and .value == "v1"'
+  # The live pod's own log: a selector over the service also reads the terminating
+  # pods of earlier revisions, which still carry their h2c notice.
+  local zlog zpod
+  zpod="$(pod_json "${ZONE}" | jq -r '.metadata.name')"
+  [ -n "${zpod}" ] || fail "no live zone pod to read the transport notice from"
+  zlog="$(k -n "${NS}" logs "${zpod}" -c user-container --tail=-1)"
+  grep -qF 'knext: example function: transport HTTP/1.1' <<<"${zlog}" \
+    || fail "the zone did not log an HTTP/1.1 transport for the example function"
+  ! grep -qF 'knext: example function: transport h2c' <<<"${zlog}" \
+    || fail "the zone logged an h2c transport for the example function under httpVersion 1.1"
+  [ "$(fn_port_names)" = h2c ] || fail "${GO_FN}: its Knative Service port is '$(fn_port_names)' under httpVersion 1.1, want h2c"
+  ok "httpVersion 1.1: the zone dials over HTTP/1.1 and the function's port is still h2c"
+
+  # From zero: the HTTP/1.1 request goes through the activator to the h2c port.
+  await_zero "${GO_FN}"
+  cold_call "${GO_FN}" "/example/put?sub=alice&id=h11-2&value=v2" 200 '.ok == true' \
+    "httpVersion 1.1 from zero"
+
+  k -n "${NS}" patch nextapp "${ZONE}" --type json \
+    -p '[{"op":"remove","path":"/spec/backends/0/httpVersion"}]' >/dev/null
+  wait_until 300 3 "the zone runs without EXAMPLE_SERVICE_HTTP_VERSION" "zone_http_version unset"
+}
+
 # ---------------------------------------------------------------- main
 
 use_cluster
@@ -825,8 +947,8 @@ k get crd backendservices.apps.kn-next.dev >/dev/null 2>&1 \
   || fail "the cluster has no BackendService CRD: run the Z7 lane's up phase first (PHASES=up ${Z7}/run.sh)"
 for phase in ${PHASES}; do
   case "${phase}" in
-    images | deploy | cold | trailers | grpctrailers | zerozone | rollout | sovereignty | crosszone | wake) ;;
-    *) fail "unknown phase '${phase}' (images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake)" ;;
+    images | deploy | cold | trailers | grpctrailers | zerozone | rollout | sovereignty | crosszone | wake | imagepin | http11) ;;
+    *) fail "unknown phase '${phase}' (images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11)" ;;
   esac
 done
 has_phase images && phase_images
@@ -839,4 +961,6 @@ has_phase rollout && phase_rollout
 has_phase sovereignty && phase_sovereignty
 has_phase crosszone && phase_crosszone
 has_phase wake && phase_wake
+has_phase imagepin && phase_imagepin
+has_phase http11 && phase_http11
 log "Z10 lane: ${PHASES} passed"

@@ -753,7 +753,7 @@ the positive-evidence model of the revocation work, and the zone-env golden.
       matching pin renders, no pin unchanged, recovery, rotation, malformed pin rejected by the CRD),
       the CLI tests, and prover rows in `scripts/mutation-prove-2052-backendservice.mjs`.
 - [x] Docs: the threat model residual, the zone-functions page, the CLI and operator references.
-- [ ] kind: swap the image with `kubectl` and assert no database Secret mount (extends the Z8 kind lane).
+- [x] kind: swap the image with `kubectl` and assert the function is refused and renders nothing (extends the Z8 kind lane). The Z10 lane's `imagepin` phase proves it: a swapped image gives `Bound=False/BindingImageMismatch`, no Knative Service and no pod, so no pod can mount the zone's database Secret; the pinned image binds again.
 - [ ] The founder's ratification decision: accept, amend or reject this amendment.
 
 
@@ -1011,9 +1011,16 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
    roll its revision, which is against Decision 1's consent model. The generated function servers accept
    both versions on their one port: the Go template enables HTTP/1 and unencrypted HTTP/2 on the same
    server (`templates/go/internal/rpc/rpc.go`), and the Rust template's server does the
-   same (`templates/rust/src/rpc/mod.rs`). Whether Knative's queue-proxy passes HTTP/1.1
-   through to a port named `h2c` is not yet verified on a cluster; that is an action item below. So nothing is rendered into the function, and neither pin (Amendments 3 and 4) is
-   involved.
+   same (`templates/rust/src/rpc/mod.rs`). **What `httpVersion` controls, measured on kind (the Z10
+   lane's `http11` phase).** It chooses the protocol of the **zone's own client** towards the
+   function's cluster-local URL: with `"1.1"` the zone's pod carries `<NAME>_SERVICE_HTTP_VERSION=1.1`
+   and logs `transport HTTP/1.1, set by <NAME>_SERVICE_HTTP_VERSION=1.1`; with it unset a Node zone logs
+   `transport h2c`. It does **not** change the function: its Knative port stays named `h2c` before and
+   after, nothing is rendered into it, and an HTTP/1.1 request is passed through that port by Knative's
+   data path, both to a warm function and to one woken from zero through the activator (a write and a
+   read succeed; the call from zero is answered). The lane does not observe which protocol the function
+   container itself receives behind the queue-proxy, so this decision claims only the zone's leg. Nothing
+   is rendered into the function, and neither pin (Amendments 3 and 4) is involved.
 3. If the zone already sets the variable in `spec.env` or `spec.secrets.envMap`, the existing
    collision rule applies. The zone's value is kept, and `BackendBindings` names the variable. The rule
    sees only explicit container env, not keys imported through `envFrom`: as for every binding variable,
@@ -1047,4 +1054,4 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
 - [x] `kn-next.config.ts` `backends[].httpVersion`, its validator, and the CR builder emitting it only when set.
 - [x] Docs: the zone-functions env table, the operator field table and the CLI glue note.
 - [ ] When ADR-0065's `model` flavour is built, skip `<NAME>_SERVICE_HTTP_VERSION` for its entries, with a test.
-- [ ] kind: call a function over HTTP/1.1 through its Knative `h2c` port (queue-proxy passthrough).
+- [x] kind: call a function over HTTP/1.1 through its Knative `h2c` port (queue-proxy passthrough). The Z10 lane's `http11` phase proves it, warm and from zero.

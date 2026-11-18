@@ -171,9 +171,9 @@ const MUTATIONS = [
   {
     id: 'W6',
     subject: 'workflow',
-    claim: 'the path filter drops the NetworkPolicy reconcile code',
-    anchor: "      - 'packages/kn-next-operator/internal/controller/nextapp_networkpolicy.go'\n",
-    replacement: '',
+    claim: 'the push path filter drifts from the pull_request one (drops an entry)',
+    anchor: "      - 'tests/z11-activator-drill.test.ts'\n  workflow_dispatch: {}",
+    replacement: '  workflow_dispatch: {}',
   },
   {
     id: 'W1',

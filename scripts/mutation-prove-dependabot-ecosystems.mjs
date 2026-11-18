@@ -165,6 +165,27 @@ const MUTATIONS = [
     replacement:
       "          - 'patch'\n    open-pull-requests-limit: 3\n    commit-message:\n      prefix: 'chore(rust)'\n",
   },
+  {
+    id: 'E-D1',
+    claim: 'the docker entry drops the Rust template (distroless copy ungrouped)',
+    subject: 'dep',
+    anchor: "      - '/templates/go'\n      - '/templates/rust'\n    schedule:",
+    replacement: "      - '/templates/go'\n    schedule:",
+  },
+  {
+    id: 'E-D2',
+    claim: 'the distroless-base group is removed',
+    subject: 'dep',
+    anchor: "      distroless-base:\n        patterns:\n          - 'gcr.io/distroless/*'\n",
+    replacement: '',
+  },
+  {
+    id: 'E-D3',
+    claim: 'the distroless group gains an update-types filter (digest-only bumps ungrouped)',
+    subject: 'dep',
+    anchor: "          - 'gcr.io/distroless/*'\n",
+    replacement: "          - 'gcr.io/distroless/*'\n        update-types:\n          - 'major'\n",
+  },
 ].map((m) => ({ expect: 'red', validate: parsesYaml, ...m }));
 
 const CANARY = {

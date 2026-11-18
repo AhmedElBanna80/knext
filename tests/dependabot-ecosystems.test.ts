@@ -180,6 +180,41 @@ describe('dependabot.yml: docker base images', () => {
       expect(existsSync(resolve(REPO_ROOT, `.${d}`, 'Dockerfile')), `${d}/Dockerfile`).toBe(true);
     }
   });
+
+  // Derived, not listed: every tracked Dockerfile that pins distroless/static
+  // must sit in ONE docker entry whose first matching group is distroless-only,
+  // so Dependabot moves all copies in one PR (the digest guard is red otherwise).
+  const distrolessDirs = execFileSync('git', ['ls-files', '*Dockerfile'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .filter((f) => f && /distroless\/static/.test(readFileSync(resolve(REPO_ROOT, f), 'utf8')))
+    .map((f) => `/${dirname(f)}`);
+
+  it('finds the distroless Dockerfiles (non-vacuous), including templates/rust', () => {
+    expect(distrolessDirs.length).toBeGreaterThanOrEqual(4);
+    expect(distrolessDirs).toContain('/templates/rust');
+  });
+
+  it('ONE grouped docker entry covers every distroless/static Dockerfile', () => {
+    const owners = docker.filter((u) => distrolessDirs.every((d) => dirsOf(u).includes(d)));
+    expect(owners.length, 'single docker entry covering all distroless dirs').toBe(1);
+    const entry = owners[0];
+    const groups = Object.entries(entry.groups ?? {});
+    const idx = groups.findIndex(([, g]) =>
+      (g.patterns ?? []).some((p: string) => p === 'gcr.io/distroless/*'),
+    );
+    expect(idx, 'a group matching gcr.io/distroless/*').toBeGreaterThanOrEqual(0);
+    // No update-types filter: a digest-only refresh must be grouped too.
+    expect(groups[idx][1]['update-types']).toBeUndefined();
+    // First match wins: no earlier group may claim the dependency.
+    expect(groups.slice(0, idx).length).toBe(0);
+    // No other docker entry may also cover one of these dirs (split PRs).
+    for (const u of docker.filter((x) => x !== entry)) {
+      for (const d of distrolessDirs) expect(dirsOf(u), `${d} in a second entry`).not.toContain(d);
+    }
+  });
 });
 
 describe('dependabot.yml: grouping, cadence and cooldown', () => {

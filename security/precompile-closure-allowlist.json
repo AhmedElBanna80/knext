@@ -39,6 +39,12 @@
       "added": "2026-11-13",
       "expires": "2026-11-27",
       "note": "Tracked in #61. Drop this entry, do not renew it, once `next` is pinned to a release whose next/dist/compiled/react-server-dom-* build is 19.3.1+ or a canary dated after the fix. Because suppression is by advisory id, this entry would also hide a REGRESSION of the userland copies to an affected version — re-read the SUPPRESSED lines in the audit log when renewing."
+    },
+    {
+      "id": "GHSA-fc5q-39xc-vjpf",
+      "justification": "picomatch 2.3.2 and 4.0.5 (ReDoS: single-branch repeated extglobs such as +(*) or +(*a) skip analyzeRepeatedExtglob in lib/parse.js and backtrack exponentially). Advisory range <= 4.0.7 with NO patched version (npm latest is 4.0.7, inside the range), so a bump is impossible. The advisory was marked WITHDRAWN by GitHub on 2026-11-18, so scanners are expected to drop it as their databases refresh. Closure: apps/file-manager and examples/bun-exec pre-compile closures. NOT build-tooling-only in apps/file-manager: picomatch 2.3.2 is reached through a runtime dependency of the app, vinext@1.1.0 -> vite-plugin-commonjs@0.10.4 -> vite-plugin-dynamic-import@1.6.0 -> fast-glob@3.3.3 -> micromatch@4.0.8 -> picomatch@2.3.2 (bun.lock). The reached code is a Vite build plugin: it globs trusted repo patterns (its include/exclude globs and file discovery) at build time, inside vite build. REACHABILITY: no untrusted input reaches a picomatch pattern in a served app. No request, response or user-supplied bytes are ever handed to picomatch there, so an attacker cannot choose the glob pattern, which is the condition the ReDoS needs. The other picomatch paths (vite, tinyglobby/fdir, fumadocs, sucrase and @changesets at 4.0.5) are build-time tooling. Re-check trigger: a picomatch release above 4.0.7 (bump and drop this entry), or the scanner database dropping the withdrawn advisory (drop this entry); renew only if the advisory is reinstated and there is still no fix. The GHSA-c2c7-rcm5-vvqj entry's 2.3.2 fix covers only that earlier advisory (range < 2.3.2); GHSA-fc5q's range is <= 4.0.7, so it covers 2.3.2 and every released version, and has no patched version.",
+      "added": "2026-11-18",
+      "expires": "2026-12-18"
     }
   ]
 }

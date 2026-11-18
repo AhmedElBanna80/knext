@@ -1,0 +1,74 @@
+#!/usr/bin/env node
+/**
+ * Mutation proof for the narrow own-repo reusable-workflow exemption in
+ * `scripts/verify-action-pins.mjs` (`isOwnRepoReusableWorkflow`), guarded by
+ * `tests/workflow-action-pins.test.ts`.
+ *   1. Removing the exemption reds the REAL file (z7-rotation-weekly.yml).
+ *   2. Widening it to any repo reds the lookalike/third-party rejection cases.
+ * Anchors must occur exactly once (harness aborts otherwise); judged on exit
+ * codes; the subject is restored from a byte snapshot.
+ *
+ * Usage:  node scripts/mutation-prove-own-repo-workflow-exemption.mjs
+ */
+import { spawnSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { resolveSpecRunner } from './lib/ci-blocking-gate-proof.mjs';
+import { mutate, restore, snapshot } from './lib/mutation-harness.mjs';
+import { declareMutations, recordMutation } from './lib/prover-report.mjs';
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SPEC = 'tests/workflow-action-pins.test.ts';
+const SUBJECT = 'scripts/verify-action-pins.mjs';
+const RUNNER = resolveSpecRunner(REPO_ROOT);
+
+function specPasses() {
+  const r = spawnSync(RUNNER.command, [...RUNNER.args, ...RUNNER.runArgs(SPEC)], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  });
+  return r.status === 0;
+}
+
+const MUTATIONS = [
+  {
+    label: 'remove the exemption entirely (always false)',
+    anchor: "  if (typeof action !== 'string' || !PROTECTED_REFS.has(ref)) return false;",
+    replacement: '  return false;',
+  },
+  {
+    label: 'widen the exemption to any owner/repo',
+    anchor: '!OWN_REPOS.has(`${parts[0]}/${parts[1]}`)',
+    replacement: 'false',
+  },
+];
+
+declareMutations(MUTATIONS.length);
+
+if (!specPasses()) {
+  console.error('FATAL: baseline is not green');
+  process.exit(1);
+}
+const decorative = [];
+for (const m of MUTATIONS) {
+  console.log(`-- mutation: ${m.label}`);
+  const snap = snapshot(resolve(REPO_ROOT, SUBJECT));
+  try {
+    mutate(snap, m.anchor, m.replacement);
+    if (specPasses()) {
+      console.log('   x DECORATION: spec stayed GREEN');
+      decorative.push(m.label);
+    } else {
+      console.log('   ok went RED as required');
+    }
+    recordMutation();
+  } finally {
+    restore(snap);
+  }
+  if (!specPasses()) {
+    console.error('   FATAL: spec not green after restore');
+    process.exit(1);
+  }
+}
+console.log(`${MUTATIONS.length - decorative.length} caught, ${decorative.length} decorative.`);
+if (decorative.length > 0) process.exit(1);

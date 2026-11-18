@@ -304,6 +304,37 @@ export function discoverPinnableFiles(repoRoot) {
   return found.sort();
 }
 
+/**
+ * The repos whose OWN reusable workflows a `uses:` may call by protected branch
+ * instead of a SHA. Both homes are listed because the project lives on a
+ * temporary personal repo and will move back to the org repo; the exemption must
+ * survive the move. Anything else, including lookalike owners, stays pinned.
+ */
+export const OWN_REPOS = new Set(['AhmedElBanna80/knext', 'getknext-dev/knext']);
+/** The only branch refs an own-repo reusable-workflow call may use. */
+export const PROTECTED_REFS = new Set(['main', 'integration/v2']);
+
+/**
+ * The ONE narrow exemption from SHA pinning: a same-repo reusable workflow
+ * (`<own repo>/.github/workflows/<name>.yml|yaml`) called on a protected branch.
+ * A trusted-by-construction call into this repo's own code, not a third-party
+ * action. Shared by `tests/workflow-action-pins.test.ts` and the nightly resolver
+ * so the two cannot drift.
+ */
+export function isOwnRepoReusableWorkflow(action, ref) {
+  if (typeof action !== 'string' || !PROTECTED_REFS.has(ref)) return false;
+  const parts = action.split('/');
+  if (parts.length < 4 || !OWN_REPOS.has(`${parts[0]}/${parts[1]}`)) return false;
+  const path = parts.slice(2);
+  if (path.some((segment) => segment === '' || segment === '.' || segment === '..')) return false;
+  return (
+    path[0] === '.github' &&
+    path[1] === 'workflows' &&
+    path.length === 3 &&
+    /\.ya?ml$/.test(path[2])
+  );
+}
+
 /** `uses: owner/repo[/path]@<ref>` with an optional trailing `# comment`. */
 const USES_LINE = /^\s*(?:-\s*)?uses:\s*(\S+?)@(\S+)\s*(?:#\s*(.*))?$/;
 /**
@@ -1446,6 +1477,8 @@ async function verifyFileSet(files, api, lsRemote = gitLsRemoteTag, catFile = gi
       continue;
     }
     for (const pin of pins) {
+      // The one narrow, shared exemption: own-repo reusable workflow on a protected branch.
+      if (isOwnRepoReusableWorkflow(pin.action, pin.ref)) continue;
       const finding = await verifyPin(pin, { api: memoApi, lsRemote: memoLsRemote });
       if (finding) findings.push(finding);
       // Input existence (#750), IN ADDITION to the SHA↔tag verdict — neither

@@ -12,10 +12,10 @@ import { join, resolve } from 'node:path';
 import {
   assertRevOnBase,
   localCrateSourceEnv,
-} from '../../../../crates/harness/local-crates-source';
-import { CRATE_GIT, recordedCrateRev, runInit } from '../init';
+} from '../crates/harness/local-crates-source';
+import { CRATE_GIT, recordedCrateRev, runInit } from '../packages/ffi/src/init';
 
-const ROOT = resolve(import.meta.dir, '..', '..', '..', '..');
+const ROOT = resolve(import.meta.dir, '..');
 const WORKFLOW = readFileSync(join(ROOT, '.github', 'workflows', 'rust-crates.yml'), 'utf8');
 const HARNESS = readFileSync(join(ROOT, 'crates', 'harness', 'ffi-generated.ts'), 'utf8');
 

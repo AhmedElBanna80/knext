@@ -617,7 +617,11 @@ while IFS= read -r seg; do
   # `oci ce cluster` — so `oci  ce cluster delete` and `oci ce<TAB>cluster delete` were
   # still allowed while the comment claimed the fix was complete. Third instance of the
   # same half-applied shape, which is why every gap between words now uses ${ws}.
-  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|\\bterraform${ws}destroy\\b|\\bkind${ws}delete${ws}cluster\\b"; then
+  # LOCAL kind teardown (`kind delete cluster|clusters`) is deliberately NOT matched: kind
+  # clusters are always local, and the founder allowed agents to tear them down on
+  # 2026-11-18. Remote/infra deletes (oci, terraform) stay human-gated, and a kind delete
+  # chained with one of them is still blocked because each segment is checked separately.
+  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|\\bterraform${ws}destroy\\b"; then
     deny "cluster/infra teardown is human-gated. Run it yourself if intended."
   fi
 done <<EOF

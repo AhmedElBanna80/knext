@@ -133,7 +133,16 @@ run "for/do rm ${D}rf"                       "for x in 1; do rm ${D}rf /tmp/x; d
 run "negated push ${D}${D}force"             "! git push ${D}${D}force origin main"           BLOCK
 run "sudo rm ${D}rf"                         "sudo rm ${D}rf /tmp/x"                          BLOCK
 run "terraform destroy"                      "terraform destroy"                              BLOCK
-run "kind delete cluster"                    "kind delete cluster ${D}${D}name x"             BLOCK
+# Local kind teardown is agent-allowed (founder 2026-11-18); remote/infra deletes stay BLOCKED.
+run "kind delete cluster"                    "kind delete cluster ${D}${D}name x"             allow
+run "kind delete clusters a b"               "kind delete clusters a b"                       allow
+run "kind delete cluster (tab)"              "$(printf 'kind\tdelete\tcluster %s%sname x' "$D" "$D")" allow
+run "kind  delete  clusters (2 spaces)"      "kind  delete  clusters a b"                     allow
+run "oci ce cluster delete"                  "oci ce cluster delete ${D}${D}cluster-id x"     BLOCK
+run "oci ce node-pool delete"                "oci ce node-pool delete ${D}${D}node-pool-id x" BLOCK
+run "kubectl delete"                         "kubectl delete ns x"                            BLOCK
+run "kind delete && terraform destroy"       "kind delete cluster ${D}${D}name x && terraform destroy" BLOCK
+run "kind delete ; oci cluster delete"       "kind delete cluster ; oci ce cluster delete ${D}${D}cluster-id x" BLOCK
 
 # A THIRD round. Both sign-off gates independently defeated the round-2 hook, and
 # both landed on the same place: the `git commit` exemption. It was justified in the
@@ -235,7 +244,7 @@ run "escaped dq inside dq msg, then push"    "git commit ${D}m \"a \\\"b\" && gi
 # ALLOWED while its single-space form blocked — the branch rule got the shared-class fix
 # and the teardown rule did not.
 run "terraform<TAB>destroy"                  "$(printf 'terraform\tdestroy')"                 BLOCK
-run "kind  delete cluster (2 spaces)"        "kind  delete cluster ${D}${D}name x"            BLOCK
+run "kind  delete cluster (2 spaces)"        "kind  delete cluster ${D}${D}name x"            allow
 run "oci ce cluster  delete (2 spaces)"      "oci ce cluster  delete ${D}${D}cluster-id x"    BLOCK
 # ${ws} between EVERY word, not just the last gap. Architect sign-off BLOCKed on exactly
 # this: the round-9 fix worked, but reverting it to the round-7 form left the suite

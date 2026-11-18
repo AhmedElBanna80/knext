@@ -42,7 +42,7 @@ describe('rust-crates generator step is independent of the restricted remote', (
   });
 
   it('requires the recorded rev to be merged (ancestor of the base) before rewriting', () => {
-    expect(HARNESS).toMatch(/assertRevOnBase\(/);
+    expect(HARNESS).toMatch(/^\s*assertRevOnBase\(localRepo/m);
     expect(HARNESS.indexOf('assertRevOnBase(')).toBeLessThan(
       HARNESS.indexOf('localCrateSourceEnv(localRepo'),
     );

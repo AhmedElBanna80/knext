@@ -14,9 +14,8 @@
  * only, baseline green first, a canary that must go red, anchors that must occur
  * exactly once (else abort), byte-exact restore.
  *
- * The template `cosign` rows are the stale-gap direction: today the template
- * workflows have a NAMED known gap (no cosign), so ADDING a cosign step must red
- * the guard until the known-gap entry is deleted.
+ * The template `cosign` rows remove sign / attest / verify / the push-only gate
+ * from the signed template publish jobs (S8-2).
  *
  * Usage: node scripts/mutation-prove-2044-image-supply-chain.mjs
  */
@@ -28,9 +27,6 @@ import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SPEC = 'tests/image-supply-chain.test.ts';
-
-const COSIGN_STEP = (title) =>
-  `      - name: cosign mutant\n        run: cosign sign --yes "$IMG@$DIGEST"\n\n      - name: ${title}`;
 
 const MUTATIONS = [
   // ── operator workflow ────────────────────────────────────────────────────
@@ -169,16 +165,58 @@ const MUTATIONS = [
   {
     id: 'T4',
     subject: 'gotpl',
-    claim: 'cosign lands on the Go template: the known gap goes STALE and must be deleted',
-    anchor: '      - name: Trivy scan — FAIL on HIGH/CRITICAL',
-    replacement: COSIGN_STEP('Trivy scan — FAIL on HIGH/CRITICAL'),
+    claim: 'the Go template publish job stops signing the digest',
+    anchor: 'cosign sign --yes "${IMAGE}@${DIGEST}"',
+    replacement: 'cosign sign-blob --yes "${IMAGE}@${DIGEST}"',
   },
   {
     id: 'T5',
+    subject: 'gotpl',
+    claim: 'the Go template publish job stops attesting the SBOM',
+    anchor: 'cosign attest --yes --predicate sbom.spdx.json',
+    replacement: 'cosign attest-x --yes --predicate sbom.spdx.json',
+  },
+  {
+    id: 'T6',
+    subject: 'gotpl',
+    claim: 'the Go template publish job stops verifying the signature',
+    anchor: 'cosign verify "${IMAGE}@${DIGEST}"',
+    replacement: 'cosign verify-x "${IMAGE}@${DIGEST}"',
+  },
+  {
+    id: 'T7',
+    subject: 'gotpl',
+    claim: 'the Go template publish job is no longer gated off pull requests',
+    anchor: "      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/integration/v2')",
+    replacement: "      (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')",
+  },
+  {
+    id: 'T8',
     subject: 'rusttpl',
-    claim: 'cosign lands on the Rust template: the known gap goes STALE and must be deleted',
-    anchor: '      - name: Trivy scan — FAIL on HIGH/CRITICAL',
-    replacement: COSIGN_STEP('Trivy scan — FAIL on HIGH/CRITICAL'),
+    claim: 'the Rust template publish job stops signing the digest',
+    anchor: 'cosign sign --yes "${IMAGE}@${DIGEST}"',
+    replacement: 'cosign sign-blob --yes "${IMAGE}@${DIGEST}"',
+  },
+  {
+    id: 'T9',
+    subject: 'rusttpl',
+    claim: 'the Rust template publish job stops attesting the SBOM',
+    anchor: 'cosign attest --yes --predicate sbom.spdx.json',
+    replacement: 'cosign attest-x --yes --predicate sbom.spdx.json',
+  },
+  {
+    id: 'T10',
+    subject: 'rusttpl',
+    claim: 'the Rust template publish job stops verifying the signature',
+    anchor: 'cosign verify "${IMAGE}@${DIGEST}"',
+    replacement: 'cosign verify-x "${IMAGE}@${DIGEST}"',
+  },
+  {
+    id: 'T11',
+    subject: 'rusttpl',
+    claim: 'the Rust template publish job is no longer gated off pull requests',
+    anchor: "      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/integration/v2')",
+    replacement: "      (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')",
   },
   // ── the guard's own engine ───────────────────────────────────────────────
   {

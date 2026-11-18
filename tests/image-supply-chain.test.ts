@@ -42,20 +42,9 @@ interface KnownGap {
   reason: string;
 }
 
-const KNOWN_GAPS: readonly KnownGap[] = [
-  {
-    subject: 'template:go',
-    check: 'cosign',
-    reason:
-      'TODO(#2044), tracked in #2425: go-template.yml builds, SBOMs and Trivy-scans the image but never publishes or signs it; its header defers GHCR push + cosign to a separate push-only workflow (Z4 follow-up)',
-  },
-  {
-    subject: 'template:rust',
-    check: 'cosign',
-    reason:
-      'TODO(#2044), tracked in #2425: rust-template.yml has the same deferral (Z5 follow-up): SBOM and Trivy, no push, no cosign',
-  },
-];
+// Empty since the template images are signed (S8-2): the engine still reds on any
+// unlisted gap, so a regression is a finding, not an exception.
+const KNOWN_GAPS: readonly KnownGap[] = [];
 
 const key = (f: { subject: string; check: string }) => `${f.subject}|${f.check}`;
 
@@ -657,7 +646,7 @@ describe('function template images: the real tree', () => {
     expect(templates).toEqual(expect.arrayContaining(['go', 'rust']));
   });
 
-  it('every template image has an SBOM and cosign, except the NAMED known gaps (#2425)', () => {
+  it('every template image has an SBOM and cosign (no known gaps)', () => {
     expect(judge(auditTemplateImages(wfs, templates), KNOWN_GAPS)).toEqual([]);
   });
 
@@ -665,12 +654,72 @@ describe('function template images: the real tree', () => {
     expect(auditTemplateImages(wfs, templates).filter((f) => f.check === 'sbom')).toEqual([]);
   });
 
-  it('every known gap cites #2425', () => {
-    expect(KNOWN_GAPS.every((g) => g.reason.includes('#2425'))).toBe(true);
+  it('there are no known gaps', () => {
+    expect(KNOWN_GAPS).toEqual([]);
   });
+});
 
-  it('the known gaps are load-bearing: without them the real tree is NOT clean', () => {
-    expect(judge(auditTemplateImages(wfs, templates), []).length).toBe(KNOWN_GAPS.length);
+describe('template image publish jobs: sign, attest and verify by digest (S8-2)', () => {
+  type Step = Record<string, unknown>;
+  const FILES = ['go-template.yml', 'rust-template.yml'];
+  const PUB = 'image-publish';
+  const runs = (wf: Workflow) =>
+    ((jobsOf(wf)[PUB]?.steps as Step[]) ?? []).map((s) => String(s.run ?? '')).join('\n');
+  for (const file of FILES) {
+    describe(file, () => {
+      const wf = wfNamed(file);
+      const job = (jobsOf(wf)[PUB] ?? {}) as Record<string, unknown>;
+      it('signs and attests the pushed DIGEST, never a tag', () => {
+        const r = runs(wf);
+        expect(r).toMatch(/cosign sign --yes "\$\{IMAGE\}@\$\{DIGEST\}"/);
+        expect(r).toMatch(/cosign attest --yes --predicate sbom\.spdx\.json --type spdxjson "\$\{IMAGE\}@\$\{DIGEST\}"/);
+      });
+      it('verifies signature and attestation with identity regexp + GitHub OIDC issuer', () => {
+        const r = runs(wf);
+        expect(r).toMatch(/cosign verify "\$\{IMAGE\}@\$\{DIGEST\}"/);
+        expect(r).toMatch(/cosign verify-attestation "\$\{IMAGE\}@\$\{DIGEST\}" --type spdxjson/);
+        const text = JSON.stringify(wf.doc);
+        expect(text).toContain('https://github.com/${{ github.repository }}/.*');
+        expect(text).toContain('https://token.actions.githubusercontent.com');
+        expect(r.match(/--certificate-identity-regexp/g)?.length).toBe(2);
+      });
+      it('is gated to push on main / integration/v2, never a PR or merge queue', () => {
+        const cond = String(job.if);
+        expect(cond).toMatch(/refs\/heads\/main/);
+        expect(cond).toMatch(/refs\/heads\/integration\/v2/);
+        expect(cond).not.toMatch(/pull_request|merge_group/);
+      });
+      it('only the publish job holds id-token: write', () => {
+        for (const [id, j] of Object.entries(jobsOf(wf))) {
+          const perms = (j as Record<string, Record<string, string>>).permissions ?? {};
+          expect(perms['id-token'] === 'write').toBe(id === PUB);
+        }
+        expect(((job.permissions ?? {}) as Record<string, string>)['id-token']).toBe('write');
+      });
+      it('pushes the scanned archive (digest-checked) and needs the scan job', () => {
+        expect(job.needs).toEqual(['image']);
+        expect(runs(wf)).toMatch(/crane push \S+-template-image\.tar/);
+        expect(runs(wf)).toContain('refusing to continue');
+      });
+    });
+  }
+  it('mutation: dropping the sign step from a template workflow reds', () => {
+    for (const file of FILES) {
+      const m = withWf(file, (d) => {
+        d.jobs[PUB].steps = d.jobs[PUB].steps.filter(
+          (st: Step) => !/\bcosign\s+(sign|attest)\b/.test(String(st.run ?? '')),
+        );
+      });
+      const t = file.startsWith('go') ? 'go' : 'rust';
+      expect(checks(auditTemplateImages(m, [t]))).toContain('cosign');
+      expect(auditImageLanes(m, real).map((f) => f.check)).toContain('cosign');
+    }
+  });
+  it('mutation: signing on a pull request reds', () => {
+    const m = withWf('go-template.yml', (d) => {
+      d.jobs[PUB].if = undefined;
+    });
+    expect(checks(auditTemplateImages(m, ['go']))).toContain('cosign');
   });
 });
 

@@ -1213,13 +1213,28 @@ export function auditTemplateImages(
       ['cosign', isCosign],
     ] as const) {
       const cands = located.filter((x) => match(x.step));
-      const valid = cands.filter((x) => gateProblems(kind, x.step, x.job, x.ctxs).length === 0);
+      // SBOM runs on every event. Signing is a publish side effect: it is judged on
+      // the contexts where its job and step can run (never a PR, by design), and it
+      // MUST be able to run on a push to main (a sign gated off everywhere reds).
+      const problems = (x: (typeof located)[number]): string[] => {
+        if (kind !== 'cosign') return gateProblems(kind, x.step, x.job, x.ctxs);
+        const live = x.ctxs.filter(
+          (c) =>
+            evalExpr(x.job.if ?? true, c) !== false && evalExpr(x.step.if ?? true, c) !== false,
+        );
+        if (!live.some((c) => c.event === 'push' && c.ref === 'refs/heads/main'))
+          return ['signing cannot run on a push to main'];
+        if (live.some((c) => c.event === 'pull_request' || c.event === 'merge_group'))
+          return ['signing can run on a pull request or merge queue (OIDC must be push-only)'];
+        return gateProblems(kind, x.step, x.job, live, true);
+      };
+      const valid = cands.filter((x) => problems(x).length === 0);
       if (valid.length) continue;
       out.push({
         subject,
         check: kind,
         detail: cands.length
-          ? `\`${cands[0].id}\`: ${gateProblems(kind, cands[0].step, cands[0].job, cands[0].ctxs).join('; ')}`
+          ? `\`${cands[0].id}\`: ${problems(cands[0]).join('; ')}`
           : kind === 'cosign'
             ? 'no `cosign sign`/`cosign attest` in or after the image job'
             : 'no SBOM step in or after the image job',

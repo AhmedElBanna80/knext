@@ -53,7 +53,11 @@ describe('z7-rotation-weekly.yml', () => {
     for (const k of ['steps', 'runs-on', 'env', 'timeout-minutes'])
       expect(call, k).not.toHaveProperty(k);
     // The only other jobs are preflight, wiring-check and the alert; run.sh is never invoked here.
-    expect(others.map(([n]) => n).sort()).toEqual(['preflight', 'rotation-red-alert', 'wiring-check']);
+    expect(others.map(([n]) => n).sort()).toEqual([
+      'preflight',
+      'rotation-red-alert',
+      'wiring-check',
+    ]);
     expect(text).not.toContain('z7-identity-kind/run.sh');
     expect(text).not.toMatch(/\bkind\b.*\binstall_only\b|helm\/kind-action|setup-go|setup-bun/);
   });

@@ -647,8 +647,10 @@ scope (they hold the provisioner credential by design).
     - Action item 1's kind acceptance, **in part**: two apps on one Redis, A refused `NOPERM` on B's
       keys (L2, `:286-289`), the password only in the Secret and absent from the NextApp and Events
       (L3, `:300`), delete sweeps keys and user (L8, `:395-397`).
-    Evidence: local kind run 2026-11-17 (to be replaced by the CI run link once
-    `.github/workflows/redis-acl-kind-drill.yml` has run on `integration/v2`). **Not met by this
+    Evidence: local kind run 2026-11-17, and the CI run of `.github/workflows/redis-acl-kind-drill.yml`
+    on PR #148 (head `3e2fddf`, merged to `integration/v2`): job "Redis ACL drill L1-L9 on kind"
+    ([run 44087072445](https://github.com/AhmedElBanna80/knext/actions/runs/44087072445/job/134052167209)),
+    conclusion success, final log line `passed: 53  failed: 0`. **Not met by this
     run, and left open:** the ISR and `'use cache'` paths including the outage replay (the drill
     does not cover them; `scripts/redis-acl-spike.mjs` runs them in the live lane).
 

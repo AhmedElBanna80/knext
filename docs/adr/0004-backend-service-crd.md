@@ -279,6 +279,7 @@ These came from the system designer as tech-debt or test items, not blockers. Th
 - [x] Docs (D3, #2071): the namespace is the trust boundary; zones whose owners do not trust each
       other go in separate namespaces.
 - [x] Per-zone key Secret and JWKS ConfigMap; rotation in the order above (Z7 #2458/#2459/#2460/#2473/#2491; OKE rotation proofs open: #2461, #2483).
+      Z7 rotation, first scheduled CI run: Sunday 2026-11-22 03:23 UTC (`.github/workflows/z7-identity-kind-e2e.yml` schedule); link to be recorded after it runs.
 - [x] Interceptors in the Go and Rust templates (Z7 verifiers, #2455), fail-closed, mutation-proved; JWKS re-read on an
       unknown `kid`; small `exp` clock skew.
 - [x] Generator (Z6 #2411): auth options `USER` and `PUBLIC` only; a `PUBLIC_MUTATION` option is refused.

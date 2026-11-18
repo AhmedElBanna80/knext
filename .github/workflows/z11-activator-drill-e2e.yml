@@ -10,45 +10,62 @@ name: Z11 activator-path drill — kind + Calico e2e
 # without its token interceptor answers the same call.
 #
 # Deliberately no error-masking flag and no PHASES override: a red step is signal and
-# the policy-off leg runs by default. Path-filtered like the other kind lanes; not a
-# required check.
+# the policy-off leg runs by default. Path-filtered to what can change the drill's
+# outcome (the drill, the zone-function token code, the operator's NetworkPolicy and
+# identity reconcile code, this file); not a required check.
 
 on:
   pull_request:
     paths:
-      - 'packages/kn-next-operator/**'
-      - '!packages/kn-next-operator/**/*_test.go'
-      - '!packages/kn-next-operator/test/**'
-      - '!packages/kn-next-operator/**/*.md'
-      - 'templates/go/**'
-      - 'packages/grpc/src/*.ts'
-      - 'packages/grpc/proto/**'
-      - 'packages/grpc/scripts/**'
-      - 'packages/grpc/e2e/**'
-      - 'packages/grpc/package.json'
+      # The drill itself and the lane helpers it sources.
+      - 'packages/grpc/e2e/z11-activator-drill/**'
+      - 'packages/grpc/e2e/lib/kind-lane.sh'
       - 'scripts/kind-manifests/**'
-      - '.github/actions/docker-hub-mirror/**'
+      # Zone-function token code: the Go function's verifier, its interceptor wiring
+      # (the noauth leg removes that line), and the zone-side signer.
+      - 'templates/go/internal/auth/**'
+      - '!templates/go/internal/auth/*_test.go'
+      - 'templates/go/internal/rpc/rpc.go'
+      - 'templates/go/main.go'
+      - 'packages/grpc/src/signer.ts'
+      - 'packages/grpc/src/runtime.ts'
+      - 'packages/grpc/src/glue.ts'
+      # The operator's NetworkPolicy and zone-identity reconcile code.
+      - 'packages/kn-next-operator/internal/controller/netpol_*.go'
+      - 'packages/kn-next-operator/internal/controller/nextapp_networkpolicy.go'
+      - 'packages/kn-next-operator/internal/controller/backendservice_render.go'
+      - 'packages/kn-next-operator/internal/controller/identity.go'
+      - 'packages/kn-next-operator/internal/controller/zone_signing_key*.go'
+      - '!packages/kn-next-operator/**/*_test.go'
+      # This lane and its guard.
       - '.github/workflows/z11-activator-drill-e2e.yml'
       - 'tests/z11-activator-drill.test.ts'
-      - 'bun.lock'
   push:
     branches: [main, 'integration/**']
     paths:
-      - 'packages/kn-next-operator/**'
-      - '!packages/kn-next-operator/**/*_test.go'
-      - '!packages/kn-next-operator/test/**'
-      - '!packages/kn-next-operator/**/*.md'
-      - 'templates/go/**'
-      - 'packages/grpc/src/*.ts'
-      - 'packages/grpc/proto/**'
-      - 'packages/grpc/scripts/**'
-      - 'packages/grpc/e2e/**'
-      - 'packages/grpc/package.json'
+      # The drill itself and the lane helpers it sources.
+      - 'packages/grpc/e2e/z11-activator-drill/**'
+      - 'packages/grpc/e2e/lib/kind-lane.sh'
       - 'scripts/kind-manifests/**'
-      - '.github/actions/docker-hub-mirror/**'
+      # Zone-function token code: the Go function's verifier, its interceptor wiring
+      # (the noauth leg removes that line), and the zone-side signer.
+      - 'templates/go/internal/auth/**'
+      - '!templates/go/internal/auth/*_test.go'
+      - 'templates/go/internal/rpc/rpc.go'
+      - 'templates/go/main.go'
+      - 'packages/grpc/src/signer.ts'
+      - 'packages/grpc/src/runtime.ts'
+      - 'packages/grpc/src/glue.ts'
+      # The operator's NetworkPolicy and zone-identity reconcile code.
+      - 'packages/kn-next-operator/internal/controller/netpol_*.go'
+      - 'packages/kn-next-operator/internal/controller/nextapp_networkpolicy.go'
+      - 'packages/kn-next-operator/internal/controller/backendservice_render.go'
+      - 'packages/kn-next-operator/internal/controller/identity.go'
+      - 'packages/kn-next-operator/internal/controller/zone_signing_key*.go'
+      - '!packages/kn-next-operator/**/*_test.go'
+      # This lane and its guard.
       - '.github/workflows/z11-activator-drill-e2e.yml'
       - 'tests/z11-activator-drill.test.ts'
-      - 'bun.lock'
   workflow_dispatch: {}
 
 permissions:

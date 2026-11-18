@@ -31,7 +31,7 @@ real generated glue.
 
 The functions here use the Connect protocol over h2c, the default for a Node zone.
 In it, a failed unary call travels as an HTTP status plus a JSON error body, not as
-gRPC trailers. The `trailers` phase checks that this code survives the activator (the `grpctrailers` phase checks the gRPC-protocol case). A
+gRPC trailers. The `connecterr` phase checks that this code survives the activator (the `grpctrailers` phase checks the gRPC-protocol case). A
 code that is lost or rewritten on the way (502, `Unavailable`, `Unknown`) fails it.
 
 Each cold call is checked against two conditions: no pod at all before the call (a pod

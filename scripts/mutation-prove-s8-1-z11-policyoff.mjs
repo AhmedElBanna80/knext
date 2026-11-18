@@ -47,8 +47,8 @@ const MUTATIONS = [
     id: 'P4',
     subject: 'run',
     claim: 'the direct leg stops requiring the dial to connect',
-    anchor: '[ "$(dial_rc "${ip}" 8080)" = 0 ]; then reached=1',
-    replacement: '[ "$(dial_rc "${ip}" 8080)" != 99 ]; then reached=1',
+    anchor: '[ "$(dial_rc "${ip}" 8080)" = 0 ]; then DIRECT_IP=',
+    replacement: '[ "$(dial_rc "${ip}" 8080)" != 99 ]; then DIRECT_IP=',
   },
   {
     id: 'P5',
@@ -77,6 +77,103 @@ const MUTATIONS = [
     claim: 'policyoff leaves the default phase list',
     anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth}"',
     replacement: 'PHASES="${PHASES:-up deploy token direct noauth}"',
+  },
+  {
+    id: 'L1',
+    subject: 'run',
+    claim: 'the cold policy-off leg weakens its 401 assertion',
+    anchor:
+      '[ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \\\n    || fail "policy off, cold',
+    replacement:
+      '[ "${FC_STATUS}" != 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \\\n    || fail "policy off, cold',
+  },
+  {
+    id: 'L2',
+    subject: 'run',
+    claim: 'the direct no-token leg weakens its 401 assertion',
+    anchor:
+      '[ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \\\n    || fail "policy off, direct to the pod, no token',
+    replacement:
+      '[ "${FC_STATUS}" != 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \\\n    || fail "policy off, direct to the pod, no token',
+  },
+  {
+    id: 'L3',
+    subject: 'run',
+    claim: 'the direct garbage-token leg weakens its 401 assertion',
+    anchor:
+      '[ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, direct to the pod, garbage token',
+    replacement:
+      '[ "${FC_STATUS}" != 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, direct to the pod, garbage token',
+  },
+  {
+    id: 'L4',
+    subject: 'run',
+    claim: 'the cold policy-off call is deleted, leaving the stale status to be judged',
+    anchor:
+      '  foreign_get ""\n  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \\\n    || fail "policy off, cold',
+    replacement:
+      '  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \\\n    || fail "policy off, cold',
+  },
+  {
+    id: 'K1',
+    subject: 'run',
+    claim: 'the policy-off direct wait stops keeping the pod warm',
+    anchor:
+      '    zone_call "/example/get?sub=alice&id=missing"\n    ip="$(fn_pod_ip)"\n    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ]; then DIRECT_IP=',
+    replacement:
+      '    ip="$(fn_pod_ip)"\n    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ]; then DIRECT_IP=',
+  },
+  {
+    id: 'N1',
+    subject: 'run',
+    claim: 'noauth no longer turns the policy off for its direct dial',
+    anchor: '  set_policy false\n  await_direct_ip\n  local dip=',
+    replacement: '  await_direct_ip\n  local dip=',
+  },
+  {
+    id: 'N2',
+    subject: 'run',
+    claim: 'noauth no longer dials the no-interceptor pod directly',
+    anchor: '  foreign_post "http://${dip}:8080${GET_ITEM}" ""\n',
+    replacement: '  foreign_get ""\n',
+  },
+  {
+    id: 'N3',
+    subject: 'run',
+    claim: 'noauth weakens the policy-off outcome (404 not_found)',
+    anchor: '[ "${pstatus}" = 404 ] && [ "${pcode}" = not_found ]',
+    replacement: '[ "${pstatus}" != 404 ] && [ "${pcode}" = not_found ]',
+  },
+  {
+    id: 'N4',
+    subject: 'run',
+    claim: 'noauth leaves the policy off while the image is restored',
+    anchor: '  set_policy true\n  echo "NOAUTH-WITH-POLICY-OFF',
+    replacement: '  echo "NOAUTH-WITH-POLICY-OFF',
+  },
+  {
+    id: 'W4',
+    subject: 'workflow',
+    claim: 'the drill run step gains a step-level if that can skip it',
+    anchor: '        run: packages/grpc/e2e/z11-activator-drill/run.sh',
+    replacement:
+      "        if: github.event_name != 'push'\n        run: packages/grpc/e2e/z11-activator-drill/run.sh",
+  },
+  {
+    id: 'W5',
+    subject: 'workflow',
+    claim: 'the path filter widens back to the whole operator tree',
+    anchor:
+      "      - '.github/workflows/z11-activator-drill-e2e.yml'\n      - 'tests/z11-activator-drill.test.ts'\n  push:",
+    replacement:
+      "      - '.github/workflows/z11-activator-drill-e2e.yml'\n      - 'tests/z11-activator-drill.test.ts'\n      - 'packages/kn-next-operator/**'\n  push:",
+  },
+  {
+    id: 'W6',
+    subject: 'workflow',
+    claim: 'the path filter drops the NetworkPolicy reconcile code',
+    anchor: "      - 'packages/kn-next-operator/internal/controller/nextapp_networkpolicy.go'\n",
+    replacement: '',
   },
   {
     id: 'W1',

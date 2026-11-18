@@ -23,7 +23,9 @@
 #             in-process token check is the control, not the network.
 #   noauth    mutation: the function rebuilt WITHOUT its token interceptor answers
 #             the foreign no-token call (not_found, not 401). The token, not the
-#             network, is the control on the activator path.
+#             network, is the control on the activator path. With the policy also
+#             off, a direct no-token dial to that pod still reaches the handler:
+#             with both controls gone nothing refuses it.
 #
 # Phases (PHASES, space-separated; default all): up deploy token direct policyoff noauth.
 #   up        a kind cluster with the default CNI disabled and Calico installed,
@@ -311,6 +313,21 @@ phase_direct() {
   ok "with the policy off both direct dials connect: the refusal is the policy's doing (policy restored)"
 }
 
+# await_direct_ip: with the policy off, wait until the foreign pod can dial the warm
+# function pod's user port, and set DIRECT_IP. Each round keeps the pod warm through
+# the zone (the same way phase_direct does), so an idle scale-down cannot race the dial.
+await_direct_ip() {
+  local end=$((SECONDS + 90)) ip
+  DIRECT_IP=""
+  while [ "${SECONDS}" -lt "${end}" ]; do
+    zone_call "/example/get?sub=alice&id=missing"
+    ip="$(fn_pod_ip)"
+    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ]; then DIRECT_IP="${ip}"; return 0; fi
+    sleep 3
+  done
+  fail "policy off: the foreign pod could not reach the warm function pod, so the direct leg proves nothing"
+}
+
 # ---------------------------------------------------------------- phase: policyoff
 
 phase_policyoff() {
@@ -329,13 +346,9 @@ phase_policyoff() {
   [ "$(all_pods "${GO_FN}")" -ge 1 ] || fail "the refused call never woke ${GO_FN}: it did not reach the function"
   ok "policy off: a cold no-token call through the activator woke the function and was refused (401 unauthenticated)"
   # Warm and direct: the dial the policy would drop now connects, and the function answers.
-  local ip end=$((SECONDS + 90)) reached=0
-  while [ "${SECONDS}" -lt "${end}" ]; do
-    ip="$(fn_pod_ip)"
-    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ]; then reached=1; break; fi
-    sleep 3
-  done
-  [ "${reached}" = 1 ] || fail "policy off: the foreign pod could not reach the warm function pod, so the direct leg proves nothing"
+  local ip
+  await_direct_ip
+  ip="${DIRECT_IP}"
   foreign_post "http://${ip}:8080${GET_ITEM}" ""
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
     || fail "policy off, direct to the pod, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
@@ -365,11 +378,24 @@ phase_noauth() {
   await_zero "${GO_FN}"
   foreign_get ""
   local status=${FC_STATUS} code=${FC_CODE}
+  # The same no-interceptor function with the NetworkPolicy OFF, dialled directly: the
+  # case ADR-0004 names as having no control at all. The token-less call must reach
+  # the handler (404 not_found), because neither the network nor the function refuses it.
+  set_policy false
+  await_direct_ip
+  local dip="${DIRECT_IP}"
+  foreign_post "http://${dip}:8080${GET_ITEM}" ""
+  local pstatus=${FC_STATUS} pcode=${FC_CODE}
+  set_policy true
+  echo "NOAUTH-WITH-POLICY-OFF: direct ${dip}:8080 no token -> ${pstatus} ${pcode}"
   k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"image\":\"${good}\"}}" >/dev/null
   wait_until 300 3 "${GO_FN}'s latest ready revision runs its own image again" "fn_ready_on '${good}'"
   RESTORE_IMAGE=""
   [ "${status}" = 404 ] && [ "${code}" = not_found ] \
     || fail "without the interceptor a foreign no-token call got status ${status} code '${code}', want 404 not_found (it should reach the handler)"
+  [ "${pstatus}" = 404 ] && [ "${pcode}" = not_found ] \
+    || fail "no interceptor and no policy: a direct no-token call got status ${pstatus} code '${pcode}', want 404 not_found (nothing should stop it)"
+  ok "no interceptor and no policy: a direct no-token call reaches the handler (404 not_found): with both controls gone nothing refuses it"
   ok "without the interceptor the same foreign call reaches the handler (404 not_found): the token is the control (image restored)"
 }
 

@@ -68,7 +68,8 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `up deploy token direct policyoff noauth`; it proves which control holds on the
     activator path (the function's token, and the NetworkPolicy on a direct
     dial), and that with the NetworkPolicy off a token-less call is still refused
-    by the function itself (`policyoff`). `.github/workflows/z11-activator-drill-e2e.yml`
+    by the function itself (`policyoff`), while a function without its interceptor and
+    without the policy answers it (`noauth`). `.github/workflows/z11-activator-drill-e2e.yml`
     runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
     Guard: `tests/z11-activator-drill.test.ts`, mutation-proved by
     `scripts/mutation-prove-s8-1-z11-policyoff.mjs`.

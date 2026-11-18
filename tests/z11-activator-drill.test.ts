@@ -101,7 +101,8 @@ describe('direct: dropped by the policy, proved by removing it', () => {
   it('only a timeout counts as dropped, on both ports, after a wake that reached the function', () => {
     expect(d).toContain('for port in 8080 8013; do');
     expect(d).toMatch(/\[ "\$\{rc\}" = 28 \] \|\| fail/);
-    expect(d).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \] \|\| fail/);
+    expect(d).toContain('wake_ready');
+    expect(body('wake_ready')).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \]/);
     expect(body('fn_pod_ip')).toContain('select(.type == "Ready")');
   });
 

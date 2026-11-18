@@ -46,8 +46,8 @@ const MUTATIONS = [
     subject: 'lane',
     claim: "the zone's BackendBindings report of the refusal is not checked",
     anchor:
-      '  [ "$(cond_of nextapp "${ZONE}" BackendBindings)" = False/BindingImageMismatch ] \\\n',
-    replacement: '  true \\\n',
+      '  wait_until 60 2 "${ZONE}\'s BackendBindings reports ${GO_FN} as BindingImageMismatch" \\\n    "[ \\"\\$(cond_of nextapp ${ZONE} BackendBindings)\\" = False/BindingImageMismatch ]"\n',
+    replacement: '',
   },
   {
     id: 'P04',
@@ -72,6 +72,60 @@ const MUTATIONS = [
     anchor: '    -p \'[{"op":"remove","path":"/spec/backends/0/image"}]\' >/dev/null\n',
     replacement:
       '    -p \'[{"op":"test","path":"/spec/backends/0/image","value":"x"}]\' >/dev/null || true\n',
+  },
+  {
+    id: 'P07',
+    subject: 'lane',
+    claim: 'the refusal is never waited for: the phase reads whatever state it finds',
+    anchor:
+      '  wait_until 180 3 "${GO_FN} refused for the image swap" \\\n    "[ \\"\\$(cond_of backendservice ${GO_FN} Bound)\\" = False/BindingImageMismatch ]"\n',
+    replacement: '',
+  },
+  {
+    id: 'P08',
+    subject: 'lane',
+    claim: "the refused function's Knative Service is not checked absent after the hold",
+    anchor:
+      '  ksvc_gone "${GO_FN}" || fail "${GO_FN}: refused, but its Knative Service exists (or kubectl failed)"\n',
+    replacement: '',
+  },
+  {
+    id: 'P09',
+    subject: 'lane',
+    claim: 'the refused function is not checked to have no pod after the hold',
+    anchor: '  [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN}: refused, but it has a pod"\n',
+    replacement: '',
+  },
+  {
+    id: 'P10',
+    subject: 'lane',
+    claim: 'a kubectl error reads as "the Knative Service is absent"',
+    anchor: '--ignore-not-found -o name)" || return 1\n',
+    replacement: '--ignore-not-found -o name)" || true\n',
+  },
+  {
+    id: 'P11',
+    subject: 'lane',
+    claim: "the zone's bindings report is one read, not a bounded wait",
+    anchor:
+      '  wait_until 60 2 "${ZONE}\'s BackendBindings reports ${GO_FN} as BindingImageMismatch" \\\n    "[ \\"\\$(cond_of nextapp ${ZONE} BackendBindings)\\" = False/BindingImageMismatch ]"\n',
+    replacement:
+      '  [ "$(cond_of nextapp "${ZONE}" BackendBindings)" = False/BindingImageMismatch ] || fail "bindings"\n',
+  },
+  {
+    id: 'P12',
+    subject: 'lane',
+    claim:
+      'the matching pin is asserted without waiting for the operator to judge the pinned generation',
+    anchor: '    "[ \\"\\$(cond_generation nextapp ${ZONE} BackendBindings)\\" = ${gen} ]"\n',
+    replacement: '    "true"\n',
+  },
+  {
+    id: 'P13',
+    subject: 'lane',
+    claim: 'a failed imagepin phase leaves the swapped image and the pin in place',
+    anchor: '  PHASE_RESTORE=imagepin_restore\n',
+    replacement: '',
   },
   {
     id: 'H01',
@@ -118,6 +172,27 @@ const MUTATIONS = [
     anchor:
       '  wait_until 300 3 "the zone runs without EXAMPLE_SERVICE_HTTP_VERSION" "zone_http_version unset"\n',
     replacement: '',
+  },
+  {
+    id: 'H07',
+    subject: 'lane',
+    claim: 'a failed http11 phase leaves httpVersion on the zone',
+    anchor: '  PHASE_RESTORE=http11_restore\n',
+    replacement: '',
+  },
+  {
+    id: 'D02',
+    subject: 'lane',
+    claim: 'imagepin is no longer a default phase',
+    anchor: 'crosszone wake imagepin http11}"',
+    replacement: 'crosszone wake http11}"',
+  },
+  {
+    id: 'D03',
+    subject: 'lane',
+    claim: "the cleanup trap never runs the failed phase's restore",
+    anchor: '"${PHASE_RESTORE}" || true; fi\n',
+    replacement: 'true; fi\n',
   },
   {
     id: 'D01',

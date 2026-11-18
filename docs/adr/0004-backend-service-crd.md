@@ -1008,18 +1008,18 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
    exactly as before.
 2. The field lives on the **zone's** entry, not on the `BackendService`. The transport is the zone's own
    choice: a function-side field would let a writer of the `BackendService` change the zone's pod env and
-   roll its revision, which is against Decision 1's consent model. The generated function servers accept
-   both versions on their one port: the Go template enables HTTP/1 and unencrypted HTTP/2 on the same
-   server (`templates/go/internal/rpc/rpc.go`), and the Rust template's server does the
-   same (`templates/rust/src/rpc/mod.rs`). **What `httpVersion` controls, measured on kind (the Z10
+   roll its revision, which is against Decision 1's consent model. Whether the generated function servers
+   also accept HTTP/1.1 on their one port is **not proven** and is not relied on (see the action items):
+   the port is named `h2c`, so Knative's queue-proxy speaks h2c to the container. **What `httpVersion` controls, measured on kind (the Z10
    lane's `http11` phase).** It chooses the protocol of the **zone's own client** towards the
    function's cluster-local URL: with `"1.1"` the zone's pod carries `<NAME>_SERVICE_HTTP_VERSION=1.1`
    and logs `transport HTTP/1.1, set by <NAME>_SERVICE_HTTP_VERSION=1.1`; with it unset a Node zone logs
    `transport h2c`. It does **not** change the function: its Knative port stays named `h2c` before and
-   after, nothing is rendered into it, and an HTTP/1.1 request is passed through that port by Knative's
-   data path, both to a warm function and to one woken from zero through the activator (a write and a
-   read succeed; the call from zero is answered). The lane does not observe which protocol the function
-   container itself receives behind the queue-proxy, so this decision claims only the zone's leg. Nothing
+   after, nothing is rendered into it, and an HTTP/1.1 request to that port is **translated** to h2c by
+   Knative's queue-proxy before it reaches the container, both for a warm function and for one woken from
+   zero through the activator (a write and a read succeed; the call from zero is answered). The lane does
+   not observe which protocol the function container itself receives behind the queue-proxy, so this
+   decision claims only the zone's leg. Nothing
    is rendered into the function, and neither pin (Amendments 3 and 4) is involved.
 3. If the zone already sets the variable in `spec.env` or `spec.secrets.envMap`, the existing
    collision rule applies. The zone's value is kept, and `BackendBindings` names the variable. The rule
@@ -1054,4 +1054,5 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
 - [x] `kn-next.config.ts` `backends[].httpVersion`, its validator, and the CR builder emitting it only when set.
 - [x] Docs: the zone-functions env table, the operator field table and the CLI glue note.
 - [ ] When ADR-0065's `model` flavour is built, skip `<NAME>_SERVICE_HTTP_VERSION` for its entries, with a test.
-- [x] kind: call a function over HTTP/1.1 through its Knative `h2c` port (queue-proxy passthrough). The Z10 lane's `http11` phase proves it, warm and from zero.
+- [x] kind: call a function over HTTP/1.1 through its Knative `h2c` port (the queue-proxy translates it to h2c). The Z10 lane's `http11` phase proves it, warm and from zero.
+- [ ] Prove or delete the generated function servers' HTTP/1 path: the Go and Rust templates enable HTTP/1 beside h2c on their one port, but nothing proves a call reaches it (behind a named `h2c` port the queue-proxy sends h2c). Either a test that hits the server's HTTP/1 path directly, or remove the HTTP/1 enablement.

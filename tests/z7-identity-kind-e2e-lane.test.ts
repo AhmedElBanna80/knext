@@ -276,10 +276,10 @@ describe('the workflow is as safe as the rest of CI', () => {
   it('bounds the job and runs the lane with every phase and the Rust function', () => {
     for (const job of Object.values(wf.jobs)) {
       // A number, or the one expression that gives the real-time dispatch 120 and
-      // everything else 55 (the one-hour overlap does not fit the default bound).
+      // everything else 65 (the one-hour overlap does not fit the default bound).
       const t = job['timeout-minutes'];
       if (typeof t === 'number') expect(t).toBeLessThanOrEqual(75);
-      else expect(String(t)).toMatch(/^\$\{\{ inputs\.rotation_realtime && 120 \|\| 55 \}\}$/);
+      else expect(String(t)).toMatch(/^\$\{\{ inputs\.rotation_realtime && 120 \|\| 65 \}\}$/);
     }
     // No default step overrides the phases: only the dispatch-input step does.
     expect(wfText.match(/\bPHASES\b/g)).toHaveLength(1);
@@ -761,7 +761,7 @@ describe('the real-time rotation phase proves the three exit properties and stay
     for (const s of defaults) expect(s.if).toBe('${{ !inputs.rotation_realtime }}');
     // The longer bound is only for that run.
     const job = wf.jobs['z7-identity-e2e'] as Job;
-    expect(String(job['timeout-minutes'])).toBe('${{ inputs.rotation_realtime && 120 || 55 }}');
+    expect(String(job['timeout-minutes'])).toBe('${{ inputs.rotation_realtime && 120 || 65 }}');
   });
 
   it('is called weekly from main (no dead schedule here), checks integration/v2 out on a call, and a push cannot cancel that run mid-overlap', () => {

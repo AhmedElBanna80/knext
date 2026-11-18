@@ -96,12 +96,16 @@ diagnostics() {
   k -n "${OPERATOR_NS}" logs deployment/kn-next-operator-controller-manager --tail=40 >&2 2>&1 || true
 }
 
+# The running phase names its own restore here, so a failed phase puts back what it
+# changed (a pin, an image, an httpVersion) and does not break the next phase or a rerun.
+PHASE_RESTORE=
 cleanup() {
   local rc=$?
   if [ -f "${PF_PIDS}" ]; then
     while read -r pid; do kill "${pid}" 2>/dev/null || true; done <"${PF_PIDS}"
   fi
   if [ "${rc}" -ne 0 ]; then diagnostics; fi
+  if [ "${rc}" -ne 0 ] && [ -n "${PHASE_RESTORE}" ]; then "${PHASE_RESTORE}" || true; fi
   rm -rf "${WORK}"
   exit "${rc}"
 }
@@ -827,10 +831,39 @@ phase_wake() {
 
 # ---------------------------------------------------------------- phase: imagepin
 
+# ksvc_gone <service>: the Knative Service is absent. A kubectl ERROR is not
+# "absent": it returns 1, so a wait keeps waiting and a bare call fails.
+ksvc_gone() {
+  local names
+  names="$(k -n "${NS}" get ksvc "$1" --ignore-not-found -o name)" || return 1
+  [ -z "${names}" ]
+}
+
+# cond_generation <kind> <name> <type>: the metadata.generation that condition was set for.
+cond_generation() {
+  k -n "${NS}" get "$1" "$2" -o json | jq -r --arg t "$3" '.status.conditions[]? | select(.type == $t) | .observedGeneration'
+}
+
+# imagepin_restore: put the zone and the function back as the other phases expect
+# (no pin on the zone's entry, the function on its own image). Idempotent, and
+# never fails: it runs on the failure path, where it must not mask the cause.
+imagepin_restore() {
+  local go_img
+  go_img="$(image_ref function-go)" || return 0
+  k -n "${NS}" patch backendservice "${GO_FN}" --type json \
+    -p "[{\"op\":\"replace\",\"path\":\"/spec/image\",\"value\":\"${go_img}\"}]" >/dev/null 2>&1 || true
+  if [ "$(k -n "${NS}" get nextapp "${ZONE}" -o json 2>/dev/null | jq -r '.spec.backends[0].image // "unset"')" != unset ]; then
+    k -n "${NS}" patch nextapp "${ZONE}" --type json \
+      -p '[{"op":"remove","path":"/spec/backends/0/image"}]' >/dev/null 2>&1 || true
+  fi
+}
+
 phase_imagepin() {
   log "imagepin: a zone that pins its function's digest refuses a swapped image and recovers"
   [ -n "${ZONE_HOST}" ] || start_forwards
-  local go_img swap_img pin
+  local go_img swap_img pin gen
+  # A failed phase restores the pin and image on exit (see PHASE_RESTORE in cleanup).
+  PHASE_RESTORE=imagepin_restore
   go_img="$(image_ref function-go)"
   # Any other image will do: the refusal comes before anything is rendered.
   swap_img="$(image_ref zone-caller)"
@@ -841,8 +874,15 @@ phase_imagepin() {
     || fail "the zone's first backend is not ${GO_FN}"
   k -n "${NS}" patch nextapp "${ZONE}" --type json \
     -p "[{\"op\":\"add\",\"path\":\"/spec/backends/0/image\",\"value\":\"${pin}\"}]" >/dev/null
-  wait_until 120 3 "${GO_FN} still Bound under the matching pin" \
-    "[ \"\$(cond_of backendservice ${GO_FN} Bound)\" = True/Bound ]"
+  # Wait for the operator to have judged THIS generation of the zone (the condition's
+  # observedGeneration); a Bound read before that is the pre-pin state and proves nothing.
+  gen="$(k -n "${NS}" get nextapp "${ZONE}" -o jsonpath='{.metadata.generation}')"
+  wait_until 120 3 "the zone's BackendBindings judged the pinned generation ${gen}" \
+    "[ \"\$(cond_generation nextapp ${ZONE} BackendBindings)\" = ${gen} ]"
+  [ "$(cond_of nextapp "${ZONE}" BackendBindings)" = True/Bound ] \
+    || fail "${ZONE}: BackendBindings is $(cond_of nextapp "${ZONE}" BackendBindings) under the matching pin, want True/Bound"
+  [ "$(cond_of backendservice "${GO_FN}" Bound)" = True/Bound ] \
+    || fail "${GO_FN}: Bound is $(cond_of backendservice "${GO_FN}" Bound) under the matching pin, want True/Bound"
   expect_zone "pinned and matching: the zone calls ${GO_FN}" \
     "/example/put?sub=alice&id=pin-1&value=v" 200 '.ok == true'
 
@@ -851,19 +891,18 @@ phase_imagepin() {
     -p "[{\"op\":\"replace\",\"path\":\"/spec/image\",\"value\":\"${swap_img}\"}]" >/dev/null
   wait_until 180 3 "${GO_FN} refused for the image swap" \
     "[ \"\$(cond_of backendservice ${GO_FN} Bound)\" = False/BindingImageMismatch ]"
-  wait_until 180 3 "${GO_FN}'s Knative Service is removed" \
-    "[ -z \"\$(k -n ${NS} get ksvc ${GO_FN} --ignore-not-found -o name)\" ]"
+  wait_until 180 3 "${GO_FN}'s Knative Service is removed" "ksvc_gone ${GO_FN}"
   # The pod the pinned image was serving drains first; then none may come back.
   await_zero "${GO_FN}"
   # Hold: a refusal that flaps back to rendering is not one.
   sleep 20
   [ "$(cond_of backendservice "${GO_FN}" Bound)" = False/BindingImageMismatch ] \
     || fail "${GO_FN}: Bound is $(cond_of backendservice "${GO_FN}" Bound) after the hold"
-  [ "$(cond_of nextapp "${ZONE}" BackendBindings)" = False/BindingImageMismatch ] \
-    || fail "${ZONE}: BackendBindings is $(cond_of nextapp "${ZONE}" BackendBindings), want False/BindingImageMismatch"
-  # --ignore-not-found: an API error must fail the lane, not read as "absent".
-  [ -z "$(k -n "${NS}" get ksvc "${GO_FN}" --ignore-not-found -o name)" ] \
-    || fail "${GO_FN}: refused, but its Knative Service exists"
+  # The zone's report follows the function's by a reconcile: a bounded wait, not one read.
+  wait_until 60 2 "${ZONE}'s BackendBindings reports ${GO_FN} as BindingImageMismatch" \
+    "[ \"\$(cond_of nextapp ${ZONE} BackendBindings)\" = False/BindingImageMismatch ]"
+  # An API error must fail the lane, not read as "absent" (ksvc_gone returns 1 on error).
+  ksvc_gone "${GO_FN}" || fail "${GO_FN}: refused, but its Knative Service exists (or kubectl failed)"
   [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN}: refused, but it has a pod"
   ok "image swap: ${GO_FN} is BindingImageMismatch, with no Knative Service and no pod; the zone's bindings report it"
 
@@ -882,6 +921,7 @@ phase_imagepin() {
     -p '[{"op":"remove","path":"/spec/backends/0/image"}]' >/dev/null
   [ "$(k -n "${NS}" get nextapp "${ZONE}" -o json | jq -r '.spec.backends[0].image // "unset"')" = unset ] \
     || fail "the pin is still on the zone's entry"
+  PHASE_RESTORE=
 }
 
 # ---------------------------------------------------------------- phase: http11
@@ -904,9 +944,19 @@ zone_http_version() {
   [ "${ZC_STATUS}" = 200 ]
 }
 
+# http11_restore: no httpVersion on the zone's entry. Idempotent, never fails.
+http11_restore() {
+  if [ "$(k -n "${NS}" get nextapp "${ZONE}" -o json 2>/dev/null | jq -r '.spec.backends[0].httpVersion // "unset"')" != unset ]; then
+    k -n "${NS}" patch nextapp "${ZONE}" --type json \
+      -p '[{"op":"remove","path":"/spec/backends/0/httpVersion"}]' >/dev/null 2>&1 || true
+  fi
+}
+
 phase_http11() {
   log "http11: the zone calls the function over HTTP/1.1; the function's port stays h2c"
   [ -n "${ZONE_HOST}" ] || start_forwards
+  # A failed phase restores httpVersion on exit (see PHASE_RESTORE in cleanup).
+  PHASE_RESTORE=http11_restore
   [ "$(k -n "${NS}" get nextapp "${ZONE}" -o json | jq -r '.spec.backends[0].service')" = "${GO_FN}" ] \
     || fail "the zone's first backend is not ${GO_FN}"
   [ "$(fn_port_names)" = h2c ] || fail "${GO_FN}: its Knative Service port is '$(fn_port_names)', want h2c"
@@ -938,6 +988,7 @@ phase_http11() {
   k -n "${NS}" patch nextapp "${ZONE}" --type json \
     -p '[{"op":"remove","path":"/spec/backends/0/httpVersion"}]' >/dev/null
   wait_until 300 3 "the zone runs without EXAMPLE_SERVICE_HTTP_VERSION" "zone_http_version unset"
+  PHASE_RESTORE=
 }
 
 # ---------------------------------------------------------------- main

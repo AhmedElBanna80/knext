@@ -462,15 +462,47 @@ describe('imagepin: a pinned zone refuses a swapped function image and recovers 
     expect(p).toMatch(/\[ "\$\{swap_img#\*@\}" != "\$\{go_img#\*@\}" \] \|\| fail/);
   });
   it('refuses on BindingImageMismatch, on both objects, and holds', () => {
-    expect(p).toContain('= False/BindingImageMismatch');
-    expect(p).toMatch(/cond_of backendservice "\$\{GO_FN\}" Bound/);
+    // The refusal wait, anchored to its own call (a bare substring matches several lines).
     expect(p).toContain(
-      '[ "$(cond_of nextapp "${ZONE}" BackendBindings)" = False/BindingImageMismatch ] \\\n    || fail',
+      'wait_until 180 3 "${GO_FN} refused for the image swap" \\\n    "[ \\"\\$(cond_of backendservice ${GO_FN} Bound)\\" = False/BindingImageMismatch ]"',
     );
+    // The held read of the function's own condition, after the hold.
+    expect(p).toContain(
+      '[ "$(cond_of backendservice "${GO_FN}" Bound)" = False/BindingImageMismatch ] \\\n    || fail "${GO_FN}: Bound is',
+    );
+    // The zone's report is a bounded wait, not a single read.
+    expect(p).toContain(
+      'wait_until 60 2 "${ZONE}\'s BackendBindings reports ${GO_FN} as BindingImageMismatch" \\\n    "[ \\"\\$(cond_of nextapp ${ZONE} BackendBindings)\\" = False/BindingImageMismatch ]"',
+    );
+    // Absence is judged by a fail-closed helper: a kubectl error is not "absent".
+    expect(p).toContain(
+      'wait_until 180 3 "${GO_FN}\'s Knative Service is removed" "ksvc_gone ${GO_FN}"',
+    );
+    expect(p).toContain('ksvc_gone "${GO_FN}" || fail');
+    expect(body('ksvc_gone')).toContain('--ignore-not-found -o name)" || return 1');
+    expect(p).not.toMatch(/\[ -z "\$\(k -n/);
     expect(p.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(-1);
     expect(p.indexOf('sleep 20')).toBeGreaterThan(p.indexOf('await_zero "${GO_FN}"'));
-    expect(p).toMatch(/get ksvc "\$\{GO_FN\}" --ignore-not-found -o name\)" \] \\\n\s*\|\| fail/);
     expect(p).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" = 0 \] \|\| fail/);
+  });
+  it('judges the pinned generation before it asserts Bound, so the check cannot pass vacuously', () => {
+    const gen = p.indexOf("jsonpath='{.metadata.generation}'");
+    const judged = p.indexOf('cond_generation nextapp ${ZONE} BackendBindings)\\" = ${gen}', gen);
+    const bound = p.indexOf('under the matching pin, want True/Bound', judged);
+    expect(gen).toBeGreaterThan(-1);
+    expect(judged).toBeGreaterThan(gen);
+    expect(bound).toBeGreaterThan(judged);
+    expect(body('cond_generation')).toContain('.observedGeneration');
+  });
+  it('restores the pin and the image when the phase fails, and disarms on success', () => {
+    expect(p).toContain('PHASE_RESTORE=imagepin_restore');
+    expect(p.trimEnd().endsWith('PHASE_RESTORE=')).toBe(true);
+    const r = body('imagepin_restore');
+    expect(r).toContain('"op\\":\\"replace\\"');
+    expect(r).toContain('"op":"remove","path":"/spec/backends/0/image"');
+    expect(own).toMatch(
+      /if \[ "\$\{rc\}" -ne 0 \] && \[ -n "\$\{PHASE_RESTORE\}" \]; then "\$\{PHASE_RESTORE\}"/,
+    );
   });
   it('recovers on the pinned image and the zone calls it, then removes the pin', () => {
     const back = p.indexOf('\\"value\\":\\"${go_img}\\"');
@@ -506,6 +538,10 @@ describe('http11: backends[].httpVersion 1.1 is called over HTTP/1.1 through the
     const cold = p.indexOf('cold_call', zero);
     expect(zero).toBeGreaterThan(-1);
     expect(cold).toBeGreaterThan(zero);
+  });
+  it('restores httpVersion when the phase fails', () => {
+    expect(p).toContain('PHASE_RESTORE=http11_restore');
+    expect(body('http11_restore')).toContain('"op":"remove","path":"/spec/backends/0/httpVersion"');
   });
   it('restores the zone to no httpVersion', () => {
     expect(p).toContain('"op":"remove","path":"/spec/backends/0/httpVersion"');

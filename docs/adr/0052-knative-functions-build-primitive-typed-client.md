@@ -119,6 +119,23 @@ only a *build* tool.
     **and** an ecosystem advisory scan exists for its pinned Connect/gRPC + h2c server deps. State
     **where** the scan runs (knext CI scans the template; the user's scaffolded image is scanned only if
     `kn-next build` runs Trivy on it).
+
+    > **Scope note, 2026-11-18 — pending founder ratification (Status unchanged).** D14 covers images
+    > knext SHIPS: the published app, operator and self-contained images, which are cosign-signed with
+    > SBOM attestations on `main` (`.github/workflows/supply-chain.yml:430-432` app, `:720-721`
+    > self-contained; `.github/workflows/operator-supply-chain.yml:540-541` and `:595` operator). The Go
+    > and Rust templates are build-only and are not shipped: the README build path is
+    > `docker build -t <image> .` (`templates/go/README.md:49`, `templates/rust/README.md:74`), their kind
+    > e2e loads a locally built `kind.local/` image (`templates/go/e2e/kind-e2e.sh:29`,
+    > `templates/rust/e2e/kind-e2e.sh:33`), and no workflow publishes a template image
+    > (`tests/shipped-scan.test.ts:226-233`). The templates are SBOM'd and Trivy-scanned in CI on every build
+    > (`.github/workflows/go-template.yml:191`, `:205-206`; `.github/workflows/rust-template.yml:286`,
+    > `:306-307`), and users build and own their image. Template-image cosign signing is therefore out of
+    > D14's scope. This narrowing contradicts the sentence above that lists the template server image in the
+    > matrix, so ratification must either amend that sentence or reject the narrowing. The template workflows
+    > still defer their own publish and signing to a future push-only workflow
+    > (`go-template.yml:25-26`, `rust-template.yml:38-39`).
+
 15. **gRPC status rides HTTP/2 trailers — the cold path must preserve them.** A `connect-es` gRPC
     client reads `grpc-status` from a trailer; if the cold h2c path (**activator buffer → queue-proxy**)
     strips it, a mutation that *succeeded* returns as missing-status → client retries → **double-apply**,
@@ -196,6 +213,11 @@ only a *build* tool.
       `go-template.yml:157-163`; `cargo deny` `rust-template.yml:216`; `cargo audit --deny warnings`
       `rust-template.yml:219-220`. Cosign is deferred for both (`go-template.yml:25-26`, `rust-template.yml:38-39`):
       no template-image signing workflow exists.
+      *Scope note, 2026-11-18 — pending founder ratification:* the scope is narrowed to shipped images
+      (decision 14 scope note). Shipped images are cosign-signed on `main` (`supply-chain.yml:430-432`,
+      `:720-721`; `operator-supply-chain.yml:540-541`, `:595`). **This box stays unticked.** Ticking requires
+      ratification of the narrowed scope and a check that every shipped image is signed; that check is not
+      done in this note. The template-image cosign gap above is unchanged.
 - [~] **Bun func template — runtime mechanism proven locally (2026-09;** `docs/release/bun-func-runtime-spike.md`**).**
       A `bun build --compile` single-exec **serves** `connect-es`/gRPC over h2c (writes status
       trailers), ~60 MB. **Still to build:** the generator (proto + handler → `main` + `buf generate`

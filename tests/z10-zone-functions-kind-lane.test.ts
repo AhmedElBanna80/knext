@@ -462,21 +462,18 @@ describe('CI runs the lane on the Z7 cluster', () => {
     expect(z10).toBeLessThan(teardown);
     expect(JSON.stringify(steps[z10])).not.toContain('continue-on-error');
     // The only condition allowed is the one that skips Z10 on the rotation-only
-    // (weekly schedule / dispatch with rotation_realtime) run, which replaces the
+    // (weekly call / dispatch with rotation_realtime) run, which replaces the
     // default phases. It must be exactly that text, and TRUE on every other event.
     const cond = steps[z10]?.if;
     if (cond !== undefined) {
-      expect(cond).toBe("${{ !(inputs.rotation_realtime || github.event_name == 'schedule') }}");
-      const evalFor = (event: string, rotation: boolean | undefined) =>
-        new Function('inputs', 'github', `return ${cond.replace(/^\$\{\{\s*|\s*\}\}$/g, '')};`)(
-          { rotation_realtime: rotation },
-          { event_name: event },
-        );
-      expect(evalFor('push', undefined)).toBe(true);
-      expect(evalFor('pull_request', undefined)).toBe(true);
-      expect(evalFor('workflow_dispatch', false)).toBe(true);
-      expect(evalFor('schedule', undefined)).toBe(false);
-      expect(evalFor('workflow_dispatch', true)).toBe(false);
+      expect(cond).toBe('${{ !inputs.rotation_realtime }}');
+      const evalFor = (rotation: boolean | undefined) =>
+        new Function('inputs', `return ${cond.replace(/^\$\{\{\s*|\s*\}\}$/g, '')};`)({
+          rotation_realtime: rotation,
+        });
+      expect(evalFor(undefined)).toBe(true); // push, pull_request
+      expect(evalFor(false)).toBe(true); // dispatch without the input, a call without it
+      expect(evalFor(true)).toBe(false); // the weekly call, or a dispatch with the input
     }
   });
 

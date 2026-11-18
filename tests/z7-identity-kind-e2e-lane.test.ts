@@ -60,7 +60,10 @@ interface Workflow {
     pull_request: { paths: string[]; branches?: string[] };
     push: { paths: string[]; branches: string[] };
     workflow_dispatch?: unknown;
-    schedule?: { cron?: string }[];
+    schedule?: unknown;
+    workflow_call?: {
+      inputs?: Record<string, { type?: string; default?: unknown }>;
+    };
   };
   permissions?: Record<string, string>;
   jobs: Record<string, Job>;
@@ -275,10 +278,7 @@ describe('the workflow is as safe as the rest of CI', () => {
       // everything else 55 (the one-hour overlap does not fit the default bound).
       const t = job['timeout-minutes'];
       if (typeof t === 'number') expect(t).toBeLessThanOrEqual(75);
-      else
-        expect(String(t)).toMatch(
-          /^\$\{\{ \(inputs\.rotation_realtime \|\| github\.event_name == 'schedule'\) && 120 \|\| 55 \}\}$/,
-        );
+      else expect(String(t)).toMatch(/^\$\{\{ inputs\.rotation_realtime && 120 \|\| 55 \}\}$/);
     }
     // No default step overrides the phases: only the dispatch-input step does.
     expect(wfText.match(/\bPHASES\b/g)).toHaveLength(1);
@@ -735,7 +735,7 @@ describe('the real-time rotation phase proves the three exit properties and stay
     runSh.indexOf('# ---------------------------------------------------------------- phase: pin'),
   );
 
-  it('exists, is NOT in the default phase list, and is reached only by a dispatch input', () => {
+  it('exists, is NOT in the default phase list, and is reached only by the rotation_realtime input (dispatch or call)', () => {
     expect(runSh.indexOf('phase_rotation() {')).toBeGreaterThan(0);
     const def = runSh.match(/^PHASES="\$\{PHASES:-([^}]*)\}"$/m);
     expect(def?.[1]?.split(' ')).not.toContain('rotation');
@@ -744,10 +744,12 @@ describe('the real-time rotation phase proves the three exit properties and stay
     };
     expect(dispatch.inputs?.rotation_realtime?.type).toBe('boolean');
     expect(dispatch.inputs?.rotation_realtime?.default).toBe(false);
+    // A caller on main passes the same input through workflow_call.
+    expect(wf.on.workflow_call?.inputs?.rotation_realtime?.type).toBe('boolean');
+    expect(wf.on.workflow_call?.inputs?.rotation_realtime?.default).toBe(false);
     const rt = steps.filter((s) => (s.env as Record<string, string> | undefined)?.PHASES);
     expect(rt).toHaveLength(1);
-    expect((rt[0] as Step).if).toMatch(/inputs\.rotation_realtime/);
-    expect((rt[0] as Step).if).toMatch(/github\.event_name == 'schedule'/);
+    expect((rt[0] as Step).if).toBe('${{ inputs.rotation_realtime }}');
     expect((rt[0] as Step).if).not.toMatch(/!/);
     expect(((rt[0] as Step).env as Record<string, string>).PHASES).toBe(
       'up images deploy verify rotation',
@@ -755,22 +757,27 @@ describe('the real-time rotation phase proves the three exit properties and stay
     // The default steps are skipped on that dispatch, and run on everything else.
     const defaults = steps.filter((s) => /run\.sh/.test(s.run ?? '') && s !== rt[0]);
     expect(defaults.length).toBeGreaterThanOrEqual(2);
-    for (const s of defaults)
-      expect(s.if).toMatch(
-        /^\$\{\{ !\(inputs\.rotation_realtime \|\| github\.event_name == 'schedule'\) \}\}$/,
-      );
+    for (const s of defaults) expect(s.if).toBe('${{ !inputs.rotation_realtime }}');
     // The longer bound is only for that run.
     const job = wf.jobs['z7-identity-e2e'] as Job;
-    expect(String(job['timeout-minutes'])).toMatch(
-      /\(inputs\.rotation_realtime \|\| github\.event_name == 'schedule'\) && 120 \|\| 55/,
-    );
+    expect(String(job['timeout-minutes'])).toBe('${{ inputs.rotation_realtime && 120 || 55 }}');
   });
 
-  it('runs on a WEEKLY schedule, and a push cannot cancel that run mid-overlap', () => {
-    const sched = wf.on.schedule ?? [];
-    expect(sched).toHaveLength(1);
-    // minute hour day-of-month month day-of-week: one fixed weekday, every other field fixed or *.
-    expect(String(sched[0]?.cron)).toMatch(/^\d{1,2} \d{1,2} \* \* [0-6]$/);
+  it('is called weekly from main (no dead schedule here), checks integration/v2 out on a call, and a push cannot cancel that run mid-overlap', () => {
+    // GitHub fires `schedule:` only from the default branch; this file is not on it, so a
+    // cron here is dead. The cron lives in the caller (tests/z7-rotation-weekly-schedule.test.ts).
+    expect(wf.on.schedule).toBeUndefined();
+    expect(wfText).not.toMatch(/github\.event_name == 'schedule'/);
+    // A called workflow inherits the CALLER's ref, so the checkout takes an explicit input
+    // that defaults to integration/v2 on a call and is empty (the triggering ref) otherwise.
+    const ci = wf.on.workflow_call?.inputs?.checkout_ref;
+    expect(ci?.type).toBe('string');
+    expect(ci?.default).toBe('integration/v2');
+    expect(wf.on.workflow_dispatch).not.toHaveProperty('inputs.checkout_ref');
+    const checkouts = steps.filter((s) => s.uses?.startsWith('actions/checkout@'));
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const c of checkouts)
+      expect((c.with as Record<string, unknown>)?.ref).toBe('${{ inputs.checkout_ref }}');
     expect(wfText).toMatch(
       /^ {2}group: z7-identity-kind-e2e-\$\{\{ github\.ref \}\}-\$\{\{ github\.event_name \}\}$/m,
     );

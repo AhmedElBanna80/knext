@@ -248,9 +248,9 @@ const LANE_ROWS = [
     subject: 'workflow',
     claim: 'a red step is allowed to pass (continue-on-error)',
     anchor:
-      "        if: ${{ !(inputs.rotation_realtime || github.event_name == 'schedule') }}\n        run: packages/grpc/e2e/z7-identity-kind/run.sh\n",
+      '        if: ${{ !inputs.rotation_realtime }}\n        run: packages/grpc/e2e/z7-identity-kind/run.sh\n',
     replacement:
-      "        if: ${{ !(inputs.rotation_realtime || github.event_name == 'schedule') }}\n        run: packages/grpc/e2e/z7-identity-kind/run.sh\n        continue-on-error: true\n",
+      '        if: ${{ !inputs.rotation_realtime }}\n        run: packages/grpc/e2e/z7-identity-kind/run.sh\n        continue-on-error: true\n',
     validate: validateYaml,
   },
   {
@@ -391,9 +391,27 @@ const LANE_ROWS = [
   {
     id: 'RT8',
     subject: 'workflow',
-    claim: 'the weekly schedule is removed, so the real-time rotation runs only by hand',
-    anchor: "  schedule:\n    - cron: '23 3 * * 0'\n",
-    replacement: '  # the weekly schedule is gone\n',
+    claim: 'the workflow_call trigger is removed, so the weekly caller on main cannot run it',
+    anchor: '  workflow_call:\n    inputs:\n      rotation_realtime:',
+    replacement: '  workflow_dispatch_only:\n    inputs:\n      rotation_realtime:',
+    validate: validateYaml,
+  },
+  {
+    id: 'RT9',
+    subject: 'workflow',
+    claim: 'a call checks out the caller ref (main) instead of integration/v2',
+    anchor: '          ref: ${{ inputs.checkout_ref }}\n',
+    replacement: '',
+    validate: validateYaml,
+  },
+  {
+    id: 'RT10',
+    subject: 'workflow',
+    claim: 'a dead cron is put back in a file that is not on the default branch',
+    anchor:
+      "  workflow_dispatch:\n    inputs:\n      rotation_realtime:\n        description: 'Also run",
+    replacement:
+      "  schedule:\n    - cron: '23 3 * * 0'\n  workflow_dispatch:\n    inputs:\n      rotation_realtime:\n        description: 'Also run",
     validate: validateYaml,
   },
   {
@@ -427,8 +445,7 @@ const LANE_ROWS = [
     id: 'RT6',
     subject: 'workflow',
     claim: 'the real-time rotation step runs on every event, not only on the dispatch input',
-    anchor:
-      "        if: ${{ (inputs.rotation_realtime || github.event_name == 'schedule') }}\n        env:",
+    anchor: '        if: ${{ inputs.rotation_realtime }}\n        env:',
     replacement: '        if: ${{ always() }}\n        env:',
     validate: validateYaml,
   },

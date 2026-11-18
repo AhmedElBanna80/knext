@@ -464,7 +464,9 @@ describe('imagepin: a pinned zone refuses a swapped function image and recovers 
   it('refuses on BindingImageMismatch, on both objects, and holds', () => {
     expect(p).toContain('= False/BindingImageMismatch');
     expect(p).toMatch(/cond_of backendservice "\$\{GO_FN\}" Bound/);
-    expect(p).toMatch(/cond_of nextapp "\$\{ZONE\}" BackendBindings/);
+    expect(p).toContain(
+      '[ "$(cond_of nextapp "${ZONE}" BackendBindings)" = False/BindingImageMismatch ] \\\n    || fail',
+    );
     expect(p.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(-1);
     expect(p.indexOf('sleep 20')).toBeGreaterThan(p.indexOf('await_zero "${GO_FN}"'));
     expect(p).toMatch(/get ksvc "\$\{GO_FN\}" --ignore-not-found -o name\)" \] \\\n\s*\|\| fail/);

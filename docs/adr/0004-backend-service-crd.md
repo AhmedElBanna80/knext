@@ -278,7 +278,8 @@ These came from the system designer as tech-debt or test items, not blockers. Th
       [ADR-0073](0073-opt-in-predictive-prewake.md).
 - [x] Docs (D3, #2071): the namespace is the trust boundary; zones whose owners do not trust each
       other go in separate namespaces.
-- [x] Per-zone key Secret and JWKS ConfigMap; rotation in the order above (Z7 #2458/#2459/#2460/#2473/#2491; OKE rotation proofs open: #2461, #2483).
+- [x] Per-zone key Secret and JWKS ConfigMap; rotation in the order above, proven in real time on kind (Z7 #2458/#2459/#2460/#2473/#2491; OKE rotation proofs open: #2461, #2483). Scheduled CI run not yet proven (see the sub-line).
+      Z7 rotation: the real-time proof is a local kind run, recorded in #149 (S7-5). Its scheduled CI run is pending a main-side scheduled workflow (in progress, tracked as Sprint 8 task S8-8): GitHub fires `schedule` only from the default branch, and `.github/workflows/z7-identity-kind-e2e.yml` is not on `main`, so that cron does not fire yet. The CI link will be recorded after that first run.
 - [x] Interceptors in the Go and Rust templates (Z7 verifiers, #2455), fail-closed, mutation-proved; JWKS re-read on an
       unknown `kid`; small `exp` clock skew.
 - [x] Generator (Z6 #2411): auth options `USER` and `PUBLIC` only; a `PUBLIC_MUTATION` option is refused.

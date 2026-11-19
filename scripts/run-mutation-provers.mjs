@@ -48,6 +48,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { loadavg, tmpdir } from 'node:os';
+import { pinExitSignals } from './lib/lane-exit-signals.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -386,10 +387,10 @@ function cleanPrivateTmp() {
 process.on('exit', () => {
   if (privateTmp) rmSync(privateTmp, { recursive: true, force: true });
 });
-// A job timeout or cancellation sends SIGTERM/SIGINT, which skips 'exit' unless
-// handled; exit with the conventional code so the private dir is still removed.
-process.once('SIGTERM', () => process.exit(143));
-process.once('SIGINT', () => process.exit(130));
+// A job timeout, a cancellation, or a closed terminal (SIGHUP) sends a signal that skips 'exit'
+// unless it is routed through process.exit. pinExitSignals does that for each one, so the private
+// dir is removed on every signal we can catch (SIGKILL cannot be caught; see lib/lane-exit-signals.mjs).
+pinExitSignals();
 
 /** Delete regenerable build output; returns what was removed. */
 function cleanBuildOutput() {

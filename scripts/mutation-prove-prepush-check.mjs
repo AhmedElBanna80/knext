@@ -47,8 +47,8 @@ const MUTATIONS = [
     id: 'P2',
     claim: 'gate discovery stops skipping the mutation provers',
     subject: 'lib',
-    anchor: " && !f.startsWith('mutation-prove-')",
-    replacement: '',
+    anchor: "f.endsWith('.mjs') && !f.startsWith('mutation-prove-')",
+    replacement: "f.endsWith('.mjs')",
   },
   {
     id: 'P3',

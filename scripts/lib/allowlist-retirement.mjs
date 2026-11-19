@@ -20,8 +20,8 @@
  * this is unit-tested offline (`tests/allowlist-retirement.test.ts`).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 export const ALLOWLIST_FILES = [
   'security/precompile-closure-allowlist.json',
@@ -40,6 +40,25 @@ export function isPinnedFixtureLockfile(rel) {
 
 /** Lockfiles searched for entries that name no lockfile of their own. */
 export const DEFAULT_LOCKFILES = ['bun.lock', 'examples/bun-exec/bun.lock', 'package-lock.json'];
+
+/**
+ * Which allowlists a root is probed for. Default: all of them. A root that
+ * legitimately lacks one (main has no OSV gate) names the files it HAS via a
+ * comma list; every name must be a known allowlist, and every named file is then
+ * REQUIRED (a missing one throws in `collectEntries`: never a silent skip).
+ */
+export function resolveAllowlistFiles(spec) {
+  if (spec === undefined || String(spec).trim() === '') return ALLOWLIST_FILES;
+  const names = String(spec)
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
+  for (const n of names) {
+    if (!ALLOWLIST_FILES.includes(n)) throw new Error(`unknown allowlist file \`${n}\``);
+  }
+  if (names.length === 0) throw new Error('ALLOWLIST_FILES names no allowlist');
+  return names;
+}
 
 /** Read every allowlist; a malformed file/entry THROWS (never silently skipped). */
 export function collectEntries(repoRoot, files = ALLOWLIST_FILES) {
@@ -227,8 +246,20 @@ export function parseLockfile(text, kind) {
 }
 
 export function loadLockfileFromDisk(repoRoot, rel) {
-  const abs = resolve(repoRoot, rel);
+  const root = resolve(repoRoot);
+  const abs = resolve(root, rel);
+  const outside = (p) => {
+    const r = relative(root, p);
+    return r === '..' || r.startsWith('..') || isAbsolute(r);
+  };
+  // An entry's `lockfile` is DATA from the probed branch: it must stay inside the root.
+  if (isAbsolute(rel) || outside(abs)) {
+    throw new Error(`lockfile \`${rel}\` is outside the probed root`);
+  }
   if (!existsSync(abs)) return null;
+  if (outside(realpathSync(abs).replace(realpathSync(root), root))) {
+    throw new Error(`lockfile \`${rel}\` resolves outside the probed root (symlink)`);
+  }
   return parseLockfile(readFileSync(abs, 'utf8'), rel.endsWith('.json') ? 'npm' : 'bun');
 }
 

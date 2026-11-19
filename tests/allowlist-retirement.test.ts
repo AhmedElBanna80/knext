@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import {
   ALLOWLIST_FILES,
@@ -9,10 +10,12 @@ import {
   collectEntries,
   exitCodeFor,
   isPinnedFixtureLockfile,
+  loadLockfileFromDisk,
   parseLockfile,
   probeEntries,
   reachability,
   renderReport,
+  resolveAllowlistFiles,
   satisfiesRange,
   versionInRange,
 } from '../scripts/lib/allowlist-retirement.mjs';
@@ -326,5 +329,41 @@ describe('workflow placement and alert wiring', () => {
     expect(cond).toContain('always()');
     expect(cond).toContain("needs.probe-allowlists.result == 'failure'");
     expect(cond).toContain("needs.probe-allowlists.result == 'cancelled'");
+  });
+});
+
+describe('probe root confinement and file selection', () => {
+  it('loadLockfileFromDisk rejects an absolute path and any path that escapes the root', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'allow-'));
+    expect(() => loadLockfileFromDisk(dir, '/etc/passwd')).toThrow(/outside/);
+    expect(() => loadLockfileFromDisk(dir, '../../etc/passwd')).toThrow(/outside/);
+    expect(() => loadLockfileFromDisk(dir, 'a/../../x')).toThrow(/outside/);
+    expect(loadLockfileFromDisk(dir, 'bun.lock')).toBeNull();
+    rmSync(dir, { recursive: true });
+  });
+
+  it('loadLockfileFromDisk rejects a symlink that resolves outside the root', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'allow-'));
+    const out = mkdtempSync(join(tmpdir(), 'allow-out-'));
+    writeFileSync(join(out, 'bun.lock'), '{}');
+    symlinkSync(join(out, 'bun.lock'), join(dir, 'bun.lock'));
+    expect(() => loadLockfileFromDisk(dir, 'bun.lock')).toThrow(/outside/);
+    rmSync(dir, { recursive: true });
+    rmSync(out, { recursive: true });
+  });
+
+  it('a MISSING allowlist is an error on every root (fail closed)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'allow-'));
+    expect(() => collectEntries(dir)).toThrow(/ENOENT/);
+    rmSync(dir, { recursive: true });
+  });
+
+  it('resolveAllowlistFiles: default is all three; a list must name known files', () => {
+    expect(resolveAllowlistFiles(undefined)).toEqual(ALLOWLIST_FILES);
+    expect(resolveAllowlistFiles('security/npm-audit-allowlist.json')).toEqual([
+      'security/npm-audit-allowlist.json',
+    ]);
+    expect(() => resolveAllowlistFiles('security/nope.json')).toThrow(/unknown/);
+    expect(() => resolveAllowlistFiles(' , ')).toThrow(/names no allowlist/);
   });
 });

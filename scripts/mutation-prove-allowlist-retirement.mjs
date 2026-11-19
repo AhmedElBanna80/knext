@@ -172,11 +172,32 @@ const MUTATIONS = [
     anchor: 'on:\n  workflow_call:',
     replacement: "on:\n  schedule:\n    - cron: '19 7 * * *'\n  workflow_call:",
   },
+  {
+    label: 'lib: an absolute or escaping lockfile path is read',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (isAbsolute(rel) || outside(abs)) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'lib: a symlinked lockfile escaping the root is read',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (outside(realpathSync(abs).replace(realpathSync(root), root))) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'lib: an unknown allowlist file name is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (!ALLOWLIST_FILES.includes(n)) throw',
+    replacement: 'if (false) throw',
+  },
 ];
 
-declareMutations(18);
-if (MUTATIONS.length !== 18) {
-  console.error(`FATAL: declared 18 mutations, table has ${MUTATIONS.length}`);
+declareMutations(21);
+if (MUTATIONS.length !== 21) {
+  console.error(`FATAL: declared 21 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

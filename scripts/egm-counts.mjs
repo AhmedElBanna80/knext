@@ -37,9 +37,11 @@ const WORDS = [
 ];
 const SKIP_DIRS = new Set(['node_modules', '.git', 'target', 'dist', '.claude', '.next']);
 const MARKER = new RegExp(
-  `(\\d[\\d,]*|\\b(?:${WORDS.join('|')}))<!--egm:([A-Za-z0-9._-]+)-->`,
+  `(?<![\\w.,])(\\d[\\d,]*|(?:${WORDS.join('|')}))<!--egm:([A-Za-z0-9._-]+)-->`,
   'g',
 );
+// Anything that opens like a marker. Each one must also parse as a MARKER, or it is a problem.
+const RAW_MARKER = /<!--\s*egm[^\n]*?-->|<!--\s*egm[^\n]*$/gi;
 
 export function computeCount(rule, root) {
   if (rule.kind === 'entries') {
@@ -69,6 +71,16 @@ export function computeCount(rule, root) {
       throw new Error(`json-keys: no object at ${rule.file}#${rule.path}`);
     return Object.keys(node).filter((k) => k.startsWith(rule.prefix ?? '')).length;
   }
+  if (rule.kind === 'regex-count') {
+    const text = readFileSync(join(root, rule.file), 'utf8');
+    let region = text;
+    if (rule.within) {
+      const m = new RegExp(rule.within).exec(text);
+      if (!m) throw new Error(`regex-count: "within" did not match in ${rule.file}`);
+      region = m[1] ?? m[0];
+    }
+    return [...region.matchAll(new RegExp(rule.pattern, 'gm'))].length;
+  }
   throw new Error(`unknown rule kind: ${rule.kind}`);
 }
 
@@ -97,9 +109,15 @@ function render(n, old) {
 export function run({ root, manifestPath, write }) {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const computed = {};
-  for (const [key, rule] of Object.entries(manifest.counts))
-    computed[key] = computeCount(rule, root);
   const problems = [];
+  for (const [key, rule] of Object.entries(manifest.counts)) {
+    computed[key] = computeCount(rule, root);
+    if (computed[key] === 0 && !rule.allowZero) {
+      problems.push(
+        `manifest key "${key}" matched 0 (a broken rule; set allowZero if zero is real)`,
+      );
+    }
+  }
   const used = new Set();
   let derived = 0;
   for (const file of findDocs(root)) {
@@ -107,6 +125,15 @@ export function run({ root, manifestPath, write }) {
     const lines = readFileSync(file, 'utf8').split('\n');
     let changed = false;
     lines.forEach((line, i) => {
+      const ends = new Set();
+      for (const m of line.matchAll(MARKER)) ends.add(m.index + m[0].length);
+      for (const m of line.matchAll(RAW_MARKER)) {
+        if (!ends.has(m.index + m[0].length)) {
+          problems.push(
+            `${rel}:${i + 1}: malformed count marker "${m[0]}" (needs a number or number word directly before <!--egm:KEY-->, KEY of [A-Za-z0-9._-])`,
+          );
+        }
+      }
       lines[i] = line.replace(MARKER, (whole, cited, key) => {
         derived++;
         used.add(key);

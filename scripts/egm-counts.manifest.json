@@ -1,13 +1,45 @@
 {
-  "_doc": "Each key names one counted quantity cited in an EGM.md as `N<!--egm:KEY-->`. kinds: entries (directory entries of one dir, filtered by `name` regex and `type` file|dir|any, `exclude` regex), grep (files in `dir` matching `name`, whose content matches `pattern`), json-keys (keys of the object at `path` in a JSON file that start with `prefix`).",
+  "_doc": "Each key names one counted quantity cited in an EGM.md as `N<!--egm:KEY-->`. kinds: entries (directory entries of one dir, filtered by `name` regex and `type` file|dir|any, `exclude` regex), grep (files in `dir` matching `name`, whose content matches `pattern`), regex-count (matches of `pattern`, one per line, inside the first capture of `within` when given), json-keys (keys of the object at `path` in a JSON file that start with `prefix`). A rule that computes 0 is an error unless it declares `allowZero`.",
   "counts": {
-    "scripts.entries": { "kind": "entries", "dir": "scripts", "type": "any" },
-    "scripts.files": { "kind": "entries", "dir": "scripts", "type": "file" },
-    "scripts.mjs": { "kind": "entries", "dir": "scripts", "type": "file", "name": "\\.mjs$" },
-    "scripts.sh": { "kind": "entries", "dir": "scripts", "type": "file", "name": "\\.sh$" },
-    "scripts.ts": { "kind": "entries", "dir": "scripts", "type": "file", "name": "\\.ts$" },
-    "scripts.json": { "kind": "entries", "dir": "scripts", "type": "file", "name": "\\.json$" },
-    "scripts.dirs": { "kind": "entries", "dir": "scripts", "type": "dir" },
+    "scripts.entries": {
+      "kind": "entries",
+      "dir": "scripts",
+      "type": "any"
+    },
+    "scripts.files": {
+      "kind": "entries",
+      "dir": "scripts",
+      "type": "file"
+    },
+    "scripts.mjs": {
+      "kind": "entries",
+      "dir": "scripts",
+      "type": "file",
+      "name": "\\.mjs$"
+    },
+    "scripts.sh": {
+      "kind": "entries",
+      "dir": "scripts",
+      "type": "file",
+      "name": "\\.sh$"
+    },
+    "scripts.ts": {
+      "kind": "entries",
+      "dir": "scripts",
+      "type": "file",
+      "name": "\\.ts$"
+    },
+    "scripts.json": {
+      "kind": "entries",
+      "dir": "scripts",
+      "type": "file",
+      "name": "\\.json$"
+    },
+    "scripts.dirs": {
+      "kind": "entries",
+      "dir": "scripts",
+      "type": "dir"
+    },
     "scripts.provers": {
       "kind": "entries",
       "dir": "scripts",
@@ -55,6 +87,12 @@
       "dir": "packages/kn-next-action",
       "type": "file",
       "name": "\\.mjs$"
+    },
+    "db.tsup-entries": {
+      "kind": "regex-count",
+      "file": "packages/db/tsup.config.ts",
+      "within": "entry:\\s*\\{([^}]*)\\}",
+      "pattern": "^\\s*\\w+:\\s*['\"]"
     }
   }
 }

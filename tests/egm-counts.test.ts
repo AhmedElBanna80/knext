@@ -96,4 +96,100 @@ describe('EGM.md counts are derived', () => {
       rmSync(f.root, { recursive: true, force: true });
     }
   });
+
+  describe('fails closed on malformed markers and broken rules', () => {
+    const cases: Array<[string, string, string]> = [
+      [
+        'no number before the marker',
+        'provers <!--egm:fx.provers--> here\n',
+        'malformed count marker',
+      ],
+      [
+        'an unsupported number word',
+        'thirteen<!--egm:fx.provers--> here\n',
+        'malformed count marker',
+      ],
+      ['a number glued to a word', 'x2<!--egm:fx.provers--> here\n', 'malformed count marker'],
+      ['a decimal before the marker', '1.5<!--egm:fx.provers--> here\n', 'malformed count marker'],
+      ['an invalid key', '2<!--egm:bad key--> here\n', 'malformed count marker'],
+      ['an empty key', '2<!--egm:--> here\n', 'malformed count marker'],
+      ['an unterminated comment', '2<!--egm:fx.provers here\n', 'malformed count marker'],
+      [
+        'a spaced marker-like comment',
+        '2 <!-- egm:fx.provers --> here\n',
+        'malformed count marker',
+      ],
+    ];
+    for (const [name, line, msg] of cases) {
+      it(`reds on ${name}, naming file:line`, () => {
+        const f = fixture();
+        try {
+          const doc = join(f.root, 'tools/EGM.md');
+          writeFileSync(doc, `ok 2<!--egm:fx.provers--> 1<!--egm:fx.users-->\n${line}`);
+          const r = run(f.args('--check'));
+          expect(r.code).toBe(1);
+          expect(r.out).toContain(msg);
+          expect(r.out).toContain('tools/EGM.md:2:');
+          expect(run(f.args('--write')).code).toBe(1);
+        } finally {
+          rmSync(f.root, { recursive: true, force: true });
+        }
+      });
+    }
+
+    it('reds when a rule matches nothing, unless it declares allowZero', () => {
+      const f = fixture();
+      try {
+        const m = structuredClone(MANIFEST) as typeof MANIFEST & { counts: Record<string, object> };
+        m.counts['fx.none'] = { kind: 'entries', dir: 'tools', type: 'file', name: '^nope$' };
+        writeFileSync(f.manifest, JSON.stringify(m));
+        const doc = join(f.root, 'tools/EGM.md');
+        writeFileSync(doc, 'two<!--egm:fx.provers--> 1<!--egm:fx.users--> 0<!--egm:fx.none-->\n');
+        const bad = run(f.args('--check'));
+        expect(bad.code).toBe(1);
+        expect(bad.out).toContain('"fx.none" matched 0');
+        m.counts['fx.none'] = {
+          kind: 'entries',
+          dir: 'tools',
+          type: 'file',
+          name: '^nope$',
+          allowZero: true,
+        };
+        writeFileSync(f.manifest, JSON.stringify(m));
+        expect(run(f.args('--check')).code).toBe(0);
+      } finally {
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    });
+
+    it('counts regex-count matches inside the `within` region only', () => {
+      const f = fixture();
+      try {
+        writeFileSync(
+          join(f.root, 'cfg.ts'),
+          "x: 'out',\nentry: {\n  a: 'a',\n  b: 'b',\n},\ny: 'z',\n",
+        );
+        const m = {
+          counts: {
+            'fx.entries': {
+              kind: 'regex-count',
+              file: 'cfg.ts',
+              within: 'entry:\\s*\\{([^}]*)\\}',
+              pattern: '^\\s*\\w+:\\s*[\'"]',
+            },
+          },
+        };
+        writeFileSync(f.manifest, JSON.stringify(m));
+        const doc = join(f.root, 'tools/EGM.md');
+        writeFileSync(doc, 'two<!--egm:fx.entries-->\n');
+        expect(run(f.args('--check')).code).toBe(0);
+        writeFileSync(join(f.root, 'cfg.ts'), "entry: {\n  a: 'a',\n  b: 'b',\n  c: 'c',\n},\n");
+        const bad = run(f.args('--check'));
+        expect(bad.code).toBe(1);
+        expect(bad.out).toContain('fx.entries says two, computed 3');
+      } finally {
+        rmSync(f.root, { recursive: true, force: true });
+      }
+    });
+  });
 });

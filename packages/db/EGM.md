@@ -19,7 +19,7 @@ with `access: public` and `provenance: true` (`package.json` `publishConfig`).
     `runMigrations`, `defaultMigrateDeps`, `DEFAULT_SCHEMA_PATH`,
     `DEFAULT_MIGRATIONS_DIR`, `RO_GATEWAY_PORT`.
 - The public API document is `docs/PUBLIC_API.md` (`package.json` `knext.publicApi.doc`).
-- `tsup.config.ts`: builds the three entries `index`, `schema` and `migrate` from
+- `tsup.config.ts`: builds the three<!--egm:db.tsup-entries--> entries `index`, `schema` and `migrate` from
   `src/` as ESM with `.d.ts` output into `dist`, targeting `node20`.
   Dependencies stay external (module comment).
 - Subdirectories:

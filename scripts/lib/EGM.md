@@ -1,7 +1,7 @@
 # scripts/lib
 
 ## Overview
-Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 87<!--egm:scripts.lib.files--> files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~28k lines, so treat each file's header as the authority.
+Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 88<!--egm:scripts.lib.files--> files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~28k lines, so treat each file's header as the authority.
 
 ## Interface
 Grouped by concern. The names listed are the modules' exported symbols.
@@ -24,6 +24,7 @@ Grouped by concern. The names listed are the modules' exported symbols.
 - `server-action-auth-scan.mjs`: `scanTree`, `scanSource`, `gateVerdict`, `AUTH_CALLS`, `ALLOWLIST`, `SCAN_ROOTS`. Also exports `ASYNC_AUTH_CALLS`, `MUTATING_METHODS`, `SENSITIVE_READS`, `listScanFiles`, `collectSurfaces`.
 - `published-export-scan.mjs`: `scanPackage`, `SEAM_PREFIX`, `enumerateEntries`. Also exports `createCtx`, `readExports`, `describeFinding`. Reads CommonJS post-hoc attachment on exported bindings, including `Object.defineProperty` descriptors (`value`, shorthand `value`, getter returns); an unreadable descriptor is a finding.
 - `unused-export-scan.mjs`: `scanUnusedExports`, `scanTree`. Also exports `PACKAGE_DIR`, `SCOPE_DIR`, `isScopedSource`, `declarationCompanions`, `exportedNames`, `publicSourceFiles`, `readTrackedFiles`.
+- `prepush-check.mjs`: pure logic for `scripts/prepush-check.mjs`: `changedAllowlists`, `scanReaders`, `workflowInvocations`, `bareInvocations`, `deriveWorkflowArgSets`, `joinContinuations`, `planGateRuns`, `GATE_TABLE`, `ALLOWLIST_REGISTRY`, `testsCovering`, `newEntries`, `staticTempDirFindings` (reuses `unpairedTempDirs`), `parseScopeLines`, `globToRegExp`, `outOfScope`, `groupByArea`, `changedTestFiles`. Runs nothing on import.
 - `scratch-space-scan.mjs`: `repoRootedWrites`, `unpairedTempDirs`, `countTempDirSites`. Also exports `WRITE_CALLS`, `classifyPathExpr`.
 - `test-skips.mjs`: `scanSkips`, `skipCount`, `SKIP_FORMS`. Also exports `CONDITIONAL_FORMS`, `artifactGatedSkipCount`.
 - `test-framework-import.mjs`: `importsFrom`.

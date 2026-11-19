@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import {
   appendFileSync,
@@ -17,8 +17,13 @@ import { compareProbeFiles } from '../scripts/check-probe-sync.mjs';
 import { PROBE_FILES } from '../scripts/record-allowlist-retirement-hash.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
+const tempDirs: string[] = [];
+afterAll(() => {
+  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+});
 function copyTree(): string {
   const dir = mkdtempSync(join(tmpdir(), 'probesync-'));
+  tempDirs.push(dir);
   for (const p of PROBE_FILES) {
     mkdirSync(dirname(join(dir, p)), { recursive: true });
     copyFileSync(resolve(ROOT, p), join(dir, p));

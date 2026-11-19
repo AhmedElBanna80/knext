@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import * as LINT_MODULE from '../scripts/lib/prover-wiring-lint.mjs';
 import {
   auditWiringLabels,
   classifyPair,
@@ -535,6 +536,59 @@ describe('attribution resolves module paths; a basename or another directory doe
   });
   it('a relative import that resolves to the subject IS an execution', () => {
     expect(classifyPair("import { r } from '../lib/render';", SUBJ, SPEC)).toBe('executed');
+  });
+});
+
+// ROUND 4 item 1. TS ESM imports name a .js or .mjs file that is really the .ts or .mts source: a specifier
+// './helpers/blocking-gate.js' names blocking-gate.ts.
+describe('a .js/.mjs specifier names its .ts/.mts source (ROUND 4 item 1)', () => {
+  const SPEC = 'scripts/lib/spec.test.ts';
+  it("import './helpers/blocking-gate.js' names helpers/blocking-gate.ts and executes it", () => {
+    const subj = 'scripts/lib/helpers/blocking-gate.ts';
+    const spec = "import { g } from './helpers/blocking-gate.js'; expect(g).toBe(1);";
+    expect(namesSubject(spec, subj, SPEC)).toBe(true);
+    expect(classifyPair(spec, subj, SPEC)).toBe('executed');
+  });
+  it("import './a.mjs' names a.mts", () => {
+    expect(namesSubject("import './a.mjs';", 'scripts/lib/a.mts', SPEC)).toBe(true);
+  });
+  it("import './a.js' does NOT name a.mts (the mapping is .js to .ts, .mjs to .mts only)", () => {
+    expect(namesSubject("import './a.js';", 'scripts/lib/a.mts', SPEC)).toBe(false);
+  });
+});
+
+// ROUND 4 item 2. -o noexec means the same as -n (the last of +o/-o noexec wins). Any other -o value is neutral.
+describe('bash -o noexec is a syntax check; other -o values are neutral (ROUND 4 item 2)', () => {
+  const P = 'scripts/thing.sh';
+  it('bash -o noexec <subject> is a syntax check, not a run', () => {
+    expect(classifyPair(`spawnSync('bash', ['-o', 'noexec', '${P}']);`, P)).not.toBe('executed');
+  });
+  it('bash -o noexec +o noexec <subject> runs the subject (+o noexec turns the check off)', () => {
+    expect(classifyPair(`spawnSync('bash', ['-o', 'noexec', '+o', 'noexec', '${P}']);`, P)).toBe('executed');
+  });
+  it('bash -o pipefail <subject> is neutral: it runs the subject', () => {
+    expect(classifyPair(`spawnSync('bash', ['-o', 'pipefail', '${P}']);`, P)).toBe('executed');
+  });
+  it('bash -n -o pipefail <subject> is still a check (a neutral -o does not reset -n)', () => {
+    expect(classifyPair(`spawnSync('bash', ['-n', '-o', 'pipefail', '${P}']);`, P)).not.toBe('executed');
+  });
+  it('bash -o noexec -o pipefail <subject> is still a check (the neutral -o changes nothing)', () => {
+    expect(classifyPair(`spawnSync('bash', ['-o', 'noexec', '-o', 'pipefail', '${P}']);`, P)).not.toBe('executed');
+  });
+});
+
+// ROUND 4 item 3. The module's exports are documented in scripts/lib/EGM.md, and the EGM does not overstate the heuristic.
+describe('the lint module exports are documented, and the EGM states the heuristic (ROUND 4 item 3)', () => {
+  it('every export of prover-wiring-lint.mjs is named in scripts/lib/EGM.md', () => {
+    const egm = readFileSync(resolve(ROOT, 'scripts/lib/EGM.md'), 'utf8');
+    const exported = Object.keys(LINT_MODULE).sort();
+    expect(exported.length).toBeGreaterThan(0);
+    const missing = exported.filter((name) => !egm.includes(name));
+    expect(missing).toEqual([]);
+  });
+  it('the EGM does not say a flagged row is "genuinely" text-only (it is classified so by the heuristic)', () => {
+    const egm = readFileSync(resolve(ROOT, 'scripts/lib/EGM.md'), 'utf8');
+    expect(egm).not.toMatch(/genuinely text-only/);
   });
 });
 

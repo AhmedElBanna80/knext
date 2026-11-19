@@ -69,8 +69,20 @@ function fixtureGroups(dir: string): number[] {
   return [...groups];
 }
 
+/**
+ * The groups a fixture kill may signal: every fixture group EXCEPT the test process's own group, so a
+ * misidentified pgid can never signal the test runner itself. ROUND 4 item 4.
+ */
+export function safeGroupsToKill(groups: number[], ownPgid: number): number[] {
+  return groups.filter((g) => g !== ownPgid);
+}
+
+function ownProcessGroup(): number {
+  return Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' }).trim());
+}
+
 function killFixtureGroups(dir: string) {
-  for (const g of fixtureGroups(dir)) {
+  for (const g of safeGroupsToKill(fixtureGroups(dir), ownProcessGroup())) {
     try {
       process.kill(-g, 'SIGKILL');
     } catch {
@@ -84,6 +96,14 @@ async function waitFor(check: () => boolean, ms = 20_000) {
   while (!check() && Date.now() < end) await Bun.sleep(50);
   return check();
 }
+
+describe('the fixture kill never targets the test process group (ROUND 4 item 4)', () => {
+  it('safeGroupsToKill drops the test process own group and keeps every other fixture group', () => {
+    expect(safeGroupsToKill([101, 4242, 303], 4242)).toEqual([101, 303]);
+    expect(safeGroupsToKill([4242], 4242)).toEqual([]);
+    expect(safeGroupsToKill([], 4242)).toEqual([]);
+  });
+});
 
 describe('a signal to the lane runner restores the tree its killed prover left (ROUND 2 item 6)', () => {
   it('SIGTERM mid-mutation: the tracked file is restored, the untracked file removed, the tree clean', async () => {

@@ -367,9 +367,33 @@ const MUTATIONS = [
     anchor: "function specifierTargets(spec, specPath) {\n  const t = posix.normalize(posix.join(posix.dirname(specPath), spec));",
     replacement: "function specifierTargets(spec, specPath) {\n  const t = posix.normalize(posix.join('.', spec));",
   },
+  {
+    label: 'a .js/.mjs specifier no longer names its .ts/.mts source (ROUND 4 item 1)',
+    subject: 'lint',
+    anchor: "...MODULE_EXTS.slice(1).map((e) => `${t}/index${e}`), ...twins];",
+    replacement: "...MODULE_EXTS.slice(1).map((e) => `${t}/index${e}`)];",
+  },
+  {
+    label: 'bash -o noexec is ignored, so a syntax-only -o noexec counts as a run (ROUND 4 item 2)',
+    subject: 'lint',
+    anchor: "if (c === 'o' && before[i + 1] === 'noexec') check = m[1] === '-';",
+    replacement: "if (false) check = m[1] === '-';",
+  },
+  {
+    label: 'a later +o noexec does not turn the -o noexec check off (ROUND 4 item 2)',
+    subject: 'lint',
+    anchor: "if (c === 'o' && before[i + 1] === 'noexec') check = m[1] === '-';",
+    replacement: "if (c === 'o' && before[i + 1] === 'noexec') check = true;",
+  },
+  {
+    label: 'a neutral -o value (pipefail) is treated as unknown instead of ignored (ROUND 4 item 2)',
+    subject: 'lint',
+    anchor: "if (c === 'o' && before[i + 1] === 'noexec') check = m[1] === '-';",
+    replacement: "if (c === 'o' && before[i + 1] !== 'noexec') return 'unknown';\n        if (c === 'o' && before[i + 1] === 'noexec') check = m[1] === '-';",
+  },
 ];
 
-const DECLARED = 54;
+const DECLARED = 58;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

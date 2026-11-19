@@ -216,6 +216,8 @@ function shellArgKind(expr) {
       if (c === 'o' || c === 'O') {
         // -o X / +o X / -O X: the option's argument is the next word, which must itself be before the subject.
         if (j !== m[2].length - 1 || i + 1 >= before.length) return 'unknown';
+        // -o noexec is the same setting as -n, and +o noexec turns it off again. Any other -o value is neutral.
+        if (c === 'o' && before[i + 1] === 'noexec') check = m[1] === '-';
         i += 1;
         break;
       }
@@ -791,7 +793,11 @@ const MODULE_EXTS = ['', '.mjs', '.cjs', '.js', '.ts', '.tsx', '.jsx', '.mts', '
  */
 function specifierTargets(spec, specPath) {
   const t = posix.normalize(posix.join(posix.dirname(specPath), spec));
-  return [...MODULE_EXTS.map((e) => t + e), ...MODULE_EXTS.slice(1).map((e) => `${t}/index${e}`)];
+  // TS ESM convention: './x.js' is the file x.ts, './x.mjs' is x.mts, './x.cjs' is x.cts, './x.jsx' is x.tsx.
+  const TS_TWIN = { '.js': ['.ts'], '.mjs': ['.mts'], '.cjs': ['.cts'], '.jsx': ['.tsx'] };
+  const ext = (t.match(/\.[cm]?jsx?$/) ?? [])[0];
+  const twins = ext ? TS_TWIN[ext].map((e) => t.slice(0, -ext.length) + e) : [];
+  return [...MODULE_EXTS.map((e) => t + e), ...MODULE_EXTS.slice(1).map((e) => `${t}/index${e}`), ...twins];
 }
 
 /**

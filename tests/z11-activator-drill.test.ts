@@ -775,3 +775,30 @@ describe('heldwarm: warm pods with the old key set cached, a call held past the 
     expect(body('fn_pods_ready')).toContain('"Ready"');
   });
 });
+
+describe('the kind-level pod-swap mutant and the heldwarm wording', () => {
+  // Wiring rows: run.sh is read, never executed. The behaviour (a swapped answering pod reds
+  // check_accepted_by) is proved by the local kind run recorded in the PR, and the verdict
+  // itself is exercised in tests/z11-answering-pod.test.ts.
+  const hold = body('hold_call');
+
+  it('Z11_MUTANT=swap-pod re-attaches a pod that is NOT the target, and only on that exact value', () => {
+    expect(hold).toContain('[ "${Z11_MUTANT:-}" = swap-pod ]');
+    // The swap picks a pod whose uid differs from the target's.
+    expect(hold).toMatch(/\[ "\$\{uid\}" != "\$\{3:-\}" \]/);
+    // The re-attach after the hold uses the chosen pod, never a hardcoded target.
+    expect(hold).toContain('"serving.knative.dev/revisionUID=${tlabel}"');
+    expect(hold).toContain('RESTORE_DETACH="${RESTORE_DETACH/${tpod}=${tlabel} /}"');
+  });
+
+  it('the mutant is a local-only switch: the CI workflow never sets it, and it defaults off', () => {
+    expect(readFileSync(WORKFLOW, 'utf8')).not.toContain('Z11_MUTANT');
+    expect(own).not.toMatch(/^Z11_MUTANT=/m);
+    expect(own).not.toMatch(/export Z11_MUTANT/);
+  });
+
+  it('describes the warm pods as holding the old key set in memory, not as a stale cache', () => {
+    expect(own).not.toMatch(/stale-cache/);
+    expect(own).toContain('re-reads');
+  });
+});

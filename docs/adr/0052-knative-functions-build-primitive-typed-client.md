@@ -196,17 +196,18 @@ only a *build* tool.
 - [ ] **Per-language token interceptor:** each template ships the fail-closed token-verifying server
       interceptor; a **mutation-proof test** (delete the check → red), including a **flannel/no-
       NetworkPolicy** case proving the interceptor — not the CNI — is the control.
-      *Evidence (2026-11-17), box stays open: the per-template parts are built; the no-NetworkPolicy leg is not proven.*
+      *Evidence (2026-11-17), box stays open: the per-template parts are built; the no-NetworkPolicy leg is proven for Go on kind (CI run 44430815511, 2026-11-19, see below) and still open for Rust.*
       Built: Go `templates/go/internal/auth/auth.go:82-106` (`NewInterceptor`, fails closed), wired at
       `templates/go/internal/rpc/rpc.go:121`; Rust `templates/rust/src/auth.rs:359-363` (no-token refusal, fails
       closed), wired at `templates/rust/src/rpc/mod.rs:169`. Mutation provers:
       `scripts/mutation-prove-go-template-auth.mjs`, `scripts/mutation-prove-rust-template-auth.mjs`.
-      Gap: the z11 drill's `policyoff` phase (`phase_policyoff`, `packages/grpc/e2e/z11-activator-drill/run.sh`)
-      now shows the Go function's own token check refusing a token-less call with the policy off, and its `noauth`
-      phase now also dials the interceptor-less function directly with the policy off. These legs are
+      Policy-off leg, proven in CI (2026-11-19): the z11 drill's `policyoff` phase (`phase_policyoff`, `packages/grpc/e2e/z11-activator-drill/run.sh`)
+      shows the Go function's own token check refusing a token-less call with the NetworkPolicy off, and its `noauth`
+      phase shows the interceptor-less function answering the same foreign call with the policy off. These legs are
       cluster-free-guarded (`tests/z11-activator-drill.test.ts`) and run in CI by default
-      (`.github/workflows/z11-activator-drill-e2e.yml`). The CI run link will be added once CI is green; until
-      then the evidence is the local kind run. The drill runs on Calico, not flannel.
+      (`.github/workflows/z11-activator-drill-e2e.yml`). Evidence: CI run https://github.com/AhmedElBanna80/knext/actions/runs/44430815511
+      (green on the merged code at `bee549a8e`). The drill runs on Calico, not flannel, and exercises the Go function only;
+      the Rust leg is not run there, so this box stays open.
 - [ ] **Per-language supply-chain:** a language enters the matrix only with Trivy + SBOM + cosign on
       its image *and* an ecosystem advisory scan on its pinned server deps.
       *Evidence (2026-11-17), box stays open: cosign is not in place for either template.* Trivy and SBOM run per

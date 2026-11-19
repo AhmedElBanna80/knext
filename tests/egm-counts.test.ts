@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,8 +19,14 @@ const MANIFEST = {
   },
 };
 
+const tempDirs: string[] = [];
+afterAll(() => {
+  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+});
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'egm-counts-'));
+  tempDirs.push(root);
   mkdirSync(join(root, 'tools'));
   writeFileSync(join(root, 'tools/prove-a.mjs'), "import 'lib/x';\n");
   writeFileSync(join(root, 'tools/prove-b.mjs'), 'nothing\n');

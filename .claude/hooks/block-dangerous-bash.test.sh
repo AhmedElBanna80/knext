@@ -196,6 +196,19 @@ run "bash ${D}c plain apply allowed"         "bash ${D}c 'terraform apply'"     
 run "apply in dollar-paren allowed"          "echo \$(terraform apply)"                           allow
 run "apply redirected allowed"               "terraform apply > log"                              allow
 run "kind delete cluster stays allowed"      "kind delete cluster ${D}${D}name x"                 allow
+# S10-3 review fixes: redirections are not plan files; TF_CLI_ARGS can inject one.
+run "apply 2>&1 pipe tee allowed"            "terraform apply ${D}auto-approve 2>&1 | tee log"    allow
+run "tofu apply 2>&1 pipe tee allowed"       "tofu apply ${D}auto-approve 2>&1 | tee log"         allow
+run "apply 2>/dev/null allowed"              "terraform apply 2>/dev/null"                        allow
+run "apply > out.log allowed"                "terraform apply > out.log"                          allow
+run "apply < in allowed"                     "terraform apply < in.txt"                           allow
+run "apply digit-led planfile"               "terraform apply 1p"                                 BLOCK
+run "apply bare digit planfile"              "terraform apply 7"                                  BLOCK
+run "TF_CLI_ARGS_apply planfile"             "TF_CLI_ARGS_apply=p terraform apply"                BLOCK
+run "TF_CLI_ARGS_apply quoted planfile"      "TF_CLI_ARGS_apply=\"${D}no-color p\" terraform apply" BLOCK
+run "TF_CLI_ARGS planfile tofu"              "TF_CLI_ARGS=p tofu apply"                           BLOCK
+run "TF_CLI_ARGS_apply flags only allowed"   "TF_CLI_ARGS_apply=${D}no-color terraform apply"    allow
+run "TF_CLI_ARGS_apply quoted flags allowed" "TF_CLI_ARGS_apply=\"${D}no-color ${D}input=false\" terraform apply" allow
 run "kind delete && terraform destroy"       "kind delete cluster ${D}${D}name x && terraform destroy" BLOCK
 run "kind delete ; oci cluster delete"       "kind delete cluster ; oci ce cluster delete ${D}${D}cluster-id x" BLOCK
 

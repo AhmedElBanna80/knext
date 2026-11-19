@@ -640,15 +640,23 @@ while IFS= read -r seg; do
   #      destroy plans. Plain `apply` (interactive prompt) and `apply -auto-approve` stay
   #      allowed, exactly as before. Known false positive: `apply -var x=1` (a flag value
   #      separated by a space reads as a positional); write `-var=x=1`.
+  #   6. `TF_CLI_ARGS[_apply]=<value>` where the value holds a positional (non-flag) token -
+  #      the env var injects the plan file, so the command line never names it. Unquoted: the
+  #      value's first char is not a dash. Quoted: any token in it is not a flag. Flags-only
+  #      values (`TF_CLI_ARGS=-no-color`) stay allowed.
   # Deliberately NOT covered: `<tool> plan [-destroy] [-out=p]` (read-only, ALLOWED, tested),
   # and anything a regex over command text cannot see: variable indirection
   # (`T=terraform; $T destroy`), spliced quotes (`ter""raform destroy`), and destroy reached
   # through a wrapper script or Makefile target.
-  # a positional = first char that is not a dash, space, redirect/pipe/list char, quote, backtick or paren
-  posfirst='[^-[:space:]<>&|;"'"'"'`)]'
+  # A positional token is one that is not a flag and not a redirection. Its first char is not a
+  # dash, space, < > & | ; quote, backtick or `)`. A leading digit run is a positional only when
+  # something else follows it that is not a redirect char (`p1`, `12ab`, bare `7`); `2>`, `2>&1`
+  # and `2>/dev/null` are file-descriptor redirections, not plan files.
+  pc='[^-[:space:]<>&|;"'"'"'`)0-9]'
+  posfirst="(${pc}|[0-9]+${pc}|[0-9]+([[:space:]]|\$))"
   tfw='\b(terraform|tofu)'
   chdirval='("[^"]*"|'"'"'[^'"'"']*'"'"'|([^[:space:]\\]|\\.)+)'
-  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|${tfw}${ws}destroy\\b|${tfw}${ws}-chdir[=[:space:]]${chdirval}${ws}destroy\\b|${tfw}\\b.*${ws}apply\\b.*${ws}--?destroy\\b|${tfw}${ws}(-chdir[=[:space:]]${chdirval}${ws})?apply(${ws}-[^[:space:]]+)*${ws}${posfirst}|\\bTF_CLI_ARGS[_a-z]*=.*--?destroy\\b"; then
+  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|${tfw}${ws}destroy\\b|${tfw}${ws}-chdir[=[:space:]]${chdirval}${ws}destroy\\b|${tfw}\\b.*${ws}apply\\b.*${ws}--?destroy\\b|${tfw}${ws}(-chdir[=[:space:]]${chdirval}${ws})?apply(${ws}-[^[:space:]]+)*${ws}${posfirst}|\\bTF_CLI_ARGS[_a-z]*=.*--?destroy\\b|\\bTF_CLI_ARGS(_apply)?=[^-[:space:]\"']|\\bTF_CLI_ARGS(_apply)?=[\"'](-[^[:space:]\"']*${ws})*[^-[:space:]\"']"; then
     deny "cluster/infra teardown is human-gated. Run it yourself if intended."
   fi
 done <<EOF

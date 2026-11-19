@@ -14,6 +14,7 @@
  */
 
 import { relative } from 'node:path';
+import { expiresBefore, parseStrictIsoDate } from './strict-date.mjs';
 
 /** CVSS base score at which a vulnerability is HIGH (the Trivy/npm-audit threshold). */
 export const HIGH_SEVERITY = 7;
@@ -91,7 +92,6 @@ export function parseOsv(text, scanRoot) {
   return findings;
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ALLOW_KEYS = new Set([
   'id',
   'package',
@@ -145,12 +145,12 @@ export function loadAllowlist(doc, today) {
     if (typeof e.justification !== 'string' || e.justification.trim().length < 20) {
       throw new Error(`${at} needs a real \`justification\` (>= 20 chars)`);
     }
-    if (typeof e.added !== 'string' || !ISO_DATE.test(e.added)) {
+    if (parseStrictIsoDate(e.added) === null) {
       throw new Error(`${at} needs an ISO \`added\` date`);
     }
     // A future `added` would push the expiry cap into the future with it.
     if (e.added > today) throw new Error(`${at} \`added\` is in the future`);
-    if (typeof e.expires !== 'string' || !ISO_DATE.test(e.expires)) {
+    if (parseStrictIsoDate(e.expires) === null) {
       throw new Error(`${at} needs an ISO \`expires\` date (it is required)`);
     }
     const span = (Date.parse(e.expires) - Date.parse(e.added)) / DAY_MS;
@@ -158,7 +158,7 @@ export function loadAllowlist(doc, today) {
     if (span > MAX_ALLOW_DAYS) {
       throw new Error(`${at} \`expires\` is more than ${MAX_ALLOW_DAYS} days after \`added\``);
     }
-    if (e.expires < today) expired.push({ id: e.id, expires: e.expires });
+    if (expiresBefore(e.expires, today)) expired.push({ id: e.id, expires: e.expires });
     else active.push(e);
   }
   return { active, expired };

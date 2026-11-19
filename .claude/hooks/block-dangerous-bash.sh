@@ -621,21 +621,42 @@ while IFS= read -r seg; do
   # clusters are always local, and the founder allowed agents to tear them down on
   # 2026-11-18. Remote/infra deletes (oci, terraform) stay human-gated, and a kind delete
   # chained with one of them is still blocked because each segment is checked separately.
-  # IaC teardown (terraform AND tofu), every spelling that reaches `destroy`:
+  # IaC teardown (terraform AND tofu) - DEFENCE IN DEPTH, NOT THE CONTROL. A regex over
+  # command text cannot be a security boundary. The real control is that agents do not hold
+  # infra credentials: with none, a bypass of this rule has nothing to act on. This rule only
+  # turns the common accidental and lazy spellings into a clear refusal. Blocked forms:
   #   1. `<tool> destroy`;
-  #   2. `<tool> -chdir=DIR destroy` — DIR may be bare, "quoted", 'quoted' or an escaped-space
+  #   2. `<tool> -chdir=DIR destroy` - DIR may be bare, "quoted", 'quoted' or an escaped-space
   #      token (`a\ b`), so the value is matched as one of those three shapes, not [^ ]*;
   #   3. `<tool> apply -destroy` / `--destroy` (Go flag parsing accepts both dashes), with any
   #      other flags or -chdir in between;
-  #   4. `TF_CLI_ARGS[_cmd]=...-destroy` — the env var injects the flag, so the command line
+  #   4. `TF_CLI_ARGS[_cmd]=...-destroy` - the env var injects the flag, so the command line
   #      never says destroy. Matched wherever it is set, which also blocks the harmless
-  #      `TF_CLI_ARGS_plan=-destroy ...plan`: accepted, a false positive that costs one retry.
-  # Deliberately NOT covered: `<tool> plan -destroy` (read-only, ALLOWED, tested), and
-  # destroy reached through a wrapper script, Makefile target or a variable-built command
-  # name — a regex over command text cannot see those.
+  #      `TF_CLI_ARGS_plan=-destroy ...plan`: accepted, a false positive that costs one retry;
+  #   5. `<tool> [-chdir=DIR] apply [flags] <planfile>` - apply with a positional plan file.
+  #      `plan -destroy -out=p` is allowed on purpose, so `apply p` would otherwise finish the
+  #      teardown, and the plan's contents are invisible to a regex. Applying ANY saved plan
+  #      non-interactively is an infra mutation, so every positional is blocked, not just
+  #      destroy plans. Plain `apply` (interactive prompt) and `apply -auto-approve` stay
+  #      allowed, exactly as before. Known false positive: `apply -var x=1` (a flag value
+  #      separated by a space reads as a positional); write `-var=x=1`.
+  #   6. `TF_CLI_ARGS[_apply]=<value>` where the value holds a positional (non-flag) token -
+  #      the env var injects the plan file, so the command line never names it. Unquoted: the
+  #      value's first char is not a dash. Quoted: any token in it is not a flag. Flags-only
+  #      values (`TF_CLI_ARGS=-no-color`) stay allowed.
+  # Deliberately NOT covered: `<tool> plan [-destroy] [-out=p]` (read-only, ALLOWED, tested),
+  # and anything a regex over command text cannot see: variable indirection
+  # (`T=terraform; $T destroy`), spliced quotes (`ter""raform destroy`), and destroy reached
+  # through a wrapper script or Makefile target.
+  # A positional token is one that is not a flag and not a redirection. Its first char is not a
+  # dash, space, < > & | ; quote, backtick or `)`. A leading digit run is a positional only when
+  # something else follows it that is not a redirect char (`p1`, `12ab`, bare `7`); `2>`, `2>&1`
+  # and `2>/dev/null` are file-descriptor redirections, not plan files.
+  pc='[^-[:space:]<>&|;"'"'"'`)0-9]'
+  posfirst="(${pc}|[0-9]+${pc}|[0-9]+([[:space:]]|\$))"
   tfw='\b(terraform|tofu)'
   chdirval='("[^"]*"|'"'"'[^'"'"']*'"'"'|([^[:space:]\\]|\\.)+)'
-  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|${tfw}${ws}destroy\\b|${tfw}${ws}-chdir[=[:space:]]${chdirval}${ws}destroy\\b|${tfw}\\b.*${ws}apply\\b.*${ws}--?destroy\\b|\\bTF_CLI_ARGS[_a-z]*=.*--?destroy\\b"; then
+  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|${tfw}${ws}destroy\\b|${tfw}${ws}-chdir[=[:space:]]${chdirval}${ws}destroy\\b|${tfw}\\b.*${ws}apply\\b.*${ws}--?destroy\\b|${tfw}${ws}(-chdir[=[:space:]]${chdirval}${ws})?apply(${ws}-[^[:space:]]+)*${ws}${posfirst}|\\bTF_CLI_ARGS[_a-z]*=.*--?destroy\\b|\\bTF_CLI_ARGS(_apply)?=[^-[:space:]\"']|\\bTF_CLI_ARGS(_apply)?=[\"'](-[^[:space:]\"']*${ws})*[^-[:space:]\"']"; then
     deny "cluster/infra teardown is human-gated. Run it yourself if intended."
   fi
 done <<EOF

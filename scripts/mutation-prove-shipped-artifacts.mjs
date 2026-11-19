@@ -116,7 +116,7 @@ const MUTATIONS = [
     id: 'L7',
     claim: 'an expired allowlist entry keeps suppressing',
     subject: 'lib',
-    anchor: "if (typeof e.expires === 'string' && e.expires < today) continue;",
+    anchor: 'if (expiresBefore(e.expires, today)) continue;',
     replacement: 'void 0;',
   },
   {

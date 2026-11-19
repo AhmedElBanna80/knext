@@ -10,6 +10,7 @@
  * be reached is never read as "nothing there".
  */
 
+import { expiresBefore, parseStrictIsoDate } from './strict-date.mjs';
 /** The published npm fixed group, in the order they are installed for a scan. */
 export const NPM_GROUP = ['@getknext/core', '@getknext/lib', '@getknext/db', 'kn-next'];
 
@@ -154,7 +155,21 @@ export function failingNpmFindings(report, allowedIds) {
   return { failing, suppressed };
 }
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+/**
+ * `expires` is MANDATORY on every npm-audit allowlist entry: an entry with no
+ * clock is accepted risk that never forces re-justification. Shared by
+ * `loadNpmAllowlist` and `scripts/audit-published.mjs` so there is one rule.
+ *
+ * @param {{id: string, expires?: unknown}} e
+ * @returns {void}
+ */
+export function assertAllowlistExpires(e) {
+  if (parseStrictIsoDate(e.expires) === null) {
+    throw new Error(
+      `allowlist entry ${e.id} needs a real YYYY-MM-DD \`expires\` date (it is required)`,
+    );
+  }
+}
 
 /**
  * The active advisory ids in `security/npm-audit-allowlist.json`. Same rules as
@@ -175,10 +190,11 @@ export function loadNpmAllowlist(doc, today) {
     if (typeof e.justification !== 'string' || !e.justification) {
       throw new Error(`allowlist entry ${e.id} needs a justification`);
     }
-    if (typeof e.added !== 'string' || !ISO_DATE.test(e.added)) {
+    if (parseStrictIsoDate(e.added) === null) {
       throw new Error(`allowlist entry ${e.id} needs an ISO added date`);
     }
-    if (typeof e.expires === 'string' && e.expires < today) continue;
+    assertAllowlistExpires(e);
+    if (expiresBefore(e.expires, today)) continue;
     ids.add(e.id);
   }
   return ids;

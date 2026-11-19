@@ -296,6 +296,7 @@ describe('z7-watchdog workflow', () => {
     const pairs: [string, string][] = [
       ['z7-watchdog-red-alert', 'z7-watchdog'],
       ['protected-refs-red-alert', 'protected-refs'],
+      ['z7-pin-skew-red-alert', 'z7-pin-skew'],
     ];
     for (const [alertId, need] of pairs) {
       const alert = wf.jobs[alertId];
@@ -307,7 +308,11 @@ describe('z7-watchdog workflow', () => {
       expect(alert.permissions).toEqual({ issues: 'write' });
     }
     const titles = [...text.matchAll(/title='([^']+)'/g)].map((m) => m[1]);
-    expect(titles).toEqual(['Z7 weekly caller watchdog RED', 'Protected-ref check RED']);
+    expect(titles).toEqual([
+      'Z7 weekly caller watchdog RED',
+      'Protected-ref check RED',
+      'Z7 pin skew RED',
+    ]);
   });
   it('the protected-ref issue is suppressed only by the dated-exception step, which fails closed', () => {
     const steps = wf.jobs['protected-refs-red-alert'].steps;

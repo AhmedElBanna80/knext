@@ -193,11 +193,82 @@ const MUTATIONS = [
     anchor: 'if (!ALLOWLIST_FILES.includes(n)) throw',
     replacement: 'if (false) throw',
   },
+  {
+    label: 'lib: a prerelease of the patched version counts as patched',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'return Number(!pre(a)) - Number(!pre(b));',
+    replacement: 'return 0;',
+  },
+  {
+    label: 'lib: the newest-stable pick accepts prereleases',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (!STABLE.test(String(v))) continue;',
+    replacement: '',
+  },
+  {
+    label: 'lib: a vendored patch is informational instead of red',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "if (vc.level === 'RETIRE') level = 'RETIRE';",
+    replacement: "if (vc.level === 'NEVER') level = 'RETIRE';",
+  },
+  {
+    label: 'lib: an unpatched vendored copy is flagged red',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "level: 'INFO',\n    reasons: [`vendored patch not available",
+    replacement: "level: 'RETIRE',\n    reasons: [`vendored patch not available",
+  },
+  {
+    label: 'lib: a vendoredIn entry with no resolver is skipped instead of an error',
+    subject: 'lib',
+    guard: 'spec',
+    anchor:
+      "if (!resolveVendored)\n          throw new Error('entry declares vendoredIn but no vendored resolver was supplied');",
+    replacement: 'if (!resolveVendored) continue;',
+  },
+  {
+    label: 'lib: a malformed vendoredIn path (..) is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "v.path.split('/').some((seg) => seg === '..' || seg === '')",
+    replacement: 'false',
+  },
+  {
+    label: 'cli: the tarball integrity check is skipped',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (actual !== expected)',
+    replacement: 'if (false)',
+  },
+  {
+    label: 'cli: a tarball URL off the registry host is fetched',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: "if (tarUrl.protocol !== 'https:' || tarUrl.host !== new URL(REGISTRY).host) {",
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'cli: the vendored retry bound is effectively removed',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'attempt <= MAX_RETRIES; attempt++',
+    replacement: 'attempt <= MAX_RETRIES + 100; attempt++',
+  },
+  {
+    label: 'cli: a missing vendored file in the tarball is tolerated',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (file === null)',
+    replacement: 'if (false)',
+  },
 ];
 
-declareMutations(21);
-if (MUTATIONS.length !== 21) {
-  console.error(`FATAL: declared 21 mutations, table has ${MUTATIONS.length}`);
+declareMutations(31);
+if (MUTATIONS.length !== 31) {
+  console.error(`FATAL: declared 31 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

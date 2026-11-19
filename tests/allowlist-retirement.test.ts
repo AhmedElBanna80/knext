@@ -1,25 +1,36 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { parse } from 'yaml';
 import {
   ALLOWLIST_FILES,
   classifyAdvisory,
+  classifyVendored,
   collectEntries,
   exitCodeFor,
   isPinnedFixtureLockfile,
   loadLockfileFromDisk,
   parseLockfile,
+  pickNewestStable,
   probeEntries,
   reachability,
+  readTarEntry,
   renderReport,
   resolveAllowlistFiles,
+  satisfiesPatched,
   satisfiesRange,
+  validateVendoredIn,
   versionInRange,
 } from '../scripts/lib/allowlist-retirement.mjs';
-import { MAX_RETRIES, makeFetchAdvisory } from '../scripts/verify-allowlist-retirement.mjs';
+import {
+  MAX_RETRIES,
+  makeFetchAdvisory,
+  makeResolveVendored,
+} from '../scripts/verify-allowlist-retirement.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
 
@@ -379,5 +390,260 @@ describe('the CLI honours ALLOWLIST_ROOT', () => {
     rmSync(dir, { recursive: true });
     expect(r.status).not.toBe(0);
     expect(`${r.stdout}${r.stderr}`).toContain(dir);
+  });
+});
+
+// ── vendored advisories ─────────────────────────────────────────────────────
+
+const VENDORED = {
+  package: 'next',
+  range: '>=16.4.3 <16.5.0',
+  path: 'dist/compiled/rsd/package.json',
+  field: 'peerDependencies.react',
+  patched: ['>= 19.3.1'],
+};
+const vEntry = () => entry({ vendoredIn: VENDORED });
+const tarFile = (name: string, body: string, type = '0') => {
+  const data = Buffer.from(body);
+  const head = Buffer.alloc(512);
+  head.write(name, 0);
+  head.write(`${data.length.toString(8).padStart(11, '0')}\0`, 124);
+  head.write(type, 156);
+  const pad = Buffer.alloc(Math.ceil(data.length / 512) * 512);
+  data.copy(pad);
+  return Buffer.concat([head, pad]);
+};
+const tgzOf = (...files: Buffer[]) => gzipSync(Buffer.concat([...files, Buffer.alloc(1024)]));
+const integrityOf = (b: Buffer) => `sha512-${createHash('sha512').update(b).digest('base64')}`;
+const rsd = (react: string) => JSON.stringify({ peerDependencies: { react } });
+const ok = (body: unknown) => ({
+  ok: true,
+  status: 200,
+  json: async () => body,
+  arrayBuffer: async () => body as ArrayBuffer,
+});
+const reg = (versions: string[], tgz: Buffer, integrity = integrityOf(tgz)) => {
+  const calls: string[] = [];
+  const fetchImpl = async (url: string) => {
+    calls.push(url);
+    if (url.endsWith('.tgz'))
+      return ok(tgz.buffer.slice(tgz.byteOffset, tgz.byteOffset + tgz.length));
+    return ok({
+      versions: Object.fromEntries(
+        versions.map((v) => [
+          v,
+          { dist: { tarball: `https://registry.npmjs.org/next/-/next-${v}.tgz`, integrity } },
+        ]),
+      ),
+    });
+  };
+  return { fetchImpl: fetchImpl as never, calls };
+};
+const noSleep = async () => {};
+const probeV = (resolved: { hostVersion: string; vendoredVersion: string } | Error) =>
+  probeEntries([vEntry()], stub({ 'GHSA-aaaa-bbbb-cccc': unpatched() }), {
+    resolveVendored: async () => {
+      if (resolved instanceof Error) throw resolved;
+      return resolved;
+    },
+  });
+
+describe('vendored advisories: classification', () => {
+  it('RETIRE (red): the newest stable host vendors a patched version', async () => {
+    const r = await probeV({ hostVersion: '16.4.9', vendoredVersion: '19.3.1' });
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].reasons.join()).toContain('next@16.4.9');
+    expect(exitCodeFor(r)).toBe(1);
+  });
+
+  it('INFO (not red): the newest stable host still vendors an unpatched canary', async () => {
+    const r = await probeV({
+      hostVersion: '16.4.6',
+      vendoredVersion: '19.3.0-canary-278794d7-20261002',
+    });
+    expect(r.findings).toHaveLength(0);
+    expect(r.informational).toHaveLength(1);
+    expect(r.informational[0].reasons.join()).toContain('19.3.0-canary-278794d7-20261002');
+    expect(exitCodeFor(r)).toBe(0);
+  });
+
+  it('a prerelease of the patched version is NOT patched; the stable one is', () => {
+    expect(satisfiesPatched('19.3.1-canary-abc-20261101', ['>= 19.3.1'])).toBe(false);
+    expect(satisfiesPatched('19.3.1', ['>= 19.3.1'])).toBe(true);
+    expect(satisfiesPatched('19.2.9', ['>= 19.2.9, < 19.3.0', '>= 19.3.1'])).toBe(true);
+    expect(satisfiesPatched('19.3.0', ['>= 19.3.1'])).toBe(false);
+    expect(() => satisfiesPatched('canary', ['>= 19.3.1'])).toThrow();
+  });
+
+  it('classifyVendored on a host with no vendored fix names the host, path and range', () => {
+    const c = classifyVendored(vEntry() as never, {
+      hostVersion: '16.4.6',
+      vendoredVersion: '19.3.0',
+    });
+    expect(c.level).toBe('INFO');
+    expect(c.reasons[0]).toContain(VENDORED.path);
+  });
+
+  it('FAIL CLOSED: a resolver error is an error and a non-zero exit', async () => {
+    const r = await probeV(new Error('registry down'));
+    expect(r.errors).toHaveLength(1);
+    expect(exitCodeFor(r)).toBe(1);
+  });
+
+  it('FAIL CLOSED: an entry with vendoredIn and no resolver is an error, never a skip', async () => {
+    const r = await probeEntries([vEntry()], stub({ 'GHSA-aaaa-bbbb-cccc': unpatched() }));
+    expect(r.errors).toHaveLength(1);
+    expect(exitCodeFor(r)).toBe(1);
+  });
+
+  it('a withdrawn advisory retires without touching the registry', async () => {
+    let called = 0;
+    const r = await probeEntries(
+      [vEntry()],
+      stub({ 'GHSA-aaaa-bbbb-cccc': { withdrawn_at: '2026-11-01', vulnerabilities: [] } }),
+      {
+        resolveVendored: async () => {
+          called++;
+          return { hostVersion: '1.0.0', vendoredVersion: '1.0.0' };
+        },
+      },
+    );
+    expect(r.findings).toHaveLength(1);
+    expect(called).toBe(0);
+  });
+
+  it('pickNewestStable ignores prereleases and honours the range', () => {
+    const vs = ['16.4.3', '16.4.6', '16.4.7-canary.1', '16.5.0', '16.5.1-rc.0'];
+    expect(pickNewestStable(vs, '>=16.4.3 <16.5.0')).toBe('16.4.6');
+    expect(() => pickNewestStable(['16.5.0-canary.1'], '>=16.4.3 <16.5.0')).toThrow();
+    expect(() => pickNewestStable(vs, 'workspace:*')).toThrow();
+  });
+
+  it('validateVendoredIn rejects malformed declarations', () => {
+    expect(validateVendoredIn(VENDORED, 'f', 'id').field).toBe('peerDependencies.react');
+    const bad = (over: Record<string, unknown>) =>
+      expect(() => validateVendoredIn({ ...VENDORED, ...over }, 'f', 'id')).toThrow();
+    bad({ path: '../escape/package.json' });
+    bad({ path: '/abs/package.json' });
+    bad({ package: 'Not A Name' });
+    bad({ patched: [] });
+    bad({ patched: ['^19.3.1'] });
+    bad({ range: '' });
+    bad({ range: 'workspace:*' });
+    bad({ field: 'a..b' });
+  });
+});
+
+describe('vendored advisories: registry and tarball resolution', () => {
+  const tgz = tgzOf(
+    tarFile('package/dist/compiled/rsd/package.json', rsd('19.3.0-canary-x-20261002')),
+  );
+
+  it('reads the vendored version from the newest STABLE host tarball in range', async () => {
+    const { fetchImpl, calls } = reg(['16.4.3', '16.4.6', '16.4.7-canary.1', '16.5.0'], tgz);
+    const r = await makeResolveVendored(fetchImpl, noSleep)(VENDORED as never);
+    expect(r).toEqual({ hostVersion: '16.4.6', vendoredVersion: '19.3.0-canary-x-20261002' });
+    expect(calls.some((c) => c.includes('16.4.7-canary.1'))).toBe(false);
+    expect(calls.some((c) => c.endsWith('next-16.4.6.tgz'))).toBe(true);
+  });
+
+  it('FAIL CLOSED: a tarball that fails its integrity check', async () => {
+    const { fetchImpl } = reg(['16.4.6'], tgz, integrityOf(Buffer.from('other')));
+    await expect(makeResolveVendored(fetchImpl, noSleep)(VENDORED as never)).rejects.toThrow(
+      /integrity/,
+    );
+  });
+
+  it('FAIL CLOSED: the vendored file is absent from the tarball', async () => {
+    const { fetchImpl } = reg(['16.4.6'], tgzOf(tarFile('package/other.json', '{}')));
+    await expect(makeResolveVendored(fetchImpl, noSleep)(VENDORED as never)).rejects.toThrow(
+      /no package\//,
+    );
+  });
+
+  it('FAIL CLOSED: the version field is missing or not a string', async () => {
+    const { fetchImpl } = reg(
+      ['16.4.6'],
+      tgzOf(tarFile('package/dist/compiled/rsd/package.json', '{"peerDependencies":{}}')),
+    );
+    await expect(makeResolveVendored(fetchImpl, noSleep)(VENDORED as never)).rejects.toThrow(
+      /not a string/,
+    );
+  });
+
+  it('FAIL CLOSED: a registry error is retried a BOUNDED number of times, then thrown', async () => {
+    let n = 0;
+    const fetchImpl = (async () => {
+      n++;
+      return { ok: false, status: 503 };
+    }) as never;
+    await expect(makeResolveVendored(fetchImpl, noSleep)(VENDORED as never)).rejects.toThrow(/503/);
+    expect(n).toBe(MAX_RETRIES + 1);
+  });
+
+  it('FAIL CLOSED: a network error is retried, then thrown', async () => {
+    let n = 0;
+    const fetchImpl = (async () => {
+      n++;
+      throw new Error('ECONNRESET');
+    }) as never;
+    await expect(makeResolveVendored(fetchImpl, noSleep)(VENDORED as never)).rejects.toThrow(
+      /ECONNRESET/,
+    );
+    expect(n).toBe(MAX_RETRIES + 1);
+  });
+
+  it('a 404 is not retried', async () => {
+    let n = 0;
+    const fetchImpl = (async () => {
+      n++;
+      return { ok: false, status: 404 };
+    }) as never;
+    await expect(makeResolveVendored(fetchImpl, noSleep)(VENDORED as never)).rejects.toThrow(/404/);
+    expect(n).toBe(1);
+  });
+
+  it('FAIL CLOSED: a tarball URL off the registry host is refused (nothing is fetched from it)', async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      calls.push(url);
+      return ok({
+        versions: {
+          '16.4.6': { dist: { tarball: 'https://evil.example/next.tgz', integrity: 'sha512-x' } },
+        },
+      });
+    }) as never;
+    await expect(makeResolveVendored(fetchImpl, noSleep)(VENDORED as never)).rejects.toThrow(
+      /not on/,
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it('readTarEntry matches regular files only, by exact name', () => {
+    const tar = Buffer.concat([
+      tarFile('package/a.json', '{"a":1}', '5'),
+      tarFile('package/b.json', '{"b":2}'),
+      Buffer.alloc(1024),
+    ]);
+    expect(readTarEntry(tar, 'package/b.json')?.toString()).toBe('{"b":2}');
+    expect(readTarEntry(tar, 'package/a.json')).toBeNull();
+    expect(readTarEntry(tar, 'package/b')).toBeNull();
+  });
+});
+
+describe('real allowlists: vendored entries', () => {
+  it('every vendoredIn is valid, and GHSA-xqc2 (when present) declares one and keeps its expiry', () => {
+    const file = 'security/precompile-closure-allowlist.json';
+    const doc = JSON.parse(readFileSync(resolve(ROOT, file), 'utf8'));
+    for (const e of doc.allow) {
+      if (e.vendoredIn !== undefined) validateVendoredIn(e.vendoredIn, file, e.id);
+    }
+    const x = doc.allow.find((e: { id: string }) => e.id === 'GHSA-xqc2-xf4c-x3h3');
+    if (x === undefined) return; // integration/v2 carries no such entry
+    expect(x.expires).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const v = validateVendoredIn(x.vendoredIn, file, x.id);
+    expect(v.package).toBe('next');
+    expect(v.patched).toContain('>= 19.3.1');
+    expect(collectEntries(ROOT, [file]).some((e) => e.vendoredIn)).toBe(true);
   });
 });

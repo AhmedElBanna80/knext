@@ -85,16 +85,50 @@ export function makeFetchAdvisory(
 }
 
 const REGISTRY = 'https://registry.npmjs.org';
-const MAX_TARBALL_BYTES = 200 * 1024 * 1024;
+export const LIMITS = {
+  /** per-request timeout (AbortSignal); a timeout is a failed attempt, retried then fail closed */
+  timeoutMs: 60_000,
+  /** download caps, enforced WHILE streaming */
+  maxPackumentBytes: 100 * 1024 * 1024,
+  maxTarballBytes: 200 * 1024 * 1024,
+  /** gunzip output cap (decompression-bomb guard) */
+  maxTarBytes: 600 * 1024 * 1024,
+};
+
+/** Read a Response body into a Buffer, aborting the moment `cap` bytes are exceeded. */
+export async function readCapped(res, cap, what) {
+  const tooBig = () => new Error(`${what} exceeds the ${cap}-byte download cap`);
+  const declared = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > cap) throw tooBig();
+  if (!res.body?.getReader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > cap) throw tooBig();
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
 
 /**
  * GET with BOUNDED retries on network errors, 429 and 5xx, then FAIL CLOSED. Returns the Response.
  */
-async function getWithRetries(fetchImpl, url, init, sleep) {
+async function getWithRetries(fetchImpl, url, init, sleep, timeoutMs) {
   let last = '';
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const res = await fetchImpl(url, init);
+      const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
       if (res.ok) return res;
       last = `HTTP ${res.status}`;
       if (res.status !== 429 && res.status < 500) break;
@@ -112,15 +146,19 @@ async function getWithRetries(fetchImpl, url, init, sleep) {
  * tarball. The tarball is integrity-checked against the registry and only READ (gunzip + tar
  * header walk + JSON.parse); nothing in it is executed or extracted to disk.
  */
-export function makeResolveVendored(fetchImpl = fetch, sleep = realSleep) {
+export function makeResolveVendored(fetchImpl = fetch, sleep = realSleep, limits = {}) {
+  const L = { ...LIMITS, ...limits };
   return async (v) => {
     const metaRes = await getWithRetries(
       fetchImpl,
       `${REGISTRY}/${v.package.replace('/', '%2f')}`,
       { headers: { accept: 'application/vnd.npm.install-v1+json' } },
       sleep,
+      L.timeoutMs,
     );
-    const packument = await metaRes.json();
+    const packument = JSON.parse(
+      (await readCapped(metaRes, L.maxPackumentBytes, `${v.package} packument`)).toString('utf8'),
+    );
     const versions = packument?.versions;
     if (versions === null || typeof versions !== 'object') {
       throw new Error(`registry returned no versions for ${v.package}`);
@@ -137,15 +175,23 @@ export function makeResolveVendored(fetchImpl = fetch, sleep = realSleep) {
     if (tarUrl.protocol !== 'https:' || tarUrl.host !== new URL(REGISTRY).host) {
       throw new Error(`${v.package}@${hostVersion} tarball is not on ${REGISTRY}: ${dist.tarball}`);
     }
-    const tgz = Buffer.from(
-      await (await getWithRetries(fetchImpl, dist.tarball, {}, sleep)).arrayBuffer(),
+    const tgz = await readCapped(
+      await getWithRetries(fetchImpl, dist.tarball, {}, sleep, L.timeoutMs),
+      L.maxTarballBytes,
+      `${v.package}@${hostVersion} tarball`,
     );
-    if (tgz.length > MAX_TARBALL_BYTES)
-      throw new Error(`${v.package}@${hostVersion} tarball is too large`);
     const actual = `sha512-${createHash('sha512').update(tgz).digest('base64')}`;
     if (actual !== expected)
       throw new Error(`${v.package}@${hostVersion} tarball failed its integrity check`);
-    const file = readTarEntry(gunzipSync(tgz), `package/${v.path}`);
+    let tar;
+    try {
+      tar = gunzipSync(tgz, { maxOutputLength: L.maxTarBytes });
+    } catch (error) {
+      throw new Error(
+        `${v.package}@${hostVersion} tarball did not decompress within ${L.maxTarBytes} bytes: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    const file = readTarEntry(tar, `package/${v.path}`);
     if (file === null)
       throw new Error(`${v.package}@${hostVersion} tarball has no package/${v.path}`);
     const vendoredVersion = readField(JSON.parse(file.toString('utf8')), v.field);

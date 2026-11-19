@@ -84,7 +84,11 @@ export function collectEntries(repoRoot, files = ALLOWLIST_FILES) {
         version: e.version,
         lockfile: e.lockfile,
         vendoredIn:
-          e.vendoredIn === undefined ? undefined : validateVendoredIn(e.vendoredIn, file, e.id),
+          e.vendoredIn === undefined
+            ? undefined
+            : validateVendoredIn(e.vendoredIn, file, e.id, (rel, field) =>
+                readDeclaredRange(repoRoot, rel, field),
+              ),
       });
     }
   }
@@ -205,10 +209,13 @@ const COMPARATOR = /^(<=|>=|<|>|=)?\s*([0-9][^\s]*)$/;
  * Validate an entry's `vendoredIn`; a malformed declaration THROWS (never a skip).
  * `package`: the host package. `path`: the vendored `package.json`-style file inside
  * the host tarball (relative to the tarball's `package/` root). `field`: dotted path of
- * the version inside that JSON (default `version`). `range`: the host versions the repo
- * may take. `patched`: patched ranges of the vendored package, any one is a fix.
+ * the version inside that JSON (default `version`). `rangeFrom`: `<file>#<dotted.field>`, the
+ * repo's OWN declaration of the host versions it may take (e.g. a package.json peer range);
+ * the probe derives the host range from it, so it cannot drift from a hand-written copy.
+ * `patched`: STABLE patched ranges of the vendored package (`>= 19.3.1`; a prerelease bound
+ * is rejected), any one is a fix. `readRange(file, field)` reads the declared range.
  */
-export function validateVendoredIn(v, file, id) {
+export function validateVendoredIn(v, file, id, readRange) {
   const where = `${file}: ${id}: vendoredIn`;
   const bad = (m) => {
     throw new Error(`${where} ${m}`);
@@ -227,23 +234,53 @@ export function validateVendoredIn(v, file, id) {
     (typeof v.field !== 'string' || !/^[\w$-]+(\.[\w$-]+)*$/.test(v.field))
   )
     bad('`field` must be a dotted key path');
-  if (typeof v.range !== 'string' || v.range.trim() === '') bad('needs a host `range`');
-  if (satisfiesRange('1.0.0', v.range) === null) bad('`range` is not a range this probe parses');
+  if (v.range !== undefined) bad('must not hand-write `range`; use `rangeFrom`');
+  const from = typeof v.rangeFrom === 'string' ? v.rangeFrom.split('#') : [];
+  if (from.length !== 2 || from[0] === '' || !/^[\w$-]+(\.[\w$-]+)*$/.test(from[1]))
+    bad('needs `rangeFrom` as "<file>#<dotted.field>"');
+  if (typeof readRange !== 'function') bad('cannot derive the host range (no reader)');
+  const range = readRange(from[0], from[1]);
+  if (typeof range !== 'string' || range.trim() === '')
+    bad(`\`rangeFrom\` ${v.rangeFrom} is not a string range`);
+  if (satisfiesRange('1.0.0', range) === null) bad('the derived host range is not parseable');
   if (
     !Array.isArray(v.patched) ||
     v.patched.length === 0 ||
     v.patched.some(
-      (r) => typeof r !== 'string' || r.split(',').some((part) => !COMPARATOR.test(part.trim())),
+      (r) =>
+        typeof r !== 'string' ||
+        r.split(',').some((part) => {
+          const m = part.trim().match(COMPARATOR);
+          return !m || !STABLE.test(m[2]);
+        }),
     )
   )
-    bad('needs a non-empty `patched` array of comparator ranges (">= 19.3.1")');
+    bad('needs a non-empty `patched` array of STABLE comparator ranges (">= 19.3.1")');
   return {
     package: v.package,
     path: v.path,
     field: v.field ?? 'version',
-    range: v.range,
+    rangeFrom: v.rangeFrom,
+    range,
     patched: v.patched,
   };
+}
+
+/** Read a string field of a JSON file under `repoRoot`; the path must stay inside the root. */
+export function readDeclaredRange(repoRoot, rel, field) {
+  const root = resolve(repoRoot);
+  const abs = resolve(root, rel);
+  const outside = (p) => {
+    const r = relative(root, p);
+    return r === '..' || r.startsWith('..') || isAbsolute(r);
+  };
+  if (isAbsolute(rel) || outside(abs)) throw new Error(`\`${rel}\` is outside the probed root`);
+  if (!existsSync(abs)) throw new Error(`rangeFrom file \`${rel}\` does not exist`);
+  const real = realpathSync(abs).replace(realpathSync(root), root);
+  if (outside(real)) {
+    throw new Error(`\`${rel}\` resolves outside the probed root (symlink)`);
+  }
+  return readField(JSON.parse(readFileSync(abs, 'utf8')), field);
 }
 
 /** Prerelease-aware compare: `19.3.0-canary-x` sorts BELOW `19.3.0`. */

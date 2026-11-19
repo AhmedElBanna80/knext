@@ -367,3 +367,17 @@ describe('probe root confinement and file selection', () => {
     expect(() => resolveAllowlistFiles(' , ')).toThrow(/names no allowlist/);
   });
 });
+
+describe('the CLI honours ALLOWLIST_ROOT', () => {
+  it('reads the tree named by ALLOWLIST_ROOT, not its own checkout', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'allow-'));
+    const r = spawnSync('node', ['scripts/verify-allowlist-retirement.mjs'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, ALLOWLIST_ROOT: dir },
+    });
+    rmSync(dir, { recursive: true });
+    expect(r.status).not.toBe(0);
+    expect(`${r.stdout}${r.stderr}`).toContain(dir);
+  });
+});

@@ -67,67 +67,60 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the crates rule is dropped — Rust source, Cargo.lock and deny.toml stop firing',
     subject: 'paths',
-    anchor: '    match: (p) => CRATES_SURFACE.test(p),',
+    anchor: "    match: (p) => p.startsWith('crates/') && !CRATES_DOCS.test(p),",
     replacement: '    match: (p) => false && p,',
   },
   {
     id: 'M80',
     expect: 'red',
     claim:
-      'the crates rule widens back to every path under crates/ — docs-only EGM.md and README.md edits fire again (D9)',
+      'the docs exclusion is deleted — every crates/ path fires, so EGM.md and README.md edits fire again (D9)',
     subject: 'paths',
-    anchor: '    match: (p) => CRATES_SURFACE.test(p),',
+    anchor: "    match: (p) => p.startsWith('crates/') && !CRATES_DOCS.test(p),",
     replacement: "    match: (p) => p.startsWith('crates/'),",
   },
   {
     id: 'M81',
     expect: 'red',
-    claim: 'the crates pattern loses *.rs — Rust crate source stops firing (D9)',
+    claim:
+      'the exclusion widens to *.ts — the FFI generator and harness (crates/harness/ffi-generated.ts) stop firing (D9)',
     subject: 'paths',
-    anchor:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
-    replacement:
-      '  /^crates\\/(?:.+\\/)?(?:Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+    anchor: 'const CRATES_DOCS = /\\.md$/;',
+    replacement: 'const CRATES_DOCS = /\\.(md|ts)$/;',
   },
   {
     id: 'M82',
     expect: 'red',
-    claim: 'the crates pattern loses Cargo.toml — a per-crate manifest change stops firing (D9)',
+    claim: 'the exclusion widens to .stderr — trybuild expectations stop firing (D9)',
     subject: 'paths',
-    anchor:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
-    replacement:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+    anchor: 'const CRATES_DOCS = /\\.md$/;',
+    replacement: 'const CRATES_DOCS = /\\.(md|stderr)$/;',
   },
   {
     id: 'M83',
     expect: 'red',
-    claim: 'the crates pattern loses Cargo.lock — a lockfile change stops firing (D9)',
+    claim: 'the exclusion matches every path — the whole crates/ surface goes silent (D9)',
     subject: 'paths',
-    anchor:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
-    replacement:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|deny\\.toml|rust-toolchain\\.toml)$/;',
+    anchor: 'const CRATES_DOCS = /\\.md$/;',
+    replacement: 'const CRATES_DOCS = /.*/;',
   },
   {
     id: 'M84',
     expect: 'red',
-    claim: 'the crates pattern loses deny.toml — the cargo deny policy stops firing (D9)',
+    claim:
+      'the crates/ prefix is dropped — every non-Markdown path fires, including packages/ and docs/ (D9)',
     subject: 'paths',
-    anchor:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
-    replacement:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|rust-toolchain\\.toml)$/;',
+    anchor: "    match: (p) => p.startsWith('crates/') && !CRATES_DOCS.test(p),",
+    replacement: '    match: (p) => !CRATES_DOCS.test(p),',
   },
   {
     id: 'M85',
     expect: 'red',
-    claim: 'the crates pattern loses rust-toolchain.toml — the toolchain pin stops firing (D9)',
+    claim:
+      'the docs exclusion is anchored to the top level only — nested docs (crates/harness/EGM.md) fire; the any-depth rule is lost (D9)',
     subject: 'paths',
-    anchor:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
-    replacement:
-      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml)$/;',
+    anchor: 'const CRATES_DOCS = /\\.md$/;',
+    replacement: 'const CRATES_DOCS = /^crates\\/[^/]+\\.md$/;',
   },
   {
     id: 'M6',
@@ -767,7 +760,7 @@ declareMutations(MUTATIONS.length);
 prover.baseline();
 prover.proveCanSeeRed({
   subject: 'paths',
-  anchor: '    match: (p) => CRATES_SURFACE.test(p),',
+  anchor: "    match: (p) => p.startsWith('crates/') && !CRATES_DOCS.test(p),",
   replacement: '    match: (p) => false && p,',
 });
 

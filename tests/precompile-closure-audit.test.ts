@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   ANCHOR_PACKAGES,
   evaluateFindings,
@@ -224,6 +224,54 @@ describe('readAllowlist — dated + justified, mirroring the npm-audit gate', ()
       NOW,
     );
     expect(active.has('GHSA-aaaa')).toBe(true);
+  });
+
+  const VENDORED_ENTRY = {
+    id: 'GHSA-vend',
+    justification: 'vendored copy, no fix in any stable host',
+    added: '2026-08-19',
+    expires: '2026-11-27',
+    vendoredIn: {
+      package: 'next',
+      rangeFrom: 'packages/kn-next/package.json#peerDependencies.next',
+      path: 'dist/compiled/react-server-dom-webpack/package.json',
+      field: 'peerDependencies.react',
+      patched: ['>= 19.3.1'],
+    },
+  };
+
+  it('accepts an entry carrying a valid `vendoredIn` (and it still suppresses)', () => {
+    expect(readAllowlist({ allow: [VENDORED_ENTRY] }, NOW).has('GHSA-vend')).toBe(true);
+  });
+
+  it('THROWS on a malformed `vendoredIn`, and an unknown key inside it is not tolerated', () => {
+    const bad = (over: Record<string, unknown>) =>
+      expect(() =>
+        readAllowlist(
+          { allow: [{ ...VENDORED_ENTRY, vendoredIn: { ...VENDORED_ENTRY.vendoredIn, ...over } }] },
+          NOW,
+        ),
+      ).toThrow(/vendoredIn/);
+    bad({ package: 'Not A Name' });
+    bad({ path: '../escape/package.json' });
+    bad({ path: '/abs/package.json' });
+    bad({ patched: ['>= 19.3.1-canary-abc-20261101'] });
+    bad({ patched: [] });
+    bad({ rangeFrom: undefined });
+    bad({ range: '>=16.4.3 <16.5.0' });
+    expect(() =>
+      readAllowlist({ allow: [{ ...VENDORED_ENTRY, vendoredIn: 'next' }] }, NOW),
+    ).toThrow(/vendoredIn/);
+  });
+
+  it('the REAL allowlist parses (a new field must not red the gate that reads it)', () => {
+    const doc = JSON.parse(
+      readFileSync(
+        resolve(import.meta.dir, '../security/precompile-closure-allowlist.json'),
+        'utf8',
+      ),
+    );
+    expect(() => readAllowlist(doc, NOW)).not.toThrow();
   });
 
   it('an EXPIRED entry stops suppressing', () => {

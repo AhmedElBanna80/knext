@@ -11,6 +11,11 @@ name: prepush-lib-drift
 # merged result against the other branch). A push re-checks after the merge; workflow_dispatch
 # runs it on demand.
 #
+# LIMIT: the `paths:` filter means a pull request or push that touches none of the listed files does
+# not run this. A change landing on the other branch is therefore not re-checked here until this
+# side next touches one of those files; the nightly `schedule` (main's copy) and `workflow_dispatch`
+# are what catch it sooner.
+#
 # Informational, not a required check. RED means one copy changed without the other: port the
 # change. Until BOTH copies have landed it also fails ("not present on ...").
 #
@@ -39,6 +44,11 @@ on:
       - 'tests/prepush-check.test.ts'
       - '.github/workflows/prepush-check.yml'
       - '.github/workflows/prepush-lib-drift.yml'
+  # A cron fires only from the DEFAULT branch, so main's copy is the one that runs. It checks main
+  # against integration/v2 every night, which covers a change that landed on one side while the
+  # `paths:` filter above kept this workflow from running on the other.
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -59,6 +69,13 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      # The check parses JavaScript and YAML with `typescript` and `yaml`, both pinned by bun.lock.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
       - name: Diff the two copies against the other branch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,6 +90,7 @@ jobs:
             *) echo "not run on main or integration/v2 (got '$here'); nothing to compare"; exit 0 ;;
           esac
           auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::${auth}"
           git -c "http.extraheader=AUTHORIZATION: basic ${auth}" fetch --no-tags --depth=1 origin \
             "+refs/heads/${other}:refs/remotes/origin/${other}"
           node scripts/prepush-lib-drift.mjs --other "origin/${other}" | tee -a "$GITHUB_STEP_SUMMARY"

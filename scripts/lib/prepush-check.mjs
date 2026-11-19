@@ -11,6 +11,8 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
+import ts from 'typescript';
+import { LineCounter, parseDocument } from 'yaml';
 import { unpairedTempDirs } from './scratch-space-scan.mjs';
 
 /**
@@ -28,8 +30,8 @@ export const changedAllowlists = changedGateInputs;
 
 // BEGIN branch-specific (GATE_TABLE, registry): differs between integration/v2 and main by design;
 // everything outside this block must stay byte-identical (see `driftBetween`). The block holds DATA
-// only: `const NAME = <object, array or string literal>` (identifier references and spreads allowed),
-// no calls and no functions; `branchBlockProblems` enforces it, so the drift guard can evaluate it.
+// only: `const NAME = <pure literal tree>` (objects, arrays, strings, numbers, regex; no identifier
+// references, spreads, calls or functions); `branchBlockProblems` enforces it, so the drift guard can evaluate it.
 /**
  * How to invoke each gate that reads a gate input, by repo-relative script path.
  * `runs: 'workflows'` derives the argument sets from the workflow steps that
@@ -62,13 +64,13 @@ export const GATE_TABLE = {
  * in `tests/prepush-check.test.ts`. A reader added next month cannot be missed
  * by omission. An input may instead carry `exempt: <reason>` (see `planGateRuns`).
  */
-const RUNS_GATE = 'runs a registered gate; reads the file only through it';
 export const GATE_INPUT_REGISTRY = {
   'security/gitleaks-allowlist.json': {
     gates: ['scripts/secret-scan.mjs'],
     other: {
-      '.github/workflows/ci.yml': RUNS_GATE,
-      '.github/workflows/secret-scan-nightly.yml': RUNS_GATE,
+      '.github/workflows/ci.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/secret-scan-nightly.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/npm-audit-allowlist.json': {
@@ -78,12 +80,16 @@ export const GATE_INPUT_REGISTRY = {
         'nightly network probe of whether an entry still has an advisory; it does not judge the file',
       'scripts/precompile-closure-audit.mjs':
         'imports the retirement helper that lists this file, but judges only its own allowlist',
-      '.github/workflows/allowlist-retirement-nightly.yml': RUNS_GATE,
-      '.github/workflows/ci.yml': RUNS_GATE,
-      '.github/workflows/docs-deploy-oke.yml': RUNS_GATE,
-      '.github/workflows/release.yml': RUNS_GATE,
-      '.github/workflows/shipped-artifacts-nightly.yml': RUNS_GATE,
-      '.github/workflows/supply-chain.yml': RUNS_GATE,
+      '.github/workflows/allowlist-retirement-nightly.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/ci.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/docs-deploy-oke.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/release.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/shipped-artifacts-nightly.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/supply-chain.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/osv-allowlist.json': {
@@ -95,13 +101,17 @@ export const GATE_INPUT_REGISTRY = {
         'imports the retirement helper that lists this file, but judges only its own allowlist',
       'scripts/release-age-gate.mjs':
         'imports the OSV base picker; judges security/release-age-exceptions.json, not this file',
-      '.github/workflows/allowlist-retirement-nightly.yml': RUNS_GATE,
-      '.github/workflows/ci.yml': RUNS_GATE,
-      '.github/workflows/docs-deploy-oke.yml': RUNS_GATE,
-      '.github/workflows/osv-scan.yml': RUNS_GATE,
-      '.github/workflows/release-age.yml': RUNS_GATE,
-      '.github/workflows/shipped-artifacts-nightly.yml': RUNS_GATE,
-      '.github/workflows/supply-chain.yml': RUNS_GATE,
+      '.github/workflows/allowlist-retirement-nightly.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/ci.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/docs-deploy-oke.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/osv-scan.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/release-age.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/shipped-artifacts-nightly.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/supply-chain.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/precompile-closure-allowlist.json': {
@@ -109,10 +119,13 @@ export const GATE_INPUT_REGISTRY = {
     other: {
       'scripts/verify-allowlist-retirement.mjs':
         'nightly network probe of whether an entry still has an advisory; it does not judge the file',
-      '.github/workflows/allowlist-retirement-nightly.yml': RUNS_GATE,
-      '.github/workflows/ci.yml': RUNS_GATE,
-      '.github/workflows/docs-deploy-oke.yml': RUNS_GATE,
-      '.github/workflows/supply-chain.yml': RUNS_GATE,
+      '.github/workflows/allowlist-retirement-nightly.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/ci.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/docs-deploy-oke.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/supply-chain.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/govulncheck-exceptions.json': {
@@ -120,9 +133,11 @@ export const GATE_INPUT_REGISTRY = {
     other: {
       'scripts/govulncheck-gate.mjs':
         'reads govulncheck JSON piped in per Go module, so it cannot run bare; the tests that name the file run its exception semantics',
-      '.github/workflows/go-template.yml': RUNS_GATE,
-      '.github/workflows/govulncheck-modules.yml': RUNS_GATE,
-      '.github/workflows/govulncheck-nightly.yml': RUNS_GATE,
+      '.github/workflows/go-template.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/govulncheck-modules.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/govulncheck-nightly.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/govulncheck-modules.json': {
@@ -130,9 +145,11 @@ export const GATE_INPUT_REGISTRY = {
     other: {
       'scripts/govulncheck-gate.mjs':
         'reads govulncheck JSON piped in per Go module, so it cannot run bare; the tests that name the file run its exception semantics',
-      '.github/workflows/go-template.yml': RUNS_GATE,
-      '.github/workflows/govulncheck-modules.yml': RUNS_GATE,
-      '.github/workflows/govulncheck-nightly.yml': RUNS_GATE,
+      '.github/workflows/go-template.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/govulncheck-modules.yml':
+        'runs a registered gate; reads the file only through it',
+      '.github/workflows/govulncheck-nightly.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/release-age-exceptions.json': {
@@ -140,15 +157,17 @@ export const GATE_INPUT_REGISTRY = {
     other: {
       'scripts/osv-gate.mjs':
         'imports the release-age helper that reads this file, but judges only the OSV allowlist',
-      '.github/workflows/osv-scan.yml': RUNS_GATE,
-      '.github/workflows/release-age.yml': RUNS_GATE,
-      '.github/workflows/shipped-artifacts-nightly.yml': RUNS_GATE,
+      '.github/workflows/osv-scan.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/release-age.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/shipped-artifacts-nightly.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/dockerfile-base-exclusions.json': {
     gates: ['scripts/verify-image-pins.mjs'],
     other: {
-      '.github/workflows/image-pin-resolution-nightly.yml': RUNS_GATE,
+      '.github/workflows/image-pin-resolution-nightly.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
   'security/bun-install-scripts.json': {
@@ -160,14 +179,16 @@ export const GATE_INPUT_REGISTRY = {
     exempt:
       "consumed only by the Trivy step's `trivyignores:` input in the two workflows listed below; no script or test reads it by path, so those workflows are its gate and nothing here can run it",
     other: {
-      '.github/workflows/ci.yml': RUNS_GATE,
-      '.github/workflows/docs-closure-nightly.yml': RUNS_GATE,
+      '.github/workflows/ci.yml': 'runs a registered gate; reads the file only through it',
+      '.github/workflows/docs-closure-nightly.yml':
+        'runs a registered gate; reads the file only through it',
     },
   },
 };
+// END branch-specific
+
 /** Older name, kept for callers that predate the widening. */
 export const ALLOWLIST_REGISTRY = GATE_INPUT_REGISTRY;
-// END branch-specific
 
 const SCRIPT_EXT = /\.(?:mjs|cjs|js|ts|sh)$/;
 /** This check's own files hold the registry, so they name every allowlist by design. */
@@ -333,13 +354,16 @@ export function readsByPath(text, inputRel) {
 }
 
 /** A token that names a test file, as opposed to a flag or a flag's value (`--shard 1/4`). */
-const TEST_PATH_TOKEN = /\.test\.[cm]?[jt]sx?$|\.[cm]?[jt]sx?$/;
+const TEST_PATH_TOKEN = /\.[cm]?[jt]sx?$/;
+/** A directory argument: ends in `/`, or has a path separator and is not a `1/4` shard. */
+const DIR_TOKEN = /^(?!\d+\/\d+$)(?:.*\/$|[^/\s-][^\s]*\/[^\s]+)$/;
 /** `scripts/bun-test.mjs` and the tokens after it, up to a shell separator. */
 const BUN_TEST_CMD = /\bscripts\/bun-test\.mjs\b([^|&;>\n]*)/;
 
 /**
  * Is this line `bun-test.mjs` run over the whole suite: no token after it names a test file?
- * Flags and their values (`--coverage`, `--shard 1/4`, `--timeout=30000`) do not narrow it.
+ * Flags and their values (`--coverage`, `--shard 1/4`, `--timeout=30000`) do not narrow it; a
+ * file or a directory argument (`tests/`, `packages/x/src`) does.
  */
 export function runsWholeSuite(line) {
   const m = BUN_TEST_CMD.exec(line.trim().replace(/^(?:-\s*)?run:\s*/, ''));
@@ -347,7 +371,7 @@ export function runsWholeSuite(line) {
   return !m[1]
     .split(/\s+/)
     .filter(Boolean)
-    .some((t) => TEST_PATH_TOKEN.test(t));
+    .some((t) => TEST_PATH_TOKEN.test(t) || DIR_TOKEN.test(t));
 }
 
 /** Test files the whole-suite run partitions out; they run only where a workflow names them. */
@@ -357,37 +381,42 @@ const ALWAYS_TRUE =
   /^(?:\$\{\{\s*)?(?:true|always\(\)|github\.event_name\s*==\s*'pull_request'|github\.event_name\s*!=\s*'merge_group')(?:\s*\}\})?$/;
 
 /**
- * The `if:` conditions that guard line `i` of a workflow: the step it sits in and the job
- * that holds the step. Indentation-based (workflows here are block-style YAML), so it is a
- * cheap approximation, not a YAML parser.
+ * Index the `if:` guards of a workflow by line. The text is parsed as YAML (the `yaml` package), so
+ * a blank line inside a step, a trailing `# comment` on an `if:`, quoting and flow style all read
+ * the way GitHub reads them. Returns `lineGuards(i)`: the `if:` of the step holding line `i` and of
+ * its job, or `null` when the file is not valid YAML (the caller then refuses the line: fail closed).
+ *
+ * @param {string} wfText
+ * @returns {(i: number) => string[] | null}
  */
-function guardsOf(lines, i) {
-  const indent = (l) => l.length - l.trimStart().length;
-  const guards = [];
-  // the step: walk up to the nearest `- ` item whose indent is below the line's own
-  let stepIndent = -1;
-  for (let k = i; k >= 0; k--) {
-    if (/^\s*-\s/.test(lines[k]) && indent(lines[k]) <= indent(lines[i])) {
-      stepIndent = indent(lines[k]);
-      for (let m = k; m < lines.length && (m === k || indent(lines[m]) > stepIndent); m++) {
-        const g = /^\s*(?:-\s+)?if:\s*(.+?)\s*$/.exec(lines[m]);
-        if (g && indent(lines[m].replace(/^(\s*)-\s+/, '$1  ')) === stepIndent + 2)
-          guards.push(g[1]);
-      }
-      break;
+function workflowGuards(wfText) {
+  const lc = new LineCounter();
+  const doc = parseDocument(wfText, { lineCounter: lc });
+  if (doc.errors.length > 0) return () => null;
+  /** @type {{ from: number, to: number, guard: string | null }[]} */
+  const regions = [];
+  const guardOf = (node) => {
+    const v = node?.get?.('if');
+    return v === undefined || v === null ? null : String(v).trim();
+  };
+  const jobs = doc.get('jobs', true);
+  for (const jp of jobs?.items ?? []) {
+    const job = jp.value;
+    if (!job?.range) continue;
+    const jobGuard = guardOf(job);
+    regions.push({ from: job.range[0], to: job.range[2], guard: jobGuard });
+    for (const step of job.get('steps', true)?.items ?? []) {
+      if (step?.range)
+        regions.push({ from: step.range[0], to: step.range[2], guard: guardOf(step) });
     }
   }
-  // the job: nearest `  name:` at two spaces above, then its direct `    if:`
-  for (let k = i; k >= 0; k--) {
-    if (/^ {2}[\w-]+:\s*$/.test(lines[k])) {
-      for (let m = k + 1; m < lines.length && !/^ {2}[\w-]+:\s*$/.test(lines[m]); m++) {
-        const g = /^ {4}if:\s*(.+?)\s*$/.exec(lines[m]);
-        if (g) guards.push(g[1]);
-      }
-      break;
-    }
-  }
-  return guards;
+  return (i) => {
+    const line = lc.lineStarts[i];
+    if (line === undefined) return [];
+    const end = (lc.lineStarts[i + 1] ?? wfText.length + 1) - 1;
+    const at = Math.max(line, end - 1);
+    return regions.filter((r) => at >= r.from && at < r.to && r.guard !== null).map((r) => r.guard);
+  };
 }
 
 /**
@@ -405,11 +434,13 @@ export function ciRunsTest(root, testFile) {
   for (const f of readdirSync(join(root, wfDir)).filter((n) => /\.ya?ml$/.test(n))) {
     const wfText = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));
     const lines = wfText.split('\n');
+    const guardsAt = workflowGuards(wfText);
     for (const [i, line] of lines.entries()) {
       const names = line.includes(testFile) && /\b(?:bun-test\.mjs|bun test|vitest)\b/.test(line);
       const whole = runsWholeSuite(line) && !PARTITIONED.test(testFile);
       if (!names && !whole) continue;
-      if (guardsOf(lines, i).every((g) => ALWAYS_TRUE.test(g))) return true;
+      const guards = guardsAt(i);
+      if (guards?.every((g) => ALWAYS_TRUE.test(g))) return true;
     }
   }
   return false;
@@ -776,65 +807,67 @@ export function driftBetween(a, b) {
 
 /**
  * Why the branch-specific block is NOT plain data, as a list of problems (empty = fine). The
- * block may hold only `const NAME = <literal>` declarations: object, array, string, number or
- * boolean literals, identifier references and spreads. A call, a function, an arrow, a template
- * literal or any other statement is a problem, because the drift guard evaluates this block and
- * logic hidden in it would be logic the two branches could silently differ on.
- * Lexical scan (strings and comments blanked first), not a JS parser: nothing here needs one.
+ * block is parsed with the TypeScript parser (no hand-written scanner), and every top-level
+ * statement must be a `const NAME = <literal>` whose initializer is a pure literal tree: an
+ * object with plain keys (no computed key, shorthand, spread, method or accessor), an array of
+ * literals, a string, number, boolean, null, regex, or a template with no `${}`. An identifier
+ * reference, a spread, a call, `new`, a tagged template or any other statement is a problem,
+ * because the drift guard evaluates this block and logic hidden in it would be logic the two
+ * branches could silently differ on.
  *
  * @param {string} text a full copy of the lib
  * @returns {string[]}
  */
 export function branchBlockProblems(text) {
-  const lines = stripBranchSpecific(text) && text.split('\n');
+  const lines = text.split('\n');
   const begin = lines.findIndex((l) => l.startsWith(BRANCH_BEGIN));
   const end = lines.findIndex((l) => l.startsWith(BRANCH_END));
+  if (begin < 0 || end < begin) return ['the branch-specific markers are missing or out of order'];
   const src = lines.slice(begin + 1, end).join('\n');
+  const sf = ts.createSourceFile('block.mjs', src, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const problems = [];
-  let code = '';
-  for (let i = 0; i < src.length; ) {
-    const c = src[i];
-    if (c === '/' && src[i + 1] === '/') {
-      while (i < src.length && src[i] !== '\n') i++;
-    } else if (c === '/' && src[i + 1] === '*') {
-      const e = src.indexOf('*/', i + 2);
-      i = e < 0 ? src.length : e + 2;
-    } else if (c === "'" || c === '"') {
-      let j = i + 1;
-      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
-      code += '""';
-      i = j + 1;
-    } else if (c === '`') {
-      problems.push('template literal');
-      i++;
-    } else {
-      code += c;
-      i++;
-    }
-  }
-  if (/[()]/.test(code)) problems.push('a call or parenthesised expression');
-  if (/=>/.test(code)) problems.push('an arrow function');
-  const kw =
-    /\b(function|class|new|import|await|async|return|if|else|for|while|switch|try|throw|delete|typeof|void|eval)\b/.exec(
-      code,
-    );
-  if (kw) problems.push(`the keyword \`${kw[1]}\``);
-  let depth = 0;
-  let stmt = '';
-  const flush = () => {
-    const t = stmt.trim();
-    stmt = '';
-    if (t && !/^(?:export\s+)?const\s+[A-Za-z_$][\w$]*\s*=/.test(t)) {
-      problems.push(`a statement that is not a const declaration: ${t.slice(0, 40)}`);
+  const syntax = sf.parseDiagnostics ?? [];
+  for (const d of syntax)
+    problems.push(`syntax error: ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
+  const K = ts.SyntaxKind;
+  const keyOk = (n) =>
+    n.kind === K.Identifier || n.kind === K.StringLiteral || n.kind === K.NumericLiteral;
+  const lit = (n) => {
+    switch (n.kind) {
+      case K.StringLiteral:
+      case K.NumericLiteral:
+      case K.NoSubstitutionTemplateLiteral:
+      case K.RegularExpressionLiteral:
+      case K.TrueKeyword:
+      case K.FalseKeyword:
+      case K.NullKeyword:
+        return true;
+      case K.PrefixUnaryExpression:
+        return n.operator === K.MinusToken && n.operand.kind === K.NumericLiteral;
+      case K.ArrayLiteralExpression:
+        return n.elements.every(lit);
+      case K.ObjectLiteralExpression:
+        return n.properties.every(
+          (p) => p.kind === K.PropertyAssignment && keyOk(p.name) && lit(p.initializer),
+        );
+      default:
+        return false;
     }
   };
-  for (const c of code) {
-    if ('{['.includes(c)) depth++;
-    if ('}]'.includes(c)) depth--;
-    if (c === ';' && depth === 0) flush();
-    else stmt += c;
+  for (const s of sf.statements) {
+    const head = s.getText(sf).slice(0, 40);
+    const isConst =
+      s.kind === K.VariableStatement && (s.declarationList.flags & ts.NodeFlags.Const) !== 0;
+    const mods = (s.modifiers ?? []).every((m) => m.kind === K.ExportKeyword);
+    if (!isConst || !mods) {
+      problems.push(`a statement that is not a const declaration: ${head}`);
+      continue;
+    }
+    for (const d of s.declarationList.declarations) {
+      if (d.name.kind !== K.Identifier || !d.initializer || !lit(d.initializer))
+        problems.push(`a const whose value is not a pure literal: ${d.getText(sf).slice(0, 40)}`);
+    }
   }
-  flush();
   return problems;
 }
 

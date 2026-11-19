@@ -73,10 +73,16 @@ What the CI job does **not** catch:
 
 The copy on `main` and the copy on `integration/v2` differ only in the block between
 `// BEGIN branch-specific` and `// END branch-specific` (which gates and `security/` files each
-registers); that block holds data literals only, no calls or functions.
+registers); that block is parsed, and holds pure literals only: no calls, functions, identifier references or
+spreads. A test also counts as a gate only when the `if:` on its step and job is read from the parsed
+workflow YAML.
 `.github/workflows/prepush-lib-drift.yml` exists on both branches and runs
-`scripts/prepush-lib-drift.mjs` on every pull request and push to either, against the other
-branch, so drift introduced from either side fails on that side's own PR. It fails on any
+`scripts/prepush-lib-drift.mjs` against the other branch, so drift introduced from either side
+fails on that side's own PR. Limits: it runs only on a pull request or push that touches one of the
+files it compares (a `paths:` filter), so a change that lands on the other branch is not
+re-checked here until this side next touches those files; a nightly run from `main` (a cron fires
+only on the default branch) and `workflow_dispatch` cover that gap. It is informational, not a
+required check, and is red until both copies have landed. It fails on any
 difference outside the block, in the CLI, the tests, the prover or the two workflows, on a block
 that is not plain data, and on an input that exists on both branches but is exempt on only one.
 

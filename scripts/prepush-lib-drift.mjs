@@ -11,13 +11,15 @@
  *  1. any difference in `scripts/lib/prepush-check.mjs` outside the branch-specific block;
  *  2. any difference at all in the CLI, this script, the test file, the prover and the two
  *     workflows (`WHOLE_FILES`);
- *  3. a branch-specific block (either copy) that is not plain data (`evalBranchBlock` refuses it, see `branchBlockProblems`);
+ *  3. a branch-specific block (either copy) that is not plain data (`evalBranchBlock` refuses it: `branchBlockProblems` parses it with the TypeScript parser and
+ *     accepts only `const` declarations of pure literal trees);
  *  4. an input that exists on BOTH branches and is `exempt` on only one (the set of exempt
  *     input names must agree wherever the file is present on both);
  *  5. the other ref having no copy of a compared file yet, or a missing or doubled marker.
  *
- * `.github/workflows/prepush-lib-drift.yml` runs it on every pull request and push to either
- * branch, so drift introduced from EITHER side reds on that side's own PR.
+ * `.github/workflows/prepush-lib-drift.yml` runs it on a pull request or push to either
+ * branch that touches a compared file (a `paths:` filter), nightly from main, and on demand, so
+ * drift introduced from EITHER side reds on that side's own PR.
  *
  * Exit 0 identical; 1 drift (first differing line printed); 2 usage.
  */

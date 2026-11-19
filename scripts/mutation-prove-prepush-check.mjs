@@ -328,25 +328,22 @@ const MUTATIONS = [
     id: 'G3',
     claim: 'an input nothing gates is no longer unmapped',
     subject: 'lib',
-    anchor:
-      'if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {',
+    anchor: 'if (!(allowlist in registry) || !gated) {',
     replacement: 'if (false) {',
   },
   {
     id: 'G4',
-    claim: 'a test that names the input no longer counts as its gate',
+    claim: 'a test that reads the input by path no longer counts as its gate',
     subject: 'lib',
-    anchor:
-      'if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {',
-    replacement: 'if (!(allowlist in registry) || reg.gates.length === 0) {',
+    anchor: 'reg.gates.length > 0 || testReaders.length > 0 ||',
+    replacement: 'reg.gates.length > 0 ||',
   },
   {
     id: 'G13',
-    claim: 'an input missing from the registry is accepted when a test names it',
+    claim: 'an input missing from the registry is accepted when a test reads it',
     subject: 'lib',
-    anchor:
-      'if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {',
-    replacement: 'if (reg.gates.length === 0 && testReaders.length === 0) {',
+    anchor: 'if (!(allowlist in registry) || !gated) {',
+    replacement: 'if (!gated) {',
   },
   {
     id: 'G5',

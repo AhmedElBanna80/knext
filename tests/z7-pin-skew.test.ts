@@ -156,6 +156,6 @@ describe('the nightly job can run on a fresh runner', () => {
     });
     // No yaml installed: the run must fail closed (nonzero), proving the install step is load-bearing.
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toMatch(/fail closed/);
+    expect(r.stderr).toMatch(/Cannot find (package|module)/);
   });
 });

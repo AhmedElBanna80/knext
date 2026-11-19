@@ -36,9 +36,24 @@ const fixture = (): string => {
   made.push(d);
   return d;
 };
-afterAll(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true });
-});
+/** Remove every fixture dir. Idempotent, so it can run from afterAll AND from an exit/signal path. */
+const cleanup = () => {
+  for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+};
+afterAll(cleanup);
+// A run that is killed or exits abnormally skips afterAll; these cover that path, so a
+// fixture never outlives the process (the leftovers the prepush leak scan then reds on).
+process.on('exit', cleanup);
+for (const [sig, code] of [
+  ['SIGINT', 130],
+  ['SIGTERM', 143],
+  ['SIGHUP', 129],
+] as const) {
+  process.once(sig, () => {
+    cleanup();
+    process.exit(code);
+  });
+}
 
 const put = (root: string, rel: string, body: string) => {
   mkdirSync(dirname(join(root, rel)), { recursive: true });

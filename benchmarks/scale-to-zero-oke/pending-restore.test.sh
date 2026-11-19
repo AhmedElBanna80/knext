@@ -102,7 +102,13 @@ KILL_PID=$!
 
 ARMED=0
 for _ in $(seq 1 600); do
-  [ -f "$PF" ] && { ARMED=1; break; }
+  # Wait for the FULL record, not mere existence: kill only once the captured
+  # originals are on disk, so the kill cannot race the capture write.
+  if [ -f "$PF" ] && grep -q '"maxScale": "17"' "$PF" 2>/dev/null \
+     && grep -q '"containerConcurrency": "23"' "$PF" 2>/dev/null \
+     && grep -q '"panicThresholdPercentage"' "$PF" 2>/dev/null; then
+    ARMED=1; break
+  fi
   sleep 0.1
 done
 if [ "$ARMED" = "1" ]; then

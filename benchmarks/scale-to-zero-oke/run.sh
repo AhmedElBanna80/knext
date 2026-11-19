@@ -722,7 +722,11 @@ write_pending_restore() {
   pending_restore_active || return 0
   mkdir -p "$PENDING_DIR" 2>/dev/null || return 0
   local f; f=$(pending_restore_path)
-  cat > "$f" <<PENDING
+  # Atomic: write a temp file then rename, so the pending file is never visible
+  # empty or half-written (a reader, or a SIGKILL, between create and fill would
+  # otherwise see a truncated record).
+  local tmp="${f}.tmp.$$"
+  cat > "$tmp" <<PENDING
 {
   "service": "${SERVICE}",
   "namespace": "${NS}",
@@ -738,6 +742,7 @@ write_pending_restore() {
   }
 }
 PENDING
+  mv -f "$tmp" "$f"
 }
 
 clear_pending_restore() { rm -f "$(pending_restore_path)" 2>/dev/null || true; }

@@ -93,7 +93,7 @@ const MUTATIONS = [
     label: 'a describe/it title naming the subject is treated as executing it',
     subject: 'lint',
     anchor:
-      "if (direct && TITLE_CALLEES.has(calleeName(direct) ?? '') && direct.arguments[0] === outer) continue;",
+      "if (direct && TITLE_CALLEES.has(calleeName(direct) ?? '') && direct.arguments[0] === outer)\n      continue;",
     replacement: '',
   },
   {

@@ -138,34 +138,34 @@ const MUTATIONS = [
     subject: 'run',
     claim: 'the retirement no longer waits for the previous key to leave the Secret',
     anchor:
-      '"the previous key to leave the Secret under the warm pod" \'[ -z "$(secret_get previous.kid)" ]\'\n  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the previous key to leave the Secret under the warm pod" \'[ -z "$(secret_get previous.kid)" ]\'\n  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  wretired_at="$(jwks_written_at)"\n  read -r uid',
     replacement:
-      '"the previous key to leave the Secret under the warm pod" true\n  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the previous key to leave the Secret under the warm pod" true\n  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  wretired_at="$(jwks_written_at)"\n  read -r uid',
   },
   {
     id: 'W14',
     subject: 'run',
     claim: 'the JWKS is no longer required to publish only the new key',
     anchor:
-      '"the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  wretired_at="$(jwks_written_at)"\n  read -r uid',
     replacement:
-      '"the JWKS to publish only the new key under the warm pod" true\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the JWKS to publish only the new key under the warm pod" true\n  wretired_at="$(jwks_written_at)"\n  read -r uid',
   },
   {
     id: 'W15',
     subject: 'run',
     claim: 'the pod is no longer required to be the same pod after the rotation',
     anchor:
-      '[ "${uid}" = "${wuid}" ] && [ "${wstart}" -lt "${retired_at}" ] \\\n    || fail "the pod is',
+      '[ "${uid}" = "${wuid}" ] && [ "${wstart}" -lt "${wretired_at}" ] \\\n    || fail "the pod is',
     replacement:
-      '[ "${uid}" != "" ] && [ "${wstart}" -lt "${retired_at}" ] \\\n    || fail "the pod is',
+      '[ "${uid}" != "" ] && [ "${wstart}" -lt "${wretired_at}" ] \\\n    || fail "the pod is',
   },
   {
     id: 'W16',
     subject: 'run',
     claim: 'the pod is no longer shown to have started before the retirement',
     anchor:
-      '[ "${uid}" = "${wuid}" ] && [ "${wstart}" -lt "${retired_at}" ] \\\n    || fail "the pod is',
+      '[ "${uid}" = "${wuid}" ] && [ "${wstart}" -lt "${wretired_at}" ] \\\n    || fail "the pod is',
     replacement: '[ "${uid}" = "${wuid}" ] && [ "${wstart}" -ge 0 ] \\\n    || fail "the pod is',
   },
   {

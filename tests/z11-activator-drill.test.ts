@@ -660,11 +660,11 @@ describe('heldwarm: a warm pod with a cached key set refuses a call held past th
     );
     expect(w).toContain('export_key "${WORK}/key-pre" current');
     expect(w).toContain('HELD_POD_UID');
-    expect(w).toContain('retired_at="$(jwks_written_at)"');
+    expect(w).toContain('wretired_at="$(jwks_written_at)"');
     expect(w).toMatch(
-      /\[ "\$\{uid\}" = "\$\{wuid\}" \] && \[ "\$\{wstart\}" -lt "\$\{retired_at\}" \] \\\n\s*\|\| fail "the pod is/,
+      /\[ "\$\{uid\}" = "\$\{wuid\}" \] && \[ "\$\{wstart\}" -lt "\$\{wretired_at\}" \] \\\n\s*\|\| fail "the pod is/,
     );
-    expect(w.indexOf('retired_at="$(jwks_written_at)"')).toBeLessThan(
+    expect(w.indexOf('wretired_at="$(jwks_written_at)"')).toBeLessThan(
       w.indexOf('hold_call "${HELD_SECONDS}" warm'),
     );
   });

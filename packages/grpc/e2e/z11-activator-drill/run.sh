@@ -806,7 +806,7 @@ phase_held() {
 phase_heldwarm() {
   log "heldwarm: a warm pod with a cached key set, the key rotated, one call held past the token's life"
   [ -n "${ZONE_HOST}" ] || start_forwards
-  local old_kid new_kid wnonce rev_before wuid wstart retired_at uid now_start
+  local old_kid new_kid wnonce rev_before wuid wstart wretired_at uid now_start
   [ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \
     || fail "warm pod: a rotation is already in flight; run the deploy phase for a clean zone"
   old_kid="$(secret_get current.kid)"
@@ -835,10 +835,10 @@ phase_heldwarm() {
   k -n "${OPERATOR_NS}" rollout status deployment.apps/kn-next-operator-controller-manager --timeout=180s
   wait_until 180 3 "the previous key to leave the Secret under the warm pod" '[ -z "$(secret_get previous.kid)" ]'
   wait_until 30 1 "the JWKS to publish only the new key under the warm pod" '[ "$(jwks_kids)" = "${new_kid}" ]'
-  retired_at="$(jwks_written_at)"
+  wretired_at="$(jwks_written_at)"
   read -r uid now_start <<<"$(fn_pod_started)"
-  [ "${uid}" = "${wuid}" ] && [ "${wstart}" -lt "${retired_at}" ] \
-    || fail "the pod is ${uid} started ${now_start}, want the warm pod ${wuid} started ${wstart}, before the retirement at ${retired_at}: the rotation was not done under a warm pod"
+  [ "${uid}" = "${wuid}" ] && [ "${wstart}" -lt "${wretired_at}" ] \
+    || fail "the pod is ${uid} started ${now_start}, want the warm pod ${wuid} started ${wstart}, before the retirement at ${wretired_at}: the rotation was not done under a warm pod"
   ok "retired: only ${new_kid} remains; the warm pod ${wuid} (started before it) never restarted and never served a call since it loaded ${old_kid}"
 
   log "heldwarm 2/3: one call, signed with the new key, held ${HELD_SECONDS}s and released to that pod"

@@ -60,6 +60,11 @@ jobs:
           path: target
           persist-credentials: false
 
+      - name: Probe copies must match main (data-only byte diff, nothing from target/ runs)
+        env:
+          PROBE_SYNC_TARGET: target
+        run: node scripts/check-probe-sync.mjs
+
       - name: Probe advisories (FAIL on any actionable finding or API error)
         env:
           GITHUB_TOKEN: ${{ github.token }}

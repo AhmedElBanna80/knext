@@ -12,8 +12,9 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - `assert-tree-unchanged.mjs snapshot|check <file>`: compares `git status --porcelain --untracked-files=all` before and after a run.
 
 ### Mutation provers
-- 173 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
-- Shared drivers: `lib/prover-report.mjs` (imported by all 173), `lib/mutation-harness.mjs` (98) and `lib/guard-prover.mjs` (101).
+- 175 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
+- Shared drivers: `lib/prover-report.mjs` (imported by all 175), `lib/mutation-harness.mjs` (98) and `lib/guard-prover.mjs` (103).
+- `mutation-prove-s9-4-ffi-offline.mjs` proves the CI egress proof in `tests/ffi-ci-local-crates.test.ts` (the rewrite, the github.com denial, the verdict, the `Generator — egress denied` step, and the egress script's exit). Its subjects are `crates/harness/local-crates-source.ts`, `crates/harness/ffi-egress-offline.ts` and `.github/workflows/rust-crates.yml`.
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.
 - Kind-lane provers live among them, e.g. `mutation-prove-2461-z7-kind-e2e.mjs` for the Z7 identity lane in `packages/grpc/e2e/z7-identity-kind`, and `mutation-prove-s8-1-z11-policyoff.mjs` for the Z11 activator-path drill in `packages/grpc/e2e/z11-activator-drill`, including the SQ1/SQ2 rows for the squatted-JWKS-ConfigMap phase and the RT rows for the real-time rotation (RT2, RT9-RT11 are behavioural, against `rotation-verdict.ts`; RT5 and RT7 are string-level).

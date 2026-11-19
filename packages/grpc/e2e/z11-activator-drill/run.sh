@@ -223,9 +223,13 @@ dial_rc() {
   echo "${rc}"
 }
 
-fn_pod_ip() { pod_ip_of "${GO_FN}"; }
-pod_ip_of() { # <service>: the Ready, non-terminating pod's IP, or empty
-  k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json \
+fn_pod_ip() {
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running"
+              and ([.status.conditions[]? | select(.type == "Ready") | .status] == ["True"]))] | .[0].status.podIP // ""'
+}
+rust_pod_ip() { # the same for the Rust function
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${RUST_FN}" -o json \
     | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running"
               and ([.status.conditions[]? | select(.type == "Ready") | .status] == ["True"]))] | .[0].status.podIP // ""'
 }
@@ -517,7 +521,7 @@ await_rust_ip() {
   end=$((SECONDS + 90))
   while [ "${SECONDS}" -lt "${end}" ]; do
     foreign_post "${RUST_URL}${GET_ITEM}" ""
-    ip="$(pod_ip_of "${RUST_FN}")"
+    ip="$(rust_pod_ip)"
     if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ]; then RUST_IP="${ip}"; return 0; fi
     sleep 3
   done

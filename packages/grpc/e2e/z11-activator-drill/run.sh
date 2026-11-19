@@ -38,7 +38,7 @@
 #             Control: the same hold for 30 s, inside the token's life, is accepted, so
 #             the refusal is the token's age. Afterwards a fresh token is accepted and a
 #             garbage token is still refused.
-#   heldwarm  the combined case ADR-0004 names: warm pods that cached the OLD key set, the
+#   heldwarm  the warm-pod, held-call case ADR-0004 names: warm pods that cached the OLD key set, the
 #             zone's key rotated and retired under them, and a call held longer than the
 #             token's life. Two warm pods each load the old set with one call and get no
 #             other. A new-key token held 30 s on pod A is accepted (404 not_found): a pod
@@ -867,7 +867,7 @@ phase_held() {
 
 # ---------------------------------------------------------------- phase: heldwarm
 
-# The combined case ADR-0004 names, on the verifier as built. Its order on every call is:
+# The warm-pod, held-call case ADR-0004 names, on the verifier as built. Its order on every call is:
 # re-read the mounted JWKS when its mtime or size changed or it is older than JWKSRereadInterval
 # (10 s), THEN look the kid up (an unknown kid is refused, it is not fetched again), then check
 # the signature, and only then the lifetime (exp). So a pod that is idle for more than 10 s always

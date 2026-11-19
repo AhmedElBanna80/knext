@@ -17,7 +17,7 @@ things from one package:
   (`templates/vinext-patches/manifest.json` plus its `.patch` files).
 
 The published surface is the `exports` map in `package.json`: `.` (config
-types), `./adapter`, `./validate`, five `./adapters/*` subpaths and the
+types), `./adapter`, `./validate`, five<!--egm:kn-next.adapters-subpaths--> `./adapters/*` subpaths and the
 `./internal/*` wiring subpaths. The tarball contains only `dist` and `templates`,
 and the package requires Node >= 24.
 

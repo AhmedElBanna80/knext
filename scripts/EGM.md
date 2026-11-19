@@ -1,7 +1,7 @@
 # scripts
 
 ## Overview
-This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 321 top-level entries: 311 files (294 `.mjs`, 14 `.sh`, one `.ts`, one `.json` and this `EGM.md`) and 10 directories. 180 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
+This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 324<!--egm:scripts.entries--> top-level entries: 314<!--egm:scripts.files--> files (296<!--egm:scripts.mjs--> `.mjs`, 14<!--egm:scripts.sh--> `.sh`, one<!--egm:scripts.ts--> `.ts`, two<!--egm:scripts.json--> `.json` and this `EGM.md`) and 10<!--egm:scripts.dirs--> directories. 181<!--egm:scripts.provers--> of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
 
 ## Interface
 
@@ -11,9 +11,13 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - `prepush.mjs`: exports `runSteps`. Its internal `DEFAULT_STEPS` list runs `biome check`, then a temp-dirs test, then `bun run typecheck`.
 - `assert-tree-unchanged.mjs snapshot|check <file>`: compares `git status --porcelain --untracked-files=all` before and after a run.
 
+### EGM count derivation
+- `egm-counts.mjs (--check | --write) [--root DIR] [--manifest FILE]`: every counted number in an `EGM.md` is followed directly by an HTML comment of the form `egm:KEY` (a number or a number word from zero to twelve, then the comment, no space), and `egm-counts.manifest.json` defines each KEY as a directory listing (`entries`), a content grep over a file set (`grep`), a regex match count over one file (`regex-count`) or a count of JSON keys (`json-keys`). `--check` exits 1 naming each `file:line` whose number differs from the computed one, plus any malformed marker (no number before it, a bad key, an unparseable comment), any marker with an unknown key, any manifest key no doc cites and any rule that computes 0 unless it declares `allowZero`. `--write` rewrites the numbers in place. Numbers that are not counts (ports, timeouts, limits) carry no marker. Exports `computeCount` and `run`.
+- `tests/egm-counts.test.ts` runs `--check` on the repo and proves both modes on a fixture tree. Adding or removing a file this document counts means running `--write` once.
+
 ### Mutation provers
-- 181 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
-- Shared drivers: `lib/prover-report.mjs` (imported by all 180), `lib/mutation-harness.mjs` (100) and `lib/guard-prover.mjs` (106).
+- 181<!--egm:scripts.provers--> files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
+- Shared drivers: `lib/prover-report.mjs` (imported by all 181<!--egm:scripts.provers.prover-report-->), `lib/mutation-harness.mjs` (100<!--egm:scripts.provers.mutation-harness-->) and `lib/guard-prover.mjs` (107<!--egm:scripts.provers.guard-prover-->).
 - `mutation-prove-s9-4-ffi-offline.mjs` proves the CI egress proof in `tests/ffi-ci-local-crates.test.ts` (the rewrite, the github.com denial, the verdict, the `Generator — egress denied` step, and the egress script's exit). Its subjects are `crates/harness/local-crates-source.ts`, `crates/harness/ffi-egress-offline.ts` and `.github/workflows/rust-crates.yml`.
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.

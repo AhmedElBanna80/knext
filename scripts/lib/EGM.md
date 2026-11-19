@@ -1,7 +1,7 @@
 # scripts/lib
 
 ## Overview
-Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 83 files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~27k lines, so treat each file's header as the authority.
+Shared library modules for the repo's CI guards, gates and mutation provers. Most of these 84 files are pure decision logic over text, JSON, lcov, tarballs or workflow YAML. Thin CLIs in `scripts/` do the I/O and call into them, and specs in `tests/` pin them. A few shell files are sourced by the e2e deploy scripts. This contract was compiled from each file's header comment and its `export` list. It is an index, not a line-by-line reading of all ~27k lines, so treat each file's header as the authority.
 
 ## Interface
 Grouped by concern. The names listed are the modules' exported symbols.
@@ -33,7 +33,7 @@ Grouped by concern. The names listed are the modules' exported symbols.
 - `request-byte-cap.mjs`: `auditRequestByteCap`, `ENV_VAR` (`KNEXT_MAX_REQUEST_BYTES`), `DEFAULT_MAX_REQUEST_BYTES` (8 MiB). Also exports `METRICS_MAX_REQUEST_BYTES`, `BUN_COUNTED_BODY_FLOOR`, `CANONICAL_CONTRACT`, `BUN_FLOOR_SOURCE`, `discoverSrvxServeSites`, `isSrvxServeSite`, `serveCalls`, `loadCapResolver`, `auditCapResolver`, `auditBunFloor`.
 - `runtime-entry-copies.mjs`: `auditRuntimeEntryCopies`, `CANONICAL_TEMPLATES`. Also exports `CANONICAL_TEMPLATE_DIR`, `COPY_BASENAMES`, `GENERATED_BY_MARKER`, `DIVERGENT`, `stripGeneratedByHeader`, `discoverRuntimeEntryCopies`, `sha256`.
 - `dockerfile-base-images.mjs`: `checkDockerfiles`, `discoverDockerfiles`, `parseDockerfileRefs`. Also exports `EXCLUSION_FILE`, `KNOWN_CHECKS`, `exclusionProblem`, `isExpired`, `loadExclusions`, `isExcluded`.
-- `allowlist-retirement.mjs`: `collectEntries`, `classifyAdvisory`, `probeEntries`, `reachability`, `satisfiesRange`, `parseLockfile`, `exitCodeFor`, `renderReport`. Pure logic for the retirement probe: red only on a withdrawn advisory or a reachable patch; unreachable patches are INFO.
+- `allowlist-retirement.mjs`: `ALLOWLIST_FILES`, `DEFAULT_LOCKFILES`, `isPinnedFixtureLockfile`, `collectEntries`, `versionInRange`, `satisfiesRange`, `parseLockfile`, `loadLockfileFromDisk`, `reachability`, `classifyAdvisory`, `probeEntries`, `exitCodeFor`, `renderReport`. The retirement probe's classification is pure: RETIRE (red) on a withdrawn advisory or a reachable patch, INFO (not red) on an unreachable patch, ERROR (red, fail closed) on an advisory API failure. `collectEntries` and `loadLockfileFromDisk` read files. A reachable patch in a lockfile under `fixtures/` or `musl-native-lockfiles/` is INFO, not RETIRE (`isPinnedFixtureLockfile`, `classifyAdvisory`). `exitCodeFor` is red on a RETIRE finding, an API error, or an empty entry set (`checked === 0`).
 - `crane-pin.mjs`: `scanCranePins`, `verifyPinAgainstChecksums`, `assertLockstep`. Also exports `filenameForPin`, `scanCraneVersionComments`, `parseChecksumsTxt`.
 - `crd-schema-diff.mjs`: `diffCrd`, `diffOpenApiSchema`, `applyWaivers`, `validateWaiverEntry`. Also exports `diffCrdVersionSchema`, `WAIVER_KEYS`.
 - `ratchet-floors.mjs`: `RATCHET_FLOOR_MARKER`, `extractRatchetFloors`, `findLoweredFloors`.

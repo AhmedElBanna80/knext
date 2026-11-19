@@ -47,8 +47,14 @@ export function collectEntries(repoRoot, files = ALLOWLIST_FILES) {
 }
 
 function cmp(a, b) {
-  const pa = String(a).split('-')[0].split('.').map((n) => Number.parseInt(n, 10) || 0);
-  const pb = String(b).split('-')[0].split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const pa = String(a)
+    .split('-')[0]
+    .split('.')
+    .map((n) => Number.parseInt(n, 10) || 0);
+  const pb = String(b)
+    .split('-')[0]
+    .split('.')
+    .map((n) => Number.parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const d = (pa[i] ?? 0) - (pb[i] ?? 0);
     if (d !== 0) return d;
@@ -68,7 +74,15 @@ export function versionInRange(version, range) {
     const d = cmp(version, m[2]);
     const op = m[1] ?? '=';
     const ok =
-      op === '<' ? d < 0 : op === '<=' ? d <= 0 : op === '>' ? d > 0 : op === '>=' ? d >= 0 : d === 0;
+      op === '<'
+        ? d < 0
+        : op === '<='
+          ? d <= 0
+          : op === '>'
+            ? d > 0
+            : op === '>='
+              ? d >= 0
+              : d === 0;
     if (!ok) return false;
   }
   return true;
@@ -93,7 +107,10 @@ export function classifyAdvisory(entry, advisory) {
     // accepted (the entry rests on reachability, not on "no fix"): not news.
     if (mentionsVersion(entry.justification, v.first_patched_version)) continue;
     reasons.push(
-      `${name} ${v.vulnerable_version_range ?? ''} now has a patched version ${v.first_patched_version}`.replace(/\s+/g, ' '),
+      `${name} ${v.vulnerable_version_range ?? ''} now has a patched version ${v.first_patched_version}`.replace(
+        /\s+/g,
+        ' ',
+      ),
     );
   }
   return { retire: reasons.length > 0, reasons };
@@ -111,9 +128,14 @@ export async function probeEntries(entries, fetchAdvisory) {
     try {
       if (!cache.has(entry.id)) cache.set(entry.id, await fetchAdvisory(entry.id));
       const { retire, reasons } = classifyAdvisory(entry, cache.get(entry.id));
-      if (retire) findings.push({ file: entry.file, id: entry.id, package: entry.package, reasons });
+      if (retire)
+        findings.push({ file: entry.file, id: entry.id, package: entry.package, reasons });
     } catch (error) {
-      errors.push({ file: entry.file, id: entry.id, message: error instanceof Error ? error.message : String(error) });
+      errors.push({
+        file: entry.file,
+        id: entry.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
   return { findings, errors, checked: entries.length };
@@ -125,9 +147,14 @@ export function exitCodeFor({ findings, errors, checked }) {
 
 export function renderReport({ findings, errors, checked }) {
   const lines = [`Checked ${checked} allowlist entries.`];
-  for (const f of findings) lines.push(`RETIRE ${f.id} (${f.file}${f.package ? `, ${f.package}` : ''}): ${f.reasons.join('; ')}`);
+  for (const f of findings)
+    lines.push(
+      `RETIRE ${f.id} (${f.file}${f.package ? `, ${f.package}` : ''}): ${f.reasons.join('; ')}`,
+    );
   for (const e of errors) lines.push(`ERROR ${e.id} (${e.file}): ${e.message}`);
-  if (checked === 0) lines.push('ERROR: no allowlist entries were found; refusing to pass vacuously.');
-  if (findings.length === 0 && errors.length === 0 && checked > 0) lines.push('OK: no entry is retirable.');
+  if (checked === 0)
+    lines.push('ERROR: no allowlist entries were found; refusing to pass vacuously.');
+  if (findings.length === 0 && errors.length === 0 && checked > 0)
+    lines.push('OK: no entry is retirable.');
   return lines.join('\n');
 }

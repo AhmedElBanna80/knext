@@ -23,7 +23,11 @@ const entry = (over: Record<string, unknown> = {}) => ({
 const advisory = (over: Record<string, unknown> = {}) => ({
   withdrawn_at: null,
   vulnerabilities: [
-    { package: { ecosystem: 'npm', name: 'pkg' }, vulnerable_version_range: '< 2.0.0', first_patched_version: null },
+    {
+      package: { ecosystem: 'npm', name: 'pkg' },
+      vulnerable_version_range: '< 2.0.0',
+      first_patched_version: null,
+    },
   ],
   ...over,
 });
@@ -36,7 +40,10 @@ const stub = (map: Record<string, unknown>) => async (id: string) => {
 
 describe('allowlist retirement probe', () => {
   it('RETIRE: advisory withdrawn upstream', async () => {
-    const r = await probeEntries([entry()], stub({ 'GHSA-aaaa-bbbb-cccc': advisory({ withdrawn_at: '2026-11-18T00:00:00Z' }) }));
+    const r = await probeEntries(
+      [entry()],
+      stub({ 'GHSA-aaaa-bbbb-cccc': advisory({ withdrawn_at: '2026-11-18T00:00:00Z' }) }),
+    );
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0].reasons[0]).toContain('withdrawn');
     expect(exitCodeFor(r)).toBe(1);
@@ -44,7 +51,13 @@ describe('allowlist retirement probe', () => {
 
   it('RETIRE: a patched version now exists for the package', async () => {
     const adv = advisory({
-      vulnerabilities: [{ package: { name: 'pkg' }, vulnerable_version_range: '< 2.0.0', first_patched_version: '2.0.0' }],
+      vulnerabilities: [
+        {
+          package: { name: 'pkg' },
+          vulnerable_version_range: '< 2.0.0',
+          first_patched_version: '2.0.0',
+        },
+      ],
     });
     const r = await probeEntries([entry()], stub({ 'GHSA-aaaa-bbbb-cccc': adv }));
     expect(r.findings).toHaveLength(1);
@@ -78,18 +91,36 @@ describe('allowlist retirement probe', () => {
 
   it('a patch the justification already names is not news; a different patch is', () => {
     const adv = advisory({
-      vulnerabilities: [{ package: { name: 'pkg' }, vulnerable_version_range: '<= 0.5.0', first_patched_version: '0.5.1' }],
+      vulnerabilities: [
+        {
+          package: { name: 'pkg' },
+          vulnerable_version_range: '<= 0.5.0',
+          first_patched_version: '0.5.1',
+        },
+      ],
     });
-    expect(classifyAdvisory(entry({ justification: 'fixed only in 0.5.1, ESM-only' }), adv).retire).toBe(false);
+    expect(
+      classifyAdvisory(entry({ justification: 'fixed only in 0.5.1, ESM-only' }), adv).retire,
+    ).toBe(false);
     expect(classifyAdvisory(entry({ justification: 'fixed in 10.5.1' }), adv).retire).toBe(true);
-    expect(classifyAdvisory(entry({ justification: 'No patched release exists' }), adv).retire).toBe(true);
+    expect(
+      classifyAdvisory(entry({ justification: 'No patched release exists' }), adv).retire,
+    ).toBe(true);
   });
 
   it('osv entries: a patch for another package or another version range is ignored', () => {
     const adv = advisory({
       vulnerabilities: [
-        { package: { name: 'other' }, vulnerable_version_range: '< 9', first_patched_version: '9.0.0' },
-        { package: { name: 'pkg' }, vulnerable_version_range: '>= 4.0.0, < 4.5.0', first_patched_version: '4.5.0' },
+        {
+          package: { name: 'other' },
+          vulnerable_version_range: '< 9',
+          first_patched_version: '9.0.0',
+        },
+        {
+          package: { name: 'pkg' },
+          vulnerable_version_range: '>= 4.0.0, < 4.5.0',
+          first_patched_version: '4.5.0',
+        },
       ],
     });
     expect(classifyAdvisory(entry({ package: 'pkg', version: '3.1.0' }), adv).retire).toBe(false);
@@ -110,7 +141,14 @@ describe('allowlist retirement probe', () => {
   });
 
   it('importing the CLI module does not run main() (entrypoint guard)', () => {
-    const r = spawnSync('node', ['-e', "globalThis.fetch=async()=>{throw new Error('offline')};await import('./scripts/verify-allowlist-retirement.mjs').then(m=>m)"], { cwd: ROOT, encoding: 'utf8' });
+    const r = spawnSync(
+      'node',
+      [
+        '-e',
+        "globalThis.fetch=async()=>{throw new Error('offline')};await import('./scripts/verify-allowlist-retirement.mjs').then(m=>m)",
+      ],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
     // Importing must not run main() (entrypoint guard): no network, clean exit.
     expect(r.status).toBe(0);
   });

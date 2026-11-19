@@ -48,7 +48,8 @@ async function main() {
   const result = await probeEntries(entries, makeFetchAdvisory());
   const text = renderReport(result);
   console.log(text);
-  if (result.findings.length > 0) console.error('::error::allowlist entries are retirable; drop them and bump the dependency');
+  if (result.findings.length > 0)
+    console.error('::error::allowlist entries are retirable; drop them and bump the dependency');
   process.exit(exitCodeFor(result));
 }
 

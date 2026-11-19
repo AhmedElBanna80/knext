@@ -48,7 +48,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 ### Supply chain and pins
 - Dependency and closure audits: `audit-published.mjs`, `audit-shipped-npm.mjs`, `osv-gate.mjs`, `govulncheck-gate.mjs`, `release-age-gate.mjs`, `precompile-closure-audit.mjs`, `sbom-docs-closure.mjs`.
 - `secret-scan.mjs` (`validateAllowlist`, `filterFindings`), `summarize-trivy-fs-report.mjs`.
-- Pin checks: `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
+- Pin checks: `verify-allowlist-retirement.mjs` (read-only nightly probe: RETIRE on a withdrawn or newly patched allowlisted advisory, fail closed on API error), `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
 - `resolve-shipped-images.mjs`, `resolve-scale-test-image.mjs`, `write-native-integrity.mjs`, `generate-musl-native-lockfile.sh`, `scan-suite-native-addons.mjs`.
 
 ### Static repo guards

@@ -33,6 +33,7 @@ Grouped by concern. The names listed are the modules' exported symbols.
 - `request-byte-cap.mjs`: `auditRequestByteCap`, `ENV_VAR` (`KNEXT_MAX_REQUEST_BYTES`), `DEFAULT_MAX_REQUEST_BYTES` (8 MiB). Also exports `METRICS_MAX_REQUEST_BYTES`, `BUN_COUNTED_BODY_FLOOR`, `CANONICAL_CONTRACT`, `BUN_FLOOR_SOURCE`, `discoverSrvxServeSites`, `isSrvxServeSite`, `serveCalls`, `loadCapResolver`, `auditCapResolver`, `auditBunFloor`.
 - `runtime-entry-copies.mjs`: `auditRuntimeEntryCopies`, `CANONICAL_TEMPLATES`. Also exports `CANONICAL_TEMPLATE_DIR`, `COPY_BASENAMES`, `GENERATED_BY_MARKER`, `DIVERGENT`, `stripGeneratedByHeader`, `discoverRuntimeEntryCopies`, `sha256`.
 - `dockerfile-base-images.mjs`: `checkDockerfiles`, `discoverDockerfiles`, `parseDockerfileRefs`. Also exports `EXCLUSION_FILE`, `KNOWN_CHECKS`, `exclusionProblem`, `isExpired`, `loadExclusions`, `isExcluded`.
+- `allowlist-retirement.mjs`: `collectEntries`, `classifyAdvisory`, `probeEntries`, `reachability`, `satisfiesRange`, `parseLockfile`, `exitCodeFor`, `renderReport`. Pure logic for the retirement probe: red only on a withdrawn advisory or a reachable patch; unreachable patches are INFO.
 - `crane-pin.mjs`: `scanCranePins`, `verifyPinAgainstChecksums`, `assertLockstep`. Also exports `filenameForPin`, `scanCraneVersionComments`, `parseChecksumsTxt`.
 - `crd-schema-diff.mjs`: `diffCrd`, `diffOpenApiSchema`, `applyWaivers`, `validateWaiverEntry`. Also exports `diffCrdVersionSchema`, `WAIVER_KEYS`.
 - `ratchet-floors.mjs`: `RATCHET_FLOOR_MARKER`, `extractRatchetFloors`, `findLoweredFloors`.

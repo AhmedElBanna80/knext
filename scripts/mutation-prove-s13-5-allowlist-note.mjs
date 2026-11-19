@@ -74,28 +74,34 @@ const MUTATIONS = [
     replacement: "`expires` (ISO date, isn't REQUIRED, at most",
   },
   {
-    label: "ROUND 2 item 4: the negation branch never flags \"not REQUIRED\" (the checker returns undefined)",
+    label:
+      'ROUND 2 item 4: the negation branch never flags "not REQUIRED" (the checker returns undefined)',
     subject: 'checker',
     anchor: "    return '`expires` is said to be negated before REQUIRED';",
-    replacement: "    return undefined;",
+    replacement: '    return undefined;',
   },
   {
-    label: "ROUND 2 item 4: the old window regex is back (it flags \"not blank, REQUIRED\" and \"not optional, REQUIRED\")",
+    label:
+      'ROUND 2 item 4: the old window regex is back (it flags "not blank, REQUIRED" and "not optional, REQUIRED")',
     subject: 'checker',
-    anchor: "    /`expires`[^.]*\\b(?:(?:is|are)\\s+)?(?:not|no\\s+longer|never|isn['’]t)(?:\\s+\\w+)?\\s+REQUIRED\\b/i.test(",
-    replacement: "    /`expires`[^.]*\\b(?:not|no longer|isn['’]t|never|optional)\\b(?:[^\\w.]+\\w+){0,3}?[^\\w.]+REQUIRED\\b/i.test(",
+    anchor:
+      "    /`expires`[^.]*\\b(?:(?:is|are)\\s+)?(?:not|no\\s+longer|never|isn['’]t)(?:\\s+\\w+)?\\s+REQUIRED\\b/i.test(",
+    replacement:
+      "    /`expires`[^.]*\\b(?:not|no longer|isn['’]t|never|optional)\\b(?:[^\\w.]+\\w+){0,3}?[^\\w.]+REQUIRED\\b/i.test(",
   },
   {
-    label: "ROUND 2 item 4: the \"is optional\" predicate check is removed",
+    label: 'ROUND 2 item 4: the "is optional" predicate check is removed',
     subject: 'checker',
-    anchor: "  if (/`expires`[^.]*\\bis optional\\b/i.test(note)) return '`expires` is said to be optional';",
+    anchor:
+      "  if (/`expires`[^.]*\\bis optional\\b/i.test(note)) return '`expires` is said to be optional';",
     replacement: "  if (false) return '`expires` is said to be optional';",
   },
   {
-    label: "ROUND 3 item 4: the negation accepts only \"really\" as the adverb (strictly and always pass)",
-    subject: "checker",
-    anchor: "(?:\\s+\\w+)?\\s+REQUIRED\\b/i.test(",
-    replacement: "(?:\\s+really)?\\s+REQUIRED\\b/i.test(",
+    label:
+      'ROUND 3 item 4: the negation accepts only "really" as the adverb (strictly and always pass)',
+    subject: 'checker',
+    anchor: '(?:\\s+\\w+)?\\s+REQUIRED\\b/i.test(',
+    replacement: '(?:\\s+really)?\\s+REQUIRED\\b/i.test(',
   },
 ];
 

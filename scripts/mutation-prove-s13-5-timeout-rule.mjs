@@ -57,34 +57,38 @@ const MUTATIONS = [
     replacement: 'The slowest was 2313 s',
   },
   {
-    label: 'a second citation in the z11 job, whose 60 min timeout is below its 2557 s figure, is not checked',
+    label:
+      'a second citation in the z11 job, whose 60 min timeout is below its 2557 s figure, is not checked',
     subject: 'z11',
     anchor: '    timeout-minutes: 60',
     replacement: '    # The slowest is 2557 s (42.6 min).\n    timeout-minutes: 60',
   },
   {
-    label: 'the z7 job loses its timeout-minutes while its citation stays (a cited job with no timeout)',
+    label:
+      'the z7 job loses its timeout-minutes while its citation stays (a cited job with no timeout)',
     subject: 'z7',
     anchor: '    timeout-minutes: ${{ inputs.rotation_realtime && 120 || 65 }}',
     replacement: '',
   },
   {
-    label: "ROUND 2 item 7: the citation matches whole seconds only (a \"2313.5 s\" citation is silently ignored)",
+    label:
+      'ROUND 2 item 7: the citation matches whole seconds only (a "2313.5 s" citation is silently ignored)',
     subject: 'checker',
-    anchor: "const CITATION = /The slowest is (\\d+(?:\\.\\d+)?) s\\b/;",
-    replacement: "const CITATION = /The slowest is (\\d+) s\\b/;",
+    anchor: 'const CITATION = /The slowest is (\\d+(?:\\.\\d+)?) s\\b/;',
+    replacement: 'const CITATION = /The slowest is (\\d+) s\\b/;',
   },
   {
-    label: "ROUND 2 item 7: the timeout is any indent, so a step-level timeout counts as the job timeout",
+    label:
+      'ROUND 2 item 7: the timeout is any indent, so a step-level timeout counts as the job timeout',
     subject: 'checker',
-    anchor: "const TIMEOUT = /^ {4}timeout-minutes:\\s*(.+?)\\s*$/m;",
-    replacement: "const TIMEOUT = /^\\s*timeout-minutes:\\s*(.+?)\\s*$/m;",
+    anchor: 'const TIMEOUT = /^ {4}timeout-minutes:\\s*(.+?)\\s*$/m;',
+    replacement: 'const TIMEOUT = /^\\s*timeout-minutes:\\s*(.+?)\\s*$/m;',
   },
   {
-    label: "ROUND 3 item 7b: a timeout literal is whole seconds only (120.5 splits into 120 and 5)",
-    subject: "checker",
-    anchor: "matchAll(/\\b\\d+(?:\\.\\d+)?\\b/g)",
-    replacement: "matchAll(/\\b\\d+\\b/g)",
+    label: 'ROUND 3 item 7b: a timeout literal is whole seconds only (120.5 splits into 120 and 5)',
+    subject: 'checker',
+    anchor: 'matchAll(/\\b\\d+(?:\\.\\d+)?\\b/g)',
+    replacement: 'matchAll(/\\b\\d+\\b/g)',
   },
 ];
 

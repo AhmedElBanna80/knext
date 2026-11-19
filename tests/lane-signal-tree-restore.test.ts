@@ -5,8 +5,8 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -64,7 +64,8 @@ function fixtureGroups(dir: string): number[] {
   const groups = new Set<number>();
   for (const line of out.split('\n')) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(line);
-    if (m && m[2]!.includes(dir) && m[2]!.includes('mutation-prove-zz-fixture')) groups.add(Number(m[1]));
+    if (m && m[2]!.includes(dir) && m[2]!.includes('mutation-prove-zz-fixture'))
+      groups.add(Number(m[1]));
   }
   return [...groups];
 }
@@ -78,7 +79,9 @@ export function safeGroupsToKill(groups: number[], ownPgid: number): number[] {
 }
 
 function ownProcessGroup(): number {
-  return Number(execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' }).trim());
+  return Number(
+    execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)], { encoding: 'utf8' }).trim(),
+  );
 }
 
 function killFixtureGroups(dir: string) {
@@ -140,7 +143,9 @@ describe('a signal to the lane runner restores the tree its killed prover left (
       stderr: 'ignore',
     });
     try {
-      expect(await waitFor(() => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n')).toBe(true);
+      expect(
+        await waitFor(() => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n'),
+      ).toBe(true);
       proc.kill('SIGKILL');
       await proc.exited;
       // The prover is orphaned and alive: the runner's SIGTERM handler never ran.

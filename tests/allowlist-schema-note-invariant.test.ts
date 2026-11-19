@@ -82,10 +82,14 @@ describe('allowlist $schema-note matches its validator', () => {
   it('ROUND 3 item 4: any adverb between the negation and REQUIRED is still a negation (must reject)', () => {
     expect(requiredRuleViolation('`expires` (ISO date) is not strictly REQUIRED')).toBeDefined();
     expect(requiredRuleViolation('`expires` (ISO date) is not always REQUIRED')).toBeDefined();
-    expect(requiredRuleViolation('`expires` (ISO date) is no longer strictly REQUIRED')).toBeDefined();
+    expect(
+      requiredRuleViolation('`expires` (ISO date) is no longer strictly REQUIRED'),
+    ).toBeDefined();
   });
   it('ROUND 3 item 4: the must-pass phrases still pass with the wider negation', () => {
-    expect(requiredRuleViolation('`expires` (ISO date, not blank, REQUIRED, at most 180 days)')).toBeUndefined();
+    expect(
+      requiredRuleViolation('`expires` (ISO date, not blank, REQUIRED, at most 180 days)'),
+    ).toBeUndefined();
     expect(requiredRuleViolation('`expires` (ISO date) not optional, REQUIRED')).toBeUndefined();
     expect(requiredRuleViolation('`expires` (ISO date, REQUIRED, not optional)')).toBeUndefined();
   });

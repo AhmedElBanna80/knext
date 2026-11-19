@@ -142,28 +142,32 @@ const MUTATIONS = [
     replacement: 'void 0;',
   },
   {
-    label: "ROUND 2 item 6: a signal does not restore the tree its killed prover left (the restore never runs)",
-    subject: "helper",
-    anchor: "      beforeExit(signal);",
-    replacement: "",
+    label:
+      'ROUND 2 item 6: a signal does not restore the tree its killed prover left (the restore never runs)',
+    subject: 'helper',
+    anchor: '      beforeExit(signal);',
+    replacement: '',
   },
   {
-    label: "ROUND 2 item 6: the signal restore is a no-op (the killed prover leaves the tree dirty)",
-    subject: "runner",
-    anchor: "  if (!activeProver) return;",
-    replacement: "  return;",
+    label:
+      'ROUND 2 item 6: the signal restore is a no-op (the killed prover leaves the tree dirty)',
+    subject: 'runner',
+    anchor: '  if (!activeProver) return;',
+    replacement: '  return;',
   },
   {
-    label: "ROUND 2 item 6: the active prover is never recorded, so a signal has nothing to restore",
-    subject: "runner",
-    anchor: "  activeProver = { relPath: prover.relPath, untrackedBefore, modifiedBefore };",
-    replacement: "",
+    label:
+      'ROUND 2 item 6: the active prover is never recorded, so a signal has nothing to restore',
+    subject: 'runner',
+    anchor: '  activeProver = { relPath: prover.relPath, untrackedBefore, modifiedBefore };',
+    replacement: '',
   },
   {
-    label: "ROUND 3 item 2: a SIGKILLed runner leaves its prover running (the test does not kill the prover group)",
-    subject: "restoreSpec",
-    anchor: "killFixtureGroups(dir);",
-    replacement: "void 0;",
+    label:
+      'ROUND 3 item 2: a SIGKILLed runner leaves its prover running (the test does not kill the prover group)',
+    subject: 'restoreSpec',
+    anchor: 'killFixtureGroups(dir);',
+    replacement: 'void 0;',
   },
 ];
 

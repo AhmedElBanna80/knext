@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync }
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { unpairedTempDirs } from '../scripts/lib/scratch-space-scan.mjs';
 import { EXIT_SIGNALS } from '../scripts/lib/lane-exit-signals.mjs';
+import { unpairedTempDirs } from '../scripts/lib/scratch-space-scan.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const RUNNER = 'scripts/run-mutation-provers.mjs';
@@ -56,7 +56,9 @@ async function runSignalled(signal: NodeJS.Signals, tmpRoot: string) {
 }
 
 describe('the lane runner leaves no private temp dir behind on a signal (TD-S12-2a)', () => {
-  for (const [signal, code] of EXIT_SIGNALS as unknown as ReadonlyArray<readonly [NodeJS.Signals, number]>) {
+  for (const [signal, code] of EXIT_SIGNALS as unknown as ReadonlyArray<
+    readonly [NodeJS.Signals, number]
+  >) {
     it(`${signal}: the private dir is removed and the exit code is ${code}`, async () => {
       const tmpRoot = mkdtempSync(join(tmpdir(), 'lane-signal-scan-'));
       try {

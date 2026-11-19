@@ -48,9 +48,9 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { loadavg, tmpdir } from 'node:os';
-import { pinExitSignals, trackProverGroup } from './lib/lane-exit-signals.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pinExitSignals, trackProverGroup } from './lib/lane-exit-signals.mjs';
 import {
   countProcesses,
   describeResources,

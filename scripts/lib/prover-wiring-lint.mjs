@@ -55,10 +55,11 @@
  *   - Limited to the spec's own text. A spec that delegates the check to a helper module is not
  *     seen, and its subject is UNATTRIBUTED unless another spec names it.
  */
-import ts from 'typescript';
+
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import { proverSubjectPaths, referencedSpecs } from './prover-lane.mjs';
 
 const parse = (name, source, kind) =>
@@ -167,7 +168,14 @@ const strLit = (n) =>
  */
 // Bash options this lint can read. A letter in NOARG_SHORT takes no argument; -o/-O take one (the next word).
 const NOARG_SHORT = 'abefhkmnptuvxBCHPT';
-const NOARG_LONG = new Set(['--posix', '--norc', '--noprofile', '--login', '--restricted', '--noediting']);
+const NOARG_LONG = new Set([
+  '--posix',
+  '--norc',
+  '--noprofile',
+  '--login',
+  '--restricted',
+  '--noediting',
+]);
 const ARG_LONG = new Set(['--rcfile', '--init-file']);
 
 /**
@@ -221,7 +229,8 @@ function shellArgKind(expr) {
         i += 1;
         break;
       }
-      if (c === 'n') check = m[1] === '-'; // the LAST setting wins: '+n' turns the check off again
+      if (c === 'n')
+        check = m[1] === '-'; // the LAST setting wins: '+n' turns the check off again
       else if (!NOARG_SHORT.includes(c)) return 'unknown';
     }
   }
@@ -645,7 +654,8 @@ function isSubstringUse(use) {
     }
   }
   // A local helper that asserts on its argument (`assertHas(src)`): the text is checked inside it.
-  if (cur.parent && ts.isCallExpression(cur.parent) && helperChecksArg(cur.parent, cur)) return true;
+  if (cur.parent && ts.isCallExpression(cur.parent) && helperChecksArg(cur.parent, cur))
+    return true;
   // regex.test(v)
   if (
     call &&
@@ -701,7 +711,13 @@ export function classifyPair(specSource, subjectPath, specPath = SPEC_DEFAULT) {
     const parent = lit.parent;
     // An import/require specifier names the subject but is not a use of it: `imported` already counts it.
     if (parent && (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent))) continue;
-    if (parent && ts.isCallExpression(parent) && (parent.expression.kind === ts.SyntaxKind.ImportKeyword || /^(require|mock|doMock|module)$/.test(calleeName(parent) ?? ''))) continue;
+    if (
+      parent &&
+      ts.isCallExpression(parent) &&
+      (parent.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        /^(require|mock|doMock|module)$/.test(calleeName(parent) ?? ''))
+    )
+      continue;
     const outer = outerPathExpr(lit);
     const sk = shellArgKind(outer);
     if (sk === 'unknown') return 'other';
@@ -797,7 +813,11 @@ function specifierTargets(spec, specPath) {
   const TS_TWIN = { '.js': ['.ts'], '.mjs': ['.mts'], '.cjs': ['.cts'], '.jsx': ['.tsx'] };
   const ext = (t.match(/\.[cm]?jsx?$/) ?? [])[0];
   const twins = ext ? TS_TWIN[ext].map((e) => t.slice(0, -ext.length) + e) : [];
-  return [...MODULE_EXTS.map((e) => t + e), ...MODULE_EXTS.slice(1).map((e) => `${t}/index${e}`), ...twins];
+  return [
+    ...MODULE_EXTS.map((e) => t + e),
+    ...MODULE_EXTS.slice(1).map((e) => `${t}/index${e}`),
+    ...twins,
+  ];
 }
 
 /**
@@ -809,7 +829,9 @@ function refersTo(lit, subjectPath, specPath = SPEC_DEFAULT) {
   if (lit.startsWith('./') || lit.startsWith('../')) {
     return specifierTargets(lit, specPath).includes(subjectPath);
   }
-  return lit === subjectPath || lit === subjectPath.split('/').pop() || subjectPath.endsWith(`/${lit}`);
+  return (
+    lit === subjectPath || lit === subjectPath.split('/').pop() || subjectPath.endsWith(`/${lit}`)
+  );
 }
 
 /**

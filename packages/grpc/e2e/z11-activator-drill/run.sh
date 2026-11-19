@@ -784,6 +784,15 @@ release_pods() {
 # ONLY the target pod is re-attached, so the call can only be answered by it; the others come
 # back after the answer, and the set of pods must be exactly what it was. The call is a direct
 # bun call, never the retrying wrapper: a retry would mint a fresh token and prove nothing.
+# The Z11_MUTANT switch exists for local proofs only. A mutant that reached CI would turn a green
+# run into a meaningless one, so any run with CI set and a mutant requested refuses to start.
+refuse_mutant_in_ci() {
+  if [ -n "${Z11_MUTANT:-}" ] && [ -n "${CI:-}" ]; then
+    fail "Z11_MUTANT=${Z11_MUTANT} is a local-only mutant and CI is set: refusing to run"
+  fi
+}
+refuse_mutant_in_ci
+
 hold_call() {
   local out="${WORK}/held.out" start mode="${2:-cold}" pods="" pod uid label tpod="" tlabel="" uids_before=""
   HELD_POD_UID=""
@@ -795,6 +804,17 @@ hold_call() {
     while read -r pod uid label; do
       if [ "${uid}" = "${3:-}" ]; then tpod="${pod}"; tlabel="${label}"; fi
     done <<<"${pods}"
+    # Local mutant, never set in CI: Z11_MUTANT=swap-pod re-attaches a pod that is NOT the target,
+    # so the answering pod differs from the one the caller expects and check_accepted_by or
+    # check_refused_by must go red.
+    if [ "${Z11_MUTANT:-}" = swap-pod ]; then
+      tpod=""
+      while read -r pod uid label; do
+        if [ "${uid}" != "${3:-}" ] && [ -z "${tpod}" ]; then tpod="${pod}"; tlabel="${label}"; fi
+      done <<<"${pods}"
+      [ -n "${tpod}" ] || fail "swap-pod mutant needs ≥2 pods: no Ready ${GO_FN} pod other than the target ${3:-}"
+      log "MUTANT swap-pod: the call will be answered by ${tpod}, not by the target ${3:-}"
+    fi
     [ -n "${tpod}" ] || fail "the target pod ${3:-} is not a Ready ${GO_FN} pod"
     HELD_REQ_BEFORE="$(request_snapshot)" || fail "cannot read the pods' request counters before the hold"
   else
@@ -902,7 +922,8 @@ phase_held() {
 # with the old key, so each caches the old set, and neither gets another call. The key is then
 # rotated and retired under them. The call that proves the pod finds the new key it does not
 # hold (the control) is held 30 s on pod A and must be accepted. The call held 80 s, on pod B,
-# which is in the same stale-cache state, must be refused. Only the target pod is re-attached to
+# which holds the same old key set in memory, must be refused. (The verifier re-reads the JWKS
+# file on its next call, so neither pod serves a stale cache: that is why the control is accepted.) Only the target pod is re-attached to
 # the Service for each call, so it is the one that answers, and the pod set is checked unchanged.
 phase_heldwarm() {
   log "heldwarm: warm pods with the old key set cached, the key rotated, one call held past the token's life"
@@ -963,7 +984,7 @@ phase_heldwarm() {
   echo "HELDWARM: outstanding ${HELD_FOR}s -> ${HELD_STATUS} ${HELD_CODE} '${HELD_MESSAGE}'"
   check_refused_by "${wuid_b}" "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}" "${HELD_STATUS}" "${HELD_CODE}" "${HELD_MESSAGE}" \
     || fail "warm pod: a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}' from pod ${HELD_POD_UID}, want 401 unauthenticated 'token rejected' from the warm pod ${wuid_b} (an expired token must never be accepted, and the header must have reached the function)"
-  ok "a call held ${HELD_FOR}s was refused by pod B, in the same stale-cache state pod A accepted it in (401 unauthenticated, token rejected)"
+  ok "a call held ${HELD_FOR}s was refused by pod B, which held the same old key set in memory as pod A, which accepted it (401 unauthenticated, token rejected)"
   # Positive control on pod B: the same pod, right after its refusal, accepts a FRESH token. So
   # the refusal was the token's age, and pod B is healthy and still validates. The call is sent
   # to B alone (the others are detached) and the counters confirm B is the pod that answered.

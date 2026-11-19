@@ -100,21 +100,28 @@ describe('a kind e2e timeout is at least 1.5x its measured slowest CI run (TD-S1
 
   it('the rule itself: 2313 s needs 57.8 min, so 60 passes and 50 fails', () => {
     expect(minimumMinutes(2313)).toBeCloseTo(57.8, 1);
-    expect(timeoutViolations('jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    timeout-minutes: 60\n')).toEqual(
-      [],
-    );
     expect(
-      timeoutViolations('jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    timeout-minutes: 50\n').length,
+      timeoutViolations(
+        'jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    timeout-minutes: 60\n',
+      ),
+    ).toEqual([]);
+    expect(
+      timeoutViolations(
+        'jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    timeout-minutes: 50\n',
+      ).length,
     ).toBe(1);
   });
 
   it('a ternary is checked on EVERY branch, not only the default', () => {
     expect(
-      timeoutViolations('jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120 || 50 }}\n')
-        .length,
+      timeoutViolations(
+        'jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120 || 50 }}\n',
+      ).length,
     ).toBe(1);
     expect(
-      timeoutViolations('jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120 || 65 }}\n'),
+      timeoutViolations(
+        'jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120 || 65 }}\n',
+      ),
     ).toEqual([]);
   });
 
@@ -165,11 +172,16 @@ describe('a kind e2e timeout is at least 1.5x its measured slowest CI run (TD-S1
 
   // ROUND 3 item 7b. A timeout literal is a decimal number as a whole: 120.5 is ONE number, not 120 and 5.
   it('a decimal timeout literal (50.5) is one number, checked once', () => {
-    expect(timeoutViolations('jobs:\n  a:\n    # The slowest is 2313 s.\n    timeout-minutes: 50.5\n').length).toBe(1);
+    expect(
+      timeoutViolations('jobs:\n  a:\n    # The slowest is 2313 s.\n    timeout-minutes: 50.5\n')
+        .length,
+    ).toBe(1);
   });
   it('a decimal timeout inside a ternary (120.5) is one number and passes', () => {
     expect(
-      timeoutViolations('jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120.5 || 65 }}\n'),
+      timeoutViolations(
+        'jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120.5 || 65 }}\n',
+      ),
     ).toEqual([]);
   });
 

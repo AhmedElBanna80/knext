@@ -7,8 +7,8 @@ import {
   auditWiringLabels,
   classifyPair,
   declaredWiringSubjects,
-  namesSubject,
   isTextOnlyPair,
+  namesSubject,
   rowsBySubject,
   summarizeProverRows,
   textOnlySubjects,
@@ -451,16 +451,24 @@ describe('a spec that both executes the subject and substring-checks it is mixed
 describe('bash option arguments are consumed; an unknown option is unattributed (ROUND 2 item 2)', () => {
   const P = 'scripts/thing.sh';
   it('bash -o pipefail -n <subject> is a syntax check: no use, so not executed', () => {
-    expect(classifyPair(`spawnSync('bash', ['-o', 'pipefail', '-n', '${P}']);`, P)).not.toBe('executed');
+    expect(classifyPair(`spawnSync('bash', ['-o', 'pipefail', '-n', '${P}']);`, P)).not.toBe(
+      'executed',
+    );
   });
   it('bash -O extglob -n <subject> is a syntax check too', () => {
-    expect(classifyPair(`spawnSync('bash', ['-O', 'extglob', '-n', '${P}']);`, P)).not.toBe('executed');
+    expect(classifyPair(`spawnSync('bash', ['-O', 'extglob', '-n', '${P}']);`, P)).not.toBe(
+      'executed',
+    );
   });
   it('bash +o posix -n <subject> is a syntax check too', () => {
-    expect(classifyPair(`spawnSync('bash', ['+o', 'posix', '-n', '${P}']);`, P)).not.toBe('executed');
+    expect(classifyPair(`spawnSync('bash', ['+o', 'posix', '-n', '${P}']);`, P)).not.toBe(
+      'executed',
+    );
   });
   it('bash --rcfile X -n <subject> is a syntax check too', () => {
-    expect(classifyPair(`spawnSync('bash', ['--rcfile', 'rc', '-n', '${P}']);`, P)).not.toBe('executed');
+    expect(classifyPair(`spawnSync('bash', ['--rcfile', 'rc', '-n', '${P}']);`, P)).not.toBe(
+      'executed',
+    );
   });
   it('bash -o pipefail <subject> (no -n) RUNS the subject: executed', () => {
     expect(classifyPair(`spawnSync('bash', ['-o', 'pipefail', '${P}']);`, P)).toBe('executed');
@@ -524,15 +532,19 @@ describe('attribution resolves module paths; a basename or another directory doe
   it("a spec importing '../lib/render' DOES name scripts/lib/render.mjs (extension resolved)", () => {
     expect(namesSubject("import { r } from '../lib/render';", SUBJ, SPEC)).toBe(true);
   });
-  it("a.mjs is not named by a data.mjs literal (no substring match)", () => {
+  it('a.mjs is not named by a data.mjs literal (no substring match)', () => {
     expect(namesSubject("const f = 'data.mjs';", 'scripts/a.mjs', SPEC)).toBe(false);
     expect(namesSubject("const f = 'a.mjs';", 'scripts/a.mjs', SPEC)).toBe(true);
   });
   it("a spawned '../other/render.mjs' is not an execution of scripts/lib/render.mjs", () => {
-    expect(classifyPair("spawnSync('bash', ['../other/render.mjs']);", SUBJ, SPEC)).not.toBe('executed');
+    expect(classifyPair("spawnSync('bash', ['../other/render.mjs']);", SUBJ, SPEC)).not.toBe(
+      'executed',
+    );
   });
   it("an import of '../other/render' is not an execution of scripts/lib/render.mjs", () => {
-    expect(classifyPair("import { r } from '../other/render'; expect(1).toBe(1);", SUBJ, SPEC)).not.toBe('executed');
+    expect(
+      classifyPair("import { r } from '../other/render'; expect(1).toBe(1);", SUBJ, SPEC),
+    ).not.toBe('executed');
   });
   it('a relative import that resolves to the subject IS an execution', () => {
     expect(classifyPair("import { r } from '../lib/render';", SUBJ, SPEC)).toBe('executed');
@@ -564,16 +576,22 @@ describe('bash -o noexec is a syntax check; other -o values are neutral (ROUND 4
     expect(classifyPair(`spawnSync('bash', ['-o', 'noexec', '${P}']);`, P)).not.toBe('executed');
   });
   it('bash -o noexec +o noexec <subject> runs the subject (+o noexec turns the check off)', () => {
-    expect(classifyPair(`spawnSync('bash', ['-o', 'noexec', '+o', 'noexec', '${P}']);`, P)).toBe('executed');
+    expect(classifyPair(`spawnSync('bash', ['-o', 'noexec', '+o', 'noexec', '${P}']);`, P)).toBe(
+      'executed',
+    );
   });
   it('bash -o pipefail <subject> is neutral: it runs the subject', () => {
     expect(classifyPair(`spawnSync('bash', ['-o', 'pipefail', '${P}']);`, P)).toBe('executed');
   });
   it('bash -n -o pipefail <subject> is still a check (a neutral -o does not reset -n)', () => {
-    expect(classifyPair(`spawnSync('bash', ['-n', '-o', 'pipefail', '${P}']);`, P)).not.toBe('executed');
+    expect(classifyPair(`spawnSync('bash', ['-n', '-o', 'pipefail', '${P}']);`, P)).not.toBe(
+      'executed',
+    );
   });
   it('bash -o noexec -o pipefail <subject> is still a check (the neutral -o changes nothing)', () => {
-    expect(classifyPair(`spawnSync('bash', ['-o', 'noexec', '-o', 'pipefail', '${P}']);`, P)).not.toBe('executed');
+    expect(
+      classifyPair(`spawnSync('bash', ['-o', 'noexec', '-o', 'pipefail', '${P}']);`, P),
+    ).not.toBe('executed');
   });
 });
 
@@ -595,10 +613,10 @@ describe('the lint module exports are documented, and the EGM states the heurist
 // ROUND 3 item 3a. The LAST n-setting wins: '+n' turns the syntax check off again.
 describe('shell -n is turned off by a later +n (ROUND 3 item 3a)', () => {
   const P = 'scripts/thing.sh';
-  it("bash -n +n <subject> RUNS the subject (executed): the last setting is +n", () => {
+  it('bash -n +n <subject> RUNS the subject (executed): the last setting is +n', () => {
     expect(classifyPair(`spawnSync('bash', ['-n', '+n', '${P}']);`, P)).toBe('executed');
   });
-  it("bash +n -n <subject> is a syntax check: the last setting is -n", () => {
+  it('bash +n -n <subject> is a syntax check: the last setting is -n', () => {
     expect(classifyPair(`spawnSync('bash', ['+n', '-n', '${P}']);`, P)).not.toBe('executed');
   });
 });

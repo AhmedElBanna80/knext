@@ -22,6 +22,9 @@ import { resolveSpecRunner } from './lib/ci-blocking-gate-proof.mjs';
 import { MUTATION_MARKER, mutate, restore, snapshot } from './lib/mutation-harness.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
+/** Subjects whose spec only substring/regex-matches the source: their rows are WIRING rows, not behavioural proof. */
+export const WIRING_SUBJECTS = ['cliMdx'];
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const GUARD_SPEC = 'packages/kn-next/src/__tests__/no-kn-next-command-guidance.test.ts';

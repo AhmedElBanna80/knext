@@ -39,6 +39,9 @@ const row = (id, subject, claim, anchor, replacement) => ({
   replacement,
 });
 
+// WIRING rows: caught only by a source-text check in the spec (run.sh is read, never executed).
+const wiringRow = (...args) => ({ ...row(...args), kind: 'wiring' });
+
 const ACC = 'answer_is_accepted() { [ "$1" = 404 ] && [ "$2" = not_found ]; }';
 const REF =
   'answer_is_refused() { [ "$1" = 401 ] && [ "$2" = unauthenticated ] && [ "$3" = "token rejected" ]; }';
@@ -178,70 +181,70 @@ const MUTATIONS = [
     "message '$6'\" >&2; return 1; }\n  true\n}\n",
   ),
   // ---- WIRING rows: run.sh calls the functions, where it should (text-level, labelled as such)
-  row(
+  wiringRow(
     'WR1',
     'run',
     'wiring: the control no longer calls check_accepted_by',
     '  check_accepted_by "${wuid_a}"',
     '  true "${wuid_a}"',
   ),
-  row(
+  wiringRow(
     'WR2',
     'run',
     'wiring: the long hold no longer calls check_refused_by',
     '  check_refused_by "${wuid_b}"',
     '  true "${wuid_b}"',
   ),
-  row(
+  wiringRow(
     'WR3',
     'run',
     'wiring: the pod B fresh-token control no longer calls check_accepted_by',
     '  check_accepted_by "${wuid_b}" "${bctl_before}"',
     '  true "${wuid_b}" "${bctl_before}"',
   ),
-  row(
+  wiringRow(
     'WR4',
     'run',
     'wiring: the control expects pod B',
     '  check_accepted_by "${wuid_a}"',
     '  check_accepted_by "${wuid_b}"',
   ),
-  row(
+  wiringRow(
     'WR5',
     'run',
     'wiring: the long hold expects pod A',
     '  check_refused_by "${wuid_b}"',
     '  check_refused_by "${wuid_a}"',
   ),
-  row(
+  wiringRow(
     'WR6',
     'run',
     'wiring: the answering uid is taken from the hold target again',
     OBSERVE,
     'HELD_POD_UID="$3" || fail ',
   ),
-  row(
+  wiringRow(
     'WR7',
     'run',
     'wiring: the counters are read before the call but never after it',
     '    HELD_REQ_AFTER="$(request_snapshot)" || fail "cannot read the pods\' request counters after the hold"\n',
     '    HELD_REQ_AFTER="${HELD_REQ_BEFORE}"\n',
   ),
-  row(
+  wiringRow(
     'WR8',
     'run',
     'wiring: the fresh token is never sent to pod B',
     '  fn_probe "${WORK}/key-held" fresh-b\n',
     '',
   ),
-  row(
+  wiringRow(
     'WR9',
     'run',
     'wiring: the fresh token is sent with pod A still attached',
     '  isolate_pods "${wuid_b}"\n  bctl_before=',
     '  bctl_before=',
   ),
-  row(
+  wiringRow(
     'WR10',
     'run',
     'wiring: the fresh call is judged with the counters of the hold, not of the fresh call',

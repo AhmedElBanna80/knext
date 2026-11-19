@@ -80,9 +80,15 @@ const MUTATIONS = [
     anchor: "const TIMEOUT = /^ {4}timeout-minutes:\\s*(.+?)\\s*$/m;",
     replacement: "const TIMEOUT = /^\\s*timeout-minutes:\\s*(.+?)\\s*$/m;",
   },
+  {
+    label: "ROUND 3 item 7b: a timeout literal is whole seconds only (120.5 splits into 120 and 5)",
+    subject: "checker",
+    anchor: "matchAll(/\\b\\d+(?:\\.\\d+)?\\b/g)",
+    replacement: "matchAll(/\\b\\d+\\b/g)",
+  },
 ];
 
-const DECLARED = 7;
+const DECLARED = 8;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

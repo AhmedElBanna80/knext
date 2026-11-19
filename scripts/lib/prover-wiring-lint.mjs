@@ -57,7 +57,7 @@
  */
 import ts from 'typescript';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { proverSubjectPaths, referencedSpecs } from './prover-lane.mjs';
 
@@ -219,7 +219,7 @@ function shellArgKind(expr) {
         i += 1;
         break;
       }
-      if (m[1] === '-' && c === 'n') check = true;
+      if (c === 'n') check = m[1] === '-'; // the LAST setting wins: '+n' turns the check off again
       else if (!NOARG_SHORT.includes(c)) return 'unknown';
     }
   }
@@ -662,14 +662,13 @@ function isSubstringUse(use) {
  * @param {string} subjectPath repo-relative subject path
  * @returns {'text' | 'executed' | 'mixed' | 'other'}
  */
-export function classifyPair(specSource, subjectPath) {
-  const base = subjectPath.split('/').pop();
+export function classifyPair(specSource, subjectPath, specPath = SPEC_DEFAULT) {
   const sf = parse('spec.ts', specSource, ts.ScriptKind.TS);
   const lits = [];
   const collect = (n) => {
     if (
       (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) &&
-      (n.text === base || n.text.endsWith(`/${base}`))
+      refersTo(n.text, subjectPath, specPath)
     ) {
       lits.push(n);
     }
@@ -677,7 +676,6 @@ export function classifyPair(specSource, subjectPath) {
   };
   collect(sf);
   // An import / require of the subject (any extension spelling) means the spec EXECUTES it.
-  const stem = base.replace(/\.[^.]+$/, '');
   let imported = false;
   const findImports = (n) => {
     const spec =
@@ -689,10 +687,7 @@ export function classifyPair(specSource, subjectPath) {
               /^(require|mock|doMock|module)$/.test(calleeName(n) ?? ''))
           ? strLit(n.arguments[0])
           : undefined;
-    if (spec !== undefined) {
-      const last = spec.split('/').pop();
-      if (last === base || last === stem) imported = true;
-    }
+    if (spec !== undefined && refersTo(spec, subjectPath, specPath)) imported = true;
     ts.forEachChild(n, findImports);
   };
   findImports(sf);
@@ -785,11 +780,46 @@ export function isTextOnlyPair(specSource, subjectPath) {
   return classifyPair(specSource, subjectPath) === 'text';
 }
 
-/** Does a spec source contain a path literal naming this subject's module (`'../render'`, `'./render.ts'`)? */
-function importsModule(specSource, subjectPath) {
-  const stem = subjectPath.split('/').pop().replace(/\.[^.]+$/, '');
-  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`['"\`][^'"\`]*/${escaped}(\\.[cm]?[jt]sx?)?['"\`]`).test(specSource);
+/** The spec a classifyPair call is given when the caller does not say where it lives (tests/ is the usual home). */
+const SPEC_DEFAULT = 'tests/spec.test.ts';
+/** Extensions a relative module specifier may leave off (mirrors what node, bun and tsc resolve). */
+const MODULE_EXTS = ['', '.mjs', '.cjs', '.js', '.ts', '.tsx', '.jsx', '.mts', '.cts', '.sh'];
+
+/**
+ * The repo paths a relative specifier can name, resolved from the SPEC's directory: the file as written, with
+ * each extension, or an index file in that directory. A bare specifier (a package) names no repo file.
+ */
+function specifierTargets(spec, specPath) {
+  const t = posix.normalize(posix.join(posix.dirname(specPath), spec));
+  return [...MODULE_EXTS.map((e) => t + e), ...MODULE_EXTS.slice(1).map((e) => `${t}/index${e}`)];
+}
+
+/**
+ * Does one path literal in a spec name the subject? A relative literal names it only when it RESOLVES (from the
+ * spec's directory) to the subject's repo path, so '../other/render' does not name scripts/lib/render.mjs. A
+ * non-relative literal names it when it is the subject's repo path, its bare file name, or a path suffix of it.
+ */
+function refersTo(lit, subjectPath, specPath = SPEC_DEFAULT) {
+  if (lit.startsWith('./') || lit.startsWith('../')) {
+    return specifierTargets(lit, specPath).includes(subjectPath);
+  }
+  return lit === subjectPath || lit === subjectPath.split('/').pop() || subjectPath.endsWith(`/${lit}`);
+}
+
+/**
+ * Does a spec name the subject at all? Its bare file name must appear on a path boundary (not as the tail of
+ * '../other/render.mjs' or 'data.mjs'), or its full repo path must appear, or a quoted literal must refer to it.
+ * A spec that does not name a subject does not attribute it (see subjectAttribution).
+ */
+export function namesSubject(specSource, subjectPath, specPath = SPEC_DEFAULT) {
+  const base = subjectPath.split('/').pop();
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (specSource.includes(subjectPath)) return true;
+  if (new RegExp(`(?<![\\w./-])${esc(base)}(?![\\w-])`).test(specSource)) return true;
+  for (const m of specSource.matchAll(/(['"`])([^'"`\n]*)\1/g)) {
+    if (refersTo(m[2], subjectPath, specPath)) return true;
+  }
+  return false;
 }
 
 /**
@@ -803,14 +833,13 @@ export function subjectAttribution(proverSource, readSpec) {
   const subjects = proverSubjectPaths(proverSource);
   if (subjects.size === 0) return out;
   const specs = referencedSpecs(proverSource)
-    .map((s) => readSpec(s))
-    .filter((s) => typeof s === 'string');
+    .map((p) => ({ p, text: readSpec(p) }))
+    .filter((x) => typeof x.text === 'string');
   for (const [key, path] of subjects) {
-    const base = path.split('/').pop();
-    // A spec names the subject by its file name, or by an import of its module (`from '../render'`).
+    // A spec names the subject only by a path that resolves to it (see namesSubject); the verdict uses the same path.
     const verdicts = specs
-      .filter((s) => s.includes(base) || importsModule(s, path))
-      .map((s) => classifyPair(s, path));
+      .filter((x) => namesSubject(x.text, path, x.p))
+      .map((x) => classifyPair(x.text, path, x.p));
     let kind = 'unattributed';
     if (verdicts.length > 0 && verdicts.every((v) => v === 'text')) kind = 'text';
     else if (verdicts.length > 0 && verdicts.every((v) => v === 'executed')) kind = 'executed';

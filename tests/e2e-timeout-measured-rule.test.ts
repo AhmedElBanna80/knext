@@ -62,7 +62,7 @@ export function timeoutViolations(yml: string): string[] {
         out.push(`${where} cites ${slowest} s but no timeout-minutes follows the citation`);
         continue;
       }
-      const literals = [...(t[1] ?? '').matchAll(/\b\d+\b/g)].map((x) => Number(x[0]));
+      const literals = [...(t[1] ?? '').matchAll(/\b\d+(?:\.\d+)?\b/g)].map((x) => Number(x[0]));
       if (literals.length === 0) {
         out.push(`${where}: timeout-minutes '${t[1]}' is not a number`);
         continue;
@@ -161,6 +161,16 @@ describe('a kind e2e timeout is at least 1.5x its measured slowest CI run (TD-S1
   it('a step-level timeout does not satisfy a job that also has a short job-level one', () => {
     const yml = `jobs:\n  a:\n    # The slowest is 2313 s.\n    timeout-minutes: 50\n    steps:\n      - name: x\n        timeout-minutes: 90\n`;
     expect(timeoutViolations(yml).length).toBe(1);
+  });
+
+  // ROUND 3 item 7b. A timeout literal is a decimal number as a whole: 120.5 is ONE number, not 120 and 5.
+  it('a decimal timeout literal (50.5) is one number, checked once', () => {
+    expect(timeoutViolations('jobs:\n  a:\n    # The slowest is 2313 s.\n    timeout-minutes: 50.5\n').length).toBe(1);
+  });
+  it('a decimal timeout inside a ternary (120.5) is one number and passes', () => {
+    expect(
+      timeoutViolations('jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120.5 || 65 }}\n'),
+    ).toEqual([]);
   });
 
   it('a citation outside any job (before jobs:) is a violation, not silently skipped', () => {

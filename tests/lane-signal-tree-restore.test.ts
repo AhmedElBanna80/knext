@@ -26,7 +26,7 @@ const ROOT = resolve(import.meta.dirname, '..');
 const PROVER = `import { writeFileSync } from 'node:fs';
 writeFileSync('fixture.txt', 'MUTATED\\n');
 writeFileSync('scratch-residue.txt', 'untracked\\n');
-setInterval(() => {}, 1000);
+setTimeout(() => process.exit(0), 60000); // self-exit: never outlives the test
 `;
 
 const git = (dir: string, args: string[]) =>
@@ -56,6 +56,27 @@ function fixtureRepo(): string {
   git(dir, ['add', '-A']);
   git(dir, ['commit', '-qm', 'base']);
   return dir;
+}
+
+/** Process groups of this test's fixture prover (its pgid is its own pid, since the runner spawns it detached). */
+function fixtureGroups(dir: string): number[] {
+  const out = execFileSync('ps', ['-eo', 'pgid=,command='], { encoding: 'utf8' });
+  const groups = new Set<number>();
+  for (const line of out.split('\n')) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (m && m[2]!.includes(dir) && m[2]!.includes('mutation-prove-zz-fixture')) groups.add(Number(m[1]));
+  }
+  return [...groups];
+}
+
+function killFixtureGroups(dir: string) {
+  for (const g of fixtureGroups(dir)) {
+    try {
+      process.kill(-g, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
 }
 
 async function waitFor(check: () => boolean, ms = 20_000) {
@@ -88,5 +109,26 @@ describe('a signal to the lane runner restores the tree its killed prover left (
       }
       rmSync(dir, { recursive: true, force: true });
     }
+  }, 60_000);
+
+  it('a SIGKILLed runner cannot run its handler, so the prover survives until the test kills its group, and nothing is left', async () => {
+    const dir = fixtureRepo();
+    const proc = Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
+      cwd: dir,
+      env: { ...process.env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' },
+      stdout: 'ignore',
+      stderr: 'ignore',
+    });
+    try {
+      expect(await waitFor(() => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n')).toBe(true);
+      proc.kill('SIGKILL');
+      await proc.exited;
+      // The prover is orphaned and alive: the runner's SIGTERM handler never ran.
+      expect(await waitFor(() => fixtureGroups(dir).length > 0, 3000)).toBe(true);
+    } finally {
+      killFixtureGroups(dir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(await waitFor(() => fixtureGroups(dir).length === 0, 3000)).toBe(true);
   }, 60_000);
 });

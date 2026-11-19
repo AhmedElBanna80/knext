@@ -24,6 +24,7 @@ const PROOF = {
   subjects: {
     helper: 'scripts/lib/lane-exit-signals.mjs',
     runner: 'scripts/run-mutation-provers.mjs',
+    restoreSpec: 'tests/lane-signal-tree-restore.test.ts',
   },
 };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
@@ -158,9 +159,15 @@ const MUTATIONS = [
     anchor: "  activeProver = { relPath: prover.relPath, untrackedBefore, modifiedBefore };",
     replacement: "",
   },
+  {
+    label: "ROUND 3 item 2: a SIGKILLed runner leaves its prover running (the test does not kill the prover group)",
+    subject: "restoreSpec",
+    anchor: "killFixtureGroups(dir);",
+    replacement: "void 0;",
+  },
 ];
 
-const DECLARED = 14;
+const DECLARED = 15;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

@@ -6,6 +6,7 @@ import {
   auditWiringLabels,
   classifyPair,
   declaredWiringSubjects,
+  namesSubject,
   isTextOnlyPair,
   rowsBySubject,
   summarizeProverRows,
@@ -508,6 +509,43 @@ describe('a text read passed only to a local assert helper is text (ROUND 2 item
     const spec = `const src = readFileSync('${P}', 'utf8'); a(src); function a(s) { b(s); } function b(s) { a(s); }`;
     expect(() => classifyPair(spec, P)).not.toThrow();
     expect(classifyPair(spec, P)).toBe('other');
+  });
+});
+
+// ROUND 3 item 1. Attribution resolves a relative module specifier against the spec's own directory and
+// compares the result to the subject's repo path. A basename match is not enough.
+describe('attribution resolves module paths; a basename or another directory does not attribute (ROUND 3 item 1)', () => {
+  const SUBJ = 'scripts/lib/render.mjs';
+  const SPEC = 'scripts/x/spec.test.ts';
+  it("a spec importing '../other/render' does NOT name scripts/lib/render.mjs", () => {
+    expect(namesSubject("import { r } from '../other/render';", SUBJ, SPEC)).toBe(false);
+  });
+  it("a spec importing '../lib/render' DOES name scripts/lib/render.mjs (extension resolved)", () => {
+    expect(namesSubject("import { r } from '../lib/render';", SUBJ, SPEC)).toBe(true);
+  });
+  it("a.mjs is not named by a data.mjs literal (no substring match)", () => {
+    expect(namesSubject("const f = 'data.mjs';", 'scripts/a.mjs', SPEC)).toBe(false);
+    expect(namesSubject("const f = 'a.mjs';", 'scripts/a.mjs', SPEC)).toBe(true);
+  });
+  it("a spawned '../other/render.mjs' is not an execution of scripts/lib/render.mjs", () => {
+    expect(classifyPair("spawnSync('bash', ['../other/render.mjs']);", SUBJ, SPEC)).not.toBe('executed');
+  });
+  it("an import of '../other/render' is not an execution of scripts/lib/render.mjs", () => {
+    expect(classifyPair("import { r } from '../other/render'; expect(1).toBe(1);", SUBJ, SPEC)).not.toBe('executed');
+  });
+  it('a relative import that resolves to the subject IS an execution', () => {
+    expect(classifyPair("import { r } from '../lib/render';", SUBJ, SPEC)).toBe('executed');
+  });
+});
+
+// ROUND 3 item 3a. The LAST n-setting wins: '+n' turns the syntax check off again.
+describe('shell -n is turned off by a later +n (ROUND 3 item 3a)', () => {
+  const P = 'scripts/thing.sh';
+  it("bash -n +n <subject> RUNS the subject (executed): the last setting is +n", () => {
+    expect(classifyPair(`spawnSync('bash', ['-n', '+n', '${P}']);`, P)).toBe('executed');
+  });
+  it("bash +n -n <subject> is a syntax check: the last setting is -n", () => {
+    expect(classifyPair(`spawnSync('bash', ['+n', '-n', '${P}']);`, P)).not.toBe('executed');
   });
 });
 

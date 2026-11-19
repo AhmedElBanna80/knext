@@ -23,10 +23,10 @@ export const noteKeys = (note: string): Set<string> =>
 export function requiredRuleViolation(note: string): string | undefined {
   if (!/`expires`[^.]*\bREQUIRED\b/.test(note)) return 'no `expires` sentence says REQUIRED';
   // The negation must DIRECTLY modify REQUIRED: "not REQUIRED", "no longer REQUIRED", "never
-  // REQUIRED", "isn't REQUIRED", each with an optional "really". A window of words is not used:
+  // REQUIRED", "isn't REQUIRED", with any one adverb ("strictly", "always", "really") allowed between. A window of words is not used:
   // it flagged "(ISO date, not blank, REQUIRED)" and "not optional, REQUIRED", which both say REQUIRED.
   if (
-    /`expires`[^.]*\b(?:(?:is|are)\s+)?(?:not|no\s+longer|never|isn['’]t)\s+(?:really\s+)?REQUIRED\b/i.test(
+    /`expires`[^.]*\b(?:(?:is|are)\s+)?(?:not|no\s+longer|never|isn['’]t)(?:\s+\w+)?\s+REQUIRED\b/i.test(
       note,
     )
   )
@@ -77,6 +77,17 @@ describe('allowlist $schema-note matches its validator', () => {
   it('ROUND 2 item 4: "optional" as the predicate is still rejected, and REQUIRED alone passes', () => {
     expect(requiredRuleViolation('`expires` (ISO date) is optional, REQUIRED')).toBeDefined();
     expect(requiredRuleViolation('`expires` (ISO date) is REQUIRED')).toBeUndefined();
+  });
+
+  it('ROUND 3 item 4: any adverb between the negation and REQUIRED is still a negation (must reject)', () => {
+    expect(requiredRuleViolation('`expires` (ISO date) is not strictly REQUIRED')).toBeDefined();
+    expect(requiredRuleViolation('`expires` (ISO date) is not always REQUIRED')).toBeDefined();
+    expect(requiredRuleViolation('`expires` (ISO date) is no longer strictly REQUIRED')).toBeDefined();
+  });
+  it('ROUND 3 item 4: the must-pass phrases still pass with the wider negation', () => {
+    expect(requiredRuleViolation('`expires` (ISO date, not blank, REQUIRED, at most 180 days)')).toBeUndefined();
+    expect(requiredRuleViolation('`expires` (ISO date) not optional, REQUIRED')).toBeUndefined();
+    expect(requiredRuleViolation('`expires` (ISO date, REQUIRED, not optional)')).toBeUndefined();
   });
 
   it('the key scan rejects a stale extra key and ignores uppercase tokens', () => {

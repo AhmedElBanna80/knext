@@ -147,8 +147,8 @@ const MUTATIONS = [
   {
     label: 'the -n flag is no longer required: any shell spawn of the subject is a syntax check',
     subject: 'lint',
-    anchor: "if (m[1] === '-' && c === 'n') check = true;",
-    replacement: "check = true;",
+    anchor: "  return check ? 'check' : 'run';",
+    replacement: "  return 'check';",
   },
   {
     label: 'a -n argument to a non-shell command is treated as a syntax check',
@@ -334,12 +334,42 @@ const MUTATIONS = [
   {
     label: "item 3: a spec that imports the subject by module path no longer names it (its executed verdict is lost)",
     subject: 'lint',
-    anchor: "s.includes(base) || importsModule(s, path))",
-    replacement: "s.includes(base))",
+    anchor: "      .filter((x) => namesSubject(x.text, path, x.p))",
+    replacement: "      .filter(() => true)",
+  },
+  {
+    label: "ROUND 3 item 1: the bare name is matched as a raw substring (data.mjs names a.mjs)",
+    subject: "lint",
+    anchor: "if (new RegExp(`(?<![\\\\w./-])${esc(base)}(?![\\\\w-])`).test(specSource)) return true;",
+    replacement: "if (specSource.includes(base)) return true;",
+  },
+  {
+    label: "ROUND 3 item 1: a relative specifier names the subject by its stem, not its resolved path (../other/render names lib/render)",
+    subject: "lint",
+    anchor: "    return specifierTargets(lit, specPath).includes(subjectPath);",
+    replacement: "    return lit.split('/').pop().replace(/\\.[^.]+$/, '') === subjectPath.split('/').pop().replace(/\\.[^.]+$/, '');",
+  },
+  {
+    label: "ROUND 3 item 3a: the last -n/+n setting is ignored (a later +n leaves the check on)",
+    subject: "lint",
+    anchor: "if (c === 'n') check = m[1] === '-';",
+    replacement: "if (c === 'n') check = check || m[1] === '-';",
+  },
+  {
+    label: "ROUND 3 item 1: namesSubject never checks quoted literals (a relative import is not seen)",
+    subject: "lint",
+    anchor: "    if (refersTo(m[2], subjectPath, specPath)) return true;",
+    replacement: "    if (false) return true;",
+  },
+  {
+    label: "ROUND 3 item 1: classifyPair ignores the spec path and resolves relative imports from the repo root",
+    subject: "lint",
+    anchor: "function specifierTargets(spec, specPath) {\n  const t = posix.normalize(posix.join(posix.dirname(specPath), spec));",
+    replacement: "function specifierTargets(spec, specPath) {\n  const t = posix.normalize(posix.join('.', spec));",
   },
 ];
 
-const DECLARED = 49;
+const DECLARED = 54;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

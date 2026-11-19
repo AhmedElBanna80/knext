@@ -181,6 +181,13 @@ function nameFromSpec(spec) {
  * `{ packages: [{name, version, deps}], roots: [deps] }`. Returns NULL for a
  * file that cannot be read or understood, so the caller reports INFO, not a pass.
  */
+/**
+ * @typedef {{ name: string, version: string, deps: Record<string, string> }} LockPackage
+ * @typedef {{ packages: LockPackage[], roots: Record<string, string>[] }} ParsedLock
+ * @param {string} text
+ * @param {'bun' | 'npm'} kind
+ * @returns {ParsedLock | null}
+ */
 export function parseLockfile(text, kind) {
   try {
     if (kind === 'bun') {
@@ -361,10 +368,17 @@ export async function probeEntries(entries, fetchAdvisory, { loadLock = () => nu
 }
 
 /** Red ONLY on a RETIRE finding, an API error, or an empty entry set. INFO never fails. */
+/** @param {{ findings: unknown[], errors: unknown[], checked: number }} result */
 export function exitCodeFor({ findings, errors, checked }) {
   return findings.length > 0 || errors.length > 0 || checked === 0 ? 1 : 0;
 }
 
+/**
+ * @typedef {{ file: string, id: string, package?: string, reasons: string[] }} ProbeRow
+ * @typedef {{ findings: ProbeRow[], informational?: ProbeRow[], errors: { file: string, id: string, message: string }[], checked: number }} ProbeResult
+ */
+
+/** @param {ProbeResult} result */
 export function renderReport({ findings, informational = [], errors, checked }) {
   const tag = (f) => `${f.id} (${f.file}${f.package ? `, ${f.package}` : ''})`;
   const lines = [`Checked ${checked} allowlist entries.`];

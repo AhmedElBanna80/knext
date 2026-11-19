@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parse } from 'yaml';
 import {
   ALLOWLIST_FILES,
   classifyAdvisory,
@@ -292,5 +294,37 @@ describe('real allowlists', () => {
       { cwd: ROOT, encoding: 'utf8' },
     );
     expect(r.status).toBe(0);
+  });
+});
+
+describe('workflow placement and alert wiring', () => {
+  const wf = parse(
+    readFileSync(resolve(ROOT, '.github/workflows/allowlist-retirement-nightly.yml'), 'utf8'),
+  ) as {
+    on: Record<string, { inputs?: Record<string, unknown> } | undefined>;
+    jobs: Record<
+      string,
+      { if?: string; steps?: { uses?: string; with?: Record<string, string> }[] }
+    >;
+  };
+
+  it('is a workflow_call with a checkout_ref input and NO dead schedule', () => {
+    expect(wf.on.schedule).toBeUndefined();
+    expect(Object.keys(wf.on.workflow_call?.inputs ?? {})).toContain('checkout_ref');
+  });
+
+  it('every checkout uses inputs.checkout_ref (a call would otherwise probe main)', () => {
+    for (const [name, job] of Object.entries(wf.jobs)) {
+      const checkouts = (job.steps ?? []).filter((st) => st.uses?.startsWith('actions/checkout@'));
+      expect(checkouts.length, name).toBeGreaterThan(0);
+      for (const c of checkouts) expect(c.with?.ref, name).toBe('${{ inputs.checkout_ref }}');
+    }
+  });
+
+  it('the alert fires on failure OR cancelled and carries always()', () => {
+    const cond = wf.jobs['nightly-red-alert'].if ?? '';
+    expect(cond).toContain('always()');
+    expect(cond).toContain("needs.probe-allowlists.result == 'failure'");
+    expect(cond).toContain("needs.probe-allowlists.result == 'cancelled'");
   });
 });

@@ -145,7 +145,7 @@ const MUTATIONS = [
   {
     label: "workflow: drop 'cancelled' from the alert condition",
     subject: 'workflow',
-    guard: 'alertSpec',
+    guard: 'spec',
     anchor:
       "(needs.probe-allowlists.result == 'failure' || needs.probe-allowlists.result == 'cancelled')",
     replacement: "needs.probe-allowlists.result == 'failure'",
@@ -153,15 +153,30 @@ const MUTATIONS = [
   {
     label: 'workflow: drop always() from the alert condition',
     subject: 'workflow',
-    guard: 'alertSpec',
+    guard: 'spec',
     anchor: "always() &&\n      github.event_name == 'schedule' &&\n      (needs.probe-allowlists",
     replacement: "github.event_name == 'schedule' &&\n      (needs.probe-allowlists",
   },
+  {
+    label: 'workflow: the checkout ignores checkout_ref (a call would probe main)',
+    subject: 'workflow',
+    guard: 'spec',
+    anchor:
+      '          ref: ${{ inputs.checkout_ref }}\n          persist-credentials: false\n\n      - name: Probe',
+    replacement: '          persist-credentials: false\n\n      - name: Probe',
+  },
+  {
+    label: 'workflow: a dead schedule trigger is added back',
+    subject: 'workflow',
+    guard: 'spec',
+    anchor: 'on:\n  workflow_call:',
+    replacement: "on:\n  schedule:\n    - cron: '19 7 * * *'\n  workflow_call:",
+  },
 ];
 
-declareMutations(16);
-if (MUTATIONS.length !== 16) {
-  console.error(`FATAL: declared 16 mutations, table has ${MUTATIONS.length}`);
+declareMutations(18);
+if (MUTATIONS.length !== 18) {
+  console.error(`FATAL: declared 18 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

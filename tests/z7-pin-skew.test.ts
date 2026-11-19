@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
@@ -141,21 +141,25 @@ describe('the nightly job can run on a fresh runner', () => {
   });
   it('runs in a clean directory with only the install step providing yaml', () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'z7skew-'));
-    mkdirSync(resolve(dir, 'scripts/lib'), { recursive: true });
-    cpSync(
-      resolve(REPO_ROOT, 'scripts/verify-z7-pin-skew.mjs'),
-      resolve(dir, 'scripts/verify-z7-pin-skew.mjs'),
-    );
-    cpSync(
-      resolve(REPO_ROOT, 'scripts/lib/z7-pin-skew.mjs'),
-      resolve(dir, 'scripts/lib/z7-pin-skew.mjs'),
-    );
-    const r = spawnSync('node', [resolve(dir, 'scripts/verify-z7-pin-skew.mjs')], {
-      cwd: dir,
-      encoding: 'utf8',
-    });
-    // No yaml installed: the run must fail closed (nonzero), proving the install step is load-bearing.
-    expect(r.status).not.toBe(0);
-    expect(r.stderr).toMatch(/Cannot find (package|module)/);
+    try {
+      mkdirSync(resolve(dir, 'scripts/lib'), { recursive: true });
+      cpSync(
+        resolve(REPO_ROOT, 'scripts/verify-z7-pin-skew.mjs'),
+        resolve(dir, 'scripts/verify-z7-pin-skew.mjs'),
+      );
+      cpSync(
+        resolve(REPO_ROOT, 'scripts/lib/z7-pin-skew.mjs'),
+        resolve(dir, 'scripts/lib/z7-pin-skew.mjs'),
+      );
+      const r = spawnSync('node', [resolve(dir, 'scripts/verify-z7-pin-skew.mjs')], {
+        cwd: dir,
+        encoding: 'utf8',
+      });
+      // No yaml installed: the run must fail closed (nonzero), proving the install step is load-bearing.
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/Cannot find (package|module)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

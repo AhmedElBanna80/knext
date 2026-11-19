@@ -58,7 +58,7 @@ export function discoverAllowlistGates(scriptsDir, allowlistRel) {
 
 /**
  * Expand the changed allowlists into concrete commands.
- * @returns {{ runs: object[], unknown: {allowlist: string, script: string}[] }}
+ * @returns {{ runs: {allowlist: string, script: string, args: string[], entry: any}[], unknown: {allowlist: string, script: string}[] }}
  */
 export function planGateRuns(scriptsDir, allowlists, table = GATE_TABLE) {
   const runs = [];

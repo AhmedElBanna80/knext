@@ -67,7 +67,7 @@ describe('allowlist gate discovery', () => {
     const root = fixture();
     put(root, 'scripts/known.mjs', 'x-allowlist.json');
     put(root, 'scripts/stranger.mjs', 'x-allowlist.json');
-    const table = { 'known.mjs': { needs: [], runs: [['--a'], ['--b']] } };
+    const table: any = { 'known.mjs': { needs: [], runs: [['--a'], ['--b']] } };
     const { runs, unknown } = planGateRuns(
       join(root, 'scripts'),
       ['security/x-allowlist.json'],

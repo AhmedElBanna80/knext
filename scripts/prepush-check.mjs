@@ -116,7 +116,11 @@ export function runChecks(opts, deps = REAL_DEPS) {
         `${u.script} reads ${u.allowlist} but has no invocation in GATE_TABLE (scripts/lib/prepush-check.mjs); add it so it is run`,
       );
     }
-    let sbomDir;
+    let sbomDir = '';
+    const needsSbom = runs.some((r) => r.entry.sbom);
+    if (needsSbom) {
+      sbomDir = mkdtempSync(join(tmpdir(), 'prepush-sbom-'));
+    }
     try {
       for (const r of runs) {
         const label = `${r.script} ${r.args.join(' ')}`.trim();
@@ -130,7 +134,6 @@ export function runChecks(opts, deps = REAL_DEPS) {
         if (r.entry.scanner) args.push('--scanner', deps.which('osv-scanner'));
         if (r.entry.base) args.push('--base', mergeBase);
         if (r.entry.sbom) {
-          sbomDir ??= mkdtempSync(join(tmpdir(), 'prepush-sbom-'));
           args.push('--sbom-out', join(sbomDir, 'sbom.cdx.json'));
         }
         say(`\n--- ${label}`);

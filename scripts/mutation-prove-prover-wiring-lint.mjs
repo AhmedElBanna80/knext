@@ -124,8 +124,14 @@ const MUTATIONS = [
   {
     label: 'src.replace(...) is no longer a text-only use',
     subject: 'lint',
-    anchor: "  'replaceAll',\n]);",
-    replacement: ']);',
+    anchor: "  'replace',\n",
+    replacement: '',
+  },
+  {
+    label: 'src.replaceAll(...) is no longer a text-only use',
+    subject: 'lint',
+    anchor: "  'replaceAll',\n",
+    replacement: '',
   },
   {
     label: 'a bash -n spawn of the subject (literal path) counts as executing it again',
@@ -165,7 +171,7 @@ const MUTATIONS = [
   },
 ];
 
-const DECLARED = 21;
+const DECLARED = 22;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

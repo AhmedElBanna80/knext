@@ -195,6 +195,10 @@ describe('F6 evasions: text reads and chained string methods are still text-only
     const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const out = src.replace('a', 'b'); expect(out).toContain('b');`;
     expect(isTextOnlyPair(spec, P)).toBe(true);
   });
+  it('flags src.replaceAll(...) as a text-only rewrite too', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const out = src.replaceAll('a', 'b'); expect(out).toContain('b');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
   it('a chained method that ends in neither a substring check nor an assertion is not flagged', () => {
     const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const n = src.toLowerCase().length;`;
     expect(isTextOnlyPair(spec, P)).toBe(false);

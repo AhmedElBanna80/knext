@@ -1,0 +1,48 @@
+name: prepush-lib-drift
+
+# `integration/v2` and `main` each carry a copy of the pre-push check. They must stay the same
+# code and differ only in which gates and security/ files they register (the block between
+# `// BEGIN branch-specific` and `// END branch-specific` in scripts/lib/prepush-check.mjs).
+# This diffs everything else against origin/main and fails on divergence.
+#
+# RUNS FROM integration/v2 ONLY, and why it is a push trigger rather than a nightly cron: GitHub
+# fires `schedule` only from the DEFAULT branch's copy of a workflow, and this file deliberately
+# does not exist on main, so a cron here would never run. A push to integration/v2 that touches
+# the check runs it from that branch's own copy; `workflow_dispatch` runs it on demand.
+#
+# Informational, not a required check, never a gate on a PR. RED means one copy changed without
+# the other: port the change. Until the main copy lands it also fails ("not present on origin/main").
+
+on:
+  push:
+    branches: [integration/v2]
+    paths:
+      - 'scripts/lib/prepush-check.mjs'
+      - 'scripts/prepush-check.mjs'
+      - 'scripts/prepush-lib-drift.mjs'
+      - '.github/workflows/prepush-lib-drift.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepush-lib-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Diff the two copies outside the branch-specific block
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin '+refs/heads/main:refs/remotes/origin/main'
+          node scripts/prepush-lib-drift.mjs --other origin/main | tee -a "$GITHUB_STEP_SUMMARY"

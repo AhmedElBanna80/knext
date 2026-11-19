@@ -26,7 +26,7 @@ fails if the commit that landed on `main` or `integration/**` does not contain t
 ## Before you push, part two: `node scripts/prepush-check.mjs`
 
 `bun run prepush` checks lint and types. This one checks the diff you are about to push, against
-the merge base, for three defects that reached CI or merged: a changed `security/*allowlist*.json`
+the merge base, for three defects that reached CI or merged: a changed `security/` data file
 that its gate rejects, tests that leak temp directories, and a change that touches files outside
 its task.
 
@@ -35,16 +35,44 @@ node scripts/prepush-check.mjs --scope 'scripts/**,tests/**'
 ```
 
 Every check looks at the same set of files: the merge-base diff plus your uncommitted and
-untracked changes, which are listed as such. It runs the real gate for every changed allowlist
-(readers are found by scanning `scripts/` and the workflows; one that is not in the registry in
-`scripts/lib/prepush-check.mjs` fails), runs the changed tests while snapshotting `tmpdir()` and the
-repo root for new leftovers (with no changed tests it runs the tests that import the changed source,
-and warns that the leak scan was not exercised if there are none), scans `tests/**` for a `mkdtemp`
-that is never removed, and prints `git diff --stat` grouped by top-level area. A file outside the
-declared scope fails; with no scope declared it warns. The scope is `--scope`, or a line of the
-form `Scope: glob, glob` in a commit or PR body; any other phrasing is ignored. A
-gate whose tool is not installed is reported as unverified and fails unless you pass
+untracked changes, which are listed as such. It runs the real gate for every changed file under
+`security/` (any depth, any extension except `.md`): readers are found by scanning `scripts/`, the
+workflows and `package.json` scripts, and one that is not in the registry in
+`scripts/lib/prepush-check.mjs` fails. A file with no gate fails too. A gate is a registered
+script, a test that reads the file by its path and that a workflow runs, or a documented
+exemption (reported on every run). It also runs the changed tests while snapshotting `tmpdir()`
+and the repo root for new leftovers (with no changed tests it runs the tests that import the
+changed source, and warns that the leak scan was not exercised if there are none), scans
+`tests/**` for a `mkdtemp` that is never removed, and prints `git diff --stat` grouped by
+top-level area. A file outside the declared scope fails. The scope is `--scope`, or a line of the
+form `Scope: glob, glob` in a commit or PR body; any other phrasing is ignored. List each glob
+separately: a brace glob such as `{a,b}/**` fails, because the line is split on commas. A gate
+whose tool is not installed is reported as unverified and fails unless you pass
 `--allow-missing-tools`. It is not a git hook and nothing installs it.
+
+### In CI
+
+`.github/workflows/prepush-check.yml` runs it on every pull request, and again when the PR body is
+edited. There the `Scope:` line must be in the **PR body** (a commit message can be rebased wider),
+and the job fails when it is missing, when it is a wildcard over directories (`**`, `**/*`,
+`*/**`), or when the globs together touch 75% of the tracked top-level directories or match more
+than 60% of tracked files (so `**/*.ts, **/*.md` fails). Locally a missing scope only warns.
+
+What the CI job does **not** catch:
+
+- It does not run any gate or test; each already runs in its own workflow. It proves a scope was
+  declared and that each changed `security/` file has a gate.
+- The scope is self-declared. A revert inside the declared scope passes, and so does a wide but
+  honest-looking scope below the thresholds above.
+- A `Scope:` line is not checked against what the PR says it does.
+- A test counts as a gate if it reads the file by path and a workflow runs it; workflow trigger
+  filters are not evaluated, and a test that reads the file but asserts little still counts.
+- A path built at run time cannot be seen by the reader scan; keep paths literal.
+
+The copy on `main` and the copy on `integration/v2` differ only in the block between
+`// BEGIN branch-specific` and `// END branch-specific` (which gates and `security/` files each
+registers). `.github/workflows/prepush-lib-drift.yml` runs `scripts/prepush-lib-drift.mjs` from
+`integration/v2` and fails when anything else differs.
 
 ## Mutation-proving a guard
 

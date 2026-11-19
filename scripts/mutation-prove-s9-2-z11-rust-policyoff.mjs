@@ -105,7 +105,7 @@ const MUTATIONS = [
     id: 'R11',
     subject: 'run',
     claim: 'the direct Rust garbage-token call is dropped',
-    anchor: '  foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer not-a-token"\n  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, Rust',
+    anchor: '  foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer not-a-token"\n  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, Rust',
     replacement: '  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, Rust',
   },
   {

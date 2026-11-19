@@ -257,19 +257,19 @@ describe('policyoff, Rust: the Rust template function itself refuses a token-les
     expect(w).toMatch(/dial_rc "\$\{ip\}" 8080\)" = 0 \]; then RUST_IP=/);
     expect(w).toMatch(/\n {2}fail "policy off: the foreign pod could not reach the warm Rust/);
     expect(r).toContain('await_rust_ip');
-    expect(r.indexOf('await_rust_ip')).toBeLessThan(r.indexOf('foreign_post "http://${ip}:8080'));
+    expect(r.indexOf('await_rust_ip')).toBeLessThan(r.indexOf('foreign_post "http://${RUST_IP}:8080'));
   });
   it('the direct Rust no-token call is asserted 401 "missing bearer token"', () => {
     const leg = seg(
-      'foreign_post "http://${ip}:8080${GET_ITEM}" ""',
-      'foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer',
+      'foreign_post "http://${RUST_IP}:8080${GET_ITEM}" ""',
+      'foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer',
     );
     expect(leg).toContain(refused('missing bearer token'));
     expect(leg).toContain('policy off, Rust, direct to the pod, no token');
   });
   it('the direct Rust garbage-token call is asserted 401 "token rejected"', () => {
     const leg = seg(
-      'foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer not-a-token"',
+      'foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer not-a-token"',
       'echo "REFUSED',
     );
     expect(leg).toContain(refused('token rejected'));

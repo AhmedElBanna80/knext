@@ -534,16 +534,14 @@ policyoff_rust() {
     || fail "policy off, Rust, cold, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
   [ "$(all_pods "${RUST_FN}")" -ge 1 ] || fail "the refused call never woke ${RUST_FN}: it did not reach the function"
   ok "policy off: a cold no-token call through the activator woke the Rust function and was refused (401 unauthenticated)"
-  local ip
   await_rust_ip
-  ip="${RUST_IP}"
-  foreign_post "http://${ip}:8080${GET_ITEM}" ""
+  foreign_post "http://${RUST_IP}:8080${GET_ITEM}" ""
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
     || fail "policy off, Rust, direct to the pod, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
-  foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer not-a-token"
+  foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer not-a-token"
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
     || fail "policy off, Rust, direct to the pod, garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
-  echo "REFUSED-BY-RUST-FUNCTION-WITH-POLICY-OFF: direct ${ip}:8080 no token -> 401 unauthenticated; garbage token -> 401 unauthenticated"
+  echo "REFUSED-BY-RUST-FUNCTION-WITH-POLICY-OFF: direct ${RUST_IP}:8080 no token -> 401 unauthenticated; garbage token -> 401 unauthenticated"
   set_rust_policy true
   ok "policy off: a foreign pod reached the Rust function pod directly and the function itself refused it (policy restored)"
 }

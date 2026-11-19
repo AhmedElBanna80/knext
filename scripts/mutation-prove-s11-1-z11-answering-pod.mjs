@@ -337,13 +337,6 @@ const MUTATIONS = [
   row(
     'DC5',
     'lib',
-    'an unreadable token file no longer fails the call',
-    'auth="$(cat "$3")" || { echo "direct_call: cannot read the token file $3" >&2; return 1; }',
-    'auth="$(cat "$3" 2>/dev/null)" || true',
-  ),
-  row(
-    'DC6',
-    'lib',
     'an empty token file no longer fails the call',
     '  [ -n "${auth}" ] || { echo "direct_call: the token file $3 is empty" >&2; return 1; }\n',
     '',

@@ -38,9 +38,29 @@
 #             Control: the same hold for 30 s, inside the token's life, is accepted, so
 #             the refusal is the token's age. Afterwards a fresh token is accepted and a
 #             garbage token is still refused.
+#   heldwarm  the combined case ADR-0004 names: warm pods that cached the OLD key set, the
+#             zone's key rotated and retired under them, and a call held longer than the
+#             token's life. Two warm pods each load the old set with one call and get no
+#             other. A new-key token held 30 s on pod A is accepted (404 not_found): a pod
+#             holding the old set finds the new key. The same held 80 s on pod B, in the same
+#             state, is refused (401 unauthenticated "token rejected"). Only the target pod is
+#             re-attached for each call, and the pod set is checked unchanged. The verifier
+#             re-reads its JWKS at the start of every call older than 10 s, looks the kid up,
+#             checks the signature and only then the expiry; a refusal says "token rejected"
+#             for every cause and is not logged, so the drill proves the pair above, not which
+#             check fired.
+#
+# How a call is held (held and heldwarm), with no node cordoned: a ResourceQuota in the
+# function's namespace admits no new pod, so the pod the activator is waiting for cannot be
+# created (cold hold). For the warm hold the live pods are also detached from their Service
+# (their revisionUID label is changed), so the activator has no endpoint while the pods, and the
+# key sets they cached, stay alive; with the quota in place the ReplicaSet cannot replace them.
+# Release re-attaches only the target pod, then (after the answer) the rest, and only then deletes
+# the quota; a cold release deletes the quota and nudges the ReplicaSet so it does not sit in its
+# retry backoff. Only this namespace is touched.
 #
 # Phases (PHASES, space-separated; default all): up deploy token direct policyoff noauth
-# rotcold held.
+# rotcold held heldwarm.
 #   up        a kind cluster with the default CNI disabled and Calico installed,
 #             then the Z7 lane's up phase on it (registry, cert-manager, Knative,
 #             the operator from this checkout)
@@ -71,7 +91,7 @@ REG_NAME="${REGISTRY_NAME:-knext-z11-registry}"
 REG_PORT="${REGISTRY_PORT:-5002}"
 NS="${Z11_NAMESPACE:-z11-e2e}"
 FOREIGN="${NS}-foreign"
-PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held}"
+PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held heldwarm}"
 INTERNAL_PORT="${INTERNAL_PORT:-18100}"
 # How long the held call stays outstanding. A token lives 60 s and the verifier allows
 # 5 s of skew, so anything below 66 s would not prove the refusal is the expiry.
@@ -117,18 +137,32 @@ diagnostics() {
 RESTORE_POLICY=0
 RESTORE_RUST_POLICY=0
 RESTORE_IMAGE=""
-# Set while the held phase has every node cordoned: a kept cluster must stay schedulable.
-RESTORE_CORDON=0
+# Set while a hold has the namespace's pod quota in place: a kept cluster must admit pods again.
+RESTORE_QUOTA=0
+# "<pod>=<revisionUID label> ..." while a warm hold has pods detached from their Service.
+RESTORE_DETACH=""
+# Set while heldwarm has the function on minScale 1: put it back to 0.
+RESTORE_MINSCALE=0
+HOLD_QUOTA=z11-hold
 # The background held call's pid is written here, so an abort never leaves it running.
 HELD_PIDFILE="${WORK}/held.pid"
 
 cleanup() {
-  local rc=$?
+  local rc=$? entry
   if [ -s "${HELD_PIDFILE}" ]; then kill "$(cat "${HELD_PIDFILE}")" 2>/dev/null || true; fi
-  if [ "${RESTORE_CORDON}" = 1 ]; then
-    # shellcheck disable=SC2046
-    k uncordon $(k get nodes -o name) >/dev/null 2>&1 \
-      || echo "WARNING: could not uncordon the nodes" >&2
+  # Re-attach every detached pod BEFORE the quota goes: with the quota still in place the
+  # ReplicaSet cannot create a replacement while it adopts the pods back.
+  for entry in ${RESTORE_DETACH}; do
+    k -n "${NS}" label pod "${entry%%=*}" "serving.knative.dev/revisionUID=${entry#*=}" --overwrite >/dev/null 2>&1 \
+      || echo "WARNING: could not re-attach ${entry%%=*}" >&2
+  done
+  if [ "${RESTORE_QUOTA}" = 1 ]; then
+    k -n "${NS}" delete resourcequota "${HOLD_QUOTA}" --ignore-not-found >/dev/null 2>&1 \
+      || echo "WARNING: could not delete the ${HOLD_QUOTA} quota" >&2
+  fi
+  if [ "${RESTORE_MINSCALE}" = 1 ]; then
+    k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"scaling":{"minScale":0,"maxScale":1}}}' >/dev/null 2>&1 \
+      || echo "WARNING: could not put ${GO_FN} back on minScale 0 and maxScale 1" >&2
   fi
   if [ "${RESTORE_POLICY}" = 1 ]; then
     k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"security":{"networkPolicy":true}}}' >/dev/null 2>&1 \
@@ -667,42 +701,129 @@ phase_rotcold() {
 
 # ---------------------------------------------------------------- phase: held
 
-# hold_call <seconds>: with the function at zero and every node cordoned, send one call
-# signed with the held key and keep it outstanding for <seconds>, then uncordon and take
-# the answer. Sets HELD_STATUS, HELD_CODE, HELD_MESSAGE and HELD_FOR. The call is a direct
+# fn_pods_ready: "<name> <uid> <revisionUID label>" per live Ready function pod, sorted by uid.
+fn_pods_ready() {
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running"
+              and ([.status.conditions[]? | select(.type == "Ready") | .status] == ["True"]))]
+              | sort_by(.metadata.uid)[] | "\(.metadata.name) \(.metadata.uid) \(.metadata.labels["serving.knative.dev/revisionUID"])"'
+}
+# fn_pod_uids: the uids of every live function pod, sorted, on one line.
+fn_pod_uids() {
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .metadata.uid] | sort | join(" ")'
+}
+# fn_pods_started_max: the latest start time among the live function pods, API server clock.
+fn_pods_started_max() {
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null) | .status.startTime | fromdateiso8601] | max'
+}
+
+# isolate_pods <keep uid>: with the pod quota in place (so nothing replaces them), detach every
+# function pod except <keep uid> from the Service and wait until the activator's endpoints hold
+# only the kept pod. Used to load the key set into one chosen pod.
+isolate_pods() {
+  local pod uid label rev end=$((SECONDS + 60))
+  RESTORE_QUOTA=1
+  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null
+  while read -r pod uid label; do
+    [ "${uid}" = "$1" ] && continue
+    RESTORE_DETACH="${RESTORE_DETACH}${pod}=${label} "
+    k -n "${NS}" label pod "${pod}" "serving.knative.dev/revisionUID=detached" --overwrite >/dev/null
+  done <<<"$(fn_pods_ready)"
+  rev="$(k -n "${NS}" get ksvc "${GO_FN}" -o jsonpath='{.status.latestReadyRevisionName}')"
+  until [ "$(k -n "${NS}" get endpoints "${rev}-private" -o json | jq '[.subsets[]?.addresses[]?] | length')" = 1 ]; do
+    [ "${SECONDS}" -lt "${end}" ] || fail "timed out after 60s waiting for the activator's endpoints to hold only the kept pod"
+    sleep 1
+  done
+  sleep 3
+}
+
+# release_pods: re-attach every detached pod, and only then delete the quota.
+release_pods() {
+  local entry
+  for entry in ${RESTORE_DETACH}; do
+    k -n "${NS}" label pod "${entry%%=*}" "serving.knative.dev/revisionUID=${entry#*=}" --overwrite >/dev/null
+  done
+  RESTORE_DETACH=""
+  k -n "${NS}" delete resourcequota "${HOLD_QUOTA}" >/dev/null
+  RESTORE_QUOTA=0
+}
+
+# hold_call <seconds> [warm <target uid>]: hold ONE call in the activator for <seconds>, then
+# release it and take the answer. Sets HELD_STATUS, HELD_CODE, HELD_MESSAGE, HELD_FOR and, for a
+# warm hold, HELD_POD_UID. Cold (the default): the function is scaled to zero first and a
+# ResourceQuota admits no pod, so the pod the activator waits for cannot be created. Warm: every
+# live pod is kept, all are detached from the Service (their revisionUID label is changed) so the
+# activator has no endpoint, and the quota keeps the ReplicaSet from replacing them. On release
+# ONLY the target pod is re-attached, so the call can only be answered by it; the others come
+# back after the answer, and the set of pods must be exactly what it was. The call is a direct
 # bun call, never the retrying wrapper: a retry would mint a fresh token and prove nothing.
 hold_call() {
-  local out="${WORK}/held.out" start
-  await_zero "${GO_FN}"
+  local out="${WORK}/held.out" start mode="${2:-cold}" pods="" pod uid label tpod="" tlabel="" uids_before=""
+  HELD_POD_UID=""
+  if [ "${mode}" = warm ]; then
+    pods="$(fn_pods_ready)"
+    uids_before="$(fn_pod_uids)"
+    while read -r pod uid label; do
+      if [ "${uid}" = "${3:-}" ]; then tpod="${pod}"; tlabel="${label}"; fi
+    done <<<"${pods}"
+    [ -n "${tpod}" ] || fail "the target pod ${3:-} is not a Ready ${GO_FN} pod"
+    HELD_POD_UID="$3"
+  else
+    await_zero "${GO_FN}"
+  fi
   ensure_forward
-  RESTORE_CORDON=1
-  # shellcheck disable=SC2046
-  k cordon $(k get nodes -o name) >/dev/null
+  RESTORE_QUOTA=1
+  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null
+  if [ "${mode}" = warm ]; then
+    while read -r pod uid label; do
+      RESTORE_DETACH="${RESTORE_DETACH}${pod}=${label} "
+      k -n "${NS}" label pod "${pod}" "serving.knative.dev/revisionUID=detached" --overwrite >/dev/null
+    done <<<"${pods}"
+  fi
   start=$SECONDS
   bun "${Z7}/probe.ts" --base "http://127.0.0.1:${INTERNAL_PORT}" --host "${FN_HOST}" \
     --issuer "${ISSUER}" --sub alice --rpc get --id missing --auth signer --key-dir "${WORK}/key-held" \
     --with-message --timeout-seconds 240 >"${out}" 2>"${WORK}/held.err" &
   echo "$!" >"${HELD_PIDFILE}"
-  # An inline wait, not wait_until: its eval would add three levels to the call chain the
-  # supply-chain scanner follows (limit 6).
-  until [ "$(all_pods "${GO_FN}")" -ge 1 ]; do
-    [ $((SECONDS - start)) -lt 60 ] || fail "timed out after 60s waiting for the held call to create a pod for the activator to wait on"
-    sleep 1
-  done
-  [ "$(fn_pod_ip)" = "" ] || fail "a Ready ${GO_FN} pod exists with every node cordoned: the call is not being held"
+  if [ "${mode}" = cold ]; then
+    # An inline wait, not wait_until: its eval would add three levels to the call chain the
+    # supply-chain scanner follows (limit 6). The activator asking for a pod is the proof that
+    # the call reached it and is being held, not answered.
+    until [ "$(k -n "${NS}" get deploy -l "serving.knative.dev/service=${GO_FN}" -o json | jq '[.items[].spec.replicas // 0] | max // 0')" -ge 1 ]; do
+      [ $((SECONDS - start)) -lt 60 ] || fail "timed out after 60s waiting for the held call to make the activator ask for a pod"
+      sleep 1
+    done
+  fi
   while [ $((SECONDS - start)) -lt "$1" ]; do
     kill -0 "$(cat "${HELD_PIDFILE}")" 2>/dev/null || fail "the held call ended after $((SECONDS - start))s, before $1s: it was not held ($(cat "${out}" "${WORK}/held.err" 2>/dev/null | head -c 300))"
     sleep 2
   done
-  # shellcheck disable=SC2046
-  k uncordon $(k get nodes -o name) >/dev/null
-  RESTORE_CORDON=0
+  if [ "${mode}" = warm ]; then
+    [ "$(fn_pod_uids)" = "${uids_before}" ] || fail "the warm pods changed during the hold: now '$(fn_pod_uids)', was '${uids_before}'"
+    # The label goes back BEFORE the quota is deleted, and only on the target pod.
+    k -n "${NS}" label pod "${tpod}" "serving.knative.dev/revisionUID=${tlabel}" --overwrite >/dev/null
+    RESTORE_DETACH="${RESTORE_DETACH/${tpod}=${tlabel} /}"
+  else
+    [ "$(all_pods "${GO_FN}")" = 0 ] || fail "a ${GO_FN} pod exists while the quota admits none: the call is not being held"
+    k -n "${NS}" delete resourcequota "${HOLD_QUOTA}" >/dev/null
+    RESTORE_QUOTA=0
+    # The ReplicaSet retries a refused pod create with a backoff that grows with every refusal:
+    # touching it makes it sync now instead of when the backoff ends.
+    k -n "${NS}" annotate replicaset -l "serving.knative.dev/service=${GO_FN}" "apps.kn-next.dev/z11-release=${SECONDS}" --overwrite >/dev/null
+  fi
   wait "$(cat "${HELD_PIDFILE}")" || fail "the held call did not get an answer: $(head -c 300 "${WORK}/held.err")"
   : >"${HELD_PIDFILE}"
   HELD_FOR=$((SECONDS - start))
   HELD_STATUS="$(jq -r .status "${out}")"
   HELD_CODE="$(jq -r '.code // ""' "${out}")"
   HELD_MESSAGE="$(jq -r '.message // ""' "${out}")"
+  if [ "${mode}" = warm ]; then
+    release_pods
+    # Exactly the pods that were there, and the target among them: nothing was replaced.
+    [ "$(fn_pod_uids)" = "${uids_before}" ] || fail "after the answer the pods are '$(fn_pod_uids)', want exactly '${uids_before}'"
+  fi
   [ "${HELD_FOR}" -ge "$1" ] || fail "the held call was outstanding only ${HELD_FOR}s, want at least $1s"
 }
 
@@ -724,7 +845,7 @@ phase_held() {
   [ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \
     || fail "a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}', want 401 unauthenticated 'token rejected' (an expired token must never be accepted, and the header must have reached the function)"
   ok "a call held ${HELD_FOR}s in the activator was refused by the function (401 unauthenticated, token rejected) while the ${CONTROL_HELD_SECONDS}s control with the same mechanism was accepted: the token expired"
-  wait_until 120 3 "a Ready ${GO_FN} pod after the nodes are schedulable again" '[ -n "$(fn_pod_ip)" ]'
+  wait_until 120 3 "a Ready ${GO_FN} pod after the hold is released" '[ -n "$(fn_pod_ip)" ]'
   fn_probe "${WORK}/key-held" fresh
   [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
     || fail "after the hold a fresh token got status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (token validation must still work)"
@@ -734,12 +855,102 @@ phase_held() {
   ok "after the hold a fresh token is accepted (404 not_found) and a garbage token is still refused (token validation intact)"
 }
 
+# ---------------------------------------------------------------- phase: heldwarm
+
+# The combined case ADR-0004 names, on the verifier as built. Its order on every call is:
+# re-read the mounted JWKS when its mtime or size changed or it is older than JWKSRereadInterval
+# (10 s), THEN look the kid up (an unknown kid is refused, it is not fetched again), then check
+# the signature, and only then the lifetime (exp). So a pod that is idle for more than 10 s always
+# re-reads the file at the start of its next call, and a call held for more than 60 s reaches the
+# exp check only after the kid and signature checks have passed. The refusal's wire message is
+# "token rejected" for every cause and the verifier logs nothing about a refusal, so no log line or
+# counter can tell an unknown kid from an expired token: what the drill can prove is the pair
+# below, on pods whose in-memory key set is the OLD one.
+#
+# Two warm pods are kept (minScale and maxScale 2). Each is isolated in turn and given ONE call
+# with the old key, so each caches the old set, and neither gets another call. The key is then
+# rotated and retired under them. The call that proves the pod finds the new key it does not
+# hold (the control) is held 30 s on pod A and must be accepted. The call held 80 s, on pod B,
+# which is in the same stale-cache state, must be refused. Only the target pod is re-attached to
+# the Service for each call, so it is the one that answers, and the pod set is checked unchanged.
+phase_heldwarm() {
+  log "heldwarm: warm pods with the old key set cached, the key rotated, one call held past the token's life"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  local old_kid new_kid wnonce rev_before wuid_a wuid_b wuids wretired_at
+  [ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \
+    || fail "warm pod: a rotation is already in flight; run the deploy phase for a clean zone"
+  old_kid="$(secret_get current.kid)"
+  export_key "${WORK}/key-pre" current
+  rev_before="$(k -n "${NS}" get ksvc "${GO_FN}" -o jsonpath='{.status.latestReadyRevisionName}')"
+  RESTORE_MINSCALE=1
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"scaling":{"minScale":2,"maxScale":2}}}' >/dev/null
+  wait_until 300 3 "two warm ${GO_FN} pods on a new revision, the old one drained" \
+    '[ "$(k -n "${NS}" get ksvc "${GO_FN}" -o jsonpath="{.status.latestReadyRevisionName}")" != "${rev_before}" ] && [ "$(all_pods "${GO_FN}")" = 2 ] && [ "$(fn_pods_ready | wc -l | tr -d " ")" = 2 ]'
+  wuids="$(fn_pod_uids)"
+  read -r wuid_a wuid_b <<<"${wuids}"
+  [ -n "${wuid_a}" ] && [ -n "${wuid_b}" ] && [ "${wuid_a}" != "${wuid_b}" ] || fail "want two distinct warm pods, have '${wuids}'"
+  isolate_pods "${wuid_a}"
+  fn_probe "${WORK}/key-pre" load-a
+  [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
+    || fail "the warm pod A answered the current key with status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (it must load the key set)"
+  release_pods
+  isolate_pods "${wuid_b}"
+  fn_probe "${WORK}/key-pre" load-b
+  [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
+    || fail "the warm pod B answered the current key with status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (it must load the key set)"
+  release_pods
+  ok "both warm pods (${wuid_a}, ${wuid_b}) loaded the key set with ${old_kid} (404 not_found) and get no other call until their held one"
+
+  log "heldwarm 1/3: rotate and retire the key while those pods are warm and idle"
+  wnonce="z11w-$(date +%s)"
+  k -n "${NS}" annotate nextapp "${ZONE}" "apps.kn-next.dev/rotate-signing-key=${wnonce}" --overwrite
+  wait_until 60 1 "the operator to take the rotation request under the warm pod" '[ -n "$(secret_get next.kid)" ]'
+  new_kid="$(secret_get next.kid)"
+  [ -n "${new_kid}" ] && [ "${new_kid}" != "${old_kid}" ] || fail "no new key was staged by the rotation request"
+  wait_until $((BOUND_SECONDS + 150)) 2 "signing to switch under the warm pod" '[ "$(secret_get current.kid)" = "${new_kid}" ]'
+  k -n "${NS}" annotate secret "${KEY_SECRET}" \
+    "apps.kn-next.dev/signing-key-switched-at=$(node -p 'new Date(Date.now() - 7200 * 1000).toISOString()')" --overwrite
+  k -n "${OPERATOR_NS}" rollout restart deployment.apps/kn-next-operator-controller-manager
+  k -n "${OPERATOR_NS}" rollout status deployment.apps/kn-next-operator-controller-manager --timeout=180s
+  wait_until 180 3 "the previous key to leave the Secret under the warm pod" '[ -z "$(secret_get previous.kid)" ]'
+  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" '[ "$(jwks_kids)" = "${new_kid}" ]'
+  wretired_at="$(jwks_written_at)"
+  [ "$(fn_pod_uids)" = "${wuids}" ] && [ "$(fn_pods_started_max)" -lt "${wretired_at}" ] \
+    || fail "the pods are '$(fn_pod_uids)' (latest start $(fn_pods_started_max)), want the warm pods '${wuids}' all started before the retirement at ${wretired_at}: the rotation was not done under warm pods"
+  ok "retired: only ${new_kid} remains; the two warm pods (started before it) never restarted and served no call since they loaded ${old_kid}"
+
+  log "heldwarm 2/3: control, pod A (old set cached), new-key token held ${CONTROL_HELD_SECONDS}s"
+  export_key "${WORK}/key-held" current
+  hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"
+  echo "HELDWARM-CONTROL: outstanding ${HELD_FOR}s -> ${HELD_STATUS} ${HELD_CODE}"
+  [ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \
+    || fail "warm pod control: a call held ${HELD_FOR}s (inside the token's life) got status ${HELD_STATUS} code '${HELD_CODE}', want 404 not_found (a pod holding the old key set must find the new key)"
+  [ "${HELD_POD_UID}" = "${wuid_a}" ] \
+    || fail "warm pod control: the call was not answered by the warm pod ${wuid_a}"
+  ok "control: pod A, which cached only the old key set, accepted the new key after a ${HELD_FOR}s hold (404 not_found)"
+
+  log "heldwarm 3/3: pod B, in the same state, new-key token held ${HELD_SECONDS}s"
+  hold_call "${HELD_SECONDS}" warm "${wuid_b}"
+  echo "HELDWARM: outstanding ${HELD_FOR}s -> ${HELD_STATUS} ${HELD_CODE} '${HELD_MESSAGE}'"
+  [ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \
+    || fail "warm pod: a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}', want 401 unauthenticated 'token rejected' (an expired token must never be accepted, and the header must have reached the function)"
+  [ "${HELD_POD_UID}" = "${wuid_b}" ] \
+    || fail "the held call was not answered by the warm pod ${wuid_b}"
+  ok "a call held ${HELD_FOR}s was refused by pod B, in the same stale-cache state pod A accepted it in (401 unauthenticated, token rejected)"
+  foreign_get "Bearer not-a-token"
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
+    || fail "warm pod: after the holds a garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
+  k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"scaling":{"minScale":0,"maxScale":1}}}' >/dev/null
+  RESTORE_MINSCALE=0
+  ok "token validation is intact after the holds, and ${GO_FN} is back on minScale 0, maxScale 1"
+}
+
 # ---------------------------------------------------------------- main
 
 for phase in ${PHASES}; do
   case "${phase}" in
-    up | deploy | token | direct | policyoff | noauth | rotcold | held) ;;
-    *) fail "unknown phase '${phase}' (up deploy token direct policyoff noauth rotcold held)" ;;
+    up | deploy | token | direct | policyoff | noauth | rotcold | held | heldwarm) ;;
+    *) fail "unknown phase '${phase}' (up deploy token direct policyoff noauth rotcold held heldwarm)" ;;
   esac
 done
 if has_phase up; then phase_up; fi
@@ -753,4 +964,5 @@ if has_phase policyoff; then phase_policyoff; fi
 if has_phase noauth; then phase_noauth; fi
 if has_phase rotcold; then phase_rotcold; fi
 if has_phase held; then phase_held; fi
+if has_phase heldwarm; then phase_heldwarm; fi
 log "Z11 drill: ${PHASES} passed"

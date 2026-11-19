@@ -35,7 +35,20 @@ describe('the drill is careful', () => {
     expect(own).toMatch(/^set -euo pipefail$/m);
     expect(own).toMatch(/^set \+x$/m);
     expect(own).not.toMatch(/kind delete/);
-    for (const p of ['up', 'deploy', 'token', 'direct', 'policyoff', 'noauth', 'rotcold', 'held']) {
+    expect(own).toMatch(
+      /^ {4}up \| deploy \| token \| direct \| policyoff \| noauth \| rotcold \| held \| heldwarm\) ;;$/m,
+    );
+    for (const p of [
+      'up',
+      'deploy',
+      'token',
+      'direct',
+      'policyoff',
+      'noauth',
+      'rotcold',
+      'held',
+      'heldwarm',
+    ]) {
       expect(own).toContain(`if has_phase ${p}; then phase_${p}; fi`);
     }
   });
@@ -375,15 +388,15 @@ describe('CI runs the drill by default, including the policy-off leg', () => {
       expect(existsSync(resolve(REPO_ROOT, g)), `${g} exists`).toBe(true);
     }
   });
-  it('the run step and the job budget cover the rotcold and held phases', () => {
+  it('the run step and the job budget cover the rotcold, held and heldwarm phases', () => {
     expect(wf).toContain(
-      'Run the Z11 activator-path drill (all phases, including policyoff, rotcold and held)',
+      'Run the Z11 activator-path drill (all phases, including policyoff, rotcold, held and heldwarm)',
     );
     expect(wf).toMatch(/timeout-minutes: 90\b/);
   });
-  it('the default phase list of the script includes policyoff, rotcold and held', () => {
+  it('the default phase list of the script includes policyoff, rotcold, held and heldwarm', () => {
     expect(own).toMatch(
-      /PHASES="\$\{PHASES:-up deploy token direct policyoff noauth rotcold held\}"/,
+      /PHASES="\$\{PHASES:-up deploy token direct policyoff noauth rotcold held heldwarm\}"/,
     );
   });
 });
@@ -470,15 +483,20 @@ describe('rotcold: a cold pod accepts only the new key after a rotation done at 
 describe('held: a call the activator holds past the token life is refused, and validation still works', () => {
   const h = body('phase_held');
   const c = body('hold_call');
-  it('hold_call scales to zero, records the cordon, then cordons before it sends the call', () => {
+  it('hold_call scales to zero (cold), records the quota, then creates it before it sends the call', () => {
     expect(c.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(-1);
-    expect(c.indexOf('await_zero "${GO_FN}"')).toBeLessThan(c.indexOf('k cordon'));
-    expect(c.indexOf('RESTORE_CORDON=1')).toBeGreaterThan(-1);
-    expect(c.indexOf('RESTORE_CORDON=1')).toBeLessThan(c.indexOf('k cordon'));
-    expect(c.indexOf('k cordon')).toBeLessThan(c.indexOf('bun "${Z7}/probe.ts"'));
+    expect(c.indexOf('await_zero "${GO_FN}"')).toBeLessThan(c.indexOf('create resourcequota'));
+    expect(c.indexOf('RESTORE_QUOTA=1')).toBeGreaterThan(-1);
+    expect(c.indexOf('RESTORE_QUOTA=1')).toBeLessThan(c.indexOf('create resourcequota'));
+    expect(c).toContain('create resourcequota "${HOLD_QUOTA}" --hard=pods=0');
+    expect(c.indexOf('create resourcequota')).toBeLessThan(c.indexOf('bun "${Z7}/probe.ts"'));
     expect(c).toContain('echo "$!" >"${HELD_PIDFILE}"');
+    // Nothing is cordoned: the hold is scoped to the function's namespace.
+    expect(c).not.toMatch(/cordon/);
+    expect(own).not.toMatch(/\bk (un)?cordon\b/);
     // Flat: an inline wait (wait_until's eval would exceed the scanner's call-chain limit).
-    expect(c).toContain('until [ "$(all_pods "${GO_FN}")" -ge 1 ]; do');
+    expect(c).toContain('-ge 1 ]; do');
+    expect(c).toContain('.items[].spec.replicas');
     expect(c).not.toMatch(/wait_until [0-9]/);
   });
   it('the call stays outstanding for the whole hold, is a direct call with its own long timeout', () => {
@@ -491,8 +509,19 @@ describe('held: a call the activator holds past the token life is refused, and v
     expect(c).toContain('--with-message --timeout-seconds 240');
     expect(c).toMatch(/\[ "\$\{HELD_FOR\}" -ge "\$1" \] \|\| fail/);
     expect(c).not.toContain('fn_probe');
-    expect(c.indexOf('kill -0')).toBeLessThan(c.indexOf('k uncordon'));
-    expect(c.indexOf('k uncordon')).toBeLessThan(c.indexOf('RESTORE_CORDON=0'));
+    expect(c.indexOf('kill -0')).toBeLessThan(c.indexOf('delete resourcequota "${HOLD_QUOTA}"'));
+    expect(c.indexOf('delete resourcequota "${HOLD_QUOTA}"')).toBeLessThan(
+      c.indexOf('RESTORE_QUOTA=0'),
+    );
+    // After the quota is gone the ReplicaSet is nudged, so it is not still in its retry backoff.
+    expect(c.indexOf('delete resourcequota')).toBeLessThan(c.indexOf('annotate replicaset'));
+    // Both halves of the hold check: a cold hold has no pod, a warm hold has exactly the one.
+    expect(c).toMatch(
+      /\[ "\$\(all_pods "\$\{GO_FN\}"\)" = 0 \] \|\| fail "a \$\{GO_FN\} pod exists/,
+    );
+    expect(c).toMatch(
+      /\[ "\$\(fn_pod_uids\)" = "\$\{uids_before\}" \] \|\| fail "the warm pods changed during the hold/,
+    );
   });
   it('the control: the same hold, shorter than the token life, must be ACCEPTED (404 not_found)', () => {
     const ctl = h.slice(
@@ -526,14 +555,24 @@ describe('held: a call the activator holds past the token life is refused, and v
       /\[ "\$\{FC_STATUS\}" = 401 \] && \[ "\$\{FC_CODE\}" = unauthenticated \] && \[ "\$\{FC_MESSAGE\}" = "token rejected" \] \\\n\s*\|\| fail "after the hold a garbage token/,
     );
   });
-  it('an aborted hold never leaves a node cordoned or the call running', () => {
+  it('an aborted hold never leaves the quota, a detached pod, the raised scale or the call running', () => {
     const x = body('cleanup');
     expect(x).toMatch(
       /if \[ -s "\$\{HELD_PIDFILE\}" \]; then kill "\$\(cat "\$\{HELD_PIDFILE\}"\)"/,
     );
-    expect(x).toMatch(/if \[ "\$\{RESTORE_CORDON\}" = 1 \]; then/);
-    expect(x).toContain('k uncordon');
-    expect(x.indexOf('kill "$(cat "${HELD_PIDFILE}")"')).toBeLessThan(x.indexOf('k uncordon'));
+    expect(x).toMatch(/if \[ "\$\{RESTORE_QUOTA\}" = 1 \]; then/);
+    expect(x).toContain('delete resourcequota "${HOLD_QUOTA}" --ignore-not-found');
+    expect(x).toContain('for entry in ${RESTORE_DETACH}; do');
+    expect(x).toContain('"serving.knative.dev/revisionUID=${entry#*=}" --overwrite');
+    // Every detached pod goes back BEFORE the quota is deleted.
+    expect(x.indexOf('for entry in ${RESTORE_DETACH}')).toBeLessThan(
+      x.indexOf('delete resourcequota'),
+    );
+    expect(x).toMatch(/if \[ "\$\{RESTORE_MINSCALE\}" = 1 \]; then/);
+    expect(x).toContain('{"spec":{"scaling":{"minScale":0,"maxScale":1}}}');
+    expect(x.indexOf('kill "$(cat "${HELD_PIDFILE}")"')).toBeLessThan(
+      x.indexOf('delete resourcequota'),
+    );
   });
   it('the probe prints the interceptor message only on request, so the defaults are unchanged', () => {
     const probe = readFileSync(
@@ -571,5 +610,162 @@ describe('rotcold: the woken pods really started after the retirement', () => {
 describe('the long-call timeouts are what the phases need', () => {
   it('fn_probe waits 60 s for an answer', () => {
     expect(body('fn_probe')).toContain('--timeout-seconds 60');
+  });
+});
+
+// The combined case ADR-0004 names: warm pods that cached the old key set, the key rotated under
+// them, one call held past the token's life. Scanned as text; each assertion is tied to its own
+// call.
+describe('heldwarm: warm pods with the old key set cached, a call held past the token life', () => {
+  const w = body('phase_heldwarm');
+  const c = body('hold_call');
+  const seg = (from: string, to: string): string => {
+    const a = w.indexOf(from);
+    expect(a, `${from} is in phase_heldwarm`).toBeGreaterThan(-1);
+    const z = to === '' ? w.length : w.indexOf(to, a + from.length);
+    expect(z, `${to} follows ${from}`).toBeGreaterThan(-1);
+    return w.slice(a, z);
+  };
+
+  it('keeps TWO warm pods on a new revision and waits for exactly two', () => {
+    expect(w).toContain('RESTORE_MINSCALE=1');
+    expect(w.indexOf('RESTORE_MINSCALE=1')).toBeLessThan(w.indexOf('"minScale":2'));
+    expect(w).toContain('{"spec":{"scaling":{"minScale":2,"maxScale":2}}}');
+    expect(w).toMatch(
+      /!= "\$\{rev_before\}" \] && \[ "\$\(all_pods "\$\{GO_FN\}"\)" = 2 \] && \[ "\$\(fn_pods_ready \| wc -l \| tr -d " "\)" = 2 \]/,
+    );
+    expect(w.indexOf('rev_before="$(')).toBeLessThan(w.indexOf('"minScale":2'));
+    expect(w).toMatch(
+      /\[ "\$\{wuid_a\}" != "\$\{wuid_b\}" \] \|\| fail "want two distinct warm pods/,
+    );
+  });
+
+  it('loads the OLD key set into each pod with ONE call, isolated, and each must answer 404', () => {
+    const pre = seg('isolate_pods "${wuid_a}"', 'log "heldwarm 1/3');
+    expect(pre.indexOf('isolate_pods "${wuid_a}"')).toBeLessThan(
+      pre.indexOf('fn_probe "${WORK}/key-pre" load-a'),
+    );
+    expect(pre.indexOf('fn_probe "${WORK}/key-pre" load-a')).toBeLessThan(
+      pre.indexOf('isolate_pods "${wuid_b}"'),
+    );
+    expect(pre.indexOf('isolate_pods "${wuid_b}"')).toBeLessThan(
+      pre.indexOf('fn_probe "${WORK}/key-pre" load-b'),
+    );
+    for (const x of ['A', 'B']) {
+      expect(pre).toMatch(
+        new RegExp(
+          `\\[ "\\$\\{PR_STATUS\\}" = 404 \\] && \\[ "\\$\\{PR_CODE\\}" = not_found \\] \\\\\\n\\s*\\|\\| fail "the warm pod ${x} answered`,
+        ),
+      );
+    }
+    expect(pre.match(/release_pods/g)?.length).toBe(2);
+    expect(w).toContain('export_key "${WORK}/key-pre" current');
+    // No call reaches either pod between its load and its held call.
+    const between = seg('log "heldwarm 1/3', 'hold_call "${CONTROL_HELD_SECONDS}" warm');
+    expect(between).not.toContain('fn_probe');
+    expect(between).not.toContain('foreign_get');
+    expect(between).not.toContain('zone_call');
+  });
+
+  it('isolate_pods keeps one pod, waits for the endpoints to hold only it, and release_pods re-attaches before the quota goes', () => {
+    const iso = body('isolate_pods');
+    expect(iso).toContain('[ "${uid}" = "$1" ] && continue');
+    expect(iso).toContain('create resourcequota "${HOLD_QUOTA}" --hard=pods=0');
+    expect(iso).toContain("-o json | jq '[.subsets[]?.addresses[]?] | length')\" = 1 ]");
+    expect(iso.indexOf('RESTORE_DETACH="${RESTORE_DETACH}${pod}=${label} "')).toBeLessThan(
+      iso.indexOf('"serving.knative.dev/revisionUID=detached"'),
+    );
+    const rel = body('release_pods');
+    expect(rel.indexOf('revisionUID=${entry#*=}')).toBeGreaterThan(-1);
+    expect(rel.indexOf('revisionUID=${entry#*=}')).toBeLessThan(
+      rel.indexOf('delete resourcequota "${HOLD_QUOTA}"'),
+    );
+    expect(rel).toContain('RESTORE_DETACH=""');
+    expect(rel).toContain('RESTORE_QUOTA=0');
+  });
+
+  it('rotates and retires the key while those pods are warm, and proves none restarted', () => {
+    expect(w).toContain('apps.kn-next.dev/rotate-signing-key=${wnonce}');
+    expect(w).toContain(
+      '"signing to switch under the warm pod" \'[ "$(secret_get current.kid)" = "${new_kid}" ]\'',
+    );
+    expect(w).toContain('Date.now() - 7200 * 1000');
+    expect(w).toContain('rollout restart deployment.apps/kn-next-operator-controller-manager');
+    expect(w).toContain(
+      '"the previous key to leave the Secret under the warm pod" \'[ -z "$(secret_get previous.kid)" ]\'',
+    );
+    expect(w).toContain(
+      '"the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'',
+    );
+    expect(w).toContain('wretired_at="$(jwks_written_at)"');
+    expect(w).toMatch(
+      /\[ "\$\(fn_pod_uids\)" = "\$\{wuids\}" \] && \[ "\$\(fn_pods_started_max\)" -lt "\$\{wretired_at\}" \] \\\n\s*\|\| fail "the pods are/,
+    );
+    expect(w.indexOf('wretired_at="$(jwks_written_at)"')).toBeLessThan(
+      w.indexOf('hold_call "${CONTROL_HELD_SECONDS}" warm'),
+    );
+    expect(body('fn_pods_started_max')).toContain('.status.startTime | fromdateiso8601');
+  });
+
+  it('the control: new-key token held INSIDE the token life on stale pod A must be ACCEPTED, by A', () => {
+    const ctl = seg('hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"', 'log "heldwarm 3/3');
+    expect(ctl).toMatch(
+      /\[ "\$\{HELD_STATUS\}" = 404 \] && \[ "\$\{HELD_CODE\}" = not_found \] \\\n\s*\|\| fail "warm pod control: a call held/,
+    );
+    expect(ctl).toMatch(
+      /\[ "\$\{HELD_POD_UID\}" = "\$\{wuid_a\}" \] \\\n\s*\|\| fail "warm pod control: the call was not answered/,
+    );
+    expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeGreaterThan(-1);
+    expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeLessThan(
+      w.indexOf('hold_call "${CONTROL_HELD_SECONDS}" warm'),
+    );
+  });
+
+  it('the test: the same token held PAST the token life on stale pod B must be 401 "token rejected", by B', () => {
+    const held = seg('hold_call "${HELD_SECONDS}" warm "${wuid_b}"', 'foreign_get');
+    expect(held).toMatch(
+      /\[ "\$\{HELD_STATUS\}" = 401 \] && \[ "\$\{HELD_CODE\}" = unauthenticated \] && \[ "\$\{HELD_MESSAGE\}" = "token rejected" \] \\\n\s*\|\| fail "warm pod: a call held/,
+    );
+    expect(held).toMatch(
+      /\[ "\$\{HELD_POD_UID\}" = "\$\{wuid_b\}" \] \\\n\s*\|\| fail "the held call was not answered by the warm pod/,
+    );
+    // The control runs BEFORE the long hold, both on pods in the loaded-but-never-called state.
+    expect(w.indexOf('hold_call "${CONTROL_HELD_SECONDS}" warm')).toBeLessThan(
+      w.indexOf('hold_call "${HELD_SECONDS}" warm'),
+    );
+    expect(seg('foreign_get', '')).toMatch(
+      /\[ "\$\{FC_STATUS\}" = 401 \] && \[ "\$\{FC_CODE\}" = unauthenticated \] && \[ "\$\{FC_MESSAGE\}" = "token rejected" \] \\\n\s*\|\| fail "warm pod: after the holds a garbage token/,
+    );
+  });
+
+  it('puts minScale and maxScale back and clears the restore flag when it finishes', () => {
+    const end = seg('{"spec":{"scaling":{"minScale":0,"maxScale":1}}}', '');
+    expect(end).toContain('RESTORE_MINSCALE=0');
+  });
+
+  it('the warm hold detaches EVERY pod, re-attaches only the target first, and the label goes back before the quota', () => {
+    expect(c).toContain('HELD_POD_UID="$3"');
+    expect(c).toContain('uids_before="$(fn_pod_uids)"');
+    expect(c).toContain('RESTORE_DETACH="${RESTORE_DETACH}${pod}=${label} "');
+    expect(c.indexOf('RESTORE_DETACH="${RESTORE_DETACH}${pod}=${label} "')).toBeLessThan(
+      c.indexOf('"serving.knative.dev/revisionUID=detached"'),
+    );
+    expect(c.indexOf('"serving.knative.dev/revisionUID=detached"')).toBeLessThan(
+      c.indexOf('bun "${Z7}/probe.ts"'),
+    );
+    // Target label first, then the answer, then the rest, then the quota (release_pods).
+    const t = c.indexOf('"serving.knative.dev/revisionUID=${tlabel}"');
+    expect(t).toBeGreaterThan(c.indexOf('kill -0'));
+    expect(t).toBeLessThan(c.indexOf('wait "$(cat "${HELD_PIDFILE}")"'));
+    expect(c.indexOf('wait "$(cat "${HELD_PIDFILE}")"')).toBeLessThan(c.indexOf('release_pods'));
+    // The target's label goes back before ANY quota deletion in the warm path.
+    expect(t).toBeLessThan(c.indexOf('delete resourcequota'));
+    // Exactly the pods that were there: counted by uid, all of them, before and after.
+    expect(c).toMatch(
+      /\[ "\$\(fn_pod_uids\)" = "\$\{uids_before\}" \] \|\| fail "after the answer the pods are/,
+    );
+    expect(body('fn_pod_uids')).toContain('select(.metadata.deletionTimestamp == null)');
+    expect(body('fn_pods_ready')).toContain('.metadata.deletionTimestamp == null');
+    expect(body('fn_pods_ready')).toContain('"Ready"');
   });
 });

@@ -181,16 +181,17 @@ const MUTATIONS = [
   {
     id: 'H1',
     subject: 'run',
-    claim: 'the nodes are no longer cordoned, so nothing holds the call',
-    anchor: '  k cordon $(k get nodes -o name) >/dev/null\n',
-    replacement: '',
+    claim: 'the pod quota is no longer created, so nothing holds the call',
+    anchor:
+      '  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null\n  if [ "${mode}" = warm ]; then\n    while read',
+    replacement: '  if [ "${mode}" = warm ]; then\n    while read',
   },
   {
     id: 'H2',
     subject: 'run',
     claim: 'the function is no longer scaled to zero before the hold',
-    anchor: '  local out="${WORK}/held.out" start\n  await_zero "${GO_FN}"\n',
-    replacement: '  local out="${WORK}/held.out" start\n',
+    anchor: '    await_zero "${GO_FN}"\n  fi\n  ensure_forward\n',
+    replacement: '    true\n  fi\n  ensure_forward\n',
   },
   {
     id: 'H3',
@@ -210,15 +211,19 @@ const MUTATIONS = [
     id: 'H5',
     subject: 'run',
     claim: 'the held call may be answered with anything but 401',
-    anchor: '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ]',
-    replacement: '[ "${HELD_STATUS}" != 401 ] && [ "${HELD_CODE}" = unauthenticated ]',
+    anchor:
+      '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \\\n    || fail "a call held',
+    replacement:
+      '[ "${HELD_STATUS}" != 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \\\n    || fail "a call held',
   },
   {
     id: 'H6',
     subject: 'run',
     claim: 'the held call may be answered with any code',
-    anchor: '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ]',
-    replacement: '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" != unauthenticated ]',
+    anchor:
+      '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \\\n    || fail "a call held',
+    replacement:
+      '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" != unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \\\n    || fail "a call held',
   },
   {
     id: 'H7',
@@ -230,9 +235,9 @@ const MUTATIONS = [
   {
     id: 'H8',
     subject: 'run',
-    claim: 'the nodes are never uncordoned after the hold',
-    anchor: '  k uncordon $(k get nodes -o name) >/dev/null\n  RESTORE_CORDON=0\n',
-    replacement: '  RESTORE_CORDON=0\n',
+    claim: 'the pod quota is never deleted after the hold',
+    anchor: '  k -n "${NS}" delete resourcequota "${HOLD_QUOTA}" >/dev/null\n  RESTORE_QUOTA=0\n',
+    replacement: '  RESTORE_QUOTA=0\n',
   },
   {
     id: 'H9',
@@ -269,16 +274,18 @@ const MUTATIONS = [
   {
     id: 'H13',
     subject: 'run',
-    claim: 'the exit handler no longer uncordons after an abort',
-    anchor: '  if [ "${RESTORE_CORDON}" = 1 ]; then\n',
-    replacement: '  if [ "${RESTORE_CORDON}" = 99 ]; then\n',
+    claim: 'the exit handler no longer deletes the quota after an abort',
+    anchor: '  if [ "${RESTORE_QUOTA}" = 1 ]; then\n',
+    replacement: '  if [ "${RESTORE_QUOTA}" = 99 ]; then\n',
   },
   {
     id: 'H14',
     subject: 'run',
-    claim: 'the cordon is no longer recorded for the exit handler',
-    anchor: '  RESTORE_CORDON=1\n',
-    replacement: '',
+    claim: 'the quota is no longer recorded for the exit handler',
+    anchor:
+      '  RESTORE_QUOTA=1\n  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null\n  if [ "${mode}"',
+    replacement:
+      '  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null\n  if [ "${mode}"',
   },
   // ---- round 2: the code halves, the message, the control, the pod-start proof
   {
@@ -453,15 +460,15 @@ const MUTATIONS = [
     id: 'D3',
     subject: 'run',
     claim: 'rotcold leaves the default phase list',
-    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held}"',
-    replacement: 'PHASES="${PHASES:-up deploy token direct policyoff noauth held}"',
+    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held heldwarm}"',
+    replacement: 'PHASES="${PHASES:-up deploy token direct policyoff noauth held heldwarm}"',
   },
   {
     id: 'D4',
     subject: 'run',
     claim: 'held leaves the default phase list',
-    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held}"',
-    replacement: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold}"',
+    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held heldwarm}"',
+    replacement: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold heldwarm}"',
   },
   {
     id: 'Q1',
@@ -482,9 +489,9 @@ const MUTATIONS = [
     id: 'W1',
     subject: 'workflow',
     claim: 'the workflow runs only the earlier phases',
-    anchor: 'including policyoff, rotcold and held)\n        run:',
+    anchor: 'including policyoff, rotcold, held and heldwarm)\n        run:',
     replacement:
-      'including policyoff, rotcold and held)\n        env:\n          PHASES: up deploy token direct policyoff noauth\n        run:',
+      'including policyoff, rotcold, held and heldwarm)\n        env:\n          PHASES: up deploy token direct policyoff noauth\n        run:',
   },
   {
     id: 'W2',
@@ -497,7 +504,7 @@ const MUTATIONS = [
     id: 'W3',
     subject: 'workflow',
     claim: 'the drill step is renamed so it no longer claims the new phases',
-    anchor: '(all phases, including policyoff, rotcold and held)',
+    anchor: '(all phases, including policyoff, rotcold, held and heldwarm)',
     replacement: '(all phases, including policyoff)',
   },
 ];

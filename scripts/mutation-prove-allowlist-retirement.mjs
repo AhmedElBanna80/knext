@@ -25,6 +25,8 @@ const PROOF = {
   subjects: {
     spec: 'tests/allowlist-retirement.test.ts',
     alertSpec: 'tests/nightly-alert-cancelled-condition.test.ts',
+    closureSpec: 'tests/precompile-closure-audit.test.ts',
+    closureLib: 'scripts/lib/precompile-closure.mjs',
     lib: 'scripts/lib/allowlist-retirement.mjs',
     cli: 'scripts/verify-allowlist-retirement.mjs',
     workflow: '.github/workflows/allowlist-retirement-nightly.yml',
@@ -205,11 +207,187 @@ const MUTATIONS = [
     anchor: '          ALLOWLIST_FILES: ${{ matrix.files }}\n',
     replacement: '\n',
   },
+  {
+    label: 'lib: a prerelease of the patched version counts as patched',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'return Number(!pre(a)) - Number(!pre(b));',
+    replacement: 'return 0;',
+  },
+  {
+    label: 'lib: the newest-stable pick accepts prereleases',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (!STABLE.test(String(v))) continue;',
+    replacement: '',
+  },
+  {
+    label: 'lib: a vendored patch is informational instead of red',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "if (vc.level === 'RETIRE') level = 'RETIRE';",
+    replacement: "if (vc.level === 'NEVER') level = 'RETIRE';",
+  },
+  {
+    label: 'lib: an unpatched vendored copy is flagged red',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "level: 'INFO',\n    reasons: [`vendored patch not available",
+    replacement: "level: 'RETIRE',\n    reasons: [`vendored patch not available",
+  },
+  {
+    label: 'lib: a vendoredIn entry with no resolver is skipped instead of an error',
+    subject: 'lib',
+    guard: 'spec',
+    anchor:
+      "if (!resolveVendored)\n          throw new Error('entry declares vendoredIn but no vendored resolver was supplied');",
+    replacement: 'if (!resolveVendored) continue;',
+  },
+  {
+    label: 'lib: a malformed vendoredIn path (..) is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "v.path.split('/').some((seg) => seg === '..' || seg === '')",
+    replacement: 'false',
+  },
+  {
+    label: 'cli: the tarball integrity check is skipped',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (actual !== expected)',
+    replacement: 'if (false)',
+  },
+  {
+    label: 'cli: a tarball URL off the registry host is fetched',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: "if (tarUrl.protocol !== 'https:' || tarUrl.host !== new URL(REGISTRY).host) {",
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'cli: the vendored retry bound is effectively removed',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'attempt <= MAX_RETRIES; attempt++',
+    replacement: 'attempt <= MAX_RETRIES + 100; attempt++',
+  },
+  {
+    label: 'cli: a missing vendored file in the tarball is tolerated',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (file === null)',
+    replacement: 'if (false)',
+  },
+  {
+    label: 'lib: a prerelease patched bound is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'return !m || !STABLE.test(m[2]);',
+    replacement: 'return !m;',
+  },
+  {
+    label: 'lib: the derived host range is ignored',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'const range = readRange(from[0], from[1]);',
+    replacement: "const range = '>=16.0.0 <99.0.0';",
+  },
+  {
+    label: 'lib: rangeFrom may read outside the probed root',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (isAbsolute(rel) || outside(abs)) throw new Error(',
+    replacement: 'if (false) throw new Error(',
+  },
+  {
+    label: 'cli: requests carry no timeout signal',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'signal: AbortSignal.timeout(timeoutMs)',
+    replacement: 'signal: undefined',
+  },
+  {
+    label: 'cli: the streamed download cap is not enforced',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (total > cap) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'cli: an over-cap Content-Length is not refused',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (Number.isFinite(declared) && declared > cap) throw tooBig();',
+    replacement: '',
+  },
+  {
+    label: 'cli: the gunzip output cap is removed',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: '{ maxOutputLength: L.maxTarBytes }',
+    replacement: '{}',
+  },
+  {
+    label: 'lib: rangeFrom may follow a symlink out of the probed root',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (outside(real)) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'closure gate: `vendoredIn` is not an allowed allowlist key (the CI regression)',
+    subject: 'closureLib',
+    guard: 'closureSpec',
+    anchor: "  'vendoredIn',\n]);",
+    replacement: ']);',
+  },
+  {
+    label: 'closure gate: a malformed `vendoredIn` is accepted unvalidated',
+    subject: 'closureLib',
+    guard: 'closureSpec',
+    anchor: "validateVendoredIn(entry.vendoredIn, 'allowlist', entry.id, () => '*');",
+    replacement: '',
+  },
+  {
+    label: 'lib: an unknown nested vendoredIn key is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'const unknown = Object.keys(v).filter((k) => !VENDORED_IN_KEYS.has(k));',
+    replacement: 'const unknown = [];',
+  },
+  {
+    label: 'lib: a vendoredIn entry with no host package is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "if (typeof v.package !== 'string' || !NPM_NAME.test(v.package)) bad(",
+    replacement: 'if (false) bad(',
+  },
+  {
+    label: 'lib: a URL / scheme / query in the tarball path is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: '/[:\\\\?#]/.test(v.path) ||',
+    replacement: 'false ||',
+  },
+  {
+    label: 'lib: a `..` segment mid-path is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "seg === '..' || seg === ''",
+    replacement: "seg === ''",
+  },
+  {
+    label: 'closure gate: an unknown nested vendoredIn key passes the strict allowlist',
+    subject: 'lib',
+    guard: 'closureSpec',
+    anchor: 'const unknown = Object.keys(v).filter((k) => !VENDORED_IN_KEYS.has(k));',
+    replacement: 'const unknown = [];',
+  },
 ];
 
-declareMutations(23);
-if (MUTATIONS.length !== 23) {
-  console.error(`FATAL: declared 23 mutations, table has ${MUTATIONS.length}`);
+declareMutations(48);
+if (MUTATIONS.length !== 48) {
+  console.error(`FATAL: declared 48 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

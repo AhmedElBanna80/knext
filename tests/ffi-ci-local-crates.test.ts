@@ -101,6 +101,8 @@ function bareFixture(): { bare: string; sha: string } {
   const sha = g('rev-parse', 'HEAD');
   const bare = join(TMP, `fixture-${++seq}.git`);
   execFileSync('git', ['clone', '-q', '--bare', work, bare]);
+  // Only the bare clone is needed; the working repo is removed here, not left for the suite's end.
+  rmSync(work, { recursive: true, force: true });
   return { bare, sha };
 }
 
@@ -220,16 +222,20 @@ describe('egress proof, git half (S9-4): real git against a local bare fixture, 
   it('rewrite half, quiet: a -q fetch of the recorded rev lands the commit (no output is relied on)', () => {
     const bare = bareFixture();
     const scratch = mkdtempSync(join(TMP, 'scratch-'));
-    execFileSync('git', ['init', '-q', scratch]);
-    const r = spawnSync('git', ['-C', scratch, 'fetch', '-q', '--no-tags', CRATE_GIT, bare.sha], {
-      env: deniedEnv(localCrateSourceEnv(bare.bare, CRATE_GIT)),
-      encoding: 'utf8',
-    });
-    expect(r.status).toBe(0);
-    expect(r.stdout + r.stderr).not.toMatch(/From /);
-    expect(spawnSync('git', ['-C', scratch, 'cat-file', '-e', `${bare.sha}^{commit}`]).status).toBe(
-      0,
-    );
+    try {
+      execFileSync('git', ['init', '-q', scratch]);
+      const r = spawnSync('git', ['-C', scratch, 'fetch', '-q', '--no-tags', CRATE_GIT, bare.sha], {
+        env: deniedEnv(localCrateSourceEnv(bare.bare, CRATE_GIT)),
+        encoding: 'utf8',
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout + r.stderr).not.toMatch(/From /);
+      expect(
+        spawnSync('git', ['-C', scratch, 'cat-file', '-e', `${bare.sha}^{commit}`]).status,
+      ).toBe(0);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 
   it('the denial is scoped to github.com and names the refused proxy', () => {

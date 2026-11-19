@@ -23,6 +23,24 @@ Run it before every push (agents included). After a merge, `.github/workflows/me
 fails if the commit that landed on `main` or `integration/**` does not contain the PR's final head
 (`scripts/merged-sha-check.mjs`: ancestry, or for squash merges, per-file blob equality).
 
+## Before you push, part two: `node scripts/prepush-check.mjs`
+
+`bun run prepush` checks lint and types. This one checks the diff you are about to push, against
+the merge base, for three defects that reached CI or merged: a changed `security/*allowlist*.json`
+that its gate rejects, tests that leak temp directories, and a change that touches files outside
+its task.
+
+```bash
+node scripts/prepush-check.mjs --scope 'scripts/**,tests/**'
+```
+
+It runs the real gate for every changed allowlist, runs the changed tests while snapshotting
+`tmpdir()` and the repo root for new leftovers, scans `tests/**` for a `mkdtemp` that is never
+removed, and prints `git diff --stat` grouped by top-level area. A file outside the declared scope
+fails; with no scope declared (`--scope`, or a `Scope:` line in a commit or PR body) it warns. A
+gate whose tool is not installed is reported as unverified and fails unless you pass
+`--allow-missing-tools`. It is not a git hook and nothing installs it.
+
 ## Mutation-proving a guard
 
 Every new guard is mutation-proved (delete the behaviour it protects, watch it go RED, restore).

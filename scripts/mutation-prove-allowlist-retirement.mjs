@@ -45,29 +45,46 @@ const MUTATIONS = [
     label: 'lib: ignore withdrawn_at (a withdrawn advisory is no longer a RETIRE)',
     subject: 'lib',
     guard: 'spec',
-    anchor: 'if (advisory.withdrawn_at) reasons.push(',
-    replacement: 'if (false && advisory.withdrawn_at) reasons.push(',
+    anchor: 'if (advisory.withdrawn_at) {',
+    replacement: 'if (false) {',
   },
   {
-    label: 'lib: never treat a patched version as retirable',
+    label:
+      'lib: drop the vulnerable-range check (a patch for another range applies to the installed version)',
     subject: 'lib',
     guard: 'spec',
-    anchor: 'if (!v.first_patched_version) continue;',
-    replacement: 'continue;',
+    anchor:
+      'if (versionInRange(iv, v.vulnerable_version_range)) candidates.push({ lock, lf, iv });',
+    replacement: 'candidates.push({ lock, lf, iv });',
   },
   {
-    label: 'lib: ignore the package/version range (flag patches for other packages and ranges)',
+    label: 'lib: drop the reachability check (a blocked patch is flagged red)',
     subject: 'lib',
     guard: 'spec',
-    anchor: 'if (entry.package && name !== entry.package) continue;',
-    replacement: '',
+    anchor: "} else if (r.status === 'reachable') reachable.push(",
+    replacement: '} else if (true) reachable.push(',
   },
   {
-    label: 'lib: a patch already named in the justification is flagged again',
+    label: 'lib: a reachable patch in a pinned fixture lockfile goes red',
     subject: 'lib',
     guard: 'spec',
-    anchor: 'if (mentionsVersion(entry.justification, v.first_patched_version)) continue;',
-    replacement: '',
+    anchor: "if (r.status === 'reachable' && isPinnedFixtureLockfile(c.lf)) {",
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'lib: informational findings are routed to the red list',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "else if (level === 'INFO') informational.push(row);",
+    replacement: "else if (level === 'INFO') findings.push(row);",
+  },
+  {
+    label: 'lib: informational findings fail the exit code',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'return findings.length > 0 || errors.length > 0 || checked === 0 ? 1 : 0;',
+    replacement:
+      'return findings.length + arguments[0].informational.length > 0 || errors.length > 0 || checked === 0 ? 1 : 0;',
   },
   {
     label: 'lib: swallow API errors instead of recording them (fail open)',
@@ -101,8 +118,29 @@ const MUTATIONS = [
     label: 'cli: a non-2xx API response is accepted instead of thrown',
     subject: 'cli',
     guard: 'spec',
-    anchor: 'if (!res.ok) throw new Error(',
-    replacement: 'if (false) throw new Error(',
+    anchor: 'if (res.ok) break;',
+    replacement: 'if (true) break;',
+  },
+  {
+    label: 'cli: the retry bound is effectively removed',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'attempt < MAX_RETRIES',
+    replacement: 'attempt < MAX_RETRIES + 100',
+  },
+  {
+    label: 'cli: 403 is no longer retried',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: '(res.status === 403 || res.status === 429)',
+    replacement: '(res.status === 429)',
+  },
+  {
+    label: 'cli: a CVE id with several advisories is accepted',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'body.length !== 1',
+    replacement: 'body.length < 1',
   },
   {
     label: "workflow: drop 'cancelled' from the alert condition",
@@ -121,9 +159,9 @@ const MUTATIONS = [
   },
 ];
 
-declareMutations(11);
-if (MUTATIONS.length !== 11) {
-  console.error(`FATAL: declared 11 mutations, table has ${MUTATIONS.length}`);
+declareMutations(16);
+if (MUTATIONS.length !== 16) {
+  console.error(`FATAL: declared 16 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

@@ -5,15 +5,26 @@ name: Advisory allowlist retirement (nightly)
 # patched version published. This nightly runs the read-only probe
 # `scripts/verify-allowlist-retirement.mjs` over the precompile-closure,
 # npm-audit and osv allowlists and goes RED on any retirable entry. It also goes
-# red if the GitHub API is unreachable: a probe that passes when it cannot reach
+# red if the GitHub API is unreachable (after bounded retries): a probe that passes when it cannot reach
 # upstream is worse than none.
 #
 # Logic and offline tests: `scripts/lib/allowlist-retirement.mjs`,
 # `tests/allowlist-retirement.test.ts`. The probe never edits an allowlist.
 
+# PLACEMENT: this file lives on integration/v2 but a `schedule:` only fires from the
+# default branch, so there is deliberately NO `schedule:` here (it could never
+# fire). It is a reusable `workflow_call`; a thin caller on main (a later PR, the
+# z7-identity-kind-e2e.yml pattern) runs it nightly with
+# `checkout_ref: integration/v2` and `permissions: contents: read, issues: write`.
+# A called workflow sees the CALLER's github context, so `github.event_name` is
+# `schedule` on a nightly call and the alert condition below works unchanged.
 on:
-  schedule:
-    - cron: '19 7 * * *'
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: 'Ref to probe (the caller runs on main; this file lives on integration/v2)'
+        type: string
+        default: ''
   workflow_dispatch: {}
 
 permissions:
@@ -28,9 +39,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A call would otherwise check out the caller's ref (main).
+          ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
-      - name: Probe advisories (FAIL on any RETIRE finding or API error)
+      - name: Probe advisories (FAIL on any actionable finding or API error)
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/verify-allowlist-retirement.mjs
@@ -52,6 +65,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
       - name: Create or update the "Advisory allowlist retirement RED" issue (idempotent)
@@ -62,10 +76,11 @@ jobs:
         run: |
           set -euo pipefail
           title='Advisory allowlist retirement RED'
-          body="The nightly allowlist retirement probe FAILED: at least one allowlisted advisory was withdrawn upstream or now has a patched version, or the advisory API could not be reached. The job log lists each RETIRE or ERROR line with its allowlist file.
+          body="The nightly allowlist retirement probe FAILED. Read the job log: each line is one of
+          - RETIRE: the advisory was withdrawn upstream (drop the entry), or a patched version is reachable now (every parent accepts it; bump, then drop the entry).
+          - ERROR: the advisory API could not be read after retries, so the check could not run. That is a failure, not a pass; re-run to confirm.
+          INFO lines are informational and never fail the run.
 
           - Run: ${RUN_URL}
-          - Probe job result: ${CHECK_RESULT}
-
-          Triage: drop the entry and bump the dependency (withdrawn: just drop the entry). An ERROR line means the check could not run, which is a failure rather than a pass; re-run to confirm."
+          - Probe job result: ${CHECK_RESULT}"
           TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs

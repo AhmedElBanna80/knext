@@ -636,6 +636,10 @@ describe('scope enforcement (CI reads the PR body only)', () => {
     expect(broadScopes(['scripts/**', 'tests/**', 'docs/**'])).toEqual([]);
     expect(broadScopes(['scripts/**', 'security/**'])).toEqual([]);
     expect(broadScopes(['*.md'])).toEqual([]);
+    // every directory but .github is still a narrower claim than "everything"
+    expect(
+      broadScopes(['apps/**', 'docs/**', 'packages/**', 'scripts/**', 'security/**', 'tests/**']),
+    ).toEqual([]);
     // together they cover every area, though none does alone
     expect(
       broadScopes([

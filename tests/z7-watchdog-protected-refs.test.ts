@@ -132,8 +132,8 @@ describe('fetchZ7Runs', () => {
     expect(() => fetchZ7Runs({ gh, repo: 'o/r' })).toThrow(/ECONNREFUSED/);
   });
   it('throws on a malformed payload', () => {
-    expect(() => fetchZ7Runs({ gh: () => '{}', repo: 'o/r' })).toThrow();
-    expect(() => fetchZ7Runs({ gh: () => 'not json', repo: 'o/r' })).toThrow();
+    expect(() => fetchZ7Runs({ gh: () => '{}', repo: 'o/r' })).toThrow(/no workflow_runs array/);
+    expect(() => fetchZ7Runs({ gh: () => 'not json', repo: 'o/r' })).toThrow(/non-JSON/);
   });
 });
 

@@ -196,7 +196,7 @@ only a *build* tool.
 - [ ] **Per-language token interceptor:** each template ships the fail-closed token-verifying server
       interceptor; a **mutation-proof test** (delete the check → red), including a **flannel/no-
       NetworkPolicy** case proving the interceptor — not the CNI — is the control.
-      *Evidence (2026-11-17), box stays open: the per-template parts are built; the no-NetworkPolicy leg is not proven.*
+      *Evidence (2026-11-17), box stays open: the per-template parts are built; the no-NetworkPolicy leg is proven for Go on kind (CI run 44430815511, 2026-11-19, see below) and still open for Rust.*
       Built: Go `templates/go/internal/auth/auth.go:82-106` (`NewInterceptor`, fails closed), wired at
       `templates/go/internal/rpc/rpc.go:121`; Rust `templates/rust/src/auth.rs:359-363` (no-token refusal, fails
       closed), wired at `templates/rust/src/rpc/mod.rs:169`. Mutation provers:

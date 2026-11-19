@@ -209,6 +209,9 @@ run "TF_CLI_ARGS_apply quoted planfile"      "TF_CLI_ARGS_apply=\"${D}no-color p
 run "TF_CLI_ARGS planfile tofu"              "TF_CLI_ARGS=p tofu apply"                           BLOCK
 run "TF_CLI_ARGS_apply flags only allowed"   "TF_CLI_ARGS_apply=${D}no-color terraform apply"    allow
 run "TF_CLI_ARGS_apply quoted flags allowed" "TF_CLI_ARGS_apply=\"${D}no-color ${D}input=false\" terraform apply" allow
+run "apply 1>out.log allowed"                "terraform apply 1>out.log"                          allow
+run "apply 2>>err.log allowed"               "terraform apply 2>>err.log"                         allow
+run "apply auto-approve 2> err.log allowed"  "terraform apply ${D}auto-approve 2> err.log"        allow
 run "kind delete && terraform destroy"       "kind delete cluster ${D}${D}name x && terraform destroy" BLOCK
 run "kind delete ; oci cluster delete"       "kind delete cluster ; oci ce cluster delete ${D}${D}cluster-id x" BLOCK
 

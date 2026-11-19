@@ -433,14 +433,14 @@ const MUTATIONS = [
     id: 'K5',
     claim: 'globs that only together cover everything pass',
     subject: 'lib',
-    anchor: 'return covers(globs) ? [...globs] : [];',
+    anchor: 'return broad(globs) ? [...globs] : [];',
     replacement: 'return [];',
   },
   {
     id: 'K6',
     claim: 'a single match-everything glob is not isolated from narrow ones',
     subject: 'lib',
-    anchor: 'const alone = globs.filter((g) => covers([g]));',
+    anchor: 'const alone = globs.filter((g) => broad([g]));',
     replacement: 'const alone = [];',
   },
   {

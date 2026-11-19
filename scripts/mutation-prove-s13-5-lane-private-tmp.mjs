@@ -50,10 +50,40 @@ const MUTATIONS = [
     replacement: '',
   },
   {
+    label: 'SIGTERM is no longer routed through process.exit (a job timeout leaves the dir)',
+    subject: 'helper',
+    anchor: "  ['SIGTERM', 143],\n",
+    replacement: '',
+  },
+  {
+    label: 'SIGINT is no longer routed through process.exit',
+    subject: 'helper',
+    anchor: "  ['SIGINT', 130],\n",
+    replacement: '',
+  },
+  {
     label: 'a pinned signal runs a no-op handler instead of exiting (the exit cleanup never runs)',
     subject: 'helper',
-    anchor: 'process.once(signal, () => process.exit(code));',
-    replacement: 'process.once(signal, () => {});',
+    anchor: 'process.exit(code);',
+    replacement: 'void code;',
+  },
+  {
+    label: 'a signal handler is installed with once(): removed after it fires, so a repeat signal is not caught',
+    subject: 'helper',
+    anchor: 'process.on(signal, () => {',
+    replacement: 'process.once(signal, () => {',
+  },
+  {
+    label: 'a signal does not kill the tracked prover groups before it exits (an orphan prover survives)',
+    subject: 'helper',
+    anchor: 'killTrackedGroups();',
+    replacement: 'void 0;',
+  },
+  {
+    label: 'a registered prover group is not kept, so it is never killed',
+    subject: 'helper',
+    anchor: 'tracked.add(kill);',
+    replacement: 'void kill;',
   },
   {
     label: 'the runner stops pinning its signals (back to the bare exit handler)',
@@ -61,9 +91,21 @@ const MUTATIONS = [
     anchor: 'pinExitSignals();',
     replacement: '',
   },
+  {
+    label: 'the runner stops tracking its prover groups (a signal leaves them running)',
+    subject: 'runner',
+    anchor: 'const untrack = trackProverGroup(killGroup);',
+    replacement: 'const untrack = () => {};',
+  },
+  {
+    label: 'the runner never untracks a prover at close (a finished group would be signalled)',
+    subject: 'runner',
+    anchor: 'untrack();',
+    replacement: 'void 0;',
+  },
 ];
 
-const DECLARED = 4;
+const DECLARED = 11;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

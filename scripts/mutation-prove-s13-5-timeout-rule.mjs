@@ -55,9 +55,21 @@ const MUTATIONS = [
     anchor: 'The slowest is 2313 s',
     replacement: 'The slowest was 2313 s',
   },
+  {
+    label: 'a second citation in the z11 job, whose 60 min timeout is below its 2557 s figure, is not checked',
+    subject: 'z11',
+    anchor: '    timeout-minutes: 60',
+    replacement: '    # The slowest is 2557 s (42.6 min).\n    timeout-minutes: 60',
+  },
+  {
+    label: 'the z7 job loses its timeout-minutes while its citation stays (a cited job with no timeout)',
+    subject: 'z7',
+    anchor: '    timeout-minutes: ${{ inputs.rotation_realtime && 120 || 65 }}',
+    replacement: '',
+  },
 ];
 
-const DECLARED = 3;
+const DECLARED = 5;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

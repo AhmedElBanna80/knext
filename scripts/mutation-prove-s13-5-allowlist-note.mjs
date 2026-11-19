@@ -60,9 +60,21 @@ const MUTATIONS = [
     anchor: '`expires` (ISO date, REQUIRED, at most',
     replacement: '`expires` (ISO date, is optional, at most',
   },
+  {
+    label: 'the npm note says `expires` is "no longer REQUIRED" (a negation the old check missed)',
+    subject: 'npmNote',
+    anchor: '`expires` (strict YYYY-MM-DD, REQUIRED:',
+    replacement: '`expires` is no longer REQUIRED (strict YYYY-MM-DD, REQUIRED:',
+  },
+  {
+    label: "the osv note says `expires` isn't REQUIRED (a contraction the old check missed)",
+    subject: 'osvNote',
+    anchor: '`expires` (ISO date, REQUIRED, at most',
+    replacement: "`expires` (ISO date, isn't REQUIRED, at most",
+  },
 ];
 
-const DECLARED = 4;
+const DECLARED = 6;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

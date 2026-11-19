@@ -383,6 +383,14 @@ describe('a slice/split/replace result that reaches an executing consumer is not
     const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const part = src.split('\\n'); const cfg = JSON.parse(part[0]); expect(src).toContain('foo');`;
     expect(isTextOnlyPair(spec, P)).toBe(false);
   });
+  it('a result stored in an object literal (an unrecognised consumer) is not text-only, conservatively', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const holder = { part: src.slice(1) }; expect(holder.part).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('a comparison of a result is a boolean, not an escape: still text-only', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const same = src.slice(0) === 'x'; expect(same).toBe(true); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
   it('the result asserted on (expect(out).toContain) is still text-only', () => {
     const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const out = src.replace('a', 'b'); expect(out).toContain('b');`;
     expect(isTextOnlyPair(spec, P)).toBe(true);

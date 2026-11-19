@@ -38,26 +38,26 @@ const MUTATIONS = [
   {
     label: 'an imported subject is no longer treated as executed (flagged as text-only)',
     subject: 'lint',
-    anchor: 'if (imported) return false;',
-    replacement: '',
+    anchor: "if (imported) return 'executed';",
+    replacement: "if (imported) return 'text';",
   },
   {
-    label: 'a path variable used for anything but a text read no longer counts as executed',
+    label: 'a path variable used for anything but a text read is skipped instead of judged',
     subject: 'lint',
-    anchor: 'if (!c || !isReadCall(c)) return false;',
-    replacement: 'if (c && !isReadCall(c)) return false;',
+    anchor: "if (!c || !isReadCall(c, aliases)) return spawnedBy(u) ? 'executed' : 'other';",
+    replacement: 'if (!c || !isReadCall(c, aliases)) continue;',
   },
   {
     label: 'text handed to a parser or helper is still called a substring match',
     subject: 'lint',
-    anchor: 'if (!isSubstringUse(u)) return false;',
+    anchor: "if (!isSubstringUse(u)) return 'other';",
     replacement: '',
   },
   {
     label: 'a string-method text analysis (slice) is no longer recognised as a text check',
     subject: 'lint',
-    anchor: "  'slice',\n",
-    replacement: '',
+    anchor: "'endsWith',\n  'slice',\n",
+    replacement: "'endsWith',\n",
   },
   {
     label: 'one unlabelled row among labelled ones is accepted',
@@ -86,21 +86,20 @@ const MUTATIONS = [
   {
     label: 'a text read that is never asserted on counts as a substring check (judged > 0 dropped)',
     subject: 'lint',
-    anchor: 'return judged > 0;',
-    replacement: 'return true;',
+    anchor: "return judged > 0 ? 'text' : 'other';",
+    replacement: "return 'text';",
   },
   {
     label: 'a describe/it title naming the subject is treated as executing it',
     subject: 'lint',
-    anchor:
-      "if (direct && TITLE_CALLEES.has(calleeName(direct) ?? '') && direct.arguments[0] === outer)\n      continue;",
-    replacement: '',
+    anchor: "TITLE_CALLEES.has(calleeName(direct) ?? '')",
+    replacement: 'false',
   },
   {
     label: 'one text-only spec is enough to flag a subject another spec executes (every -> some)',
     subject: 'lint',
-    anchor: 'mentioning.every(',
-    replacement: 'mentioning.some(',
+    anchor: "verdicts.every((v) => v === 'text')",
+    replacement: "verdicts.some((v) => v === 'text')",
   },
   {
     label: 'the real z11 prover loses its wiring label on the WR rows',
@@ -124,14 +123,14 @@ const MUTATIONS = [
   {
     label: 'src.replace(...) is no longer a text-only use',
     subject: 'lint',
-    anchor: "  'replace',\n",
-    replacement: '',
+    anchor: "not a parse.\n  'replace',\n",
+    replacement: 'not a parse.\n',
   },
   {
     label: 'src.replaceAll(...) is no longer a text-only use',
     subject: 'lint',
-    anchor: "  'replaceAll',\n",
-    replacement: '',
+    anchor: "'replaceAll',\n]);\n// Methods whose RESULT",
+    replacement: ']);\n// Methods whose RESULT',
   },
   {
     label: 'a bash -n spawn of the subject (literal path) counts as executing it again',
@@ -148,30 +147,152 @@ const MUTATIONS = [
   {
     label: 'the -n flag is no longer required: any shell spawn of the subject is a syntax check',
     subject: 'lint',
-    anchor: "arr.elements.some((e) => strLit(e) === '-n')",
-    replacement: 'true',
+    anchor: 'return before.some((f) => /^-[A-Za-z]*n[A-Za-z]*$/.test(f));',
+    replacement: 'return true;',
   },
   {
     label: 'a -n argument to a non-shell command is treated as a syntax check',
     subject: 'lint',
-    anchor: 'return Boolean(shellArg) || shells(arr.elements[0]);',
-    replacement: 'return true;',
+    anchor: 'shells(call.arguments[0])',
+    replacement: 'true',
   },
   {
-    label: 'an inline Bun.file(p).text() read is judged without its adapter (no substring match seen)',
+    label: 'a text read through an adapter (Bun.file(p).text()) is treated as a file handle',
     subject: 'lint',
-    anchor: '{ inline: readValueEnd(direct) }',
-    replacement: '{ inline: direct }',
+    anchor: 'if (end !== c) return v ? { name: v } : { inline: end };',
+    replacement: 'if (end !== c) return v ? { name: v, handle: true } : { inline: c };',
   },
   {
     label: 'the wiring count ignores the text-only subjects (labelled rows only)',
     subject: 'lint',
-    anchor: 'wiring += textOnly.has(key) || declared.has(key) ? r.total : r.labelled;',
+    anchor: 'wiring += r.total;',
     replacement: 'wiring += r.labelled;',
+  },
+  // ---- Item 2: bash -n needs -n BEFORE the subject
+  {
+    label: 'a non-flag argument in front of the subject no longer ends the syntax check',
+    subject: 'lint',
+    anchor: "if (before.some((f) => f === undefined || !f.startsWith('-'))) return false;",
+    replacement: '',
+  },
+  {
+    label: 'an -n AFTER the subject (bash <subject> -n, the script runs) counts as a syntax check',
+    subject: 'lint',
+    anchor: 'return before.some((f) => /^-[A-Za-z]*n[A-Za-z]*$/.test(f));',
+    replacement: "return args.some((f) => /^-[A-Za-z]*n[A-Za-z]*$/.test(strLit(f) ?? ''));",
+  },
+  // ---- Item 3: a string method result that reaches an executing or unknown consumer
+  {
+    label:
+      'a slice/split/replace result that reaches a call is no longer followed (JSON.parse(x.slice(..)))',
+    subject: 'lint',
+    anchor: 'return !escapesTextCheck(c);',
+    replacement: 'return true;',
+  },
+  {
+    label:
+      'a call argument is never an escape (any call, a spawn argument array included, counts as a check)',
+    subject: 'lint',
+    anchor: "p.expression.text === 'expect') return false;",
+    replacement: "p.expression.text === 'expect') return false;\n      return false;",
+  },
+  {
+    label: 'a predicate or index method result (indexOf, includes, test) is followed as text',
+    subject: 'lint',
+    anchor: '      SUBSTRING_METHODS.has(p.name.text)\n    ) {\n      return false;',
+    replacement: '      false\n    ) {\n      return false;',
+  },
+  {
+    label: 'a .length of a text result is followed as text (it is a number)',
+    subject: 'lint',
+    anchor: "p.name.text === 'length')",
+    replacement: "p.name.text === 'NOLENGTH')",
+  },
+  {
+    label: 'a comparison of a text result is followed as text (it is a boolean)',
+    subject: 'lint',
+    anchor: 'COMPARISON_OPERATORS.has(p.operatorToken.kind)',
+    replacement: 'false',
+  },
+  {
+    label: 'a text method on an array of lines (filter, join, ...) is no longer followed',
+    subject: 'lint',
+    anchor: 'ARRAY_TEXT_METHODS.has(p.name.text))',
+    replacement: 'false)',
+  },
+  {
+    label: 'a value returned from a named helper is not followed to its call sites',
+    subject: 'lint',
+    anchor: 'if (ts.isReturnStatement(p) || (ts.isArrowFunction(p) && p.body === cur)) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'a for-of loop over a text result is not followed to its loop variable',
+    subject: 'lint',
+    anchor: 'if (ts.isForOfStatement(p) && p.expression === cur) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'a use of a binding counts a same-named binding in another scope (no shadowing check)',
+    subject: 'lint',
+    anchor: '!shadowed(n)',
+    replacement: 'true',
+  },
+  // ---- Item 4: Bun.file handles and read aliases
+  {
+    label: 'f.text() on a Bun.file handle is no longer a text read',
+    subject: 'lint',
+    anchor: "read.name.text === 'text'",
+    replacement: "read.name.text === 'NOTEXT'",
+  },
+  {
+    label: 'an aliased read function (const rf = readFileSync) is no longer a text read',
+    subject: 'lint',
+    anchor: "aliases.has(calleeName(n) ?? '')",
+    replacement: 'false',
+  },
+  {
+    label: 'a Bun.file handle bound to a variable is treated as already read text',
+    subject: 'lint',
+    anchor: 'handle: isBunFile(c)',
+    replacement: 'handle: false',
+  },
+  // ---- Attribution (item 1)
+  {
+    label: 'a path handed to nothing that runs it is counted as executed (behavioural), not other',
+    subject: 'lint',
+    anchor: "return spawnedBy(u) ? 'executed' : 'other';",
+    replacement: "return 'other';",
+  },
+  {
+    label:
+      'a subject with a text-only spec and an executing spec is behavioural, not unattributed (some, not every)',
+    subject: 'lint',
+    anchor: "verdicts.every((v) => v === 'executed')",
+    replacement: "verdicts.some((v) => v === 'executed')",
+  },
+  {
+    label: 'an unattributed row is counted as behavioural (only executed subjects should be)',
+    subject: 'lint',
+    anchor: "if (kind === 'executed') behavioural += unlabelled;",
+    replacement: 'behavioural += unlabelled;',
+  },
+  {
+    label:
+      'a subject no spec names (or a mixed one) defaults to executed (behavioural), not unattributed',
+    subject: 'lint',
+    anchor: "let kind = 'unattributed';",
+    replacement: "let kind = 'executed';",
+  },
+  {
+    label: 'a subject no spec names is counted as text-only (wiring) because no spec disagrees',
+    subject: 'lint',
+    anchor: "verdicts.length > 0 && verdicts.every((v) => v === 'text')",
+    replacement: "verdicts.every((v) => v === 'text')",
   },
 ];
 
-const DECLARED = 22;
+const DECLARED = 41;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

@@ -40,6 +40,10 @@ import { main as driftMain } from '../scripts/prepush-lib-drift.mjs';
  * defect it exists for is caught, and the clean case is not accused.
  */
 
+/** The registry as the checker types it: `exempt` is optional, `gates` may be empty. */
+type RegistryEntry = { gates: string[]; other: Record<string, string>; exempt?: string };
+const REGISTRY = GATE_INPUT_REGISTRY as Record<string, RegistryEntry>;
+
 const made: string[] = [];
 const fixture = (): string => {
   const d = mkdtempSync(join(tmpdir(), 'prepush-check-test-'));
@@ -312,7 +316,7 @@ describe('allowlist gate discovery', () => {
           expect(found.has(o), `${o} no longer reads ${allowlist}; drop its excuse`).toBe(true);
         }
       }
-      for (const [input, reg] of Object.entries(GATE_INPUT_REGISTRY)) {
+      for (const [input, reg] of Object.entries(REGISTRY)) {
         expect(
           reg.gates.length + scanTestReaders(root, input).length + (reg.exempt ? 1 : 0),
           `${input} has no gate: no registered script, no CI-run test reading it, no exemption`,
@@ -320,7 +324,7 @@ describe('allowlist gate discovery', () => {
       }
       for (const g of Object.keys(GATE_TABLE)) {
         expect(
-          Object.values(GATE_INPUT_REGISTRY).some((r) => r.gates.includes(g)),
+          Object.values(REGISTRY).some((r) => r.gates.includes(g)),
           `${g} is in GATE_TABLE but gates no allowlist`,
         ).toBe(true);
       }
@@ -1002,9 +1006,12 @@ describe('default base follows the branch fork point', () => {
       'origin/main',
     ];
     expect(pickBase(refs, (r) => dist[r])).toBe('personal/main');
-    expect(pickBase(refs, (r) => ({ ...dist, 'personal/integration/v2': [1, 0] })[r])).toBe(
-      'personal/integration/v2',
-    );
+    expect(
+      pickBase(
+        refs,
+        (r) => ({ ...dist, 'personal/integration/v2': [1, 0] as [number, number] })[r],
+      ),
+    ).toBe('personal/integration/v2');
     // same fork commit: the ref with fewer commits of its own past it wins, then the earlier one
     expect(pickBase(['v2', 'main'], (r) => (r === 'v2' ? [1, 30] : [1, 0]))).toBe('main');
     expect(pickBase(['a', 'b'], () => [2, 2])).toBe('a');

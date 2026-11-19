@@ -296,6 +296,10 @@ describe('bun-version pins (#754) — scanned across every workflow', () => {
       // fifth — it needs bun too, to `bun install` + build before packing.
       // #2035: the `publish-lane-guard` job runs the real `changeset version`
       // bump before its major check — a sixth.
+      // NEW (S13-4): the pre-push check and its drift guard import `typescript` and `yaml`, so each
+      // runs one pinned "Setup bun" and a frozen-lockfile install before the check.
+      'prepush-check.yml': 1,
+      'prepush-lib-drift.yml': 1,
       'release.yml': 6,
       // NEW (#1596, kn-next-action Bun toolchain fix): the composite action never
       // installed Bun, so the default runtime's compiled-standalone build

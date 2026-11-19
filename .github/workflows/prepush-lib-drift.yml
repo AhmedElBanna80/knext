@@ -48,7 +48,7 @@ on:
   # against integration/v2 every night, which covers a change that landed on one side while the
   # `paths:` filter above kept this workflow from running on the other.
   schedule:
-    - cron: '17 3 * * *'
+    - cron: '37 11 * * *'
   workflow_dispatch: {}
 
 permissions:

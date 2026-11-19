@@ -53,7 +53,7 @@ describe('the harness is as careful as the Z7 lane', () => {
 
   it('runs every phase by default', () => {
     expect(own).toContain(
-      'PHASES="${PHASES:-images deploy cold connecterr grpctrailers zerozone rollout sovereignty crosszone wake}"',
+      'PHASES="${PHASES:-images deploy cold connecterr grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
     );
   });
 });
@@ -444,6 +444,108 @@ describe('wake: the zone start wakes an opted-in function, never an opted-out on
     expect(call).toBeGreaterThan(woke);
     expect(w).toMatch(/\[ "\$\{on_ms\}" -lt "\$\{off_ms\}" \] \\\n\s*\|\| fail/);
     expect(body('zone_runs')).toContain('KNEXT_WAKE_FUNCTIONS');
+  });
+});
+
+describe('imagepin: a pinned zone refuses a swapped function image and recovers (ADR-0004 Am3)', () => {
+  const p = body('phase_imagepin');
+  it('is a default phase, run last, and a known phase', () => {
+    expect(own).toContain('crosszone wake imagepin http11}"');
+    expect(own).toMatch(/images \| deploy .* \| wake \| imagepin \| http11\) ;;/);
+    expect(own).toContain('has_phase imagepin && phase_imagepin');
+  });
+  it('pins the digest the function really runs, then swaps to a different image', () => {
+    expect(p).toContain('go_img="$(image_ref function-go)"');
+    expect(p).toContain('pin="@${go_img#*@}"');
+    expect(p).toContain('\\"path\\":\\"/spec/backends/0/image\\",\\"value\\":\\"${pin}\\"');
+    expect(p).toContain('swap_img="$(image_ref zone-caller)"');
+    expect(p).toMatch(/\[ "\$\{swap_img#\*@\}" != "\$\{go_img#\*@\}" \] \|\| fail/);
+  });
+  it('refuses on BindingImageMismatch, on both objects, and holds', () => {
+    // The refusal wait, anchored to its own call (a bare substring matches several lines).
+    expect(p).toContain(
+      'wait_until 180 3 "${GO_FN} refused for the image swap" \\\n    "[ \\"\\$(cond_of backendservice ${GO_FN} Bound)\\" = False/BindingImageMismatch ]"',
+    );
+    // The held read of the function's own condition, after the hold.
+    expect(p).toContain(
+      '[ "$(cond_of backendservice "${GO_FN}" Bound)" = False/BindingImageMismatch ] \\\n    || fail "${GO_FN}: Bound is',
+    );
+    // The zone's report is a bounded wait, not a single read.
+    expect(p).toContain(
+      'wait_until 60 2 "${ZONE}\'s BackendBindings reports ${GO_FN} as BindingImageMismatch" \\\n    "[ \\"\\$(cond_of nextapp ${ZONE} BackendBindings)\\" = False/BindingImageMismatch ]"',
+    );
+    // Absence is judged by a fail-closed helper: a kubectl error is not "absent".
+    expect(p).toContain(
+      'wait_until 180 3 "${GO_FN}\'s Knative Service is removed" "ksvc_gone ${GO_FN}"',
+    );
+    expect(p).toContain('ksvc_gone "${GO_FN}" || fail');
+    expect(body('ksvc_gone')).toContain('--ignore-not-found -o name)" || return 1');
+    expect(p).not.toMatch(/\[ -z "\$\(k -n/);
+    expect(p.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(-1);
+    expect(p.indexOf('sleep 20')).toBeGreaterThan(p.indexOf('await_zero "${GO_FN}"'));
+    expect(p).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" = 0 \] \|\| fail/);
+  });
+  it('judges the pinned generation before it asserts Bound, so the check cannot pass vacuously', () => {
+    const gen = p.indexOf("jsonpath='{.metadata.generation}'");
+    const judged = p.indexOf('cond_generation nextapp ${ZONE} BackendBindings)\\" = ${gen}', gen);
+    const bound = p.indexOf('under the matching pin, want True/Bound', judged);
+    expect(gen).toBeGreaterThan(-1);
+    expect(judged).toBeGreaterThan(gen);
+    expect(bound).toBeGreaterThan(judged);
+    expect(body('cond_generation')).toContain('.observedGeneration');
+  });
+  it('restores the pin and the image when the phase fails, and disarms on success', () => {
+    expect(p).toContain('PHASE_RESTORE=imagepin_restore');
+    expect(p.trimEnd().endsWith('PHASE_RESTORE=')).toBe(true);
+    const r = body('imagepin_restore');
+    expect(r).toContain('"op\\":\\"replace\\"');
+    expect(r).toContain('"op":"remove","path":"/spec/backends/0/image"');
+    expect(own).toMatch(
+      /if \[ "\$\{rc\}" -ne 0 \] && \[ -n "\$\{PHASE_RESTORE\}" \]; then "\$\{PHASE_RESTORE\}"/,
+    );
+  });
+  it('recovers on the pinned image and the zone calls it, then removes the pin', () => {
+    const back = p.indexOf('\\"value\\":\\"${go_img}\\"');
+    const bound = p.indexOf('= True/Bound', back);
+    const call = p.indexOf('expect_zone', bound);
+    const unpin = p.indexOf('"op":"remove","path":"/spec/backends/0/image"');
+    expect(back).toBeGreaterThan(p.indexOf('= False/BindingImageMismatch'));
+    expect(bound).toBeGreaterThan(back);
+    expect(call).toBeGreaterThan(bound);
+    expect(unpin).toBeGreaterThan(call);
+  });
+});
+
+describe('http11: backends[].httpVersion 1.1 is called over HTTP/1.1 through the h2c port (ADR-0004 Am6)', () => {
+  const p = body('phase_http11');
+  it('sets 1.1 on the zone entry and waits for the zone to run with it', () => {
+    expect(p).toContain('"path":"/spec/backends/0/httpVersion","value":"1.1"');
+    expect(p).toContain('zone_http_version 1.1');
+    expect(body('zone_http_version')).toContain('EXAMPLE_SERVICE_HTTP_VERSION');
+  });
+  it('the function port stays h2c before and after, and the zone logs HTTP/1.1, never h2c', () => {
+    expect(body('fn_port_names')).toContain('.ports[]?.name');
+    expect(p.match(/\[ "\$\(fn_port_names\)" = h2c \] \|\| fail/g)?.length).toBe(2);
+    expect(p).toContain('zpod="$(pod_json "${ZONE}" | jq -r \'.metadata.name\')"');
+    expect(p).toContain('logs "${zpod}" -c user-container');
+    expect(p).not.toContain('logs -l');
+    expect(p).toContain('knext: example function: transport HTTP/1.1');
+    expect(p).toMatch(/! grep -qF 'knext: example function: transport h2c[^\n]*\n?[^\n]*\|\| fail/);
+  });
+  it('a call at HTTP/1.1 lands, warm and from zero, and leaves a pod', () => {
+    expect(p).toContain('expect_zone');
+    const zero = p.indexOf('await_zero "${GO_FN}"');
+    const cold = p.indexOf('cold_call', zero);
+    expect(zero).toBeGreaterThan(-1);
+    expect(cold).toBeGreaterThan(zero);
+  });
+  it('restores httpVersion when the phase fails', () => {
+    expect(p).toContain('PHASE_RESTORE=http11_restore');
+    expect(body('http11_restore')).toContain('"op":"remove","path":"/spec/backends/0/httpVersion"');
+  });
+  it('restores the zone to no httpVersion', () => {
+    expect(p).toContain('"op":"remove","path":"/spec/backends/0/httpVersion"');
+    expect(p).toContain('zone_http_version unset');
   });
 });
 

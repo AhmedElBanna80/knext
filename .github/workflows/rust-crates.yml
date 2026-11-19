@@ -190,6 +190,19 @@ jobs:
           KNEXT_FFI_LOCAL_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
         run: bun harness/ffi-generated.ts init
 
+      - name: Generator — egress denied, cargo fetches the recorded knext-ffi rev from this checkout (S9-4)
+        # Tests what the init step above only assumes: that the local rewrite is the
+        # ONLY route to the knext crates. github.com is routed to a refused proxy
+        # (crates/harness/local-crates-source.ts, githubDenialGitConfig), the rewrite
+        # must still serve the recorded rev, and a control with the rewrite removed
+        # must be refused by that route. crates.io stays reachable: knext-ffi pulls
+        # serde from it, so the denial is scoped to github.com, not HTTPS_PROXY.
+        # Not proven here: that the rev is published on CRATE_GIT (see that file).
+        env:
+          KNEXT_FFI_LOCAL_REPO: ${{ github.workspace }}
+          KNEXT_FFI_LOCAL_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+        run: bun harness/ffi-egress-offline.ts
+
   # cargo deny over the crates' Cargo.lock. Its own job with NO `if:` and no
   # `needs:`, so it runs on every event regardless of `changes` (#2441): the
   # publish lane relies on it being unconditional.

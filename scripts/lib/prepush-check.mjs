@@ -344,7 +344,6 @@ function guardsOf(lines, i) {
   for (let k = i; k >= 0; k--) {
     if (/^ {2}[\w-]+:\s*$/.test(lines[k])) {
       for (let m = k + 1; m < lines.length && !/^ {2}[\w-]+:\s*$/.test(lines[m]); m++) {
-        if (/^ {4}steps:/.test(lines[m])) break;
         const g = /^ {4}if:\s*(.+?)\s*$/.exec(lines[m]);
         if (g) guards.push(g[1]);
       }

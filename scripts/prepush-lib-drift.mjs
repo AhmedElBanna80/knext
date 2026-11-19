@@ -11,7 +11,7 @@
  *  1. any difference in `scripts/lib/prepush-check.mjs` outside the branch-specific block;
  *  2. any difference at all in the CLI, this script, the test file, the prover and the two
  *     workflows (`WHOLE_FILES`);
- *  3. a branch-specific block (either copy) that is not plain data (`branchBlockProblems`);
+ *  3. a branch-specific block (either copy) that is not plain data (`evalBranchBlock` refuses it, see `branchBlockProblems`);
  *  4. an input that exists on BOTH branches and is `exempt` on only one (the set of exempt
  *     input names must agree wherever the file is present on both);
  *  5. the other ref having no copy of a compared file yet, or a missing or doubled marker.
@@ -25,12 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  branchBlockProblems,
-  driftBetween,
-  evalBranchBlock,
-  exemptInputs,
-} from './lib/prepush-check.mjs';
+import { driftBetween, evalBranchBlock, exemptInputs } from './lib/prepush-check.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const LIB = 'scripts/lib/prepush-check.mjs';
@@ -110,10 +105,7 @@ export function main(argv, root = ROOT) {
     const regs = {};
     for (const [name, text] of Object.entries(copies)) {
       try {
-        const problems = branchBlockProblems(text);
-        if (problems.length > 0)
-          fail(`${LIB} on ${name}: branch-specific block is not data: ${problems.join('; ')}`);
-        else regs[name] = evalBranchBlock(text).GATE_INPUT_REGISTRY;
+        regs[name] = evalBranchBlock(text).GATE_INPUT_REGISTRY;
       } catch (e) {
         fail(`${LIB} on ${name}: ${e.message}`);
       }

@@ -243,8 +243,12 @@ These came from the system designer as tech-debt or test items, not blockers. Th
 - **Named untested failure mode, owned by the activator-path drill (Z11, #2056).** A JWKS rotation
   where a warm function pod has cached the old key set, combined with one call held in the
   activator for more than 60 s. The planned warm-pod rotation test does not cover it; Z11 must add
-  a cold-pod rotation case and a request held beyond 60 s. Until that drill is green, Decision 13's
-  claim that the token, not the NetworkPolicy, is the authoritative control is unproven.
+  a cold-pod rotation case and a request held beyond 60 s. *Update (2026-11-19):* the drill now runs
+  both halves for the Go function, separately, and they are green in CI (run
+  https://github.com/AhmedElBanna80/knext/actions/runs/44458665117): a cold-pod rotation and a call held past the token's life. The combined case (a warm pod
+  with a cached key set and a held call) is still untested and stays open as TD-S9-1c. Until it is
+  covered, Decision 13's claim that the token, not the NetworkPolicy, is the authoritative control
+  is proven for each half but not for their combination.
 - **Filed as #2276 (architect, at re-confirmation).** Make the anonymous principal enforceable in
   generated code: a distinct branded type rather than a user-id string, rejected by a generated
   action unless that RPC opts in through a proto option, mutation-proved. Until then, the rule that
@@ -295,8 +299,9 @@ These came from the system designer as tech-debt or test items, not blockers. Th
 - [x] Generator (Z6 #2411): auth options `USER` and `PUBLIC` only; a `PUBLIC_MUTATION` option is refused.
 - [x] Z11 #2056 (proven part): token refusal on the activator path, both with and without the NetworkPolicy, Go function, kind + Calico (Z8's Calico drill proved the cold call and the direct-dial refusal).
       *Ticked (2026-11-19), from CI run https://github.com/AhmedElBanna80/knext/actions/runs/44430815511 (job "Z11 token refusal on the activator path, with and without the NetworkPolicy", green on the merged code at `bee549a8e`).* The `policyoff` phase shows a cold token-less call through the activator refused by the function (401 unauthenticated) with the NetworkPolicy off. The `noauth` phase shows the same foreign call reaching the handler once the interceptor is removed, so the token is the control. Scope: the Go function on Calico; the Rust template is not in this drill.
-- [ ] Z11 #2056 (open): a cold-pod JWKS rotation case. A function pod that has cached the old key set, rotated under a cold call through the activator, is not covered by the drill (the named untested failure mode above).
-- [ ] Z11 #2056 (open): a request held in the activator beyond 60 s. The drill does not cover it, and such a call fails with `UNAUTHENTICATED` on a saturated cluster (the named untested failure mode above).
+- [x] Z11 #2056: a cold-pod JWKS rotation case (Go function, kind + Calico). *Ticked (2026-11-19), from CI run https://github.com/AhmedElBanna80/knext/actions/runs/44458665117 (green on the merged code).* The `rotcold` phase rotates the zone's key while the function is at zero: a pod that woke after the retirement refuses the retired key (401 unauthenticated) and a second cold pod accepts the new key (404 not_found). Scope: the Go function; a Rust cold-pod rotation is not run.
+- [x] Z11 #2056: a request held in the activator beyond 60 s (Go function, kind + Calico). *Ticked (2026-11-19), from CI run https://github.com/AhmedElBanna80/knext/actions/runs/44458665117 (green on the merged code).* The `held` phase holds a call in the activator past the token's life: it is refused by the function (401 unauthenticated, "token rejected"), while a shorter hold with the same mechanism is accepted (404 not_found). Scope: the Go function; a Rust held call is not run.
+- [ ] Z11 #2056 (open, TD-S9-1c): the combined case, a warm pod with a cached key set plus a call held for more than 60 s. The two halves above are proven separately; their combination is not.
 
 ## Amendment 2 (2026-10-15) — `spec.zone`, two-sided binding, rendered binding env, operator-owned identity
 

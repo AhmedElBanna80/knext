@@ -83,7 +83,9 @@ CURL_IMAGE='curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01
 
 ZONE=storefront
 GO_FN=example-go
+RUST_FN=inventory-rust
 FN_URL="http://${GO_FN}.${NS}.svc.cluster.local"
+RUST_URL="http://${RUST_FN}.${NS}.svc.cluster.local"
 GET_ITEM="/example.v1.ExampleService/GetItem"
 ZONE_HOST=""
 FN_HOST="${GO_FN}.${NS}.svc.cluster.local"
@@ -113,6 +115,7 @@ diagnostics() {
 # back even when the drill aborts in between: a kept cluster must never stay with
 # the policy off or on the image without its token check.
 RESTORE_POLICY=0
+RESTORE_RUST_POLICY=0
 RESTORE_IMAGE=""
 # Set while the held phase has every node cordoned: a kept cluster must stay schedulable.
 RESTORE_CORDON=0
@@ -130,6 +133,10 @@ cleanup() {
   if [ "${RESTORE_POLICY}" = 1 ]; then
     k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"security":{"networkPolicy":true}}}' >/dev/null 2>&1 \
       || echo "WARNING: could not turn ${GO_FN}'s NetworkPolicy back on" >&2
+  fi
+  if [ "${RESTORE_RUST_POLICY}" = 1 ]; then
+    k -n "${NS}" patch backendservice "${RUST_FN}" --type merge -p '{"spec":{"security":{"networkPolicy":true}}}' >/dev/null 2>&1 \
+      || echo "WARNING: could not turn ${RUST_FN}'s NetworkPolicy back on" >&2
   fi
   if [ -n "${RESTORE_IMAGE}" ]; then
     k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p "{\"spec\":{\"image\":\"${RESTORE_IMAGE}\"}}" >/dev/null 2>&1 \
@@ -151,7 +158,7 @@ BOUND_SECONDS="$(jq -er '.rotation.propagationBoundSeconds' "${BOUND_FIXTURE}")"
 
 lane_env() { # the environment the Z7 and Z10 lanes need to run against this cluster
   KIND_CLUSTER="${CLUSTER}" REGISTRY_NAME="${REG_NAME}" REGISTRY_PORT="${REG_PORT}" \
-    Z10_NAMESPACE="${NS}" Z10_WITH_RUST=0 INTERNAL_PORT="${INTERNAL_PORT}" "$@"
+    Z10_NAMESPACE="${NS}" Z10_WITH_RUST=1 INTERNAL_PORT="${INTERNAL_PORT}" "$@"
 }
 
 all_pods() { # <service>: every pod of a function, terminating ones included
@@ -165,6 +172,19 @@ await_zero() { # <service>: no pod at all (a draining pod could serve a "cold" c
     sleep 5
   done
   ok "$1 has scaled to zero"
+}
+
+# await_zero_all <service>...: every service has no pod at all. One shared bound, and the
+# services drain at the same time on the cluster, so the wait costs the slowest drain, not the sum.
+await_zero_all() {
+  local end=$((SECONDS + 300)) svc
+  for svc in "$@"; do
+    until [ "$(all_pods "${svc}")" = 0 ]; do
+      [ "${SECONDS}" -lt "${end}" ] || fail "timed out after 300s waiting for: ${svc} scaled to zero"
+      sleep 5
+    done
+    ok "${svc} has scaled to zero"
+  done
 }
 
 start_forwards() {
@@ -203,8 +223,9 @@ dial_rc() {
   echo "${rc}"
 }
 
-fn_pod_ip() {
-  k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
+fn_pod_ip() { pod_ip_of "${GO_FN}"; }
+pod_ip_of() { # <service>: the Ready, non-terminating pod's IP, or empty
+  k -n "${NS}" get pods -l "serving.knative.dev/service=$1" -o json \
     | jq -r '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running"
               and ([.status.conditions[]? | select(.type == "Ready") | .status] == ["True"]))] | .[0].status.podIP // ""'
 }
@@ -365,6 +386,21 @@ set_policy() { # true|false: the function's NetworkPolicy toggle, then wait for 
   if [ "$1" = true ]; then RESTORE_POLICY=0; fi
 }
 
+# set_rust_policy true|false: the Rust function's NetworkPolicy toggle, then wait for the object
+# to match (the same as set_policy, for the Rust function).
+set_rust_policy() {
+  if [ "$1" = false ]; then RESTORE_RUST_POLICY=1; fi
+  k -n "${NS}" patch backendservice "${RUST_FN}" --type merge -p "{\"spec\":{\"security\":{\"networkPolicy\":$1}}}" >/dev/null
+  local want=1
+  [ "$1" = false ] && want=0
+  local end=$((SECONDS + 120))
+  until [ "$(k -n "${NS}" get networkpolicy "${RUST_FN}-function-ingress" --ignore-not-found -o name | grep -c .)" = "${want}" ]; do
+    [ "${SECONDS}" -lt "${end}" ] || fail "the Rust function's NetworkPolicy did not become present=${want} within 120s"
+    sleep 3
+  done
+  if [ "$1" = true ]; then RESTORE_RUST_POLICY=0; fi
+}
+
 # wake_ready: wake the function through the zone with the authenticated call and WAIT,
 # bounded, until the call reached the handler (404 not_found) AND a Ready pod exists;
 # set WARM_IP. Fails closed when no pod ever becomes Ready, so a direct dial is never
@@ -444,8 +480,12 @@ phase_policyoff() {
   # phase's claim never rests on a helper's wait.
   [ "$(k -n "${NS}" get networkpolicy "${GO_FN}-function-ingress" --ignore-not-found -o name | grep -c .)" = 0 ] \
     || fail "the function's NetworkPolicy still exists: the leg would not be a policy-off leg"
-  # Cold, through the activator.
-  await_zero "${GO_FN}"
+  set_rust_policy false
+  [ "$(k -n "${NS}" get networkpolicy "${RUST_FN}-function-ingress" --ignore-not-found -o name | grep -c .)" = 0 ] \
+    || fail "the Rust function's NetworkPolicy still exists: the Rust leg would not be a policy-off leg"
+  # Cold, through the activator. Both functions drain at the same time, so the Rust leg
+  # below costs no wait of its own.
+  await_zero_all "${GO_FN}" "${RUST_FN}"
   foreign_get ""
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
     || fail "policy off, cold, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
@@ -465,6 +505,47 @@ phase_policyoff() {
   echo "REFUSED-BY-FUNCTION-WITH-POLICY-OFF: direct ${ip}:8080 no token -> 401 unauthenticated; garbage token -> 401 unauthenticated"
   set_policy true
   ok "policy off: a foreign pod reached the function pod directly and the function itself refused it (policy restored)"
+  policyoff_rust
+}
+
+# await_rust_ip: with the Rust function's policy off, wait until the foreign pod can dial the
+# Rust function pod's user port, and set RUST_IP. Each round keeps the pod warm through its
+# own cluster-local URL, so an idle scale-down cannot race the dial.
+await_rust_ip() {
+  local end ip
+  RUST_IP=""
+  end=$((SECONDS + 90))
+  while [ "${SECONDS}" -lt "${end}" ]; do
+    foreign_post "${RUST_URL}${GET_ITEM}" ""
+    ip="$(pod_ip_of "${RUST_FN}")"
+    if [ -n "${ip}" ] && [ "$(dial_rc "${ip}" 8080)" = 0 ]; then RUST_IP="${ip}"; return 0; fi
+    sleep 3
+  done
+  fail "policy off: the foreign pod could not reach the warm Rust function pod, so the Rust direct leg proves nothing"
+}
+
+# policyoff_rust: the Go policy-off leg, against the Rust template function (its NetworkPolicy
+# is already off). Cold through the activator, then direct to the pod: the function itself refuses.
+policyoff_rust() {
+  log "policyoff (Rust): with the NetworkPolicy OFF the Rust function itself refuses a token-less call"
+  [ "$(all_pods "${RUST_FN}")" = 0 ] || fail "${RUST_FN} has a pod before the cold call, so the Rust leg would not be cold"
+  foreign_post "${RUST_URL}${GET_ITEM}" ""
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
+    || fail "policy off, Rust, cold, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
+  [ "$(all_pods "${RUST_FN}")" -ge 1 ] || fail "the refused call never woke ${RUST_FN}: it did not reach the function"
+  ok "policy off: a cold no-token call through the activator woke the Rust function and was refused (401 unauthenticated)"
+  local ip
+  await_rust_ip
+  ip="${RUST_IP}"
+  foreign_post "http://${ip}:8080${GET_ITEM}" ""
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "missing bearer token" ] \
+    || fail "policy off, Rust, direct to the pod, no token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'missing bearer token'"
+  foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer not-a-token"
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
+    || fail "policy off, Rust, direct to the pod, garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
+  echo "REFUSED-BY-RUST-FUNCTION-WITH-POLICY-OFF: direct ${ip}:8080 no token -> 401 unauthenticated; garbage token -> 401 unauthenticated"
+  set_rust_policy true
+  ok "policy off: a foreign pod reached the Rust function pod directly and the function itself refused it (policy restored)"
 }
 
 # ---------------------------------------------------------------- phase: noauth

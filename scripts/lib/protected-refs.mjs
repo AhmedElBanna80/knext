@@ -17,7 +17,7 @@ const isNotFound = (e) => /\(HTTP 404\)|\bHTTP 404\b/.test(errText(e));
 
 /**
  * @param {{gh: (args: string[]) => string, repo: string, refs: Iterable<string>}} p
- * @returns {{ok: boolean, findings: string[], checked: number}}
+ * @returns {{ok: boolean, findings: string[], kinds: string[], onlyUnprotected: boolean, checked: number}}
  */
 export function verifyProtectedRefs({ gh, repo, refs }) {
   const findings = [];

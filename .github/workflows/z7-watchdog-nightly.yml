@@ -16,9 +16,9 @@ name: Z7 caller watchdog + protected-ref check (nightly)
 # founder-confirmed setting, not something this job can assert.
 
 on:
-  # 06:07 UTC, offset from the other supply-chain nightlies.
+  # 06:59 UTC, offset from the other supply-chain nightlies.
   schedule:
-    - cron: '7 6 * * *'
+    - cron: '59 6 * * *'
   workflow_dispatch: {}
 
 permissions:

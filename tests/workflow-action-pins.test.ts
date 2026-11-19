@@ -5,6 +5,7 @@ import {
   discoverPinnableFiles,
   isOwnRepoReusableWorkflow,
   mentionsUses,
+  ownRepoShaPinBranch,
 } from '../scripts/verify-action-pins.mjs';
 
 /**
@@ -114,7 +115,13 @@ describe('every workflow SHA-pins every action (#528)', () => {
   });
 
   it.each([...COVERED])('%s annotates every pin with the tag it claims', (file) => {
-    for (const entry of usesRefs(file).filter((e) => !isOwnRepoReusableWorkflow(e.action, e.ref))) {
+    // An own-repo reusable workflow SHA pin may carry a `# <protected branch>` comment
+    // instead (shared definition; the nightly resolves the branch against the SHA).
+    for (const entry of usesRefs(file).filter(
+      (e) =>
+        !isOwnRepoReusableWorkflow(e.action, e.ref) &&
+        ownRepoShaPinBranch(e.action, e.ref, e.comment) === undefined,
+    )) {
       expect(
         entry.comment,
         `${file}:${entry.line} — ${entry.action} needs a trailing "# vX.Y.Z" comment. ` +

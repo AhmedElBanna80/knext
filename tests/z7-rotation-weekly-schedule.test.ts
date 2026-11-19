@@ -9,7 +9,7 @@ import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
-import { isOwnRepoReusableWorkflow } from '../scripts/verify-action-pins.mjs';
+import { isOwnRepoReusableWorkflow, ownRepoShaPinBranch } from '../scripts/verify-action-pins.mjs';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const text = readFileSync(resolve(REPO_ROOT, '.github/workflows/z7-rotation-weekly.yml'), 'utf8');
@@ -38,9 +38,11 @@ describe('z7-rotation-weekly.yml', () => {
   it('is a caller of exactly the Z7 lane on integration/v2 with rotation_realtime: true', () => {
     expect(callers).toHaveLength(1);
     const [, call] = callers[0] as [string, Job];
+    // Temporarily SHA-pinned (branches unprotected); see the comment in the workflow.
     expect(call.uses).toBe(
-      'AhmedElBanna80/knext/.github/workflows/z7-identity-kind-e2e.yml@integration/v2',
+      'AhmedElBanna80/knext/.github/workflows/z7-identity-kind-e2e.yml@bdbe014b20f29cb7fd42de6a82fc4c162ec1f9dd',
     );
+    expect(text).toMatch(/z7-identity-kind-e2e\.yml@[0-9a-f]{40} # integration\/v2\n/);
     expect(call.with).toEqual({ rotation_realtime: true, checkout_ref: 'integration/v2' });
     expect(call.needs).toEqual(['preflight']);
     // The called workflow needs only contents: read; the caller grants no more.
@@ -106,10 +108,16 @@ describe('z7-rotation-weekly.yml', () => {
   it('every remote action step is pinned by full SHA with a version comment', () => {
     const uses = [...text.matchAll(/^\s*-?\s*uses:\s*(\S+)(.*)$/gm)].filter(
       // The caller's own-repo reusable workflow is a branch ref by design (asserted above).
-      ([, r]) => {
+      ([, r, rest]) => {
         if (r.startsWith('./')) return false;
         const at = r.lastIndexOf('@');
-        return !isOwnRepoReusableWorkflow(r.slice(0, at), r.slice(at + 1));
+        const action = r.slice(0, at);
+        const ref = r.slice(at + 1);
+        const comment = (rest ?? '').replace(/^\s*#\s*/, '');
+        return (
+          !isOwnRepoReusableWorkflow(action, ref) &&
+          ownRepoShaPinBranch(action, ref, comment) === undefined
+        );
       },
     );
     expect(uses.length).toBeGreaterThan(0);

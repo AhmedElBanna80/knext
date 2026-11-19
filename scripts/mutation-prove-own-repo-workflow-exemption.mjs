@@ -53,14 +53,14 @@ const MUTATIONS = [
   {
     subject: 'verify',
     label: 'delete the nightly call-site exemption (every own-repo call SHA-resolved)',
-    anchor: '      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
-    replacement: '      if (true) {',
+    anchor: '} else if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
+    replacement: '} else if (true) {',
   },
   {
     subject: 'verify',
     label: 'widen the nightly call-site exemption to owner/repo only',
-    anchor: '      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
-    replacement: '      if (!OWN_REPOS.has(`${pin.owner}/${pin.repo}`)) {',
+    anchor: '} else if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {',
+    replacement: '} else if (!OWN_REPOS.has(`${pin.owner}/${pin.repo}`)) {',
   },
   {
     subject: 'verify',

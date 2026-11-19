@@ -73,8 +73,8 @@ const MUTATIONS = [
     label: 'lib: swallow API errors instead of recording them (fail open)',
     subject: 'lib',
     guard: 'spec',
-    anchor: 'errors.push({ file: entry.file',
-    replacement: '[].push({ file: entry.file',
+    anchor: 'errors.push({',
+    replacement: '[].push({',
   },
   {
     label: 'lib: exit code ignores API errors',

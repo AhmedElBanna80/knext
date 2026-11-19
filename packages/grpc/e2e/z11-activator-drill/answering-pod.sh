@@ -97,3 +97,18 @@ check_refused_by() {
   answer_is_refused "$4" "$5" "$6" || { echo "want 401 unauthenticated 'token rejected', got status $4 code '$5' message '$6'" >&2; return 1; }
   assert_answered_by "$1" "$2" "$3"
 }
+
+# check_direct_accepted <status> <code>: the POSITIVE CONTROL for a direct dial to a function pod
+# with its NetworkPolicy off. A call carrying a VALID token on that same path must reach the
+# handler (404 not_found: the item does not exist), so the 401s the no-token and garbage-token
+# calls got were the token check, not a path that refuses everything. A 401 here means the
+# valid token was refused (the leg proves nothing); anything else is no answer from the handler.
+check_direct_accepted() {
+  if [ "$1" = 404 ] && [ "$2" = not_found ]; then return 0; fi
+  if [ "$1" = 401 ]; then
+    echo "the direct path refused a VALID token (status $1 code '$2'): the policy-off refusals prove nothing" >&2
+  else
+    echo "want 404 not_found from the handler, got status $1 code '$2'" >&2
+  fi
+  return 1
+}

@@ -78,6 +78,31 @@ const MUTATIONS = [
     replacement: 'if (declared.size >= 0) continue;',
   },
   {
+    label: 'a helper merely named wiring* labels rows without setting the kind',
+    subject: 'lint',
+    anchor: 'helperSetsWiringKind(sf, n.expression.text)',
+    replacement: 'true',
+  },
+  {
+    label: 'a text read that is never asserted on counts as a substring check (judged > 0 dropped)',
+    subject: 'lint',
+    anchor: 'return judged > 0;',
+    replacement: 'return true;',
+  },
+  {
+    label: 'a describe/it title naming the subject is treated as executing it',
+    subject: 'lint',
+    anchor:
+      "if (direct && TITLE_CALLEES.has(calleeName(direct) ?? '') && direct.arguments[0] === outer) continue;",
+    replacement: '',
+  },
+  {
+    label: 'one text-only spec is enough to flag a subject another spec executes (every -> some)',
+    subject: 'lint',
+    anchor: 'mentioning.every(',
+    replacement: 'mentioning.some(',
+  },
+  {
     label: 'the real z11 prover loses its wiring label on the WR rows',
     subject: 'z11',
     anchor: "const wiringRow = (...args) => ({ ...row(...args), kind: 'wiring' });",
@@ -85,7 +110,7 @@ const MUTATIONS = [
   },
 ];
 
-const DECLARED = 8;
+const DECLARED = 12;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

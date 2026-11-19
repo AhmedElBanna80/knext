@@ -136,4 +136,34 @@ describe('the lint heuristic', () => {
     expect(audit(proverWith(rows)).length).toBe(1);
     expect(declaredWiringSubjects(`// const WIRING_SUBJECTS = ['thing'];\n`).size).toBe(0);
   });
+  it('a text read whose text is never asserted on is not a substring check (no judged use)', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8');`;
+    expect(isTextOnlyPair(spec, 'scripts/thing.sh')).toBe(false);
+  });
+  it('a subject only named in a describe title is not text-only (no read at all)', () => {
+    expect(isTextOnlyPair(`describe('scripts/thing.sh', () => {});`, 'scripts/thing.sh')).toBe(
+      false,
+    );
+  });
+  it('an exact-path describe title is neutral, it neither reads nor executes the subject', () => {
+    const spec = `
+      const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8');
+      describe('scripts/thing.sh', () => { it('x', () => { expect(src).toContain('foo'); }); });`;
+    expect(isTextOnlyPair(spec, 'scripts/thing.sh')).toBe(true);
+  });
+  it('EVERY referencing spec must be text-only: one executing spec clears the subject', () => {
+    const prover = `
+      const A = 'tests/thing.test.ts';
+      const B = 'tests/thing2.test.ts';
+      const PROOF = { subjects: { thing: 'scripts/thing.sh' } };
+      const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`;
+    const execSpec = `const p = resolve(ROOT, 'scripts/thing.sh'); spawnSync('bash', [p]);`;
+    const specs: Record<string, string> = {
+      'tests/thing.test.ts': SPEC_TEXT,
+      'tests/thing2.test.ts': execSpec,
+    };
+    expect(auditWiringLabels(prover, (s: string) => specs[s])).toEqual([]);
+    specs['tests/thing2.test.ts'] = SPEC_TEXT;
+    expect(auditWiringLabels(prover, (s: string) => specs[s]).length).toBe(1);
+  });
 });

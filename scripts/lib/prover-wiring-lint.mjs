@@ -200,7 +200,6 @@ export function isTextOnlyPair(specSource, subjectPath) {
   };
   findImports(sf);
   if (imported) return false;
-  let reads = 0;
   const textExprs = []; // identifiers or inline read calls holding the file text
   for (const lit of lits) {
     const outer = outerPathExpr(lit);
@@ -208,7 +207,6 @@ export function isTextOnlyPair(specSource, subjectPath) {
     if (direct && TITLE_CALLEES.has(calleeName(direct) ?? '') && direct.arguments[0] === outer)
       continue;
     if (direct && isReadCall(direct)) {
-      reads++;
       const v = declaredName(direct);
       textExprs.push(v ? { name: v } : { inline: direct });
       continue;
@@ -220,12 +218,10 @@ export function isTextOnlyPair(specSource, subjectPath) {
     for (const u of uses) {
       const c = argOf(u);
       if (!c || !isReadCall(c)) return false; // used for anything but a text read
-      reads++;
       const v = declaredName(c);
       textExprs.push(v ? { name: v } : { inline: c });
     }
   }
-  if (reads === 0) return false;
   let judged = 0;
   for (const t of textExprs) {
     if (t.inline) {

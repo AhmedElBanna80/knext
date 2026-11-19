@@ -106,14 +106,17 @@ jobs:
     permissions:
       contents: read
     needs: [preflight]
-    # TEMPORARY SHA pin. A branch ref is only trusted once the branch is protected
-    # (PROTECTED_REFS); neither main nor integration/v2 is protected on this temporary
-    # repo yet, so whoever can push integration/v2 would run code here. Pinned to the
-    # commit of z7-identity-kind-e2e.yml on integration/v2. The trailing branch comment is
-    # resolved by the nightly (the SHA must be reachable from that branch). When the
-    # founder protects both branches (see z7-watchdog-nightly.yml's protected-ref
-    # check), re-point this to `@integration/v2`. Until then, bump the SHA whenever
-    # v2's Z7 workflow changes.
+    # TEMPORARY SHA pin of the WORKFLOW YAML only. A branch ref is only trusted once the
+    # branch is protected (PROTECTED_REFS); neither main nor integration/v2 is protected on
+    # this temporary repo yet, so whoever can push integration/v2 would run workflow steps
+    # here. The pin freezes z7-identity-kind-e2e.yml (steps, env, timeout). It does NOT
+    # freeze the scripts: checkout_ref below is the floating integration/v2 tip, so run.sh,
+    # probe.ts and everything they call come from that tip. The two must stay
+    # compatible (same flags, paths and env names); re-check when either side changes.
+    # The trailing branch comment is resolved by the nightly (the SHA must be reachable
+    # from that branch). When the founder protects both branches (see
+    # z7-watchdog-nightly.yml's protected-ref check), re-point this to `@integration/v2`.
+    # Until then, bump the SHA whenever v2's Z7 workflow YAML changes.
     uses: AhmedElBanna80/knext/.github/workflows/z7-identity-kind-e2e.yml@bdbe014b20f29cb7fd42de6a82fc4c162ec1f9dd # integration/v2
     with:
       rotation_realtime: true

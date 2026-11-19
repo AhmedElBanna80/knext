@@ -293,7 +293,8 @@ These came from the system designer as tech-debt or test items, not blockers. Th
 - [x] Interceptors in the Go and Rust templates (Z7 verifiers, #2455), fail-closed, mutation-proved; JWKS re-read on an
       unknown `kid`; small `exp` clock skew.
 - [x] Generator (Z6 #2411): auth options `USER` and `PUBLIC` only; a `PUBLIC_MUTATION` option is refused.
-- [ ] Open, Z11 #2056: the kind + Calico activator-path drill with the token as the control (Z8's Calico drill proved the cold call and the direct-dial refusal).
+- [x] Z11 #2056: the kind + Calico activator-path drill with the token as the control (Z8's Calico drill proved the cold call and the direct-dial refusal).
+      *Ticked (2026-11-19), from CI run https://github.com/AhmedElBanna80/knext/actions/runs/44430815511 (job "Z11 token refusal on the activator path, with and without the NetworkPolicy", green on the merged code at `bee549a8e`).* The `policyoff` phase shows a cold token-less call through the activator refused by the function (401 unauthenticated) with the NetworkPolicy off. The `noauth` phase shows the same foreign call reaching the handler once the interceptor is removed, so the token is the control. Scope: the Go function on Calico; the Rust template is not in this drill.
 
 ## Amendment 2 (2026-10-15) — `spec.zone`, two-sided binding, rendered binding env, operator-owned identity
 

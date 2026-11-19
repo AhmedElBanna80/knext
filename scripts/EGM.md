@@ -12,8 +12,9 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - `assert-tree-unchanged.mjs snapshot|check <file>`: compares `git status --porcelain --untracked-files=all` before and after a run.
 
 ### Mutation provers
-- 174 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
-- Shared drivers: `lib/prover-report.mjs` (imported by all 174), `lib/mutation-harness.mjs` (98) and `lib/guard-prover.mjs` (101).
+- 176 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
+- Shared drivers: `lib/prover-report.mjs` (imported by all 176), `lib/mutation-harness.mjs` (99) and `lib/guard-prover.mjs` (103).
+- `mutation-prove-s9-4-ffi-offline.mjs` proves the CI egress proof in `tests/ffi-ci-local-crates.test.ts` (the rewrite, the github.com denial, the verdict, the `Generator — egress denied` step, and the egress script's exit). Its subjects are `crates/harness/local-crates-source.ts`, `crates/harness/ffi-egress-offline.ts` and `.github/workflows/rust-crates.yml`.
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.
 - Kind-lane provers live among them, e.g. `mutation-prove-2461-z7-kind-e2e.mjs` for the Z7 identity lane in `packages/grpc/e2e/z7-identity-kind`, including the SQ1/SQ2 rows for the squatted-JWKS-ConfigMap phase and the RT rows for the real-time rotation (RT2, RT9-RT11 are behavioural, against `rotation-verdict.ts`; RT5 and RT7 are string-level). Its neighbours `mutation-prove-s8-1-z11-policyoff.mjs` (the Z11 `policyoff` phase in `packages/grpc/e2e/z11-activator-drill/run.sh`) and `mutation-prove-s9-1-z11-rotation-held.mjs` (its `rotcold` cold-pod key rotation and `held` call-held-past-the-token-life phases) and `mutation-prove-s8-5-z8-am3-am6.mjs` (the Z10 `imagepin` and `http11` phases in `packages/grpc/e2e/z10-zone-functions-kind/run.sh`) are kind-lane provers too.

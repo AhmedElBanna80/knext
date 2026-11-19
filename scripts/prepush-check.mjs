@@ -17,6 +17,7 @@
  *  3. STATIC SCAN. Every `mkdtemp` in `tests/**` must reach a removal, by the
  *     same scanner (`scratch-space-scan.mjs`) and per-file baseline
  *     (`tests/scratch-space-exceptions.json`) as `tests/temp-dirs-outside-the-repo.test.ts`.
+ *     Every documented `exempt` registry entry is printed as a NOTICE on EVERY run.
  *  4. SCOPE REPORT. `git diff --stat <merge-base>...HEAD` grouped by top-level
  *     area. With a declared scope (--scope a/**,b/*.ts, or a `Scope:` line in a
  *     commit body or PR body) any file outside it FAILS; with none declared it
@@ -53,6 +54,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bracedScopes,
+  GATE_INPUT_REGISTRY,
   broadScopes,
   changedGateInputs,
   changedTestFiles,
@@ -127,12 +129,18 @@ export function runChecks(opts, deps = REAL_DEPS) {
   const root = opts.root;
   const failures = [];
   const warnings = [];
+  const notices = [];
   const say = (s = '') => console.log(s);
 
   const base = opts.base ?? pickBase(BASES, (b) => distanceFrom(root, b));
   if (!base) {
     failures.push(`no base ref found (tried ${BASES.join(', ')}); pass --base <ref>`);
     return { exit: 1, failures, warnings };
+  }
+  // Every documented exemption is listed on EVERY run, not only when its file changes: an
+  // input that nothing local can gate is a standing fact worth seeing, not a one-off.
+  for (const [input, r] of Object.entries(opts.registry ?? GATE_INPUT_REGISTRY)) {
+    if (r.exempt) notices.push(`${input} has no local gate (documented exemption): ${r.exempt}`);
   }
   const mergeBase = git(root, ['merge-base', 'HEAD', base]).trim();
   say(`prepush-check: base ${base}, merge-base ${mergeBase.slice(0, 12)}`);
@@ -166,11 +174,7 @@ export function runChecks(opts, deps = REAL_DEPS) {
       unknown,
       tests: gateTests,
       unmapped,
-      exempt,
     } = planGateRuns(root, allowlists, opts.gateTable, opts.registry);
-    for (const e of exempt) {
-      warnings.push(`${e.input} has no local gate (documented exemption): ${e.reason}`);
-    }
     // Mapping is checked even when execution is skipped: an input nothing gates is a defect
     // regardless of whether this run can execute gates.
     for (const u of unmapped) {
@@ -332,10 +336,11 @@ export function runChecks(opts, deps = REAL_DEPS) {
   }
 
   say('');
+  for (const n of notices) say(`NOTICE  ${n}`);
   for (const w of warnings) say(`WARN  ${w}`);
   for (const f of failures) say(`FAIL  ${f}`);
   say(failures.length === 0 ? 'prepush-check OK' : `prepush-check FAILED (${failures.length})`);
-  return { exit: failures.length === 0 ? 0 : 1, failures, warnings };
+  return { exit: failures.length === 0 ? 0 : 1, failures, warnings, notices };
 }
 
 function parseArgs(argv) {

@@ -6,9 +6,12 @@ import { dirname, join } from 'node:path';
 import {
   bareInvocations,
   bracedScopes,
+  branchBlockProblems,
   broadScopes,
   ciRunsTest,
   driftBetween,
+  evalBranchBlock,
+  exemptInputs,
   changedGateInputs,
   changedTestFiles,
   deriveWorkflowArgSets,
@@ -22,12 +25,14 @@ import {
   pickBase,
   planGateRuns,
   readsByPath,
+  runsWholeSuite,
   scanReaders,
   scanTestReaders,
   staticTempDirFindings,
   stripBranchSpecific,
   testsCovering,
 } from '../scripts/lib/prepush-check.mjs';
+import { main as driftMain } from '../scripts/prepush-lib-drift.mjs';
 import { runChecks } from '../scripts/prepush-check.mjs';
 
 /**
@@ -1134,33 +1139,296 @@ describe('scope breadth, braces and exemptions through runChecks', () => {
     expect(local.failures.join()).toContain('brace alternation');
   });
 
-  it('reports a documented exemption as a warning every run', () => {
+  it('lists every documented exemption as a NOTICE on EVERY run, changed file or not', () => {
     const root = fixture();
     git(root, 'init', '-q', '-b', 'main');
-    put(root, 'security/x.yaml', 'a: 1');
     put(root, 'README.md', 'base');
     git(root, 'add', '.');
     git(root, 'commit', '-q', '-m', 'base');
     git(root, 'switch', '-q', '-c', 'feature');
-    put(root, 'security/x.yaml', 'a: 2');
+    put(root, 'docs/a.md', 'x'); // no security/ file changes at all
     git(root, 'add', '.');
     git(root, 'commit', '-q', '-m', 'change');
+    const registry = {
+      'security/x.yaml': { gates: [], other: {}, exempt: 'only a workflow step reads it' },
+      'security/y.json': { gates: ['s.mjs'], other: {} },
+    };
+    const lines: string[] = [];
+    const spy = spyOn(console, 'log').mockImplementation(
+      (m: unknown) => void lines.push(String(m)),
+    );
     const r = runChecks(
       {
         root,
         base: 'main',
-        scope: ['security/**'],
+        scope: ['docs/**'],
         skipTests: true,
         skipGates: true,
         gateTable: {},
-        registry: {
-          'security/x.yaml': { gates: [], other: {}, exempt: 'only a workflow step reads it' },
-        },
+        registry,
       },
       deps(root),
     );
+    spy.mockRestore();
+    expect(lines.filter((l) => l.startsWith('NOTICE  security/x.yaml'))).toHaveLength(1);
     expect(r.failures).toEqual([]);
-    expect(r.warnings.join()).toContain('security/x.yaml has no local gate (documented exemption)');
+    expect(r.notices).toEqual([
+      'security/x.yaml has no local gate (documented exemption): only a workflow step reads it',
+    ]);
+    const none = runChecks(
+      {
+        root,
+        base: 'main',
+        scope: ['docs/**'],
+        skipTests: true,
+        skipGates: true,
+        gateTable: {},
+        registry: {},
+      },
+      deps(root),
+    );
+    expect(none.notices).toEqual([]);
+  });
+});
+
+describe('ciRunsTest: whole-suite flags and job guards', () => {
+  const wf = (root: string, name: string, body: string) =>
+    put(root, `.github/workflows/${name}`, body);
+  const job = (extra: string, stepExtra = '') =>
+    `jobs:\n  t:\n${extra}    runs-on: x\n    steps:\n      - name: s\n${stepExtra}        run: node scripts/bun-test.mjs --shard 1/4 --coverage\n`;
+
+  it('runsWholeSuite accepts flags that take values and rejects a named test path', () => {
+    expect(runsWholeSuite('node scripts/bun-test.mjs')).toBe(true);
+    expect(runsWholeSuite('run: node scripts/bun-test.mjs --shard 1/4 --coverage')).toBe(true);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --timeout=30000 --no-skip')).toBe(true);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --coverage | tee out.txt')).toBe(true);
+    expect(
+      runsWholeSuite('node scripts/bun-test.mjs --coverage && node scripts/check-coverage.mjs'),
+    ).toBe(true);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --shard 1/4 tests/a.test.ts')).toBe(false);
+    expect(runsWholeSuite('node scripts/bun-test.mjs apps/x/y.test.ts')).toBe(false);
+    expect(runsWholeSuite('bun test tests/a.test.ts')).toBe(false);
+  });
+
+  it('counts a whole-suite step with value-taking flags', () => {
+    const root = fixture();
+    wf(root, 'ci.yml', job(''));
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(true);
+  });
+
+  it('refuses a job whose if: is not always true on a pull request', () => {
+    for (const cond of [
+      "github.event_name == 'push'",
+      "github.ref == 'refs/heads/main'",
+      'matrix.x',
+    ]) {
+      const root = fixture();
+      wf(root, 'ci.yml', job(`    if: ${cond}\n`));
+      expect(ciRunsTest(root, 'tests/a.test.ts'), cond).toBe(false);
+    }
+    for (const cond of [
+      'true',
+      'always()',
+      "github.event_name == 'pull_request'",
+      '${{ always() }}',
+    ]) {
+      const root = fixture();
+      wf(root, 'ci.yml', job(`    if: ${cond}\n`));
+      expect(ciRunsTest(root, 'tests/a.test.ts'), cond).toBe(true);
+    }
+  });
+
+  it('refuses a step whose if: is not always true, and ignores another job or step guard', () => {
+    const root = fixture();
+    wf(root, 'ci.yml', job('', "        if: github.event_name == 'push'\n"));
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(false);
+    // a guard on a DIFFERENT job does not refuse this one
+    const other = fixture();
+    wf(
+      other,
+      'ci.yml',
+      `jobs:\n  a:\n    if: github.ref == 'x'\n    steps:\n      - run: echo hi\n  t:\n    steps:\n      - run: node scripts/bun-test.mjs\n`,
+    );
+    expect(ciRunsTest(other, 'tests/a.test.ts')).toBe(true);
+    // a guard on a LATER job does not bleed back into this one
+    const later = fixture();
+    wf(
+      later,
+      'ci.yml',
+      `jobs:\n  t:\n    steps:\n      - run: node scripts/bun-test.mjs\n  b:\n    if: github.ref == 'x'\n    steps:\n      - run: echo hi\n`,
+    );
+    expect(ciRunsTest(later, 'tests/a.test.ts')).toBe(true);
+    // a guard on a DIFFERENT step does not refuse this one
+    const sibling = fixture();
+    wf(
+      sibling,
+      'ci.yml',
+      `jobs:\n  t:\n    steps:\n      - name: a\n        if: matrix.x\n        run: echo hi\n      - name: b\n        run: node scripts/bun-test.mjs\n`,
+    );
+    expect(ciRunsTest(sibling, 'tests/a.test.ts')).toBe(true);
+  });
+});
+
+describe('the branch-specific block is data, and the drift guard compares both branches', () => {
+  const block = (body: string) =>
+    `head\n// BEGIN branch-specific (x)\n${body}\n// END branch-specific\ntail\n`;
+  const REG =
+    "export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = { 'security/a.json': { gates: [], other: {} } };";
+
+  it('branchBlockProblems accepts const literals, spreads and references, strings and comments with parens', () => {
+    expect(branchBlockProblems(block(REG))).toEqual([]);
+    expect(
+      branchBlockProblems(
+        block(
+          "const R = 'a (b)';\n// note (x) => y\n/* function f() {} */\nexport const T = { ...O, k: R, z: [1, true, null] };",
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('branchBlockProblems rejects calls, functions, arrows, templates and non-const statements', () => {
+    for (const bad of [
+      "const A = runners(['x']);",
+      'const A = (() => 1)();',
+      'const A = () => 1;',
+      'const A = x => 1;',
+      'const A = new Z;',
+      'const A = { k: typeof Z };',
+      'function f() {}',
+      'const A = `t`;',
+      'const A = new Map();',
+      'let A = 1;',
+      'doThing;',
+      'const A = { k: 1 }; if (A) {}',
+      'import x from "y";',
+    ]) {
+      expect(branchBlockProblems(block(bad)).length, bad).toBeGreaterThan(0);
+    }
+  });
+
+  it('the real lib block is data, and evalBranchBlock reads its registry', () => {
+    const text = readFileSync(join(import.meta.dir, '..', 'scripts/lib/prepush-check.mjs'), 'utf8');
+    expect(branchBlockProblems(text)).toEqual([]);
+    const { GATE_INPUT_REGISTRY: reg } = evalBranchBlock(text);
+    expect(Object.keys(reg)).toEqual(Object.keys(GATE_INPUT_REGISTRY));
+    expect(exemptInputs(reg)).toEqual(exemptInputs(GATE_INPUT_REGISTRY));
+    expect(() => evalBranchBlock(block('const A = f();'))).toThrow(/not data/);
+  });
+
+  it('exemptInputs lists exactly the entries with an exempt reason, sorted', () => {
+    expect(
+      exemptInputs({
+        'security/b': { gates: [], other: {}, exempt: 'r' },
+        'security/a': { gates: [], other: {}, exempt: 'r' },
+        'security/c': { gates: [], other: {} },
+      }),
+    ).toEqual(['security/a', 'security/b']);
+  });
+
+  // ---- the drift CLI against a fixture repo with two branches
+  const LIB = 'scripts/lib/prepush-check.mjs';
+  const FILES = [
+    'scripts/prepush-check.mjs',
+    'scripts/prepush-lib-drift.mjs',
+    'scripts/mutation-prove-prepush-check.mjs',
+    'tests/prepush-check.test.ts',
+    '.github/workflows/prepush-check.yml',
+    '.github/workflows/prepush-lib-drift.yml',
+  ];
+  function pair(
+    over: { here?: Record<string, string>; there?: Record<string, string>; hereRm?: string[] } = {},
+  ) {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'trunk');
+    const base: Record<string, string> = { [LIB]: block(REG) };
+    for (const f of FILES) base[f] = `content of ${f}\n`;
+    for (const [f, t] of Object.entries({ ...base, ...(over.there ?? {}) })) put(root, f, t);
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'other');
+    git(root, 'branch', 'other');
+    for (const f of over.hereRm ?? []) rmSync(join(root, f));
+    for (const [f, t] of Object.entries(over.here ?? {})) put(root, f, t);
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'here');
+    return root;
+  }
+  const drift = (root: string) => {
+    const spy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      return driftMain(['--other', 'other'], root);
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it('exits 0 for identical copies, and ignores differences INSIDE the branch-specific block', () => {
+    expect(drift(pair())).toBe(0);
+    const other = block(
+      "export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = { 'security/zzz.json': { gates: [], other: {} } };",
+    );
+    expect(drift(pair({ there: { [LIB]: other } }))).toBe(0);
+  });
+
+  it('exits 1 on drift in the lib outside the block, and on drift in each whole-compared file', () => {
+    expect(drift(pair({ here: { [LIB]: `${block(REG)}extra\n` } }))).toBe(1);
+    for (const f of FILES) {
+      expect(drift(pair({ here: { [f]: 'changed\n' } })), f).toBe(1);
+    }
+  });
+
+  it('exits 1 when the other branch has no copy, from EITHER direction', () => {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'trunk');
+    put(root, 'README.md', 'x');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'bare');
+    git(root, 'branch', 'other');
+    for (const [f, t] of Object.entries({
+      [LIB]: block(REG),
+      ...Object.fromEntries(FILES.map((f) => [f, 'x\n'])),
+    }))
+      put(root, f, t);
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'here');
+    expect(drift(root)).toBe(1);
+  });
+
+  it('exits 1 when a block is not data, in either copy', () => {
+    const logic = block('export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = mk();');
+    expect(drift(pair({ here: { [LIB]: logic } }))).toBe(1);
+    expect(drift(pair({ there: { [LIB]: logic } }))).toBe(1);
+  });
+
+  it('exits 1 when an input present on BOTH branches is exempt on only one', () => {
+    const reg = (exempt: boolean) =>
+      block(
+        `export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = { 'security/a.json': { gates: [], other: {}${exempt ? ", exempt: 'r'" : ''} } };`,
+      );
+    const both = { 'security/a.json': '{}' };
+    const mk = (here: boolean, there: boolean, files: Record<string, string>) => {
+      const root = pair({
+        there: { [LIB]: reg(there), ...files },
+        here: { [LIB]: reg(here), ...files },
+      });
+      return drift(root);
+    };
+    expect(mk(true, false, both)).toBe(1);
+    expect(mk(false, true, both)).toBe(1);
+    expect(mk(true, true, both)).toBe(0);
+    // the file exists on neither branch (or one): the registries may differ
+    expect(mk(true, false, {})).toBe(0);
+    // present on one branch only: nothing to compare against
+    const onlyThere = pair({
+      there: { [LIB]: reg(false), 'security/a.json': '{}' },
+      here: { [LIB]: reg(true) },
+      hereRm: ['security/a.json'],
+    });
+    expect(drift(onlyThere)).toBe(0);
+    const onlyHere = pair({
+      there: { [LIB]: reg(false) },
+      here: { [LIB]: reg(true), 'security/a.json': '{}' },
+    });
+    expect(drift(onlyHere)).toBe(0);
   });
 });
 
@@ -1182,5 +1450,37 @@ describe('the prover and the drift CLI', () => {
     const r = run('--other', 'refs/heads/no-such-branch-for-the-test');
     expect(r.status).toBe(1);
     expect(r.stdout).toContain('not present on');
+  });
+});
+
+describe('the symmetric drift workflow', () => {
+  const wf = readFileSync(
+    join(import.meta.dir, '..', '.github/workflows/prepush-lib-drift.yml'),
+    'utf8',
+  );
+  const code = wf
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+  const run = code.slice(code.indexOf('run: |'));
+
+  it('fires on pull requests AND pushes to BOTH branches, so either side reds on its own PR', () => {
+    expect(code).toMatch(/pull_request:\s*\n\s*branches:\s*\[main, integration\/v2\]/);
+    expect(code).toMatch(/push:\s*\n\s*branches:\s*\[main, integration\/v2\]/);
+    expect(code).toContain('workflow_dispatch');
+    // and compares against the OTHER branch in each direction
+    expect(run).toMatch(/main\)\s*other=integration\/v2/);
+    expect(run).toMatch(/integration\/v2\)\s*other=main/);
+    expect(run).toContain('prepush-lib-drift.mjs --other');
+  });
+
+  it('passes the token to the fetch explicitly, through env, with read-only contents', () => {
+    expect(code).toMatch(/persist-credentials:\s*false/);
+    expect(code).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
+    expect(run).toContain('http.extraheader=AUTHORIZATION');
+    expect(run).not.toContain('${{');
+    expect(code).toMatch(/permissions:\s*\n\s*contents:\s*read\s*\n/);
+    expect(code).not.toMatch(/contents:\s*write/);
+    expect(code).not.toMatch(/continue-on-error/);
   });
 });

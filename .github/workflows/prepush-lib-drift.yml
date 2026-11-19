@@ -1,25 +1,43 @@
 name: prepush-lib-drift
 
 # `integration/v2` and `main` each carry a copy of the pre-push check. They must stay the same
-# code and differ only in which gates and security/ files they register (the block between
-# `// BEGIN branch-specific` and `// END branch-specific` in scripts/lib/prepush-check.mjs).
-# This diffs everything else against origin/main and fails on divergence.
+# code and differ only in which gates and security/ files they register (the data-only block
+# between `// BEGIN branch-specific` and `// END branch-specific` in
+# scripts/lib/prepush-check.mjs). This runs scripts/prepush-lib-drift.mjs against the OTHER
+# branch's tip and fails on divergence.
 #
-# RUNS FROM integration/v2 ONLY, and why it is a push trigger rather than a nightly cron: GitHub
-# fires `schedule` only from the DEFAULT branch's copy of a workflow, and this file deliberately
-# does not exist on main, so a cron here would never run. A push to integration/v2 that touches
-# the check runs it from that branch's own copy; `workflow_dispatch` runs it on demand.
+# SYMMETRIC: this file exists on both branches and compares against the other one, so a change
+# introduced from EITHER side reds on that side's own pull request (the PR job compares the
+# merged result against the other branch). A push re-checks after the merge; workflow_dispatch
+# runs it on demand.
 #
-# Informational, not a required check, never a gate on a PR. RED means one copy changed without
-# the other: port the change. Until the main copy lands it also fails ("not present on origin/main").
+# Informational, not a required check. RED means one copy changed without the other: port the
+# change. Until BOTH copies have landed it also fails ("not present on ...").
+#
+# CREDENTIALS: checkout does not persist the token (persist-credentials: false), so the fetch
+# of the other branch passes it explicitly, through env (never inlined into the script), with
+# the read-only contents scope below. Private repositories work.
 
 on:
-  push:
-    branches: [integration/v2]
+  pull_request:
+    branches: [main, integration/v2]
     paths:
       - 'scripts/lib/prepush-check.mjs'
       - 'scripts/prepush-check.mjs'
       - 'scripts/prepush-lib-drift.mjs'
+      - 'scripts/mutation-prove-prepush-check.mjs'
+      - 'tests/prepush-check.test.ts'
+      - '.github/workflows/prepush-check.yml'
+      - '.github/workflows/prepush-lib-drift.yml'
+  push:
+    branches: [main, integration/v2]
+    paths:
+      - 'scripts/lib/prepush-check.mjs'
+      - 'scripts/prepush-check.mjs'
+      - 'scripts/prepush-lib-drift.mjs'
+      - 'scripts/mutation-prove-prepush-check.mjs'
+      - 'tests/prepush-check.test.ts'
+      - '.github/workflows/prepush-check.yml'
       - '.github/workflows/prepush-lib-drift.yml'
   workflow_dispatch: {}
 
@@ -27,7 +45,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: prepush-lib-drift-${{ github.ref }}
+  group: prepush-lib-drift-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,8 +59,20 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
-      - name: Diff the two copies outside the branch-specific block
+      - name: Diff the two copies against the other branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin '+refs/heads/main:refs/remotes/origin/main'
-          node scripts/prepush-lib-drift.mjs --other origin/main | tee -a "$GITHUB_STEP_SUMMARY"
+          here="${BASE_REF:-$REF_NAME}"
+          case "$here" in
+            main) other=integration/v2 ;;
+            integration/v2) other=main ;;
+            *) echo "not run on main or integration/v2 (got '$here'); nothing to compare"; exit 0 ;;
+          esac
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.extraheader=AUTHORIZATION: basic ${auth}" fetch --no-tags --depth=1 origin \
+            "+refs/heads/${other}:refs/remotes/origin/${other}"
+          node scripts/prepush-lib-drift.mjs --other "origin/${other}" | tee -a "$GITHUB_STEP_SUMMARY"

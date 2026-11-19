@@ -40,7 +40,7 @@ untracked changes, which are listed as such. It runs the real gate for every cha
 workflows and `package.json` scripts, and one that is not in the registry in
 `scripts/lib/prepush-check.mjs` fails. A file with no gate fails too. A gate is a registered
 script, a test that reads the file by its path and that a workflow runs, or a documented
-exemption (reported on every run). It also runs the changed tests while snapshotting `tmpdir()`
+exemption (printed as a `NOTICE` on every run, whether or not that file changed). It also runs the changed tests while snapshotting `tmpdir()`
 and the repo root for new leftovers (with no changed tests it runs the tests that import the
 changed source, and warns that the leak scan was not exercised if there are none), scans
 `tests/**` for a `mkdtemp` that is never removed, and prints `git diff --stat` grouped by
@@ -65,14 +65,20 @@ What the CI job does **not** catch:
 - The scope is self-declared. A revert inside the declared scope passes, and so does a wide but
   honest-looking scope below the thresholds above.
 - A `Scope:` line is not checked against what the PR says it does.
-- A test counts as a gate if it reads the file by path and a workflow runs it; workflow trigger
-  filters are not evaluated, and a test that reads the file but asserts little still counts.
+- A test counts as a gate if it reads the file by path and a workflow runs it. A step or job whose
+  `if:` is not always true on a pull request is refused, but workflow trigger filters (`paths:`,
+  `branches:`) and `needs:` are not evaluated, and a test that reads the file but asserts little
+  still counts.
 - A path built at run time cannot be seen by the reader scan; keep paths literal.
 
 The copy on `main` and the copy on `integration/v2` differ only in the block between
 `// BEGIN branch-specific` and `// END branch-specific` (which gates and `security/` files each
-registers). `.github/workflows/prepush-lib-drift.yml` runs `scripts/prepush-lib-drift.mjs` from
-`integration/v2` and fails when anything else differs.
+registers); that block holds data literals only, no calls or functions.
+`.github/workflows/prepush-lib-drift.yml` exists on both branches and runs
+`scripts/prepush-lib-drift.mjs` on every pull request and push to either, against the other
+branch, so drift introduced from either side fails on that side's own PR. It fails on any
+difference outside the block, in the CLI, the tests, the prover or the two workflows, on a block
+that is not plain data, and on an input that exists on both branches but is exempt on only one.
 
 ## Mutation-proving a guard
 

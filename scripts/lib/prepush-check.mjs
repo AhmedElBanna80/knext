@@ -27,9 +27,11 @@ export const changedGateInputs = (files) => files.filter((f) => GATE_INPUT_RE.te
 export const changedAllowlists = changedGateInputs;
 
 // BEGIN branch-specific (GATE_TABLE, registry): differs between integration/v2 and main by design;
-// everything outside this block must stay byte-identical (see `driftBetween`).
+// everything outside this block must stay byte-identical (see `driftBetween`). The block holds DATA
+// only: `const NAME = <object, array or string literal>` (identifier references and spreads allowed),
+// no calls and no functions; `branchBlockProblems` enforces it, so the drift guard can evaluate it.
 /**
- * How to invoke each gate that reads an allowlist, by repo-relative script path.
+ * How to invoke each gate that reads a gate input, by repo-relative script path.
  * `runs: 'workflows'` derives the argument sets from the workflow steps that
  * invoke the script (see `deriveWorkflowArgSets`), so a new covered app is
  * picked up rather than forgotten.
@@ -48,127 +50,119 @@ export const GATE_TABLE = {
   'scripts/osv-gate.mjs': { needs: ['osv-scanner'], scanner: true, base: true, runs: [[]] },
   'scripts/audit-shipped-npm.mjs': { needs: ['osv-scanner', 'npm'], scanner: true, runs: [[]] },
   'scripts/audit-published.mjs': { needs: ['npm', 'bun'], runs: [[]] },
-  // Both look packages / image pins up on the network and fail closed when they cannot.
   'scripts/release-age-gate.mjs': { needs: [], base: true, runs: [[]] },
   'scripts/verify-image-pins.mjs': { needs: [], base: true, runs: [[]] },
 };
 
 /**
- * The registry: for each allowlist, the gates that must pass when it changes,
+ * The registry: for each security/ gate input, the gates that must pass when it changes,
  * and every OTHER reader that is known and deliberately not run, with the
  * reason. `scanReaders` finds readers by scanning the repo; any reader it finds
  * that is in neither list is UNREGISTERED, which fails the check and the test
  * in `tests/prepush-check.test.ts`. A reader added next month cannot be missed
- * by omission.
+ * by omission. An input may instead carry `exempt: <reason>` (see `planGateRuns`).
  */
-const PROBE = {
-  'scripts/verify-allowlist-retirement.mjs':
-    'nightly network probe of whether an entry still has an advisory; it does not judge the file',
-};
-const OWN_ALLOWLIST = {
-  'scripts/precompile-closure-audit.mjs':
-    'imports the retirement helper that lists this file, but judges only its own allowlist',
-};
-/** Workflows and manifests that RUN a registered gate: they reach the file only through it. */
-const runners = (files) =>
-  Object.fromEntries(
-    files.map((f) => [f, 'runs a registered gate; reads the file only through it']),
-  );
-
-const GOVULNCHECK_OTHER = {
-  'scripts/govulncheck-gate.mjs':
-    'reads govulncheck JSON piped in per Go module, so it cannot run bare; the tests that name the file run its exception semantics',
-  ...runners([
-    '.github/workflows/go-template.yml',
-    '.github/workflows/govulncheck-modules.yml',
-    '.github/workflows/govulncheck-nightly.yml',
-  ]),
-};
-
+const RUNS_GATE = 'runs a registered gate; reads the file only through it';
 export const GATE_INPUT_REGISTRY = {
   'security/gitleaks-allowlist.json': {
     gates: ['scripts/secret-scan.mjs'],
-    other: runners(['.github/workflows/ci.yml', '.github/workflows/secret-scan-nightly.yml']),
+    other: {
+      '.github/workflows/ci.yml': RUNS_GATE,
+      '.github/workflows/secret-scan-nightly.yml': RUNS_GATE,
+    },
   },
   'security/npm-audit-allowlist.json': {
     gates: ['scripts/audit-published.mjs', 'scripts/audit-shipped-npm.mjs'],
     other: {
-      ...PROBE,
-      ...OWN_ALLOWLIST,
-      ...runners([
-        '.github/workflows/allowlist-retirement-nightly.yml',
-        '.github/workflows/ci.yml',
-        '.github/workflows/docs-deploy-oke.yml',
-        '.github/workflows/release.yml',
-        '.github/workflows/shipped-artifacts-nightly.yml',
-        '.github/workflows/supply-chain.yml',
-      ]),
+      'scripts/verify-allowlist-retirement.mjs':
+        'nightly network probe of whether an entry still has an advisory; it does not judge the file',
+      'scripts/precompile-closure-audit.mjs':
+        'imports the retirement helper that lists this file, but judges only its own allowlist',
+      '.github/workflows/allowlist-retirement-nightly.yml': RUNS_GATE,
+      '.github/workflows/ci.yml': RUNS_GATE,
+      '.github/workflows/docs-deploy-oke.yml': RUNS_GATE,
+      '.github/workflows/release.yml': RUNS_GATE,
+      '.github/workflows/shipped-artifacts-nightly.yml': RUNS_GATE,
+      '.github/workflows/supply-chain.yml': RUNS_GATE,
     },
   },
   'security/osv-allowlist.json': {
     gates: ['scripts/osv-gate.mjs', 'scripts/audit-shipped-npm.mjs'],
     other: {
-      ...PROBE,
-      ...OWN_ALLOWLIST,
+      'scripts/verify-allowlist-retirement.mjs':
+        'nightly network probe of whether an entry still has an advisory; it does not judge the file',
+      'scripts/precompile-closure-audit.mjs':
+        'imports the retirement helper that lists this file, but judges only its own allowlist',
       'scripts/release-age-gate.mjs':
         'imports the OSV base picker; judges security/release-age-exceptions.json, not this file',
-      ...runners([
-        '.github/workflows/allowlist-retirement-nightly.yml',
-        '.github/workflows/ci.yml',
-        '.github/workflows/docs-deploy-oke.yml',
-        '.github/workflows/osv-scan.yml',
-        '.github/workflows/release-age.yml',
-        '.github/workflows/shipped-artifacts-nightly.yml',
-        '.github/workflows/supply-chain.yml',
-      ]),
+      '.github/workflows/allowlist-retirement-nightly.yml': RUNS_GATE,
+      '.github/workflows/ci.yml': RUNS_GATE,
+      '.github/workflows/docs-deploy-oke.yml': RUNS_GATE,
+      '.github/workflows/osv-scan.yml': RUNS_GATE,
+      '.github/workflows/release-age.yml': RUNS_GATE,
+      '.github/workflows/shipped-artifacts-nightly.yml': RUNS_GATE,
+      '.github/workflows/supply-chain.yml': RUNS_GATE,
     },
   },
   'security/precompile-closure-allowlist.json': {
     gates: ['scripts/precompile-closure-audit.mjs'],
     other: {
-      ...PROBE,
-      ...runners([
-        '.github/workflows/allowlist-retirement-nightly.yml',
-        '.github/workflows/ci.yml',
-        '.github/workflows/docs-deploy-oke.yml',
-        '.github/workflows/supply-chain.yml',
-      ]),
+      'scripts/verify-allowlist-retirement.mjs':
+        'nightly network probe of whether an entry still has an advisory; it does not judge the file',
+      '.github/workflows/allowlist-retirement-nightly.yml': RUNS_GATE,
+      '.github/workflows/ci.yml': RUNS_GATE,
+      '.github/workflows/docs-deploy-oke.yml': RUNS_GATE,
+      '.github/workflows/supply-chain.yml': RUNS_GATE,
     },
   },
-  // Gate inputs that are not named `*allowlist*`. A gate is a registered script, or a test that
-  // names the file (found by scanning `tests/`, run whenever the file changes); an input with
-  // neither FAILS as unmapped.
   'security/govulncheck-exceptions.json': {
     gates: [],
-    other: { ...GOVULNCHECK_OTHER },
+    other: {
+      'scripts/govulncheck-gate.mjs':
+        'reads govulncheck JSON piped in per Go module, so it cannot run bare; the tests that name the file run its exception semantics',
+      '.github/workflows/go-template.yml': RUNS_GATE,
+      '.github/workflows/govulncheck-modules.yml': RUNS_GATE,
+      '.github/workflows/govulncheck-nightly.yml': RUNS_GATE,
+    },
   },
   'security/govulncheck-modules.json': {
     gates: [],
-    other: { ...GOVULNCHECK_OTHER },
+    other: {
+      'scripts/govulncheck-gate.mjs':
+        'reads govulncheck JSON piped in per Go module, so it cannot run bare; the tests that name the file run its exception semantics',
+      '.github/workflows/go-template.yml': RUNS_GATE,
+      '.github/workflows/govulncheck-modules.yml': RUNS_GATE,
+      '.github/workflows/govulncheck-nightly.yml': RUNS_GATE,
+    },
   },
   'security/release-age-exceptions.json': {
     gates: ['scripts/release-age-gate.mjs'],
     other: {
       'scripts/osv-gate.mjs':
         'imports the release-age helper that reads this file, but judges only the OSV allowlist',
-      ...runners([
-        '.github/workflows/osv-scan.yml',
-        '.github/workflows/release-age.yml',
-        '.github/workflows/shipped-artifacts-nightly.yml',
-      ]),
+      '.github/workflows/osv-scan.yml': RUNS_GATE,
+      '.github/workflows/release-age.yml': RUNS_GATE,
+      '.github/workflows/shipped-artifacts-nightly.yml': RUNS_GATE,
     },
   },
   'security/dockerfile-base-exclusions.json': {
     gates: ['scripts/verify-image-pins.mjs'],
-    other: runners(['.github/workflows/image-pin-resolution-nightly.yml']),
+    other: {
+      '.github/workflows/image-pin-resolution-nightly.yml': RUNS_GATE,
+    },
   },
-  // Read only by its own test, which `planGateRuns` finds and runs.
-  'security/bun-install-scripts.json': { gates: [], other: {} },
+  'security/bun-install-scripts.json': {
+    gates: [],
+    other: {},
+  },
   'security/docs-closure-trivyignore.yaml': {
     gates: [],
     exempt:
       "consumed only by the Trivy step's `trivyignores:` input in the two workflows listed below; no script or test reads it by path, so those workflows are its gate and nothing here can run it",
-    other: runners(['.github/workflows/ci.yml', '.github/workflows/docs-closure-nightly.yml']),
+    other: {
+      '.github/workflows/ci.yml': RUNS_GATE,
+      '.github/workflows/docs-closure-nightly.yml': RUNS_GATE,
+    },
   },
 };
 /** Older name, kept for callers that predate the widening. */
@@ -338,31 +332,85 @@ export function readsByPath(text, inputRel) {
   return false;
 }
 
-/** `bun-test.mjs` invoked with no test path (flags only): the whole suite. */
-const WHOLE_SUITE = /\bscripts\/bun-test\.mjs(?:[ \t]+--[\w=-]+)*[ \t]*$/;
+/** A token that names a test file, as opposed to a flag or a flag's value (`--shard 1/4`). */
+const TEST_PATH_TOKEN = /\.test\.[cm]?[jt]sx?$|\.[cm]?[jt]sx?$/;
+/** `scripts/bun-test.mjs` and the tokens after it, up to a shell separator. */
+const BUN_TEST_CMD = /\bscripts\/bun-test\.mjs\b([^|&;>\n]*)/;
+
+/**
+ * Is this line `bun-test.mjs` run over the whole suite: no token after it names a test file?
+ * Flags and their values (`--coverage`, `--shard 1/4`, `--timeout=30000`) do not narrow it.
+ */
+export function runsWholeSuite(line) {
+  const m = BUN_TEST_CMD.exec(line.trim().replace(/^(?:-\s*)?run:\s*/, ''));
+  if (!m) return false;
+  return !m[1]
+    .split(/\s+/)
+    .filter(Boolean)
+    .some((t) => TEST_PATH_TOKEN.test(t));
+}
+
 /** Test files the whole-suite run partitions out; they run only where a workflow names them. */
 const PARTITIONED = /\.(?:docker-e2e|kind-e2e|e2e)\.test\./;
+/** An `if:` that holds on every pull request event. Anything else is a job that may not run. */
+const ALWAYS_TRUE =
+  /^(?:\$\{\{\s*)?(?:true|always\(\)|github\.event_name\s*==\s*'pull_request'|github\.event_name\s*!=\s*'merge_group')(?:\s*\}\})?$/;
+
+/**
+ * The `if:` conditions that guard line `i` of a workflow: the step it sits in and the job
+ * that holds the step. Indentation-based (workflows here are block-style YAML), so it is a
+ * cheap approximation, not a YAML parser.
+ */
+function guardsOf(lines, i) {
+  const indent = (l) => l.length - l.trimStart().length;
+  const guards = [];
+  // the step: walk up to the nearest `- ` item whose indent is below the line's own
+  let stepIndent = -1;
+  for (let k = i; k >= 0; k--) {
+    if (/^\s*-\s/.test(lines[k]) && indent(lines[k]) <= indent(lines[i])) {
+      stepIndent = indent(lines[k]);
+      for (let m = k; m < lines.length && (m === k || indent(lines[m]) > stepIndent); m++) {
+        const g = /^\s*(?:-\s+)?if:\s*(.+?)\s*$/.exec(lines[m]);
+        if (g && indent(lines[m].replace(/^(\s*)-\s+/, '$1  ')) === stepIndent + 2)
+          guards.push(g[1]);
+      }
+      break;
+    }
+  }
+  // the job: nearest `  name:` at two spaces above, then its direct `    if:`
+  for (let k = i; k >= 0; k--) {
+    if (/^ {2}[\w-]+:\s*$/.test(lines[k])) {
+      for (let m = k + 1; m < lines.length && !/^ {2}[\w-]+:\s*$/.test(lines[m]); m++) {
+        if (/^ {4}steps:/.test(lines[m])) break;
+        const g = /^ {4}if:\s*(.+?)\s*$/.exec(lines[m]);
+        if (g) guards.push(g[1]);
+      }
+      break;
+    }
+  }
+  return guards;
+}
 
 /**
  * Is `testFile` run by some workflow? Either a workflow command names its path, or a workflow
- * runs the whole suite (`scripts/bun-test.mjs` with no path) and the file is not one the suite
- * partitions out (`*.docker-e2e.test.*`, `*.kind-e2e.test.*`, `*.e2e.test.*`).
- * LIMIT: workflow trigger filters (`paths:`, `if:`) are not evaluated, so a job that is gated off
- * for a given change still counts as running it.
+ * runs the whole suite (`runsWholeSuite`) and the file is not one the suite partitions out
+ * (`*.docker-e2e.test.*`, `*.kind-e2e.test.*`, `*.e2e.test.*`). A step or job whose `if:` is not
+ * always true on a pull request is refused: it may not run.
+ * LIMIT: workflow TRIGGER filters (`paths:`, `branches:`) and `needs:` are not evaluated, and an
+ * `if:` is judged by shape only (`true`, `always()`, a pull_request event check pass; anything
+ * else is refused), so a gated-off job can still count and an exotic always-true guard is refused.
  */
 export function ciRunsTest(root, testFile) {
   const wfDir = '.github/workflows';
   if (!existsSync(join(root, wfDir))) return false;
   for (const f of readdirSync(join(root, wfDir)).filter((n) => /\.ya?ml$/.test(n))) {
     const wfText = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));
-    for (const line of wfText.split('\n')) {
-      if (line.includes(testFile) && /\b(?:bun-test\.mjs|bun test|vitest)\b/.test(line))
-        return true;
-      if (
-        WHOLE_SUITE.test(line.trim().replace(/^(?:-\s*)?run:\s*/, '')) &&
-        !PARTITIONED.test(testFile)
-      )
-        return true;
+    const lines = wfText.split('\n');
+    for (const [i, line] of lines.entries()) {
+      const names = line.includes(testFile) && /\b(?:bun-test\.mjs|bun test|vitest)\b/.test(line);
+      const whole = runsWholeSuite(line) && !PARTITIONED.test(testFile);
+      if (!names && !whole) continue;
+      if (guardsOf(lines, i).every((g) => ALWAYS_TRUE.test(g))) return true;
     }
   }
   return false;
@@ -726,3 +774,89 @@ export function driftBetween(a, b) {
   }
   return { same: true };
 }
+
+/**
+ * Why the branch-specific block is NOT plain data, as a list of problems (empty = fine). The
+ * block may hold only `const NAME = <literal>` declarations: object, array, string, number or
+ * boolean literals, identifier references and spreads. A call, a function, an arrow, a template
+ * literal or any other statement is a problem, because the drift guard evaluates this block and
+ * logic hidden in it would be logic the two branches could silently differ on.
+ * Lexical scan (strings and comments blanked first), not a JS parser: nothing here needs one.
+ *
+ * @param {string} text a full copy of the lib
+ * @returns {string[]}
+ */
+export function branchBlockProblems(text) {
+  const lines = stripBranchSpecific(text) && text.split('\n');
+  const begin = lines.findIndex((l) => l.startsWith(BRANCH_BEGIN));
+  const end = lines.findIndex((l) => l.startsWith(BRANCH_END));
+  const src = lines.slice(begin + 1, end).join('\n');
+  const problems = [];
+  let code = '';
+  for (let i = 0; i < src.length; ) {
+    const c = src[i];
+    if (c === '/' && src[i + 1] === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+    } else if (c === '/' && src[i + 1] === '*') {
+      const e = src.indexOf('*/', i + 2);
+      i = e < 0 ? src.length : e + 2;
+    } else if (c === "'" || c === '"') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
+      code += '""';
+      i = j + 1;
+    } else if (c === '`') {
+      problems.push('template literal');
+      i++;
+    } else {
+      code += c;
+      i++;
+    }
+  }
+  if (/[()]/.test(code)) problems.push('a call or parenthesised expression');
+  if (/=>/.test(code)) problems.push('an arrow function');
+  const kw =
+    /\b(function|class|new|import|await|async|return|if|else|for|while|switch|try|throw|delete|typeof|void|eval)\b/.exec(
+      code,
+    );
+  if (kw) problems.push(`the keyword \`${kw[1]}\``);
+  let depth = 0;
+  let stmt = '';
+  const flush = () => {
+    const t = stmt.trim();
+    stmt = '';
+    if (t && !/^(?:export\s+)?const\s+[A-Za-z_$][\w$]*\s*=/.test(t)) {
+      problems.push(`a statement that is not a const declaration: ${t.slice(0, 40)}`);
+    }
+  };
+  for (const c of code) {
+    if ('{['.includes(c)) depth++;
+    if ('}]'.includes(c)) depth--;
+    if (c === ';' && depth === 0) flush();
+    else stmt += c;
+  }
+  flush();
+  return problems;
+}
+
+/** The registry and gate table out of a copy's branch-specific block. Throws if the block is not data. */
+export function evalBranchBlock(text) {
+  const problems = branchBlockProblems(text);
+  if (problems.length > 0)
+    throw new Error(`branch-specific block is not data: ${problems.join('; ')}`);
+  const lines = text.split('\n');
+  const begin = lines.findIndex((l) => l.startsWith(BRANCH_BEGIN));
+  const end = lines.findIndex((l) => l.startsWith(BRANCH_END));
+  const body = lines
+    .slice(begin + 1, end)
+    .join('\n')
+    .replace(/^export\s+/gm, '');
+  return new Function(`${body}\nreturn { GATE_TABLE, GATE_INPUT_REGISTRY };`)();
+}
+
+/** Names of the registry entries that carry an `exempt` reason, sorted. */
+export const exemptInputs = (registry) =>
+  Object.entries(registry)
+    .filter(([, r]) => r.exempt)
+    .map(([k]) => k)
+    .sort();

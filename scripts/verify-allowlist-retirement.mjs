@@ -12,7 +12,7 @@
  * Read-only: GET requests only; never edits an allowlist.
  * Logic + tests: scripts/lib/allowlist-retirement.mjs, tests/allowlist-retirement.test.ts.
  *
- * Usage:  GITHUB_TOKEN=... [ALLOWLIST_ROOT=<checkout>] node scripts/verify-allowlist-retirement.mjs
+ * Usage:  GITHUB_TOKEN=... node scripts/verify-allowlist-retirement.mjs
  */
 
 import { resolve } from 'node:path';
@@ -23,6 +23,7 @@ import {
   loadLockfileFromDisk,
   probeEntries,
   renderReport,
+  resolveAllowlistFiles,
 } from './lib/allowlist-retirement.mjs';
 
 // The tree whose allowlists and lockfiles are PROBED. Defaults to this checkout; the nightly
@@ -79,7 +80,7 @@ export function makeFetchAdvisory(
 }
 
 async function main() {
-  const entries = collectEntries(REPO_ROOT);
+  const entries = collectEntries(REPO_ROOT, resolveAllowlistFiles(process.env.ALLOWLIST_FILES));
   const result = await probeEntries(entries, makeFetchAdvisory(), {
     loadLock: (rel) => loadLockfileFromDisk(REPO_ROOT, rel),
   });

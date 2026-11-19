@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
@@ -10,11 +10,12 @@ import {
   collectEntries,
   exitCodeFor,
   isPinnedFixtureLockfile,
-  OPTIONAL_ALLOWLIST_FILES,
+  loadLockfileFromDisk,
   parseLockfile,
   probeEntries,
   reachability,
   renderReport,
+  resolveAllowlistFiles,
   satisfiesRange,
   versionInRange,
 } from '../scripts/lib/allowlist-retirement.mjs';
@@ -283,12 +284,13 @@ describe('advisory API client', () => {
 
 describe('real allowlists', () => {
   it('covers all three (shapes verified, not assumed)', () => {
-    const entries = collectEntries(ROOT);
+    // main has no OSV gate: it is probed for the two allowlists it carries (the nightly names them
+    // via ALLOWLIST_FILES); a root with the full set is probed for all three.
+    const files = ALLOWLIST_FILES.filter((f) => existsSync(resolve(ROOT, f)));
     expect(ALLOWLIST_FILES).toHaveLength(3);
-    // main carries no OSV gate, so that file is the one allowed to be absent.
-    for (const f of ALLOWLIST_FILES)
-      if (!OPTIONAL_ALLOWLIST_FILES.includes(f))
-        expect(entries.some((e) => e.file === f)).toBe(true);
+    expect(files.length).toBeGreaterThanOrEqual(2);
+    const entries = collectEntries(ROOT, files);
+    for (const f of files) expect(entries.some((e) => e.file === f)).toBe(true);
     expect(entries.every((e) => /^(GHSA|CVE)-/i.test(e.id))).toBe(true);
   });
 
@@ -313,7 +315,7 @@ describe('workflow caller and alert wiring', () => {
       {
         if?: string;
         permissions?: Record<string, string>;
-        strategy?: { matrix?: { ref?: string[] } };
+        strategy?: { matrix?: { include?: { ref: string; files: string }[] } };
         steps?: { uses?: string; with?: Record<string, string>; env?: Record<string, string> }[];
       }
     >;
@@ -325,7 +327,16 @@ describe('workflow caller and alert wiring', () => {
   });
 
   it('probes BOTH branches: main and integration/v2', () => {
-    expect(wf.jobs['probe-allowlists'].strategy?.matrix?.ref).toEqual(['main', 'integration/v2']);
+    const legs = wf.jobs['probe-allowlists'].strategy?.matrix?.include ?? [];
+    expect(legs.map((l) => l.ref)).toEqual(['main', 'integration/v2']);
+    const osv = 'security/osv-allowlist.json';
+    // v2 carries all three allowlists; main has no OSV gate. Both must name the two shared ones.
+    expect(legs[1].files.split(',')).toContain(osv);
+    expect(legs[0].files.split(',')).not.toContain(osv);
+    for (const l of legs) {
+      expect(l.files.split(',')).toContain('security/precompile-closure-allowlist.json');
+      expect(l.files.split(',')).toContain('security/npm-audit-allowlist.json');
+    }
   });
 
   it('runs main’s script over the branch checked out as DATA (ALLOWLIST_ROOT), never the branch’s script', () => {
@@ -335,6 +346,7 @@ describe('workflow caller and alert wiring', () => {
     expect(checkouts[1].with?.path).toBe('target');
     const probe = steps.find((st) => st.env?.ALLOWLIST_ROOT);
     expect(probe?.env?.ALLOWLIST_ROOT).toBe('target');
+    expect(probe?.env?.ALLOWLIST_FILES).toBe('${{ matrix.files }}');
   });
 
   it('every action is SHA-pinned', () => {
@@ -353,20 +365,44 @@ describe('workflow caller and alert wiring', () => {
   });
 });
 
-describe('ALLOWLIST_ROOT and optional allowlists', () => {
-  it('collectEntries skips ONLY the OSV allowlist when absent; any other missing file throws', () => {
+describe('probe root confinement and file selection', () => {
+  it('loadLockfileFromDisk rejects an absolute path and any path that escapes the root', () => {
     const dir = mkdtempSync(join(tmpdir(), 'allow-'));
-    mkdirSync(join(dir, 'security'));
-    const doc = JSON.stringify({ allow: [{ id: 'GHSA-aaaa-bbbb-cccc' }] });
-    writeFileSync(join(dir, 'security/precompile-closure-allowlist.json'), doc);
-    writeFileSync(join(dir, 'security/npm-audit-allowlist.json'), doc);
-    expect(collectEntries(dir)).toHaveLength(2);
-    rmSync(join(dir, 'security/npm-audit-allowlist.json'));
+    expect(() => loadLockfileFromDisk(dir, '/etc/passwd')).toThrow(/outside/);
+    expect(() => loadLockfileFromDisk(dir, '../../etc/passwd')).toThrow(/outside/);
+    expect(() => loadLockfileFromDisk(dir, 'a/../../x')).toThrow(/outside/);
+    expect(loadLockfileFromDisk(dir, 'bun.lock')).toBeNull();
+    rmSync(dir, { recursive: true });
+  });
+
+  it('loadLockfileFromDisk rejects a symlink that resolves outside the root', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'allow-'));
+    const out = mkdtempSync(join(tmpdir(), 'allow-out-'));
+    writeFileSync(join(out, 'bun.lock'), '{}');
+    symlinkSync(join(out, 'bun.lock'), join(dir, 'bun.lock'));
+    expect(() => loadLockfileFromDisk(dir, 'bun.lock')).toThrow(/outside/);
+    rmSync(dir, { recursive: true });
+    rmSync(out, { recursive: true });
+  });
+
+  it('a MISSING allowlist is an error on every root (fail closed)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'allow-'));
     expect(() => collectEntries(dir)).toThrow(/ENOENT/);
     rmSync(dir, { recursive: true });
   });
 
-  it('the CLI reads the tree named by ALLOWLIST_ROOT, not its own checkout', () => {
+  it('resolveAllowlistFiles: default is all three; a list must name known files', () => {
+    expect(resolveAllowlistFiles(undefined)).toEqual(ALLOWLIST_FILES);
+    expect(resolveAllowlistFiles('security/npm-audit-allowlist.json')).toEqual([
+      'security/npm-audit-allowlist.json',
+    ]);
+    expect(() => resolveAllowlistFiles('security/nope.json')).toThrow(/unknown/);
+    expect(() => resolveAllowlistFiles(' , ')).toThrow(/names no allowlist/);
+  });
+});
+
+describe('the CLI honours ALLOWLIST_ROOT', () => {
+  it('reads the tree named by ALLOWLIST_ROOT, not its own checkout', () => {
     const dir = mkdtempSync(join(tmpdir(), 'allow-'));
     const r = spawnSync('node', ['scripts/verify-allowlist-retirement.mjs'], {
       cwd: ROOT,

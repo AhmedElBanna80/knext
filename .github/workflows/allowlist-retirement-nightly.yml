@@ -39,7 +39,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: [main, integration/v2]
+        # Each leg NAMES the allowlists its branch carries: main has no OSV gate, and a
+        # named file that is missing is an error (never a silent skip).
+        include:
+          - ref: main
+            files: security/precompile-closure-allowlist.json,security/npm-audit-allowlist.json
+          - ref: integration/v2
+            files: security/precompile-closure-allowlist.json,security/npm-audit-allowlist.json,security/osv-allowlist.json
     steps:
       - name: Checkout the probe script (main)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,6 +64,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           ALLOWLIST_ROOT: target
+          ALLOWLIST_FILES: ${{ matrix.files }}
         run: node scripts/verify-allowlist-retirement.mjs
 
   nightly-red-alert:

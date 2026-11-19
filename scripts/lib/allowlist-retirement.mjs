@@ -20,22 +20,14 @@
  * this is unit-tested offline (`tests/allowlist-retirement.test.ts`).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 export const ALLOWLIST_FILES = [
   'security/precompile-closure-allowlist.json',
   'security/npm-audit-allowlist.json',
   'security/osv-allowlist.json',
 ];
-
-/**
- * Allowlists that may be legitimately ABSENT from a ref: main carries no OSV
- * gate, so `security/osv-allowlist.json` does not exist there. Every other file
- * is required and its absence THROWS: a vanished allowlist must not read as
- * "nothing to retire".
- */
-export const OPTIONAL_ALLOWLIST_FILES = ['security/osv-allowlist.json'];
 
 /**
  * A lockfile that is frozen ON PURPOSE: a test fixture or the musl native-addon
@@ -49,11 +41,29 @@ export function isPinnedFixtureLockfile(rel) {
 /** Lockfiles searched for entries that name no lockfile of their own. */
 export const DEFAULT_LOCKFILES = ['bun.lock', 'examples/bun-exec/bun.lock', 'package-lock.json'];
 
+/**
+ * Which allowlists a root is probed for. Default: all of them. A root that
+ * legitimately lacks one (main has no OSV gate) names the files it HAS via a
+ * comma list; every name must be a known allowlist, and every named file is then
+ * REQUIRED (a missing one throws in `collectEntries`: never a silent skip).
+ */
+export function resolveAllowlistFiles(spec) {
+  if (spec === undefined || String(spec).trim() === '') return ALLOWLIST_FILES;
+  const names = String(spec)
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
+  for (const n of names) {
+    if (!ALLOWLIST_FILES.includes(n)) throw new Error(`unknown allowlist file \`${n}\``);
+  }
+  if (names.length === 0) throw new Error('ALLOWLIST_FILES names no allowlist');
+  return names;
+}
+
 /** Read every allowlist; a malformed file/entry THROWS (never silently skipped). */
 export function collectEntries(repoRoot, files = ALLOWLIST_FILES) {
   const entries = [];
   for (const file of files) {
-    if (OPTIONAL_ALLOWLIST_FILES.includes(file) && !existsSync(resolve(repoRoot, file))) continue;
     const doc = JSON.parse(readFileSync(resolve(repoRoot, file), 'utf8'));
     if (!Array.isArray(doc.allow)) throw new Error(`${file}: \`allow\` is not an array`);
     for (const e of doc.allow) {
@@ -236,8 +246,20 @@ export function parseLockfile(text, kind) {
 }
 
 export function loadLockfileFromDisk(repoRoot, rel) {
-  const abs = resolve(repoRoot, rel);
+  const root = resolve(repoRoot);
+  const abs = resolve(root, rel);
+  const outside = (p) => {
+    const r = relative(root, p);
+    return r === '..' || r.startsWith('..') || isAbsolute(r);
+  };
+  // An entry's `lockfile` is DATA from the probed branch: it must stay inside the root.
+  if (isAbsolute(rel) || outside(abs)) {
+    throw new Error(`lockfile \`${rel}\` is outside the probed root`);
+  }
   if (!existsSync(abs)) return null;
+  if (outside(realpathSync(abs).replace(realpathSync(root), root))) {
+    throw new Error(`lockfile \`${rel}\` resolves outside the probed root (symlink)`);
+  }
   return parseLockfile(readFileSync(abs, 'utf8'), rel.endsWith('.json') ? 'npm' : 'bun');
 }
 

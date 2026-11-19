@@ -53,6 +53,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertAllowlistExpires } from './lib/allowlist-expires.mjs';
+import { expiresBefore } from './lib/strict-date.mjs';
 import { packPublishableGroup } from './lib/pack-publishable-group.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -126,7 +127,7 @@ function loadAllowlist() {
     }
     // An expired allowlist entry stops suppressing — an accepted risk must be
     // re-justified, not left to rot (mirror the Trivy dated-triage pattern).
-    if (entry.expires < today) {
+    if (expiresBefore(entry.expires, today)) {
       console.log(
         `[audit-published] allowlist entry ${entry.id} EXPIRED (${entry.expires}) — no longer suppressed`,
       );

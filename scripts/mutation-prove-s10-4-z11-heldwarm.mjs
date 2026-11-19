@@ -8,7 +8,8 @@
  * by default, and REQUIRES the spec to go red. Both halves are covered: what must be there
  * (the rotation, the one cached-key call, each assertion's status, code and message, the control,
  * the restore of every mutated thing) and what must not be (an extra call to the pod between the
- * cached-key call and the held one, a pod that is not the warm one answering). The shared driver
+ * cached-key call and the held one, a pod that is not the warm one answering: the rows for that are in the S11-1 prover, which runs
+ * the observation itself). The shared driver
  * (`scripts/lib/guard-prover.mjs`) owns the discipline: verdicts by exit code, baseline green
  * first, a canary that must go red, anchors occurring exactly once (else abort), byte-exact
  * restore.
@@ -30,10 +31,6 @@ const HELD =
   '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \\\n    || fail "warm pod: a call held';
 const CTL =
   '[ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \\\n    || fail "warm pod control: a call held';
-const ANS_CTL =
-  '[ "${HELD_POD_UID}" = "${wuid_a}" ] \\\n    || fail "warm pod control: the call was not answered';
-const ANS_HELD =
-  '[ "${HELD_POD_UID}" = "${wuid_b}" ] \\\n    || fail "the held call was not answered';
 const GARBAGE =
   '  foreign_get "Bearer not-a-token"\n  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "warm pod: after the holds';
 const DEFAULTS =
@@ -90,7 +87,12 @@ const MUTATIONS = [
     '  fn_probe "${WORK}/key-pre" load-a\n',
     '',
   ),
-  row('W8', 'pod B is not isolated before its load call', '  isolate_pods "${wuid_b}"\n', ''),
+  row(
+    'W8',
+    'pod B is not isolated before its load call',
+    '  isolate_pods "${wuid_b}"\n  fn_probe "${WORK}/key-pre" load-b\n',
+    '  fn_probe "${WORK}/key-pre" load-b\n',
+  ),
   row(
     'W9',
     'the load call to pod B is deleted, so it caches nothing',
@@ -220,12 +222,6 @@ const MUTATIONS = [
     CTL.replace('[ "${HELD_CODE}" = not_found ]', '[ "${HELD_CODE}" != not_found ]'),
   ),
   row(
-    'W30',
-    'the control may be answered by a pod that is not pod A',
-    ANS_CTL,
-    ANS_CTL.replace('[ "${HELD_POD_UID}" = "${wuid_a}" ]', '[ "${HELD_POD_UID}" != "" ]'),
-  ),
-  row(
     'W31',
     'the long held call is not sent',
     '  hold_call "${HELD_SECONDS}" warm "${wuid_b}"\n',
@@ -263,12 +259,6 @@ const MUTATIONS = [
       '[ "${HELD_MESSAGE}" = "token rejected" ]',
       '[ "${HELD_MESSAGE}" != "missing bearer token" ]',
     ),
-  ),
-  row(
-    'W37',
-    'the long held call may be answered by a pod that is not pod B',
-    ANS_HELD,
-    ANS_HELD.replace('[ "${HELD_POD_UID}" = "${wuid_b}" ]', '[ "${HELD_POD_UID}" != "" ]'),
   ),
   row(
     'W38',
@@ -324,12 +314,6 @@ const MUTATIONS = [
     'the other pods are never re-attached after the answer',
     '    release_pods\n    # Exactly',
     '    # Exactly',
-  ),
-  row(
-    'K7',
-    'the pod that holds the call is no longer recorded for the answer check',
-    '    HELD_POD_UID="$3"\n',
-    '',
   ),
   row(
     'K8',

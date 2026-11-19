@@ -282,8 +282,10 @@ const MUTATIONS = [
     id: 'H14',
     subject: 'run',
     claim: 'the quota is no longer recorded for the exit handler',
-    anchor: '  RESTORE_QUOTA=1\n',
-    replacement: '',
+    anchor:
+      '  RESTORE_QUOTA=1\n  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null\n  if [ "${mode}"',
+    replacement:
+      '  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null\n  if [ "${mode}"',
   },
   // ---- round 2: the code halves, the message, the control, the pod-start proof
   {

@@ -715,6 +715,7 @@ describe('heldwarm: warm pods with the old key set cached, a call held past the 
     expect(ctl).toMatch(
       /\[ "\$\{HELD_POD_UID\}" = "\$\{wuid_a\}" \] \\\n\s*\|\| fail "warm pod control: the call was not answered/,
     );
+    expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeGreaterThan(-1);
     expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeLessThan(
       w.indexOf('hold_call "${CONTROL_HELD_SECONDS}" warm'),
     );

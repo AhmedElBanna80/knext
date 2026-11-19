@@ -141,6 +141,42 @@ run "kind  delete  clusters (2 spaces)"      "kind  delete  clusters a b"       
 run "oci ce cluster delete"                  "oci ce cluster delete ${D}${D}cluster-id x"     BLOCK
 run "oci ce node-pool delete"                "oci ce node-pool delete ${D}${D}node-pool-id x" BLOCK
 run "kubectl delete"                         "kubectl delete ns x"                            BLOCK
+# S9-5: teardown forms that bypassed the literal `terraform destroy` rule, plus tofu and wrappers.
+run "chdir destroy"                          "terraform ${D}chdir=infra destroy"                  BLOCK
+run "chdir space destroy"                    "terraform ${D}chdir infra destroy"                  BLOCK
+run "chdir destroy (tab)"                    "$(printf 'terraform\t-chdir=infra\tdestroy')"      BLOCK
+run "apply ${D}destroy"                      "terraform apply ${D}destroy"                        BLOCK
+run "apply ${D}destroy (tab)"                "$(printf 'terraform\tapply\t-destroy')"            BLOCK
+run "apply auto-approve ${D}destroy"         "terraform apply ${D}auto-approve ${D}destroy"       BLOCK
+run "chdir apply ${D}destroy"                "terraform ${D}chdir=infra apply ${D}destroy"        BLOCK
+run "tofu destroy"                           "tofu destroy"                                 BLOCK
+run "tofu destroy (tab)"                     "$(printf 'tofu\tdestroy')"                    BLOCK
+run "tofu chdir destroy"                     "tofu ${D}chdir=infra destroy"                 BLOCK
+run "tofu apply ${D}destroy"                 "tofu apply ${D}destroy"                       BLOCK
+run "destroy in a pipe"                      "echo yes | terraform destroy"                       BLOCK
+run "destroy in dollar-paren"                "echo \$(terraform destroy)"                        BLOCK
+run "destroy in backticks"                   "echo \`terraform destroy\`"                        BLOCK
+run "bash ${D}c destroy"                     "bash ${D}c 'terraform destroy'"                     BLOCK
+run "bash ${D}c chdir destroy"               "bash ${D}c 'terraform ${D}chdir=infra destroy'"     BLOCK
+run "bash ${D}c tofu apply ${D}destroy"      "bash ${D}c 'tofu apply ${D}destroy'"          BLOCK
+run "plan stays allowed"                     "terraform plan"                                     allow
+run "apply without destroy"                  "terraform apply ${D}auto-approve"                   allow
+run "chdir plan"                             "terraform ${D}chdir=infra plan"                     allow
+run "tofu plan"                              "tofu plan"                                    allow
+run "commit msg mentioning destroy"          "git commit ${D}m \"docs: terraform destroy is blocked\"" allow
+run "kind delete cluster still allowed"      "kind delete cluster"                          allow
+# S9-5 review round: quoted/escaped -chdir, --destroy, TF_CLI_ARGS injection.
+run "chdir dq value destroy"                 "terraform ${D}chdir=\"a b\" destroy"                BLOCK
+run "chdir sq value destroy"                 "terraform ${D}chdir='a b' destroy"                  BLOCK
+run "chdir escaped-space destroy"            "terraform ${D}chdir=a\\ b destroy"                  BLOCK
+run "tofu chdir dq value destroy"            "tofu ${D}chdir=\"a b\" destroy"               BLOCK
+run "apply ${D}${D}destroy"                  "terraform apply ${D}${D}destroy"                    BLOCK
+run "tofu apply ${D}${D}destroy"             "tofu apply ${D}${D}destroy"                   BLOCK
+run "TF_CLI_ARGS ${D}destroy apply"          "TF_CLI_ARGS=${D}destroy terraform apply"            BLOCK
+run "TF_CLI_ARGS_apply ${D}destroy"          "TF_CLI_ARGS_apply=${D}destroy terraform apply"      BLOCK
+run "TF_CLI_ARGS quoted tofu"                "TF_CLI_ARGS=\"${D}destroy\" tofu apply"       BLOCK
+run "plan ${D}destroy stays allowed"         "terraform plan ${D}destroy"                         allow
+run "tofu plan ${D}destroy stays allowed"    "tofu plan ${D}destroy"                        allow
 run "kind delete && terraform destroy"       "kind delete cluster ${D}${D}name x && terraform destroy" BLOCK
 run "kind delete ; oci cluster delete"       "kind delete cluster ; oci ce cluster delete ${D}${D}cluster-id x" BLOCK
 

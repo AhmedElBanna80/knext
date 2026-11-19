@@ -17,23 +17,60 @@ const TIMEOUT = /^\s*timeout-minutes:\s*(.+?)\s*$/m;
 export const minimumMinutes = (slowestSeconds: number): number => (slowestSeconds * 1.5) / 60;
 
 /**
- * Violations of the 1.5x rule in one workflow: for each citation, the first `timeout-minutes` after it
- * must be a number (or a ternary of numbers) and every numeric literal in it must reach the minimum.
- * An uncited workflow has no rule to check, so it yields no violations.
+ * The units a workflow's citations are checked within: one per job under `jobs:` (a citation is checked
+ * against ITS job's timeout, never a later job's), or the whole text when there is no `jobs:` key. Text
+ * before `jobs:` is a unit with no job name, so a citation there is a violation rather than a silent skip.
+ */
+export function jobUnits(yml: string): { job: string | undefined; text: string }[] {
+  const lines = yml.split('\n');
+  const start = lines.findIndex((l) => /^jobs:\s*$/.test(l));
+  if (start < 0) return [{ job: undefined, text: yml }];
+  const units = [{ job: undefined, text: lines.slice(0, start).join('\n') }];
+  let cur = null;
+  for (const l of lines.slice(start + 1)) {
+    const header = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(l);
+    if (header) {
+      cur = { job: header[1], text: '' };
+      units.push(cur);
+    } else if (cur) {
+      cur.text += `${l}\n`;
+    }
+  }
+  return units;
+}
+
+/**
+ * Violations of the 1.5x rule in one workflow. Every citation in every job is checked: the first
+ * `timeout-minutes` after the citation, within the same job, must be a number (or a ternary of numbers),
+ * and every numeric literal in it must reach the minimum. A job that cites a time but has no
+ * `timeout-minutes` after the citation is a violation. An uncited workflow has no rule, so it yields none.
  */
 export function timeoutViolations(yml: string): string[] {
-  const m = CITATION.exec(yml);
-  if (!m) return [];
-  const slowest = Number(m[1]);
-  const after = yml.slice(m.index + m[0].length);
-  const t = TIMEOUT.exec(after);
-  if (!t) return [`cites ${slowest} s but no timeout-minutes follows the citation`];
-  const literals = [...(t[1] ?? '').matchAll(/\b\d+\b/g)].map((x) => Number(x[0]));
-  if (literals.length === 0) return [`timeout-minutes '${t[1]}' is not a number`];
-  const min = minimumMinutes(slowest);
-  return literals
-    .filter((v) => v < min)
-    .map((v) => `timeout-minutes ${v} is below 1.5x the measured ${slowest} s (${min.toFixed(1)} min)`);
+  const out: string[] = [];
+  for (const { job, text } of jobUnits(yml)) {
+    const where = job === undefined ? 'outside any job' : `job '${job}'`;
+    for (const c of text.matchAll(new RegExp(CITATION.source, 'g'))) {
+      const slowest = Number(c[1]);
+      const after = text.slice((c.index ?? 0) + c[0].length);
+      const t = TIMEOUT.exec(after);
+      if (!t) {
+        out.push(`${where} cites ${slowest} s but no timeout-minutes follows the citation`);
+        continue;
+      }
+      const literals = [...(t[1] ?? '').matchAll(/\b\d+\b/g)].map((x) => Number(x[0]));
+      if (literals.length === 0) {
+        out.push(`${where}: timeout-minutes '${t[1]}' is not a number`);
+        continue;
+      }
+      const min = minimumMinutes(slowest);
+      for (const v of literals.filter((n) => n < min)) {
+        out.push(
+          `${where}: timeout-minutes ${v} is below 1.5x the measured ${slowest} s (${min.toFixed(1)} min)`,
+        );
+      }
+    }
+  }
+  return out;
 }
 
 const e2eWorkflows = readdirSync(WORKFLOWS)
@@ -58,15 +95,18 @@ describe('a kind e2e timeout is at least 1.5x its measured slowest CI run (TD-S1
 
   it('the rule itself: 2313 s needs 57.8 min, so 60 passes and 50 fails', () => {
     expect(minimumMinutes(2313)).toBeCloseTo(57.8, 1);
-    expect(timeoutViolations('# The slowest is 2313 s (38.6 min).\ntimeout-minutes: 60\n')).toEqual([]);
-    expect(timeoutViolations('# The slowest is 2313 s (38.6 min).\ntimeout-minutes: 50\n').length).toBe(
-      1,
+    expect(timeoutViolations('# The slowest is 2313 s (38.6 min).\ntimeout-minutes: 60\n')).toEqual(
+      [],
     );
+    expect(
+      timeoutViolations('# The slowest is 2313 s (38.6 min).\ntimeout-minutes: 50\n').length,
+    ).toBe(1);
   });
 
   it('a ternary is checked on EVERY branch, not only the default', () => {
     expect(
-      timeoutViolations('# The slowest is 2557 s.\ntimeout-minutes: ${{ x && 120 || 50 }}\n').length,
+      timeoutViolations('# The slowest is 2557 s.\ntimeout-minutes: ${{ x && 120 || 50 }}\n')
+        .length,
     ).toBe(1);
     expect(
       timeoutViolations('# The slowest is 2557 s.\ntimeout-minutes: ${{ x && 120 || 65 }}\n'),
@@ -75,5 +115,30 @@ describe('a kind e2e timeout is at least 1.5x its measured slowest CI run (TD-S1
 
   it('a citation with no timeout after it is a violation, not a silent pass', () => {
     expect(timeoutViolations('# The slowest is 100 s.\n').length).toBe(1);
+  });
+
+  // Item 7: every job that carries a citation is checked, and a job's citation is checked against
+  // that job's own timeout, never against a later job's.
+  it('a SECOND citation in the same job is checked too (not only the first)', () => {
+    const yml = `jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    timeout-minutes: 60\n    # The slowest is 2557 s (42.6 min).\n    timeout-minutes: 20\n`;
+    expect(timeoutViolations(yml).length).toBe(1);
+  });
+
+  it('a job that cites a time but has no timeout-minutes is a violation, even if a later job has one', () => {
+    const yml = `jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    runs-on: x\n  b:\n    timeout-minutes: 60\n`;
+    expect(timeoutViolations(yml).length).toBe(1);
+  });
+
+  it('a second job with its own citation is checked against its own timeout', () => {
+    const ok = `jobs:\n  a:\n    # The slowest is 2313 s.\n    timeout-minutes: 60\n  b:\n    # The slowest is 2557 s.\n    timeout-minutes: 65\n`;
+    expect(timeoutViolations(ok)).toEqual([]);
+    const bad = ok.replace('timeout-minutes: 65', 'timeout-minutes: 50');
+    expect(timeoutViolations(bad).length).toBe(1);
+  });
+
+  it('a citation outside any job (before jobs:) is a violation, not silently skipped', () => {
+    expect(
+      timeoutViolations(`# The slowest is 100 s.\njobs:\n  a:\n    timeout-minutes: 60\n`).length,
+    ).toBe(1);
   });
 });

@@ -48,7 +48,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { loadavg, tmpdir } from 'node:os';
-import { pinExitSignals } from './lib/lane-exit-signals.mjs';
+import { pinExitSignals, trackProverGroup } from './lib/lane-exit-signals.mjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -157,6 +157,8 @@ function runProver(
         }
       }
     };
+    // A signal to the runner kills every running group first (lib/lane-exit-signals.mjs).
+    const untrack = trackProverGroup(killGroup);
     const watcher = watch
       ? setInterval(() => {
           try {
@@ -186,6 +188,7 @@ function runProver(
     // stdio pipes open, would delay `close` until the timeout).
     child.on('exit', () => killGroup());
     child.on('close', (status, signal) => {
+      untrack();
       clearTimeout(timer);
       if (watcher) clearInterval(watcher);
       resolvePromise({ status, signal, output, timedOut, runaway, error: spawnError });

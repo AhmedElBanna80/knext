@@ -238,10 +238,11 @@ describe('F6 evasions: text reads and chained string methods are still text-only
 
 describe('row-level wiring vs behavioural counts', () => {
   // `thing` is text-only: BOTH its rows are wiring, labelled or not (the unlabelled one is a finding,
-  // the count does not depend on the label). `beh` is executed by no spec: its labelled row is
+  // the count does not depend on the label). `beh` is executed by its own spec: its labelled row is
   // wiring (a self-declared label only ever moves a row to wiring), its other row is behavioural.
   const prover = `
     const SPEC = 'tests/thing.test.ts';
+    const SPEC_B = 'tests/beh.test.ts';
     const PROOF = { subjects: { thing: 'scripts/thing.sh', beh: 'scripts/beh.sh' } };
     const MUTATIONS = [
       { subject: 'thing', anchor: 'a', replacement: 'b' },
@@ -249,9 +250,160 @@ describe('row-level wiring vs behavioural counts', () => {
       { subject: 'beh', anchor: 'c', replacement: 'd' },
       { subject: 'beh', kind: 'wiring', anchor: 'e', replacement: 'f' },
     ];`;
-  const readSpec = () => SPEC_TEXT;
-  it('reports the wiring and behavioural totals separately', () => {
-    expect(summarizeProverRows(prover, readSpec)).toEqual({ total: 4, wiring: 3, behavioural: 1 });
+  const specs: Record<string, string> = {
+    'tests/thing.test.ts': SPEC_TEXT,
+    'tests/beh.test.ts': `const p = resolve(ROOT, 'scripts/beh.sh'); spawnSync('bash', [p]);`,
+  };
+  it('reports the wiring, behavioural and unattributed totals separately', () => {
+    expect(summarizeProverRows(prover, (s: string) => specs[s])).toEqual({
+      total: 4,
+      wiring: 3,
+      behavioural: 1,
+      unattributed: 0,
+    });
+  });
+});
+
+// ITEM 1 (attribution). A row carries no spec field, so a row cannot be tied to the spec that catches
+// it. A row is therefore BEHAVIOURAL only when every spec naming its subject executes the subject.
+// If any naming spec only reads the text, or the subject is named by no spec, the row is UNATTRIBUTED
+// (reported apart, never counted as behavioural). The old count called these behavioural.
+describe('attribution: a row is behavioural only when every spec naming its subject executes it', () => {
+  const proverFor = (subjectPath: string, specA: string, specB?: string) => `
+    const A = 'tests/a.test.ts';
+    ${specB === undefined ? '' : "const B = 'tests/b.test.ts';"}
+    const PROOF = { subjects: { thing: '${subjectPath}' } };
+    const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`;
+  const TEXT_SPEC = `const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8'); expect(src).toContain('foo');`;
+  const EXEC_SPEC = `const p = resolve(ROOT, 'scripts/thing.sh'); spawnSync('bash', [p]);`;
+
+  it('a subject that a text-only spec AND an executing spec both name is UNATTRIBUTED, not behavioural', () => {
+    const specs: Record<string, string> = {
+      'tests/a.test.ts': TEXT_SPEC,
+      'tests/b.test.ts': EXEC_SPEC,
+    };
+    expect(
+      summarizeProverRows(proverFor('scripts/thing.sh', 'A', 'B'), (s: string) => specs[s]),
+    ).toEqual({ total: 1, wiring: 0, behavioural: 0, unattributed: 1 });
+  });
+
+  it('a subject that only an executing spec names is behavioural', () => {
+    const specs: Record<string, string> = { 'tests/a.test.ts': EXEC_SPEC };
+    expect(
+      summarizeProverRows(proverFor('scripts/thing.sh', 'A'), (s: string) => specs[s]),
+    ).toEqual({
+      total: 1,
+      wiring: 0,
+      behavioural: 1,
+      unattributed: 0,
+    });
+  });
+
+  it('a subject that no referenced spec names is UNATTRIBUTED, never behavioural', () => {
+    const specs: Record<string, string> = { 'tests/a.test.ts': `expect(1).toBe(1);` };
+    expect(
+      summarizeProverRows(proverFor('scripts/thing.sh', 'A'), (s: string) => specs[s]),
+    ).toEqual({
+      total: 1,
+      wiring: 0,
+      behavioural: 0,
+      unattributed: 1,
+    });
+  });
+
+  it('a spec that reads the text and hands it to a parser is UNATTRIBUTED (neither text-only nor executed)', () => {
+    const specs: Record<string, string> = {
+      'tests/a.test.ts': `const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8'); parseIt(src);`,
+    };
+    expect(
+      summarizeProverRows(proverFor('scripts/thing.sh', 'A'), (s: string) => specs[s]),
+    ).toEqual({
+      total: 1,
+      wiring: 0,
+      behavioural: 0,
+      unattributed: 1,
+    });
+  });
+
+  it('a labelled row is wiring even when its subject is unattributed', () => {
+    const specs: Record<string, string> = { 'tests/a.test.ts': `expect(1).toBe(1);` };
+    const p = `
+      const A = 'tests/a.test.ts';
+      const PROOF = { subjects: { thing: 'scripts/thing.sh' } };
+      const MUTATIONS = [{ subject: 'thing', kind: 'wiring', anchor: 'a', replacement: 'b' }];`;
+    expect(summarizeProverRows(p, (s: string) => specs[s])).toEqual({
+      total: 1,
+      wiring: 1,
+      behavioural: 0,
+      unattributed: 0,
+    });
+  });
+});
+
+// ITEM 2. `bash -n <subject>` is a syntax check only when `-n` (or a flag cluster containing n) comes
+// BEFORE the subject. After the subject, `-n` is an argument to the script, and the script runs.
+describe('bash -n is a syntax check only when -n precedes the subject', () => {
+  const P = 'scripts/thing.sh';
+  const tail = `const src = readFileSync(p, 'utf8'); expect(src).toContain('foo');`;
+  it('bash <subject> -n runs the subject: NOT a syntax check, so it does not clear the row', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); spawnSync('bash', [p, '-n']); ${tail}`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('bash run.sh -n <subject>: a non-flag before the subject means the subject is not the syntax-checked file', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); spawnSync('bash', ['run.sh', '-n', p]); ${tail}`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('bash -ne <subject> (a cluster containing n, before the subject) IS a syntax check', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); spawnSync('bash', ['-ne', p]); ${tail}`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('the Bun.spawn array form: [bash, -n, subject] is a syntax check, [bash, subject, -n] is not', () => {
+    expect(
+      isTextOnlyPair(`const p = resolve(ROOT, '${P}'); Bun.spawn(['bash', '-n', p]); ${tail}`, P),
+    ).toBe(true);
+    expect(
+      isTextOnlyPair(`const p = resolve(ROOT, '${P}'); Bun.spawn(['bash', p, '-n']); ${tail}`, P),
+    ).toBe(false);
+  });
+});
+
+// ITEM 3. A string method whose RESULT reaches an executing consumer (JSON.parse, a spawn argument,
+// eval, a helper) is not a substring check, whatever method produced it.
+describe('a slice/split/replace result that reaches an executing consumer is not substring-only', () => {
+  const P = 'scripts/thing.sh';
+  it('JSON.parse(src.slice(..)) is not text-only', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const cfg = JSON.parse(src.slice(1)); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('a spawn argument built with src.replace(...) is not text-only', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); spawnSync('bash', ['-c', src.replace('a', 'b')]); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('the same result routed through a variable into JSON.parse is not text-only', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const part = src.split('\\n'); const cfg = JSON.parse(part[0]); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('the result asserted on (expect(out).toContain) is still text-only', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const out = src.replace('a', 'b'); expect(out).toContain('b');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+});
+
+// ITEM 4. A Bun.file handle held in a variable, and a read function aliased to a variable, are text
+// reads too.
+describe('a Bun.file handle held in a variable, and an aliased read function, are text reads', () => {
+  const P = 'scripts/thing.sh';
+  it('const f = Bun.file(p); await f.text(); expect(src).toContain(..) is text-only', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); const f = Bun.file(p); const src = await f.text(); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('a handle used for anything other than reading its text is not text-only', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); const f = Bun.file(p); const n = f.size; expect(n).toBe(3);`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('const rf = readFileSync; rf(p) is a text read', () => {
+    const spec = `const rf = readFileSync; const src = rf(resolve(ROOT, '${P}'), 'utf8'); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
   });
 });
 

@@ -22,7 +22,14 @@ export const noteKeys = (note: string): Set<string> =>
  */
 export function requiredRuleViolation(note: string): string | undefined {
   if (!/`expires`[^.]*\bREQUIRED\b/.test(note)) return 'no `expires` sentence says REQUIRED';
-  if (/`expires`[^.]*\bnot\s+REQUIRED\b/i.test(note)) return '`expires` is said to be not REQUIRED';
+  // A negation within a few words before REQUIRED ("not REQUIRED", "no longer REQUIRED",
+  // "isn't really REQUIRED", "optional, REQUIRED") says the opposite of the rule.
+  if (
+    /`expires`[^.]*\b(?:not|no longer|isn['’]t|never|optional)\b(?:[^\w.]+\w+){0,3}?[^\w.]+REQUIRED\b/i.test(
+      note,
+    )
+  )
+    return '`expires` is said to be negated before REQUIRED';
   if (/`expires`[^.]*\bis optional\b/i.test(note)) return '`expires` is said to be optional';
   return undefined;
 }
@@ -46,8 +53,17 @@ describe('allowlist $schema-note matches its validator', () => {
   it('the REQUIRED check rejects "not REQUIRED" and "optional", and accepts the real wording', () => {
     expect(requiredRuleViolation('`expires` is not REQUIRED')).toBeDefined();
     expect(requiredRuleViolation('`expires` (ISO date) is optional')).toBeDefined();
-    expect(requiredRuleViolation('`expires` (ISO date, REQUIRED, at most 180 days)')).toBeUndefined();
+    expect(
+      requiredRuleViolation('`expires` (ISO date, REQUIRED, at most 180 days)'),
+    ).toBeUndefined();
     expect(requiredRuleViolation('no expiry sentence at all')).toBeDefined();
+  });
+
+  it('the REQUIRED check also rejects "no longer REQUIRED", "isn\'t REQUIRED" and "never REQUIRED" (item 6)', () => {
+    expect(requiredRuleViolation('`expires` is no longer REQUIRED')).toBeDefined();
+    expect(requiredRuleViolation("`expires` isn't REQUIRED")).toBeDefined();
+    expect(requiredRuleViolation('`expires` (ISO date) is not really REQUIRED')).toBeDefined();
+    expect(requiredRuleViolation('`expires` (ISO date, REQUIRED, not optional)')).toBeUndefined();
   });
 
   it('the key scan rejects a stale extra key and ignores uppercase tokens', () => {

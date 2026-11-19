@@ -192,8 +192,8 @@ const MUTATIONS = [
   row(
     'W25',
     'the held calls are no longer signed with the key that is current after the rotation',
-    '  export_key "${WORK}/key-held" current\n',
-    '',
+    '  export_key "${WORK}/key-held" current\n  hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"\n',
+    '  hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"\n',
   ),
   row(
     'W26',

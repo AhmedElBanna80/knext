@@ -182,8 +182,9 @@ const MUTATIONS = [
     id: 'H1',
     subject: 'run',
     claim: 'the pod quota is no longer created, so nothing holds the call',
-    anchor: '  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null\n',
-    replacement: '',
+    anchor:
+      '  k -n "${NS}" create resourcequota "${HOLD_QUOTA}" --hard=pods=0 >/dev/null\n  if [ "${mode}" = warm ]; then\n    while read',
+    replacement: '  if [ "${mode}" = warm ]; then\n    while read',
   },
   {
     id: 'H2',

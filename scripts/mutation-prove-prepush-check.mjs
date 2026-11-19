@@ -11,6 +11,10 @@
  *   R1-R4  the scan stops following imports / counts comments / skips workflows / sees only .mjs.
  *   D1-D3  workflow-derived targets drop --closure / count comments / are unused.
  *   U1-U3  the diff basis drops uncommitted or untracked files, or stops flagging them.
+ *   B1-B3  continuation lines are not joined / a bare invocation passes / is kept runnable.
+ *   I1-I4  invocation edges, package.json scripts, composite actions are not followed or scanned;
+ *          manifest prose counts.
+ *   S1-S2  directory-level readers (readdir/glob over security, `security/*`) are missed.
  *   L1-L2  the leak scan stops falling back to covering tests, or stops saying it did not run.
  *   P4  the leak snapshot diff reports nothing.
  *   P5  the static scan ignores each file's baseline.
@@ -146,6 +150,71 @@ const MUTATIONS = [
     subject: 'cli',
     anchor: "'leak scan NOT exercised:",
     replacement: "'leak scan ok:",
+  },
+  {
+    id: 'B1',
+    claim: 'YAML continuation lines are no longer joined',
+    subject: 'lib',
+    anchor:
+      "const joined = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));",
+    replacement: "const joined = stripComments(readFileSync(join(root, wfDir, f), 'utf8'));",
+  },
+  {
+    id: 'B2',
+    claim: 'a bare closure-audit invocation no longer fails the check',
+    subject: 'lib',
+    anchor: 'for (const b of bareInvocations(root, script)) {',
+    replacement: 'for (const b of []) {',
+  },
+  {
+    id: 'B3',
+    claim: 'a bare invocation is kept as a runnable argument set',
+    subject: 'lib',
+    anchor:
+      "if (args.some((a) => a === '--app' || a === '--closure')) sets.set(args.join(' '), args);",
+    replacement: "sets.set(args.join(' '), args);",
+  },
+  {
+    id: 'I1',
+    claim: 'invocations (node/bash/sh/bun) stop being edges',
+    subject: 'lib',
+    anchor: 'for (const m of joinContinuations(text).matchAll(INVOKE)) {',
+    replacement: 'for (const m of []) {',
+  },
+  {
+    id: 'I2',
+    claim: 'package.json prose keys count as reads',
+    subject: 'lib',
+    anchor: "if (!f.endsWith('package.json')) return stripComments(raw);",
+    replacement: 'return stripComments(raw);',
+  },
+  {
+    id: 'I3',
+    claim: 'package.json manifests are not scanned',
+    subject: 'lib',
+    anchor: 'for (const m of manifests) if (existsSync(join(root, m))) files.push(m);',
+    replacement: 'void manifests;',
+  },
+  {
+    id: 'I4',
+    claim: 'composite actions are not scanned',
+    subject: 'lib',
+    anchor: "for (const f of walk(root, '.github/actions')) {",
+    replacement: 'for (const f of []) {',
+  },
+  {
+    id: 'S1',
+    claim: 'directory-level readers are ignored',
+    subject: 'lib',
+    anchor: '|| DIR_READ.some((r) => r.test(text.get(f)))',
+    replacement: '',
+  },
+  {
+    id: 'S2',
+    claim: 'the shell `security/*` pattern is no longer recognised',
+    subject: 'lib',
+    anchor: '/\\bsecurity\\/\\*/,',
+    replacement: '/\\bsecurity\\/\\*NEVER/,',
   },
   {
     id: 'P4',

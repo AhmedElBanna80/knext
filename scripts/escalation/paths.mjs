@@ -54,6 +54,15 @@ const OPERATOR_MANAGER = 'packages/kn-next-operator/config/manager/manager.yaml'
 const TEMPLATE_NON_SURFACE =
   /(^|\/)(tests|testkit|testutil|testvectors|testhelpers|testdata|e2e)(\/|\.rs$)|_tests\.rs$|\.md$|(^|\/)\.gitignore$|^templates\/[^/]+\/(conformance\.sh$|conformance\/)/;
 
+/**
+ * The Rust surface under `crates/`: crate source (`*.rs`, tests included, since
+ * a test change is still a change to the FFI it exercises), every `Cargo.toml`,
+ * the lockfile, the cargo deny policy and the toolchain pin. Docs (`EGM.md`,
+ * `README.md`) and anything else under `crates/` do not fire.
+ */
+const CRATES_SURFACE =
+  /^crates\/(?:.+\/)?(?:[^/]+\.rs|Cargo\.toml|Cargo\.lock|deny\.toml|rust-toolchain\.toml)$/;
+
 export function isTestPath(p) {
   return (
     /(^|\/)__tests__\//.test(p) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(p) || /_test\.go$/.test(p)
@@ -93,8 +102,9 @@ export const TRIGGERS = [
   },
   {
     id: 'crates',
-    // Source, Cargo.lock, deny.toml and the toolchain pin: FFI surface and supply chain.
-    match: (p) => p.startsWith('crates/'),
+    // Crate source, Cargo manifests and lockfile, deny.toml and the toolchain pin:
+    // FFI surface and supply chain. Docs under crates/ are not a trigger.
+    match: (p) => CRATES_SURFACE.test(p),
   },
   {
     id: 'supply-chain',

@@ -321,9 +321,32 @@ describe('#2388 — every package CLI surface', () => {
 });
 
 describe('#2388 — Rust crates', () => {
-  it('anything under crates/ fires', () => {
+  it('crate source (*.rs, tests included) fires', () => {
     expect(ids(classify([change('crates/knext-ffi/src/lib.rs')]))).toContain('crates');
-    expect(ids(classify([change('crates/deny.toml')]))).toContain('crates');
+    expect(ids(classify([change('crates/knext-ffi/tests/abi.rs')]))).toContain('crates');
+  });
+
+  it('the cargo supply chain fires: Cargo.lock, deny.toml, every Cargo.toml, the toolchain pin', () => {
+    for (const p of [
+      'crates/Cargo.lock',
+      'crates/deny.toml',
+      'crates/Cargo.toml',
+      'crates/knext-ffi/Cargo.toml',
+      'crates/knext-ffi-macros/Cargo.toml',
+      'crates/rust-toolchain.toml',
+    ]) {
+      expect(ids(classify([change(p)])), p).toContain('crates');
+    }
+  });
+
+  it('near miss: docs under crates/ do not fire (EGM.md, README.md)', () => {
+    expect(
+      classify([
+        change('crates/harness/EGM.md'),
+        change('crates/knext-ffi/EGM.md'),
+        change('crates/README.md'),
+      ]),
+    ).toHaveLength(0);
   });
 
   it('near miss: a crates-like name outside the root crates/ does not fire', () => {

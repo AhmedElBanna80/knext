@@ -205,7 +205,7 @@ describe('the scratch yaml install is integrity-checked against the repo lockfil
     bad(INSTALLED(`${real.slice(0, -4)}AAAA`));
     bad(INSTALLED(real, '2.8.9'));
     bad(JSON.stringify({ packages: {} }));
-    bad(INSTALLED(real), '2.9.1');
+    bad(INSTALLED(real, '2.9.1'), '2.9.1');
     bad(INSTALLED(real), '2.9.0', '{}');
   });
   it('the CLI exits nonzero on a missing install dir (fail closed)', () => {

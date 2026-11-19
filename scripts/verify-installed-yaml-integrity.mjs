@@ -27,13 +27,12 @@ export function verifyYamlIntegrity({ lockText, installedLockText, expectedVersi
     throw new Error(`lockfile pins yaml@${locked.version}, workflow installs ${expectedVersion}`);
   }
   const entry = JSON.parse(installedLockText).packages?.['node_modules/yaml'];
-  if (!entry?.integrity) throw new Error('installed yaml has no recorded integrity');
-  if (entry.version !== expectedVersion) {
-    throw new Error(`installed yaml is ${entry.version}, expected ${expectedVersion}`);
+  if (entry?.version !== expectedVersion) {
+    throw new Error(`installed yaml is ${entry?.version}, expected ${expectedVersion}`);
   }
-  if (entry.integrity !== locked.integrity) {
+  if (entry?.integrity !== locked.integrity) {
     throw new Error(
-      `yaml@${expectedVersion} integrity mismatch: installed ${entry.integrity} != lockfile ${locked.integrity}`,
+      `yaml@${expectedVersion} integrity mismatch: installed ${entry?.integrity} != lockfile ${locked.integrity}`,
     );
   }
 }

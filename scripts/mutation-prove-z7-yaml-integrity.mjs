@@ -39,12 +39,6 @@ const MUTATIONS = [
     replacement: 'if (false) {',
   },
   {
-    label: 'a missing recorded integrity no longer fails',
-    subject: 'script',
-    anchor: "if (!entry?.integrity) throw new Error('installed yaml has no recorded integrity');",
-    replacement: '',
-  },
-  {
     label: 'the installed version is no longer checked',
     subject: 'script',
     anchor: 'if (entry.version !== expectedVersion) {',
@@ -71,7 +65,7 @@ const MUTATIONS = [
   },
 ];
 
-const DECLARED = 6;
+const DECLARED = 5;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

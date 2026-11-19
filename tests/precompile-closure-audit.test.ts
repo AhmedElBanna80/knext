@@ -214,7 +214,12 @@ describe('readAllowlist — dated + justified, mirroring the npm-audit gate', ()
     const active = readAllowlist(
       {
         allow: [
-          { id: 'GHSA-aaaa', justification: 'no fix available upstream', added: '2026-08-19' },
+          {
+            id: 'GHSA-aaaa',
+            justification: 'no fix available upstream',
+            added: '2026-08-19',
+            expires: '2026-11-19',
+          },
         ],
       },
       NOW,
@@ -247,6 +252,21 @@ describe('readAllowlist — dated + justified, mirroring the npm-audit gate', ()
     expect(() => readAllowlist({ allow: [{ id: 'GHSA-x', justification: 'y' }] }, NOW)).toThrow(
       /added/i,
     );
+  });
+
+  it('THROWS on an entry with no `expires` — an allowlist entry with no clock never retires', () => {
+    expect(() =>
+      readAllowlist(
+        { allow: [{ id: 'GHSA-noclock', justification: 'y', added: '2026-08-19' }] },
+        NOW,
+      ),
+    ).toThrow(/expires/i);
+    expect(() =>
+      readAllowlist(
+        { allow: [{ id: 'GHSA-empty', justification: 'y', added: '2026-08-19', expires: '' }] },
+        NOW,
+      ),
+    ).toThrow(/expires/i);
   });
 
   it('THROWS on an UNKNOWN key — a typo’d `expires` is a never-expiring entry', () => {

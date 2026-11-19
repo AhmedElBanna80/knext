@@ -23,9 +23,13 @@ import {
   loadLockfileFromDisk,
   probeEntries,
   renderReport,
+  resolveAllowlistFiles,
 } from './lib/allowlist-retirement.mjs';
 
-const REPO_ROOT = resolve(import.meta.dirname, '..');
+// The tree whose allowlists and lockfiles are PROBED. Defaults to this checkout; the nightly
+// caller on main points it at a second checkout of each branch so ONE trusted copy of this
+// script (main's) reads each branch's data and no branch's code is executed.
+const REPO_ROOT = resolve(process.env.ALLOWLIST_ROOT || resolve(import.meta.dirname, '..'));
 
 export const MAX_RETRIES = 3;
 const MAX_WAIT_MS = 60_000;
@@ -76,7 +80,7 @@ export function makeFetchAdvisory(
 }
 
 async function main() {
-  const entries = collectEntries(REPO_ROOT);
+  const entries = collectEntries(REPO_ROOT, resolveAllowlistFiles(process.env.ALLOWLIST_FILES));
   const result = await probeEntries(entries, makeFetchAdvisory(), {
     loadLock: (rel) => loadLockfileFromDisk(REPO_ROOT, rel),
   });

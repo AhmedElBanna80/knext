@@ -156,7 +156,7 @@ describe('loadNpmAllowlist', () => {
     const ids = loadNpmAllowlist(
       {
         allow: [
-          { id: 'GHSA-1', justification: 'accepted', added: '2026-10-01' },
+          { id: 'GHSA-1', justification: 'accepted', added: '2026-10-01', expires: '2099-01-01' },
           { id: 'GHSA-2', justification: 'accepted', added: '2026-09-01', expires: '2026-10-01' },
         ],
       },
@@ -167,6 +167,20 @@ describe('loadNpmAllowlist', () => {
   it('rejects a malformed entry', () => {
     expect(() => loadNpmAllowlist({ allow: [{ id: 'X' }] }, TODAY)).toThrow();
     expect(() => loadNpmAllowlist(null, TODAY)).toThrow();
+  });
+  it('rejects an entry with no `expires` (or a malformed one)', () => {
+    const base = { id: 'GHSA-3', justification: 'accepted', added: '2026-10-01' };
+    expect(() => loadNpmAllowlist({ allow: [base] }, TODAY)).toThrow(/expires/);
+    expect(() => loadNpmAllowlist({ allow: [{ ...base, expires: 'soon' }] }, TODAY)).toThrow(
+      /expires/,
+    );
+    expect(() =>
+      loadNpmAllowlist({ allow: [{ ...base, expires: '2099-01-01' }] }, TODAY),
+    ).not.toThrow();
+  });
+  it('audit-published validates through the SAME expires rule (no second, laxer copy)', () => {
+    const src = readFileSync(resolve(REPO_ROOT, 'scripts/audit-published.mjs'), 'utf8');
+    expect(src).toMatch(/assertAllowlistExpires\(/);
   });
   it('the committed allowlist parses', () => {
     const json = JSON.parse(

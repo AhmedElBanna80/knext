@@ -12,8 +12,8 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - `assert-tree-unchanged.mjs snapshot|check <file>`: compares `git status --porcelain --untracked-files=all` before and after a run.
 
 ### Mutation provers
-- 174 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
-- Shared drivers: `lib/prover-report.mjs` (imported by all 174), `lib/mutation-harness.mjs` (98) and `lib/guard-prover.mjs` (101).
+- 175 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
+- Shared drivers: `lib/prover-report.mjs` (imported by all 175), `lib/mutation-harness.mjs` (99) and `lib/guard-prover.mjs` (102).
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
 - Shell driver: `mutate-prove.sh`.
 - Kind-lane provers live among them, e.g. `mutation-prove-2461-z7-kind-e2e.mjs` for the Z7 identity lane in `packages/grpc/e2e/z7-identity-kind`, including the SQ1/SQ2 rows for the squatted-JWKS-ConfigMap phase and the RT rows for the real-time rotation (RT2, RT9-RT11 are behavioural, against `rotation-verdict.ts`; RT5 and RT7 are string-level). Its neighbours `mutation-prove-s8-1-z11-policyoff.mjs` (the Z11 `policyoff` phase in `packages/grpc/e2e/z11-activator-drill/run.sh`) and `mutation-prove-s8-5-z8-am3-am6.mjs` (the Z10 `imagepin` and `http11` phases in `packages/grpc/e2e/z10-zone-functions-kind/run.sh`) are kind-lane provers too.
@@ -48,7 +48,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 ### Supply chain and pins
 - Dependency and closure audits: `audit-published.mjs`, `audit-shipped-npm.mjs`, `osv-gate.mjs`, `govulncheck-gate.mjs`, `release-age-gate.mjs`, `precompile-closure-audit.mjs`, `sbom-docs-closure.mjs`.
 - `secret-scan.mjs` (`validateAllowlist`, `filterFindings`), `summarize-trivy-fs-report.mjs`.
-- Pin checks: `verify-allowlist-retirement.mjs` (read-only nightly probe: RETIRE on a withdrawn advisory or a reachable patch for an allowlisted advisory, INFO for an unreachable patch, fail closed on API error), `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
+- Pin checks: `verify-allowlist-retirement.mjs` (read-only nightly probe: RETIRE on a withdrawn advisory or a reachable patch for an allowlisted advisory, INFO for an unreachable patch or a reachable patch in a `fixtures/` or `musl-native-lockfiles/` lockfile, fail closed on API error or an empty entry set), `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
 - `resolve-shipped-images.mjs`, `resolve-scale-test-image.mjs`, `write-native-integrity.mjs`, `generate-musl-native-lockfile.sh`, `scan-suite-native-addons.mjs`.
 
 ### Static repo guards
@@ -142,6 +142,7 @@ The scripts below also export these symbols, mostly so `tests/` can import their
 - [api-surface](./api-surface/EGM.md): public API type-surface report generator and check.
 - [bench-cold-start-phases](./bench-cold-start-phases/EGM.md): per-phase cold-start benchmark harness, with [ceiling](./bench-cold-start-phases/ceiling/EGM.md) and [gke](./bench-cold-start-phases/gke/EGM.md).
 - [deep-health-alert-e2e](./deep-health-alert-e2e/EGM.md): Prometheus alert assertions for the deep-health e2e.
+- [escalation](./escalation/EGM.md): the modules behind `check-escalation-triggers.mjs`, the PR check that escalation triggers were acknowledged.
 - [kind-manifests](./kind-manifests/EGM.md): checksum-verified, digest-pinned installs of cert-manager, Knative and Kourier.
 - [lib](./lib/EGM.md): pure logic shared by the guards and provers.
 - [prereqs](./prereqs/EGM.md): single-command pinned install of the cluster prerequisites.

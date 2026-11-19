@@ -54,10 +54,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   bracedScopes,
-  GATE_INPUT_REGISTRY,
   broadScopes,
   changedGateInputs,
   changedTestFiles,
+  GATE_INPUT_REGISTRY,
   groupByArea,
   newEntries,
   outOfScope,

@@ -8,13 +8,13 @@ import {
   bracedScopes,
   branchBlockProblems,
   broadScopes,
+  changedGateInputs,
+  changedTestFiles,
   ciRunsTest,
+  deriveWorkflowArgSets,
   driftBetween,
   evalBranchBlock,
   exemptInputs,
-  changedGateInputs,
-  changedTestFiles,
-  deriveWorkflowArgSets,
   GATE_INPUT_REGISTRY,
   GATE_TABLE,
   globToRegExp,
@@ -32,8 +32,8 @@ import {
   stripBranchSpecific,
   testsCovering,
 } from '../scripts/lib/prepush-check.mjs';
-import { main as driftMain } from '../scripts/prepush-lib-drift.mjs';
 import { runChecks } from '../scripts/prepush-check.mjs';
+import { main as driftMain } from '../scripts/prepush-lib-drift.mjs';
 
 /**
  * GUARDS for scripts/prepush-check.mjs. Every check is asserted both ways: the

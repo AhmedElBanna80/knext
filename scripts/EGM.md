@@ -1,7 +1,7 @@
 # scripts
 
 ## Overview
-This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 313 top-level entries: 303 files (286 `.mjs`, 14 `.sh`, one `.ts`, one `.json` and this `EGM.md`) and 10 directories. 174 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
+This directory holds the repo's tooling: CI guards and gates, release and publish automation, the e2e drivers for the official Next.js compatibility harness, kind e2e assertions, supply-chain scans, and the mutation-prover fleet. It contains 315 top-level entries: 305 files (288 `.mjs`, 14 `.sh`, one `.ts`, one `.json` and this `EGM.md`) and 10 directories. 175 of them are `mutation-prove-*.mjs` provers, and the rest are mostly single-purpose CLIs over the pure logic in [lib](./lib/EGM.md). This contract was compiled from each file's header comment and `export` list. It is an index, so treat each file's header as the authority for that file.
 
 ## Interface
 
@@ -48,7 +48,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 ### Supply chain and pins
 - Dependency and closure audits: `audit-published.mjs`, `audit-shipped-npm.mjs`, `osv-gate.mjs`, `govulncheck-gate.mjs`, `release-age-gate.mjs`, `precompile-closure-audit.mjs`, `sbom-docs-closure.mjs`.
 - `secret-scan.mjs` (`validateAllowlist`, `filterFindings`), `summarize-trivy-fs-report.mjs`.
-- Pin checks: `verify-allowlist-retirement.mjs` (read-only nightly probe: RETIRE on a withdrawn or newly patched allowlisted advisory, fail closed on API error), `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
+- Pin checks: `verify-allowlist-retirement.mjs` (read-only nightly probe: RETIRE on a withdrawn advisory or a reachable patch for an allowlisted advisory, INFO for an unreachable patch, fail closed on API error), `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
 - `resolve-shipped-images.mjs`, `resolve-scale-test-image.mjs`, `write-native-integrity.mjs`, `generate-musl-native-lockfile.sh`, `scan-suite-native-addons.mjs`.
 
 ### Static repo guards

@@ -114,23 +114,23 @@ const MUTATIONS = [
     subject: 'run',
     claim: 'the rotation is never requested',
     anchor:
-      '  k -n "${NS}" annotate nextapp "${ZONE}" "apps.kn-next.dev/rotate-signing-key=${nonce}" --overwrite\n  wait_until 60 1 "the operator to take the rotation request"',
-    replacement: '  wait_until 60 1 "the operator to take the rotation request"',
+      '  k -n "${NS}" annotate nextapp "${ZONE}" "apps.kn-next.dev/rotate-signing-key=${wnonce}" --overwrite\n  wait_until 60 1 "the operator to take the rotation request under the warm pod"',
+    replacement: '  wait_until 60 1 "the operator to take the rotation request under the warm pod"',
   },
   {
     id: 'W11',
     subject: 'run',
     claim: 'the rotation no longer waits for signing to switch',
     anchor:
-      '"signing to switch to the new key" \'[ "$(secret_get current.kid)" = "${new_kid}" ]\'\n  k -n "${NS}" annotate secret',
-    replacement: '"signing to switch to the new key" true\n  k -n "${NS}" annotate secret',
+      '"signing to switch under the warm pod" \'[ "$(secret_get current.kid)" = "${new_kid}" ]\'\n  k -n "${NS}" annotate secret',
+    replacement: '"signing to switch under the warm pod" true\n  k -n "${NS}" annotate secret',
   },
   {
     id: 'W12',
     subject: 'run',
     claim: 'the retirement stamp is no longer backdated',
     anchor:
-      '\'[ "$(secret_get current.kid)" = "${new_kid}" ]\'\n  k -n "${NS}" annotate secret "${KEY_SECRET}" \\\n    "apps.kn-next.dev/signing-key-switched-at=$(node -p \'new Date(Date.now() - 2 * 3600 * 1000).toISOString()\')" --overwrite\n',
+      '\'[ "$(secret_get current.kid)" = "${new_kid}" ]\'\n  k -n "${NS}" annotate secret "${KEY_SECRET}" \\\n    "apps.kn-next.dev/signing-key-switched-at=$(node -p \'new Date(Date.now() - 7200 * 1000).toISOString()\')" --overwrite\n',
     replacement: '\'[ "$(secret_get current.kid)" = "${new_kid}" ]\'\n',
   },
   {
@@ -138,18 +138,18 @@ const MUTATIONS = [
     subject: 'run',
     claim: 'the retirement no longer waits for the previous key to leave the Secret',
     anchor:
-      '"the previous key to leave the Secret" \'[ -z "$(secret_get previous.kid)" ]\'\n  wait_until 30 1 "the JWKS to publish only the new key" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the previous key to leave the Secret under the warm pod" \'[ -z "$(secret_get previous.kid)" ]\'\n  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
     replacement:
-      '"the previous key to leave the Secret" true\n  wait_until 30 1 "the JWKS to publish only the new key" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the previous key to leave the Secret under the warm pod" true\n  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
   },
   {
     id: 'W14',
     subject: 'run',
     claim: 'the JWKS is no longer required to publish only the new key',
     anchor:
-      '"the JWKS to publish only the new key" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'\n  retired_at="$(jwks_written_at)"\n  read -r uid',
     replacement:
-      '"the JWKS to publish only the new key" true\n  retired_at="$(jwks_written_at)"\n  read -r uid',
+      '"the JWKS to publish only the new key under the warm pod" true\n  retired_at="$(jwks_written_at)"\n  read -r uid',
   },
   {
     id: 'W15',

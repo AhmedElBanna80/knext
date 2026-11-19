@@ -806,9 +806,9 @@ phase_held() {
 phase_heldwarm() {
   log "heldwarm: a warm pod with a cached key set, the key rotated, one call held past the token's life"
   [ -n "${ZONE_HOST}" ] || start_forwards
-  local old_kid new_kid nonce rev_before wuid wstart retired_at uid now_start
+  local old_kid new_kid wnonce rev_before wuid wstart retired_at uid now_start
   [ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \
-    || fail "a rotation is already in flight; run the deploy phase for a clean zone"
+    || fail "a rotation is already in flight before the warm-pod rotation; run the deploy phase for a clean zone"
   old_kid="$(secret_get current.kid)"
   export_key "${WORK}/key-pre" current
   rev_before="$(k -n "${NS}" get ksvc "${GO_FN}" -o jsonpath='{.status.latestReadyRevisionName}')"
@@ -823,18 +823,18 @@ phase_heldwarm() {
   ok "the warm pod ${wuid} loaded the key set with ${old_kid} (404 not_found) and gets no other call until the held one"
 
   log "heldwarm 1/3: rotate and retire the key while that pod is warm and idle"
-  nonce="z11w-$(date +%s)"
-  k -n "${NS}" annotate nextapp "${ZONE}" "apps.kn-next.dev/rotate-signing-key=${nonce}" --overwrite
-  wait_until 60 1 "the operator to take the rotation request" '[ -n "$(secret_get next.kid)" ]'
+  wnonce="z11w-$(date +%s)"
+  k -n "${NS}" annotate nextapp "${ZONE}" "apps.kn-next.dev/rotate-signing-key=${wnonce}" --overwrite
+  wait_until 60 1 "the operator to take the rotation request under the warm pod" '[ -n "$(secret_get next.kid)" ]'
   new_kid="$(secret_get next.kid)"
   [ -n "${new_kid}" ] && [ "${new_kid}" != "${old_kid}" ] || fail "no new key was staged by the rotation request"
-  wait_until $((BOUND_SECONDS + 150)) 2 "signing to switch to the new key" '[ "$(secret_get current.kid)" = "${new_kid}" ]'
+  wait_until $((BOUND_SECONDS + 150)) 2 "signing to switch under the warm pod" '[ "$(secret_get current.kid)" = "${new_kid}" ]'
   k -n "${NS}" annotate secret "${KEY_SECRET}" \
-    "apps.kn-next.dev/signing-key-switched-at=$(node -p 'new Date(Date.now() - 2 * 3600 * 1000).toISOString()')" --overwrite
-  k -n "${OPERATOR_NS}" rollout restart deployment/kn-next-operator-controller-manager
-  k -n "${OPERATOR_NS}" rollout status deployment/kn-next-operator-controller-manager --timeout=180s
-  wait_until 180 3 "the previous key to leave the Secret" '[ -z "$(secret_get previous.kid)" ]'
-  wait_until 30 1 "the JWKS to publish only the new key" '[ "$(jwks_kids)" = "${new_kid}" ]'
+    "apps.kn-next.dev/signing-key-switched-at=$(node -p 'new Date(Date.now() - 7200 * 1000).toISOString()')" --overwrite
+  k -n "${OPERATOR_NS}" rollout restart deployment.apps/kn-next-operator-controller-manager
+  k -n "${OPERATOR_NS}" rollout status deployment.apps/kn-next-operator-controller-manager --timeout=180s
+  wait_until 180 3 "the previous key to leave the Secret under the warm pod" '[ -z "$(secret_get previous.kid)" ]'
+  wait_until 30 1 "the JWKS to publish only the new key under the warm pod" '[ "$(jwks_kids)" = "${new_kid}" ]'
   retired_at="$(jwks_written_at)"
   read -r uid now_start <<<"$(fn_pod_started)"
   [ "${uid}" = "${wuid}" ] && [ "${wstart}" -lt "${retired_at}" ] \

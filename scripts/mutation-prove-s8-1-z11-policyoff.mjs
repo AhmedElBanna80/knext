@@ -75,8 +75,8 @@ const MUTATIONS = [
     id: 'P8',
     subject: 'run',
     claim: 'policyoff leaves the default phase list',
-    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held}"',
-    replacement: 'PHASES="${PHASES:-up deploy token direct noauth rotcold held}"',
+    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held heldwarm}"',
+    replacement: 'PHASES="${PHASES:-up deploy token direct noauth rotcold held heldwarm}"',
   },
   {
     id: 'L1',

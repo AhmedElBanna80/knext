@@ -646,17 +646,17 @@ describe('heldwarm: a warm pod with a cached key set refuses a call held past th
   });
 
   it('rotates and retires the key while that pod is warm, and proves the pod never restarted', () => {
-    expect(w).toContain('apps.kn-next.dev/rotate-signing-key=${nonce}');
+    expect(w).toContain('apps.kn-next.dev/rotate-signing-key=${wnonce}');
     expect(w).toContain(
-      '"signing to switch to the new key" \'[ "$(secret_get current.kid)" = "${new_kid}" ]\'',
+      '"signing to switch under the warm pod" \'[ "$(secret_get current.kid)" = "${new_kid}" ]\'',
     );
-    expect(w).toContain('Date.now() - 2 * 3600 * 1000');
-    expect(w).toContain('rollout restart deployment/kn-next-operator-controller-manager');
+    expect(w).toContain('Date.now() - 7200 * 1000');
+    expect(w).toContain('rollout restart deployment.apps/kn-next-operator-controller-manager');
     expect(w).toContain(
-      '"the previous key to leave the Secret" \'[ -z "$(secret_get previous.kid)" ]\'',
+      '"the previous key to leave the Secret under the warm pod" \'[ -z "$(secret_get previous.kid)" ]\'',
     );
     expect(w).toContain(
-      '"the JWKS to publish only the new key" \'[ "$(jwks_kids)" = "${new_kid}" ]\'',
+      '"the JWKS to publish only the new key under the warm pod" \'[ "$(jwks_kids)" = "${new_kid}" ]\'',
     );
     expect(w).toContain('export_key "${WORK}/key-pre" current');
     expect(w).toContain('HELD_POD_UID');

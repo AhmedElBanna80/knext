@@ -57,6 +57,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { packPublishableGroup } from './lib/pack-publishable-group.mjs';
+import { assertAllowlistExpires } from './lib/shipped-scan.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -161,9 +162,14 @@ function loadAllowlist() {
     if (typeof entry.added !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.added)) {
       die(`allowlist entry ${entry.id} must carry an ISO added date (YYYY-MM-DD)`);
     }
+    try {
+      assertAllowlistExpires(entry);
+    } catch (err) {
+      die(err.message);
+    }
     // An expired allowlist entry stops suppressing — an accepted risk must be
     // re-justified, not left to rot (mirror the Trivy dated-triage pattern).
-    if (typeof entry.expires === 'string' && entry.expires < today) {
+    if (entry.expires < today) {
       console.log(
         `[audit-published] allowlist entry ${entry.id} EXPIRED (${entry.expires}) — no longer suppressed`,
       );

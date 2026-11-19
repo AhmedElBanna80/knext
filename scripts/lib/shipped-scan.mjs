@@ -157,6 +157,20 @@ export function failingNpmFindings(report, allowedIds) {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * `expires` is MANDATORY on every npm-audit allowlist entry: an entry with no
+ * clock is accepted risk that never forces re-justification. Shared by
+ * `loadNpmAllowlist` and `scripts/audit-published.mjs` so there is one rule.
+ *
+ * @param {{id: string, expires?: unknown}} e
+ * @returns {void}
+ */
+export function assertAllowlistExpires(e) {
+  if (typeof e.expires !== 'string' || !ISO_DATE.test(e.expires)) {
+    throw new Error(`allowlist entry ${e.id} needs an ISO \`expires\` date (it is required)`);
+  }
+}
+
+/**
  * The active advisory ids in `security/npm-audit-allowlist.json`. Same rules as
  * `audit-published.mjs`: id, justification and an ISO `added` date are required;
  * an entry past `expires` stops suppressing.
@@ -178,7 +192,8 @@ export function loadNpmAllowlist(doc, today) {
     if (typeof e.added !== 'string' || !ISO_DATE.test(e.added)) {
       throw new Error(`allowlist entry ${e.id} needs an ISO added date`);
     }
-    if (typeof e.expires === 'string' && e.expires < today) continue;
+    assertAllowlistExpires(e);
+    if (e.expires < today) continue;
     ids.add(e.id);
   }
   return ids;

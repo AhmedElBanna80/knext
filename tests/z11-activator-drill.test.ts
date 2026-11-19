@@ -8,8 +8,14 @@
  * mutation must flip the same call to reaching the handler.
  */
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+const WORKFLOW = resolve(
+  import.meta.dirname,
+  '..',
+  '.github/workflows/z11-activator-drill-e2e.yml',
+);
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const own = readFileSync(
@@ -29,7 +35,7 @@ describe('the drill is careful', () => {
     expect(own).toMatch(/^set -euo pipefail$/m);
     expect(own).toMatch(/^set \+x$/m);
     expect(own).not.toMatch(/kind delete/);
-    for (const p of ['up', 'deploy', 'token', 'direct', 'noauth']) {
+    for (const p of ['up', 'deploy', 'token', 'direct', 'policyoff', 'noauth']) {
       expect(own).toContain(`if has_phase ${p}; then phase_${p}; fi`);
     }
   });
@@ -44,6 +50,32 @@ describe('the drill is careful', () => {
     expect(calico).toMatch(/sha256sum -c -/);
     expect(calico).toMatch(/pin-known-images\.sh" "\$OUT" --expect 3/);
     expect(own).toContain('"${REPO}/scripts/kind-manifests/apply-calico.sh"');
+  });
+});
+
+describe('every direct dial wakes the function and waits for a Ready pod first', () => {
+  const w = body('wake_ready');
+  it('wake_ready calls the zone, waits bounded for 404 and a Ready pod, and fails closed', () => {
+    expect(w).toContain('zone_call "/example/get?sub=alice&id=missing"');
+    expect(w).toContain('fn_pod_ip');
+    expect(w).toContain('SECONDS + 180');
+    expect(w).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \] && \[ -n "\$\{ip\}" \]/);
+    expect(w).toMatch(/\n {2}fail "no Ready/);
+  });
+  it('phase_direct wakes before any pod lookup or dial; every await_direct_ip call is preceded by wake_ready', () => {
+    const b = body('phase_direct');
+    expect(b.indexOf('wake_ready'), 'phase_direct wakes').toBeGreaterThan(-1);
+    expect(b.indexOf('wake_ready')).toBeLessThan(b.indexOf('dial_rc'));
+    expect(b.indexOf('wake_ready')).toBeLessThan(b.indexOf('fn_pod_ip'));
+    // await_direct_ip does not call wake_ready itself (the call chain would be too deep
+    // for the supply-chain scanner); its callers do, on the line right before it.
+    expect(body('await_direct_ip')).not.toContain('wake_ready');
+    const calls = [...own.matchAll(/^( *)await_direct_ip$/gm)];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const m of calls) {
+      const before = own.slice(0, m.index).trimEnd().split('\n').pop();
+      expect(before, 'wake_ready right before await_direct_ip').toBe(`${m[1]}wake_ready`);
+    }
   });
 });
 
@@ -76,7 +108,8 @@ describe('direct: dropped by the policy, proved by removing it', () => {
   it('only a timeout counts as dropped, on both ports, after a wake that reached the function', () => {
     expect(d).toContain('for port in 8080 8013; do');
     expect(d).toMatch(/\[ "\$\{rc\}" = 28 \] \|\| fail/);
-    expect(d).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \] \|\| fail/);
+    expect(d).toContain('wake_ready');
+    expect(body('wake_ready')).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \]/);
     expect(body('fn_pod_ip')).toContain('select(.type == "Ready")');
   });
 
@@ -110,5 +143,146 @@ describe('noauth: without the interceptor the same call reaches the handler', ()
     expect(n).toMatch(/\[ "\$\{status\}" = 404 \] && \[ "\$\{code\}" = not_found \]/);
     expect(n.indexOf('await_zero')).toBeGreaterThan(-1);
     expect(n.indexOf('await_zero')).toBeLessThan(n.indexOf('foreign_get ""'));
+  });
+});
+
+describe('policyoff: with the NetworkPolicy off the function itself refuses a token-less call', () => {
+  const p = body('phase_policyoff');
+  it('turns the policy off, proves the object is gone, and restores it afterwards', () => {
+    expect(p).toContain('set_policy false');
+    expect(p).toMatch(
+      /networkpolicy "\$\{GO_FN\}-function-ingress"[^\n]*grep -c \.\)" = 0 \] \\\n\s*\|\| fail/,
+    );
+    expect(p.indexOf('set_policy false')).toBeLessThan(p.indexOf('foreign_get ""'));
+    expect(p.indexOf('set_policy true')).toBeGreaterThan(p.indexOf('foreign_post "http://'));
+  });
+  it('the cold call is refused 401 unauthenticated after waking the function', () => {
+    expect(p.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(p.indexOf('set_policy false'));
+    expect(p.indexOf('await_zero "${GO_FN}"')).toBeLessThan(p.indexOf('foreign_get ""'));
+    expect(p).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" -ge 1 \] \|\| fail/);
+  });
+  // Each leg's assertion is tied to its OWN call: the slice from that call to the next
+  // one must carry the full 401/code/message check. Counting matches elsewhere would let
+  // one leg's assertion be weakened while the others still add up.
+  const seg = (from: string, to: string): string => {
+    const a = p.indexOf(from);
+    expect(a, `${from} is in phase_policyoff`).toBeGreaterThan(-1);
+    expect(p.indexOf(from, a + 1), `${from} occurs once`).toBe(-1);
+    const b = p.indexOf(to, a);
+    expect(b, `${to} follows ${from}`).toBeGreaterThan(a);
+    return p.slice(a, b);
+  };
+  const refused = (msg: string) =>
+    `[ "\${FC_STATUS}" = 401 ] && [ "\${FC_CODE}" = unauthenticated ] && [ "\${FC_MESSAGE}" = "${msg}" ]`;
+  it('the cold call is its own call, asserted 401 unauthenticated "missing bearer token"', () => {
+    const leg = seg('foreign_get ""', 'all_pods');
+    expect(leg).toContain(refused('missing bearer token'));
+    expect(leg).toContain('policy off, cold, no token');
+  });
+  it('the direct dial must connect (rc 0), kept warm through the zone', () => {
+    const w = body('await_direct_ip');
+    expect(w).toContain('zone_call "/example/get?sub=alice&id=missing"');
+    expect(w.indexOf('zone_call')).toBeLessThan(w.indexOf('dial_rc'));
+    expect(w).toMatch(/dial_rc "\$\{ip\}" 8080\)" = 0 \]; then DIRECT_IP=/);
+    expect(w).toMatch(/\n {2}fail "policy off: the foreign pod could not reach/);
+    expect(p).toContain('await_direct_ip');
+  });
+  it('the direct no-token call is asserted 401 "missing bearer token"', () => {
+    const leg = seg(
+      'foreign_post "http://${ip}:8080${GET_ITEM}" ""',
+      'foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer',
+    );
+    expect(leg).toContain(refused('missing bearer token'));
+    expect(leg).toContain('direct to the pod, no token');
+  });
+  it('the direct garbage-token call is asserted 401 "token rejected"', () => {
+    const leg = seg(
+      'foreign_post "http://${ip}:8080${GET_ITEM}" "Bearer not-a-token"',
+      'echo "REFUSED',
+    );
+    expect(leg).toContain(refused('token rejected'));
+    expect(leg).toContain('direct to the pod, garbage token');
+  });
+});
+
+describe('noauth with the policy off: nothing refuses the direct no-token call', () => {
+  const n = body('phase_noauth');
+  it('turns the policy off, dials the pod directly, and requires 404 not_found', () => {
+    const off = n.indexOf('set_policy false');
+    expect(off).toBeGreaterThan(n.indexOf('foreign_get ""'));
+    expect(n.indexOf('await_direct_ip')).toBeGreaterThan(off);
+    const dial = n.indexOf('foreign_post "http://${dip}:8080${GET_ITEM}" ""');
+    expect(dial).toBeGreaterThan(n.indexOf('await_direct_ip'));
+    const restore = n.indexOf('set_policy true');
+    expect(restore).toBeGreaterThan(dial);
+    // The policy goes back on before the image is put back.
+    expect(restore).toBeLessThan(n.indexOf('\\"image\\":\\"${good}'));
+    expect(n).toMatch(
+      /\[ "\$\{pstatus\}" = 404 \] && \[ "\$\{pcode\}" = not_found \] \\\n\s*\|\| fail "no interceptor and no policy/,
+    );
+  });
+});
+
+describe('CI runs the drill by default, including the policy-off leg', () => {
+  const wf = readFileSync(WORKFLOW, 'utf8');
+  it('runs run.sh with no PHASES override, on integration and main, with no continue-on-error', () => {
+    expect(wf).toContain('packages/grpc/e2e/z11-activator-drill/run.sh');
+    expect(wf).not.toMatch(/^\s*PHASES:/m);
+    expect(wf).not.toMatch(/continue-on-error/);
+    // No step-level condition on the drill run step either: it would skip it silently.
+    const runStep = wf.slice(wf.indexOf('- name: Run the Z11 activator-path drill'));
+    const stepBlock = runStep.slice(
+      0,
+      runStep.indexOf('\n\n') > 0 ? runStep.indexOf('\n\n') : runStep.length,
+    );
+    expect(stepBlock).toContain('run: packages/grpc/e2e/z11-activator-drill/run.sh');
+    expect(stepBlock).not.toMatch(/^\s+if:/m);
+    expect(wf).toMatch(/push:\n\s+branches: \[main, 'integration\/\*\*'\]/);
+  });
+  const pathLists = (): string[][] =>
+    [...wf.matchAll(/^ {4}paths:\n((?: {6}(?:#.*|- .*)\n)+)/gm)].map((m) =>
+      m[1]
+        .split('\n')
+        .filter((l) => l.trim().startsWith('- '))
+        .map((l) => l.trim().slice(2).replace(/^'|'$/g, '')),
+    );
+  it('path filters are narrow but cover everything that can change the drill outcome', () => {
+    const lists = pathLists();
+    expect(lists.length).toBe(2);
+    expect(lists[0]).toEqual(lists[1]);
+    const paths = lists[0];
+    for (const must of [
+      'packages/grpc/e2e/z11-activator-drill/**',
+      'packages/grpc/e2e/lib/kind-lane.sh',
+      'scripts/kind-manifests/**',
+      'templates/go/internal/auth/**',
+      'templates/go/internal/rpc/rpc.go',
+      'packages/grpc/src/signer.ts',
+      'packages/kn-next-operator/internal/controller/netpol_*.go',
+      'packages/kn-next-operator/internal/controller/nextapp_networkpolicy.go',
+      'packages/kn-next-operator/internal/controller/backendservice_render.go',
+      '.github/workflows/z11-activator-drill-e2e.yml',
+      'tests/z11-activator-drill.test.ts',
+    ]) {
+      expect(paths, `${must} triggers the drill`).toContain(must);
+    }
+    // Whole-tree globs are the cost this narrowing removed.
+    for (const broad of [
+      'packages/kn-next-operator/**',
+      'templates/go/**',
+      'packages/grpc/e2e/**',
+      'packages/grpc/src/*.ts',
+      'packages/grpc/scripts/**',
+      'bun.lock',
+    ]) {
+      expect(paths, `${broad} is too broad`).not.toContain(broad);
+    }
+    // Every include that names a file in the repo must exist (a stale path never fires).
+    for (const g of paths.filter((x) => !x.startsWith('!') && !x.includes('*'))) {
+      expect(existsSync(resolve(REPO_ROOT, g)), `${g} exists`).toBe(true);
+    }
+  });
+  it('the default phase list of the script includes policyoff', () => {
+    expect(own).toMatch(/PHASES="\$\{PHASES:-up deploy token direct policyoff noauth\}"/);
   });
 });

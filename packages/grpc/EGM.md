@@ -51,7 +51,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `rotation` phase (`z7-identity-kind/run.sh:952`, dispatch/weekly only) is decided by that verdict; the
     workflow runs that phase through the `rotation_realtime` input, by dispatch or by the weekly caller on main (`z7-rotation-weekly.yml`, which `uses:` this workflow through `workflow_call`; the cron cannot live here because GitHub fires `schedule:` only from the default branch).
   - e2e/z10-zone-functions-kind (no EGM.md): the Z10 zone-functions lane on kind
-    (cold path, Connect trailers, gRPC-protocol `grpc-status` trailers via `packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts` (tested cluster-free by `src/__tests__/z10-grpc-trailer-probe.test.ts`), zone and function both at zero, rollout with one zone
+    (cold path, Connect error codes (`connecterr`), gRPC-protocol `grpc-status` trailers via `packages/grpc/e2e/z7-identity-kind/zone-caller/grpc-probe.ts` (tested cluster-free by `src/__tests__/z10-grpc-trailer-probe.test.ts`), zone and function both at zero, rollout with one zone
     revision per served-version bump, sovereignty, cross-zone refusal, wake-ahead). The same workflow
     runs its `run.sh` after Z7, on the same cluster, on push, PR and normal dispatch runs; it is
     skipped on the weekly called or `rotation_realtime` dispatch run
@@ -64,11 +64,15 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `tests/z10-zone-functions-kind-lane.test.ts`.
   - e2e/lib/kind-lane.sh: helpers sourced (never run) by the Z7, Z10 and Z11
     scripts.
-  - e2e/z11-activator-drill (no EGM.md): a manual drill on kind with Calico,
-    phases `up deploy token direct noauth`; it proves which control holds on the
+  - e2e/z11-activator-drill (no EGM.md): a drill on kind with Calico, phases
+    `up deploy token direct policyoff noauth`; it proves which control holds on the
     activator path (the function's token, and the NetworkPolicy on a direct
-    dial). No workflow runs it; `RECORDED-RUN.md` holds the last run. Guard:
-    `tests/z11-activator-drill.test.ts`.
+    dial), and that with the NetworkPolicy off a token-less call is still refused
+    by the function itself (`policyoff`), while a function without its interceptor and
+    without the policy answers it (`noauth`). `.github/workflows/z11-activator-drill-e2e.yml`
+    runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
+    Guard: `tests/z11-activator-drill.test.ts`, mutation-proved by
+    `scripts/mutation-prove-s8-1-z11-policyoff.mjs`.
 
 ## Invariants
 

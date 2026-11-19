@@ -14,8 +14,9 @@
 #   images    build and push the Go function, the Rust function and the zone
 #   deploy    recreate the namespace; the zone warm (minScale 1), the functions at minScale 0
 #   cold      each function scaled to zero; a write then a read through the zone wakes it
-#   trailers  scaled to zero again; a read of a missing item comes back NotFound through
-#             the activator, the same code as the warm control
+#   connecterr  scaled to zero again; a read of a missing item comes back NotFound through
+#             the activator over the Connect protocol (an HTTP status and a JSON body,
+#             not gRPC trailers), the same code as the warm control
 #   grpctrailers  the same, over the gRPC protocol (HTTP/2, not Connect): scaled to zero, a call
 #             made with createGrpcTransport must get its code from the grpc-status trailer
 #             (0 for a success, 5 for a missing item) and the same code as a warm control;
@@ -60,7 +61,7 @@ CLUSTER="${KIND_CLUSTER:-knext-z7-e2e}"
 REG_PORT="${REGISTRY_PORT:-5001}"
 NS="${Z10_NAMESPACE:-z10-e2e}"
 WITH_RUST="${Z10_WITH_RUST:-1}"
-PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake}"
+PHASES="${PHASES:-images deploy cold connecterr grpctrailers zerozone rollout sovereignty crosszone wake}"
 INTERNAL_PORT="${INTERNAL_PORT:-18090}"
 ZERO_TIMEOUT="${Z10_ZERO_TIMEOUT:-300}"
 OPERATOR_NS='kn-next-operator-system'
@@ -281,10 +282,10 @@ phase_cold() {
   fi
 }
 
-# ---------------------------------------------------------------- phase: trailers
+# ---------------------------------------------------------------- phase: connecterr
 
-phase_trailers() {
-  log "trailers: a failed call's code survives the cold activator path"
+phase_connecterr() {
+  log "connecterr: a failed call's code survives the cold activator path"
   [ -n "${ZONE_HOST}" ] || start_forwards
   # The Connect protocol (h2c on a Node zone) carries a unary error as the HTTP
   # status and a JSON error body, not as gRPC trailers; the zone's glue turns it
@@ -825,14 +826,14 @@ k get crd backendservices.apps.kn-next.dev >/dev/null 2>&1 \
   || fail "the cluster has no BackendService CRD: run the Z7 lane's up phase first (PHASES=up ${Z7}/run.sh)"
 for phase in ${PHASES}; do
   case "${phase}" in
-    images | deploy | cold | trailers | grpctrailers | zerozone | rollout | sovereignty | crosszone | wake) ;;
-    *) fail "unknown phase '${phase}' (images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake)" ;;
+    images | deploy | cold | connecterr | grpctrailers | zerozone | rollout | sovereignty | crosszone | wake) ;;
+    *) fail "unknown phase '${phase}' (images deploy cold connecterr grpctrailers zerozone rollout sovereignty crosszone wake)" ;;
   esac
 done
 has_phase images && phase_images
 has_phase deploy && phase_deploy
 has_phase cold && phase_cold
-has_phase trailers && phase_trailers
+has_phase connecterr && phase_connecterr
 has_phase grpctrailers && phase_grpctrailers
 has_phase zerozone && phase_zerozone
 has_phase rollout && phase_rollout

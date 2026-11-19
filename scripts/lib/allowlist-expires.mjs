@@ -16,3 +16,22 @@ export function assertAllowlistExpires(e) {
     );
   }
 }
+
+/** The ONLY keys an npm-audit allowlist entry may carry; the `$schema-note` and its invariant test read this. */
+export const NPM_ALLOWLIST_KEYS = new Set(['id', 'justification', 'added', 'expires']);
+
+/**
+ * Reject an entry carrying a key outside NPM_ALLOWLIST_KEYS: a misspelled
+ * `expires` would otherwise be ignored and the entry would never expire.
+ *
+ * @param {{id: string}} e
+ * @returns {void}
+ */
+export function assertNpmAllowlistKeys(e) {
+  const unknown = Object.keys(e).filter((k) => !NPM_ALLOWLIST_KEYS.has(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `allowlist entry ${e.id} has unknown key(s) ${unknown.join(', ')}; allowed: [${[...NPM_ALLOWLIST_KEYS].join(', ')}]`,
+    );
+  }
+}

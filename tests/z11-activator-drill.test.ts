@@ -801,14 +801,19 @@ describe('the kind-level pod-swap mutant and the heldwarm wording', () => {
 
   it('describes the warm pods as holding the old key set in memory, not as a stale cache', () => {
     expect(own).not.toMatch(/stale-cache/);
-    expect(own).toContain('(The verifier re-reads the JWKS\n# file on its next call, so neither pod serves a stale cache');
+    expect(own).toContain(
+      '(The verifier re-reads the JWKS\n# file on its next call, so neither pod serves a stale cache',
+    );
   });
 
   it('refuses a mutant under CI: the guard is called at top level and exits non-zero when run', () => {
     expect(own.match(/^refuse_mutant_in_ci$/gm)).toHaveLength(1);
     const fn = `fail() { printf 'FAIL: %s\\n' "$*" >&2; exit 1; }\n${body('refuse_mutant_in_ci').trimStart()}\n}\nrefuse_mutant_in_ci\necho PASSED-THROUGH\n`;
     const run = (env: Record<string, string>) =>
-      spawnSync('bash', ['-c', fn], { env: { PATH: process.env.PATH ?? '', ...env }, encoding: 'utf8' });
+      spawnSync('bash', ['-c', fn], {
+        env: { PATH: process.env.PATH ?? '', ...env },
+        encoding: 'utf8',
+      });
     const refused = run({ CI: 'true', Z11_MUTANT: 'swap-pod' });
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain('local-only mutant and CI is set: refusing to run');

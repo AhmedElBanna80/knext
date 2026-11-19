@@ -42,7 +42,19 @@ const put = (root: string, rel: string, body: string) => {
   writeFileSync(join(root, rel), body);
 };
 const git = (root: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' });
+  execFileSync(
+    'git',
+    [
+      '-c',
+      'commit.gpgsign=false',
+      '-c',
+      'user.name=knext-test',
+      '-c',
+      'user.email=knext-test@example.invalid',
+      ...args,
+    ],
+    { cwd: root, encoding: 'utf8' },
+  );
 
 describe('allowlist gate discovery', () => {
   it('matches only security allowlist json files', () => {

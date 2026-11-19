@@ -34,8 +34,10 @@
 #             the rotation a cold pod accepts the old key.
 #   held      a call the activator holds for longer than the token's life (a pod that
 #             cannot be scheduled, so the activator buffers the request) is refused by
-#             the function as 401 unauthenticated, never accepted; afterwards a fresh
-#             token is accepted and a garbage token is still refused.
+#             the function as 401 unauthenticated "token rejected", never accepted.
+#             Control: the same hold for 30 s, inside the token's life, is accepted, so
+#             the refusal is the token's age. Afterwards a fresh token is accepted and a
+#             garbage token is still refused.
 #
 # Phases (PHASES, space-separated; default all): up deploy token direct policyoff noauth
 # rotcold held.
@@ -74,6 +76,9 @@ INTERNAL_PORT="${INTERNAL_PORT:-18100}"
 # How long the held call stays outstanding. A token lives 60 s and the verifier allows
 # 5 s of skew, so anything below 66 s would not prove the refusal is the expiry.
 HELD_SECONDS="${Z11_HELD_SECONDS:-80}"
+# The control hold: the same mechanism, shorter than the token's life, so its token is still
+# valid when the activator releases the call. It must be ACCEPTED.
+CONTROL_HELD_SECONDS="${Z11_CONTROL_HELD_SECONDS:-30}"
 CURL_IMAGE='curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69'
 
 ZONE=storefront
@@ -111,9 +116,12 @@ RESTORE_POLICY=0
 RESTORE_IMAGE=""
 # Set while the held phase has every node cordoned: a kept cluster must stay schedulable.
 RESTORE_CORDON=0
+# The background held call's pid is written here, so an abort never leaves it running.
+HELD_PIDFILE="${WORK}/held.pid"
 
 cleanup() {
   local rc=$?
+  if [ -s "${HELD_PIDFILE}" ]; then kill "$(cat "${HELD_PIDFILE}")" 2>/dev/null || true; fi
   if [ "${RESTORE_CORDON}" = 1 ]; then
     # shellcheck disable=SC2046
     k uncordon $(k get nodes -o name) >/dev/null 2>&1 \
@@ -212,6 +220,14 @@ fn_ready_on() {
 
 secret_get() { # <field>: one data field of the zone's key Secret, decoded (kids only!)
   k -n "${NS}" get secret "${KEY_SECRET}" -o json | jq -r --arg f "$1" '.data[$f] // empty | @base64d'
+}
+# jwks_written_at: when the JWKS ConfigMap was last written, by the API server's clock (the
+# same clock as the kubelet's on a kind node, so it compares with a pod's startTime).
+jwks_written_at() { k -n "${NS}" get configmap "${JWKS_CM}" -o json | jq -r '[.metadata.managedFields[]?.time | fromdateiso8601] | max'; }
+# fn_pod_started: "<uid> <startTime epoch>" of the function's live pod.
+fn_pod_started() {
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0] | "\(.metadata.uid) \(.status.startTime | fromdateiso8601)"'
 }
 jwks_kids() { k -n "${NS}" get configmap "${JWKS_CM}" -o json | jq -r '.data["jwks.json"] | fromjson | [.keys[].kid] | sort | join(",")'; }
 
@@ -536,18 +552,26 @@ phase_rotcold() {
   k -n "${OPERATOR_NS}" rollout status deployment/kn-next-operator-controller-manager --timeout=180s
   wait_until 180 3 "the previous key to leave the Secret" '[ -z "$(secret_get previous.kid)" ]'
   wait_until 30 1 "the JWKS to publish only the new key" '[ "$(jwks_kids)" = "${new_kid}" ]'
+  local retired_at old_uid old_start new_uid new_start
+  retired_at="$(jwks_written_at)"
   ok "retired: only ${new_kid} remains in the Secret and the JWKS"
 
   log "rotcold 4/4: the cold pod accepts only the new key"
   # Nothing called the function through the whole rotation: it never existed to cache a key set.
   [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN} woke during the rotation: this was not a cold-pod rotation"
   fn_probe "${WORK}/key-old" old
+  read -r old_uid old_start <<<"$(fn_pod_started)"
+  [ "${old_start}" -ge "${retired_at}" ] \
+    || fail "the pod that refused the retired key started at ${old_start}, before the retirement at ${retired_at}: it was not a cold start"
   [ "${PR_STATUS}" = 401 ] && [ "${PR_CODE}" = unauthenticated ] \
     || fail "cold pod, retired key: status ${PR_STATUS} code '${PR_CODE}', want 401 unauthenticated"
   [ "$(all_pods "${GO_FN}")" -ge 1 ] || fail "the refused call never woke ${GO_FN}: it did not reach the function"
   ok "cold pod, retired key ${old_kid}: the function that woke after the rotation refused it (401 unauthenticated)"
   await_zero "${GO_FN}"
   fn_probe "${WORK}/key-new" new
+  read -r new_uid new_start <<<"$(fn_pod_started)"
+  [ "${new_uid}" != "${old_uid}" ] && [ "${new_start}" -ge "${retired_at}" ] \
+    || fail "the pod that accepted the new key (${new_uid}, started ${new_start}) is not a second pod started after the retirement at ${retired_at}"
   [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
     || fail "cold pod, new key: status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (it should reach the handler)"
   ok "cold pod, new key ${new_kid}: a second cold pod accepted it (404 not_found)"
@@ -560,45 +584,63 @@ phase_rotcold() {
 
 # ---------------------------------------------------------------- phase: held
 
-# A call is held in the activator while the function has no pod it can use. Every node
-# is cordoned, so the pod the call wakes stays Pending; the call stays outstanding past
-# the token's life, then the nodes are uncordoned and the activator releases it. The token
-# was minted when the call started, so the function sees it expired. The call is a direct
+# hold_call <seconds>: with the function at zero and every node cordoned, send one call
+# signed with the held key and keep it outstanding for <seconds>, then uncordon and take
+# the answer. Sets HELD_STATUS, HELD_CODE, HELD_MESSAGE and HELD_FOR. The call is a direct
 # bun call, never the retrying wrapper: a retry would mint a fresh token and prove nothing.
-phase_held() {
-  log "held: a call the activator holds longer than the token's life (${HELD_SECONDS}s)"
-  [ -n "${ZONE_HOST}" ] || start_forwards
-  export_key "${WORK}/key-held" current
+hold_call() {
+  local out="${WORK}/held.out" start
   await_zero "${GO_FN}"
   ensure_forward
   RESTORE_CORDON=1
   # shellcheck disable=SC2046
   k cordon $(k get nodes -o name) >/dev/null
-  local held_out="${WORK}/held.out" held_pid held_start held_for
-  held_start=$SECONDS
+  start=$SECONDS
   bun "${Z7}/probe.ts" --base "http://127.0.0.1:${INTERNAL_PORT}" --host "${FN_HOST}" \
     --issuer "${ISSUER}" --sub alice --rpc get --id missing --auth signer --key-dir "${WORK}/key-held" \
-    --timeout-seconds 240 >"${held_out}" 2>"${WORK}/held.err" &
-  held_pid=$!
-  wait_until 60 1 "the held call to create a pod for the activator to wait on" '[ "$(all_pods "${GO_FN}")" -ge 1 ]'
+    --with-message --timeout-seconds 240 >"${out}" 2>"${WORK}/held.err" &
+  echo "$!" >"${HELD_PIDFILE}"
+  # An inline wait, not wait_until: its eval would add three levels to the call chain the
+  # supply-chain scanner follows (limit 6).
+  until [ "$(all_pods "${GO_FN}")" -ge 1 ]; do
+    [ $((SECONDS - start)) -lt 60 ] || fail "timed out after 60s waiting for the held call to create a pod for the activator to wait on"
+    sleep 1
+  done
   [ "$(fn_pod_ip)" = "" ] || fail "a Ready ${GO_FN} pod exists with every node cordoned: the call is not being held"
-  while [ $((SECONDS - held_start)) -lt "${HELD_SECONDS}" ]; do
-    kill -0 "${held_pid}" 2>/dev/null || fail "the held call ended after $((SECONDS - held_start))s, before ${HELD_SECONDS}s: it was not held ($(cat "${held_out}" "${WORK}/held.err" 2>/dev/null | head -c 300))"
+  while [ $((SECONDS - start)) -lt "$1" ]; do
+    kill -0 "$(cat "${HELD_PIDFILE}")" 2>/dev/null || fail "the held call ended after $((SECONDS - start))s, before $1s: it was not held ($(cat "${out}" "${WORK}/held.err" 2>/dev/null | head -c 300))"
     sleep 2
   done
   # shellcheck disable=SC2046
   k uncordon $(k get nodes -o name) >/dev/null
   RESTORE_CORDON=0
-  wait "${held_pid}" || fail "the held call did not get an answer: $(head -c 300 "${WORK}/held.err")"
-  held_for=$((SECONDS - held_start))
-  local held_status held_code
-  held_status="$(jq -r .status "${held_out}")"
-  held_code="$(jq -r '.code // ""' "${held_out}")"
-  echo "HELD: outstanding ${held_for}s through the activator -> ${held_status} ${held_code}"
-  [ "${held_status}" = 401 ] && [ "${held_code}" = unauthenticated ] \
-    || fail "a call held ${held_for}s got status ${held_status} code '${held_code}', want 401 unauthenticated (an expired token must never be accepted)"
-  [ "${held_for}" -ge "${HELD_SECONDS}" ] || fail "the held call was outstanding only ${held_for}s, want at least ${HELD_SECONDS}s"
-  ok "a call held ${held_for}s in the activator was refused by the function (401 unauthenticated): the token expired, it was not accepted"
+  wait "$(cat "${HELD_PIDFILE}")" || fail "the held call did not get an answer: $(head -c 300 "${WORK}/held.err")"
+  : >"${HELD_PIDFILE}"
+  HELD_FOR=$((SECONDS - start))
+  HELD_STATUS="$(jq -r .status "${out}")"
+  HELD_CODE="$(jq -r '.code // ""' "${out}")"
+  HELD_MESSAGE="$(jq -r '.message // ""' "${out}")"
+  [ "${HELD_FOR}" -ge "$1" ] || fail "the held call was outstanding only ${HELD_FOR}s, want at least $1s"
+}
+
+# The control comes first and uses the same mechanism: a call held ${CONTROL_HELD_SECONDS}s
+# (inside the token's life) is ACCEPTED, so what refuses the longer call is its age, not
+# the hold itself, a stripped header or a replay. The verifier does not accept a token with
+# a longer life, so the control shortens the hold instead of lengthening the token.
+phase_held() {
+  log "held: a call the activator holds longer than the token's life (${HELD_SECONDS}s), with a shorter hold as control"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  export_key "${WORK}/key-held" current
+  hold_call "${CONTROL_HELD_SECONDS}"
+  echo "HELD-CONTROL: outstanding ${HELD_FOR}s through the activator -> ${HELD_STATUS} ${HELD_CODE}"
+  [ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \
+    || fail "control: a call held ${HELD_FOR}s (inside the token's life) got status ${HELD_STATUS} code '${HELD_CODE}', want 404 not_found (the hold itself must not refuse a valid token)"
+  ok "control: a call held ${HELD_FOR}s in the activator, inside the token's life, was accepted (404 not_found)"
+  hold_call "${HELD_SECONDS}"
+  echo "HELD: outstanding ${HELD_FOR}s through the activator -> ${HELD_STATUS} ${HELD_CODE} '${HELD_MESSAGE}'"
+  [ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \
+    || fail "a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}', want 401 unauthenticated 'token rejected' (an expired token must never be accepted, and the header must have reached the function)"
+  ok "a call held ${HELD_FOR}s in the activator was refused by the function (401 unauthenticated, token rejected) while the ${CONTROL_HELD_SECONDS}s control with the same mechanism was accepted: the token expired"
   wait_until 120 3 "a Ready ${GO_FN} pod after the nodes are schedulable again" '[ -n "$(fn_pod_ip)" ]'
   fn_probe "${WORK}/key-held" fresh
   [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \

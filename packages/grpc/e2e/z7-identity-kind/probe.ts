@@ -44,6 +44,7 @@ const { values } = parseArgs({
     kid: { type: 'string' },
     twice: { type: 'boolean', default: false },
     'timeout-seconds': { type: 'string' },
+    'with-message': { type: 'boolean', default: false },
   },
   strict: true,
 });
@@ -92,7 +93,7 @@ try {
           ? undefined
           : Number(values['timeout-seconds']) * 1000,
     });
-    console.log(summarize(outcome, auth.kid));
+    console.log(summarize(outcome, auth.kid, values['with-message']));
   }
 } catch (err) {
   console.error(`probe: no response from ${host}: ${(err as Error).message}`);

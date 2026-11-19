@@ -174,8 +174,8 @@ const MUTATIONS = [
     'V9',
     'lib',
     'the refusal no longer checks which pod answered',
-    '  assert_answered_by "$1" "$2" "$3"\n}\n',
-    '  true\n}\n',
+    'message \'$6\'" >&2; return 1; }\n  assert_answered_by "$1" "$2" "$3"\n}\n',
+    "message '$6'\" >&2; return 1; }\n  true\n}\n",
   ),
   // ---- WIRING rows: run.sh calls the functions, where it should (text-level, labelled as such)
   row(

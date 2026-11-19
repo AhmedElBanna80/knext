@@ -709,11 +709,9 @@ describe('heldwarm: warm pods with the old key set cached, a call held past the 
 
   it('the control: new-key token held INSIDE the token life on stale pod A must be ACCEPTED, by A', () => {
     const ctl = seg('hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"', 'log "heldwarm 3/3');
+    // Wiring only: the verdict itself is exercised in tests/z11-answering-pod.test.ts.
     expect(ctl).toMatch(
-      /\[ "\$\{HELD_STATUS\}" = 404 \] && \[ "\$\{HELD_CODE\}" = not_found \] \\\n\s*\|\| fail "warm pod control: a call held/,
-    );
-    expect(ctl).toMatch(
-      /assert_answered_by "\$\{wuid_a\}" "\$\{HELD_REQ_BEFORE\}" "\$\{HELD_REQ_AFTER\}" \\\n\s*\|\| fail "warm pod control: the call was not answered/,
+      /check_accepted_by "\$\{wuid_a\}" "\$\{HELD_REQ_BEFORE\}" "\$\{HELD_REQ_AFTER\}" "\$\{HELD_STATUS\}" "\$\{HELD_CODE\}" \\\n\s*\|\| fail "warm pod control: a call held/,
     );
     expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeGreaterThan(-1);
     expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeLessThan(
@@ -723,11 +721,9 @@ describe('heldwarm: warm pods with the old key set cached, a call held past the 
 
   it('the test: the same token held PAST the token life on stale pod B must be 401 "token rejected", by B', () => {
     const held = seg('hold_call "${HELD_SECONDS}" warm "${wuid_b}"', 'foreign_get');
+    // Wiring only: the verdict itself is exercised in tests/z11-answering-pod.test.ts.
     expect(held).toMatch(
-      /\[ "\$\{HELD_STATUS\}" = 401 \] && \[ "\$\{HELD_CODE\}" = unauthenticated \] && \[ "\$\{HELD_MESSAGE\}" = "token rejected" \] \\\n\s*\|\| fail "warm pod: a call held/,
-    );
-    expect(held).toMatch(
-      /assert_answered_by "\$\{wuid_b\}" "\$\{HELD_REQ_BEFORE\}" "\$\{HELD_REQ_AFTER\}" \\\n\s*\|\| fail "the held call was not answered by the warm pod/,
+      /check_refused_by "\$\{wuid_b\}" "\$\{HELD_REQ_BEFORE\}" "\$\{HELD_REQ_AFTER\}" "\$\{HELD_STATUS\}" "\$\{HELD_CODE\}" "\$\{HELD_MESSAGE\}" \\\n\s*\|\| fail "warm pod: a call held/,
     );
     // The control runs BEFORE the long hold, both on pods in the loaded-but-never-called state.
     expect(w.indexOf('hold_call "${CONTROL_HELD_SECONDS}" warm')).toBeLessThan(

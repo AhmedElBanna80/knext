@@ -933,19 +933,15 @@ phase_heldwarm() {
   export_key "${WORK}/key-held" current
   hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"
   echo "HELDWARM-CONTROL: outstanding ${HELD_FOR}s -> ${HELD_STATUS} ${HELD_CODE}"
-  [ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \
-    || fail "warm pod control: a call held ${HELD_FOR}s (inside the token's life) got status ${HELD_STATUS} code '${HELD_CODE}', want 404 not_found (a pod holding the old key set must find the new key)"
-  assert_answered_by "${wuid_a}" "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}" \
-    || fail "warm pod control: the call was not answered by the warm pod ${wuid_a} (the pod whose request counter rose is ${HELD_POD_UID})"
+  check_accepted_by "${wuid_a}" "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}" "${HELD_STATUS}" "${HELD_CODE}" \
+    || fail "warm pod control: a call held ${HELD_FOR}s (inside the token's life) got status ${HELD_STATUS} code '${HELD_CODE}' from pod ${HELD_POD_UID}, want 404 not_found from the warm pod ${wuid_a} (a pod holding the old key set must find the new key)"
   ok "control: pod A, which cached only the old key set, accepted the new key after a ${HELD_FOR}s hold (404 not_found)"
 
   log "heldwarm 3/3: pod B, in the same state, new-key token held ${HELD_SECONDS}s, then a fresh token"
   hold_call "${HELD_SECONDS}" warm "${wuid_b}"
   echo "HELDWARM: outstanding ${HELD_FOR}s -> ${HELD_STATUS} ${HELD_CODE} '${HELD_MESSAGE}'"
-  [ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \
-    || fail "warm pod: a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}', want 401 unauthenticated 'token rejected' (an expired token must never be accepted, and the header must have reached the function)"
-  assert_answered_by "${wuid_b}" "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}" \
-    || fail "the held call was not answered by the warm pod ${wuid_b} (the pod whose request counter rose is ${HELD_POD_UID})"
+  check_refused_by "${wuid_b}" "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}" "${HELD_STATUS}" "${HELD_CODE}" "${HELD_MESSAGE}" \
+    || fail "warm pod: a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}' from pod ${HELD_POD_UID}, want 401 unauthenticated 'token rejected' from the warm pod ${wuid_b} (an expired token must never be accepted, and the header must have reached the function)"
   ok "a call held ${HELD_FOR}s was refused by pod B, in the same stale-cache state pod A accepted it in (401 unauthenticated, token rejected)"
   # Positive control on pod B: the same pod, right after its refusal, accepts a FRESH token. So
   # the refusal was the token's age, and pod B is healthy and still validates. The call is sent
@@ -956,10 +952,8 @@ phase_heldwarm() {
   bctl_after="$(request_snapshot)" || fail "cannot read the pods' request counters after pod B's fresh call"
   release_pods
   echo "HELDWARM-FRESH-B: fresh token to pod B -> ${PR_STATUS} ${PR_CODE}"
-  [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
-    || fail "warm pod B: a FRESH token right after its refusal got status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (the refusal must have been the token's age, and pod B must be healthy)"
-  assert_answered_by "${wuid_b}" "${bctl_before}" "${bctl_after}" \
-    || fail "warm pod B: the fresh-token call was not answered by pod B ${wuid_b}"
+  check_accepted_by "${wuid_b}" "${bctl_before}" "${bctl_after}" "${PR_STATUS}" "${PR_CODE}" \
+    || fail "warm pod B: a FRESH token right after its refusal got status ${PR_STATUS} code '${PR_CODE}', want 404 not_found from pod B ${wuid_b} (the refusal must have been the token's age, and pod B must be healthy)"
   ok "positive control: pod B accepts a fresh token (404 not_found) right after refusing the 80s-old one, so the refusal was the token's age"
   foreign_get "Bearer not-a-token"
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \

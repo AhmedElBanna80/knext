@@ -1,26 +1,127 @@
 /**
- * Behavioural tests for which pod ANSWERED a held call in the Z11 drill (heldwarm):
- * packages/grpc/e2e/z11-activator-drill/answering-pod.sh, and the way run.sh uses it.
+ * Tests for which pod ANSWERED a held call in the Z11 drill (heldwarm), and for the verdicts on
+ * that call: packages/grpc/e2e/z11-activator-drill/answering-pod.sh.
  *
  * The drill used to ASSIGN the answering pod's uid from the hold's target, so "the right pod
- * answered" was true by construction. These tests run the real shell functions on fabricated
- * counters and require that a different pod answering, two pods answering, nobody answering and
- * a weakened comparison are each caught. Verdicts come from exit codes.
+ * answered" was true by construction. The decisions now live in sourced shell functions, and
+ * these tests RUN them: the counter reading through a stub `kubectl` on PATH, the attribution on
+ * fabricated snapshots, and the verdicts on fabricated answers. A different pod, two pods,
+ * nobody, an unreadable pod, an empty or malformed scrape and a weakened comparison must each be
+ * caught. Verdicts come from exit codes.
+ *
+ * The last block is a WIRING check, and says so: it only asserts that run.sh calls these
+ * functions in the right phase, in order. It is not evidence of behaviour.
  */
-import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { afterAll, describe, expect, it } from 'bun:test';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const DRILL = resolve(REPO_ROOT, 'packages/grpc/e2e/z11-activator-drill');
 const LIB = resolve(DRILL, 'answering-pod.sh');
 const run = readFileSync(resolve(DRILL, 'run.sh'), 'utf8');
 
+// A stub `kubectl` on PATH. `kubectl get --raw /api/v1/namespaces/<ns>/pods/<pod>:9091/proxy/metrics`
+// prints the file named after the pod, or fails when there is none.
+const STUB = mkdtempSync(join(tmpdir(), 'z11-answering-pod-'));
+const FIXTURES = join(STUB, 'metrics');
+mkdirSync(FIXTURES);
+const BIN = join(STUB, 'bin');
+mkdirSync(BIN);
+writeFileSync(
+  join(BIN, 'kubectl'),
+  `#!/usr/bin/env bash
+path="\${3:-}"
+pod="\${path#*/pods/}"; pod="\${pod%%:*}"
+[ -f "${FIXTURES}/\${pod}" ] || exit 1
+cat "${FIXTURES}/\${pod}"
+`,
+);
+chmodSync(join(BIN, 'kubectl'), 0o755);
+afterAll(() => rmSync(STUB, { recursive: true, force: true }));
+
+const metrics = (pod: string, body: string | null) => {
+  if (body === null) rmSync(join(FIXTURES, pod), { force: true });
+  else writeFileSync(join(FIXTURES, pod), body);
+};
+const series = (pod: string, code: string, n: string) =>
+  `revision_request_count{pod_name="${pod}",response_code="${code}"} ${n}\n`;
+
 function sh(script: string): { code: number; out: string; err: string } {
-  const r = Bun.spawnSync(['bash', '-c', script], { stdout: 'pipe', stderr: 'pipe' });
+  const r = Bun.spawnSync(['bash', '-c', script], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env, PATH: `${BIN}:${process.env.PATH}` },
+  });
   return { code: r.exitCode ?? -1, out: r.stdout.toString(), err: r.stderr.toString() };
 }
-const lib = (body: string) => `set -uo pipefail\nsource '${LIB}'\n${body}`;
+const lib = (body: string) =>
+  `set -uo pipefail\nk() { kubectl "$@"; }\nNS=z11-e2e\nsource '${LIB}'\n${body}`;
+
+describe('pod_request_total reads the counter through kubectl and fails closed', () => {
+  const total = (pod: string) => sh(lib(`pod_request_total ${pod}`));
+
+  it('sums every response code of the revision_request_count family', () => {
+    metrics('pod-a', series('pod-a', '404', '3') + series('pod-a', '401', '1'));
+    const r = total('pod-a');
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe('4');
+  });
+  it('accepts a float-formatted value', () => {
+    metrics('pod-a', series('pod-a', '404', '1e+01'));
+    expect(total('pod-a').out.trim()).toBe('10');
+  });
+  it('FAILS, naming the pod, on an empty scrape', () => {
+    metrics('pod-e', '');
+    const r = total('pod-e');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('pod-e');
+    expect(r.err).toContain('empty');
+  });
+  it('FAILS, naming the pod, when the family is missing (other series only)', () => {
+    metrics('pod-m', '# HELP revision_go_alloc x\nrevision_go_alloc{name=""} 2.6e+06\n');
+    const r = total('pod-m');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('pod-m');
+    expect(r.err).toContain('revision_request_count');
+  });
+  it('FAILS, naming the pod, on a non-numeric value, even when another series is fine', () => {
+    metrics('pod-n', series('pod-n', '404', '3') + series('pod-n', '401', 'NaN'));
+    const r = total('pod-n');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('pod-n');
+    metrics('pod-n2', series('pod-n2', '404', 'abc'));
+    expect(total('pod-n2').code).not.toBe(0);
+  });
+  it('FAILS, naming the pod, when kubectl cannot read it', () => {
+    metrics('pod-x', null);
+    const r = total('pod-x');
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('pod-x');
+  });
+});
+
+describe('request_snapshot', () => {
+  it('lists "<uid> <total>" for every Ready pod', () => {
+    metrics('pod-a', series('pod-a', '404', '4'));
+    metrics('pod-b', series('pod-b', '404', '7'));
+    const r = sh(
+      lib(`fn_pods_ready() { printf 'pod-a uid-a l\\npod-b uid-b l\\n'; }\nrequest_snapshot`),
+    );
+    expect(r.code).toBe(0);
+    expect(r.out.trim().split('\n')).toEqual(['uid-a 4', 'uid-b 7']);
+  });
+  it('FAILS when any one pod cannot be read: no short snapshot, no zero for the unreadable one', () => {
+    metrics('pod-a', series('pod-a', '404', '4'));
+    metrics('pod-b', '');
+    const r = sh(
+      lib(`fn_pods_ready() { printf 'pod-a uid-a l\\npod-b uid-b l\\n'; }\nrequest_snapshot`),
+    );
+    expect(r.code).not.toBe(0);
+    expect(r.err).toContain('pod-b');
+  });
+});
 
 const BEFORE = 'uid-a 4\nuid-b 7';
 
@@ -28,15 +129,9 @@ describe('answering_pod_uid: the pod whose counter rose by exactly one', () => {
   const answered = (before: string, after: string) =>
     sh(lib(`answering_pod_uid '${before}' '${after}'`));
 
-  it('names pod A when only A rose', () => {
-    const r = answered(BEFORE, 'uid-a 5\nuid-b 7');
-    expect(r.code).toBe(0);
-    expect(r.out.trim()).toBe('uid-a');
-  });
-  it('names pod B when only B rose', () => {
-    const r = answered(BEFORE, 'uid-a 4\nuid-b 8');
-    expect(r.code).toBe(0);
-    expect(r.out.trim()).toBe('uid-b');
+  it('names pod A when only A rose, and pod B when only B rose', () => {
+    expect(answered(BEFORE, 'uid-a 5\nuid-b 7').out.trim()).toBe('uid-a');
+    expect(answered(BEFORE, 'uid-a 4\nuid-b 8').out.trim()).toBe('uid-b');
   });
   it('refuses when nobody counted the call', () => {
     expect(answered(BEFORE, BEFORE).code).not.toBe(0);
@@ -73,41 +168,60 @@ describe('assert_answered_by: the answering pod must be the expected one', () =>
   });
 });
 
-describe('request_snapshot reads each pod through its queue-proxy counter', () => {
-  const metrics = (pod: string) =>
-    ({
-      'pod-a':
-        'revision_request_count{pod_name="pod-a",response_code="404"} 3\nrevision_request_count{pod_name="pod-a",response_code="401"} 1\n',
-      'pod-b': '# HELP revision_go_alloc x\nrevision_go_alloc{name=""} 2.6e+06\n',
-    })[pod] ?? '';
+describe('the verdicts on a held call: status, code, message AND the answering pod', () => {
+  const A_ROSE = 'uid-a 5\nuid-b 7';
+  const B_ROSE = 'uid-a 4\nuid-b 8';
+  const accepted = (want: string, after: string, status: string, code: string) =>
+    sh(lib(`check_accepted_by '${want}' '${BEFORE}' '${after}' '${status}' '${code}'`)).code;
+  const refused = (want: string, after: string, status: string, code: string, msg: string) =>
+    sh(lib(`check_refused_by '${want}' '${BEFORE}' '${after}' '${status}' '${code}' '${msg}'`))
+      .code;
 
-  it('sums every response code, and a pod with no series is 0', () => {
-    const r = sh(
-      lib(`
-fn_pods_ready() { printf 'pod-a uid-a l\\npod-b uid-b l\\n'; }
-pod_metrics() { case "$1" in pod-a) printf '%s' '${metrics('pod-a')}';; pod-b) printf '%s' '${metrics('pod-b')}';; esac; }
-request_snapshot`),
-    );
-    expect(r.code).toBe(0);
-    expect(r.out.trim().split('\n')).toEqual(['uid-a 4', 'uid-b 0']);
+  it('the control: 404 not_found from the expected pod passes, and only that', () => {
+    expect(accepted('uid-a', A_ROSE, '404', 'not_found')).toBe(0);
+    expect(accepted('uid-a', B_ROSE, '404', 'not_found')).not.toBe(0); // wrong pod
+    expect(accepted('uid-a', BEFORE, '404', 'not_found')).not.toBe(0); // nobody
+    expect(accepted('uid-a', A_ROSE, '401', 'not_found')).not.toBe(0); // status
+    expect(accepted('uid-a', A_ROSE, '404', 'unauthenticated')).not.toBe(0); // code
   });
-  it('fails when a pod cannot be read, so no snapshot is silently short', () => {
-    const r = sh(
-      lib(`
-fn_pods_ready() { printf 'pod-a uid-a l\\n'; }
-pod_metrics() { return 1; }
-request_snapshot`),
-    );
-    expect(r.code).not.toBe(0);
+  it('the fresh-token control on pod B uses the same verdict, so pod B must be the answerer', () => {
+    expect(accepted('uid-b', B_ROSE, '404', 'not_found')).toBe(0);
+    expect(accepted('uid-b', A_ROSE, '404', 'not_found')).not.toBe(0);
+  });
+  it("the refusal: 401 unauthenticated 'token rejected' from the expected pod passes, and only that", () => {
+    expect(refused('uid-b', B_ROSE, '401', 'unauthenticated', 'token rejected')).toBe(0);
+    expect(refused('uid-b', A_ROSE, '401', 'unauthenticated', 'token rejected')).not.toBe(0);
+    expect(refused('uid-b', BEFORE, '401', 'unauthenticated', 'token rejected')).not.toBe(0);
+    expect(refused('uid-b', B_ROSE, '404', 'unauthenticated', 'token rejected')).not.toBe(0);
+    expect(refused('uid-b', B_ROSE, '401', 'not_found', 'token rejected')).not.toBe(0);
+    expect(refused('uid-b', B_ROSE, '401', 'unauthenticated', 'missing bearer token')).not.toBe(0);
   });
 });
 
-describe('run.sh uses the observation, not the target', () => {
-  const hold = (() => {
-    const start = run.indexOf('\nhold_call() {');
+/**
+ * WIRING checks. These read run.sh as text and only establish that it CALLS the functions above,
+ * where it should, in the order it should. They say nothing about what the functions decide.
+ */
+describe('wiring: run.sh calls the answering-pod functions in the right place', () => {
+  const fnBody = (name: string): string => {
+    const start = run.indexOf(`\n${name}() {`);
+    expect(start, `${name}() is defined`).toBeGreaterThan(-1);
     return run.slice(start, run.indexOf('\n}\n', start));
-  })();
-  it("reads every pod's counter before the call is sent and again after it is answered, before the pods are released", () => {
+  };
+  const hold = fnBody('hold_call');
+  const warm = fnBody('phase_heldwarm');
+
+  it('sources the lib', () => {
+    expect(run).toContain('source "${HERE}/answering-pod.sh"');
+  });
+  it('never assigns HELD_POD_UID from an argument or the target pod', () => {
+    const assigns = run.split('\n').filter((l) => /^\s*HELD_POD_UID=/.test(l));
+    expect(assigns.length).toBeGreaterThan(0);
+    for (const l of assigns) {
+      expect(l).toMatch(/^\s*HELD_POD_UID=("")$|HELD_POD_UID="\$\(answering_pod_uid /);
+    }
+  });
+  it('hold_call snapshots the counters before the call and after the answer, before release_pods', () => {
     const before = hold.indexOf('HELD_REQ_BEFORE="$(request_snapshot)"');
     const probe = hold.indexOf('bun "${Z7}/probe.ts"');
     const answered = hold.indexOf('wait "$(cat "${HELD_PIDFILE}")"');
@@ -117,124 +231,26 @@ describe('run.sh uses the observation, not the target', () => {
     expect(before).toBeLessThan(probe);
     expect(after).toBeGreaterThan(answered);
     expect(after).toBeLessThan(release);
+    expect(hold).toContain('answering_pod_uid "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}"');
   });
-  it('never assigns HELD_POD_UID from an argument or the target pod', () => {
-    const assigns = run.split('\n').filter((l) => /^\s*HELD_POD_UID=/.test(l));
-    expect(assigns.length).toBeGreaterThan(0);
-    for (const l of assigns) {
-      expect(l, 'only an empty reset or the observation').toMatch(
-        /^\s*HELD_POD_UID=("")$|HELD_POD_UID="\$\(answering_pod_uid /,
-      );
-    }
+  it('phase_heldwarm: the control, the refusal and the pod B fresh-token control each call their check', () => {
+    const ctl = warm.indexOf('check_accepted_by "${wuid_a}" "${HELD_REQ_BEFORE}"');
+    const ref = warm.indexOf('check_refused_by "${wuid_b}" "${HELD_REQ_BEFORE}"');
+    const fresh = warm.indexOf('check_accepted_by "${wuid_b}" "${bctl_before}" "${bctl_after}"');
+    expect(ctl).toBeGreaterThan(-1);
+    expect(ref).toBeGreaterThan(ctl);
+    expect(fresh).toBeGreaterThan(ref);
   });
-});
-
-/**
- * The statements run.sh really executes, cut out of it and run on fabricated counters. A check
- * that is deleted, or weakened to something that no longer compares the answering pod with the
- * expected one, cannot pass these. `fail` is stubbed to exit 3, so the verdict is the exit code.
- */
-describe('the assertions in run.sh, executed', () => {
-  const statement = (re: RegExp, what: string): string => {
-    const m = run.match(re);
-    expect(m, `${what} is in run.sh exactly as the test expects`).not.toBeNull();
-    return (m as RegExpMatchArray)[0];
-  };
-  const assertion = (uid: 'wuid_a' | 'wuid_b' | 'wuid_b" "${bctl_before}" "${bctl_after') => {
-    const dollar = '\\$';
-    const body =
-      uid === 'wuid_a' || uid === 'wuid_b'
-        ? `${dollar}\\{${uid}\\}" "${dollar}\\{HELD_REQ_BEFORE\\}" "${dollar}\\{HELD_REQ_AFTER\\}`
-        : `${dollar}\\{wuid_b\\}" "${dollar}\\{bctl_before\\}" "${dollar}\\{bctl_after\\}`;
-    return statement(
-      new RegExp(`  assert_answered_by "${body}" \\\\\\n\\s*\\|\\| fail "[^\\n]*"`),
-      `the ${uid} assertion`,
-    );
-  };
-  const exec = (stmt: string, vars: string): number =>
-    sh(
-      `set -uo pipefail\nsource '${LIB}'\nfail() { echo "FAIL: $*" >&2; exit 3; }\n${vars}\n${stmt}\nexit 0`,
-    ).code;
-  const vars = (rose: 'uid-a' | 'uid-b' | 'both' | 'none') =>
-    [
-      'wuid_a=uid-a; wuid_b=uid-b',
-      "HELD_REQ_BEFORE=$'uid-a 4\\nuid-b 7'",
-      `HELD_REQ_AFTER=$'uid-a ${rose === 'uid-a' || rose === 'both' ? 5 : 4}\\nuid-b ${rose === 'uid-b' || rose === 'both' ? 8 : 7}'`,
-      'bctl_before="${HELD_REQ_BEFORE}"; bctl_after="${HELD_REQ_AFTER}"',
-      `HELD_POD_UID=${rose}`,
-    ].join('\n');
-
-  it('the control (pod A) passes only when pod A answered', () => {
-    const stmt = assertion('wuid_a');
-    expect(exec(stmt, vars('uid-a'))).toBe(0);
-    expect(exec(stmt, vars('uid-b'))).toBe(3);
-    expect(exec(stmt, vars('both'))).toBe(3);
-    expect(exec(stmt, vars('none'))).toBe(3);
-  });
-  it('the long hold (pod B) passes only when pod B answered', () => {
-    const stmt = assertion('wuid_b');
-    expect(exec(stmt, vars('uid-b'))).toBe(0);
-    expect(exec(stmt, vars('uid-a'))).toBe(3);
-    expect(exec(stmt, vars('both'))).toBe(3);
-    expect(exec(stmt, vars('none'))).toBe(3);
-  });
-  it("the fresh-token positive control passes only when pod B's own counter rose", () => {
-    const stmt = assertion('wuid_b" "${bctl_before}" "${bctl_after');
-    expect(exec(stmt, vars('uid-b'))).toBe(0);
-    expect(exec(stmt, vars('uid-a'))).toBe(3);
-    expect(exec(stmt, vars('none'))).toBe(3);
-  });
-  it('hold_call takes HELD_POD_UID from the counters and fails when the call cannot be attributed', () => {
-    const stmt = statement(
-      /    HELD_POD_UID="\$\(answering_pod_uid "\$\{HELD_REQ_BEFORE\}" "\$\{HELD_REQ_AFTER\}"\)" \|\| fail "[^\n]*"/,
-      'the observation in hold_call',
-    );
-    const r = sh(
-      `set -uo pipefail\nsource '${LIB}'\nfail() { exit 3; }\n${vars('uid-b')}\n${stmt}\necho "$HELD_POD_UID"`,
-    );
-    expect(r.out.trim()).toBe('uid-b');
-    expect(exec(stmt, vars('both'))).toBe(3);
-    expect(exec(stmt, vars('none'))).toBe(3);
-  });
-});
-
-describe('the positive control on pod B, executed', () => {
-  it('accepts only 404 not_found from the fresh token', () => {
-    const m = run.match(
-      /  \[ "\$\{PR_STATUS\}" = 404 \] && \[ "\$\{PR_CODE\}" = not_found \] \\\n\s*\|\| fail "warm pod B: a FRESH token[^\n]*"/,
-    );
-    expect(m, 'the fresh-token status check is in run.sh').not.toBeNull();
-    const go = (status: string, code: string) =>
-      sh(
-        `fail() { exit 3; }\nPR_STATUS=${status}; PR_CODE=${code}\n${(m as RegExpMatchArray)[0]}\nexit 0`,
-      ).code;
-    expect(go('404', 'not_found')).toBe(0);
-    expect(go('401', 'unauthenticated')).toBe(3);
-    expect(go('404', 'unauthenticated')).toBe(3);
-    expect(go('200', 'not_found')).toBe(3);
-  });
-});
-
-describe('the positive control on pod B', () => {
-  const w = (() => {
-    const start = run.indexOf('\nphase_heldwarm() {');
-    return run.slice(start, run.indexOf('\n}\n', start));
-  })();
-  it('sends a FRESH token to pod B alone, after its refusal, and requires 404 not_found', () => {
-    const refusal = w.indexOf('was refused by pod B');
-    const iso = w.indexOf('isolate_pods "${wuid_b}"', refusal);
-    const probe = w.indexOf('fn_probe "${WORK}/key-held" fresh-b');
-    const rel = w.indexOf('release_pods', probe);
-    expect(refusal).toBeGreaterThan(-1);
-    expect(iso).toBeGreaterThan(refusal);
-    expect(probe).toBeGreaterThan(iso);
-    expect(rel).toBeGreaterThan(probe);
-    expect(w).toMatch(
-      /\[ "\$\{PR_STATUS\}" = 404 \] && \[ "\$\{PR_CODE\}" = not_found \] \\\n\s*\|\| fail "warm pod B: a FRESH token/,
-    );
-    // Counters are read around the call and before the pods are re-attached.
-    expect(w.indexOf('bctl_before="$(request_snapshot)"')).toBeLessThan(probe);
-    expect(w.indexOf('bctl_after="$(request_snapshot)"')).toBeGreaterThan(probe);
-    expect(w.indexOf('bctl_after="$(request_snapshot)"')).toBeLessThan(rel);
+  it('phase_heldwarm: the fresh call goes to pod B alone, between its isolation and the release', () => {
+    const iso = warm.indexOf('isolate_pods "${wuid_b}"', warm.indexOf('check_refused_by'));
+    const b0 = warm.indexOf('bctl_before="$(request_snapshot)"');
+    const probe = warm.indexOf('fn_probe "${WORK}/key-held" fresh-b');
+    const b1 = warm.indexOf('bctl_after="$(request_snapshot)"');
+    const rel = warm.indexOf('release_pods', b1);
+    expect(iso).toBeGreaterThan(-1);
+    expect(b0).toBeGreaterThan(iso);
+    expect(probe).toBeGreaterThan(b0);
+    expect(b1).toBeGreaterThan(probe);
+    expect(rel).toBeGreaterThan(b1);
   });
 });

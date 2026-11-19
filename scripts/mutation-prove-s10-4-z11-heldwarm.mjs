@@ -8,8 +8,8 @@
  * by default, and REQUIRES the spec to go red. Both halves are covered: what must be there
  * (the rotation, the one cached-key call, each assertion's status, code and message, the control,
  * the restore of every mutated thing) and what must not be (an extra call to the pod between the
- * cached-key call and the held one, a pod that is not the warm one answering: the rows for that are in the S11-1 prover, which runs
- * the observation itself). The shared driver
+ * cached-key call and the held one, a pod that is not the warm one answering: the rows for that, and for the verdicts on a held
+ * call's status, code and message, are in the S11-1 prover, which runs the functions). The shared driver
  * (`scripts/lib/guard-prover.mjs`) owns the discipline: verdicts by exit code, baseline green
  * first, a canary that must go red, anchors occurring exactly once (else abort), byte-exact
  * restore.
@@ -27,10 +27,6 @@ const SPEC = 'tests/z11-activator-drill.test.ts';
 
 const LOAD = (x) =>
   `[ "\${PR_STATUS}" = 404 ] && [ "\${PR_CODE}" = not_found ] \\\n    || fail "the warm pod ${x} answered`;
-const HELD =
-  '[ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \\\n    || fail "warm pod: a call held';
-const CTL =
-  '[ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \\\n    || fail "warm pod control: a call held';
 const GARBAGE =
   '  foreign_get "Bearer not-a-token"\n  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "warm pod: after the holds';
 const DEFAULTS =
@@ -210,18 +206,6 @@ const MUTATIONS = [
     'hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_b}"',
   ),
   row(
-    'W28',
-    'the control may be refused (status)',
-    CTL,
-    CTL.replace('[ "${HELD_STATUS}" = 404 ]', '[ "${HELD_STATUS}" != 404 ]'),
-  ),
-  row(
-    'W29',
-    'the control may be answered with any code',
-    CTL,
-    CTL.replace('[ "${HELD_CODE}" = not_found ]', '[ "${HELD_CODE}" != not_found ]'),
-  ),
-  row(
     'W31',
     'the long held call is not sent',
     '  hold_call "${HELD_SECONDS}" warm "${wuid_b}"\n',
@@ -238,27 +222,6 @@ const MUTATIONS = [
     'the long hold is cold, not on a warm pod',
     'hold_call "${HELD_SECONDS}" warm "${wuid_b}"',
     'hold_call "${HELD_SECONDS}"',
-  ),
-  row(
-    'W34',
-    'the long held call may be answered with anything but 401',
-    HELD,
-    HELD.replace('[ "${HELD_STATUS}" = 401 ]', '[ "${HELD_STATUS}" != 401 ]'),
-  ),
-  row(
-    'W35',
-    'the long held call may be answered with any code',
-    HELD,
-    HELD.replace('[ "${HELD_CODE}" = unauthenticated ]', '[ "${HELD_CODE}" != unauthenticated ]'),
-  ),
-  row(
-    'W36',
-    'the long held call accepts any message, so a stripped header would pass',
-    HELD,
-    HELD.replace(
-      '[ "${HELD_MESSAGE}" = "token rejected" ]',
-      '[ "${HELD_MESSAGE}" != "missing bearer token" ]',
-    ),
   ),
   row(
     'W38',

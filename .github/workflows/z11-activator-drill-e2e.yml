@@ -7,7 +7,10 @@ name: Z11 activator-path drill — kind + Calico e2e
 # function (401) through the activator; a direct dial to the warm pod is dropped by
 # the policy; with the policy switched OFF a token-less call is still refused by the
 # function itself (the in-process token check, not the network); and a function built
-# without its token interceptor answers the same call.
+# without its token interceptor answers the same call. Two more phases cover the failure
+# mode the identity design names: the zone's key rotated and retired while the function is
+# at zero (the cold pod that wakes accepts only the new key), and a call the activator holds
+# past the token's life (refused as unauthenticated, token validation intact afterwards).
 #
 # Deliberately no error-masking flag and no PHASES override: a red step is signal and
 # the policy-off leg runs by default. Path-filtered to what can change the drill's
@@ -20,6 +23,9 @@ on:
       # The drill itself and the lane helpers it sources.
       - 'packages/grpc/e2e/z11-activator-drill/**'
       - 'packages/grpc/e2e/lib/kind-lane.sh'
+      # The Z7 probe the rotcold and held phases sign and send their calls with.
+      - 'packages/grpc/e2e/z7-identity-kind/probe.ts'
+      - 'packages/grpc/e2e/z7-identity-kind/probe-lib.ts'
       - 'scripts/kind-manifests/**'
       # Zone-function token code: the Go function's verifier, its interceptor wiring
       # (the noauth leg removes that line), and the zone-side signer.
@@ -46,6 +52,9 @@ on:
       # The drill itself and the lane helpers it sources.
       - 'packages/grpc/e2e/z11-activator-drill/**'
       - 'packages/grpc/e2e/lib/kind-lane.sh'
+      # The Z7 probe the rotcold and held phases sign and send their calls with.
+      - 'packages/grpc/e2e/z7-identity-kind/probe.ts'
+      - 'packages/grpc/e2e/z7-identity-kind/probe-lib.ts'
       - 'scripts/kind-manifests/**'
       # Zone-function token code: the Go function's verifier, its interceptor wiring
       # (the noauth leg removes that line), and the zone-side signer.
@@ -80,7 +89,7 @@ jobs:
   z11-activator-drill:
     name: Z11 token refusal on the activator path, with and without the NetworkPolicy
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       KIND_CLUSTER: z11-activator-drill
       REGISTRY_NAME: kind-registry
@@ -118,7 +127,7 @@ jobs:
       - name: Install workspace dependencies (the pinned buf, the Connect runtime)
         run: bun install --frozen-lockfile
 
-      - name: Run the Z11 activator-path drill (all phases, including policyoff)
+      - name: Run the Z11 activator-path drill (all phases, including policyoff, rotcold and held)
         run: packages/grpc/e2e/z11-activator-drill/run.sh
 
       # run.sh prints object status on failure and never reads a Secret.

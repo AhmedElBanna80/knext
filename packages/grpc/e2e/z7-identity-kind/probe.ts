@@ -43,6 +43,7 @@ const { values } = parseArgs({
     lifetime: { type: 'string' },
     kid: { type: 'string' },
     twice: { type: 'boolean', default: false },
+    'timeout-seconds': { type: 'string' },
   },
   strict: true,
 });
@@ -86,6 +87,10 @@ try {
       procedure,
       body,
       authorization: auth.header,
+      timeoutMs:
+        values['timeout-seconds'] === undefined
+          ? undefined
+          : Number(values['timeout-seconds']) * 1000,
     });
     console.log(summarize(outcome, auth.kid));
   }

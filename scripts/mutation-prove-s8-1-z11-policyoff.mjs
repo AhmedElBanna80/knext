@@ -75,8 +75,8 @@ const MUTATIONS = [
     id: 'P8',
     subject: 'run',
     claim: 'policyoff leaves the default phase list',
-    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth}"',
-    replacement: 'PHASES="${PHASES:-up deploy token direct noauth}"',
+    anchor: 'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held}"',
+    replacement: 'PHASES="${PHASES:-up deploy token direct noauth rotcold held}"',
   },
   {
     id: 'L1',
@@ -201,7 +201,7 @@ const MUTATIONS = [
     subject: 'workflow',
     claim: 'the workflow runs only a subset of phases',
     anchor:
-      '      - name: Run the Z11 activator-path drill (all phases, including policyoff)\n        run:',
+      '      - name: Run the Z11 activator-path drill (all phases, including policyoff, rotcold and held)\n        run:',
     replacement:
       '      - name: Run the Z11 activator-path drill (all phases, including policyoff)\n        env:\n          PHASES: up deploy token\n        run:',
   },

@@ -445,7 +445,7 @@ describe('runChecks end to end on a fixture repo', () => {
     const ran: string[] = [];
     const bad = runChecks(
       opts(root),
-      deps({ tmpRoot: () => root + '/.', runGate: (_r: string, s: string) => (ran.push(s), 1) }),
+      deps({ tmpRoot: () => `${root}/.`, runGate: (_r: string, s: string) => (ran.push(s), 1) }),
     );
     expect(ran).toEqual(['scripts/gate.mjs']);
     expect(bad.failures.some((f) => f.startsWith('scripts/gate.mjs: exit 1'))).toBe(true);
@@ -1084,6 +1084,13 @@ describe('the CI job that makes the check non-advisory', () => {
   it('does not accept a commit trailer or --scope in CI', () => {
     expect(code).not.toMatch(/--scope\b/);
   });
+
+  it('installs the locked dependencies (the check parses JS and YAML) before it runs', () => {
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeGreaterThan(0);
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeLessThan(
+      code.indexOf('node scripts/prepush-check.mjs'),
+    );
+  });
 });
 
 describe('scope breadth, braces and exemptions through runChecks', () => {
@@ -1208,6 +1215,11 @@ describe('ciRunsTest: whole-suite flags and job guards', () => {
     expect(runsWholeSuite('node scripts/bun-test.mjs --shard 1/4 tests/a.test.ts')).toBe(false);
     expect(runsWholeSuite('node scripts/bun-test.mjs apps/x/y.test.ts')).toBe(false);
     expect(runsWholeSuite('bun test tests/a.test.ts')).toBe(false);
+    // a directory argument narrows the run as much as a file does
+    expect(runsWholeSuite('node scripts/bun-test.mjs tests/')).toBe(false);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --coverage tests')).toBe(true); // bare word: a flag value, not a path
+    expect(runsWholeSuite('node scripts/bun-test.mjs packages/kn-next/src')).toBe(false);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --shard 1/4')).toBe(true);
   });
 
   it('counts a whole-suite step with value-taking flags', () => {
@@ -1267,6 +1279,47 @@ describe('ciRunsTest: whole-suite flags and job guards', () => {
     );
     expect(ciRunsTest(sibling, 'tests/a.test.ts')).toBe(true);
   });
+
+  it('reads the step guard after a blank line, and treats a trailing comment on an if: as a comment', () => {
+    const root = fixture();
+    wf(
+      root,
+      'ci.yml',
+      `jobs:\n  t:\n    runs-on: x\n    steps:\n      - name: s\n        run: node scripts/bun-test.mjs\n\n        if: github.ref == 'x'\n`,
+    );
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(false);
+    const blankJob = fixture();
+    wf(
+      blankJob,
+      'ci.yml',
+      `jobs:\n  t:\n    runs-on: x\n\n    if: github.ref == 'x'\n    steps:\n      - run: node scripts/bun-test.mjs\n`,
+    );
+    expect(ciRunsTest(blankJob, 'tests/a.test.ts')).toBe(false);
+    const commented = fixture();
+    wf(commented, 'ci.yml', job('    if: always() # run on every pull request\n'));
+    expect(ciRunsTest(commented, 'tests/a.test.ts')).toBe(true);
+    const commentedFalse = fixture();
+    wf(commentedFalse, 'ci.yml', job("    if: github.ref == 'x' # always() here\n"));
+    expect(ciRunsTest(commentedFalse, 'tests/a.test.ts')).toBe(false);
+    // flow-style and quoted forms are the same YAML
+    const flow = fixture();
+    wf(
+      flow,
+      'ci.yml',
+      `jobs:\n  t: {runs-on: x, if: "github.ref == 'x'", steps: [{run: node scripts/bun-test.mjs}]}\n`,
+    );
+    expect(ciRunsTest(flow, 'tests/a.test.ts')).toBe(false);
+  });
+
+  it('refuses a workflow that is not valid YAML rather than guessing', () => {
+    const root = fixture();
+    wf(
+      root,
+      'ci.yml',
+      `jobs:\n  t:\n    steps:\n      - run: node scripts/bun-test.mjs\n   bad: [unclosed\n`,
+    );
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(false);
+  });
 });
 
 describe('the branch-specific block is data, and the drift guard compares both branches', () => {
@@ -1275,18 +1328,20 @@ describe('the branch-specific block is data, and the drift guard compares both b
   const REG =
     "export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = { 'security/a.json': { gates: [], other: {} } };";
 
-  it('branchBlockProblems accepts const literals, spreads and references, strings and comments with parens', () => {
+  it('branchBlockProblems accepts pure literal trees: objects, arrays, strings, numbers, regex, plain templates', () => {
     expect(branchBlockProblems(block(REG))).toEqual([]);
     expect(
       branchBlockProblems(
         block(
-          "const R = 'a (b)';\n// note (x) => y\n/* function f() {} */\nexport const T = { ...O, k: R, z: [1, true, null] };",
+          "const R = 'a (b)';\n// note (x) => y\n/* function f() {} */\nexport const T = { k: 'v', 'q-r': [1, -2, true, null, /a\\/\\/b['\"]/g, `plain`] };",
         ),
       ),
     ).toEqual([]);
+    // no trailing semicolon, but each statement on its own line is a complete const declaration
+    expect(branchBlockProblems(block('const A = {}\nconst B = []'))).toEqual([]);
   });
 
-  it('branchBlockProblems rejects calls, functions, arrows, templates and non-const statements', () => {
+  it('branchBlockProblems rejects anything that is not a pure literal tree', () => {
     for (const bad of [
       "const A = runners(['x']);",
       'const A = (() => 1)();',
@@ -1295,15 +1350,54 @@ describe('the branch-specific block is data, and the drift guard compares both b
       'const A = new Z;',
       'const A = { k: typeof Z };',
       'function f() {}',
-      'const A = `t`;',
+      'const A = `t${1}`;',
+      'const A = tag`t`;',
       'const A = new Map();',
       'let A = 1;',
       'doThing;',
       'const A = { k: 1 }; if (A) {}',
       'import x from "y";',
+      'const A = { ...O };',
+      'const A = [...O];',
+      'const A = { k: B };',
+      'const A = B;',
+      'const A = { [k]: 1 };',
+      'const A = { k };',
+      'const A = { m() {} };',
+      'const A = { get k() { return 1; } };',
+      'const A = { k: 1 };;',
+      'const A = {',
+      'declare const A = 1;',
     ]) {
       expect(branchBlockProblems(block(bad)).length, bad).toBeGreaterThan(0);
     }
+  });
+
+  it('branchBlockProblems refuses text with no markers', () => {
+    expect(branchBlockProblems('const A = {};').length).toBeGreaterThan(0);
+    expect(
+      branchBlockProblems('// END branch-specific\n// BEGIN branch-specific\n').length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('branchBlockProblems is not fooled by regex literals, a missing semicolon, or a spread of an unknown name', () => {
+    // a regex holding `//` is not a comment: the code after it is real
+    expect(
+      branchBlockProblems(block('const A = /x\\/\\//; process.exitCode = 1;')).length,
+    ).toBeGreaterThan(0);
+    expect(
+      branchBlockProblems(block('const A = /a\\/\\/b/;\nprocess.exitCode = 1;')).length,
+    ).toBeGreaterThan(0);
+    // a regex holding a quote does not open a string that swallows the statement after it
+    expect(
+      branchBlockProblems(block("const A = /'/; process.exitCode = 1; const B = /'/;")).length,
+    ).toBeGreaterThan(0);
+    // no semicolon: the next line is a statement of its own
+    expect(branchBlockProblems(block('const A = {}\nprocess.exitCode = 1')).length).toBeGreaterThan(
+      0,
+    );
+    // a spread of a name nothing defines is a reference, not data
+    expect(branchBlockProblems(block('const A = { ...UNKNOWN };')).length).toBeGreaterThan(0);
   });
 
   it('the real lib block is data, and evalBranchBlock reads its registry', () => {
@@ -1482,5 +1576,20 @@ describe('the symmetric drift workflow', () => {
     expect(code).toMatch(/permissions:\s*\n\s*contents:\s*read\s*\n/);
     expect(code).not.toMatch(/contents:\s*write/);
     expect(code).not.toMatch(/continue-on-error/);
+  });
+
+  it('masks the derived basic-auth value before it is used, and installs the locked dependencies', () => {
+    expect(run).toContain('echo "::add-mask::${auth}"');
+    expect(run.indexOf('::add-mask::')).toBeLessThan(run.indexOf('http.extraheader'));
+    expect(run.indexOf('::add-mask::')).toBeGreaterThan(run.indexOf('auth="$('));
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeGreaterThan(0);
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeLessThan(code.indexOf('run: |'));
+  });
+
+  it('runs nightly (a cron fires only from the default branch, so main checks v2) and says what its paths: filter misses', () => {
+    expect(code).toMatch(/schedule:\s*\n\s*- cron: '/);
+    expect(wf.replace(/\s*\n#\s*/g, ' ')).toMatch(
+      /not re-checked here until this side next touches/,
+    );
   });
 });

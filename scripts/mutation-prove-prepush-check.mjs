@@ -114,7 +114,7 @@ const MUTATIONS = [
     id: 'D3',
     claim: 'workflow-derived args are not used',
     subject: 'lib',
-    anchor: "entry.runs === 'workflows' ? deriveWorkflowArgSets(root, script) : entry.runs",
+    anchor: 'fromWorkflows ? deriveWorkflowArgSets(root, script) : entry.runs',
     replacement: '[]',
   },
   {

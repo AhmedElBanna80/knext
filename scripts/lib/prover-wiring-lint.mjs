@@ -29,6 +29,9 @@
  * is not seen.
  */
 import ts from 'typescript';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { proverSubjectPaths, referencedSpecs } from './prover-lane.mjs';
 
 const parse = (name, source, kind) =>
@@ -49,8 +52,23 @@ const SUBSTRING_METHODS = new Set([
   'slice',
   'substring',
   'split',
+  // Rewriting the source text is a text-only use too (`src.replace(a, b)`), not a parse.
+  'replace',
+  'replaceAll',
 ]);
 const SUBSTRING_MATCHERS = new Set(['toContain', 'toMatch', 'toContainEqual', 'toInclude']);
+// Pass-through string methods: `src.toLowerCase().includes(x)` still checks the source text.
+const TEXT_TRANSFORMS = new Set([
+  'toLowerCase',
+  'toUpperCase',
+  'trim',
+  'trimStart',
+  'trimEnd',
+  'normalize',
+  'toString',
+]);
+// Readers that turn a file handle into its text: `Bun.file(p).text()`.
+const READ_ADAPTERS = new Set(['text', ...TEXT_TRANSFORMS]);
 
 function calleeName(call) {
   const e = call.expression;
@@ -58,9 +76,54 @@ function calleeName(call) {
   if (ts.isPropertyAccessExpression(e)) return e.name.text;
   return undefined;
 }
+/** `Bun.file(p)`: a file handle whose text is read with `.text()`. */
+const isBunFile = (n) =>
+  ts.isCallExpression(n) &&
+  ts.isPropertyAccessExpression(n.expression) &&
+  n.expression.name.text === 'file' &&
+  ts.isIdentifier(n.expression.expression) &&
+  n.expression.expression.text === 'Bun';
 const isReadCall = (n) =>
   (ts.isCallExpression(n) || ts.isNewExpression(n)) &&
-  /^(readFile|read[A-Z_]|read$)/.test(calleeName(n) ?? '');
+  (/^(readFile|read[A-Z_]|read$)/.test(calleeName(n) ?? '') || isBunFile(n));
+
+/**
+ * `bash -n p` / `sh -n p`: a SYNTAX check parses the subject without running it, so it neither
+ * executes the subject nor counts as a text read. The `-n` must sit in the same argument array as
+ * the path, and the shell must be `bash`/`sh` (the first argument of the spawn, or the first
+ * element of a `Bun.spawn`-style array). Any other spawn of the subject still executes it.
+ */
+function isSyntaxCheckArg(expr) {
+  const arr = expr.parent;
+  if (!arr || !ts.isArrayLiteralExpression(arr) || !arr.elements.some((e) => strLit(e) === '-n')) {
+    return false;
+  }
+  const shells = (n) => n !== undefined && ['bash', 'sh'].includes(strLit(n));
+  const call = arr.parent;
+  const shellArg =
+    call && (ts.isCallExpression(call) || ts.isNewExpression(call)) && shells(call.arguments[0]);
+  return Boolean(shellArg) || shells(arr.elements[0]);
+}
+
+/** The value a read produces, through `await`, parens, casts and `.text()`-style adapters. */
+function readValueEnd(expr) {
+  let cur = expr;
+  for (;;) {
+    const p = cur.parent;
+    if (p && (ts.isAwaitExpression(p) || ts.isParenthesizedExpression(p) || ts.isAsExpression(p))) {
+      cur = p;
+      continue;
+    }
+    if (p && ts.isPropertyAccessExpression(p) && p.expression === cur && READ_ADAPTERS.has(p.name.text)) {
+      const c = p.parent;
+      if (c && ts.isCallExpression(c) && c.expression === p) {
+        cur = c;
+        continue;
+      }
+    }
+    return cur;
+  }
+}
 
 /** Climb from a path literal through path builders; returns the outermost path expression. */
 function outerPathExpr(node) {
@@ -130,18 +193,27 @@ function identifierUses(sf, name) {
 
 /** Is this use of the text variable (or inline read) a pure substring/regex assertion? */
 function isSubstringUse(use) {
-  const p = use.parent;
+  // Climb a chain of pass-through string methods (`v.toLowerCase().trim()`) to the value that is
+  // finally checked. Without this, one `.toLowerCase()` hid a substring check from the lint.
+  let cur = use;
+  for (;;) {
+    const q = cur.parent;
+    if (q && ts.isPropertyAccessExpression(q) && q.expression === cur && TEXT_TRANSFORMS.has(q.name.text)) {
+      const c = q.parent;
+      if (c && ts.isCallExpression(c) && c.expression === q) {
+        cur = c;
+        continue;
+      }
+    }
+    break;
+  }
+  const p = cur.parent;
   // v.includes(...) / v.indexOf(...) / v.match(...)
-  if (
-    p &&
-    ts.isPropertyAccessExpression(p) &&
-    p.expression === use &&
-    SUBSTRING_METHODS.has(p.name.text)
-  ) {
+  if (p && ts.isPropertyAccessExpression(p) && p.expression === cur && SUBSTRING_METHODS.has(p.name.text)) {
     return true;
   }
   // expect(v).[not.]toContain(...)
-  const call = argOf(use);
+  const call = argOf(cur);
   if (call && ts.isIdentifier(call.expression) && call.expression.text === 'expect') {
     let cur = call.parent;
     while (cur && ts.isPropertyAccessExpression(cur)) {
@@ -203,12 +275,13 @@ export function isTextOnlyPair(specSource, subjectPath) {
   const textExprs = []; // identifiers or inline read calls holding the file text
   for (const lit of lits) {
     const outer = outerPathExpr(lit);
+    if (isSyntaxCheckArg(outer)) continue; // `bash -n <subject>` parses, it does not run
     const direct = argOf(outer);
     if (direct && TITLE_CALLEES.has(calleeName(direct) ?? '') && direct.arguments[0] === outer)
       continue;
     if (direct && isReadCall(direct)) {
       const v = declaredName(direct);
-      textExprs.push(v ? { name: v } : { inline: direct });
+      textExprs.push(v ? { name: v } : { inline: readValueEnd(direct) });
       continue;
     }
     const pathVar = declaredName(outer);
@@ -216,10 +289,11 @@ export function isTextOnlyPair(specSource, subjectPath) {
     const uses = identifierUses(sf, pathVar);
     if (uses.length === 0) return false;
     for (const u of uses) {
+      if (isSyntaxCheckArg(u)) continue;
       const c = argOf(u);
       if (!c || !isReadCall(c)) return false; // used for anything but a text read
       const v = declaredName(c);
-      textExprs.push(v ? { name: v } : { inline: c });
+      textExprs.push(v ? { name: v } : { inline: readValueEnd(c) });
     }
   }
   let judged = 0;
@@ -376,4 +450,44 @@ export function auditWiringLabels(proverSource, readSpec) {
     );
   }
   return findings;
+}
+
+/**
+ * One prover's rows, split by what they can prove. A row is WIRING when its subject is text-only
+ * (or declared in WIRING_SUBJECTS), or when it carries the label; every other row is BEHAVIOURAL.
+ * A self-declared label only ever moves a row to wiring, so it cannot inflate the behavioural count.
+ * @returns {{total: number, wiring: number, behavioural: number}}
+ */
+export function summarizeProverRows(proverSource, readSpec) {
+  const textOnly = textOnlySubjects(proverSource, readSpec);
+  const declared = declaredWiringSubjects(proverSource);
+  let total = 0;
+  let wiring = 0;
+  for (const [key, r] of rowsBySubject(proverSource)) {
+    total += r.total;
+    wiring += textOnly.has(key) || declared.has(key) ? r.total : r.labelled;
+  }
+  return { total, wiring, behavioural: total - wiring };
+}
+
+// CLI: `node scripts/lib/prover-wiring-lint.mjs`. Prints each prover's row split and exits 1 on any
+// unlabelled text-only row (every finding is printed to stderr).
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  const readSpec = (rel) => {
+    const p = resolve(REPO_ROOT, rel);
+    return existsSync(p) ? readFileSync(p, 'utf8') : undefined;
+  };
+  let failed = false;
+  for (const f of readdirSync(resolve(REPO_ROOT, 'scripts')).filter((n) => /^mutation-prove-.*\.mjs$/.test(n)).sort()) {
+    const rel = `scripts/${f}`;
+    const src = readFileSync(resolve(REPO_ROOT, rel), 'utf8');
+    const s = summarizeProverRows(src, readSpec);
+    console.log(`${rel}: total ${s.total}, wiring ${s.wiring}, behavioural ${s.behavioural}`);
+    for (const finding of auditWiringLabels(src, readSpec)) {
+      console.error(`${rel}: ${finding}`);
+      failed = true;
+    }
+  }
+  process.exit(failed ? 1 : 0);
 }

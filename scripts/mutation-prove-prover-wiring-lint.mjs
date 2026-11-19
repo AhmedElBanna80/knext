@@ -108,9 +108,64 @@ const MUTATIONS = [
     anchor: "const wiringRow = (...args) => ({ ...row(...args), kind: 'wiring' });",
     replacement: 'const wiringRow = (...args) => row(...args);',
   },
+  // ---- TD-S12-5a (F6): the evasions, and the row-level split
+  {
+    label: 'Bun.file(p).text() is no longer a text read (its substring checks go unflagged)',
+    subject: 'lint',
+    anchor: "n.expression.expression.text === 'Bun';",
+    replacement: "n.expression.expression.text === 'NoBun';",
+  },
+  {
+    label: 'a chained pass-through string method no longer climbs to the checked value',
+    subject: 'lint',
+    anchor: 'TEXT_TRANSFORMS.has(q.name.text)',
+    replacement: 'false',
+  },
+  {
+    label: 'src.replace(...) is no longer a text-only use',
+    subject: 'lint',
+    anchor: "  'replaceAll',\n]);",
+    replacement: ']);',
+  },
+  {
+    label: 'a bash -n spawn of the subject (literal path) counts as executing it again',
+    subject: 'lint',
+    anchor: 'if (isSyntaxCheckArg(outer)) continue;',
+    replacement: '',
+  },
+  {
+    label: 'a bash -n spawn of the subject (path variable) counts as executing it again',
+    subject: 'lint',
+    anchor: 'if (isSyntaxCheckArg(u)) continue;',
+    replacement: '',
+  },
+  {
+    label: 'the -n flag is no longer required: any shell spawn of the subject is a syntax check',
+    subject: 'lint',
+    anchor: "arr.elements.some((e) => strLit(e) === '-n')",
+    replacement: 'true',
+  },
+  {
+    label: 'a -n argument to a non-shell command is treated as a syntax check',
+    subject: 'lint',
+    anchor: 'return Boolean(shellArg) || shells(arr.elements[0]);',
+    replacement: 'return true;',
+  },
+  {
+    label: 'an inline Bun.file(p).text() read is judged without its adapter (no substring match seen)',
+    subject: 'lint',
+    anchor: '{ inline: readValueEnd(direct) }',
+    replacement: '{ inline: direct }',
+  },
+  {
+    label: 'the wiring count ignores the text-only subjects (labelled rows only)',
+    subject: 'lint',
+    anchor: 'wiring += textOnly.has(key) || declared.has(key) ? r.total : r.labelled;',
+    replacement: 'wiring += r.labelled;',
+  },
 ];
 
-const DECLARED = 12;
+const DECLARED = 21;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
@@ -6,6 +7,7 @@ import {
   declaredWiringSubjects,
   isTextOnlyPair,
   rowsBySubject,
+  summarizeProverRows,
   textOnlySubjects,
 } from '../scripts/lib/prover-wiring-lint.mjs';
 
@@ -165,5 +167,101 @@ describe('the lint heuristic', () => {
     expect(auditWiringLabels(prover, (s: string) => specs[s])).toEqual([]);
     specs['tests/thing2.test.ts'] = SPEC_TEXT;
     expect(auditWiringLabels(prover, (s: string) => specs[s]).length).toBe(1);
+  });
+});
+
+// TD-S12-5a (F6): the evasions the per-subject lint let through. Each is a text-only check
+// that the lint must now flag, and each `bash -n` case is a syntax check that must NOT count as
+// executing the subject.
+describe('F6 evasions: text reads and chained string methods are still text-only', () => {
+  const P = 'scripts/thing.sh';
+  it('flags Bun.file(p).text() followed by a substring check (not an execution)', () => {
+    const spec = `const src = await Bun.file(resolve(ROOT, '${P}')).text(); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('flags a path variable read through Bun.file(p).text()', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); const src = await Bun.file(p).text(); expect(src).toMatch(/foo/);`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('flags an inline Bun.file(p).text() read asserted in place', () => {
+    const spec = `expect(await Bun.file(resolve(ROOT, '${P}')).text()).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('flags a chained string method ending in includes', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); expect(src.toLowerCase().includes('foo')).toBe(true);`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('flags src.replace(...) as a text-only rewrite', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const out = src.replace('a', 'b'); expect(out).toContain('b');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('a chained method that ends in neither a substring check nor an assertion is not flagged', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); const n = src.toLowerCase().length;`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('a bash -n syntax check of the subject does NOT clear it (literal path)', () => {
+    const spec = `const src = readFileSync(resolve(ROOT, '${P}'), 'utf8'); expect(src).toContain('foo');
+      spawnSync('bash', ['-n', resolve(ROOT, '${P}')]);`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('a bash -n syntax check through a path variable does NOT clear it', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); spawnSync('bash', ['-n', p]);
+      const src = readFileSync(p, 'utf8'); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('a spawn WITHOUT -n still executes the subject (the exclusion is exact)', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); spawnSync('bash', ['-x', p]);
+      const src = readFileSync(p, 'utf8'); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('a -n argument to a command that is not a shell still executes the subject', () => {
+    const spec = `const p = resolve(ROOT, '${P}'); spawnSync(TOOL, ['-n', p]);
+      const src = readFileSync(p, 'utf8'); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+  it('one spec doing bash -n on subject A does not clear unrelated rows on subject B', () => {
+    const prover = `
+      const SPEC = 'tests/thing.test.ts';
+      const PROOF = { subjects: { thing: 'scripts/thing.sh' } };
+      const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`;
+    const specs: Record<string, string> = {
+      'tests/thing.test.ts': `const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8'); expect(src).toContain('x');
+        spawnSync('bash', ['-n', resolve(ROOT, 'scripts/thing.sh')]);`,
+    };
+    expect(auditWiringLabels(prover, (s: string) => specs[s]).length).toBe(1);
+  });
+});
+
+describe('row-level wiring vs behavioural counts', () => {
+  // `thing` is text-only: BOTH its rows are wiring, labelled or not (the unlabelled one is a finding,
+  // the count does not depend on the label). `beh` is executed by no spec: its labelled row is
+  // wiring (a self-declared label only ever moves a row to wiring), its other row is behavioural.
+  const prover = `
+    const SPEC = 'tests/thing.test.ts';
+    const PROOF = { subjects: { thing: 'scripts/thing.sh', beh: 'scripts/beh.sh' } };
+    const MUTATIONS = [
+      { subject: 'thing', anchor: 'a', replacement: 'b' },
+      { subject: 'thing', kind: 'wiring', anchor: 'g', replacement: 'h' },
+      { subject: 'beh', anchor: 'c', replacement: 'd' },
+      { subject: 'beh', kind: 'wiring', anchor: 'e', replacement: 'f' },
+    ];`;
+  const readSpec = () => SPEC_TEXT;
+  it('reports the wiring and behavioural totals separately', () => {
+    expect(summarizeProverRows(prover, readSpec)).toEqual({ total: 4, wiring: 3, behavioural: 1 });
+  });
+});
+
+describe('the lint CLI prints each prover total split into wiring and behavioural', () => {
+  it('z11 answering-pod: its 18 run.sh WR rows are wiring, the lib rows are not', () => {
+    const r = spawnSync(process.execPath, [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs')], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+    const line = r.stdout
+      .split('\n')
+      .find((l) => l.startsWith('scripts/mutation-prove-s11-1-z11-answering-pod.mjs:'));
+    expect(line).toBeDefined();
+    expect(line).toMatch(/total \d+, wiring 18, behavioural \d+/);
+    expect(r.status).toBe(0);
   });
 });

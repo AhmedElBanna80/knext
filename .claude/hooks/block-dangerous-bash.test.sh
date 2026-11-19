@@ -165,6 +165,18 @@ run "chdir plan"                             "terraform ${D}chdir=infra plan"   
 run "tofu plan"                              "tofu plan"                                    allow
 run "commit msg mentioning destroy"          "git commit ${D}m \"docs: terraform destroy is blocked\"" allow
 run "kind delete cluster still allowed"      "kind delete cluster"                          allow
+# S9-5 review round: quoted/escaped -chdir, --destroy, TF_CLI_ARGS injection.
+run "chdir dq value destroy"                 "terraform ${D}chdir=\"a b\" destroy"                BLOCK
+run "chdir sq value destroy"                 "terraform ${D}chdir='a b' destroy"                  BLOCK
+run "chdir escaped-space destroy"            "terraform ${D}chdir=a\\ b destroy"                  BLOCK
+run "tofu chdir dq value destroy"            "tofu ${D}chdir=\"a b\" destroy"               BLOCK
+run "apply ${D}${D}destroy"                  "terraform apply ${D}${D}destroy"                    BLOCK
+run "tofu apply ${D}${D}destroy"             "tofu apply ${D}${D}destroy"                   BLOCK
+run "TF_CLI_ARGS ${D}destroy apply"          "TF_CLI_ARGS=${D}destroy terraform apply"            BLOCK
+run "TF_CLI_ARGS_apply ${D}destroy"          "TF_CLI_ARGS_apply=${D}destroy terraform apply"      BLOCK
+run "TF_CLI_ARGS quoted tofu"                "TF_CLI_ARGS=\"${D}destroy\" tofu apply"       BLOCK
+run "plan ${D}destroy stays allowed"         "terraform plan ${D}destroy"                         allow
+run "tofu plan ${D}destroy stays allowed"    "tofu plan ${D}destroy"                        allow
 run "kind delete && terraform destroy"       "kind delete cluster ${D}${D}name x && terraform destroy" BLOCK
 run "kind delete ; oci cluster delete"       "kind delete cluster ; oci ce cluster delete ${D}${D}cluster-id x" BLOCK
 

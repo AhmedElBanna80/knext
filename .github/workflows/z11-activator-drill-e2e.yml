@@ -95,7 +95,9 @@ jobs:
     # sized for the first six phases (11 min locally, about 5x); 90 min is 3.5x the new total.
     # Re-measured locally (2026-11-19, with the Rust function deployed and the Rust policyoff leg; the up
     # phase excluded): deploy 283 s, token 137, direct 12, policyoff 128, noauth 133, rotcold 515, held 363;
-    # 1571 s (26 min) in all. The Rust leg added 2 s to policyoff (126 s before): both functions drain together.
+    # 1571 s (26 min) in all. Two single runs of policyoff measured 126 s (Go only) and 128 s (Go and Rust),
+    # a difference within run-to-run noise. The shared drain (await_zero_all) saved no measurable time,
+    # because the Rust function is already idle at that point.
     timeout-minutes: 90
     env:
       KIND_CLUSTER: z11-activator-drill

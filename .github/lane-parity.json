@@ -136,16 +136,16 @@
     {
       "path": "scripts/run-mutation-provers.mjs",
       "lane": "main",
-      "here": "e97c0e27a34477c7c837a9bd04b83c0b2b139aa8",
+      "here": "4d2d64eb59e631d2980192192f298d477850c577",
       "there": "f6de362e76fd43adc8ebdaa1e776bedf9d9fbcab",
-      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also carries its own commits of the round-4 runner fixes (in-prover sampler, runaway kill, cdn-purge isolation); v2 carries each of them (runawayReason, the resource tripwire, between-prover cleanup, the meminfo fixture) plus later fixes main lacks (tracked-residue restore after every prover, private-tmp cleanup), so nothing is left to port."
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also carries its own commits of the round-4 runner fixes (in-prover sampler, runaway kill, cdn-purge isolation); v2 carries each of them (runawayReason, the resource tripwire, between-prover cleanup, the meminfo fixture) plus later fixes main lacks (tracked-residue restore after every prover, private-tmp cleanup), so nothing is left to port. Then S13-5 adds a signal-safe exit and tree restore to this runner on integration/v2 only (a SIGTERM restores the killed prover tree before the process exits); it is not on main or integration/v1.3 yet. Port with TD-S12-2a to main if needed."
     },
     {
       "path": "scripts/run-mutation-provers.mjs",
       "lane": "integration/v1.3",
-      "here": "e97c0e27a34477c7c837a9bd04b83c0b2b139aa8",
+      "here": "4d2d64eb59e631d2980192192f298d477850c577",
       "there": "61495c5c53539f476005e72d8b98c7968a6f7eac",
-      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+      "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. Then S13-5 adds a signal-safe exit and tree restore to this runner on integration/v2 only (a SIGTERM restores the killed prover tree before the process exits); it is not on main or integration/v1.3 yet. Port with TD-S12-2a to main if needed."
     },
     {
       "path": "tests/mutation-prover-lane.test.ts",

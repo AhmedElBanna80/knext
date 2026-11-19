@@ -50,6 +50,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import { loadavg, tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pinExitSignals, trackProverGroup } from './lib/lane-exit-signals.mjs';
 import {
   countProcesses,
   describeResources,
@@ -156,6 +157,8 @@ function runProver(
         }
       }
     };
+    // A signal to the runner kills every running group first (lib/lane-exit-signals.mjs).
+    const untrack = trackProverGroup(killGroup);
     const watcher = watch
       ? setInterval(() => {
           try {
@@ -185,6 +188,7 @@ function runProver(
     // stdio pipes open, would delay `close` until the timeout).
     child.on('exit', () => killGroup());
     child.on('close', (status, signal) => {
+      untrack();
       clearTimeout(timer);
       if (watcher) clearInterval(watcher);
       resolvePromise({ status, signal, output, timedOut, runaway, error: spawnError });
@@ -386,10 +390,30 @@ function cleanPrivateTmp() {
 process.on('exit', () => {
   if (privateTmp) rmSync(privateTmp, { recursive: true, force: true });
 });
-// A job timeout or cancellation sends SIGTERM/SIGINT, which skips 'exit' unless
-// handled; exit with the conventional code so the private dir is still removed.
-process.once('SIGTERM', () => process.exit(143));
-process.once('SIGINT', () => process.exit(130));
+// A job timeout, a cancellation, or a closed terminal (SIGHUP) sends a signal that skips 'exit'
+// unless it is routed through process.exit. pinExitSignals does that for each one, so the private
+// dir is removed on every signal we can catch (SIGKILL cannot be caught; see lib/lane-exit-signals.mjs).
+/** The prover running now, and the tree it started from. A signal restores that tree before it exits. */
+let activeProver = null;
+
+/**
+ * A signal kills the running prover's group (lib/lane-exit-signals.mjs), then restores the tree that prover
+ * left, synchronously, the same restore a timeout gets: the tracked files it mutated come back from HEAD and
+ * the untracked files it created are removed. Without it a killed prover left the tree dirty for the next run.
+ */
+function restoreOnSignal() {
+  if (!activeProver) return;
+  const { relPath, untrackedBefore, modifiedBefore } = activeProver;
+  activeProver = null;
+  try {
+    console.error(`\n   signal during ${relPath}: ${restoreTreeAfterKill(untrackedBefore)}`);
+    const residue = residueFinding(relPath, modifiedBefore);
+    if (residue) console.error(`   ${residue}`);
+  } catch (error) {
+    console.error(`   signal restore failed for ${relPath}: ${error.message}`);
+  }
+}
+pinExitSignals(restoreOnSignal);
 
 /** Delete regenerable build output; returns what was removed. */
 function cleanBuildOutput() {
@@ -493,6 +517,7 @@ for (const prover of provers) {
   const started = Date.now();
   const untrackedBefore = untrackedFiles();
   const modifiedBefore = modifiedTrackedFiles();
+  activeProver = { relPath: prover.relPath, untrackedBefore, modifiedBefore };
   const run = await runProver(prover.absPath, {
     cwd: REPO_ROOT,
     env: proverEnv,
@@ -517,6 +542,7 @@ for (const prover of provers) {
     console.error(`\n   ${findings[0]}`);
   }
   const residue = residueFinding(prover.relPath, modifiedBefore);
+  activeProver = null;
   if (residue) {
     findings.push(residue);
     console.error(`\n   ${residue}`);

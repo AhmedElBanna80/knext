@@ -17,9 +17,11 @@ import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SPEC = 'tests/z7-pin-skew.test.ts';
-const SUBJECTS = {
-  script: 'scripts/verify-installed-yaml-integrity.mjs',
-  workflow: '.github/workflows/z7-watchdog-nightly.yml',
+const PROOF = {
+  subjects: {
+    script: 'scripts/verify-installed-yaml-integrity.mjs',
+    workflow: '.github/workflows/z7-watchdog-nightly.yml',
+  },
 };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
 
@@ -78,7 +80,7 @@ if (!specPasses()) {
 const decorative = [];
 for (const m of MUTATIONS) {
   console.log(`── mutation: ${m.label}`);
-  const snap = snapshot(resolve(REPO_ROOT, SUBJECTS[m.subject]));
+  const snap = snapshot(resolve(REPO_ROOT, PROOF.subjects[m.subject]));
   try {
     mutate(snap, m.anchor, m.replacement);
     if (specPasses()) {

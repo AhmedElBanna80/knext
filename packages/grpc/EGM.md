@@ -68,7 +68,8 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `up deploy token direct policyoff noauth rotcold held`; it proves which control holds on the
     activator path (the function's token, and the NetworkPolicy on a direct
     dial), and that with the NetworkPolicy off a token-less call is still refused
-    by the function itself (`policyoff`), while a function without its interceptor and
+    by the function itself (`policyoff`, for the Go function and, as its Rust leg
+    `policyoff_rust`, for the Rust template function), while a function without its interceptor and
     without the policy answers it (`noauth`). `rotcold` rotates and retires the zone's
     signing key while the function is at zero: the cold pod that wakes refuses the
     retired key (401 unauthenticated) and, after another scale to zero, accepts the new
@@ -79,8 +80,9 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     long-call option). `.github/workflows/z11-activator-drill-e2e.yml`
     runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
     Guard: `tests/z11-activator-drill.test.ts`, mutation-proved by
-    `scripts/mutation-prove-s8-1-z11-policyoff.mjs` and
-    `scripts/mutation-prove-s9-1-z11-rotation-held.mjs`.
+    `scripts/mutation-prove-s8-1-z11-policyoff.mjs`,
+    `scripts/mutation-prove-s9-1-z11-rotation-held.mjs` and
+    `scripts/mutation-prove-s9-2-z11-rust-policyoff.mjs` (the Rust leg).
 
 ## Invariants
 

@@ -15,13 +15,18 @@
  * Usage:  GITHUB_TOKEN=... node scripts/verify-allowlist-retirement.mjs
  */
 
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 import {
   collectEntries,
   exitCodeFor,
   loadLockfileFromDisk,
+  pickNewestStable,
   probeEntries,
+  readField,
+  readTarEntry,
   renderReport,
   resolveAllowlistFiles,
 } from './lib/allowlist-retirement.mjs';
@@ -79,10 +84,129 @@ export function makeFetchAdvisory(
   };
 }
 
+const REGISTRY = 'https://registry.npmjs.org';
+export const LIMITS = {
+  /** per-request timeout (AbortSignal); a timeout is a failed attempt, retried then fail closed */
+  timeoutMs: 60_000,
+  /** download caps, enforced WHILE streaming */
+  maxPackumentBytes: 100 * 1024 * 1024,
+  maxTarballBytes: 200 * 1024 * 1024,
+  /** gunzip output cap (decompression-bomb guard) */
+  maxTarBytes: 600 * 1024 * 1024,
+};
+
+/** Read a Response body into a Buffer, aborting the moment `cap` bytes are exceeded. */
+export async function readCapped(res, cap, what) {
+  const tooBig = () => new Error(`${what} exceeds the ${cap}-byte download cap`);
+  const declared = Number(res.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > cap) throw tooBig();
+  if (!res.body?.getReader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > cap) throw tooBig();
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > cap) {
+      await reader.cancel().catch(() => {});
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * GET with BOUNDED retries on network errors, 429 and 5xx, then FAIL CLOSED. Returns the Response.
+ */
+async function getWithRetries(fetchImpl, url, init, sleep, timeoutMs) {
+  let last = '';
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      if (res.ok) return res;
+      last = `HTTP ${res.status}`;
+      if (res.status !== 429 && res.status < 500) break;
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error);
+    }
+    if (attempt !== MAX_RETRIES) await sleep(Math.min(2 ** attempt * 1000, MAX_WAIT_MS));
+  }
+  throw new Error(`${url} failed (${last}); cannot resolve the vendored version`);
+}
+
+/**
+ * Resolve `vendoredIn` to `{ hostVersion, vendoredVersion }`: newest STABLE host release in
+ * `range` (registry packument, no prereleases), then the vendored file read out of that release's
+ * tarball. The tarball is integrity-checked against the registry and only READ (gunzip + tar
+ * header walk + JSON.parse); nothing in it is executed or extracted to disk.
+ */
+export function makeResolveVendored(fetchImpl = fetch, sleep = realSleep, limits = {}) {
+  const L = { ...LIMITS, ...limits };
+  return async (v) => {
+    const metaRes = await getWithRetries(
+      fetchImpl,
+      `${REGISTRY}/${v.package.replace('/', '%2f')}`,
+      { headers: { accept: 'application/vnd.npm.install-v1+json' } },
+      sleep,
+      L.timeoutMs,
+    );
+    const packument = JSON.parse(
+      (await readCapped(metaRes, L.maxPackumentBytes, `${v.package} packument`)).toString('utf8'),
+    );
+    const versions = packument?.versions;
+    if (versions === null || typeof versions !== 'object') {
+      throw new Error(`registry returned no versions for ${v.package}`);
+    }
+    const hostVersion = pickNewestStable(Object.keys(versions), v.range);
+    const dist = versions[hostVersion]?.dist;
+    const expected = typeof dist?.integrity === 'string' ? dist.integrity : null;
+    if (typeof dist?.tarball !== 'string' || !expected?.startsWith('sha512-')) {
+      throw new Error(
+        `${v.package}@${hostVersion} has no tarball URL / sha512 integrity in the registry`,
+      );
+    }
+    const tarUrl = new URL(dist.tarball);
+    if (tarUrl.protocol !== 'https:' || tarUrl.host !== new URL(REGISTRY).host) {
+      throw new Error(`${v.package}@${hostVersion} tarball is not on ${REGISTRY}: ${dist.tarball}`);
+    }
+    const tgz = await readCapped(
+      await getWithRetries(fetchImpl, dist.tarball, {}, sleep, L.timeoutMs),
+      L.maxTarballBytes,
+      `${v.package}@${hostVersion} tarball`,
+    );
+    const actual = `sha512-${createHash('sha512').update(tgz).digest('base64')}`;
+    if (actual !== expected)
+      throw new Error(`${v.package}@${hostVersion} tarball failed its integrity check`);
+    let tar;
+    try {
+      tar = gunzipSync(tgz, { maxOutputLength: L.maxTarBytes });
+    } catch (error) {
+      throw new Error(
+        `${v.package}@${hostVersion} tarball did not decompress within ${L.maxTarBytes} bytes: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+    const file = readTarEntry(tar, `package/${v.path}`);
+    if (file === null)
+      throw new Error(`${v.package}@${hostVersion} tarball has no package/${v.path}`);
+    const vendoredVersion = readField(JSON.parse(file.toString('utf8')), v.field);
+    if (typeof vendoredVersion !== 'string') {
+      throw new Error(`${v.package}@${hostVersion}: \`${v.field}\` in ${v.path} is not a string`);
+    }
+    return { hostVersion, vendoredVersion };
+  };
+}
+
 async function main() {
   const entries = collectEntries(REPO_ROOT, resolveAllowlistFiles(process.env.ALLOWLIST_FILES));
   const result = await probeEntries(entries, makeFetchAdvisory(), {
     loadLock: (rel) => loadLockfileFromDisk(REPO_ROOT, rel),
+    resolveVendored: makeResolveVendored(),
   });
   const text = renderReport(result);
   console.log(text);

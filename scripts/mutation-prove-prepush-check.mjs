@@ -304,10 +304,10 @@ const MUTATIONS = [
   },
   {
     id: 'C8',
-    claim: 'an undeclared scope fails instead of warning',
+    claim: 'an undeclared scope fails locally instead of warning',
     subject: 'cli',
-    anchor: "if (globs.length === 0) {\n    warnings.push(\n      'no scope declared",
-    replacement: "if (globs.length === 0) {\n    failures.push(\n      'no scope declared",
+    anchor: '} else warnings.push(msg);',
+    replacement: '} else failures.push(msg);',
   },
   // --- S13-4: every security/ input maps to a gate; CI enforces scope; nearest-fork base ---
   {
@@ -380,8 +380,8 @@ const MUTATIONS = [
     id: 'G9',
     claim: '--skip-gates also skips the input-to-gate mapping check',
     subject: 'cli',
-    anchor: 'if (allowlists.length === 0) say(',
-    replacement: 'if (allowlists.length === 0 || opts.skipGates) say(',
+    anchor: 'if (allowlists.length === 0)\n    say(',
+    replacement: 'if (allowlists.length === 0 || opts.skipGates)\n    say(',
   },
   {
     id: 'G10',

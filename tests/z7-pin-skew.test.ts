@@ -55,6 +55,27 @@ describe('checkPinSkew', () => {
     expect(() => checkPinSkew({ callerText: GOOD, gh: stubGh(new Error('404'), 'a') })).toThrow();
     expect(() => checkPinSkew({ callerText: GOOD, gh: stubGh('a', new Error('500')) })).toThrow();
   });
+  it('a comment-only difference passes', () => {
+    const base = 'jobs:\n  a:\n    timeout-minutes: 5\n    steps:\n      - run: x\n';
+    expect(
+      evaluateSkew({ pinned: base, tip: `# note\n${base.replace('jobs:', 'jobs: # c')}` }).ok,
+    ).toBe(true);
+  });
+  it('a changed step, env value or timeout reds', () => {
+    const base =
+      'jobs:\n  a:\n    timeout-minutes: 5\n    env:\n      K: v\n    steps:\n      - run: x\n';
+    for (const [f, t] of [
+      ['run: x', 'run: y'],
+      ['K: v', 'K: w'],
+      ['minutes: 5', 'minutes: 6'],
+    ]) {
+      expect(evaluateSkew({ pinned: base, tip: base.replace(f, t) }).ok).toBe(false);
+    }
+  });
+  it('fails closed when either side is unparseable', () => {
+    expect(evaluateSkew({ pinned: 'a: [', tip: 'a: 1\n' }).ok).toBe(false);
+    expect(evaluateSkew({ pinned: 'a: 1\n', tip: 'a: [' }).ok).toBe(false);
+  });
   it('reds on empty bodies, even if both are empty', () => {
     expect(evaluateSkew({ pinned: '', tip: '' }).ok).toBe(false);
     expect(evaluateSkew({ pinned: 'a', tip: ' \n' }).ok).toBe(false);

@@ -1,3 +1,5 @@
+import { parse } from 'yaml';
+
 /**
  * Z7 pin-skew check. z7-rotation-weekly.yml calls the Z7 lane on integration/v2 at a
  * pinned SHA. The pin must be bumped whenever v2's Z7 workflow YAML changes; this module
@@ -41,6 +43,15 @@ export function summarizeDiff(pinned, tip) {
   return `${a.length} lines at pin, ${b.length} at tip; first difference at line ${first + 1}; ${removed} pinned line(s) absent from tip, ${added} tip line(s) absent from pin`;
 }
 
+function deepEqual(x, y) {
+  if (x === y) return true;
+  if (x === null || y === null || typeof x !== 'object' || typeof y !== 'object') return false;
+  if (Array.isArray(x) !== Array.isArray(y)) return false;
+  const kx = Object.keys(x);
+  const ky = Object.keys(y);
+  return kx.length === ky.length && kx.every((k) => Object.hasOwn(y, k) && deepEqual(x[k], y[k]));
+}
+
 /**
  * @param {{pinned: string, tip: string}} yaml
  * @returns {{ok: boolean, reason: string}}
@@ -52,7 +63,23 @@ export function evaluateSkew({ pinned, tip }) {
   if (typeof tip !== 'string' || tip.trim() === '') {
     return { ok: false, reason: 'YAML at the branch tip is empty or missing' };
   }
-  if (pinned === tip) return { ok: true, reason: 'Z7 workflow YAML at the pin equals the tip' };
+  let a;
+  let b;
+  try {
+    a = parse(pinned);
+    b = parse(tip);
+  } catch (e) {
+    return { ok: false, reason: `YAML unparseable: ${e instanceof Error ? e.message : e}` };
+  }
+  if (a === null || typeof a !== 'object' || b === null || typeof b !== 'object') {
+    return { ok: false, reason: 'YAML did not parse to a mapping' };
+  }
+  if (deepEqual(a, b)) {
+    return {
+      ok: true,
+      reason: 'Z7 workflow YAML at the pin equals the tip (parsed; comments ignored)',
+    };
+  }
   return { ok: false, reason: `PIN SKEW: ${summarizeDiff(pinned, tip)}` };
 }
 

@@ -548,6 +548,16 @@ describe('vendored advisories: classification', () => {
     bad({ patched: ['^19.3.1'] });
     bad({ field: 'a..b' });
     bad({ range: '>=16.4.3 <16.5.0' }); // a hand-written range is refused: it would drift
+    bad({ extra: 'x' }); // any unknown nested key
+    bad({ url: 'https://evil.example/next.tgz' });
+    bad({ package: undefined }); // missing host
+    bad({ package: '' });
+    bad({ path: 'https://evil.example/p/package.json' }); // a URL is not a tarball path
+    bad({ path: 'file:///etc/passwd' });
+    bad({ path: 'a\\b/package.json' });
+    bad({ path: 'a/../b/package.json' }); // `..` mid-path
+    bad({ path: 'a//b/package.json' });
+    bad({ path: 'a/b/package.json?x=1' });
     bad({ rangeFrom: undefined });
     bad({ rangeFrom: 'no-field-part' });
     bad({ rangeFrom: 'packages/x/package.json#missing.field' }); // not a string -> error

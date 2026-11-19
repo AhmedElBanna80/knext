@@ -274,13 +274,6 @@ const MUTATIONS = [
     replacement: 'return !m;',
   },
   {
-    label: 'lib: a hand-written host range is accepted',
-    subject: 'lib',
-    guard: 'spec',
-    anchor: 'if (v.range !== undefined) bad(',
-    replacement: 'if (false) bad(',
-  },
-  {
     label: 'lib: the derived host range is ignored',
     subject: 'lib',
     guard: 'spec',
@@ -343,11 +336,46 @@ const MUTATIONS = [
     anchor: "validateVendoredIn(entry.vendoredIn, 'allowlist', entry.id, () => '*');",
     replacement: '',
   },
+  {
+    label: 'lib: an unknown nested vendoredIn key is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'const unknown = Object.keys(v).filter((k) => !VENDORED_IN_KEYS.has(k));',
+    replacement: 'const unknown = [];',
+  },
+  {
+    label: 'lib: a vendoredIn entry with no host package is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "if (typeof v.package !== 'string' || !NPM_NAME.test(v.package)) bad(",
+    replacement: 'if (false) bad(',
+  },
+  {
+    label: 'lib: a URL / scheme / query in the tarball path is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: '/[:\\\\?#]/.test(v.path) ||',
+    replacement: 'false ||',
+  },
+  {
+    label: 'lib: a `..` segment mid-path is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: "seg === '..' || seg === ''",
+    replacement: "seg === ''",
+  },
+  {
+    label: 'closure gate: an unknown nested vendoredIn key passes the strict allowlist',
+    subject: 'lib',
+    guard: 'closureSpec',
+    anchor: 'const unknown = Object.keys(v).filter((k) => !VENDORED_IN_KEYS.has(k));',
+    replacement: 'const unknown = [];',
+  },
 ];
 
-declareMutations(42);
-if (MUTATIONS.length !== 42) {
-  console.error(`FATAL: declared 42 mutations, table has ${MUTATIONS.length}`);
+declareMutations(46);
+if (MUTATIONS.length !== 46) {
+  console.error(`FATAL: declared 46 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

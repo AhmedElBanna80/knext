@@ -193,10 +193,10 @@ only a *build* tool.
       the trailer is read at `:72`, the 30 s timeout default at `:95`). Not covered: Rust is not
       separately run (trailer survival is a proxy property, not a language one); no OKE run.
       The Connect-only phase (`connecterr`, `run.sh:285-288`, formerly named `trailers`) checks the error code over the Connect protocol, not gRPC trailers, and is not the evidence.
-- [ ] **Per-language token interceptor:** each template ships the fail-closed token-verifying server
+- [x] **Per-language token interceptor:** each template ships the fail-closed token-verifying server
       interceptor; a **mutation-proof test** (delete the check → red), including a **flannel/no-
       NetworkPolicy** case proving the interceptor — not the CNI — is the control.
-      *Evidence (2026-11-17), box stays open: the per-template parts are built; the no-NetworkPolicy leg is proven for Go on kind (CI run 44430815511, 2026-11-19, see below) and still open for Rust.*
+      *Evidence (2026-11-17), ticked 2026-11-19: the per-template parts are built; the no-NetworkPolicy leg is proven for Go (CI run 44430815511) and for Rust (CI run 44477330944), see the Update below.*
       Built: Go `templates/go/internal/auth/auth.go:82-106` (`NewInterceptor`, fails closed), wired at
       `templates/go/internal/rpc/rpc.go:121`; Rust `templates/rust/src/auth.rs:359-363` (no-token refusal, fails
       closed), wired at `templates/rust/src/rpc/mod.rs:169`. Mutation provers:
@@ -206,12 +206,16 @@ only a *build* tool.
       phase shows the interceptor-less function answering the same foreign call with the policy off. These legs are
       cluster-free-guarded (`tests/z11-activator-drill.test.ts`) and run in CI by default
       (`.github/workflows/z11-activator-drill-e2e.yml`). Evidence: CI run https://github.com/AhmedElBanna80/knext/actions/runs/44430815511
-      (green on the merged code at `bee549a8e`). The drill runs on Calico, not flannel, and exercises the Go function only;
-      the Rust leg is not run there, so this box stays open.
+      (green on the merged code at `bee549a8e`). The drill runs on Calico, not flannel, and exercised the Go function only at
+      that point; the Rust leg is added in the Update below.
       *Update (2026-11-19):* the drill's `policyoff` phase now also runs the same leg against the Rust template
       function (`policyoff_rust`: cold through the activator and direct to the pod, both refused 401 by the function
-      itself with the policy off). It passed on a local kind run; the box is ticked only after its CI run is green,
-      and that run is not recorded here yet.
+      itself with the policy off). The box is ticked on CI run https://github.com/AhmedElBanna80/knext/actions/runs/44477330944
+      (job "Z11 token refusal on the activator path, with and without the NetworkPolicy", green on PR head
+      `c9d352f6f`, merged as `159288dab`). With the NetworkPolicy off, that run shows the Go function and the
+      Rust function each refusing a token-less call with `401 unauthenticated`, both cold through the activator
+      and direct to the pod. Both also refuse a garbage bearer token with `401` on the direct dial. This proves
+      the policy-off leg only; it does not prove a refusal through the activator with a garbage token.
 - [ ] **Per-language supply-chain:** a language enters the matrix only with Trivy + SBOM + cosign on
       its image *and* an ecosystem advisory scan on its pinned server deps.
       *Evidence (2026-11-17), box stays open: cosign is not in place for either template.* Trivy and SBOM run per

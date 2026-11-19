@@ -699,8 +699,8 @@ const MUTATIONS = [
     id: 'V2',
     claim: 'the whole-suite scan reads past a shell separator into the next command',
     subject: 'lib',
-    anchor: '([^|&;>\\n]*)',
-    replacement: '([^\\n]*)',
+    anchor: '([^|&;>\\n]*)/;',
+    replacement: '([^\\n]*)/;',
   },
   {
     id: 'J1',

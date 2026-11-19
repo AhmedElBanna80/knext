@@ -25,6 +25,8 @@ const PROOF = {
   subjects: {
     spec: 'tests/allowlist-retirement.test.ts',
     alertSpec: 'tests/nightly-alert-cancelled-condition.test.ts',
+    closureSpec: 'tests/precompile-closure-audit.test.ts',
+    closureLib: 'scripts/lib/precompile-closure.mjs',
     lib: 'scripts/lib/allowlist-retirement.mjs',
     cli: 'scripts/verify-allowlist-retirement.mjs',
     workflow: '.github/workflows/allowlist-retirement-nightly.yml',
@@ -327,11 +329,25 @@ const MUTATIONS = [
     anchor: 'if (outside(real)) {',
     replacement: 'if (false) {',
   },
+  {
+    label: 'closure gate: `vendoredIn` is not an allowed allowlist key (the CI regression)',
+    subject: 'closureLib',
+    guard: 'closureSpec',
+    anchor: "  'vendoredIn',\n]);",
+    replacement: ']);',
+  },
+  {
+    label: 'closure gate: a malformed `vendoredIn` is accepted unvalidated',
+    subject: 'closureLib',
+    guard: 'closureSpec',
+    anchor: "validateVendoredIn(entry.vendoredIn, 'allowlist', entry.id, () => '*');",
+    replacement: '',
+  },
 ];
 
-declareMutations(40);
-if (MUTATIONS.length !== 40) {
-  console.error(`FATAL: declared 40 mutations, table has ${MUTATIONS.length}`);
+declareMutations(42);
+if (MUTATIONS.length !== 42) {
+  console.error(`FATAL: declared 42 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

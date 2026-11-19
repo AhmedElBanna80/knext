@@ -264,8 +264,8 @@ const MUTATIONS = [
     id: 'C2',
     claim: 'a missing gate tool is a warning even without the flag',
     subject: 'cli',
-    anchor: '(opts.allowMissingTools ? warnings : failures).push(msg);',
-    replacement: 'warnings.push(msg);',
+    anchor: 'not on PATH`;\n          (opts.allowMissingTools ? warnings : failures).push(msg);',
+    replacement: 'not on PATH`;\n          warnings.push(msg);',
   },
   {
     id: 'C3',
@@ -328,15 +328,25 @@ const MUTATIONS = [
     id: 'G3',
     claim: 'an input nothing gates is no longer unmapped',
     subject: 'lib',
-    anchor: 'if (reg.gates.length === 0 && testReaders.length === 0) {',
+    anchor:
+      'if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {',
     replacement: 'if (false) {',
   },
   {
     id: 'G4',
     claim: 'a test that names the input no longer counts as its gate',
     subject: 'lib',
-    anchor: 'if (reg.gates.length === 0 && testReaders.length === 0) {',
-    replacement: 'if (reg.gates.length === 0) {',
+    anchor:
+      'if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {',
+    replacement: 'if (!(allowlist in registry) || reg.gates.length === 0) {',
+  },
+  {
+    id: 'G13',
+    claim: 'an input missing from the registry is accepted when a test names it',
+    subject: 'lib',
+    anchor:
+      'if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {',
+    replacement: 'if (reg.gates.length === 0 && testReaders.length === 0) {',
   },
   {
     id: 'G5',

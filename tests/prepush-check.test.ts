@@ -604,6 +604,8 @@ describe('gate inputs that are not allowlists (every security/ file must map to 
     const viaTest = planGateRuns(root2, [IN], table, { [IN]: { gates: [], other: {} } });
     expect(viaTest.unmapped).toEqual([]);
     expect(viaTest.tests).toEqual(['tests/x.test.ts']);
+    // a naming test alone is not enough: the input must be registered, so its readers are explained
+    expect(planGateRuns(root2, [IN], table, {}).unmapped).toEqual([IN]);
   });
 
   it('every non-allowlist input in the real repo is mapped', () => {

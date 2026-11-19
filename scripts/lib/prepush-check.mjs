@@ -389,7 +389,7 @@ export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = GA
     const reg = registry[allowlist] ?? { gates: [], other: {} };
     const testReaders = scanTestReaders(root, allowlist);
     for (const t of testReaders) tests.add(t);
-    if (reg.gates.length === 0 && testReaders.length === 0) {
+    if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {
       unmapped.push(allowlist);
     }
     const { scripts, workflows, manifests } = scanReaders(root, allowlist);

@@ -17,6 +17,9 @@ import { resolveSpecRunner } from './lib/ci-blocking-gate-proof.mjs';
 import { mutate, restore, snapshot } from './lib/mutation-harness.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
+/** Subjects whose spec only substring/regex-matches the source: their rows are WIRING rows, not behavioural proof. */
+export const WIRING_SUBJECTS = ['action'];
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 const SPEC = 'tests/docker-hub-mirror-guard.test.ts';

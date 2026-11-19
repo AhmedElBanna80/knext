@@ -37,6 +37,9 @@ import { parse } from 'yaml';
 import { createGuardProver } from './lib/guard-prover.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
+/** Subjects whose spec only substring/regex-matches the source: their rows are WIRING rows, not behavioural proof. */
+export const WIRING_SUBJECTS = ['bunfig'];
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SPEC = 'tests/dependabot-ecosystems.test.ts';
 

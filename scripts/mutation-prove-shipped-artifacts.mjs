@@ -50,6 +50,9 @@ import { createGuardProver } from './lib/guard-prover.mjs';
 import { jsStillParses } from './lib/parse-validity.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
+/** Subjects whose spec only substring/regex-matches the source: their rows are WIRING rows, not behavioural proof. */
+export const WIRING_SUBJECTS = ['resolver'];
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SPEC = 'tests/shipped-scan.test.ts';
 

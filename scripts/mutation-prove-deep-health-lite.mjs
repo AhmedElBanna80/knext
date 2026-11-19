@@ -26,6 +26,9 @@ import { fileURLToPath } from 'node:url';
 import { createGuardProver } from './lib/guard-prover.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
+/** Subjects whose spec only substring/regex-matches the source: their rows are WIRING rows, not behavioural proof. */
+export const WIRING_SUBJECTS = ['fixtureTs', 'assertAlert'];
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const T = 'packages/kn-next/src/__tests__/';
 

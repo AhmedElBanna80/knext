@@ -554,14 +554,14 @@ phase_policyoff() {
 
 # direct_valid_token <pod ip> <function host>: the positive control's call. Mints ONE valid zone
 # token for <function host> (single-use, so one per call), then sends it from the foreign pod
-# straight to <pod ip>:8080. Sets FC_STATUS / FC_CODE / FC_MESSAGE. The verdict is
+# straight to <pod ip>:8080 (direct_call, answering-pod.sh). Sets FC_STATUS / FC_CODE / FC_MESSAGE. The verdict is
 # check_direct_accepted (answering-pod.sh), never a comparison here.
 direct_valid_token() {
   local tokfile="${WORK}/direct-token"
   export_key "${WORK}/key-direct" current
   bun "${HERE}/mint-token.ts" --host "$2" --issuer "${ISSUER}" --key-dir "${WORK}/key-direct" \
     --out "${tokfile}" || fail "could not mint a valid token for $2"
-  foreign_post "http://$1:8080${GET_ITEM}" "$(cat "${tokfile}")"
+  direct_call "$1" 8080 "${tokfile}" || fail "could not send the valid-token call to $1:8080"
   rm -f "${tokfile}"
 }
 

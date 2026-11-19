@@ -112,3 +112,16 @@ check_direct_accepted() {
   fi
   return 1
 }
+
+# direct_call <pod ip> <port> <token file>: ONE call straight to a function pod, from the foreign
+# pod, carrying the Authorization header held in <token file>. The request is built here, not in
+# run.sh, so a changed target, port or token is a behaviour change a test can see. The curl is
+# the caller's `foreign_post <url> <authorization value>` (the seam; tests stub it), and
+# `GET_ITEM` is the path. Fails, sending nothing, when the token file cannot be read: an empty
+# header would turn the positive control into a no-token call.
+direct_call() {
+  local auth
+  auth="$(cat "$3")" || { echo "direct_call: cannot read the token file $3" >&2; return 1; }
+  [ -n "${auth}" ] || { echo "direct_call: the token file $3 is empty" >&2; return 1; }
+  foreign_post "http://$1:$2${GET_ITEM}" "${auth}"
+}

@@ -200,6 +200,40 @@ describe('the verdicts on a held call: status, code, message AND the answering p
   });
 });
 
+describe('direct_call: the valid-token request, built in the lib and issued through the foreign_post seam', () => {
+  const tok = join(STUB, 'direct-token');
+  // foreign_post is stubbed: it records the URL and the Authorization value it was given.
+  const call = (args: string) =>
+    sh(
+      lib(
+        `GET_ITEM=/example.v1.ExampleService/GetItem\nforeign_post() { echo "URL=$1 AUTH=$2"; }\ndirect_call ${args}`,
+      ),
+    );
+
+  it('sends the valid token to exactly the given pod ip and port, on the GetItem path', () => {
+    writeFileSync(tok, 'Bearer valid-token-1');
+    const r = call(`10.1.2.3 8080 '${tok}'`);
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe(
+      'URL=http://10.1.2.3:8080/example.v1.ExampleService/GetItem AUTH=Bearer valid-token-1',
+    );
+  });
+  it('a different ip or port reaches a different target (nothing is hardcoded)', () => {
+    writeFileSync(tok, 'Bearer valid-token-2');
+    expect(call(`10.9.9.9 8080 '${tok}'`).out).toContain('URL=http://10.9.9.9:8080/');
+    expect(call(`10.1.2.3 9090 '${tok}'`).out).toContain('URL=http://10.1.2.3:9090/');
+  });
+  it('FAILS and sends nothing when the token file is missing or empty', () => {
+    const missing = call(`10.1.2.3 8080 '${join(STUB, 'no-such-token')}'`);
+    expect(missing.code).not.toBe(0);
+    expect(missing.out).not.toContain('URL=');
+    writeFileSync(tok, '');
+    const empty = call(`10.1.2.3 8080 '${tok}'`);
+    expect(empty.code).not.toBe(0);
+    expect(empty.out).not.toContain('URL=');
+  });
+});
+
 describe('check_direct_accepted: the policy-off positive control (a VALID token on the direct path)', () => {
   const direct = (status: string, code: string) =>
     sh(lib(`check_direct_accepted '${status}' '${code}'`));
@@ -251,6 +285,12 @@ describe('wiring: run.sh calls the answering-pod functions in the right place', 
     expect(after).toBeGreaterThan(answered);
     expect(after).toBeLessThan(release);
     expect(hold).toContain('answering_pod_uid "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}"');
+  });
+  it('direct_valid_token sends through direct_call to port 8080 with the token file it minted', () => {
+    const body = fnBody('direct_valid_token');
+    expect(body).toContain('direct_call "$1" 8080 "${tokfile}"');
+    expect(body).toContain('--key-dir "${WORK}/key-direct"');
+    expect(body).toContain('export_key "${WORK}/key-direct" current');
   });
   it('policyoff (Go and Rust): the valid-token control follows the garbage-token refusal and is judged by check_direct_accepted', () => {
     for (const [phase, refusedMarker, controlHost] of [

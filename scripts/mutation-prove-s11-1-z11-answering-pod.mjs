@@ -305,6 +305,71 @@ const MUTATIONS = [
     '  direct_valid_token "${ip}" "${FN_HOST}"',
     '  direct_valid_token "${ip}" "${RUST_FN}.${NS}.svc.cluster.local"',
   ),
+  // ---- S12-3 review: the request the control sends (behavioural: the spec runs direct_call)
+  row(
+    'DC1',
+    'lib',
+    'the control dials a different pod ip than it was given',
+    'foreign_post "http://$1:$2${GET_ITEM}" "${auth}"',
+    'foreign_post "http://127.0.0.1:$2${GET_ITEM}" "${auth}"',
+  ),
+  row(
+    'DC2',
+    'lib',
+    'the control dials a different port than it was given',
+    'foreign_post "http://$1:$2${GET_ITEM}" "${auth}"',
+    'foreign_post "http://$1:9091${GET_ITEM}" "${auth}"',
+  ),
+  row(
+    'DC3',
+    'lib',
+    'the control sends a refused (garbage) token instead of the valid one',
+    'foreign_post "http://$1:$2${GET_ITEM}" "${auth}"',
+    'foreign_post "http://$1:$2${GET_ITEM}" "Bearer not-a-token"',
+  ),
+  row(
+    'DC4',
+    'lib',
+    'the control sends no token at all',
+    'foreign_post "http://$1:$2${GET_ITEM}" "${auth}"',
+    'foreign_post "http://$1:$2${GET_ITEM}" ""',
+  ),
+  row(
+    'DC5',
+    'lib',
+    'an unreadable token file no longer fails the call',
+    'auth="$(cat "$3")" || { echo "direct_call: cannot read the token file $3" >&2; return 1; }',
+    'auth="$(cat "$3" 2>/dev/null)" || true',
+  ),
+  row(
+    'DC6',
+    'lib',
+    'an empty token file no longer fails the call',
+    '  [ -n "${auth}" ] || { echo "direct_call: the token file $3 is empty" >&2; return 1; }\n',
+    '',
+  ),
+  // ---- WIRING rows for the same call (labelled: they delete or redirect text in run.sh)
+  row(
+    'WR16',
+    'run',
+    'wiring: the control is sent to port 8080 no more',
+    'direct_call "$1" 8080 "${tokfile}"',
+    'direct_call "$1" 9091 "${tokfile}"',
+  ),
+  row(
+    'WR17',
+    'run',
+    'wiring: the control is sent to the wrong ip argument',
+    'direct_call "$1" 8080 "${tokfile}"',
+    'direct_call "$2" 8080 "${tokfile}"',
+  ),
+  row(
+    'WR18',
+    'run',
+    'wiring: the control mints its token with the wrong key directory',
+    '--key-dir "${WORK}/key-direct"',
+    '--key-dir "${WORK}/key-none"',
+  ),
 ];
 
 const prover = createGuardProver({

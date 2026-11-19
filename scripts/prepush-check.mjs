@@ -20,6 +20,11 @@
  *     commit body or PR body) any file outside it FAILS; with none declared it
  *     WARNS.
  *
+ * Basis for every check: merge-base...HEAD plus uncommitted changes (reported as such).
+ * With no changed test file, the tests that import the changed source run instead;
+ * if there are none, the leak scan is reported as NOT exercised (a WARN, never a pass).
+ * Only lines of the form `Scope: glob, glob` are read; other phrasing is ignored.
+ *
  * Options: --base <ref> (default: personal/integration/v2, origin/integration/v2,
  * origin/main), --scope <glob,...>, --pr-body-file <path> (or env PR_BODY),
  * --allow-missing-tools, --skip-gates, --skip-tests, --root <dir>.
@@ -41,9 +46,12 @@ import {
   parseScopeLines,
   planGateRuns,
   staticTempDirFindings,
+  testsCovering,
 } from './lib/prepush-check.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+/** Cap on tests run when falling back to covering tests, to keep the check quick. */
+const MAX_COVERING_TESTS = 20;
 const BASES = ['personal/integration/v2', 'origin/integration/v2', 'origin/main'];
 
 function git(root, args) {
@@ -60,7 +68,7 @@ export const REAL_DEPS = {
   onPath,
   which,
   runGate: (root, script, args) =>
-    spawnSync('node', [join('scripts', script), ...args], { cwd: root, stdio: 'inherit' }).status,
+    spawnSync('node', [script, ...args], { cwd: root, stdio: 'inherit' }).status,
   runTests: (root, files) =>
     spawnSync('node', ['scripts/bun-test.mjs', ...files], { cwd: root, stdio: 'inherit' }).status,
   tmpRoot: () => tmpdir(),
@@ -98,10 +106,22 @@ export function runChecks(opts, deps = REAL_DEPS) {
   const mergeBase = git(root, ['merge-base', 'HEAD', base]).trim();
   say(`prepush-check: base ${base}, merge-base ${mergeBase.slice(0, 12)}`);
 
-  // Committed + working-tree changes since the merge base.
-  const changed = git(root, ['diff', '--name-only', '--diff-filter=ACMRD', mergeBase])
-    .split('\n')
-    .filter(Boolean);
+  // ONE basis for every check: merge-base...HEAD, plus uncommitted changes
+  // (tracked edits and untracked files), which are reported as such.
+  const lines = (args) => git(root, args).split('\n').filter(Boolean);
+  const committed = lines(['diff', '--name-only', `${mergeBase}...HEAD`]);
+  const uncommitted = [
+    ...new Set([
+      ...lines(['diff', '--name-only', 'HEAD']),
+      ...lines(['ls-files', '-o', '--exclude-standard']),
+    ]),
+  ].sort();
+  const changed = [...new Set([...committed, ...uncommitted])].sort();
+  if (uncommitted.length > 0) {
+    warnings.push(
+      `${uncommitted.length} uncommitted file(s) included in every check: ${uncommitted.join(', ')}`,
+    );
+  }
 
   // 1. gates on changed data
   say('\n=== 1. gates on changed allowlists ===');
@@ -110,10 +130,10 @@ export function runChecks(opts, deps = REAL_DEPS) {
   else if (allowlists.length === 0) say('no security/*allowlist*.json changed; nothing to run');
   else {
     say(`changed: ${allowlists.join(', ')}`);
-    const { runs, unknown } = planGateRuns(join(root, 'scripts'), allowlists, opts.gateTable);
+    const { runs, unknown } = planGateRuns(root, allowlists, opts.gateTable, opts.registry);
     for (const u of unknown) {
       failures.push(
-        `${u.script} reads ${u.allowlist} but has no invocation in GATE_TABLE (scripts/lib/prepush-check.mjs); add it so it is run`,
+        `${u.script} reads ${u.allowlist} but is not in ALLOWLIST_REGISTRY (scripts/lib/prepush-check.mjs) as a gate or an excused reader; register it so it is run or explained`,
       );
     }
     let sbomDir = '';
@@ -147,10 +167,23 @@ export function runChecks(opts, deps = REAL_DEPS) {
 
   // 2. temp-dir leak scan around the changed tests
   say('\n=== 2. temp-dir leak scan ===');
-  const tests = changedTestFiles(changed).filter((f) => existsSync(join(root, f)));
+  const allTests = [
+    ...lines(['ls-files', 'tests']),
+    ...lines(['ls-files', '-o', '--exclude-standard', 'tests']),
+  ].filter((f) => changedTestFiles([f]).length > 0);
+  let tests = changedTestFiles(changed).filter((f) => existsSync(join(root, f)));
+  if (tests.length === 0 && !opts.skipTests) {
+    // Only source changed: fall back to the tests that import it.
+    tests = testsCovering(root, changed, allTests).slice(0, MAX_COVERING_TESTS);
+    if (tests.length > 0)
+      say(`no changed tests; running ${tests.length} test(s) that import the changed source`);
+  }
   if (opts.skipTests) warnings.push('leak scan skipped by --skip-tests');
-  else if (tests.length === 0) say('no changed test files; nothing to run');
-  else {
+  else if (tests.length === 0) {
+    warnings.push(
+      'leak scan NOT exercised: no changed test files and no test imports the changed source, so nothing ran to leak',
+    );
+  } else {
     const before = snapshot(root, deps);
     const status = deps.runTests(root, tests);
     const after = snapshot(root, deps);
@@ -191,10 +224,8 @@ export function runChecks(opts, deps = REAL_DEPS) {
   // 4. scope report
   say('\n=== 4. scope report ===');
   say(git(root, ['diff', '--stat', `${mergeBase}...HEAD`]).trimEnd());
-  const committed = git(root, ['diff', '--name-only', `${mergeBase}...HEAD`])
-    .split('\n')
-    .filter(Boolean);
-  for (const [area, fs] of groupByArea(committed)) say(`  ${area}/: ${fs.length} file(s)`);
+  if (uncommitted.length > 0) say(`uncommitted (not in the stat above): ${uncommitted.join(', ')}`);
+  for (const [area, fs] of groupByArea(changed)) say(`  ${area}/: ${fs.length} file(s)`);
   let globs = opts.scope ?? [];
   if (globs.length === 0)
     globs = parseScopeLines(git(root, ['log', '--format=%B', `${mergeBase}..HEAD`]));
@@ -208,7 +239,7 @@ export function runChecks(opts, deps = REAL_DEPS) {
     );
   } else {
     say(`declared scope: ${globs.join(', ')}`);
-    for (const f of outOfScope(committed, globs)) failures.push(`out of scope: ${f}`);
+    for (const f of outOfScope(changed, globs)) failures.push(`out of scope: ${f}`);
   }
 
   say('');

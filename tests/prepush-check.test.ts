@@ -1,19 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
+  ALLOWLIST_REGISTRY,
   changedAllowlists,
   changedTestFiles,
-  discoverAllowlistGates,
+  deriveWorkflowArgSets,
+  GATE_TABLE,
   globToRegExp,
   groupByArea,
   newEntries,
   outOfScope,
   parseScopeLines,
   planGateRuns,
+  scanReaders,
   staticTempDirFindings,
+  testsCovering,
 } from '../scripts/lib/prepush-check.mjs';
 import { runChecks } from '../scripts/prepush-check.mjs';
 
@@ -52,47 +56,138 @@ describe('allowlist gate discovery', () => {
     ).toEqual(['security/osv-allowlist.json', 'security/gitleaks-allowlist.json']);
   });
 
-  it('finds readers by scanning, skipping provers and lib', () => {
+  it('scans readers: direct, via an imported lib, not comments, not provers; workflows too', () => {
     const root = fixture();
-    put(root, 'scripts/gate-a.mjs', "readFileSync('security/x-allowlist.json')");
-    put(root, 'scripts/mutation-prove-a.mjs', 'x-allowlist.json');
-    put(root, 'scripts/lib/helper.mjs', 'x-allowlist.json');
-    put(root, 'scripts/other.mjs', 'nothing here');
-    expect(discoverAllowlistGates(join(root, 'scripts'), 'security/x-allowlist.json')).toEqual([
-      'gate-a.mjs',
-    ]);
+    put(root, 'scripts/direct.mjs', "readFileSync('security/x-allowlist.json')");
+    put(root, 'scripts/lib/shared.mjs', "export const P = 'security/x-allowlist.json';");
+    put(root, 'scripts/via-lib.mjs', "import { P } from './lib/shared.mjs';");
+    put(root, 'scripts/sub/deep.sh', 'node -e "require(\'../lib/shared.mjs\')"');
+    put(root, 'scripts/sub/deep.mjs', "import('../lib/shared.mjs');");
+    put(
+      root,
+      'scripts/comment-only.mjs',
+      '// see security/x-allowlist.json\n/* x-allowlist.json */',
+    );
+    put(root, 'scripts/mutation-prove-a.mjs', "'x-allowlist.json'");
+    put(root, 'scripts/unrelated.mjs', "import './lib/other.mjs'");
+    put(root, 'scripts/lib/other.mjs', 'export {}');
+    put(root, '.github/workflows/w.yml', 'steps:\n  - run: cat security/x-allowlist.json\n');
+    put(root, '.github/workflows/c.yml', '# security/x-allowlist.json\n');
+    expect(scanReaders(root, 'security/x-allowlist.json')).toEqual({
+      scripts: [
+        'scripts/direct.mjs',
+        'scripts/sub/deep.mjs',
+        'scripts/sub/deep.sh',
+        'scripts/via-lib.mjs',
+      ],
+      workflows: ['.github/workflows/w.yml'],
+    });
   });
 
-  it('plans one run per table row and reports a reader with no invocation', () => {
+  it('plans gate runs from the registry and reports any unregistered reader', () => {
     const root = fixture();
     put(root, 'scripts/known.mjs', 'x-allowlist.json');
     put(root, 'scripts/stranger.mjs', 'x-allowlist.json');
-    const table: any = { 'known.mjs': { needs: [], runs: [['--a'], ['--b']] } };
-    const { runs, unknown } = planGateRuns(
-      join(root, 'scripts'),
-      ['security/x-allowlist.json'],
-      table,
+    put(root, 'scripts/lib/shared.mjs', 'x-allowlist.json');
+    put(root, 'scripts/transitive.mjs', "import './lib/shared.mjs'");
+    put(root, 'scripts/excused.mjs', 'x-allowlist.json');
+    put(root, '.github/workflows/w.yml', '  - run: node scripts/audit.mjs --app apps/a\n');
+    put(
+      root,
+      '.github/workflows/v.yml',
+      '  - run: node scripts/audit.mjs --app apps/b --closure c\n',
     );
-    expect(runs.map((r) => r.args)).toEqual([['--a'], ['--b']]);
-    expect(unknown).toEqual([{ allowlist: 'security/x-allowlist.json', script: 'stranger.mjs' }]);
+    put(root, 'scripts/audit.mjs', 'x-allowlist.json');
+    const table: any = {
+      'scripts/known.mjs': { needs: [], runs: [['--a'], ['--b']] },
+      'scripts/audit.mjs': { needs: [], runs: 'workflows' },
+    };
+    const registry = {
+      'security/x-allowlist.json': {
+        gates: ['scripts/known.mjs', 'scripts/audit.mjs'],
+        other: { 'scripts/excused.mjs': 'reason' },
+      },
+    };
+    const { runs, unknown } = planGateRuns(root, ['security/x-allowlist.json'], table, registry);
+    expect(runs.map((r) => `${r.script} ${r.args.join(' ')}`)).toEqual([
+      'scripts/known.mjs --a',
+      'scripts/known.mjs --b',
+      'scripts/audit.mjs --app apps/a',
+      'scripts/audit.mjs --app apps/b --closure c',
+    ]);
+    expect(unknown.map((u) => u.script).sort()).toEqual([
+      'scripts/stranger.mjs',
+      'scripts/transitive.mjs',
+    ]);
   });
 
-  it('the shipped table covers every real reader of every real allowlist', () => {
+  it('a registry gate with no table entry, or no derivable args, is reported', () => {
+    const root = fixture();
+    put(root, 'scripts/g.mjs', 'x-allowlist.json');
+    const registry = { 'security/x-allowlist.json': { gates: ['scripts/g.mjs'], other: {} } };
+    const none = planGateRuns(root, ['security/x-allowlist.json'], {}, registry);
+    expect(none.unknown.map((u) => u.script)).toEqual(['scripts/g.mjs']);
+    const noWf = planGateRuns(
+      root,
+      ['security/x-allowlist.json'],
+      { 'scripts/g.mjs': { needs: [], runs: 'workflows' } } as any,
+      registry,
+    );
+    expect(noWf.unknown[0].script).toContain('no workflow step found');
+  });
+
+  describe('against the real repo', () => {
     const root = join(import.meta.dir, '..');
-    const all = ['gitleaks', 'npm-audit', 'osv', 'precompile-closure'].map(
-      (n) => `security/${n}-allowlist.json`,
-    );
-    const { runs, unknown } = planGateRuns(join(root, 'scripts'), all);
-    expect(unknown).toEqual([]);
-    expect(new Set(runs.map((r) => r.script))).toEqual(
-      new Set([
-        'secret-scan.mjs',
-        'precompile-closure-audit.mjs',
-        'osv-gate.mjs',
-        'audit-shipped-npm.mjs',
-        'audit-published.mjs',
-      ]),
-    );
+    const onDisk = readdirSync(join(root, 'security')).filter((f) => /allowlist.*\.json$/.test(f));
+
+    it('registers every allowlist file on disk, and nothing else', () => {
+      expect(Object.keys(ALLOWLIST_REGISTRY).sort()).toEqual(
+        onDisk.map((f) => `security/${f}`).sort(),
+      );
+    });
+
+    it('every script and workflow that reads an allowlist is a registered gate or excused reader', () => {
+      for (const allowlist of Object.keys(ALLOWLIST_REGISTRY)) {
+        const reg = ALLOWLIST_REGISTRY[allowlist as keyof typeof ALLOWLIST_REGISTRY];
+        const { scripts, workflows } = scanReaders(root, allowlist);
+        const known = new Set([...reg.gates, ...Object.keys(reg.other)]);
+        expect(
+          [...scripts, ...workflows].filter((r) => !known.has(r)),
+          `${allowlist} is read by something the registry does not list`,
+        ).toEqual([]);
+      }
+    });
+
+    it('registry entries are live: each gate really reads its allowlist and has a table row', () => {
+      for (const [allowlist, reg] of Object.entries(ALLOWLIST_REGISTRY)) {
+        const { scripts, workflows } = scanReaders(root, allowlist);
+        const found = new Set([...scripts, ...workflows]);
+        for (const g of reg.gates) {
+          expect(found.has(g), `${g} no longer reads ${allowlist}`).toBe(true);
+          expect(g in GATE_TABLE, `${g} has no GATE_TABLE row`).toBe(true);
+        }
+        for (const o of Object.keys(reg.other)) {
+          expect(found.has(o), `${o} no longer reads ${allowlist}; drop its excuse`).toBe(true);
+        }
+      }
+      for (const g of Object.keys(GATE_TABLE)) {
+        expect(
+          Object.values(ALLOWLIST_REGISTRY).some((r) => r.gates.includes(g)),
+          `${g} is in GATE_TABLE but gates no allowlist`,
+        ).toBe(true);
+      }
+    });
+
+    it('the precompile-closure targets are derived from the workflows, matching the known set', () => {
+      const derived = deriveWorkflowArgSets(root, 'scripts/precompile-closure-audit.mjs').map((a) =>
+        a.join(' '),
+      );
+      expect(derived).toEqual([
+        '--app apps/docs',
+        '--app apps/file-manager',
+        '--closure examples/bun-exec',
+      ]);
+    });
   });
 });
 
@@ -159,11 +254,14 @@ describe('runChecks end to end on a fixture repo', () => {
   });
   afterAll(() => quiet.mockRestore());
 
-  const table = { 'gate.mjs': { needs: ['fakebin'], runs: [[]] } };
+  const table = { 'scripts/gate.mjs': { needs: ['fakebin'], runs: [[]] } };
+  const registry = {
+    'security/x-allowlist.json': { gates: ['scripts/gate.mjs'], other: {} },
+  };
   function repo(): string {
     const root = fixture();
     git(root, 'init', '-q', '-b', 'main');
-    put(root, 'scripts/gate.mjs', '// reads security/x-allowlist.json\n');
+    put(root, 'scripts/gate.mjs', "readFileSync('security/x-allowlist.json');\n");
     put(root, 'security/x-allowlist.json', '[]');
     put(root, 'README.md', 'base');
     git(root, 'add', '.');
@@ -188,6 +286,7 @@ describe('runChecks end to end on a fixture repo', () => {
     base: 'main',
     scope: ['security/**', 'tests/**'],
     gateTable: table,
+    registry,
     ...over,
   });
 
@@ -200,8 +299,8 @@ describe('runChecks end to end on a fixture repo', () => {
       opts(root),
       deps({ tmpRoot: () => root + '/.', runGate: (_r: string, s: string) => (ran.push(s), 1) }),
     );
-    expect(ran).toEqual(['gate.mjs']);
-    expect(bad.failures.some((f) => f.startsWith('gate.mjs: exit 1'))).toBe(true);
+    expect(ran).toEqual(['scripts/gate.mjs']);
+    expect(bad.failures.some((f) => f.startsWith('scripts/gate.mjs: exit 1'))).toBe(true);
     const good = runChecks(opts(root), deps({ tmpRoot: () => root }));
     expect(good.failures).toEqual([]);
   });
@@ -228,11 +327,11 @@ describe('runChecks end to end on a fixture repo', () => {
 
   it('fails on a reader of the allowlist that has no invocation', () => {
     const root = repo();
-    put(root, 'scripts/second.mjs', 'security/x-allowlist.json');
+    put(root, 'scripts/second.mjs', "read('security/x-allowlist.json')");
     put(root, 'security/x-allowlist.json', '["new"]');
     commit(root);
     const r = runChecks(opts(root, { scope: ['**'] }), deps({ tmpRoot: () => root }));
-    expect(r.failures.join()).toContain('second.mjs reads security/x-allowlist.json');
+    expect(r.failures.join()).toContain('scripts/second.mjs reads security/x-allowlist.json');
   });
 
   it('fails when changed tests leak into tmpdir or the repo root, and not otherwise', () => {
@@ -281,5 +380,70 @@ describe('runChecks end to end on a fixture repo', () => {
     );
     expect(w.failures).toEqual([]);
     expect(w.warnings.join()).toContain('no scope declared');
+  });
+
+  it('uses one basis: uncommitted changes count for gates, scope and area, and are flagged', () => {
+    const root = repo();
+    put(root, 'README.md', 'committed');
+    commit(root);
+    put(root, 'security/x-allowlist.json', '["uncommitted"]'); // tracked edit, not committed
+    put(root, 'untracked-new.txt', 'x'); // untracked
+    const ran: string[] = [];
+    const r = runChecks(
+      opts(root, { scope: ['README.md'] }),
+      deps({
+        tmpRoot: () => root,
+        runGate: (_r: string, s: string) => (ran.push(s), 0),
+      }),
+    );
+    expect(ran).toEqual(['scripts/gate.mjs']);
+    expect(r.failures.sort()).toEqual([
+      'out of scope: security/x-allowlist.json',
+      'out of scope: untracked-new.txt',
+    ]);
+    expect(r.warnings.join()).toContain('2 uncommitted file(s) included in every check');
+  });
+
+  it('with only source changed, runs the tests that import it; with none, WARNs not-exercised', () => {
+    const root = repo();
+    put(root, 'scripts/lib/thing.mjs', 'export {};');
+    put(root, 'tests/thing.test.ts', "import '../scripts/lib/thing.mjs';\n");
+    put(root, 'tests/other.test.ts', 'export {};');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'base2');
+    git(root, 'switch', '-q', '-c', 'src-only');
+    put(root, 'scripts/lib/thing.mjs', 'export const x = 1;');
+    commit(root);
+    const ran: string[][] = [];
+    const r = runChecks(
+      opts(root, { base: 'feature', scope: ['scripts/**'] }),
+      deps({ tmpRoot: () => root, runTests: (_r: string, f: string[]) => (ran.push(f), 0) }),
+    );
+    expect(ran).toEqual([['tests/thing.test.ts']]);
+    expect(r.warnings.join()).not.toContain('NOT exercised');
+
+    git(root, 'switch', '-q', '-c', 'no-cover');
+    put(root, 'scripts/lib/lonely.mjs', 'export {};');
+    commit(root);
+    const none = runChecks(
+      opts(root, { base: 'src-only', scope: ['scripts/**'] }),
+      deps({ tmpRoot: () => root, runTests: () => 1 }),
+    );
+    expect(none.warnings.join()).toContain('leak scan NOT exercised');
+    expect(none.failures).toEqual([]);
+  });
+
+  it('finds covering tests by import path, with or without extension, and not by prefix', () => {
+    const root = fixture();
+    put(root, 'tests/a.test.ts', "import x from '../scripts/lib/a.mjs';");
+    put(root, 'tests/b.test.ts', "import x from '../scripts/lib/a';");
+    put(root, 'tests/c.test.ts', "import x from '../scripts/lib/a-longer.mjs';");
+    expect(
+      testsCovering(
+        root,
+        ['scripts/lib/a.mjs'],
+        ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts'],
+      ),
+    ).toEqual(['tests/a.test.ts', 'tests/b.test.ts']);
   });
 });

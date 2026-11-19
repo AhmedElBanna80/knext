@@ -6,8 +6,12 @@
  * requires the guard to go RED, by exit code:
  *
  *   P1  allowlist detection starts matching nested directories.
- *   P2  gate discovery stops skipping the mutation provers.
- *   P3  a reader of the allowlist with no invocation is silently dropped.
+ *   P2  the reader scan stops skipping the mutation provers.
+ *   P3  a reader missing from the registry is silently accepted.
+ *   R1-R4  the scan stops following imports / counts comments / skips workflows / sees only .mjs.
+ *   D1-D3  workflow-derived targets drop --closure / count comments / are unused.
+ *   U1-U3  the diff basis drops uncommitted or untracked files, or stops flagging them.
+ *   L1-L2  the leak scan stops falling back to covering tests, or stops saying it did not run.
  *   P4  the leak snapshot diff reports nothing.
  *   P5  the static scan ignores each file's baseline.
  *   P6  the static scan looks beyond tests/**.
@@ -46,17 +50,102 @@ const MUTATIONS = [
   },
   {
     id: 'P2',
-    claim: 'gate discovery stops skipping the mutation provers',
+    claim: 'gate scan stops skipping the mutation provers',
     subject: 'lib',
-    anchor: "f.endsWith('.mjs') && !f.startsWith('mutation-prove-')",
-    replacement: "f.endsWith('.mjs')",
+    anchor: String.raw`&& !/\/mutation-prove-[^/]*$/.test(f)`,
+    replacement: '',
   },
   {
     id: 'P3',
-    claim: 'a reader with no invocation is silently dropped',
+    claim: 'an unregistered reader is silently accepted',
     subject: 'lib',
-    anchor: 'unknown.push({ allowlist, script });',
-    replacement: 'void allowlist;',
+    anchor: '!reg.gates.includes(r) && !(r in reg.other)',
+    replacement: 'false',
+  },
+  {
+    id: 'R1',
+    claim: 'the scan stops following imports (a reader via a lib is missed)',
+    subject: 'lib',
+    anchor: 'if (edgesOf(root, f, text.get(f)).some((t) => reads.has(t))) {',
+    replacement: 'if (false) {',
+  },
+  {
+    id: 'R2',
+    claim: 'comments count as reads',
+    subject: 'lib',
+    anchor: 'files.filter((f) => stripComments(text.get(f)).includes(name))',
+    replacement: 'files.filter((f) => text.get(f).includes(name))',
+  },
+  {
+    id: 'R3',
+    claim: 'workflows are not scanned',
+    subject: 'lib',
+    anchor: ".filter((f) => stripComments(readFileSync(join(root, f), 'utf8')).includes(name))",
+    replacement: '.filter(() => false)',
+  },
+  {
+    id: 'R4',
+    claim: 'the scan only sees .mjs',
+    subject: 'lib',
+    anchor: 'const SCRIPT_EXT = /\\.(?:mjs|cjs|js|ts|sh)$/;',
+    replacement: 'const SCRIPT_EXT = /\\.mjs$/;',
+  },
+  {
+    id: 'D1',
+    claim: 'derived targets drop --closure',
+    subject: 'lib',
+    anchor: '/^--(?:app|closure|shape)$/',
+    replacement: '/^--(?:app|shape)$/',
+  },
+  {
+    id: 'D2',
+    claim: 'workflow comments count when deriving targets',
+    subject: 'lib',
+    anchor:
+      "for (const line of stripComments(readFileSync(join(root, wfDir, f), 'utf8')).split('\\n')) {",
+    replacement: "for (const line of readFileSync(join(root, wfDir, f), 'utf8').split('\\n')) {",
+  },
+  {
+    id: 'D3',
+    claim: 'workflow-derived args are not used',
+    subject: 'lib',
+    anchor: "entry.runs === 'workflows' ? deriveWorkflowArgSets(root, script) : entry.runs",
+    replacement: '[]',
+  },
+  {
+    id: 'U1',
+    claim: 'uncommitted changes drop out of the basis',
+    subject: 'cli',
+    anchor: 'const changed = [...new Set([...committed, ...uncommitted])].sort();',
+    replacement: 'const changed = [...new Set(committed)].sort();',
+  },
+  {
+    id: 'U2',
+    claim: 'untracked files drop out of the uncommitted set',
+    subject: 'cli',
+    anchor: "...lines(['ls-files', '-o', '--exclude-standard']),",
+    replacement: '',
+  },
+  {
+    id: 'U3',
+    claim: 'uncommitted changes are no longer flagged',
+    subject: 'cli',
+    anchor: 'uncommitted file(s) included in every check',
+    replacement: 'file(s) included',
+  },
+  {
+    id: 'L1',
+    claim: 'source-only changes no longer fall back to covering tests',
+    subject: 'cli',
+    anchor: 'tests = testsCovering(root, changed, allTests).slice(0, MAX_COVERING_TESTS);',
+    replacement: 'tests = [];',
+  },
+  {
+    id: 'L2',
+    claim: 'an unexercised leak scan stops saying so',
+    subject: 'cli',
+    anchor: "'leak scan NOT exercised:",
+    replacement: "'leak scan ok:",
   },
   {
     id: 'P4',
@@ -133,8 +222,8 @@ const MUTATIONS = [
     id: 'C6',
     claim: 'an out-of-scope file stops failing',
     subject: 'cli',
-    anchor: 'for (const f of outOfScope(committed, globs)) failures.push(',
-    replacement: 'for (const f of outOfScope(committed, globs)) warnings.push(',
+    anchor: 'for (const f of outOfScope(changed, globs)) failures.push(',
+    replacement: 'for (const f of outOfScope(changed, globs)) warnings.push(',
   },
   {
     id: 'C7',

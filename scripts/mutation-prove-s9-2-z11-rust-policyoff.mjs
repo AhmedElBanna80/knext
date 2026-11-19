@@ -105,8 +105,10 @@ const MUTATIONS = [
     id: 'R11',
     subject: 'run',
     claim: 'the direct Rust garbage-token call is dropped',
-    anchor: '  foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer not-a-token"\n  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, Rust',
-    replacement: '  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, Rust',
+    anchor:
+      '  foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer not-a-token"\n  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, Rust',
+    replacement:
+      '  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "policy off, Rust',
   },
   {
     id: 'R12',
@@ -161,7 +163,8 @@ const MUTATIONS = [
     id: 'D4',
     subject: 'run',
     claim: 'await_zero_all stops failing when a service never drains',
-    anchor: '      [ "${SECONDS}" -lt "${end}" ] || fail "timed out after 300s waiting for: ${svc} scaled to zero"',
+    anchor:
+      '      [ "${SECONDS}" -lt "${end}" ] || fail "timed out after 300s waiting for: ${svc} scaled to zero"',
     replacement: '      [ "${SECONDS}" -lt "${end}" ] || true',
   },
   {

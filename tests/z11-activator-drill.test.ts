@@ -257,7 +257,9 @@ describe('policyoff, Rust: the Rust template function itself refuses a token-les
     expect(w).toMatch(/dial_rc "\$\{ip\}" 8080\)" = 0 \]; then RUST_IP=/);
     expect(w).toMatch(/\n {2}fail "policy off: the foreign pod could not reach the warm Rust/);
     expect(r).toContain('await_rust_ip');
-    expect(r.indexOf('await_rust_ip')).toBeLessThan(r.indexOf('foreign_post "http://${RUST_IP}:8080'));
+    expect(r.indexOf('await_rust_ip')).toBeLessThan(
+      r.indexOf('foreign_post "http://${RUST_IP}:8080'),
+    );
   });
   it('the direct Rust no-token call is asserted 401 "missing bearer token"', () => {
     const leg = seg(

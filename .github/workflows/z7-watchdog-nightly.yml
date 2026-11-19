@@ -48,6 +48,10 @@ jobs:
     name: PROTECTED_REFS are protected and not shadowed by tags
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `true` only when EVERY finding is "branch unprotected". Empty when the job was
+    # cancelled or died before the step, which the alert treats as "not only unprotected".
+    outputs:
+      only_unprotected: ${{ steps.verify.outputs.only_unprotected }}
     permissions:
       contents: read
     steps:
@@ -57,6 +61,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify branch protection and tag absence (UNVERIFIABLE fails)
+        id: verify
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/verify-protected-refs.mjs
@@ -121,14 +126,16 @@ jobs:
           persist-credentials: false
 
       # A dated known exception (security/protected-refs-exception.json, max 30 days)
-      # suppresses ONLY this issue; the check job above stays red. Once it expires,
-      # or if the file is missing or malformed, the issue is filed.
+      # suppresses ONLY this issue, and ONLY when every finding is "branch unprotected"
+      # (a tag shadow, an UNVERIFIABLE answer or any other failure still files it); the
+      # check job above stays red either way. Once it expires, or if the file is missing
+      # or malformed, the issue is filed.
       - name: Is a dated known exception holding?
         id: exception
         run: node scripts/protected-refs-exception-status.mjs
 
       - name: Create or update the protected-ref issue (idempotent, never pinned)
-        if: steps.exception.outputs.active != 'true'
+        if: steps.exception.outputs.active != 'true' || needs.protected-refs.outputs.only_unprotected != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

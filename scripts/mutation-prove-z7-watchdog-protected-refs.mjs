@@ -26,6 +26,7 @@ const PROOF = {
     refs: 'scripts/lib/protected-refs.mjs',
     workflow: '.github/workflows/z7-watchdog-nightly.yml',
     pins: 'scripts/verify-action-pins.mjs',
+    cli: 'scripts/verify-protected-refs.mjs',
   },
 };
 
@@ -220,8 +221,51 @@ const MUTATIONS = [
     label: 'the exception no longer gates the issue step',
     subject: 'workflow',
     spec: SPEC,
-    anchor: "        if: steps.exception.outputs.active != 'true'\n",
+    anchor:
+      "        if: steps.exception.outputs.active != 'true' || needs.protected-refs.outputs.only_unprotected != 'true'\n",
     replacement: '',
+  },
+  {
+    label: 'the exception mutes ANY protected-refs failure (the only_unprotected gate is dropped)',
+    subject: 'workflow',
+    spec: SPEC,
+    anchor: " || needs.protected-refs.outputs.only_unprotected != 'true'",
+    replacement: '',
+  },
+  {
+    label: 'a not-yet-granted (future-dated) exception is active',
+    subject: 'refs',
+    spec: SPEC,
+    anchor: 'if (nowMs < granted) return',
+    replacement: 'if (false) return',
+  },
+  {
+    label: 'the expiry cap from NOW is deleted',
+    subject: 'refs',
+    spec: SPEC,
+    anchor: 'if (expires > nowMs + EXCEPTION_MAX_DAYS * DAY_MS) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'a tag shadow is classified as an unprotected-branch finding (mutable by the exception)',
+    subject: 'refs',
+    spec: SPEC,
+    anchor: "add('tag', ",
+    replacement: "add('unprotected', ",
+  },
+  {
+    label: 'an UNVERIFIABLE branch answer is classified as unprotected (mutable by the exception)',
+    subject: 'refs',
+    spec: SPEC,
+    anchor: "add('unverifiable', `branch ${ref}: UNVERIFIABLE (${errText(e)",
+    replacement: "add('unprotected', `branch ${ref}: UNVERIFIABLE (${errText(e)",
+  },
+  {
+    label: 'the CLI stops writing only_unprotected to the job output',
+    subject: 'cli',
+    spec: SPEC,
+    anchor: 'appendFileSync(process.env.GITHUB_OUTPUT,',
+    replacement: '0 && appendFileSync(process.env.GITHUB_OUTPUT,',
   },
   {
     label: 'the z7 alert loses its cancelled arm',
@@ -302,7 +346,7 @@ const MUTATIONS = [
   },
 ];
 
-const DECLARED = 37;
+const DECLARED = 43;
 declareMutations(DECLARED);
 
 if (MUTATIONS.length !== DECLARED) {

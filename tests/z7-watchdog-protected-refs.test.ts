@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import {
   EXCEPTION_REASON,
@@ -217,6 +219,67 @@ describe('verifyProtectedRefs (D4)', () => {
   });
 });
 
+describe('only an all-unprotected failure may be muted', () => {
+  const one = (mutate: (api: Api) => void) => {
+    const api = allGood();
+    mutate(api);
+    return verifyProtectedRefs({ gh: apiGh(api), repo: 'o/r', refs: PROTECTED_REFS });
+  };
+  it('reports onlyUnprotected for unprotected branches alone', () => {
+    const r = one((a) => {
+      a[branchPath('main')] = JSON.stringify({ protected: false });
+      a[branchPath('integration/v2')] = JSON.stringify({ protected: false });
+    });
+    expect(r.ok).toBe(false);
+    expect(r.onlyUnprotected).toBe(true);
+  });
+  it('a tag shadow alongside an unprotected branch is NOT onlyUnprotected', () => {
+    const r = one((a) => {
+      a[branchPath('main')] = JSON.stringify({ protected: false });
+      a[tagPath('integration/v2')] = JSON.stringify({ ref: 'x' });
+    });
+    expect(r.onlyUnprotected).toBe(false);
+  });
+  it('an UNVERIFIABLE answer alongside an unprotected branch is NOT onlyUnprotected', () => {
+    const r = one((a) => {
+      a[branchPath('main')] = JSON.stringify({ protected: false });
+      a[branchPath('integration/v2')] = new Error('HTTP 403');
+    });
+    expect(r.onlyUnprotected).toBe(false);
+  });
+  it('a clean pass and an empty set are not onlyUnprotected', () => {
+    expect(one(() => {}).onlyUnprotected).toBe(false);
+    expect(
+      verifyProtectedRefs({ gh: apiGh({}), repo: 'o/r', refs: new Set() }).onlyUnprotected,
+    ).toBe(false);
+  });
+  it('the CLI writes only_unprotected to GITHUB_OUTPUT and exits 1', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knext-fake-gh-'));
+    try {
+      // A fake `gh`: branches report protected:false; tag refs 404.
+      writeFileSync(
+        join(dir, 'gh'),
+        '#!/bin/sh\ncase "$2" in\n  */git/ref/tags/*) echo "gh: Not Found (HTTP 404)" >&2; exit 1;;\n  *) echo \'{"protected":false}\';;\nesac\n',
+        { mode: 0o755 },
+      );
+      const out = join(dir, 'out');
+      const r = spawnSync('node', [resolve(REPO_ROOT, 'scripts/verify-protected-refs.mjs')], {
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          GITHUB_REPOSITORY: 'o/r',
+          GITHUB_OUTPUT: out,
+        },
+        encoding: 'utf8',
+      });
+      expect(r.status).toBe(1);
+      expect(readFileSync(out, 'utf8')).toContain('only_unprotected=true');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('z7-watchdog workflow', () => {
   const text = readFileSync(
     resolve(REPO_ROOT, '.github/workflows/z7-watchdog-nightly.yml'),
@@ -251,7 +314,17 @@ describe('z7-watchdog workflow', () => {
     const probe = steps.find((st: { id?: string }) => st.id === 'exception');
     expect(probe.run).toContain('scripts/protected-refs-exception-status.mjs');
     const file = steps.find((st: { run?: string }) => st.run?.includes('nightly-alert-issue.mjs'));
-    expect(file.if).toBe("steps.exception.outputs.active != 'true'");
+    // Suppress only when the exception holds AND every finding is "branch unprotected".
+    expect(file.if).toBe(
+      "steps.exception.outputs.active != 'true' || needs.protected-refs.outputs.only_unprotected != 'true'",
+    );
+    expect(wf.jobs['protected-refs'].outputs.only_unprotected).toBe(
+      '${{ steps.verify.outputs.only_unprotected }}',
+    );
+    const verify = wf.jobs['protected-refs'].steps.find(
+      (st: { id?: string }) => st.id === 'verify',
+    );
+    expect(verify.run).toContain('scripts/verify-protected-refs.mjs');
     // The z7 alert has no exception path.
     expect(JSON.stringify(wf.jobs['z7-watchdog-red-alert'].steps)).not.toContain('exception');
   });
@@ -280,6 +353,23 @@ describe('dated known exception for protected refs', () => {
     expect(evaluateException({ ...ok, granted: undefined } as never, T).active).toBe(false);
     expect(evaluateException({ ...ok, expires: '2026-12-20' }, T).active).toBe(false);
     expect(evaluateException({ ...ok, reason: 'because' }, T).active).toBe(false);
+  });
+  it('is inactive before it is granted (future-dated pair cannot mute today)', () => {
+    const future = { granted: '2027-01-01', expires: '2027-01-30', reason: EXCEPTION_REASON };
+    expect(evaluateException(future, T).active).toBe(false);
+    expect(evaluateException(future, Date.parse('2027-01-02T00:00:00Z')).active).toBe(true);
+  });
+  it('caps expiry at 30 days from NOW, not only from granted', () => {
+    const longAgoGranted = {
+      granted: '2026-10-25',
+      expires: '2026-11-24',
+      reason: EXCEPTION_REASON,
+    };
+    expect(evaluateException(longAgoGranted, T).active).toBe(true);
+    // granted..expires is 30 days, but expiry is 35 days away from the evaluation time.
+    const far = { granted: '2026-11-15', expires: '2026-12-15', reason: EXCEPTION_REASON };
+    expect(evaluateException(far, Date.parse('2026-11-10T00:00:00Z')).active).toBe(false);
+    expect(evaluateException(far, Date.parse('2026-11-16T00:00:00Z')).active).toBe(true);
   });
   it('the committed exception file is currently valid and within 30 days', () => {
     const file = JSON.parse(

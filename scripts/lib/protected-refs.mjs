@@ -21,6 +21,12 @@ const isNotFound = (e) => /\(HTTP 404\)|\bHTTP 404\b/.test(errText(e));
  */
 export function verifyProtectedRefs({ gh, repo, refs }) {
   const findings = [];
+  // One kind per finding: 'unprotected' | 'tag' | 'unverifiable' | 'empty'.
+  const kinds = [];
+  const add = (kind, text) => {
+    kinds.push(kind);
+    findings.push(text);
+  };
   let checked = 0;
   for (const ref of refs) {
     checked++;
@@ -30,25 +36,27 @@ export function verifyProtectedRefs({ gh, repo, refs }) {
       if (body?.protected === true) {
         // ok
       } else if (body?.protected === false) {
-        findings.push(`branch ${ref}: UNPROTECTED`);
+        add('unprotected', `branch ${ref}: UNPROTECTED`);
       } else {
-        findings.push(`branch ${ref}: UNVERIFIABLE (no \`protected\` field in the response)`);
+        add('unverifiable', `branch ${ref}: UNVERIFIABLE (no \`protected\` field in the response)`);
       }
     } catch (e) {
-      findings.push(`branch ${ref}: UNVERIFIABLE (${errText(e).split('\n')[0]})`);
+      add('unverifiable', `branch ${ref}: UNVERIFIABLE (${errText(e).split('\n')[0]})`);
     }
     // No tag with the branch's name.
     try {
       gh(['api', `repos/${repo}/git/ref/tags/${ref}`]);
-      findings.push(`tag ${ref}: EXISTS (shadows the protected branch name)`);
+      add('tag', `tag ${ref}: EXISTS (shadows the protected branch name)`);
     } catch (e) {
       if (!isNotFound(e)) {
-        findings.push(`tag ${ref}: UNVERIFIABLE (${errText(e).split('\n')[0]})`);
+        add('unverifiable', `tag ${ref}: UNVERIFIABLE (${errText(e).split('\n')[0]})`);
       }
     }
   }
-  if (checked === 0) findings.push('no protected refs were checked (empty set)');
-  return { ok: findings.length === 0, findings, checked };
+  if (checked === 0) add('empty', 'no protected refs were checked (empty set)');
+  // The ONLY shape a dated exception may mute: every finding is "branch unprotected".
+  const onlyUnprotected = kinds.length > 0 && kinds.every((k) => k === 'unprotected');
+  return { ok: findings.length === 0, findings, kinds, onlyUnprotected, checked };
 }
 
 const DAY_MS = 86_400_000;
@@ -74,6 +82,12 @@ export function evaluateException(exception, nowMs) {
   if (exception.reason !== EXCEPTION_REASON) return { active: false, why: 'reason mismatch' };
   if (expires - granted > EXCEPTION_MAX_DAYS * DAY_MS) {
     return { active: false, why: `exception window exceeds ${EXCEPTION_MAX_DAYS} days` };
+  }
+  if (nowMs < granted) return { active: false, why: `not yet granted (${exception.granted})` };
+  // The cap is measured from NOW as well: a future-dated granted/expires pair must
+  // not mute the alert for longer than 30 days from today.
+  if (expires > nowMs + EXCEPTION_MAX_DAYS * DAY_MS) {
+    return { active: false, why: `expires more than ${EXCEPTION_MAX_DAYS} days from now` };
   }
   if (nowMs >= expires) return { active: false, why: `expired ${exception.expires}` };
   return { active: true, why: `holds until ${exception.expires}` };

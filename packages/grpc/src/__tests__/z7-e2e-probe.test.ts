@@ -248,30 +248,30 @@ describe('summarize', () => {
   });
 
   it('prints the interceptor own message only with withMessage, and never a free text', () => {
-  const own = { status: 401, body: { code: 'unauthenticated', message: 'token rejected' } };
-  expect(JSON.parse(summarize(own, KID, true))).toEqual({
-    status: 401,
-    code: 'unauthenticated',
-    kid: KID,
-    message: 'token rejected',
+    const own = { status: 401, body: { code: 'unauthenticated', message: 'token rejected' } };
+    expect(JSON.parse(summarize(own, KID, true))).toEqual({
+      status: 401,
+      code: 'unauthenticated',
+      kid: KID,
+      message: 'token rejected',
+    });
+    expect(JSON.parse(summarize(own, KID))).not.toHaveProperty('message');
+    const pem = PEM.split('\n').filter((l) => l && !l.startsWith('-----'))[0] as string;
+    const echo = { status: 401, body: { code: 'unauthenticated', message: `bad ${pem}` } };
+    expect(JSON.parse(summarize(echo, KID, true)).message).toBe('');
+    expect(summarize(echo, KID, true)).not.toContain(pem);
   });
-  expect(JSON.parse(summarize(own, KID))).not.toHaveProperty('message');
-  const pem = PEM.split('\n').filter((l) => l && !l.startsWith('-----'))[0] as string;
-  const echo = { status: 401, body: { code: 'unauthenticated', message: `bad ${pem}` } };
-  expect(JSON.parse(summarize(echo, KID, true)).message).toBe('');
-  expect(summarize(echo, KID, true)).not.toContain(pem);
-});
 
-it('carries the body of a success so the e2e can compare a read-back value', () => {
-  const line = summarize({ status: 200, body: { id: 'a', value: 'v' } }, undefined);
-  expect(JSON.parse(line)).toEqual({
-    status: 200,
-    code: '',
-    kid: '',
-    body: { id: 'a', value: 'v' },
+  it('carries the body of a success so the e2e can compare a read-back value', () => {
+    const line = summarize({ status: 200, body: { id: 'a', value: 'v' } }, undefined);
+    expect(JSON.parse(line)).toEqual({
+      status: 200,
+      code: '',
+      kid: '',
+      body: { id: 'a', value: 'v' },
+    });
   });
 });
-})
 describe('hand-built tokens, signed by the zone key (mode raw)', () => {
   // The real signer will not mint a token with no sub for an AUTH_USER RPC, nor one
   // that lives past 60 s. The e2e still has to prove the FUNCTION refuses both, so

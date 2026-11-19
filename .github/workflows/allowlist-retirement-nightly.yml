@@ -1,0 +1,98 @@
+name: Advisory allowlist retirement (nightly)
+
+# A security-allowlist entry is accepted risk with an exit condition. Nothing
+# told us when the exit condition was met: the advisory withdrawn upstream, or a
+# patched version published. This nightly runs the read-only probe
+# `scripts/verify-allowlist-retirement.mjs` over the precompile-closure,
+# npm-audit and osv allowlists of BOTH long-lived branches (main and
+# integration/v2) and goes RED on any retirable entry. It also goes red if the
+# GitHub API is unreachable (after bounded retries): a probe that passes when it
+# cannot reach upstream is worse than none.
+#
+# MECHANISM: the probe script lives on main. For each branch in the matrix this
+# job checks out main (the trusted script) and, separately, the branch under
+# probe into `target/`, then runs the main script with `ALLOWLIST_ROOT=target`.
+# The branch contributes DATA only (allowlist JSON + lockfiles, parsed, never
+# executed), so no branch code runs here and there is no SHA pin to bump and no
+# `workflow_call` wiring that can fail silently at startup.
+#
+# Logic and offline tests: `scripts/lib/allowlist-retirement.mjs`,
+# `tests/allowlist-retirement.test.ts`. The probe never edits an allowlist.
+
+on:
+  schedule:
+    - cron: '47 2 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: allowlist-retirement-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe-allowlists:
+    name: Probe allowlists (${{ matrix.ref }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [main, integration/v2]
+    steps:
+      - name: Checkout the probe script (main)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Checkout the branch under probe (data only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.ref }}
+          path: target
+          persist-credentials: false
+
+      - name: Probe advisories (FAIL on any actionable finding or API error)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ALLOWLIST_ROOT: target
+        run: node scripts/verify-allowlist-retirement.mjs
+
+  nightly-red-alert:
+    name: Nightly red alert (never pinned)
+    needs: [probe-allowlists]
+    # always() so a failed/cancelled probe still runs this job; the needs-result
+    # check fires on failure OR cancelled so a timed-out probe does not go silent.
+    if: >-
+      always() &&
+      github.event_name == 'schedule' &&
+      (needs.probe-allowlists.result == 'failure' || needs.probe-allowlists.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Create or update the "Advisory allowlist retirement RED" issue (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CHECK_RESULT: ${{ needs.probe-allowlists.result }}
+        run: |
+          set -euo pipefail
+          title='Advisory allowlist retirement RED'
+          body="The nightly allowlist retirement probe FAILED for at least one branch (main or integration/v2). Read the job logs: each line is one of
+          - RETIRE: the advisory was withdrawn upstream (drop the entry), or a patched version is reachable now (every parent accepts it; bump, then drop the entry).
+          - ERROR: the advisory API could not be read after retries, so the check could not run. That is a failure, not a pass; re-run to confirm.
+          INFO lines are informational and never fail the run.
+
+          - Run: ${RUN_URL}
+          - Probe job result: ${CHECK_RESULT}"
+          TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs

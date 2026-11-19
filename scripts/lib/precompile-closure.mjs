@@ -240,12 +240,14 @@ export function readAllowlist(doc, now = new Date()) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.added ?? '')) {
       throw new Error(`allowlist: entry ${entry.id} has no valid \`added\` date (YYYY-MM-DD)`);
     }
-    if (entry.expires) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.expires)) {
-        throw new Error(`allowlist: entry ${entry.id} has a malformed \`expires\` date`);
-      }
-      if (new Date(`${entry.expires}T00:00:00Z`) <= now) continue; // expired — no longer suppresses
+    // `expires` is MANDATORY: an entry with no clock is accepted risk that never
+    // forces re-justification.
+    if (typeof entry.expires !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(entry.expires)) {
+      throw new Error(
+        `allowlist: entry ${entry.id} has no valid \`expires\` date (YYYY-MM-DD) — it is required`,
+      );
     }
+    if (new Date(`${entry.expires}T00:00:00Z`) <= now) continue; // expired — no longer suppresses
     active.add(entry.id);
   }
   return active;

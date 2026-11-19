@@ -38,6 +38,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseStrictIsoDate } from './strict-date.mjs';
 
 /**
  * The severities that fail the gate — the same threshold as the image Trivy
@@ -237,15 +238,18 @@ export function readAllowlist(doc, now = new Date()) {
     if (!entry.justification) {
       throw new Error(`allowlist: entry ${entry.id} has no \`justification\``);
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.added ?? '')) {
+    if (parseStrictIsoDate(entry.added) === null) {
       throw new Error(`allowlist: entry ${entry.id} has no valid \`added\` date (YYYY-MM-DD)`);
     }
-    if (entry.expires) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.expires)) {
-        throw new Error(`allowlist: entry ${entry.id} has a malformed \`expires\` date`);
-      }
-      if (new Date(`${entry.expires}T00:00:00Z`) <= now) continue; // expired — no longer suppresses
+    // `expires` is MANDATORY: an entry with no clock is accepted risk that never
+    // forces re-justification.
+    const expiresMs = parseStrictIsoDate(entry.expires);
+    if (expiresMs === null) {
+      throw new Error(
+        `allowlist: entry ${entry.id} has no valid \`expires\` date (a real YYYY-MM-DD calendar date) — it is required`,
+      );
     }
+    if (expiresMs <= now.getTime()) continue; // expired — no longer suppresses
     active.add(entry.id);
   }
   return active;

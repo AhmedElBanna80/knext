@@ -76,7 +76,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     one. `held` makes the activator hold a call past the token's life with a ResourceQuota in the
     function's namespace that admits no pod (no node is cordoned; `Z11_HELD_SECONDS`, default
     80 s; the quota is removed on exit): the call is refused as unauthenticated, then a fresh
-    token is accepted and a garbage one is still refused. `heldwarm` is the combined case: two warm pods each load the old key set with one call (the others detached, quota in place), the key is rotated and retired under them, a new-key call held 30 s and released to pod A only is accepted (the control), and the same held 80 s and released to pod B only, in the same state, is refused (401 unauthenticated "token rejected"). The pod uid set is checked unchanged; labels go back before the quota. The verifier's order is JWKS re-read, kid lookup, signature, then expiry, and a refusal is not logged, so the drill proves the pair, not which check fired.
+    token is accepted and a garbage one is still refused. `heldwarm` is the combined case: two warm pods each load the old key set with one call (the others detached, quota in place), the key is rotated and retired under them, a new-key call held 30 s and released to pod A only is accepted (the control), and the same held 80 s and released to pod B only, in the same state, is refused (401 unauthenticated "token rejected"). The pod uid set is checked unchanged; labels go back before the quota. The pod that answered each held call is observed, not assumed: `e2e/z11-activator-drill/answering-pod.sh` (sourced by `run.sh`) reads every pod's queue-proxy `revision_request_count` through the API server's pod proxy before and after the call, and the one pod whose total rose by exactly one is the answerer (any other result fails the run, and an unreadable, empty, series-less or non-numeric scrape fails closed naming the pod rather than counting as zero). The verdicts (404 not_found, or 401 unauthenticated "token rejected", from the expected pod) are the functions `check_accepted_by` and `check_refused_by` in the same file. After its refusal, pod B alone is given a fresh token and must accept it (404 not_found), which shows the refusal was the token's age. The verifier's order is JWKS re-read, kid lookup, signature, then expiry, and a refusal is not logged, so the drill proves the pair, not which check fired.
     Both sign through `../z7-identity-kind/probe.ts` (`--timeout-seconds` is its
     long-call option). `.github/workflows/z11-activator-drill-e2e.yml`
     runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
@@ -84,7 +84,9 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `scripts/mutation-prove-s8-1-z11-policyoff.mjs`,
     `scripts/mutation-prove-s9-1-z11-rotation-held.mjs` and
     `scripts/mutation-prove-s9-2-z11-rust-policyoff.mjs` (the Rust leg) and
-    `scripts/mutation-prove-s10-4-z11-heldwarm.mjs` (`heldwarm` and the warm hold).
+    `scripts/mutation-prove-s10-4-z11-heldwarm.mjs` (`heldwarm` and the warm hold) and
+    `scripts/mutation-prove-s11-1-z11-answering-pod.mjs` (which pod answered and the pod B fresh-token control,
+    run against `tests/z11-answering-pod.test.ts`, which executes the shell on fabricated counters).
 
 ## Invariants
 
@@ -112,4 +114,4 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
 
 - Run: `node scripts/bun-test.mjs packages/grpc` (from the repository root).
 - The e2e guards live at the repo root and run by name:
-  `node scripts/bun-test.mjs tests/z7-identity-kind-e2e-lane.test.ts tests/z10-zone-functions-kind-lane.test.ts tests/z11-activator-drill.test.ts`.
+  `node scripts/bun-test.mjs tests/z7-identity-kind-e2e-lane.test.ts tests/z10-zone-functions-kind-lane.test.ts tests/z11-activator-drill.test.ts tests/z11-answering-pod.test.ts`.

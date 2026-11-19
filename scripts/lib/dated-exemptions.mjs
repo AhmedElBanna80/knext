@@ -14,9 +14,9 @@
  *   - AN UNKNOWN KEY THROWS. A typo'd `expiress` otherwise parses as an entry
  *     with no expiry — an exemption that never lapses, wearing the appearance of
  *     one that does. This is the quietest possible way to neuter a clock.
- *   - `expires` IS REQUIRED. The security allowlists require it too (strict real
- *     calendar date, the gate throws without one). Nothing here can be
- *     permanent: a metric leaving the coverage gate, or a guard shipping with
+ *   - `expires` IS REQUIRED. The security allowlist makes it optional because a
+ *     vulnerability finding can be permanently accepted after triage. Nothing
+ *     here can be: a metric leaving the coverage gate, or a guard shipping with
  *     no prover, is a debt, and a debt with no date is a decision nobody ever
  *     makes again.
  *

@@ -709,11 +709,9 @@ describe('heldwarm: warm pods with the old key set cached, a call held past the 
 
   it('the control: new-key token held INSIDE the token life on stale pod A must be ACCEPTED, by A', () => {
     const ctl = seg('hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"', 'log "heldwarm 3/3');
+    // Wiring only: the verdict itself is exercised in tests/z11-answering-pod.test.ts.
     expect(ctl).toMatch(
-      /\[ "\$\{HELD_STATUS\}" = 404 \] && \[ "\$\{HELD_CODE\}" = not_found \] \\\n\s*\|\| fail "warm pod control: a call held/,
-    );
-    expect(ctl).toMatch(
-      /\[ "\$\{HELD_POD_UID\}" = "\$\{wuid_a\}" \] \\\n\s*\|\| fail "warm pod control: the call was not answered/,
+      /check_accepted_by "\$\{wuid_a\}" "\$\{HELD_REQ_BEFORE\}" "\$\{HELD_REQ_AFTER\}" "\$\{HELD_STATUS\}" "\$\{HELD_CODE\}" \\\n\s*\|\| fail "warm pod control: a call held/,
     );
     expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeGreaterThan(-1);
     expect(w.indexOf('export_key "${WORK}/key-held" current')).toBeLessThan(
@@ -723,11 +721,9 @@ describe('heldwarm: warm pods with the old key set cached, a call held past the 
 
   it('the test: the same token held PAST the token life on stale pod B must be 401 "token rejected", by B', () => {
     const held = seg('hold_call "${HELD_SECONDS}" warm "${wuid_b}"', 'foreign_get');
+    // Wiring only: the verdict itself is exercised in tests/z11-answering-pod.test.ts.
     expect(held).toMatch(
-      /\[ "\$\{HELD_STATUS\}" = 401 \] && \[ "\$\{HELD_CODE\}" = unauthenticated \] && \[ "\$\{HELD_MESSAGE\}" = "token rejected" \] \\\n\s*\|\| fail "warm pod: a call held/,
-    );
-    expect(held).toMatch(
-      /\[ "\$\{HELD_POD_UID\}" = "\$\{wuid_b\}" \] \\\n\s*\|\| fail "the held call was not answered by the warm pod/,
+      /check_refused_by "\$\{wuid_b\}" "\$\{HELD_REQ_BEFORE\}" "\$\{HELD_REQ_AFTER\}" "\$\{HELD_STATUS\}" "\$\{HELD_CODE\}" "\$\{HELD_MESSAGE\}" \\\n\s*\|\| fail "warm pod: a call held/,
     );
     // The control runs BEFORE the long hold, both on pods in the loaded-but-never-called state.
     expect(w.indexOf('hold_call "${CONTROL_HELD_SECONDS}" warm')).toBeLessThan(
@@ -744,7 +740,10 @@ describe('heldwarm: warm pods with the old key set cached, a call held past the 
   });
 
   it('the warm hold detaches EVERY pod, re-attaches only the target first, and the label goes back before the quota', () => {
-    expect(c).toContain('HELD_POD_UID="$3"');
+    expect(c).not.toContain('HELD_POD_UID="$3"');
+    expect(c).toContain(
+      'HELD_POD_UID="$(answering_pod_uid "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}")"',
+    );
     expect(c).toContain('uids_before="$(fn_pod_uids)"');
     expect(c).toContain('RESTORE_DETACH="${RESTORE_DETACH}${pod}=${label} "');
     expect(c.indexOf('RESTORE_DETACH="${RESTORE_DETACH}${pod}=${label} "')).toBeLessThan(

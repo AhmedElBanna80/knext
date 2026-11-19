@@ -123,6 +123,8 @@ PF_PIDS="${WORK}/pf.pids"
 IMAGE_PREFIX=z11
 # shellcheck source=../lib/kind-lane.sh
 source "${HERE}/../lib/kind-lane.sh"
+# shellcheck source=answering-pod.sh
+source "${HERE}/answering-pod.sh"
 
 diagnostics() {
   echo "---- diagnostics (no Secret is read) ----" >&2
@@ -752,7 +754,9 @@ release_pods() {
 
 # hold_call <seconds> [warm <target uid>]: hold ONE call in the activator for <seconds>, then
 # release it and take the answer. Sets HELD_STATUS, HELD_CODE, HELD_MESSAGE, HELD_FOR and, for a
-# warm hold, HELD_POD_UID. Cold (the default): the function is scaled to zero first and a
+# warm hold, HELD_POD_UID: the pod that ANSWERED, read from the queue-proxy request counters of
+# every pod before and after the call (answering-pod.sh, kept in HELD_REQ_BEFORE and
+# HELD_REQ_AFTER), never taken from the target. Cold (the default): the function is scaled to zero first and a
 # ResourceQuota admits no pod, so the pod the activator waits for cannot be created. Warm: every
 # live pod is kept, all are detached from the Service (their revisionUID label is changed) so the
 # activator has no endpoint, and the quota keeps the ReplicaSet from replacing them. On release
@@ -762,6 +766,8 @@ release_pods() {
 hold_call() {
   local out="${WORK}/held.out" start mode="${2:-cold}" pods="" pod uid label tpod="" tlabel="" uids_before=""
   HELD_POD_UID=""
+  HELD_REQ_BEFORE=""
+  HELD_REQ_AFTER=""
   if [ "${mode}" = warm ]; then
     pods="$(fn_pods_ready)"
     uids_before="$(fn_pod_uids)"
@@ -769,7 +775,7 @@ hold_call() {
       if [ "${uid}" = "${3:-}" ]; then tpod="${pod}"; tlabel="${label}"; fi
     done <<<"${pods}"
     [ -n "${tpod}" ] || fail "the target pod ${3:-} is not a Ready ${GO_FN} pod"
-    HELD_POD_UID="$3"
+    HELD_REQ_BEFORE="$(request_snapshot)" || fail "cannot read the pods' request counters before the hold"
   else
     await_zero "${GO_FN}"
   fi
@@ -820,6 +826,10 @@ hold_call() {
   HELD_CODE="$(jq -r '.code // ""' "${out}")"
   HELD_MESSAGE="$(jq -r '.message // ""' "${out}")"
   if [ "${mode}" = warm ]; then
+    # The pod that answered, observed: the one whose queue-proxy counted this call. Read while
+    # the others are still detached, before anything else can reach a pod.
+    HELD_REQ_AFTER="$(request_snapshot)" || fail "cannot read the pods' request counters after the hold"
+    HELD_POD_UID="$(answering_pod_uid "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}")" || fail "the held call cannot be attributed to one pod (before: ${HELD_REQ_BEFORE//$'\n'/; } after: ${HELD_REQ_AFTER//$'\n'/; })"
     release_pods
     # Exactly the pods that were there, and the target among them: nothing was replaced.
     [ "$(fn_pod_uids)" = "${uids_before}" ] || fail "after the answer the pods are '$(fn_pod_uids)', want exactly '${uids_before}'"
@@ -876,7 +886,7 @@ phase_held() {
 phase_heldwarm() {
   log "heldwarm: warm pods with the old key set cached, the key rotated, one call held past the token's life"
   [ -n "${ZONE_HOST}" ] || start_forwards
-  local old_kid new_kid wnonce rev_before wuid_a wuid_b wuids wretired_at
+  local old_kid new_kid wnonce rev_before wuid_a wuid_b wuids wretired_at bctl_before bctl_after
   [ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \
     || fail "warm pod: a rotation is already in flight; run the deploy phase for a clean zone"
   old_kid="$(secret_get current.kid)"
@@ -923,20 +933,28 @@ phase_heldwarm() {
   export_key "${WORK}/key-held" current
   hold_call "${CONTROL_HELD_SECONDS}" warm "${wuid_a}"
   echo "HELDWARM-CONTROL: outstanding ${HELD_FOR}s -> ${HELD_STATUS} ${HELD_CODE}"
-  [ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \
-    || fail "warm pod control: a call held ${HELD_FOR}s (inside the token's life) got status ${HELD_STATUS} code '${HELD_CODE}', want 404 not_found (a pod holding the old key set must find the new key)"
-  [ "${HELD_POD_UID}" = "${wuid_a}" ] \
-    || fail "warm pod control: the call was not answered by the warm pod ${wuid_a}"
+  check_accepted_by "${wuid_a}" "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}" "${HELD_STATUS}" "${HELD_CODE}" \
+    || fail "warm pod control: a call held ${HELD_FOR}s (inside the token's life) got status ${HELD_STATUS} code '${HELD_CODE}' from pod ${HELD_POD_UID}, want 404 not_found from the warm pod ${wuid_a} (a pod holding the old key set must find the new key)"
   ok "control: pod A, which cached only the old key set, accepted the new key after a ${HELD_FOR}s hold (404 not_found)"
 
-  log "heldwarm 3/3: pod B, in the same state, new-key token held ${HELD_SECONDS}s"
+  log "heldwarm 3/3: pod B, in the same state, new-key token held ${HELD_SECONDS}s, then a fresh token"
   hold_call "${HELD_SECONDS}" warm "${wuid_b}"
   echo "HELDWARM: outstanding ${HELD_FOR}s -> ${HELD_STATUS} ${HELD_CODE} '${HELD_MESSAGE}'"
-  [ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \
-    || fail "warm pod: a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}', want 401 unauthenticated 'token rejected' (an expired token must never be accepted, and the header must have reached the function)"
-  [ "${HELD_POD_UID}" = "${wuid_b}" ] \
-    || fail "the held call was not answered by the warm pod ${wuid_b}"
+  check_refused_by "${wuid_b}" "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}" "${HELD_STATUS}" "${HELD_CODE}" "${HELD_MESSAGE}" \
+    || fail "warm pod: a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}' from pod ${HELD_POD_UID}, want 401 unauthenticated 'token rejected' from the warm pod ${wuid_b} (an expired token must never be accepted, and the header must have reached the function)"
   ok "a call held ${HELD_FOR}s was refused by pod B, in the same stale-cache state pod A accepted it in (401 unauthenticated, token rejected)"
+  # Positive control on pod B: the same pod, right after its refusal, accepts a FRESH token. So
+  # the refusal was the token's age, and pod B is healthy and still validates. The call is sent
+  # to B alone (the others are detached) and the counters confirm B is the pod that answered.
+  isolate_pods "${wuid_b}"
+  bctl_before="$(request_snapshot)" || fail "cannot read the pods' request counters before pod B's fresh call"
+  fn_probe "${WORK}/key-held" fresh-b
+  bctl_after="$(request_snapshot)" || fail "cannot read the pods' request counters after pod B's fresh call"
+  release_pods
+  echo "HELDWARM-FRESH-B: fresh token to pod B -> ${PR_STATUS} ${PR_CODE}"
+  check_accepted_by "${wuid_b}" "${bctl_before}" "${bctl_after}" "${PR_STATUS}" "${PR_CODE}" \
+    || fail "warm pod B: a FRESH token right after its refusal got status ${PR_STATUS} code '${PR_CODE}', want 404 not_found from pod B ${wuid_b} (the refusal must have been the token's age, and pod B must be healthy)"
+  ok "positive control: pod B accepts a fresh token (404 not_found) right after refusing the 80s-old one, so the refusal was the token's age"
   foreign_get "Bearer not-a-token"
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
     || fail "warm pod: after the holds a garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"

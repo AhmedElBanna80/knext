@@ -320,7 +320,7 @@ describe('#2388 — every package CLI surface', () => {
   });
 });
 
-describe('#2388 — Rust crates', () => {
+describe('#2388 — Rust crates (fail-closed: everything under crates/ except Markdown)', () => {
   it('crate source (*.rs, tests included) fires', () => {
     expect(ids(classify([change('crates/knext-ffi/src/lib.rs')]))).toContain('crates');
     expect(ids(classify([change('crates/knext-ffi/tests/abi.rs')]))).toContain('crates');
@@ -334,6 +334,32 @@ describe('#2388 — Rust crates', () => {
       'crates/knext-ffi/Cargo.toml',
       'crates/knext-ffi-macros/Cargo.toml',
       'crates/rust-toolchain.toml',
+    ]) {
+      expect(ids(classify([change(p)])), p).toContain('crates');
+    }
+  });
+
+  it('the FFI generator and harness code under crates/harness fires (.ts)', () => {
+    for (const p of [
+      'crates/harness/ffi-generated.ts',
+      'crates/harness/ffi-harness.ts',
+      'crates/harness/local-crates-source.ts',
+    ]) {
+      expect(ids(classify([change(p)])), p).toContain('crates');
+    }
+  });
+
+  it('a trybuild .stderr expectation fires', () => {
+    expect(ids(classify([change('crates/knext-ffi/tests/ui/fail/array.stderr')]))).toContain(
+      'crates',
+    );
+  });
+
+  it('a file type nobody has listed yet fires: .cargo/config.toml, cbindgen.toml, vendor/', () => {
+    for (const p of [
+      'crates/x/.cargo/config.toml',
+      'crates/x/cbindgen.toml',
+      'crates/vendor/some-dep/src/lib.rs',
     ]) {
       expect(ids(classify([change(p)])), p).toContain('crates');
     }

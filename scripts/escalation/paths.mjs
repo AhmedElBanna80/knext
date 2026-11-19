@@ -55,13 +55,14 @@ const TEMPLATE_NON_SURFACE =
   /(^|\/)(tests|testkit|testutil|testvectors|testhelpers|testdata|e2e)(\/|\.rs$)|_tests\.rs$|\.md$|(^|\/)\.gitignore$|^templates\/[^/]+\/(conformance\.sh$|conformance\/)/;
 
 /**
- * The Rust surface under `crates/`: crate source (`*.rs`, tests included, since
- * a test change is still a change to the FFI it exercises), every `Cargo.toml`,
- * the lockfile, the cargo deny policy and the toolchain pin. Docs (`EGM.md`,
- * `README.md`) and anything else under `crates/` do not fire.
+ * Docs-only files under `crates/`: Markdown at any depth (`EGM.md`, `README.md`).
+ * This is the ONLY exclusion from the Rust trigger. It is fail-closed by design:
+ * every other path under `crates/` fires, so a file no one has listed yet (a
+ * `.cargo/config.toml`, a `cbindgen.toml`, `vendor/`, a trybuild `.stderr`, the
+ * FFI generator's `.ts`) cannot slip past silently. Case-sensitive on purpose:
+ * `.MD` is not treated as docs.
  */
-const CRATES_SURFACE =
-  /^crates\/(?:.+\/)?(?:[^/]+\.rs|Cargo\.toml|Cargo\.lock|deny\.toml|rust-toolchain\.toml)$/;
+const CRATES_DOCS = /\.md$/;
 
 export function isTestPath(p) {
   return (
@@ -102,9 +103,9 @@ export const TRIGGERS = [
   },
   {
     id: 'crates',
-    // Crate source, Cargo manifests and lockfile, deny.toml and the toolchain pin:
-    // FFI surface and supply chain. Docs under crates/ are not a trigger.
-    match: (p) => CRATES_SURFACE.test(p),
+    // Everything under crates/ (FFI surface, generator, Cargo supply chain) except
+    // docs-only Markdown. Fail-closed: an unlisted file type fires by default.
+    match: (p) => p.startsWith('crates/') && !CRATES_DOCS.test(p),
   },
   {
     id: 'supply-chain',

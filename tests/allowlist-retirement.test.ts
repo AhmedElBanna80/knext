@@ -664,20 +664,19 @@ describe('vendored advisories: registry and tarball resolution', () => {
   });
 });
 
-describe('real allowlists: the vendored GHSA entry', () => {
-  it('GHSA-xqc2 declares where its vendored copy lives, keeping its mandatory expiry', () => {
-    const doc = JSON.parse(
-      readFileSync(resolve(ROOT, 'security/precompile-closure-allowlist.json'), 'utf8'),
-    );
-    const e = doc.allow.find((x: { id: string }) => x.id === 'GHSA-xqc2-xf4c-x3h3');
-    expect(e.expires).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    const v = validateVendoredIn(e.vendoredIn, 'f', e.id);
+describe('real allowlists: vendored entries', () => {
+  it('every vendoredIn is valid, and GHSA-xqc2 (when present) declares one and keeps its expiry', () => {
+    const file = 'security/precompile-closure-allowlist.json';
+    const doc = JSON.parse(readFileSync(resolve(ROOT, file), 'utf8'));
+    for (const e of doc.allow) {
+      if (e.vendoredIn !== undefined) validateVendoredIn(e.vendoredIn, file, e.id);
+    }
+    const x = doc.allow.find((e: { id: string }) => e.id === 'GHSA-xqc2-xf4c-x3h3');
+    if (x === undefined) return; // integration/v2 carries no such entry
+    expect(x.expires).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const v = validateVendoredIn(x.vendoredIn, file, x.id);
     expect(v.package).toBe('next');
     expect(v.patched).toContain('>= 19.3.1');
-    expect(
-      collectEntries(ROOT, ['security/precompile-closure-allowlist.json']).some(
-        (x) => x.vendoredIn,
-      ),
-    ).toBe(true);
+    expect(collectEntries(ROOT, [file]).some((e) => e.vendoredIn)).toBe(true);
   });
 });

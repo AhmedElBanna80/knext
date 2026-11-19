@@ -1,0 +1,67 @@
+name: Pre-push check
+
+# Runs `scripts/prepush-check.mjs` on every pull request, so the check agents are told to run
+# before pushing is not advisory.
+#
+# WHAT IT ENFORCES HERE
+#   - A `Scope: <glob>, <glob>` line MUST be in the PR body. Missing is a FAILURE, not a warning.
+#   - A scope that matches everything (`**`, `**/*`, `*/**`) is a FAILURE: it declares nothing.
+#   - Every changed file must be inside the declared scope.
+#   - Every changed `security/*.json|yaml` input must map to a gate (a registered script, or a
+#     test under tests/ that names it). An input nothing gates is a FAILURE.
+#   - Every `mkdtemp` under tests/ reaches a removal.
+#
+# WHY THE PR BODY, NOT A COMMIT TRAILER. A commit message can be amended or rebased after
+# review to widen the scope. The PR body is the declaration reviewers read; CI reads it from the
+# event payload, which is the PR body as of THIS run. `edited` re-runs the job when the body
+# changes, so adding the line to an open PR does not need a push.
+#
+# WHAT IT DOES NOT DO (stated, not hidden; see scripts/EGM.md for the full row)
+#   - It does not EXECUTE the gates or the changed tests (--skip-gates --skip-tests). Each gate
+#     already runs in its own workflow on the PR; this job proves a scope was declared and that
+#     each changed security/ input has a gate to run.
+#   - The scope is self-declared. It catches an accident (a PR that silently reverts another
+#     PR's files), not an author who declares an honest-looking but too-wide scope.
+#
+# Untrusted text: the PR body arrives through env and is read as DATA, never interpolated into
+# the script (anyone who can edit the PR controls it).
+
+on:
+  pull_request:
+    branches: ['**']
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepush-check:
+    name: Pre-push check (scope + gate mapping)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history; the check diffs against the merge base)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Run prepush-check against the PR base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # The checkout is the PR merge ref; fetch the base branch so the merge base resolves.
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          node scripts/prepush-check.mjs \
+            --base "origin/${BASE_REF}" \
+            --require-scope --skip-gates --skip-tests

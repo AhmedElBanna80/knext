@@ -35,13 +35,13 @@ const MUTATIONS = [
   {
     label: 'the integrity comparison is dropped (any tarball is accepted)',
     subject: 'script',
-    anchor: 'if (entry.integrity !== locked.integrity) {',
+    anchor: 'if (entry?.integrity !== locked.integrity) {',
     replacement: 'if (false) {',
   },
   {
     label: 'the installed version is no longer checked',
     subject: 'script',
-    anchor: 'if (entry.version !== expectedVersion) {',
+    anchor: 'if (entry?.version !== expectedVersion) {',
     replacement: 'if (false) {',
   },
   {

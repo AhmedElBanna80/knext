@@ -60,6 +60,11 @@ jobs:
           path: target
           persist-credentials: false
 
+      - name: Probe copies must match main (data-only byte diff, nothing from target/ runs)
+        env:
+          PROBE_SYNC_TARGET: target
+        run: node scripts/check-probe-sync.mjs
+
       - name: Probe advisories (FAIL on any actionable finding or API error)
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -98,6 +103,7 @@ jobs:
           body="The nightly allowlist retirement probe FAILED for at least one branch (main or integration/v2). Read the job logs: each line is one of
           - RETIRE: the advisory was withdrawn upstream (drop the entry), or a patched version is reachable now (every parent accepts it; bump, then drop the entry).
           - ERROR: the advisory API could not be read after retries, so the check could not run. That is a failure, not a pass; re-run to confirm.
+          - DIVERGED: the probe copies on the two branches differ (the file is named). Apply the same change on both branches and re-record the hash (node scripts/record-allowlist-retirement-hash.mjs).
           INFO lines are informational and never fail the run.
 
           - Run: ${RUN_URL}

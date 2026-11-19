@@ -1,22 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  ALLOWLIST_REGISTRY,
   bareInvocations,
-  changedAllowlists,
+  broadScopes,
+  changedGateInputs,
   changedTestFiles,
   deriveWorkflowArgSets,
+  GATE_INPUT_REGISTRY,
   GATE_TABLE,
   globToRegExp,
   groupByArea,
   newEntries,
   outOfScope,
   parseScopeLines,
+  pickBase,
   planGateRuns,
   scanReaders,
+  scanTestReaders,
   staticTempDirFindings,
   testsCovering,
 } from '../scripts/lib/prepush-check.mjs';
@@ -57,16 +60,25 @@ const git = (root: string, ...args: string[]) =>
   );
 
 describe('allowlist gate discovery', () => {
-  it('matches only security allowlist json files', () => {
+  it('matches every data file directly under security/, not only allowlists, and no other path', () => {
     expect(
-      changedAllowlists([
+      changedGateInputs([
         'security/osv-allowlist.json',
         'security/gitleaks-allowlist.json',
         'security/bun-install-scripts.json',
+        'security/govulncheck-exceptions.json',
+        'security/docs-closure-trivyignore.yaml',
+        'security/README.md',
         'docs/osv-allowlist.json',
         'security/sub/osv-allowlist.json',
       ]),
-    ).toEqual(['security/osv-allowlist.json', 'security/gitleaks-allowlist.json']);
+    ).toEqual([
+      'security/osv-allowlist.json',
+      'security/gitleaks-allowlist.json',
+      'security/bun-install-scripts.json',
+      'security/govulncheck-exceptions.json',
+      'security/docs-closure-trivyignore.yaml',
+    ]);
   });
 
   it('scans readers: direct, via an imported lib, not comments, not provers; workflows too', () => {
@@ -236,17 +248,17 @@ describe('allowlist gate discovery', () => {
 
   describe('against the real repo', () => {
     const root = join(import.meta.dir, '..');
-    const onDisk = readdirSync(join(root, 'security')).filter((f) => /allowlist.*\.json$/.test(f));
+    const onDisk = readdirSync(join(root, 'security')).filter((f) => /\.(?:json|ya?ml)$/.test(f));
 
-    it('registers every allowlist file on disk, and nothing else', () => {
-      expect(Object.keys(ALLOWLIST_REGISTRY).sort()).toEqual(
+    it('registers every security/ data file on disk, and nothing else', () => {
+      expect(Object.keys(GATE_INPUT_REGISTRY).sort()).toEqual(
         onDisk.map((f) => `security/${f}`).sort(),
       );
     });
 
     it('every script and workflow that reads an allowlist is a registered gate or excused reader', () => {
-      for (const allowlist of Object.keys(ALLOWLIST_REGISTRY)) {
-        const reg = ALLOWLIST_REGISTRY[allowlist as keyof typeof ALLOWLIST_REGISTRY];
+      for (const allowlist of Object.keys(GATE_INPUT_REGISTRY)) {
+        const reg = GATE_INPUT_REGISTRY[allowlist as keyof typeof GATE_INPUT_REGISTRY];
         const { scripts, workflows } = scanReaders(root, allowlist);
         const known = new Set([...reg.gates, ...Object.keys(reg.other)]);
         expect(
@@ -257,7 +269,7 @@ describe('allowlist gate discovery', () => {
     });
 
     it('registry entries are live: each gate really reads its allowlist and has a table row', () => {
-      for (const [allowlist, reg] of Object.entries(ALLOWLIST_REGISTRY)) {
+      for (const [allowlist, reg] of Object.entries(GATE_INPUT_REGISTRY)) {
         const { scripts, workflows } = scanReaders(root, allowlist);
         const found = new Set([...scripts, ...workflows]);
         for (const g of reg.gates) {
@@ -268,9 +280,15 @@ describe('allowlist gate discovery', () => {
           expect(found.has(o), `${o} no longer reads ${allowlist}; drop its excuse`).toBe(true);
         }
       }
+      for (const [input, reg] of Object.entries(GATE_INPUT_REGISTRY)) {
+        expect(
+          reg.gates.length + scanTestReaders(root, input).length,
+          `${input} has no gate: no registered script and no test naming it`,
+        ).toBeGreaterThan(0);
+      }
       for (const g of Object.keys(GATE_TABLE)) {
         expect(
-          Object.values(ALLOWLIST_REGISTRY).some((r) => r.gates.includes(g)),
+          Object.values(GATE_INPUT_REGISTRY).some((r) => r.gates.includes(g)),
           `${g} is in GATE_TABLE but gates no allowlist`,
         ).toBe(true);
       }
@@ -405,7 +423,7 @@ describe('runChecks end to end on a fixture repo', () => {
 
   it('does not run a gate when no allowlist changed', () => {
     const root = repo();
-    put(root, 'security/other.json', '[]');
+    put(root, 'docs/other.json', '[]');
     commit(root);
     let ran = 0;
     runChecks(opts(root), deps({ tmpRoot: () => root, runGate: () => (ran++, 1) }));
@@ -465,7 +483,7 @@ describe('runChecks end to end on a fixture repo', () => {
   it('flags out-of-scope files when a scope is declared and only warns when none is', () => {
     const root = repo();
     put(root, 'README.md', 'reverted by accident');
-    put(root, 'security/y.json', '[]');
+    put(root, 'security/y.md', '[]');
     commit(root, 'change\n\nScope: security/**');
     const noFlag = runChecks(opts(root, { scope: undefined }), deps({ tmpRoot: () => root }));
     expect(noFlag.failures).toEqual(['out of scope: README.md']);
@@ -543,5 +561,345 @@ describe('runChecks end to end on a fixture repo', () => {
         ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts'],
       ),
     ).toEqual(['tests/a.test.ts', 'tests/b.test.ts']);
+  });
+});
+
+describe('gate inputs that are not allowlists (every security/ file must map to a gate)', () => {
+  it('scanTestReaders finds tests that name the file, not comments, not this guard, not others', () => {
+    const root = fixture();
+    put(root, 'tests/named.test.ts', "read('security/x-exceptions.json')");
+    put(root, 'tests/sub/deep.test.ts', "read('x-exceptions.json')");
+    put(root, 'tests/commented.test.ts', '// x-exceptions.json\n/* x-exceptions.json */');
+    put(root, 'tests/other.test.ts', "read('security/y.json')");
+    put(root, 'tests/prepush-check.test.ts', "'x-exceptions.json'");
+    put(root, 'tests/helper.ts', "'x-exceptions.json'");
+    expect(scanTestReaders(root, 'security/x-exceptions.json')).toEqual([
+      'tests/named.test.ts',
+      'tests/sub/deep.test.ts',
+    ]);
+  });
+
+  const table = { 'scripts/g.mjs': { needs: [], runs: [[]] } };
+  const IN = 'security/x-exceptions.json';
+
+  it('flags an input nothing gates as unmapped: no registry entry, or no gate and no naming test', () => {
+    const root = fixture();
+    const none = planGateRuns(root, [IN], table, {});
+    expect(none.unmapped).toEqual([IN]);
+    const empty = planGateRuns(root, [IN], table, { [IN]: { gates: [], other: {} } });
+    expect(empty.unmapped).toEqual([IN]);
+  });
+
+  it('maps an input by a script gate, or by a test that names it, and runs those tests', () => {
+    const root = fixture();
+    put(root, 'scripts/g.mjs', 'x-exceptions.json');
+    const viaScript = planGateRuns(root, [IN], table, {
+      [IN]: { gates: ['scripts/g.mjs'], other: {} },
+    });
+    expect(viaScript.unmapped).toEqual([]);
+    expect(viaScript.runs.map((r) => r.script)).toEqual(['scripts/g.mjs']);
+
+    const root2 = fixture();
+    put(root2, 'tests/x.test.ts', "'x-exceptions.json'");
+    const viaTest = planGateRuns(root2, [IN], table, { [IN]: { gates: [], other: {} } });
+    expect(viaTest.unmapped).toEqual([]);
+    expect(viaTest.tests).toEqual(['tests/x.test.ts']);
+  });
+
+  it('every non-allowlist input in the real repo is mapped', () => {
+    const root = join(import.meta.dir, '..');
+    const inputs = [
+      'security/govulncheck-exceptions.json',
+      'security/govulncheck-modules.json',
+      'security/release-age-exceptions.json',
+      'security/dockerfile-base-exclusions.json',
+      'security/bun-install-scripts.json',
+      'security/docs-closure-trivyignore.yaml',
+    ];
+    const plan = planGateRuns(root, inputs);
+    expect(plan.unmapped).toEqual([]);
+    expect(plan.unknown).toEqual([]);
+  });
+});
+
+describe('scope enforcement (CI reads the PR body only)', () => {
+  it('parses a CRLF PR body, which is what the GitHub UI produces', () => {
+    expect(parseScopeLines('## x\r\n\r\nScope: a/**, b.md\r\nmore\r\n')).toEqual(['a/**', 'b.md']);
+    expect(parseScopeLines('Scope: a/**\r\nScope: c/**')).toEqual(['a/**', 'c/**']);
+  });
+
+  it('broadScopes flags a scope that matches everything by what it matches, not its spelling', () => {
+    for (const g of ['**', '**/*', './**', '*/**', '**/**', '**/']) {
+      expect(broadScopes([g]), g).toEqual([g]);
+    }
+    expect(broadScopes(['scripts/**', '**'])).toEqual(['**']);
+    expect(broadScopes(['scripts/**', 'tests/**', 'docs/**'])).toEqual([]);
+    expect(broadScopes(['scripts/**', 'security/**'])).toEqual([]);
+    expect(broadScopes(['*.md'])).toEqual([]);
+    // together they cover every area, though none does alone
+    expect(
+      broadScopes([
+        '.github/**',
+        'apps/**',
+        'docs/**',
+        'packages/**',
+        'scripts/**',
+        'security/**',
+        'tests/**',
+      ]),
+    ).toHaveLength(7);
+  });
+
+  let quiet: ReturnType<typeof spyOn>;
+  beforeAll(() => {
+    quiet = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterAll(() => quiet.mockRestore());
+
+  function repo(): string {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'main');
+    put(root, 'README.md', 'base');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'base');
+    git(root, 'switch', '-q', '-c', 'feature');
+    put(root, 'docs/a.md', 'x');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'change\n\nScope: docs/**');
+    return root;
+  }
+  const deps = {
+    onPath: () => true,
+    which: () => '/bin/x',
+    runGate: () => 0,
+    runTests: () => 0,
+    tmpRoot: () => '',
+  };
+  const ci = (root: string, over: Record<string, unknown> = {}) =>
+    runChecks(
+      { root, base: 'main', requireScope: true, skipGates: true, skipTests: true, ...over },
+      { ...deps, tmpRoot: () => root },
+    );
+
+  it('FAILS a missing Scope line in CI, even when a commit trailer declares one', () => {
+    const root = repo();
+    const r = ci(root, { prBody: 'no scope line here' });
+    expect(r.exit).toBe(1);
+    expect(r.failures.join()).toContain('no `Scope:');
+  });
+
+  it('ignores --scope and the commit trailer in CI (they can be rewritten); reads the PR body', () => {
+    const root = repo();
+    expect(ci(root, { prBody: '', scope: ['docs/**'] }).exit).toBe(1);
+    expect(ci(root, { prBody: 'Scope: docs/**' }).failures).toEqual([]);
+  });
+
+  it('FAILS a match-everything scope in CI, and only warns locally', () => {
+    const root = repo();
+    const r = ci(root, { prBody: 'Scope: **' });
+    expect(r.exit).toBe(1);
+    expect(r.failures.join()).toContain('scope matches everything');
+    const local = runChecks(
+      { root, base: 'main', prBody: 'Scope: **', scope: ['**'], skipGates: true, skipTests: true },
+      { ...deps, tmpRoot: () => root },
+    );
+    expect(local.failures).toEqual([]);
+    expect(local.warnings.join()).toContain('scope matches everything');
+  });
+
+  it('still fails an out-of-scope file in CI', () => {
+    const root = repo();
+    const r = ci(root, { prBody: 'Scope: scripts/**' });
+    expect(r.failures).toEqual(['out of scope: docs/a.md']);
+  });
+
+  it('without --require-scope a missing scope still only warns', () => {
+    const root = repo();
+    const r = runChecks(
+      { root, base: 'main', prBody: '', skipGates: true, skipTests: true, scope: [] },
+      { ...deps, tmpRoot: () => root },
+    );
+    // the commit trailer declares docs/**, so even locally it is found
+    expect(r.failures).toEqual([]);
+  });
+});
+
+describe('security/ inputs through runChecks', () => {
+  let quiet: ReturnType<typeof spyOn>;
+  beforeAll(() => {
+    quiet = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterAll(() => quiet.mockRestore());
+
+  function repo(): string {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'main');
+    put(root, 'security/x-exceptions.json', '[]');
+    put(root, 'tests/x.test.ts', "read('security/x-exceptions.json')");
+    put(root, 'README.md', 'base');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'base');
+    git(root, 'switch', '-q', '-c', 'feature');
+    put(root, 'security/x-exceptions.json', '["new"]');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'change');
+    return root;
+  }
+  const deps = (over: Record<string, unknown> = {}) => ({
+    onPath: () => true,
+    which: () => '/bin/x',
+    runGate: () => 0,
+    runTests: () => 0,
+    tmpRoot: () => '',
+    ...over,
+  });
+  const o = (root: string, over: Record<string, unknown> = {}) => ({
+    root,
+    base: 'main',
+    scope: ['security/**', 'tests/**'],
+    skipTests: true,
+    gateTable: {},
+    registry: { 'security/x-exceptions.json': { gates: [], other: {} } },
+    ...over,
+  });
+
+  it('runs the test that names a changed non-allowlist input, and fails when it fails', () => {
+    const root = repo();
+    const ran: string[][] = [];
+    const ok = runChecks(
+      o(root),
+      deps({ tmpRoot: () => root, runTests: (_r: string, f: string[]) => (ran.push(f), 0) }),
+    );
+    expect(ran).toEqual([['tests/x.test.ts']]);
+    expect(ok.failures).toEqual([]);
+    const bad = runChecks(o(root), deps({ tmpRoot: () => root, runTests: () => 1 }));
+    expect(bad.failures.join()).toContain('gate tests tests/x.test.ts: exit 1');
+  });
+
+  it('treats bun missing as UNVERIFIED for the naming tests', () => {
+    const root = repo();
+    const d = deps({ tmpRoot: () => root, onPath: () => false });
+    expect(runChecks(o(root), d).failures.join()).toContain('UNVERIFIED, bun not on PATH');
+    expect(runChecks(o(root, { allowMissingTools: true }), d).failures).toEqual([]);
+  });
+
+  it('FAILS an unmapped input, including under --skip-gates', () => {
+    const root = repo();
+    for (const skipGates of [false, true]) {
+      const r = runChecks(o(root, { registry: {}, skipGates }), deps({ tmpRoot: () => root }));
+      expect(r.failures.join(), `skipGates=${skipGates}`).toContain(
+        'security/x-exceptions.json is a security/ gate input that no gate is mapped to',
+      );
+    }
+  });
+
+  it('with --skip-gates runs nothing but still says so', () => {
+    const root = repo();
+    let ran = 0;
+    const r = runChecks(
+      o(root, { skipGates: true }),
+      deps({ tmpRoot: () => root, runTests: () => (ran++, 1), runGate: () => (ran++, 1) }),
+    );
+    expect(ran).toBe(0);
+    expect(r.warnings.join()).toContain('gates NOT executed');
+  });
+});
+
+describe('default base follows the branch fork point', () => {
+  it('prefers the nearer of main and integration/v2, either way round', () => {
+    const dist: Record<string, [number, number] | null> = {
+      'personal/integration/v2': [40, 0],
+      'origin/integration/v2': null,
+      'personal/main': [3, 0],
+      'origin/main': [3, 0],
+    };
+    const refs = [
+      'personal/integration/v2',
+      'origin/integration/v2',
+      'personal/main',
+      'origin/main',
+    ];
+    expect(pickBase(refs, (r) => dist[r])).toBe('personal/main');
+    expect(pickBase(refs, (r) => ({ ...dist, 'personal/integration/v2': [1, 0] })[r])).toBe(
+      'personal/integration/v2',
+    );
+    // same fork commit: the ref with fewer commits of its own past it wins, then the earlier one
+    expect(pickBase(['v2', 'main'], (r) => (r === 'v2' ? [1, 30] : [1, 0]))).toBe('main');
+    expect(pickBase(['a', 'b'], () => [2, 2])).toBe('a');
+    expect(pickBase(['a'], () => null)).toBeUndefined();
+  });
+
+  it('runChecks on a branch cut from main picks main even though integration/v2 exists', () => {
+    const logs: string[] = [];
+    const spy = spyOn(console, 'log').mockImplementation((m: unknown) => void logs.push(String(m)));
+    try {
+      const root = fixture();
+      git(root, 'init', '-q', '-b', 'main');
+      put(root, 'README.md', 'base');
+      git(root, 'add', '.');
+      git(root, 'commit', '-q', '-m', 'base');
+      git(root, 'branch', 'personal/main');
+      git(root, 'switch', '-q', '-c', 'personal/integration/v2');
+      for (const n of ['1', '2', '3']) {
+        put(root, `v2-${n}.txt`, n);
+        git(root, 'add', '.');
+        git(root, 'commit', '-q', '-m', `v2 ${n}`);
+      }
+      git(root, 'switch', '-q', 'main');
+      git(root, 'switch', '-q', '-c', 'feature');
+      put(root, 'docs/a.md', 'x');
+      git(root, 'add', '.');
+      git(root, 'commit', '-q', '-m', 'change');
+      runChecks(
+        { root, scope: ['docs/**'], skipGates: true, skipTests: true },
+        {
+          onPath: () => true,
+          which: () => '',
+          runGate: () => 0,
+          runTests: () => 0,
+          tmpRoot: () => root,
+        },
+      );
+      expect(logs.find((l) => l.startsWith('prepush-check: base'))).toContain(
+        'base personal/main,',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('the CI job that makes the check non-advisory', () => {
+  const wf = readFileSync(
+    join(import.meta.dir, '..', '.github/workflows/prepush-check.yml'),
+    'utf8',
+  );
+  const code = wf
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+
+  it('runs on pull_request, re-runs when the body is edited, and is not gated on anything', () => {
+    expect(code).toMatch(/pull_request:/);
+    expect(code).toMatch(/types:\s*\[[^\]]*\bedited\b[^\]]*\]/);
+    expect(code).not.toMatch(/continue-on-error/);
+    expect(code).not.toMatch(/\bif:/);
+  });
+
+  it('requires the scope, reads the base from the event, and diffs full history', () => {
+    expect(code).toContain('--require-scope');
+    expect(code).toContain('github.base_ref');
+    expect(code).toMatch(/fetch-depth:\s*0/);
+    expect(code).toContain('node scripts/prepush-check.mjs');
+  });
+
+  it('passes the PR body as env data and never interpolates it into the script', () => {
+    expect(code).toMatch(/PR_BODY:\s*\$\{\{\s*github\.event\.pull_request\.body\s*\}\}/);
+    const run = code.slice(code.indexOf('run: |'));
+    expect(run).not.toContain('${{');
+  });
+
+  it('does not accept a commit trailer or --scope in CI', () => {
+    expect(code).not.toMatch(/--scope\b/);
   });
 });

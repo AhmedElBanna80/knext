@@ -13,10 +13,18 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, normalize } from 'node:path';
 import { unpairedTempDirs } from './scratch-space-scan.mjs';
 
-/** A changed file that is a supply-chain allowlist. */
-export const ALLOWLIST_RE = /^security\/[^/]*allowlist[^/]*\.json$/;
+/**
+ * A changed file that is a supply-chain gate input: ANY data file directly under
+ * `security/` (json or yaml), not only `*allowlist*`. `govulncheck-exceptions.json`,
+ * `release-age-exceptions.json`, `dockerfile-base-exclusions.json` and
+ * `bun-install-scripts.json` have the same "unknown keys FAIL" semantics as an
+ * allowlist and used to run no gate at all.
+ */
+export const GATE_INPUT_RE = /^security\/[^/]+\.(?:json|ya?ml)$/;
 
-export const changedAllowlists = (files) => files.filter((f) => ALLOWLIST_RE.test(f));
+export const changedGateInputs = (files) => files.filter((f) => GATE_INPUT_RE.test(f));
+/** Older name, kept for callers that predate the widening. */
+export const changedAllowlists = changedGateInputs;
 
 /**
  * How to invoke each gate that reads an allowlist, by repo-relative script path.
@@ -38,6 +46,9 @@ export const GATE_TABLE = {
   'scripts/osv-gate.mjs': { needs: ['osv-scanner'], scanner: true, base: true, runs: [[]] },
   'scripts/audit-shipped-npm.mjs': { needs: ['osv-scanner', 'npm'], scanner: true, runs: [[]] },
   'scripts/audit-published.mjs': { needs: ['npm', 'bun'], runs: [[]] },
+  // Both look packages / image pins up on the network and fail closed when they cannot.
+  'scripts/release-age-gate.mjs': { needs: [], base: true, runs: [[]] },
+  'scripts/verify-image-pins.mjs': { needs: [], base: true, runs: [[]] },
 };
 
 /**
@@ -62,7 +73,17 @@ const runners = (files) =>
     files.map((f) => [f, 'runs a registered gate; reads the file only through it']),
   );
 
-export const ALLOWLIST_REGISTRY = {
+const GOVULNCHECK_OTHER = {
+  'scripts/govulncheck-gate.mjs':
+    'reads govulncheck JSON piped in per Go module, so it cannot run bare; the tests that name the file run its exception semantics',
+  ...runners([
+    '.github/workflows/go-template.yml',
+    '.github/workflows/govulncheck-modules.yml',
+    '.github/workflows/govulncheck-nightly.yml',
+  ]),
+};
+
+export const GATE_INPUT_REGISTRY = {
   'security/gitleaks-allowlist.json': {
     gates: ['scripts/secret-scan.mjs'],
     other: runners(['.github/workflows/ci.yml', '.github/workflows/secret-scan-nightly.yml']),
@@ -112,7 +133,42 @@ export const ALLOWLIST_REGISTRY = {
       ]),
     },
   },
+  // Gate inputs that are not named `*allowlist*`. A gate is a registered script, or a test that
+  // names the file (found by scanning `tests/`, run whenever the file changes); an input with
+  // neither FAILS as unmapped.
+  'security/govulncheck-exceptions.json': {
+    gates: [],
+    other: { ...GOVULNCHECK_OTHER },
+  },
+  'security/govulncheck-modules.json': {
+    gates: [],
+    other: { ...GOVULNCHECK_OTHER },
+  },
+  'security/release-age-exceptions.json': {
+    gates: ['scripts/release-age-gate.mjs'],
+    other: {
+      'scripts/osv-gate.mjs':
+        'imports the release-age helper that reads this file, but judges only the OSV allowlist',
+      ...runners([
+        '.github/workflows/osv-scan.yml',
+        '.github/workflows/release-age.yml',
+        '.github/workflows/shipped-artifacts-nightly.yml',
+      ]),
+    },
+  },
+  'security/dockerfile-base-exclusions.json': {
+    gates: ['scripts/verify-image-pins.mjs'],
+    other: runners(['.github/workflows/image-pin-resolution-nightly.yml']),
+  },
+  // Read only by its own test, which `planGateRuns` finds and runs.
+  'security/bun-install-scripts.json': { gates: [], other: {} },
+  'security/docs-closure-trivyignore.yaml': {
+    gates: [],
+    other: runners(['.github/workflows/ci.yml', '.github/workflows/docs-closure-nightly.yml']),
+  },
 };
+/** Older name, kept for callers that predate the widening. */
+export const ALLOWLIST_REGISTRY = GATE_INPUT_REGISTRY;
 
 const SCRIPT_EXT = /\.(?:mjs|cjs|js|ts|sh)$/;
 /** This check's own files hold the registry, so they name every allowlist by design. */
@@ -240,6 +296,25 @@ export function scanReaders(root, allowlistRel) {
   return out;
 }
 
+/** The test file the prepush guard itself keeps: it names every input as a fixture, so it reads none. */
+const SELF_TESTS = new Set(['tests/prepush-check.test.ts']);
+
+/**
+ * Tests under `tests/` that name the input file. A test that names a gate input is
+ * the thing that asserts its schema and semantics, so it is that input's gate when
+ * no script is (e.g. `bun-install-scripts.json`). Direct name only, comments
+ * stripped; one hop on purpose.
+ *
+ * @returns {string[]} sorted repo-relative test files
+ */
+export function scanTestReaders(root, inputRel) {
+  const name = inputRel.split('/').pop();
+  return walk(root, 'tests')
+    .filter((f) => /\.test\.(?:[cm]?[jt]sx?)$/.test(f) && !SELF_TESTS.has(f))
+    .filter((f) => stripComments(readFileSync(join(root, f), 'utf8')).includes(name))
+    .sort();
+}
+
 /**
  * Every workflow command that invokes `script`, with the `--app` / `--closure` /
  * `--shape` flags it passes. YAML `\` continuations are joined first, so flags on
@@ -298,14 +373,25 @@ export const bareInvocations = (root, script) =>
  * @param {string[]} allowlists
  * @param {Record<string, any>} [table]
  * @param {Record<string, {gates: string[], other: Record<string, string>}>} [registry]
- * @returns {{ runs: {allowlist: string, script: string, args: string[], entry: any}[], unknown: {allowlist: string, script: string}[] }}
+ * `tests` are the test files that name a changed input (run as its gate). `unmapped` is every
+ * changed input that NOTHING gates: no registry entry, or an entry with no script gate and no
+ * test naming the file. An input nothing runs is a defect, never a pass.
+ *
+ * @returns {{ runs: {allowlist: string, script: string, args: string[], entry: any}[], unknown: {allowlist: string, script: string}[], tests: string[], unmapped: string[] }}
  */
-export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = ALLOWLIST_REGISTRY) {
+export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = GATE_INPUT_REGISTRY) {
   const runs = [];
   const unknown = [];
+  const unmapped = [];
+  const tests = new Set();
   const seen = new Set();
   for (const allowlist of allowlists) {
     const reg = registry[allowlist] ?? { gates: [], other: {} };
+    const testReaders = scanTestReaders(root, allowlist);
+    for (const t of testReaders) tests.add(t);
+    if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {
+      unmapped.push(allowlist);
+    }
     const { scripts, workflows, manifests } = scanReaders(root, allowlist);
     for (const r of [...scripts, ...workflows, ...manifests]) {
       if (!reg.gates.includes(r) && !(r in reg.other)) unknown.push({ allowlist, script: r });
@@ -341,7 +427,7 @@ export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = AL
       });
     }
   }
-  return { runs, unknown };
+  return { runs, unknown, tests: [...tests].sort(), unmapped };
 }
 
 /** Entries in `after` that were not in `before`. */
@@ -365,7 +451,8 @@ export function staticTempDirFindings(root, files, baseline = {}) {
 /** `Scope: a/**, b/*.ts` lines out of a commit or PR body. */
 export function parseScopeLines(text) {
   const globs = [];
-  for (const m of (text ?? '').matchAll(/^[ \t]*Scope:[ \t]*(.+)$/gim)) {
+  // A PR body from the GitHub UI is CRLF; `$` does not match before `\r`, so normalise first.
+  for (const m of (text ?? '').replace(/\r\n?/g, '\n').matchAll(/^[ \t]*Scope:[ \t]*(.+)$/gim)) {
     for (const g of m[1].split(',')) if (g.trim()) globs.push(g.trim());
   }
   return globs;
@@ -389,6 +476,40 @@ export function globToRegExp(glob) {
     else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   }
   return new RegExp(`^${re}$`);
+}
+
+/**
+ * One extensionless path under each top-level directory this repo has. A scope that matches
+ * every one of them says "anything", which declares nothing. (Root files are deliberately not a
+ * canary: `*\/**` matches every directory and no root file, and still declares nothing.)
+ */
+const CANARY_PATHS = [
+  '.github/x/y',
+  'apps/x/y',
+  'docs/x/y',
+  'packages/x/y',
+  'scripts/x/y',
+  'security/x',
+  'tests/x',
+];
+
+/**
+ * Scope globs that, alone or together, match everything (`**`, `**\/*`, `./**`, `*\/**`...):
+ * a declared scope that cannot be violated. Judged by what the globs MATCH against a canary
+ * for every area, not by their spelling.
+ * LIMIT: many narrow globs that together cover the tree (`**\/*.ts, **\/*.md, ...`) match
+ * none of the extensionless canaries and are not flagged.
+ *
+ * @returns {string[]} the offending globs (every glob when only their union is too broad)
+ */
+export function broadScopes(globs) {
+  const covers = (gs) => {
+    const res = gs.map(globToRegExp);
+    return CANARY_PATHS.every((c) => res.some((r) => r.test(c)));
+  };
+  const alone = globs.filter((g) => covers([g]));
+  if (alone.length > 0) return alone;
+  return covers(globs) ? [...globs] : [];
 }
 
 /** Files that match none of the declared scope globs. */
@@ -432,4 +553,36 @@ export function testsCovering(root, sources, testFiles) {
       return res.some((r) => r.test(text));
     })
     .sort();
+}
+
+/**
+ * Choose the base ref a branch forks from: of the candidates that exist, the one whose
+ * merge-base with HEAD is nearest HEAD (fewest commits from it to HEAD). A branch cut from
+ * main gets main, a branch cut from integration/v2 gets that, with no hardcoded order to
+ * go stale. A tie (both forked from the same commit) goes to the ref with fewer commits of
+ * its own past that commit, i.e. the one the branch could not have been cut from later; a
+ * remaining tie goes to the earlier candidate.
+ *
+ * @param {string[]} candidates refs in preference order
+ * @param {(ref: string) => [number, number] | null} distance `[commits from the ref's
+ *   merge-base with HEAD to HEAD, commits from that merge-base to the ref]`, or null when the
+ *   ref does not exist
+ * @returns {string | undefined}
+ */
+export function pickBase(candidates, distance) {
+  let best;
+  let bestScore;
+  for (const c of candidates) {
+    const score = distance(c);
+    if (!score) continue;
+    if (
+      !bestScore ||
+      score[0] < bestScore[0] ||
+      (score[0] === bestScore[0] && score[1] < bestScore[1])
+    ) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
 }

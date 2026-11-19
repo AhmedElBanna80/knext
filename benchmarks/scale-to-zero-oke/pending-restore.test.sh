@@ -44,6 +44,7 @@ make_stub() {
   cat > "${dir}/kubectl" <<STUB
 #!/usr/bin/env bash
 args="\$*"
+echo "\$args" >> "${dir}/calls.log"
 case "\$args" in
   *"get ksvc"*)
     cat <<'JSON'
@@ -192,6 +193,48 @@ RC4B=$?
                   || nope "the second run exited $RC4B — not idempotent"
 
 rm -f "$PF"
+
+# ── Test 5: a corrupt pending file is refused, never "restored" ──────────────
+echo
+echo "[5] --restore-pending REFUSES an empty / truncated / incomplete file and keeps it"
+corrupt_case() {
+  local label="$1" body="$2" T rc
+  T="$(mktemp -d)"; make_stub "$T"
+  mkdir -p "$PENDING_DIR"
+  printf '%s' "$body" > "$PF"
+  DRY_RUN=1 DRY_RUN_EXERCISE_KC=1 DRY_RUN_EXERCISE_PENDING=1 KUBECTL_BIN="${T}/kubectl" \
+  OUT="${T}/results.txt" \
+    bash "$RUN_SH" --context "$CTX" --namespace "$NS" --service "$SVC" \
+      --restore-pending > "${T}/out.txt" 2>&1
+  rc=$?
+  [ "$rc" != "0" ] && ok "${label}: exits non-zero" || nope "${label}: exited 0"
+  grep -q "corrupt" "${T}/out.txt" && grep -q "$PF" "${T}/out.txt" \
+    && ok "${label}: says it is corrupt and names the file" \
+    || nope "${label}: no loud corrupt-file message naming the file"
+  # The EXIT trap's job/configmap sweep is expected; a ksvc patch/get is the
+  # restore itself and must never happen on a corrupt file.
+  ! grep -Eq 'patch ksvc|apply|replace' "${T}/calls.log" 2>/dev/null \
+    && ok "${label}: no restore applied (no ksvc patch)" \
+    || nope "${label}: a restore was applied from garbage"
+  [ -f "$PF" ] && ok "${label}: the file is kept" || nope "${label}: the file was deleted"
+  rm -f "$PF"
+}
+corrupt_case "empty file" ""
+corrupt_case "truncated JSON" '{ "service": "x", "original": { "maxScale": "17", '
+corrupt_case "missing field" '{ "original": { "maxScale": "17", "containerConcurrency": "23", "targetBurstCapacity": "211", "panicWindowPercentage": "6" } }'
+corrupt_case "empty field" '{ "original": { "maxScale": "", "containerConcurrency": "23", "targetBurstCapacity": "211", "panicWindowPercentage": "6", "panicThresholdPercentage": "150" } }'
+
+# ── Test 6: the write is atomic (temp file + rename) ─────────────────────────
+echo
+echo "[6] write_pending_restore writes a temp file and renames it (target never partial)"
+BODY="$(awk '/^write_pending_restore\(\)/{p=1} /^clear_pending_restore/{p=0} p' "$RUN_SH")"
+printf '%s' "$BODY" | grep -q 'mv -f "\$tmp" "\$f"' \
+  && ok "it renames a temp file into place" || nope "no temp-file + mv in write_pending_restore"
+printf '%s' "$BODY" | grep -Eq '> *"\$f"' \
+  && nope "it writes the target directly (non-atomic)" || ok "it never writes the target directly"
+printf '%s' "$BODY" | grep -q 'rm -f "\$tmp"' \
+  && ok "it removes the temp file on failure" || nope "temp file can be orphaned on failure"
+
 echo
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

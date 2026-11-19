@@ -742,7 +742,10 @@ write_pending_restore() {
   }
 }
 PENDING
-  mv -f "$tmp" "$f"
+  # Never leave the temp file behind if the write or the rename failed.
+  if [ $? -ne 0 ] || ! mv -f "$tmp" "$f"; then
+    rm -f "$tmp" 2>/dev/null || true
+  fi
 }
 
 clear_pending_restore() { rm -f "$(pending_restore_path)" 2>/dev/null || true; }
@@ -750,11 +753,25 @@ clear_pending_restore() { rm -f "$(pending_restore_path)" 2>/dev/null || true; }
 # Load a pending file back into the ORIG_* variables so the normal restore path
 # can act on it unchanged — one restore implementation, not two.
 load_pending_restore() {
-  local f="$1" v
+  local f="$1" v val
+  # Validate BEFORE trusting: an empty/partial/corrupt file must not turn into
+  # empty ORIG_* values that cleanup() would "restore" onto a live service.
+  # Refuse loudly and keep the file so the originals can be recovered by hand.
+  if ! jq -e . "$f" >/dev/null 2>&1; then
+    log "FATAL: pending-restore file ${f} is corrupt (not valid JSON). Nothing was restored."
+    log "       The file is KEPT. Restore '${SERVICE}' in '${NS}' by hand, then delete it."
+    exit 1
+  fi
   for v in maxScale:ORIG_MAXSCALE containerConcurrency:ORIG_CC \
            targetBurstCapacity:ORIG_TBC panicWindowPercentage:ORIG_PW \
            panicThresholdPercentage:ORIG_PT; do
-    printf -v "${v#*:}" '%s' "$(jq -r --arg k "${v%%:*}" '.original[$k] // ""' "$f" 2>/dev/null)"
+    val=$(jq -r --arg k "${v%%:*}" '.original[$k] // ""' "$f" 2>/dev/null)
+    if [ -z "$val" ]; then
+      log "FATAL: pending-restore file ${f} is corrupt (missing or empty original.${v%%:*}). Nothing was restored."
+      log "       The file is KEPT. Restore '${SERVICE}' in '${NS}' by hand, then delete it."
+      exit 1
+    fi
+    printf -v "${v#*:}" '%s' "$val"
   done
   CAPTURED=1
 }

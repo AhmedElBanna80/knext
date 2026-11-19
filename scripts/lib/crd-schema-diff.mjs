@@ -196,7 +196,7 @@ export function diffOpenApiSchema(oldSchema, newSchema, path, violations) {
   // additionalProperties: true/schema -> false narrows outright; true/schema
   // -> a different schema recurses through the SAME diff (so any violation
   // class above applies inside it too, e.g. a nested field removed).
-  if (Object.prototype.hasOwnProperty.call(oldSchema, 'additionalProperties')) {
+  if (Object.hasOwn(oldSchema, 'additionalProperties')) {
     const oldAP = oldSchema.additionalProperties;
     const newAP = newSchema.additionalProperties;
     const oldPermissive = oldAP === true || isPlainObject(oldAP);
@@ -224,8 +224,8 @@ export function diffOpenApiSchema(oldSchema, newSchema, path, violations) {
   // default: changed or removed on an existing field is a behavior change
   // for objects relying on it, even though the field's accepted values are
   // unaffected.
-  if (Object.prototype.hasOwnProperty.call(oldSchema, 'default')) {
-    if (!Object.prototype.hasOwnProperty.call(newSchema, 'default')) {
+  if (Object.hasOwn(oldSchema, 'default')) {
+    if (!Object.hasOwn(newSchema, 'default')) {
       violations.push(`${path}.default: removed (was ${JSON.stringify(oldSchema.default)})`);
     } else if (JSON.stringify(newSchema.default) !== JSON.stringify(oldSchema.default)) {
       violations.push(
@@ -248,7 +248,7 @@ export function diffOpenApiSchema(oldSchema, newSchema, path, violations) {
   const newProps = isPlainObject(newSchema.properties) ? newSchema.properties : {};
   for (const key of Object.keys(oldProps)) {
     const childPath = `${path}.${key}`;
-    if (!Object.prototype.hasOwnProperty.call(newProps, key)) {
+    if (!Object.hasOwn(newProps, key)) {
       violations.push(`${childPath}: field removed`);
       continue;
     }

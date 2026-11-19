@@ -226,7 +226,7 @@ function jobBodies(): Map<string, string> {
   };
   for (const line of lines) {
     // Top-level job keys are indented exactly two spaces, e.g. "  changes:".
-    const jobHeader = /^  ([\w-]+):\s*$/.exec(line);
+    const jobHeader = /^ {2}([\w-]+):\s*$/.exec(line);
     if (jobHeader) {
       flush();
       currentId = jobHeader[1] ?? null;

@@ -11,7 +11,9 @@
  */
 
 const errText = (e) => (e instanceof Error ? e.message : String(e));
-const isNotFound = (e) => /\b404\b|not found/i.test(errText(e));
+// An actual HTTP 404 signal from `gh api` ("... (HTTP 404)"). Bare "not found" is NOT
+// enough: "gh: command not found" must be UNVERIFIABLE, not "tag absent".
+const isNotFound = (e) => /\(HTTP 404\)|\bHTTP 404\b/.test(errText(e));
 
 /**
  * @param {{gh: (args: string[]) => string, repo: string, refs: Iterable<string>}} p
@@ -47,4 +49,32 @@ export function verifyProtectedRefs({ gh, repo, refs }) {
   }
   if (checked === 0) findings.push('no protected refs were checked (empty set)');
   return { ok: findings.length === 0, findings, checked };
+}
+
+const DAY_MS = 86_400_000;
+export const EXCEPTION_MAX_DAYS = 30;
+export const EXCEPTION_REASON = 'founder to enable branch protection on the temporary repo';
+
+/**
+ * Dated known exception for an UNPROTECTED/UNVERIFIABLE finding. It only decides
+ * whether the alert ISSUE is filed; the check itself stays red in the job log.
+ * Active only while `now < expires`, with `expires` no more than 30 days after
+ * `granted` and the exact reason. Anything malformed is INACTIVE (fail closed).
+ * @param {{granted?: string, expires?: string, reason?: string}|undefined} exception
+ * @param {number} nowMs
+ * @returns {{active: boolean, why: string}}
+ */
+export function evaluateException(exception, nowMs) {
+  if (!exception || typeof exception !== 'object') return { active: false, why: 'no exception' };
+  const granted = Date.parse(exception.granted);
+  const expires = Date.parse(exception.expires);
+  if (!Number.isFinite(granted) || !Number.isFinite(expires)) {
+    return { active: false, why: 'granted/expires missing or unparseable' };
+  }
+  if (exception.reason !== EXCEPTION_REASON) return { active: false, why: 'reason mismatch' };
+  if (expires - granted > EXCEPTION_MAX_DAYS * DAY_MS) {
+    return { active: false, why: `exception window exceeds ${EXCEPTION_MAX_DAYS} days` };
+  }
+  if (nowMs >= expires) return { active: false, why: `expired ${exception.expires}` };
+  return { active: true, why: `holds until ${exception.expires}` };
 }

@@ -61,16 +61,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/verify-protected-refs.mjs
 
-  watchdog-red-alert:
-    name: Watchdog red alert (issue)
-    needs: [z7-watchdog, protected-refs]
-    # needs-result check fires on failure OR cancelled; a timed-out run must not
-    # leave the alert silent.
+  # Each check files its OWN issue (distinct fixed titles), so a permanently red
+  # check cannot swallow the other's alert.
+  z7-watchdog-red-alert:
+    name: Z7 watchdog red alert (issue)
+    needs: [z7-watchdog]
+    # needs-result check fires on failure OR cancelled; always() so it still runs
+    # after a failed needs job.
     if: >-
       always() &&
       github.event_name == 'schedule' &&
-      (needs.z7-watchdog.result == 'failure' || needs.z7-watchdog.result == 'cancelled' ||
-       needs.protected-refs.result == 'failure' || needs.protected-refs.result == 'cancelled')
+      (needs.z7-watchdog.result == 'failure' || needs.z7-watchdog.result == 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -86,25 +87,62 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WATCHDOG_RESULT: ${{ needs.z7-watchdog.result }}
+        run: |
+          set -euo pipefail
+          title='Z7 weekly caller watchdog RED'
+          body="The nightly Z7 caller watchdog FAILED: z7-rotation-weekly.yml has no successful
+          scheduled run on main in 9 days, its latest scheduled run did not succeed (cancelled and
+          startup_failure count), it never started after its first due date, or the runs API was
+          unreachable.
+
+          - Run (detail in the job log): ${RUN_URL}
+          - z7-watchdog result: ${WATCHDOG_RESULT}
+
+          Check that the workflow is enabled on main and that the called lane on integration/v2
+          still declares workflow_call (and that the SHA the caller pins still contains it).
+          Re-run this workflow to confirm green, then close this issue."
+          TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs
+
+  protected-refs-red-alert:
+    name: Protected-ref check red alert (issue)
+    needs: [protected-refs]
+    if: >-
+      always() &&
+      github.event_name == 'schedule' &&
+      (needs.protected-refs.result == 'failure' || needs.protected-refs.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A dated known exception (security/protected-refs-exception.json, max 30 days)
+      # suppresses ONLY this issue; the check job above stays red. Once it expires,
+      # or if the file is missing or malformed, the issue is filed.
+      - name: Is a dated known exception holding?
+        id: exception
+        run: node scripts/protected-refs-exception-status.mjs
+
+      - name: Create or update the protected-ref issue (idempotent, never pinned)
+        if: steps.exception.outputs.active != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REFS_RESULT: ${{ needs.protected-refs.result }}
         run: |
           set -euo pipefail
-          title='Z7 watchdog / protected-ref check RED'
-          body="The nightly Z7 caller watchdog or protected-ref check FAILED.
+          title='Protected-ref check RED'
+          body="The nightly protected-ref check FAILED: a PROTECTED_REFS branch is unprotected, a
+          tag shares its name, or the state was UNVERIFIABLE with the default token. The own-repo
+          reusable-workflow pin exemption is unsound until this is green; the founder must confirm
+          the branch protection settings.
 
-          - Run (per-finding detail in the job logs): ${RUN_URL}
-          - z7-watchdog result: ${WATCHDOG_RESULT}
+          - Run (detail in the job log): ${RUN_URL}
           - protected-refs result: ${REFS_RESULT}
-
-          **z7-watchdog red** means z7-rotation-weekly.yml has no successful run in 9 days,
-          its latest run did not succeed (cancelled counts), it never started, or the runs
-          API was unreachable. Check that the workflow is enabled on main and that the called
-          lane on integration/v2 still declares workflow_call.
-
-          **protected-refs red** means a PROTECTED_REFS branch is unprotected, a tag shares its
-          name, or the state was UNVERIFIABLE with the default token. The own-repo reusable
-          workflow pin exemption is unsound until this is green; the founder must confirm the
-          branch protection settings.
 
           Re-run this workflow to confirm green, then close this issue."
           TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs

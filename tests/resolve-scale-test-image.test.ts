@@ -541,7 +541,6 @@ describe("checkPullable's only network egress is the injected exec/crane (#1211 
             templateExprDepth[templateExprDepth.length - 1]--;
           }
         }
-        continue;
       }
     }
     return -1;

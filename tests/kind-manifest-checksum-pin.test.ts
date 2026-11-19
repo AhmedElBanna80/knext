@@ -346,7 +346,7 @@ describe('kind-cluster cert-manager/Knative/Calico manifests are checksum + imag
     expect(offenders.length).toBeGreaterThan(0);
   });
 
-  it('#1716 round 2: the SAME fixture stays clean when poison_tl declares \`local tl\` (a real function-local write, correctly excluded)', () => {
+  it('#1716 round 2: the SAME fixture stays clean when poison_tl declares `local tl` (a real function-local write, correctly excluded)', () => {
     const file = `${D}provision-app.sh`;
     const text = readTracked(file);
     const anchor = 'cmd_destroy() {';

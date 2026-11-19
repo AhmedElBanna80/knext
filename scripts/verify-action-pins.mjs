@@ -337,6 +337,23 @@ export function isOwnRepoReusableWorkflow(action, ref) {
   );
 }
 
+/**
+ * The SECOND, narrower own-repo form, used while a protected branch has no branch
+ * protection yet: the same own-repo reusable workflow pinned by a 40-hex SHA whose
+ * trailing comment names a PROTECTED_REFS branch (`# integration/v2`) instead of a
+ * `vX.Y.Z` tag. Returns that branch, or undefined. ONE shared definition: the PR-time
+ * guard (`tests/workflow-action-pins.test.ts`) and the nightly resolver both use it.
+ * The comment is only a claim; `verifyOwnRepoShaPin` resolves it against the repo.
+ */
+export function ownRepoShaPinBranch(action, ref, comment) {
+  if (!/^[0-9a-f]{40}$/.test(ref ?? '')) return undefined;
+  // The path-shape rule is shared with the branch-ref exemption: ask it with a
+  // protected ref so only the repo/path half is being tested here.
+  if (!isOwnRepoReusableWorkflow(action, 'main')) return undefined;
+  const branch = (comment ?? '').trim().split(/\s+/)[0];
+  return PROTECTED_REFS.has(branch) ? branch : undefined;
+}
+
 /** `uses: owner/repo[/path]@<ref>` with an optional trailing `# comment`. */
 const USES_LINE = /^\s*(?:-\s*)?uses:\s*(\S+?)@(\S+)\s*(?:#\s*(.*))?$/;
 /**
@@ -529,6 +546,8 @@ export function parsePins(text, file) {
       subpath: parts.slice(2).join('/'),
       sha: /^[0-9a-f]{40}$/.test(ref) ? ref : undefined,
       ref,
+      comment: (comment ?? '').trim(),
+      branchPin: ownRepoShaPinBranch(action, ref, comment),
       tag: tagMatch ? tagMatch[1] : undefined,
       withKeys: withResult.keys ?? [],
       withUnreadable: withResult.unreadable,
@@ -1273,6 +1292,25 @@ export async function resolveTagCommit({
   return { kind: 'unexpected-object', type: object?.type };
 }
 
+/**
+ * Resolve an own-repo `# <branch>` SHA pin: the SHA must be reachable from that
+ * branch (compare says `identical` or `ahead`, i.e. the branch is at or ahead of the
+ * pin). Anything else, including an unreachable API, is a finding.
+ */
+export async function verifyOwnRepoShaPin(pin, { api = githubApi } = {}) {
+  let res;
+  try {
+    res = await api(`repos/${pin.owner}/${pin.repo}/compare/${pin.sha}...${pin.branchPin}`);
+  } catch (error) {
+    res = { status: 0, body: { message: error instanceof Error ? error.message : `${error}` } };
+  }
+  if (res.status === 200 && ['identical', 'ahead'].includes(res.body?.status)) return undefined;
+  if (res.status === 200 || res.status === 404 || res.status === 422) {
+    return { ...pin, reason: 'branch-pin-sha-not-in-branch' };
+  }
+  return { ...pin, reason: 'branch-pin-api-error', status: res.status, message: res.body?.message };
+}
+
 /** Verify one parsed pin. Returns a finding, or undefined when it checks out. */
 export async function verifyPin(pin, { api = githubApi, lsRemote = gitLsRemoteTag } = {}) {
   if (!pin.sha) {
@@ -1485,7 +1523,10 @@ async function verifyFileSet(files, api, lsRemote = gitLsRemoteTag, catFile = gi
     for (const pin of pins) {
       // The one narrow, shared exemption: own-repo reusable workflow on a protected
       // branch. It skips ONLY the SHA/tag resolution; the input check below still runs.
-      if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {
+      if (pin.branchPin) {
+        const finding = await verifyOwnRepoShaPin(pin, { api: memoApi });
+        if (finding) findings.push(finding);
+      } else if (!isOwnRepoReusableWorkflow(pin.action, pin.ref)) {
         const finding = await verifyPin(pin, { api: memoApi, lsRemote: memoLsRemote });
         if (finding) findings.push(finding);
       }
@@ -1580,6 +1621,10 @@ export function formatFinding(finding) {
         '  The tag was deleted, renamed, or never existed (a moving major like `v1`',
         '  is often a BRANCH, not a tag). The comment no longer documents anything.',
       ].join('\n');
+    case 'branch-pin-sha-not-in-branch':
+      return `${head}\n  pinned SHA  : ${finding.ref}\n  The SHA is not reachable from \`${finding.branchPin}\` (comment claims that branch). Re-point the pin at a commit on it.`;
+    case 'branch-pin-api-error':
+      return `${head}\n  pinned SHA  : ${finding.ref}\n  Could not resolve \`${finding.branchPin}\` against the pin (status ${finding.status}: ${finding.message ?? 'no message'}). Treated as a FAILURE, not a pass.`;
     case 'no-version-comment':
       return `${head}\n  pinned SHA  : ${finding.ref}\n  No \`# vX.Y.Z\` comment — nothing to resolve the pin against.`;
     case 'not-sha-pinned':

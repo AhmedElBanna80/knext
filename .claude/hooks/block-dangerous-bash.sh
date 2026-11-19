@@ -621,7 +621,7 @@ while IFS= read -r seg; do
   # clusters are always local, and the founder allowed agents to tear them down on
   # 2026-11-18. Remote/infra deletes (oci, terraform) stay human-gated, and a kind delete
   # chained with one of them is still blocked because each segment is checked separately.
-  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|\\bterraform${ws}destroy\\b"; then
+  if seg_matches "\\boci${ws}ce${ws}cluster${ws}delete\\b|\\boci${ws}ce${ws}node-pool${ws}delete\\b|\\b(terraform|tofu)${ws}destroy\\b|\\b(terraform|tofu)${ws}-chdir[=[:space:]][^[:space:]]*${ws}destroy\\b|\\b(terraform|tofu)\\b.*${ws}apply\\b.*${ws}-destroy\\b"; then
     deny "cluster/infra teardown is human-gated. Run it yourself if intended."
   fi
 done <<EOF

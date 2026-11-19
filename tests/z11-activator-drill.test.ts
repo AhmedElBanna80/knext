@@ -325,8 +325,12 @@ describe('rotcold: a cold pod accepts only the new key after a rotation done at 
     expect(leg).toContain('before the rotation');
   });
   it('the rotation is requested, switched and retired while the function is at zero', () => {
-    const at = r.indexOf('apps.kn-next.dev/rotate-signing-key=');
-    expect(r.lastIndexOf('await_zero "${GO_FN}"', at)).toBeGreaterThan(-1);
+    // The scale to zero sits between the phase's 1/4 marker and the request itself: the
+    // control's own await_zero before it must not be able to stand in for this one.
+    expect(seg('log "rotcold 1/4', 'apps.kn-next.dev/rotate-signing-key=')).toContain(
+      'await_zero "${GO_FN}"',
+    );
+    expect(r).toContain('[ -z "$(secret_get previous.kid)" ]');
     expect(r).toContain(
       'wait_until 60 1 "the operator to take the rotation request" \'[ -n "$(secret_get next.kid)" ]\'',
     );
@@ -346,6 +350,10 @@ describe('rotcold: a cold pod accepts only the new key after a rotation done at 
   });
   it('a second cold pod accepts the NEW key (404 not_found), and the zone still reaches it', () => {
     const leg = seg('fn_probe "${WORK}/key-new" new', 'expect_zone');
+    // A second scale to zero first: the pod that refused the old key must not answer this call.
+    expect(seg('cold pod, retired key ${old_kid}', 'fn_probe "${WORK}/key-new" new')).toContain(
+      'await_zero "${GO_FN}"',
+    );
     expect(leg).toContain('[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ]');
     expect(leg).toContain('cold pod, new key');
     expect(r).toContain('expect_zone "control: after the rotation the zone');
@@ -370,7 +378,7 @@ describe('held: a call the activator holds past the token life is refused, and v
   });
   it('the call stays outstanding for longer than the token life plus skew, and is not retried', () => {
     expect(own).toMatch(/^HELD_SECONDS="\$\{Z11_HELD_SECONDS:-80\}"$/m);
-    expect(h).toContain('"${HELD_SECONDS}"');
+    expect(h).toContain('while [ $((SECONDS - held_start)) -lt "${HELD_SECONDS}" ]; do');
     expect(h).toMatch(/kill -0 "\$\{held_pid\}" 2>\/dev\/null \|\| fail "the held call ended/);
     // A direct bun call, never the retrying probe wrapper: a retry would mint a fresh token.
     expect(h.slice(0, h.indexOf('k uncordon'))).not.toContain('fn_probe');

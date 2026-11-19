@@ -101,7 +101,7 @@ async function getWithRetries(fetchImpl, url, init, sleep) {
     } catch (error) {
       last = error instanceof Error ? error.message : String(error);
     }
-    if (attempt < MAX_RETRIES) await sleep(Math.min(2 ** attempt * 1000, MAX_WAIT_MS));
+    if (attempt !== MAX_RETRIES) await sleep(Math.min(2 ** attempt * 1000, MAX_WAIT_MS));
   }
   throw new Error(`${url} failed (${last}); cannot resolve the vendored version`);
 }

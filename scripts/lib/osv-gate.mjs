@@ -92,7 +92,7 @@ export function parseOsv(text, scanRoot) {
   return findings;
 }
 
-const ALLOW_KEYS = new Set([
+export const ALLOW_KEYS = new Set([
   'id',
   'package',
   'version',

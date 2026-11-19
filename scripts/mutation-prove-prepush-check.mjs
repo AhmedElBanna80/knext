@@ -29,6 +29,7 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGuardProver } from './lib/guard-prover.mjs';
+import { MUTATION_MARKER } from './lib/mutation-harness.mjs';
 import { jsStillParses } from './lib/parse-validity.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
@@ -157,7 +158,14 @@ const MUTATIONS = [
     anchor: "say('\\n=== 4. scope report ===');",
     replacement: "say('\\n=== 4. scope and area report ===');",
   },
-].map((m) => ({ expect: 'red', validate: jsStillParses, ...m }));
+].map((m) => ({
+  expect: 'red',
+  validate: jsStillParses,
+  ...m,
+  // A block comment, never the harness's default line comment: most anchors end
+  // mid-line, and a trailing `//` marker would swallow the rest of the line.
+  replacement: `${m.replacement} /* ${MUTATION_MARKER} */`,
+}));
 
 const CANARY = {
   subject: 'lib',

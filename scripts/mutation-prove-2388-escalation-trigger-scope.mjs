@@ -67,8 +67,67 @@ const MUTATIONS = [
     expect: 'red',
     claim: 'the crates rule is dropped — Rust source, Cargo.lock and deny.toml stop firing',
     subject: 'paths',
-    anchor: "    match: (p) => p.startsWith('crates/'),",
+    anchor: '    match: (p) => CRATES_SURFACE.test(p),',
     replacement: '    match: (p) => false && p,',
+  },
+  {
+    id: 'M80',
+    expect: 'red',
+    claim:
+      'the crates rule widens back to every path under crates/ — docs-only EGM.md and README.md edits fire again (D9)',
+    subject: 'paths',
+    anchor: '    match: (p) => CRATES_SURFACE.test(p),',
+    replacement: "    match: (p) => p.startsWith('crates/'),",
+  },
+  {
+    id: 'M81',
+    expect: 'red',
+    claim: 'the crates pattern loses *.rs — Rust crate source stops firing (D9)',
+    subject: 'paths',
+    anchor:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+    replacement:
+      '  /^crates\\/(?:.+\\/)?(?:Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+  },
+  {
+    id: 'M82',
+    expect: 'red',
+    claim: 'the crates pattern loses Cargo.toml — a per-crate manifest change stops firing (D9)',
+    subject: 'paths',
+    anchor:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+    replacement:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+  },
+  {
+    id: 'M83',
+    expect: 'red',
+    claim: 'the crates pattern loses Cargo.lock — a lockfile change stops firing (D9)',
+    subject: 'paths',
+    anchor:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+    replacement:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|deny\\.toml|rust-toolchain\\.toml)$/;',
+  },
+  {
+    id: 'M84',
+    expect: 'red',
+    claim: 'the crates pattern loses deny.toml — the cargo deny policy stops firing (D9)',
+    subject: 'paths',
+    anchor:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+    replacement:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|rust-toolchain\\.toml)$/;',
+  },
+  {
+    id: 'M85',
+    expect: 'red',
+    claim: 'the crates pattern loses rust-toolchain.toml — the toolchain pin stops firing (D9)',
+    subject: 'paths',
+    anchor:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml|rust-toolchain\\.toml)$/;',
+    replacement:
+      '  /^crates\\/(?:.+\\/)?(?:[^/]+\\.rs|Cargo\\.toml|Cargo\\.lock|deny\\.toml)$/;',
   },
   {
     id: 'M6',
@@ -708,7 +767,7 @@ declareMutations(MUTATIONS.length);
 prover.baseline();
 prover.proveCanSeeRed({
   subject: 'paths',
-  anchor: "    match: (p) => p.startsWith('crates/'),",
+  anchor: '    match: (p) => CRATES_SURFACE.test(p),',
   replacement: '    match: (p) => false && p,',
 });
 

@@ -823,10 +823,10 @@ const MUTATIONS = [
   },
   {
     id: 'DR2',
-    claim: 'a non-data branch-specific block is accepted by the drift guard',
+    claim: 'a branch-specific block that cannot be evaluated (not data) is not reported',
     subject: 'drift',
-    anchor: 'if (problems.length > 0)',
-    replacement: 'if (false)',
+    anchor: 'fail(`${LIB} on ${name}: ${e.message}`);',
+    replacement: 'console.log(`${LIB} on ${name}: ${e.message}`);',
   },
   {
     id: 'DR3',

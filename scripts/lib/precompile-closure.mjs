@@ -38,6 +38,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { validateVendoredIn } from './allowlist-retirement.mjs';
 import { parseStrictIsoDate } from './strict-date.mjs';
 
 /**
@@ -255,7 +256,16 @@ export function verifyClosureCoverage({
  * than being ignored — an ignored allowlist entry is a gate that silently
  * changed meaning.
  */
-export const ALLOWLIST_ENTRY_KEYS = new Set(['id', 'justification', 'added', 'expires', 'note']);
+export const ALLOWLIST_ENTRY_KEYS = new Set([
+  'id',
+  'justification',
+  'added',
+  'expires',
+  'note',
+  // Where a VENDORED copy of the advisory's package lives, for the retirement probe. It only
+  // describes the entry; it never suppresses anything, and its shape is validated strictly below.
+  'vendoredIn',
+]);
 
 /**
  * Same validation as `readAllowlist`, but also reports the ids it skipped as
@@ -278,6 +288,11 @@ export function readAllowlistDetailed(doc, now = new Date()) {
         `allowlist: entry ${entry.id} has unknown key(s) [${unknown.join(', ')}] — allowed keys are ` +
           `[${[...ALLOWLIST_ENTRY_KEYS].join(', ')}]. A misspelled \`expires\` never expires.`,
       );
+    }
+    if (entry.vendoredIn !== undefined) {
+      // Shape only (host package, relative path, stable patched bounds, rangeFrom form); the
+      // retirement probe reads the declared host range itself. Throws on a malformed value.
+      validateVendoredIn(entry.vendoredIn, 'allowlist', entry.id, () => '*');
     }
     if (!entry.justification) {
       throw new Error(`allowlist: entry ${entry.id} has no \`justification\``);

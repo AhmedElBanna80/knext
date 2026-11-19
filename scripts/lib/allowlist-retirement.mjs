@@ -203,6 +203,8 @@ function satisfiesComparator(version, tok) {
 
 const STABLE = /^\d+\.\d+\.\d+$/;
 const NPM_NAME = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/;
+/** The ONLY keys a `vendoredIn` may carry; anything else (a typo, a `url`) is rejected. */
+export const VENDORED_IN_KEYS = new Set(['package', 'path', 'field', 'rangeFrom', 'patched']);
 const COMPARATOR = /^(<=|>=|<|>|=)?\s*([0-9][^\s]*)$/;
 
 /**
@@ -221,11 +223,17 @@ export function validateVendoredIn(v, file, id, readRange) {
     throw new Error(`${where} ${m}`);
   };
   if (v === null || typeof v !== 'object' || Array.isArray(v)) bad('is not an object');
+  const unknown = Object.keys(v).filter((k) => !VENDORED_IN_KEYS.has(k));
+  if (unknown.length > 0)
+    bad(
+      `has unknown key(s) [${unknown.join(', ')}]; allowed: [${[...VENDORED_IN_KEYS].join(', ')}]`,
+    );
   if (typeof v.package !== 'string' || !NPM_NAME.test(v.package)) bad('needs an npm `package`');
   if (
     typeof v.path !== 'string' ||
     v.path === '' ||
     v.path.startsWith('/') ||
+    /[:\\?#]/.test(v.path) ||
     v.path.split('/').some((seg) => seg === '..' || seg === '')
   )
     bad('needs a relative `path` inside the tarball (no `..`)');
@@ -234,7 +242,6 @@ export function validateVendoredIn(v, file, id, readRange) {
     (typeof v.field !== 'string' || !/^[\w$-]+(\.[\w$-]+)*$/.test(v.field))
   )
     bad('`field` must be a dotted key path');
-  if (v.range !== undefined) bad('must not hand-write `range`; use `rangeFrom`');
   const from = typeof v.rangeFrom === 'string' ? v.rangeFrom.split('#') : [];
   if (from.length !== 2 || from[0] === '' || !/^[\w$-]+(\.[\w$-]+)*$/.test(from[1]))
     bad('needs `rangeFrom` as "<file>#<dotted.field>"');

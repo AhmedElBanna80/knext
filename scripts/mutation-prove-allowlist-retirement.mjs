@@ -252,8 +252,8 @@ const MUTATIONS = [
     label: 'cli: the tarball integrity check is skipped',
     subject: 'cli',
     guard: 'spec',
-    anchor: 'if (actual !== expected) throw',
-    replacement: 'if (false) throw',
+    anchor: 'if (actual !== expected)',
+    replacement: 'if (false)',
   },
   {
     label: 'cli: a tarball URL off the registry host is fetched',
@@ -273,8 +273,8 @@ const MUTATIONS = [
     label: 'cli: a missing vendored file in the tarball is tolerated',
     subject: 'cli',
     guard: 'spec',
-    anchor: 'if (file === null) throw',
-    replacement: 'if (false) throw',
+    anchor: 'if (file === null)',
+    replacement: 'if (false)',
   },
 ];
 

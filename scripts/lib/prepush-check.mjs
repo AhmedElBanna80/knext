@@ -56,19 +56,30 @@ const OWN_ALLOWLIST = {
   'scripts/precompile-closure-audit.mjs':
     'imports the retirement helper that lists this file, but judges only its own allowlist',
 };
+/** Workflows and manifests that RUN a registered gate: they reach the file only through it. */
+const runners = (files) =>
+  Object.fromEntries(
+    files.map((f) => [f, 'runs a registered gate; reads the file only through it']),
+  );
 
 export const ALLOWLIST_REGISTRY = {
   'security/gitleaks-allowlist.json': {
     gates: ['scripts/secret-scan.mjs'],
-    other: {},
+    other: runners(['.github/workflows/ci.yml', '.github/workflows/secret-scan-nightly.yml']),
   },
   'security/npm-audit-allowlist.json': {
     gates: ['scripts/audit-published.mjs', 'scripts/audit-shipped-npm.mjs'],
     other: {
       ...PROBE,
       ...OWN_ALLOWLIST,
-      '.github/workflows/shipped-artifacts-nightly.yml':
-        'issue-body text naming the file; its gate steps are the scripts above',
+      ...runners([
+        '.github/workflows/allowlist-retirement-nightly.yml',
+        '.github/workflows/ci.yml',
+        '.github/workflows/docs-deploy-oke.yml',
+        '.github/workflows/release.yml',
+        '.github/workflows/shipped-artifacts-nightly.yml',
+        '.github/workflows/supply-chain.yml',
+      ]),
     },
   },
   'security/osv-allowlist.json': {
@@ -78,13 +89,28 @@ export const ALLOWLIST_REGISTRY = {
       ...OWN_ALLOWLIST,
       'scripts/release-age-gate.mjs':
         'imports the OSV base picker; judges security/release-age-exceptions.json, not this file',
-      '.github/workflows/shipped-artifacts-nightly.yml':
-        'issue-body text naming the file; its gate steps are the scripts above',
+      ...runners([
+        '.github/workflows/allowlist-retirement-nightly.yml',
+        '.github/workflows/ci.yml',
+        '.github/workflows/docs-deploy-oke.yml',
+        '.github/workflows/osv-scan.yml',
+        '.github/workflows/release-age.yml',
+        '.github/workflows/shipped-artifacts-nightly.yml',
+        '.github/workflows/supply-chain.yml',
+      ]),
     },
   },
   'security/precompile-closure-allowlist.json': {
     gates: ['scripts/precompile-closure-audit.mjs'],
-    other: { ...PROBE },
+    other: {
+      ...PROBE,
+      ...runners([
+        '.github/workflows/allowlist-retirement-nightly.yml',
+        '.github/workflows/ci.yml',
+        '.github/workflows/docs-deploy-oke.yml',
+        '.github/workflows/supply-chain.yml',
+      ]),
+    },
   },
 };
 
@@ -92,6 +118,17 @@ const SCRIPT_EXT = /\.(?:mjs|cjs|js|ts|sh)$/;
 /** This check's own files hold the registry, so they name every allowlist by design. */
 const SELF = new Set(['scripts/prepush-check.mjs', 'scripts/lib/prepush-check.mjs']);
 const IMPORT_SPEC = /(?:from\s*|import\s*\(?\s*|require\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g;
+/** `node x.mjs`, `bun run x.ts`, `bash x.sh`, `sh x`: an invocation of a script by path. */
+const INVOKE =
+  /\b(?:node|bun|bash|sh|zsh)\s+(?:run\s+|-[-\w=]+\s+)*["']?((?:\$\{?[A-Za-z_]+\}?\/|\.\/)?[\w./@-]+)/g;
+/**
+ * A source that lists the `security/` directory itself (readdir / glob over it,
+ * or a `security/*` pattern) reads every allowlist in it without naming one.
+ */
+const DIR_READ = [
+  /\b(?:readdir|readdirSync|opendir|opendirSync|glob|globSync|Glob|scandir)\b[^;\n]*['"`](?:[\w./${}-]*\/)?security\/?(?:\*[^'"`]*)?['"`]/,
+  /\bsecurity\/\*/,
+];
 
 function walk(root, rel, out = []) {
   const abs = join(root, rel);
@@ -112,68 +149,116 @@ const stripComments = (text) =>
     .filter((l) => !/^\s*(?:#|\/\/|\*|\/\*)/.test(l))
     .join('\n');
 
-function edgesOf(root, rel, text) {
+/** Join shell `\\` line continuations, so a multi-line `run:` is one command line. */
+export const joinContinuations = (text) => text.replace(/\\[ \t]*\r?\n[ \t]*/g, ' ');
+
+/** What the scan reads of a file: a manifest contributes its `scripts` commands only, not prose keys. */
+function scannedText(root, f) {
+  const raw = readFileSync(join(root, f), 'utf8');
+  if (!f.endsWith('package.json')) return stripComments(raw);
+  try {
+    return Object.values(JSON.parse(raw).scripts ?? {}).join('\n');
+  } catch {
+    return raw;
+  }
+}
+
+/** Every candidate file the scan reads: scripts, workflows, composite actions, package manifests. */
+function scanFiles(root) {
+  const files = [];
+  for (const f of walk(root, 'scripts')) {
+    if (SCRIPT_EXT.test(f) && !SELF.has(f) && !/\/mutation-prove-[^/]*$/.test(f)) files.push(f);
+  }
+  for (const f of walk(root, '.github/workflows')) if (/\.ya?ml$/.test(f)) files.push(f);
+  for (const f of walk(root, '.github/actions')) {
+    if (/\.(?:ya?ml|sh|mjs|cjs|js)$/.test(f)) files.push(f);
+  }
+  const manifests = ['package.json'];
+  for (const d of ['packages', 'apps']) {
+    if (existsSync(join(root, d))) {
+      for (const e of readdirSync(join(root, d), { withFileTypes: true })) {
+        if (e.isDirectory()) manifests.push(`${d}/${e.name}/package.json`);
+      }
+    }
+  }
+  for (const m of manifests) if (existsSync(join(root, m))) files.push(m);
+  return files;
+}
+
+const bucketOf = (f) =>
+  f.startsWith('scripts/') ? 'scripts' : f.startsWith('.github/') ? 'workflows' : 'manifests';
+
+function edgesOf(rel, text) {
   const out = new Set();
-  for (const m of text.matchAll(IMPORT_SPEC)) {
-    const target = normalize(join(dirname(rel), m[1]));
-    out.add(target);
+  for (const m of text.matchAll(IMPORT_SPEC)) out.add(normalize(join(dirname(rel), m[1])));
+  for (const m of joinContinuations(text).matchAll(INVOKE)) {
+    const p = m[1].replace(/^(?:\$\{?[A-Za-z_]+\}?\/|\.\/)/, '');
+    out.add(normalize(p));
+    out.add(normalize(join(dirname(rel), p)));
   }
   return [...out];
 }
 
 /**
- * Every script under `scripts/**` (provers excluded) that reads the allowlist,
- * directly by name or through anything it imports or invokes, and every
- * workflow step that names it. Scanning, not listing.
+ * Every file that reads the allowlist: by name, by listing the `security/`
+ * directory, or through anything it imports or invokes (`import`, `require`,
+ * `node|bun|bash|sh <path>`, in scripts, workflows, composite actions and
+ * `package.json` scripts). Scanning, not listing.
  *
- * @returns {{ scripts: string[], workflows: string[] }}
+ * LIMIT, stated rather than chased: a path built at run time (string
+ * concatenation, a template over a variable) names no file this scan can see.
+ * Such a reader is invisible here; keep allowlist paths literal. So are
+ * `bun run <package-script-name>` hops and a script path held in a variable.
+ *
+ * @returns {{ scripts: string[], workflows: string[], manifests: string[] }}
  */
 export function scanReaders(root, allowlistRel) {
   const name = allowlistRel.split('/').pop();
-  const files = walk(root, 'scripts').filter(
-    (f) => SCRIPT_EXT.test(f) && !SELF.has(f) && !/\/mutation-prove-[^/]*$/.test(f),
+  const files = scanFiles(root);
+  const text = new Map(files.map((f) => [f, scannedText(root, f)]));
+  const direct = new Set(
+    files.filter((f) => text.get(f).includes(name) || DIR_READ.some((r) => r.test(text.get(f)))),
   );
-  const text = new Map(files.map((f) => [f, readFileSync(join(root, f), 'utf8')]));
-  const direct = new Set(files.filter((f) => stripComments(text.get(f)).includes(name)));
   // Fixed point over import / invoke edges: a script reading the file through a
-  // lib it imports is a reader too.
+  // lib it imports, or a script it runs, is a reader too.
   const reads = new Set(direct);
   for (let grew = true; grew; ) {
     grew = false;
     for (const f of files) {
       if (reads.has(f)) continue;
-      if (edgesOf(root, f, text.get(f)).some((t) => reads.has(t))) {
+      if (edgesOf(f, text.get(f)).some((t) => reads.has(t))) {
         reads.add(f);
         grew = true;
       }
     }
   }
-  const scripts = [...reads].filter((f) => !f.startsWith('scripts/lib/')).sort();
-  const wfDir = '.github/workflows';
-  const workflows = existsSync(join(root, wfDir))
-    ? readdirSync(join(root, wfDir))
-        .filter((f) => /\.ya?ml$/.test(f))
-        .map((f) => `${wfDir}/${f}`)
-        .filter((f) => stripComments(readFileSync(join(root, f), 'utf8')).includes(name))
-        .sort()
-    : [];
-  return { scripts, workflows };
+  const out = { scripts: [], workflows: [], manifests: [] };
+  for (const f of [...reads].sort()) {
+    if (f.startsWith('scripts/lib/')) continue;
+    out[bucketOf(f)].push(f);
+  }
+  return out;
 }
 
 /**
- * The argument sets workflow steps pass to `script`: the `--app` / `--closure` /
- * `--shape` flags on each non-comment line that invokes it.
+ * Every workflow command that invokes `script`, with the `--app` / `--closure` /
+ * `--shape` flags it passes. YAML `\` continuations are joined first, so flags on
+ * a later line are not lost. A line naming the script with no runner in front of
+ * it (a path filter, a comment) is not an invocation.
+ *
+ * @returns {{ file: string, args: string[] }[]}
  */
-export function deriveWorkflowArgSets(root, script) {
+export function workflowInvocations(root, script) {
   const wfDir = '.github/workflows';
-  const sets = new Map();
-  if (!existsSync(join(root, wfDir))) return [];
+  const out = [];
+  if (!existsSync(join(root, wfDir))) return out;
+  const runner = new RegExp(`\\b(?:node|bun|bash|sh)\\b[^\\n]*?${escapeRe(script)}`);
   for (const f of readdirSync(join(root, wfDir)).filter((n) => /\.ya?ml$/.test(n))) {
-    for (const line of stripComments(readFileSync(join(root, wfDir, f), 'utf8')).split('\n')) {
-      const at = line.indexOf(script);
-      if (at === -1) continue;
+    const joined = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));
+    for (const line of joined.split('\n')) {
+      if (!runner.test(line)) continue;
       const toks = line
-        .slice(at + script.length)
+        .slice(line.indexOf(script) + script.length)
         .trim()
         .split(/\s+/)
         .filter(Boolean);
@@ -184,11 +269,26 @@ export function deriveWorkflowArgSets(root, script) {
           i += 1;
         }
       }
-      sets.set(args.join(' '), args);
+      out.push({ file: `${wfDir}/${f}`, args });
     }
+  }
+  return out;
+}
+
+/** The distinct, non-empty argument sets workflow steps pass to `script`. */
+export function deriveWorkflowArgSets(root, script) {
+  const sets = new Map();
+  for (const { args } of workflowInvocations(root, script)) {
+    if (args.some((a) => a === '--app' || a === '--closure')) sets.set(args.join(' '), args);
   }
   return [...sets.values()].sort((a, b) => a.join(' ').localeCompare(b.join(' ')));
 }
+
+/** Invocations naming neither `--app` nor `--closure`: they would scan the default tree, never a covered app. */
+export const bareInvocations = (root, script) =>
+  workflowInvocations(root, script).filter(
+    ({ args }) => !args.some((a) => a === '--app' || a === '--closure'),
+  );
 
 /**
  * Expand the changed allowlists into concrete commands. `unknown` is every
@@ -206,8 +306,8 @@ export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = AL
   const seen = new Set();
   for (const allowlist of allowlists) {
     const reg = registry[allowlist] ?? { gates: [], other: {} };
-    const { scripts, workflows } = scanReaders(root, allowlist);
-    for (const r of [...scripts, ...workflows]) {
+    const { scripts, workflows, manifests } = scanReaders(root, allowlist);
+    for (const r of [...scripts, ...workflows, ...manifests]) {
       if (!reg.gates.includes(r) && !(r in reg.other)) unknown.push({ allowlist, script: r });
     }
     for (const script of reg.gates) {
@@ -216,7 +316,17 @@ export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = AL
         unknown.push({ allowlist, script });
         continue;
       }
-      const argSets = entry.runs === 'workflows' ? deriveWorkflowArgSets(root, script) : entry.runs;
+      const fromWorkflows = entry.runs === 'workflows';
+      if (fromWorkflows) {
+        // Fail closed: an invocation with no --app/--closure is never run bare.
+        for (const b of bareInvocations(root, script)) {
+          unknown.push({
+            allowlist,
+            script: `${script} (invoked with no --app/--closure in ${b.file}; refusing to run it bare)`,
+          });
+        }
+      }
+      const argSets = fromWorkflows ? deriveWorkflowArgSets(root, script) : entry.runs;
       if (argSets.length === 0) {
         unknown.push({
           allowlist,

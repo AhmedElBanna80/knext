@@ -74,6 +74,7 @@ describe('allowlist gate discovery', () => {
     put(root, '.github/workflows/w.yml', 'steps:\n  - run: cat security/x-allowlist.json\n');
     put(root, '.github/workflows/c.yml', '# security/x-allowlist.json\n');
     expect(scanReaders(root, 'security/x-allowlist.json')).toEqual({
+      manifests: [],
       scripts: [
         'scripts/direct.mjs',
         'scripts/sub/deep.mjs',
@@ -105,7 +106,11 @@ describe('allowlist gate discovery', () => {
     const registry = {
       'security/x-allowlist.json': {
         gates: ['scripts/known.mjs', 'scripts/audit.mjs'],
-        other: { 'scripts/excused.mjs': 'reason' },
+        other: {
+          'scripts/excused.mjs': 'reason',
+          '.github/workflows/w.yml': 'runner',
+          '.github/workflows/v.yml': 'runner',
+        },
       },
     };
     const { runs, unknown } = planGateRuns(root, ['security/x-allowlist.json'], table, registry);
@@ -134,6 +139,84 @@ describe('allowlist gate discovery', () => {
       registry,
     );
     expect(noWf.unknown[0].script).toContain('no workflow step found');
+  });
+
+  it('joins YAML continuation lines and never runs a closure audit bare', () => {
+    const root = fixture();
+    put(
+      root,
+      '.github/workflows/a.yml',
+      'steps:\n  - run: |\n      node scripts/audit.mjs \\\n        --app apps/multi\n' +
+        "  - run: node scripts/audit.mjs --closure examples/c\n  - paths: ['scripts/audit.mjs']\n",
+    );
+    expect(deriveWorkflowArgSets(root, 'scripts/audit.mjs')).toEqual([
+      ['--app', 'apps/multi'],
+      ['--closure', 'examples/c'],
+    ]);
+    put(root, '.github/workflows/b.yml', 'steps:\n  - run: node scripts/audit.mjs\n');
+    put(root, 'scripts/audit.mjs', 'x-allowlist.json');
+    const registry = {
+      'security/x-allowlist.json': {
+        gates: ['scripts/audit.mjs'],
+        other: Object.fromEntries(
+          ['a', 'b'].map((n) => [`.github/workflows/${n}.yml`, 'runner'] as const),
+        ),
+      },
+    };
+    const table: any = { 'scripts/audit.mjs': { needs: [], runs: 'workflows' } };
+    const { runs, unknown } = planGateRuns(root, ['security/x-allowlist.json'], table, registry);
+    expect(runs.map((r) => r.args.join(' '))).toEqual(['--app apps/multi', '--closure examples/c']);
+    expect(unknown.map((u) => u.script).join()).toContain('refusing to run it bare');
+    expect(runs.some((r) => r.args.length === 0)).toBe(false);
+  });
+
+  it('follows node/bun/bash/sh invocations and package.json scripts as edges', () => {
+    const root = fixture();
+    put(root, 'scripts/reader.mjs', "read('security/x-allowlist.json')");
+    put(root, 'scripts/by-node.sh', 'node scripts/reader.mjs');
+    put(root, 'scripts/by-bash.sh', 'bash ./by-node.sh');
+    put(root, 'scripts/by-bun.ts', "// bun scripts/reader.mjs\nrun('bun run scripts/reader.mjs')");
+    put(root, 'scripts/by-sh.sh', 'sh "$ROOT/scripts/by-node.sh"');
+    put(root, 'scripts/not-an-invocation.mjs', "log('scripts/reader.mjs')");
+    put(root, '.github/workflows/w.yml', '  - run: bash scripts/by-bash.sh\n');
+    put(root, '.github/actions/a/action.yml', 'run: node scripts/reader.mjs\n');
+    put(
+      root,
+      'package.json',
+      JSON.stringify({
+        '//note': 'x-allowlist.json',
+        scripts: { gate: 'node scripts/reader.mjs' },
+      }),
+    );
+    put(
+      root,
+      'packages/p/package.json',
+      JSON.stringify({ '//note': 'x-allowlist.json', scripts: {} }),
+    );
+    expect(scanReaders(root, 'security/x-allowlist.json')).toEqual({
+      scripts: [
+        'scripts/by-bash.sh',
+        'scripts/by-bun.ts',
+        'scripts/by-node.sh',
+        'scripts/by-sh.sh',
+        'scripts/reader.mjs',
+      ],
+      workflows: ['.github/actions/a/action.yml', '.github/workflows/w.yml'],
+      manifests: ['package.json'],
+    });
+  });
+
+  it('flags sources that list the security directory as readers of every allowlist', () => {
+    const root = fixture();
+    put(root, 'scripts/ls.mjs', "readdirSync(join(root, 'security')).map(read)");
+    put(root, 'scripts/glob.mjs', "for await (const f of glob('security/*.json')) use(f)");
+    put(root, 'scripts/loop.sh', 'for f in security/*.json; do cat "$f"; done');
+    put(root, 'scripts/docs.mjs', "readdirSync('docs')");
+    put(root, 'scripts/comment.mjs', "// readdirSync('security')");
+    put(root, '.github/actions/a/run.sh', 'ls security/*');
+    const r = scanReaders(root, 'security/anything-allowlist.json');
+    expect(r.scripts).toEqual(['scripts/glob.mjs', 'scripts/loop.sh', 'scripts/ls.mjs']);
+    expect(r.workflows).toEqual(['.github/actions/a/run.sh']);
   });
 
   describe('against the real repo', () => {

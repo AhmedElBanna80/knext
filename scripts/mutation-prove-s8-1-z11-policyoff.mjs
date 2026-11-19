@@ -125,8 +125,8 @@ const MUTATIONS = [
     id: 'WK2',
     subject: 'run',
     claim: 'the policy-off direct wait stops waking the function first',
-    anchor: '  DIRECT_IP=""\n  wake_ready\n',
-    replacement: '  DIRECT_IP=""\n',
+    anchor: '  wake_ready\n  await_direct_ip\n  ip="${DIRECT_IP}"\n',
+    replacement: '  await_direct_ip\n  ip="${DIRECT_IP}"\n',
   },
   {
     id: 'WK3',
@@ -148,8 +148,8 @@ const MUTATIONS = [
     id: 'N1',
     subject: 'run',
     claim: 'noauth no longer turns the policy off for its direct dial',
-    anchor: '  set_policy false\n  await_direct_ip\n  local dip=',
-    replacement: '  await_direct_ip\n  local dip=',
+    anchor: '  set_policy false\n  wake_ready\n  await_direct_ip\n  local dip=',
+    replacement: '  wake_ready\n  await_direct_ip\n  local dip=',
   },
   {
     id: 'N2',

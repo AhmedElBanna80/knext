@@ -114,7 +114,7 @@ describe('fetchZ7Runs', () => {
       '2': [run('failure', 1)],
     };
     const gh = (a: string[]) => {
-      const page = /page=(\d+)/.exec(a[1])?.[1] as string;
+      const page = /[?&]page=(\d+)/.exec(a[1])?.[1] as string;
       return JSON.stringify({ workflow_runs: pages[page] ?? [], total_count: 3 });
     };
     const runs = fetchZ7Runs({ gh, repo: 'o/r', perPage: 2 });

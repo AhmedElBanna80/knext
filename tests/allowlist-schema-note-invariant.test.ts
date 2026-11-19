@@ -22,10 +22,11 @@ export const noteKeys = (note: string): Set<string> =>
  */
 export function requiredRuleViolation(note: string): string | undefined {
   if (!/`expires`[^.]*\bREQUIRED\b/.test(note)) return 'no `expires` sentence says REQUIRED';
-  // A negation within a few words before REQUIRED ("not REQUIRED", "no longer REQUIRED",
-  // "isn't really REQUIRED", "optional, REQUIRED") says the opposite of the rule.
+  // The negation must DIRECTLY modify REQUIRED: "not REQUIRED", "no longer REQUIRED", "never
+  // REQUIRED", "isn't REQUIRED", each with an optional "really". A window of words is not used:
+  // it flagged "(ISO date, not blank, REQUIRED)" and "not optional, REQUIRED", which both say REQUIRED.
   if (
-    /`expires`[^.]*\b(?:not|no longer|isn['’]t|never|optional)\b(?:[^\w.]+\w+){0,3}?[^\w.]+REQUIRED\b/i.test(
+    /`expires`[^.]*\b(?:(?:is|are)\s+)?(?:not|no\s+longer|never|isn['’]t)\s+(?:really\s+)?REQUIRED\b/i.test(
       note,
     )
   )
@@ -64,6 +65,18 @@ describe('allowlist $schema-note matches its validator', () => {
     expect(requiredRuleViolation("`expires` isn't REQUIRED")).toBeDefined();
     expect(requiredRuleViolation('`expires` (ISO date) is not really REQUIRED')).toBeDefined();
     expect(requiredRuleViolation('`expires` (ISO date, REQUIRED, not optional)')).toBeUndefined();
+  });
+
+  it('ROUND 2 item 4: the two false-positive phrases pass (negation must modify REQUIRED itself)', () => {
+    expect(
+      requiredRuleViolation('`expires` (ISO date, not blank, REQUIRED, at most 180 days)'),
+    ).toBeUndefined();
+    expect(requiredRuleViolation('`expires` (ISO date) not optional, REQUIRED')).toBeUndefined();
+  });
+
+  it('ROUND 2 item 4: "optional" as the predicate is still rejected, and REQUIRED alone passes', () => {
+    expect(requiredRuleViolation('`expires` (ISO date) is optional, REQUIRED')).toBeDefined();
+    expect(requiredRuleViolation('`expires` (ISO date) is REQUIRED')).toBeUndefined();
   });
 
   it('the key scan rejects a stale extra key and ignores uppercase tokens', () => {

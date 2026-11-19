@@ -71,7 +71,7 @@ describe('the lane runner leaves no private temp dir behind on a signal (TD-S12-
 
   it('the runner pins the exit signals through the shared helper (not an ad hoc list)', () => {
     const src = readFileSync(resolve(ROOT, RUNNER), 'utf8');
-    expect(src.match(/pinExitSignals\(\);/g)?.length).toBe(1);
+    expect(src.match(/pinExitSignals\(restoreOnSignal\);/g)?.length).toBe(1);
     expect(src).not.toMatch(/process\.once\('SIG/);
   });
 
@@ -102,10 +102,8 @@ const TRACKED_CHILD = `
     const { pinExitSignals, trackProverGroup } = await import(process.env.PIN);
     const dir = fs.mkdtempSync(join(tmpdir(), 'knext-lane-provers-'));
     process.on('exit', () => {
-      // Record the handler count first: a handler that was removed (once) reads 0 here.
+      // Record the handler count while the exit cleanup runs: a handler removed by once() reads 0 here.
       fs.writeFileSync(process.env.OUTFILE, 'LISTENERS ' + process.listenerCount('SIGTERM') + '\\n');
-      // A slow cleanup, so a second signal would land inside it if the handler were gone.
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
       fs.rmSync(dir, { recursive: true, force: true });
     });
     pinExitSignals();
@@ -182,7 +180,10 @@ describe('a signal to the runner kills its tracked prover groups before the priv
       proc.kill('SIGTERM');
       await proc.exited;
       expect(proc.exitCode).toBe(143);
-      // The handler was still installed while the exit cleanup ran (once() would have removed it).
+      // What this proves: the SIGTERM listener is still installed when the exit cleanup runs (with `once`
+      // it would read 0). What it does NOT prove: that a second signal interrupts the cleanup. Node runs
+      // signal handlers on the event loop, so a synchronous cleanup cannot be interrupted by one; the
+      // second SIGTERM is delivered after the process has exited. That limit is stated, not tested.
       expect(readFileSync(outFile, 'utf8')).toBe('LISTENERS 1\n');
       expect(readdirSync(tmpRoot)).toEqual([]);
       expect(await waitFor(() => !alive(pid), 3000)).toBe(true);
@@ -197,9 +198,9 @@ describe('a signal to the runner kills its tracked prover groups before the priv
     expect(src).toMatch(/untrack\(\)/);
   });
 
-  it('the helper kills tracked groups before it exits (the kill happens in the signal handler)', () => {
+  it('the helper kills tracked groups, restores the tree, then exits (the signal path, ROUND 2 item 6)', () => {
     const src = readFileSync(resolve(ROOT, 'scripts/lib/lane-exit-signals.mjs'), 'utf8');
-    expect(src).toMatch(/killTrackedGroups\(\);\s*process\.exit\(code\)/);
+    expect(src).toMatch(/killTrackedGroups\(\);\s*beforeExit\(signal\);\s*process\.exit\(code\)/);
     expect(src).not.toMatch(/process\.once\(/);
   });
 });

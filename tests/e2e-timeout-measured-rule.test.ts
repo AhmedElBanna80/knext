@@ -10,8 +10,11 @@ import { resolve } from 'node:path';
  * 1.5x that time, in minutes.
  */
 const WORKFLOWS = resolve(import.meta.dirname, '..', '.github', 'workflows');
-const CITATION = /The slowest is (\d+) s\b/;
-const TIMEOUT = /^\s*timeout-minutes:\s*(.+?)\s*$/m;
+// Decimal seconds ("2313.5 s") are a measured figure too. ROUND 2 item 7.
+const CITATION = /The slowest is (\d+(?:\.\d+)?) s\b/;
+// The JOB-level timeout: exactly four spaces under the job header. A step-level `timeout-minutes` is
+// indented deeper and never matches, so a job with only a step-level timeout has no job timeout.
+const TIMEOUT = /^ {4}timeout-minutes:\s*(.+?)\s*$/m;
 
 /** The minimum timeout (minutes) the rule allows for a measured slowest time in seconds. */
 export const minimumMinutes = (slowestSeconds: number): number => (slowestSeconds * 1.5) / 60;
@@ -95,21 +98,21 @@ describe('a kind e2e timeout is at least 1.5x its measured slowest CI run (TD-S1
 
   it('the rule itself: 2313 s needs 57.8 min, so 60 passes and 50 fails', () => {
     expect(minimumMinutes(2313)).toBeCloseTo(57.8, 1);
-    expect(timeoutViolations('# The slowest is 2313 s (38.6 min).\ntimeout-minutes: 60\n')).toEqual(
+    expect(timeoutViolations('jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    timeout-minutes: 60\n')).toEqual(
       [],
     );
     expect(
-      timeoutViolations('# The slowest is 2313 s (38.6 min).\ntimeout-minutes: 50\n').length,
+      timeoutViolations('jobs:\n  a:\n    # The slowest is 2313 s (38.6 min).\n    timeout-minutes: 50\n').length,
     ).toBe(1);
   });
 
   it('a ternary is checked on EVERY branch, not only the default', () => {
     expect(
-      timeoutViolations('# The slowest is 2557 s.\ntimeout-minutes: ${{ x && 120 || 50 }}\n')
+      timeoutViolations('jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120 || 50 }}\n')
         .length,
     ).toBe(1);
     expect(
-      timeoutViolations('# The slowest is 2557 s.\ntimeout-minutes: ${{ x && 120 || 65 }}\n'),
+      timeoutViolations('jobs:\n  a:\n    # The slowest is 2557 s.\n    timeout-minutes: ${{ x && 120 || 65 }}\n'),
     ).toEqual([]);
   });
 
@@ -134,6 +137,28 @@ describe('a kind e2e timeout is at least 1.5x its measured slowest CI run (TD-S1
     expect(timeoutViolations(ok)).toEqual([]);
     const bad = ok.replace('timeout-minutes: 65', 'timeout-minutes: 50');
     expect(timeoutViolations(bad).length).toBe(1);
+  });
+
+  // ROUND 2 item 7. A citation may carry decimal seconds, and the timeout the rule checks is the JOB-level
+  // `timeout-minutes` (four spaces under the job header). A step-level timeout is not the job's timeout.
+  it('a decimal citation ("2313.5 s") is parsed and checked (not silently ignored)', () => {
+    expect(
+      timeoutViolations('jobs:\n  a:\n    # The slowest is 2313.5 s.\n    timeout-minutes: 50\n')
+        .length,
+    ).toBe(1);
+    expect(
+      timeoutViolations('jobs:\n  a:\n    # The slowest is 2313.5 s.\n    timeout-minutes: 60\n'),
+    ).toEqual([]);
+  });
+
+  it('a job with ONLY a step-level timeout is a violation (the job timeout is what the rule checks)', () => {
+    const yml = `jobs:\n  a:\n    # The slowest is 2313 s.\n    steps:\n      - name: x\n        timeout-minutes: 60\n`;
+    expect(timeoutViolations(yml).length).toBe(1);
+  });
+
+  it('a step-level timeout does not satisfy a job that also has a short job-level one', () => {
+    const yml = `jobs:\n  a:\n    # The slowest is 2313 s.\n    timeout-minutes: 50\n    steps:\n      - name: x\n        timeout-minutes: 90\n`;
+    expect(timeoutViolations(yml).length).toBe(1);
   });
 
   it('a citation outside any job (before jobs:) is a violation, not silently skipped', () => {

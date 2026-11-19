@@ -393,7 +393,27 @@ process.on('exit', () => {
 // A job timeout, a cancellation, or a closed terminal (SIGHUP) sends a signal that skips 'exit'
 // unless it is routed through process.exit. pinExitSignals does that for each one, so the private
 // dir is removed on every signal we can catch (SIGKILL cannot be caught; see lib/lane-exit-signals.mjs).
-pinExitSignals();
+/** The prover running now, and the tree it started from. A signal restores that tree before it exits. */
+let activeProver = null;
+
+/**
+ * A signal kills the running prover's group (lib/lane-exit-signals.mjs), then restores the tree that prover
+ * left, synchronously, the same restore a timeout gets: the tracked files it mutated come back from HEAD and
+ * the untracked files it created are removed. Without it a killed prover left the tree dirty for the next run.
+ */
+function restoreOnSignal() {
+  if (!activeProver) return;
+  const { relPath, untrackedBefore, modifiedBefore } = activeProver;
+  activeProver = null;
+  try {
+    console.error(`\n   signal during ${relPath}: ${restoreTreeAfterKill(untrackedBefore)}`);
+    const residue = residueFinding(relPath, modifiedBefore);
+    if (residue) console.error(`   ${residue}`);
+  } catch (error) {
+    console.error(`   signal restore failed for ${relPath}: ${error.message}`);
+  }
+}
+pinExitSignals(restoreOnSignal);
 
 /** Delete regenerable build output; returns what was removed. */
 function cleanBuildOutput() {
@@ -497,6 +517,7 @@ for (const prover of provers) {
   const started = Date.now();
   const untrackedBefore = untrackedFiles();
   const modifiedBefore = modifiedTrackedFiles();
+  activeProver = { relPath: prover.relPath, untrackedBefore, modifiedBefore };
   const run = await runProver(prover.absPath, {
     cwd: REPO_ROOT,
     env: proverEnv,
@@ -521,6 +542,7 @@ for (const prover of provers) {
     console.error(`\n   ${findings[0]}`);
   }
   const residue = residueFinding(prover.relPath, modifiedBefore);
+  activeProver = null;
   if (residue) {
     findings.push(residue);
     console.error(`\n   ${residue}`);

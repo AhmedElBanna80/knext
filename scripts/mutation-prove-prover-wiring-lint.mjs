@@ -38,14 +38,14 @@ const MUTATIONS = [
   {
     label: 'an imported subject is no longer treated as executed (flagged as text-only)',
     subject: 'lint',
-    anchor: "if (imported) return 'executed';",
-    replacement: "if (imported) return 'text';",
+    anchor: "if (imported) kinds.add('executed');",
+    replacement: "void 0;",
   },
   {
     label: 'a path variable used for anything but a text read is skipped instead of judged',
     subject: 'lint',
-    anchor: "if (!c || !isReadCall(c, aliases)) return spawnedBy(u) ? 'executed' : 'other';",
-    replacement: 'if (!c || !isReadCall(c, aliases)) continue;',
+    anchor: "        if (!spawnedBy(u)) return 'other';",
+    replacement: "        if (!spawnedBy(u)) continue;",
   },
   {
     label: 'text handed to a parser or helper is still called a substring match',
@@ -86,8 +86,8 @@ const MUTATIONS = [
   {
     label: 'a text read that is never asserted on counts as a substring check (judged > 0 dropped)',
     subject: 'lint',
-    anchor: "return judged > 0 ? 'text' : 'other';",
-    replacement: "return 'text';",
+    anchor: "if (judged > 0) kinds.add('text');",
+    replacement: "kinds.add('text');",
   },
   {
     label: 'a describe/it title naming the subject is treated as executing it',
@@ -135,20 +135,20 @@ const MUTATIONS = [
   {
     label: 'a bash -n spawn of the subject (literal path) counts as executing it again',
     subject: 'lint',
-    anchor: 'if (isSyntaxCheckArg(outer)) continue;',
-    replacement: '',
+    anchor: "if (sk === 'check') continue;",
+    replacement: "void 0;",
   },
   {
     label: 'a bash -n spawn of the subject (path variable) counts as executing it again',
     subject: 'lint',
-    anchor: 'if (isSyntaxCheckArg(u)) continue;',
-    replacement: '',
+    anchor: "if (uk === 'check') continue;",
+    replacement: "void 0;",
   },
   {
     label: 'the -n flag is no longer required: any shell spawn of the subject is a syntax check',
     subject: 'lint',
-    anchor: 'return before.some((f) => /^-[A-Za-z]*n[A-Za-z]*$/.test(f));',
-    replacement: 'return true;',
+    anchor: "if (m[1] === '-' && c === 'n') check = true;",
+    replacement: "check = true;",
   },
   {
     label: 'a -n argument to a non-shell command is treated as a syntax check',
@@ -172,16 +172,9 @@ const MUTATIONS = [
   {
     label: 'a non-flag argument in front of the subject no longer ends the syntax check',
     subject: 'lint',
-    anchor: "if (before.some((f) => f === undefined || !f.startsWith('-'))) return false;",
-    replacement: '',
+    anchor: "if (f === '-' || !/^[-+]/.test(f)) return 'run';",
+    replacement: "if (false) return 'run';",
   },
-  {
-    label: 'an -n AFTER the subject (bash <subject> -n, the script runs) counts as a syntax check',
-    subject: 'lint',
-    anchor: 'return before.some((f) => /^-[A-Za-z]*n[A-Za-z]*$/.test(f));',
-    replacement: "return args.some((f) => /^-[A-Za-z]*n[A-Za-z]*$/.test(strLit(f) ?? ''));",
-  },
-  // ---- Item 3: a string method result that reaches an executing or unknown consumer
   {
     label:
       'a slice/split/replace result that reaches a call is no longer followed (JSON.parse(x.slice(..)))',
@@ -261,8 +254,8 @@ const MUTATIONS = [
   {
     label: 'a path handed to nothing that runs it is counted as executed (behavioural), not other',
     subject: 'lint',
-    anchor: "return spawnedBy(u) ? 'executed' : 'other';",
-    replacement: "return 'other';",
+    anchor: "if (!spawnedBy(u)) return 'other';",
+    replacement: "kinds.add('executed');",
   },
   {
     label:
@@ -290,9 +283,63 @@ const MUTATIONS = [
     anchor: "verdicts.length > 0 && verdicts.every((v) => v === 'text')",
     replacement: "verdicts.every((v) => v === 'text')",
   },
+  {
+    label: "item 1: a spec with executed and text uses collapses to executed (mixed is lost)",
+    subject: 'lint',
+    anchor: "return kinds.size === 1 ? [...kinds][0] : 'mixed';",
+    replacement: "return kinds.has('executed') ? 'executed' : kinds.size === 1 ? [...kinds][0] : 'mixed';",
+  },
+  {
+    label: "item 1: an import specifier is counted as a use of the subject again",
+    subject: 'lint',
+    anchor: "if (parent && (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent))) continue;",
+    replacement: "",
+  },
+  {
+    label: "item 2: an unknown bash option is treated as a run, not unattributed",
+    subject: 'lint',
+    anchor: "    if (sk === 'unknown') return 'other';",
+    replacement: "",
+  },
+  {
+    label: "item 2: bash -o does not consume its argument (the -n after it is missed)",
+    subject: 'lint',
+    anchor: "        i += 1;\n        break;",
+    replacement: "        break;",
+  },
+  {
+    label: "item 2: bash --rcfile does not consume its argument",
+    subject: 'lint',
+    anchor: "      i += 1; // --rcfile X: the argument is the next word, and it is before the subject",
+    replacement: "",
+  },
+  {
+    label: "item 3: a value passed to a local asserting helper escapes (the helper is not followed)",
+    subject: 'lint',
+    anchor: "      return !helperChecksArg(p, cur);",
+    replacement: "      return true;",
+  },
+  {
+    label: "item 3: a value handed to an asserting helper is no longer a substring use",
+    subject: 'lint',
+    anchor: "  if (cur.parent && ts.isCallExpression(cur.parent) && helperChecksArg(cur.parent, cur)) return true;",
+    replacement: "",
+  },
+  {
+    label: "item 3: the helper cycle guard is removed (mutually calling helpers are followed forever)",
+    subject: 'lint',
+    anchor: "  if (helpersInFlight.has(fn)) return false;",
+    replacement: "",
+  },
+  {
+    label: "item 3: a spec that imports the subject by module path no longer names it (its executed verdict is lost)",
+    subject: 'lint',
+    anchor: "s.includes(base) || importsModule(s, path))",
+    replacement: "s.includes(base))",
+  },
 ];
 
-const DECLARED = 41;
+const DECLARED = 49;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

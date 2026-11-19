@@ -23,13 +23,17 @@
  *                 spawn-family call (`spawnSync('bash', [p])`), or a path used in some other way
  *                 that is not a text read;
  *   - 'other'     the spec reads the text and does something that is neither a substring check
- *                 nor an execution (parses it, hands it to a helper, never asserts on it), or the
- *                 path is named but never read.
+ *                 nor an execution (parses it, stores it, never asserts on it), or the path is
+ *                 named but never read, or a shell option this lint cannot read is in front of it.
+ *   - 'mixed'     the spec both executes the subject and reads it as text: every use is classified,
+ *                 not only the first, and two kinds of use make the verdict 'mixed'.
+ *                 A text read handed to a LOCAL helper counts as text when that helper only asserts
+ *                 on its parameter (`assertHas(src)`); see `helperChecksArg`.
  * A subject is then classified by `subjectAttribution`:
  *   - 'text'          every naming spec is 'text' (a row on it is WIRING);
  *   - 'executed'      every naming spec is 'executed' (an unlabelled row on it is BEHAVIOURAL);
  *   - 'unattributed'  anything else: no spec names it, or the naming specs disagree, or one is
- *                     'other'. Its unlabelled rows are UNATTRIBUTED.
+ *                     'other' or 'mixed'. Its unlabelled rows are UNATTRIBUTED.
  *
  * LIMIT, the attribution one (the reason 'unattributed' exists). A row carries no spec field, so a
  * row cannot be tied to the spec that catches it. Where a subject is named by a text-only spec AND
@@ -161,9 +165,21 @@ const strLit = (n) =>
  * runs, and `-n` is one of its arguments. The shell must be `bash`/`sh`, either the first argument of
  * the spawn (`spawnSync('bash', [...])`) or the first element of a Bun.spawn-style array.
  */
-function isSyntaxCheckArg(expr) {
+// Bash options this lint can read. A letter in NOARG_SHORT takes no argument; -o/-O take one (the next word).
+const NOARG_SHORT = 'abefhkmnptuvxBCHPT';
+const NOARG_LONG = new Set(['--posix', '--norc', '--noprofile', '--login', '--restricted', '--noediting']);
+const ARG_LONG = new Set(['--rcfile', '--init-file']);
+
+/**
+ * How a shell invocation treats the subject, read from the words before it (see the header):
+ *   'check'   -n is set: the subject is parsed, not run;
+ *   'run'     the subject is run (no -n, or a word before it ends the options);
+ *   'unknown' an option this lint cannot read, or an argument missing: unattributed, never executed;
+ * and undefined when the subject is not an argument of a shell at all.
+ */
+function shellArgKind(expr) {
   const arr = expr.parent;
-  if (!arr || !ts.isArrayLiteralExpression(arr)) return false;
+  if (!arr || !ts.isArrayLiteralExpression(arr)) return undefined;
   const shells = (n) => n !== undefined && ['bash', 'sh'].includes(strLit(n));
   const call = arr.parent;
   let args;
@@ -177,15 +193,37 @@ function isSyntaxCheckArg(expr) {
   } else if (shells(arr.elements[0])) {
     args = arr.elements.slice(1);
   } else {
-    return false;
+    return undefined;
   }
   const idx = args.indexOf(expr);
-  if (idx < 0) return false;
-  // Every argument before the subject must be a literal flag: the first non-flag argument ends the
-  // options, and the subject is then a script argument, not the file bash is told to check.
+  if (idx < 0) return undefined;
   const before = args.slice(0, idx).map(strLit);
-  if (before.some((f) => f === undefined || !f.startsWith('-'))) return false;
-  return before.some((f) => /^-[A-Za-z]*n[A-Za-z]*$/.test(f));
+  let check = false;
+  for (let i = 0; i < before.length; i++) {
+    const f = before[i];
+    if (f === undefined) return 'unknown'; // a non-literal option word: cannot be read
+    if (f === '-' || !/^[-+]/.test(f)) return 'run'; // the first word that is not an option ends them
+    if (f.startsWith('--')) {
+      if (NOARG_LONG.has(f)) continue;
+      if (!ARG_LONG.has(f) || i + 1 >= before.length) return 'unknown';
+      i += 1; // --rcfile X: the argument is the next word, and it is before the subject
+      continue;
+    }
+    const m = /^([-+])([A-Za-z]+)$/.exec(f);
+    if (!m) return 'unknown';
+    for (let j = 0; j < m[2].length; j++) {
+      const c = m[2][j];
+      if (c === 'o' || c === 'O') {
+        // -o X / +o X / -O X: the option's argument is the next word, which must itself be before the subject.
+        if (j !== m[2].length - 1 || i + 1 >= before.length) return 'unknown';
+        i += 1;
+        break;
+      }
+      if (m[1] === '-' && c === 'n') check = true;
+      else if (!NOARG_SHORT.includes(c)) return 'unknown';
+    }
+  }
+  return check ? 'check' : 'run';
 }
 
 /** Is this path expression handed to a call that runs (or loads) it, directly or in an argument array? */
@@ -413,6 +451,52 @@ function readAliases(sf) {
   return out;
 }
 
+/** Helpers whose parameter is being checked right now: a helper that calls back into itself is refused. */
+const helpersInFlight = new Set();
+
+/** The local function (declaration, or `const f = () => ..`) named `name` in this file, or undefined. */
+function localFunction(sf, name) {
+  let found;
+  const visit = (n) => {
+    if (found) return;
+    if (ts.isFunctionDeclaration(n) && n.name?.text === name) found = n;
+    else if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === name &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    )
+      found = n.initializer;
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+/**
+ * Does a LOCAL helper only assert on the argument `arg` it is called with? True when the helper is in this
+ * file, the argument lands on a plain parameter, and every use of that parameter inside the helper is a
+ * substring/regex check (so the helper's body is string and assert methods only). Helpers may call further
+ * helpers; a cycle is refused. Helper bodies that store, parse or otherwise hand on the text are not checks.
+ */
+function helperChecksArg(call, arg) {
+  if (!ts.isIdentifier(call.expression)) return false;
+  const idx = call.arguments.indexOf(arg);
+  if (idx < 0) return false;
+  const fn = localFunction(call.getSourceFile(), call.expression.text);
+  const param = fn?.parameters[idx];
+  if (!fn || !param || param.dotDotDotToken || !ts.isIdentifier(param.name)) return false;
+  if (helpersInFlight.has(fn)) return false;
+  helpersInFlight.add(fn);
+  try {
+    const uses = bindingUses(param, param.name.text);
+    return uses.length > 0 && uses.every((u) => isSubstringUse(u));
+  } finally {
+    helpersInFlight.delete(fn);
+  }
+}
+
 /**
  * Does the value of `node` reach something other than an assertion or another string method? That
  * is what makes a `slice`/`split`/`replace` result an EXECUTING or parsing use of the text, not a
@@ -480,7 +564,7 @@ function escapesTextCheck(node, depth = 0) {
       ) {
         return false;
       }
-      return true;
+      return !helperChecksArg(p, cur);
     }
     if (ts.isVariableDeclaration(p) && p.initializer === cur) {
       if (!ts.isIdentifier(p.name)) return true;
@@ -558,6 +642,8 @@ function isSubstringUse(use) {
       cur = cur.parent;
     }
   }
+  // A local helper that asserts on its argument (`assertHas(src)`): the text is checked inside it.
+  if (cur.parent && ts.isCallExpression(cur.parent) && helperChecksArg(cur.parent, cur)) return true;
   // regex.test(v)
   if (
     call &&
@@ -610,12 +696,19 @@ export function classifyPair(specSource, subjectPath) {
     ts.forEachChild(n, findImports);
   };
   findImports(sf);
-  if (imported) return 'executed';
+  const kinds = new Set(); // every use's kind: one kind is a verdict, two is 'mixed'
+  if (imported) kinds.add('executed');
   const aliases = readAliases(sf);
   const textExprs = []; // { name, handle } or { inline }: the file's text, or a handle to it
   for (const lit of lits) {
+    const parent = lit.parent;
+    // An import/require specifier names the subject but is not a use of it: `imported` already counts it.
+    if (parent && (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent))) continue;
+    if (parent && ts.isCallExpression(parent) && (parent.expression.kind === ts.SyntaxKind.ImportKeyword || /^(require|mock|doMock|module)$/.test(calleeName(parent) ?? ''))) continue;
     const outer = outerPathExpr(lit);
-    if (isSyntaxCheckArg(outer)) continue; // `bash -n <subject>` parses, it does not run
+    const sk = shellArgKind(outer);
+    if (sk === 'unknown') return 'other';
+    if (sk === 'check') continue; // `bash -n <subject>` parses, it does not run
     const direct = argOf(outer);
     if (direct && TITLE_CALLEES.has(calleeName(direct) ?? '') && direct.arguments[0] === outer)
       continue;
@@ -624,13 +717,23 @@ export function classifyPair(specSource, subjectPath) {
       continue;
     }
     const pathVar = declaredName(outer);
-    if (!pathVar) return spawnedBy(outer) ? 'executed' : 'other';
+    if (!pathVar) {
+      if (!spawnedBy(outer)) return 'other';
+      kinds.add('executed');
+      continue;
+    }
     const uses = identifierUses(sf, pathVar);
     if (uses.length === 0) return 'other';
     for (const u of uses) {
-      if (isSyntaxCheckArg(u)) continue;
+      const uk = shellArgKind(u);
+      if (uk === 'unknown') return 'other';
+      if (uk === 'check') continue;
       const c = argOf(u);
-      if (!c || !isReadCall(c, aliases)) return spawnedBy(u) ? 'executed' : 'other';
+      if (!c || !isReadCall(c, aliases)) {
+        if (!spawnedBy(u)) return 'other';
+        kinds.add('executed');
+        continue;
+      }
       textExprs.push(readBinding(c));
     }
   }
@@ -668,7 +771,9 @@ export function classifyPair(specSource, subjectPath) {
       if (!isSubstringUse(u)) return 'other';
     }
   }
-  return judged > 0 ? 'text' : 'other';
+  if (judged > 0) kinds.add('text');
+  if (kinds.size === 0) return 'other';
+  return kinds.size === 1 ? [...kinds][0] : 'mixed';
 }
 
 /**
@@ -678,6 +783,13 @@ export function classifyPair(specSource, subjectPath) {
  */
 export function isTextOnlyPair(specSource, subjectPath) {
   return classifyPair(specSource, subjectPath) === 'text';
+}
+
+/** Does a spec source contain a path literal naming this subject's module (`'../render'`, `'./render.ts'`)? */
+function importsModule(specSource, subjectPath) {
+  const stem = subjectPath.split('/').pop().replace(/\.[^.]+$/, '');
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`['"\`][^'"\`]*/${escaped}(\\.[cm]?[jt]sx?)?['"\`]`).test(specSource);
 }
 
 /**
@@ -695,7 +807,10 @@ export function subjectAttribution(proverSource, readSpec) {
     .filter((s) => typeof s === 'string');
   for (const [key, path] of subjects) {
     const base = path.split('/').pop();
-    const verdicts = specs.filter((s) => s.includes(base)).map((s) => classifyPair(s, path));
+    // A spec names the subject by its file name, or by an import of its module (`from '../render'`).
+    const verdicts = specs
+      .filter((s) => s.includes(base) || importsModule(s, path))
+      .map((s) => classifyPair(s, path));
     let kind = 'unattributed';
     if (verdicts.length > 0 && verdicts.every((v) => v === 'text')) kind = 'text';
     else if (verdicts.length > 0 && verdicts.every((v) => v === 'executed')) kind = 'executed';

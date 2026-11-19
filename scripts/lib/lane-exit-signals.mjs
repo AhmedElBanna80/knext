@@ -56,11 +56,15 @@ export function killTrackedGroups() {
   tracked.clear();
 }
 
-/** Register each signal once; the handler kills the tracked groups, then exits, which emits `exit`. */
-export function pinExitSignals() {
+/**
+ * Register each signal. The handler kills the tracked groups, then runs `beforeExit(signal)` (synchronously:
+ * the runner restores the tree its killed prover left), then exits, which emits `exit` for the cleanup.
+ */
+export function pinExitSignals(beforeExit = () => {}) {
   for (const [signal, code] of EXIT_SIGNALS) {
     process.on(signal, () => {
       killTrackedGroups();
+      beforeExit(signal);
       process.exit(code);
     });
   }

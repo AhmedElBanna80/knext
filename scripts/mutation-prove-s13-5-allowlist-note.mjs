@@ -21,6 +21,7 @@ const PROOF = {
   subjects: {
     npmNote: 'security/npm-audit-allowlist.json',
     osvNote: 'security/osv-allowlist.json',
+    checker: 'tests/allowlist-schema-note-invariant.test.ts',
   },
 };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
@@ -72,9 +73,27 @@ const MUTATIONS = [
     anchor: '`expires` (ISO date, REQUIRED, at most',
     replacement: "`expires` (ISO date, isn't REQUIRED, at most",
   },
+  {
+    label: "ROUND 2 item 4: the negation branch never flags \"not REQUIRED\" (the checker returns undefined)",
+    subject: 'checker',
+    anchor: "    return '`expires` is said to be negated before REQUIRED';",
+    replacement: "    return undefined;",
+  },
+  {
+    label: "ROUND 2 item 4: the old window regex is back (it flags \"not blank, REQUIRED\" and \"not optional, REQUIRED\")",
+    subject: 'checker',
+    anchor: "    /`expires`[^.]*\\b(?:(?:is|are)\\s+)?(?:not|no\\s+longer|never|isn['’]t)\\s+(?:really\\s+)?REQUIRED\\b/i.test(",
+    replacement: "    /`expires`[^.]*\\b(?:not|no longer|isn['’]t|never|optional)\\b(?:[^\\w.]+\\w+){0,3}?[^\\w.]+REQUIRED\\b/i.test(",
+  },
+  {
+    label: "ROUND 2 item 4: the \"is optional\" predicate check is removed",
+    subject: 'checker',
+    anchor: "  if (/`expires`[^.]*\\bis optional\\b/i.test(note)) return '`expires` is said to be optional';",
+    replacement: "  if (false) return '`expires` is said to be optional';",
+  },
 ];
 
-const DECLARED = 6;
+const DECLARED = 9;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

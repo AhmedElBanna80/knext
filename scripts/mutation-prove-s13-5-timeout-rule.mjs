@@ -22,6 +22,7 @@ const PROOF = {
   subjects: {
     z11: '.github/workflows/z11-activator-drill-e2e.yml',
     z7: '.github/workflows/z7-identity-kind-e2e.yml',
+    checker: 'tests/e2e-timeout-measured-rule.test.ts',
   },
 };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
@@ -67,9 +68,21 @@ const MUTATIONS = [
     anchor: '    timeout-minutes: ${{ inputs.rotation_realtime && 120 || 65 }}',
     replacement: '',
   },
+  {
+    label: "ROUND 2 item 7: the citation matches whole seconds only (a \"2313.5 s\" citation is silently ignored)",
+    subject: 'checker',
+    anchor: "const CITATION = /The slowest is (\\d+(?:\\.\\d+)?) s\\b/;",
+    replacement: "const CITATION = /The slowest is (\\d+) s\\b/;",
+  },
+  {
+    label: "ROUND 2 item 7: the timeout is any indent, so a step-level timeout counts as the job timeout",
+    subject: 'checker',
+    anchor: "const TIMEOUT = /^ {4}timeout-minutes:\\s*(.+?)\\s*$/m;",
+    replacement: "const TIMEOUT = /^\\s*timeout-minutes:\\s*(.+?)\\s*$/m;",
+  },
 ];
 
-const DECLARED = 5;
+const DECLARED = 7;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

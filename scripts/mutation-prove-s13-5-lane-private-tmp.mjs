@@ -18,6 +18,8 @@ import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SPEC = 'tests/lane-private-tmp-signals.test.ts';
+// ROUND 2 item 6: the tree-restore test is a second spec the signal rows must also keep green.
+const SPECS = [SPEC, 'tests/lane-signal-tree-restore.test.ts'];
 const PROOF = {
   subjects: {
     helper: 'scripts/lib/lane-exit-signals.mjs',
@@ -27,13 +29,46 @@ const PROOF = {
 const RUNNER = resolveSpecRunner(REPO_ROOT);
 const SPEC_TIMEOUT_MS = 240_000;
 
+/**
+ * Detached orphans of the spec: processes with ppid 1 whose command is one of the spec's `setInterval`
+ * children. A child whose parent (the spec's runner) died is re-parented to 1 and keeps running, so the
+ * prover kills the ones that APPEARED during its run and leaves every process that predates it alone.
+ */
+const ORPHAN_SIGNATURE = 'setInterval(() => {}, 1000)';
+function orphanPids() {
+  const r = spawnSync('ps', ['-eo', 'pid=,ppid=,command='], { encoding: 'utf8' });
+  if (r.status !== 0) return new Set();
+  const pids = new Set();
+  for (const line of r.stdout.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (m && m[2] === '1' && m[3].includes(ORPHAN_SIGNATURE)) pids.add(Number(m[1]));
+  }
+  return pids;
+}
+function killNewOrphans(before) {
+  for (const pid of orphanPids()) {
+    if (before.has(pid)) continue;
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
+}
+
 function specPasses() {
-  const r = spawnSync(RUNNER.command, [...RUNNER.args, ...RUNNER.runArgs(SPEC)], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-    timeout: SPEC_TIMEOUT_MS,
-  });
-  return r.status === 0;
+  const before = orphanPids();
+  let ok = true;
+  for (const spec of SPECS) {
+    const r = spawnSync(RUNNER.command, [...RUNNER.args, ...RUNNER.runArgs(spec)], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      timeout: SPEC_TIMEOUT_MS,
+    });
+    ok = ok && r.status === 0;
+  }
+  killNewOrphans(before);
+  return ok;
 }
 
 const MUTATIONS = [
@@ -68,13 +103,15 @@ const MUTATIONS = [
     replacement: 'void code;',
   },
   {
-    label: 'a signal handler is installed with once(): removed after it fires, so a repeat signal is not caught',
+    label:
+      'a signal handler is installed with once(): removed after it fires, so a repeat signal is not caught',
     subject: 'helper',
     anchor: 'process.on(signal, () => {',
     replacement: 'process.once(signal, () => {',
   },
   {
-    label: 'a signal does not kill the tracked prover groups before it exits (an orphan prover survives)',
+    label:
+      'a signal does not kill the tracked prover groups before it exits (an orphan prover survives)',
     subject: 'helper',
     anchor: 'killTrackedGroups();',
     replacement: 'void 0;',
@@ -88,7 +125,7 @@ const MUTATIONS = [
   {
     label: 'the runner stops pinning its signals (back to the bare exit handler)',
     subject: 'runner',
-    anchor: 'pinExitSignals();',
+    anchor: 'pinExitSignals(restoreOnSignal);',
     replacement: '',
   },
   {
@@ -103,9 +140,27 @@ const MUTATIONS = [
     anchor: 'untrack();',
     replacement: 'void 0;',
   },
+  {
+    label: "ROUND 2 item 6: a signal does not restore the tree its killed prover left (the restore never runs)",
+    subject: "helper",
+    anchor: "      beforeExit(signal);",
+    replacement: "",
+  },
+  {
+    label: "ROUND 2 item 6: the signal restore is a no-op (the killed prover leaves the tree dirty)",
+    subject: "runner",
+    anchor: "  if (!activeProver) return;",
+    replacement: "  return;",
+  },
+  {
+    label: "ROUND 2 item 6: the active prover is never recorded, so a signal has nothing to restore",
+    subject: "runner",
+    anchor: "  activeProver = { relPath: prover.relPath, untrackedBefore, modifiedBefore };",
+    replacement: "",
+  },
 ];
 
-const DECLARED = 11;
+const DECLARED = 14;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

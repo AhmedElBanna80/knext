@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   auditWiringLabels,
+  classifyPair,
   declaredWiringSubjects,
   isTextOnlyPair,
   rowsBySubject,
@@ -412,6 +413,101 @@ describe('a Bun.file handle held in a variable, and an aliased read function, ar
   it('const rf = readFileSync; rf(p) is a text read', () => {
     const spec = `const rf = readFileSync; const src = rf(resolve(ROOT, '${P}'), 'utf8'); expect(src).toContain('foo');`;
     expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+});
+
+// ROUND 2 item 1. classifyPair used to return at the FIRST use it judged, so a spec that spawned the subject
+// and also substring-checked it was "executed" and its text check was never looked at. Every use is
+// classified; a spec with two kinds of use is "mixed", which subjectAttribution leaves unattributed.
+describe('a spec that both executes the subject and substring-checks it is mixed (ROUND 2 item 1)', () => {
+  const P = 'scripts/thing.sh';
+  it('spawnSync(bash, [subject]) plus readFileSync + expect(src).toContain is mixed, not executed', () => {
+    const spec = `spawnSync('bash', ['${P}']); const src = readFileSync('${P}', 'utf8'); expect(src).toContain('foo');`;
+    expect(classifyPair(spec, P)).toBe('mixed');
+  });
+  it('an import of the subject plus a substring check is mixed', () => {
+    const spec = `import '../${P}'; const src = readFileSync('${P}', 'utf8'); expect(src).toContain('foo');`;
+    expect(classifyPair(spec, P)).toBe('mixed');
+  });
+  it('a spec that ONLY spawns the subject is still executed (no regression)', () => {
+    const spec = `spawnSync('bash', ['${P}']);`;
+    expect(classifyPair(spec, P)).toBe('executed');
+  });
+  it('a spec that ONLY substring-checks the subject is still text (no regression)', () => {
+    const spec = `const src = readFileSync('${P}', 'utf8'); expect(src).toContain('foo');`;
+    expect(classifyPair(spec, P)).toBe('text');
+  });
+  it('a mixed pair is not text-only, so its rows are not labelled wiring', () => {
+    const spec = `spawnSync('bash', ['${P}']); const src = readFileSync('${P}', 'utf8'); expect(src).toContain('foo');`;
+    expect(isTextOnlyPair(spec, P)).toBe(false);
+  });
+});
+
+// ROUND 2 item 2. A bash option that takes an argument (-o pipefail, -O extglob, +o, --rcfile X) must be
+// consumed with its argument, so the -n after it still counts as a syntax check. An option this lint cannot
+// read makes the use unattributed ('other'), never 'executed'.
+describe('bash option arguments are consumed; an unknown option is unattributed (ROUND 2 item 2)', () => {
+  const P = 'scripts/thing.sh';
+  it('bash -o pipefail -n <subject> is a syntax check: no use, so not executed', () => {
+    expect(classifyPair(`spawnSync('bash', ['-o', 'pipefail', '-n', '${P}']);`, P)).not.toBe('executed');
+  });
+  it('bash -O extglob -n <subject> is a syntax check too', () => {
+    expect(classifyPair(`spawnSync('bash', ['-O', 'extglob', '-n', '${P}']);`, P)).not.toBe('executed');
+  });
+  it('bash +o posix -n <subject> is a syntax check too', () => {
+    expect(classifyPair(`spawnSync('bash', ['+o', 'posix', '-n', '${P}']);`, P)).not.toBe('executed');
+  });
+  it('bash --rcfile X -n <subject> is a syntax check too', () => {
+    expect(classifyPair(`spawnSync('bash', ['--rcfile', 'rc', '-n', '${P}']);`, P)).not.toBe('executed');
+  });
+  it('bash -o pipefail <subject> (no -n) RUNS the subject: executed', () => {
+    expect(classifyPair(`spawnSync('bash', ['-o', 'pipefail', '${P}']);`, P)).toBe('executed');
+  });
+  it('an unknown option before the subject makes the use unattributed, never executed', () => {
+    expect(classifyPair(`spawnSync('bash', ['-Z', '${P}']);`, P)).toBe('other');
+    expect(classifyPair(`spawnSync('bash', ['--frobnicate', '-n', '${P}']);`, P)).toBe('other');
+  });
+  it('bash <script> -n <subject>: the first non-option ends the options, so the subject is RUN (executed)', () => {
+    expect(classifyPair(`spawnSync('bash', ['x.sh', '-n', '${P}']);`, P)).toBe('executed');
+  });
+  it('a path handed to a call that neither runs nor reads it is other, not executed', () => {
+    expect(classifyPair(`const p = resolve(ROOT, '${P}'); keep(p);`, P)).toBe('other');
+  });
+  it('a dangling option argument (-o with nothing before the subject) is unattributed, not a silent skip', () => {
+    expect(classifyPair(`spawnSync('bash', ['-n', '-o', '${P}']);`, P)).toBe('other');
+  });
+});
+
+// ROUND 2 item 3. A subject that is read as text and whose text goes only into a LOCAL helper that asserts
+// on it (`assertHas(src)` where the helper does `expect(s).toContain(..)`) is a text check, so its rows are
+// wiring and an unlabelled row on it is flagged. A helper that does anything else with the text is not.
+describe('a text read passed only to a local assert helper is text (ROUND 2 item 3)', () => {
+  const P = 'scripts/thing.sh';
+  it('a function declaration helper that only expects its argument is text', () => {
+    const spec = `const src = readFileSync('${P}', 'utf8'); assertHas(src); function assertHas(s) { expect(s).toContain('x'); }`;
+    expect(classifyPair(spec, P)).toBe('text');
+    expect(isTextOnlyPair(spec, P)).toBe(true);
+  });
+  it('an arrow helper that only expects its argument is text', () => {
+    const spec = `const src = readFileSync('${P}', 'utf8'); const assertHas = (s) => expect(s).toContain('x'); assertHas(src);`;
+    expect(classifyPair(spec, P)).toBe('text');
+  });
+  it('a text-result (src.split(..)) passed to an asserting helper is still text', () => {
+    const spec = `const src = readFileSync('${P}', 'utf8'); assertHas(src.split('\\n')); function assertHas(s) { expect(s).toContain('x'); }`;
+    expect(classifyPair(spec, P)).toBe('text');
+  });
+  it('a helper that parses the text (JSON.parse) is not a text check', () => {
+    const spec = `const src = readFileSync('${P}', 'utf8'); parseIt(src); function parseIt(s) { return JSON.parse(s); }`;
+    expect(classifyPair(spec, P)).toBe('other');
+  });
+  it('a helper that stores the text somewhere is not a text check', () => {
+    const spec = `const src = readFileSync('${P}', 'utf8'); keep(src); const store = []; function keep(s) { store.push(s); }`;
+    expect(classifyPair(spec, P)).toBe('other');
+  });
+  it('two helpers that call each other are not followed forever (a cycle is refused, not looped)', () => {
+    const spec = `const src = readFileSync('${P}', 'utf8'); a(src); function a(s) { b(s); } function b(s) { a(s); }`;
+    expect(() => classifyPair(spec, P)).not.toThrow();
+    expect(classifyPair(spec, P)).toBe('other');
   });
 });
 

@@ -208,6 +208,10 @@ only a *build* tool.
       (`.github/workflows/z11-activator-drill-e2e.yml`). Evidence: CI run https://github.com/AhmedElBanna80/knext/actions/runs/44430815511
       (green on the merged code at `bee549a8e`). The drill runs on Calico, not flannel, and exercises the Go function only;
       the Rust leg is not run there, so this box stays open.
+      *Update (2026-11-19):* the drill's `policyoff` phase now also runs the same leg against the Rust template
+      function (`policyoff_rust`: cold through the activator and direct to the pod, both refused 401 by the function
+      itself with the policy off). It passed on a local kind run; the box is ticked only after its CI run is green,
+      and that run is not recorded here yet.
 - [ ] **Per-language supply-chain:** a language enters the matrix only with Trivy + SBOM + cosign on
       its image *and* an ecosystem advisory scan on its pinned server deps.
       *Evidence (2026-11-17), box stays open: cosign is not in place for either template.* Trivy and SBOM run per

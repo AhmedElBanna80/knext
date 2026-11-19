@@ -157,8 +157,8 @@ describe('policyoff: with the NetworkPolicy off the function itself refuses a to
     expect(p.indexOf('set_policy true')).toBeGreaterThan(p.indexOf('foreign_post "http://'));
   });
   it('the cold call is refused 401 unauthenticated after waking the function', () => {
-    expect(p.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(p.indexOf('set_policy false'));
-    expect(p.indexOf('await_zero "${GO_FN}"')).toBeLessThan(p.indexOf('foreign_get ""'));
+    expect(p.indexOf('await_zero_all "${GO_FN}"')).toBeGreaterThan(p.indexOf('set_policy false'));
+    expect(p.indexOf('await_zero_all "${GO_FN}"')).toBeLessThan(p.indexOf('foreign_get ""'));
     expect(p).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" -ge 1 \] \|\| fail/);
   });
   // Each leg's assertion is tied to its OWN call: the slice from that call to the next
@@ -202,6 +202,97 @@ describe('policyoff: with the NetworkPolicy off the function itself refuses a to
     );
     expect(leg).toContain(refused('token rejected'));
     expect(leg).toContain('direct to the pod, garbage token');
+  });
+});
+
+describe('policyoff, Rust: the Rust template function itself refuses a token-less call with the policy off', () => {
+  const r = body('policyoff_rust');
+  const refused = (msg: string) =>
+    `[ "\${FC_STATUS}" = 401 ] && [ "\${FC_CODE}" = unauthenticated ] && [ "\${FC_MESSAGE}" = "${msg}" ]`;
+  const seg = (from: string, to: string): string => {
+    const a = r.indexOf(from);
+    expect(a, `${from} is in policyoff_rust`).toBeGreaterThan(-1);
+    expect(r.indexOf(from, a + 1), `${from} occurs once`).toBe(-1);
+    const b = r.indexOf(to, a);
+    expect(b, `${to} follows ${from}`).toBeGreaterThan(a);
+    return r.slice(a, b);
+  };
+  it('the drill deploys the Rust template function next to the Go one, and runs the leg from policyoff', () => {
+    expect(own).toContain('RUST_FN=inventory-rust');
+    expect(own).toMatch(/Z10_WITH_RUST=1 /);
+    expect(own).not.toMatch(/Z10_WITH_RUST=0/);
+    const p = body('phase_policyoff');
+    expect(p).toContain('set_rust_policy false');
+    expect(p).toContain('policyoff_rust');
+    expect(p.indexOf('set_rust_policy false')).toBeLessThan(p.indexOf('policyoff_rust'));
+    // The Rust object is proven gone before any Rust call, like the Go one.
+    expect(p).toMatch(
+      /networkpolicy "\$\{RUST_FN\}-function-ingress"[^\n]*grep -c \.\)" = 0 \] \\\n\s*\|\| fail/,
+    );
+  });
+  it('the Rust policy is restored by the leg and by the exit handler', () => {
+    expect(r).toContain('set_rust_policy true');
+    expect(body('set_rust_policy')).toContain('RESTORE_RUST_POLICY=1');
+    expect(body('set_rust_policy')).toContain('RESTORE_RUST_POLICY=0');
+    expect(body('set_rust_policy')).toContain('${RUST_FN}-function-ingress');
+    const c = body('cleanup');
+    expect(c).toMatch(/if \[ "\$\{RESTORE_RUST_POLICY\}" = 1 \]; then/);
+    expect(c).toContain('backendservice "${RUST_FN}"');
+  });
+  it('the Rust function is cold first, and the refused call woke it', () => {
+    expect(r.indexOf('all_pods "${RUST_FN}")" = 0 ] || fail')).toBeGreaterThan(-1);
+    expect(r.indexOf('all_pods "${RUST_FN}")" = 0 ] || fail')).toBeLessThan(
+      r.indexOf('foreign_post "${RUST_URL}${GET_ITEM}" ""'),
+    );
+    expect(r).toMatch(/\[ "\$\(all_pods "\$\{RUST_FN\}"\)" -ge 1 \] \|\| fail/);
+  });
+  it('the cold Rust call is its own call, asserted 401 unauthenticated "missing bearer token"', () => {
+    const leg = seg('foreign_post "${RUST_URL}${GET_ITEM}" ""', 'all_pods "${RUST_FN}")" -ge 1');
+    expect(leg).toContain(refused('missing bearer token'));
+    expect(leg).toContain('policy off, Rust, cold, no token');
+  });
+  it('the direct Rust dial must connect (rc 0) before the direct calls are judged', () => {
+    const w = body('await_rust_ip');
+    expect(w).toContain('foreign_post "${RUST_URL}${GET_ITEM}" ""');
+    expect(w).toMatch(/dial_rc "\$\{ip\}" 8080\)" = 0 \]; then RUST_IP=/);
+    expect(w).toMatch(/\n {2}fail "policy off: the foreign pod could not reach the warm Rust/);
+    expect(r).toContain('await_rust_ip');
+    expect(r.indexOf('await_rust_ip')).toBeLessThan(
+      r.indexOf('foreign_post "http://${RUST_IP}:8080'),
+    );
+  });
+  it('the direct Rust no-token call is asserted 401 "missing bearer token"', () => {
+    const leg = seg(
+      'foreign_post "http://${RUST_IP}:8080${GET_ITEM}" ""',
+      'foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer',
+    );
+    expect(leg).toContain(refused('missing bearer token'));
+    expect(leg).toContain('policy off, Rust, direct to the pod, no token');
+  });
+  it('the direct Rust garbage-token call is asserted 401 "token rejected"', () => {
+    const leg = seg(
+      'foreign_post "http://${RUST_IP}:8080${GET_ITEM}" "Bearer not-a-token"',
+      'echo "REFUSED',
+    );
+    expect(leg).toContain(refused('token rejected'));
+    expect(leg).toContain('policy off, Rust, direct to the pod, garbage token');
+  });
+});
+
+describe('drain: the Go and Rust functions drain at the same time', () => {
+  it('await_zero_all polls every named service under one bound and fails closed', () => {
+    const a = body('await_zero_all');
+    expect(a).toContain('for svc in "$@"; do');
+    expect(a).toMatch(/until \[ "\$\(all_pods "\$\{svc\}"\)" = 0 \]; do/);
+    expect(a).toMatch(/\[ "\$\{SECONDS\}" -lt "\$\{end\}" \] \|\| fail/);
+    expect(a).toContain('local end=$((SECONDS + 300))');
+  });
+  it('policyoff waits for both functions at once before the first cold call', () => {
+    const p = body('phase_policyoff');
+    expect(p).toContain('await_zero_all "${GO_FN}" "${RUST_FN}"');
+    expect(p).not.toContain('await_zero "${GO_FN}"');
+    expect(p.indexOf('await_zero_all')).toBeLessThan(p.indexOf('foreign_get ""'));
+    expect(p.indexOf('await_zero_all')).toBeGreaterThan(p.indexOf('set_rust_policy false'));
   });
 });
 

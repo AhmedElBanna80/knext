@@ -615,6 +615,14 @@ describe('vendored advisories: classification', () => {
       expect(() => readDeclaredRange(dir, '../p.json', 'a')).toThrow(/outside/);
       expect(() => readDeclaredRange(dir, '/etc/hosts', 'a')).toThrow(/outside/);
       expect(() => readDeclaredRange(dir, 'missing.json', 'a')).toThrow(/does not exist/);
+      const outsideDir = mkdtempSync(join(tmpdir(), 'rng-out-'));
+      try {
+        writeFileSync(join(outsideDir, 'o.json'), '{"a":"^1.0.0"}');
+        symlinkSync(join(outsideDir, 'o.json'), join(dir, 'link.json'));
+        expect(() => readDeclaredRange(dir, 'link.json', 'a')).toThrow(/symlink/);
+      } finally {
+        rmSync(outsideDir, { recursive: true });
+      }
     } finally {
       rmSync(dir, { recursive: true });
     }

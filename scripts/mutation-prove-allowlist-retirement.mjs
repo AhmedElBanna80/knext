@@ -332,11 +332,18 @@ const MUTATIONS = [
     anchor: '{ maxOutputLength: L.maxTarBytes }',
     replacement: '{}',
   },
+  {
+    label: 'lib: rangeFrom may follow a symlink out of the probed root',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (outside(real)) {',
+    replacement: 'if (false) {',
+  },
 ];
 
-declareMutations(41);
-if (MUTATIONS.length !== 41) {
-  console.error(`FATAL: declared 41 mutations, table has ${MUTATIONS.length}`);
+declareMutations(42);
+if (MUTATIONS.length !== 42) {
+  console.error(`FATAL: declared 42 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

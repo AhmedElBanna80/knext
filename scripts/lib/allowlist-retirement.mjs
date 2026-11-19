@@ -276,7 +276,8 @@ export function readDeclaredRange(repoRoot, rel, field) {
   };
   if (isAbsolute(rel) || outside(abs)) throw new Error(`\`${rel}\` is outside the probed root`);
   if (!existsSync(abs)) throw new Error(`rangeFrom file \`${rel}\` does not exist`);
-  if (outside(realpathSync(abs).replace(realpathSync(root), root))) {
+  const real = realpathSync(abs).replace(realpathSync(root), root);
+  if (outside(real)) {
     throw new Error(`\`${rel}\` resolves outside the probed root (symlink)`);
   }
   return readField(JSON.parse(readFileSync(abs, 'utf8')), field);

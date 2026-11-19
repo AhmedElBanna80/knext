@@ -128,7 +128,7 @@ jobs:
     # The real-time rotation (the rotation_realtime input, by dispatch or the weekly caller) waits a one-hour
     # constant, so a run that does it gets the longer bound; every other run gets 65 minutes: the 55 it had,
     # plus 10 for the two phases added after wake (imagepin, http11), each of which waits out a drain to
-    # zero and a zone roll or a recovery (a few minutes on a healthy run; the sum is a bound, not measured). A failing
+    # zero and a zone roll or a recovery. Measured, local kind (2026-11-19): the Z10 run alone, with the Rust function and every phase, took 1611 s (27 min; images 9, deploy 72, cold 66, connecterr 128, grpctrailers 249, zerozone 192, rollout 246, sovereignty 27, crosszone 24, wake 288, imagepin 63, http11 247). The Z7 phases before it are not part of that figure. A failing
     # wait fails its phase at its own bound, so 65 is not a license to hang, only room for a healthy run.
     timeout-minutes: ${{ inputs.rotation_realtime && 120 || 65 }}
     env:

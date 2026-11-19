@@ -69,7 +69,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     activator path (the function's token, and the NetworkPolicy on a direct
     dial), and that with the NetworkPolicy off a token-less call is still refused
     by the function itself (`policyoff`, for the Go function and, as its Rust leg
-    `policyoff_rust`, for the Rust template function), while a function without its interceptor and
+    `policyoff_rust`, for the Rust template function; each leg ends with a positive control: a VALID token sent the same direct way is accepted, 404 not_found, judged by `check_direct_accepted` in `answering-pod.sh`, so the refusals are the token check and not a path that refuses everything), while a function without its interceptor and
     without the policy answers it (`noauth`). `rotcold` rotates and retires the zone's
     signing key while the function is at zero: the cold pod that wakes refuses the
     retired key (401 unauthenticated) and, after another scale to zero, accepts the new
@@ -85,7 +85,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `scripts/mutation-prove-s9-1-z11-rotation-held.mjs` and
     `scripts/mutation-prove-s9-2-z11-rust-policyoff.mjs` (the Rust leg) and
     `scripts/mutation-prove-s10-4-z11-heldwarm.mjs` (`heldwarm` and the warm hold) and
-    `scripts/mutation-prove-s11-1-z11-answering-pod.mjs` (which pod answered and the pod B fresh-token control,
+    `scripts/mutation-prove-s11-1-z11-answering-pod.mjs` (which pod answered, the pod B fresh-token control and the policy-off valid-token control,
     run against `tests/z11-answering-pod.test.ts`, which executes the shell on fabricated counters).
 
 ## Invariants

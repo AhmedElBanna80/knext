@@ -41,8 +41,8 @@ describe('every text-only prover row is labelled as a wiring row', () => {
     expect([...textOnly.keys()]).toEqual(['run']);
     const rows = rowsBySubject(src);
     const run = rows.get('run');
-    expect(run?.total).toBe(10);
-    expect(run?.labelled).toBe(10);
+    expect(run?.total).toBe(18);
+    expect(run?.labelled).toBe(18);
     expect(rows.get('lib')?.labelled).toBe(0);
   });
 });

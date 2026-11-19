@@ -497,8 +497,8 @@ const MUTATIONS = [
     id: 'W2',
     subject: 'workflow',
     claim: 'the job budget shrinks back so the new phases cannot finish',
-    anchor: 'timeout-minutes: 90',
-    replacement: 'timeout-minutes: 60',
+    anchor: 'timeout-minutes: 60',
+    replacement: 'timeout-minutes: 20',
   },
   {
     id: 'W3',

@@ -543,9 +543,26 @@ phase_policyoff() {
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
     || fail "policy off, direct to the pod, garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
   echo "REFUSED-BY-FUNCTION-WITH-POLICY-OFF: direct ${ip}:8080 no token -> 401 unauthenticated; garbage token -> 401 unauthenticated"
+  direct_valid_token "${ip}" "${FN_HOST}"
+  echo "ACCEPTED-BY-FUNCTION-WITH-POLICY-OFF: direct ${ip}:8080 valid token -> ${FC_STATUS} ${FC_CODE}"
+  check_direct_accepted "${FC_STATUS}" "${FC_CODE}" \
+    || fail "policy off, direct to the pod, VALID token: status ${FC_STATUS} code '${FC_CODE}', want 404 not_found (the positive control: the direct path must accept a valid token)"
   set_policy true
   ok "policy off: a foreign pod reached the function pod directly and the function itself refused it (policy restored)"
   policyoff_rust
+}
+
+# direct_valid_token <pod ip> <function host>: the positive control's call. Mints ONE valid zone
+# token for <function host> (single-use, so one per call), then sends it from the foreign pod
+# straight to <pod ip>:8080 (direct_call, answering-pod.sh). Sets FC_STATUS / FC_CODE / FC_MESSAGE. The verdict is
+# check_direct_accepted (answering-pod.sh), never a comparison here.
+direct_valid_token() {
+  local tokfile="${WORK}/direct-token"
+  export_key "${WORK}/key-direct" current
+  bun "${HERE}/mint-token.ts" --host "$2" --issuer "${ISSUER}" --key-dir "${WORK}/key-direct" \
+    --out "${tokfile}" || fail "could not mint a valid token for $2"
+  direct_call "$1" 8080 "${tokfile}" || fail "could not send the valid-token call to $1:8080"
+  rm -f "${tokfile}"
 }
 
 # await_rust_ip: with the Rust function's policy off, wait until the foreign pod can dial the
@@ -582,6 +599,10 @@ policyoff_rust() {
   [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
     || fail "policy off, Rust, direct to the pod, garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
   echo "REFUSED-BY-RUST-FUNCTION-WITH-POLICY-OFF: direct ${RUST_IP}:8080 no token -> 401 unauthenticated; garbage token -> 401 unauthenticated"
+  direct_valid_token "${RUST_IP}" "${RUST_FN}.${NS}.svc.cluster.local"
+  echo "ACCEPTED-BY-RUST-FUNCTION-WITH-POLICY-OFF: direct ${RUST_IP}:8080 valid token -> ${FC_STATUS} ${FC_CODE}"
+  check_direct_accepted "${FC_STATUS}" "${FC_CODE}" \
+    || fail "policy off, Rust, direct to the pod, VALID token: status ${FC_STATUS} code '${FC_CODE}', want 404 not_found (the positive control: the direct path must accept a valid token)"
   set_rust_policy true
   ok "policy off: a foreign pod reached the Rust function pod directly and the function itself refused it (policy restored)"
 }

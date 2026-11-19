@@ -130,6 +130,12 @@ jobs:
     # plus 10 for the two phases added after wake (imagepin, http11), each of which waits out a drain to
     # zero and a zone roll or a recovery. Measured, local kind (2026-11-19): the Z10 run alone, with the Rust function and every phase, took 1611 s (27 min; images 9, deploy 72, cold 66, connecterr 128, grpctrailers 249, zerozone 192, rollout 246, sovereignty 27, crosszone 24, wake 288, imagepin 63, http11 247). The Z7 phases before it are not part of that figure. A failing
     # wait fails its phase at its own bound, so 65 is not a license to hang, only room for a healthy run.
+    # CI wall times (this job runs the Z7 phases and then the Z10 phases on one cluster; the local 1611 s above is
+    # the Z10 part alone): the three most recent green runs on integration/v2 took 2461 s (run 44567654756,
+    # https://github.com/AhmedElBanna80/knext/actions/runs/44567654756), 2555 s (44558522185, a pull request) and
+    # 2557 s (44548776777) for the job. In the first, the Z7 step took 901 s and the Z10 step 1527 s (local: 1611 s).
+    # The slowest is 2557 s (42.6 min). Timeout = the slowest CI job plus a 50 percent margin, rounded up to 5
+    # minutes: 2557 x 1.5 = 3836 s = 63.9 min, so 65 holds. Only the real-time rotation run needs the 120.
     timeout-minutes: ${{ inputs.rotation_realtime && 120 || 65 }}
     env:
       KIND_CLUSTER: z7-identity-e2e

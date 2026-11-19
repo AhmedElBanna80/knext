@@ -200,6 +200,57 @@ describe('the verdicts on a held call: status, code, message AND the answering p
   });
 });
 
+describe('direct_call: the valid-token request, built in the lib and issued through the foreign_post seam', () => {
+  const tok = join(STUB, 'direct-token');
+  // foreign_post is stubbed: it records the URL and the Authorization value it was given.
+  const call = (args: string) =>
+    sh(
+      lib(
+        `GET_ITEM=/example.v1.ExampleService/GetItem\nforeign_post() { echo "URL=$1 AUTH=$2"; }\ndirect_call ${args}`,
+      ),
+    );
+
+  it('sends the valid token to exactly the given pod ip and port, on the GetItem path', () => {
+    writeFileSync(tok, 'Bearer valid-token-1');
+    const r = call(`10.1.2.3 8080 '${tok}'`);
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe(
+      'URL=http://10.1.2.3:8080/example.v1.ExampleService/GetItem AUTH=Bearer valid-token-1',
+    );
+  });
+  it('a different ip or port reaches a different target (nothing is hardcoded)', () => {
+    writeFileSync(tok, 'Bearer valid-token-2');
+    expect(call(`10.9.9.9 8080 '${tok}'`).out).toContain('URL=http://10.9.9.9:8080/');
+    expect(call(`10.1.2.3 9090 '${tok}'`).out).toContain('URL=http://10.1.2.3:9090/');
+  });
+  it('FAILS and sends nothing when the token file is missing or empty', () => {
+    const missing = call(`10.1.2.3 8080 '${join(STUB, 'no-such-token')}'`);
+    expect(missing.code).not.toBe(0);
+    expect(missing.out).not.toContain('URL=');
+    writeFileSync(tok, '');
+    const empty = call(`10.1.2.3 8080 '${tok}'`);
+    expect(empty.code).not.toBe(0);
+    expect(empty.out).not.toContain('URL=');
+  });
+});
+
+describe('check_direct_accepted: the policy-off positive control (a VALID token on the direct path)', () => {
+  const direct = (status: string, code: string) =>
+    sh(lib(`check_direct_accepted '${status}' '${code}'`));
+
+  it('passes on 404 not_found, and only that', () => {
+    expect(direct('404', 'not_found').code).toBe(0);
+    expect(direct('401', 'unauthenticated').code).not.toBe(0); // the valid token was refused
+    expect(direct('404', 'unauthenticated').code).not.toBe(0);
+    expect(direct('200', '').code).not.toBe(0);
+    expect(direct('000', '').code).not.toBe(0); // no answer
+    expect(direct('500', 'internal').code).not.toBe(0);
+  });
+  it('says why a refused valid token makes the policy-off refusals meaningless', () => {
+    expect(direct('401', 'unauthenticated').err).toContain('refused a VALID token');
+  });
+});
+
 /**
  * WIRING checks. These read run.sh as text and only establish that it CALLS the functions above,
  * where it should, in the order it should. They say nothing about what the functions decide.
@@ -234,6 +285,31 @@ describe('wiring: run.sh calls the answering-pod functions in the right place', 
     expect(after).toBeGreaterThan(answered);
     expect(after).toBeLessThan(release);
     expect(hold).toContain('answering_pod_uid "${HELD_REQ_BEFORE}" "${HELD_REQ_AFTER}"');
+  });
+  it('direct_valid_token sends through direct_call to port 8080 with the token file it minted', () => {
+    const body = fnBody('direct_valid_token');
+    expect(body).toContain('direct_call "$1" 8080 "${tokfile}"');
+    expect(body).toContain('--key-dir "${WORK}/key-direct"');
+    expect(body).toContain('export_key "${WORK}/key-direct" current');
+  });
+  it('policyoff (Go and Rust): the valid-token control follows the garbage-token refusal and is judged by check_direct_accepted', () => {
+    for (const [phase, refusedMarker, controlHost] of [
+      ['phase_policyoff', 'REFUSED-BY-FUNCTION-WITH-POLICY-OFF', '"${FN_HOST}"'],
+      [
+        'policyoff_rust',
+        'REFUSED-BY-RUST-FUNCTION-WITH-POLICY-OFF',
+        '"${RUST_FN}.${NS}.svc.cluster.local"',
+      ],
+    ] as const) {
+      const body = fnBody(phase);
+      const refused = body.indexOf(refusedMarker);
+      const mint = body.indexOf('direct_valid_token', refused);
+      const verdict = body.indexOf('check_direct_accepted "${FC_STATUS}" "${FC_CODE}"', mint);
+      expect(refused, `${phase}: refusal line`).toBeGreaterThan(-1);
+      expect(mint, `${phase}: valid-token call`).toBeGreaterThan(refused);
+      expect(body.slice(mint, verdict)).toContain(controlHost);
+      expect(verdict, `${phase}: verdict`).toBeGreaterThan(mint);
+    }
   });
   it('phase_heldwarm: the control, the refusal and the pod B fresh-token control each call their check', () => {
     const ctl = warm.indexOf('check_accepted_by "${wuid_a}" "${HELD_REQ_BEFORE}"');

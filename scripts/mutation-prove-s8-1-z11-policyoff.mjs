@@ -209,8 +209,8 @@ const MUTATIONS = [
     id: 'W2',
     subject: 'workflow',
     claim: 'the workflow masks a red step',
-    anchor: '    timeout-minutes: 90\n',
-    replacement: '    timeout-minutes: 90\n    continue-on-error: true\n',
+    anchor: '    timeout-minutes: 60\n',
+    replacement: '    timeout-minutes: 60\n    continue-on-error: true\n',
   },
   {
     id: 'W3',

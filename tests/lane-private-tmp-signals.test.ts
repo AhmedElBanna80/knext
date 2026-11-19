@@ -30,7 +30,7 @@ const CHILD = `
   })();
 `;
 
-async function runSignalled(signal: string, tmpRoot: string) {
+async function runSignalled(signal: NodeJS.Signals, tmpRoot: string) {
   const proc = Bun.spawn(['node', '-e', CHILD], {
     cwd: ROOT,
     env: {
@@ -56,7 +56,7 @@ async function runSignalled(signal: string, tmpRoot: string) {
 }
 
 describe('the lane runner leaves no private temp dir behind on a signal (TD-S12-2a)', () => {
-  for (const [signal, code] of EXIT_SIGNALS) {
+  for (const [signal, code] of EXIT_SIGNALS as unknown as ReadonlyArray<readonly [NodeJS.Signals, number]>) {
     it(`${signal}: the private dir is removed and the exit code is ${code}`, async () => {
       const tmpRoot = mkdtempSync(join(tmpdir(), 'lane-signal-scan-'));
       try {

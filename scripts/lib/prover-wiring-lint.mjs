@@ -660,7 +660,7 @@ function isSubstringUse(use) {
  * loaded), or 'other' (read as text but not substring-checked, or named but never read).
  * @param {string} specSource
  * @param {string} subjectPath repo-relative subject path
- * @returns {'text' | 'executed' | 'other'}
+ * @returns {'text' | 'executed' | 'mixed' | 'other'}
  */
 export function classifyPair(specSource, subjectPath) {
   const base = subjectPath.split('/').pop();

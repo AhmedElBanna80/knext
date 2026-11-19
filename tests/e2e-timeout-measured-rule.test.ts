@@ -28,8 +28,10 @@ export function jobUnits(yml: string): { job: string | undefined; text: string }
   const lines = yml.split('\n');
   const start = lines.findIndex((l) => /^jobs:\s*$/.test(l));
   if (start < 0) return [{ job: undefined, text: yml }];
-  const units = [{ job: undefined, text: lines.slice(0, start).join('\n') }];
-  let cur = null;
+  const units: { job: string | undefined; text: string }[] = [
+    { job: undefined, text: lines.slice(0, start).join('\n') },
+  ];
+  let cur: { job: string; text: string } | null = null;
   for (const l of lines.slice(start + 1)) {
     const header = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(l);
     if (header) {

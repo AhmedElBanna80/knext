@@ -808,7 +808,7 @@ phase_heldwarm() {
   [ -n "${ZONE_HOST}" ] || start_forwards
   local old_kid new_kid wnonce rev_before wuid wstart retired_at uid now_start
   [ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \
-    || fail "a rotation is already in flight before the warm-pod rotation; run the deploy phase for a clean zone"
+    || fail "warm pod: a rotation is already in flight; run the deploy phase for a clean zone"
   old_kid="$(secret_get current.kid)"
   export_key "${WORK}/key-pre" current
   rev_before="$(k -n "${NS}" get ksvc "${GO_FN}" -o jsonpath='{.status.latestReadyRevisionName}')"

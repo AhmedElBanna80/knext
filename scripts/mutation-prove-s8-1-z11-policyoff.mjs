@@ -201,7 +201,7 @@ const MUTATIONS = [
     subject: 'workflow',
     claim: 'the workflow runs only a subset of phases',
     anchor:
-      '      - name: Run the Z11 activator-path drill (all phases, including policyoff, rotcold and held)\n        run:',
+      '      - name: Run the Z11 activator-path drill (all phases, including policyoff, rotcold, held and heldwarm)\n        run:',
     replacement:
       '      - name: Run the Z11 activator-path drill (all phases, including policyoff)\n        env:\n          PHASES: up deploy token\n        run:',
   },

@@ -19,8 +19,8 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SPEC = 'tests/allowlist-schema-note-invariant.test.ts';
 const PROOF = {
   subjects: {
-    npm: 'security/npm-audit-allowlist.json',
-    osv: 'security/osv-allowlist.json',
+    npmNote: 'security/npm-audit-allowlist.json',
+    osvNote: 'security/osv-allowlist.json',
   },
 };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
@@ -38,25 +38,25 @@ function specPasses() {
 const MUTATIONS = [
   {
     label: 'the npm note names a stale extra key (`note`) the validator does not accept',
-    subject: 'npm',
+    subject: 'npmNote',
     anchor: '`added` (ISO date it was accepted)',
     replacement: '`added` (ISO date it was accepted) and `note`',
   },
   {
     label: 'the npm note says `expires` is "not REQUIRED" (the REQUIRED word is still there)',
-    subject: 'npm',
+    subject: 'npmNote',
     anchor: '`expires` (strict YYYY-MM-DD, REQUIRED:',
     replacement: '`expires` is not REQUIRED (strict YYYY-MM-DD, REQUIRED:',
   },
   {
     label: 'the osv note names a stale extra key (`note`) the validator does not accept',
-    subject: 'osv',
+    subject: 'osvNote',
     anchor: '`expires` (ISO date, REQUIRED, at most',
     replacement: '`expires` (ISO date, REQUIRED, at most 180 days; `note` is also fine, at most',
   },
   {
     label: 'the osv note drops REQUIRED from the expires sentence (it becomes optional)',
-    subject: 'osv',
+    subject: 'osvNote',
     anchor: '`expires` (ISO date, REQUIRED, at most',
     replacement: '`expires` (ISO date, is optional, at most',
   },

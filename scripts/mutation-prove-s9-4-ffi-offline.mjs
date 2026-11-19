@@ -149,6 +149,7 @@ const MUTATIONS = [
     id: 'S14',
     subject: 'egress',
     half: 'wiring',
+    kind: 'wiring',
     claim: 'the egress script no longer exits 1 on a problem',
     anchor: 'if (problems.length > 0) {',
     replacement: 'if (problems.length > 99) {',

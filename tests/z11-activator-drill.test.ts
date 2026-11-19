@@ -330,11 +330,18 @@ describe('rotcold: a cold pod accepts only the new key after a rotation done at 
     expect(seg('log "rotcold 1/4', 'apps.kn-next.dev/rotate-signing-key=')).toContain(
       'await_zero "${GO_FN}"',
     );
-    expect(r).toContain('[ -z "$(secret_get previous.kid)" ]');
+    expect(r).toContain(
+      '"the previous key to leave the Secret" \'[ -z "$(secret_get previous.kid)" ]\'',
+    );
+    expect(r).toContain(
+      '"the JWKS to publish only the new key" \'[ "$(jwks_kids)" = "${new_kid}" ]\'',
+    );
     expect(r).toContain(
       'wait_until 60 1 "the operator to take the rotation request" \'[ -n "$(secret_get next.kid)" ]\'',
     );
-    expect(r).toContain('wait_until $((BOUND_SECONDS + 150)) 2 "signing to switch to the new key"');
+    expect(r).toContain(
+      'wait_until $((BOUND_SECONDS + 150)) 2 "signing to switch to the new key" \'[ "$(secret_get current.kid)" = "${new_kid}" ]\'',
+    );
     expect(r).toContain('apps.kn-next.dev/signing-key-switched-at=');
     expect(r).toContain('rollout restart deployment/kn-next-operator-controller-manager');
     expect(r).toContain('[ "$(jwks_kids)" = "${new_kid}" ]');
@@ -363,7 +370,9 @@ describe('rotcold: a cold pod accepts only the new key after a rotation done at 
     expect(f).toContain('--auth signer --key-dir "$1"');
     expect(f).toContain('--timeout-seconds');
     expect(f).toContain('[ "${rc}" = 2 ]');
-    expect(body('export_key')).toContain('@base64d');
+    expect(body('export_key')).toContain(
+      `'.data[$s] // empty | @base64d' <<<"\${json}" >"\${dir}/current.key"`,
+    );
   });
 });
 

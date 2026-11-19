@@ -76,12 +76,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     one. `held` makes the activator hold a call past the token's life with a ResourceQuota in the
     function's namespace that admits no pod (no node is cordoned; `Z11_HELD_SECONDS`, default
     80 s; the quota is removed on exit): the call is refused as unauthenticated, then a fresh
-    token is accepted and a garbage one is still refused. `heldwarm` is the combined case: the
-    function is kept warm at minScale 1, one call loads the key set, the key is rotated and
-    retired under that pod, and one call signed with the new key is held 80 s (the same quota,
-    plus the live pod detached from its Service by a label change) and released to the same pod:
-    401 unauthenticated "token rejected", with a 30 s hold on the same pod and key accepted as
-    the control (`Z11_CONTROL_HELD_SECONDS`).
+    token is accepted and a garbage one is still refused. `heldwarm` is the combined case: two warm pods each load the old key set with one call (the others detached, quota in place), the key is rotated and retired under them, a new-key call held 30 s and released to pod A only is accepted (the control), and the same held 80 s and released to pod B only, in the same state, is refused (401 unauthenticated "token rejected"). The pod uid set is checked unchanged; labels go back before the quota. The verifier's order is JWKS re-read, kid lookup, signature, then expiry, and a refusal is not logged, so the drill proves the pair, not which check fired.
     Both sign through `../z7-identity-kind/probe.ts` (`--timeout-seconds` is its
     long-call option). `.github/workflows/z11-activator-drill-e2e.yml`
     runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.

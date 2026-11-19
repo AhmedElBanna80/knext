@@ -392,7 +392,14 @@ describe('CI runs the drill by default, including the policy-off leg', () => {
     expect(wf).toContain(
       'Run the Z11 activator-path drill (all phases, including policyoff, rotcold, held and heldwarm)',
     );
-    expect(wf).toMatch(/timeout-minutes: 90\b/);
+    // The budget rests on CI wall time, not the local figure: the slowest recent green CI job was
+    // 2313 s (38.6 min). It must clear that by a real margin and not drift back to an unbounded hold.
+    const minutes = Number(/timeout-minutes: (\d+)\b/.exec(wf)?.[1]);
+    expect(minutes).toBeGreaterThanOrEqual(45);
+    expect(minutes).toBeLessThanOrEqual(75);
+    // The evidence is recorded next to the figure, with the run it came from.
+    expect(wf).toContain('actions/runs/44567654663');
+    expect(wf).toContain('CI wall times');
   });
   it('the default phase list of the script includes policyoff, rotcold, held and heldwarm', () => {
     expect(own).toMatch(

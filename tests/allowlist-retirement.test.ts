@@ -18,6 +18,7 @@ import {
   pickNewestStable,
   probeEntries,
   reachability,
+  readDeclaredRange,
   readTarEntry,
   renderReport,
   resolveAllowlistFiles,
@@ -27,9 +28,11 @@ import {
   versionInRange,
 } from '../scripts/lib/allowlist-retirement.mjs';
 import {
+  LIMITS,
   MAX_RETRIES,
   makeFetchAdvisory,
   makeResolveVendored,
+  readCapped,
 } from '../scripts/verify-allowlist-retirement.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -453,7 +456,9 @@ const ok = (body: unknown) => ({
   ok: true,
   status: 200,
   json: async () => body,
-  arrayBuffer: async () => body as ArrayBuffer,
+  headers: { get: () => null },
+  arrayBuffer: async () =>
+    body instanceof ArrayBuffer ? body : new TextEncoder().encode(JSON.stringify(body)).buffer,
 });
 const reg = (versions: string[], tgz: Buffer, integrity = integrityOf(tgz)) => {
   const calls: string[] = [];
@@ -552,18 +557,67 @@ describe('vendored advisories: classification', () => {
     expect(() => pickNewestStable(vs, 'workspace:*')).toThrow();
   });
 
-  it('validateVendoredIn rejects malformed declarations', () => {
-    expect(validateVendoredIn(VENDORED, 'f', 'id').field).toBe('peerDependencies.react');
-    const bad = (over: Record<string, unknown>) =>
-      expect(() => validateVendoredIn({ ...VENDORED, ...over }, 'f', 'id')).toThrow();
+  it('validateVendoredIn derives the host range from the declaring file and rejects malformed declarations', () => {
+    const decl = {
+      package: 'next',
+      path: 'dist/compiled/rsd/package.json',
+      field: 'peerDependencies.react',
+      rangeFrom: 'packages/x/package.json#peerDependencies.next',
+      patched: ['>= 19.3.1'],
+    };
+    const reader = (rel: string, field: string) =>
+      rel === 'packages/x/package.json' && field === 'peerDependencies.next'
+        ? '>=16.0.0 <16.5.0'
+        : undefined;
+    const good = validateVendoredIn(decl, 'f', 'id', reader);
+    expect(good.range).toBe('>=16.0.0 <16.5.0');
+    expect(good.field).toBe('peerDependencies.react');
+    const bad = (over: Record<string, unknown>, r: unknown = reader) =>
+      expect(() => validateVendoredIn({ ...decl, ...over }, 'f', 'id', r as never)).toThrow();
     bad({ path: '../escape/package.json' });
     bad({ path: '/abs/package.json' });
     bad({ package: 'Not A Name' });
     bad({ patched: [] });
     bad({ patched: ['^19.3.1'] });
-    bad({ range: '' });
-    bad({ range: 'workspace:*' });
     bad({ field: 'a..b' });
+    bad({ range: '>=16.4.3 <16.5.0' }); // a hand-written range is refused: it would drift
+    bad({ rangeFrom: undefined });
+    bad({ rangeFrom: 'no-field-part' });
+    bad({ rangeFrom: 'packages/x/package.json#missing.field' }); // not a string -> error
+    bad({}, null); // no reader
+    bad({}, () => 'workspace:*'); // unparseable derived range
+  });
+
+  it('a PRERELEASE patched bound is rejected (a canary of the fix is not the fix)', () => {
+    const decl = {
+      package: 'next',
+      path: 'p/package.json',
+      rangeFrom: 'a.json#b',
+      patched: ['>= 19.3.1-canary-abc-20261101'],
+    };
+    expect(() => validateVendoredIn(decl, 'f', 'id', () => '^16.4.0')).toThrow(/STABLE/);
+    expect(() =>
+      validateVendoredIn(
+        { ...decl, patched: ['>= 19.3.1, < 19.4.0-rc.1'] },
+        'f',
+        'id',
+        () => '^16.4.0',
+      ),
+    ).toThrow(/STABLE/);
+  });
+
+  it('readDeclaredRange reads a field and refuses paths that leave the root', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rng-'));
+    try {
+      writeFileSync(join(dir, 'p.json'), '{"peerDependencies":{"next":"^16.4.0"}}');
+      expect(readDeclaredRange(dir, 'p.json', 'peerDependencies.next')).toBe('^16.4.0');
+      expect(readDeclaredRange(dir, 'p.json', 'peerDependencies.nope')).toBeUndefined();
+      expect(() => readDeclaredRange(dir, '../p.json', 'a')).toThrow(/outside/);
+      expect(() => readDeclaredRange(dir, '/etc/hosts', 'a')).toThrow(/outside/);
+      expect(() => readDeclaredRange(dir, 'missing.json', 'a')).toThrow(/does not exist/);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
   });
 });
 
@@ -664,17 +718,111 @@ describe('vendored advisories: registry and tarball resolution', () => {
   });
 });
 
+describe('vendored advisories: download robustness (all fail closed)', () => {
+  const sleepless = async () => {};
+  const goodTgz = () => tgzOf(tarFile('package/dist/compiled/rsd/package.json', rsd('19.3.0')));
+
+  it('every request carries an AbortSignal timeout', async () => {
+    const signals: unknown[] = [];
+    const inner = reg(['16.4.6'], goodTgz()).fetchImpl as unknown as (u: string) => unknown;
+    const fetchImpl = (async (u: string, init: { signal?: unknown }) => {
+      signals.push(init?.signal);
+      return inner(u);
+    }) as never;
+    await makeResolveVendored(fetchImpl, sleepless)(VENDORED as never);
+    expect(signals).toHaveLength(2);
+    expect(signals.every((x) => x instanceof AbortSignal)).toBe(true);
+  });
+
+  it('a hung request times out, is retried a bounded number of times, then fails closed', async () => {
+    let n = 0;
+    const fetchImpl = ((_u: string, init: { signal: AbortSignal }) =>
+      new Promise((_res, rej) => {
+        n++;
+        init.signal.addEventListener('abort', () => rej(new Error('aborted by timeout')));
+      })) as never;
+    await expect(
+      makeResolveVendored(fetchImpl, sleepless, { timeoutMs: 5 })(VENDORED as never),
+    ).rejects.toThrow(/aborted by timeout/);
+    expect(n).toBe(MAX_RETRIES + 1);
+  });
+
+  const streamOf = (chunks: Uint8Array[], onPull?: () => void) =>
+    new Response(
+      new ReadableStream({
+        pull(c) {
+          onPull?.();
+          const next = chunks.shift();
+          if (next) c.enqueue(next);
+          else c.close();
+        },
+      }),
+    );
+
+  it('readCapped aborts the stream the moment the cap is crossed (not after buffering it all)', async () => {
+    let pulls = 0;
+    const chunks = Array.from({ length: 1000 }, () => new Uint8Array(100));
+    await expect(
+      readCapped(
+        streamOf(chunks, () => {
+          pulls++;
+        }),
+        350,
+        'blob',
+      ),
+    ).rejects.toThrow(/download cap/);
+    expect(pulls).toBeLessThan(20);
+  });
+
+  it('readCapped refuses an over-cap Content-Length up front, and passes an under-cap body', async () => {
+    const big = new Response('x', { headers: { 'content-length': '999999' } });
+    await expect(readCapped(big, 100, 'blob')).rejects.toThrow(/download cap/);
+    const small = await readCapped(new Response('hello'), 100, 'blob');
+    expect(small.toString()).toBe('hello');
+  });
+
+  it('a tarball over the download cap fails closed', async () => {
+    const { fetchImpl } = reg(['16.4.6'], goodTgz());
+    await expect(
+      makeResolveVendored(fetchImpl, sleepless, { maxTarballBytes: 10 })(VENDORED as never),
+    ).rejects.toThrow(/download cap/);
+  });
+
+  it('a gzip bomb (output over maxTarBytes) fails closed, and the same tarball passes under the default', async () => {
+    const bomb = tgzOf(
+      tarFile('package/pad.bin', 'a'.repeat(200_000)),
+      tarFile('package/dist/compiled/rsd/package.json', rsd('19.3.0')),
+    );
+    const { fetchImpl } = reg(['16.4.6'], bomb);
+    await expect(
+      makeResolveVendored(fetchImpl, sleepless, { maxTarBytes: 50_000 })(VENDORED as never),
+    ).rejects.toThrow(/did not decompress/);
+    const r = await makeResolveVendored(fetchImpl, sleepless)(VENDORED as never);
+    expect(r.vendoredVersion).toBe('19.3.0');
+  });
+
+  it('the shipped limits are finite and ordered', () => {
+    expect(LIMITS.timeoutMs).toBeGreaterThan(0);
+    expect(LIMITS.maxTarballBytes).toBeLessThan(LIMITS.maxTarBytes);
+  });
+});
+
 describe('real allowlists: vendored entries', () => {
   it('every vendoredIn is valid, and GHSA-xqc2 (when present) declares one and keeps its expiry', () => {
     const file = 'security/precompile-closure-allowlist.json';
     const doc = JSON.parse(readFileSync(resolve(ROOT, file), 'utf8'));
+    const read = (rel: string, field: string) => readDeclaredRange(ROOT, rel, field);
     for (const e of doc.allow) {
-      if (e.vendoredIn !== undefined) validateVendoredIn(e.vendoredIn, file, e.id);
+      if (e.vendoredIn !== undefined) validateVendoredIn(e.vendoredIn, file, e.id, read);
     }
     const x = doc.allow.find((e: { id: string }) => e.id === 'GHSA-xqc2-xf4c-x3h3');
     if (x === undefined) return; // integration/v2 carries no such entry
     expect(x.expires).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    const v = validateVendoredIn(x.vendoredIn, file, x.id);
+    const v = validateVendoredIn(x.vendoredIn, file, x.id, read);
+    // the host range IS the repo's own peer range, not a hand-written copy
+    expect(v.range).toBe(
+      readDeclaredRange(ROOT, 'packages/kn-next/package.json', 'peerDependencies.next'),
+    );
     expect(v.package).toBe('next');
     expect(v.patched).toContain('>= 19.3.1');
     expect(collectEntries(ROOT, [file]).some((e) => e.vendoredIn)).toBe(true);

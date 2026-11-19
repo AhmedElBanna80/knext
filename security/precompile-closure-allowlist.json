@@ -14,12 +14,12 @@
       "expires": "2026-11-27",
       "vendoredIn": {
         "package": "next",
-        "range": ">=16.4.3 <16.5.0",
+        "rangeFrom": "packages/kn-next/package.json#peerDependencies.next",
         "path": "dist/compiled/react-server-dom-webpack/package.json",
         "field": "peerDependencies.react",
         "patched": [">= 19.3.1"]
       },
-      "note": "Tracked in #61. Drop this entry, do not renew it, once `next` is pinned to a release whose next/dist/compiled/react-server-dom-* build is 19.3.1+ or a canary dated after the fix. Because suppression is by advisory id, this entry would also hide a REGRESSION of the userland copies to an affected version — re-read the SUPPRESSED lines in the audit log when renewing."
+      "note": "Tracked in #61. Drop this entry, do not renew it, once `next` is pinned to a release whose next/dist/compiled/react-server-dom-* build is 19.3.1+. Because suppression is by advisory id, this entry would also hide a REGRESSION of the userland copies to an affected version — re-read the SUPPRESSED lines in the audit log when renewing."
     }
   ]
 }

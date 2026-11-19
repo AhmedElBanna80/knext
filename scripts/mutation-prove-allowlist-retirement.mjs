@@ -276,11 +276,67 @@ const MUTATIONS = [
     anchor: 'if (file === null)',
     replacement: 'if (false)',
   },
+  {
+    label: 'lib: a prerelease patched bound is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'return !m || !STABLE.test(m[2]);',
+    replacement: 'return !m;',
+  },
+  {
+    label: 'lib: a hand-written host range is accepted',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (v.range !== undefined) bad(',
+    replacement: 'if (false) bad(',
+  },
+  {
+    label: 'lib: the derived host range is ignored',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'const range = readRange(from[0], from[1]);',
+    replacement: "const range = '>=16.0.0 <99.0.0';",
+  },
+  {
+    label: 'lib: rangeFrom may read outside the probed root',
+    subject: 'lib',
+    guard: 'spec',
+    anchor: 'if (isAbsolute(rel) || outside(abs)) throw new Error(',
+    replacement: 'if (false) throw new Error(',
+  },
+  {
+    label: 'cli: requests carry no timeout signal',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'signal: AbortSignal.timeout(timeoutMs)',
+    replacement: 'signal: undefined',
+  },
+  {
+    label: 'cli: the streamed download cap is not enforced',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (total > cap) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'cli: an over-cap Content-Length is not refused',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: 'if (Number.isFinite(declared) && declared > cap) throw tooBig();',
+    replacement: '',
+  },
+  {
+    label: 'cli: the gunzip output cap is removed',
+    subject: 'cli',
+    guard: 'spec',
+    anchor: '{ maxOutputLength: L.maxTarBytes }',
+    replacement: '{}',
+  },
 ];
 
-declareMutations(33);
-if (MUTATIONS.length !== 33) {
-  console.error(`FATAL: declared 33 mutations, table has ${MUTATIONS.length}`);
+declareMutations(41);
+if (MUTATIONS.length !== 41) {
+  console.error(`FATAL: declared 41 mutations, table has ${MUTATIONS.length}`);
   process.exit(1);
 }
 

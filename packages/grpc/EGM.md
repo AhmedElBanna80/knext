@@ -65,14 +65,22 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
   - e2e/lib/kind-lane.sh: helpers sourced (never run) by the Z7, Z10 and Z11
     scripts.
   - e2e/z11-activator-drill (no EGM.md): a drill on kind with Calico, phases
-    `up deploy token direct policyoff noauth`; it proves which control holds on the
+    `up deploy token direct policyoff noauth rotcold held`; it proves which control holds on the
     activator path (the function's token, and the NetworkPolicy on a direct
     dial), and that with the NetworkPolicy off a token-less call is still refused
     by the function itself (`policyoff`), while a function without its interceptor and
-    without the policy answers it (`noauth`). `.github/workflows/z11-activator-drill-e2e.yml`
+    without the policy answers it (`noauth`). `rotcold` rotates and retires the zone's
+    signing key while the function is at zero: the cold pod that wakes refuses the
+    retired key (401 unauthenticated) and, after another scale to zero, accepts the new
+    one. `held` cordons the nodes so the activator holds a call past the token's life
+    (`Z11_HELD_SECONDS`, default 80 s; it is cleaned up on exit): the call is refused as
+    unauthenticated, then a fresh token is accepted and a garbage one is still refused.
+    Both sign through `../z7-identity-kind/probe.ts` (`--timeout-seconds` is its
+    long-call option). `.github/workflows/z11-activator-drill-e2e.yml`
     runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
     Guard: `tests/z11-activator-drill.test.ts`, mutation-proved by
-    `scripts/mutation-prove-s8-1-z11-policyoff.mjs`.
+    `scripts/mutation-prove-s8-1-z11-policyoff.mjs` and
+    `scripts/mutation-prove-s9-1-z11-rotation-held.mjs`.
 
 ## Invariants
 

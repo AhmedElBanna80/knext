@@ -27,7 +27,20 @@
 #             off, a direct no-token dial to that pod still reaches the handler:
 #             with both controls gone nothing refuses it.
 #
-# Phases (PHASES, space-separated; default all): up deploy token direct policyoff noauth.
+#   rotcold   the zone's signing key is rotated, switched and retired WHILE the function
+#             is at zero. The cold pod that wakes afterwards reads the new JWKS: it
+#             refuses a token signed by the retired key (401 unauthenticated) and, after
+#             another scale to zero, accepts one signed by the new key. Control: before
+#             the rotation a cold pod accepts the old key.
+#   held      a call the activator holds for longer than the token's life (a pod that
+#             cannot be scheduled, so the activator buffers the request) is refused by
+#             the function as 401 unauthenticated "token rejected", never accepted.
+#             Control: the same hold for 30 s, inside the token's life, is accepted, so
+#             the refusal is the token's age. Afterwards a fresh token is accepted and a
+#             garbage token is still refused.
+#
+# Phases (PHASES, space-separated; default all): up deploy token direct policyoff noauth
+# rotcold held.
 #   up        a kind cluster with the default CNI disabled and Calico installed,
 #             then the Z7 lane's up phase on it (registry, cert-manager, Knative,
 #             the operator from this checkout)
@@ -58,8 +71,14 @@ REG_NAME="${REGISTRY_NAME:-knext-z11-registry}"
 REG_PORT="${REGISTRY_PORT:-5002}"
 NS="${Z11_NAMESPACE:-z11-e2e}"
 FOREIGN="${NS}-foreign"
-PHASES="${PHASES:-up deploy token direct policyoff noauth}"
+PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held}"
 INTERNAL_PORT="${INTERNAL_PORT:-18100}"
+# How long the held call stays outstanding. A token lives 60 s and the verifier allows
+# 5 s of skew, so anything below 66 s would not prove the refusal is the expiry.
+HELD_SECONDS="${Z11_HELD_SECONDS:-80}"
+# The control hold: the same mechanism, shorter than the token's life, so its token is still
+# valid when the activator releases the call. It must be ACCEPTED.
+CONTROL_HELD_SECONDS="${Z11_CONTROL_HELD_SECONDS:-30}"
 CURL_IMAGE='curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69'
 
 ZONE=storefront
@@ -67,6 +86,12 @@ GO_FN=example-go
 FN_URL="http://${GO_FN}.${NS}.svc.cluster.local"
 GET_ITEM="/example.v1.ExampleService/GetItem"
 ZONE_HOST=""
+FN_HOST="${GO_FN}.${NS}.svc.cluster.local"
+Z7_PROBE="${Z7}/probe.ts"
+ISSUER="knext:zone:${NS}/${ZONE}"
+KEY_SECRET="${ZONE}-knext-signing-key"
+JWKS_CM="${ZONE}-knext-jwks"
+OPERATOR_NS='kn-next-operator-system'
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/knext-z11-drill.XXXXXX")"
 STATE="${TMPDIR:-/tmp}/knext-z11-drill-state-${CLUSTER}"
@@ -89,9 +114,19 @@ diagnostics() {
 # the policy off or on the image without its token check.
 RESTORE_POLICY=0
 RESTORE_IMAGE=""
+# Set while the held phase has every node cordoned: a kept cluster must stay schedulable.
+RESTORE_CORDON=0
+# The background held call's pid is written here, so an abort never leaves it running.
+HELD_PIDFILE="${WORK}/held.pid"
 
 cleanup() {
   local rc=$?
+  if [ -s "${HELD_PIDFILE}" ]; then kill "$(cat "${HELD_PIDFILE}")" 2>/dev/null || true; fi
+  if [ "${RESTORE_CORDON}" = 1 ]; then
+    # shellcheck disable=SC2046
+    k uncordon $(k get nodes -o name) >/dev/null 2>&1 \
+      || echo "WARNING: could not uncordon the nodes" >&2
+  fi
   if [ "${RESTORE_POLICY}" = 1 ]; then
     k -n "${NS}" patch backendservice "${GO_FN}" --type merge -p '{"spec":{"security":{"networkPolicy":true}}}' >/dev/null 2>&1 \
       || echo "WARNING: could not turn ${GO_FN}'s NetworkPolicy back on" >&2
@@ -108,6 +143,11 @@ cleanup() {
   exit "${rc}"
 }
 trap cleanup EXIT
+
+# The propagation bound the operator ships with, from its own contract fixture.
+BOUND_FIXTURE="${REPO}/packages/kn-next-operator/internal/controller/testdata/zone-identity-contract.json"
+BOUND_SECONDS="$(jq -er '.rotation.propagationBoundSeconds' "${BOUND_FIXTURE}")" \
+  || { echo "cannot read .rotation.propagationBoundSeconds from ${BOUND_FIXTURE}" >&2; exit 64; }
 
 lane_env() { # the environment the Z7 and Z10 lanes need to run against this cluster
   KIND_CLUSTER="${CLUSTER}" REGISTRY_NAME="${REG_NAME}" REGISTRY_PORT="${REG_PORT}" \
@@ -176,6 +216,55 @@ fn_ready_on() {
   rev="$(k -n "${NS}" get ksvc "${GO_FN}" -o jsonpath='{.status.latestReadyRevisionName}')"
   [ -n "${rev}" ] || return 1
   [ "$(k -n "${NS}" get revision "${rev}" -o jsonpath='{.spec.containers[0].image}')" = "$1" ]
+}
+
+secret_get() { # <field>: one data field of the zone's key Secret, decoded (kids only!)
+  k -n "${NS}" get secret "${KEY_SECRET}" -o json | jq -r --arg f "$1" '.data[$f] // empty | @base64d'
+}
+# jwks_written_at: when the JWKS ConfigMap was last written, by the API server's clock (the
+# same clock as the kubelet's on a kind node, so it compares with a pod's startTime).
+jwks_written_at() { k -n "${NS}" get configmap "${JWKS_CM}" -o json --show-managed-fields | jq -r '[.metadata.managedFields[]?.time | fromdateiso8601] | max'; }
+# fn_pod_started: "<uid> <startTime epoch>" of the function's live pod.
+fn_pod_started() {
+  k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \
+    | jq -r '[.items[] | select(.metadata.deletionTimestamp == null)][0] | "\(.metadata.uid) \(.status.startTime | fromdateiso8601)"'
+}
+jwks_kids() { k -n "${NS}" get configmap "${JWKS_CM}" -o json | jq -r '.data["jwks.json"] | fromjson | [.keys[].kid] | sort | join(",")'; }
+
+# export_key <dir> <slot>: the Secret's <slot>.key/.kid as <dir>/current.key/.kid, the
+# layout the Z7 probe's signer reads. Written straight to files; nothing is printed.
+export_key() {
+  local dir=$1 slot=$2 json
+  mkdir -p "${dir}"
+  chmod 700 "${dir}"
+  json="$(k -n "${NS}" get secret "${KEY_SECRET}" -o json)"
+  jq -r --arg s "${slot}.key" '.data[$s] // empty | @base64d' <<<"${json}" >"${dir}/current.key"
+  jq -r --arg s "${slot}.kid" '.data[$s] // empty | @base64d' <<<"${json}" >"${dir}/current.kid"
+  chmod 600 "${dir}/current.key" "${dir}/current.kid"
+  [ -s "${dir}/current.key" ] && [ -s "${dir}/current.kid" ] || fail "the Secret holds no ${slot} key"
+}
+
+# fn_probe <key dir> <id>: one VALID-signature call to the function through the gateway
+# (so through the activator when it is cold), with a token the Z7 probe signs with the key
+# in <key dir>. Sets PR_STATUS and PR_CODE. Exit 2 means nothing answered (a dropped
+# port-forward): the call is retried, and only then. A function that ANSWERS is never
+# retried, so a refusal stays a refusal.
+fn_probe() {
+  local attempt rc=0 out
+  PR_STATUS=000
+  PR_CODE=""
+  for attempt in 1 2 3; do
+    rc=0
+    ensure_forward
+    bun "${Z7_PROBE}" --base "http://127.0.0.1:${INTERNAL_PORT}" --host "${FN_HOST}" \
+      --issuer "${ISSUER}" --sub alice --rpc get --id "$2" --auth signer --key-dir "$1" \
+      --timeout-seconds 60 >"${WORK}/fn-probe.out" 2>/dev/null || rc=$?
+    [ "${rc}" = 2 ] || break
+  done
+  [ "${rc}" = 0 ] || fail "the function did not answer a call (probe exit ${rc})"
+  out="$(cat "${WORK}/fn-probe.out")"
+  PR_STATUS="$(jq -r .status <<<"${out}")"
+  PR_CODE="$(jq -r '.code // ""' <<<"${out}")"
 }
 
 # ---------------------------------------------------------------- phase: up
@@ -418,12 +507,156 @@ phase_noauth() {
   ok "without the interceptor the same foreign call reaches the handler (404 not_found): the token is the control (image restored)"
 }
 
+# ---------------------------------------------------------------- phase: rotcold
+
+# The failure mode ADR-0004 names: a rotation that a function pod never saw because it
+# did not exist. The pod is at zero for the whole rotation; the pod that wakes afterwards
+# mounts the JWKS as it is NOW. The retirement is brought forward the way the Z7 lane does
+# it (the switch stamp backdated, the operator restarted to re-read it).
+phase_rotcold() {
+  log "rotcold: the zone's key is rotated while the function is at zero"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  local old_kid new_kid nonce
+  old_kid="$(secret_get current.kid)"
+  [ -n "${old_kid}" ] || fail "no current key"
+  [ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \
+    || fail "a rotation is already in flight; run the deploy phase for a clean zone"
+  export_key "${WORK}/key-old" current
+  await_zero "${GO_FN}"
+  fn_probe "${WORK}/key-old" ctl
+  [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
+    || fail "before the rotation a cold pod answered the old key with status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (the harness would prove nothing)"
+  ok "control: before the rotation a cold pod accepts the old key ${old_kid} (404 not_found)"
+
+  log "rotcold 1/4: scale to zero, then request the rotation"
+  await_zero "${GO_FN}"
+  nonce="z11-$(date +%s)"
+  k -n "${NS}" annotate nextapp "${ZONE}" "apps.kn-next.dev/rotate-signing-key=${nonce}" --overwrite
+  # The operator takes the request and stages the new key in one write, and no key was
+  # staged before (checked above), so a staged key is this request's.
+  wait_until 60 1 "the operator to take the rotation request" '[ -n "$(secret_get next.kid)" ]'
+  new_kid="$(secret_get next.kid)"
+  [ -n "${new_kid}" ] && [ "${new_kid}" != "${old_kid}" ] || fail "no new key was staged by the rotation request"
+  wait_until 30 1 "the JWKS to publish both keys" \
+    '[ "$(jwks_kids)" = "$(printf "%s\n%s\n" "${old_kid}" "${new_kid}" | LC_ALL=C sort | paste -sd, -)" ]'
+  export_key "${WORK}/key-new" next
+
+  log "rotcold 2/4: the operator switches signing after the propagation bound (${BOUND_SECONDS}s)"
+  wait_until $((BOUND_SECONDS + 150)) 2 "signing to switch to the new key" '[ "$(secret_get current.kid)" = "${new_kid}" ]'
+  [ "$(secret_get previous.kid)" = "${old_kid}" ] || fail "the old key is not kept as previous after the switch"
+
+  log "rotcold 3/4: retirement (the switch stamp backdated by two hours, the operator restarted)"
+  k -n "${NS}" annotate secret "${KEY_SECRET}" \
+    "apps.kn-next.dev/signing-key-switched-at=$(node -p 'new Date(Date.now() - 2 * 3600 * 1000).toISOString()')" --overwrite
+  k -n "${OPERATOR_NS}" rollout restart deployment/kn-next-operator-controller-manager
+  k -n "${OPERATOR_NS}" rollout status deployment/kn-next-operator-controller-manager --timeout=180s
+  wait_until 180 3 "the previous key to leave the Secret" '[ -z "$(secret_get previous.kid)" ]'
+  wait_until 30 1 "the JWKS to publish only the new key" '[ "$(jwks_kids)" = "${new_kid}" ]'
+  local retired_at old_uid old_start new_uid new_start
+  retired_at="$(jwks_written_at)"
+  ok "retired: only ${new_kid} remains in the Secret and the JWKS"
+
+  log "rotcold 4/4: the cold pod accepts only the new key"
+  # Nothing called the function through the whole rotation: it never existed to cache a key set.
+  [ "$(all_pods "${GO_FN}")" = 0 ] || fail "${GO_FN} woke during the rotation: this was not a cold-pod rotation"
+  fn_probe "${WORK}/key-old" old
+  read -r old_uid old_start <<<"$(fn_pod_started)"
+  [ "${old_start}" -ge "${retired_at}" ] \
+    || fail "the pod that refused the retired key started at ${old_start}, before the retirement at ${retired_at}: it was not a cold start"
+  [ "${PR_STATUS}" = 401 ] && [ "${PR_CODE}" = unauthenticated ] \
+    || fail "cold pod, retired key: status ${PR_STATUS} code '${PR_CODE}', want 401 unauthenticated"
+  [ "$(all_pods "${GO_FN}")" -ge 1 ] || fail "the refused call never woke ${GO_FN}: it did not reach the function"
+  ok "cold pod, retired key ${old_kid}: the function that woke after the rotation refused it (401 unauthenticated)"
+  await_zero "${GO_FN}"
+  fn_probe "${WORK}/key-new" new
+  read -r new_uid new_start <<<"$(fn_pod_started)"
+  [ "${new_uid}" != "${old_uid}" ] && [ "${new_start}" -ge "${retired_at}" ] \
+    || fail "the pod that accepted the new key (${new_uid}, started ${new_start}) is not a second pod started after the retirement at ${retired_at}"
+  [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
+    || fail "cold pod, new key: status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (it should reach the handler)"
+  ok "cold pod, new key ${new_kid}: a second cold pod accepted it (404 not_found)"
+  echo "ROTCOLD: retired ${old_kid} -> 401 unauthenticated; new ${new_kid} -> 404 not_found (both cold)"
+  wait_until 300 3 "the zone's own call to succeed with the new key" \
+    '[ "$(zone_status "/example/get?sub=alice&id=missing")" = 404 ]'
+  expect_zone "control: after the rotation the zone's own call reaches the function (NotFound, not 401)" \
+    "/example/get?sub=alice&id=missing" 404 '.ok == false and .code == "NotFound"'
+}
+
+# ---------------------------------------------------------------- phase: held
+
+# hold_call <seconds>: with the function at zero and every node cordoned, send one call
+# signed with the held key and keep it outstanding for <seconds>, then uncordon and take
+# the answer. Sets HELD_STATUS, HELD_CODE, HELD_MESSAGE and HELD_FOR. The call is a direct
+# bun call, never the retrying wrapper: a retry would mint a fresh token and prove nothing.
+hold_call() {
+  local out="${WORK}/held.out" start
+  await_zero "${GO_FN}"
+  ensure_forward
+  RESTORE_CORDON=1
+  # shellcheck disable=SC2046
+  k cordon $(k get nodes -o name) >/dev/null
+  start=$SECONDS
+  bun "${Z7}/probe.ts" --base "http://127.0.0.1:${INTERNAL_PORT}" --host "${FN_HOST}" \
+    --issuer "${ISSUER}" --sub alice --rpc get --id missing --auth signer --key-dir "${WORK}/key-held" \
+    --with-message --timeout-seconds 240 >"${out}" 2>"${WORK}/held.err" &
+  echo "$!" >"${HELD_PIDFILE}"
+  # An inline wait, not wait_until: its eval would add three levels to the call chain the
+  # supply-chain scanner follows (limit 6).
+  until [ "$(all_pods "${GO_FN}")" -ge 1 ]; do
+    [ $((SECONDS - start)) -lt 60 ] || fail "timed out after 60s waiting for the held call to create a pod for the activator to wait on"
+    sleep 1
+  done
+  [ "$(fn_pod_ip)" = "" ] || fail "a Ready ${GO_FN} pod exists with every node cordoned: the call is not being held"
+  while [ $((SECONDS - start)) -lt "$1" ]; do
+    kill -0 "$(cat "${HELD_PIDFILE}")" 2>/dev/null || fail "the held call ended after $((SECONDS - start))s, before $1s: it was not held ($(cat "${out}" "${WORK}/held.err" 2>/dev/null | head -c 300))"
+    sleep 2
+  done
+  # shellcheck disable=SC2046
+  k uncordon $(k get nodes -o name) >/dev/null
+  RESTORE_CORDON=0
+  wait "$(cat "${HELD_PIDFILE}")" || fail "the held call did not get an answer: $(head -c 300 "${WORK}/held.err")"
+  : >"${HELD_PIDFILE}"
+  HELD_FOR=$((SECONDS - start))
+  HELD_STATUS="$(jq -r .status "${out}")"
+  HELD_CODE="$(jq -r '.code // ""' "${out}")"
+  HELD_MESSAGE="$(jq -r '.message // ""' "${out}")"
+  [ "${HELD_FOR}" -ge "$1" ] || fail "the held call was outstanding only ${HELD_FOR}s, want at least $1s"
+}
+
+# The control comes first and uses the same mechanism: a call held ${CONTROL_HELD_SECONDS}s
+# (inside the token's life) is ACCEPTED, so what refuses the longer call is its age, not
+# the hold itself, a stripped header or a replay. The verifier does not accept a token with
+# a longer life, so the control shortens the hold instead of lengthening the token.
+phase_held() {
+  log "held: a call the activator holds longer than the token's life (${HELD_SECONDS}s), with a shorter hold as control"
+  [ -n "${ZONE_HOST}" ] || start_forwards
+  export_key "${WORK}/key-held" current
+  hold_call "${CONTROL_HELD_SECONDS}"
+  echo "HELD-CONTROL: outstanding ${HELD_FOR}s through the activator -> ${HELD_STATUS} ${HELD_CODE}"
+  [ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \
+    || fail "control: a call held ${HELD_FOR}s (inside the token's life) got status ${HELD_STATUS} code '${HELD_CODE}', want 404 not_found (the hold itself must not refuse a valid token)"
+  ok "control: a call held ${HELD_FOR}s in the activator, inside the token's life, was accepted (404 not_found)"
+  hold_call "${HELD_SECONDS}"
+  echo "HELD: outstanding ${HELD_FOR}s through the activator -> ${HELD_STATUS} ${HELD_CODE} '${HELD_MESSAGE}'"
+  [ "${HELD_STATUS}" = 401 ] && [ "${HELD_CODE}" = unauthenticated ] && [ "${HELD_MESSAGE}" = "token rejected" ] \
+    || fail "a call held ${HELD_FOR}s got status ${HELD_STATUS} code '${HELD_CODE}' message '${HELD_MESSAGE}', want 401 unauthenticated 'token rejected' (an expired token must never be accepted, and the header must have reached the function)"
+  ok "a call held ${HELD_FOR}s in the activator was refused by the function (401 unauthenticated, token rejected) while the ${CONTROL_HELD_SECONDS}s control with the same mechanism was accepted: the token expired"
+  wait_until 120 3 "a Ready ${GO_FN} pod after the nodes are schedulable again" '[ -n "$(fn_pod_ip)" ]'
+  fn_probe "${WORK}/key-held" fresh
+  [ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \
+    || fail "after the hold a fresh token got status ${PR_STATUS} code '${PR_CODE}', want 404 not_found (token validation must still work)"
+  foreign_get "Bearer not-a-token"
+  [ "${FC_STATUS}" = 401 ] && [ "${FC_CODE}" = unauthenticated ] && [ "${FC_MESSAGE}" = "token rejected" ] \
+    || fail "after the hold a garbage token: status ${FC_STATUS} code '${FC_CODE}' message '${FC_MESSAGE}', want 401 unauthenticated 'token rejected'"
+  ok "after the hold a fresh token is accepted (404 not_found) and a garbage token is still refused (token validation intact)"
+}
+
 # ---------------------------------------------------------------- main
 
 for phase in ${PHASES}; do
   case "${phase}" in
-    up | deploy | token | direct | policyoff | noauth) ;;
-    *) fail "unknown phase '${phase}' (up deploy token direct policyoff noauth)" ;;
+    up | deploy | token | direct | policyoff | noauth | rotcold | held) ;;
+    *) fail "unknown phase '${phase}' (up deploy token direct policyoff noauth rotcold held)" ;;
   esac
 done
 if has_phase up; then phase_up; fi
@@ -435,4 +668,6 @@ if has_phase token; then phase_token; fi
 if has_phase direct; then phase_direct; fi
 if has_phase policyoff; then phase_policyoff; fi
 if has_phase noauth; then phase_noauth; fi
+if has_phase rotcold; then phase_rotcold; fi
+if has_phase held; then phase_held; fi
 log "Z11 drill: ${PHASES} passed"

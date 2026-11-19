@@ -263,14 +263,36 @@ export function callFunction(o: CallOptions): Promise<CallOutcome> {
 }
 
 /**
- * The one line the CLI prints. A Connect error body's `message` is dropped (it
- * is the server's free text); only its `code` is kept. A success body is kept
- * so a caller can compare a read-back value.
+ * The messages the function's own interceptor sends with a refusal. With `--with-message`
+ * only one of these is ever printed; any other message is the server's free text and is
+ * dropped, so nothing a server echoes can reach the output.
  */
-export function summarize(outcome: CallOutcome, kid: string | undefined): string {
-  const body = outcome.body as { code?: unknown } | null;
+const KNOWN_MESSAGES: ReadonlySet<string> = new Set([
+  'missing bearer token',
+  'token rejected',
+  'unauthenticated',
+  'the function is at its token limit; retry',
+]);
+
+/**
+ * The one line the CLI prints. A Connect error body's `message` is dropped by default (it
+ * is the server's free text); only its `code` is kept. With `withMessage` a message that is
+ * exactly one of the interceptor's own (KNOWN_MESSAGES) is added as `message`, so a caller
+ * can tell a missing token from a rejected one. A success body is kept so a caller can
+ * compare a read-back value.
+ */
+export function summarize(
+  outcome: CallOutcome,
+  kid: string | undefined,
+  withMessage = false,
+): string {
+  const body = outcome.body as { code?: unknown; message?: unknown } | null;
   const code = outcome.status >= 400 && typeof body?.code === 'string' ? body.code : '';
   const out: Record<string, unknown> = { status: outcome.status, code, kid: kid ?? '' };
+  if (withMessage && outcome.status >= 400) {
+    const m = body?.message;
+    out.message = typeof m === 'string' && KNOWN_MESSAGES.has(m) ? m : '';
+  }
   if (outcome.status >= 200 && outcome.status < 300) out.body = outcome.body;
   return JSON.stringify(out);
 }

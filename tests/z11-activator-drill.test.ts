@@ -35,7 +35,7 @@ describe('the drill is careful', () => {
     expect(own).toMatch(/^set -euo pipefail$/m);
     expect(own).toMatch(/^set \+x$/m);
     expect(own).not.toMatch(/kind delete/);
-    for (const p of ['up', 'deploy', 'token', 'direct', 'policyoff', 'noauth']) {
+    for (const p of ['up', 'deploy', 'token', 'direct', 'policyoff', 'noauth', 'rotcold', 'held']) {
       expect(own).toContain(`if has_phase ${p}; then phase_${p}; fi`);
     }
   });
@@ -254,6 +254,8 @@ describe('CI runs the drill by default, including the policy-off leg', () => {
     for (const must of [
       'packages/grpc/e2e/z11-activator-drill/**',
       'packages/grpc/e2e/lib/kind-lane.sh',
+      'packages/grpc/e2e/z7-identity-kind/probe.ts',
+      'packages/grpc/e2e/z7-identity-kind/probe-lib.ts',
       'scripts/kind-manifests/**',
       'templates/go/internal/auth/**',
       'templates/go/internal/rpc/rpc.go',
@@ -282,7 +284,201 @@ describe('CI runs the drill by default, including the policy-off leg', () => {
       expect(existsSync(resolve(REPO_ROOT, g)), `${g} exists`).toBe(true);
     }
   });
-  it('the default phase list of the script includes policyoff', () => {
-    expect(own).toMatch(/PHASES="\$\{PHASES:-up deploy token direct policyoff noauth\}"/);
+  it('the run step and the job budget cover the rotcold and held phases', () => {
+    expect(wf).toContain(
+      'Run the Z11 activator-path drill (all phases, including policyoff, rotcold and held)',
+    );
+    expect(wf).toMatch(/timeout-minutes: 90\b/);
+  });
+  it('the default phase list of the script includes policyoff, rotcold and held', () => {
+    expect(own).toMatch(
+      /PHASES="\$\{PHASES:-up deploy token direct policyoff noauth rotcold held\}"/,
+    );
+  });
+});
+
+// The failure mode ADR-0004 names: a zone key rotated while a function is at zero, and a
+// call the activator holds past the token's life. Both phases are scanned as text, so each
+// assertion is tied to its own call (a slice from one call to the next), never counted.
+describe('rotcold: a cold pod accepts only the new key after a rotation done at zero', () => {
+  const r = body('phase_rotcold');
+  const seg = (from: string, to: string): string => {
+    const a = r.indexOf(from);
+    expect(a, `${from} is in phase_rotcold`).toBeGreaterThan(-1);
+    expect(r.indexOf(from, a + 1), `${from} occurs once`).toBe(-1);
+    const b = r.indexOf(to, a);
+    expect(b, `${to} follows ${from}`).toBeGreaterThan(a);
+    return r.slice(a, b);
+  };
+  it('refuses to start on a zone with a rotation in flight, and exports the old key first', () => {
+    expect(r).toMatch(
+      /\[ -z "\$\(secret_get next\.kid\)" \] && \[ -z "\$\(secret_get previous\.kid\)" \] \\\n\s*\|\| fail/,
+    );
+    expect(r.indexOf('export_key "${WORK}/key-old" current')).toBeGreaterThan(-1);
+    expect(r.indexOf('export_key "${WORK}/key-old" current')).toBeLessThan(
+      r.indexOf('apps.kn-next.dev/rotate-signing-key='),
+    );
+  });
+  it('the control: before the rotation a cold pod accepts the old key (404 not_found)', () => {
+    const leg = seg('fn_probe "${WORK}/key-old" ctl', 'await_zero');
+    expect(leg).toContain('[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ]');
+    expect(leg).toContain('before the rotation');
+  });
+  it('the rotation is requested, switched and retired while the function is at zero', () => {
+    // The scale to zero sits between the phase's 1/4 marker and the request itself: the
+    // control's own await_zero before it must not be able to stand in for this one.
+    expect(seg('log "rotcold 1/4', 'apps.kn-next.dev/rotate-signing-key=')).toContain(
+      'await_zero "${GO_FN}"',
+    );
+    expect(r).toContain(
+      '"the previous key to leave the Secret" \'[ -z "$(secret_get previous.kid)" ]\'',
+    );
+    expect(r).toContain(
+      '"the JWKS to publish only the new key" \'[ "$(jwks_kids)" = "${new_kid}" ]\'',
+    );
+    expect(r).toContain(
+      'wait_until 60 1 "the operator to take the rotation request" \'[ -n "$(secret_get next.kid)" ]\'',
+    );
+    expect(r).toContain(
+      'wait_until $((BOUND_SECONDS + 150)) 2 "signing to switch to the new key" \'[ "$(secret_get current.kid)" = "${new_kid}" ]\'',
+    );
+    expect(r).toContain('apps.kn-next.dev/signing-key-switched-at=');
+    expect(r).toContain('rollout restart deployment/kn-next-operator-controller-manager');
+    expect(r).toContain('[ "$(jwks_kids)" = "${new_kid}" ]');
+    expect(seg('log "rotcold 4/4', 'fn_probe "${WORK}/key-old" old')).toMatch(
+      /\[ "\$\(all_pods "\$\{GO_FN\}"\)" = 0 \] \|\| fail/,
+    );
+  });
+  it('the cold pod refuses the OLD key as 401 unauthenticated, and the refused call woke it', () => {
+    const leg = seg('fn_probe "${WORK}/key-old" old', 'await_zero');
+    expect(leg).toContain('[ "${PR_STATUS}" = 401 ] && [ "${PR_CODE}" = unauthenticated ]');
+    expect(leg).toContain('cold pod, retired key');
+    expect(leg).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" -ge 1 \] \|\| fail/);
+  });
+  it('a second cold pod accepts the NEW key (404 not_found), and the zone still reaches it', () => {
+    const leg = seg('fn_probe "${WORK}/key-new" new', 'expect_zone');
+    // A second scale to zero first: the pod that refused the old key must not answer this call.
+    expect(seg('cold pod, retired key ${old_kid}', 'fn_probe "${WORK}/key-new" new')).toContain(
+      'await_zero "${GO_FN}"',
+    );
+    expect(leg).toContain('[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ]');
+    expect(leg).toContain('cold pod, new key');
+    expect(r).toContain('expect_zone "control: after the rotation the zone');
+  });
+  it('fn_probe: no retry on an answer, and the key slot is read from the Secret', () => {
+    const f = body('fn_probe');
+    expect(f).toContain('--auth signer --key-dir "$1"');
+    expect(f).toContain('--timeout-seconds');
+    expect(f).toContain('[ "${rc}" = 2 ]');
+    expect(body('export_key')).toContain(
+      `'.data[$s] // empty | @base64d' <<<"\${json}" >"\${dir}/current.key"`,
+    );
+  });
+});
+
+describe('held: a call the activator holds past the token life is refused, and validation still works', () => {
+  const h = body('phase_held');
+  const c = body('hold_call');
+  it('hold_call scales to zero, records the cordon, then cordons before it sends the call', () => {
+    expect(c.indexOf('await_zero "${GO_FN}"')).toBeGreaterThan(-1);
+    expect(c.indexOf('await_zero "${GO_FN}"')).toBeLessThan(c.indexOf('k cordon'));
+    expect(c.indexOf('RESTORE_CORDON=1')).toBeGreaterThan(-1);
+    expect(c.indexOf('RESTORE_CORDON=1')).toBeLessThan(c.indexOf('k cordon'));
+    expect(c.indexOf('k cordon')).toBeLessThan(c.indexOf('bun "${Z7}/probe.ts"'));
+    expect(c).toContain('echo "$!" >"${HELD_PIDFILE}"');
+    // Flat: an inline wait (wait_until's eval would exceed the scanner's call-chain limit).
+    expect(c).toContain('until [ "$(all_pods "${GO_FN}")" -ge 1 ]; do');
+    expect(c).not.toMatch(/wait_until [0-9]/);
+  });
+  it('the call stays outstanding for the whole hold, is a direct call with its own long timeout', () => {
+    expect(own).toMatch(/^HELD_SECONDS="\$\{Z11_HELD_SECONDS:-80\}"$/m);
+    expect(own).toMatch(/^CONTROL_HELD_SECONDS="\$\{Z11_CONTROL_HELD_SECONDS:-30\}"$/m);
+    expect(c).toContain('while [ $((SECONDS - start)) -lt "$1" ]; do');
+    expect(c).toMatch(
+      /kill -0 "\$\(cat "\$\{HELD_PIDFILE\}"\)" 2>\/dev\/null \|\| fail "the held call ended/,
+    );
+    expect(c).toContain('--with-message --timeout-seconds 240');
+    expect(c).toMatch(/\[ "\$\{HELD_FOR\}" -ge "\$1" \] \|\| fail/);
+    expect(c).not.toContain('fn_probe');
+    expect(c.indexOf('kill -0')).toBeLessThan(c.indexOf('k uncordon'));
+    expect(c.indexOf('k uncordon')).toBeLessThan(c.indexOf('RESTORE_CORDON=0'));
+  });
+  it('the control: the same hold, shorter than the token life, must be ACCEPTED (404 not_found)', () => {
+    const ctl = h.slice(
+      h.indexOf('hold_call "${CONTROL_HELD_SECONDS}"'),
+      h.indexOf('hold_call "${HELD_SECONDS}"'),
+    );
+    expect(ctl).toContain('hold_call "${CONTROL_HELD_SECONDS}"');
+    expect(ctl).toMatch(
+      /\[ "\$\{HELD_STATUS\}" = 404 \] && \[ "\$\{HELD_CODE\}" = not_found \] \\\n\s*\|\| fail "control: a call held/,
+    );
+    // The control runs BEFORE the long hold, and both go through the one helper.
+    expect(h.indexOf('hold_call "${CONTROL_HELD_SECONDS}"')).toBeLessThan(
+      h.indexOf('hold_call "${HELD_SECONDS}"'),
+    );
+    expect(h.indexOf('hold_call "${CONTROL_HELD_SECONDS}"')).toBeGreaterThan(-1);
+  });
+  it('the long hold must be 401 unauthenticated "token rejected", never "missing bearer token"', () => {
+    expect(h).toMatch(
+      /\[ "\$\{HELD_STATUS\}" = 401 \] && \[ "\$\{HELD_CODE\}" = unauthenticated \] && \[ "\$\{HELD_MESSAGE\}" = "token rejected" \] \\\n\s*\|\| fail "a call held/,
+    );
+    expect(c).toContain('HELD_MESSAGE="$(jq -r \'.message // ""\' "${out}")"');
+  });
+  it('after the hold a fresh token is accepted and a garbage token is still refused', () => {
+    const after = h.slice(h.indexOf('hold_call "${HELD_SECONDS}"'));
+    expect(after).toContain('fn_probe "${WORK}/key-held" fresh');
+    expect(after).toMatch(
+      /\[ "\$\{PR_STATUS\}" = 404 \] && \[ "\$\{PR_CODE\}" = not_found \] \\\n\s*\|\| fail "after the hold a fresh token/,
+    );
+    expect(after).toContain('foreign_get "Bearer not-a-token"');
+    expect(after).toMatch(
+      /\[ "\$\{FC_STATUS\}" = 401 \] && \[ "\$\{FC_CODE\}" = unauthenticated \] && \[ "\$\{FC_MESSAGE\}" = "token rejected" \] \\\n\s*\|\| fail "after the hold a garbage token/,
+    );
+  });
+  it('an aborted hold never leaves a node cordoned or the call running', () => {
+    const x = body('cleanup');
+    expect(x).toMatch(
+      /if \[ -s "\$\{HELD_PIDFILE\}" \]; then kill "\$\(cat "\$\{HELD_PIDFILE\}"\)"/,
+    );
+    expect(x).toMatch(/if \[ "\$\{RESTORE_CORDON\}" = 1 \]; then/);
+    expect(x).toContain('k uncordon');
+    expect(x.indexOf('kill "$(cat "${HELD_PIDFILE}")"')).toBeLessThan(x.indexOf('k uncordon'));
+  });
+  it('the probe prints the interceptor message only on request, so the defaults are unchanged', () => {
+    const probe = readFileSync(
+      resolve(REPO_ROOT, 'packages/grpc/e2e/z7-identity-kind/probe.ts'),
+      'utf8',
+    );
+    expect(probe).toContain("'with-message': { type: 'boolean', default: false }");
+    expect(probe).toContain("summarize(outcome, auth.kid, values['with-message'])");
+  });
+});
+
+describe('rotcold: the woken pods really started after the retirement', () => {
+  const r = body('phase_rotcold');
+  it('records the retirement by the API server clock and compares each pod start with it', () => {
+    expect(r).toContain('retired_at="$(jwks_written_at)"');
+    expect(r.indexOf('retired_at="$(jwks_written_at)"')).toBeGreaterThan(
+      r.indexOf('"the JWKS to publish only the new key"'),
+    );
+    expect(r).toMatch(
+      /\[ "\$\{old_start\}" -ge "\$\{retired_at\}" \] \\\n\s*\|\| fail "the pod that refused/,
+    );
+    expect(r).toMatch(
+      /\[ "\$\{new_uid\}" != "\$\{old_uid\}" \] && \[ "\$\{new_start\}" -ge "\$\{retired_at\}" \] \\\n\s*\|\| fail "the pod that accepted/,
+    );
+    expect(body('fn_pod_started')).toContain('.metadata.uid');
+    expect(body('fn_pod_started')).toContain('.status.startTime | fromdateiso8601');
+    expect(body('jwks_written_at')).toContain('--show-managed-fields');
+    expect(body('jwks_written_at')).toContain('managedFields');
+  });
+  it('the zero-pods snapshot is kept', () => {
+    expect(r).toMatch(/\[ "\$\(all_pods "\$\{GO_FN\}"\)" = 0 \] \|\| fail/);
+  });
+});
+
+describe('the long-call timeouts are what the phases need', () => {
+  it('fn_probe waits 60 s for an answer', () => {
+    expect(body('fn_probe')).toContain('--timeout-seconds 60');
   });
 });

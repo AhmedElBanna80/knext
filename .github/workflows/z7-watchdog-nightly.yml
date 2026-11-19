@@ -66,6 +66,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/verify-protected-refs.mjs
 
+  # Pin skew: the caller pins the Z7 lane YAML by SHA; this compares the YAML at that pin with
+  # the integration/v2 tip (data only, nothing executed) and reds on ANY difference, an
+  # unparseable pin or a failed fetch. Its own alert issue keeps the title distinct.
+  z7-pin-skew:
+    name: Z7 pinned workflow YAML equals the integration/v2 tip
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare the pinned Z7 YAML with the branch tip (FAIL closed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The comparison parses YAML, so it needs `yaml`. A fresh runner has no node_modules, so
+        # install ONLY that one package at an exact version, lifecycle scripts off, into a scratch
+        # dir beside copies of the two script files (never into the checkout), then run there.
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/z7-pin-skew"
+          mkdir -p "${work}/scripts/lib"
+          cp scripts/verify-z7-pin-skew.mjs "${work}/scripts/"
+          cp scripts/lib/z7-pin-skew.mjs "${work}/scripts/lib/"
+          (cd "${work}" && npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund yaml@2.9.0)
+          Z7_CALLER_FILE="${GITHUB_WORKSPACE}/.github/workflows/z7-rotation-weekly.yml" node "${work}/scripts/verify-z7-pin-skew.mjs"
+
   # Each check files its OWN issue (distinct fixed titles), so a permanently red
   # check cannot swallow the other's alert.
   z7-watchdog-red-alert:
@@ -152,4 +182,41 @@ jobs:
           - protected-refs result: ${REFS_RESULT}
 
           Re-run this workflow to confirm green, then close this issue."
+          TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs
+
+  z7-pin-skew-red-alert:
+    name: Z7 pin skew red alert (issue)
+    needs: [z7-pin-skew]
+    if: >-
+      always() &&
+      github.event_name == 'schedule' &&
+      (needs.z7-pin-skew.result == 'failure' || needs.z7-pin-skew.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create or update the pin-skew issue (idempotent, never pinned)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SKEW_RESULT: ${{ needs.z7-pin-skew.result }}
+        run: |
+          set -euo pipefail
+          title='Z7 pin skew RED'
+          body="The nightly Z7 pin-skew check FAILED: the Z7 workflow YAML on integration/v2 differs
+          from the YAML at the SHA pinned in z7-rotation-weekly.yml, the pin could not be parsed, or
+          the fetch failed. The diff summary (first differing line and line counts) is in the job log.
+
+          - Run: ${RUN_URL}
+          - z7-pin-skew result: ${SKEW_RESULT}
+
+          To fix: review the integration/v2 change to z7-identity-kind-e2e.yml, then bump the SHA on
+          the uses: line of z7-rotation-weekly.yml to the new integration/v2 commit (keep the
+          trailing integration/v2 comment). Re-run this workflow to confirm green, then close this issue."
           TITLE="${title}" BODY="${body}" node scripts/nightly-alert-issue.mjs

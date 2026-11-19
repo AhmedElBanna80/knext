@@ -433,13 +433,6 @@ const MUTATIONS = [
     replacement: 'if (false) {',
   },
   {
-    id: 'S5',
-    claim: 'a CRLF PR body is no longer parsed',
-    subject: 'lib',
-    anchor: ".replace(/\\r\\n?/g, '\\n')",
-    replacement: '',
-  },
-  {
     id: 'S6',
     claim: 'globs that only together cover everything pass',
     subject: 'lib',

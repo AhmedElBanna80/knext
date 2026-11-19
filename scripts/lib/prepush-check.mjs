@@ -451,8 +451,9 @@ export function staticTempDirFindings(root, files, baseline = {}) {
 /** `Scope: a/**, b/*.ts` lines out of a commit or PR body. */
 export function parseScopeLines(text) {
   const globs = [];
-  // A PR body from the GitHub UI is CRLF; `$` does not match before `\r`, so normalise first.
-  for (const m of (text ?? '').replace(/\r\n?/g, '\n').matchAll(/^[ \t]*Scope:[ \t]*(.+)$/gim)) {
+  // A GitHub-UI PR body is CRLF; JS `$` and `.` both stop at `\r`, so no normalising is needed
+  // (pinned by a CRLF test below, so a regex change that breaks it is caught).
+  for (const m of (text ?? '').matchAll(/^[ \t]*Scope:[ \t]*(.+)$/gim)) {
     for (const g of m[1].split(',')) if (g.trim()) globs.push(g.trim());
   }
   return globs;

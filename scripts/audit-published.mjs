@@ -52,7 +52,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { assertAllowlistExpires } from './lib/allowlist-expires.mjs';
+import { assertAllowlistExpires, assertNpmAllowlistKeys } from './lib/allowlist-expires.mjs';
 import { packPublishableGroup } from './lib/pack-publishable-group.mjs';
 import { expiresBefore } from './lib/strict-date.mjs';
 
@@ -121,6 +121,7 @@ function loadAllowlist() {
       die(`allowlist entry ${entry.id} must carry an ISO added date (YYYY-MM-DD)`);
     }
     try {
+      assertNpmAllowlistKeys(entry);
       assertAllowlistExpires(entry);
     } catch (err) {
       die(err.message);

@@ -1,18 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { NPM_ALLOWLIST_KEYS } from '../scripts/lib/allowlist-expires.mjs';
 import { ALLOWLIST_ENTRY_KEYS } from '../scripts/lib/precompile-closure.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const noteOf = (rel: string): string =>
   JSON.parse(readFileSync(resolve(ROOT, rel), 'utf8'))['$schema-note'];
 
-/** Keys the npm-audit gate requires on every entry (scripts/lib/shipped-scan.mjs loadNpmAllowlist). */
-const NPM_REQUIRED_KEYS = ['id', 'justification', 'added', 'expires'];
-
 const cases: [string, string[]][] = [
   ['security/precompile-closure-allowlist.json', [...ALLOWLIST_ENTRY_KEYS]],
-  ['security/npm-audit-allowlist.json', NPM_REQUIRED_KEYS],
+  ['security/npm-audit-allowlist.json', [...NPM_ALLOWLIST_KEYS]],
 ];
 
 describe('allowlist $schema-note matches its validator', () => {

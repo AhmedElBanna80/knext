@@ -65,7 +65,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
   - e2e/lib/kind-lane.sh: helpers sourced (never run) by the Z7, Z10 and Z11
     scripts.
   - e2e/z11-activator-drill (no EGM.md): a drill on kind with Calico, phases
-    `up deploy token direct policyoff noauth rotcold held`; it proves which control holds on the
+    `up deploy token direct policyoff noauth rotcold held heldwarm`; it proves which control holds on the
     activator path (the function's token, and the NetworkPolicy on a direct
     dial), and that with the NetworkPolicy off a token-less call is still refused
     by the function itself (`policyoff`, for the Go function and, as its Rust leg
@@ -73,16 +73,23 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     without the policy answers it (`noauth`). `rotcold` rotates and retires the zone's
     signing key while the function is at zero: the cold pod that wakes refuses the
     retired key (401 unauthenticated) and, after another scale to zero, accepts the new
-    one. `held` cordons the nodes so the activator holds a call past the token's life
-    (`Z11_HELD_SECONDS`, default 80 s; it is cleaned up on exit): the call is refused as
-    unauthenticated, then a fresh token is accepted and a garbage one is still refused.
+    one. `held` makes the activator hold a call past the token's life with a ResourceQuota in the
+    function's namespace that admits no pod (no node is cordoned; `Z11_HELD_SECONDS`, default
+    80 s; the quota is removed on exit): the call is refused as unauthenticated, then a fresh
+    token is accepted and a garbage one is still refused. `heldwarm` is the combined case: the
+    function is kept warm at minScale 1, one call loads the key set, the key is rotated and
+    retired under that pod, and one call signed with the new key is held 80 s (the same quota,
+    plus the live pod detached from its Service by a label change) and released to the same pod:
+    401 unauthenticated "token rejected", with a 30 s hold on the same pod and key accepted as
+    the control (`Z11_CONTROL_HELD_SECONDS`).
     Both sign through `../z7-identity-kind/probe.ts` (`--timeout-seconds` is its
     long-call option). `.github/workflows/z11-activator-drill-e2e.yml`
     runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
     Guard: `tests/z11-activator-drill.test.ts`, mutation-proved by
     `scripts/mutation-prove-s8-1-z11-policyoff.mjs`,
     `scripts/mutation-prove-s9-1-z11-rotation-held.mjs` and
-    `scripts/mutation-prove-s9-2-z11-rust-policyoff.mjs` (the Rust leg).
+    `scripts/mutation-prove-s9-2-z11-rust-policyoff.mjs` (the Rust leg) and
+    `scripts/mutation-prove-s10-4-z11-heldwarm.mjs` (`heldwarm` and the warm hold).
 
 ## Invariants
 

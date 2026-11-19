@@ -195,6 +195,8 @@ describe('the verdicts on a held call: status, code, message AND the answering p
     expect(refused('uid-b', B_ROSE, '404', 'unauthenticated', 'token rejected')).not.toBe(0);
     expect(refused('uid-b', B_ROSE, '401', 'not_found', 'token rejected')).not.toBe(0);
     expect(refused('uid-b', B_ROSE, '401', 'unauthenticated', 'missing bearer token')).not.toBe(0);
+    expect(refused('uid-b', B_ROSE, '401', 'unauthenticated', 'something else')).not.toBe(0);
+    expect(refused('uid-b', B_ROSE, '401', 'unauthenticated', '')).not.toBe(0);
   });
 });
 

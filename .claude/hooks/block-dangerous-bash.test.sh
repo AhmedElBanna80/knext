@@ -177,6 +177,41 @@ run "TF_CLI_ARGS_apply ${D}destroy"          "TF_CLI_ARGS_apply=${D}destroy terr
 run "TF_CLI_ARGS quoted tofu"                "TF_CLI_ARGS=\"${D}destroy\" tofu apply"       BLOCK
 run "plan ${D}destroy stays allowed"         "terraform plan ${D}destroy"                         allow
 run "tofu plan ${D}destroy stays allowed"    "tofu plan ${D}destroy"                        allow
+# S10-3: apply with a positional plan file finishes a `plan -destroy -out=p` teardown.
+run "apply planfile"                         "terraform apply p"                                  BLOCK
+run "tofu apply planfile"                    "tofu apply p"                                 BLOCK
+run "apply flag then planfile"               "terraform apply ${D}auto-approve tfplan"            BLOCK
+run "chdir apply planfile"                   "terraform ${D}chdir=x apply p"                      BLOCK
+run "tofu chdir apply planfile"              "tofu ${D}chdir=x apply p"                     BLOCK
+run "planfile in a pipe"                     "echo yes | terraform apply p"                       BLOCK
+run "planfile in dollar-paren"               "echo \$(terraform apply p)"                         BLOCK
+run "planfile in backticks"                  "echo \`terraform apply p\`"                         BLOCK
+run "bash ${D}c apply planfile"              "bash ${D}c 'terraform apply p'"                     BLOCK
+run "bash ${D}c tofu apply planfile"         "bash ${D}c 'tofu apply p'"                    BLOCK
+run "plan ${D}out stays allowed"             "terraform plan ${D}out=p"                           allow
+run "plan ${D}destroy ${D}out stays allowed" "terraform plan ${D}destroy ${D}out=p"              allow
+run "plain apply stays allowed"              "terraform apply"                                    allow
+run "tofu plain apply stays allowed"         "tofu apply"                                   allow
+run "bash ${D}c plain apply allowed"         "bash ${D}c 'terraform apply'"                       allow
+run "apply in dollar-paren allowed"          "echo \$(terraform apply)"                           allow
+run "apply redirected allowed"               "terraform apply > log"                              allow
+run "kind delete cluster stays allowed"      "kind delete cluster ${D}${D}name x"                 allow
+# S10-3 review fixes: redirections are not plan files; TF_CLI_ARGS can inject one.
+run "apply 2>&1 pipe tee allowed"            "terraform apply ${D}auto-approve 2>&1 | tee log"    allow
+run "tofu apply 2>&1 pipe tee allowed"       "tofu apply ${D}auto-approve 2>&1 | tee log"         allow
+run "apply 2>/dev/null allowed"              "terraform apply 2>/dev/null"                        allow
+run "apply > out.log allowed"                "terraform apply > out.log"                          allow
+run "apply < in allowed"                     "terraform apply < in.txt"                           allow
+run "apply digit-led planfile"               "terraform apply 1p"                                 BLOCK
+run "apply bare digit planfile"              "terraform apply 7"                                  BLOCK
+run "TF_CLI_ARGS_apply planfile"             "TF_CLI_ARGS_apply=p terraform apply"                BLOCK
+run "TF_CLI_ARGS_apply quoted planfile"      "TF_CLI_ARGS_apply=\"${D}no-color p\" terraform apply" BLOCK
+run "TF_CLI_ARGS planfile tofu"              "TF_CLI_ARGS=p tofu apply"                           BLOCK
+run "TF_CLI_ARGS_apply flags only allowed"   "TF_CLI_ARGS_apply=${D}no-color terraform apply"    allow
+run "TF_CLI_ARGS_apply quoted flags allowed" "TF_CLI_ARGS_apply=\"${D}no-color ${D}input=false\" terraform apply" allow
+run "apply 1>out.log allowed"                "terraform apply 1>out.log"                          allow
+run "apply 2>>err.log allowed"               "terraform apply 2>>err.log"                         allow
+run "apply auto-approve 2> err.log allowed"  "terraform apply ${D}auto-approve 2> err.log"        allow
 run "kind delete && terraform destroy"       "kind delete cluster ${D}${D}name x && terraform destroy" BLOCK
 run "kind delete ; oci cluster delete"       "kind delete cluster ; oci ce cluster delete ${D}${D}cluster-id x" BLOCK
 

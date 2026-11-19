@@ -623,8 +623,8 @@ const MUTATIONS = [
     id: 'U9',
     claim: 'a duplicated mutation id is accepted (the uniqueness guard reads the prover itself)',
     subject: 'prover',
-    anchor: "id: 'N1',",
-    replacement: "id: 'G1'",
+    anchor: "id: 'N1',\n    expect: 'green',",
+    replacement: "id: 'G1',\n    expect: 'green',",
   },
   {
     id: 'F1',

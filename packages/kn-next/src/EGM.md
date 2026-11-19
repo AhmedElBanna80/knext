@@ -2,7 +2,7 @@
 
 ## Overview
 
-The source of `@getknext/core`. The five files directly in this directory are the
+The source of `@getknext/core`. The five<!--egm:kn-next.src.files--> files directly in this directory are the
 configuration schema and its loader, plus the Next.js version policy and
 advisory table the CLI and `knext doctor` read. The runtime, the CLI, the
 generators and the shared utilities each live in a subdirectory with its own

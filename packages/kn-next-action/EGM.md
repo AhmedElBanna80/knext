@@ -103,7 +103,7 @@ deployment logic of its own (`action.yml` comment above "Deploy"). The two
   `--skip-upload`, `--skip-build`, `--dry-run` flags (`action.yml` "Deploy",
   `DEPLOY_ARGS`); the build, push and cluster write happen inside that CLI.
 - Writes GitHub workflow commands (`::error::`, `::warning::`) to
-  stderr/stdout (all three `.mjs` files, `action.yml`).
+  stderr/stdout (all three<!--egm:kn-next-action.mjs--> `.mjs` files, `action.yml`).
 
 ## Verification
 

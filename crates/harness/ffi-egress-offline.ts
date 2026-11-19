@@ -23,6 +23,10 @@ if (!repo) {
   process.exit(2);
 }
 const rev = recordedCrateRev();
+if (!rev) {
+  console.error('egress: packages/ffi knextFfi.crateRev is not set; there is no revision to prove');
+  process.exit(2);
+}
 assertRevOnBase(repo, rev, process.env.KNEXT_FFI_LOCAL_BASE_REF);
 
 const problems = cargoEgressProbe({ repoDir: repo, gitUrl: CRATE_GIT, rev });

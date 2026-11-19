@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -110,18 +118,42 @@ const spawnForReal: ProbeSpawn = (cmd, args, env) => {
 };
 
 /**
- * The egress verdict over two cargo runs. `positive` must fetch from the local
- * clone; `control` runs with the local rewrite removed and must be refused by
- * the denied route. Returns one message per failed half, `[]` when both hold.
+ * True when cargo's git db under `cargoHome` holds `rev` as a commit. This does
+ * not read cargo's output (a `-q` fetch, or a ref already up to date, prints no
+ * "From" line). github.com is denied, so the only source that can put the commit
+ * in the db is the local clone.
  */
-export function egressVerdict(repoDir: string, positive: ProbeRun, control: ProbeRun): string[] {
+export function cargoDbHoldsRev(cargoHome: string, rev: string): boolean {
+  const dbRoot = join(cargoHome, 'git', 'db');
+  if (!existsSync(dbRoot)) return false;
+  return readdirSync(dbRoot).some(
+    (name) =>
+      spawnSync('git', ['-C', join(dbRoot, name), 'cat-file', '-e', `${rev}^{commit}`], {
+        encoding: 'utf8',
+      }).status === 0,
+  );
+}
+
+/**
+ * The egress verdict over two cargo runs. `positive` must fetch, and its git db
+ * must hold the recorded rev (`positiveHoldsRev`, from cargoDbHoldsRev); the
+ * `control` runs with the local rewrite removed and must be refused by the
+ * denied route. Returns one message per failed half, `[]` when both hold.
+ */
+export function egressVerdict(
+  positive: ProbeRun,
+  positiveHoldsRev: boolean,
+  control: ProbeRun,
+): string[] {
   const problems: string[] = [];
   if (positive.status !== 0) {
     problems.push(
       `cargo fetch from the local clone failed (status ${positive.status}): ${positive.stderr.trim()}`,
     );
-  } else if (!positive.stderr.includes(`file://${repoDir}`)) {
-    problems.push(`cargo fetch did not read the local clone (no file://${repoDir} in its output)`);
+  } else if (!positiveHoldsRev) {
+    problems.push(
+      "cargo's git db holds no commit for the recorded rev: nothing fetched it from the local clone",
+    );
   }
   if (control.status === 0) {
     problems.push('control fetched with the local rewrite removed: the denied route does not hold');
@@ -150,6 +182,12 @@ export function cargoEgressProbe(opts: {
   try {
     const gitConfig = join(root, 'gitconfig');
     writeFileSync(gitConfig, githubDenialGitConfig());
+    // A missing denial fails HERE, before cargo runs, so no run can reach github.com.
+    if (!readFileSync(gitConfig, 'utf8').includes(`proxy = ${DENIED_PROXY}`)) {
+      throw new Error(
+        'the github.com denial is missing from the git config: refusing to run the proof',
+      );
+    }
     const run = (name: 'positive' | 'control'): ProbeRun => {
       const dir = join(root, name);
       mkdirSync(join(dir, 'src'), { recursive: true });
@@ -175,7 +213,9 @@ export function cargoEgressProbe(opts: {
       };
       return spawn('cargo', ['fetch', '--manifest-path', manifest], env);
     };
-    return egressVerdict(opts.repoDir, run('positive'), run('control'));
+    const positive = run('positive');
+    const holds = cargoDbHoldsRev(join(root, 'cargo-home-positive'), opts.rev);
+    return egressVerdict(positive, holds, run('control'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

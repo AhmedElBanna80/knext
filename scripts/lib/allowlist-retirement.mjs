@@ -16,6 +16,13 @@
  *                      lockfile could not be resolved. Listed so it stays visible.
  *   ERROR (red)        the advisory API failed after bounded retries. Fail closed.
  *
+ * VENDORED advisories: an entry may declare `vendoredIn` (the host package, the
+ * vendored file's path inside its tarball, the patched ranges of the vendored
+ * package). Lockfile parents cannot see such a copy, so the probe resolves the
+ * newest STABLE host release in the declared range, reads the vendored version out
+ * of that tarball (data only, nothing executed) and goes RETIRE when it is patched,
+ * INFO otherwise. A registry or tarball failure is an ERROR (fail closed).
+ *
  * `scripts/verify-allowlist-retirement.mjs` is the thin network wrapper; all of
  * this is unit-tested offline (`tests/allowlist-retirement.test.ts`).
  */
@@ -76,6 +83,8 @@ export function collectEntries(repoRoot, files = ALLOWLIST_FILES) {
         package: e.package,
         version: e.version,
         lockfile: e.lockfile,
+        vendoredIn:
+          e.vendoredIn === undefined ? undefined : validateVendoredIn(e.vendoredIn, file, e.id),
       });
     }
   }
@@ -184,6 +193,158 @@ function satisfiesComparator(version, tok) {
   }
   const d = cmp(version, base);
   return op === '<' ? d < 0 : op === '<=' ? d <= 0 : op === '>' ? d > 0 : d >= 0;
+}
+
+// ── vendored advisories ──────────────────────────────────────────────────────
+
+const STABLE = /^\d+\.\d+\.\d+$/;
+const NPM_NAME = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/;
+const COMPARATOR = /^(<=|>=|<|>|=)?\s*([0-9][^\s]*)$/;
+
+/**
+ * Validate an entry's `vendoredIn`; a malformed declaration THROWS (never a skip).
+ * `package`: the host package. `path`: the vendored `package.json`-style file inside
+ * the host tarball (relative to the tarball's `package/` root). `field`: dotted path of
+ * the version inside that JSON (default `version`). `range`: the host versions the repo
+ * may take. `patched`: patched ranges of the vendored package, any one is a fix.
+ */
+export function validateVendoredIn(v, file, id) {
+  const where = `${file}: ${id}: vendoredIn`;
+  const bad = (m) => {
+    throw new Error(`${where} ${m}`);
+  };
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) bad('is not an object');
+  if (typeof v.package !== 'string' || !NPM_NAME.test(v.package)) bad('needs an npm `package`');
+  if (
+    typeof v.path !== 'string' ||
+    v.path === '' ||
+    v.path.startsWith('/') ||
+    v.path.split('/').some((seg) => seg === '..' || seg === '')
+  )
+    bad('needs a relative `path` inside the tarball (no `..`)');
+  if (
+    v.field !== undefined &&
+    (typeof v.field !== 'string' || !/^[\w$-]+(\.[\w$-]+)*$/.test(v.field))
+  )
+    bad('`field` must be a dotted key path');
+  if (typeof v.range !== 'string' || v.range.trim() === '') bad('needs a host `range`');
+  if (satisfiesRange('1.0.0', v.range) === null) bad('`range` is not a range this probe parses');
+  if (
+    !Array.isArray(v.patched) ||
+    v.patched.length === 0 ||
+    v.patched.some(
+      (r) => typeof r !== 'string' || r.split(',').some((part) => !COMPARATOR.test(part.trim())),
+    )
+  )
+    bad('needs a non-empty `patched` array of comparator ranges (">= 19.3.1")');
+  return {
+    package: v.package,
+    path: v.path,
+    field: v.field ?? 'version',
+    range: v.range,
+    patched: v.patched,
+  };
+}
+
+/** Prerelease-aware compare: `19.3.0-canary-x` sorts BELOW `19.3.0`. */
+function cmpPre(a, b) {
+  const d = cmp(a, b);
+  if (d !== 0) return d;
+  const pre = (v) => String(v).split('+')[0].includes('-');
+  return Number(!pre(a)) - Number(!pre(b));
+}
+
+/** Does `version` (prerelease-aware) satisfy ANY of the comparator-AND `patched` ranges? */
+export function satisfiesPatched(version, patched) {
+  if (!/^\d+\.\d+\.\d+/.test(String(version)))
+    throw new Error(`unparseable vendored version \`${version}\``);
+  return patched.some((range) =>
+    range.split(',').every((part) => {
+      const m = part.trim().match(COMPARATOR);
+      if (!m) throw new Error(`unparseable patched range \`${range}\``);
+      const d = cmpPre(version, m[2]);
+      const op = m[1] ?? '=';
+      return op === '<'
+        ? d < 0
+        : op === '<='
+          ? d <= 0
+          : op === '>'
+            ? d > 0
+            : op === '>='
+              ? d >= 0
+              : d === 0;
+    }),
+  );
+}
+
+/** Newest STABLE (no prerelease) version in `range`; throws when there is none or the range is unreadable. */
+export function pickNewestStable(versions, range) {
+  let best = null;
+  for (const v of versions) {
+    if (!STABLE.test(String(v))) continue;
+    const ok = satisfiesRange(v, range);
+    if (ok === null) throw new Error(`host range \`${range}\` is not one this probe parses`);
+    if (ok && (best === null || cmp(v, best) > 0)) best = v;
+  }
+  if (best === null) throw new Error(`no stable release satisfies \`${range}\``);
+  return best;
+}
+
+/** Read one regular file out of an in-memory (decompressed) tar. DATA ONLY; nothing is executed. */
+export function readTarEntry(tar, wanted) {
+  let off = 0;
+  while (off + 512 <= tar.length) {
+    const head = tar.subarray(off, off + 512);
+    if (head.every((b) => b === 0)) break;
+    const str = (a, b) => {
+      const raw = head.subarray(a, b);
+      const z = raw.indexOf(0);
+      return raw.subarray(0, z === -1 ? raw.length : z).toString('utf8');
+    };
+    const size = Number.parseInt(str(124, 136).trim() || '0', 8);
+    if (!Number.isFinite(size) || size < 0) throw new Error('corrupt tar header');
+    const type = String.fromCharCode(head[156] || 48);
+    const prefix = str(345, 500);
+    const name = prefix ? `${prefix}/${str(0, 100)}` : str(0, 100);
+    const start = off + 512;
+    if (type === '0' && name === wanted) {
+      if (start + size > tar.length) throw new Error('truncated tar entry');
+      return tar.subarray(start, start + size);
+    }
+    off = start + Math.ceil(size / 512) * 512;
+  }
+  return null;
+}
+
+/** Walk a dotted key path in parsed JSON. */
+export function readField(json, field) {
+  let cur = json;
+  for (const key of field.split('.')) {
+    if (cur === null || typeof cur !== 'object' || !(key in cur)) return undefined;
+    cur = cur[key];
+  }
+  return cur;
+}
+
+/**
+ * @param entry    allowlist entry carrying `vendoredIn`
+ * @param resolved `{ hostVersion, vendoredVersion }` read from the newest stable host tarball
+ */
+export function classifyVendored(entry, resolved) {
+  const v = entry.vendoredIn;
+  const label = `${v.package}@${resolved.hostVersion} (newest stable in ${v.range}) vendors ${resolved.vendoredVersion} at ${v.path}`;
+  if (satisfiesPatched(resolved.vendoredVersion, v.patched)) {
+    return {
+      level: 'RETIRE',
+      reasons: [
+        `vendored patch reachable now: ${label}, which satisfies ${v.patched.join(' || ')}`,
+      ],
+    };
+  }
+  return {
+    level: 'INFO',
+    reasons: [`vendored patch not available: ${label}; patched is ${v.patched.join(' || ')}`],
+  };
 }
 
 // ── lockfiles ────────────────────────────────────────────────────────────────
@@ -370,12 +531,17 @@ export function classifyAdvisory(entry, advisory, loadLock = () => null) {
  * Probe every entry. `fetchAdvisory(id)` returns the advisory or THROWS; a throw
  * is an ERROR (fail closed), never a pass and never a skip.
  */
-export async function probeEntries(entries, fetchAdvisory, { loadLock = () => null } = {}) {
+export async function probeEntries(
+  entries,
+  fetchAdvisory,
+  { loadLock = () => null, resolveVendored = null } = {},
+) {
   const findings = [];
   const informational = [];
   const errors = [];
   const cache = new Map();
   const locks = new Map();
+  const vendored = new Map();
   const cachedLock = (rel) => {
     if (!locks.has(rel)) locks.set(rel, loadLock(rel));
     return locks.get(rel);
@@ -383,7 +549,17 @@ export async function probeEntries(entries, fetchAdvisory, { loadLock = () => nu
   for (const entry of entries) {
     try {
       if (!cache.has(entry.id)) cache.set(entry.id, await fetchAdvisory(entry.id));
-      const { level, reasons } = classifyAdvisory(entry, cache.get(entry.id), cachedLock);
+      let { level, reasons } = classifyAdvisory(entry, cache.get(entry.id), cachedLock);
+      if (entry.vendoredIn && level !== 'RETIRE') {
+        if (!resolveVendored)
+          throw new Error('entry declares vendoredIn but no vendored resolver was supplied');
+        const key = JSON.stringify(entry.vendoredIn);
+        if (!vendored.has(key)) vendored.set(key, await resolveVendored(entry.vendoredIn));
+        const vc = classifyVendored(entry, vendored.get(key));
+        reasons = [...reasons, ...vc.reasons];
+        if (vc.level === 'RETIRE') level = 'RETIRE';
+        else if (level === 'KEEP') level = 'INFO';
+      }
       const row = { file: entry.file, id: entry.id, package: entry.package, reasons };
       if (level === 'RETIRE') findings.push(row);
       else if (level === 'INFO') informational.push(row);

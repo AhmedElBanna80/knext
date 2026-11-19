@@ -107,7 +107,7 @@ Grouped by concern. The names listed are the modules' exported symbols.
 ### Misc
 - `manifest-patch.ts`: `patchManifestJs`.
 - `names.ts`: `toDns1123Label`.
-- `lane-parity.mjs`: `checkLaneParity({ manifest, readBlob })` and `validateManifest`. Pure: git reads come in through `readBlob`. Finding kinds: `manifest`, `missing-here`, `unexplained`, `out-of-date` (a recorded entry whose blob ids no longer match either side) and `stale` (an entry for a file that is identical again).
+- `lane-parity.mjs`: `checkLaneParity({ manifest, readBlob })`, `validateManifest`, `recordLaneParity({ manifest, readBlob })` and `formatManifest`. Pure: git reads come in through `readBlob`. Finding kinds: `manifest`, `missing-here`, `unexplained`, `out-of-date` (a recorded entry whose blob ids no longer match either side) and `stale` (an entry for a file that is identical again).
 
 ## Invariants
 - `prover-lane.mjs` and `prover-shard.mjs` state that nothing in them spawns, reads the tree or touches git on import. Their behaviour is testable without running mutations.

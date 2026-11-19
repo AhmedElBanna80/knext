@@ -70,7 +70,23 @@ describe('the lint heuristic', () => {
     expect(
       audit(proverWith(`{ subject: 'thing', kind: 'wiring', anchor: 'a', replacement: 'b' }`)),
     ).toEqual([]);
-    expect(audit(proverWith(`wiringRow('W1', 'thing', 'claim', 'a', 'b')`))).toEqual([]);
+    expect(
+      audit(
+        proverWith(
+          `wiringRow('W1', 'thing', 'claim', 'a', 'b')`,
+          `const wiringRow = (...a) => ({ ...row(...a), kind: 'wiring' });`,
+        ),
+      ),
+    ).toEqual([]);
+    // a helper merely NAMED wiring* that does not set the kind labels nothing
+    expect(
+      audit(
+        proverWith(
+          `wiringRow('W1', 'thing', 'claim', 'a', 'b')`,
+          `const wiringRow = (...a) => row(...a);`,
+        ),
+      ).length,
+    ).toBe(1);
     expect(
       audit(
         proverWith(

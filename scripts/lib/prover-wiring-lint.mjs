@@ -290,6 +290,35 @@ export function declaredWiringSubjects(proverSource) {
   return out;
 }
 
+/** Does the local helper `name` build rows carrying `kind: 'wiring'`? (A name alone proves nothing.) */
+function helperSetsWiringKind(sf, name) {
+  let found = false;
+  const visit = (n) => {
+    const decl =
+      (ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.name.text === name &&
+        n.initializer) ||
+      (ts.isFunctionDeclaration(n) && n.name?.text === name && n.body);
+    if (decl) {
+      const scan = (m) => {
+        if (
+          ts.isPropertyAssignment(m) &&
+          (ts.isIdentifier(m.name) ? m.name.text : strLit(m.name)) === 'kind' &&
+          strLit(m.initializer) === 'wiring'
+        ) {
+          found = true;
+        }
+        ts.forEachChild(m, scan);
+      };
+      scan(decl);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
 /**
  * Rows targeting each subject key, with whether each carries the wiring label.
  * Recognised shapes: object literal `{ subject: 'K', kind?: 'wiring' }`, and a positional call
@@ -323,7 +352,7 @@ export function rowsBySubject(proverSource) {
         strLit(n.arguments[0]) !== undefined &&
         !/^(resolve|join)$/.test(n.expression.text)
       ) {
-        add(k, /wiring/i.test(n.expression.text));
+        add(k, /wiring/i.test(n.expression.text) && helperSetsWiringKind(sf, n.expression.text));
       }
     }
     ts.forEachChild(n, visit);

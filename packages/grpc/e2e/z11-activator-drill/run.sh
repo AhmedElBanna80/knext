@@ -223,7 +223,7 @@ secret_get() { # <field>: one data field of the zone's key Secret, decoded (kids
 }
 # jwks_written_at: when the JWKS ConfigMap was last written, by the API server's clock (the
 # same clock as the kubelet's on a kind node, so it compares with a pod's startTime).
-jwks_written_at() { k -n "${NS}" get configmap "${JWKS_CM}" -o json | jq -r '[.metadata.managedFields[]?.time | fromdateiso8601] | max'; }
+jwks_written_at() { k -n "${NS}" get configmap "${JWKS_CM}" -o json --show-managed-fields | jq -r '[.metadata.managedFields[]?.time | fromdateiso8601] | max'; }
 # fn_pod_started: "<uid> <startTime epoch>" of the function's live pod.
 fn_pod_started() {
   k -n "${NS}" get pods -l "serving.knative.dev/service=${GO_FN}" -o json \

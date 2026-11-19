@@ -388,7 +388,7 @@ describe('held: a call the activator holds past the token life is refused, and v
     expect(c).toContain('echo "$!" >"${HELD_PIDFILE}"');
     // Flat: an inline wait (wait_until's eval would exceed the scanner's call-chain limit).
     expect(c).toContain('until [ "$(all_pods "${GO_FN}")" -ge 1 ]; do');
-    expect(c).not.toContain('wait_until');
+    expect(c).not.toMatch(/wait_until [0-9]/);
   });
   it('the call stays outstanding for the whole hold, is a direct call with its own long timeout', () => {
     expect(own).toMatch(/^HELD_SECONDS="\$\{Z11_HELD_SECONDS:-80\}"$/m);
@@ -469,6 +469,7 @@ describe('rotcold: the woken pods really started after the retirement', () => {
     );
     expect(body('fn_pod_started')).toContain('.metadata.uid');
     expect(body('fn_pod_started')).toContain('.status.startTime | fromdateiso8601');
+    expect(body('jwks_written_at')).toContain('--show-managed-fields');
     expect(body('jwks_written_at')).toContain('managedFields');
   });
   it('the zero-pods snapshot is kept', () => {

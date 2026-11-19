@@ -220,6 +220,127 @@ const MUTATIONS = [
     '  if [ "${RESTORE_CORDON}" = 99 ]; then\n',
   ),
   run('H14', 'the cordon is no longer recorded for the exit handler', '  RESTORE_CORDON=1\n', ''),
+  // ---- round 2: the code halves, the message, the control, the pod-start proof
+  run(
+    'C2b',
+    'the control no longer requires the not_found code',
+    '[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \\\n    || fail "before the rotation',
+    '[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" != not_found ] \\\n    || fail "before the rotation',
+  ),
+  run(
+    'C16b',
+    'the new-key acceptance no longer requires the not_found code',
+    '[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \\\n    || fail "cold pod, new key',
+    '[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" != not_found ] \\\n    || fail "cold pod, new key',
+  ),
+  run(
+    'H10b',
+    'the fresh token after the hold no longer requires the not_found code',
+    '[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" = not_found ] \\\n    || fail "after the hold a fresh token',
+    '[ "${PR_STATUS}" = 404 ] && [ "${PR_CODE}" != not_found ] \\\n    || fail "after the hold a fresh token',
+  ),
+  run(
+    'H15',
+    'the garbage-token message check after the hold weakens',
+    '[ "${FC_MESSAGE}" = "token rejected" ] \\\n    || fail "after the hold a garbage',
+    '[ "${FC_MESSAGE}" != "token rejected" ] \\\n    || fail "after the hold a garbage',
+  ),
+  run(
+    'T1',
+    'the held call gets a short client timeout',
+    '--with-message --timeout-seconds 240',
+    '--with-message --timeout-seconds 20',
+  ),
+  run(
+    'T2',
+    'fn_probe gets a short client timeout',
+    '--timeout-seconds 60 >"${WORK}/fn-probe.out"',
+    '--timeout-seconds 5 >"${WORK}/fn-probe.out"',
+  ),
+  run(
+    'P1',
+    'the precondition no longer checks for a staged key',
+    '[ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \\\n    || fail "a rotation is already',
+    '[ -z "$(secret_get previous.kid)" ] \\\n    || fail "a rotation is already',
+  ),
+  run(
+    'P2',
+    'the precondition no longer checks for a previous key',
+    '[ -z "$(secret_get next.kid)" ] && [ -z "$(secret_get previous.kid)" ] \\\n    || fail "a rotation is already',
+    '[ -z "$(secret_get next.kid)" ] \\\n    || fail "a rotation is already',
+  ),
+  run(
+    'K1',
+    'the short-hold control call is deleted',
+    '  hold_call "${CONTROL_HELD_SECONDS}"\n',
+    '',
+  ),
+  run(
+    'K2',
+    'the control no longer requires status 404',
+    '[ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \\\n    || fail "control: a call held',
+    '[ "${HELD_STATUS}" != 404 ] && [ "${HELD_CODE}" = not_found ] \\\n    || fail "control: a call held',
+  ),
+  run(
+    'K3',
+    'the control no longer requires the not_found code',
+    '[ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" = not_found ] \\\n    || fail "control: a call held',
+    '[ "${HELD_STATUS}" = 404 ] && [ "${HELD_CODE}" != not_found ] \\\n    || fail "control: a call held',
+  ),
+  run(
+    'K4',
+    'the control hold grows past the token life',
+    'CONTROL_HELD_SECONDS="${Z11_CONTROL_HELD_SECONDS:-30}"',
+    'CONTROL_HELD_SECONDS="${Z11_CONTROL_HELD_SECONDS:-75}"',
+  ),
+  run(
+    'M1',
+    'the long hold accepts any message, so a stripped header would pass',
+    '[ "${HELD_MESSAGE}" = "token rejected" ] \\\n    || fail "a call held',
+    '[ "${HELD_MESSAGE}" != "missing bearer token" ] \\\n    || fail "a call held',
+  ),
+  run(
+    'M2',
+    'the message is no longer read from the held call output',
+    '  HELD_MESSAGE="$(jq -r \'.message // ""\' "${out}")"\n',
+    '  HELD_MESSAGE="token rejected"\n',
+  ),
+  run(
+    'S1',
+    'the pod that refused the retired key is no longer shown to start after the retirement',
+    '[ "${old_start}" -ge "${retired_at}" ]',
+    '[ "${old_start}" -ge 0 ]',
+  ),
+  run(
+    'S2',
+    'the pod that accepted the new key is no longer shown to start after the retirement',
+    '[ "${new_start}" -ge "${retired_at}" ]',
+    '[ "${new_start}" -ge 0 ]',
+  ),
+  run(
+    'S3',
+    'the second pod is no longer required to be a different pod',
+    '[ "${new_uid}" != "${old_uid}" ]',
+    '[ "${new_uid}" != "" ]',
+  ),
+  run(
+    'S4',
+    'the retirement time is no longer read from the cluster',
+    '  retired_at="$(jwks_written_at)"\n',
+    '  retired_at=0\n',
+  ),
+  run(
+    'X1',
+    'the exit handler no longer kills the held call',
+    '  if [ -s "${HELD_PIDFILE}" ]; then kill',
+    '  if [ -z "${HELD_PIDFILE}" ]; then kill',
+  ),
+  run(
+    'X2',
+    'the held call pid is never recorded for the exit handler',
+    '  echo "$!" >"${HELD_PIDFILE}"\n',
+    '',
+  ),
   // ---- dispatch and defaults
   run(
     'D1',
@@ -245,6 +366,20 @@ const MUTATIONS = [
     'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold held}"',
     'PHASES="${PHASES:-up deploy token direct policyoff noauth rotcold}"',
   ),
+  {
+    id: 'Q1',
+    subject: 'probe',
+    claim: 'the probe loses its --with-message option',
+    anchor: "    'with-message': { type: 'boolean', default: false },\n",
+    replacement: '',
+  },
+  {
+    id: 'Q2',
+    subject: 'probe',
+    claim: 'the probe no longer passes the option to summarize',
+    anchor: "summarize(outcome, auth.kid, values['with-message'])",
+    replacement: 'summarize(outcome, auth.kid)',
+  },
   // ---- workflow
   {
     id: 'W1',
@@ -276,6 +411,7 @@ const prover = createGuardProver({
   subjects: {
     run: 'packages/grpc/e2e/z11-activator-drill/run.sh',
     workflow: '.github/workflows/z11-activator-drill-e2e.yml',
+    probe: 'packages/grpc/e2e/z7-identity-kind/probe.ts',
   },
 });
 

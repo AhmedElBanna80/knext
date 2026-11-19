@@ -330,10 +330,11 @@ phase_direct() {
 # await_direct_ip: with the policy off, wait until the foreign pod can dial the warm
 # function pod's user port, and set DIRECT_IP. Each round keeps the pod warm through
 # the zone (the same way phase_direct does), so an idle scale-down cannot race the dial.
+# Callers run wake_ready on the line before: it is not called from here so the call chain
+# stays shallow enough for the supply-chain scanner to classify it.
 await_direct_ip() {
   local end ip
   DIRECT_IP=""
-  wake_ready
   end=$((SECONDS + 90))
   while [ "${SECONDS}" -lt "${end}" ]; do
     zone_call "/example/get?sub=alice&id=missing"
@@ -363,6 +364,7 @@ phase_policyoff() {
   ok "policy off: a cold no-token call through the activator woke the function and was refused (401 unauthenticated)"
   # Warm and direct: the dial the policy would drop now connects, and the function answers.
   local ip
+  wake_ready
   await_direct_ip
   ip="${DIRECT_IP}"
   foreign_post "http://${ip}:8080${GET_ITEM}" ""
@@ -398,6 +400,7 @@ phase_noauth() {
   # case ADR-0004 names as having no control at all. The token-less call must reach
   # the handler (404 not_found), because neither the network nor the function refuses it.
   set_policy false
+  wake_ready
   await_direct_ip
   local dip="${DIRECT_IP}"
   foreign_post "http://${dip}:8080${GET_ITEM}" ""

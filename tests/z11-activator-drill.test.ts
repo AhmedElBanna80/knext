@@ -62,15 +62,20 @@ describe('every direct dial wakes the function and waits for a Ready pod first',
     expect(w).toMatch(/\[ "\$\{ZC_STATUS\}" = 404 \] && \[ -n "\$\{ip\}" \]/);
     expect(w).toMatch(/\n {2}fail "no Ready/);
   });
-  it('phase_direct and await_direct_ip call wake_ready before any pod lookup or dial', () => {
-    for (const f of ['phase_direct', 'await_direct_ip']) {
-      const b = body(f);
-      expect(b.indexOf('wake_ready'), `${f} wakes`).toBeGreaterThan(-1);
-      expect(b.indexOf('wake_ready')).toBeLessThan(b.indexOf('dial_rc'));
+  it('phase_direct wakes before any pod lookup or dial; every await_direct_ip call is preceded by wake_ready', () => {
+    const b = body('phase_direct');
+    expect(b.indexOf('wake_ready'), 'phase_direct wakes').toBeGreaterThan(-1);
+    expect(b.indexOf('wake_ready')).toBeLessThan(b.indexOf('dial_rc'));
+    expect(b.indexOf('wake_ready')).toBeLessThan(b.indexOf('fn_pod_ip'));
+    // await_direct_ip does not call wake_ready itself (the call chain would be too deep
+    // for the supply-chain scanner); its callers do, on the line right before it.
+    expect(body('await_direct_ip')).not.toContain('wake_ready');
+    const calls = [...own.matchAll(/^( *)await_direct_ip$/gm)];
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const m of calls) {
+      const before = own.slice(0, m.index).trimEnd().split('\n').pop();
+      expect(before, 'wake_ready right before await_direct_ip').toBe(`${m[1]}wake_ready`);
     }
-    expect(body('phase_direct').indexOf('wake_ready')).toBeLessThan(
-      body('phase_direct').indexOf('fn_pod_ip'),
-    );
   });
 });
 

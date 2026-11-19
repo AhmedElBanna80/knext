@@ -171,6 +171,25 @@ export function assertAllowlistExpires(e) {
   }
 }
 
+/** The ONLY keys an npm-audit allowlist entry may carry; the `$schema-note` and its invariant test read this. */
+export const NPM_ALLOWLIST_KEYS = new Set(['id', 'justification', 'added', 'expires']);
+
+/**
+ * Reject an entry carrying a key outside NPM_ALLOWLIST_KEYS: a misspelled
+ * `expires` would otherwise be ignored and the entry would never expire.
+ *
+ * @param {{id: string}} e
+ * @returns {void}
+ */
+export function assertNpmAllowlistKeys(e) {
+  const unknown = Object.keys(e).filter((k) => !NPM_ALLOWLIST_KEYS.has(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `allowlist entry ${e.id} has unknown key(s) ${unknown.join(', ')}; allowed: [${[...NPM_ALLOWLIST_KEYS].join(', ')}]`,
+    );
+  }
+}
+
 /**
  * The active advisory ids in `security/npm-audit-allowlist.json`. Same rules as
  * `audit-published.mjs`: id, justification and an ISO `added` date are required;
@@ -193,6 +212,7 @@ export function loadNpmAllowlist(doc, today) {
     if (parseStrictIsoDate(e.added) === null) {
       throw new Error(`allowlist entry ${e.id} needs an ISO added date`);
     }
+    assertNpmAllowlistKeys(e);
     assertAllowlistExpires(e);
     if (expiresBefore(e.expires, today)) continue;
     ids.add(e.id);

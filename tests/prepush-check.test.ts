@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   ALLOWLIST_REGISTRY,
+  bareInvocations,
   changedAllowlists,
   changedTestFiles,
   deriveWorkflowArgSets,
@@ -147,12 +148,14 @@ describe('allowlist gate discovery', () => {
       root,
       '.github/workflows/a.yml',
       'steps:\n  - run: |\n      node scripts/audit.mjs \\\n        --app apps/multi\n' +
-        "  - run: node scripts/audit.mjs --closure examples/c\n  - paths: ['scripts/audit.mjs']\n",
+        "  - run: node scripts/audit.mjs --closure examples/c\n  - paths: ['scripts/audit.mjs']\n" +
+        '  # run: node scripts/audit.mjs\n',
     );
     expect(deriveWorkflowArgSets(root, 'scripts/audit.mjs')).toEqual([
       ['--app', 'apps/multi'],
       ['--closure', 'examples/c'],
     ]);
+    expect(bareInvocations(root, 'scripts/audit.mjs')).toEqual([]); // comments and path filters are not invocations
     put(root, '.github/workflows/b.yml', 'steps:\n  - run: node scripts/audit.mjs\n');
     put(root, 'scripts/audit.mjs', 'x-allowlist.json');
     const registry = {

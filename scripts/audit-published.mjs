@@ -53,8 +53,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertAllowlistExpires } from './lib/allowlist-expires.mjs';
-import { expiresBefore } from './lib/strict-date.mjs';
 import { packPublishableGroup } from './lib/pack-publishable-group.mjs';
+import { expiresBefore } from './lib/strict-date.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');

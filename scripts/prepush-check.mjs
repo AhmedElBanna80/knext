@@ -20,6 +20,12 @@
  *     commit body or PR body) any file outside it FAILS; with none declared it
  *     WARNS.
  *
+ * Reader discovery scans `scripts/**`, `.github/workflows`, `.github/actions`, and the `scripts` of
+ * every `package.json`, following imports and `node|bun|bash|sh <path>` invocations, and treats a
+ * source that lists `security/` itself (readdir, glob, `security/*`) as reading every allowlist.
+ * LIMIT: a path built at run time (concatenation, a variable) cannot be seen statically; keep
+ * allowlist paths literal. A closure audit invoked with no `--app`/`--closure` fails, never runs.
+ *
  * Basis for every check: merge-base...HEAD plus uncommitted changes (reported as such).
  * With no changed test file, the tests that import the changed source run instead;
  * if there are none, the leak scan is reported as NOT exercised (a WARN, never a pass).

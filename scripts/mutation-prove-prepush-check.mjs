@@ -70,22 +70,23 @@ const MUTATIONS = [
     id: 'R1',
     claim: 'the scan stops following imports (a reader via a lib is missed)',
     subject: 'lib',
-    anchor: 'if (edgesOf(root, f, text.get(f)).some((t) => reads.has(t))) {',
+    anchor: 'if (edgesOf(f, text.get(f)).some((t) => reads.has(t))) {',
     replacement: 'if (false) {',
   },
   {
     id: 'R2',
     claim: 'comments count as reads',
     subject: 'lib',
-    anchor: 'files.filter((f) => stripComments(text.get(f)).includes(name))',
-    replacement: 'files.filter((f) => text.get(f).includes(name))',
+    anchor: "if (!f.endsWith('package.json')) return stripComments(raw);",
+    replacement: "if (!f.endsWith('package.json')) return raw;",
   },
   {
     id: 'R3',
     claim: 'workflows are not scanned',
     subject: 'lib',
-    anchor: ".filter((f) => stripComments(readFileSync(join(root, f), 'utf8')).includes(name))",
-    replacement: '.filter(() => false)',
+    anchor:
+      "for (const f of walk(root, '.github/workflows')) if (/\\.ya?ml$/.test(f)) files.push(f);",
+    replacement: 'void 0;',
   },
   {
     id: 'R4',
@@ -106,8 +107,8 @@ const MUTATIONS = [
     claim: 'workflow comments count when deriving targets',
     subject: 'lib',
     anchor:
-      "for (const line of stripComments(readFileSync(join(root, wfDir, f), 'utf8')).split('\\n')) {",
-    replacement: "for (const line of readFileSync(join(root, wfDir, f), 'utf8').split('\\n')) {",
+      "const joined = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));",
+    replacement: "const joined = joinContinuations(readFileSync(join(root, wfDir, f), 'utf8'));",
   },
   {
     id: 'D3',

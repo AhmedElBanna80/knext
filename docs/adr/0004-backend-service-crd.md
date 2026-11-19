@@ -289,7 +289,7 @@ These came from the system designer as tech-debt or test items, not blockers. Th
 - [x] Docs (D3, #2071): the namespace is the trust boundary; zones whose owners do not trust each
       other go in separate namespaces.
 - [x] Per-zone key Secret and JWKS ConfigMap; rotation in the order above, proven in real time on kind (Z7 #2458/#2459/#2460/#2473/#2491; OKE rotation proofs open: #2461, #2483). Scheduled CI run not yet proven (see the sub-line).
-      Z7 rotation: the real-time proof is a local kind run, recorded in #149 (S7-5). Its scheduled CI run is pending a main-side scheduled workflow (in progress, tracked as Sprint 8 task S8-8): GitHub fires `schedule` only from the default branch, and `.github/workflows/z7-identity-kind-e2e.yml` is not on `main`, so that cron does not fire yet. The CI link will be recorded after that first run.
+      Z7 rotation: the real-time proof is a local kind run, recorded in #149 (S7-5). Its scheduled CI run: the main-side weekly caller (Sprint 8 task S8-8) merged in #162, and the first scheduled run is 2026-11-22. GitHub fires `schedule` only from the default branch, so that first run is the proof the cron fires on `main`. The CI link will be recorded here after that first run.
 - [x] Interceptors in the Go and Rust templates (Z7 verifiers, #2455), fail-closed, mutation-proved; JWKS re-read on an
       unknown `kid`; small `exp` clock skew.
 - [x] Generator (Z6 #2411): auth options `USER` and `PUBLIC` only; a `PUBLIC_MUTATION` option is refused.
@@ -757,6 +757,7 @@ the positive-evidence model of the revocation work, and the zone-env golden.
       the CLI tests, and prover rows in `scripts/mutation-prove-2052-backendservice.mjs`.
 - [x] Docs: the threat model residual, the zone-functions page, the CLI and operator references.
 - [x] kind: swap the image with `kubectl` and assert the function is refused and renders nothing (extends the Z8 kind lane). The Z10 lane's `imagepin` phase proves it: a swapped image gives `Bound=False/BindingImageMismatch`, no Knative Service and no pod, so no pod can mount the zone's database Secret; the pinned image binds again.
+  *CI run: https://github.com/AhmedElBanna80/knext/actions/runs/44436237986 (job "Z7 zone identity tokens on kind (key, JWKS, rotation, warm functions)", green on #174's final head `1df932320`; the Z10 lane's `imagepin` phase ran in it).*
 - [ ] The founder's ratification decision: accept, amend or reject this amendment.
 
 
@@ -1058,4 +1059,5 @@ binding env the operator renders. It names `<NAME>_SERVICE_URL`, `<NAME>_SERVICE
 - [x] Docs: the zone-functions env table, the operator field table and the CLI glue note.
 - [ ] When ADR-0065's `model` flavour is built, skip `<NAME>_SERVICE_HTTP_VERSION` for its entries, with a test.
 - [x] kind: call a function over HTTP/1.1 through its Knative `h2c` port (the queue-proxy translates it to h2c). The Z10 lane's `http11` phase proves it, warm and from zero.
+  *CI run: https://github.com/AhmedElBanna80/knext/actions/runs/44436237986 (job "Z7 zone identity tokens on kind (key, JWKS, rotation, warm functions)", green on #174's final head `1df932320`; the Z10 lane's `http11` phase ran in it).*
 - [ ] Prove or delete the generated function servers' HTTP/1 path: the Go and Rust templates enable HTTP/1 beside h2c on their one port, but nothing proves a call reaches it (behind a named `h2c` port the queue-proxy sends h2c). Either a test that hits the server's HTTP/1 path directly, or remove the HTTP/1 enablement.

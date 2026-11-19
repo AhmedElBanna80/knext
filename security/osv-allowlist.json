@@ -2,15 +2,6 @@
   "$schema-note": "Dated, justified, SCOPED allowlist for the OSV dependency gate (scripts/osv-gate.mjs, .github/workflows/osv-scan.yml) and the nightly re-scan of published packages (scripts/audit-shipped-npm.mjs). A finding is suppressed ONLY by an entry here, so the gate can never be silently neutered. It covers both kinds of finding the gate fails on: a malicious-package advisory (`MAL-…`; suppress only a confirmed false positive) and a NEW HIGH/CRITICAL or unscored vulnerability. Each entry suppresses ONE advisory on ONE package at ONE version in ONE lockfile, never an advisory id everywhere. Each entry MUST carry: `id` (the advisory id or any alias: MAL-…, GHSA-…, CVE-…, GO-…), `package` (exact name), `version` (exact version), `lockfile` (exact repo-relative path of the lockfile the finding appears in; for the nightly re-scan of the published npm packages that is `package-lock.json`, the lockfile of its scratch install), `justification` (at least 20 characters: why it is accepted, not exploitable in our usage, no fix available, upstream confirmed false positive), `added` (ISO date) and `expires` (ISO date, REQUIRED, at most 180 days after `added`). Past its expiry the entry stops suppressing and the risk must be re-justified. Wildcards, ranges and unknown keys are rejected. Bump the dependency FIRST; allowlist only when there is no fix. Mirrors security/npm-audit-allowlist.json.",
   "allow": [
     {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "version": "3.0.3",
-      "lockfile": "bun.lock",
-      "justification": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns. No patched release exists: 3.0.3 is the newest braces on npm and the advisory lists no fixed version, so there is nothing to bump to. The flaw is stack exhaustion on a pattern of deeply nested braces; in this workspace it sits under the dev tools @turbo/gen (node-plop -> globby -> fast-glob) and vinext (vite-plugin-commonjs -> vite-plugin-dynamic-import -> fast-glob), where braces only expands glob patterns taken from first-party source and config, never request-supplied or attacker-controlled input. Re-triage when braces publishes a fix.",
-      "added": "2026-10-20",
-      "expires": "2027-01-18"
-    },
-    {
       "id": "GHSA-w5hq-g745-h8pq",
       "package": "uuid",
       "version": "8.3.2",
@@ -25,15 +16,6 @@
       "version": "9.0.1",
       "lockfile": "bun.lock",
       "justification": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided. uuid 9.0.1 (fixed in 11.1.1+): the missing bounds check needs a `buf` argument to v3/v5/v6. It is pulled in by @google-cloud/storage (directly and via gaxios and teeny-request), and every call site in the installed 7.19.0 closure is `uuid.v4()` with no buffer (resumable-upload, request id headers, multipart boundary), so the vulnerable path is not reachable. A workspace override to 11+ would make our tests exercise a combination consumers never get, because overrides do not ship with the published package. Same justification as the package-lock.json entry for the published closure; remove once @google-cloud/storage ships a gaxios on uuid >= 11.1.1.",
-      "added": "2026-10-20",
-      "expires": "2027-01-18"
-    },
-    {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "version": "3.0.3",
-      "lockfile": "examples/bun-exec/bun.lock",
-      "justification": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns. No patched release exists: 3.0.3 is the newest braces on npm and the advisory lists no fixed version, so there is nothing to bump to. The flaw is stack exhaustion on a pattern of deeply nested braces; in this example it sits under vinext (vite-plugin-commonjs -> vite-plugin-dynamic-import -> fast-glob) at build time, where braces only expands glob patterns taken from first-party source and config, never request-supplied or attacker-controlled input. Re-triage when braces publishes a fix.",
       "added": "2026-10-20",
       "expires": "2027-01-18"
     },
@@ -61,15 +43,6 @@
       "version": "1.2.1",
       "lockfile": "packages/kn-next/src/__tests__/fixtures/standalone-pages-app/bun.lock",
       "justification": "source-map-js allows event-loop denial of service through indexed source-map section offsets. source-map-js 1.2.1 (fixed 1.2.2) is postcss's source-map reader. The event-loop DoS needs an attacker-supplied indexed source map; postcss here only reads maps of first-party CSS during the fixture's build. The fixture (standalone-pages-app) is a frozen lockfile installed into a throwaway build directory by a docker or build e2e, never shipped, never serving traffic, and its pin is the thing under test; the Docker-based suites that install it cannot run in this change, so it is not bumped blind. Fixtures are deliberately pinned and exempt from Dependabot (tests/dependabot-ecosystems.test.ts), so re-triage at expiry.",
-      "added": "2026-10-20",
-      "expires": "2027-01-18"
-    },
-    {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "version": "3.0.3",
-      "lockfile": "packages/kn-next/src/__tests__/fixtures/vinext-bun-og-app/bun.lock",
-      "justification": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns. No patched release exists: 3.0.3 is the newest braces on npm and the advisory lists no fixed version, so there is nothing to bump to. The flaw is stack exhaustion on a pattern of deeply nested braces; in this throwaway e2e fixture it sits under vinext (vite-plugin-commonjs -> vite-plugin-dynamic-import -> fast-glob) at build time, where braces only expands glob patterns taken from first-party source and config, never request-supplied or attacker-controlled input. Re-triage when braces publishes a fix.",
       "added": "2026-10-20",
       "expires": "2027-01-18"
     },
@@ -110,15 +83,6 @@
       "expires": "2027-01-18"
     },
     {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "version": "3.0.3",
-      "lockfile": "packages/kn-next/src/__tests__/fixtures/vinext-image-loaderfile-app/bun.lock",
-      "justification": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns. No patched release exists: 3.0.3 is the newest braces on npm and the advisory lists no fixed version, so there is nothing to bump to. The flaw is stack exhaustion on a pattern of deeply nested braces; in this throwaway e2e fixture it sits under vinext (vite-plugin-commonjs -> vite-plugin-dynamic-import -> fast-glob) at build time, where braces only expands glob patterns taken from first-party source and config, never request-supplied or attacker-controlled input. Re-triage when braces publishes a fix.",
-      "added": "2026-10-20",
-      "expires": "2027-01-18"
-    },
-    {
       "id": "GHSA-px8p-9vwx-vf98",
       "package": "fflate",
       "version": "0.7.3",
@@ -133,15 +97,6 @@
       "version": "8.2.2",
       "lockfile": "packages/kn-next/src/__tests__/fixtures/vinext-image-loaderfile-app/bun.lock",
       "justification": "vite bundles launch-editor-middleware: the fs.existsSync() existence check can be bypassed on Windows (published 2026-10-20). vite 8.2.2 (fixed 8.2.4 / 8.3.3) carries the advisory only through its dev server's open-in-editor middleware, and only when the dev server runs on Windows; this fixture runs vite build on Linux and never starts a dev server. The fixture (vinext-image-loaderfile-app) is a frozen lockfile installed into a throwaway build directory by a docker or build e2e, never shipped, never serving traffic, and its pin is the thing under test; the Docker-based suites that install it cannot run in this change, so it is not bumped blind. Fixtures are deliberately pinned and exempt from Dependabot (tests/dependabot-ecosystems.test.ts), so re-triage at expiry.",
-      "added": "2026-10-20",
-      "expires": "2027-01-18"
-    },
-    {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "version": "3.0.3",
-      "lockfile": "packages/kn-next/src/__tests__/fixtures/vinext-node-app/bun.lock",
-      "justification": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns. No patched release exists: 3.0.3 is the newest braces on npm and the advisory lists no fixed version, so there is nothing to bump to. The flaw is stack exhaustion on a pattern of deeply nested braces; in this throwaway e2e fixture it sits under vinext (vite-plugin-commonjs -> vite-plugin-dynamic-import -> fast-glob) at build time, where braces only expands glob patterns taken from first-party source and config, never request-supplied or attacker-controlled input. Re-triage when braces publishes a fix.",
       "added": "2026-10-20",
       "expires": "2027-01-18"
     },
@@ -169,15 +124,6 @@
       "version": "8.3.0",
       "lockfile": "packages/kn-next/src/__tests__/fixtures/vinext-node-app/bun.lock",
       "justification": "vite bundles launch-editor-middleware: the fs.existsSync() existence check can be bypassed on Windows (published 2026-10-20). vite 8.3.0 (fixed 8.2.4 / 8.3.3) carries the advisory only through its dev server's open-in-editor middleware, and only when the dev server runs on Windows; this fixture runs vite build on Linux and never starts a dev server. The fixture (vinext-node-app) is a frozen lockfile installed into a throwaway build directory by a docker or build e2e, never shipped, never serving traffic, and its pin is the thing under test; the Docker-based suites that install it cannot run in this change, so it is not bumped blind. Fixtures are deliberately pinned and exempt from Dependabot (tests/dependabot-ecosystems.test.ts), so re-triage at expiry.",
-      "added": "2026-10-20",
-      "expires": "2027-01-18"
-    },
-    {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "version": "3.0.3",
-      "lockfile": "packages/kn-next/src/__tests__/fixtures/vinext-styled-jsx-app/bun.lock",
-      "justification": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns. No patched release exists: 3.0.3 is the newest braces on npm and the advisory lists no fixed version, so there is nothing to bump to. The flaw is stack exhaustion on a pattern of deeply nested braces; in this throwaway e2e fixture it sits under vinext (vite-plugin-commonjs -> vite-plugin-dynamic-import -> fast-glob) at build time, where braces only expands glob patterns taken from first-party source and config, never request-supplied or attacker-controlled input. Re-triage when braces publishes a fix.",
       "added": "2026-10-20",
       "expires": "2027-01-18"
     },
@@ -430,15 +376,6 @@
       "version": "3.4.0",
       "lockfile": "scripts/musl-native-lockfiles/sqlite3-5.0.2/package-lock.json",
       "justification": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided. uuid 3.4.0 is request's request-id generator (v4 without a buffer argument), not the v3/v5/v6 buffer paths the advisory is about. This lockfile (sqlite3-5.0.2) is a frozen `npm ci` pin of the install the pinned Next.js deploy-tests suite performs, used only inside the musl native-rebuild compat e2e container to reproduce that install; it is never shipped, and it is kept for the 1.x credential refs whose pinned suite still installs this addon (scripts/musl-native-lockfiles/suite-native-addons.json), so a transitive cannot be bumped without making the e2e stop modelling that install. Re-justify or retire when those refs drop this addon.",
-      "added": "2026-10-20",
-      "expires": "2027-04-18"
-    },
-    {
-      "id": "GHSA-ch52-4w7c-c8xp",
-      "package": "http-cache-semantics",
-      "version": "4.2.0",
-      "lockfile": "scripts/musl-native-lockfiles/sqlite3-5.1.7/package-lock.json",
-      "justification": "http-cache-semantics max-stale handling can disclose cross-user cached responses. http-cache-semantics is make-fetch-happen's cache policy used by node-gyp's registry fetches during install, with no shared cache across users. This lockfile (sqlite3-5.1.7) is a frozen `npm ci` pin of the install the pinned Next.js deploy-tests suite performs, used only inside the musl native-rebuild compat e2e container to reproduce that install; it is never shipped, and it is kept for the 1.x credential refs whose pinned suite still installs this addon (scripts/musl-native-lockfiles/suite-native-addons.json), so a transitive cannot be bumped without making the e2e stop modelling that install. Re-justify or retire when those refs drop this addon.",
       "added": "2026-10-20",
       "expires": "2027-04-18"
     },

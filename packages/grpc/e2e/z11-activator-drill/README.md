@@ -36,7 +36,7 @@ back on, puts the function back on its own image, and removes the hold quota, th
 | `REGISTRY_NAME` / `REGISTRY_PORT` | `knext-z11-registry` / `5002` | The local registry. |
 | `Z11_NAMESPACE` | `z11-e2e` | The zone's namespace. The caller runs in `<namespace>-foreign`. |
 | `PHASES` | all | Any subset of `up deploy token direct policyoff noauth rotcold held heldwarm`. The phases always run in that order. |
-| `Z11_MUTANT` | unset | Local only; CI never sets it. `swap-pod` makes the `heldwarm` holds re-attach a pod other than the target, so the answering pod differs from the expected one. The run must then fail with `the call was answered by pod <other>, want pod <target>`; a run that passes with it set means the answering-pod check proves nothing. |
+| `Z11_MUTANT` | unset | Local only; the run refuses to start when `CI` is set; CI never sets it. `swap-pod` makes the `heldwarm` holds re-attach a pod other than the target, so the answering pod differs from the expected one. The run must then fail with `the call was answered by pod <other>, want pod <target>`; a run that passes with it set means the answering-pod check proves nothing. |
 
 ## What it does not prove
 

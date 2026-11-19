@@ -476,7 +476,7 @@ export const bareInvocations = (root, script) =>
  * @param {string} root
  * @param {string[]} allowlists
  * @param {Record<string, any>} [table]
- * @param {Record<string, {gates: string[], other: Record<string, string>}>} [registry]
+ * @param {Record<string, {gates: string[], other: Record<string, string>, exempt?: string}>} [registry]
  * `tests` are the test files that name a changed input (run as its gate). `unmapped` is every
  * changed input that NOTHING gates: no registry entry, or an entry with no script gate and no
  * test naming the file. An input nothing runs is a defect, never a pass.
@@ -698,7 +698,7 @@ export function testsCovering(root, sources, testFiles) {
  * remaining tie goes to the earlier candidate.
  *
  * @param {string[]} candidates refs in preference order
- * @param {(ref: string) => [number, number] | null} distance `[commits from the ref's
+ * @param {(ref: string) => [number, number] | null | undefined} distance `[commits from the ref's
  *   merge-base with HEAD to HEAD, commits from that merge-base to the ref]`, or null when the
  *   ref does not exist
  * @returns {string | undefined}

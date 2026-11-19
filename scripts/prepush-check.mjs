@@ -123,7 +123,7 @@ function snapshot(root, deps) {
 }
 
 /**
- * @returns {{ exit: number, failures: string[], warnings: string[] }}
+ * @returns {{ exit: number, failures: string[], warnings: string[], notices: string[] }}
  */
 export function runChecks(opts, deps = REAL_DEPS) {
   const root = opts.root;

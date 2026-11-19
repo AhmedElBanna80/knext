@@ -904,7 +904,7 @@ const MUTATIONS = [
     claim: 'the drift workflow has no nightly schedule',
     subject: 'wf2',
     validate: () => null,
-    anchor: "schedule:\n    - cron: '17 3 * * *'",
+    anchor: "schedule:\n    - cron: '37 11 * * *'",
     replacement: '# no schedule',
   },
   {

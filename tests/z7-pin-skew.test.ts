@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { parse } from 'yaml';
 import { checkPinSkew, evaluateSkew, parsePin } from '../scripts/lib/z7-pin-skew.mjs';
@@ -76,6 +78,24 @@ describe('checkPinSkew', () => {
     expect(evaluateSkew({ pinned: 'a: [', tip: 'a: 1\n' }).ok).toBe(false);
     expect(evaluateSkew({ pinned: 'a: 1\n', tip: 'a: [' }).ok).toBe(false);
   });
+  it('a list order change reds', () => {
+    expect(evaluateSkew({ pinned: 'a: [1, 2]\n', tip: 'a: [2, 1]\n' }).ok).toBe(false);
+  });
+  it('an anchor/alias that resolves equal passes', () => {
+    const pinned = 'a: &x {k: v}\nb: *x\n';
+    const tip = 'a: {k: v}\nb: {k: v}\n';
+    expect(evaluateSkew({ pinned, tip }).ok).toBe(true);
+  });
+  it('a duplicate key fails closed', () => {
+    expect(evaluateSkew({ pinned: 'a: 1\na: 2\n', tip: 'a: 2\n' }).ok).toBe(false);
+    expect(evaluateSkew({ pinned: 'a: 2\n', tip: 'a: 1\na: 2\n' }).ok).toBe(false);
+  });
+  it('an int key 1 and a string key "1" compare EQUAL', () => {
+    // Deliberate: the YAML parser stringifies mapping keys, and GitHub Actions also reads both
+    // as the string "1", so the workflow behaves identically. Values still compare by type.
+    expect(evaluateSkew({ pinned: '1: a\n', tip: '"1": a\n' }).ok).toBe(true);
+    expect(evaluateSkew({ pinned: 'k: 1\n', tip: 'k: "1"\n' }).ok).toBe(false);
+  });
   it('reds on empty bodies, even if both are empty', () => {
     expect(evaluateSkew({ pinned: '', tip: '' }).ok).toBe(false);
     expect(evaluateSkew({ pinned: 'a', tip: ' \n' }).ok).toBe(false);
@@ -101,5 +121,41 @@ describe('real caller file and nightly wiring', () => {
     expect(text).toContain("title='Z7 pin skew RED'");
     expect(text).toMatch(/bump the SHA/i);
     expect(text).not.toMatch(/bdbe014b/);
+  });
+});
+
+describe('the nightly job can run on a fresh runner', () => {
+  const text = read('.github/workflows/z7-watchdog-nightly.yml');
+  const run: string = parse(text).jobs['z7-pin-skew'].steps.find((s: { run?: string }) =>
+    s.run?.includes('verify-z7-pin-skew'),
+  ).run;
+  it('installs yaml at an exact version with lifecycle scripts off, outside the checkout', () => {
+    expect(run).toMatch(/npm install[^\n]*--ignore-scripts[^\n]*yaml@\d+\.\d+\.\d+/);
+    expect(run).toContain('RUNNER_TEMP');
+  });
+  it('the scripts import nothing but node:*, yaml and relative files', () => {
+    for (const f of ['scripts/verify-z7-pin-skew.mjs', 'scripts/lib/z7-pin-skew.mjs']) {
+      const specs = [...read(f).matchAll(/^import .*? from '([^']+)'/gm)].map((m) => m[1]);
+      for (const sp of specs) expect(sp).toMatch(/^(node:|yaml$|\.\/)/);
+    }
+  });
+  it('runs in a clean directory with only the install step providing yaml', () => {
+    const dir = mkdtempSync(resolve(tmpdir(), 'z7skew-'));
+    mkdirSync(resolve(dir, 'scripts/lib'), { recursive: true });
+    cpSync(
+      resolve(REPO_ROOT, 'scripts/verify-z7-pin-skew.mjs'),
+      resolve(dir, 'scripts/verify-z7-pin-skew.mjs'),
+    );
+    cpSync(
+      resolve(REPO_ROOT, 'scripts/lib/z7-pin-skew.mjs'),
+      resolve(dir, 'scripts/lib/z7-pin-skew.mjs'),
+    );
+    const r = spawnSync('node', [resolve(dir, 'scripts/verify-z7-pin-skew.mjs')], {
+      cwd: dir,
+      encoding: 'utf8',
+    });
+    // No yaml installed: the run must fail closed (nonzero), proving the install step is load-bearing.
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/fail closed/);
   });
 });

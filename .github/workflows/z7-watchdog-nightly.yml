@@ -84,7 +84,17 @@ jobs:
       - name: Compare the pinned Z7 YAML with the branch tip (FAIL closed)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/verify-z7-pin-skew.mjs
+        # The comparison parses YAML, so it needs `yaml`. A fresh runner has no node_modules, so
+        # install ONLY that one package at an exact version, lifecycle scripts off, into a scratch
+        # dir beside copies of the two script files (never into the checkout), then run there.
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/z7-pin-skew"
+          mkdir -p "${work}/scripts/lib"
+          cp scripts/verify-z7-pin-skew.mjs "${work}/scripts/"
+          cp scripts/lib/z7-pin-skew.mjs "${work}/scripts/lib/"
+          (cd "${work}" && npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund yaml@2.9.0)
+          Z7_CALLER_FILE="${GITHUB_WORKSPACE}/.github/workflows/z7-rotation-weekly.yml" node "${work}/scripts/verify-z7-pin-skew.mjs"
 
   # Each check files its OWN issue (distinct fixed titles), so a permanently red
   # check cannot swallow the other's alert.

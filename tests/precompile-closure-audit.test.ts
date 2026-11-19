@@ -259,6 +259,11 @@ describe('readAllowlist — dated + justified, mirroring the npm-audit gate', ()
     bad({ patched: [] });
     bad({ rangeFrom: undefined });
     bad({ range: '>=16.4.3 <16.5.0' });
+    bad({ extra: 'x' }); // ANY unknown nested key, not just `range`
+    bad({ url: 'https://evil.example/next.tgz' });
+    bad({ package: undefined });
+    bad({ path: 'https://evil.example/p/package.json' });
+    bad({ path: 'a/../b/package.json' });
     expect(() =>
       readAllowlist({ allow: [{ ...VENDORED_ENTRY, vendoredIn: 'next' }] }, NOW),
     ).toThrow(/vendoredIn/);

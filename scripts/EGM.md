@@ -12,7 +12,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 - `assert-tree-unchanged.mjs snapshot|check <file>`: compares `git status --porcelain --untracked-files=all` before and after a run.
 
 ### Mutation provers
-- 179 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
+- 180 files named `mutation-prove-*.mjs`. Each one mutates a guard's subject and requires the guard's spec to go red.
 - Shared drivers: `lib/prover-report.mjs` (imported by all 179), `lib/mutation-harness.mjs` (99) and `lib/guard-prover.mjs` (106).
 - `mutation-prove-s9-4-ffi-offline.mjs` proves the CI egress proof in `tests/ffi-ci-local-crates.test.ts` (the rewrite, the github.com denial, the verdict, the `Generator — egress denied` step, and the egress script's exit). Its subjects are `crates/harness/local-crates-source.ts`, `crates/harness/ffi-egress-offline.ts` and `.github/workflows/rust-crates.yml`.
 - Lane tooling: `run-mutation-provers.mjs` (flags `--shard <i>/<n>`, `--list`, `--report <file>`), `prover-lane-plan.mjs` (`parseRefs`, `resolveRef`), `prover-lane-aggregate.mjs`, `prover-lane-known-red.mjs`.
@@ -49,7 +49,7 @@ This directory holds the repo's tooling: CI guards and gates, release and publis
 ### Supply chain and pins
 - Dependency and closure audits: `audit-published.mjs`, `audit-shipped-npm.mjs`, `osv-gate.mjs`, `govulncheck-gate.mjs`, `release-age-gate.mjs`, `precompile-closure-audit.mjs`, `sbom-docs-closure.mjs`.
 - `secret-scan.mjs` (`validateAllowlist`, `filterFindings`), `summarize-trivy-fs-report.mjs`.
-- Pin checks: `verify-allowlist-retirement.mjs` (read-only nightly probe: RETIRE on a withdrawn advisory or a reachable patch for an allowlisted advisory, INFO for an unreachable patch or a reachable patch in a `fixtures/` or `musl-native-lockfiles/` lockfile, fail closed on API error or an empty entry set), `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
+- Pin checks: `record-allowlist-retirement-hash.mjs` (writes the probe-code pin `scripts/lib/allowlist-retirement.sha256`), `verify-allowlist-retirement.mjs` (read-only nightly probe: RETIRE on a withdrawn advisory or a reachable patch for an allowlisted advisory, INFO for an unreachable patch or a reachable patch in a `fixtures/` or `musl-native-lockfiles/` lockfile, fail closed on API error or an empty entry set), `verify-action-pins.mjs`, `verify-image-pins.mjs`, `verify-crane-pin.mjs`, `verify-operator-bundle-image.mjs`, `check-base-images-pinned.sh`, `docker-hub-mirror-guard.mjs`.
 - `resolve-shipped-images.mjs`, `resolve-scale-test-image.mjs`, `write-native-integrity.mjs`, `generate-musl-native-lockfile.sh`, `scan-suite-native-addons.mjs`.
 
 ### Static repo guards

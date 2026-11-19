@@ -194,18 +194,18 @@ const MUTATIONS = [
     subject: 'lane',
     claim: 'the new phases are not in the default run',
     anchor:
-      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
+      'PHASES="${PHASES:-images deploy cold connecterr grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
     replacement:
-      'PHASES="${PHASES:-images deploy cold trailers grpctrailers rollout sovereignty wake}"',
+      'PHASES="${PHASES:-images deploy cold connecterr grpctrailers rollout sovereignty wake}"',
   },
   {
     id: 'G01',
     subject: 'lane',
     claim: 'the grpctrailers phase is not in the lane default phase list',
     anchor:
-      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
+      'PHASES="${PHASES:-images deploy cold connecterr grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
     replacement:
-      'PHASES="${PHASES:-images deploy cold trailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
+      'PHASES="${PHASES:-images deploy cold connecterr zerozone rollout sovereignty crosszone wake imagepin http11}"',
   },
   {
     id: 'G02',

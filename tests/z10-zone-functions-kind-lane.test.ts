@@ -53,7 +53,7 @@ describe('the harness is as careful as the Z7 lane', () => {
 
   it('runs every phase by default', () => {
     expect(own).toContain(
-      'PHASES="${PHASES:-images deploy cold trailers grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
+      'PHASES="${PHASES:-images deploy cold connecterr grpctrailers zerozone rollout sovereignty crosszone wake imagepin http11}"',
     );
   });
 });
@@ -76,7 +76,7 @@ describe('the cold path is really cold', () => {
   });
 
   it('every cold call waits for scale-to-zero first, for both functions', () => {
-    for (const phase of ['phase_cold', 'phase_trailers']) {
+    for (const phase of ['phase_cold', 'phase_connecterr']) {
       const b = body(phase);
       expect(b).toContain('await_zero "${GO_FN}"');
       expect(b).toContain('await_zero "${RUST_FN}"');
@@ -101,7 +101,7 @@ describe('the cold path is really cold', () => {
 
 describe('a failed call keeps its code through the activator', () => {
   it('the cold read of a missing item must come back NotFound / not_found, next to a warm control', () => {
-    const t = body('phase_trailers');
+    const t = body('phase_connecterr');
     expect(t.match(/404 '\.ok == false and \.code == "NotFound"'/g)?.length).toBe(2);
     expect(t.match(/404 '\.ok == false and \.code == "not_found"'/g)?.length).toBe(2);
     expect(t).toMatch(/cold_call "\$\{GO_FN\}" "\/example\/get\?sub=alice&id=missing"/);
@@ -124,7 +124,7 @@ describe('the gRPC status trailer survives the cold activator path (Z11 / D15)',
 
   it('the phase exists, is dispatched, and is in the default run and the phase allowlist', () => {
     expect(own).toMatch(/^has_phase grpctrailers && phase_grpctrailers$/m);
-    expect(own).toContain('| trailers | grpctrailers | zerozone |');
+    expect(own).toContain('| connecterr | grpctrailers | zerozone |');
     // The CI job runs run.sh with no PHASES override, so the default run IS the CI run.
     const wf = readFileSync(WORKFLOW, 'utf8');
     expect(wf).toContain('packages/grpc/e2e/z10-zone-functions-kind/run.sh');
@@ -361,7 +361,7 @@ describe('a cross-zone function binds on neither side (#2421)', () => {
 describe('every phase runs, in order (#2421)', () => {
   it('the dispatch calls each new phase between its neighbours', () => {
     const order = [
-      'phase_trailers',
+      'phase_connecterr',
       'phase_grpctrailers',
       'phase_zerozone',
       'phase_rollout',

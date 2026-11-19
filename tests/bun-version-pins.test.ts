@@ -284,6 +284,8 @@ describe('bun-version pins (#754) — scanned across every workflow', () => {
       // the workspace install (the lockfile's verified buf, the Connect runtime)
       // and the probe, the zone-image build and `knext generate` it runs.
       'z7-identity-kind-e2e.yml': 1,
+      // The Z11 activator drill kind e2e — one pinned "Setup bun" for the workspace build.
+      'z11-activator-drill-e2e.yml': 1,
       // NEW (#926): the npm publish lane installed with `pnpm install
       // --frozen-lockfile` against a repo with NO pnpm-lock.yaml, so every job
       // died at install. All three release.yml jobs now install with bun,

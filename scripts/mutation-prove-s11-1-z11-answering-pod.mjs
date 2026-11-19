@@ -273,35 +273,35 @@ const MUTATIONS = [
     '  fi\n  return 1\n}\n',
     '  fi\n  return 0\n}\n',
   ),
-  row(
+  wiringRow(
     'WR11',
     'run',
     'wiring: the Go policy-off leg no longer judges its valid-token call',
     '  check_direct_accepted "${FC_STATUS}" "${FC_CODE}" \\\n    || fail "policy off, direct to the pod, VALID',
     '  true \\\n    || fail "policy off, direct to the pod, VALID',
   ),
-  row(
+  wiringRow(
     'WR12',
     'run',
     'wiring: the Rust policy-off leg no longer judges its valid-token call',
     '  check_direct_accepted "${FC_STATUS}" "${FC_CODE}" \\\n    || fail "policy off, Rust, direct to the pod, VALID',
     '  true \\\n    || fail "policy off, Rust, direct to the pod, VALID',
   ),
-  row(
+  wiringRow(
     'WR13',
     'run',
     'wiring: the Go policy-off leg never sends a valid token',
     '  direct_valid_token "${ip}" "${FN_HOST}"\n',
     '',
   ),
-  row(
+  wiringRow(
     'WR14',
     'run',
     'wiring: the Rust policy-off leg never sends a valid token',
     '  direct_valid_token "${RUST_IP}" "${RUST_FN}.${NS}.svc.cluster.local"\n',
     '',
   ),
-  row(
+  wiringRow(
     'WR15',
     'run',
     'wiring: the Go control mints its token for the Rust function (wrong audience)',
@@ -345,21 +345,21 @@ const MUTATIONS = [
     '',
   ),
   // ---- WIRING rows for the same call (labelled: they delete or redirect text in run.sh)
-  row(
+  wiringRow(
     'WR16',
     'run',
     'wiring: the control is sent to port 8080 no more',
     'direct_call "$1" 8080 "${tokfile}"',
     'direct_call "$1" 9091 "${tokfile}"',
   ),
-  row(
+  wiringRow(
     'WR17',
     'run',
     'wiring: the control is sent to the wrong ip argument',
     'direct_call "$1" 8080 "${tokfile}"',
     'direct_call "$2" 8080 "${tokfile}"',
   ),
-  row(
+  wiringRow(
     'WR18',
     'run',
     'wiring: the control mints its token with the wrong key directory',

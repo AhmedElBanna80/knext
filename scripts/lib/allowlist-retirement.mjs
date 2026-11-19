@@ -531,6 +531,11 @@ export function classifyAdvisory(entry, advisory, loadLock = () => null) {
  * Probe every entry. `fetchAdvisory(id)` returns the advisory or THROWS; a throw
  * is an ERROR (fail closed), never a pass and never a skip.
  */
+/**
+ * @param {any[]} entries
+ * @param {(id: string) => Promise<any>} fetchAdvisory
+ * @param {{ loadLock?: (rel: string) => any, resolveVendored?: ((v: any) => Promise<{ hostVersion: string, vendoredVersion: string }>) | null }} [opts]
+ */
 export async function probeEntries(
   entries,
   fetchAdvisory,

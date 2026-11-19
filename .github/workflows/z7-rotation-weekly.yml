@@ -108,8 +108,12 @@ jobs:
     needs: [preflight]
     # TEMPORARY SHA pin of the WORKFLOW YAML only. A branch ref is only trusted once the
     # branch is protected (PROTECTED_REFS); neither main nor integration/v2 is protected on
-    # this temporary repo yet, so whoever can push integration/v2 would run workflow steps
-    # here. The pin freezes z7-identity-kind-e2e.yml (steps, env, timeout). It does NOT
+    # this temporary repo yet. Without the pin, a pusher of integration/v2 could change this
+    # lane's workflow steps (permissions, env, steps). With it, that pusher can STILL run
+    # code here through the floating scripts (run.sh, probe.ts): the pin narrows the
+    # exposure, it does not close it. The exposure is bounded because the lane has
+    # contents: read and no secrets (the caller passes none, the callee reads none).
+    # The pin freezes z7-identity-kind-e2e.yml (steps, env, timeout). It does NOT
     # freeze the scripts: checkout_ref below is the floating integration/v2 tip, so run.sh,
     # probe.ts and everything they call come from that tip. The two must stay
     # compatible (same flags, paths and env names); re-check when either side changes.

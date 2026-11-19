@@ -14,17 +14,20 @@ import { dirname, join, normalize } from 'node:path';
 import { unpairedTempDirs } from './scratch-space-scan.mjs';
 
 /**
- * A changed file that is a supply-chain gate input: ANY data file directly under
- * `security/` (json or yaml), not only `*allowlist*`. `govulncheck-exceptions.json` and
- * `protected-refs-exception.json` have the same "unknown keys FAIL" semantics as an
- * allowlist and used to run no gate at all.
+ * A changed file that is a supply-chain gate input: ANY file under `security/`, at any depth
+ * and with any extension, except Markdown prose. Not only `*allowlist*`:
+ * `govulncheck-exceptions.json`, `release-age-exceptions.json`, `dockerfile-base-exclusions.json`
+ * and `bun-install-scripts.json` have the same "unknown keys FAIL" semantics as an allowlist and
+ * used to run no gate at all. A new file under `security/` must be mapped or the check fails.
  */
-export const GATE_INPUT_RE = /^security\/[^/]+\.(?:json|ya?ml)$/;
+export const GATE_INPUT_RE = /^security\/(?!.*\.md$).+$/;
 
 export const changedGateInputs = (files) => files.filter((f) => GATE_INPUT_RE.test(f));
 /** Older name, kept for callers that predate the widening. */
 export const changedAllowlists = changedGateInputs;
 
+// BEGIN branch-specific (GATE_TABLE, registry): differs between integration/v2 and main by design;
+// everything outside this block must stay byte-identical (see `driftBetween`).
 /**
  * How to invoke each gate that reads an allowlist, by repo-relative script path.
  * `runs: 'workflows'` derives the argument sets from the workflow steps that
@@ -122,11 +125,14 @@ export const GATE_INPUT_REGISTRY = {
   },
   'security/docs-closure-trivyignore.yaml': {
     gates: [],
+    exempt:
+      "consumed only by the Trivy step's `trivyignores:` input in the two workflows listed below; no script or test reads it by path, so those workflows are its gate and nothing here can run it",
     other: runners(['.github/workflows/ci.yml', '.github/workflows/docs-closure-nightly.yml']),
   },
 };
 /** Older name, kept for callers that predate the widening. */
 export const ALLOWLIST_REGISTRY = GATE_INPUT_REGISTRY;
+// END branch-specific
 
 const SCRIPT_EXT = /\.(?:mjs|cjs|js|ts|sh)$/;
 /** This check's own files hold the registry, so they name every allowlist by design. */
@@ -257,19 +263,83 @@ export function scanReaders(root, allowlistRel) {
 /** The test file the prepush guard itself keeps: it names every input as a fixture, so it reads none. */
 const SELF_TESTS = new Set(['tests/prepush-check.test.ts']);
 
+/** A read- or import-like call near a path literal: the path is passed somewhere that opens it. */
+const READ_CONTEXT =
+  /\b(?:read\w*|import|require|Bun\.file|JSON\.parse|load\w*|parse\w*|existsSync|statSync|spawnSync|execFileSync)\b/;
+
 /**
- * Tests under `tests/` that name the input file. A test that names a gate input is
- * the thing that asserts its schema and semantics, so it is that input's gate when
- * no script is (e.g. `protected-refs-exception.json`). Direct name only, comments
- * stripped; one hop on purpose.
+ * Does `text` open the file `inputRel` BY ITS PATH? The path must appear as a whole quoted
+ * string (`'security/x.json'`, `'../security/x.json'`) or as consecutive join segments
+ * (`'security', 'x.json'`), so `my-x.json` or a prose mention does not count, and a read- or
+ * import-like call must sit within two lines of it. Comments are ignored.
+ * LIMIT: a path assembled at run time, or read through a helper with an unusual name, is not seen.
+ */
+export function readsByPath(text, inputRel) {
+  const code = stripComments(text);
+  const whole = new RegExp(`['"\`](?:[^'"\`\\n]*/)?${escapeRe(inputRel)}['"\`]`, 'g');
+  const parts = inputRel.split('/').map(escapeRe).join('[\'"`]\\s*,\\s*[\'"`]');
+  const segs = new RegExp(`['"\`]${parts}['"\`]`, 'g');
+  const lines = code.split('\n');
+  const offsets = [];
+  let at = 0;
+  for (const l of lines) {
+    offsets.push(at);
+    at += l.length + 1;
+  }
+  const lineOf = (idx) => offsets.findLastIndex((o) => o <= idx);
+  for (const re of [whole, segs]) {
+    for (const m of code.matchAll(re)) {
+      const i = lineOf(m.index);
+      const near = lines.slice(Math.max(0, i - 2), i + 3).join('\n');
+      if (READ_CONTEXT.test(near)) return true;
+    }
+  }
+  return false;
+}
+
+/** `bun-test.mjs` invoked with no test path (flags only): the whole suite. */
+const WHOLE_SUITE = /\bscripts\/bun-test\.mjs(?:[ \t]+--[\w=-]+)*[ \t]*$/;
+/** Test files the whole-suite run partitions out; they run only where a workflow names them. */
+const PARTITIONED = /\.(?:docker-e2e|kind-e2e|e2e)\.test\./;
+
+/**
+ * Is `testFile` run by some workflow? Either a workflow command names its path, or a workflow
+ * runs the whole suite (`scripts/bun-test.mjs` with no path) and the file is not one the suite
+ * partitions out (`*.docker-e2e.test.*`, `*.kind-e2e.test.*`, `*.e2e.test.*`).
+ * LIMIT: workflow trigger filters (`paths:`, `if:`) are not evaluated, so a job that is gated off
+ * for a given change still counts as running it.
+ */
+export function ciRunsTest(root, testFile) {
+  const wfDir = '.github/workflows';
+  if (!existsSync(join(root, wfDir))) return false;
+  for (const f of readdirSync(join(root, wfDir)).filter((n) => /\.ya?ml$/.test(n))) {
+    const wfText = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));
+    for (const line of wfText.split('\n')) {
+      if (line.includes(testFile) && /\b(?:bun-test\.mjs|bun test|vitest)\b/.test(line))
+        return true;
+      if (
+        WHOLE_SUITE.test(line.trim().replace(/^(?:-\s*)?run:\s*/, '')) &&
+        !PARTITIONED.test(testFile)
+      )
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Tests under `tests/` that READ the input file by its path (`readsByPath`) AND that some
+ * workflow runs (`ciRunsTest`). Such a test asserts the file's schema and semantics, so it is
+ * that input's gate when no script is (e.g. `bun-install-scripts.json`). A test that merely
+ * mentions the name, or that no workflow runs, is not a gate. One hop on purpose.
  *
  * @returns {string[]} sorted repo-relative test files
  */
 export function scanTestReaders(root, inputRel) {
-  const name = inputRel.split('/').pop();
   return walk(root, 'tests')
     .filter((f) => /\.test\.(?:[cm]?[jt]sx?)$/.test(f) && !SELF_TESTS.has(f))
-    .filter((f) => stripComments(readFileSync(join(root, f), 'utf8')).includes(name))
+    .filter((f) => readsByPath(readFileSync(join(root, f), 'utf8'), inputRel))
+    .filter((f) => ciRunsTest(root, f))
     .sort();
 }
 
@@ -335,19 +405,28 @@ export const bareInvocations = (root, script) =>
  * changed input that NOTHING gates: no registry entry, or an entry with no script gate and no
  * test naming the file. An input nothing runs is a defect, never a pass.
  *
- * @returns {{ runs: {allowlist: string, script: string, args: string[], entry: any}[], unknown: {allowlist: string, script: string}[], tests: string[], unmapped: string[] }}
+ * An entry may instead carry `exempt: <reason>` when its only gate is a workflow step that
+ * nothing local can run; that counts as mapped and is reported (`exempt`) every run, so the
+ * exemption is visible, not silent.
+ *
+ * @returns {{ runs: {allowlist: string, script: string, args: string[], entry: any}[], unknown: {allowlist: string, script: string}[], tests: string[], unmapped: string[], exempt: {input: string, reason: string}[] }}
  */
 export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = GATE_INPUT_REGISTRY) {
   const runs = [];
   const unknown = [];
   const unmapped = [];
+  const exempt = [];
   const tests = new Set();
   const seen = new Set();
   for (const allowlist of allowlists) {
     const reg = registry[allowlist] ?? { gates: [], other: {} };
     const testReaders = scanTestReaders(root, allowlist);
     for (const t of testReaders) tests.add(t);
-    if (!(allowlist in registry) || (reg.gates.length === 0 && testReaders.length === 0)) {
+    const gated = reg.gates.length > 0 || testReaders.length > 0 || Boolean(reg.exempt);
+    if (reg.exempt && !reg.gates.length && !testReaders.length) {
+      exempt.push({ input: allowlist, reason: reg.exempt });
+    }
+    if (!(allowlist in registry) || !gated) {
       unmapped.push(allowlist);
     }
     const { scripts, workflows, manifests } = scanReaders(root, allowlist);
@@ -385,7 +464,7 @@ export function planGateRuns(root, allowlists, table = GATE_TABLE, registry = GA
       });
     }
   }
-  return { runs, unknown, tests: [...tests].sort(), unmapped };
+  return { runs, unknown, tests: [...tests].sort(), unmapped, exempt };
 }
 
 /** Entries in `after` that were not in `before`. */
@@ -437,39 +516,59 @@ export function globToRegExp(glob) {
   return new RegExp(`^${re}$`);
 }
 
-/**
- * One extensionless path under each top-level directory this repo has. A scope that matches
- * every one of them says "anything", which declares nothing. (Root files are deliberately not a
- * canary: `*\/**` matches every directory and no root file, and still declares nothing.)
- */
-const CANARY_PATHS = [
-  '.github/x/y',
-  'apps/x/y',
-  'docs/x/y',
-  'packages/x/y',
-  'scripts/x/y',
-  'security/x',
-  'tests/x',
-];
+/** A path no repo has: a scope that matches it is a wildcard over directories, not a claim. */
+const PROBE_PATH = '__scope_probe__/a/b';
+/** Judge breadth only in a repo big enough for the ratios to mean something. */
+const MIN_TRACKED_FILES = 20;
+const MIN_AREAS = 5;
+/** A scope touching this share of the tracked top-level directories spans the repo. */
+export const BROAD_AREA_SHARE = 0.75;
+/** A scope matching this share of all tracked files spans the repo. */
+export const BROAD_FILE_SHARE = 0.6;
 
 /**
- * Scope globs that, alone or together, match everything (`**`, `**\/*`, `./**`, `*\/**`...):
- * a declared scope that cannot be violated. Judged by what the globs MATCH against a canary
- * for every area, not by their spelling.
- * LIMIT: many narrow globs that together cover the tree (`**\/*.ts, **\/*.md, ...`) match
- * none of the extensionless canaries and are not flagged.
+ * Scope globs that together cover the repo: a declared scope that cannot be violated.
+ * Judged by what the globs MATCH, never by their spelling, against the repo's ACTUAL tracked
+ * files (`tracked`, e.g. `git ls-files`), so the list of areas cannot go stale:
  *
+ *  1. matches a path that exists nowhere (`__scope_probe__/a/b`): a wildcard over directories
+ *     (`**`, `**\/*`, `./**`, `*\/**`);
+ *  2. touches at least BROAD_AREA_SHARE (75%) of the tracked top-level directories, i.e. at
+ *     least one tracked file in each (this is what stops `**\/*.ts, **\/*.md`);
+ *  3. matches more than BROAD_FILE_SHARE (60%) of all tracked files.
+ *
+ * Rules 2 and 3 apply only when the repo has at least 20 tracked files and 5 top-level
+ * directories; below that the ratios say nothing. 75% / 60% are judgement: a legitimate PR here
+ * (scripts + tests + docs + .github + security) touches 5 of 21 directories and 31% of files;
+ * `packages/**` alone is 1 of 21 directories and 48% of files and is not flagged.
+ *
+ * @param {string[]} globs
+ * @param {string[]} [tracked] repo-relative tracked files
  * @returns {string[]} the offending globs (every glob when only their union is too broad)
  */
-export function broadScopes(globs) {
-  const covers = (gs) => {
+export function broadScopes(globs, tracked = []) {
+  const areas = [...new Set(tracked.filter((f) => f.includes('/')).map((f) => f.split('/')[0]))];
+  const judgeRatios = tracked.length >= MIN_TRACKED_FILES && areas.length >= MIN_AREAS;
+  const broad = (gs) => {
     const res = gs.map(globToRegExp);
-    return CANARY_PATHS.every((c) => res.some((r) => r.test(c)));
+    const any = (f) => res.some((r) => r.test(f));
+    if (any(PROBE_PATH)) return true;
+    if (!judgeRatios) return false;
+    const hit = tracked.filter(any);
+    if (hit.length > tracked.length * BROAD_FILE_SHARE) return true;
+    const touched = areas.filter((a) => hit.some((f) => f.startsWith(`${a}/`)));
+    return touched.length >= areas.length * BROAD_AREA_SHARE;
   };
-  const alone = globs.filter((g) => covers([g]));
+  const alone = globs.filter((g) => broad([g]));
   if (alone.length > 0) return alone;
-  return covers(globs) ? [...globs] : [];
+  return broad(globs) ? [...globs] : [];
 }
+
+/**
+ * Globs that use brace alternation (`{a,b}`). Scope lines are split on commas, so a brace glob
+ * would be cut into two broken ones; it is rejected rather than misread.
+ */
+export const bracedScopes = (globs) => globs.filter((g) => /[{}]/.test(g));
 
 /** Files that match none of the declared scope globs. */
 export function outOfScope(files, globs) {
@@ -544,4 +643,45 @@ export function pickBase(candidates, distance) {
     }
   }
   return best;
+}
+
+export const BRANCH_BEGIN = '// BEGIN branch-specific';
+export const BRANCH_END = '// END branch-specific';
+
+/**
+ * `text` with the branch-specific block (GATE_TABLE + registry) removed. A marker is a LINE that
+ * starts with the marker text, so a string constant naming it does not count. Throws unless
+ * there is exactly one BEGIN and one END, in that order: a copy that lost or doubled a marker
+ * must not compare as "identical".
+ */
+export function stripBranchSpecific(text) {
+  const lines = text.split('\n');
+  const at = (marker) => lines.flatMap((l, i) => (l.startsWith(marker) ? [i] : []));
+  const begins = at(BRANCH_BEGIN);
+  const ends = at(BRANCH_END);
+  if (begins.length !== 1 || ends.length !== 1) {
+    throw new Error(
+      `expected exactly one BEGIN and one END branch-specific marker, got ${begins.length}/${ends.length}`,
+    );
+  }
+  if (ends[0] < begins[0]) throw new Error('branch-specific END marker comes before BEGIN');
+  return [...lines.slice(0, begins[0]), ...lines.slice(ends[0] + 1)].join('\n');
+}
+
+/**
+ * Compare two copies of the check's source outside the branch-specific block. The two long-lived
+ * branches carry the same code and differ only in which gates and security/ files they register;
+ * anything else that differs is drift.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {{ same: boolean, line?: number, a?: string, b?: string }} the first differing line, 1-based
+ */
+export function driftBetween(a, b) {
+  const x = stripBranchSpecific(a).split('\n');
+  const y = stripBranchSpecific(b).split('\n');
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if (x[i] !== y[i]) return { same: false, line: i + 1, a: x[i], b: y[i] };
+  }
+  return { same: true };
 }

@@ -35,8 +35,8 @@
  *
  * Options: --base <ref> (default: of personal|origin integration/v2 and main, the ref the
  * branch forked from most recently), --scope <glob,...>, --pr-body-file <path> (or env PR_BODY),
- * --require-scope (CI: the PR body is the ONLY scope source and a missing or match-everything
- * scope FAILS), --allow-missing-tools, --skip-gates (execution only; the input-to-gate mapping is
+ * --require-scope (CI: the PR body is the ONLY scope source; a missing scope, a scope that spans
+ * the repo, or a brace glob FAILS), --allow-missing-tools, --skip-gates (execution only; the input-to-gate mapping is
  * still checked), --skip-tests, --root <dir>.
  *
  * CI (`.github/workflows/prepush-check.yml`) runs it with --require-scope --skip-gates
@@ -52,6 +52,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  bracedScopes,
   broadScopes,
   changedGateInputs,
   changedTestFiles,
@@ -165,12 +166,16 @@ export function runChecks(opts, deps = REAL_DEPS) {
       unknown,
       tests: gateTests,
       unmapped,
+      exempt,
     } = planGateRuns(root, allowlists, opts.gateTable, opts.registry);
+    for (const e of exempt) {
+      warnings.push(`${e.input} has no local gate (documented exemption): ${e.reason}`);
+    }
     // Mapping is checked even when execution is skipped: an input nothing gates is a defect
     // regardless of whether this run can execute gates.
     for (const u of unmapped) {
       failures.push(
-        `${u} is a security/ gate input that no gate is mapped to: add it to GATE_INPUT_REGISTRY (scripts/lib/prepush-check.mjs) with a gate script, or a test that names it`,
+        `${u} is a security/ gate input that no gate is mapped to: add it to GATE_INPUT_REGISTRY (scripts/lib/prepush-check.mjs) with a gate script, a test that reads it by path and that CI runs, or an exempt reason`,
       );
     }
     for (const u of unknown) {
@@ -310,12 +315,20 @@ export function runChecks(opts, deps = REAL_DEPS) {
     } else warnings.push(msg);
   } else {
     say(`declared scope: ${globs.join(', ')}`);
-    const broad = broadScopes(globs);
+    const braced = bracedScopes(globs);
+    if (braced.length > 0) {
+      failures.push(
+        `scope uses brace alternation (${braced.join(', ')}); scope lines are split on commas, so \`{a,b}\` would be cut in two. List each glob separately`,
+      );
+    }
+    const broad = broadScopes(globs, lines(['ls-files']));
     if (broad.length > 0) {
-      const msg = `scope matches everything (${broad.join(', ')}); it declares nothing, so no file can be out of scope`;
+      const msg = `scope is too broad (${broad.join(', ')}): it matches a path no repo has, or spans at least 75% of the top-level directories or more than 60% of tracked files, so it declares nothing`;
       (opts.requireScope ? failures : warnings).push(msg);
     }
-    for (const f of outOfScope(changed, globs)) failures.push(`out of scope: ${f}`);
+    if (braced.length === 0) {
+      for (const f of outOfScope(changed, globs)) failures.push(`out of scope: ${f}`);
+    }
   }
 
   say('');

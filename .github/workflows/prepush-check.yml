@@ -5,10 +5,14 @@ name: Pre-push check
 #
 # WHAT IT ENFORCES HERE
 #   - A `Scope: <glob>, <glob>` line MUST be in the PR body. Missing is a FAILURE, not a warning.
-#   - A scope that matches everything (`**`, `**/*`, `*/**`) is a FAILURE: it declares nothing.
+#   - A scope that spans the repo is a FAILURE: it declares nothing. That is a wildcard over
+#     directories (`**`, `**/*`, `*/**`), or globs that together touch 75% of the tracked top-level
+#     directories or match over 60% of tracked files (`**/*.ts, **/*.md`).
+#   - A brace glob (`{a,b}`) is a FAILURE: scope lines split on commas and would misread it.
 #   - Every changed file must be inside the declared scope.
-#   - Every changed `security/*.json|yaml` input must map to a gate (a registered script, or a
-#     test under tests/ that names it). An input nothing gates is a FAILURE.
+#   - Every changed file under `security/` (any depth, any extension but .md) must map to a gate:
+#     a registered script, a test that reads it by path and that a workflow runs, or a documented
+#     exemption. An input nothing gates is a FAILURE.
 #   - Every `mkdtemp` under tests/ reaches a removal.
 #
 # WHY THE PR BODY, NOT A COMMIT TRAILER. A commit message can be amended or rebased after
@@ -16,12 +20,13 @@ name: Pre-push check
 # event payload, which is the PR body as of THIS run. `edited` re-runs the job when the body
 # changes, so adding the line to an open PR does not need a push.
 #
-# WHAT IT DOES NOT DO (stated, not hidden; see scripts/EGM.md for the full row)
+# WHAT IT DOES NOT DO (stated, not hidden; see CONTRIBUTING.md, "Before you push, part two")
 #   - It does not EXECUTE the gates or the changed tests (--skip-gates --skip-tests). Each gate
 #     already runs in its own workflow on the PR; this job proves a scope was declared and that
 #     each changed security/ input has a gate to run.
-#   - The scope is self-declared. It catches an accident (a PR that silently reverts another
-#     PR's files), not an author who declares an honest-looking but too-wide scope.
+#   - The scope is self-declared. It catches an accident (a PR that touches files outside its task),
+#     not an author who declares an honest-looking but too-wide scope, and a revert INSIDE the
+#     declared scope passes.
 #
 # Untrusted text: the PR body arrives through env and is read as DATA, never interpolated into
 # the script (anyone who can edit the PR controls it).

@@ -89,6 +89,10 @@ jobs:
   z11-activator-drill:
     name: Z11 token refusal on the activator path, with and without the NetworkPolicy
     runs-on: ubuntu-latest
+    # Measured, not guessed: a full local run of every phase took 26 min on a warm image cache
+    # (up 2.5, deploy 1.3, token 3.0, direct 0.2, policyoff 2.1, noauth 2.2, rotcold 8.7,
+    # held 6.0; a shared runner with cold pulls is slower). The 60 min budget this replaced was
+    # sized for the first six phases (11 min locally, about 5x); 90 min is 3.5x the new total.
     timeout-minutes: 90
     env:
       KIND_CLUSTER: z11-activator-drill

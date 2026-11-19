@@ -87,6 +87,7 @@ jobs:
         # The comparison parses YAML, so it needs `yaml`. A fresh runner has no node_modules, so
         # install ONLY that one package at an exact version, lifecycle scripts off, into a scratch
         # dir beside copies of the two script files (never into the checkout), then run there.
+        # The installed tarball's integrity is then checked against the repo's bun.lock (fail closed).
         run: |
           set -euo pipefail
           work="${RUNNER_TEMP}/z7-pin-skew"
@@ -94,6 +95,7 @@ jobs:
           cp scripts/verify-z7-pin-skew.mjs "${work}/scripts/"
           cp scripts/lib/z7-pin-skew.mjs "${work}/scripts/lib/"
           (cd "${work}" && npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund yaml@2.9.0)
+          node scripts/verify-installed-yaml-integrity.mjs "${work}" "${GITHUB_WORKSPACE}/bun.lock" 2.9.0
           Z7_CALLER_FILE="${GITHUB_WORKSPACE}/.github/workflows/z7-rotation-weekly.yml" node "${work}/scripts/verify-z7-pin-skew.mjs"
 
   # Each check files its OWN issue (distinct fixed titles), so a permanently red

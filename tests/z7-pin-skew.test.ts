@@ -163,3 +163,63 @@ describe('the nightly job can run on a fresh runner', () => {
     }
   });
 });
+
+describe('the scratch yaml install is integrity-checked against the repo lockfile', () => {
+  const text = read('.github/workflows/z7-watchdog-nightly.yml');
+  const run: string = parse(text).jobs['z7-pin-skew'].steps.find((s: { run?: string }) =>
+    s.run?.includes('verify-z7-pin-skew'),
+  ).run;
+  const lockText = read('bun.lock');
+  const INSTALLED = (integrity: string, version = '2.9.0') =>
+    JSON.stringify({ packages: { 'node_modules/yaml': { version, integrity } } });
+  const real = lockText.match(/"yaml": \["yaml@2\.9\.0"[^\n]*?"(sha512-[^"]+)"\]/)?.[1] ?? '';
+
+  it('the workflow runs the check after the install and before the comparison, set -e on', async () => {
+    const i = run.indexOf('npm install');
+    const c = run.indexOf('verify-installed-yaml-integrity.mjs');
+    const v = run.indexOf('verify-z7-pin-skew.mjs', c);
+    expect(i).toBeGreaterThan(-1);
+    expect(c).toBeGreaterThan(i);
+    expect(v).toBeGreaterThan(c);
+    expect(run).toContain('set -euo pipefail');
+    expect(run).toContain('bun.lock');
+    expect(run).toMatch(/verify-installed-yaml-integrity\.mjs[^\n]*2\.9\.0/);
+  });
+  it('accepts the matching integrity', async () => {
+    const { verifyYamlIntegrity } = await import('../scripts/verify-installed-yaml-integrity.mjs');
+    expect(real).toMatch(/^sha512-/);
+    expect(() =>
+      verifyYamlIntegrity({
+        lockText,
+        installedLockText: INSTALLED(real),
+        expectedVersion: '2.9.0',
+      }),
+    ).not.toThrow();
+  });
+  it('rejects a tampered integrity, a wrong version, a missing entry and a drifted pin', async () => {
+    const { verifyYamlIntegrity } = await import('../scripts/verify-installed-yaml-integrity.mjs');
+    const bad = (installedLockText: string, expectedVersion = '2.9.0', lt = lockText) =>
+      expect(() =>
+        verifyYamlIntegrity({ lockText: lt, installedLockText, expectedVersion }),
+      ).toThrow();
+    bad(INSTALLED(`${real.slice(0, -4)}AAAA`));
+    bad(INSTALLED(real, '2.8.9'));
+    bad(JSON.stringify({ packages: {} }));
+    bad(INSTALLED(real), '2.9.1');
+    bad(INSTALLED(real), '2.9.0', '{}');
+  });
+  it('the CLI exits nonzero on a missing install dir (fail closed)', () => {
+    const r = spawnSync(
+      'node',
+      [
+        resolve(REPO_ROOT, 'scripts/verify-installed-yaml-integrity.mjs'),
+        '/nonexistent-dir',
+        resolve(REPO_ROOT, 'bun.lock'),
+        '2.9.0',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/FAILED/);
+  });
+});

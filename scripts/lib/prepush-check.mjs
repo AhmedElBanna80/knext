@@ -354,8 +354,8 @@ export function ciRunsTest(root, testFile) {
   const wfDir = '.github/workflows';
   if (!existsSync(join(root, wfDir))) return false;
   for (const f of readdirSync(join(root, wfDir)).filter((n) => /\.ya?ml$/.test(n))) {
-    const joined = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));
-    for (const line of joined.split('\n')) {
+    const wfText = joinContinuations(stripComments(readFileSync(join(root, wfDir, f), 'utf8')));
+    for (const line of wfText.split('\n')) {
       if (line.includes(testFile) && /\b(?:bun-test\.mjs|bun test|vitest)\b/.test(line))
         return true;
       if (

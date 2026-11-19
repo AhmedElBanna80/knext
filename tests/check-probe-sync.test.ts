@@ -47,6 +47,42 @@ describe('probe sync check (logic)', () => {
   });
 });
 
+describe('probe sync check (CLI behaviour)', () => {
+  const run = (target: string) =>
+    spawnSync(process.execPath, [resolve(ROOT, 'scripts/check-probe-sync.mjs')], {
+      cwd: ROOT,
+      env: { ...process.env, PROBE_SYNC_TARGET: target },
+      encoding: 'utf8',
+    });
+  it('passes on identical copies', () => {
+    const d = copyTree();
+    expect(run(d).status).toBe(0);
+    rmSync(d, { recursive: true });
+  });
+  it('goes red naming the file on a one-byte edit, a removal, or a symlink', () => {
+    for (const f of PROBE_FILES) {
+      for (const how of ['edit', 'remove', 'symlink']) {
+        const d = copyTree();
+        if (how === 'edit') appendFileSync(join(d, f), ' ');
+        else unlinkSync(join(d, f));
+        if (how === 'symlink') symlinkSync(resolve(ROOT, f), join(d, f));
+        const r = run(d);
+        expect(r.status, `${how} ${f}`).toBe(1);
+        expect(r.stderr).toContain(`DIVERGED: ${f}`);
+        rmSync(d, { recursive: true });
+      }
+    }
+  });
+  it('fails without a target', () => {
+    const r = spawnSync(process.execPath, [resolve(ROOT, 'scripts/check-probe-sync.mjs')], {
+      cwd: ROOT,
+      env: { ...process.env, PROBE_SYNC_TARGET: '' },
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(1);
+  });
+});
+
 describe('probe sync check (nightly wiring)', () => {
   const wf = parse(
     readFileSync(resolve(ROOT, '.github/workflows/allowlist-retirement-nightly.yml'), 'utf8'),

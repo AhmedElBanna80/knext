@@ -84,11 +84,9 @@ export function evaluateException(exception, nowMs) {
     return { active: false, why: `exception window exceeds ${EXCEPTION_MAX_DAYS} days` };
   }
   if (nowMs < granted) return { active: false, why: `not yet granted (${exception.granted})` };
-  // The cap is measured from NOW as well: a future-dated granted/expires pair must
-  // not mute the alert for longer than 30 days from today.
-  if (expires > nowMs + EXCEPTION_MAX_DAYS * DAY_MS) {
-    return { active: false, why: `expires more than ${EXCEPTION_MAX_DAYS} days from now` };
-  }
+  // `granted <= now` plus `expires - granted <= 30d` together imply
+  // `expires <= now + 30d`, so a future-dated granted/expires pair cannot mute the
+  // alert for longer than 30 days from today (no separate now-based cap is needed).
   if (nowMs >= expires) return { active: false, why: `expired ${exception.expires}` };
   return { active: true, why: `holds until ${exception.expires}` };
 }

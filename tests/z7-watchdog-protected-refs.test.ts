@@ -357,9 +357,12 @@ describe('dated known exception for protected refs', () => {
   it('is inactive before it is granted (future-dated pair cannot mute today)', () => {
     const future = { granted: '2027-01-01', expires: '2027-01-30', reason: EXCEPTION_REASON };
     expect(evaluateException(future, T).active).toBe(false);
+    // Window within 30 days and expiry within 30 days of now: ONLY the not-yet-granted check rejects.
+    const soon = { granted: '2026-11-25', expires: '2026-12-10', reason: EXCEPTION_REASON };
+    expect(evaluateException(soon, T).active).toBe(false);
     expect(evaluateException(future, Date.parse('2027-01-02T00:00:00Z')).active).toBe(true);
   });
-  it('caps expiry at 30 days from NOW, not only from granted', () => {
+  it('never lets an exception outlast 30 days from now (granted <= now and a 30-day window)', () => {
     const longAgoGranted = {
       granted: '2026-10-25',
       expires: '2026-11-24',

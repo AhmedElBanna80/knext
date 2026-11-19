@@ -165,15 +165,15 @@ const MUTATIONS = [
     label: 'a branch API error is swallowed instead of UNVERIFIABLE',
     subject: 'refs',
     spec: SPEC,
-    anchor: 'findings.push(`branch ${ref}: UNVERIFIABLE (${errText(e).split',
-    replacement: '0 && findings.push(`branch ${ref}: UNVERIFIABLE (${errText(e).split',
+    anchor: "add('unverifiable', `branch ${ref}: UNVERIFIABLE (${errText(e).split",
+    replacement: "0 && add('unverifiable', `branch ${ref}: UNVERIFIABLE (${errText(e).split",
   },
   {
     label: 'a tag shadowing a protected branch name is not reported',
     subject: 'refs',
     spec: SPEC,
-    anchor: 'findings.push(`tag ${ref}: EXISTS',
-    replacement: '0 && findings.push(`tag ${ref}: EXISTS',
+    anchor: "add('tag', `tag ${ref}: EXISTS",
+    replacement: "0 && add('tag', `tag ${ref}: EXISTS",
   },
   {
     label: 'a non-404 tag lookup error is treated as absent',
@@ -193,8 +193,8 @@ const MUTATIONS = [
     label: 'an empty ref set passes',
     subject: 'refs',
     spec: SPEC,
-    anchor: 'if (checked === 0) findings.push',
-    replacement: 'if (false) findings.push',
+    anchor: 'if (checked === 0) add',
+    replacement: 'if (false) add',
   },
   {
     label: 'the exception never expires (the expiry check is deleted)',
@@ -238,13 +238,6 @@ const MUTATIONS = [
     spec: SPEC,
     anchor: 'if (nowMs < granted) return',
     replacement: 'if (false) return',
-  },
-  {
-    label: 'the expiry cap from NOW is deleted',
-    subject: 'refs',
-    spec: SPEC,
-    anchor: 'if (expires > nowMs + EXCEPTION_MAX_DAYS * DAY_MS) {',
-    replacement: 'if (false) {',
   },
   {
     label: 'a tag shadow is classified as an unprotected-branch finding (mutable by the exception)',
@@ -346,7 +339,7 @@ const MUTATIONS = [
   },
 ];
 
-const DECLARED = 43;
+const DECLARED = 42;
 declareMutations(DECLARED);
 
 if (MUTATIONS.length !== DECLARED) {

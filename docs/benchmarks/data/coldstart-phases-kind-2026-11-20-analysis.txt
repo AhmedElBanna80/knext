@@ -1,16 +1,19 @@
-valid 13, excluded 0: []
+valid 12, excluded 0: []
 
-### s156-zone (n=13)
+### s156-zone (n=12)
 
 | phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
 |---|---|---|---|---|
-| 0 autoscaler decides 0->1 (log; inside phase 1) | 27 | 31 | 6 [22, 29] | 13–32 |
-| 1 activation: request -> Pod object | 44 | 55 | 15 [38, 53] | 29–57 |
-| 2 scheduling: Pod -> bound to node | 9 | 24 | 5 [7, 12] | 4–38 |
-| 3 sandbox + containers start: bound -> first log line | 295 | 320 | 38 [279, 317] | 275–321 |
-| 4 runtime boot: first log -> Next listening | 2192 | 2307 | 99 [2158, 2257] | 2121–2358 |
-| 5 routable: listening -> ready | 640 | 734 | 93 [571, 664] | 474–817 |
-| 6 forward + render: ready -> first byte | 0 | 152 | 72 [0, 72] | 0–156 |
-| total: request -> first byte | 3169 | 3408 | 124 [3151, 3275] | 3128–3539 |
-|   5x kubelet status lag: first log -> pod IP visible in API | 457 | 808 | 520 [158, 677] | 18–870 |
-|   5w activator: first log -> activator marks pod healthy | 2686 | 2867 | 44 [2663, 2708] | 2621–3052 |
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 25 | 33 | 5 [22, 27] | 19–33 |
+| 1 activation: request -> Pod object | 43 | 50 | 8 [39, 47] | 36–53 |
+| 2 scheduling: Pod -> bound to node | 7 | 10 | 3 [6, 9] | 5–11 |
+| 3 sandbox + containers start: bound -> first log line | 301 | 315 | 18 [291, 309] | 282–318 |
+| 4 runtime boot: first log -> Next listening | 2174 | 2220 | 29 [2159, 2188] | 2125–2242 |
+| 5 routable: listening -> ready | 689 | 731 | 21 [677, 698] | 657–740 |
+| 6 forward + render: ready -> first byte | 19 | 286 | 27 [4, 31] | 0–336 |
+| total: request -> first byte | 3226 | 3561 | 38 [3215, 3253] | 3161–3596 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 564 | 1013 | 525 [397, 922] | 100–1014 |
+|   5y net: first log -> TCP :3000 from the other node | 2173 | 2213 | 25 [2158, 2183] | 2128–2242 |
+|   5y net: first log -> TCP :3000 from the same node | 2170 | 2210 | 27 [2159, 2186] | 2128–2236 |
+|   5z app: listening -> /api/health 200 (same node, direct) | 475 | 498 | 28 [464, 492] | 398–501 |
+|   5w activator: first log -> activator marks pod healthy | 2863 | 3140 | 24 [2844, 2868] | 2789–3148 |

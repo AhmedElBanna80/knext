@@ -50,6 +50,7 @@ kind: Pod
 metadata:
   name: phase-bench
   namespace: z2
+  labels: {knext-bench: harness}
 spec:
   serviceAccountName: phase-bench
   restartPolicy: Never
@@ -65,7 +66,7 @@ kind: Pod
 metadata:
   name: clock-kind
   namespace: z2
-  labels: {app: phase-clock}
+  labels: {app: phase-clock, knext-bench: harness}
 spec:
   automountServiceAccountToken: false
   restartPolicy: Never
@@ -81,7 +82,7 @@ kind: Pod
 metadata:
   name: agent-kind
   namespace: z2
-  labels: {app: phase-agent}
+  labels: {app: phase-agent, knext-bench: harness}
 spec:
   automountServiceAccountToken: false
   restartPolicy: Never
@@ -130,3 +131,27 @@ spec:
           }).listen(8080);
       resources:
         requests: {cpu: 10m, memory: 32Mi}
+---
+# The operator renders a default-on, port-restricted NetworkPolicy for the app. Without this additive
+# allow the harness's direct probes to the new pod (:3000, :8012) and the agent's same-node polls are
+# dropped, every probe-derived milestone (qp_probe_ok, app_tcp_3000, same_node_*) comes back null, and
+# analyze.py falls back to the Ready condition / first byte. Benchmark-only; it widens nothing for
+# anything but the labelled harness pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bench-harness-probes
+  namespace: z2
+spec:
+  # Only the app's pods: a bare {} would also isolate the harness and agent pods themselves.
+  podSelector:
+    matchExpressions:
+      - {key: serving.knative.dev/service, operator: Exists}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {knext-bench: harness}
+      ports:
+        - {protocol: TCP, port: 3000}
+        - {protocol: TCP, port: 8012}

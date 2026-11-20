@@ -100,10 +100,14 @@ jobs:
           if [ -n "$ARMS_INPUT" ] && [ "$SET" != default ]; then
             echo "::error::arms may only be given with set=default"; exit 1
           fi
+          # An explicit arm list is never a set name (that would pick the set's arms while the N
+          # floor below follows SET alone).
+          case "$ARMS_INPUT" in default | ladder | bun | smoke) echo "::error::arms must be an arm list, not a set name (use the set input)"; exit 1 ;; esac
           spec="${ARMS_INPUT:-$SET}"
           kind=scripts/bench-cold-start-phases/kind
-          MIN_N="$("$kind/arms.sh" --min-n "$spec")"
-          N="${N_INPUT:-$("$kind/arms.sh" --default-n "$spec")}"
+          # The N floor and default come from SET only, never from the arm spec.
+          MIN_N="$("$kind/arms.sh" --min-n "$SET")"
+          N="${N_INPUT:-$("$kind/arms.sh" --default-n "$SET")}"
           case "$N" in ''|*[!0-9]*) echo "::error::n must be an integer"; exit 1 ;; esac
           # n is capped at 30; the combined check below (run-budget.sh) is what actually bounds the
           # run: n x arms x (45 s per wake + ready window) + 25 min setup must fit the 150 min timeout

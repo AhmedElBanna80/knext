@@ -3,8 +3,9 @@
 # requested arm, in the order given, or exits 2 naming the first unknown/duplicate arm.
 #
 #   arms.sh [<set>|<arm>,<arm>,...]        resolve arms
-#   arms.sh --min-n [<set>|<csv>]           the smallest N allowed: 1 for the smoke set, else 12
-#   arms.sh --default-n [<set>|<csv>]       the default N: 1 for the smoke set, else 12
+#   arms.sh --min-n [<set>]                 the smallest N allowed: 1 for the smoke set, else 12
+#   arms.sh --default-n [<set>]             the default N: 1 for the smoke set, else 12
+# (both refuse an unknown set name with exit 2; they take a set, never an arm list)
 #
 # Named sets (each resolves to a comma list of arms): default (the first native run's three arms),
 # ladder (node-1000m, node-2000m, node-4000m, node-nolimit), bun (bun-1000m, bun-nolimit and the
@@ -26,7 +27,11 @@ set_csv() {
 }
 
 if [ "${1:-}" = "--min-n" ] || [ "${1:-}" = "--default-n" ]; then
-  if [ "${2:-default}" = smoke ]; then echo 1; else echo 12; fi
+  case "${2-default}" in
+    smoke) echo 1 ;;
+    default | ladder | bun) echo 12 ;;
+    *) echo "unknown set '${2}' (known sets: default, ladder, bun, smoke)" >&2; exit 2 ;;
+  esac
   exit 0
 fi
 

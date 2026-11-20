@@ -306,8 +306,16 @@ describe('kind/arms.sh sets', () => {
     const minN = (a: string) =>
       spawnSync('bash', [ARMS_SH, '--min-n', a], { encoding: 'utf8' }).stdout.trim();
     expect(minN('smoke')).toBe('1');
-    for (const o of ['default', 'ladder', 'bun', 'node-1000m', 'smoke,node-1000m'])
-      expect(minN(o)).toBe('12');
+    for (const o of ['default', 'ladder', 'bun']) expect(minN(o)).toBe('12');
+  });
+
+  it('--min-n and --default-n reject an unknown set or an arm list with exit 2', () => {
+    for (const flag of ['--min-n', '--default-n'])
+      for (const o of ['junk', 'node-1000m', 'smoke,node-1000m']) {
+        const r = spawnSync('bash', [ARMS_SH, flag, o], { encoding: 'utf8' });
+        expect(r.status).toBe(2);
+        expect(r.stderr).toContain('unknown set');
+      }
   });
 });
 
@@ -370,6 +378,36 @@ describe('Validate inputs step (behaviour)', () => {
   it('accepts ladder at N=20 and refuses an oversize run', () => {
     expect(validate({ SET: 'ladder', N_INPUT: '20' }).status).toBe(0);
     expect(validate({ SET: 'ladder', N_INPUT: '30' }).status).toBe(1);
+  });
+
+  it('refuses the arms=smoke N=1 bypass (the floor follows SET, not the arm spec)', () => {
+    expect(validate({ SET: 'default', ARMS_INPUT: 'smoke', N_INPUT: '1' }).status).toBe(1);
+    expect(validate({ SET: 'default', ARMS_INPUT: 'ladder', N_INPUT: '12' }).status).toBe(1);
+    expect(validate({ SET: 'default', ARMS_INPUT: 'node-1000m', N_INPUT: '1' }).status).toBe(1);
+  });
+
+  it('refuses a non-integer, whitespace or newline-bearing n, even for the smoke set', () => {
+    for (const n of ['x', ' ', '1\n2', '1\n', '1.5', '-1'])
+      for (const set of ['smoke', 'default', 'ladder'])
+        expect(validate({ SET: set, N_INPUT: n }).status).toBe(1);
+  });
+
+  it('refuses an unknown set', () => {
+    expect(validate({ SET: 'junk' }).status).not.toBe(0);
+    expect(validate({ SET: 'junk', N_INPUT: '12' }).status).not.toBe(0);
+    expect(validate({ SET: '' }).status).not.toBe(0);
+  });
+
+  it('the default set exports exactly the 3 default arms and N=12', () => {
+    const r = validate({ SET: 'default' });
+    expect(r.status).toBe(0);
+    expect(r.genv).toBe('N=12\nARMS=node-1000m,node-nolimit,bun-1000m\n');
+  });
+
+  it('accepts an explicit arm list with the default set and exports exactly it', () => {
+    const r = validate({ SET: 'default', ARMS_INPUT: 'node-2000m,bun-nolimit' });
+    expect(r.status).toBe(0);
+    expect(r.genv).toBe('N=12\nARMS=node-2000m,bun-nolimit\n');
   });
 
   it('refuses arms together with a named set', () => {

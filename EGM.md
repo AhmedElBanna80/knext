@@ -30,8 +30,8 @@ This file covers the platform code only. `apps/`, `examples/`, `spikes/`,
   operator; the database layer; the Beta `grpc` and `ffi` modules; the UI kit;
   the GitHub Action.
 - crates: [./crates/EGM.md](./crates/EGM.md) - the Cargo workspace for the
-  in-process Rust crates (Beta), kept outside the repo root so no tool mistakes
-  the monorepo for a Rust project.
+  in-process Rust crates (Beta), kept in its own subdirectory with no Cargo
+  manifest at the repo root, so no tool mistakes the monorepo for a Rust project.
 - scripts: [./scripts/EGM.md](./scripts/EGM.md) - repo tooling: CI guards and
   gates, release and publish automation, the compatibility-harness e2e drivers,
   supply-chain scans and the mutation-prover fleet.

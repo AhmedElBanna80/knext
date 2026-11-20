@@ -38,7 +38,7 @@ Arms:
 - The workflow builds the packages and CLI, creates the kind cluster, installs the serving stack and operator, then
   deploys every arm through `kn-next deploy` and waits for Ready.
 - The arms set the limit as `scaling.cpuLimit` in the app config. The CLI maps it to `spec.resources.cpuLimit`
-  (`packages/kn-next/src/cli/cr-builder.ts:155-166`) and fills the other resource fields with its own constants.
+  (`packages/kn-next/src/cli/cr-builder.ts:152-168`) and fills the other resource fields with its own constants.
 - `drive.py` interleaves the four arms. Each wake is a true scale from zero; the harness refuses to start otherwise.
 - `analyze.py` builds each table from the control-plane logs and the per-row milestones. p95 is linear interpolation
   between order statistics. At n = 12 it is close to the maximum, so read it as a tail bound.

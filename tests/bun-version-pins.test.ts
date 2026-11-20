@@ -277,6 +277,9 @@ describe('bun-version pins (#754) — scanned across every workflow', () => {
       // is what exposed the pnpm/bun mismatch (run 33883692192).
       'compat-vinext.yml': 2,
       'bun-sandbox-fetch-ab.yml': 1,
+      // NEW (S16-2): the dispatch-only native amd64 kind cold-start phases lane: one pinned
+      // "Setup bun" for the workspace build and the zone install. A count RISING is a decision.
+      'coldstart-phases-kind-native.yml': 1,
       // The write-free runtime proof lane (dispatch-only): one setup-bun to
       // build the workspace + compile the default bun runtime.
       'write-free-runtime-kind-e2e.yml': 1,

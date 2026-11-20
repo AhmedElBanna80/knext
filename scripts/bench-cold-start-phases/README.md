@@ -63,3 +63,7 @@ scripts/bench-cold-start-phases/prewake-ab.sh --context kind-<name> --setup --ro
 
 It refuses a non-kind context without `--allow-non-kind`. The OKE procedure is the founder's
 runbook, [`docs/benchmarks/prewake-ab-oke-runbook.md`](../../docs/benchmarks/prewake-ab-oke-runbook.md).
+
+## Overlap between arms within a round
+
+`drive.py` waits for zero pods once per round and then wakes the arms one after another. While arm B wakes, arm A's pod from the same round is still up (it only scales down after the autoscaler's grace period), and the harness's post-response watch (`READY_WINDOW_MS`) keeps running. A longer window lengthens that overlap. The arm order rotates every round, so the effect is spread across arms rather than always hitting the same one; it is mitigated, not removed.

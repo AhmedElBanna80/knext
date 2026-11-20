@@ -58,6 +58,7 @@ Cluster work is a queue of one: never run two drivers at once.
 """
 import argparse
 import json
+import os
 import pathlib
 import shlex
 import signal
@@ -168,6 +169,8 @@ def harness_env(treat, arm):
     if CFG["agent_pods"]:
         env["AGENT_PODS"] = json.dumps(CFG["agent_pods"], separators=(",", ":"))
     env["AGENT_LABEL"] = CFG["agent_label"]
+    if os.environ.get("READY_WINDOW_MS"):
+        env["READY_WINDOW_MS"] = os.environ["READY_WINDOW_MS"]
     return "".join(f"{k}={shlex.quote(v)} " for k, v in env.items())
 
 

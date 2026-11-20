@@ -23,6 +23,69 @@ Run it before every push (agents included). After a merge, `.github/workflows/me
 fails if the commit that landed on `main` or `integration/**` does not contain the PR's final head
 (`scripts/merged-sha-check.mjs`: ancestry, or for squash merges, per-file blob equality).
 
+## Before you push, part two: `node scripts/prepush-check.mjs`
+
+`bun run prepush` checks lint and types. This one checks the diff you are about to push, against
+the merge base, for three defects that reached CI or merged: a changed `security/` data file
+that its gate rejects, tests that leak temp directories, and a change that touches files outside
+its task.
+
+```bash
+node scripts/prepush-check.mjs --scope 'scripts/**,tests/**'
+```
+
+Every check looks at the same set of files: the merge-base diff plus your uncommitted and
+untracked changes, which are listed as such. It runs the real gate for every changed file under
+`security/` (any depth, any extension except `.md`): readers are found by scanning `scripts/`, the
+workflows and `package.json` scripts, and one that is not in the registry in
+`scripts/lib/prepush-check.mjs` fails. A file with no gate fails too. A gate is a registered
+script, a test that reads the file by its path and that a workflow runs, or a documented
+exemption (printed as a `NOTICE` on every run, whether or not that file changed). It also runs the changed tests while snapshotting `tmpdir()`
+and the repo root for new leftovers (with no changed tests it runs the tests that import the
+changed source, and warns that the leak scan was not exercised if there are none), scans
+`tests/**` for a `mkdtemp` that is never removed, and prints `git diff --stat` grouped by
+top-level area. A file outside the declared scope fails. The scope is `--scope`, or a line of the
+form `Scope: glob, glob` in a commit or PR body; any other phrasing is ignored. List each glob
+separately: a brace glob such as `{a,b}/**` fails, because the line is split on commas. A gate
+whose tool is not installed is reported as unverified and fails unless you pass
+`--allow-missing-tools`. It is not a git hook and nothing installs it.
+
+### In CI
+
+`.github/workflows/prepush-check.yml` runs it on every pull request, and again when the PR body is
+edited. There the `Scope:` line must be in the **PR body** (a commit message can be rebased wider),
+and the job fails when it is missing, when it is a wildcard over directories (`**`, `**/*`,
+`*/**`), or when the globs together touch 75% of the tracked top-level directories or match more
+than 60% of tracked files (so `**/*.ts, **/*.md` fails). Locally a missing scope only warns.
+
+What the CI job does **not** catch:
+
+- It does not run any gate or test; each already runs in its own workflow. It proves a scope was
+  declared and that each changed `security/` file has a gate.
+- The scope is self-declared. A revert inside the declared scope passes, and so does a wide but
+  honest-looking scope below the thresholds above.
+- A `Scope:` line is not checked against what the PR says it does.
+- A test counts as a gate if it reads the file by path and a workflow runs it. A step or job whose
+  `if:` is not always true on a pull request is refused, but workflow trigger filters (`paths:`,
+  `branches:`) and `needs:` are not evaluated, and a test that reads the file but asserts little
+  still counts.
+- A path built at run time cannot be seen by the reader scan; keep paths literal.
+
+The copy on `main` and the copy on `integration/v2` differ only in the block between
+`// BEGIN branch-specific` and `// END branch-specific` (which gates and `security/` files each
+registers); that block is parsed, and holds pure literals only: no calls, functions, identifier references or
+spreads. A test also counts as a gate only when the `if:` on its step and job is read from the parsed
+workflow YAML.
+`.github/workflows/prepush-lib-drift.yml` exists on both branches and runs
+`scripts/prepush-lib-drift.mjs` against the other branch, so drift introduced from either side
+fails on that side's own PR. Limits: it runs only on a pull request or push that touches one of the
+files it compares (a `paths:` filter), so a change that lands on the other branch is not
+re-checked here until this side next touches those files; a nightly run from `main` (a cron fires
+only on the default branch) and `workflow_dispatch` cover that gap. It is informational, not a
+required check, and is red until both copies have landed. It fails on any
+difference outside the block, in the CLI, the tests, the prover or the two workflows, on a block
+that is not plain data, and on an input that exists on both branches but is exempt on only one.
+
 ## Mutation-proving a guard
 
 Every new guard is mutation-proved (delete the behaviour it protects, watch it go RED, restore).

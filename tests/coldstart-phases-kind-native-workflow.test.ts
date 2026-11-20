@@ -87,7 +87,8 @@ describe('coldstart-phases-kind-native workflow shape', () => {
 
   it('verifies each arm runs its runtime, both the rendered command and pid 1', () => {
     expect(code).toMatch(/\$runtime" = bun \]; then/);
-    expect(code).toMatch(/but its container command is/);
+    expect(code).toMatch(/is a bun arm but its container command is/);
+    expect(code).toMatch(/is a node arm but its container command is/);
     expect(code).toMatch(/cat \/proc\/1\/cmdline/);
     expect(code).toMatch(/bun:\*bun\*\) ;;/);
     expect(code).toMatch(/node:\*bun\*\) echo "::error::node arm/);

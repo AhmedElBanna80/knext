@@ -6,12 +6,14 @@ name: Cold-start phases on kind (native amd64, manual)
 # is amd64 and the image is amd64, so runtime boot is measured without it.
 #
 # MANUAL by design: a measurement tool, not a gate or a monitor. There is no schedule or
-# pull_request trigger. The push trigger lists four dedicated branches (guard-tested in
+# pull_request trigger. The push trigger lists five dedicated branches (guard-tested in
 # tests/coldstart-phases-kind-native-workflow.test.ts), each selecting one arm set:
 #   bench/run-coldstart-native         default set (node-1000m, node-nolimit, bun-1000m)
 #   bench/run-coldstart-native-ladder  ladder set (node 1000m, 2000m, 4000m, nolimit)
 #   bench/run-coldstart-native-bun     bun set (bun-1000m, bun-nolimit, node-1000m control)
 #   bench/run-coldstart-native-smoke   smoke set (node-1000m, N=1 allowed)
+#   bench/run-coldstart-native-buildtool  buildtool set (node and bun, each built with turbopack
+#                                      and with vinext, all at 1000m)
 #
 # Why push triggers exist: GitHub only dispatches a workflow file that exists on the default
 # branch, and this file lives only on the v2 line, so `gh workflow run` returns 404. The four
@@ -22,7 +24,8 @@ name: Cold-start phases on kind (native amd64, manual)
 # dispatch, the `set` input (default `default`) selects the set instead of the branch name.
 # Runner time per run, from run-budget.sh's estimate (n x arms x (45 s + window) + 25 min setup, with
 # window 20 s on push): default about 64 min (3 x 12 x 65 s + 25 min), ladder about 77 min (4 x 12 x
-# 65 s + 25 min), bun about 64 min (3 x 12 x 65 s + 25 min), smoke about 26 min (1 x 1 x 65 s + 25 min).
+# 65 s + 25 min), bun about 64 min (3 x 12 x 65 s + 25 min), smoke about 26 min (1 x 1 x 65 s + 25 min),
+# buildtool about 77 min (4 x 12 x 65 s + 25 min; the four image builds sit in the setup estimate).
 # A larger N fits only while it stays within the 135 min budget; run-budget.sh refuses anything above
 # it. The concurrency group queues a
 # re-dispatch behind it so two measurements never share the runner pool.
@@ -33,7 +36,20 @@ name: Cold-start phases on kind (native amd64, manual)
 #   bun-1000m     bun runtime, cpu limit 1000m
 #   node-2000m, node-4000m   node runtime at 2 and 4 CPUs;  bun-nolimit   bun runtime, 64 CPUs
 # Sets: default (the three above), ladder (node 1000m, 2000m, 4000m, nolimit), bun (bun-1000m,
-# bun-nolimit, node-1000m as control), smoke (node-1000m, N=1: a cheap check of workflow changes).
+# bun-nolimit, node-1000m as control), smoke (node-1000m, N=1: a cheap check of workflow changes),
+# buildtool (the four build-tool arms below).
+#
+# Build-tool axis (the buildtool set). Every arm above builds the spike zone with the default build
+# tool (turbopack). These four vary the build tool and the runtime on ONE app, a fresh `knext create`
+# scaffold, so the only differences between them are build and runtime:
+#   node-turbopack-1000m  build: turbopack, runtime: node   .next/standalone under node, V8 compile cache baked in the image
+#   bun-turbopack-1000m   build: turbopack, runtime: bun    the standalone server compiled to a Bun executable with bytecode
+#   node-vinext-1000m     build: vinext,    runtime: node   nitro node preset under node, V8 compile cache baked in the image
+#   bun-vinext-1000m      build: vinext,    runtime: bun    `vite build` compiled with `bun build --compile --bytecode`
+# A user selects vinext with `build: "vinext"` in knext.config.ts (config.ts, `build`), and the runtime
+# with `runtime: "node" | "bun"`; the two are independent. Per arm, record-evidence.sh reads the pushed
+# image and writes evidence-<arm>.json (build target, runtime, and the compile-cache byte count or the
+# bytecode verdict), which the step summary quotes and the artifact carries.
 # The cpu limit is the NextApp scaling.cpuLimit, resolved by scripts/bench-cold-start-phases/kind/arms.sh.
 #
 # Image pull is 0 by construction: every arm is deployed and reaches Ready (which pulls the app and
@@ -48,10 +64,11 @@ on:
       - bench/run-coldstart-native-ladder
       - bench/run-coldstart-native-bun
       - bench/run-coldstart-native-smoke
+      - bench/run-coldstart-native-buildtool
   workflow_dispatch:
     inputs:
       set:
-        description: 'Arm set: default, ladder, bun or smoke (smoke is the only set that may run N=1)'
+        description: 'Arm set: default, ladder, bun, smoke or buildtool (smoke is the only set that may run N=1)'
         required: false
         type: string
         default: 'default'
@@ -61,7 +78,7 @@ on:
         type: string
         default: ''
       arms:
-        description: 'Comma-separated arms (only with set=default): node-1000m, node-2000m, node-4000m, node-nolimit, bun-1000m, bun-nolimit'
+        description: 'Comma-separated arms (only with set=default): node-1000m, node-2000m, node-4000m, node-nolimit, bun-1000m, bun-nolimit, node-turbopack-1000m, bun-turbopack-1000m, node-vinext-1000m, bun-vinext-1000m'
         required: false
         type: string
         default: ''
@@ -92,7 +109,7 @@ jobs:
       NEXT_VERSION: 16.4.5
       # The arm set comes from the dispatch input, or on push from the branch name. N and ARMS are
       # resolved by the validation step below and exported through GITHUB_ENV.
-      SET: ${{ inputs.set || (github.ref_name == 'bench/run-coldstart-native-ladder' && 'ladder') || (github.ref_name == 'bench/run-coldstart-native-bun' && 'bun') || (github.ref_name == 'bench/run-coldstart-native-smoke' && 'smoke') || 'default' }}
+      SET: ${{ inputs.set || (github.ref_name == 'bench/run-coldstart-native-ladder' && 'ladder') || (github.ref_name == 'bench/run-coldstart-native-bun' && 'bun') || (github.ref_name == 'bench/run-coldstart-native-smoke' && 'smoke') || (github.ref_name == 'bench/run-coldstart-native-buildtool' && 'buildtool') || 'default' }}
       N_INPUT: ${{ inputs.n || '' }}
       ARMS_INPUT: ${{ inputs.arms || '' }}
       READY_WINDOW_S: ${{ inputs.ready_window_s || '20' }}
@@ -109,7 +126,7 @@ jobs:
           fi
           # An explicit arm list is never a set name (that would pick the set's arms while the N
           # floor below follows SET alone).
-          case "$ARMS_INPUT" in default | ladder | bun | smoke) echo "::error::arms must be an arm list, not a set name (use the set input)"; exit 1 ;; esac
+          case "$ARMS_INPUT" in default | ladder | bun | smoke | buildtool) echo "::error::arms must be an arm list, not a set name (use the set input)"; exit 1 ;; esac
           spec="${ARMS_INPUT:-$SET}"
           kind=scripts/bench-cold-start-phases/kind
           # The N floor and default come from SET only, never from the arm spec.
@@ -249,56 +266,93 @@ jobs:
       - name: Namespace
         run: kubectl create namespace "$APP_NS"
 
+      # vinext+bun compiles with `bytecode: true` but embeds no marker and `knext build` runs no
+      # bytecode check on that executable, so its proof is a differential: the count of
+      # `// @bun @bytecode @bun-cjs` module pragmas in the shipped binary must exceed the count in a
+      # probe compiled WITHOUT bytecode for the same target and Bun (the runtime carries one copy of
+      # the text itself). Built only when an arm needs it.
+      - name: Build the no-bytecode baseline probe (vinext+bun pragma differential)
+        run: |
+          set -euo pipefail
+          if awk '$2 == "bun" && $4 == "vinext" { f = 1 } END { exit !f }' "${RUNNER_TEMP}/arms.txt"; then
+            echo 'console.log("knext bytecode baseline probe")' > "${RUNNER_TEMP}/probe.js"
+            bun build --compile --minify --target=bun-linux-x64-musl "${RUNNER_TEMP}/probe.js" --outfile "${RUNNER_TEMP}/bytecode-baseline"
+            test -s "${RUNNER_TEMP}/bytecode-baseline"
+            echo "BYTECODE_BASELINE=${RUNNER_TEMP}/bytecode-baseline" >> "$GITHUB_ENV"
+          fi
+
       # One Knative Service per arm, each through the real `kn-next deploy`. The zone is the minimal
       # Next.js app from the cold-start spike, staged OUTSIDE the repo (a real app is its own project
-      # dir). The first arm of each runtime builds and pushes the amd64 image natively; a later arm
-      # of the same runtime reuses that digest with --image, so a cpu-limit arm differs from its
-      # sibling in the limit alone. Each arm is deployed to Ready, which pulls the app and
+      # dir). The first arm of each (app, runtime, build tool) builds and pushes the amd64 image
+      # natively; a later arm with the same key reuses that digest with --image, so a cpu-limit arm
+      # differs from its sibling in the limit alone. The scaffold arms (the buildtool set) build a
+      # fresh `knext create --builder <build> --runtime <runtime>` app instead of the spike zone. Each arm is deployed to Ready, which pulls the app and
       # queue-proxy images onto the node before any measured wake.
       - name: Deploy every arm (kn-next deploy) and warm the node image cache
         run: |
           set -euo pipefail
           CLI="${GITHUB_WORKSPACE}/packages/kn-next/dist/cli/kn-next.js"
+          out="${RUNNER_TEMP}/out"
+          mkdir -p "$out"
           : > "${RUNNER_TEMP}/arm-images.txt"
           # fd 3, not stdin: kubectl, node and bun inside the loop must not eat the arm list.
-          while read -r -u 3 arm runtime cpulimit; do
+          # arms.sh prints three columns for the arms that predate the build-tool axis; they are
+          # turbopack on the spike zone.
+          while read -r -u 3 arm runtime cpulimit build app; do
+            build="${build:-turbopack}"
+            app="${app:-spike}"
+            key="${app}-${runtime}-${build}"
             cat > "${RUNNER_TEMP}/knext.config.${arm}.ts" <<EOF
           const config = {
             name: "${arm}",
             runtime: "${runtime}",
+            build: "${build}",
             registry: "localhost:5001",
             healthCheckPath: "/api/health",
             scaling: { minScale: 0, maxScale: 1, cpuRequest: "250m", cpuLimit: "${cpulimit}", memoryRequest: "256Mi", memoryLimit: "512Mi" },
           };
           export default config;
           EOF
-            reuse="$(awk -v r="$runtime" '$1==r {print $2; exit}' "${RUNNER_TEMP}/arm-images.txt")"
+            reuse="$(awk -v k="$key" '$1==k {print $2; exit}' "${RUNNER_TEMP}/arm-images.txt")"
             if [ -n "$reuse" ]; then
               dir="${RUNNER_TEMP}/cfg-${arm}"
               mkdir -p "$dir"
               cp "${RUNNER_TEMP}/knext.config.${arm}.ts" "$dir/knext.config.ts"
               (cd "$dir" && node "$CLI" deploy --image "$reuse" --namespace "$APP_NS" --tag "r${GITHUB_RUN_ID}-${arm}")
             else
-              dir="${RUNNER_TEMP}/zone-${runtime}"
-              mkdir -p "$dir"
-              cp -R spikes/zone-functions-coldstart/zone/. "$dir/"
+              dir="${RUNNER_TEMP}/zone-${key}"
+              if [ "$app" = scaffold ]; then
+                # A new app from this commit's scaffolder, so every build-tool arm runs the same
+                # source. The generated knext.config.ts is then replaced by the arm's.
+                node "$CLI" create "$dir" --name "$arm" --builder "${build}" --runtime "$runtime" --yes
+              else
+                mkdir -p "$dir"
+                cp -R spikes/zone-functions-coldstart/zone/. "$dir/"
+              fi
               (
                 cd "$dir"
                 mkdir -p public
                 cp "${RUNNER_TEMP}/knext.config.${arm}.ts" knext.config.ts
-                bun install
-                bun add "$(ls "${TARBALLS_DIR}"/getknext-lib-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-db-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-core-*.tgz)"
+                if [ "$app" = scaffold ]; then
+                  # The three packed tarballs in one reify, so @getknext/core resolves its lib and db
+                  # dependencies from them rather than the registry.
+                  npm install --no-audit --no-fund "$(ls "${TARBALLS_DIR}"/getknext-lib-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-db-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-core-*.tgz)"
+                else
+                  bun install
+                  bun add "$(ls "${TARBALLS_DIR}"/getknext-lib-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-db-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-core-*.tgz)"
+                fi
                 test -d node_modules/@getknext/core
                 node -e "const v=require('./node_modules/next/package.json').version; if (v !== process.env.NEXT_VERSION) { console.error('next is ' + v); process.exit(1) }"
-                node "$CLI" deploy --registry localhost:5001 --namespace "$APP_NS" --tag "r${GITHUB_RUN_ID}-${arm}"
+                # The build log is kept per image: it carries the compile-cache bake line.
+                node "$CLI" deploy --registry localhost:5001 --namespace "$APP_NS" --tag "r${GITHUB_RUN_ID}-${arm}" 2>&1 | tee "${out}/build-${key}.log"
               )
             fi
             kubectl -n "$APP_NS" wait --for=condition=Ready --timeout=300s "nextapp/${arm}" \
               || (kubectl -n "$APP_NS" get nextapp,ksvc,pods -o wide; kubectl -n "$APP_NS" describe "nextapp/${arm}"; exit 1)
             img="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.image}')"
             test -n "$img"
-            echo "$runtime $img" >> "${RUNNER_TEMP}/arm-images.txt"
-            echo "arm ${arm}: runtime=${runtime} cpuLimit=${cpulimit} image=${img}"
+            echo "$key $img" >> "${RUNNER_TEMP}/arm-images.txt"
+            echo "arm ${arm}: runtime=${runtime} build=${build} app=${app} cpuLimit=${cpulimit} image=${img}"
             kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].resources}{"\n"}'
             # The arm must run the runtime its name says. Two checks, both through check-runtime.sh,
             # which judges only the basename of argv[0] (so `node /app/bundle.js` is node and
@@ -307,7 +361,10 @@ jobs:
             # read from the kind node while the warm-up pod is still up. Either failing fails the job,
             # so a bun arm that silently ran node cannot produce a table.
             chk=scripts/bench-cold-start-phases/kind/check-runtime.sh
-            flag=""; [ "$runtime" = node ] && flag="--allow-empty"
+            # A node arm and any vinext arm render no container command (the image CMD runs it).
+            flag=""; [ "$runtime" = node ] && flag="--allow-empty"; [ "$build" = vinext ] && flag="--allow-empty"
+            # The live process of a vinext+bun arm is the compiled single executable (/app/server).
+            proc_rt="$runtime"; [ "$build" = vinext ] && [ "$runtime" = bun ] && proc_rt="bun-exec"
             kubectl -n "$APP_NS" get ksvc "$arm" -o json \
               | jq -j '.spec.template.spec.containers[0].command // [] | .[] | ., "\u0000"' > "${RUNNER_TEMP}/cmd-${arm}.bin"
             echo "arm ${arm}: container command=$(tr '\0' ' ' < "${RUNNER_TEMP}/cmd-${arm}.bin")"
@@ -338,8 +395,25 @@ jobs:
             docker exec "$knode" cat "/proc/${hostpid}/cmdline" > "${RUNNER_TEMP}/proc-${arm}.bin" \
               || { echo "::error::could not read /proc/${hostpid}/cmdline on ${knode} (arm ${arm})"; exit 1; }
             echo "arm ${arm}: main process = $(tr '\0' ' ' < "${RUNNER_TEMP}/proc-${arm}.bin")"
-            "$chk" "$runtime" < "${RUNNER_TEMP}/proc-${arm}.bin" \
-              || { echo "::error::arm ${arm} (${runtime}) main process is not ${runtime}"; exit 1; }
+            "$chk" "$proc_rt" < "${RUNNER_TEMP}/proc-${arm}.bin" \
+              || { echo "::error::arm ${arm} (${runtime}, ${build}) main process is not ${proc_rt}"; exit 1; }
+            # The arm must also be the build tool its name says: spec.build on the CR (absent means
+            # turbopack), and spec.runtime for the standalone shape (the CLI omits it for vinext,
+            # where the runtime is fixed by the image).
+            spec_build="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.build}')"
+            spec_runtime="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.runtime}')"
+            [ "${spec_build:-turbopack}" = "$build" ] \
+              || { echo "::error::arm ${arm} is a ${build} arm but NextApp spec.build is '${spec_build}'"; exit 1; }
+            if [ "$build" != vinext ] && [ "$spec_runtime" != "$runtime" ]; then
+              echo "::error::arm ${arm} is a ${runtime} arm but NextApp spec.runtime is '${spec_runtime}'"; exit 1
+            fi
+            # Proof that bytecode (bun) or the compile cache (node) is in the image, read from the
+            # pushed image. It fails the job when absent, so no row is measured without it.
+            scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out"
+            ev="${out}/evidence-${arm}.json"
+            jq --arg sb "${spec_build:-turbopack}" --arg sr "$spec_runtime" --arg cpu "$cpulimit" \
+              '. + {spec_build: $sb, spec_runtime: $sr, cpu_limit: $cpu}' "$ev" > "${ev}.tmp"
+            mv "${ev}.tmp" "$ev"
           done 3< "${RUNNER_TEMP}/arms.txt"
 
       # The harness pods run node:24-alpine. Load it into the node so no measured wake pays a pull
@@ -408,6 +482,15 @@ jobs:
             else
               echo "No rows were written."
             fi
+            echo
+            echo "### Build target and bytecode evidence (read from each arm's pushed image)"
+            echo
+            echo "| arm | build target | runtime | app | proof |"
+            echo "|---|---|---|---|---|"
+            for f in "$out"/evidence-*.json; do
+              [ -e "$f" ] || continue
+              jq -r '"| \(.arm) | \(.build_target) | \(.runtime) | \(.app) | " + (if .bytecode.kind == "v8-compile-cache" then "V8 compile cache, \(.bytecode.bytes) bytes in \(.bytecode.files) file(s) at \(.bytecode.cache_dir); bake: \(.bytecode.bake_line)" else "Bun bytecode, \(.bytecode.method): \(.bytecode.verdict)" end) + " |"' "$f"
+            done
             for f in "$out"/analysis-*.txt; do
               [ -e "$f" ] || continue
               echo

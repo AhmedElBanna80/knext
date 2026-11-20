@@ -557,6 +557,7 @@ const MUTATIONS = [
   {
     label: 'the CI job fetches a shallow checkout (no base to read)',
     subject: 'ci',
+    kind: 'wiring',
     anchor:
       '      - name: Checkout code (full history, the base is read at the merge-base)\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          fetch-depth: 0\n',
     replacement:
@@ -565,6 +566,7 @@ const MUTATIONS = [
   {
     label: 'the CI job does not pass the PR body',
     subject: 'ci',
+    kind: 'wiring',
     anchor:
       '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs',
     replacement: '        run: node scripts/lib/prover-wiring-lint.mjs',
@@ -572,6 +574,7 @@ const MUTATIONS = [
   {
     label: 'the CI job interpolates the PR body into the script',
     subject: 'ci',
+    kind: 'wiring',
     anchor:
       '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs',
     replacement:
@@ -580,6 +583,7 @@ const MUTATIONS = [
   {
     label: 'the CI job runs on every event, including pushes with no base',
     subject: 'ci',
+    kind: 'wiring',
     anchor: "    name: Prover unattributed ratchet\n    if: github.event_name == 'pull_request'\n",
     replacement: '    name: Prover unattributed ratchet\n',
   },

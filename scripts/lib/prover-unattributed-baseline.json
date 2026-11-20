@@ -49,6 +49,7 @@
   "scripts/mutation-prove-2660-dockerfile-digests.mjs": 8,
   "scripts/mutation-prove-2666-create-require-bindings.mjs": 22,
   "scripts/mutation-prove-allowlist-retirement.mjs": 4,
+  "scripts/mutation-prove-alpine-image.mjs": 5,
   "scripts/mutation-prove-audit-sibling-tripwire.mjs": 4,
   "scripts/mutation-prove-build-id-env.mjs": 1,
   "scripts/mutation-prove-bun-install-scripts.mjs": 11,

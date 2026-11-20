@@ -95,7 +95,7 @@
       "path": "tests/bun-version-pins.test.ts",
       "lane": "main",
       "here": "77a1648c5fb6a426d26db7b4261638d205bd68b9",
-      "there": "b1617cff8191f3f35756cb9806010c0aa3a1d11e",
+      "there": "2ddd9c1412ca721453dc389c123a40dd0e2d13cf",
       "reason": "Registry of each lane's own setup-bun steps: v2 registers its v2-only kind lanes (rollback, Z7 identity), and main has its cache-handler-on-every-Next-minor step; the lists differ by design. main's cache-handler-on-every-Next-minor step is on v2 too (next-minor-matrix.yml, with wider triggers), so nothing is left to port. v2 runs one leg (16.4) by design: its peer range admits 16.4 only, and its handler has no 16.3 seed to prove. v2 also registers the self-contained reference-image supply-chain job's setup-bun step (S7-7); main ships no self-contained image job."
     },
     {
@@ -108,58 +108,65 @@
     {
       "path": "scripts/lib/guard-prover.mjs",
       "lane": "main",
-      "here": "7c0c6065d352ba8f7ce102c90809d23355de85be",
-      "there": "69998f83e201d0842138312f0b86919fe73f0ab2",
+      "here": "3e62e7ee08780930955f464d6221ef1c85725735",
+      "there": "581f9ba055a988e75ed6bc6817db970fa0e01c00",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
     },
     {
       "path": "scripts/lib/guard-prover.mjs",
       "lane": "integration/v1.3",
-      "here": "7c0c6065d352ba8f7ce102c90809d23355de85be",
+      "here": "3e62e7ee08780930955f464d6221ef1c85725735",
       "there": "69998f83e201d0842138312f0b86919fe73f0ab2",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
     },
     {
       "path": "scripts/lib/prover-lane.mjs",
       "lane": "main",
-      "here": "7da242b9513fcbcb3a2bbea3b1e6a83182f3170e",
-      "there": "1a6b4a1317f0c3627839dd08a11165180e43509a",
+      "here": "fe94039517a29092ddb3f97ded78b5fa483a8eec",
+      "there": "76a0639a3b3f474df530b334cbe4c790e5e10ddb",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
     },
     {
       "path": "scripts/lib/prover-lane.mjs",
       "lane": "integration/v1.3",
-      "here": "7da242b9513fcbcb3a2bbea3b1e6a83182f3170e",
+      "here": "fe94039517a29092ddb3f97ded78b5fa483a8eec",
       "there": "1a6b4a1317f0c3627839dd08a11165180e43509a",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
     },
     {
       "path": "scripts/run-mutation-provers.mjs",
       "lane": "main",
-      "here": "4d2d64eb59e631d2980192192f298d477850c577",
-      "there": "f6de362e76fd43adc8ebdaa1e776bedf9d9fbcab",
+      "here": "2e629cdd707de8831917adbf53d7a0794ea5e5c8",
+      "there": "380c818a2be5e9cf655f4a995ad4ff904bf8edae",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. main also carries its own commits of the round-4 runner fixes (in-prover sampler, runaway kill, cdn-purge isolation); v2 carries each of them (runawayReason, the resource tripwire, between-prover cleanup, the meminfo fixture) plus later fixes main lacks (tracked-residue restore after every prover, private-tmp cleanup), so nothing is left to port. Then S13-5 adds a signal-safe exit and tree restore to this runner on integration/v2 only (a SIGTERM restores the killed prover tree before the process exits); it is not on main or integration/v1.3 yet. Port with TD-S12-2a to main if needed."
     },
     {
       "path": "scripts/run-mutation-provers.mjs",
       "lane": "integration/v1.3",
-      "here": "4d2d64eb59e631d2980192192f298d477850c577",
+      "here": "2e629cdd707de8831917adbf53d7a0794ea5e5c8",
       "there": "61495c5c53539f476005e72d8b98c7968a6f7eac",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. Then S13-5 adds a signal-safe exit and tree restore to this runner on integration/v2 only (a SIGTERM restores the killed prover tree before the process exits); it is not on main or integration/v1.3 yet. Port with TD-S12-2a to main if needed."
     },
     {
       "path": "tests/mutation-prover-lane.test.ts",
       "lane": "main",
-      "here": "2bfe703f11a05f4b980d7704ffaa87b4d8fa21ee",
-      "there": "6d6dc957bdd647b31eeb873eff007057d336c80f",
+      "here": "df4681d80aa4834677cdf7a1f249a7ee1a92f8e8",
+      "there": "3c1aa8a591cd2d0add35e053c3ccfc9ca765e49a",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. v2 runs the same sharded re-run over main and integration/v2, plus a daily integration/v2 leg, so nothing is left to port."
     },
     {
       "path": "tests/mutation-prover-lane.test.ts",
       "lane": "integration/v1.3",
-      "here": "2bfe703f11a05f4b980d7704ffaa87b4d8fa21ee",
+      "here": "df4681d80aa4834677cdf7a1f249a7ee1a92f8e8",
       "there": "deffb7d17b8be74666e990702d51e42893a34f42",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
+    },
+    {
+      "path": "scripts/lib/prover-report.mjs",
+      "lane": "integration/v1.3",
+      "here": "8e1a4c3d8b1a4278af3be356f8056a5bd58aab9b",
+      "there": "64e16f0d110c961265e7f8225ad2fa9b312d5f63",
+      "reason": "Docker-gated prover SKIP marker (declareSkip, parseProverSkip) added with the alpine-image prover (S15-3). It is on main and integration/v2 (same change), not on integration/v1.3, whose mutation-prover lane is the older one and is not back-ported."
     }
   ]
 }

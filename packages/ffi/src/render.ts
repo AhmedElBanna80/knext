@@ -18,13 +18,12 @@
  *   It uses only erasable TypeScript, so Node's type stripping can import it
  *   (and then refuse the call with the Bun-only message).
  * - Loading is fail-closed: the library beside the executable must be listed
- *   in `native/.integrity.json` with a matching sha256. On Linux it is loaded
- *   through the descriptor its bytes were hashed from (`/proc/self/fd/<n>`),
- *   so a file renamed or linked over the path after the check is not the one
- *   `dlopen` opens (this needs `/proc` mounted, as every container runtime
- *   does). On macOS it is loaded by path, since dyld treats
- *   `/dev/fd/<n>` as a second library: a swap between the check and the load
- *   is not caught there (macOS is a development platform; images are Linux).
+ *   in `native/.integrity.json` with a matching sha256. It is loaded through
+ *   the descriptor its bytes were hashed from (`/proc/self/fd/<n>` on Linux,
+ *   which needs `/proc` mounted, as every container runtime does;
+ *   `/dev/fd/<n>` on macOS), so a file renamed or linked over the path after
+ *   the check is not the one `dlopen` opens. (dyld shares one instance among
+ *   `/dev/fd` names but keeps it apart from the same file opened by path.)
  *   The check assumes the attacker cannot write to the library file itself or
  *   to `native/`: the descriptor pins the inode, not its contents, so a write
  *   into the same file after the hash is loaded. Ship `native/` root-owned and
@@ -634,8 +633,12 @@ function $open(): void {
     symbols = ffi.dlopen(load, $SPEC).symbols;
   } catch (err) {
     // A descriptor handed to dlopen is never closed on success; on failure it is.
-    if (load.startsWith('/proc/self/fd/')) $closeSync(Number(load.slice('/proc/self/fd/'.length)));
-    const via = load === path ? '' : \` (opened as \${load}, which needs /proc mounted)\`;
+    const fd = /^\\/(?:proc\\/self|dev)\\/fd\\/(\\d+)$/.exec(load)?.[1];
+    if (fd !== undefined) $closeSync(Number(fd));
+    const via =
+      load === path
+        ? ''
+        : \` (opened as \${load}\${load.startsWith('/proc/') ? ', which needs /proc mounted' : ''})\`;
     throw new FfiLoadError(
       \`knext ffi: could not load \${path}\${via}: \${err instanceof Error ? err.message : String(err)}\\n\` +
         'If the library does not export a function this module calls, the module is stale: run \`knext ffi generate\` and commit the result.',
@@ -737,9 +740,9 @@ function $resolve(): readonly [string, string] {
 
 /**
  * Fail closed: the library must be listed in native/.integrity.json with a matching sha256.
- * Returns the name to dlopen. On Linux that is the descriptor the hashed bytes were read
- * through, so a file renamed or linked over the path after the check is not the one loaded.
- * On macOS it is the path: dyld opens /dev/fd/<n> as a separate library instance.
+ * Returns the name to dlopen: the descriptor the hashed bytes were read through
+ * (/proc/self/fd/<n> on Linux, /dev/fd/<n> on macOS), so a file renamed or linked
+ * over the path after the check is not the one loaded.
  */
 function $verify(native: string, rel: string, path: string): string {
   const manifest = $join(native, '.integrity.json');
@@ -779,13 +782,13 @@ function $verify(native: string, rel: string, path: string): string {
       \`knext ffi: refusing to load \${path}: sha256 mismatch\\n  expected \${expected}\\n  actual   \${actual}\`,
     );
   }
-  if (process.platform !== 'linux') {
+  if (process.platform !== 'linux' && process.platform !== 'darwin') {
     $closeSync(fd);
     return path;
   }
   // Never closed once dlopen has seen its name: glibc finds an already-loaded
   // library by that name, and the next open would reuse the number.
-  return \`/proc/self/fd/\${fd}\`;
+  return process.platform === 'darwin' ? \`/dev/fd/\${fd}\` : \`/proc/self/fd/\${fd}\`;
 }
 
 /** A Rust-owned (ptr, len) pair from the out slot, read as two u32 halves (no BigInt per call). */

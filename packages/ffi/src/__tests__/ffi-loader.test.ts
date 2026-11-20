@@ -186,7 +186,13 @@ const c = (f) => {
 let fixture;
 if (process.env.LIBPATH) {
   const ffi = process.getBuiltinModule('bun:ffi');
-  fixture = ffi.dlopen(process.env.LIBPATH, {
+  // dyld keeps a library opened by path apart from the same file opened through
+  // /dev/fd/<n> (which the module uses on macOS), but shares one instance among
+  // /dev/fd names; so on macOS the fixture is opened the way the module opens it.
+  const name = process.platform === 'darwin'
+    ? '/dev/fd/' + process.getBuiltinModule('node:fs').openSync(process.env.LIBPATH, 'r')
+    : process.env.LIBPATH;
+  fixture = ffi.dlopen(name, {
     fixture_live: { args: [], returns: 'i64' },
     fixture_last_null: { args: [], returns: 'i32' },
   }).symbols;
@@ -914,14 +920,9 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       // The swap really happened, at that moment: the path now holds the other library.
       expect(out?.swaps, r.stderr).toEqual([when]);
       expect(out.atPath).toBe(sha256(libs.debug as string));
-      if (process.platform === 'linux') {
-        // ...and the library loaded is still the one whose bytes were hashed.
-        expect(out.greet).toEqual({ ok: 'Hello, World!' });
-      } else {
-        // macOS loads by path (dyld opens /dev/fd/<n> as a second library), so the
-        // swapped-in library IS the one loaded. This pins the documented residual.
-        expect(out.greet).not.toEqual({ ok: 'Hello, World!' });
-      }
+      // ...and the library loaded is still the one whose bytes were hashed, on
+      // Linux (/proc/self/fd/<n>) and macOS (/dev/fd/<n>) alike.
+      expect(out.greet).toEqual({ ok: 'Hello, World!' });
       expect(r.status).toBe(0);
     });
   }

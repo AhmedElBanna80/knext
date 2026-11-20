@@ -111,14 +111,15 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     - A library staged in `native/ffi/<triple>/` (`native/` beside `process.execPath`) must be
       listed in `native/.integrity.json` (version 1) with a matching sha256. If `native/ffi/`
       holds only other triples, the load fails.
-    - The bytes are hashed through an open descriptor. On Linux the library is then loaded
-      through that same descriptor (`/proc/self/fd/<n>`, never closed), so a file renamed or
-      symlinked over the path after the check is not the one loaded. On macOS it is loaded by
-      path, because dyld opens `/dev/fd/<n>` as a second library instance; a swap between the
-      check and the load is not caught there. The check assumes the attacker cannot write to
-      the library file or to `native/`: the descriptor pins the inode, not its contents, so an
-      in-place write after the hash is loaded. On Linux the load needs `/proc` mounted; a failed
-      load closes the descriptor and its error names both the path and `/proc/self/fd/<n>`.
+    - The bytes are hashed through an open descriptor, and the library is then loaded through
+      that same descriptor (never closed): `/proc/self/fd/<n>` on Linux, `/dev/fd/<n>` on
+      macOS. A file renamed or symlinked over the path after the check is not the one loaded.
+      dyld shares one instance among `/dev/fd` names (so module copies bind one library) but
+      keeps it apart from the same file opened by path. Other platforms load by path. The check
+      assumes the attacker cannot write to the library file or to `native/`: the descriptor pins
+      the inode, not its contents, so an in-place write after the hash is loaded. On Linux the
+      load needs `/proc` mounted; a failed load closes the descriptor and its error names both
+      the path and the descriptor name.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check.
     - Every `<symbol>_schema` must equal the FNV-1a 64 hash computed at render time.

@@ -67,3 +67,21 @@ runbook, [`docs/benchmarks/prewake-ab-oke-runbook.md`](../../docs/benchmarks/pre
 ## Overlap between arms within a round
 
 `drive.py` waits for zero pods once per round and then wakes the arms one after another. While arm B wakes, arm A's pod from the same round is still up (it only scales down after the autoscaler's grace period), and the harness's post-response watch (`READY_WINDOW_MS`) keeps running. A longer window lengthens that overlap. The arm order rotates every round, so the effect is spread across arms rather than always hitting the same one; it is mitigated, not removed.
+
+## Native amd64 kind run: arms and sets
+
+`.github/workflows/coldstart-phases-kind-native.yml` runs this harness on an amd64 runner. Arms are
+resolved by `kind/arms.sh`: `node-1000m`, `node-2000m`, `node-4000m`, `node-nolimit`, `bun-1000m`,
+`bun-nolimit` (the nolimit arms use a 64-CPU limit). Named sets:
+
+| Set | Arms | Default N |
+|---|---|---|
+| `default` | node-1000m, node-nolimit, bun-1000m | 12 |
+| `ladder` | node-1000m, node-2000m, node-4000m, node-nolimit | 12 |
+| `bun` | bun-1000m, bun-nolimit, node-1000m (control) | 12 |
+| `smoke` | node-1000m | 1 |
+
+Pick the set with the `set` dispatch input, or by pushing to `bench/run-coldstart-native` (default),
+`-ladder`, `-bun` or `-smoke`. Only `smoke` may use N below 12; it is a cheap check that a workflow
+change still runs end to end, not a measurement. `kind/run-budget.sh <n> <arms> <window>` bounds the
+run: the ladder at N=20 needs 4 x 20 x (45 + 20) s + 25 min = 6700 s of the 8100 s budget.

@@ -11,10 +11,11 @@ import { parseAllDocuments } from 'yaml';
  *
  * Invariants a casual edit could silently destroy:
  * 1. MANUAL. A measurement tool, not a gate: the only triggers are workflow_dispatch and ONE push
- *    trigger restricted to branches: [bench/run-coldstart-native] (the default-branch dispatch
- *    limitation); no paths, tags, other branches, schedule or pull_request.
- * 2. Inputs n, arms, ready_window_s with the agreed defaults (12, three arms, 20), validated in the
- *    shell (n >= 12, window 16..45) and reaching the shell through env only.
+ *    trigger restricted to exactly four branch names (bench/run-coldstart-native and its -ladder,
+ *    -bun, -smoke siblings; the default-branch dispatch limitation); no wildcard, paths, tags,
+ *    schedule or pull_request. The branch maps to the arm set through github.ref_name in env.
+ * 2. Inputs set, n, arms, ready_window_s, validated in the shell (n >= 12 except the smoke set,
+ *    which may use N=1; window 16..45) and reaching the shell through env only.
  * 3. The three arms resolve (node 1000m, node no-limit, bun 1000m) and unknown arms are refused.
  * 4. Every action is pinned by a 40-hex SHA with a `# vX.Y.Z` comment; permissions are read-only;
  *    concurrency group queues runs (cancel-in-progress: false; the job applies to a cluster).
@@ -45,7 +46,16 @@ function onBlock(t: string) {
   return i < 0 || j < 0 ? '' : t.slice(i, j);
 }
 
-/** Every way the trigger block departs from "dispatch + exactly the one bench-branch push". */
+const BRANCHES = [
+  'bench/run-coldstart-native',
+  'bench/run-coldstart-native-ladder',
+  'bench/run-coldstart-native-bun',
+  'bench/run-coldstart-native-smoke',
+];
+const BRANCH_LIST = BRANCHES.map((b) => `      - ${b}\n`).join('');
+const PUSH_BODY = `    branches:\n${BRANCH_LIST}`.trimEnd();
+
+/** Every way the trigger block departs from "dispatch + exactly the four bench-branch push". */
 function onViolations(t: string): string[] {
   const on = onBlock(t);
   const v: string[] = [];
@@ -53,8 +63,8 @@ function onViolations(t: string): string[] {
   for (const k of top) if (k !== 'push' && k !== 'workflow_dispatch') v.push(`trigger ${k}`);
   if (top.filter((k) => k === 'push').length !== 1) v.push('push trigger count != 1');
   const push = on.match(/^ {2}push:\n((?: {4}.*\n?)*)/m);
-  if (!push || push[1].trimEnd() !== '    branches: [bench/run-coldstart-native]')
-    v.push('push body is not exactly the one branch');
+  if (!push || push[1].trimEnd() !== PUSH_BODY)
+    v.push('push body is not exactly the four branches');
   if (/\bcron:/.test(on)) v.push('cron');
   return v;
 }
@@ -64,52 +74,75 @@ function arms(arg?: string) {
 }
 
 describe('coldstart-phases-kind-native workflow shape', () => {
-  it('has exactly one push trigger (the dedicated bench branch), dispatch, and nothing else', () => {
+  it('has exactly one push trigger (the four dedicated bench branches), dispatch, and nothing else', () => {
     expect(onViolations(code)).toEqual([]);
     expect(onBlock(code)).toMatch(/workflow_dispatch:/);
   });
 
-  it('the trigger scan rejects a second branch, tags, paths, a schedule or a pull_request', () => {
-    const base =
-      '\non:\n  push:\n    branches: [bench/run-coldstart-native]\n  workflow_dispatch:\n';
+  it('the trigger scan rejects a fifth branch, a wildcard, tags, paths, a schedule or a pull_request', () => {
+    const base = `\non:\n  push:\n${PUSH_BODY.replace(/^ {4}/, '    ')}\n  workflow_dispatch:\n`;
     const wrap = (on: string) => `${on}\npermissions:\n  contents: read\n`;
     expect(onViolations(wrap(base))).toEqual([]);
+    const last = '      - bench/run-coldstart-native-smoke\n';
     const bad = [
-      base.replace('[bench/run-coldstart-native]', '[bench/run-coldstart-native, main]'),
-      base.replace('[bench/run-coldstart-native]', "['bench/**']"),
-      base.replace('[bench/run-coldstart-native]', '[bench/run-coldstart-native]\n    tags: [v*]'),
-      base.replace('[bench/run-coldstart-native]', '[bench/run-coldstart-native]\n    paths: [x]'),
+      base.replace(last, `${last}      - main\n`),
+      base.replace(last, `${last}      - bench/run-coldstart-native-x\n`),
+      base.replace(last, '      - bench/run-coldstart-native-*\n'),
+      base.replace(last, ''),
+      base.replace(last, `${last}    tags: [v*]\n`),
+      base.replace(last, `${last}    paths: [x]\n`),
       `${base}  schedule:\n    - cron: '0 0 * * *'\n`,
       `${base}  pull_request:\n`,
       `${base}  pull_request_target:\n`,
-      base.replace('  push:\n    branches: [bench/run-coldstart-native]\n', '  push:\n'),
-      base.replace('  push:\n    branches: [bench/run-coldstart-native]\n', ''),
+      base.replace(`  push:\n${PUSH_BODY}\n`, '  push:\n'),
+      base.replace(`  push:\n${PUSH_BODY}\n`, ''),
     ];
     for (const b of bad) expect(onViolations(wrap(b)).length).toBeGreaterThan(0);
   });
 
+  it('exactly four push branches, no wildcard, no paths, no schedule, no pull_request', () => {
+    const on = onBlock(code);
+    const listed = [...on.matchAll(/^ {6}- (\S+)$/gm)].map((m) => m[1]);
+    expect(listed).toEqual(BRANCHES);
+    expect(on).not.toMatch(/\*/);
+    expect(on).not.toMatch(/\bpaths(-ignore)?:|schedule:|pull_request|tags:/);
+  });
+
+  it('maps each push branch to its set in env through github.ref_name, not a run: input', () => {
+    const m = code.match(/\n {6}SET: (.*)\n/);
+    expect(m).not.toBeNull();
+    const expr = m?.[1] ?? '';
+    expect(expr).toMatch(/^\$\{\{ inputs\.set \|\| /);
+    for (const [branch, set] of [
+      ['bench/run-coldstart-native-ladder', 'ladder'],
+      ['bench/run-coldstart-native-bun', 'bun'],
+      ['bench/run-coldstart-native-smoke', 'smoke'],
+    ])
+      expect(expr).toContain(`github.ref_name == '${branch}' && '${set}'`);
+    expect(expr).toMatch(/\|\| 'default' \}\}$/);
+    // The bare default branch (and a dispatch with no set) falls through to the default set.
+    expect(expr).not.toContain("== 'bench/run-coldstart-native' &&");
+  });
+
   it('falls back to the documented defaults when the inputs are empty (push event)', () => {
-    expect(code).toMatch(/\n {6}N: \$\{\{ inputs\.n \|\| '12' \}\}\n/);
-    expect(code).toMatch(
-      /\n {6}ARMS: \$\{\{ inputs\.arms \|\| 'node-1000m,node-nolimit,bun-1000m' \}\}\n/,
-    );
+    expect(code).toMatch(/\n {6}N_INPUT: \$\{\{ inputs\.n \|\| '' \}\}\n/);
+    expect(code).toMatch(/\n {6}ARMS_INPUT: \$\{\{ inputs\.arms \|\| '' \}\}\n/);
     expect(code).toMatch(/\n {6}READY_WINDOW_S: \$\{\{ inputs\.ready_window_s \|\| '20' \}\}\n/);
     // The fallbacks equal the declared input defaults, and the validation step still reads them.
     expect(code).toMatch(/\n {6}- name: Validate inputs\n/);
     expect(code).toMatch(/\[ "\$N" -le 30 \]/);
-    expect(code).toMatch(/run-budget\.sh "\$N"/);
+    expect(code).toMatch(/run-budget\.sh" "\$N"/);
   });
 
-  it('declares the three inputs with the agreed defaults', () => {
-    expect(code).toMatch(/\n {6}n:\n(?: {8}.*\n)*? {8}default: '12'/);
-    expect(code).toMatch(
-      /\n {6}arms:\n(?: {8}.*\n)*? {8}default: 'node-1000m,node-nolimit,bun-1000m'/,
-    );
+  it('declares the four inputs with the agreed defaults', () => {
+    expect(code).toMatch(/\n {6}set:\n(?: {8}.*\n)*? {8}default: 'default'/);
+    expect(code).toMatch(/\n {6}n:\n(?: {8}.*\n)*? {8}default: ''/);
+    expect(code).toMatch(/\n {6}arms:\n(?: {8}.*\n)*? {8}default: ''/);
     expect(code).toMatch(/\n {6}ready_window_s:\n(?: {8}.*\n)*? {8}default: '20'/);
   });
 
   it('validates the inputs in the shell and passes them through env only', () => {
-    expect(code).toMatch(/\[ "\$N" -ge 12 \]/);
+    expect(code).toMatch(/\[ "\$N" -ge "\$MIN_N" \]/);
     expect(code).toMatch(/\[ "\$N" -le 30 \]/);
     expect(code).toMatch(/timeout-minutes: 150/);
     expect(code).toMatch(/"\$READY_WINDOW_S" -lt 16/);
@@ -157,7 +190,7 @@ describe('coldstart-phases-kind-native workflow shape', () => {
   });
 
   it('runs the combined run-budget check', () => {
-    expect(code).toMatch(/kind\/run-budget\.sh "\$N" .* "\$READY_WINDOW_S"/);
+    expect(code).toMatch(/\/run-budget\.sh" "\$N" .* "\$READY_WINDOW_S"/);
     expect(code).toMatch(/\[ "\$N" -le 30 \]/);
   });
 
@@ -239,6 +272,108 @@ describe('kind/arms.sh', () => {
     const dup = arms('node-1000m,node-1000m');
     expect(dup.status).toBe(2);
     expect(dup.stderr).toContain("duplicate arm 'node-1000m'");
+  });
+});
+
+describe('kind/arms.sh sets', () => {
+  const SETS: Record<string, string[]> = {
+    ladder: [
+      'node-1000m node 1000m',
+      'node-2000m node 2000m',
+      'node-4000m node 4000m',
+      'node-nolimit node 64',
+    ],
+    bun: ['bun-1000m bun 1000m', 'bun-nolimit bun 64', 'node-1000m node 1000m'],
+    smoke: ['node-1000m node 1000m'],
+    default: ['node-1000m node 1000m', 'node-nolimit node 64', 'bun-1000m bun 1000m'],
+  };
+  for (const [name, lines] of Object.entries(SETS))
+    it(`set ${name} resolves to its arms in order`, () => {
+      const r = arms(name);
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim().split('\n')).toEqual(lines);
+    });
+
+  it('the new single arms resolve, the nolimit arms at a 64 CPU limit', () => {
+    expect(arms('node-2000m,node-4000m,bun-nolimit').stdout.trim().split('\n')).toEqual([
+      'node-2000m node 2000m',
+      'node-4000m node 4000m',
+      'bun-nolimit bun 64',
+    ]);
+  });
+
+  it('only the smoke set has a minimum N below 12', () => {
+    const minN = (a: string) =>
+      spawnSync('bash', [ARMS_SH, '--min-n', a], { encoding: 'utf8' }).stdout.trim();
+    expect(minN('smoke')).toBe('1');
+    for (const o of ['default', 'ladder', 'bun', 'node-1000m', 'smoke,node-1000m'])
+      expect(minN(o)).toBe('12');
+  });
+});
+
+/** Run the real "Validate inputs" step script with a shimmed `uname` and a scratch GITHUB_ENV. */
+function validate(env: Record<string, string>) {
+  const step = text.split('\n      - name: Validate inputs\n')[1].split('\n      - name: ')[0];
+  const script = step.split('        run: |\n')[1].replace(/^ {10}/gm, '');
+  const d = mkdtempSync(join(tmpdir(), 'val-'));
+  try {
+    writeFileSync(join(d, 'uname'), '#!/bin/sh\necho x86_64\n', { mode: 0o755 });
+    writeFileSync(join(d, 'genv'), '');
+    const r = spawnSync('bash', ['-c', script], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: {
+        PATH: `${d}:${process.env.PATH}`,
+        RUNNER_TEMP: d,
+        GITHUB_ENV: join(d, 'genv'),
+        READY_WINDOW_S: '20',
+        N_INPUT: '',
+        ARMS_INPUT: '',
+        ...env,
+      },
+    });
+    return {
+      status: r.status,
+      out: r.stdout + r.stderr,
+      genv: readFileSync(join(d, 'genv'), 'utf8'),
+    };
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+}
+
+describe('Validate inputs step (behaviour)', () => {
+  it('accepts N=1 for the smoke set and defaults smoke to N=1', () => {
+    const a = validate({ SET: 'smoke', N_INPUT: '1' });
+    expect(a.status).toBe(0);
+    expect(a.genv).toContain('N=1\n');
+    expect(a.genv).toContain('ARMS=node-1000m\n');
+    expect(validate({ SET: 'smoke' }).genv).toContain('N=1\n');
+  });
+
+  it('refuses N=1 (and anything under 12) for every other set and for an explicit arm list', () => {
+    for (const set of ['default', 'ladder', 'bun']) {
+      expect(validate({ SET: set, N_INPUT: '1' }).status).toBe(1);
+      expect(validate({ SET: set, N_INPUT: '11' }).status).toBe(1);
+    }
+    expect(validate({ SET: 'default', ARMS_INPUT: 'node-1000m', N_INPUT: '1' }).status).toBe(1);
+    expect(validate({ SET: 'default', N_INPUT: '12' }).status).toBe(0);
+  });
+
+  it('defaults the non-smoke sets to N=12 and exports the resolved arms', () => {
+    const r = validate({ SET: 'ladder' });
+    expect(r.status).toBe(0);
+    expect(r.genv).toContain('N=12\n');
+    expect(r.genv).toContain('ARMS=node-1000m,node-2000m,node-4000m,node-nolimit\n');
+  });
+
+  it('accepts ladder at N=20 and refuses an oversize run', () => {
+    expect(validate({ SET: 'ladder', N_INPUT: '20' }).status).toBe(0);
+    expect(validate({ SET: 'ladder', N_INPUT: '30' }).status).toBe(1);
+  });
+
+  it('refuses arms together with a named set', () => {
+    expect(validate({ SET: 'ladder', ARMS_INPUT: 'node-1000m' }).status).toBe(1);
   });
 });
 
@@ -351,6 +486,15 @@ describe('kind/run-budget.sh (behaviour)', () => {
     // 30 x 3 x 65 + 25 min = 7350 s fits 150 - 15 min (8100 s) but not 150 - 40 min (6600 s).
     expect(run('30', '3', '20', '150', '40').status).toBe(1);
     expect(run('30', '3', '20', '150', '15').status).toBe(0);
+  });
+
+  it('accepts the ladder set (4 arms) at N=20 and refuses an oversize run', () => {
+    // 4 x 20 x (45 + 20) s + 25 min = 6700 s <= 8100 s.
+    const ok = run('20', '4', '20');
+    expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain('20 x 4 x (45 + 20) s');
+    expect(run('30', '4', '20').status).toBe(1);
+    expect(run('20', '4', '45').status).toBe(1);
   });
 
   it('rejects non-integers with exit 2', () => {

@@ -12,8 +12,10 @@ name: Cold-start phases on kind (native amd64, manual)
 # Why a push trigger exists: GitHub only dispatches a workflow file that exists on the default
 # branch, and this file lives only on the v2 line, so `gh workflow run` returns 404. The one
 # dedicated branch below stands in for the dispatch. It is pushed only by a maintainer, once per
-# measurement; nothing else triggers on push. A push carries no dispatch inputs, so the env block
-# falls back to the documented defaults (n=12, all three arms, ready_window_s=20), and the
+# measurement; nothing else triggers on push. The push branch names are exactly four (no wildcard):
+# bench/run-coldstart-native (the default set), -ladder, -bun and -smoke; the env block maps
+# github.ref_name to the arm set. A push carries no dispatch inputs, so the set default N applies
+# (12, or 1 for smoke) with ready_window_s=20, and the
 # validation step below checks those defaults exactly as it checks dispatched values.
 # One run takes the runner for about an hour at the defaults; the concurrency group queues a
 # re-dispatch behind it so two measurements never share the runner pool.
@@ -22,6 +24,9 @@ name: Cold-start phases on kind (native amd64, manual)
 #   node-1000m    node runtime, cpu limit 1000m (the platform default)
 #   node-nolimit  node runtime, cpu limit 64 CPUs (above any runner, so the CFS quota never binds)
 #   bun-1000m     bun runtime, cpu limit 1000m
+#   node-2000m, node-4000m   node runtime at 2 and 4 CPUs;  bun-nolimit   bun runtime, 64 CPUs
+# Sets: default (the three above), ladder (node 1000m, 2000m, 4000m, nolimit), bun (bun-1000m,
+# bun-nolimit, node-1000m as control), smoke (node-1000m, N=1: a cheap check of workflow changes).
 # The cpu limit is the NextApp scaling.cpuLimit, resolved by scripts/bench-cold-start-phases/kind/arms.sh.
 #
 # Image pull is 0 by construction: every arm is deployed and reaches Ready (which pulls the app and
@@ -31,19 +36,28 @@ name: Cold-start phases on kind (native amd64, manual)
 
 on:
   push:
-    branches: [bench/run-coldstart-native]
+    branches:
+      - bench/run-coldstart-native
+      - bench/run-coldstart-native-ladder
+      - bench/run-coldstart-native-bun
+      - bench/run-coldstart-native-smoke
   workflow_dispatch:
     inputs:
+      set:
+        description: 'Arm set: default, ladder, bun or smoke (smoke is the only set that may run N=1)'
+        required: false
+        type: string
+        default: 'default'
       n:
-        description: 'True scale-from-zero wakes per arm (integer, 12 to 30)'
+        description: 'True scale-from-zero wakes per arm (integer, 12 to 30; smoke may use 1 to 30). Empty = the set default'
         required: false
         type: string
-        default: '12'
+        default: ''
       arms:
-        description: 'Comma-separated arms: node-1000m, node-nolimit, bun-1000m'
+        description: 'Comma-separated arms (only with set=default): node-1000m, node-2000m, node-4000m, node-nolimit, bun-1000m, bun-nolimit'
         required: false
         type: string
-        default: 'node-1000m,node-nolimit,bun-1000m'
+        default: ''
       ready_window_s:
         description: 'Seconds the harness keeps watching after the first byte (integer, 16 to 45)'
         required: false
@@ -69,8 +83,11 @@ jobs:
       CLUSTER: coldstart-native
       APP_NS: z2
       NEXT_VERSION: 16.4.5
-      N: ${{ inputs.n || '12' }}
-      ARMS: ${{ inputs.arms || 'node-1000m,node-nolimit,bun-1000m' }}
+      # The arm set comes from the dispatch input, or on push from the branch name. N and ARMS are
+      # resolved by the validation step below and exported through GITHUB_ENV.
+      SET: ${{ inputs.set || (github.ref_name == 'bench/run-coldstart-native-ladder' && 'ladder') || (github.ref_name == 'bench/run-coldstart-native-bun' && 'bun') || (github.ref_name == 'bench/run-coldstart-native-smoke' && 'smoke') || 'default' }}
+      N_INPUT: ${{ inputs.n || '' }}
+      ARMS_INPUT: ${{ inputs.arms || '' }}
       READY_WINDOW_S: ${{ inputs.ready_window_s || '20' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,18 +96,29 @@ jobs:
       - name: Validate inputs
         run: |
           set -euo pipefail
+          # A named set, or an explicit arm list (only with set=default), never both.
+          if [ -n "$ARMS_INPUT" ] && [ "$SET" != default ]; then
+            echo "::error::arms may only be given with set=default"; exit 1
+          fi
+          spec="${ARMS_INPUT:-$SET}"
+          kind=scripts/bench-cold-start-phases/kind
+          MIN_N="$("$kind/arms.sh" --min-n "$spec")"
+          N="${N_INPUT:-$("$kind/arms.sh" --default-n "$spec")}"
           case "$N" in ''|*[!0-9]*) echo "::error::n must be an integer"; exit 1 ;; esac
           # n is capped at 30; the combined check below (run-budget.sh) is what actually bounds the
           # run: n x arms x (45 s per wake + ready window) + 25 min setup must fit the 150 min timeout
           # minus 15 min for the analyse, upload and teardown steps. The 45 s and 25 min are estimates.
-          [ "$N" -ge 12 ] || { echo "::error::n must be 12 or more (got $N)"; exit 1; }
+          # Only the smoke set may use N below 12 (MIN_N is 1 for it, 12 otherwise).
+          [ "$N" -ge "$MIN_N" ] || { echo "::error::n must be $MIN_N or more for set $SET (got $N)"; exit 1; }
           [ "$N" -le 30 ] || { echo "::error::n must be 30 or fewer (got $N)"; exit 1; }
           case "$READY_WINDOW_S" in ''|*[!0-9]*) echo "::error::ready_window_s must be an integer"; exit 1 ;; esac
           if [ "$READY_WINDOW_S" -lt 16 ] || [ "$READY_WINDOW_S" -gt 45 ]; then
             echo "::error::ready_window_s must be 16 to 45 (got $READY_WINDOW_S)"; exit 1
           fi
-          scripts/bench-cold-start-phases/kind/arms.sh "$ARMS" | tee "${RUNNER_TEMP}/arms.txt"
-          scripts/bench-cold-start-phases/kind/run-budget.sh "$N" "$(wc -l < "${RUNNER_TEMP}/arms.txt" | tr -d ' ')" "$READY_WINDOW_S"
+          "$kind/arms.sh" "$spec" | tee "${RUNNER_TEMP}/arms.txt"
+          "$kind/run-budget.sh" "$N" "$(wc -l < "${RUNNER_TEMP}/arms.txt" | tr -d ' ')" "$READY_WINDOW_S"
+          echo "N=$N" >> "$GITHUB_ENV"
+          echo "ARMS=$(cut -d' ' -f1 "${RUNNER_TEMP}/arms.txt" | paste -sd, -)" >> "$GITHUB_ENV"
           test "$(uname -m)" = x86_64 || { echo "::error::runner is not amd64"; exit 1; }
 
       - name: Route Docker Hub pulls through mirror.gcr.io (anonymous rate limit)

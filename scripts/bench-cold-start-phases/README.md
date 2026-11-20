@@ -104,11 +104,14 @@ bytecode proof), quoted in the step summary. Every arm of every set now goes thr
 
 - node: the V8 compile cache directory in the image (`/app/.next/standalone/.next/compile-cache` for
   turbopack, `/app/.compile-cache` for vinext), its byte and file count against the bake floor (262144 and
-  65536 bytes), the image's `NODE_COMPILE_CACHE`, and the `NODE_COMPILE_CACHE` in the running process's
-  environment on the kind node.
+  65536 bytes), the image's `NODE_COMPILE_CACHE`, and the `NODE_COMPILE_CACHE` in the environment of the
+  running server on the kind node (for turbopack, the Next child of the supervisor, not the supervisor).
 - bun, turbopack: the compiled executable verified through its per-build marker (`kind/verify-bytecode.mjs
   standalone`), the image's `STANDALONE_SERVER_EXEC` naming it, and a live child of the supervisor running
-  it, so a silent fall back to an uncompiled `bun server.js` fails the arm.
+  it (matched on argv[0], the exe link or comm, and the evidence says which), so a silent fall back to an
+  uncompiled `bun server.js` fails the arm. The live `/proc` reads run before anything slow, since the pod
+  scales to zero about 40 s after Ready; a pod already gone fails with "pod scaled away before the live
+  check".
 - bun, vinext: `knext build` embeds no marker and runs no bytecode check on this executable, so
   `kind/verify-bytecode.mjs pragma` requires more `// @bun @bytecode @bun-cjs` pragmas than a probe
   compiled without bytecode for the same target and Bun (`--target=bun-linux-x64-musl`). This is a

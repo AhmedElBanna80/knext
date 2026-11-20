@@ -383,7 +383,7 @@ jobs:
             done
             [ -n "$pod" ] || { echo "::error::no running pod for arm ${arm} to verify its runtime"; exit 1; }
             # The runtime image is distroless (no shell, no cat), so nothing is exec'd into the app
-            # container: the container id comes from the pod status, the host pid from crictl on the
+            # container: the container id comes from the pod status, the kind-node pid from crictl on the
             # kind node, and the command line from that node's /proc.
             cid="$(kubectl -n "$APP_NS" get pod "$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="user-container")].containerID}')"
             cid="${cid#containerd://}"
@@ -392,11 +392,11 @@ jobs:
             if ! inspect="$(docker exec "$knode" crictl inspect "$cid" 2>&1)"; then
               echo "::error::crictl inspect failed on ${knode} for container ${cid} (arm ${arm}; the pod may have scaled down): ${inspect}"; exit 1
             fi
-            hostpid="$(printf '%s' "$inspect" | jq -r '.info.pid')" \
+            kpid="$(printf '%s' "$inspect" | jq -r '.info.pid')" \
               || { echo "::error::crictl inspect output for ${cid} (arm ${arm}) is not JSON"; exit 1; }
-            case "$hostpid" in ''|null|*[!0-9]*) echo "::error::crictl gave no pid for ${cid} (arm ${arm}): '${hostpid}'"; exit 1 ;; esac
-            docker exec "$knode" cat "/proc/${hostpid}/cmdline" > "${RUNNER_TEMP}/proc-${arm}.bin" \
-              || { echo "::error::could not read /proc/${hostpid}/cmdline on ${knode} (arm ${arm})"; exit 1; }
+            case "$kpid" in ''|null|*[!0-9]*) echo "::error::crictl gave no pid for ${cid} (arm ${arm}): '${kpid}'"; exit 1 ;; esac
+            docker exec "$knode" cat "/proc/${kpid}/cmdline" > "${RUNNER_TEMP}/proc-${arm}.bin" \
+              || { echo "::error::could not read /proc/${kpid}/cmdline on ${knode} (arm ${arm})"; exit 1; }
             echo "arm ${arm}: main process = $(tr '\0' ' ' < "${RUNNER_TEMP}/proc-${arm}.bin")"
             "$chk" "$proc_rt" < "${RUNNER_TEMP}/proc-${arm}.bin" \
               || { echo "::error::arm ${arm} (${runtime}, ${build}) main process is not ${proc_rt}"; exit 1; }
@@ -413,7 +413,7 @@ jobs:
             # Proof that bytecode (bun) or the compile cache (node) is in the image and in the live
             # process, read from the pushed image and the kind node. It fails the job when absent, so
             # no row is measured without it.
-            scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$hostpid"
+            scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$kpid"
             ev="${out}/evidence-${arm}.json"
             # The versions the arm's app actually resolved (shared by every arm with this key).
             versions="$(cd "${RUNNER_TEMP}/zone-${key}" && node -e "const o={}; for (const n of ['next','react','react-dom']) o[n]=require('./node_modules/'+n+'/package.json').version; console.log(JSON.stringify(o))")"

@@ -188,7 +188,7 @@ describe('coldstart-phases-kind-native workflow shape', () => {
     expect(code).toMatch(/containerStatuses\[\?\(@\.name=="user-container"\)\]\.containerID/);
     expect(code).toMatch(/docker exec "\$knode" crictl inspect "\$cid"/);
     expect(code).toMatch(/jq -r '\.info\.pid'/);
-    expect(code).toMatch(/docker exec "\$knode" cat "\/proc\/\$\{hostpid\}\/cmdline"/);
+    expect(code).toMatch(/docker exec "\$knode" cat "\/proc\/\$\{kpid\}\/cmdline"/);
     expect(code).not.toMatch(/kubectl[^\n]*\bexec\b/);
     expect(code).toMatch(/crictl inspect failed on/);
     // Newest Running pod that is not terminating.
@@ -721,7 +721,8 @@ describe('kind/verify-bytecode.mjs (behaviour)', () => {
 
 describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
   const REC = resolve(DIR, 'kind/record-evidence.sh');
-  const HOSTPID = '4242';
+  const KPID = '4242';
+  const NODE = 'kindnode';
   type Case = {
     runtime: string;
     build: string;
@@ -733,7 +734,11 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     args?: string[];
   };
 
-  /** A fake `docker`: `cp` materialises fixture files, `exec <node> cat <path>` reads fake /proc. */
+  /**
+   * A fake `docker`. Every call is logged. `cp` materialises fixture files. `exec <node> cat|readlink
+   * <path>` reads a fake /proc, and FAILS when <node> is not the node the script was told about, so a
+   * wrong node name cannot pass.
+   */
   function run(c: Case, baselineBin?: string) {
     const d = mkdtempSync(join(tmpdir(), 'rec-'));
     try {
@@ -750,13 +755,15 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
         join(d, 'docker'),
         [
           '#!/bin/sh',
+          'echo "$1" >> "$FAKE_LOG"',
           'case "$1" in',
           '  pull) exit 0 ;;',
           '  create) echo fakecid ;;',
           '  rm) exit 0 ;;',
           '  inspect) printf "%s\\n" "PATH=/usr/bin" "${FAKE_ENV:-}" ;;',
           '  cp) src="${2#fakecid:}"; dst="$3"; cp -R "$FAKE_FX$src" "$dst" 2>/dev/null || exit 1 ;;',
-          '  exec) [ "$3" = cat ] || exit 1; cat "$FAKE_PROC$4" 2>/dev/null || exit 1 ;;',
+          '  exec) [ "$2" = "$FAKE_NODE" ] || exit 1',
+          '        case "$3" in cat | readlink) cat "$FAKE_PROC$4" 2>/dev/null || exit 1 ;; *) exit 1 ;; esac ;;',
           'esac',
           '',
         ].join('\n'),
@@ -778,7 +785,7 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
           'localhost:5001/x@sha256:abc',
           join(d, 'build.log'),
           join(d, 'out'),
-          ...(c.args ?? ['kindnode', HOSTPID]),
+          ...(c.args ?? [NODE, KPID]),
         ],
         {
           encoding: 'utf8',
@@ -787,6 +794,8 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
             FAKE_FX: join(d, 'fx'),
             FAKE_PROC: join(d, 'proc'),
             FAKE_ENV: c.env ?? '',
+            FAKE_NODE: NODE,
+            FAKE_LOG: join(d, 'calls.log'),
             ...(baselineBin ? { BYTECODE_BASELINE: baselineBin } : {}),
           },
         },
@@ -797,7 +806,13 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
       } catch {
         ev = null;
       }
-      return { status: r.status, err: r.stderr + r.stdout, ev };
+      let calls: string[] = [];
+      try {
+        calls = readFileSync(join(d, 'calls.log'), 'utf8').split('\n').filter(Boolean);
+      } catch {
+        calls = [];
+      }
+      return { status: r.status, err: r.stderr + r.stdout, ev, calls };
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
@@ -806,16 +821,22 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
   const big = 'x'.repeat(300000);
   const TCACHE = '/app/.next/standalone/.next/compile-cache';
   const envOf = (cache: string) => `PATH=/usr/bin\0NODE_COMPILE_CACHE=${cache}\0`;
+  const CHILDREN = `/proc/${KPID}/task/${KPID}/children`;
+
+  // node + turbopack: a supervisor (KPID) and its Next child (4300).
   const nodeCase = (over: Partial<Case> = {}): Case => ({
     runtime: 'node',
     build: 'turbopack',
-    files: { [`app/.next/standalone/.next/compile-cache/v24/a.bin`]: big },
+    files: { 'app/.next/standalone/.next/compile-cache/v24/a.bin': big },
     env: `NODE_COMPILE_CACHE=${TCACHE}`,
-    proc: { [`/proc/${HOSTPID}/environ`]: envOf(TCACHE) },
+    proc: {
+      [CHILDREN]: '4300 ',
+      '/proc/4300/environ': envOf(TCACHE),
+    },
     ...over,
   });
 
-  it('turbopack+node: records the compile cache bytes, the env, the live env and the bake line', () => {
+  it('turbopack+node: records the cache bytes, the image env and the CHILD live env', () => {
     const r = run(nodeCase());
     expect(r.status).toBe(0);
     expect(r.ev?.build_target).toBe('turbopack');
@@ -824,44 +845,111 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(bc.kind).toBe('v8-compile-cache');
     expect(bc.bytes).toBe(300000);
     expect(bc.files).toBe(1);
+    expect(bc.live_via).toBe('supervisor-child');
+    expect(bc.live_pid).toBe(4300);
     expect(bc.live_env_NODE_COMPILE_CACHE).toBe(TCACHE);
     expect(String(bc.bake_line)).toContain('compile cache baked: 999999 bytes');
   });
 
-  it('vinext+node: reads the cache from /app/.compile-cache', () => {
+  it('turbopack+node: the Next child must carry NODE_COMPILE_CACHE, not just the supervisor', () => {
+    // The supervisor has it, its child does not: the cache is not effective where it matters.
+    const r = run(
+      nodeCase({
+        proc: {
+          [CHILDREN]: '4300 ',
+          [`/proc/${KPID}/environ`]: envOf(TCACHE),
+          '/proc/4300/environ': 'PATH=/usr/bin\0',
+        },
+      }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('no child of the supervisor');
+    expect(r.err).not.toContain('scaled away');
+    // No children at all.
+    const none = run(nodeCase({ proc: { [CHILDREN]: '' } }));
+    expect(none.status).toBe(1);
+    expect(none.err).toContain('has no child process');
+  });
+
+  it('vinext+node: reads the cache from /app/.compile-cache and the main process env', () => {
     const r = run(
       nodeCase({
         build: 'vinext',
         files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
         env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
-        proc: { [`/proc/${HOSTPID}/environ`]: envOf('/app/.compile-cache') },
+        proc: { [`/proc/${KPID}/environ`]: envOf('/app/.compile-cache') },
       }),
     );
     expect(r.status).toBe(0);
-    expect((r.ev?.bytecode as Record<string, unknown>).bytes).toBe(70000);
+    const bc = r.ev?.bytecode as Record<string, unknown>;
+    expect(bc.bytes).toBe(70000);
+    expect(bc.live_via).toBe('main-process');
+    // A main process without the variable fails, naming it (not a bare exit).
+    const bad = run(
+      nodeCase({
+        build: 'vinext',
+        files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
+        env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
+        proc: { [`/proc/${KPID}/environ`]: 'PATH=/usr/bin\0' },
+      }),
+    );
+    expect(bad.status).toBe(1);
+    expect(bad.err).toContain('has NODE_COMPILE_CACHE=');
   });
 
-  it('node: an empty or too-small cache, or a missing NODE_COMPILE_CACHE env, fails', () => {
+  it('node: an empty or too-small cache, or a missing NODE_COMPILE_CACHE image env, fails', () => {
     const file = 'app/.next/standalone/.next/compile-cache/v24/a.bin';
     expect(run(nodeCase({ files: { [file]: 'tiny' } })).status).not.toBe(0);
     expect(run(nodeCase({ files: {} })).status).not.toBe(0);
     expect(run(nodeCase({ env: 'FOO=1' })).status).not.toBe(0);
   });
 
-  it('node: the RUNNING process must carry NODE_COMPILE_CACHE too, not just the image config', () => {
-    const noEnv = run(nodeCase({ proc: { [`/proc/${HOSTPID}/environ`]: 'PATH=/usr/bin\0' } }));
-    expect(noEnv.status).toBe(1);
-    expect(noEnv.err).toContain('live process');
-    const wrong = run(nodeCase({ proc: { [`/proc/${HOSTPID}/environ`]: envOf('/elsewhere') } }));
-    expect(wrong.status).toBe(1);
-    // An unreadable /proc entry (the pod scaled away) is a failure, never a pass.
-    expect(run(nodeCase({ proc: {} })).status).toBe(1);
+  it('a pod that scaled away says so, never "fell back", and nothing slow ran', () => {
+    const gone: Case[] = [
+      nodeCase({ proc: {} }),
+      nodeCase({ proc: { [CHILDREN]: '4300 ' } }), // child environ unreadable
+      nodeCase({
+        build: 'vinext',
+        env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
+        files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
+        proc: {},
+      }),
+      bunCase({ proc: {} }),
+      bunCase({ proc: { [CHILDREN]: '4301 ' } }), // child unreadable
+    ];
+    for (const c of gone) {
+      const r = run(c);
+      expect(r.status).toBe(1);
+      expect(r.err).toContain('pod scaled away before the live check');
+      expect(r.err).not.toContain('fell back');
+      // The live reads come first, so a gone pod is found before the image is even pulled.
+      expect(r.calls).not.toContain('pull');
+    }
   });
 
-  it('refuses a missing kind node or host pid, and a non-numeric pid, with exit 2', () => {
+  it('does every live /proc read BEFORE the image pull, the copies and the bytecode scan', () => {
+    for (const c of [nodeCase(), bunCase()]) {
+      const r = run(c);
+      expect(r.status).toBe(0);
+      const lastExec = r.calls.lastIndexOf('exec');
+      const slow = r.calls.findIndex((x) => ['pull', 'create', 'cp', 'inspect'].includes(x));
+      expect(lastExec).toBeGreaterThanOrEqual(0);
+      expect(slow).toBeGreaterThan(lastExec);
+      // And no /proc read sneaks in after the first slow call.
+      expect(r.calls.slice(slow)).not.toContain('exec');
+    }
+  });
+
+  it('every /proc read names the kind node it was given: a wrong node fails', () => {
+    const r = run(nodeCase({ args: ['some-other-node', KPID] }));
+    expect(r.status).not.toBe(0);
+    expect(run(nodeCase()).status).toBe(0);
+  });
+
+  it('refuses a missing kind node or pid, and a non-numeric pid, with exit 2', () => {
     expect(run(nodeCase({ args: [] })).status).not.toBe(0);
-    expect(run(nodeCase({ args: ['kindnode'] })).status).not.toBe(0);
-    expect(run(nodeCase({ args: ['kindnode', 'abc'] })).status).toBe(2);
+    expect(run(nodeCase({ args: [NODE] })).status).not.toBe(0);
+    expect(run(nodeCase({ args: [NODE, 'abc'] })).status).toBe(2);
   });
 
   const M = 'knext-standalone-exec:aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -873,9 +961,13 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     files: { 'app/.next/standalone/knext-standalone-exec': bunBody },
     env: `STANDALONE_SERVER_EXEC=${SEXEC}`,
     proc: {
-      [`/proc/${HOSTPID}/task/${HOSTPID}/children`]: '4300 4301 ',
+      [CHILDREN]: '4300 4301 ',
       '/proc/4300/cmdline': 'bun\0run\0/app/knext-entry.mjs\0',
+      '/proc/4300/exe': '/usr/local/bin/bun\n',
+      '/proc/4300/comm': 'bun\n',
       '/proc/4301/cmdline': `${SEXEC}\0`,
+      '/proc/4301/exe': `${SEXEC}\n`,
+      '/proc/4301/comm': 'knext-standalon\n',
     },
     ...over,
   });
@@ -890,6 +982,7 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(bc.server_exec_env).toBe(SEXEC);
     expect(bc.live_child_pid).toBe(4301);
     expect(bc.live_child_argv0).toBe(SEXEC);
+    expect(bc.live_child_matched_by).toBe('argv0');
     // Without bytecode the arm fails.
     const bad = run(
       bunCase({
@@ -901,29 +994,54 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(bad.status).not.toBe(0);
   });
 
+  it('standalone bun: a rewritten process.title is still matched, by exe or comm, and says which', () => {
+    const titled = (extra: Record<string, string>) =>
+      bunCase({
+        proc: {
+          [CHILDREN]: '4301 ',
+          '/proc/4301/cmdline': 'next-server (v16.4.5)\0',
+          '/proc/4301/exe': '/dev/null\n',
+          '/proc/4301/comm': 'next-server (v1\n',
+          ...extra,
+        },
+      });
+    const viaExe = run(titled({ '/proc/4301/exe': `${SEXEC}\n` }));
+    expect(viaExe.status).toBe(0);
+    expect((viaExe.ev?.bytecode as Record<string, unknown>).live_child_matched_by).toBe('exe');
+    const viaComm = run(titled({ '/proc/4301/comm': 'knext-standalon\n' }));
+    expect(viaComm.status).toBe(0);
+    expect((viaComm.ev?.bytecode as Record<string, unknown>).live_child_matched_by).toBe('comm');
+    // None of the three: it fell back, and the error lists what it saw.
+    const none = run(titled({}));
+    expect(none.status).toBe(1);
+    expect(none.err).toContain('fell back');
+    expect(none.err).toContain("comm='next-server (v1'");
+  });
+
   it('standalone bun: refuses a silent fallback to an uncompiled server', () => {
     // The image does not name the executable: the supervisor would run `bun server.js`.
     const noEnv = run(bunCase({ env: 'FOO=1' }));
     expect(noEnv.status).toBe(1);
     expect(noEnv.err).toContain('STANDALONE_SERVER_EXEC');
-    const wrongEnv = run(bunCase({ env: 'STANDALONE_SERVER_EXEC=/app/server' }));
-    expect(wrongEnv.status).toBe(1);
+    expect(run(bunCase({ env: 'STANDALONE_SERVER_EXEC=/app/server' })).status).toBe(1);
     // The image is right but the live supervisor has no compiled child (it spawned bun server.js).
     const fallback = run(
       bunCase({
         proc: {
-          [`/proc/${HOSTPID}/task/${HOSTPID}/children`]: '4300 ',
+          [CHILDREN]: '4300 ',
           '/proc/4300/cmdline': 'bun\0server.js\0',
+          '/proc/4300/exe': '/usr/local/bin/bun\n',
+          '/proc/4300/comm': 'bun\n',
         },
       }),
     );
     expect(fallback.status).toBe(1);
     expect(fallback.err).toContain('fell back');
-    // No children at all, and an unreadable children file, both fail.
-    expect(
-      run(bunCase({ proc: { [`/proc/${HOSTPID}/task/${HOSTPID}/children`]: '' } })).status,
-    ).toBe(1);
-    expect(run(bunCase({ proc: {} })).status).toBe(1);
+    expect(fallback.err).not.toContain('scaled away');
+    // No child at all.
+    const none = run(bunCase({ proc: { [CHILDREN]: '' } }));
+    expect(none.status).toBe(1);
+    expect(none.err).toContain('has no child process');
   });
 
   it('vinext bun: needs BYTECODE_BASELINE and a higher @bytecode pragma count than it', () => {
@@ -950,7 +1068,6 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     }
   });
 });
-
 describe('kind/check-versions.sh (behaviour)', () => {
   const CHECK = resolve(DIR, 'kind/check-versions.sh');
   type V = { next?: string; react?: string; 'react-dom'?: string };
@@ -1028,7 +1145,7 @@ describe('workflow wiring of the evidence and version checks', () => {
   const lines = code.split('\n');
   const idx = (re: RegExp) => lines.findIndex((l) => re.test(l));
   const REC_LINE =
-    'scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$hostpid"';
+    'scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$kpid"';
 
   it('calls record-evidence.sh with exactly these arguments, once', () => {
     expect(lines.filter((l) => l.includes('kind/record-evidence.sh') && !/^\s*#/.test(l))).toEqual([
@@ -1060,7 +1177,7 @@ describe('workflow wiring of the evidence and version checks', () => {
     expect(rec).toBeGreaterThan(loopStart);
     expect(rec).toBeLessThan(loopEnd);
     expect(rec).toBeGreaterThan(proc);
-    expect(idx(/hostpid="\$\(printf/)).toBeLessThan(rec);
+    expect(idx(/kpid="\$\(printf/)).toBeLessThan(rec);
     expect(idx(/knode="\$\{CLUSTER\}-control-plane"/)).toBeLessThan(rec);
     // check-versions runs after every arm has its evidence, still before the wakes.
     const ver = idx(/kind\/check-versions\.sh/);
@@ -1084,10 +1201,35 @@ describe('workflow wiring of the evidence and version checks', () => {
       expect(l).not.toMatch(/--bytecode/);
   });
 
-  it('records the resolved next, react and react-dom per arm', () => {
-    expect(code).toMatch(/\['next','react','react-dom'\]/);
-    expect(code).toMatch(/--argjson v "\$versions"/);
-    expect(code).toMatch(/versions: \$v/);
+  it('the versions snippet reads next, react and react-dom from the installed app', () => {
+    // Run the workflow's own `node -e` against a fixture node_modules, not a text match.
+    const line = lines.find((l) => l.includes('versions="$(cd'));
+    expect(line).toBeDefined();
+    const m = (line ?? '').match(/node -e "(.*)"\)"$/);
+    expect(m).not.toBeNull();
+    const d = mkdtempSync(join(tmpdir(), 'vers-'));
+    try {
+      for (const [name, version] of [
+        ['next', '16.4.5'],
+        ['react', '19.3.1'],
+        ['react-dom', '19.3.2'],
+      ]) {
+        mkdirSync(join(d, 'node_modules', name), { recursive: true });
+        writeFileSync(join(d, 'node_modules', name, 'package.json'), JSON.stringify({ version }));
+      }
+      const r = spawnSync('node', ['-e', m?.[1] ?? ''], { cwd: d, encoding: 'utf8' });
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout)).toEqual({
+        next: '16.4.5',
+        react: '19.3.1',
+        'react-dom': '19.3.2',
+      });
+      // The result is merged into the evidence file.
+      expect(code).toMatch(/--argjson v "\$versions"/);
+      expect(code).toMatch(/versions: \$v/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 
   it('keeps every comment line at 110 columns or fewer', () => {

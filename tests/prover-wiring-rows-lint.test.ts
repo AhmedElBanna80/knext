@@ -938,6 +938,18 @@ describe('a CI job runs the lint with the base fetched and the PR body in env', 
   it('fetches full history (the base is read at the merge-base)', () => {
     expect(job).toMatch(/fetch-depth: 0/);
   });
+  it('uses no bun (the setup-bun pin count is held elsewhere) and reads contents only', () => {
+    expect(job).not.toMatch(/setup-bun|bun install/);
+    expect(job).toMatch(/permissions:\n\s+contents: read/);
+  });
+  it('installs typescript and yaml at the versions bun.lock pins', () => {
+    const lock = readFileSync(resolve(ROOT, 'bun.lock'), 'utf8');
+    for (const pkg of ['typescript', 'yaml']) {
+      const locked = lock.match(new RegExp(`"${pkg}": \\["${pkg}@([^"]+)"`))?.[1];
+      expect(locked).toBeDefined();
+      expect(job).toContain(`${pkg}@${locked}`);
+    }
+  });
   it('passes the PR body through env, never interpolated into the script', () => {
     expect(job).toContain('PR_BODY: ${{ github.event.pull_request.body }}');
     const run = job.match(/run: (node scripts\/prover-unattributed-ratchet\.mjs.*)/)?.[1];

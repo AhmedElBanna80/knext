@@ -426,6 +426,8 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - name: Checkout code (full history, the base is read at the merge-base)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -437,13 +439,13 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Setup bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --ignore-scripts
+      # Node only, no bun: the ratchet needs just `typescript` and `yaml`, installed at the versions
+      # bun.lock pins (tests/prover-wiring-rows-lint.test.ts holds the two in lockstep) into the
+      # runner temp dir and linked into the workspace so ESM resolution finds them.
+      - name: Install the two script dependencies (typescript, yaml)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ratchet-deps" --no-save --no-package-lock --ignore-scripts typescript@5.9.3 yaml@2.9.0
+          ln -s "$RUNNER_TEMP/ratchet-deps/node_modules" node_modules
 
       - name: Run the unattributed ratchet against the PR base
         env:

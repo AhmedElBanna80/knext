@@ -373,6 +373,121 @@ describe('self-asserting provers: anchors built at run time assert themselves', 
       );
       expect(auditSelfAsserting(stub).join(' ')).toMatch(/does not import/);
     });
+
+    const CALL = 'assertAnchorsResolved(rows);';
+    const evasions: Array<[string, string]> = [
+      ['`if (false)` on the line before a column-0 call', `if (false)\n${CALL}`],
+      ['the call AFTER process.exit(0)', `process.exit(0);\n${CALL}`],
+      ['the call AFTER the first mutate()', `mutate(rows[0]);\n${CALL}`],
+      ['the call inside an async IIFE', `(async () => {\n${CALL}\n})();`],
+      ['the call with no arguments', 'assertAnchorsResolved();'],
+      ['the call under a conditional', `if (process.env.CHECK) {\n${CALL}\n}`],
+      ['the call inside a function never invoked', `function never() {\n${CALL}\n}`],
+      [
+        'work hidden in a called local function declaration',
+        `function run() {\n  mutate(rows);\n}\nrun();\n${CALL}`,
+      ],
+      [
+        'work hidden in a called local arrow binding',
+        `const run = () => {\n  mutate(rows);\n};\nrun();\n${CALL}`,
+      ],
+      [
+        'work hidden in a transitively called local function',
+        `function inner() {\n  snapshot(rows);\n}\nfunction outer() {\n  inner();\n}\nouter();\n${CALL}`,
+      ],
+      ['work via rows.forEach(mutate)', `[rows].forEach(mutate);\n${CALL}`],
+      ['work via rows.map(mutate)', `rows.map(mutate);\n${CALL}`],
+      ['work via setTimeout(mutate)', `setTimeout(mutate, 0, rows);\n${CALL}`],
+      ['work via alias const m = mutate', `const m = mutate;\nm(rows);\n${CALL}`],
+      ['work via namespace h.mutate', `h.mutate(rows);\n${CALL}`],
+      ['work via mutate.call', `mutate.call(null, rows);\n${CALL}`],
+      ['work via [mutate][0]()', `[mutate][0](rows);\n${CALL}`],
+      ['work via tagged template', `mutate\`x\`;\n${CALL}`],
+      ['work via class static block', `class X {\n  static {\n    mutate(rows);\n  }\n}\n${CALL}`],
+      ['work via class static field', `class X {\n  static y = mutate(rows);\n}\n${CALL}`],
+      [
+        'work via class static method called',
+        `class X {\n  static go() {\n    mutate(rows);\n  }\n}\nX.go();\n${CALL}`,
+      ],
+      [
+        'work via new class with work in an instance field initializer',
+        `class X {\n  y = mutate(rows);\n}\nnew X();\n${CALL}`,
+      ],
+      [
+        'work via new class with work in constructor',
+        `class X {\n  constructor() {\n    mutate(rows);\n  }\n}\nnew X();\n${CALL}`,
+      ],
+      [
+        'work via instance method called',
+        `class X {\n  go() {\n    mutate(rows);\n  }\n}\nconst x = new X();\nx.go();\n${CALL}`,
+      ],
+      [
+        'work via local function passed by reference',
+        `function run() {\n  mutate(rows);\n}\n[rows].forEach(run);\n${CALL}`,
+      ],
+      [
+        'work via shadowed name defined later',
+        `function go() {\n  mutate(rows);\n}\nfunction other() {\n  const go = () => 0;\n  return go;\n}\ngo();\n${CALL}`,
+      ],
+      ['work in an IIFE before the call', `(() => {\n  mutate(rows);\n})();\n${CALL}`],
+      ['work in a callback before the call', `[rows].forEach((r) => mutate(r));\n${CALL}`],
+      ['work inside the call arguments', 'assertAnchorsResolved(snapshot(rows));'],
+      ['an empty array literal as the rows', 'assertAnchorsResolved([]);'],
+      ['a spread of an empty literal as the rows', 'assertAnchorsResolved(...[]);'],
+    ];
+    for (const [name, replacement] of evasions) {
+      it(`${name} -> red`, () => {
+        const src = GOOD.replace(CALL, replacement);
+        expect(src).not.toBe(GOOD);
+        expect(auditSelfAsserting(src).join(' ')).toMatch(/never calls assertAnchorsResolved/);
+      });
+    }
+
+    it('a local stub named assertAnchorsResolved (no import) -> red', () => {
+      const stub = GOOD.replace(
+        "import { assertAnchorsResolved, mutate } from './lib/mutation-harness.mjs';",
+        "import { mutate } from './lib/mutation-harness.mjs';\nfunction assertAnchorsResolved(r) {\n  return r;\n}",
+      );
+      expect(auditSelfAsserting(stub).join(' ')).toMatch(/does not import/);
+    });
+
+    it('a re-export instead of an import -> red', () => {
+      const reexp = GOOD.replace(
+        "import { assertAnchorsResolved, mutate } from './lib/mutation-harness.mjs';",
+        "import { mutate } from './lib/mutation-harness.mjs';\nexport { assertAnchorsResolved } from './lib/mutation-harness.mjs';",
+      );
+      expect(auditSelfAsserting(reexp).join(' ')).toMatch(/does not import/);
+    });
+
+    it('an aliased import -> red', () => {
+      const aliased = GOOD.replace(
+        'assertAnchorsResolved, mutate }',
+        'assertAnchorsResolved as other, mutate }',
+      );
+      expect(auditSelfAsserting(aliased).join(' ')).toMatch(/does not import/);
+    });
+
+    it('a process.exit inside a never-run helper before the call -> green (read-only preflight)', () => {
+      const src = GOOD.replace(
+        CALL,
+        `function preflight() {\n  if (!rows) process.exit(1);\n}\npreflight();\n${CALL}`,
+      );
+      expect(auditSelfAsserting(src)).toEqual([]);
+    });
+
+    it('an array literal or call expression as the rows -> green', () => {
+      expect(auditSelfAsserting(GOOD.replace('(rows)', '([rows[0]])'))).toEqual([]);
+      expect(auditSelfAsserting(GOOD.replace('(rows)', '(rows.flatMap((r) => [r]))'))).toEqual([]);
+    });
+
+    it('a source that does not parse fails closed (call otherwise valid) -> red', () => {
+      const src = GOOD.replace(CALL, `${CALL}\nconst rows2 = [;`);
+      expect(auditSelfAsserting(src).join(' ')).toMatch(/does not parse/);
+    });
+
+    it('await-prefixed top-level call before any work -> green', () => {
+      expect(auditSelfAsserting(GOOD.replace(CALL, `await ${CALL}`))).toEqual([]);
+    });
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -14,7 +14,9 @@ import { resolve } from 'node:path';
 import * as LINT_MODULE from '../scripts/lib/prover-wiring-lint.mjs';
 import {
   auditWiringLabels,
+  baselineRaises,
   classifyPair,
+  declaredBaselineRaises,
   declaredWiringSubjects,
   isTextOnlyPair,
   namesSubject,
@@ -633,10 +635,15 @@ describe('shell -n is turned off by a later +n (ROUND 3 item 3a)', () => {
 
 describe('the lint CLI prints each prover total split into wiring and behavioural', () => {
   it('z11 answering-pod: its 18 run.sh WR rows are wiring, the lib rows are not', () => {
-    const r = spawnSync(process.execPath, [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs')], {
-      cwd: ROOT,
-      encoding: 'utf8',
-    });
+    // `--base HEAD`: this test is about the row split, not the base-branch rule (tested below)
+    const r = spawnSync(
+      process.execPath,
+      [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs'), '--base', 'HEAD'],
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+      },
+    );
     const line = r.stdout
       .split('\n')
       .find((l) => l.startsWith('scripts/mutation-prove-s11-1-z11-answering-pod.mjs:'));
@@ -758,5 +765,185 @@ describe('the committed baseline', () => {
       expect(provers).toContain(prover);
       expect(Number.isInteger(n) && n > 0).toBe(true);
     }
+  });
+});
+
+describe('baselineRaises / declaredBaselineRaises (pure)', () => {
+  const P = 'scripts/mutation-prove-a.mjs';
+  it('a working baseline above the base (absent = 0) is a raise; equal or lower is not', () => {
+    expect(baselineRaises({ [P]: 3 }, { [P]: 2 })).toEqual([{ prover: P, from: 2, to: 3 }]);
+    expect(baselineRaises({ [P]: 1 }, {})).toEqual([{ prover: P, from: 0, to: 1 }]);
+    expect(baselineRaises({ [P]: 2 }, { [P]: 2 })).toEqual([]);
+    expect(baselineRaises({}, { [P]: 2 })).toEqual([]);
+    expect(baselineRaises({ [P]: 1 }, { [P]: 2 })).toEqual([]);
+  });
+  it('reads `Baseline-raise: <prover> <reason>` from visible text only, and needs a reason', () => {
+    const body = `Baseline-raise: ${P} eleven new rows on a shared spec`;
+    expect([...declaredBaselineRaises(body)]).toEqual([P]);
+    expect([...declaredBaselineRaises(`baseline-raise: ${P} why`)]).toEqual([P]);
+    expect([...declaredBaselineRaises(`Baseline-raise: ${P}`)]).toEqual([]);
+    expect([...declaredBaselineRaises(`<!-- ${body} -->`)]).toEqual([]);
+    expect([...declaredBaselineRaises(`\`\`\`\n${body}\n\`\`\``)]).toEqual([]);
+  });
+});
+
+describe('the baseline cannot be raised by the PR that grows past it (git fixture)', () => {
+  const P = 'scripts/mutation-prove-fx.mjs';
+  const EXECUTES = `const p = resolve(ROOT, 'scripts/thing.sh'); spawnSync('bash', [p]);`;
+  const ESCAPES = `${EXECUTES}
+    const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8'); JSON.parse(src.slice(0, 4));`;
+  const sh = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
+  const write = (root: string, rel: string, text: string) => {
+    mkdirSync(resolve(root, rel, '..'), { recursive: true });
+    writeFileSync(resolve(root, rel), text);
+  };
+  /** main holds `baseBaseline` (null = no file); the branch holds `workBaseline` and `spec`. */
+  const repo = (
+    baseBaseline: Record<string, number> | null,
+    workBaseline: object,
+    spec: string,
+  ) => {
+    const root = mkdtempSync(resolve(tmpdir(), 'wiring-base-'));
+    sh(root, 'init', '-q', '-b', 'main');
+    sh(root, 'config', 'user.email', 't@t');
+    sh(root, 'config', 'user.name', 't');
+    sh(root, 'config', 'commit.gpgsign', 'false');
+    write(
+      root,
+      P,
+      `const SPEC = 'tests/fx.test.ts';
+const PROOF = { subjects: { thing: 'scripts/thing.sh' } };
+const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`,
+    );
+    write(root, 'tests/fx.test.ts', EXECUTES);
+    if (baseBaseline)
+      write(root, 'scripts/lib/prover-unattributed-baseline.json', JSON.stringify(baseBaseline));
+    else write(root, 'README.md', 'x');
+    sh(root, 'add', '-A');
+    sh(root, 'commit', '-qm', 'base');
+    sh(root, 'switch', '-qc', 'work');
+    sh(root, 'update-ref', 'refs/remotes/origin/main', 'main');
+    write(root, 'tests/fx.test.ts', spec);
+    write(root, 'scripts/lib/prover-unattributed-baseline.json', JSON.stringify(workBaseline));
+    sh(root, 'add', '-A');
+    return root;
+  };
+  const commit = (root: string, msg: string) => {
+    sh(root, 'commit', '-qm', msg);
+  };
+  const lint = (
+    root: string,
+    env: Record<string, string> = {},
+    base: string[] = ['--base', 'main'],
+  ) =>
+    spawnSync(
+      process.execPath,
+      [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs'), '--root', root, ...base],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } },
+    );
+  const withRepo = (
+    base: Record<string, number> | null,
+    work: object,
+    spec: string,
+    msg: string,
+    fn: (root: string) => void,
+  ) => {
+    const root = repo(base, work, spec);
+    try {
+      commit(root, msg);
+      fn(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it('FAILS a raised baseline with no Baseline-raise line, even though the count fits the new baseline', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const r = lint(root);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(`${P}: baseline raised 0 -> 1 without a Baseline-raise line`);
+    });
+  });
+  it('PASSES a raise declared in the PR body (CI) with a reason', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const body = `Baseline-raise: ${P} shared spec cannot be attributed`;
+      const r = lint(root, { GITHUB_ACTIONS: 'true', PR_BODY: body });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`NOTICE ${P}: baseline raised 0 -> 1`);
+    });
+  });
+  it('FAILS a raise declared only in a comment or fence of the PR body', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const hidden = `<!-- Baseline-raise: ${P} reason -->`;
+      expect(lint(root, { PR_BODY: hidden }).status).toBe(1);
+    });
+  });
+  it('in CI a commit message cannot declare the raise (it can be rewritten); locally it can', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, `grow\n\nBaseline-raise: ${P} reason here`, (root) => {
+      expect(lint(root, { GITHUB_ACTIONS: 'true' }).status).toBe(1);
+      expect(lint(root).status).toBe(0);
+    });
+  });
+  it('a raise for another prover does not excuse this one', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const r = lint(root, { PR_BODY: 'Baseline-raise: scripts/mutation-prove-other.mjs reason' });
+      expect(r.status).toBe(1);
+    });
+  });
+  it('lowering the baseline is always allowed', () => {
+    withRepo({ [P]: 1 }, {}, EXECUTES, 'shrink', (root) => {
+      const r = lint(root);
+      expect(r.status).toBe(0);
+      expect(r.stderr).not.toContain('baseline raised');
+    });
+  });
+  it('a base with no baseline file falls back to the working tree with a NOTICE', () => {
+    withRepo(null, { [P]: 1 }, ESCAPES, 'add', (root) => {
+      const r = lint(root);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('NOTICE no baseline on main');
+    });
+  });
+  it('in CI the base is GITHUB_BASE_REF as origin/<ref> when --base is not given', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const r = lint(root, { GITHUB_ACTIONS: 'true', GITHUB_BASE_REF: 'main' }, []);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('baseline raised 0 -> 1');
+    });
+  });
+  it('reads the base baseline at the MERGE-BASE, not at the base branch tip', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      sh(root, 'switch', '-q', 'main');
+      write(root, 'scripts/lib/prover-unattributed-baseline.json', JSON.stringify({ [P]: 5 }));
+      sh(root, 'commit', '-qam', 'base moves on');
+      sh(root, 'switch', '-q', 'work');
+      const r = lint(root);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('baseline raised 0 -> 1');
+    });
+  });
+  it('still fails growth past the working baseline', () => {
+    withRepo({}, {}, ESCAPES, 'grow', (root) => {
+      expect(lint(root).status).toBe(1);
+    });
+  });
+});
+
+describe('a CI job runs the lint with the base fetched and the PR body in env', () => {
+  const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const start = ci.indexOf('\n  prover-unattributed-ratchet:');
+  const job = start === -1 ? '' : ci.slice(start + 1, ci.indexOf('\n  compat-smoke:', start));
+  it('the job exists and runs on pull requests only', () => {
+    expect(job).not.toBe('');
+    expect(job).toContain("if: github.event_name == 'pull_request'");
+  });
+  it('fetches full history (the base is read at the merge-base)', () => {
+    expect(job).toMatch(/fetch-depth: 0/);
+  });
+  it('passes the PR body through env, never interpolated into the script', () => {
+    expect(job).toContain('PR_BODY: ${{ github.event.pull_request.body }}');
+    const run = job.match(/run: (node scripts\/lib\/prover-wiring-lint\.mjs.*)/)?.[1];
+    expect(run).toBeDefined();
+    expect(run).not.toContain('${{');
   });
 });

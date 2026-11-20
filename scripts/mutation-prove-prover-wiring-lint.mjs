@@ -22,6 +22,7 @@ const PROOF = {
   subjects: {
     lint: 'scripts/lib/prover-wiring-lint.mjs',
     z11: 'scripts/mutation-prove-s11-1-z11-answering-pod.mjs',
+    ci: '.github/workflows/ci.yml',
   },
 };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
@@ -469,9 +470,122 @@ const MUTATIONS = [
     anchor: 'const root = ri === -1 ? REPO_ROOT : resolve(process.argv[ri + 1]);',
     replacement: 'const root = REPO_ROOT;',
   },
+  {
+    label: 'an equal baseline counts as a raise',
+    subject: 'lint',
+    anchor: 'if (work[prover] > from) out.push(',
+    replacement: 'if (work[prover] >= from) out.push(',
+  },
+  {
+    label: 'a raised baseline is never seen as a raise',
+    subject: 'lint',
+    anchor: 'if (work[prover] > from) out.push(',
+    replacement: 'if (work[prover] > from + 1e9) out.push(',
+  },
+  {
+    label: 'a prover absent from the base baseline is allowed a non-zero start',
+    subject: 'lint',
+    anchor: 'const from = base[prover] ?? 0;',
+    replacement: 'const from = base[prover] ?? Infinity;',
+  },
+  {
+    label: 'a Baseline-raise line hidden in a comment or fence still counts',
+    subject: 'lint',
+    anchor: "visibleMarkdown(text ?? '').matchAll(",
+    replacement: "(text ?? '').matchAll(",
+  },
+  {
+    label: 'a Baseline-raise line with no reason counts',
+    subject: 'lint',
+    anchor: '[ \\t]+\\S.*$/gim',
+    replacement: '[ \\t]*\\S*.*$/gim',
+  },
+  {
+    label: 'an undeclared raise is accepted',
+    subject: 'lint',
+    anchor: 'if (declared.has(r.prover)) {',
+    replacement: 'if (true) {',
+  },
+  {
+    label: 'a raise declared for ANY prover excuses every prover',
+    subject: 'lint',
+    anchor: 'if (declared.has(r.prover)) {',
+    replacement: 'if (declared.size > 0) {',
+  },
+  {
+    label: 'CI also reads commit messages for the declaration (rewritable after review)',
+    subject: 'lint',
+    anchor: "ci ? '' : (gitQ(",
+    replacement: "false ? '' : (gitQ(",
+  },
+  {
+    label: 'the PR body is not read for the declaration',
+    subject: 'lint',
+    anchor: "env.PR_BODY ?? '',",
+    replacement: "'',",
+  },
+  {
+    label: 'locally, commit messages are not read for the declaration',
+    subject: 'lint',
+    anchor: "ci ? '' : (gitQ(",
+    replacement: "'' && (gitQ(",
+  },
+  {
+    label: 'a base that has the baseline is not compared (treated as absent)',
+    subject: 'lint',
+    anchor: 'if (!baseBaseline) {',
+    replacement: 'if (true) {',
+  },
+  {
+    label: 'the base baseline is read at the base tip, not the merge-base',
+    subject: 'lint',
+    anchor: "['show', `${mergeBase}:${UNATTRIBUTED_BASELINE}`]",
+    replacement: "['show', `${ref}:${UNATTRIBUTED_BASELINE}`]",
+  },
+  {
+    label: 'GITHUB_BASE_REF is ignored when no --base is given',
+    subject: 'lint',
+    anchor: '(env.GITHUB_BASE_REF ? `origin/${env.GITHUB_BASE_REF}`',
+    replacement: '(false ? `origin/${env.GITHUB_BASE_REF}`',
+  },
+  {
+    label: 'the CLI ignores --base',
+    subject: 'lint',
+    anchor: 'base: bi === -1 ? undefined : process.argv[bi + 1],',
+    replacement: 'base: undefined,',
+  },
+  {
+    label: 'the CI job fetches a shallow checkout (no base to read)',
+    subject: 'ci',
+    anchor:
+      '      - name: Checkout code (full history, the base is read at the merge-base)\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          fetch-depth: 0\n',
+    replacement:
+      '      - name: Checkout code (full history, the base is read at the merge-base)\n        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+  },
+  {
+    label: 'the CI job does not pass the PR body',
+    subject: 'ci',
+    anchor:
+      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs',
+    replacement: '        run: node scripts/lib/prover-wiring-lint.mjs',
+  },
+  {
+    label: 'the CI job interpolates the PR body into the script',
+    subject: 'ci',
+    anchor:
+      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs',
+    replacement:
+      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs "${{ github.event.pull_request.body }}"',
+  },
+  {
+    label: 'the CI job runs on every event, including pushes with no base',
+    subject: 'ci',
+    anchor: "    name: Prover unattributed ratchet\n    if: github.event_name == 'pull_request'\n",
+    replacement: '    name: Prover unattributed ratchet\n',
+  },
 ];
 
-const DECLARED = 68;
+const DECLARED = 86;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

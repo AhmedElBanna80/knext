@@ -56,10 +56,12 @@
  *     seen, and its subject is UNATTRIBUTED unless another spec names it.
  */
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { pickBase, visibleMarkdown } from './prepush-check.mjs';
 import { proverSubjectPaths, referencedSpecs } from './prover-lane.mjs';
 
 const parse = (name, source, kind) =>
@@ -1060,11 +1062,80 @@ export function unattributedRatchet(counts, baseline) {
 }
 
 /**
+ * Provers whose working-tree baseline is above the base branch's (absent = 0). Lowering is never
+ * a raise.
+ * @returns {{prover: string, from: number, to: number}[]}
+ */
+export function baselineRaises(work, base) {
+  const out = [];
+  for (const prover of Object.keys(work).sort()) {
+    const from = base[prover] ?? 0;
+    if (work[prover] > from) out.push({ prover, from, to: work[prover] });
+  }
+  return out;
+}
+
+/**
+ * Provers named by a visible `Baseline-raise: <prover path> <reason>` line. A line with no reason
+ * does not count; a line hidden in a comment or fence is not seen (same rule as `Scope:`).
+ * @returns {Set<string>}
+ */
+export function declaredBaselineRaises(text) {
+  const out = new Set();
+  for (const m of visibleMarkdown(text ?? '').matchAll(
+    /^[ \t]*Baseline-raise:[ \t]*(\S+)[ \t]+\S.*$/gim,
+  )) {
+    out.add(m[1]);
+  }
+  return out;
+}
+
+const BASES = ['personal/integration/v2', 'origin/integration/v2', 'personal/main', 'origin/main'];
+
+function gitQ(root, args) {
+  return spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 1 << 26 });
+}
+
+/** `[commits mine, commits theirs]` from the merge-base, or null; the same measure prepush-check uses. */
+function distanceFrom(root, ref) {
+  if (gitQ(root, ['rev-parse', '--verify', '-q', ref]).status !== 0) return null;
+  const mb = gitQ(root, ['merge-base', 'HEAD', ref]);
+  if (mb.status !== 0) return null;
+  const m = mb.stdout.trim();
+  const mine = gitQ(root, ['rev-list', '--count', `${m}..HEAD`]);
+  const theirs = gitQ(root, ['rev-list', '--count', `${m}..${ref}`]);
+  return mine.status === 0 && theirs.status === 0
+    ? [Number(mine.stdout.trim()), Number(theirs.stdout.trim())]
+    : null;
+}
+
+/**
+ * The base branch's committed baseline, read at the merge-base so a PR cannot edit the number it is
+ * judged by. `--base` wins, then `GITHUB_BASE_REF` (CI, as `origin/<ref>`), then the nearest of the
+ * usual long-lived refs (as prepush-check picks it).
+ * @returns {{ref?: string, mergeBase?: string, baseline: Record<string, number> | null}}
+ */
+export function readBaseBaseline(root, { base, env = process.env } = {}) {
+  const ref =
+    base ??
+    (env.GITHUB_BASE_REF
+      ? `origin/${env.GITHUB_BASE_REF}`
+      : pickBase(BASES, (b) => distanceFrom(root, b)));
+  if (!ref) return { baseline: null };
+  const mb = gitQ(root, ['merge-base', 'HEAD', ref]);
+  if (mb.status !== 0) return { ref, baseline: null };
+  const mergeBase = mb.stdout.trim();
+  const shown = gitQ(root, ['show', `${mergeBase}:${UNATTRIBUTED_BASELINE}`]);
+  if (shown.status !== 0) return { ref, mergeBase, baseline: null };
+  return { ref, mergeBase, baseline: JSON.parse(shown.stdout) };
+}
+
+/**
  * Lint every `scripts/mutation-prove-*.mjs` under `root`: label findings, row split per prover and
  * the unattributed ratchet.
  * @returns {{lines: string[], failures: string[], hints: string[]}}
  */
-export function lintProvers(root) {
+export function lintProvers(root, opts = {}) {
   const readSpec = (rel) => {
     const p = resolve(root, rel);
     return existsSync(p) ? readFileSync(p, 'utf8') : undefined;
@@ -1087,7 +1158,7 @@ export function lintProvers(root) {
   const baselinePath = resolve(root, UNATTRIBUTED_BASELINE);
   if (!existsSync(baselinePath)) {
     failures.push(`${UNATTRIBUTED_BASELINE}: missing; the unattributed ratchet has no baseline`);
-    return { lines, failures, hints: [] };
+    return { lines, failures, hints: [], notices: [] };
   }
   const { grew, shrank } = unattributedRatchet(
     counts,
@@ -1098,23 +1169,62 @@ export function lintProvers(root) {
       `${g.prover}: unattributed ${g.count} is above its baseline ${g.baseline}; a row whose subject is not cleanly executed or text-only cannot be credited. Make the spec execute the subject (or label the rows kind: 'wiring'); raising the baseline needs a stated reason in the PR`,
     );
   }
+  const notices = [];
+  const env = opts.env ?? process.env;
+  const work = JSON.parse(readFileSync(baselinePath, 'utf8'));
+  const {
+    ref,
+    mergeBase,
+    baseline: baseBaseline,
+  } = readBaseBaseline(root, { base: opts.base, env });
+  if (!baseBaseline) {
+    notices.push(
+      ref
+        ? `no baseline on ${ref} at the merge-base; judging against the working tree (expected only for the PR that adds it)`
+        : 'no base ref resolved; the baseline cannot be compared with the base branch (pass --base)',
+    );
+  } else {
+    // CI reads the PR body only (a commit message can be rewritten after review); locally the
+    // commit messages since the merge-base count too.
+    const ci = env.GITHUB_ACTIONS === 'true';
+    const text = [
+      env.PR_BODY ?? '',
+      ci ? '' : (gitQ(root, ['log', '--format=%B', `${mergeBase}..HEAD`]).stdout ?? ''),
+    ].join('\n');
+    const declared = declaredBaselineRaises(text);
+    for (const r of baselineRaises(work, baseBaseline)) {
+      if (declared.has(r.prover)) {
+        notices.push(
+          `${r.prover}: baseline raised ${r.from} -> ${r.to} (declared by a Baseline-raise line)`,
+        );
+      } else {
+        failures.push(
+          `${r.prover}: baseline raised ${r.from} -> ${r.to} without a Baseline-raise line; the baseline is judged against ${ref} at the merge-base, so a PR cannot raise its own limit silently. State \`Baseline-raise: ${r.prover} <reason>\` in the PR body${ci ? '' : ' (or a commit message)'}`,
+        );
+      }
+    }
+  }
   const hints = shrank.map(
     (g) =>
       `${g.prover}: unattributed fell to ${g.count} (baseline ${g.baseline}); lower it in ${UNATTRIBUTED_BASELINE} to lock the gain`,
   );
-  return { lines, failures, hints };
+  return { lines, failures, hints, notices };
 }
 
-// CLI: `node scripts/lib/prover-wiring-lint.mjs [--root <dir>]`. Prints each prover's row split and
+// CLI: `node scripts/lib/prover-wiring-lint.mjs [--root <dir>] [--base <ref>]`. Prints each prover's row split and
 // exits 1 on any unlabelled text-only row or any prover whose unattributed count grew past its
 // baseline (every failure is printed to stderr; a count below baseline prints a hint, exit 0).
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const ri = process.argv.indexOf('--root');
   const root = ri === -1 ? REPO_ROOT : resolve(process.argv[ri + 1]);
-  const { lines, failures, hints } = lintProvers(root);
+  const bi = process.argv.indexOf('--base');
+  const { lines, failures, hints, notices } = lintProvers(root, {
+    base: bi === -1 ? undefined : process.argv[bi + 1],
+  });
   for (const l of lines) console.log(l);
   for (const h of hints) console.log(`HINT ${h}`);
+  for (const n of notices) console.log(`NOTICE ${n}`);
   for (const f of failures) console.error(f);
   process.exit(failures.length > 0 ? 1 : 0);
 }

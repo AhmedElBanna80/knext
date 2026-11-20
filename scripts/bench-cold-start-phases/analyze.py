@@ -146,6 +146,51 @@ def table(rows, title):
                   f"{s['min']:.0f}–{s['max']:.0f}" + ("" if s["n"] == len(rows) else f" (n={s['n']})") + " |")
 
 
+PROBE_KEYS = ("qp_probe_ok", "app_tcp_3000", "same_node_tcp_3000", "same_node_health_ok")
+
+
+def probes_missing_everywhere(rows):
+    """True when the input has rows and no row carries any probe milestone (null or absent)."""
+    return bool(rows) and all(
+        all((r.get("watch") or {}).get(k) is None for k in PROBE_KEYS) for r in rows
+    )
+
+
+def is_excluded(r, need_marker):
+    """A row main() drops from the tables: an error, a non-200 code, or a missing marker."""
+    return "error" in r or r.get("code") != 200 or (need_marker and not r.get("marker"))
+
+
+def refuse(msg):
+    sys.stderr.write(f"analyze.py: refusing: {msg}\n")
+    sys.exit(2)
+
+
+def preflight(raw, valid):
+    """Refuse runs the tables would silently mis-describe. Empty input passes (exit 0).
+
+    Ordering matters: the probe check reads the VALID rows, the rows the tables are built
+    from. A probe-bearing row that the code/marker/error filter drops does not count.
+    """
+    if not raw:
+        return
+    if not valid:
+        if all("error" in r for r in raw):
+            refuse(f"every row ({len(raw)}) errored, so the wakes failed before any measurement "
+                   "was recorded (see each row's error field). The probes were not what failed here.")
+        refuse(f"no valid rows: all {len(raw)} row(s) were excluded by the error/code/marker filter, "
+               "so there is nothing to tabulate (run without --no-marker only for apps whose body "
+               "carries the marker).")
+    if probes_missing_everywhere(valid):
+        # Every valid row lacks every probe: the harness probes never reached the pod, so the
+        # tables would silently fall back to the cond_Ready/first_byte milestones.
+        refuse(f"every valid row ({len(valid)}) is missing every probe milestone "
+               f"({', '.join(PROBE_KEYS)}). The probes never reached the pod. A NetworkPolicy that "
+               "drops the harness probes is the likely cause (the kind harness allow rule lives in "
+               "kind/phase-harness-kind.yaml). Partial nulls are allowed; a run with no probe data "
+               "at all cannot be analyzed.")
+
+
 def flag(name, argv=None):
     return next((a.split("=", 1)[1] for a in (argv or sys.argv) if a.startswith(f"--{name}=")), None)
 
@@ -163,11 +208,12 @@ def main():
             load_cp("activator", a.split("=", 1)[1])
         if a.startswith("--autoscaler="):
             load_cp("autoscaler", a.split("=", 1)[1])
-    rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+    raw = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
     # --no-marker: the app under test is not file-manager, so the body has no "items:50" marker.
     need_marker = "--no-marker" not in sys.argv
-    bad = [r for r in rows if "error" in r or r.get("code") != 200 or (need_marker and not r.get("marker"))]
-    rows = [r for r in rows if r not in bad]
+    bad = [r for r in raw if is_excluded(r, need_marker)]
+    rows = [r for r in raw if not is_excluded(r, need_marker)]
+    preflight(raw, rows)  # on the valid set: the tables are built from these rows only
     print(f"valid {len(rows)}, excluded {len(bad)}: "
           f"{[(b.get('round'), b.get('arm'), str(b.get('error', b.get('code')))[:80]) for b in bad]}")
     groups = {}

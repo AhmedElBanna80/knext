@@ -1,17 +1,29 @@
 import { describe, expect, it } from 'bun:test';
-import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import * as LINT_MODULE from '../scripts/lib/prover-wiring-lint.mjs';
 import {
   auditWiringLabels,
+  baselineRaises,
   classifyPair,
+  declaredBaselineRaises,
   declaredWiringSubjects,
   isTextOnlyPair,
   namesSubject,
   rowsBySubject,
   summarizeProverRows,
   textOnlySubjects,
+  unattributedRatchet,
 } from '../scripts/lib/prover-wiring-lint.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -636,4 +648,312 @@ describe('the lint CLI prints each prover total split into wiring and behavioura
     // spawns the lint over every prover under scripts/: it scales with the fleet, so it gets a
     // budget of its own rather than bun's 5 s default
   }, 60_000);
+});
+
+describe('unattributedRatchet: a prover may not gain unattributed rows', () => {
+  const P = 'scripts/mutation-prove-a.mjs';
+  it('fails a count above its baseline, naming prover, count and baseline', () => {
+    expect(unattributedRatchet({ [P]: 5 }, { [P]: 4 }).grew).toEqual([
+      { prover: P, count: 5, baseline: 4 },
+    ]);
+  });
+  it('passes an equal count, and a lower one is a shrink hint, not a failure', () => {
+    expect(unattributedRatchet({ [P]: 4 }, { [P]: 4 })).toEqual({ grew: [], shrank: [] });
+    const r = unattributedRatchet({ [P]: 2 }, { [P]: 4 });
+    expect(r.grew).toEqual([]);
+    expect(r.shrank).toEqual([{ prover: P, count: 2, baseline: 4 }]);
+  });
+  it('a new prover (absent from the baseline) starts at 0', () => {
+    expect(unattributedRatchet({ [P]: 1 }, {}).grew).toEqual([
+      { prover: P, count: 1, baseline: 0 },
+    ]);
+    expect(unattributedRatchet({ [P]: 0 }, {})).toEqual({ grew: [], shrank: [] });
+  });
+  it('a baseline entry for a prover that no longer exists is a shrink hint', () => {
+    expect(unattributedRatchet({}, { [P]: 3 }).shrank).toEqual([
+      { prover: P, count: 0, baseline: 3 },
+    ]);
+  });
+});
+
+describe('the lint CLI enforces the unattributed ratchet on a fixture repo', () => {
+  const lint = (root: string) =>
+    spawnSync(
+      process.execPath,
+      [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs'), '--root', root],
+      {
+        encoding: 'utf8',
+      },
+    );
+  const fixture = (baseline: Record<string, number>, spec: string) => {
+    const root = mkdtempSync(resolve(tmpdir(), 'wiring-ratchet-'));
+    mkdirSync(resolve(root, 'scripts/lib'), { recursive: true });
+    mkdirSync(resolve(root, 'tests'));
+    writeFileSync(
+      resolve(root, 'scripts/mutation-prove-fx.mjs'),
+      `const SPEC = 'tests/fx.test.ts';
+const PROOF = { subjects: { thing: 'scripts/thing.sh' } };
+const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`,
+    );
+    writeFileSync(resolve(root, 'tests/fx.test.ts'), spec);
+    writeFileSync(
+      resolve(root, 'scripts/lib/prover-unattributed-baseline.json'),
+      JSON.stringify(baseline),
+    );
+    return root;
+  };
+  const EXECUTES = `const p = resolve(ROOT, 'scripts/thing.sh'); spawnSync('bash', [p]);`;
+  const ESCAPES = `${EXECUTES}
+    const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8'); JSON.parse(src.slice(0, 4));`;
+  const P = 'scripts/mutation-prove-fx.mjs';
+
+  it('is green while the subject is executed, RED when a JSON.parse(src.slice()) use makes it unattributed', () => {
+    const root = fixture({}, EXECUTES);
+    try {
+      const ok = lint(root);
+      expect(ok.stdout).toContain('behavioural 1, unattributed 0');
+      expect(ok.status).toBe(0);
+      writeFileSync(resolve(root, 'tests/fx.test.ts'), ESCAPES);
+      const red = lint(root);
+      expect(red.stdout).toContain('unattributed 1');
+      expect(red.stderr).toContain(`${P}: unattributed 1 is above its baseline 0`);
+      expect(red.status).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('passes at its recorded baseline, and prints a lower-it hint when the count shrinks', () => {
+    const root = fixture({ [P]: 1 }, ESCAPES);
+    try {
+      expect(lint(root).status).toBe(0);
+      writeFileSync(resolve(root, 'tests/fx.test.ts'), EXECUTES);
+      const r = lint(root);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`HINT ${P}: unattributed fell to 0 (baseline 1)`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('fails when the baseline file is missing', () => {
+    const root = fixture({}, EXECUTES);
+    try {
+      rmSync(resolve(root, 'scripts/lib/prover-unattributed-baseline.json'));
+      const r = lint(root);
+      expect(r.status).toBe(1);
+      // a whole line of its own: a crash's source excerpt (bun prints one) must not satisfy this
+      expect(r.stderr).toMatch(
+        /^scripts\/lib\/prover-unattributed-baseline\.json: missing; the unattributed ratchet has no baseline$/m,
+      );
+      expect(r.stderr).not.toContain('ENOENT');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the committed baseline', () => {
+  it('covers real provers only, with positive integer counts, and the real CLI is green on it', () => {
+    const baseline = JSON.parse(
+      readFileSync(resolve(ROOT, 'scripts/lib/prover-unattributed-baseline.json'), 'utf8'),
+    ) as Record<string, number>;
+    for (const [prover, n] of Object.entries(baseline)) {
+      expect(provers).toContain(prover);
+      expect(Number.isInteger(n) && n > 0).toBe(true);
+    }
+  });
+});
+
+describe('baselineRaises / declaredBaselineRaises (pure)', () => {
+  const P = 'scripts/mutation-prove-a.mjs';
+  it('a working baseline above the base (absent = 0) is a raise; equal or lower is not', () => {
+    expect(baselineRaises({ [P]: 3 }, { [P]: 2 })).toEqual([{ prover: P, from: 2, to: 3 }]);
+    expect(baselineRaises({ [P]: 1 }, {})).toEqual([{ prover: P, from: 0, to: 1 }]);
+    expect(baselineRaises({ [P]: 2 }, { [P]: 2 })).toEqual([]);
+    expect(baselineRaises({}, { [P]: 2 })).toEqual([]);
+    expect(baselineRaises({ [P]: 1 }, { [P]: 2 })).toEqual([]);
+  });
+  it('reads `Baseline-raise: <prover> <reason>` from visible text only, and needs a reason', () => {
+    const body = `Baseline-raise: ${P} eleven new rows on a shared spec`;
+    expect([...declaredBaselineRaises(body)]).toEqual([P]);
+    expect([...declaredBaselineRaises(`baseline-raise: ${P} why`)]).toEqual([P]);
+    expect([...declaredBaselineRaises(`Baseline-raise: ${P}`)]).toEqual([]);
+    expect([...declaredBaselineRaises(`<!-- ${body} -->`)]).toEqual([]);
+    expect([...declaredBaselineRaises(`\`\`\`\n${body}\n\`\`\``)]).toEqual([]);
+  });
+});
+
+describe('the baseline cannot be raised by the PR that grows past it (git fixture)', () => {
+  const P = 'scripts/mutation-prove-fx.mjs';
+  const EXECUTES = `const p = resolve(ROOT, 'scripts/thing.sh'); spawnSync('bash', [p]);`;
+  const ESCAPES = `${EXECUTES}
+    const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8'); JSON.parse(src.slice(0, 4));`;
+  const sh = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
+  const write = (root: string, rel: string, text: string) => {
+    mkdirSync(resolve(root, rel, '..'), { recursive: true });
+    writeFileSync(resolve(root, rel), text);
+  };
+  /** main holds `baseBaseline` (null = no file); the branch holds `workBaseline` and `spec`. */
+  const repo = (
+    baseBaseline: Record<string, number> | null,
+    workBaseline: object,
+    spec: string,
+  ) => {
+    const root = mkdtempSync(resolve(tmpdir(), 'wiring-base-'));
+    sh(root, 'init', '-q', '-b', 'main');
+    sh(root, 'config', 'user.email', 't@t');
+    sh(root, 'config', 'user.name', 't');
+    sh(root, 'config', 'commit.gpgsign', 'false');
+    write(
+      root,
+      P,
+      `const SPEC = 'tests/fx.test.ts';
+const PROOF = { subjects: { thing: 'scripts/thing.sh' } };
+const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`,
+    );
+    write(root, 'tests/fx.test.ts', EXECUTES);
+    if (baseBaseline)
+      write(root, 'scripts/lib/prover-unattributed-baseline.json', JSON.stringify(baseBaseline));
+    else write(root, 'README.md', 'x');
+    sh(root, 'add', '-A');
+    sh(root, 'commit', '-qm', 'base');
+    sh(root, 'switch', '-qc', 'work');
+    sh(root, 'update-ref', 'refs/remotes/origin/main', 'main');
+    write(root, 'tests/fx.test.ts', spec);
+    write(root, 'scripts/lib/prover-unattributed-baseline.json', JSON.stringify(workBaseline));
+    sh(root, 'add', '-A');
+    return root;
+  };
+  const commit = (root: string, msg: string) => {
+    sh(root, 'commit', '-qm', msg);
+  };
+  const lint = (
+    root: string,
+    env: Record<string, string> = {},
+    base: string[] = ['--base', 'main'],
+  ) =>
+    spawnSync(
+      process.execPath,
+      [resolve(ROOT, 'scripts/prover-unattributed-ratchet.mjs'), '--root', root, ...base],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } },
+    );
+  const withRepo = (
+    base: Record<string, number> | null,
+    work: object,
+    spec: string,
+    msg: string,
+    fn: (root: string) => void,
+  ) => {
+    const root = repo(base, work, spec);
+    try {
+      commit(root, msg);
+      fn(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it('FAILS a raised baseline with no Baseline-raise line, even though the count fits the new baseline', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const r = lint(root);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain(`${P}: baseline raised 0 -> 1 without a Baseline-raise line`);
+    });
+  });
+  it('PASSES a raise declared in the PR body (CI) with a reason', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const body = `Baseline-raise: ${P} shared spec cannot be attributed`;
+      const r = lint(root, { GITHUB_ACTIONS: 'true', PR_BODY: body });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`NOTICE ${P}: baseline raised 0 -> 1`);
+    });
+  });
+  it('FAILS a raise declared only in a comment or fence of the PR body', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const hidden = `<!-- Baseline-raise: ${P} reason -->`;
+      expect(lint(root, { PR_BODY: hidden }).status).toBe(1);
+    });
+  });
+  it('in CI a commit message cannot declare the raise (it can be rewritten); locally it can', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, `grow\n\nBaseline-raise: ${P} reason here`, (root) => {
+      expect(lint(root, { GITHUB_ACTIONS: 'true' }).status).toBe(1);
+      expect(lint(root).status).toBe(0);
+    });
+  });
+  it('a raise for another prover does not excuse this one', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      const r = lint(root, { PR_BODY: 'Baseline-raise: scripts/mutation-prove-other.mjs reason' });
+      expect(r.status).toBe(1);
+    });
+  });
+  it('lowering the baseline is always allowed', () => {
+    withRepo({ [P]: 1 }, {}, EXECUTES, 'shrink', (root) => {
+      const r = lint(root);
+      expect(r.status).toBe(0);
+      expect(r.stderr).not.toContain('baseline raised');
+    });
+  });
+  it('a base with no baseline file falls back to the working tree with a NOTICE', () => {
+    withRepo(null, { [P]: 1 }, ESCAPES, 'add', (root) => {
+      const r = lint(root);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('NOTICE no baseline on main');
+    });
+  });
+  it('in CI the base is GITHUB_BASE_REF as origin/<ref> when --base is not given', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      // only origin/rel exists, so a base found by guessing (origin/main) cannot satisfy this
+      sh(root, 'update-ref', 'refs/remotes/origin/rel', 'main');
+      sh(root, 'update-ref', '-d', 'refs/remotes/origin/main');
+      const r = lint(root, { GITHUB_ACTIONS: 'true', GITHUB_BASE_REF: 'rel' }, []);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('baseline raised 0 -> 1');
+    });
+  });
+  it('reads the base baseline at the MERGE-BASE, not at the base branch tip', () => {
+    withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
+      sh(root, 'switch', '-q', 'main');
+      write(root, 'scripts/lib/prover-unattributed-baseline.json', JSON.stringify({ [P]: 5 }));
+      sh(root, 'commit', '-qam', 'base moves on');
+      sh(root, 'switch', '-q', 'work');
+      const r = lint(root);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('baseline raised 0 -> 1');
+    });
+  });
+  it('still fails growth past the working baseline', () => {
+    withRepo({}, {}, ESCAPES, 'grow', (root) => {
+      expect(lint(root).status).toBe(1);
+    });
+  });
+});
+
+describe('a CI job runs the lint with the base fetched and the PR body in env', () => {
+  const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
+  const start = ci.indexOf('\n  prover-unattributed-ratchet:');
+  const job = start === -1 ? '' : ci.slice(start + 1, ci.indexOf('\n  compat-smoke:', start));
+  it('the job exists and runs on pull requests only', () => {
+    expect(job).not.toBe('');
+    expect(job).toContain("if: github.event_name == 'pull_request'");
+  });
+  it('fetches full history (the base is read at the merge-base)', () => {
+    expect(job).toMatch(/fetch-depth: 0/);
+  });
+  it('uses no bun (the setup-bun pin count is held elsewhere) and reads contents only', () => {
+    expect(job).not.toMatch(/setup-bun|bun install/);
+    expect(job).toMatch(/permissions:\n\s+contents: read/);
+  });
+  it('installs typescript and yaml at the versions bun.lock pins', () => {
+    const lock = readFileSync(resolve(ROOT, 'bun.lock'), 'utf8');
+    for (const pkg of ['typescript', 'yaml']) {
+      const locked = lock.match(new RegExp(`"${pkg}": \\["${pkg}@([^"]+)"`))?.[1];
+      expect(locked).toBeDefined();
+      expect(job).toContain(`${pkg}@${locked}`);
+    }
+  });
+  it('passes the PR body through env, never interpolated into the script', () => {
+    expect(job).toContain('PR_BODY: ${{ github.event.pull_request.body }}');
+    const run = job.match(/run: (node scripts\/prover-unattributed-ratchet\.mjs.*)/)?.[1];
+    expect(run).toBeDefined();
+    expect(run).not.toContain('${{');
+  });
 });

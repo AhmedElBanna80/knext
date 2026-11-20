@@ -45,10 +45,25 @@ and the repo root for new leftovers (with no changed tests it runs the tests tha
 changed source, and warns that the leak scan was not exercised if there are none), scans
 `tests/**` for a `mkdtemp` that is never removed, and prints `git diff --stat` grouped by
 top-level area. A file outside the declared scope fails. The scope is `--scope`, or a line of the
-form `Scope: glob, glob` in a commit or PR body; any other phrasing is ignored. List each glob
+form `Scope:` (case-insensitive) `glob, glob` in a commit or PR body; any other phrasing is ignored, and so is a `Scope:`
+line inside an HTML comment (`<!-- -->`) or a code fence (``` or ~~~), because reviewers never see those.
+The PR body must carry exactly one such line: two or more fail. The local log may union scopes
+across commits; CI reads only the PR body. List each glob
 separately: a brace glob such as `{a,b}/**` fails, because the line is split on commas. A gate
 whose tool is not installed is reported as unverified and fails unless you pass
 `--allow-missing-tools`. It is not a git hook and nothing installs it.
+
+### Mutation-prover rows the lint cannot attribute
+
+`node scripts/prover-unattributed-ratchet.mjs` (CI runs it on every pull request) counts, per mutation prover, the rows it cannot credit as
+behavioural or as wiring (`unattributed`). Each prover's count may not exceed its entry in
+`scripts/lib/prover-unattributed-baseline.json` (absent means 0, so a new prover starts at 0).
+Fix growth by making the spec execute the subject, or by labelling rows `kind: 'wiring'` when they
+really only match text. Lowering is always allowed: when a count falls the lint prints a `HINT`, and
+you edit the JSON down in the same PR. Raising an entry is judged against the base branch's file at
+the merge-base, not your working copy, so it fails unless the PR body carries a line
+`Baseline-raise: <prover path> <reason>` (CI reads only the PR body; locally a commit message also
+counts). Add that line to the body before you push: a re-run replays the old body.
 
 ### In CI
 

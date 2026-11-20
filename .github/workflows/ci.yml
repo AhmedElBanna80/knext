@@ -417,6 +417,43 @@ jobs:
       - name: Run the ratchet-floor guard
         run: node scripts/check-ratchet-floors.mjs
 
+  # The unattributed-row ratchet (scripts/prover-unattributed-ratchet.mjs) is judged against the BASE
+  # branch's committed baseline at the merge-base, so a PR cannot raise the limit it is judged by.
+  # `fetch-depth: 0` is required: with no base to read the lint can only compare the working tree.
+  # The PR body arrives through env and is read as DATA (a `Baseline-raise:` line declares a raise).
+  prover-unattributed-ratchet:
+    name: Prover unattributed ratchet
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code (full history, the base is read at the merge-base)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      # Node only, no bun: the ratchet needs just `typescript` and `yaml`, installed at the versions
+      # bun.lock pins (tests/prover-wiring-rows-lint.test.ts holds the two in lockstep) into the
+      # runner temp dir, checked against bun.lock's sha512 (fail closed), then linked into the
+      # workspace so ESM resolution finds them.
+      - name: Install the two script dependencies (typescript, yaml)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ratchet-deps" --no-save --no-package-lock --ignore-scripts typescript@5.9.3 yaml@2.9.0
+          node scripts/verify-installed-integrity.mjs --prefix "$RUNNER_TEMP/ratchet-deps" typescript yaml
+          ln -s "$RUNNER_TEMP/ratchet-deps/node_modules" node_modules
+
+      - name: Run the unattributed ratchet against the PR base
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/prover-unattributed-ratchet.mjs
+
   compat-smoke:
     # knext adapter SMOKE suite — NOT the official Next.js compatibility suite (ADR-0007,
     # option C). Builds apps/file-manager through the knext adapter (output:'standalone'),

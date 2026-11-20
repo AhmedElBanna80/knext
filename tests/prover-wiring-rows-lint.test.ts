@@ -633,5 +633,7 @@ describe('the lint CLI prints each prover total split into wiring and behavioura
     expect(line).toBeDefined();
     expect(line).toMatch(/total \d+, wiring 18, behavioural \d+/);
     expect(r.status).toBe(0);
-  });
+    // spawns the lint over every prover under scripts/: it scales with the fleet, so it gets a
+    // budget of its own rather than bun's 5 s default
+  }, 60_000);
 });

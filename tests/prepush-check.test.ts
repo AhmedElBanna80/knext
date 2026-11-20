@@ -1,31 +1,48 @@
 import { afterAll, beforeAll, describe, expect, it, spyOn } from 'bun:test';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  ALLOWLIST_REGISTRY,
   bareInvocations,
-  changedAllowlists,
+  bracedScopes,
+  branchBlockProblems,
+  broadScopes,
+  changedGateInputs,
   changedTestFiles,
+  ciRunsTest,
   deriveWorkflowArgSets,
+  driftBetween,
+  evalBranchBlock,
+  exemptInputs,
+  GATE_INPUT_REGISTRY,
   GATE_TABLE,
   globToRegExp,
   groupByArea,
   newEntries,
   outOfScope,
   parseScopeLines,
+  pickBase,
   planGateRuns,
+  readsByPath,
+  runsWholeSuite,
   scanReaders,
+  scanTestReaders,
   staticTempDirFindings,
+  stripBranchSpecific,
   testsCovering,
 } from '../scripts/lib/prepush-check.mjs';
 import { runChecks } from '../scripts/prepush-check.mjs';
+import { main as driftMain } from '../scripts/prepush-lib-drift.mjs';
 
 /**
  * GUARDS for scripts/prepush-check.mjs. Every check is asserted both ways: the
  * defect it exists for is caught, and the clean case is not accused.
  */
+
+/** The registry as the checker types it: `exempt` is optional, `gates` may be empty. */
+type RegistryEntry = { gates: string[]; other: Record<string, string>; exempt?: string };
+const REGISTRY = GATE_INPUT_REGISTRY as Record<string, RegistryEntry>;
 
 const made: string[] = [];
 const fixture = (): string => {
@@ -33,9 +50,24 @@ const fixture = (): string => {
   made.push(d);
   return d;
 };
-afterAll(() => {
-  for (const d of made) rmSync(d, { recursive: true, force: true });
-});
+/** Remove every fixture dir. Idempotent, so it can run from afterAll AND from an exit/signal path. */
+const cleanup = () => {
+  for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+};
+afterAll(cleanup);
+// A run that is killed or exits abnormally skips afterAll; these cover that path, so a
+// fixture never outlives the process (the leftovers the prepush leak scan then reds on).
+process.on('exit', cleanup);
+for (const [sig, code] of [
+  ['SIGINT', 130],
+  ['SIGTERM', 143],
+  ['SIGHUP', 129],
+] as const) {
+  process.once(sig, () => {
+    cleanup();
+    process.exit(code);
+  });
+}
 
 const put = (root: string, rel: string, body: string) => {
   mkdirSync(dirname(join(root, rel)), { recursive: true });
@@ -57,16 +89,30 @@ const git = (root: string, ...args: string[]) =>
   );
 
 describe('allowlist gate discovery', () => {
-  it('matches only security allowlist json files', () => {
+  it('matches every file under security/ at any depth and extension, except Markdown prose', () => {
     expect(
-      changedAllowlists([
-        'security/osv-allowlist.json',
-        'security/gitleaks-allowlist.json',
-        'security/bun-install-scripts.json',
-        'docs/osv-allowlist.json',
-        'security/sub/osv-allowlist.json',
+      changedGateInputs([
+        'security/a-allowlist.json',
+        'security/b-exceptions.json',
+        'security/c.yaml',
+        'security/d.yml',
+        'security/e.txt',
+        'security/noext',
+        'security/sub/deep/f.json',
+        'security/README.md',
+        'security/sub/NOTES.md',
+        'docs/a-allowlist.json',
+        'xsecurity/a.json',
       ]),
-    ).toEqual(['security/osv-allowlist.json', 'security/gitleaks-allowlist.json']);
+    ).toEqual([
+      'security/a-allowlist.json',
+      'security/b-exceptions.json',
+      'security/c.yaml',
+      'security/d.yml',
+      'security/e.txt',
+      'security/noext',
+      'security/sub/deep/f.json',
+    ]);
   });
 
   it('scans readers: direct, via an imported lib, not comments, not provers; workflows too', () => {
@@ -236,17 +282,19 @@ describe('allowlist gate discovery', () => {
 
   describe('against the real repo', () => {
     const root = join(import.meta.dir, '..');
-    const onDisk = readdirSync(join(root, 'security')).filter((f) => /allowlist.*\.json$/.test(f));
-
-    it('registers every allowlist file on disk, and nothing else', () => {
-      expect(Object.keys(ALLOWLIST_REGISTRY).sort()).toEqual(
-        onDisk.map((f) => `security/${f}`).sort(),
+    const walkSec = (rel: string): string[] =>
+      readdirSync(join(root, rel), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walkSec(`${rel}/${e.name}`) : [`${rel}/${e.name}`],
       );
+    const onDisk = walkSec('security').filter((f) => !f.endsWith('.md'));
+
+    it('registers every security/ data file on disk, and nothing else', () => {
+      expect(Object.keys(GATE_INPUT_REGISTRY).sort()).toEqual([...onDisk].sort());
     });
 
     it('every script and workflow that reads an allowlist is a registered gate or excused reader', () => {
-      for (const allowlist of Object.keys(ALLOWLIST_REGISTRY)) {
-        const reg = ALLOWLIST_REGISTRY[allowlist as keyof typeof ALLOWLIST_REGISTRY];
+      for (const allowlist of Object.keys(GATE_INPUT_REGISTRY)) {
+        const reg = GATE_INPUT_REGISTRY[allowlist as keyof typeof GATE_INPUT_REGISTRY];
         const { scripts, workflows } = scanReaders(root, allowlist);
         const known = new Set([...reg.gates, ...Object.keys(reg.other)]);
         expect(
@@ -257,7 +305,7 @@ describe('allowlist gate discovery', () => {
     });
 
     it('registry entries are live: each gate really reads its allowlist and has a table row', () => {
-      for (const [allowlist, reg] of Object.entries(ALLOWLIST_REGISTRY)) {
+      for (const [allowlist, reg] of Object.entries(GATE_INPUT_REGISTRY)) {
         const { scripts, workflows } = scanReaders(root, allowlist);
         const found = new Set([...scripts, ...workflows]);
         for (const g of reg.gates) {
@@ -268,9 +316,15 @@ describe('allowlist gate discovery', () => {
           expect(found.has(o), `${o} no longer reads ${allowlist}; drop its excuse`).toBe(true);
         }
       }
+      for (const [input, reg] of Object.entries(REGISTRY)) {
+        expect(
+          reg.gates.length + scanTestReaders(root, input).length + (reg.exempt ? 1 : 0),
+          `${input} has no gate: no registered script, no CI-run test reading it, no exemption`,
+        ).toBeGreaterThan(0);
+      }
       for (const g of Object.keys(GATE_TABLE)) {
         expect(
-          Object.values(ALLOWLIST_REGISTRY).some((r) => r.gates.includes(g)),
+          Object.values(REGISTRY).some((r) => r.gates.includes(g)),
           `${g} is in GATE_TABLE but gates no allowlist`,
         ).toBe(true);
       }
@@ -395,7 +449,7 @@ describe('runChecks end to end on a fixture repo', () => {
     const ran: string[] = [];
     const bad = runChecks(
       opts(root),
-      deps({ tmpRoot: () => root + '/.', runGate: (_r: string, s: string) => (ran.push(s), 1) }),
+      deps({ tmpRoot: () => `${root}/.`, runGate: (_r: string, s: string) => (ran.push(s), 1) }),
     );
     expect(ran).toEqual(['scripts/gate.mjs']);
     expect(bad.failures.some((f) => f.startsWith('scripts/gate.mjs: exit 1'))).toBe(true);
@@ -405,7 +459,7 @@ describe('runChecks end to end on a fixture repo', () => {
 
   it('does not run a gate when no allowlist changed', () => {
     const root = repo();
-    put(root, 'security/other.json', '[]');
+    put(root, 'docs/other.json', '[]');
     commit(root);
     let ran = 0;
     runChecks(opts(root), deps({ tmpRoot: () => root, runGate: () => (ran++, 1) }));
@@ -465,7 +519,7 @@ describe('runChecks end to end on a fixture repo', () => {
   it('flags out-of-scope files when a scope is declared and only warns when none is', () => {
     const root = repo();
     put(root, 'README.md', 'reverted by accident');
-    put(root, 'security/y.json', '[]');
+    put(root, 'security/y.md', '[]');
     commit(root, 'change\n\nScope: security/**');
     const noFlag = runChecks(opts(root, { scope: undefined }), deps({ tmpRoot: () => root }));
     expect(noFlag.failures).toEqual(['out of scope: README.md']);
@@ -543,5 +597,1006 @@ describe('runChecks end to end on a fixture repo', () => {
         ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts'],
       ),
     ).toEqual(['tests/a.test.ts', 'tests/b.test.ts']);
+  });
+});
+
+describe('gate inputs that are not allowlists (every security/ file must map to a gate)', () => {
+  const IN = 'security/x-exceptions.json';
+  const READS = "const j = JSON.parse(readFileSync('security/x-exceptions.json', 'utf8'));";
+  const CI_ALL = 'jobs:\n  t:\n    steps:\n      - run: node scripts/bun-test.mjs --coverage\n';
+
+  it('readsByPath: the file must be opened by its path, as a whole string, near a read or import', () => {
+    expect(readsByPath(READS, IN)).toBe(true);
+    expect(readsByPath("read('../security/x-exceptions.json')", IN)).toBe(true);
+    expect(readsByPath("const p = join(root, 'security', 'x-exceptions.json');\nread(p)", IN)).toBe(
+      true,
+    );
+    expect(readsByPath('import j from "../security/x-exceptions.json"', IN)).toBe(true);
+    // a bare basename, a longer name, a prose mention, a comment, or a path with no read: no
+    expect(readsByPath("expect(text).toContain('x-exceptions.json')", IN)).toBe(false);
+    expect(readsByPath("read('security/my-x-exceptions.json')", IN)).toBe(false);
+    expect(readsByPath("read('security/x-exceptions.json.bak')", IN)).toBe(false);
+    expect(readsByPath("// read('security/x-exceptions.json')", IN)).toBe(false);
+    expect(readsByPath("const note = 'security/x-exceptions.json';\n\n\n\n\nfoo();", IN)).toBe(
+      false,
+    );
+    expect(readsByPath("read('docs/x-exceptions.json')", IN)).toBe(false);
+  });
+
+  it('ciRunsTest: a workflow runs the whole suite or names the file; partitioned tests need a name', () => {
+    const root = fixture();
+    put(root, '.github/workflows/ci.yml', CI_ALL);
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(true);
+    expect(ciRunsTest(root, 'tests/a.docker-e2e.test.ts')).toBe(false);
+    put(
+      root,
+      '.github/workflows/e2e.yml',
+      'steps:\n  - run: node scripts/bun-test.mjs --no-skip tests/a.docker-e2e.test.ts\n',
+    );
+    expect(ciRunsTest(root, 'tests/a.docker-e2e.test.ts')).toBe(true);
+    // a run of some OTHER file is not the whole suite
+    const only = fixture();
+    put(
+      only,
+      '.github/workflows/ci.yml',
+      'steps:\n  - run: node scripts/bun-test.mjs tests/z.test.ts\n',
+    );
+    expect(ciRunsTest(only, 'tests/a.test.ts')).toBe(false);
+    // no workflow, or only a comment: no
+    const none = fixture();
+    put(none, '.github/workflows/ci.yml', '# run: node scripts/bun-test.mjs\nsteps: []\n');
+    expect(ciRunsTest(none, 'tests/a.test.ts')).toBe(false);
+    expect(ciRunsTest(fixture(), 'tests/a.test.ts')).toBe(false);
+  });
+
+  it('scanTestReaders needs path-read AND a CI run; not comments, this guard, or other tests', () => {
+    const root = fixture();
+    put(root, '.github/workflows/ci.yml', CI_ALL);
+    put(root, 'tests/named.test.ts', READS);
+    put(root, 'tests/sub/deep.test.ts', READS);
+    put(root, 'tests/mention.test.ts', "expect(t).toContain('x-exceptions.json')");
+    put(root, 'tests/commented.test.ts', `// ${READS}`);
+    put(root, 'tests/other.test.ts', "read('security/y.json')");
+    put(root, 'tests/prepush-check.test.ts', READS);
+    put(root, 'tests/helper.ts', READS);
+    put(root, 'tests/slow.docker-e2e.test.ts', READS);
+    expect(scanTestReaders(root, IN)).toEqual(['tests/named.test.ts', 'tests/sub/deep.test.ts']);
+    // and with no workflow running tests, none qualifies
+    const bare = fixture();
+    put(bare, 'tests/named.test.ts', READS);
+    expect(scanTestReaders(bare, IN)).toEqual([]);
+  });
+
+  const table = { 'scripts/g.mjs': { needs: [], runs: [[]] } };
+
+  it('flags an input nothing gates as unmapped: no registry entry, or no gate and no qualifying test', () => {
+    const root = fixture();
+    expect(planGateRuns(root, [IN], table, {}).unmapped).toEqual([IN]);
+    const empty = planGateRuns(root, [IN], table, { [IN]: { gates: [], other: {} } });
+    expect(empty.unmapped).toEqual([IN]);
+    // a test that only mentions the name does not map it
+    put(root, '.github/workflows/ci.yml', CI_ALL);
+    put(root, 'tests/m.test.ts', "expect(t).toContain('x-exceptions.json')");
+    expect(planGateRuns(root, [IN], table, { [IN]: { gates: [], other: {} } }).unmapped).toEqual([
+      IN,
+    ]);
+  });
+
+  it('maps an input by a script gate, a qualifying test (and runs it), or a documented exemption', () => {
+    const root = fixture();
+    put(root, 'scripts/g.mjs', 'x-exceptions.json');
+    const viaScript = planGateRuns(root, [IN], table, {
+      [IN]: { gates: ['scripts/g.mjs'], other: {} },
+    });
+    expect(viaScript.unmapped).toEqual([]);
+    expect(viaScript.runs.map((r) => r.script)).toEqual(['scripts/g.mjs']);
+
+    const root2 = fixture();
+    put(root2, '.github/workflows/ci.yml', CI_ALL);
+    put(root2, 'tests/x.test.ts', READS);
+    const viaTest = planGateRuns(root2, [IN], table, { [IN]: { gates: [], other: {} } });
+    expect(viaTest.unmapped).toEqual([]);
+    expect(viaTest.tests).toEqual(['tests/x.test.ts']);
+    // a naming test alone is not enough: the input must be registered, so its readers are explained
+    expect(planGateRuns(root2, [IN], table, {}).unmapped).toEqual([IN]);
+
+    const exempt = planGateRuns(fixture(), [IN], table, {
+      [IN]: { gates: [], other: {}, exempt: 'only a workflow step reads it' },
+    });
+    expect(exempt.unmapped).toEqual([]);
+    expect(exempt.exempt).toEqual([{ input: IN, reason: 'only a workflow step reads it' }]);
+  });
+
+  it('an exemption that a real gate has since replaced is not reported', () => {
+    const root = fixture();
+    put(root, '.github/workflows/ci.yml', CI_ALL);
+    put(root, 'tests/x.test.ts', READS);
+    const r = planGateRuns(root, [IN], table, { [IN]: { gates: [], other: {}, exempt: 'stale' } });
+    expect(r.exempt).toEqual([]);
+    expect(r.tests).toEqual(['tests/x.test.ts']);
+  });
+
+  it('every input in the real repo is mapped; each exemption names a reason and no gate replaced it', () => {
+    const root = join(import.meta.dir, '..');
+    const inputs = Object.keys(GATE_INPUT_REGISTRY);
+    const plan = planGateRuns(root, inputs);
+    expect(plan.unmapped).toEqual([]);
+    expect(plan.unknown).toEqual([]);
+    for (const [input, reg] of Object.entries(GATE_INPUT_REGISTRY) as [string, any][]) {
+      if (!reg.exempt) continue;
+      expect(String(reg.exempt).length, `${input} needs a real reason`).toBeGreaterThan(40);
+      expect(reg.gates, `${input} is exempt, so it has no script gate`).toEqual([]);
+      expect(
+        scanTestReaders(root, input),
+        `${input} now has a test gate; drop the exemption`,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe('braces and the drift guard', () => {
+  it('bracedScopes flags any glob carrying brace alternation, however the comma split cut it', () => {
+    expect(bracedScopes(parseScopeLines('Scope: src/{a,b}/**, docs/**'))).toEqual([
+      'src/{a',
+      'b}/**',
+    ]);
+    expect(bracedScopes(['a/**', 'b/*.ts'])).toEqual([]);
+  });
+
+  const lib = (block: string) =>
+    `a\n// BEGIN branch-specific (x)\n${block}\n// END branch-specific\nb\n`;
+
+  it('stripBranchSpecific removes the block and demands exactly one ordered marker pair', () => {
+    expect(stripBranchSpecific(lib('X\nY'))).toBe('a\nb\n');
+    expect(() => stripBranchSpecific('a\nb')).toThrow(/exactly one/);
+    expect(() => stripBranchSpecific(`${lib('X')}${lib('Y')}`)).toThrow(/exactly one/);
+    expect(() => stripBranchSpecific('// END branch-specific\n// BEGIN branch-specific\n')).toThrow(
+      /before BEGIN/,
+    );
+    // a string constant that names the marker is not a marker
+    const named = `const M = '// BEGIN branch-specific';\n${lib('X')}`;
+    expect(stripBranchSpecific(named)).toBe("const M = '// BEGIN branch-specific';\na\nb\n");
+  });
+
+  it('driftBetween: equal outside the block (block contents ignored), reports the first drift', () => {
+    expect(driftBetween(lib('one'), lib('two\nlines')).same).toBe(true);
+    const d = driftBetween(lib('x'), lib('x').replace('\nb\n', '\nB\n'));
+    expect(d).toEqual({ same: false, line: 2, a: 'b', b: 'B' });
+    expect(driftBetween(lib('x'), `${lib('x')}extra\n`).same).toBe(false);
+  });
+
+  it('the real lib carries exactly one marker pair, so the drift guard can compare it', () => {
+    const text = readFileSync(join(import.meta.dir, '..', 'scripts/lib/prepush-check.mjs'), 'utf8');
+    expect(stripBranchSpecific(text)).not.toContain('export const GATE_TABLE');
+    expect(stripBranchSpecific(text)).toContain('export function planGateRuns');
+  });
+});
+
+describe('scope enforcement (CI reads the PR body only)', () => {
+  it('parses a CRLF PR body, which is what the GitHub UI produces', () => {
+    expect(parseScopeLines('## x\r\n\r\nScope: a/**, b.md\r\nmore\r\n')).toEqual(['a/**', 'b.md']);
+    expect(parseScopeLines('Scope: a/**\r\nScope: c/**')).toEqual(['a/**', 'c/**']);
+  });
+
+  // a repo-shaped file list: top-level directories plus root files, 4 files in each
+  const tree = (areas: string[], per = 4) => [
+    'README.md',
+    'package.json',
+    ...Array.from({ length: 20 }, (_, i) => `root${i}.txt`),
+    ...areas.flatMap((a) =>
+      Array.from({ length: per }, (_, i) => `${a}/f${i}.${['ts', 'md', 'mjs', 'yml'][i % 4]}`),
+    ),
+  ];
+  const AREAS = ['.github', 'apps', 'docs', 'packages', 'scripts', 'tests'];
+  const dirs = (as: string[]) => as.map((a) => `${a}/**`);
+
+  it('broadScopes: a wildcard over directories is broad by what it matches, in any repo', () => {
+    for (const g of ['**', '**/*', './**', '*/**', '**/**', '**/']) {
+      expect(broadScopes([g]), g).toEqual([g]);
+      expect(broadScopes([g], tree(AREAS)), g).toEqual([g]);
+    }
+    expect(broadScopes(['scripts/**', '**'], tree(AREAS))).toEqual(['**']);
+    expect(broadScopes(['scripts/**', 'tests/**', 'docs/**'], tree(AREAS))).toEqual([]);
+    expect(broadScopes(['*.md'], tree(AREAS))).toEqual([]);
+  });
+
+  it("broadScopes: spanning the repo is broad, from the repo's ACTUAL tracked areas", () => {
+    const files = tree(AREAS);
+    // the extension bypass: no glob is a wildcard, together they touch every directory
+    expect(broadScopes(['**/*.ts', '**/*.md', '**/*.mjs', '**/*.yml'], files)).toHaveLength(4);
+    // 5 of 6 areas = 83% >= 75%; 4 of 6 = 67% is not
+    expect(broadScopes(dirs(AREAS.slice(0, 5)), files)).toHaveLength(5);
+    expect(broadScopes(dirs(AREAS.slice(0, 4)), files)).toEqual([]);
+    // more areas appearing in the repo make the same 5-glob scope narrower than 75%
+    expect(broadScopes(dirs(AREAS.slice(0, 5)), tree([...AREAS, 'infra', 'deploy', 'x']))).toEqual(
+      [],
+    );
+    // one big area is a legitimate claim, even above half the files
+    const lopsided = [
+      ...tree(AREAS, 2),
+      ...Array.from({ length: 30 }, (_, i) => `packages/p/${i}.ts`),
+    ];
+    expect(broadScopes(['packages/**'], lopsided)).toEqual([]);
+  });
+
+  it('broadScopes: more than 60% of tracked files is broad even when few directories are touched', () => {
+    const files = [
+      ...tree(AREAS, 1),
+      ...Array.from({ length: 40 }, (_, i) => `packages/p/${i}.ts`),
+      ...Array.from({ length: 40 }, (_, i) => `apps/a/${i}.ts`),
+    ];
+    // packages + apps hold ~87% of files but are 2 of 6 directories; alone each is under 60%
+    expect(broadScopes(['packages/**', 'apps/**'], files)).toHaveLength(2);
+    expect(broadScopes(['packages/**'], files)).toEqual([]);
+  });
+
+  it('broadScopes: ratios are not judged in a repo too small for them to mean anything', () => {
+    expect(broadScopes(['docs/**', 'scripts/**'], ['docs/a', 'scripts/b'])).toEqual([]);
+    expect(broadScopes(['**'], ['docs/a', 'scripts/b'])).toEqual(['**']);
+  });
+
+  let quiet: ReturnType<typeof spyOn>;
+  beforeAll(() => {
+    quiet = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterAll(() => quiet.mockRestore());
+
+  function repo(): string {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'main');
+    put(root, 'README.md', 'base');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'base');
+    git(root, 'switch', '-q', '-c', 'feature');
+    put(root, 'docs/a.md', 'x');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'change\n\nScope: docs/**');
+    return root;
+  }
+  const deps = {
+    onPath: () => true,
+    which: () => '/bin/x',
+    runGate: () => 0,
+    runTests: () => 0,
+    tmpRoot: () => '',
+  };
+  const ci = (root: string, over: Record<string, unknown> = {}) =>
+    runChecks(
+      { root, base: 'main', requireScope: true, skipGates: true, skipTests: true, ...over },
+      { ...deps, tmpRoot: () => root },
+    );
+
+  it('FAILS a missing Scope line in CI, even when a commit trailer declares one', () => {
+    const root = repo();
+    const r = ci(root, { prBody: 'no scope line here' });
+    expect(r.exit).toBe(1);
+    expect(r.failures.join()).toContain('no `Scope:');
+  });
+
+  it('ignores --scope and the commit trailer in CI (they can be rewritten); reads the PR body', () => {
+    const root = repo();
+    expect(ci(root, { prBody: '', scope: ['docs/**'] }).exit).toBe(1);
+    expect(ci(root, { prBody: 'Scope: docs/**' }).failures).toEqual([]);
+  });
+
+  it('FAILS a match-everything scope in CI, and only warns locally', () => {
+    const root = repo();
+    const r = ci(root, { prBody: 'Scope: **' });
+    expect(r.exit).toBe(1);
+    expect(r.failures.join()).toContain('scope is too broad');
+    const local = runChecks(
+      { root, base: 'main', prBody: 'Scope: **', scope: ['**'], skipGates: true, skipTests: true },
+      { ...deps, tmpRoot: () => root },
+    );
+    expect(local.failures).toEqual([]);
+    expect(local.warnings.join()).toContain('scope is too broad');
+  });
+
+  it('still fails an out-of-scope file in CI', () => {
+    const root = repo();
+    const r = ci(root, { prBody: 'Scope: scripts/**' });
+    expect(r.failures).toEqual(['out of scope: docs/a.md']);
+  });
+
+  it('without --require-scope a missing scope still only warns', () => {
+    const root = repo();
+    const r = runChecks(
+      { root, base: 'main', prBody: '', skipGates: true, skipTests: true, scope: [] },
+      { ...deps, tmpRoot: () => root },
+    );
+    // the commit trailer declares docs/**, so even locally it is found
+    expect(r.failures).toEqual([]);
+  });
+});
+
+describe('security/ inputs through runChecks', () => {
+  let quiet: ReturnType<typeof spyOn>;
+  beforeAll(() => {
+    quiet = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterAll(() => quiet.mockRestore());
+
+  function repo(): string {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'main');
+    put(root, 'security/x-exceptions.json', '[]');
+    put(root, 'tests/x.test.ts', "read('security/x-exceptions.json')");
+    put(root, '.github/workflows/ci.yml', 'steps:\n  - run: node scripts/bun-test.mjs\n');
+    put(root, 'README.md', 'base');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'base');
+    git(root, 'switch', '-q', '-c', 'feature');
+    put(root, 'security/x-exceptions.json', '["new"]');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'change');
+    return root;
+  }
+  const deps = (over: Record<string, unknown> = {}) => ({
+    onPath: () => true,
+    which: () => '/bin/x',
+    runGate: () => 0,
+    runTests: () => 0,
+    tmpRoot: () => '',
+    ...over,
+  });
+  const o = (root: string, over: Record<string, unknown> = {}) => ({
+    root,
+    base: 'main',
+    scope: ['security/**', 'tests/**'],
+    skipTests: true,
+    gateTable: {},
+    registry: { 'security/x-exceptions.json': { gates: [], other: {} } },
+    ...over,
+  });
+
+  it('runs the test that names a changed non-allowlist input, and fails when it fails', () => {
+    const root = repo();
+    const ran: string[][] = [];
+    const ok = runChecks(
+      o(root),
+      deps({ tmpRoot: () => root, runTests: (_r: string, f: string[]) => (ran.push(f), 0) }),
+    );
+    expect(ran).toEqual([['tests/x.test.ts']]);
+    expect(ok.failures).toEqual([]);
+    const bad = runChecks(o(root), deps({ tmpRoot: () => root, runTests: () => 1 }));
+    expect(bad.failures.join()).toContain('gate tests tests/x.test.ts: exit 1');
+  });
+
+  it('treats bun missing as UNVERIFIED for the naming tests', () => {
+    const root = repo();
+    const d = deps({ tmpRoot: () => root, onPath: () => false });
+    expect(runChecks(o(root), d).failures.join()).toContain('UNVERIFIED, bun not on PATH');
+    expect(runChecks(o(root, { allowMissingTools: true }), d).failures).toEqual([]);
+  });
+
+  it('FAILS an unmapped input, including under --skip-gates', () => {
+    const root = repo();
+    for (const skipGates of [false, true]) {
+      const r = runChecks(o(root, { registry: {}, skipGates }), deps({ tmpRoot: () => root }));
+      expect(r.failures.join(), `skipGates=${skipGates}`).toContain(
+        'security/x-exceptions.json is a security/ gate input that no gate is mapped to',
+      );
+    }
+  });
+
+  it('with --skip-gates runs nothing but still says so', () => {
+    const root = repo();
+    let ran = 0;
+    const r = runChecks(
+      o(root, { skipGates: true }),
+      deps({ tmpRoot: () => root, runTests: () => (ran++, 1), runGate: () => (ran++, 1) }),
+    );
+    expect(ran).toBe(0);
+    expect(r.warnings.join()).toContain('gates NOT executed');
+  });
+});
+
+describe('default base follows the branch fork point', () => {
+  it('prefers the nearer of main and integration/v2, either way round', () => {
+    const dist: Record<string, [number, number] | null> = {
+      'personal/integration/v2': [40, 0],
+      'origin/integration/v2': null,
+      'personal/main': [3, 0],
+      'origin/main': [3, 0],
+    };
+    const refs = [
+      'personal/integration/v2',
+      'origin/integration/v2',
+      'personal/main',
+      'origin/main',
+    ];
+    expect(pickBase(refs, (r) => dist[r])).toBe('personal/main');
+    expect(
+      pickBase(
+        refs,
+        (r) => ({ ...dist, 'personal/integration/v2': [1, 0] as [number, number] })[r],
+      ),
+    ).toBe('personal/integration/v2');
+    // same fork commit: the ref with fewer commits of its own past it wins, then the earlier one
+    expect(pickBase(['v2', 'main'], (r) => (r === 'v2' ? [1, 30] : [1, 0]))).toBe('main');
+    expect(pickBase(['a', 'b'], () => [2, 2])).toBe('a');
+    expect(pickBase(['a'], () => null)).toBeUndefined();
+  });
+
+  it('runChecks on a branch cut from main picks main even though integration/v2 exists', () => {
+    const logs: string[] = [];
+    const spy = spyOn(console, 'log').mockImplementation((m: unknown) => void logs.push(String(m)));
+    try {
+      const root = fixture();
+      git(root, 'init', '-q', '-b', 'main');
+      put(root, 'README.md', 'base');
+      git(root, 'add', '.');
+      git(root, 'commit', '-q', '-m', 'base');
+      git(root, 'branch', 'personal/main');
+      git(root, 'switch', '-q', '-c', 'personal/integration/v2');
+      for (const n of ['1', '2', '3']) {
+        put(root, `v2-${n}.txt`, n);
+        git(root, 'add', '.');
+        git(root, 'commit', '-q', '-m', `v2 ${n}`);
+      }
+      git(root, 'switch', '-q', 'main');
+      git(root, 'switch', '-q', '-c', 'feature');
+      put(root, 'docs/a.md', 'x');
+      git(root, 'add', '.');
+      git(root, 'commit', '-q', '-m', 'change');
+      runChecks(
+        { root, scope: ['docs/**'], skipGates: true, skipTests: true },
+        {
+          onPath: () => true,
+          which: () => '',
+          runGate: () => 0,
+          runTests: () => 0,
+          tmpRoot: () => root,
+        },
+      );
+      expect(logs.find((l) => l.startsWith('prepush-check: base'))).toContain(
+        'base personal/main,',
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('the CI job that makes the check non-advisory', () => {
+  const wf = readFileSync(
+    join(import.meta.dir, '..', '.github/workflows/prepush-check.yml'),
+    'utf8',
+  );
+  const code = wf
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+
+  it('runs on pull_request, re-runs when the body is edited, and is not gated on anything', () => {
+    expect(code).toMatch(/pull_request:/);
+    expect(code).toMatch(/types:\s*\[[^\]]*\bedited\b[^\]]*\]/);
+    expect(code).not.toMatch(/continue-on-error/);
+    expect(code).not.toMatch(/\bif:/);
+  });
+
+  it('requires the scope, reads the base from the event, and diffs full history', () => {
+    expect(code).toContain('--require-scope');
+    expect(code).toContain('github.base_ref');
+    expect(code).toMatch(/fetch-depth:\s*0/);
+    expect(code).toContain('node scripts/prepush-check.mjs');
+  });
+
+  it('passes the PR body as env data and never interpolates it into the script', () => {
+    expect(code).toMatch(/PR_BODY:\s*\$\{\{\s*github\.event\.pull_request\.body\s*\}\}/);
+    const run = code.slice(code.indexOf('run: |'));
+    expect(run).not.toContain('${{');
+  });
+
+  it('does not accept a commit trailer or --scope in CI', () => {
+    expect(code).not.toMatch(/--scope\b/);
+  });
+
+  it('installs the locked dependencies (the check parses JS and YAML) before it runs', () => {
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeGreaterThan(0);
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeLessThan(
+      code.indexOf('node scripts/prepush-check.mjs'),
+    );
+  });
+});
+
+describe('scope breadth, braces and exemptions through runChecks', () => {
+  let quiet: ReturnType<typeof spyOn>;
+  beforeAll(() => {
+    quiet = spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterAll(() => quiet.mockRestore());
+
+  const deps = (root: string) => ({
+    onPath: () => true,
+    which: () => '/bin/x',
+    runGate: () => 0,
+    runTests: () => 0,
+    tmpRoot: () => root,
+  });
+  const run = (root: string, prBody: string, over: Record<string, unknown> = {}) =>
+    runChecks(
+      { root, base: 'main', requireScope: true, skipGates: true, skipTests: true, prBody, ...over },
+      deps(root),
+    );
+  /** A repo shaped like a real one: enough tracked files across enough top-level directories. */
+  function bigRepo(): string {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'main');
+    for (const a of ['docs', 'scripts', 'tests', 'apps', 'packages', 'infra']) {
+      for (const [i, ext] of ['ts', 'md', 'mjs', 'yml'].entries())
+        put(root, `${a}/f${i}.${ext}`, 'x');
+    }
+    for (let i = 0; i < 12; i++) put(root, `root${i}.txt`, 'x');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'base');
+    git(root, 'switch', '-q', '-c', 'feature');
+    put(root, 'docs/new.md', 'x');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'change');
+    return root;
+  }
+
+  it('FAILS the extension bypass (`**/*.ts, **/*.md, ...`) in CI, and accepts a narrow scope', () => {
+    const root = bigRepo();
+    const bad = run(root, 'Scope: **/*.ts, **/*.md, **/*.mjs, **/*.yml');
+    expect(bad.failures.join()).toContain('scope is too broad');
+    expect(run(root, 'Scope: docs/**').failures).toEqual([]);
+  });
+
+  it('FAILS a brace glob with a message, in CI and locally, rather than misreading it', () => {
+    const root = bigRepo();
+    const ci = run(root, 'Scope: {docs,scripts}/**');
+    expect(ci.failures.join()).toContain('brace alternation');
+    expect(ci.failures.join()).not.toContain('out of scope');
+    const local = run(root, 'Scope: {docs,scripts}/**', { requireScope: false });
+    expect(local.failures.join()).toContain('brace alternation');
+  });
+
+  it('lists every documented exemption as a NOTICE on EVERY run, changed file or not', () => {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'main');
+    put(root, 'README.md', 'base');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'base');
+    git(root, 'switch', '-q', '-c', 'feature');
+    put(root, 'docs/a.md', 'x'); // no security/ file changes at all
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'change');
+    const registry = {
+      'security/x.yaml': { gates: [], other: {}, exempt: 'only a workflow step reads it' },
+      'security/y.json': { gates: ['s.mjs'], other: {} },
+    };
+    const lines: string[] = [];
+    const spy = spyOn(console, 'log').mockImplementation(
+      (m: unknown) => void lines.push(String(m)),
+    );
+    const r = runChecks(
+      {
+        root,
+        base: 'main',
+        scope: ['docs/**'],
+        skipTests: true,
+        skipGates: true,
+        gateTable: {},
+        registry,
+      },
+      deps(root),
+    );
+    spy.mockRestore();
+    expect(lines.filter((l) => l.startsWith('NOTICE  security/x.yaml'))).toHaveLength(1);
+    expect(r.failures).toEqual([]);
+    expect(r.notices).toEqual([
+      'security/x.yaml has no local gate (documented exemption): only a workflow step reads it',
+    ]);
+    const none = runChecks(
+      {
+        root,
+        base: 'main',
+        scope: ['docs/**'],
+        skipTests: true,
+        skipGates: true,
+        gateTable: {},
+        registry: {},
+      },
+      deps(root),
+    );
+    expect(none.notices).toEqual([]);
+  });
+});
+
+describe('ciRunsTest: whole-suite flags and job guards', () => {
+  const wf = (root: string, name: string, body: string) =>
+    put(root, `.github/workflows/${name}`, body);
+  const job = (extra: string, stepExtra = '') =>
+    `jobs:\n  t:\n${extra}    runs-on: x\n    steps:\n      - name: s\n${stepExtra}        run: node scripts/bun-test.mjs --shard 1/4 --coverage\n`;
+
+  it('runsWholeSuite accepts flags that take values and rejects a named test path', () => {
+    expect(runsWholeSuite('node scripts/bun-test.mjs')).toBe(true);
+    expect(runsWholeSuite('run: node scripts/bun-test.mjs --shard 1/4 --coverage')).toBe(true);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --timeout=30000 --no-skip')).toBe(true);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --coverage | tee out.txt')).toBe(true);
+    expect(
+      runsWholeSuite('node scripts/bun-test.mjs --coverage && node scripts/check-coverage.mjs'),
+    ).toBe(true);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --shard 1/4 tests/a.test.ts')).toBe(false);
+    expect(runsWholeSuite('node scripts/bun-test.mjs apps/x/y.test.ts')).toBe(false);
+    expect(runsWholeSuite('bun test tests/a.test.ts')).toBe(false);
+    // a directory argument narrows the run as much as a file does
+    expect(runsWholeSuite('node scripts/bun-test.mjs tests/')).toBe(false);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --coverage tests')).toBe(true); // bare word: a flag value, not a path
+    expect(runsWholeSuite('node scripts/bun-test.mjs packages/kn-next/src')).toBe(false);
+    expect(runsWholeSuite('node scripts/bun-test.mjs --shard 1/4')).toBe(true);
+  });
+
+  it('counts a whole-suite step with value-taking flags', () => {
+    const root = fixture();
+    wf(root, 'ci.yml', job(''));
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(true);
+  });
+
+  it('refuses a job whose if: is not always true on a pull request', () => {
+    for (const cond of [
+      "github.event_name == 'push'",
+      "github.ref == 'refs/heads/main'",
+      'matrix.x',
+    ]) {
+      const root = fixture();
+      wf(root, 'ci.yml', job(`    if: ${cond}\n`));
+      expect(ciRunsTest(root, 'tests/a.test.ts'), cond).toBe(false);
+    }
+    for (const cond of [
+      'true',
+      'always()',
+      "github.event_name == 'pull_request'",
+      '${{ always() }}',
+    ]) {
+      const root = fixture();
+      wf(root, 'ci.yml', job(`    if: ${cond}\n`));
+      expect(ciRunsTest(root, 'tests/a.test.ts'), cond).toBe(true);
+    }
+  });
+
+  it('refuses a step whose if: is not always true, and ignores another job or step guard', () => {
+    const root = fixture();
+    wf(root, 'ci.yml', job('', "        if: github.event_name == 'push'\n"));
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(false);
+    // a guard on a DIFFERENT job does not refuse this one
+    const other = fixture();
+    wf(
+      other,
+      'ci.yml',
+      `jobs:\n  a:\n    if: github.ref == 'x'\n    steps:\n      - run: echo hi\n  t:\n    steps:\n      - run: node scripts/bun-test.mjs\n`,
+    );
+    expect(ciRunsTest(other, 'tests/a.test.ts')).toBe(true);
+    // a guard on a LATER job does not bleed back into this one
+    const later = fixture();
+    wf(
+      later,
+      'ci.yml',
+      `jobs:\n  t:\n    steps:\n      - run: node scripts/bun-test.mjs\n  b:\n    if: github.ref == 'x'\n    steps:\n      - run: echo hi\n`,
+    );
+    expect(ciRunsTest(later, 'tests/a.test.ts')).toBe(true);
+    // a guard on a DIFFERENT step does not refuse this one
+    const sibling = fixture();
+    wf(
+      sibling,
+      'ci.yml',
+      `jobs:\n  t:\n    steps:\n      - name: a\n        if: matrix.x\n        run: echo hi\n      - name: b\n        run: node scripts/bun-test.mjs\n`,
+    );
+    expect(ciRunsTest(sibling, 'tests/a.test.ts')).toBe(true);
+  });
+
+  it('reads the step guard after a blank line, and treats a trailing comment on an if: as a comment', () => {
+    const root = fixture();
+    wf(
+      root,
+      'ci.yml',
+      `jobs:\n  t:\n    runs-on: x\n    steps:\n      - name: s\n        run: node scripts/bun-test.mjs\n\n        if: github.ref == 'x'\n`,
+    );
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(false);
+    const blankJob = fixture();
+    wf(
+      blankJob,
+      'ci.yml',
+      `jobs:\n  t:\n    runs-on: x\n\n    if: github.ref == 'x'\n    steps:\n      - run: node scripts/bun-test.mjs\n`,
+    );
+    expect(ciRunsTest(blankJob, 'tests/a.test.ts')).toBe(false);
+    const commented = fixture();
+    wf(commented, 'ci.yml', job('    if: always() # run on every pull request\n'));
+    expect(ciRunsTest(commented, 'tests/a.test.ts')).toBe(true);
+    const commentedFalse = fixture();
+    wf(commentedFalse, 'ci.yml', job("    if: github.ref == 'x' # always() here\n"));
+    expect(ciRunsTest(commentedFalse, 'tests/a.test.ts')).toBe(false);
+    // flow-style and quoted forms are the same YAML
+    const flow = fixture();
+    wf(
+      flow,
+      'ci.yml',
+      `jobs:\n  t: {runs-on: x, if: "github.ref == 'x'", steps: [{run: node scripts/bun-test.mjs}]}\n`,
+    );
+    expect(ciRunsTest(flow, 'tests/a.test.ts')).toBe(false);
+  });
+
+  it('refuses a workflow that is not valid YAML rather than guessing', () => {
+    const root = fixture();
+    wf(
+      root,
+      'ci.yml',
+      `jobs:\n  t:\n    steps:\n      - run: node scripts/bun-test.mjs\n   bad: [unclosed\n`,
+    );
+    expect(ciRunsTest(root, 'tests/a.test.ts')).toBe(false);
+  });
+});
+
+describe('the branch-specific block is data, and the drift guard compares both branches', () => {
+  const block = (body: string) =>
+    `head\n// BEGIN branch-specific (x)\n${body}\n// END branch-specific\ntail\n`;
+  const REG =
+    "export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = { 'security/a.json': { gates: [], other: {} } };";
+
+  it('branchBlockProblems accepts pure literal trees: objects, arrays, strings, numbers, regex, plain templates', () => {
+    expect(branchBlockProblems(block(REG))).toEqual([]);
+    expect(
+      branchBlockProblems(
+        block(
+          "const R = 'a (b)';\n// note (x) => y\n/* function f() {} */\nexport const T = { k: 'v', 'q-r': [1, -2, true, null, /a\\/\\/b['\"]/g, `plain`] };",
+        ),
+      ),
+    ).toEqual([]);
+    // no trailing semicolon, but each statement on its own line is a complete const declaration
+    expect(branchBlockProblems(block('const A = {}\nconst B = []'))).toEqual([]);
+  });
+
+  it('branchBlockProblems rejects anything that is not a pure literal tree', () => {
+    for (const bad of [
+      "const A = runners(['x']);",
+      'const A = (() => 1)();',
+      'const A = () => 1;',
+      'const A = x => 1;',
+      'const A = new Z;',
+      'const A = { k: typeof Z };',
+      'function f() {}',
+      'const A = `t${1}`;',
+      'const A = tag`t`;',
+      'const A = new Map();',
+      'let A = 1;',
+      'doThing;',
+      'const A = { k: 1 }; if (A) {}',
+      'import x from "y";',
+      'const A = { ...O };',
+      'const A = [...O];',
+      'const A = { k: B };',
+      'const A = B;',
+      'const A = { [k]: 1 };',
+      'const A = { k };',
+      'const A = { m() {} };',
+      'const A = { get k() { return 1; } };',
+      'const A = { k: 1 };;',
+      'const A = {',
+      'declare const A = 1;',
+    ]) {
+      expect(branchBlockProblems(block(bad)).length, bad).toBeGreaterThan(0);
+    }
+  });
+
+  it('branchBlockProblems refuses text with no markers', () => {
+    expect(branchBlockProblems('const A = {};').length).toBeGreaterThan(0);
+    expect(
+      branchBlockProblems('// END branch-specific\n// BEGIN branch-specific\n').length,
+    ).toBeGreaterThan(0);
+  });
+
+  it('branchBlockProblems is not fooled by regex literals, a missing semicolon, or a spread of an unknown name', () => {
+    // a regex holding `//` is not a comment: the code after it is real
+    expect(
+      branchBlockProblems(block('const A = /x\\/\\//; process.exitCode = 1;')).length,
+    ).toBeGreaterThan(0);
+    expect(
+      branchBlockProblems(block('const A = /a\\/\\/b/;\nprocess.exitCode = 1;')).length,
+    ).toBeGreaterThan(0);
+    // a regex holding a quote does not open a string that swallows the statement after it
+    expect(
+      branchBlockProblems(block("const A = /'/; process.exitCode = 1; const B = /'/;")).length,
+    ).toBeGreaterThan(0);
+    // no semicolon: the next line is a statement of its own
+    expect(branchBlockProblems(block('const A = {}\nprocess.exitCode = 1')).length).toBeGreaterThan(
+      0,
+    );
+    // a spread of a name nothing defines is a reference, not data
+    expect(branchBlockProblems(block('const A = { ...UNKNOWN };')).length).toBeGreaterThan(0);
+  });
+
+  it('the real lib block is data, and evalBranchBlock reads its registry', () => {
+    const text = readFileSync(join(import.meta.dir, '..', 'scripts/lib/prepush-check.mjs'), 'utf8');
+    expect(branchBlockProblems(text)).toEqual([]);
+    const { GATE_INPUT_REGISTRY: reg } = evalBranchBlock(text);
+    expect(Object.keys(reg)).toEqual(Object.keys(GATE_INPUT_REGISTRY));
+    expect(exemptInputs(reg)).toEqual(exemptInputs(GATE_INPUT_REGISTRY));
+    expect(() => evalBranchBlock(block('const A = f();'))).toThrow(/not data/);
+  });
+
+  it('exemptInputs lists exactly the entries with an exempt reason, sorted', () => {
+    expect(
+      exemptInputs({
+        'security/b': { gates: [], other: {}, exempt: 'r' },
+        'security/a': { gates: [], other: {}, exempt: 'r' },
+        'security/c': { gates: [], other: {} },
+      }),
+    ).toEqual(['security/a', 'security/b']);
+  });
+
+  // ---- the drift CLI against a fixture repo with two branches
+  const LIB = 'scripts/lib/prepush-check.mjs';
+  const FILES = [
+    'scripts/prepush-check.mjs',
+    'scripts/prepush-lib-drift.mjs',
+    'scripts/mutation-prove-prepush-check.mjs',
+    'tests/prepush-check.test.ts',
+    '.github/workflows/prepush-check.yml',
+    '.github/workflows/prepush-lib-drift.yml',
+  ];
+  function pair(
+    over: { here?: Record<string, string>; there?: Record<string, string>; hereRm?: string[] } = {},
+  ) {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'trunk');
+    const base: Record<string, string> = { [LIB]: block(REG) };
+    for (const f of FILES) base[f] = `content of ${f}\n`;
+    for (const [f, t] of Object.entries({ ...base, ...(over.there ?? {}) })) put(root, f, t);
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'other');
+    git(root, 'branch', 'other');
+    for (const f of over.hereRm ?? []) rmSync(join(root, f));
+    for (const [f, t] of Object.entries(over.here ?? {})) put(root, f, t);
+    git(root, 'add', '-A');
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'here');
+    return root;
+  }
+  const drift = (root: string) => {
+    const spy = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      return driftMain(['--other', 'other'], root);
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it('exits 0 for identical copies, and ignores differences INSIDE the branch-specific block', () => {
+    expect(drift(pair())).toBe(0);
+    const other = block(
+      "export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = { 'security/zzz.json': { gates: [], other: {} } };",
+    );
+    expect(drift(pair({ there: { [LIB]: other } }))).toBe(0);
+  });
+
+  it('exits 1 on drift in the lib outside the block, and on drift in each whole-compared file', () => {
+    expect(drift(pair({ here: { [LIB]: `${block(REG)}extra\n` } }))).toBe(1);
+    for (const f of FILES) {
+      expect(drift(pair({ here: { [f]: 'changed\n' } })), f).toBe(1);
+    }
+  });
+
+  it('exits 1 when the other branch has no copy, from EITHER direction', () => {
+    const root = fixture();
+    git(root, 'init', '-q', '-b', 'trunk');
+    put(root, 'README.md', 'x');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'bare');
+    git(root, 'branch', 'other');
+    for (const [f, t] of Object.entries({
+      [LIB]: block(REG),
+      ...Object.fromEntries(FILES.map((f) => [f, 'x\n'])),
+    }))
+      put(root, f, t);
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'here');
+    expect(drift(root)).toBe(1);
+  });
+
+  it('exits 1 when a block is not data, in either copy', () => {
+    const logic = block('export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = mk();');
+    expect(drift(pair({ here: { [LIB]: logic } }))).toBe(1);
+    expect(drift(pair({ there: { [LIB]: logic } }))).toBe(1);
+  });
+
+  it('exits 1 when an input present on BOTH branches is exempt on only one', () => {
+    const reg = (exempt: boolean) =>
+      block(
+        `export const GATE_TABLE = {};\nexport const GATE_INPUT_REGISTRY = { 'security/a.json': { gates: [], other: {}${exempt ? ", exempt: 'r'" : ''} } };`,
+      );
+    const both = { 'security/a.json': '{}' };
+    const mk = (here: boolean, there: boolean, files: Record<string, string>) => {
+      const root = pair({
+        there: { [LIB]: reg(there), ...files },
+        here: { [LIB]: reg(here), ...files },
+      });
+      return drift(root);
+    };
+    expect(mk(true, false, both)).toBe(1);
+    expect(mk(false, true, both)).toBe(1);
+    expect(mk(true, true, both)).toBe(0);
+    // the file exists on neither branch (or one): the registries may differ
+    expect(mk(true, false, {})).toBe(0);
+    // present on one branch only: nothing to compare against
+    const onlyThere = pair({
+      there: { [LIB]: reg(false), 'security/a.json': '{}' },
+      here: { [LIB]: reg(true) },
+      hereRm: ['security/a.json'],
+    });
+    expect(drift(onlyThere)).toBe(0);
+    const onlyHere = pair({
+      there: { [LIB]: reg(false) },
+      here: { [LIB]: reg(true), 'security/a.json': '{}' },
+    });
+    expect(drift(onlyHere)).toBe(0);
+  });
+});
+
+describe('the prover and the drift CLI', () => {
+  it('every mutation id in the prover is unique', () => {
+    const src = readFileSync(
+      join(import.meta.dir, '..', 'scripts/mutation-prove-prepush-check.mjs'),
+      'utf8',
+    );
+    const ids = [...src.matchAll(/^\s+id: '([A-Za-z0-9]+)'/gm)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(40);
+    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
+  });
+
+  it('the drift CLI exits 2 without --other and 1 when the other ref has no copy', () => {
+    const cli = join(import.meta.dir, '..', 'scripts/prepush-lib-drift.mjs');
+    const run = (...a: string[]) => spawnSync('node', [cli, ...a], { encoding: 'utf8' });
+    expect(run().status).toBe(2);
+    const r = run('--other', 'refs/heads/no-such-branch-for-the-test');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('not present on');
+  });
+});
+
+describe('the symmetric drift workflow', () => {
+  const wf = readFileSync(
+    join(import.meta.dir, '..', '.github/workflows/prepush-lib-drift.yml'),
+    'utf8',
+  );
+  const code = wf
+    .split('\n')
+    .filter((l) => !/^\s*#/.test(l))
+    .join('\n');
+  const run = code.slice(code.indexOf('run: |'));
+
+  it('fires on pull requests AND pushes to BOTH branches, so either side reds on its own PR', () => {
+    expect(code).toMatch(/pull_request:\s*\n\s*branches:\s*\[main, integration\/v2\]/);
+    expect(code).toMatch(/push:\s*\n\s*branches:\s*\[main, integration\/v2\]/);
+    expect(code).toContain('workflow_dispatch');
+    // and compares against the OTHER branch in each direction
+    expect(run).toMatch(/main\)\s*other=integration\/v2/);
+    expect(run).toMatch(/integration\/v2\)\s*other=main/);
+    expect(run).toContain('prepush-lib-drift.mjs --other');
+  });
+
+  it('passes the token to the fetch explicitly, through env, with read-only contents', () => {
+    expect(code).toMatch(/persist-credentials:\s*false/);
+    expect(code).toMatch(/GH_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
+    expect(run).toContain('http.extraheader=AUTHORIZATION');
+    expect(run).not.toContain('${{');
+    expect(code).toMatch(/permissions:\s*\n\s*contents:\s*read\s*\n/);
+    expect(code).not.toMatch(/contents:\s*write/);
+    expect(code).not.toMatch(/continue-on-error/);
+  });
+
+  it('masks the derived basic-auth value before it is used, and installs the locked dependencies', () => {
+    expect(run).toContain('echo "::add-mask::${auth}"');
+    expect(run.indexOf('::add-mask::')).toBeLessThan(run.indexOf('http.extraheader'));
+    expect(run.indexOf('::add-mask::')).toBeGreaterThan(run.indexOf('auth="$('));
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeGreaterThan(0);
+    expect(code.indexOf('bun install --frozen-lockfile')).toBeLessThan(code.indexOf('run: |'));
+  });
+
+  it('runs nightly (a cron fires only from the default branch, so main checks v2) and says what its paths: filter misses', () => {
+    expect(code).toMatch(/schedule:\s*\n\s*- cron: '/);
+    expect(wf.replace(/\s*\n#\s*/g, ' ')).toMatch(
+      /not re-checked here until this side next touches/,
+    );
   });
 });

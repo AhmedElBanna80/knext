@@ -69,7 +69,10 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
   - Types: `CargoToolPin`, `CargoTool`, `ZigAsset`, `ZigPin`, `HostPlatform`, `ZigDeps`,
     `ResolvedZig`, `AllowEntry`, `AdvisoryFinding`, `DenyReport`, `AdvisoryVerdict`,
     `DenyOptions`, `AuditPackage`, `SupplyChainOptions` and `SupplyChain`.
-- Tests live in `__tests__/`, which this contract does not document.
+- Tests live in `__tests__/`. Shared helpers:
+  - `helpers.ts`: scratch directories (`emptyDir`, removed by `removeScratchDirs`), `PKG_DIR`, `readTree`, `capture` (captured CLI stdout and stderr), synthetic manifest blobs (`blob`, `D`, `record`, `enumRecord`, `fn`) and the `KITCHEN_SINK` manifest.
+  - `toolchain-fake.ts`: `fakeToolchain()`, an on-disk fake of the pinned cargo-subcommand and zig toolchain for tests that must not need Rust, zig or the network, plus `supplyFixture` for the supply-chain fixtures.
+  - `integer-matrix.ts`: `integerMatrix`, the integer-argument matrix, stringified and run in a fresh Bun process, shared with `crates/harness/ffi-generated.ts`.
 
 ## Invariants
 - **CLI dispatch** (`cli.ts:run`)

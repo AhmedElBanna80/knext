@@ -14,7 +14,8 @@
 //       count the module pragma `// @bun @bytecode @bun-cjs` (Latin-1 and UTF-16LE) in the binary
 //       and in a baseline probe compiled WITHOUT bytecode for the same target and Bun: the Bun
 //       runtime embeds one copy of the text itself (measured: 1 in a no-bytecode build, 2 with
-//       bytecode), so the binary proves bytecode only when its count exceeds the baseline's.
+//       bytecode), so the check passes only when the binary's count exceeds the baseline's. That
+//       shows the build requested bytecode; it is not a per-build marker proof.
 //
 // Exit 0 verified (one verdict line on stdout), 1 not verified (reason on stderr), 2 usage or
 // unreadable input. A missing baseline is a usage error, never a pass.
@@ -76,7 +77,7 @@ if (mode === "standalone") {
   if (app <= base) {
     die(1, `no bytecode evidence in ${binary}: @bytecode pragma count app=${app} is not above baseline=${base}`);
   }
-  console.log(`bytecode pragma count app=${app} baseline=${base}: the executable carries bytecode modules`);
+  console.log(`the build requested bytecode (pragma differential): @bytecode pragma count app=${app} baseline=${base}`);
 } else {
   die(2, `unknown mode '${mode}'`);
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -626,8 +626,7 @@ describe('build-tool axis (buildtool set)', () => {
     expect(code).toMatch(/evidence-\*\.json/);
   });
 
-  it('builds a no-bytecode baseline probe for the vinext+bun pragma differential', () => {
-    expect(code).toMatch(/bun build --compile --minify --target=bun-linux-x64-musl/);
+  it('exports BYTECODE_BASELINE for the vinext+bun pragma differential', () => {
     expect(code).toMatch(/BYTECODE_BASELINE=/);
   });
 });
@@ -656,6 +655,7 @@ describe('kind/verify-bytecode.mjs (behaviour)', () => {
   const PRAGMA = '// @bun @bytecode @bun-cjs';
   const NOPRAGMA = '// @bun @bun-cjs';
   const d = mkdtempSync(join(tmpdir(), 'vbc-'));
+  afterAll(() => rmSync(d, { recursive: true, force: true }));
   const bin = (name: string, body: string, enc: BufferEncoding = 'latin1') => {
     const f = join(d, name);
     writeFileSync(f, Buffer.concat([Buffer.from('\x7fELFxx', 'latin1'), Buffer.from(body, enc)]));
@@ -693,6 +693,8 @@ describe('kind/verify-bytecode.mjs (behaviour)', () => {
     const app = bin('app', `${PRAGMA}\n${PRAGMA}\n${NOPRAGMA}\n`);
     const ok = verify('pragma', app, baseline);
     expect(ok.status).toBe(0);
+    expect(ok.stdout).toContain('the build requested bytecode (pragma differential)');
+    expect(ok.stdout).not.toMatch(/carries bytecode|proven/);
     expect(ok.stdout).toContain('app=2');
     expect(ok.stdout).toContain('baseline=1');
     // Same count as the baseline: compiled without bytecode.
@@ -719,9 +721,19 @@ describe('kind/verify-bytecode.mjs (behaviour)', () => {
 
 describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
   const REC = resolve(DIR, 'kind/record-evidence.sh');
-  type Case = { runtime: string; build: string; files?: Record<string, string>; env?: string };
+  const HOSTPID = '4242';
+  type Case = {
+    runtime: string;
+    build: string;
+    files?: Record<string, string>;
+    /** Lines of the image's own ENV, as `docker inspect` prints them. */
+    env?: string;
+    /** Files on the kind node, keyed by their /proc path. */
+    proc?: Record<string, string>;
+    args?: string[];
+  };
 
-  /** A fake `docker` whose `cp` materialises fixture files for the requested container path. */
+  /** A fake `docker`: `cp` materialises fixture files, `exec <node> cat <path>` reads fake /proc. */
   function run(c: Case, baselineBin?: string) {
     const d = mkdtempSync(join(tmpdir(), 'rec-'));
     try {
@@ -729,6 +741,10 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
       for (const [rel, body] of Object.entries(c.files ?? {})) {
         mkdirSync(join(d, 'fx', dirname(rel)), { recursive: true });
         writeFileSync(join(d, 'fx', rel), body);
+      }
+      for (const [rel, body] of Object.entries(c.proc ?? {})) {
+        mkdirSync(join(d, 'proc', dirname(rel)), { recursive: true });
+        writeFileSync(join(d, 'proc', rel), body);
       }
       writeFileSync(
         join(d, 'docker'),
@@ -740,6 +756,7 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
           '  rm) exit 0 ;;',
           '  inspect) printf "%s\\n" "PATH=/usr/bin" "${FAKE_ENV:-}" ;;',
           '  cp) src="${2#fakecid:}"; dst="$3"; cp -R "$FAKE_FX$src" "$dst" 2>/dev/null || exit 1 ;;',
+          '  exec) [ "$3" = cat ] || exit 1; cat "$FAKE_PROC$4" 2>/dev/null || exit 1 ;;',
           'esac',
           '',
         ].join('\n'),
@@ -761,12 +778,14 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
           'localhost:5001/x@sha256:abc',
           join(d, 'build.log'),
           join(d, 'out'),
+          ...(c.args ?? ['kindnode', HOSTPID]),
         ],
         {
           encoding: 'utf8',
           env: {
             PATH: `${d}:${process.env.PATH}`,
             FAKE_FX: join(d, 'fx'),
+            FAKE_PROC: join(d, 'proc'),
             FAKE_ENV: c.env ?? '',
             ...(baselineBin ? { BYTECODE_BASELINE: baselineBin } : {}),
           },
@@ -785,14 +804,19 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
   }
 
   const big = 'x'.repeat(300000);
+  const TCACHE = '/app/.next/standalone/.next/compile-cache';
+  const envOf = (cache: string) => `PATH=/usr/bin\0NODE_COMPILE_CACHE=${cache}\0`;
+  const nodeCase = (over: Partial<Case> = {}): Case => ({
+    runtime: 'node',
+    build: 'turbopack',
+    files: { [`app/.next/standalone/.next/compile-cache/v24/a.bin`]: big },
+    env: `NODE_COMPILE_CACHE=${TCACHE}`,
+    proc: { [`/proc/${HOSTPID}/environ`]: envOf(TCACHE) },
+    ...over,
+  });
 
-  it('turbopack+node: records the compile cache bytes, the env and the bake line', () => {
-    const r = run({
-      runtime: 'node',
-      build: 'turbopack',
-      files: { 'app/.next/standalone/.next/compile-cache/v24/a.bin': big },
-      env: 'NODE_COMPILE_CACHE=/app/.next/standalone/.next/compile-cache',
-    });
+  it('turbopack+node: records the compile cache bytes, the env, the live env and the bake line', () => {
+    const r = run(nodeCase());
     expect(r.status).toBe(0);
     expect(r.ev?.build_target).toBe('turbopack');
     expect(r.ev?.runtime).toBe('node');
@@ -800,51 +824,106 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(bc.kind).toBe('v8-compile-cache');
     expect(bc.bytes).toBe(300000);
     expect(bc.files).toBe(1);
+    expect(bc.live_env_NODE_COMPILE_CACHE).toBe(TCACHE);
     expect(String(bc.bake_line)).toContain('compile cache baked: 999999 bytes');
   });
 
   it('vinext+node: reads the cache from /app/.compile-cache', () => {
-    const r = run({
-      runtime: 'node',
-      build: 'vinext',
-      files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
-      env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
-    });
+    const r = run(
+      nodeCase({
+        build: 'vinext',
+        files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
+        env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
+        proc: { [`/proc/${HOSTPID}/environ`]: envOf('/app/.compile-cache') },
+      }),
+    );
     expect(r.status).toBe(0);
     expect((r.ev?.bytecode as Record<string, unknown>).bytes).toBe(70000);
   });
 
   it('node: an empty or too-small cache, or a missing NODE_COMPILE_CACHE env, fails', () => {
-    const base = { runtime: 'node', build: 'turbopack' };
     const file = 'app/.next/standalone/.next/compile-cache/v24/a.bin';
-    const env = 'NODE_COMPILE_CACHE=/app/.next/standalone/.next/compile-cache';
-    expect(run({ ...base, files: { [file]: 'tiny' }, env }).status).not.toBe(0);
-    expect(run({ ...base, files: {}, env }).status).not.toBe(0);
-    expect(run({ ...base, files: { [file]: big }, env: 'FOO=1' }).status).not.toBe(0);
+    expect(run(nodeCase({ files: { [file]: 'tiny' } })).status).not.toBe(0);
+    expect(run(nodeCase({ files: {} })).status).not.toBe(0);
+    expect(run(nodeCase({ env: 'FOO=1' })).status).not.toBe(0);
   });
 
-  it('standalone bun: verifies the executable through the marker scan', () => {
-    const M = 'knext-standalone-exec:aaaaaaaaaaaaaaaaaaaaaaaa';
-    const body = `// @bun @bytecode @bun-cjs\nglobalThis.m="${M}";\n${'.'.repeat(5000)}\0${M}\0`;
-    const r = run({
-      runtime: 'bun',
-      build: 'turbopack',
-      files: { 'app/.next/standalone/knext-standalone-exec': body },
-    });
+  it('node: the RUNNING process must carry NODE_COMPILE_CACHE too, not just the image config', () => {
+    const noEnv = run(nodeCase({ proc: { [`/proc/${HOSTPID}/environ`]: 'PATH=/usr/bin\0' } }));
+    expect(noEnv.status).toBe(1);
+    expect(noEnv.err).toContain('live process');
+    const wrong = run(nodeCase({ proc: { [`/proc/${HOSTPID}/environ`]: envOf('/elsewhere') } }));
+    expect(wrong.status).toBe(1);
+    // An unreadable /proc entry (the pod scaled away) is a failure, never a pass.
+    expect(run(nodeCase({ proc: {} })).status).toBe(1);
+  });
+
+  it('refuses a missing kind node or host pid, and a non-numeric pid, with exit 2', () => {
+    expect(run(nodeCase({ args: [] })).status).not.toBe(0);
+    expect(run(nodeCase({ args: ['kindnode'] })).status).not.toBe(0);
+    expect(run(nodeCase({ args: ['kindnode', 'abc'] })).status).toBe(2);
+  });
+
+  const M = 'knext-standalone-exec:aaaaaaaaaaaaaaaaaaaaaaaa';
+  const SEXEC = '/app/.next/standalone/knext-standalone-exec';
+  const bunBody = `// @bun @bytecode @bun-cjs\nglobalThis.m="${M}";\n${'.'.repeat(5000)}\0${M}\0`;
+  const bunCase = (over: Partial<Case> = {}): Case => ({
+    runtime: 'bun',
+    build: 'turbopack',
+    files: { 'app/.next/standalone/knext-standalone-exec': bunBody },
+    env: `STANDALONE_SERVER_EXEC=${SEXEC}`,
+    proc: {
+      [`/proc/${HOSTPID}/task/${HOSTPID}/children`]: '4300 4301 ',
+      '/proc/4300/cmdline': 'bun\0run\0/app/knext-entry.mjs\0',
+      '/proc/4301/cmdline': `${SEXEC}\0`,
+    },
+    ...over,
+  });
+
+  it('standalone bun: verifies the executable through the marker scan and the live child', () => {
+    const r = run(bunCase());
     expect(r.status).toBe(0);
     const bc = r.ev?.bytecode as Record<string, unknown>;
     expect(bc.kind).toBe('bun-bytecode');
     expect(bc.method).toBe('marker');
     expect(String(bc.verdict)).toContain('bytecode verified');
+    expect(bc.server_exec_env).toBe(SEXEC);
+    expect(bc.live_child_pid).toBe(4301);
+    expect(bc.live_child_argv0).toBe(SEXEC);
     // Without bytecode the arm fails.
-    const bad = run({
-      runtime: 'bun',
-      build: 'turbopack',
-      files: {
-        'app/.next/standalone/knext-standalone-exec': `// @bun @bun-cjs\nglobalThis.m="${M}";\n`,
-      },
-    });
+    const bad = run(
+      bunCase({
+        files: {
+          'app/.next/standalone/knext-standalone-exec': `// @bun @bun-cjs\nglobalThis.m="${M}";\n`,
+        },
+      }),
+    );
     expect(bad.status).not.toBe(0);
+  });
+
+  it('standalone bun: refuses a silent fallback to an uncompiled server', () => {
+    // The image does not name the executable: the supervisor would run `bun server.js`.
+    const noEnv = run(bunCase({ env: 'FOO=1' }));
+    expect(noEnv.status).toBe(1);
+    expect(noEnv.err).toContain('STANDALONE_SERVER_EXEC');
+    const wrongEnv = run(bunCase({ env: 'STANDALONE_SERVER_EXEC=/app/server' }));
+    expect(wrongEnv.status).toBe(1);
+    // The image is right but the live supervisor has no compiled child (it spawned bun server.js).
+    const fallback = run(
+      bunCase({
+        proc: {
+          [`/proc/${HOSTPID}/task/${HOSTPID}/children`]: '4300 ',
+          '/proc/4300/cmdline': 'bun\0server.js\0',
+        },
+      }),
+    );
+    expect(fallback.status).toBe(1);
+    expect(fallback.err).toContain('fell back');
+    // No children at all, and an unreadable children file, both fail.
+    expect(
+      run(bunCase({ proc: { [`/proc/${HOSTPID}/task/${HOSTPID}/children`]: '' } })).status,
+    ).toBe(1);
+    expect(run(bunCase({ proc: {} })).status).toBe(1);
   });
 
   it('vinext bun: needs BYTECODE_BASELINE and a higher @bytecode pragma count than it', () => {
@@ -853,15 +932,168 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     try {
       const baseline = join(d, 'baseline');
       writeFileSync(baseline, P);
-      const files = { 'app/server': `${P}${P}` };
-      expect(run({ runtime: 'bun', build: 'vinext', files }).status).not.toBe(0);
-      const ok = run({ runtime: 'bun', build: 'vinext', files }, baseline);
+      const vcase = (body: string): Case => ({
+        runtime: 'bun',
+        build: 'vinext',
+        files: { 'app/server': body },
+      });
+      expect(run(vcase(`${P}${P}`)).status).not.toBe(0);
+      const ok = run(vcase(`${P}${P}`), baseline);
       expect(ok.status).toBe(0);
-      expect((ok.ev?.bytecode as Record<string, unknown>).method).toBe('pragma-differential');
-      const bad = run({ runtime: 'bun', build: 'vinext', files: { 'app/server': P } }, baseline);
-      expect(bad.status).not.toBe(0);
+      const bc = ok.ev?.bytecode as Record<string, unknown>;
+      expect(bc.method).toBe('pragma-differential');
+      expect(String(bc.verdict)).toContain('the build requested bytecode');
+      expect(String(bc.verdict)).not.toMatch(/carries bytecode|proven/);
+      expect(run(vcase(P), baseline).status).not.toBe(0);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
+  });
+});
+
+describe('kind/check-versions.sh (behaviour)', () => {
+  const CHECK = resolve(DIR, 'kind/check-versions.sh');
+  type V = { next?: string; react?: string; 'react-dom'?: string };
+  const evidence = (rows: { arm: string; build: string; app?: string; v: V }[]) => {
+    const d = mkdtempSync(join(tmpdir(), 'ver-'));
+    for (const r of rows)
+      writeFileSync(
+        join(d, `evidence-${r.arm}.json`),
+        JSON.stringify({
+          arm: r.arm,
+          build_target: r.build,
+          app: r.app ?? 'scaffold',
+          versions: r.v,
+        }),
+      );
+    const out = spawnSync('bash', [CHECK, d], { encoding: 'utf8' });
+    rmSync(d, { recursive: true, force: true });
+    return out;
+  };
+  const same = { next: '16.4.5', react: '19.3.1', 'react-dom': '19.3.1' };
+
+  it('passes when every scaffold arm resolved the same versions', () => {
+    const r = evidence([
+      { arm: 'a', build: 'turbopack', v: same },
+      { arm: 'b', build: 'vinext', v: same },
+    ]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain('NOTE');
+  });
+
+  it('records, not fails, a react that differs between build tools, and says so', () => {
+    const r = evidence([
+      { arm: 'a', build: 'turbopack', v: { ...same, react: '19.2.6', 'react-dom': '19.2.6' } },
+      { arm: 'b', build: 'vinext', v: same },
+    ]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('NOTE: react differs between build tools');
+    expect(r.stdout).toContain('turbopack=19.2.6');
+    expect(r.stdout).toContain('vinext=19.3.1');
+  });
+
+  it('fails when react differs among the arms of one build tool', () => {
+    const r = evidence([
+      { arm: 'a', build: 'vinext', v: same },
+      { arm: 'b', build: 'vinext', v: { ...same, react: '19.2.6' } },
+    ]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('react differs among the vinext arms');
+  });
+
+  it('fails when next differs across arms, or a version is missing', () => {
+    expect(
+      evidence([
+        { arm: 'a', build: 'turbopack', v: same },
+        { arm: 'b', build: 'vinext', v: { ...same, next: '16.4.4' } },
+      ]).status,
+    ).toBe(1);
+    expect(evidence([{ arm: 'a', build: 'turbopack', v: { next: '16.4.5' } }]).status).toBe(1);
+  });
+
+  it('does not compare the spike-zone arms, and passes when there are no scaffold arms', () => {
+    const r = evidence([
+      { arm: 'a', build: 'turbopack', app: 'spike', v: { ...same, next: '1.0.0' } },
+      { arm: 'b', build: 'turbopack', app: 'spike', v: same },
+    ]);
+    expect(r.status).toBe(0);
+  });
+
+  it('rejects a missing directory with exit 2', () => {
+    expect(spawnSync('bash', [CHECK, '/nonexistent-dir'], { encoding: 'utf8' }).status).toBe(2);
+  });
+});
+
+describe('workflow wiring of the evidence and version checks', () => {
+  const lines = code.split('\n');
+  const idx = (re: RegExp) => lines.findIndex((l) => re.test(l));
+  const REC_LINE =
+    'scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$hostpid"';
+
+  it('calls record-evidence.sh with exactly these arguments, once', () => {
+    expect(lines.filter((l) => l.includes('kind/record-evidence.sh') && !/^\s*#/.test(l))).toEqual([
+      `            ${REC_LINE}`,
+    ]);
+  });
+
+  it('does not swallow its failure: no `|| true`, `|| :`, `if`, `!`, pipe or continuation around it', () => {
+    const at = idx(/kind\/record-evidence\.sh/);
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at].trim()).toBe(REC_LINE);
+    expect(lines[at]).not.toMatch(/\|\||&&|\|\s*$|;\s*$|\\\s*$/);
+    // The neighbours do not make it conditional or chain onto it.
+    expect(lines[at - 1]).not.toMatch(/(\|\||&&|\\|\bthen|\bdo|\{)\s*$/);
+    expect(lines[at + 1]).not.toMatch(/^\s*(\|\||&&|\|)/);
+    // Same rule for the version comparison.
+    const v = idx(/kind\/check-versions\.sh/);
+    expect(lines[v].trim()).toBe('scripts/bench-cold-start-phases/kind/check-versions.sh "$out"');
+    expect(lines[v - 1]).not.toMatch(/(\|\||&&|\\|\bthen|\bdo|\{)\s*$/);
+  });
+
+  it('sits inside the deploy loop, after the process check, and before drive.py', () => {
+    const loopStart = idx(/while read -r -u 3 arm runtime cpulimit build app; do/);
+    const loopEnd = lines.findIndex((l, i) => i > loopStart && /^\s*done 3< /.test(l));
+    const rec = idx(/kind\/record-evidence\.sh/);
+    const proc = idx(/"\$chk" "\$proc_rt"/);
+    const drive = idx(/drive\.py "\$N" "\$ARMS"/);
+    expect(loopStart).toBeGreaterThan(0);
+    expect(rec).toBeGreaterThan(loopStart);
+    expect(rec).toBeLessThan(loopEnd);
+    expect(rec).toBeGreaterThan(proc);
+    expect(idx(/hostpid="\$\(printf/)).toBeLessThan(rec);
+    expect(idx(/knode="\$\{CLUSTER\}-control-plane"/)).toBeLessThan(rec);
+    // check-versions runs after every arm has its evidence, still before the wakes.
+    const ver = idx(/kind\/check-versions\.sh/);
+    expect(ver).toBeGreaterThan(loopEnd);
+    expect(ver).toBeLessThan(drive);
+    expect(rec).toBeLessThan(drive);
+  });
+
+  it('judges a vinext+bun process as bun-exec only when BOTH build and runtime say so', () => {
+    expect(code).toContain(
+      'proc_rt="$runtime"; [ "$build" = vinext ] && [ "$runtime" = bun ] && proc_rt="bun-exec"',
+    );
+  });
+
+  it('compiles the baseline probe WITHOUT bytecode, anchored to the exact command', () => {
+    expect(code).toMatch(
+      /^ +bun build --compile --minify --target=bun-linux-x64-musl "\$\{RUNNER_TEMP\}\/probe\.js" --outfile "\$\{RUNNER_TEMP\}\/bytecode-baseline"$/m,
+    );
+    // Adding --bytecode (or anything) to the probe defeats the differential.
+    for (const l of lines.filter((x) => x.includes('probe.js') && x.includes('bun build')))
+      expect(l).not.toMatch(/--bytecode/);
+  });
+
+  it('records the resolved next, react and react-dom per arm', () => {
+    expect(code).toMatch(/\['next','react','react-dom'\]/);
+    expect(code).toMatch(/--argjson v "\$versions"/);
+    expect(code).toMatch(/versions: \$v/);
+  });
+
+  it('keeps every comment line at 110 columns or fewer', () => {
+    const long = text
+      .split('\n')
+      .filter((l) => /^\s*#/.test(l) && l.length > 110 && !l.includes('sha256:'));
+    expect(long).toEqual([]);
   });
 });

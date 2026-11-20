@@ -16,7 +16,7 @@ name: Cold-start phases on kind (native amd64, manual)
 #                                      and with vinext, all at 1000m)
 #
 # Why push triggers exist: GitHub only dispatches a workflow file that exists on the default
-# branch, and this file lives only on the v2 line, so `gh workflow run` returns 404. The four
+# branch, and this file lives only on the v2 line, so `gh workflow run` returns 404. The five
 # branches above stand in for the dispatch. They are pushed only by a maintainer, once per
 # measurement; no other branch triggers on push. The names are exact (no wildcard). A push carries
 # no dispatch inputs, so the set's default N applies (12, or 1 for smoke) with ready_window_s=20,
@@ -40,12 +40,14 @@ name: Cold-start phases on kind (native amd64, manual)
 # buildtool (the four build-tool arms below).
 #
 # Build-tool axis (the buildtool set). Every arm above builds the spike zone with the default build
-# tool (turbopack). These four vary the build tool and the runtime on ONE app, a fresh `knext create`
-# scaffold, so the only differences between them are build and runtime:
-#   node-turbopack-1000m  build: turbopack, runtime: node   .next/standalone under node, V8 compile cache baked in the image
-#   bun-turbopack-1000m   build: turbopack, runtime: bun    the standalone server compiled to a Bun executable with bytecode
-#   node-vinext-1000m     build: vinext,    runtime: node   nitro node preset under node, V8 compile cache baked in the image
-#   bun-vinext-1000m      build: vinext,    runtime: bun    `vite build` compiled with `bun build --compile --bytecode`
+# tool (turbopack). These four vary the build tool and the runtime on one app source, a fresh
+# `knext create` scaffold per builder. Build and runtime are the intended variables; the scaffold's
+# package.json differs per builder (the vinext one pins a newer react range), so the resolved next,
+# react and react-dom versions are recorded per arm and compared by check-versions.sh:
+#   node-turbopack-1000m  turbopack + node  .next/standalone under node, V8 compile cache baked in the image
+#   bun-turbopack-1000m   turbopack + bun   the standalone server compiled to a Bun executable with bytecode
+#   node-vinext-1000m     vinext + node     nitro node preset under node, V8 compile cache baked in the image
+#   bun-vinext-1000m      vinext + bun      `vite build` compiled with `bun build --compile --bytecode`
 # A user selects vinext with `build: "vinext"` in knext.config.ts (config.ts, `build`), and the runtime
 # with `runtime: "node" | "bun"`; the two are independent. Per arm, record-evidence.sh reads the pushed
 # image and writes evidence-<arm>.json (build target, runtime, and the compile-cache byte count or the
@@ -286,8 +288,9 @@ jobs:
       # dir). The first arm of each (app, runtime, build tool) builds and pushes the amd64 image
       # natively; a later arm with the same key reuses that digest with --image, so a cpu-limit arm
       # differs from its sibling in the limit alone. The scaffold arms (the buildtool set) build a
-      # fresh `knext create --builder <build> --runtime <runtime>` app instead of the spike zone. Each arm is deployed to Ready, which pulls the app and
-      # queue-proxy images onto the node before any measured wake.
+      # fresh `knext create --builder <build> --runtime <runtime>` app instead of the spike zone.
+      # Each arm is deployed to Ready, which pulls the app and queue-proxy images onto the node
+      # before any measured wake.
       - name: Deploy every arm (kn-next deploy) and warm the node image cache
         run: |
           set -euo pipefail
@@ -407,14 +410,20 @@ jobs:
             if [ "$build" != vinext ] && [ "$spec_runtime" != "$runtime" ]; then
               echo "::error::arm ${arm} is a ${runtime} arm but NextApp spec.runtime is '${spec_runtime}'"; exit 1
             fi
-            # Proof that bytecode (bun) or the compile cache (node) is in the image, read from the
-            # pushed image. It fails the job when absent, so no row is measured without it.
-            scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out"
+            # Proof that bytecode (bun) or the compile cache (node) is in the image and in the live
+            # process, read from the pushed image and the kind node. It fails the job when absent, so
+            # no row is measured without it.
+            scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$hostpid"
             ev="${out}/evidence-${arm}.json"
-            jq --arg sb "${spec_build:-turbopack}" --arg sr "$spec_runtime" --arg cpu "$cpulimit" \
-              '. + {spec_build: $sb, spec_runtime: $sr, cpu_limit: $cpu}' "$ev" > "${ev}.tmp"
+            # The versions the arm's app actually resolved (shared by every arm with this key).
+            versions="$(cd "${RUNNER_TEMP}/zone-${key}" && node -e "const o={}; for (const n of ['next','react','react-dom']) o[n]=require('./node_modules/'+n+'/package.json').version; console.log(JSON.stringify(o))")"
+            jq --arg sb "${spec_build:-turbopack}" --arg sr "$spec_runtime" --arg cpu "$cpulimit" --argjson v "$versions" \
+              '. + {spec_build: $sb, spec_runtime: $sr, cpu_limit: $cpu, versions: $v}' "$ev" > "${ev}.tmp"
             mv "${ev}.tmp" "$ev"
           done 3< "${RUNNER_TEMP}/arms.txt"
+          # next must match on every scaffold arm and react within a build tool; react may differ
+          # between build tools (recorded, with a NOTE).
+          scripts/bench-cold-start-phases/kind/check-versions.sh "$out"
 
       # The harness pods run node:24-alpine. Load it into the node so no measured wake pays a pull
       # for it, then apply the kind harness manifest (harness, clock and agent pods plus the
@@ -489,7 +498,7 @@ jobs:
             echo "|---|---|---|---|---|"
             for f in "$out"/evidence-*.json; do
               [ -e "$f" ] || continue
-              jq -r '"| \(.arm) | \(.build_target) | \(.runtime) | \(.app) | " + (if .bytecode.kind == "v8-compile-cache" then "V8 compile cache, \(.bytecode.bytes) bytes in \(.bytecode.files) file(s) at \(.bytecode.cache_dir); bake: \(.bytecode.bake_line)" else "Bun bytecode, \(.bytecode.method): \(.bytecode.verdict)" end) + " |"' "$f"
+              jq -r '"| \(.arm) | \(.build_target) | \(.runtime) | \(.app) | " + (if .bytecode.kind == "v8-compile-cache" then "V8 compile cache, \(.bytecode.bytes) bytes in \(.bytecode.files) file(s) at \(.bytecode.cache_dir); bake: \(.bytecode.bake_line)" else "Bun, \(.bytecode.method): \(.bytecode.verdict)" end) + "; next \(.versions.next), react \(.versions.react), react-dom \(.versions["react-dom"]) |"' "$f"
             done
             for f in "$out"/analysis-*.txt; do
               [ -e "$f" ] || continue

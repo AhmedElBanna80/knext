@@ -72,7 +72,8 @@ runbook, [`docs/benchmarks/prewake-ab-oke-runbook.md`](../../docs/benchmarks/pre
 
 `.github/workflows/coldstart-phases-kind-native.yml` runs this harness on an amd64 runner. Arms are
 resolved by `kind/arms.sh`: `node-1000m`, `node-2000m`, `node-4000m`, `node-nolimit`, `bun-1000m`,
-`bun-nolimit` (the nolimit arms use a 64-CPU limit). Named sets:
+`bun-nolimit` (the nolimit arms use a 64-CPU limit), and the build-tool arms `node-turbopack-1000m`,
+`bun-turbopack-1000m`, `node-vinext-1000m`, `bun-vinext-1000m`. Named sets:
 
 | Set | Arms | Default N |
 |---|---|---|
@@ -90,17 +91,26 @@ run: the ladder at N=20 needs 4 x 20 x (45 + 20) s + 25 min = 6700 s of the 8100
 ### Build-tool axis (`buildtool` set)
 
 The four `buildtool` arms are node and bun, each built with turbopack and with vinext (`build:
-"turbopack" | "vinext"` in knext.config.ts), all at 1000m. They build one fresh `knext create` app, not
-the spike zone the earlier arms use, so the arms differ only in build and runtime; compare them with each
-other, not with `node-1000m`. The shared image is keyed on app, runtime and build tool. Per arm,
+"turbopack" | "vinext"` in knext.config.ts), all at 1000m. They build a fresh `knext create` app per
+builder, not the spike zone the earlier arms use, so build and runtime are the intended variables but not
+the only ones: the scaffold's package.json differs per builder (the vinext one pins a newer react range
+and its own vite toolchain). Compare them with each other, not with `node-1000m`. The resolved next, react
+and react-dom versions are recorded per arm; `kind/check-versions.sh` fails the job if next differs or if
+react differs within one build tool, and records, without failing, a react that differs between
+turbopack and vinext (the vinext scaffold pins a newer range) as a `NOTE:` line. The shared image is keyed on app, runtime and build tool. Per arm,
 `kind/record-evidence.sh` reads the pushed image and writes `evidence-<arm>.json` (build target, runtime,
-bytecode proof), quoted in the step summary:
+bytecode proof), quoted in the step summary. Every arm of every set now goes through it and through the
+`spec.build`/`spec.runtime` checks, not only the build-tool arms:
 
 - node: the V8 compile cache directory in the image (`/app/.next/standalone/.next/compile-cache` for
-  turbopack, `/app/.compile-cache` for vinext), its byte and file count against the bake floor, and the
-  image's `NODE_COMPILE_CACHE`.
+  turbopack, `/app/.compile-cache` for vinext), its byte and file count against the bake floor (262144 and
+  65536 bytes), the image's `NODE_COMPILE_CACHE`, and the `NODE_COMPILE_CACHE` in the running process's
+  environment on the kind node.
 - bun, turbopack: the compiled executable verified through its per-build marker (`kind/verify-bytecode.mjs
-  standalone`).
+  standalone`), the image's `STANDALONE_SERVER_EXEC` naming it, and a live child of the supervisor running
+  it, so a silent fall back to an uncompiled `bun server.js` fails the arm.
 - bun, vinext: `knext build` embeds no marker and runs no bytecode check on this executable, so
   `kind/verify-bytecode.mjs pragma` requires more `// @bun @bytecode @bun-cjs` pragmas than a probe
-  compiled without bytecode for the same target and Bun. This is a differential, not a marker proof.
+  compiled without bytecode for the same target and Bun (`--target=bun-linux-x64-musl`). This is a
+  differential, not a marker proof: it shows the build requested bytecode, not that the bytecode is in the
+  binary.

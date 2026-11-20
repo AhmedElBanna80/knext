@@ -78,7 +78,7 @@ answering the activator-style probe. The activator marks the pod healthy at 2863
 line (p95 3140).
 
 Other milestones (median / p95, ms from the request): pod IP visible in the API 918 / 1356; TCP `:3000`
-open from another pod 2516 / 2580; queue-proxy probe success 3247 / 3318.
+open from another pod 2516 / 2580; queue-proxy probe success 3247 / 3318 (median 3246.7 in the jsonl). That probe is the harness's own `K-Network-Probe: queue` poll of `:8012`, run every 50 ms from the harness pod; it imitates the activator's probe, and the activator's own result is the "marks pod healthy" log line above.
 
 ## What dominates
 
@@ -92,21 +92,33 @@ open from another pod 2516 / 2580; queue-proxy probe success 3247 / 3318.
    564 median, 1013 p95) is not on this path, because the probes ran straight to the pod IP.
 3. Everything before the container runs (activation, scheduling, sandbox) is about 350 ms.
 
-## A side finding: pod Ready lags the request path
+Phase-label note: the table boundary is `qp_ready = min(qp_probe_ok, Ready, first_byte)` (`analyze.py`). In 6 of
+12 rows (2, 4, 7, 9, 11, 12) the harness probe succeeded at or after the first byte, so `qp_ready` is clipped
+to the first byte and the forward + render phase is 0 there. That is why its median is 19 ms and its p95 286 ms
+is driven by the other rows. Treat "probe success to first byte" as at most a few tens of ms, not a measurement of
+forwarding.
 
-In this run `Ready` was seen within the harness's window (the first byte plus 1.5 s) in 4 of 12 wakes, at
-about 3.2 s. In the first run it arrived at about 3.0 s in 3 of 13 wakes and at 11.4 to 12.1 s in the other
-10. These pods used the operator's probes, so this is not a harness artefact. What the data shows:
+## A side finding: pod Ready is not seen on the request path (cause unproven)
 
-- The pod's only readiness probe is the one on queue-proxy `:8012`, `periodSeconds: 10`, `timeoutSeconds: 1`.
-- 11 of 12 pods logged `Readiness probe failed: Get "http://<ip>:8012/": context deadline exceeded` in the first
-  second, while the app was still booting (2.2 s to listening).
-- The next probe is 10 s after that, which matches the 11.4 to 12.1 s Ready times.
-- The first byte does not wait for it: the activator probes queue-proxy itself (the `K-Network-Probe: queue`
-  request the harness reproduces), and it succeeded at 3247 ms median.
+What the committed data shows (this run, 12 rows):
 
-So with an app that takes longer than the 1 s probe timeout to come up, the kubelet's Ready is up to 10 s
-behind the request path. Nothing here shows what else depends on Ready; that was not measured.
+- The pod's only readiness probe is the one on queue-proxy `:8012`, `periodSeconds: 10`, `timeoutSeconds: 1`
+  (read from the live pod).
+- 11 of 12 pods logged `Readiness probe failed: Get "http://<ip>:8012/": context deadline exceeded`, stamped
+  between 0.5 and 1.8 s after the request, while the app was still booting. Event times have 1 s granularity.
+- `Ready` was seen within the harness's window (first byte plus 1.5 s) in 4 of 12 rows, at 3149, 3207, 3215
+  and 3236 ms. In the other 8 it was not seen in that window. Row 2 has its failure event at 1837 ms and
+  Ready at 3207 ms, 1.4 s apart.
+- It does not gate the first byte: the first byte arrived at 3226 ms median whether or not Ready had been seen.
+
+What it does not show. In the withdrawn first run, `Ready` arrived at 11.4 to 12.1 s in 10 of 13 wakes, which
+suggested the next kubelet probe 10 s after a timed-out one. That is a hypothesis from data that is not in this
+PR. The four rows above, with Ready 1.4 s after a failure, contradict a strict 10 s probe grid, and the
+operator's own comment says Knative's aggressive probing makes the revision Ready as soon as the app answers.
+No mechanism is claimed. Nothing here shows what else depends on Ready; that was not measured.
+
+Debt: extend the harness's post-first-byte window past 15 s on the next run, record every row's Ready time
+and every probe event, and check whether the 10 s gap reappears and when.
 
 ## Comparison with OKE
 

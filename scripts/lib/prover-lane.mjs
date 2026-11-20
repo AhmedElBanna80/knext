@@ -1068,14 +1068,11 @@ export function proverPathBindings(source) {
  *
  * The #927 review found four provers invisible to BOTH the anchor pass and the
  * subject-existence pass — the driver shape — and that is FIXED, not exempted.
- * The remainder below fall into two shapes, neither statically resolvable: most
- * build their anchors at runtime (a mutation table of closures, a workflow
+ * The remainder below build their anchors at runtime (a mutation table of closures, a workflow
  * re-serialised from parsed YAML, a shell fragment assembled from an imported
- * token list), so there is no literal to resolve without evaluating the prover;
- * and skew-id-chain (added on the 2026-09-05 merge train) carries a POSITIONAL
- * mutation array `[file, label, anchor, replacement, spec]` that predates the
- * per-prover audit and that neither extractor reads. Its follow-up is the
- * object-shape conversion; until then it is dated like the rest.
+ * token list), so there is no literal to resolve without evaluating the prover.
+ * (skew-id-chain's positional mutation array was converted to the object shape
+ * and is no longer exempt.)
  *
  * WHAT THE EXEMPTION DOES NOT MEAN. It does not mean they are unproved — every
  * one runs in the nightly with `declared == run`. It means the PR-TIME liveness
@@ -1084,17 +1081,6 @@ export function proverPathBindings(source) {
  * files, held deliberately and with a date on it rather than silently.
  */
 export const PROVER_AUDIT_EXEMPTIONS = Object.freeze([
-  Object.freeze({
-    prover: 'scripts/mutation-prove-skew-id-chain.mjs',
-    justification:
-      'POSITIONAL-array mutation table ([file, label, anchor, replacement, spec]) predating the ' +
-      'per-prover audit; neither extractor reads that shape, and the collision surfaced only on ' +
-      'the merged tree because the merge train validated each PR against a pre-merge ref. ' +
-      'Follow-up: convert the table to the {subject, anchor} object shape both extractors read. ' +
-      'Expiry deliberately OFF the 2026-12-01 bloc (sprint-2 close C6: staggered clocks).',
-    added: '2026-09-05',
-    expires: '2026-11-20',
-  }),
   Object.freeze({
     prover: 'scripts/mutation-prove-anonymous-install.mjs',
     justification:

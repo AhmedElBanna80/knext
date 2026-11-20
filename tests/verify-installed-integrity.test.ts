@@ -119,9 +119,13 @@ describe('the CLI exits nonzero on every failure and 0 only on a match', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('FAILED');
   });
-  it('1 with no packages or no prefix (usage)', () => {
-    expect(run(writeInstalled(installed())).status).toBe(1);
-    expect(spawnSync(process.execPath, [SCRIPT, 'yaml'], { encoding: 'utf8' }).status).toBe(1);
+  it('1 with no packages or no prefix, with a usage message', () => {
+    const noPkgs = run(writeInstalled(installed()));
+    expect(noPkgs.status).toBe(1);
+    expect(noPkgs.stderr).toContain('usage:');
+    const noPrefix = spawnSync(process.execPath, [SCRIPT, 'yaml'], { encoding: 'utf8' });
+    expect(noPrefix.status).toBe(1);
+    expect(noPrefix.stderr).toContain('usage:');
   });
 });
 

@@ -87,6 +87,7 @@ const MUTATIONS = [
   {
     label: 'the workflow stops running the integrity check',
     subject: 'workflow',
+    kind: 'wiring',
     anchor:
       '          node scripts/verify-installed-integrity.mjs --prefix "$RUNNER_TEMP/ratchet-deps" typescript yaml\n',
     replacement: '',
@@ -94,6 +95,7 @@ const MUTATIONS = [
   {
     label: 'the workflow links node_modules before verifying',
     subject: 'workflow',
+    kind: 'wiring',
     anchor:
       '          node scripts/verify-installed-integrity.mjs --prefix "$RUNNER_TEMP/ratchet-deps" typescript yaml\n          ln -s "$RUNNER_TEMP/ratchet-deps/node_modules" node_modules',
     replacement:
@@ -102,6 +104,7 @@ const MUTATIONS = [
   {
     label: 'the workflow verifies only typescript',
     subject: 'workflow',
+    kind: 'wiring',
     anchor: '--prefix "$RUNNER_TEMP/ratchet-deps" typescript yaml\n',
     replacement: '--prefix "$RUNNER_TEMP/ratchet-deps" typescript\n',
   },

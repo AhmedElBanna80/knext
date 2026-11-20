@@ -738,7 +738,11 @@ const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`,
       rmSync(resolve(root, 'scripts/lib/prover-unattributed-baseline.json'));
       const r = lint(root);
       expect(r.status).toBe(1);
-      expect(r.stderr).toContain('has no baseline');
+      // a whole line of its own: a crash's source excerpt (bun prints one) must not satisfy this
+      expect(r.stderr).toMatch(
+        /^scripts\/lib\/prover-unattributed-baseline\.json: missing; the unattributed ratchet has no baseline$/m,
+      );
+      expect(r.stderr).not.toContain('ENOENT');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -8,7 +8,8 @@
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, posix, resolve } from 'node:path';
+import ts from 'typescript';
 import { blankNonCode } from './blank-non-code.mjs';
 import { activeExemptions } from './dated-exemptions.mjs';
 import { parseProverSummary } from './prover-report.mjs';
@@ -617,7 +618,12 @@ function splitArgs(blanked, start, end) {
 /** Decode a single- or double-quoted JS literal's source into its value. */
 function decodeLiteral(raw) {
   try {
-    return JSON.parse(raw[0] === "'" ? `"${raw.slice(1, -1).replace(/"/g, '\\"')}"` : raw);
+    // `\'` is a legal escape in a single-quoted JS literal and an ILLEGAL one in
+    // JSON, so it is unescaped first — otherwise any anchor spelling an
+    // apostrophe as `\'` fails to parse and silently drops out of the audit.
+    return JSON.parse(
+      raw[0] === "'" ? `"${raw.slice(1, -1).replace(/\\'/g, "'").replace(/"/g, '\\"')}"` : raw,
+    );
   } catch {
     return undefined;
   }
@@ -749,6 +755,39 @@ function stringConsts(source) {
 const PATH_ROOT_NAMES = new Set(['WT', 'REPO_ROOT', 'ROOT', 'REPO', 'repoRoot']);
 
 /**
+ * Resolve one path EXPRESSION — a string literal, a bound name, or a
+ * `join`/`resolve`/`snapshot` call over those — to a repo-relative path, or
+ * undefined.
+ *
+ * Lifted out of `pathBindings` so the call-site and table scanners resolve an
+ * INLINE `resolve(REPO_ROOT, 'a/b')` argument with the very same rules a
+ * `const X = resolve(…)` binding gets, rather than a second look-alike.
+ *
+ * @param {string} rhs
+ * @param {Map<string, string>} known names already resolved (roots included)
+ */
+function resolvePathExpr(rhs, known) {
+  const trimmed = rhs.trim();
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(trimmed)) return known.get(trimmed);
+  if (/^(['"])(?:[^\\]|\\.)*?\1$/.test(trimmed)) return decodeLiteral(trimmed);
+  const call = /^(join|resolve|snapshot)\s*\(/.exec(trimmed);
+  if (!call) return undefined;
+  const blankedRhs = blankNonCode(trimmed);
+  const span = argSpan(blankedRhs, blankedRhs.indexOf('('));
+  if (!span) return undefined;
+  const args = splitArgs(blankedRhs, span.start, span.end);
+  const parts = [];
+  for (const arg of args) {
+    const piece = resolvePathExpr(trimmed.slice(arg.start, arg.end), known);
+    if (piece === undefined) return undefined;
+    parts.push(piece);
+  }
+  // `snapshot(PATH)` carries its target's path; join/resolve concatenate.
+  if (call[1] === 'snapshot') return parts[0];
+  return parts.filter((p) => p !== '').join('/');
+}
+
+/**
  * Every `const NAME = …` in the source that resolves to a repo-relative PATH.
  *
  * Resolved in two passes so a constant built from a LATER constant still lands;
@@ -764,27 +803,7 @@ function pathBindings(source) {
   const known = new Map();
   for (const name of PATH_ROOT_NAMES) known.set(name, '');
 
-  /** Resolve one right-hand side to a path, or undefined. */
-  const resolveRhs = (rhs) => {
-    const trimmed = rhs.trim();
-    if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(trimmed)) return known.get(trimmed);
-    if (/^(['"])(?:[^\\]|\\.)*?\1$/.test(trimmed)) return decodeLiteral(trimmed);
-    const call = /^(join|resolve|snapshot)\s*\(/.exec(trimmed);
-    if (!call) return undefined;
-    const blankedRhs = blankNonCode(trimmed);
-    const span = argSpan(blankedRhs, blankedRhs.indexOf('('));
-    if (!span) return undefined;
-    const args = splitArgs(blankedRhs, span.start, span.end);
-    const parts = [];
-    for (const arg of args) {
-      const piece = resolveRhs(trimmed.slice(arg.start, arg.end));
-      if (piece === undefined) return undefined;
-      parts.push(piece);
-    }
-    // `snapshot(PATH)` carries its target's path; join/resolve concatenate.
-    if (call[1] === 'snapshot') return parts[0];
-    return parts.filter((p) => p !== '').join('/');
-  };
+  const resolveRhs = (rhs) => resolvePathExpr(rhs, known);
 
   for (let pass = 0; pass < 2; pass++) {
     const decl = /(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*/g;
@@ -942,6 +961,236 @@ function driverTableAnchors(source, subjects) {
   return { entries, unresolved };
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * THE OTHER MUTATION-TABLE SHAPES (#2793)
+ *
+ * Eight provers were exempt from the anchor audit because the two shapes above
+ * (`mutate(PATH, 'literal', …)` and the `createGuardProver` `{ subject, anchor }`
+ * table) were the only ones read. They use four more, all of them static:
+ *
+ *   - an OBJECT table: `{ label, file: PATH, anchor: '…', replacement }`;
+ *   - a POSITIONAL table consumed by `for (const [file, label, anchor, …] of T)`;
+ *   - a WRAPPER: `function prove(label, file, anchor, …) { snapshot(file); mutate(snap, anchor, …) }`
+ *     called with literals — the anchor reaches `mutate` as a parameter, but the
+ *     CALL SITES carry the literals;
+ *   - any of the above living in a shared lib the prover IMPORTS (the prover is a
+ *     thin driver, the table is data).
+ *
+ * Each is graded exactly like the shapes above: same findings, same `resolved`
+ * corpus, and an entry that cannot be read is REPORTED in `unresolved`, never
+ * dropped. Anchors that are genuinely computed at run time (a job id spliced
+ * into a key, a token list) have no literal to read; those provers assert their
+ * own resolution at run time instead — see `SELF_ASSERTING_PROVERS`.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** A copy of the path bindings with the repo-root names re-added (they are stripped from the result). */
+function withRoots(bindings) {
+  const known = new Map(bindings);
+  for (const name of PATH_ROOT_NAMES) known.set(name, '');
+  return known;
+}
+
+/** The index of the bracket that directly encloses `idx`, or -1. */
+function enclosingOpen(blanked, idx) {
+  let depth = 0;
+  for (let i = idx; i >= 0; i--) {
+    const c = blanked[i];
+    if (c === '}' || c === ')' || c === ']') depth += 1;
+    else if (c === '{' || c === '(' || c === '[') {
+      if (depth === 0) return i;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
+/** `{ name -> value span }` for the top-level properties of an object literal span. */
+function objectProps(blanked, span) {
+  const props = new Map();
+  for (const prop of splitArgs(blanked, span.start, span.end)) {
+    // Keys are located on the BLANKED view so a comment inside the row cannot
+    // hide it (the #927 round-2 defect, which must not return in a new shape).
+    const name = /^(\s*)([A-Za-z_$][A-Za-z0-9_$]*)\s*:/.exec(blanked.slice(prop.start, prop.end));
+    if (name) props.set(name[2], { start: prop.start + name[0].length, end: prop.end });
+  }
+  return props;
+}
+
+/** The leading identifier of each top-level parameter / pattern element, or ''. */
+function leadingNames(blanked, span) {
+  return splitArgs(blanked, span.start, span.end).map(
+    (arg) => /^\s*([A-Za-z_$][A-Za-z0-9_$]*)/.exec(blanked.slice(arg.start, arg.end))?.[1] ?? '',
+  );
+}
+
+const isBlank = (blanked, span) => blanked.slice(span.start, span.end).trim() === '';
+
+/**
+ * Rows of `{ …, file: PATH, anchor: '…' }` objects.
+ *
+ * Requires BOTH keys on the one object, so a nested `{ anchor, replacement }`
+ * (a multi-edit row's second edit) or an unrelated `{ anchor }` cannot produce a
+ * phantom entry; an object carrying `subject` belongs to the driver table.
+ */
+function objectTableAnchors(source, known, consts) {
+  const blanked = blankNonCode(source);
+  const entries = [];
+  const unresolved = [];
+  const seen = new Set();
+  const key = /(?<![.\w$])anchor\s*:/g;
+  for (let m = key.exec(blanked); m; m = key.exec(blanked)) {
+    const open = enclosingOpen(blanked, m.index);
+    if (open === -1 || blanked[open] !== '{' || seen.has(open)) continue;
+    seen.add(open);
+    const span = argSpan(blanked, open);
+    if (!span) continue;
+    const props = objectProps(blanked, span);
+    if (!props.has('file') || !props.has('anchor') || props.has('subject')) continue;
+    const fileSpan = props.get('file');
+    const file = resolvePathExpr(source.slice(fileSpan.start, fileSpan.end), known);
+    // A `file` that is a bare KEY ('ledger', 'core') rather than a path names a
+    // snapshot looked up elsewhere — `mutation-prove-retracted-figures.mjs`'s
+    // PLAN is the live case. It is not this shape, and grading the key as if it
+    // were a path would report a phantom deleted subject.
+    if (typeof file === 'string' && file !== '' && !/[/.]/.test(file)) continue;
+    const anchor = literalValue(source, blanked, props.get('anchor'), consts);
+    if (file === undefined || anchor === undefined) {
+      unresolved.push(
+        `{ file: ${file === undefined ? '<not a resolvable path>' : JSON.stringify(file)}, ` +
+          `anchor: ${anchor === undefined ? '<not a resolvable literal>' : '…'} } — the row was read but not resolved`,
+      );
+      continue;
+    }
+    entries.push({ file, anchor });
+  }
+  return { entries, unresolved };
+}
+
+/**
+ * Rows of `[file, label, anchor, …]` arrays, read through the destructuring
+ * loop that CONSUMES them (`for (const [file, label, anchor] of TABLE)`), so the
+ * column positions come from the prover's own pattern rather than a guess. A
+ * table is counted once however many loops read it.
+ */
+function positionalTableAnchors(source, known, consts) {
+  const blanked = blankNonCode(source);
+  const entries = [];
+  const unresolved = [];
+  const done = new Set();
+  const loop = /\bfor\s*\(\s*(?:const|let|var)\s*\[/g;
+  for (let m = loop.exec(blanked); m; m = loop.exec(blanked)) {
+    const pattern = argSpan(blanked, m.index + m[0].length - 1);
+    if (!pattern) continue;
+    const table = /^\s*of\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\)/.exec(blanked.slice(pattern.end + 1));
+    if (!table) continue;
+    const names = leadingNames(blanked, pattern);
+    const fileCol = names.indexOf('file');
+    const anchorCol = names.indexOf('anchor');
+    if (fileCol === -1 || anchorCol === -1 || done.has(table[1])) continue;
+    done.add(table[1]);
+    const decl = new RegExp(`(?:const|let|var)\\s+${table[1]}\\s*=\\s*\\[`).exec(blanked);
+    const arr = decl && argSpan(blanked, decl.index + decl[0].length - 1);
+    if (!arr) {
+      unresolved.push(`table ${table[1]} is not a literal array — its rows were not read`);
+      continue;
+    }
+    for (const row of splitArgs(blanked, arr.start, arr.end)) {
+      if (isBlank(blanked, row)) continue;
+      const at = row.start + blanked.slice(row.start, row.end).search(/\S/);
+      if (blanked[at] !== '[') continue;
+      const inner = argSpan(blanked, at);
+      if (!inner) continue;
+      const cols = splitArgs(blanked, inner.start, inner.end).filter((c) => !isBlank(blanked, c));
+      const fileCell = cols[fileCol];
+      const anchorCell = cols[anchorCol];
+      const file = fileCell && resolvePathExpr(source.slice(fileCell.start, fileCell.end), known);
+      const anchor = anchorCell && literalValue(source, blanked, anchorCell, consts);
+      if (!file || !anchor) {
+        unresolved.push(`a ${table[1]} row was read but its file or anchor did not resolve`);
+        continue;
+      }
+      entries.push({ file, anchor });
+    }
+  }
+  return { entries, unresolved };
+}
+
+/**
+ * `function prove(label, file, anchor, …)` wrappers and their call sites.
+ *
+ * A wrapper is a function whose body snapshots one PARAMETER and mutates that
+ * snapshot with another PARAMETER as the anchor. Its literals are at the call
+ * sites, which are read here; the `mutate(snap, anchor, …)` inside the body is
+ * therefore not reported as unresolved (`bodies` lets the caller skip it). A
+ * wrapper with no call sites is reported — a wrapper nobody calls is a prover
+ * that proves nothing.
+ */
+function wrapperAnchors(source, known, consts) {
+  const blanked = blankNonCode(source);
+  const entries = [];
+  const unresolved = [];
+  const bodies = [];
+  const decl = /(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
+  for (let m = decl.exec(blanked); m; m = decl.exec(blanked)) {
+    const params = argSpan(blanked, m.index + m[0].length - 1);
+    if (!params) continue;
+    const bodyOpen = blanked.indexOf('{', params.end);
+    if (bodyOpen === -1 || blanked.slice(params.end + 1, bodyOpen).trim() !== '') continue;
+    const body = argSpan(blanked, bodyOpen);
+    if (!body) continue;
+    const text = blanked.slice(body.start, body.end);
+    const names = leadingNames(blanked, params);
+    const snap =
+      /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*snapshot\s*\(\s*([A-Za-z_$][\w$]*)\s*\)/.exec(
+        text,
+      );
+    if (!snap || !names.includes(snap[2])) continue;
+    const mut = new RegExp(
+      `(?<![.\\w$])mutate\\s*\\(\\s*${snap[1]}\\s*,\\s*([A-Za-z_$][\\w$]*)\\s*[,)]`,
+    ).exec(text);
+    if (!mut || !names.includes(mut[1])) continue;
+
+    bodies.push(body);
+    const fileCol = names.indexOf(snap[2]);
+    const anchorCol = names.indexOf(mut[1]);
+    const name = m[1];
+    let calls = 0;
+    const call = new RegExp(`(?<![.\\w$])${name}\\s*\\(`, 'g');
+    for (let c = call.exec(blanked); c; c = call.exec(blanked)) {
+      if (/function\s+$/.test(blanked.slice(Math.max(0, c.index - 12), c.index))) continue;
+      if (c.index > body.start && c.index < body.end) continue;
+      const args = argSpan(blanked, c.index + c[0].length - 1);
+      if (!args) continue;
+      calls += 1;
+      const cells = splitArgs(blanked, args.start, args.end);
+      const fileCell = cells[fileCol];
+      const anchorCell = cells[anchorCol];
+      const file = fileCell && resolvePathExpr(source.slice(fileCell.start, fileCell.end), known);
+      const anchor = anchorCell && literalValue(source, blanked, anchorCell, consts);
+      if (!file || anchor === undefined) {
+        unresolved.push(`${name}(…) call — file or anchor does not resolve to a literal`);
+        continue;
+      }
+      entries.push({ file, anchor });
+    }
+    if (calls === 0) {
+      unresolved.push(`wrapper ${name}(…) has no call sites — its anchors were not read`);
+    }
+  }
+  return { entries, unresolved, bodies };
+}
+
+/** Relative module specifiers a prover imports, comments and strings excluded. */
+function relativeImports(source) {
+  const blanked = blankNonCode(source);
+  const out = new Set();
+  const re = /\bfrom\s*(['"])(\.{1,2}\/[^'"]+)\1/g;
+  for (let m = re.exec(source); m; m = re.exec(source)) {
+    if (blanked.startsWith('from', m.index)) out.add(m[2]);
+  }
+  return [...out];
+}
+
 /**
  * Audit one prover's anchors against the files they claim to anchor in.
  *
@@ -960,8 +1209,16 @@ export function auditAnchorLiveness(source, readTarget) {
   const resolved = [];
   const unresolved = [];
 
+  // WRAPPERS FIRST (#2793): a `mutate(snap, anchor, …)` inside a recognised
+  // wrapper body takes its literals from the wrapper's CALL SITES, so it is not
+  // also reported as an unreadable inline anchor.
+  const known = withRoots(bindings);
+  const wrappers = wrapperAnchors(source, known, consts);
+  const inWrapper = (index) => wrappers.bodies.some((b) => index > b.start && index < b.end);
+
   const call = /(?<![.\w$])mutate\s*\(/g;
   for (let m = call.exec(blanked); m; m = call.exec(blanked)) {
+    if (inWrapper(m.index)) continue;
     const span = argSpan(blanked, m.index + m[0].length - 1);
     if (!span) continue;
     const args = splitArgs(blanked, span.start, span.end);
@@ -995,18 +1252,55 @@ export function auditAnchorLiveness(source, readTarget) {
   // the cheap unguarded path in the first place.
   const table = driverTableAnchors(source, proverSubjectPaths(source));
   unresolved.push(...table.unresolved);
-  for (const { file, anchor } of table.entries) {
+
+  /** Grade one (file, anchor) pair exactly as the inline shape is graded. */
+  const grade = ({ file, anchor }, via = '') => {
     const contents = readTarget(file);
     if (contents === undefined) {
-      findings.push(`anchors in ${file}, which does not exist: ${JSON.stringify(anchor)}`);
-      continue;
+      findings.push(`${via}anchors in ${file}, which does not exist: ${JSON.stringify(anchor)}`);
+      return;
     }
     const count = contents.split(anchor).length - 1;
     resolved.push({ file, anchor, count });
     if (count !== 1) {
       findings.push(
-        `anchor occurs ${count} time(s) in ${file} (expected exactly 1): ${JSON.stringify(anchor.slice(0, 80))}`,
+        `${via}anchor occurs ${count} time(s) in ${file} (expected exactly 1): ${JSON.stringify(anchor.slice(0, 80))}`,
       );
+    }
+  };
+  for (const entry of table.entries) grade(entry);
+
+  // The shapes added for #2793, graded identically.
+  const own = [
+    objectTableAnchors(source, known, consts),
+    positionalTableAnchors(source, known, consts),
+    wrappers,
+  ];
+  for (const shape of own) {
+    unresolved.push(...shape.unresolved);
+    for (const entry of shape.entries) grade(entry);
+  }
+
+  // A prover that is a thin driver over a shared lib keeps its table THERE. The
+  // lib is data (no inline `mutate`, no wrappers), so only the table shapes are
+  // read from it; a lib that cannot be read is a finding, since a prover
+  // importing a deleted module is dead on arrival.
+  for (const spec of relativeImports(source)) {
+    const path = posix.normalize(posix.join(PROVER_DIR, spec));
+    const mod = readTarget(path);
+    if (mod === undefined) {
+      findings.push(`imports ${spec} (${path}), which does not exist`);
+      continue;
+    }
+    if (!mod.includes('anchor')) continue;
+    const modKnown = withRoots(pathBindings(mod));
+    const modConsts = stringConsts(mod);
+    for (const shape of [
+      objectTableAnchors(mod, modKnown, modConsts),
+      positionalTableAnchors(mod, modKnown, modConsts),
+    ]) {
+      unresolved.push(...shape.unresolved.map((u) => `${path}: ${u}`));
+      for (const entry of shape.entries) grade(entry, `${path}: `);
     }
   }
   return { findings, resolved, unresolved };
@@ -1064,81 +1358,321 @@ export function proverPathBindings(source) {
  * ──────────────────────────────────────────────────────────────────────────── */
 
 /**
- * Provers neither extractor can reach, and why.
+ * Provers the PR-time anchor audit cannot read, each carrying a DATED exemption.
  *
- * The #927 review found four provers invisible to BOTH the anchor pass and the
- * subject-existence pass — the driver shape — and that is FIXED, not exempted.
- * The remainder below build their anchors at runtime (a mutation table of closures, a workflow
- * re-serialised from parsed YAML, a shell fragment assembled from an imported
- * token list), so there is no literal to resolve without evaluating the prover.
- * (skew-id-chain's positional mutation array was converted to the object shape
- * and is no longer exempt.)
+ * EMPTY, deliberately, and the mechanism is kept. Eight provers used to live here
+ * and every one was renewed on schedule because nothing about the prover would
+ * ever change by its date: a clock that renews forever is a permanent hole with
+ * a calendar on it. Each was resolved instead:
  *
- * WHAT THE EXEMPTION DOES NOT MEAN. It does not mean they are unproved — every
- * one runs in the nightly with `declared == run`. It means the PR-TIME liveness
- * audit cannot see them, so a dead anchor in one of them surfaces at nightly
- * speed rather than at review speed. That is the pre-#912 status quo for these
- * files, held deliberately and with a date on it rather than silently.
+ *   - six are READ by the extractor now (object tables, positional tables, wrapper
+ *     call sites, and tables delegated to an imported lib; see "THE OTHER
+ *     MUTATION-TABLE SHAPES" above), so their anchors are graded like any other;
+ *   - two build their anchors at run time and are `SELF_ASSERTING_PROVERS` below,
+ *     a permanent classification the audit itself checks.
+ *
+ * Add an entry here only for a prover that is genuinely unreadable AND cannot
+ * assert for itself, with a justification, a date and a clock.
+ *
+ * WHAT AN EXEMPTION DOES NOT MEAN. It does not mean the prover is unproved: every
+ * one runs in the nightly with `declared == run`. It means the PR-TIME audit
+ * cannot see it, so a dead anchor surfaces at nightly speed instead of review
+ * speed.
  */
-export const PROVER_AUDIT_EXEMPTIONS = Object.freeze([
-  Object.freeze({
-    prover: 'scripts/mutation-prove-anonymous-install.mjs',
-    justification:
-      'Builds every anchor inside per-case closures over a fixture tree it creates at runtime; no ' +
-      'anchor exists as a literal in the source for a static pass to resolve.',
-    added: '2026-09-04',
-    expires: '2026-12-01',
-  }),
+export const PROVER_AUDIT_EXEMPTIONS = Object.freeze([]);
+
+/**
+ * Provers whose anchors are computed at RUN TIME and which assert their own
+ * resolution there: a PERMANENT classification, not an exemption.
+ *
+ * There is no literal for the static audit to resolve in these (a job id spliced
+ * into a YAML key; rows whose `file` defaults), so instead each calls
+ * `assertAnchorsResolved(rows)` from `./lib/mutation-harness.mjs` at the top level,
+ * BEFORE the first mutation is planted, over the exact `{ label, file, anchor }`
+ * rows it is about to hand to `mutate()`. A stale anchor therefore fails the
+ * prover up front with every offender named, rather than aborting mid-run.
+ *
+ * Permanent means no `expires`: the classification is true for as long as the
+ * anchors are computed, and what keeps it honest is not a date but
+ * {@link auditSelfAsserting}, which `tests/mutation-prover-lane.test.ts` runs
+ * against each entry. A self-asserting prover that stops asserting is red.
+ */
+export const SELF_ASSERTING_PROVERS = Object.freeze([
   Object.freeze({
     prover: 'scripts/mutation-prove-ci-blocking-gates.mjs',
-    justification:
-      'Delegates both mutation and running to runGateTest in ci-blocking-gate-proof.mjs, so the ' +
-      'anchors live in the shared helper rather than in the prover the lane discovers.',
-    added: '2026-09-04',
-    expires: '2026-12-01',
+    reason:
+      'Every anchor is DERIVED: the job-key anchor is `  ${jobId}:` plus a newline, for each ' +
+      "gate in GATES (imported from ci-blocking-gate-proof.mjs), times five disarms, in that gate's " +
+      'own workflow, with a per-gate `needsDisarm.anchor` override. No literal exists in the source ' +
+      'to resolve, and reading the lib would mean re-implementing jobAnchor/disarmAnchor, the ' +
+      'look-alike the lib exports them to avoid. The prover resolves the real rows and asserts ' +
+      'each occurs exactly once before planting anything.',
   }),
   Object.freeze({
     prover: 'scripts/mutation-prove-compat-fail-on-red-teeth.mjs',
-    justification:
-      'Anchors are shell fragments assembled from shell-command-position.mjs token lists at ' +
-      'runtime — deliberately generated so a new token is covered without a new row, which is ' +
-      'the property that also makes them unresolvable statically.',
-    added: '2026-09-04',
-    expires: '2026-12-01',
-  }),
-  Object.freeze({
-    prover: 'scripts/mutation-prove-compat-lane-pointer.mjs',
-    justification:
-      'Mutates a workflow re-serialised from parsed YAML rather than by text anchor, so there is ' +
-      'no source literal to count occurrences of.',
-    added: '2026-09-04',
-    expires: '2026-12-01',
-  }),
-  Object.freeze({
-    prover: 'scripts/mutation-prove-entry-copy-parity.mjs',
-    justification:
-      'Iterates the runtime-entry copy list from runtime-entry-copies.mjs and mutates each by ' +
-      'computed offset; the subject set is derived, never named in this file.',
-    added: '2026-09-04',
-    expires: '2026-12-01',
-  }),
-  Object.freeze({
-    prover: 'scripts/mutation-prove-ledger-completeness.mjs',
-    justification:
-      'Anchors are built from ledger fixture JSON generated per case; the prover writes its own ' +
-      'subjects rather than reading tracked ones.',
-    added: '2026-09-04',
-    expires: '2026-12-01',
-  }),
-  Object.freeze({
-    prover: 'scripts/mutation-prove-publish-markers.mjs',
-    justification:
-      'Delegates to publish-markers-proof.mjs, which holds the anchors; the prover itself is a ' +
-      'thin driver with no literals.',
-    added: '2026-09-04',
-    expires: '2026-12-01',
+    reason:
+      'Most rows name no `file` (it defaults to the workflow) and their anchors are shared ' +
+      'bash/JS fragments assembled from consts and `.join()`s. The extractor grades the ' +
+      'explicit-file rows it can read, but the defaulted majority has no static subject, so the ' +
+      'prover asserts every edit of every row resolves exactly once at run time (alongside its ' +
+      'own sequential and distinctness preflight).',
   }),
 ]);
+
+/**
+ * Calls that mean "the prover has started doing work". The assertion must come
+ * before the first top-level statement containing one. Derived from what the two
+ * self-asserting provers actually use: `snapshot`/`mutate` plant, `prove` is the
+ * ci-blocking-gates driver that plants, `process.exit` ends the run.
+ */
+const WORK_CALLS = new Set(['snapshot', 'mutate', 'prove']);
+
+/**
+ * A DEFINITION is not an invocation: function declarations, a function bound by
+ * `const f = ...` or an object key, and class instance members (constructor,
+ * methods, accessors, non-static fields). Class STATIC blocks and static field
+ * initializers are NOT definitions: they run when the class is defined, so they
+ * are scanned as the code they are.
+ */
+const isDefinition = (n) => {
+  if (ts.isFunctionDeclaration(n)) return true;
+  if (ts.isClassStaticBlockDeclaration(n)) return false;
+  if (ts.isPropertyDeclaration(n)) {
+    return !n.modifiers?.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+  }
+  if (
+    ts.isMethodDeclaration(n) ||
+    ts.isConstructorDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) ||
+    ts.isSetAccessorDeclaration(n)
+  ) {
+    return true;
+  }
+  return (
+    ts.isFunctionLike(n) &&
+    n.parent &&
+    ((ts.isVariableDeclaration(n.parent) && n.parent.initializer === n) ||
+      (ts.isPropertyAssignment(n.parent) && n.parent.initializer === n))
+  );
+};
+
+const nameText = (name) =>
+  name && (ts.isIdentifier(name) || ts.isStringLiteral(name)) ? name.text : undefined;
+
+/**
+ * Local callables, keyed by bare name, each name mapped to EVERY node bound to
+ * it (scope-insensitive and conservative: if any binding of a name does work,
+ * the name does work, so a later nested `const go = () => 0` cannot launder a
+ * top-level `function go() { mutate() }`). Class members are keyed by their own
+ * name and ALSO under the class name (so `new X()` / `X.go()` / `x.go()` reach
+ * them); a constructor is keyed under the class name.
+ */
+function localFunctions(sf) {
+  const fns = new Map();
+  const add = (name, node) => {
+    if (!name) return;
+    if (!fns.has(name)) fns.set(name, []);
+    fns.get(name).push(node);
+  };
+  const visit = (n) => {
+    if (ts.isFunctionDeclaration(n)) add(nameText(n.name), n);
+    else if (
+      ts.isVariableDeclaration(n) &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      add(nameText(n.name), n.initializer);
+    } else if (
+      ts.isPropertyAssignment(n) &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      add(nameText(n.name), n.initializer);
+    } else if (ts.isClassLike(n)) {
+      const cls = nameText(n.name);
+      for (const m of n.members) {
+        if (!isDefinition(m)) continue;
+        add(ts.isConstructorDeclaration(m) ? cls : nameText(m.name), m);
+        add(cls, m);
+      }
+    } else if (ts.isMethodDeclaration(n) && ts.isObjectLiteralExpression(n.parent)) {
+      add(nameText(n.name), n);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return fns;
+}
+
+/** Is this identifier a declaration/import/key position rather than a reference? */
+function isNamePosition(n) {
+  const p = n.parent;
+  if (!p) return false;
+  if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p)) return true;
+  if (
+    (ts.isFunctionDeclaration(p) ||
+      ts.isClassLike(p) ||
+      ts.isVariableDeclaration(p) ||
+      ts.isParameter(p) ||
+      ts.isMethodDeclaration(p) ||
+      ts.isPropertyDeclaration(p) ||
+      ts.isPropertyAssignment(p)) &&
+    p.name === n
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Does `node` do work? Anywhere inside it, INCLUDING inline function/arrow
+ * bodies and callbacks (an IIFE or `.forEach(r => mutate(r))` runs), any
+ * REFERENCE to snapshot/mutate/prove or to a local callable that transitively
+ * does. A reference, not only a call: `rows.forEach(mutate)`,
+ * `setTimeout(mutate, 0)`, `const m = mutate; m()`, `h.mutate()`,
+ * `mutate.call()`, `[mutate][0]()` and a tagged template all count. Only
+ * definitions and declaration-name positions are exempt.
+ * `process.exit` counts only as a CALL outside any function body: a read-only
+ * preflight helper may exit on a bad input before the assertion (the compat
+ * prover does), and an exit inside a helper says nothing about having started
+ * planting.
+ *
+ * DOCUMENTED LIMITS (a static, name-based audit cannot see these; they are
+ * accepted, not handled): `eval('mutate(rows)')`, computed names such as
+ * `globalThis['mut' + 'ate'](rows)`, and an argument that is syntactically
+ * non-empty but empty or opaque at run time (`{}`, `undefined`, `[...[]]`,
+ * `[].concat([])`). The audit proves the call is present, ordered and fed an
+ * argument expression; it cannot prove the rows are non-empty at run time.
+ */
+function doesWork(node, workFns, { exitCounts = true } = {}) {
+  let found = false;
+  const visit = (n, inFn) => {
+    if (found) return;
+    if (isDefinition(n)) return;
+    if (
+      ts.isIdentifier(n) &&
+      !isNamePosition(n) &&
+      (WORK_CALLS.has(n.text) || workFns.has(n.text))
+    ) {
+      found = true;
+      return;
+    }
+    const nowInFn = inFn || ts.isFunctionLike(n);
+    if (
+      exitCounts &&
+      !inFn &&
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === 'process' &&
+      n.expression.name.text === 'exit'
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, (ch) => visit(ch, nowInFn));
+  };
+  visit(node, false);
+  return found;
+}
+
+/** Closure over local callables: one works if any binding's body does, or references one that does. */
+function workFunctions(fns) {
+  const workFns = new Set();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [name, nodes] of fns) {
+      if (workFns.has(name)) continue;
+      let hit = false;
+      for (const fn of nodes) {
+        ts.forEachChild(fn, (ch) => {
+          if (!hit && doesWork(ch, workFns, { exitCounts: false })) hit = true;
+        });
+      }
+      if (hit) {
+        workFns.add(name);
+        changed = true;
+      }
+    }
+  }
+  return workFns;
+}
+
+const isEmptyArrayLiteral = (e) => ts.isArrayLiteralExpression(e) && e.elements.length === 0;
+
+/**
+ * Does a self-asserting prover still assert? Returns findings (empty when it does).
+ *
+ * Read from the prover's AST (TypeScript's parser), so comments, strings and
+ * layout prove nothing. Both must hold:
+ *   1. it imports `assertAnchorsResolved` by that name from the shared harness
+ *      (`./lib/mutation-harness.mjs`); a local stub, an alias or a re-export
+ *      satisfies a bare call check and asserts nothing;
+ *   2. an UNCONDITIONAL top-level ExpressionStatement calls it with at least one
+ *      argument (the rows), BEFORE the first top-level statement that calls
+ *      `snapshot`, `mutate`, `prove` or `process.exit`. Under an `if`, after an
+ *      exit, inside an IIFE or a never-invoked function, or with no rows, it is
+ *      not an assertion.
+ *
+ * @param {string} source
+ * @returns {string[]}
+ */
+export function auditSelfAsserting(source) {
+  const sf = ts.createSourceFile(
+    'prover.mjs',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  if (sf.parseDiagnostics.length > 0) {
+    return ['does not parse; the audit fails closed on a source it cannot read'];
+  }
+  const workFns = workFunctions(localFunctions(sf));
+  const findings = [];
+  let imported = false;
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st)) continue;
+    if (!ts.isStringLiteral(st.moduleSpecifier)) continue;
+    if (st.moduleSpecifier.text !== './lib/mutation-harness.mjs') continue;
+    const nb = st.importClause?.namedBindings;
+    if (st.importClause?.isTypeOnly || !nb || !ts.isNamedImports(nb)) continue;
+    for (const el of nb.elements) {
+      if (el.isTypeOnly || el.propertyName) continue;
+      if (el.name.text === 'assertAnchorsResolved') imported = true;
+    }
+  }
+  if (!imported) {
+    findings.push(
+      'does not import assertAnchorsResolved from ./lib/mutation-harness.mjs; a local stand-in asserts nothing',
+    );
+  }
+  let asserted = false;
+  for (const st of sf.statements) {
+    if (ts.isExpressionStatement(st)) {
+      let e = st.expression;
+      if (ts.isAwaitExpression(e)) e = e.expression;
+      if (
+        ts.isCallExpression(e) &&
+        ts.isIdentifier(e.expression) &&
+        e.expression.text === 'assertAnchorsResolved' &&
+        e.arguments.length >= 1 &&
+        !isEmptyArrayLiteral(e.arguments[0]) &&
+        !(ts.isSpreadElement(e.arguments[0]) && isEmptyArrayLiteral(e.arguments[0].expression)) &&
+        !e.arguments.some((arg) => doesWork(arg, workFns))
+      ) {
+        asserted = true;
+        break;
+      }
+    }
+    if (doesWork(st, workFns)) break;
+  }
+  if (!asserted) {
+    findings.push(
+      'never calls assertAnchorsResolved(...) as an unconditional top-level statement with its rows, before the first snapshot/mutate/prove/process.exit; it is classified self-asserting, so it must',
+    );
+  }
+  return findings;
+}
 
 /**
  * Sprint-1 guards shipping WITHOUT a committed prover (SE-3), and why.

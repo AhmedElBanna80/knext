@@ -77,6 +77,22 @@ const WORKFLOW_PATH = resolve(REPO_ROOT, '.github/workflows/mutation-prover-nigh
 const RUNNER = 'scripts/run-mutation-provers.mjs';
 const read = (p: string) => readFileSync(p, 'utf8');
 
+// The prover that leaks: plants a tracked edit and a new untracked file, then keeps
+// running. Shared by the restore tests and the self-exit tests. It bounds its own
+// lifetime so an interrupted test cannot leave it alive: it exits when the process
+// that spawned it is gone (reparented), and on a hard timer (the #214 precedent).
+// The timer sits far above the 1.5 s prover timeout the restore tests use, so the
+// runner's kill, not the timer, ends those runs.
+const LEAKY_FIXTURE = `
+          import { writeFileSync } from 'node:fs';
+          writeFileSync('tracked.txt', 'MUTATED');
+          writeFileSync('leak.txt', 'planted by the killed prover');
+          const spawnedBy = process.ppid;
+          setInterval(() => {
+            if (process.ppid !== spawnedBy) process.exit(0);
+          }, 200);
+          setTimeout(() => process.exit(0), Number(process.env.KNEXT_LEAKY_SELF_EXIT_MS ?? 15000));`;
+
 type Step = Record<string, unknown>;
 type Job = Record<string, unknown> & { steps?: Step[]; needs?: string | string[] };
 const workflow = () => parse(read(WORKFLOW_PATH)) as { jobs: Record<string, Job>; on: unknown };
@@ -1434,11 +1450,7 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
     // are lane-owned and must survive.
     const tree = () => {
       const dir = makeTree({
-        'mutation-prove-a-leaky.mjs': `
-          import { writeFileSync } from 'node:fs';
-          writeFileSync('tracked.txt', 'MUTATED');
-          writeFileSync('leak.txt', 'planted by the killed prover');
-          setInterval(() => {}, 1000);`,
+        'mutation-prove-a-leaky.mjs': LEAKY_FIXTURE,
         'mutation-prove-b-after.mjs': ok(1, 1),
       });
       writeFileSync(join(dir, 'tracked.txt'), 'original');
@@ -1490,6 +1502,83 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
         expect(read(join(dir, 'tracked.txt'))).toBe('MUTATED');
         expect(`${r.stdout}${r.stderr}`).toMatch(/tree was NOT restored/);
       } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+  });
+
+  describe('the leaky fixture exits on its own, so an interrupted test cannot leave it running', () => {
+    // Found in the wild: a fixture left behind by an interrupted test was still alive
+    // 33 h later, reparented to init (ppid 1). The fixture must bound its own lifetime.
+    const fixtureDir = () => {
+      const dir = mkdtempSync(join(tmpdir(), 'fixture-self-exit-'));
+      writeFileSync(join(dir, 'mutation-prove-a-leaky.mjs'), LEAKY_FIXTURE);
+      return dir;
+    };
+    // `kill -0` is true for a zombie, so ask ps: gone = no row, or state Z.
+    const gone = (pid: number) => {
+      const stat = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout;
+      return stat.trim() === '' || stat.trim().startsWith('Z');
+    };
+    const waitGone = async (pid: number, ms: number) => {
+      const end = Date.now() + ms;
+      while (!gone(pid) && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+      return gone(pid);
+    };
+
+    it('exits by itself within its bound when nothing ends it', () => {
+      const dir = fixtureDir();
+      try {
+        const r = spawnSync(process.execPath, ['mutation-prove-a-leaky.mjs'], {
+          cwd: dir,
+          env: { ...process.env, KNEXT_LEAKY_SELF_EXIT_MS: '300' },
+          encoding: 'utf8',
+          timeout: 10_000,
+        });
+        expect(r.signal, 'still running after 10 s: the fixture never exits on its own').toBeNull();
+        expect(r.status).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('exits once the process that spawned it is gone (orphaned and reparented)', async () => {
+      const dir = fixtureDir();
+      const pidFile = join(dir, 'pid.txt');
+      let pid = 0;
+      try {
+        // A runner that spawns the fixture, waits until the fixture has booted (it reads
+        // its parent pid at boot), then dies: the fixture is orphaned mid-run, the way an
+        // interrupted test leaves it.
+        writeFileSync(
+          join(dir, 'parent.mjs'),
+          `import { spawn } from 'node:child_process';
+           import { existsSync, writeFileSync } from 'node:fs';
+           import { join } from 'node:path';
+           const dir = ${JSON.stringify(dir)};
+           const c = spawn(process.execPath, ['mutation-prove-a-leaky.mjs'], { cwd: dir, stdio: 'ignore' });
+           writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));
+           c.unref();
+           const poll = setInterval(() => {
+             if (existsSync(join(dir, 'leak.txt'))) {
+               clearInterval(poll);
+               setTimeout(() => process.exit(0), 500);
+             }
+           }, 50);`,
+        );
+        const r = spawnSync(process.execPath, ['parent.mjs'], {
+          cwd: dir,
+          encoding: 'utf8',
+          timeout: 10_000,
+        });
+        expect(r.status, r.stderr).toBe(0);
+        pid = Number(read(pidFile));
+        expect(
+          await waitGone(pid, 5_000),
+          'the orphaned fixture was still running 5 s after its parent exited',
+        ).toBe(true);
+      } finally {
+        if (pid && !gone(pid)) process.kill(pid, 'SIGKILL');
         rmSync(dir, { recursive: true, force: true });
       }
     }, 30_000);

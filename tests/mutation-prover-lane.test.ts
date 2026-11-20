@@ -295,6 +295,12 @@ describe('#685 the nightly workflow exists and is scheduled, NOT a PR gate', () 
     expect(() => read(WORKFLOW_PATH)).not.toThrow();
   });
 
+  it('the alert triage names the SKIP case, so an unusable docker is not read as a pass (TD-S15-3b)', () => {
+    const text = read(WORKFLOW_PATH);
+    expect(text).toMatch(/\*SKIPPED, not proved \(\.\.\. NOT proved\)\*/);
+    expect(text).toMatch(/docker was unusable on that runner/);
+  });
+
   it('runs on a cron schedule plus workflow_dispatch', () => {
     const text = read(WORKFLOW_PATH);
     expect(/schedule:/.test(text)).toBe(true);

@@ -31,6 +31,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveSpecRunner } from './ci-blocking-gate-proof.mjs';
 import { mutate, restore, snapshot } from './mutation-harness.mjs';
+import { declareSkip } from './prover-report.mjs';
 
 /**
  * Run one spec and return ONLY its exit code.
@@ -54,6 +55,23 @@ export function runSpecExit(repoRoot, spec) {
     throw new Error(`runner did not exit cleanly for ${spec}: ${res.signal ?? res.error}`);
   }
   return res.status;
+}
+
+/**
+ * For a docker-gated prover: report an honest SKIP and exit 0 when no docker
+ * daemon answers. Returns normally only when docker is usable. Lives in this shared
+ * driver, not in the prover, because the lane audit forbids a prover from spawning
+ * anything except through a shared runner resolver.
+ */
+export function skipUnlessDocker() {
+  const probe = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
+    encoding: 'utf8',
+    timeout: 60_000,
+  });
+  if (probe.status === 0) return;
+  const why = (probe.stderr || probe.error?.message || 'no server').trim().slice(0, 120);
+  declareSkip(`docker is not usable (${why}); NOT proved`);
+  process.exit(0);
 }
 
 /**

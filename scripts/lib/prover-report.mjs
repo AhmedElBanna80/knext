@@ -86,3 +86,40 @@ export function parseProverSummary(output) {
   }
   return found;
 }
+
+/** The marker a prover prints when it could not run at all (e.g. docker is absent). */
+export const PROVER_SKIP_PREFIX = '::prover-skip::';
+
+/**
+ * Report an honest SKIP: the prover's prerequisite is missing, so nothing was
+ * proved. Prints the marker and no mutation summary, so the lane can never read
+ * it as a pass — `evaluateProverRun` returns it as `skipped`, and the aggregate
+ * turns it into a finding. The caller exits 0 straight after.
+ *
+ * @param {string} reason
+ */
+export function declareSkip(reason) {
+  console.log(`${PROVER_SKIP_PREFIX} ${JSON.stringify({ reason })}`);
+}
+
+/**
+ * The skip reason a prover printed, or `null`. Only the marker counts; the
+ * prover's prose is never parsed.
+ *
+ * @param {string} output
+ * @returns {string | null}
+ */
+export function parseProverSkip(output) {
+  let found = null;
+  for (const line of output.split('\n')) {
+    const idx = line.indexOf(PROVER_SKIP_PREFIX);
+    if (idx === -1) continue;
+    try {
+      const parsed = JSON.parse(line.slice(idx + PROVER_SKIP_PREFIX.length).trim());
+      if (typeof parsed?.reason === 'string' && parsed.reason) found = parsed.reason;
+    } catch {
+      // not a skip marker
+    }
+  }
+  return found;
+}

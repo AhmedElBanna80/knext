@@ -84,10 +84,10 @@ const read = (p: string) => readFileSync(p, 'utf8');
 // The timer sits far above the 1.5 s prover timeout the restore tests use, so the
 // runner's kill, not the timer, ends those runs.
 const LEAKY_FIXTURE = `
+          const spawnedBy = process.ppid;
           import { writeFileSync } from 'node:fs';
           writeFileSync('tracked.txt', 'MUTATED');
           writeFileSync('leak.txt', 'planted by the killed prover');
-          const spawnedBy = process.ppid;
           setInterval(() => {
             if (process.ppid !== spawnedBy) process.exit(0);
           }, 200);
@@ -1588,6 +1588,9 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
       try {
         const r = run(dir, [], env);
         expect(r.status).not.toBe(0);
+        // The fixture booted and wrote before the kill: the runner counts the new
+        // leak.txt it removed. Without this, a fixture that never ran would pass vacuously.
+        expect(`${r.stdout}${r.stderr}`).toMatch(/1 untracked file\(s\) it created removed/);
         expect(read(join(dir, 'tracked.txt'))).toBe('original');
         // The tracked half of a kill is the general residue restore, not a kill-only
         // checkout: the finding must name the killed prover and the file it left.
@@ -1602,7 +1605,8 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
     it('removes the untracked file the killed prover created, but keeps lane-owned files', () => {
       const dir = tree();
       try {
-        run(dir, [], env);
+        const r = run(dir, [], env);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/1 untracked file\(s\) it created removed/);
         expect(existsSync(join(dir, 'leak.txt')), 'the killed prover’s new file survived').toBe(
           false,
         );
@@ -1642,10 +1646,21 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
       writeFileSync(join(dir, 'mutation-prove-a-leaky.mjs'), LEAKY_FIXTURE);
       return dir;
     };
+    // ps exits 1 when no process matches and 0 when one does. Anything else (missing
+    // binary, crash) must fail loudly: it must never read as "gone".
+    const psField = (pid: number, field: string) => {
+      const ps = spawnSync('ps', ['-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8' });
+      if (ps.error || (ps.status !== 0 && ps.status !== 1)) {
+        throw new Error(
+          `ps ${field} for pid ${pid} failed: ${ps.error?.message ?? `exit ${ps.status}`}`,
+        );
+      }
+      return ps.stdout.trim();
+    };
     // `kill -0` is true for a zombie, so ask ps: gone = no row, or state Z.
     const gone = (pid: number) => {
-      const stat = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout;
-      return stat.trim() === '' || stat.trim().startsWith('Z');
+      const stat = psField(pid, 'stat');
+      return stat === '' || stat.startsWith('Z');
     };
     const waitGone = async (pid: number, ms: number) => {
       const end = Date.now() + ms;
@@ -1683,7 +1698,9 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
            import { existsSync, writeFileSync } from 'node:fs';
            import { join } from 'node:path';
            const dir = ${JSON.stringify(dir)};
-           const c = spawn(process.execPath, ['mutation-prove-a-leaky.mjs'], { cwd: dir, stdio: 'ignore' });
+           // A long bound: the parent-death watcher alone must end the fixture within 5 s.
+           const env = { ...process.env, KNEXT_LEAKY_SELF_EXIT_MS: '60000' };
+           const c = spawn(process.execPath, ['mutation-prove-a-leaky.mjs'], { cwd: dir, stdio: 'ignore', env });
            writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));
            c.unref();
            const poll = setInterval(() => {
@@ -1705,7 +1722,11 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
           'the orphaned fixture was still running 5 s after its parent exited',
         ).toBe(true);
       } finally {
-        if (pid && !gone(pid)) process.kill(pid, 'SIGKILL');
+        // Signal only a live pid whose command line is still the fixture: a reused pid
+        // must never be killed.
+        if (pid && !gone(pid) && psField(pid, 'command').includes('mutation-prove-a-leaky.mjs')) {
+          process.kill(pid, 'SIGKILL');
+        }
         rmSync(dir, { recursive: true, force: true });
       }
     }, 30_000);

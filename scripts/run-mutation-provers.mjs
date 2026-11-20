@@ -526,7 +526,10 @@ for (const prover of provers) {
     watchEveryMs: WATCH_EVERY_MS,
   });
   if (run.error) console.error(`   spawn error: ${run.error.message}`);
-  const { summary, findings } = evaluateProverRun({ status: run.status, output: run.output });
+  const { summary, findings, skipped } = evaluateProverRun({
+    status: run.status,
+    output: run.output,
+  });
   if (run.timedOut) {
     const note = restoreTreeAfterKill(untrackedBefore);
     findings.unshift(
@@ -547,7 +550,7 @@ for (const prover of provers) {
     findings.push(residue);
     console.error(`\n   ${residue}`);
   }
-  results.push({ relPath: prover.relPath, summary, findings });
+  results.push({ relPath: prover.relPath, summary, findings, skipped });
 
   if (cleanupOn) {
     const n = cleanPrivateTmp();
@@ -584,7 +587,9 @@ for (const prover of provers) {
 console.log(`\n${'═'.repeat(78)}\nLANE SUMMARY\n${'═'.repeat(78)}`);
 for (const r of results) {
   const counts = r.summary ? `${r.summary.run}/${r.summary.declared}` : '—/—';
-  console.log(`${r.findings.length === 0 ? 'ok  ' : 'FAIL'} ${counts.padEnd(8)} ${r.relPath}`);
+  const tag = r.findings.length > 0 ? 'FAIL' : r.skipped ? 'SKIP' : 'ok  ';
+  console.log(`${tag} ${counts.padEnd(8)} ${r.relPath}`);
+  if (r.skipped) console.log(`       skipped, NOT proved: ${r.skipped}`);
   for (const f of r.findings) console.log(`       ${f}`);
 }
 
@@ -607,4 +612,10 @@ if (failed.length > 0) {
   console.error(`\n${failed.length} of ${results.length} prover(s) FAILED the lane`);
   process.exit(1);
 }
-console.log(`\nall ${results.length} prover(s) ran every mutation they declare`);
+const skippedCount = results.filter((r) => r.skipped).length;
+if (skippedCount > 0) {
+  console.log(
+    `\n${skippedCount} prover(s) SKIPPED (prerequisite absent) and are NOT counted as proved; the aggregate job fails on them`,
+  );
+}
+console.log(`\n${results.length - skippedCount} prover(s) ran every mutation they declare`);

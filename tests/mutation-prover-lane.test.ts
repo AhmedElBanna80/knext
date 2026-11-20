@@ -252,6 +252,19 @@ describe('#685 the lane fails on a declared-vs-run mismatch, not only on the exi
     expect(findings.join(' ')).toMatch(/declared 13.*ran 4/);
   });
 
+  it('an honest SKIP (docker absent) is returned as skipped, never as a clean pass', () => {
+    const out = '::prover-skip:: {"reason":"docker is not usable; NOT proved"}';
+    const r = evaluateProverRun({ status: 0, output: out });
+    expect(r.skipped).toBe('docker is not usable; NOT proved');
+    expect(r.summary).toBeNull();
+    // A summary beside the marker means the prover DID score mutations: no skip.
+    expect(evaluateProverRun({ status: 0, output: `${out}\n${summary(3, 3)}` }).skipped).toBeNull();
+    // A crash that printed the marker is still a failure.
+    expect(evaluateProverRun({ status: 1, output: out }).findings.join(' ')).toMatch(/exit/);
+    // No marker, no summary: still the existing finding, never a skip.
+    expect(evaluateProverRun({ status: 0, output: 'nothing' }).skipped ?? null).toBeNull();
+  });
+
   it('run > declared is equally a failure (the declaration cannot rot upward)', () => {
     expect(evaluateProverRun({ status: 0, output: summary(3, 5) }).findings.length).toBe(1);
   });
@@ -1208,7 +1221,7 @@ describe('#927 SE-3 — every sprint-1 guard has a prover OR a dated exemption',
     ).toEqual([]);
   });
 
-  it('the split is 8 proven / 1 excused — and both halves are asserted', () => {
+  it('the split is 9 proven / 0 excused — and both halves are asserted', () => {
     // Stated as numbers so a silent migration between the two columns — an
     // exemption quietly replacing a prover — is visible rather than absorbed by
     // the subtraction above, which is satisfied either way.
@@ -1218,12 +1231,13 @@ describe('#927 SE-3 — every sprint-1 guard has a prover OR a dated exemption',
     // 6/3 → 8/1 (#928 close-out): #896 and #899 moved to the proven column —
     // `mutation-prove-scaffold-cache-handler.mjs` and
     // `mutation-prove-cli-node-runtime.mjs` landed and both exemption entries
-    // were removed in the same change. Only #897 (docker-e2e) stays excused,
-    // renewed because it cannot be proven at PR time.
+    // were removed in the same change. Only #897 (docker-e2e) stayed excused.
+    // 8/1 → 9/0 (TD-S14-2a): #897 got its docker-gated prover
+    // (`mutation-prove-alpine-image.mjs`) and the last exemption was removed.
     const proven = provenSpecs();
     const excused = activeGuardProverExemptions();
-    expect(SPRINT1_GUARDS.filter(({ guard }) => proven.has(guard))).toHaveLength(8);
-    expect(SPRINT1_GUARDS.filter(({ guard }) => excused.has(guard))).toHaveLength(1);
+    expect(SPRINT1_GUARDS.filter(({ guard }) => proven.has(guard))).toHaveLength(9);
+    expect(SPRINT1_GUARDS.filter(({ guard }) => excused.has(guard))).toHaveLength(0);
   });
 
   it('no guard is BOTH proven and excused (a stale exemption)', () => {
@@ -1248,8 +1262,9 @@ describe('#927 SE-3 — every sprint-1 guard has a prover OR a dated exemption',
     // 4 → 3 (sprint-3 A5): #906's entry left the list when its prover landed
     // (`mutation-prove-isr-staleness.mjs`), the shrinkage #928 exists to track.
     // 3 → 1 (#928 close-out): #896 and #899 left when their provers landed;
-    // only #897 (docker-e2e, not PR-time provable) remains.
-    expect(GUARD_PROVER_EXEMPTIONS.length).toBe(1);
+    // only #897 (docker-e2e, not PR-time provable) remained.
+    // 1 → 0 (TD-S14-2a): #897's docker-gated prover landed; the list is empty.
+    expect(GUARD_PROVER_EXEMPTIONS.length).toBe(0);
     for (const e of GUARD_PROVER_EXEMPTIONS) {
       expect(existsSync(resolve(REPO_ROOT, e.guard)), `${e.guard} does not exist`).toBe(true);
     }
@@ -1272,7 +1287,7 @@ describe('#927 SE-3 — every sprint-1 guard has a prover OR a dated exemption',
     expect(activeGuardProverExemptions(future).size).toBe(0);
     const proven = provenSpecs();
     const stillUncovered = SPRINT1_GUARDS.filter(({ guard }) => !proven.has(guard));
-    expect(stillUncovered).toHaveLength(1);
+    expect(stillUncovered).toHaveLength(0);
   });
 
   it('every exemption points at the tracking issue', () => {

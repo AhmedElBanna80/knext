@@ -283,6 +283,7 @@ export function makeReport({ ref, sha, shard, shards, discovered, results }) {
       relPath: r.relPath,
       declared: r.summary ? r.summary.declared : null,
       run: r.summary ? r.summary.run : null,
+      ...(r.skipped ? { skipped: r.skipped } : {}),
       findings: [...r.findings],
     })),
   };
@@ -396,7 +397,9 @@ export function aggregateReports({ expected, reports }) {
       for (const f of r.findings ?? []) findings.push(`${label}: ${relPath}: ${f}`);
       // Re-derive the count verdict rather than trusting `findings`: a report
       // that says "clean" with declared != run must still fail here.
-      if (!Number.isInteger(r.declared) || !Number.isInteger(r.run)) {
+      if (typeof r.skipped === 'string') {
+        findings.push(`${label}: ${relPath}: SKIPPED, not proved (${r.skipped})`);
+      } else if (!Number.isInteger(r.declared) || !Number.isInteger(r.run)) {
         if ((r.findings ?? []).length === 0)
           findings.push(`${label}: ${relPath}: no declared/run counts`);
       } else if (r.declared === 0) {

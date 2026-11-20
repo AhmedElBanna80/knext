@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { parseAllDocuments } from 'yaml';
 
 /**
  * GUARD TEST for .github/workflows/coldstart-phases-kind-native.yml, the native amd64 run of the
@@ -94,7 +95,7 @@ describe('coldstart-phases-kind-native workflow shape', () => {
     );
     expect(code).toMatch(/\n {6}READY_WINDOW_S: \$\{\{ inputs\.ready_window_s \|\| '20' \}\}\n/);
     // The fallbacks equal the declared input defaults, and the validation step still reads them.
-    expect(code).toMatch(/\n {2}- name: Validate inputs|- name: Validate inputs/);
+    expect(code).toMatch(/\n {6}- name: Validate inputs\n/);
     expect(code).toMatch(/\[ "\$N" -le 30 \]/);
     expect(code).toMatch(/run-budget\.sh "\$N"/);
   });
@@ -177,16 +178,24 @@ describe('coldstart-phases-kind-native workflow shape', () => {
     expect(code).toContain(`docker pull --platform linux/amd64 node@${D}`);
     expect(code).toContain(`docker tag node@${D} node:24-alpine`);
     expect(code).toMatch(/docker save -o "\$\{RUNNER_TEMP\}\/node-24-alpine\.tar" node:24-alpine/);
-    expect(code).toMatch(/kind load image-archive "\$\{RUNNER_TEMP\}\/node-24-alpine\.tar" --name "\$CLUSTER"/);
-    expect(code).not.toMatch(/kind load docker-image node:/);
+    expect(code).toMatch(
+      /kind load image-archive "\$\{RUNNER_TEMP\}\/node-24-alpine\.tar" --name "\$CLUSTER"/,
+    );
+    expect(code).not.toMatch(/kind load docker-image\s+["']?(?:docker\.io\/library\/)?node[:@]/);
     expect(code).not.toMatch(/docker pull node:/);
   });
 
   it('the kind harness manifest never pulls: every node:24-alpine container is IfNotPresent', () => {
-    const y = readFileSync(resolve(DIR, 'kind/phase-harness-kind.yaml'), 'utf8');
-    const n = (y.match(/image: node:24-alpine\n/g) ?? []).length;
-    expect(n).toBe(3);
-    expect((y.match(/image: node:24-alpine\n\s+imagePullPolicy: IfNotPresent\n/g) ?? []).length).toBe(n);
+    const docs = parseAllDocuments(
+      readFileSync(resolve(DIR, 'kind/phase-harness-kind.yaml'), 'utf8'),
+    ).map(
+      (d) => d.toJS() as { spec?: { containers?: { image?: string; imagePullPolicy?: string }[] } },
+    );
+    const nodeContainers = docs
+      .flatMap((d) => d?.spec?.containers ?? [])
+      .filter((c) => /(^|\/)node[:@]/.test(c.image ?? ''));
+    expect(nodeContainers.length).toBe(3);
+    for (const c of nodeContainers) expect(c.imagePullPolicy).toBe('IfNotPresent');
   });
 
   it('drives the existing harness unchanged and calls analyze.py with --p95', () => {

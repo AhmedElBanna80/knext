@@ -311,7 +311,10 @@ jobs:
           set -euo pipefail
           # `kind load docker-image` imports --all-platforms, which fails with "content digest ...
           # not found" for a multi-platform index pulled for one platform. Pull the linux/amd64
-          # single-platform manifest by digest (index 8a32c8cf...), retag it, and load an archive.
+          # single-platform manifest by digest, retag it, and load an archive. The index digest is
+          # sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 and 4eefa1bf... below is
+          # its linux/amd64 manifest digest, derived with:
+          #   docker buildx imagetools inspect node:24-alpine@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85
           docker pull --platform linux/amd64 node@sha256:4eefa1bfce4197942661ef9148247d779ddf1bb0ee006d3294a467609de60724
           docker tag node@sha256:4eefa1bfce4197942661ef9148247d779ddf1bb0ee006d3294a467609de60724 node:24-alpine
           docker save -o "${RUNNER_TEMP}/node-24-alpine.tar" node:24-alpine

@@ -523,6 +523,7 @@ jobs:
             behaviour it protects removed, i.e. it is decoration. Fix the GUARD, not the prover.
           - *no mutation summary at all* — the prover crashed before its first mutation, or stopped
             calling \`declareMutations\`. Read its own output above the summary table.
+          - *SKIPPED, not proved (... NOT proved)* — docker was unusable on that runner, so the prover exited without running any mutation and nothing was proved; read the reason in the finding, fix the runner's docker, and re-run the workflow rather than treating the skip as green.
           - *residue / dirty tree* — a byte-snapshot restore did not put the file back. This is the
             most urgent case: treat the tree as untrustworthy and read
             \`scripts/lib/mutation-harness.mjs\` before rerunning.

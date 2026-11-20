@@ -140,6 +140,13 @@ describe('#2208 legs are balanced by ESTIMATED COST, not by count', () => {
     }
   });
 
+  it('the alpine-image prover is weighted from its measured runtime, not the 1-minute default (TD-S15-3a)', () => {
+    // Measured locally at 240.6 s (4 mutations + baseline + canary); the weight is
+    // that rounded up to whole minutes. A removed entry falls back to 1.
+    const weight = PROVER_WEIGHT_MINUTES['scripts/mutation-prove-alpine-image.mjs'];
+    expect(weight).toBeGreaterThanOrEqual(5);
+  });
+
   it('no leg exceeds the mean estimated load by more than the heaviest single prover (the LPT bound)', () => {
     const all = real();
     const loads = Array.from({ length: N }, (_, i) => estimateShardMinutes(all, i + 1, N));

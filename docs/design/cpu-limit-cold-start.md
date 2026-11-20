@@ -11,7 +11,8 @@ Should the default CPU limit for a `NextApp` container (1000m today) change, and
 
 **Short answer: not the built-in default yet.** The evidence conflicts. Kind and GKE show a gain when the limit goes
 above one CPU. OKE, the target platform, shows none at two CPUs, and its interval excludes gains above 88 ms. A
-platform-level setting by an OKE admin is the cheapest near-term path, and it does not need a knext default change.
+platform-level setting that an OKE admin can trial is the cheapest option to try, and it needs no knext default change.
+Its gain on OKE is not established.
 
 ## 1. Current state
 
@@ -102,7 +103,7 @@ cold-start metric (request to first byte).
 | 3 | **Built-in default: 500m request, 2000m limit (ratio 4).** | Passes a ratio-4 `LimitRange`. Each pod reserves 500m instead of 250m, so any `requests.cpu` quota and node packing halve in density. The risk moves from the ratio to the quota. | Same burst as option 2, plus more reserved CPU. | Not measured at 500m / 2000m. The OKE request-1000m arm is a different shape and was underpowered. | A candidate to test. It needs its own A/B and an ADR before it becomes the built-in. |
 | 4 | **No limit by default.** | A ResourceQuota on `limits.cpu` rejects any pod without a limit. A `LimitRange` default re-injects a limit, so "no limit" silently becomes that limit. The operator always renders a limit (`scripts/bench-cold-start-phases/kind/arms.sh:14-16`), so this changes the operator contract, not just the number. | Highest. A cold-starting pod can take every free core on the node, and nothing caps a misbehaving app. | Kind −320 ms (ladder) and −224 ms (run 1). Not measured on OKE. | Reject as a default. The largest kind gain carries the largest risk. |
 | 5 | **In-place resize after the first request is served.** | Create-time admission is unchanged if the starting limit stays at 1000m. The sprint-16 close note says the pod "must still be admitted with the high limit". That assumes the `LimitRange` ratio also runs on the resize; this was not verified. Needs `InPlacePodVerticalScaling` on OKE (not verified). Knative does not own a pod-level patch, so a Service reconcile can revert it. | Bounded by the resized limit, but only from the first request onward. | Near zero on the metric this note tracks. Cold start is request to first byte, and the resize happens after that request is served, so it cannot shorten the wake that triggered it. It helps later requests on a warm pod. | Not a cold-start fix as specified. Needs its own measurement. |
-| 6 | **Platform default set by an OKE admin: `KnextPlatform` `resources.defaults` `cpuRequest` 500m, `cpuLimit` 2000m.** | Admin-owned, per cluster. The admin checks `kubectl get limitrange -A` first. With the 500m request it passes a ratio-4 `LimitRange`. Each pod reserves 500m. No ResourceQuota is changed by knext. | Same burst as option 3, on the clusters that opt in only. | Same plausible range as option 3 (0 to about 300 ms), unmeasured on OKE at 500m / 2000m. Only apps with none of the four resource fields set get it (the CLI back-fill shadows it otherwise). | **The cheapest near-term path.** It needs no knext default change, no CLI change, and no ADR, because it sets an existing field on one cluster. Reversible. The admin's own A/B is the test. |
+| 6 | **Platform default set by an OKE admin: `KnextPlatform` `resources.defaults` `cpuRequest` 500m, `cpuLimit` 2000m.** | Admin-owned, per cluster. The admin checks `kubectl get limitrange -A` first. With the 500m request it passes a ratio-4 `LimitRange`. Each pod reserves 500m. No ResourceQuota is changed by knext. | Same burst as option 3, on the clusters that opt in only. | Same plausible range as option 3 (0 to about 300 ms), unmeasured on OKE at 500m / 2000m. Only apps with none of the four resource fields set get it (the CLI back-fill shadows it otherwise). | **An admin opt-in trial, not an established gain.** It needs no knext default change, no CLI change, and no ADR, because it sets an existing field on one cluster, and it is reversible. On OKE, no gain is detected at 2000m, and the 500m / 2000m shape has not been measured anywhere. The admin's own A/B is the only test of it. |
 | 7 | **CLI default for new scaffolds only:** the emitter writes `scaling.cpuRequest` 500m and `cpuLimit` 2000m into new `kn-next.config.ts`. | New apps only. A 500m request passes a ratio-4 `LimitRange`. Each new pod reserves 500m. The emitter in `packages/kn-next/src/cli/create-options.ts` writes no resource field today, so this is a new emitted field. | Same as option 3, for new apps. | Only for apps created after the change. Existing apps keep 1000m. Same plausible range as option 3, unmeasured. | Low admission risk, but it splits the fleet (new apps differ from old) and makes any later measurement harder. Changes user-visible scaffold output, so it needs docs and a changeset. Decide after the OKE result. |
 
 Notes on the table:
@@ -153,8 +154,8 @@ where z₁₋α/₂ = 1.960 and z₁₋β = 0.842, so (z sum)² = 7.85.
 **What the planned N = 20 buys.** The standard error of a difference of medians at n = 20 is about 137 ms (σ = 345 ms).
 Power is about 19% at δ = 150 ms and about 59% at δ = 300 ms. So N = 20 cannot reliably detect a 150 ms effect.
 
-**Corrections to the earlier version of this note.** A 95% half-width of 150 ms at n ≈ 75 gives about 57% power at
-δ = 150 ms, not 80%. For 80% power the standard error must be about δ / 2.80 ≈ 54 ms. That is a 95% half-width of about
+**Corrections to the earlier version of this note.** A 95% half-width of 150 ms means SE ≈ 76.5 ms, which gives about
+50% power at δ = 150 ms, not 80%. For 80% power the standard error must be about δ / 2.80 ≈ 54 ms. That is a 95% half-width of about
 105 ms, not 54 ms. The "hundreds of wakes" figure holds for δ = 100 ms (294 per arm), not for δ = 150 ms (131 per arm).
 
 **Pinning nodes.** Two effects, one large and one small.
@@ -178,7 +179,12 @@ this data cannot test.
 
 - Pinned single node, or two identical nodes with arms balanced across them. Randomise arm order within each round.
   Use the watch-based harness from the Nov 2 run.
+- **Arms:** a 1000m / 250m control, and a treatment at the shape being recommended: 2000m limit with a 500m request
+  (ratio 4). The Nov 2 `cpu-boost2req` arm used a 1000m request and a 2000m limit, so it is a different shape and does
+  not test this one. The Nov 2 `cpu-boost2` arm (250m request) is also a different shape.
 - Pre-register the primary outcome (total median), δ = 300 ms, α = 0.05, power 0.80, n = 33 per arm (66 wakes).
+- **Expect a null result.** The Nov 2 interval already excludes gains above 88 ms, and this A/B is powered only at
+  δ = 300 ms. A null at 300 ms is the likely outcome, and it would not rule out 150 ms.
 - n = 131 per arm for δ = 150 ms is 262 wakes of cluster time, and each wake takes a founder-approved OKE window.
   I would not start there. If the 300 ms run is null, gains of 150 to 300 ms are not ruled out, and the team must
   then decide whether 131 per arm is worth paying for.
@@ -188,15 +194,17 @@ this data cannot test.
 
 Suggested, for review against the evidence above:
 
-1. **Near term: option 6 is the answer, if an OKE admin wants the gain now.** Check `kubectl get limitrange -A`, then set
-   `cpuRequest` 500m and `cpuLimit` 2000m on the platform's resource defaults. Accept that apps which set any resource
-   field through the CLI keep their own value. This is a per-cluster decision the admin owns, and the admin's own A/B is
-   the right test. knext should document it, not default it.
+1. **Near term: option 6 is an admin opt-in trial.** An OKE admin who wants to test 2000m can check
+   `kubectl get limitrange -A`, then set `cpuRequest` 500m and `cpuLimit` 2000m on the platform's resource defaults.
+   Apps that set any resource field through the CLI keep their own value. The gain on OKE is not established: none was
+   detected at 2000m, and the 500m / 2000m shape is unmeasured. knext documents it as a trial, not as a recommended
+   setting, and the admin's own A/B is the only test.
 2. **The built-in default stays 1000m / 250m** until a powered result exists. The first OKE A/B is the pinned, balanced,
-   interleaved design in section 4 at δ = 300 ms, n = 33 per arm.
+   interleaved design in section 4 at δ = 300 ms, n = 33 per arm, with the 500m / 2000m shape as the treatment.
    - If it confirms a gain of about 300 ms or more, option 3 becomes a serious candidate for the built-in default, and
      that change needs an ADR, because it changes the resource contract in ADR-0064.
-   - If it is null, gains of 150 to 300 ms are not ruled out. Decide then whether to pay for 131 per arm.
+   - If it is null, keep 1000m and close the item. A null at 300 ms is the likely outcome given the Nov 2 interval.
+     The null does not rule out 150 to 300 ms gains, and it does not justify the 131 per arm that 150 ms would need.
 3. **Option 7 (scaffold default) waits for step 2.** It splits the fleet, so it is not worth doing before the evidence is
    in.
 4. **Make the opt-in more prominent, as docs only.** Link the CPU-limit section of `scaling-cold-start.md` from the

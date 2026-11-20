@@ -641,8 +641,13 @@ const BASE_NEST_RULES: readonly NestRule[] = [
  * `standalone-bun` executable, where the generated loader looks for it
  * (`dirname(process.execPath)/native/ffi/…`). Inserted only for an app with
  * `knext.ffi.json`; the template itself never carries it.
+ *
+ * Root-owned and non-writable (`--chown=0:0 --chmod=a-w`; BuildKit, the pinned
+ * dockerfile:1.28 frontend): the loader pins the library's inode against a path
+ * swap, not its contents, so the app user must not be able to write it.
  */
-export const FFI_NATIVE_COPY = `COPY native ${STANDALONE}/native`;
+export const FFI_NATIVE_PERMS = "--chown=0:0 --chmod=a-w";
+export const FFI_NATIVE_COPY = `COPY ${FFI_NATIVE_PERMS} native ${STANDALONE}/native`;
 
 /** The `standalone-bun` exec COPY the native line goes directly after. */
 const FFI_NATIVE_ANCHOR = `COPY knext-standalone-exec-linux-x64 ${STANDALONE}/knext-standalone-exec`;
@@ -651,7 +656,8 @@ const FFI_NATIVE_ANCHOR = `COPY knext-standalone-exec-linux-x64 ${STANDALONE}/kn
 const FFI_NEST_RULE: NestRule = {
     kind: "line",
     from: FFI_NATIVE_COPY,
-    to: ({ prefix }) => `COPY ${prefix}native ${STANDALONE}/${prefix}native`,
+    to: ({ prefix }) =>
+        `COPY ${FFI_NATIVE_PERMS} ${prefix}native ${STANDALONE}/${prefix}native`,
     count: 1,
 };
 

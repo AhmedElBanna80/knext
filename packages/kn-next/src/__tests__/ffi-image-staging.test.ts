@@ -99,6 +99,9 @@ function stage(dockerfile: string, name: string): string[] {
         .filter((l) => l !== "" && !l.startsWith("#"));
 }
 
+/** Any COPY of a native/ tree, whatever flags it carries (scanned, not enumerated). */
+const NATIVE_COPY = /^COPY (?:--\S+ )*\S*native \S/m;
+
 function stageFlat(files: Record<string, string>, templateDir?: string) {
     const app = tree({ "package.json": "{}", ...files });
     const { dockerfile } = stageStandaloneBuildContext({
@@ -149,7 +152,7 @@ describe("the staged Dockerfile — flat layout", () => {
     it("opted in: exactly one line is added, directly after the standalone-bun exec COPY", () => {
         const text = stageFlat(OPT_IN);
         expect(FFI_NATIVE_COPY).toBe(
-            "COPY native /app/.next/standalone/native",
+            "COPY --chown=0:0 --chmod=a-w native /app/.next/standalone/native",
         );
         const lines = stage(text, "standalone-bun");
         const at = lines.indexOf(ANCHOR);
@@ -163,7 +166,7 @@ describe("the staged Dockerfile — flat layout", () => {
         expect(text.split("\n").length).toBe(TEMPLATE.split("\n").length + 1);
         // No other stage ships native/.
         for (const s of ["standalone-bun-self-contained", "standalone-node"]) {
-            expect(stage(text, s).join("\n")).not.toContain("COPY native");
+            expect(stage(text, s).join("\n")).not.toMatch(NATIVE_COPY);
         }
     });
 
@@ -203,7 +206,7 @@ describe("the staged Dockerfile — nested (monorepo root) layout", () => {
         );
         expect(at).toBeGreaterThan(-1);
         expect(lines[at + 1]).toBe(
-            "COPY apps/web/native /app/.next/standalone/apps/web/native",
+            "COPY --chown=0:0 --chmod=a-w apps/web/native /app/.next/standalone/apps/web/native",
         );
         expect(text).not.toContain(FFI_NATIVE_COPY);
     });
@@ -216,7 +219,7 @@ describe("the staged Dockerfile — nested (monorepo root) layout", () => {
                 coreSrc: "apps/web/node_modules/@getknext/core",
             }),
         );
-        expect(text).not.toMatch(/^COPY \S*native /m);
+        expect(text).not.toMatch(NATIVE_COPY);
     });
 });
 
@@ -285,7 +288,7 @@ describe("compileArtifactForDeploy — native/.integrity.json over native/ffi", 
         });
         compileArtifactForDeploy(bunCfg, app);
         expect(existsSync(join(app, "native", ".integrity.json"))).toBe(false);
-        expect(stageFlat({})).not.toContain("COPY native");
+        expect(stageFlat({})).not.toMatch(NATIVE_COPY);
     });
 });
 
@@ -343,7 +346,9 @@ describe("stageSharpNative (vinext) clears a stale native/ffi/ once the app opts
             join(dirname(TEMPLATE_DIR), "app", "Dockerfile.hbs"),
             "utf8",
         );
-        expect(vinextDockerfile).toMatch(/^COPY native \/app\/native$/m);
+        expect(vinextDockerfile).toMatch(
+            /^COPY --chown=0:0 --chmod=a-w native \/app\/native$/m,
+        );
     });
 
     it("opted out after an opted-in build: native/ffi/ is removed and the manifest no longer lists it", () => {
@@ -379,5 +384,38 @@ describe("stageSharpNative (vinext) clears a stale native/ffi/ once the app opts
             /Refusing to stage/,
         );
         expect(readFileSync(join(app, LIB), "utf8")).toBe("lib");
+    });
+});
+
+describe("native/ ships root-owned and non-writable, in every image that carries it", () => {
+    const LINE = /^COPY (?:--\S+ )*\S*native \S.*$/gm;
+    const PERMS =
+        /^COPY (?=(?:--\S+ )*--chown=0:0 )(?=(?:--\S+ )*--chmod=a-w )/;
+    const vinext = readFileSync(
+        join(dirname(TEMPLATE_DIR), "app", "Dockerfile.hbs"),
+        "utf8",
+    );
+    for (const [name, text] of [
+        ["the vinext template", () => vinext],
+        ["the staged flat standalone-bun Dockerfile", () => stageFlat(OPT_IN)],
+        [
+            "the staged nested standalone-bun Dockerfile",
+            () => stageNested({ "apps/web/knext.ffi.json": "{}\n" }),
+        ],
+    ] as const) {
+        it(`${name}: exactly one native/ COPY, and it carries --chown=0:0 --chmod=a-w`, () => {
+            const lines = text().match(LINE) ?? [];
+            expect(lines.length).toBe(1);
+            for (const l of lines) expect(l).toMatch(PERMS);
+        });
+    }
+
+    it("only the native/ COPY carries the flags: no other COPY line changed", () => {
+        const others = [vinext, stageFlat(OPT_IN)]
+            .join("\n")
+            .split("\n")
+            .filter((l) => l.startsWith("COPY ") && !NATIVE_COPY.test(l));
+        expect(others.length).toBeGreaterThan(0);
+        for (const l of others) expect(l).not.toContain("--chmod=a-w");
     });
 });

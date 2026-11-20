@@ -533,7 +533,9 @@ describe("the scaffold template ships the manifest with the tree", () => {
     );
 
     it("copies the directory, which carries the manifest inside it", () => {
-        expect(dockerfile).toMatch(/COPY native \/app\/native/);
+        expect(dockerfile).toMatch(
+            /^COPY --chown=0:0 --chmod=a-w native \/app\/native$/m,
+        );
     });
 
     it("fails the build when the manifest is absent, rather than at request time", () => {

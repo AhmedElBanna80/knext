@@ -62,7 +62,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     second zone image, `zone-caller-wake`, built by `../z7-identity-kind/zone-caller/build.ts --wake`,
     which starts the stand-in zone with knext's wake-ahead preload. Guard:
     `tests/z10-zone-functions-kind-lane.test.ts`.
-  - e2e/lib/kind-lane.sh: helpers sourced (never run) by the Z7, Z10 and Z11
+  - e2e/lib/kind-lane.sh: helpers sourced (never run) by the Z7, Z10, Z11 and Z12
     scripts.
   - e2e/z11-activator-drill (no EGM.md): a drill on kind with Calico, phases
     `up deploy token direct policyoff noauth rotcold held heldwarm`; it proves which control holds on the
@@ -76,7 +76,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     one. `held` makes the activator hold a call past the token's life with a ResourceQuota in the
     function's namespace that admits no pod (no node is cordoned; `Z11_HELD_SECONDS`, default
     80 s; the quota is removed on exit): the call is refused as unauthenticated, then a fresh
-    token is accepted and a garbage one is still refused. `heldwarm` is the warm-pod, held-call case: two warm pods each load the old key set with one call (the others detached, quota in place), the key is rotated and retired under them, a new-key call held 30 s and released to pod A only is accepted (the control), and the same held 80 s and released to pod B only, in the same state, is refused (401 unauthenticated "token rejected"). The pod uid set is checked unchanged; labels go back before the quota. The pod that answered each held call is observed, not assumed: `e2e/z11-activator-drill/answering-pod.sh` (sourced by `run.sh`) reads every pod's queue-proxy `revision_request_count` through the API server's pod proxy before and after the call, and the one pod whose total rose by exactly one is the answerer (any other result fails the run, and an unreadable, empty, series-less or non-numeric scrape fails closed naming the pod rather than counting as zero). The verdicts (404 not_found, or 401 unauthenticated "token rejected", from the expected pod) are the functions `check_accepted_by` and `check_refused_by` in the same file. After its refusal, pod B alone is given a fresh token and must accept it (404 not_found), which shows the refusal was the token's age. The verifier's order is JWKS re-read, kid lookup, signature, then expiry, and a refusal is not logged, so the drill proves the pair, not which check fired. `Z11_MUTANT=swap-pod` (local only, never set in CI) re-attaches the other pod, and `check_accepted_by` must then fail naming the pod that answered.
+    token is accepted and a garbage one is still refused. `heldwarm` is the warm-pod, held-call case: two warm pods each load the old key set with one call (the others detached, quota in place), the key is rotated and retired under them, a new-key call held 30 s and released to pod A only is accepted (the control), and the same held 80 s and released to pod B only, in the same state, is refused (401 unauthenticated "token rejected"). The pod uid set is checked unchanged; labels go back before the quota. The pod that answered each held call is observed, not assumed: `e2e/z11-activator-drill/answering-pod.sh` (sourced by `run.sh`) reads every pod's queue-proxy `revision_request_count` through the API server's pod proxy before and after the call, and the one pod whose total rose by exactly one is the answerer (any other result fails the run, and an unreadable, empty, series-less or non-numeric scrape fails closed naming the pod rather than counting as zero). The verdicts (404 not_found, or 401 unauthenticated "token rejected", from the expected pod) are the functions `check_accepted_by` and `check_refused_by` in the same file. After its refusal, pod B alone is given a fresh token and must accept it (404 not_found), which shows the refusal was the token's age. The verifier's order is JWKS re-read, kid lookup, signature, then expiry, and a refusal is not logged, so the drill proves the pair, not which check fired. `Z11_MUTANT=swap-pod` (local only: the drill refuses to start when `Z11_MUTANT` and `CI` are both set, `refuse_mutant_in_ci` in `e2e/z11-activator-drill/run.sh:789-794`) re-attaches the other pod, and `check_accepted_by` must then fail naming the pod that answered.
     Both sign through `../z7-identity-kind/probe.ts` (`--timeout-seconds` is its
     long-call option). `.github/workflows/z11-activator-drill-e2e.yml`
     runs every phase by default; `RECORDED-RUN.md` holds an earlier manual run.
@@ -87,6 +87,17 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     `scripts/mutation-prove-s10-4-z11-heldwarm.mjs` (`heldwarm` and the warm hold) and
     `scripts/mutation-prove-s11-1-z11-answering-pod.mjs` (which pod answered, the pod B fresh-token control and the policy-off valid-token control,
     run against `tests/z11-answering-pod.test.ts`, which executes the shell on fabricated counters).
+  - e2e/z12-quickstart-kind (no EGM.md): the Z12 zone-functions quickstart on kind, run by
+    hand, not by any workflow. `run.sh` builds `@getknext/{lib,db,core,grpc}` from this checkout
+    and packs them, then runs the documented path on a real Next.js zone: `knext create --runtime
+    node --cache-components`, `knext add function orders --lang go`, `knext generate`, `knext deploy
+    function`, `knext deploy`. Phases `pack scaffold function zone calls wake` (`PHASES`). It proves
+    the zone reaches Ready with its `BackendBindings` True, a Route Handler reaches a cold function
+    through the generated Server Action, a read keeps `NotFound` through `"use cache"`, a refused
+    caller gets the refusal message, and a warm wake loads the function from `KNEXT_WAKE_FUNCTIONS`.
+    Prerequisite: a kind cluster from the Z7 `up` phase (`PHASES=up e2e/z7-identity-kind/run.sh`).
+    No test or workflow names it. It was merged 2026-11-11 and has never run in CI; see
+    the Sprint 14 debt in `.claude/plans/v2-sprint14.md`.
 
 ## Invariants
 

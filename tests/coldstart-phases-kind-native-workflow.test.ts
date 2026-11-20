@@ -89,7 +89,11 @@ describe('coldstart-phases-kind-native workflow shape', () => {
     expect(code).toMatch(/\$runtime" = bun \]; then/);
     expect(code).toMatch(/is a bun arm but its container command is/);
     expect(code).toMatch(/is a node arm but its container command is/);
-    expect(code).toMatch(/cat \/proc\/1\/cmdline/);
+    // Distroless image: read the process from the kind node, never exec into the app container.
+    expect(code).toMatch(/containerStatuses\[\?\(@\.name==\"user-container\"\)\]\.containerID/);
+    expect(code).toMatch(/docker exec "\$knode" crictl inspect "\$cid" \| jq -r '\.info\.pid'/);
+    expect(code).toMatch(/docker exec "\$knode" cat "\/proc\/\$\{hostpid\}\/cmdline"/);
+    expect(code).not.toMatch(/kubectl[^\n]*\bexec\b/);
     expect(code).toMatch(/bun:\*bun\*\) ;;/);
     expect(code).toMatch(/node:\*bun\*\) echo "::error::node arm/);
     expect(code).toMatch(/pid 1 is not \$\{runtime\}/);

@@ -253,8 +253,8 @@ jobs:
             kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].resources}{"\n"}'
             # The arm must run the runtime its name says. Two checks: the rendered container command
             # (the operator execs `bun run server.js` for bun and leaves node on the image default),
-            # and the live process (/proc/1/cmdline of the user container, read while the warm-up pod
-            # is still up). Either failing fails the job, so a bun arm that silently ran node cannot
+            # and the live process (the user container's main process, read from the kind node while the
+            # warm-up pod is still up). Either failing fails the job, so a bun arm that silently ran node cannot
             # produce a table.
             cmd="$(kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].command}')"
             echo "arm ${arm}: container command=${cmd:-<image default>}"
@@ -270,8 +270,17 @@ jobs:
               sleep 1
             done
             [ -n "$pod" ] || { echo "::error::no running pod for arm ${arm} to verify its runtime"; exit 1; }
-            proc="$(kubectl -n "$APP_NS" exec "$pod" -c user-container -- cat /proc/1/cmdline </dev/null | tr '\0' ' ')" \
-              || { echo "::error::could not read /proc/1/cmdline of ${pod} (arm ${arm})"; exit 1; }
+            # The runtime image is distroless (no shell, no cat), so nothing is exec'd into the app
+            # container: the container id comes from the pod status, the host pid from crictl on the
+            # kind node, and the command line from that node's /proc.
+            cid="$(kubectl -n "$APP_NS" get pod "$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="user-container")].containerID}')"
+            cid="${cid#containerd://}"
+            [ -n "$cid" ] || { echo "::error::no user-container id for ${pod} (arm ${arm})"; exit 1; }
+            knode="${CLUSTER}-control-plane"
+            hostpid="$(docker exec "$knode" crictl inspect "$cid" | jq -r '.info.pid')"
+            case "$hostpid" in ''|null|*[!0-9]*) echo "::error::crictl gave no pid for ${cid} (arm ${arm}): '${hostpid}'"; exit 1 ;; esac
+            proc="$(docker exec "$knode" cat "/proc/${hostpid}/cmdline" | tr '\0' ' ')" \
+              || { echo "::error::could not read /proc/${hostpid}/cmdline on ${knode} (arm ${arm})"; exit 1; }
             echo "arm ${arm}: pid 1 = ${proc}"
             case "$runtime:$proc" in
               bun:*bun*) ;;

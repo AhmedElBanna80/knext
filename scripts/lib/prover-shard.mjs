@@ -84,6 +84,9 @@ export const PROVER_WEIGHT_MINUTES = Object.freeze({
   'scripts/mutation-prove-publish-lane-supply-chain.mjs': 7,
   'scripts/mutation-prove-go-template-auth.mjs': 5,
   'scripts/mutation-prove-1533-kubeconfig-ci-secret.mjs': 5,
+  // MEASURED locally (`time node scripts/mutation-prove-alpine-image.mjs`, docker warm, arm64): 240.6 s
+  // for 4 mutations plus baseline and canary, so ~40 s per spec run. Rounded up to 5.
+  'scripts/mutation-prove-alpine-image.mjs': 5,
   'scripts/mutation-prove-2171-redis-prefix-isolation.mjs': 4,
   'scripts/mutation-prove-2051-rust-verifier.mjs': 4,
   'scripts/mutation-prove-compat-window-packed-anchor.mjs': 4,

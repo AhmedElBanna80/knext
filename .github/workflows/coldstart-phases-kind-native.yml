@@ -25,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       n:
-        description: 'True scale-from-zero wakes per arm (integer, 12 or more)'
+        description: 'True scale-from-zero wakes per arm (integer, 12 to 30)'
         required: false
         type: string
         default: '12'
@@ -67,7 +67,15 @@ jobs:
         run: |
           set -euo pipefail
           case "$N" in ''|*[!0-9]*) echo "::error::n must be an integer"; exit 1 ;; esac
+          # Time budget behind the cap (timeout-minutes: 150). One round wakes every arm once: per
+          # wake roughly the wait for zero pods (stable window 10 s + grace READY_WINDOW_S+10 s, at
+          # most 65 s) + settle 5 s + the cold start and watch (about 3 s + READY_WINDOW_S, at most
+          # 48 s), so about 120 s a wake at the 45 s window and about 80 s at the default 20 s.
+          # Setup (kind, Knative, operator build, three image builds) is about 25 min.
+          # n=30 with 3 arms at the default window: 30 x 3 x 80 s = 120 min, plus 25 min setup = 145
+          # min, inside 150. n is capped at 30; a longer window or more arms must lower n.
           [ "$N" -ge 12 ] || { echo "::error::n must be 12 or more (got $N)"; exit 1; }
+          [ "$N" -le 30 ] || { echo "::error::n must be 30 or fewer (got $N): n x arms x per-wake time must fit the job timeout"; exit 1; }
           case "$READY_WINDOW_S" in ''|*[!0-9]*) echo "::error::ready_window_s must be an integer"; exit 1 ;; esac
           if [ "$READY_WINDOW_S" -lt 16 ] || [ "$READY_WINDOW_S" -gt 45 ]; then
             echo "::error::ready_window_s must be 16 to 45 (got $READY_WINDOW_S)"; exit 1
@@ -243,6 +251,34 @@ jobs:
             echo "$runtime $img" >> "${RUNNER_TEMP}/arm-images.txt"
             echo "arm ${arm}: runtime=${runtime} cpuLimit=${cpulimit} image=${img}"
             kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].resources}{"\n"}'
+            # The arm must run the runtime its name says. Two checks: the rendered container command
+            # (the operator execs `bun run server.js` for bun and leaves node on the image default),
+            # and the live process (/proc/1/cmdline of the user container, read while the warm-up pod
+            # is still up). Either failing fails the job, so a bun arm that silently ran node cannot
+            # produce a table.
+            cmd="$(kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].command}')"
+            echo "arm ${arm}: container command=${cmd:-<image default>}"
+            if [ "$runtime" = bun ]; then
+              case "$cmd" in *'"bun"'*) ;; *) echo "::error::arm ${arm} is a bun arm but its container command is '${cmd}'"; exit 1 ;; esac
+            else
+              case "$cmd" in *bun*) echo "::error::arm ${arm} is a node arm but its container command is '${cmd}'"; exit 1 ;; esac
+            fi
+            pod=""
+            for _ in $(seq 1 30); do
+              pod="$(kubectl -n "$APP_NS" get pods -l "serving.knative.dev/service=${arm}" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+              [ -n "$pod" ] && break
+              sleep 1
+            done
+            [ -n "$pod" ] || { echo "::error::no running pod for arm ${arm} to verify its runtime"; exit 1; }
+            proc="$(kubectl -n "$APP_NS" exec "$pod" -c user-container -- cat /proc/1/cmdline </dev/null | tr '\0' ' ')" \
+              || { echo "::error::could not read /proc/1/cmdline of ${pod} (arm ${arm})"; exit 1; }
+            echo "arm ${arm}: pid 1 = ${proc}"
+            case "$runtime:$proc" in
+              bun:*bun*) ;;
+              node:*bun*) echo "::error::node arm ${arm} is running bun: ${proc}"; exit 1 ;;
+              node:*node*) ;;
+              *) echo "::error::arm ${arm} (${runtime}) pid 1 is not ${runtime}: ${proc}"; exit 1 ;;
+            esac
           done 3< "${RUNNER_TEMP}/arms.txt"
 
       # The harness pods run node:24-alpine. Load it into the node so no measured wake pays a pull

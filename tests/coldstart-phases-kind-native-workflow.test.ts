@@ -59,6 +59,8 @@ describe('coldstart-phases-kind-native workflow shape', () => {
 
   it('validates the inputs in the shell and passes them through env only', () => {
     expect(code).toMatch(/\[ "\$N" -ge 12 \]/);
+    expect(code).toMatch(/\[ "\$N" -le 30 \]/);
+    expect(code).toMatch(/timeout-minutes: 150/);
     expect(code).toMatch(/"\$READY_WINDOW_S" -lt 16/);
     expect(code).toMatch(/"\$READY_WINDOW_S" -gt 45/);
     // No dispatch input is templated into a run: script.
@@ -81,6 +83,15 @@ describe('coldstart-phases-kind-native workflow shape', () => {
       expect(m[1]).toMatch(/^[\w.-]+\/[\w./-]+@[0-9a-f]{40}$/);
       expect(m[2]).toMatch(/#\s*v\d+\.\d+\.\d+/);
     }
+  });
+
+  it('verifies each arm runs its runtime, both the rendered command and pid 1', () => {
+    expect(code).toMatch(/\$runtime" = bun \]; then/);
+    expect(code).toMatch(/but its container command is/);
+    expect(code).toMatch(/cat \/proc\/1\/cmdline/);
+    expect(code).toMatch(/bun:\*bun\*\) ;;/);
+    expect(code).toMatch(/node:\*bun\*\) echo "::error::node arm/);
+    expect(code).toMatch(/pid 1 is not \$\{runtime\}/);
   });
 
   it('runs on amd64 ubuntu-latest and checks the node architecture', () => {

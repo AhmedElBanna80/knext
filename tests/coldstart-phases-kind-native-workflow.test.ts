@@ -1183,13 +1183,90 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(junk.err).toContain('scaled away');
   });
 
+  it('proc_state is an allowlist: every live state is accepted, an empty or unknown one is unreadable', () => {
+    const withState = (state: string, tail = ' 4242 4300 4300 0') =>
+      nodeCase({
+        proc: {
+          [CHILDREN]: '4300 ',
+          '/proc/4300/environ': envOf(TCACHE),
+          '/proc/4300/stat': `4300 (next-server (v1) ${state}${tail}\n`,
+        },
+      });
+    for (const live of ['R', 'S', 'D', 'T', 't', 'W', 'I', 'P'])
+      expect(run(withState(live)).status, `state ${live}`).toBe(0);
+    // Empty state: the stat ends right after ") ".
+    const empty = run(
+      nodeCase({
+        proc: {
+          [CHILDREN]: '4300 ',
+          '/proc/4300/environ': envOf(TCACHE),
+          '/proc/4300/stat': '4300 (next-server) \n',
+        },
+      }),
+    );
+    expect(empty.status).toBe(1);
+    expect(empty.err).toContain('pod scaled away before the live check');
+    expect(empty.ev).toBeNull();
+    // A stat with no `) ` is unparseable even when it happens to start with a live letter.
+    for (const junk of ['S garbage', 'Sxyz', 'R']) {
+      const r = run(
+        nodeCase({
+          proc: {
+            [CHILDREN]: '4300 ',
+            '/proc/4300/environ': envOf(TCACHE),
+            '/proc/4300/stat': `${junk}\n`,
+          },
+        }),
+      );
+      expect(r.status, `stat ${junk}`).toBe(1);
+      expect(r.err).toContain('pod scaled away before the live check');
+    }
+    // Unknown letters (and a lowercase z, and a digit) are not live.
+    for (const bad of ['Q', 'K', 'z', 'x', '9']) {
+      const r = run(withState(bad));
+      expect(r.status, `state ${bad}`).toBe(1);
+      expect(r.err).toContain('pod scaled away before the live check');
+    }
+    // The same rule on the bun loop: an empty state and an unknown letter never accept a match.
+    for (const stat of ['4301 (knext-standalon) \n', '4301 (knext-standalon) Q 4242 0 0\n']) {
+      const r = run(
+        bunCase({
+          proc: {
+            [CHILDREN]: '4301 ',
+            '/proc/4301/cmdline': `${SEXEC}\0`,
+            '/proc/4301/comm': 'knext-standalon\n',
+            '/proc/4301/stat': stat,
+          },
+        }),
+      );
+      expect(r.status).toBe(1);
+      expect(r.err).toContain('state=unreadable');
+      expect(r.err).not.toContain('fell back');
+    }
+    // And the vinext+node main process.
+    const vn = run(
+      nodeCase({
+        build: 'vinext',
+        files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
+        env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
+        proc: {
+          [`/proc/${KPID}/environ`]: envOf('/app/.compile-cache'),
+          [`/proc/${KPID}/stat`]: `${KPID} (node) \n`,
+        },
+      }),
+    );
+    expect(vn.status).toBe(1);
+    expect(vn.err).toContain('scaled away');
+  });
+
   it('node: a zombie child, or one with an unreadable stat, is scaled away, never a match', () => {
     const withState = (state: string) =>
       nodeCase({
         proc: {
           [CHILDREN]: '4300 ',
-          // The zombie still shows the right environment: it must not count.
-          '/proc/4300/environ': envOf(TCACHE),
+          // A zombie's /proc environ reads EMPTY (it keeps only its comm), so the stat state is what
+          // turns it into "scaled away" instead of a misleading "no child has the cache".
+          '/proc/4300/environ': state === 'Z' || state === 'X' ? '' : envOf(TCACHE),
           '/proc/4300/stat': `4300 (next-server (v1) ${state} 4242 4300 4300 0\n`,
         },
       });
@@ -1197,6 +1274,7 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     const z = run(withState('Z'));
     expect(z.status).toBe(1);
     expect(z.err).toContain('pod scaled away before the live check');
+    expect(z.err).not.toContain('no child of the supervisor');
     expect(z.ev).toBeNull();
     expect(run(withState('X')).status).toBe(1);
     const noStat = run(nodeCase({ noStat: ['4300'] }));
@@ -1207,7 +1285,7 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
       nodeCase({
         proc: {
           [CHILDREN]: '4299 4300 ',
-          '/proc/4299/environ': envOf(TCACHE),
+          '/proc/4299/environ': '',
           '/proc/4299/stat': '4299 (n) Z 4242 0 0\n',
           '/proc/4300/environ': envOf(TCACHE),
         },

@@ -105,14 +105,17 @@ dx() {
   fi
   return "$rc"
 }
-# The state letter of /proc/<pid>/stat (S, R, Z, ...), read after the LAST ')' (comm may hold ')' and
-# spaces). FAILS when stat is unreadable or has no state: an unknown state is never accepted.
+# The state letter of /proc/<pid>/stat, read after the LAST ')' (comm may hold ')' and spaces). An
+# ALLOWLIST: a live state (R S D T t W I P) is returned, and so are Z and X (the callers treat those as
+# "the child exited"). It FAILS on an unreadable stat, an empty state (stat ending in ") ") and any other
+# letter, so an unknown state is never accepted.
 proc_state() {
   local stat st
   stat="$(dx cat "/proc/$1/stat")" || return 1
   case "$stat" in *') '*) ;; *) return 1 ;; esac
   st="${stat##*) }"
-  printf '%s' "${st:0:1}"
+  st="${st:0:1}"
+  case "$st" in R | S | D | T | t | W | I | P | Z | X) printf '%s' "$st" ;; *) return 1 ;; esac
 }
 # One variable of the image's own ENV.
 image_env() { docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" | awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }'; }
@@ -193,9 +196,10 @@ elif [ "$build" = turbopack ]; then
     comm="$(dx cat "/proc/${c}/comm" || true)"
     comm="${comm%$'\n'}"
     if [ "$cmdline_ok" = 0 ] && [ -z "$exe" ] && [ -z "$comm" ]; then unreadable=1; continue; fi
-    # A zombie keeps its comm after the process is gone, so a comm match on it proves nothing: the
-    # child exited. A stat that cannot be read (or parsed) is NOT an unknown-but-acceptable state: the
-    # child counts as unreadable, for every kind of match, not only comm.
+    # A zombie keeps its comm, but its exe link is unreadable and its /proc environ reads EMPTY, so
+    # comm is the one match that can wrongly accept a dead child (the child exited). A stat that cannot
+    # be read, has an empty state or an unknown letter is NOT an acceptable state either: the child
+    # counts as unreadable, for every kind of match, not only comm.
     if ! state="$(proc_state "$c")"; then unreadable=1; seen="$seen ${c}:state=unreadable"; continue; fi
     if [ "$state" = Z ] || [ "$state" = X ]; then unreadable=1; seen="$seen ${c}:state=${state}"; continue; fi
     seen="$seen ${c}:argv0='${argv0}',exe='${exe}',comm='${comm}'"

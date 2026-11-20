@@ -545,8 +545,8 @@ const MUTATIONS = [
   {
     label: 'GITHUB_BASE_REF is ignored when no --base is given',
     subject: 'lint',
-    anchor: '(env.GITHUB_BASE_REF ? `origin/${env.GITHUB_BASE_REF}`',
-    replacement: '(false ? `origin/${env.GITHUB_BASE_REF}`',
+    anchor: '(env.GITHUB_BASE_REF\n      ? `origin/${env.GITHUB_BASE_REF}`',
+    replacement: '(false\n      ? `origin/${env.GITHUB_BASE_REF}`',
   },
   {
     label: 'the CLI ignores --base',

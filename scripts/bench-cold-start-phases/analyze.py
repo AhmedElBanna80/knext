@@ -34,6 +34,7 @@ import sys
 import benchconfig
 
 NAMESPACE = None
+P95 = "--p95" in sys.argv  # add a p95 column to the phase tables
 CP = {"activator": [], "autoscaler": []}
 
 
@@ -67,7 +68,11 @@ def q(xs):
         return None
     n = len(xs)
     lo, hi = xs[: n // 2], xs[(n + 1) // 2:]
-    return dict(n=n, med=statistics.median(xs), q1=statistics.median(lo) if lo else xs[0],
+    # p95 by linear interpolation between order statistics (at small n it is close to the max).
+    k = 0.95 * (n - 1)
+    f = int(k)
+    p95 = xs[f] + (xs[min(f + 1, n - 1)] - xs[f]) * (k - f)
+    return dict(n=n, p95=p95, med=statistics.median(xs), q1=statistics.median(lo) if lo else xs[0],
                 q3=statistics.median(hi) if hi else xs[-1], min=xs[0], max=xs[-1])
 
 
@@ -132,12 +137,12 @@ def dur(m, a, b):
 def table(rows, title):
     ms = [milestones(r) for r in rows]
     print(f"\n### {title} (n={len(rows)})\n")
-    print("| phase | median ms | IQR [Q1, Q3] | min–max |")
-    print("|---|---|---|---|")
+    print("| phase | median ms |" + (" p95 ms |" if P95 else "") + " IQR [Q1, Q3] | min–max |")
+    print("|---|---|" + ("---|" if P95 else "") + "---|---|")
     for label, a, b in PHASES + EXTRA:
         s = q([dur(m, a, b) for m in ms])
         if s:
-            print(f"| {label} | {s['med']:.0f} | {s['q3'] - s['q1']:.0f} [{s['q1']:.0f}, {s['q3']:.0f}] | "
+            print(f"| {label} | {s['med']:.0f} | {(str(round(s['p95'])) + ' | ') if P95 else ''}{s['q3'] - s['q1']:.0f} [{s['q1']:.0f}, {s['q3']:.0f}] | "
                   f"{s['min']:.0f}–{s['max']:.0f}" + ("" if s["n"] == len(rows) else f" (n={s['n']})") + " |")
 
 
@@ -159,7 +164,9 @@ def main():
         if a.startswith("--autoscaler="):
             load_cp("autoscaler", a.split("=", 1)[1])
     rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-    bad = [r for r in rows if "error" in r or r.get("code") != 200 or not r.get("marker")]
+    # --no-marker: the app under test is not file-manager, so the body has no "items:50" marker.
+    need_marker = "--no-marker" not in sys.argv
+    bad = [r for r in rows if "error" in r or r.get("code") != 200 or (need_marker and not r.get("marker"))]
     rows = [r for r in rows if r not in bad]
     print(f"valid {len(rows)}, excluded {len(bad)}: "
           f"{[(b.get('round'), b.get('arm'), str(b.get('error', b.get('code')))[:80]) for b in bad]}")

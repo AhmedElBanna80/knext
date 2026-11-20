@@ -1,0 +1,16 @@
+valid 13, excluded 0: []
+
+### s156-zone (n=13)
+
+| phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
+|---|---|---|---|---|
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 27 | 31 | 6 [22, 29] | 13–32 |
+| 1 activation: request -> Pod object | 44 | 55 | 15 [38, 53] | 29–57 |
+| 2 scheduling: Pod -> bound to node | 9 | 24 | 5 [7, 12] | 4–38 |
+| 3 sandbox + containers start: bound -> first log line | 295 | 320 | 38 [279, 317] | 275–321 |
+| 4 runtime boot: first log -> Next listening | 2192 | 2307 | 99 [2158, 2257] | 2121–2358 |
+| 5 routable: listening -> ready | 640 | 734 | 93 [571, 664] | 474–817 |
+| 6 forward + render: ready -> first byte | 0 | 152 | 72 [0, 72] | 0–156 |
+| total: request -> first byte | 3169 | 3408 | 124 [3151, 3275] | 3128–3539 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 457 | 808 | 520 [158, 677] | 18–870 |
+|   5w activator: first log -> activator marks pod healthy | 2686 | 2867 | 44 [2663, 2708] | 2621–3052 |

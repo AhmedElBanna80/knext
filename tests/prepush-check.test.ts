@@ -11,6 +11,7 @@ import {
   changedGateInputs,
   changedTestFiles,
   ciRunsTest,
+  countScopeLines,
   deriveWorkflowArgSets,
   driftBetween,
   evalBranchBlock,
@@ -772,6 +773,30 @@ describe('braces and the drift guard', () => {
   });
 });
 
+describe('visible Scope lines', () => {
+  it('ignores a Scope line inside a (multi-line, unclosed) HTML comment', () => {
+    expect(parseScopeLines('<!-- Scope: a/** -->')).toEqual([]);
+    expect(parseScopeLines('<!--\nScope: a/**\n-->\nScope: b/**')).toEqual(['b/**']);
+    expect(parseScopeLines('<!-- never closed\nScope: a/**')).toEqual([]);
+  });
+  it('ignores a Scope line inside ``` and ~~~ fences, including unclosed ones', () => {
+    expect(parseScopeLines('```\nScope: a/**\n```')).toEqual([]);
+    expect(parseScopeLines('~~~md\nScope: a/**\n~~~\nScope: b/**')).toEqual(['b/**']);
+    expect(parseScopeLines('```\nScope: a/**')).toEqual([]);
+    // a shorter closer does not end a longer fence; a comment inside a fence is literal
+    expect(parseScopeLines('````\n```\nScope: a/**\n````\nScope: b/**')).toEqual(['b/**']);
+    expect(parseScopeLines('```\n<!--\n```\nScope: b/**')).toEqual(['b/**']);
+    // a fence inside a comment is hidden, so it opens nothing; a ~~~ line does not close a ``` fence
+    expect(parseScopeLines('<!--\n```\n-->\nScope: b/**')).toEqual(['b/**']);
+    expect(parseScopeLines('```\n~~~\nScope: a/**\n```\nScope: b/**')).toEqual(['b/**']);
+  });
+  it('counts visible Scope lines: one valid, two ambiguous, hidden ones not at all', () => {
+    expect(countScopeLines('Scope: a/**, b/**')).toBe(1);
+    expect(countScopeLines('Scope: a/**\nScope: b/**')).toBe(2);
+    expect(countScopeLines('<!-- Scope: a/** -->\n```\nScope: b/**\n```')).toBe(0);
+  });
+});
+
 describe('scope enforcement (CI reads the PR body only)', () => {
   it('parses a CRLF PR body, which is what the GitHub UI produces', () => {
     expect(parseScopeLines('## x\r\n\r\nScope: a/**, b.md\r\nmore\r\n')).toEqual(['a/**', 'b.md']);
@@ -865,6 +890,36 @@ describe('scope enforcement (CI reads the PR body only)', () => {
       { root, base: 'main', requireScope: true, skipGates: true, skipTests: true, ...over },
       { ...deps, tmpRoot: () => root },
     );
+
+  it('FAILS a Scope line hidden in an HTML comment (reviewers never see it)', () => {
+    const root = repo();
+    const r = ci(root, { prBody: '<!-- Scope: docs/** -->\nbody' });
+    expect(r.exit).toBe(1);
+    expect(r.failures.join()).toContain('no `Scope:');
+  });
+
+  it('FAILS a Scope line inside a code fence', () => {
+    const root = repo();
+    for (const f of ['```', '~~~']) {
+      const r = ci(root, { prBody: `${f}\nScope: docs/**\n${f}\n` });
+      expect(r.exit).toBe(1);
+      expect(r.failures.join()).toContain('no `Scope:');
+    }
+  });
+
+  it('FAILS two Scope lines, naming the count, even if one is visible and valid', () => {
+    const root = repo();
+    const r = ci(root, { prBody: 'Scope: docs/**\n\nScope: scripts/**' });
+    expect(r.exit).toBe(1);
+    expect(r.failures.join()).toContain('2 `Scope:` lines');
+  });
+
+  it('PASSES exactly one visible Scope line, with a hidden decoy beside it', () => {
+    const root = repo();
+    const body = '<!-- Scope: scripts/** -->\n```\nScope: tests/**\n```\nScope: docs/**';
+    const r = ci(root, { prBody: body });
+    expect(r.failures).toEqual([]);
+  });
 
   it('FAILS a missing Scope line in CI, even when a commit trailer declares one', () => {
     const root = repo();

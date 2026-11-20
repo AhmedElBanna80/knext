@@ -45,7 +45,9 @@ and the repo root for new leftovers (with no changed tests it runs the tests tha
 changed source, and warns that the leak scan was not exercised if there are none), scans
 `tests/**` for a `mkdtemp` that is never removed, and prints `git diff --stat` grouped by
 top-level area. A file outside the declared scope fails. The scope is `--scope`, or a line of the
-form `Scope: glob, glob` in a commit or PR body; any other phrasing is ignored. List each glob
+form `Scope: glob, glob` in a commit or PR body; any other phrasing is ignored, and so is a `Scope:`
+line inside an HTML comment (`<!-- -->`) or a code fence (``` or ~~~), because reviewers never see those.
+The PR body must carry exactly one such line: two or more fail. List each glob
 separately: a brace glob such as `{a,b}/**` fails, because the line is split on commas. A gate
 whose tool is not installed is reported as unverified and fails unless you pass
 `--allow-missing-tools`. It is not a git hook and nothing installs it.

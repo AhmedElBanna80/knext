@@ -57,6 +57,7 @@ import {
   broadScopes,
   changedGateInputs,
   changedTestFiles,
+  countScopeLines,
   GATE_INPUT_REGISTRY,
   groupByArea,
   newEntries,
@@ -308,6 +309,14 @@ export function runChecks(opts, deps = REAL_DEPS) {
     if (globs.length === 0)
       globs = parseScopeLines(git(root, ['log', '--format=%B', `${mergeBase}..HEAD`]));
     if (globs.length === 0) globs = parseScopeLines(prBody);
+  }
+  // Reviewers read the PR body, so exactly one visible `Scope:` line there: two make the declared
+  // scope ambiguous (which one is it?), and a line hidden in a comment or fence is not seen at all.
+  const bodyScopeLines = countScopeLines(prBody);
+  if (bodyScopeLines > 1) {
+    failures.push(
+      `${bodyScopeLines} \`Scope:\` lines in the PR body; declare exactly one (comma-separated globs). Lines inside <!-- --> comments and \`\`\` / ~~~ code fences do not count`,
+    );
   }
   if (globs.length === 0) {
     const msg =

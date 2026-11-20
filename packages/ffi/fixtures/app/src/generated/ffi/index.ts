@@ -822,8 +822,12 @@ function $open(): void {
     symbols = ffi.dlopen(load, $SPEC).symbols;
   } catch (err) {
     // A descriptor handed to dlopen is never closed on success; on failure it is.
-    if (load.startsWith('/proc/self/fd/')) $closeSync(Number(load.slice('/proc/self/fd/'.length)));
-    const via = load === path ? '' : ` (opened as ${load}, which needs /proc mounted)`;
+    const fd = /^\/(?:proc\/self|dev)\/fd\/(\d+)$/.exec(load)?.[1];
+    if (fd !== undefined) $closeSync(Number(fd));
+    const via =
+      load === path
+        ? ''
+        : ` (opened as ${load}${load.startsWith('/proc/') ? ', which needs /proc mounted' : ''})`;
     throw new FfiLoadError(
       `knext ffi: could not load ${path}${via}: ${err instanceof Error ? err.message : String(err)}\n` +
         'If the library does not export a function this module calls, the module is stale: run `knext ffi generate` and commit the result.',
@@ -921,9 +925,9 @@ function $resolve(): readonly [string, string] {
 
 /**
  * Fail closed: the library must be listed in native/.integrity.json with a matching sha256.
- * Returns the name to dlopen. On Linux that is the descriptor the hashed bytes were read
- * through, so a file renamed or linked over the path after the check is not the one loaded.
- * On macOS it is the path: dyld opens /dev/fd/<n> as a separate library instance.
+ * Returns the name to dlopen: the descriptor the hashed bytes were read through
+ * (/proc/self/fd/<n> on Linux, /dev/fd/<n> on macOS), so a file renamed or linked
+ * over the path after the check is not the one loaded.
  */
 function $verify(native: string, rel: string, path: string): string {
   const manifest = $join(native, '.integrity.json');
@@ -963,13 +967,15 @@ function $verify(native: string, rel: string, path: string): string {
       `knext ffi: refusing to load ${path}: sha256 mismatch\n  expected ${expected}\n  actual   ${actual}`,
     );
   }
-  if (process.platform !== 'linux') {
+  if (process.platform !== 'linux' && process.platform !== 'darwin') {
     $closeSync(fd);
-    return path;
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${path}: ${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).`,
+    );
   }
   // Never closed once dlopen has seen its name: glibc finds an already-loaded
   // library by that name, and the next open would reuse the number.
-  return `/proc/self/fd/${fd}`;
+  return process.platform === 'darwin' ? `/dev/fd/${fd}` : `/proc/self/fd/${fd}`;
 }
 
 /** A Rust-owned (ptr, len) pair from the out slot, read as two u32 halves (no BigInt per call). */

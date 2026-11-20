@@ -32,7 +32,7 @@
  *      tree mutated after install — the case (1) cannot see.
  *
  * The manifest travels INSIDE `native/`, so every path that ships the tree ships
- * it: `COPY native /app/native` needs no second line, and a tree that arrives
+ * it: `COPY --chown=0:0 --chmod=a-w native /app/native` needs no second line, and a tree that arrives
  * without its manifest is a tree someone took apart.
  */
 

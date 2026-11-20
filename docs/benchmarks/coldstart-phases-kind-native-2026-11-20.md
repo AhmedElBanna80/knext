@@ -6,7 +6,7 @@ interleaved. Harness: `scripts/bench-cold-start-phases`. One run, one VM.
 
 **Answer.** Request to first byte is sub-second on native kind in all three arms (median / p95, ms):
 **node-1000m 934 / 977, node-nolimit 710 / 757, bun-1000m 803 / 843.** The Mac/Rosetta run measured 3226 ms.
-Runtime boot fell from 2174 ms to 205 to 269 ms, which confirms the Rosetta inflation.
+Runtime boot fell from 2174 ms to 205 to 269 ms, which is consistent with Rosetta inflation.
 
 ## Environment
 
@@ -121,7 +121,7 @@ and container start) is about 265 to 285 ms in every arm.
 | App first `/api/health` after listening | 475 ms | 284 ms |
 
 Runtime boot dropped from 2174 ms to 205 to 269 ms, so the emulation inflation flagged in the earlier write-up
-is confirmed: the 2.2 s was mostly Rosetta, not Next. The two runs differ in more than architecture (host,
+is consistent with that: the 2.2 s looks largely Rosetta rather than Next. The two runs differ in more than architecture (host,
 kind and Kubernetes versions, interleaving, a 20 s ready window), so the ratio is not a pure Rosetta factor.
 
 ## CPU limit
@@ -132,8 +132,8 @@ node-nolimit against node-1000m, same runtime, same image:
 - Runtime boot 205 against 269 ms; listening to ready 207 against 370 ms; the app's first direct
   `/api/health` 132 against 284 ms.
 
-On this runner the 1-CPU limit is a real lever on cold-start time, mostly through first-request work being
-throttled by the CFS quota. This is a finding, not a product change: nothing here recommends changing the
+On this runner the 1-CPU limit is a real lever on cold-start time, likely through first-request work being
+throttled by the CFS quota (likely, not measured). This is a finding, not a product change: nothing here recommends changing the
 default limit, and the effect on a loaded node, memory and neighbours was not measured.
 
 ## Bun

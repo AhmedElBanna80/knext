@@ -407,9 +407,71 @@ const MUTATIONS = [
     replacement:
       "if (c === 'o' && before[i + 1] !== 'noexec') return 'unknown';\n        if (c === 'o' && before[i + 1] === 'noexec') check = m[1] === '-';",
   },
+  {
+    label: 'the ratchet never fails: a count above its baseline is accepted',
+    subject: 'lint',
+    anchor: 'if (count > base) grew.push(',
+    replacement: 'if (count > base + 1e9) grew.push(',
+  },
+  {
+    label: 'an equal count is reported as a shrink (hint on every run)',
+    subject: 'lint',
+    anchor: 'else if (count < base) shrank.push(',
+    replacement: 'else if (count <= base) shrank.push(',
+  },
+  {
+    label:
+      'a new prover (absent from the baseline) is allowed an unlimited count instead of starting at 0',
+    subject: 'lint',
+    anchor: 'const base = baseline[prover] ?? 0;',
+    replacement: 'const base = baseline[prover] ?? Infinity;',
+  },
+  {
+    label:
+      'a baseline entry for a vanished prover is not hinted (missing count defaults to the baseline)',
+    subject: 'lint',
+    anchor: 'const count = counts[prover] ?? 0;',
+    replacement: 'const count = counts[prover] ?? baseline[prover];',
+  },
+  {
+    label: 'a missing baseline file is not a failure',
+    subject: 'lint',
+    anchor: 'if (!existsSync(baselinePath)) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'a grown count is computed but never reported as a failure',
+    subject: 'lint',
+    anchor: 'for (const g of grew) {',
+    replacement: 'for (const g of []) {',
+  },
+  {
+    label: 'a shrunk count prints no hint to lower the baseline',
+    subject: 'lint',
+    anchor: 'const hints = shrank.map(',
+    replacement: 'const hints = shrank.slice(1).map(',
+  },
+  {
+    label: 'the CLI does not print the hints',
+    subject: 'lint',
+    anchor: 'for (const h of hints) console.log(',
+    replacement: 'for (const h of []) console.log(',
+  },
+  {
+    label: 'the CLI exits 0 whatever the failures',
+    subject: 'lint',
+    anchor: 'process.exit(failures.length > 0 ? 1 : 0);',
+    replacement: 'process.exit(0);',
+  },
+  {
+    label: 'the CLI ignores --root and always lints the real repo',
+    subject: 'lint',
+    anchor: 'const root = ri === -1 ? REPO_ROOT : resolve(process.argv[ri + 1]);',
+    replacement: 'const root = REPO_ROOT;',
+  },
 ];
 
-const DECLARED = 58;
+const DECLARED = 68;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

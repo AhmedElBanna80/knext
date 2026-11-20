@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import * as LINT_MODULE from '../scripts/lib/prover-wiring-lint.mjs';
 import {
@@ -12,6 +21,7 @@ import {
   rowsBySubject,
   summarizeProverRows,
   textOnlySubjects,
+  unattributedRatchet,
 } from '../scripts/lib/prover-wiring-lint.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -636,4 +646,113 @@ describe('the lint CLI prints each prover total split into wiring and behavioura
     // spawns the lint over every prover under scripts/: it scales with the fleet, so it gets a
     // budget of its own rather than bun's 5 s default
   }, 60_000);
+});
+
+describe('unattributedRatchet: a prover may not gain unattributed rows', () => {
+  const P = 'scripts/mutation-prove-a.mjs';
+  it('fails a count above its baseline, naming prover, count and baseline', () => {
+    expect(unattributedRatchet({ [P]: 5 }, { [P]: 4 }).grew).toEqual([
+      { prover: P, count: 5, baseline: 4 },
+    ]);
+  });
+  it('passes an equal count, and a lower one is a shrink hint, not a failure', () => {
+    expect(unattributedRatchet({ [P]: 4 }, { [P]: 4 })).toEqual({ grew: [], shrank: [] });
+    const r = unattributedRatchet({ [P]: 2 }, { [P]: 4 });
+    expect(r.grew).toEqual([]);
+    expect(r.shrank).toEqual([{ prover: P, count: 2, baseline: 4 }]);
+  });
+  it('a new prover (absent from the baseline) starts at 0', () => {
+    expect(unattributedRatchet({ [P]: 1 }, {}).grew).toEqual([
+      { prover: P, count: 1, baseline: 0 },
+    ]);
+    expect(unattributedRatchet({ [P]: 0 }, {})).toEqual({ grew: [], shrank: [] });
+  });
+  it('a baseline entry for a prover that no longer exists is a shrink hint', () => {
+    expect(unattributedRatchet({}, { [P]: 3 }).shrank).toEqual([
+      { prover: P, count: 0, baseline: 3 },
+    ]);
+  });
+});
+
+describe('the lint CLI enforces the unattributed ratchet on a fixture repo', () => {
+  const lint = (root: string) =>
+    spawnSync(
+      process.execPath,
+      [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs'), '--root', root],
+      {
+        encoding: 'utf8',
+      },
+    );
+  const fixture = (baseline: Record<string, number>, spec: string) => {
+    const root = mkdtempSync(resolve(tmpdir(), 'wiring-ratchet-'));
+    mkdirSync(resolve(root, 'scripts/lib'), { recursive: true });
+    mkdirSync(resolve(root, 'tests'));
+    writeFileSync(
+      resolve(root, 'scripts/mutation-prove-fx.mjs'),
+      `const SPEC = 'tests/fx.test.ts';
+const PROOF = { subjects: { thing: 'scripts/thing.sh' } };
+const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`,
+    );
+    writeFileSync(resolve(root, 'tests/fx.test.ts'), spec);
+    writeFileSync(
+      resolve(root, 'scripts/lib/prover-unattributed-baseline.json'),
+      JSON.stringify(baseline),
+    );
+    return root;
+  };
+  const EXECUTES = `const p = resolve(ROOT, 'scripts/thing.sh'); spawnSync('bash', [p]);`;
+  const ESCAPES = `${EXECUTES}
+    const src = readFileSync(resolve(ROOT, 'scripts/thing.sh'), 'utf8'); JSON.parse(src.slice(0, 4));`;
+  const P = 'scripts/mutation-prove-fx.mjs';
+
+  it('is green while the subject is executed, RED when a JSON.parse(src.slice()) use makes it unattributed', () => {
+    const root = fixture({}, EXECUTES);
+    try {
+      const ok = lint(root);
+      expect(ok.stdout).toContain('behavioural 1, unattributed 0');
+      expect(ok.status).toBe(0);
+      writeFileSync(resolve(root, 'tests/fx.test.ts'), ESCAPES);
+      const red = lint(root);
+      expect(red.stdout).toContain('unattributed 1');
+      expect(red.stderr).toContain(`${P}: unattributed 1 is above its baseline 0`);
+      expect(red.status).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('passes at its recorded baseline, and prints a lower-it hint when the count shrinks', () => {
+    const root = fixture({ [P]: 1 }, ESCAPES);
+    try {
+      expect(lint(root).status).toBe(0);
+      writeFileSync(resolve(root, 'tests/fx.test.ts'), EXECUTES);
+      const r = lint(root);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain(`HINT ${P}: unattributed fell to 0 (baseline 1)`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('fails when the baseline file is missing', () => {
+    const root = fixture({}, EXECUTES);
+    try {
+      rmSync(resolve(root, 'scripts/lib/prover-unattributed-baseline.json'));
+      const r = lint(root);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('has no baseline');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the committed baseline', () => {
+  it('covers real provers only, with positive integer counts, and the real CLI is green on it', () => {
+    const baseline = JSON.parse(
+      readFileSync(resolve(ROOT, 'scripts/lib/prover-unattributed-baseline.json'), 'utf8'),
+    ) as Record<string, number>;
+    for (const [prover, n] of Object.entries(baseline)) {
+      expect(provers).toContain(prover);
+      expect(Number.isInteger(n) && n > 0).toBe(true);
+    }
+  });
 });

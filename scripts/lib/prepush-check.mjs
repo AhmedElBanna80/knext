@@ -604,13 +604,70 @@ export function staticTempDirFindings(root, files, baseline = {}) {
   return out;
 }
 
-/** `Scope: a/**, b/*.ts` lines out of a commit or PR body. */
-export function parseScopeLines(text) {
-  const globs = [];
+/**
+ * The text a reviewer actually sees: `<!-- -->` HTML comments (an unclosed one runs to the end)
+ * and ``` / ~~~ fenced blocks (an unclosed fence runs to the end) removed, a comment inside a
+ * fence staying literal and a fence inside a comment staying hidden.
+ */
+export function visibleMarkdown(text) {
+  const out = [];
+  let inComment = false;
+  let fence = null; // { ch, len } while inside a fenced block
+  for (const raw of (text ?? '').split('\n')) {
+    if (fence) {
+      const close = raw.match(/^ {0,3}(`{3,}|~{3,})[ \t\r]*$/);
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null;
+      continue;
+    }
+    let line = '';
+    let rest = raw;
+    while (rest.length > 0) {
+      if (inComment) {
+        const end = rest.indexOf('-->');
+        if (end === -1) rest = '';
+        else {
+          inComment = false;
+          rest = rest.slice(end + 3);
+        }
+      } else {
+        const start = rest.indexOf('<!--');
+        if (start === -1) {
+          line += rest;
+          rest = '';
+        } else {
+          line += rest.slice(0, start);
+          inComment = true;
+          rest = rest.slice(start + 4);
+        }
+      }
+    }
+    const open = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (open) {
+      fence = { ch: open[1][0], len: open[1].length };
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/** Every visible `Scope:` line's text, in order. */
+function scopeLineTexts(text) {
   // A GitHub-UI PR body is CRLF; JS `$` and `.` both stop at `\r`, so no normalising is needed
   // (pinned by a CRLF test below, so a regex change that breaks it is caught).
-  for (const m of (text ?? '').matchAll(/^[ \t]*Scope:[ \t]*(.+)$/gim)) {
-    for (const g of m[1].split(',')) if (g.trim()) globs.push(g.trim());
+  return [...visibleMarkdown(text).matchAll(/^[ \t]*Scope:[ \t]*(.+)$/gim)].map((m) => m[1]);
+}
+
+/** How many `Scope:` lines a reviewer can see in a commit or PR body. */
+export function countScopeLines(text) {
+  return scopeLineTexts(text).length;
+}
+
+/** `Scope: a/**, b/*.ts` lines out of a commit or PR body; hidden (comment/fence) lines never count. */
+export function parseScopeLines(text) {
+  const globs = [];
+  for (const line of scopeLineTexts(text)) {
+    for (const g of line.split(',')) if (g.trim()) globs.push(g.trim());
   }
   return globs;
 }

@@ -69,7 +69,7 @@ are unknown-command errors.
 - `buildStandaloneExecutable` (`standalone-exec-build.ts`).
 - `resolveStandaloneLayout` (`standalone-layout.ts`).
 - `resolveTracingRoot`, `requireBuildContext` (`tracing-root.ts`).
-- `selectRuntimeImage`, `dockerBuildxArgs`, `stageStandaloneBuildContext`, `stageVinextNodeDockerfile` (`runtime-image.ts`), plus its Dockerfile helpers `runtimeStandaloneTemplateDir`, `STANDALONE_DOCKERFILE_NAME`, `VINEXT_NODE_DOCKERFILE_NAME`, `isKnownGoodTemplateDockerfile`, `standaloneDockerignore`, `dockerignoreExcludes`, `nestStandaloneDockerfile`, `FFI_NATIVE_COPY` and `insertFfiNativeCopy`.
+- `selectRuntimeImage`, `dockerBuildxArgs`, `stageStandaloneBuildContext`, `stageVinextNodeDockerfile` (`runtime-image.ts`), plus its Dockerfile helpers `runtimeStandaloneTemplateDir`, `STANDALONE_DOCKERFILE_NAME`, `VINEXT_NODE_DOCKERFILE_NAME`, `isKnownGoodTemplateDockerfile`, `standaloneDockerignore`, `dockerignoreExcludes`, `nestStandaloneDockerfile`, `FFI_NATIVE_PERMS`, `FFI_NATIVE_COPY` and `insertFfiNativeCopy`. The native/ COPY (FFI line and the vinext template's) is the only COPY with `--chown=0:0 --chmod=a-w`: root-owned, non-writable for the app user.
 - `runPostCompileSmoke`, `PostCompileSmokeError`, `STARTUP_LINE` (`postcompile-smoke.ts`).
 - `ensurePatchedBun`, `resolveCompileBun`, `PATCHED_BUN` (`bun-toolchain.ts`).
 - `validateCompileConfig` (`compile-config.ts`).

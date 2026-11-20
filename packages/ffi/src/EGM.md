@@ -115,11 +115,17 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       that same descriptor (never closed): `/proc/self/fd/<n>` on Linux, `/dev/fd/<n>` on
       macOS. A file renamed or symlinked over the path after the check is not the one loaded.
       dyld shares one instance among `/dev/fd` names (so module copies bind one library) but
-      keeps it apart from the same file opened by path. Other platforms load by path. The check
-      assumes the attacker cannot write to the library file or to `native/`: the descriptor pins
-      the inode, not its contents, so an in-place write after the hash is loaded. On Linux the
-      load needs `/proc` mounted; a failed load closes the descriptor and its error names both
-      the path and the descriptor name.
+      keeps it apart from the same file opened by path. Any other platform is refused with an
+      `FfiLoadError` naming it (unreachable today, since `$triple()` refuses first; kept so a
+      new platform can never fall back to a by-path load).
+    - What this covers: a path swap (rename or symlink over the path) between the check and the
+      load. What it does not stop: a writer of the file's contents (an in-place write, a hard
+      link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. "A
+      writer of `native/` already owns the app JS" holds only when both are in the same
+      read-only image layer, not for a shared, sidecar or fsGroup-writable volume mounted at
+      `native/`. The generated Dockerfile copies `native/` root-owned and non-writable
+      (`--chown=0:0 --chmod=a-w`). On Linux the load needs `/proc` mounted; a failed load closes
+      the descriptor and its error names both the path and the descriptor name.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check.
     - Every `<symbol>_schema` must equal the FNV-1a 64 hash computed at render time.

@@ -19,15 +19,18 @@
  *   (and then refuse the call with the Bun-only message).
  * - Loading is fail-closed: the library beside the executable must be listed
  *   in `native/.integrity.json` with a matching sha256. It is loaded through
- *   the descriptor its bytes were hashed from (`/proc/self/fd/<n>` on Linux,
- *   which needs `/proc` mounted, as every container runtime does;
- *   `/dev/fd/<n>` on macOS), so a file renamed or linked over the path after
- *   the check is not the one `dlopen` opens. (dyld shares one instance among
- *   `/dev/fd` names but keeps it apart from the same file opened by path.)
- *   The check assumes the attacker cannot write to the library file itself or
- *   to `native/`: the descriptor pins the inode, not its contents, so a write
- *   into the same file after the hash is loaded. Ship `native/` root-owned and
- *   read-only.
+ *   the descriptor its bytes were hashed from: `/proc/self/fd/<n>` on Linux
+ *   (needs `/proc` mounted, as every container runtime does), `/dev/fd/<n>`
+ *   on macOS (dyld shares one instance among `/dev/fd` names but keeps it
+ *   apart from the same file opened by path). Any other platform is refused.
+ *   What this covers: a path swap (a rename or symlink over the path) between
+ *   the check and the load. What it does NOT stop: a writer of the file's
+ *   contents (an in-place write, a hard link to the inode, a writable mmap),
+ *   since the descriptor pins the inode, not its bytes. "Whoever can write
+ *   native/ already owns the app's JS" holds only when both sit in the same
+ *   read-only image layer; it does not hold for a shared, sidecar or
+ *   fsGroup-writable volume mounted at native/. The generated Dockerfile
+ *   copies native/ root-owned and non-writable; keep it that way.
  *   The development build
  *   is used only when `NODE_ENV !== 'production'`; every function's `_schema`
  *   value must match the one computed here; any failure is one cached
@@ -784,7 +787,9 @@ function $verify(native: string, rel: string, path: string): string {
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
     $closeSync(fd);
-    return path;
+    throw new FfiLoadError(
+      \`knext ffi: refusing to load \${path}: \${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).\`,
+    );
   }
   // Never closed once dlopen has seen its name: glibc finds an already-loaded
   // library by that name, and the next open would reuse the number.

@@ -927,6 +927,35 @@ describe('the library loaded is the library hashed (nothing swapped in between t
     });
   }
 
+  it('a platform with no descriptor name to load through is refused, never loaded by path', () => {
+    // $triple() already refuses such a platform, so the check is reached here by
+    // reporting the real platform until the integrity manifest has been read.
+    const FLIP = () => {
+      const fs = process.getBuiltinModule('node:fs');
+      const mod = process.getBuiltinModule('node:module') as unknown as {
+        syncBuiltinESMExports: () => void;
+      };
+      const real = process.platform;
+      let flipped = false;
+      Object.defineProperty(process, 'platform', { get: () => (flipped ? 'freebsd' : real) });
+      const read = fs.readFileSync;
+      (fs as { readFileSync: unknown }).readFileSync = function (this: unknown, ...a: unknown[]) {
+        const out = (read as (...x: unknown[]) => unknown).apply(this, a);
+        if (String(a[0]).endsWith('.integrity.json')) flipped = true;
+        return out;
+      };
+      mod.syncBuiltinESMExports();
+    };
+    const r = inBun((m, c) => c(() => m.greet('World')), {
+      FAKE_EXEC: image(),
+      BEFORE: FLIP.toString(),
+    });
+    const out = r.result as { cls?: string; message?: string };
+    expect(out?.cls, r.stderr).toBe('FfiLoadError');
+    expect(out.message).toContain('refusing to load');
+    expect(out.message).toContain('freebsd');
+  });
+
   it('two copies of the module (one per bundler layer) still bind ONE instance of the library', () => {
     const exe = image();
     const r = inBun(

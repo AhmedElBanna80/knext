@@ -448,7 +448,9 @@ function $verify(native: string, rel: string, path: string): string {
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
     $closeSync(fd);
-    return path;
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${path}: ${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).`,
+    );
   }
   // Never closed once dlopen has seen its name: glibc finds an already-loaded
   // library by that name, and the next open would reuse the number.

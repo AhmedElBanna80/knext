@@ -12,7 +12,7 @@ import { join, posix, resolve } from 'node:path';
 import ts from 'typescript';
 import { blankNonCode } from './blank-non-code.mjs';
 import { activeExemptions } from './dated-exemptions.mjs';
-import { parseProverSummary } from './prover-report.mjs';
+import { parseProverSkip, parseProverSummary } from './prover-report.mjs';
 
 /** Every prover file lives here and matches this shape. Glob, never a list. */
 const PROVER_DIR = 'scripts';
@@ -515,11 +515,17 @@ export function evaluateProverRun(run) {
   const findings = [];
   if (run.status !== 0) findings.push(`non-zero exit (${run.status})`);
   const summary = parseProverSummary(run.output);
+  // An honest SKIP (a docker-gated prover on a host without docker): exited 0,
+  // printed the skip marker, and scored nothing. It is returned as `skipped`,
+  // never as a pass — the runner prints SKIP, and the aggregate fails closed.
+  const skipped = run.status === 0 && summary === null ? parseProverSkip(run.output) : null;
+  if (skipped !== null) return { summary: null, skipped, findings };
+
   if (summary === null) {
     findings.push(
       'emitted no mutation summary — declareMutations(n) must be called before the first mutation',
     );
-    return { summary, findings };
+    return { summary, skipped: null, findings };
   }
   if (summary.declared === 0) {
     findings.push('declared zero mutations — a vacuous green proves nothing');
@@ -528,7 +534,7 @@ export function evaluateProverRun(run) {
       `declared ${summary.declared} mutation(s) but ran ${summary.run} — the prover did not do what it claims`,
     );
   }
-  return { summary, findings };
+  return { summary, skipped: null, findings };
 }
 
 /** Read a prover's source. Kept here so callers need no fs import. */
@@ -1733,23 +1739,11 @@ export function auditSelfAsserting(source) {
  * would survive nowhere anyone looks. Tracked by #928.
  */
 export const GUARD_PROVER_EXEMPTIONS = Object.freeze([
-  Object.freeze({
-    guard: 'examples/bun-exec/test/alpine-image.docker-e2e.test.ts',
-    justification:
-      "#897 SIGTERM drain on the shipped binary. It CANNOT be proven at PR time: the spec's " +
-      'beforeAll does a full `docker build` and boots the alpine container, and every mutation ' +
-      'would repeat that — so the prover is only runnable in the alpine e2e lane, where docker ' +
-      'is present. Adding it to the PR-time run-mutation-provers.mjs fleet (which globs ' +
-      'scripts/mutation-prove-*.mjs and runs every match on every PR) would either ENOENT on a ' +
-      'host without docker or add minutes of image builds to every PR, and asserting on a run ' +
-      'that skipped for lack of docker is exactly the "green because it never ran" shape this ' +
-      'whole lane exists to stop. Renewed rather than converted: the two guards that COULD be ' +
-      'PR-time proven (#896, #899) got provers in this same change; this one stays excused until ' +
-      'the alpine e2e lane grows a docker-gated prover step of its own.',
-    added: '2026-09-07',
-    expires: '2026-12-15',
-    note: 'Tracked by #928. Belongs in the alpine e2e lane, not the PR-time fleet.',
-  }),
+  // #897 (`alpine-image.docker-e2e.test.ts`) was the last entry — removed in the
+  // same change that committed its docker-gated prover
+  // (`scripts/mutation-prove-alpine-image.mjs`, which reports an honest SKIP
+  // where docker is absent). The list is empty by design.
+  //
   // #906 (`cache-handler-isr-staleness.test.ts`) was excused, then proven —
   // removed 2026-09-05 in the same commit that committed
   // `scripts/mutation-prove-isr-staleness.mjs` (sprint-3 A5).

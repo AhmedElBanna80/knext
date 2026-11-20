@@ -67,20 +67,17 @@ jobs:
         run: |
           set -euo pipefail
           case "$N" in ''|*[!0-9]*) echo "::error::n must be an integer"; exit 1 ;; esac
-          # Time budget behind the cap (timeout-minutes: 150). One round wakes every arm once: per
-          # wake roughly the wait for zero pods (stable window 10 s + grace READY_WINDOW_S+10 s, at
-          # most 65 s) + settle 5 s + the cold start and watch (about 3 s + READY_WINDOW_S, at most
-          # 48 s), so about 120 s a wake at the 45 s window and about 80 s at the default 20 s.
-          # Setup (kind, Knative, operator build, three image builds) is about 25 min.
-          # n=30 with 3 arms at the default window: 30 x 3 x 80 s = 120 min, plus 25 min setup = 145
-          # min, inside 150. n is capped at 30; a longer window or more arms must lower n.
+          # n is capped at 30; the combined check below (run-budget.sh) is what actually bounds the
+          # run: n x arms x (45 s per wake + ready window) + 25 min setup must fit the 150 min timeout
+          # minus 15 min for the analyse, upload and teardown steps. The 45 s and 25 min are estimates.
           [ "$N" -ge 12 ] || { echo "::error::n must be 12 or more (got $N)"; exit 1; }
-          [ "$N" -le 30 ] || { echo "::error::n must be 30 or fewer (got $N): n x arms x per-wake time must fit the job timeout"; exit 1; }
+          [ "$N" -le 30 ] || { echo "::error::n must be 30 or fewer (got $N)"; exit 1; }
           case "$READY_WINDOW_S" in ''|*[!0-9]*) echo "::error::ready_window_s must be an integer"; exit 1 ;; esac
           if [ "$READY_WINDOW_S" -lt 16 ] || [ "$READY_WINDOW_S" -gt 45 ]; then
             echo "::error::ready_window_s must be 16 to 45 (got $READY_WINDOW_S)"; exit 1
           fi
           scripts/bench-cold-start-phases/kind/arms.sh "$ARMS" | tee "${RUNNER_TEMP}/arms.txt"
+          scripts/bench-cold-start-phases/kind/run-budget.sh "$N" "$(wc -l < "${RUNNER_TEMP}/arms.txt" | tr -d ' ')" "$READY_WINDOW_S"
           test "$(uname -m)" = x86_64 || { echo "::error::runner is not amd64"; exit 1; }
 
       - name: Route Docker Hub pulls through mirror.gcr.io (anonymous rate limit)
@@ -251,21 +248,24 @@ jobs:
             echo "$runtime $img" >> "${RUNNER_TEMP}/arm-images.txt"
             echo "arm ${arm}: runtime=${runtime} cpuLimit=${cpulimit} image=${img}"
             kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].resources}{"\n"}'
-            # The arm must run the runtime its name says. Two checks: the rendered container command
-            # (the operator execs `bun run server.js` for bun and leaves node on the image default),
-            # and the live process (the user container's main process, read from the kind node while the
-            # warm-up pod is still up). Either failing fails the job, so a bun arm that silently ran node cannot
-            # produce a table.
-            cmd="$(kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].command}')"
-            echo "arm ${arm}: container command=${cmd:-<image default>}"
-            if [ "$runtime" = bun ]; then
-              case "$cmd" in *'"bun"'*) ;; *) echo "::error::arm ${arm} is a bun arm but its container command is '${cmd}'"; exit 1 ;; esac
-            else
-              case "$cmd" in *bun*) echo "::error::arm ${arm} is a node arm but its container command is '${cmd}'"; exit 1 ;; esac
-            fi
+            # The arm must run the runtime its name says. Two checks, both through check-runtime.sh,
+            # which judges only the basename of argv[0] (so `node /app/bundle.js` is node and
+            # `bun /app/node_modules/x` is bun): the rendered container command (the operator execs
+            # `bun run server.js` for bun and leaves node on the image default), and the live process,
+            # read from the kind node while the warm-up pod is still up. Either failing fails the job,
+            # so a bun arm that silently ran node cannot produce a table.
+            chk=scripts/bench-cold-start-phases/kind/check-runtime.sh
+            flag=""; [ "$runtime" = node ] && flag="--allow-empty"
+            kubectl -n "$APP_NS" get ksvc "$arm" -o json \
+              | jq -j '.spec.template.spec.containers[0].command // [] | .[] | ., "\u0000"' > "${RUNNER_TEMP}/cmd-${arm}.bin"
+            echo "arm ${arm}: container command=$(tr '\0' ' ' < "${RUNNER_TEMP}/cmd-${arm}.bin")"
+            "$chk" "$runtime" $flag < "${RUNNER_TEMP}/cmd-${arm}.bin" \
+              || { echo "::error::arm ${arm} is a ${runtime} arm but its container command does not run ${runtime}"; exit 1; }
+            # The newest Running pod that is not terminating (no deletionTimestamp).
             pod=""
             for _ in $(seq 1 30); do
-              pod="$(kubectl -n "$APP_NS" get pods -l "serving.knative.dev/service=${arm}" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+              pod="$(kubectl -n "$APP_NS" get pods -l "serving.knative.dev/service=${arm}" -o json \
+                | jq -r '[.items[] | select(.status.phase == "Running" and .metadata.deletionTimestamp == null)] | sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty')"
               [ -n "$pod" ] && break
               sleep 1
             done
@@ -277,17 +277,17 @@ jobs:
             cid="${cid#containerd://}"
             [ -n "$cid" ] || { echo "::error::no user-container id for ${pod} (arm ${arm})"; exit 1; }
             knode="${CLUSTER}-control-plane"
-            hostpid="$(docker exec "$knode" crictl inspect "$cid" | jq -r '.info.pid')"
+            if ! inspect="$(docker exec "$knode" crictl inspect "$cid" 2>&1)"; then
+              echo "::error::crictl inspect failed on ${knode} for container ${cid} (arm ${arm}; the pod may have scaled down): ${inspect}"; exit 1
+            fi
+            hostpid="$(printf '%s' "$inspect" | jq -r '.info.pid')" \
+              || { echo "::error::crictl inspect output for ${cid} (arm ${arm}) is not JSON"; exit 1; }
             case "$hostpid" in ''|null|*[!0-9]*) echo "::error::crictl gave no pid for ${cid} (arm ${arm}): '${hostpid}'"; exit 1 ;; esac
-            proc="$(docker exec "$knode" cat "/proc/${hostpid}/cmdline" | tr '\0' ' ')" \
+            docker exec "$knode" cat "/proc/${hostpid}/cmdline" > "${RUNNER_TEMP}/proc-${arm}.bin" \
               || { echo "::error::could not read /proc/${hostpid}/cmdline on ${knode} (arm ${arm})"; exit 1; }
-            echo "arm ${arm}: pid 1 = ${proc}"
-            case "$runtime:$proc" in
-              bun:*bun*) ;;
-              node:*bun*) echo "::error::node arm ${arm} is running bun: ${proc}"; exit 1 ;;
-              node:*node*) ;;
-              *) echo "::error::arm ${arm} (${runtime}) pid 1 is not ${runtime}: ${proc}"; exit 1 ;;
-            esac
+            echo "arm ${arm}: main process = $(tr '\0' ' ' < "${RUNNER_TEMP}/proc-${arm}.bin")"
+            "$chk" "$runtime" < "${RUNNER_TEMP}/proc-${arm}.bin" \
+              || { echo "::error::arm ${arm} (${runtime}) main process is not ${runtime}"; exit 1; }
           done 3< "${RUNNER_TEMP}/arms.txt"
 
       # The harness pods run node:24-alpine. Load it into the node so no measured wake pays a pull

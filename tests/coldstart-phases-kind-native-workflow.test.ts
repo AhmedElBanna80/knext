@@ -65,7 +65,8 @@ describe('coldstart-phases-kind-native workflow shape', () => {
     expect(code).toMatch(/"\$READY_WINDOW_S" -gt 45/);
     // No dispatch input is templated into a run: script.
     const runBodies = code.split(/\n\s+run: /).slice(1);
-    for (const body of runBodies) expect(body).not.toMatch(/github\.event\.inputs/);
+    for (const body of runBodies)
+      expect(body).not.toMatch(/github\.event\.inputs|\$\{\{\s*inputs\./);
   });
 
   it('has read-only permissions and a cancel-in-progress concurrency group', () => {
@@ -85,18 +86,28 @@ describe('coldstart-phases-kind-native workflow shape', () => {
     }
   });
 
-  it('verifies each arm runs its runtime, both the rendered command and pid 1', () => {
-    expect(code).toMatch(/\$runtime" = bun \]; then/);
-    expect(code).toMatch(/is a bun arm but its container command is/);
-    expect(code).toMatch(/is a node arm but its container command is/);
+  it('verifies each arm runs its runtime through check-runtime.sh, on the command and the process', () => {
+    // Both the rendered container command and the live process go through the one checker.
+    expect(code.match(/"\$chk" "\$runtime"/g)?.length).toBe(2);
+    expect(code).toMatch(/kind\/check-runtime\.sh/);
+    expect(code).toMatch(/flag="--allow-empty"/);
+    // No bare substring globs on a command line.
+    expect(code).not.toMatch(/\*bun\*|\*node\*/);
     // Distroless image: read the process from the kind node, never exec into the app container.
     expect(code).toMatch(/containerStatuses\[\?\(@\.name==\"user-container\"\)\]\.containerID/);
-    expect(code).toMatch(/docker exec "\$knode" crictl inspect "\$cid" \| jq -r '\.info\.pid'/);
+    expect(code).toMatch(/docker exec "\$knode" crictl inspect "\$cid"/);
+    expect(code).toMatch(/jq -r '\.info\.pid'/);
     expect(code).toMatch(/docker exec "\$knode" cat "\/proc\/\$\{hostpid\}\/cmdline"/);
     expect(code).not.toMatch(/kubectl[^\n]*\bexec\b/);
-    expect(code).toMatch(/bun:\*bun\*\) ;;/);
-    expect(code).toMatch(/node:\*bun\*\) echo "::error::node arm/);
-    expect(code).toMatch(/pid 1 is not \$\{runtime\}/);
+    expect(code).toMatch(/crictl inspect failed on/);
+    // Newest Running pod that is not terminating.
+    expect(code).toMatch(/\.metadata\.deletionTimestamp == null/);
+    expect(code).toMatch(/sort_by\(\.metadata\.creationTimestamp\) \| last/);
+  });
+
+  it('runs the combined run-budget check', () => {
+    expect(code).toMatch(/kind\/run-budget\.sh "\$N" .* "\$READY_WINDOW_S"/);
+    expect(code).toMatch(/\[ "\$N" -le 30 \]/);
   });
 
   it('runs on amd64 ubuntu-latest and checks the node architecture', () => {
@@ -209,5 +220,63 @@ describe('kind/summarize-native.py', () => {
     const r = run([row('a', true, false, 3000)], 'a,b');
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('no rows for arm(s): b');
+  });
+});
+
+describe('kind/check-runtime.sh (behaviour)', () => {
+  const CHECK = resolve(DIR, 'kind/check-runtime.sh');
+  const run = (runtime: string, argv: string[], extra: string[] = []) =>
+    spawnSync('bash', [CHECK, runtime, ...extra], {
+      encoding: 'utf8',
+      input: argv.map((a) => `${a}\0`).join(''),
+    });
+
+  it('judges argv[0] basename only: substrings in arguments or paths do not count', () => {
+    expect(run('node', ['node', '/app/bundle.js']).status).toBe(0);
+    expect(run('bun', ['bun', '/app/node_modules/x']).status).toBe(0);
+    expect(run('bun', ['/usr/local/bin/bun', 'run', 'server.js']).status).toBe(0);
+    expect(run('node', ['/usr/bin/bun', 'server.js']).status).toBe(1);
+    expect(run('bun', ['node', '/opt/bun/server.js']).status).toBe(1);
+    expect(run('node', ['/usr/local/bun/bin/node', 'x']).status).toBe(0);
+    // A lookalike basename is not the runtime.
+    expect(run('node', ['/usr/bin/nodejs-wrapper', 'x']).status).toBe(1);
+    expect(run('bun', ['bunx', 'x']).status).toBe(1);
+  });
+
+  it('refuses an empty command line unless --allow-empty, and never for bun by default', () => {
+    expect(run('bun', []).status).toBe(1);
+    expect(run('node', []).status).toBe(1);
+    expect(run('node', [], ['--allow-empty']).status).toBe(0);
+  });
+
+  it('rejects an unknown runtime with exit 2', () => {
+    expect(run('deno', ['deno']).status).toBe(2);
+  });
+});
+
+describe('kind/run-budget.sh (behaviour)', () => {
+  const BUDGET = resolve(DIR, 'kind/run-budget.sh');
+  const run = (...a: string[]) => spawnSync('bash', [BUDGET, ...a], { encoding: 'utf8' });
+
+  it('accepts the defaults and the largest default-window run', () => {
+    expect(run('12', '3', '20').status).toBe(0);
+    expect(run('30', '3', '20').status).toBe(0);
+  });
+
+  it('refuses a run that does not fit, printing the arithmetic', () => {
+    const r = run('30', '3', '45');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('30 x 3 x (45 + 45) s');
+    expect(r.stderr).toContain('does not fit');
+  });
+
+  it('keeps at least the post-step margin: a run that fits only without it is refused', () => {
+    // 30 x 3 x 65 + 25 min = 7350 s fits 150 - 15 min (8100 s) but not 150 - 40 min (6600 s).
+    expect(run('30', '3', '20', '150', '40').status).toBe(1);
+    expect(run('30', '3', '20', '150', '15').status).toBe(0);
+  });
+
+  it('rejects non-integers with exit 2', () => {
+    expect(run('x', '3', '20').status).toBe(2);
   });
 });

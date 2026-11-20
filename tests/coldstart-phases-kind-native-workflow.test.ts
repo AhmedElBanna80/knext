@@ -1276,7 +1276,11 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(z.err).toContain('pod scaled away before the live check');
     expect(z.err).not.toContain('no child of the supervisor');
     expect(z.ev).toBeNull();
-    expect(run(withState('X')).status).toBe(1);
+    const x = run(withState('X'));
+    expect(x.status).toBe(1);
+    expect(x.err).toContain('pod scaled away before the live check');
+    expect(x.err).not.toContain('no child of the supervisor');
+    expect(x.ev).toBeNull();
     const noStat = run(nodeCase({ noStat: ['4300'] }));
     expect(noStat.status).toBe(1);
     expect(noStat.err).toContain('scaled away');

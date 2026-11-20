@@ -441,10 +441,12 @@ jobs:
 
       # Node only, no bun: the ratchet needs just `typescript` and `yaml`, installed at the versions
       # bun.lock pins (tests/prover-wiring-rows-lint.test.ts holds the two in lockstep) into the
-      # runner temp dir and linked into the workspace so ESM resolution finds them.
+      # runner temp dir, checked against bun.lock's sha512 (fail closed), then linked into the
+      # workspace so ESM resolution finds them.
       - name: Install the two script dependencies (typescript, yaml)
         run: |
           npm install --prefix "$RUNNER_TEMP/ratchet-deps" --no-save --no-package-lock --ignore-scripts typescript@5.9.3 yaml@2.9.0
+          node scripts/verify-installed-integrity.mjs --prefix "$RUNNER_TEMP/ratchet-deps" typescript yaml
           ln -s "$RUNNER_TEMP/ratchet-deps/node_modules" node_modules
 
       - name: Run the unattributed ratchet against the PR base

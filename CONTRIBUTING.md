@@ -55,7 +55,7 @@ whose tool is not installed is reported as unverified and fails unless you pass
 
 ### Mutation-prover rows the lint cannot attribute
 
-`node scripts/lib/prover-wiring-lint.mjs` counts, per mutation prover, the rows it cannot credit as
+`node scripts/prover-unattributed-ratchet.mjs` (CI runs it on every pull request) counts, per mutation prover, the rows it cannot credit as
 behavioural or as wiring (`unattributed`). Each prover's count may not exceed its entry in
 `scripts/lib/prover-unattributed-baseline.json` (absent means 0, so a new prover starts at 0).
 Fix growth by making the spec execute the subject, or by labelling rows `kind: 'wiring'` when they

@@ -635,15 +635,10 @@ describe('shell -n is turned off by a later +n (ROUND 3 item 3a)', () => {
 
 describe('the lint CLI prints each prover total split into wiring and behavioural', () => {
   it('z11 answering-pod: its 18 run.sh WR rows are wiring, the lib rows are not', () => {
-    // `--base HEAD`: this test is about the row split, not the base-branch rule (tested below)
-    const r = spawnSync(
-      process.execPath,
-      [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs'), '--base', 'HEAD'],
-      {
-        cwd: ROOT,
-        encoding: 'utf8',
-      },
-    );
+    const r = spawnSync(process.execPath, [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs')], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
     const line = r.stdout
       .split('\n')
       .find((l) => l.startsWith('scripts/mutation-prove-s11-1-z11-answering-pod.mjs:'));
@@ -838,7 +833,7 @@ const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`,
   ) =>
     spawnSync(
       process.execPath,
-      [resolve(ROOT, 'scripts/lib/prover-wiring-lint.mjs'), '--root', root, ...base],
+      [resolve(ROOT, 'scripts/prover-unattributed-ratchet.mjs'), '--root', root, ...base],
       { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', ...env } },
     );
   const withRepo = (
@@ -945,7 +940,7 @@ describe('a CI job runs the lint with the base fetched and the PR body in env', 
   });
   it('passes the PR body through env, never interpolated into the script', () => {
     expect(job).toContain('PR_BODY: ${{ github.event.pull_request.body }}');
-    const run = job.match(/run: (node scripts\/lib\/prover-wiring-lint\.mjs.*)/)?.[1];
+    const run = job.match(/run: (node scripts\/prover-unattributed-ratchet\.mjs.*)/)?.[1];
     expect(run).toBeDefined();
     expect(run).not.toContain('${{');
   });

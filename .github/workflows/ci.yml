@@ -417,7 +417,7 @@ jobs:
       - name: Run the ratchet-floor guard
         run: node scripts/check-ratchet-floors.mjs
 
-  # The unattributed-row ratchet (scripts/lib/prover-wiring-lint.mjs) is judged against the BASE
+  # The unattributed-row ratchet (scripts/prover-unattributed-ratchet.mjs) is judged against the BASE
   # branch's committed baseline at the merge-base, so a PR cannot raise the limit it is judged by.
   # `fetch-depth: 0` is required: with no base to read the lint can only compare the working tree.
   # The PR body arrives through env and is read as DATA (a `Baseline-raise:` line declares a raise).
@@ -448,7 +448,7 @@ jobs:
       - name: Run the unattributed ratchet against the PR base
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: node scripts/lib/prover-wiring-lint.mjs
+        run: node scripts/prover-unattributed-ratchet.mjs
 
   compat-smoke:
     # knext adapter SMOKE suite — NOT the official Next.js compatibility suite (ADR-0007,

@@ -23,6 +23,7 @@ const PROOF = {
     lint: 'scripts/lib/prover-wiring-lint.mjs',
     z11: 'scripts/mutation-prove-s11-1-z11-answering-pod.mjs',
     ci: '.github/workflows/ci.yml',
+    script: 'scripts/prover-unattributed-ratchet.mjs',
   },
 };
 const RUNNER = resolveSpecRunner(REPO_ROOT);
@@ -515,8 +516,8 @@ const MUTATIONS = [
   {
     label: 'CI also reads commit messages for the declaration (rewritable after review)',
     subject: 'lint',
-    anchor: "ci ? '' : (gitQ(",
-    replacement: "false ? '' : (gitQ(",
+    anchor: "ci ? '' : commitLog]",
+    replacement: "false ? '' : commitLog]",
   },
   {
     label: 'the PR body is not read for the declaration',
@@ -527,8 +528,8 @@ const MUTATIONS = [
   {
     label: 'locally, commit messages are not read for the declaration',
     subject: 'lint',
-    anchor: "ci ? '' : (gitQ(",
-    replacement: "'' && (gitQ(",
+    anchor: "ci ? '' : commitLog]",
+    replacement: "ci ? '' : '']",
   },
   {
     label: 'a base that has the baseline is not compared (treated as absent)',
@@ -538,21 +539,21 @@ const MUTATIONS = [
   },
   {
     label: 'the base baseline is read at the base tip, not the merge-base',
-    subject: 'lint',
+    subject: 'script',
     anchor: "['show', `${mergeBase}:${UNATTRIBUTED_BASELINE}`]",
     replacement: "['show', `${ref}:${UNATTRIBUTED_BASELINE}`]",
   },
   {
     label: 'GITHUB_BASE_REF is ignored when no --base is given',
-    subject: 'lint',
+    subject: 'script',
     anchor: '(env.GITHUB_BASE_REF\n      ? `origin/${env.GITHUB_BASE_REF}`',
     replacement: '(false\n      ? `origin/${env.GITHUB_BASE_REF}`',
   },
   {
     label: 'the CLI ignores --base',
-    subject: 'lint',
-    anchor: 'base: bi === -1 ? undefined : process.argv[bi + 1],',
-    replacement: 'base: undefined,',
+    subject: 'script',
+    anchor: "base: arg('--base') }",
+    replacement: 'base: undefined }',
   },
   {
     label: 'the CI job fetches a shallow checkout (no base to read)',
@@ -568,17 +569,17 @@ const MUTATIONS = [
     subject: 'ci',
     kind: 'wiring',
     anchor:
-      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs',
-    replacement: '        run: node scripts/lib/prover-wiring-lint.mjs',
+      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/prover-unattributed-ratchet.mjs',
+    replacement: '        run: node scripts/prover-unattributed-ratchet.mjs',
   },
   {
     label: 'the CI job interpolates the PR body into the script',
     subject: 'ci',
     kind: 'wiring',
     anchor:
-      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs',
+      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/prover-unattributed-ratchet.mjs',
     replacement:
-      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/lib/prover-wiring-lint.mjs "${{ github.event.pull_request.body }}"',
+      '          PR_BODY: ${{ github.event.pull_request.body }}\n        run: node scripts/prover-unattributed-ratchet.mjs "${{ github.event.pull_request.body }}"',
   },
   {
     label: 'the CI job runs on every event, including pushes with no base',

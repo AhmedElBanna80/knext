@@ -79,10 +79,12 @@ const read = (p: string) => readFileSync(p, 'utf8');
 
 // The prover that leaks: plants a tracked edit and a new untracked file, then keeps
 // running. Shared by the restore tests and the self-exit tests. It bounds its own
-// lifetime so an interrupted test cannot leave it alive: it exits when the process
-// that spawned it is gone (reparented), and on a hard timer (the #214 precedent).
-// The timer sits far above the 1.5 s prover timeout the restore tests use, so the
-// runner's kill, not the timer, ends those runs.
+// lifetime so an interrupted test cannot leave it alive. The parent-death watcher
+// covers a parent that dies after the fixture has booted (the fixture reads its
+// spawner pid at boot, so a parent that dies during boot is not seen). The 15 s
+// self-exit timer (the #214 precedent) is the backstop otherwise. The timer sits far
+// above the 1.5 s prover timeout the restore tests use, so the runner's kill, not the
+// timer, ends those runs.
 const LEAKY_FIXTURE = `
           const spawnedBy = process.ppid;
           import { writeFileSync } from 'node:fs';
@@ -1466,9 +1468,9 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
       try {
         const r = run(dir, [], env);
         expect(r.status).not.toBe(0);
-        // The fixture booted and wrote before the kill: the runner counts the new
-        // leak.txt it removed. Without this, a fixture that never ran would pass vacuously.
-        expect(`${r.stdout}${r.stderr}`).toMatch(/1 untracked file\(s\) it created removed/);
+        // The runner prints this count on every kill, 0 included, so the match checks
+        // exactly one new untracked file (leak.txt): the fixture booted and wrote it.
+        expect(`${r.stdout}${r.stderr}`).toMatch(/(^|\D)1 untracked file\(s\) it created removed/);
         expect(read(join(dir, 'tracked.txt'))).toBe('original');
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -1479,7 +1481,7 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
       const dir = tree();
       try {
         const r = run(dir, [], env);
-        expect(`${r.stdout}${r.stderr}`).toMatch(/1 untracked file\(s\) it created removed/);
+        expect(`${r.stdout}${r.stderr}`).toMatch(/(^|\D)1 untracked file\(s\) it created removed/);
         expect(existsSync(join(dir, 'leak.txt')), 'the killed prover’s new file survived').toBe(
           false,
         );
@@ -1519,10 +1521,25 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
       writeFileSync(join(dir, 'mutation-prove-a-leaky.mjs'), LEAKY_FIXTURE);
       return dir;
     };
-    // ps exits 1 when no process matches and 0 when one does. Anything else (missing
-    // binary, crash) must fail loudly: it must never read as "gone".
+    // exit 1 is ambiguous: "no such pid" and a ps that rejects -p (a usage error) both
+    // return it. So probe once against our own pid and require a non-empty answer
+    // before trusting any empty or exit-1 result. Anything unusable throws.
+    let psUsable: boolean | undefined;
+    const psProbe = () => {
+      if (psUsable === undefined) {
+        const probe = spawnSync('ps', ['-o', 'stat=', '-p', String(process.pid)], {
+          encoding: 'utf8',
+        });
+        psUsable = !probe.error && probe.status === 0 && probe.stdout.trim() !== '';
+      }
+      if (!psUsable)
+        throw new Error('ps -o <field> -p <pid> is unusable here; refusing to infer "gone"');
+    };
     const psField = (pid: number, field: string) => {
-      const ps = spawnSync('ps', ['-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8' });
+      psProbe();
+      const ps = spawnSync('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], {
+        encoding: 'utf8',
+      });
       if (ps.error || (ps.status !== 0 && ps.status !== 1)) {
         throw new Error(
           `ps ${field} for pid ${pid} failed: ${ps.error?.message ?? `exit ${ps.status}`}`,
@@ -1596,9 +1613,16 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
         ).toBe(true);
       } finally {
         // Signal only a live pid whose command line is still the fixture: a reused pid
-        // must never be killed.
-        if (pid && !gone(pid) && psField(pid, 'command').includes('mutation-prove-a-leaky.mjs')) {
-          process.kill(pid, 'SIGKILL');
+        // must never be killed. A ps error here is logged, not thrown, so it cannot mask
+        // the assertion above; the fixture's own timer still bounds it.
+        try {
+          if (pid && !gone(pid) && psField(pid, 'command').includes('mutation-prove-a-leaky.mjs')) {
+            process.kill(pid, 'SIGKILL');
+          }
+        } catch (error) {
+          process.stderr.write(
+            `cleanup: could not check or kill fixture pid ${pid}: ${String(error)}\n`,
+          );
         }
         rmSync(dir, { recursive: true, force: true });
       }

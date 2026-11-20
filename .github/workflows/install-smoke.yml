@@ -1,16 +1,15 @@
 name: Install smoke (outside consumer)
 
-# PK2 / #115 — the OUTSIDE-CONSUMER gate. Packs the real @getknext/lib + @getknext/core
+# PK2 / #115 — the OUTSIDE-CONSUMER gate. Packs the real @getknext/lib, @getknext/db, @getknext/core and the kn-next alias
 # tarballs and installs them in a clean dir OUTSIDE the workspace on plain npm + Node,
 # with NO Bun on PATH, then proves BOTH consumer paths work: the `kn-next` CLI runs AND
 # an app can import the public library/adapter surface (resolving to real JS, no raw .ts).
 # This catches PK1 (#114) packaging regressions and exercises exactly the public set
 # PK5 (#116) declared — the gate that makes the first npm publish safe.
 #
-# Trigger note (deliberate): NOT branch-filtered to main. Most knext workflows gate on
-# `pull_request: branches: [main]`, which would never run on the stacked PK-series PRs
-# (their base is the previous PK branch, not main). This smoke runs on ALL PRs + pushes +
-# manual dispatch so it is useful on the very stack that introduces the packaging.
+# Trigger note: pull_request has no branch filter, so this runs on PRs whatever their base branch
+# (stacked PRs included). The push trigger ignores bench/** (the measurement branches); pushes to
+# every other branch run it. Manual dispatch is also enabled.
 on:
   pull_request:
   push:

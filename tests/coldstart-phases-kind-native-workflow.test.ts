@@ -1094,9 +1094,7 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(zombie.err).toContain('state=Z');
     expect(zombie.err).not.toContain('fell back');
     // The state is read after the LAST ')' of stat: a comm holding ')' and spaces still parses.
-    const odd = run(
-      only('S', { '/proc/4301/stat': '4301 (knext) (x) Z 4242 4301 4301 0\n' }),
-    );
+    const odd = run(only('S', { '/proc/4301/stat': '4301 (knext) (x) Z 4242 4301 4301 0\n' }));
     expect(odd.status).toBe(1);
     expect(odd.err).toContain('state=Z');
     // A live compiled child next to a zombie one is still found.

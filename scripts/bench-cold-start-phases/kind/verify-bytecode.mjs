@@ -19,16 +19,16 @@
 //
 // Exit 0 verified (one verdict line on stdout), 1 not verified (reason on stderr), 2 usage or
 // unreadable input. A missing baseline is a usage error, never a pass.
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const { verifyBytecodeExec } = await import(
-  resolve(HERE, "../../../packages/kn-next/src/adapters/bytecode-exec-verify.mjs")
+  resolve(HERE, '../../../packages/kn-next/src/adapters/bytecode-exec-verify.mjs')
 );
 
-const PRAGMA = "// @bun @bytecode @bun-cjs";
+const PRAGMA = '// @bun @bytecode @bun-cjs';
 const MARKER_RE = /knext-standalone-exec:[0-9a-f]{24}/;
 
 function die(code, msg) {
@@ -46,7 +46,7 @@ function read(path) {
 
 function count(buf, text) {
   let n = 0;
-  for (const enc of ["latin1", "utf16le"]) {
+  for (const enc of ['latin1', 'utf16le']) {
     const needle = Buffer.from(text, enc);
     for (let at = buf.indexOf(needle); at >= 0; at = buf.indexOf(needle, at + needle.length)) n++;
   }
@@ -54,12 +54,13 @@ function count(buf, text) {
 }
 
 const [mode, binary, baseline] = process.argv.slice(2);
-if (!mode || !binary) die(2, "usage: verify-bytecode.mjs standalone <binary> | pragma <binary> <baseline>");
+if (!mode || !binary)
+  die(2, 'usage: verify-bytecode.mjs standalone <binary> | pragma <binary> <baseline>');
 
-if (mode === "standalone") {
+if (mode === 'standalone') {
   const buf = read(binary);
   let marker = null;
-  for (const enc of ["latin1", "utf16le"]) {
+  for (const enc of ['latin1', 'utf16le']) {
     const m = buf.toString(enc).match(MARKER_RE);
     if (m) {
       marker = m[0];
@@ -69,15 +70,22 @@ if (mode === "standalone") {
   if (!marker) die(1, `no knext-standalone-exec marker in ${binary}: not the entry knext compiled`);
   const v = verifyBytecodeExec(buf, marker);
   if (!v.ok) die(1, `bytecode check failed for ${binary}: ${v.reason}`);
-  console.log(`bytecode verified: ${marker} sits under a @bytecode pragma with a constant-pool copy`);
-} else if (mode === "pragma") {
-  if (!baseline) die(2, "pragma mode needs a baseline probe binary (compiled without bytecode)");
+  console.log(
+    `bytecode verified: ${marker} sits under a @bytecode pragma with a constant-pool copy`,
+  );
+} else if (mode === 'pragma') {
+  if (!baseline) die(2, 'pragma mode needs a baseline probe binary (compiled without bytecode)');
   const app = count(read(binary), PRAGMA);
   const base = count(read(baseline), PRAGMA);
   if (app <= base) {
-    die(1, `no bytecode evidence in ${binary}: @bytecode pragma count app=${app} is not above baseline=${base}`);
+    die(
+      1,
+      `no bytecode evidence in ${binary}: @bytecode pragma count app=${app} is not above baseline=${base}`,
+    );
   }
-  console.log(`the build requested bytecode (pragma differential): @bytecode pragma count app=${app} baseline=${base}`);
+  console.log(
+    `the build requested bytecode (pragma differential): @bytecode pragma count app=${app} baseline=${base}`,
+  );
 } else {
   die(2, `unknown mode '${mode}'`);
 }

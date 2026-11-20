@@ -81,16 +81,28 @@ import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-const APP_TEMPLATE = resolve(REPO_ROOT, 'packages/kn-next/templates/app/next.config.ts.hbs');
-const ZONE_TEMPLATE = resolve(REPO_ROOT, 'turbo/generators/templates/zone/next.config.ts.hbs');
-const DEPLOY = resolve(REPO_ROOT, 'packages/kn-next/src/cli/deploy.ts');
-const UPLOAD = resolve(REPO_ROOT, 'packages/kn-next/src/utils/asset-upload.ts');
-// #1574: the reserved-static-dirs set (`_vinext_fonts` et al.) was extracted
-// out of asset-upload.ts into its own module (round 2 of #1292's storage-mode
-// e2e leg) so a plain-node script outside the TS build could import it
-// directly. Row 14 below now anchors here, not in UPLOAD.
-const RESERVED_DIRS = resolve(REPO_ROOT, 'packages/kn-next/src/utils/reserved-static-dirs.ts');
-const CR_BUILDER = resolve(REPO_ROOT, 'packages/kn-next/src/cli/cr-builder.ts');
+/**
+ * Subject paths, repo-relative, by key. The mutation table below names a row's
+ * file by KEY (`{ subject: 'deploy', anchor: '…' }`), the object shape the
+ * PR-time prover-lane audit reads, so a dead anchor or a deleted subject fails
+ * at review speed rather than at nightly speed.
+ */
+const PROOF = {
+  subjects: {
+    appTemplate: 'packages/kn-next/templates/app/next.config.ts.hbs',
+    zoneTemplate: 'turbo/generators/templates/zone/next.config.ts.hbs',
+    deploy: 'packages/kn-next/src/cli/deploy.ts',
+    upload: 'packages/kn-next/src/utils/asset-upload.ts',
+    // #1574: the reserved-static-dirs set (`_vinext_fonts` et al.) was extracted
+    // out of asset-upload.ts into its own module (round 2 of #1292's storage-mode
+    // e2e leg) so a plain-node script outside the TS build could import it
+    // directly. Row 14 below now anchors here, not in `upload`.
+    reservedDirs: 'packages/kn-next/src/utils/reserved-static-dirs.ts',
+    crBuilder: 'packages/kn-next/src/cli/cr-builder.ts',
+  },
+};
+
+const subjectPath = (key) => resolve(REPO_ROOT, PROOF.subjects[key]);
 
 const SPEC_TEMPLATES = 'packages/kn-next/src/__tests__/skew-build-id-templates.test.ts';
 const SPEC_DEPLOY = 'packages/kn-next/src/__tests__/deploy-orchestrator.test.ts';
@@ -110,167 +122,177 @@ const GENERATE_BUILD_ID =
   '    generateBuildId: () => process.env.KNEXT_BUILD_ID || process.env.NEXT_DEPLOYMENT_ID || null,\n';
 
 /**
- * Every disarm, as `[file, label, anchor, replacement, spec, opts?]`.
+ * Every disarm, as `{ subject, label, anchor, replacement, spec, opts? }`.
  *
  * A TABLE rather than inline calls, so the declaration below is DERIVED from it
  * and cannot drift: adding a row runs it and counts it in the same edit.
  */
 const MUTATIONS = [
-  [
-    APP_TEMPLATE,
-    '#892 ROOT CAUSE: the app template loses generateBuildId (vinext mints a UUID)',
-    GENERATE_BUILD_ID,
-    '',
-    SPEC_TEMPLATES,
+  {
+    subject: 'appTemplate',
+    label: '#892 ROOT CAUSE: the app template loses generateBuildId (vinext mints a UUID)',
+    anchor: GENERATE_BUILD_ID,
+    replacement: '',
+    spec: SPEC_TEMPLATES,
     // `.hbs` has no comment syntax the harness knows, so the residue marker's
     // prefix is supplied here.
-    { commentPrefix: '//' },
-  ],
-  [
-    ZONE_TEMPLATE,
-    'the ZONE generator template is left behind while the app template is fixed',
-    GENERATE_BUILD_ID,
-    '',
-    SPEC_TEMPLATES,
-    { commentPrefix: '//' },
-  ],
-  [
-    DEPLOY,
-    'PRE-T2 BEHAVIOUR: a missing build prefix stops aborting the deploy',
-    '        if (!prefix.ok) {\n',
-    '        if (false) {\n',
-    SPEC_DEPLOY,
-  ],
-  [
-    DEPLOY,
-    'the guard stops running under --skip-build (the leg nothing else checks)',
-    '    if (resolvedBuild === "vinext" && uploadsAssets) {\n',
-    '    if (resolvedBuild === "vinext" && uploadsAssets && !options.skipBuild) {\n',
-    SPEC_DEPLOY,
-  ],
-  [
-    DEPLOY,
-    'ROUND 2: the guard fires on deploys that upload NOTHING (no-storage / --skip-upload)',
-    '    const uploadsAssets = hasStorage(config) && !options.skipUpload;\n',
-    '    const uploadsAssets = true;\n',
+    opts: { commentPrefix: '//' },
+  },
+  {
+    subject: 'zoneTemplate',
+    label: 'the ZONE generator template is left behind while the app template is fixed',
+    anchor: GENERATE_BUILD_ID,
+    replacement: '',
+    spec: SPEC_TEMPLATES,
+    opts: { commentPrefix: '//' },
+  },
+  {
+    subject: 'deploy',
+    label: 'PRE-T2 BEHAVIOUR: a missing build prefix stops aborting the deploy',
+    anchor: '        if (!prefix.ok) {\n',
+    replacement: '        if (false) {\n',
+    spec: SPEC_DEPLOY,
+  },
+  {
+    subject: 'deploy',
+    label: 'the guard stops running under --skip-build (the leg nothing else checks)',
+    anchor: '    if (resolvedBuild === "vinext" && uploadsAssets) {\n',
+    replacement: '    if (resolvedBuild === "vinext" && uploadsAssets && !options.skipBuild) {\n',
+    spec: SPEC_DEPLOY,
+  },
+  {
+    subject: 'deploy',
+    label: 'ROUND 2: the guard fires on deploys that upload NOTHING (no-storage / --skip-upload)',
+    anchor: '    const uploadsAssets = hasStorage(config) && !options.skipUpload;\n',
+    replacement: '    const uploadsAssets = true;\n',
     // The suite that owns ADR-0047's mode. Round 1 stubbed the seam to always
     // agree here, which is exactly why this defect reached review.
-    SPEC_NO_STORAGE,
-  ],
-  [
-    DEPLOY,
-    'the --skip-build case reverts to a FATAL dump instead of usage guidance',
-    '                throw new UsageError(\n',
-    '                throw new Error(\n',
-    SPEC_DEPLOY,
-  ],
-  [
-    DEPLOY,
-    'T2d: the config-override warning goes silent (green-if-deleted in round 1)',
+    spec: SPEC_NO_STORAGE,
+  },
+  {
+    subject: 'deploy',
+    label: 'the --skip-build case reverts to a FATAL dump instead of usage guidance',
+    anchor: '                throw new UsageError(\n',
+    replacement: '                throw new Error(\n',
+    spec: SPEC_DEPLOY,
+  },
+  {
+    subject: 'deploy',
+    label: 'T2d: the config-override warning goes silent (green-if-deleted in round 1)',
     // #1417 round 2: T2d was rewritten from a single NEXT_DEPLOYMENT_ID check
     // into a loop over [NEXT_DEPLOYMENT_ID_ENV, KNEXT_BUILD_ID_ENV] (the same
     // silent-override risk now applies to both vars) — re-anchored on the
     // loop body's `if`, which is unique in the file.
-    '        if (configured !== undefined && configured !== buildId) {\n',
-    '        if (false) {\n',
-    SPEC_DEPLOY,
-  ],
-  [
-    UPLOAD,
-    '#892 ITSELF: the .knext-build marker is not staged for a vinext build',
+    anchor: '        if (configured !== undefined && configured !== buildId) {\n',
+    replacement: '        if (false) {\n',
+    spec: SPEC_DEPLOY,
+  },
+  {
+    subject: 'upload',
+    label: '#892 ITSELF: the .knext-build marker is not staged for a vinext build',
     // Anchored on the WRITE site: since round 3 there are two `if (buildId)`
     // blocks (validate, then write), and the preflight refused the ambiguous
     // anchor rather than silently scoring the wrong one.
-    '    if (buildId) {\n        writeFileSync(\n',
-    '    if (false) {\n        writeFileSync(\n',
-    SPEC_GC,
-  ],
-  [
-    UPLOAD,
-    'the marker is written into the ARTIFACT instead of the staging copy',
-    '            join(stagingDir, "_next", "static", buildId, BUILD_MARKER_FILENAME),\n',
-    '            join(sourceDir, "_next", "static", buildId, BUILD_MARKER_FILENAME),\n',
-    SPEC_STAGE,
-  ],
-  [
-    UPLOAD,
-    'ROUND 2: the write site TRUSTS the caller instead of verifying the prefix',
+    anchor: '    if (buildId) {\n        writeFileSync(\n',
+    replacement: '    if (false) {\n        writeFileSync(\n',
+    spec: SPEC_GC,
+  },
+  {
+    subject: 'upload',
+    label: 'the marker is written into the ARTIFACT instead of the staging copy',
+    anchor: '            join(stagingDir, "_next", "static", buildId, BUILD_MARKER_FILENAME),\n',
+    replacement:
+      '            join(sourceDir, "_next", "static", buildId, BUILD_MARKER_FILENAME),\n',
+    spec: SPEC_STAGE,
+  },
+  {
+    subject: 'upload',
+    label: 'ROUND 2: the write site TRUSTS the caller instead of verifying the prefix',
     // #1574: `if (!check.ok) {` alone now occurs twice in this file (a second,
     // unrelated asset/image-mismatch check was added at a different call
     // site). Anchored on the `verifyVinextStaticPrefix` call immediately
     // above it, which is unique and still targets the same write site.
-    '        const check = verifyVinextStaticPrefix(cwd, buildId);\n        if (!check.ok) {\n',
-    '        const check = verifyVinextStaticPrefix(cwd, buildId);\n        if (false) {\n',
-    SPEC_STAGE,
-  ],
-  [
-    UPLOAD,
-    'ROUND 3: the STANDALONE write site accepts a RESERVED name as a build id',
+    anchor:
+      '        const check = verifyVinextStaticPrefix(cwd, buildId);\n        if (!check.ok) {\n',
+    replacement:
+      '        const check = verifyVinextStaticPrefix(cwd, buildId);\n        if (false) {\n',
+    spec: SPEC_STAGE,
+  },
+  {
+    subject: 'upload',
+    label: 'ROUND 3: the STANDALONE write site accepts a RESERVED name as a build id',
     // Two RESERVED refusals now exist (standalone + vinext), so the bare
     // `if (RESERVED_STATIC_DIRS.has(buildId)) {` anchor spans both and fails the
     // exactly-once preflight. Anchored on THIS site's preceding comment so it
     // resolves to the standalone block alone; the vinext block has its own row.
-    '        // build shares — the max-blast-radius over-delete.\n        if (RESERVED_STATIC_DIRS.has(buildId)) {\n',
-    '        // build shares — the max-blast-radius over-delete.\n        if (false) {\n',
-    SPEC_STAGE,
-  ],
-  [
-    UPLOAD,
-    'ROUND 3: the VINEXT write site accepts a RESERVED name as a build id',
+    anchor:
+      '        // build shares — the max-blast-radius over-delete.\n        if (RESERVED_STATIC_DIRS.has(buildId)) {\n',
+    replacement:
+      '        // build shares — the max-blast-radius over-delete.\n        if (false) {\n',
+    spec: SPEC_STAGE,
+  },
+  {
+    subject: 'upload',
+    label: 'ROUND 3: the VINEXT write site accepts a RESERVED name as a build id',
     // The twin of the row above, anchored on the vinext block's preceding
     // comment so each refusal is disarmed by exactly one row: deleting EITHER
     // RESERVED check reds the prover, neither is decorative.
-    '        // pruner a licence to reap it — the max-blast-radius over-delete.\n        if (RESERVED_STATIC_DIRS.has(buildId)) {\n',
-    '        // pruner a licence to reap it — the max-blast-radius over-delete.\n        if (false) {\n',
-    SPEC_STAGE,
-  ],
-  [
-    UPLOAD,
-    'ROUND 3: a copy happens BEFORE the refusals, leaking a temp dir per failed deploy',
+    anchor:
+      '        // pruner a licence to reap it — the max-blast-radius over-delete.\n        if (RESERVED_STATIC_DIRS.has(buildId)) {\n',
+    replacement:
+      '        // pruner a licence to reap it — the max-blast-radius over-delete.\n        if (false) {\n',
+    spec: SPEC_STAGE,
+  },
+  {
+    subject: 'upload',
+    label: 'ROUND 3: a copy happens BEFORE the refusals, leaking a temp dir per failed deploy',
     // Reinstates the round-2 ordering as a single substitution: the tree is
     // duplicated first, so every refusal below now throws with a staging dir
     // already created and nothing holding a reference to clean it up.
-    '    if (buildId) {\n        // A reserved segment can never be a build-id.',
-    '    const leaked = mkdtempSync(join(tmpdir(), "knext-upload-"));\n' +
+    anchor: '    if (buildId) {\n        // A reserved segment can never be a build-id.',
+    replacement:
+      '    const leaked = mkdtempSync(join(tmpdir(), "knext-upload-"));\n' +
       '    cpSync(sourceDir, leaked, { recursive: true });\n' +
       '    if (buildId) {\n        // A reserved segment can never be a build-id.',
-    SPEC_STAGE,
-  ],
-  [
-    UPLOAD,
-    'THE OVER-DELETE DIRECTION: any prefix satisfies the check, not the stated one',
-    '    if (expectedId && siblings.includes(expectedId)) return { ok: true };\n',
-    '    if (siblings.length > 0) return { ok: true };\n',
-    SPEC_STAGE,
-  ],
-  [
-    RESERVED_DIRS,
-    "ROUND 2: _vinext_fonts drops out of the pruner's reserved set (the next/font app)",
-    '    "_vinext_fonts",\n',
-    '',
-    SPEC_GC,
-  ],
-  [
-    UPLOAD,
-    'PRE-T2 BEHAVIOUR: reclaimBuildPrefix deletes nothing and says it reclaimed',
-    '    if (!buildId) return; // never scope to the static root\n',
-    '    if (true) return; // never scope to the static root\n',
-    SPEC_GC,
-  ],
-  [
-    CR_BUILDER,
-    'the CR stops carrying NEXT_DEPLOYMENT_ID into the pod',
-    '                  ...(buildId ? { [DEPLOYMENT_ID_ENV]: buildId } : {}),\n',
-    '',
-    SPEC_CR_ENV,
-  ],
-  [
-    CR_BUILDER,
-    "the user's colliding value wins over the deploy's id (the key is still there)",
-    '                  ...config.env,\n                  ...(buildId ? { [DEPLOYMENT_ID_ENV]: buildId } : {}),\n',
-    '                  ...(buildId ? { [DEPLOYMENT_ID_ENV]: buildId } : {}),\n                  ...config.env,\n',
-    SPEC_CR_ENV,
-  ],
+    spec: SPEC_STAGE,
+  },
+  {
+    subject: 'upload',
+    label: 'THE OVER-DELETE DIRECTION: any prefix satisfies the check, not the stated one',
+    anchor: '    if (expectedId && siblings.includes(expectedId)) return { ok: true };\n',
+    replacement: '    if (siblings.length > 0) return { ok: true };\n',
+    spec: SPEC_STAGE,
+  },
+  {
+    subject: 'reservedDirs',
+    label: "ROUND 2: _vinext_fonts drops out of the pruner's reserved set (the next/font app)",
+    anchor: '    "_vinext_fonts",\n',
+    replacement: '',
+    spec: SPEC_GC,
+  },
+  {
+    subject: 'upload',
+    label: 'PRE-T2 BEHAVIOUR: reclaimBuildPrefix deletes nothing and says it reclaimed',
+    anchor: '    if (!buildId) return; // never scope to the static root\n',
+    replacement: '    if (true) return; // never scope to the static root\n',
+    spec: SPEC_GC,
+  },
+  {
+    subject: 'crBuilder',
+    label: 'the CR stops carrying NEXT_DEPLOYMENT_ID into the pod',
+    anchor: '                  ...(buildId ? { [DEPLOYMENT_ID_ENV]: buildId } : {}),\n',
+    replacement: '',
+    spec: SPEC_CR_ENV,
+  },
+  {
+    subject: 'crBuilder',
+    label: "the user's colliding value wins over the deploy's id (the key is still there)",
+    anchor:
+      '                  ...config.env,\n                  ...(buildId ? { [DEPLOYMENT_ID_ENV]: buildId } : {}),\n',
+    replacement:
+      '                  ...(buildId ? { [DEPLOYMENT_ID_ENV]: buildId } : {}),\n                  ...config.env,\n',
+    spec: SPEC_CR_ENV,
+  },
 ];
 
 /**
@@ -281,7 +303,8 @@ const MUTATIONS = [
 function assertDistinctMutations() {
   const problems = [];
   const seen = new Map();
-  for (const [file, label, anchor, replacement] of MUTATIONS) {
+  for (const { subject, label, anchor, replacement } of MUTATIONS) {
+    const file = subjectPath(subject);
     const source = readFileSync(file, 'utf8');
     const occurrences = countOccurrences(source, anchor);
     if (occurrences !== 1) {
@@ -316,7 +339,7 @@ declareMutations(MUTATIONS.length);
 
 /** One resolved runner per spec — every spec here is bun:test (#902). */
 const RUNNERS = new Map();
-for (const spec of new Set(MUTATIONS.map((m) => m[4]))) {
+for (const spec of new Set(MUTATIONS.map((m) => m.spec))) {
   RUNNERS.set(spec, resolveSpecRunner(REPO_ROOT, spec));
 }
 
@@ -355,7 +378,8 @@ console.log('');
 let pass = 0;
 let fail = 0;
 
-for (const [file, label, anchor, replacement, spec, opts = {}] of MUTATIONS) {
+for (const { subject, label, anchor, replacement, spec, opts = {} } of MUTATIONS) {
+  const file = subjectPath(subject);
   console.log(`── disarming: ${label}`);
   const snap = snapshot(file);
   try {

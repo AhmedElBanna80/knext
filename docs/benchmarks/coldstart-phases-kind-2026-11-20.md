@@ -93,10 +93,11 @@ open from another pod 2516 / 2580; queue-proxy probe success 3247 / 3318 (median
 3. Everything before the container runs (activation, scheduling, sandbox) is about 350 ms.
 
 Phase-label note: the table boundary is `qp_ready = min(qp_probe_ok, Ready, first_byte)` (`analyze.py`). In 6 of
-12 rows (2, 4, 7, 9, 11, 12) the harness probe succeeded at or after the first byte, so `qp_ready` is clipped
-to the first byte and the forward + render phase is 0 there. That is why its median is 19 ms and its p95 286 ms
-is driven by the other rows. Treat "probe success to first byte" as at most a few tens of ms, not a measurement of
-forwarding.
+12 rows (2, 4, 7, 9, 11, 12) the harness probe succeeded at or after the first byte. In rows 7, 9 and 11
+`qp_ready` is then exactly the first byte and forward + render is 0. In rows 2, 4 and 12 the pod's `Ready`
+condition came first (3207.3 vs first byte 3221.2, 3235.6 vs 3244.6, 3215.1 vs 3248.8 ms), so forward + render
+there is about 14, 9 and 34 ms. That is why its median is 19 ms and its p95 286 ms is driven by the other rows.
+Treat "probe success to first byte" as at most a few tens of ms, not a measurement of forwarding.
 
 ## A side finding: pod Ready is not seen on the request path (cause unproven)
 

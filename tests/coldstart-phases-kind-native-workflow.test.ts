@@ -9,7 +9,9 @@ import { join, resolve } from 'node:path';
  * kind cold-start phase harness.
  *
  * Invariants a casual edit could silently destroy:
- * 1. DISPATCH-ONLY. A measurement tool, not a gate: no schedule, push or pull_request trigger.
+ * 1. MANUAL. A measurement tool, not a gate: the only triggers are workflow_dispatch and ONE push
+ *    trigger restricted to branches: [bench/run-coldstart-native] (the default-branch dispatch
+ *    limitation); no paths, tags, other branches, schedule or pull_request.
  * 2. Inputs n, arms, ready_window_s with the agreed defaults (12, three arms, 20), validated in the
  *    shell (n >= 12, window 16..45) and reaching the shell through env only.
  * 3. The three arms resolve (node 1000m, node no-limit, bun 1000m) and unknown arms are refused.
@@ -35,18 +37,66 @@ const code = text
   .filter((l) => !/^\s*#/.test(l))
   .join('\n');
 
+/** The `on:` block of a workflow text (comments already stripped by the caller). */
+function onBlock(t: string) {
+  const i = t.indexOf('\non:');
+  const j = t.indexOf('\npermissions:');
+  return i < 0 || j < 0 ? '' : t.slice(i, j);
+}
+
+/** Every way the trigger block departs from "dispatch + exactly the one bench-branch push". */
+function onViolations(t: string): string[] {
+  const on = onBlock(t);
+  const v: string[] = [];
+  const top = [...on.matchAll(/^ {2}([a-z_]+):/gm)].map((m) => m[1]);
+  for (const k of top) if (k !== 'push' && k !== 'workflow_dispatch') v.push(`trigger ${k}`);
+  if (top.filter((k) => k === 'push').length !== 1) v.push('push trigger count != 1');
+  const push = on.match(/^ {2}push:\n((?: {4}.*\n?)*)/m);
+  if (!push || push[1].trimEnd() !== '    branches: [bench/run-coldstart-native]')
+    v.push('push body is not exactly the one branch');
+  if (/\bcron:/.test(on)) v.push('cron');
+  return v;
+}
+
 function arms(arg?: string) {
   return spawnSync('bash', [ARMS_SH, ...(arg === undefined ? [] : [arg])], { encoding: 'utf8' });
 }
 
 describe('coldstart-phases-kind-native workflow shape', () => {
-  it('is dispatch-only: no schedule, push or pull_request trigger', () => {
-    const on = code.slice(code.indexOf('\non:'), code.indexOf('\npermissions:'));
-    expect(on).toMatch(/workflow_dispatch:/);
-    expect(on).not.toMatch(/\bschedule:/);
-    expect(on).not.toMatch(/\bcron:/);
-    expect(on).not.toMatch(/\bpush:/);
-    expect(on).not.toMatch(/\bpull_request(_target)?:/);
+  it('has exactly one push trigger (the dedicated bench branch), dispatch, and nothing else', () => {
+    expect(onViolations(code)).toEqual([]);
+    expect(onBlock(code)).toMatch(/workflow_dispatch:/);
+  });
+
+  it('the trigger scan rejects a second branch, tags, paths, a schedule or a pull_request', () => {
+    const base =
+      '\non:\n  push:\n    branches: [bench/run-coldstart-native]\n  workflow_dispatch:\n';
+    const wrap = (on: string) => `${on}\npermissions:\n  contents: read\n`;
+    expect(onViolations(wrap(base))).toEqual([]);
+    const bad = [
+      base.replace('[bench/run-coldstart-native]', '[bench/run-coldstart-native, main]'),
+      base.replace('[bench/run-coldstart-native]', "['bench/**']"),
+      base.replace('[bench/run-coldstart-native]', '[bench/run-coldstart-native]\n    tags: [v*]'),
+      base.replace('[bench/run-coldstart-native]', '[bench/run-coldstart-native]\n    paths: [x]'),
+      `${base}  schedule:\n    - cron: '0 0 * * *'\n`,
+      `${base}  pull_request:\n`,
+      `${base}  pull_request_target:\n`,
+      base.replace('  push:\n    branches: [bench/run-coldstart-native]\n', '  push:\n'),
+      base.replace('  push:\n    branches: [bench/run-coldstart-native]\n', ''),
+    ];
+    for (const b of bad) expect(onViolations(wrap(b)).length).toBeGreaterThan(0);
+  });
+
+  it('falls back to the documented defaults when the inputs are empty (push event)', () => {
+    expect(code).toMatch(/\n {6}N: \$\{\{ inputs\.n \|\| '12' \}\}\n/);
+    expect(code).toMatch(
+      /\n {6}ARMS: \$\{\{ inputs\.arms \|\| 'node-1000m,node-nolimit,bun-1000m' \}\}\n/,
+    );
+    expect(code).toMatch(/\n {6}READY_WINDOW_S: \$\{\{ inputs\.ready_window_s \|\| '20' \}\}\n/);
+    // The fallbacks equal the declared input defaults, and the validation step still reads them.
+    expect(code).toMatch(/\n {2}- name: Validate inputs|- name: Validate inputs/);
+    expect(code).toMatch(/\[ "\$N" -le 30 \]/);
+    expect(code).toMatch(/run-budget\.sh "\$N"/);
   });
 
   it('declares the three inputs with the agreed defaults', () => {
@@ -94,7 +144,7 @@ describe('coldstart-phases-kind-native workflow shape', () => {
     // No bare substring globs on a command line.
     expect(code).not.toMatch(/\*bun\*|\*node\*/);
     // Distroless image: read the process from the kind node, never exec into the app container.
-    expect(code).toMatch(/containerStatuses\[\?\(@\.name==\"user-container\"\)\]\.containerID/);
+    expect(code).toMatch(/containerStatuses\[\?\(@\.name=="user-container"\)\]\.containerID/);
     expect(code).toMatch(/docker exec "\$knode" crictl inspect "\$cid"/);
     expect(code).toMatch(/jq -r '\.info\.pid'/);
     expect(code).toMatch(/docker exec "\$knode" cat "\/proc\/\$\{hostpid\}\/cmdline"/);

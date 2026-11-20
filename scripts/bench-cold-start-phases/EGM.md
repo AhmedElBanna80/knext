@@ -16,7 +16,7 @@ This directory measures the per-phase cold start of a Knative Service on any clu
   - `compact.py in.jsonl out.jsonl`: trims harness JSONL for committing.
   - `dns-probe.js`: times resolver lookups inside an app container and prints JSON.
   - `kubelet-snapshot.sh [context] [outdir]`: saves each node's kubelet `configz` and `metrics`.
-- Subdirectories: [ceiling](./ceiling/EGM.md) (patched-kubelet ceiling test) and [gke](./gke/EGM.md) (GKE runtime and minimisation tools, including [gke/variants](./gke/variants/EGM.md)).
+- Subdirectories: [ceiling](./ceiling/EGM.md) (patched-kubelet ceiling test) and [gke](./gke/EGM.md) (GKE runtime and minimisation tools, including [gke/variants](./gke/variants/EGM.md)), and `kind/` (no EGM of its own; it holds `phase-harness-kind.yaml`, the single-node kind harness manifest for the clock and agent pods, plus the harness-only NetworkPolicy allow `bench-harness-probes`, which is needed because the operator's default policy blocks direct probes).
 
 ## Invariants
 - `benchconfig.load_file`: an unknown config key (other than `$comment`) raises `SystemExit`, so a typo cannot fall back to a default silently.

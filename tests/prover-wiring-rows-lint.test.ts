@@ -906,7 +906,10 @@ const MUTATIONS = [{ subject: 'thing', anchor: 'a', replacement: 'b' }];`,
   });
   it('in CI the base is GITHUB_BASE_REF as origin/<ref> when --base is not given', () => {
     withRepo({}, { [P]: 1 }, ESCAPES, 'grow', (root) => {
-      const r = lint(root, { GITHUB_ACTIONS: 'true', GITHUB_BASE_REF: 'main' }, []);
+      // only origin/rel exists, so a base found by guessing (origin/main) cannot satisfy this
+      sh(root, 'update-ref', 'refs/remotes/origin/rel', 'main');
+      sh(root, 'update-ref', '-d', 'refs/remotes/origin/main');
+      const r = lint(root, { GITHUB_ACTIONS: 'true', GITHUB_BASE_REF: 'rel' }, []);
       expect(r.status).toBe(1);
       expect(r.stderr).toContain('baseline raised 0 -> 1');
     });

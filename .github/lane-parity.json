@@ -150,14 +150,14 @@
     {
       "path": "tests/mutation-prover-lane.test.ts",
       "lane": "main",
-      "here": "df4681d80aa4834677cdf7a1f249a7ee1a92f8e8",
-      "there": "3c1aa8a591cd2d0add35e053c3ccfc9ca765e49a",
+      "here": "d540af6c42bc4064237ae9261e6a5b79ae79b1e6",
+      "there": "b02f899a2d17a585fe1d403042cb4615678b2c69",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported. v2 runs the same sharded re-run over main and integration/v2, plus a daily integration/v2 leg, so nothing is left to port."
     },
     {
       "path": "tests/mutation-prover-lane.test.ts",
       "lane": "integration/v1.3",
-      "here": "df4681d80aa4834677cdf7a1f249a7ee1a92f8e8",
+      "here": "d540af6c42bc4064237ae9261e6a5b79ae79b1e6",
       "there": "deffb7d17b8be74666e990702d51e42893a34f42",
       "reason": "v2-only rework of the mutation-prover lane (prover audit, PROVER_LANE_REF precedence, ANSI-tolerant baseline, sharding over main and integration/v2); the 1.x lanes keep the older lane by design and are not back-ported."
     },

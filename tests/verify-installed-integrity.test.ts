@@ -9,8 +9,8 @@ const ROOT = resolve(import.meta.dir, '..');
 const SCRIPT = resolve(ROOT, 'scripts/verify-installed-integrity.mjs');
 const LOCK = `{
   "packages": {
-    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-TSINT"],
     "typescript-tsc7": ["typescript@7.0.2", "", { "bin": { "tsc": "bin/tsc" } }, "sha512-OTHER"],
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-TSINT"],
     "yaml": ["yaml@2.9.0", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-YAMLINT"],
   }
 }`;
@@ -27,11 +27,23 @@ const check = (installedLockText: string, packages = ['typescript', 'yaml'], loc
 
 describe('lockedPackage', () => {
   it('reads the exact top-level entry, not a name-prefixed sibling', () => {
+    // the sibling `typescript-tsc7` is listed FIRST, so a prefix match would return it
     expect(lockedPackage(LOCK, 'typescript')).toEqual({
       version: '5.9.3',
       integrity: 'sha512-TSINT',
+      hasDependencies: false,
     });
-    expect(lockedPackage(LOCK, 'yaml')).toEqual({ version: '2.9.0', integrity: 'sha512-YAMLINT' });
+    expect(lockedPackage(LOCK, 'yaml')).toEqual({
+      version: '2.9.0',
+      integrity: 'sha512-YAMLINT',
+      hasDependencies: false,
+    });
+  });
+  it('reports dependencies and optionalDependencies in the tuple', () => {
+    const lock = `"a": ["a@1.0.0", "", { "dependencies": { "b": "^1" } }, "sha512-A"],
+    "c": ["c@1.0.0", "", { "optionalDependencies": { "d": "^1" } }, "sha512-C"],`;
+    expect(lockedPackage(lock, 'a').hasDependencies).toBe(true);
+    expect(lockedPackage(lock, 'c').hasDependencies).toBe(true);
   });
   it('throws for a package with no entry', () => {
     expect(() => lockedPackage(LOCK, 'left-pad')).toThrow(/no top-level left-pad entry/);
@@ -62,6 +74,23 @@ describe('verifyInstalledIntegrity (fail closed)', () => {
     expect(() => check(installed(), ['left-pad'])).toThrow(/no top-level left-pad entry/);
     expect(() => check(installed(), [])).toThrow(/no packages to verify/);
     expect(() => check('not json')).toThrow();
+  });
+  it('rejects a package whose bun.lock tuple lists dependencies (transitive deps are not verified)', () => {
+    const lock = LOCK.replace(
+      '{ "bin": { "yaml": "bin.mjs" } }',
+      '{ "dependencies": { "x": "^1" }, "bin": { "yaml": "bin.mjs" } }',
+    );
+    expect(() => check(installed(), ['typescript', 'yaml'], lock)).toThrow(
+      /yaml lists dependencies in the lockfile: transitive deps are not verified/,
+    );
+  });
+  it('rejects a package whose npm entry lists dependencies, even optional ones', () => {
+    for (const key of ['dependencies', 'optionalDependencies']) {
+      const entry = { version: '2.9.0', integrity: 'sha512-YAMLINT', [key]: { x: '^1' } };
+      expect(() => check(installed({ 'node_modules/yaml': entry }))).toThrow(
+        /yaml lists dependencies in the installed lockfile: transitive deps are not verified/,
+      );
+    }
   });
   it('checks every package, not only the first', () => {
     expect(() =>

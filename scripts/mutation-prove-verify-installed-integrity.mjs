@@ -73,6 +73,25 @@ const MUTATIONS = [
     replacement: '`\\\\s*"${n}[^"]*": ',
   },
   {
+    label:
+      'a package with dependencies in its bun.lock tuple is verified anyway (transitive deps unchecked)',
+    subject: 'script',
+    anchor: 'if (locked.hasDependencies) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: "a package with dependencies in npm's entry is verified anyway",
+    subject: 'script',
+    anchor: 'if (entry.dependencies || entry.optionalDependencies) {',
+    replacement: 'if (false) {',
+  },
+  {
+    label: 'optionalDependencies are not counted as dependencies in the bun.lock tuple',
+    subject: 'script',
+    anchor: '/"(?:optionalD|d)ependencies"/',
+    replacement: '/"dependencies"/',
+  },
+  {
     label: 'the CLI swallows a failure (exits 0)',
     subject: 'script',
     anchor: 'process.exit(1);',
@@ -110,7 +129,7 @@ const MUTATIONS = [
   },
 ];
 
-const DECLARED = 11;
+const DECLARED = 14;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

@@ -47,7 +47,7 @@ import {
   GATES,
   runGateTest as runGateTestIn,
 } from './lib/ci-blocking-gate-proof.mjs';
-import { mutate, restore, snapshot } from './lib/mutation-harness.mjs';
+import { assertAnchorsResolved, mutate, restore, snapshot } from './lib/mutation-harness.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -97,6 +97,25 @@ const disarmsFor = (gate) => [
  * prover that stops at gate 3 of 6 loud instead of a green that proves nothing.
  */
 declareMutations(GATES.reduce((n, gate) => n + disarmsFor(gate).length, 0));
+
+/**
+ * SELF-ASSERTING (classified in `SELF_ASSERTING_PROVERS`, scripts/lib/prover-lane.mjs).
+ *
+ * Every anchor here is DERIVED (a job id spliced into a key, a per-gate override),
+ * so the PR-time audit has no literal to read. This resolves the very anchors
+ * `prove` will hand to `mutate` — through the same `disarmAnchor` — and refuses to
+ * plant anything unless each occurs exactly once in its gate's workflow. The
+ * audit checks this call is still here; removing it reds that check.
+ */
+assertAnchorsResolved(
+  GATES.flatMap((gate) =>
+    disarmsFor(gate).map((disarm) => ({
+      label: `${gate.spec} :: ${gate.jobId} :: ${disarm.label}`,
+      file: resolve(REPO_ROOT, gate.workflow),
+      anchor: disarmAnchor(gate.jobId, disarm),
+    })),
+  ),
+);
 
 let pass = 0;
 let fail = 0;

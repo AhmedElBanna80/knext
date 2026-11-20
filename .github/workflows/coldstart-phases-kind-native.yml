@@ -7,8 +7,8 @@ name: Cold-start phases on kind (native amd64, dispatch-only)
 #
 # DISPATCH-ONLY by design: a measurement tool, not a gate or a monitor. There is no schedule, push
 # or pull_request trigger (guard-tested in tests/coldstart-phases-kind-native-workflow.test.ts).
-# One run takes the runner for about an hour at the defaults; cancel-in-progress keeps a re-dispatch
-# from running two measurements against one runner pool.
+# One run takes the runner for about an hour at the defaults; the concurrency group queues a
+# re-dispatch behind it so two measurements never share the runner pool.
 #
 # Arms (one Knative Service each, interleaved by drive.py, N true scale-from-zero wakes per arm):
 #   node-1000m    node runtime, cpu limit 1000m (the platform default)
@@ -43,9 +43,12 @@ on:
 permissions:
   contents: read
 
+# One run at a time on the group, queued rather than cancelled: the job applies manifests to an
+# ephemeral kind cluster (kubectl apply, kn-next deploy), and repo policy disallows cancelling a
+# state-mutating workflow mid-apply. A second dispatch waits for the first to finish.
 concurrency:
   group: coldstart-phases-kind-native
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   phases:

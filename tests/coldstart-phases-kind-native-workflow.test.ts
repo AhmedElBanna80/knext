@@ -14,7 +14,7 @@ import { join, resolve } from 'node:path';
  *    shell (n >= 12, window 16..45) and reaching the shell through env only.
  * 3. The three arms resolve (node 1000m, node no-limit, bun 1000m) and unknown arms are refused.
  * 4. Every action is pinned by a 40-hex SHA with a `# vX.Y.Z` comment; permissions are read-only;
- *    concurrency cancels in progress.
+ *    concurrency group queues runs (cancel-in-progress: false; the job applies to a cluster).
  * 5. The harness is called as it is: `analyze.py` with --p95 and no edits to its flags here.
  * 6. The Ready window is wired end to end: workflow -> drive.py -> cold-cycle.mjs, default 1500 ms.
  * 7. The summary reports Ready recorded and image pulled per arm, and fails when an arm has no rows.
@@ -26,7 +26,7 @@ const REPO_ROOT = resolve(import.meta.dirname, '..');
 const WF = resolve(REPO_ROOT, '.github/workflows/coldstart-phases-kind-native.yml');
 const DIR = resolve(REPO_ROOT, 'scripts/bench-cold-start-phases');
 const ARMS_SH = resolve(DIR, 'kind/arms.sh');
-const SUMMARY_PY = resolve(DIR, 'kind/summarize-native.py');
+const SUMMARY_PY = resolve(REPO_ROOT, 'scripts/bench-cold-start-phases/kind/summarize-native.py');
 const text = readFileSync(WF, 'utf8');
 
 /** The workflow text with whole-line comments removed, so a comment cannot satisfy a scan. */
@@ -69,9 +69,9 @@ describe('coldstart-phases-kind-native workflow shape', () => {
       expect(body).not.toMatch(/github\.event\.inputs|\$\{\{\s*inputs\./);
   });
 
-  it('has read-only permissions and a cancel-in-progress concurrency group', () => {
+  it('has read-only permissions and a queuing concurrency group', () => {
     expect(code).toMatch(/\npermissions:\n {2}contents: read\n/);
-    expect(code).toMatch(/\nconcurrency:\n {2}group: \S+\n {2}cancel-in-progress: true\n/);
+    expect(code).toMatch(/\nconcurrency:\n {2}group: \S+\n {2}cancel-in-progress: false\n/);
     expect(code).not.toMatch(/\n\s+(?:id-token|packages|pull-requests|actions|issues): write/);
   });
 

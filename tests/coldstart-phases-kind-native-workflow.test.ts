@@ -762,8 +762,8 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
           '  rm) exit 0 ;;',
           '  inspect) printf "%s\\n" "PATH=/usr/bin" "${FAKE_ENV:-}" ;;',
           '  cp) src="${2#fakecid:}"; dst="$3"; cp -R "$FAKE_FX$src" "$dst" 2>/dev/null || exit 1 ;;',
-          '  exec) [ "$2" = "$FAKE_NODE" ] || exit 1',
-          '        case "$3" in cat | readlink) cat "$FAKE_PROC$4" 2>/dev/null || exit 1 ;; *) exit 1 ;; esac ;;',
+          '  exec) [ "$2" = "$FAKE_NODE" ] || { echo "Error: No such container: $2" >&2; exit 1; }',
+          '        case "$3" in cat | readlink) cat "$FAKE_PROC$4" || exit 1 ;; *) exit 1 ;; esac ;;',
           'esac',
           '',
         ].join('\n'),
@@ -865,10 +865,12 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(r.status).toBe(1);
     expect(r.err).toContain('no child of the supervisor');
     expect(r.err).not.toContain('scaled away');
-    // No children at all.
+    // A supervisor that is alive with no child: the server exited or is draining, i.e. scaled away.
     const none = run(nodeCase({ proc: { [CHILDREN]: '' } }));
     expect(none.status).toBe(1);
-    expect(none.err).toContain('has no child process');
+    expect(none.err).toContain('pod scaled away before the live check');
+    expect(none.err).toContain('exited or is draining');
+    expect(none.err).not.toContain('fell back');
   });
 
   it('vinext+node: reads the cache from /app/.compile-cache and the main process env', () => {
@@ -916,6 +918,8 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
       }),
       bunCase({ proc: {} }),
       bunCase({ proc: { [CHILDREN]: '4301 ' } }), // child unreadable
+      bunCase({ proc: { [CHILDREN]: '' } }), // supervisor alive, child gone
+      nodeCase({ proc: { [CHILDREN]: '' } }),
     ];
     for (const c of gone) {
       const r = run(c);
@@ -928,7 +932,13 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
   });
 
   it('does every live /proc read BEFORE the image pull, the copies and the bytecode scan', () => {
-    for (const c of [nodeCase(), bunCase()]) {
+    const vinextNode = nodeCase({
+      build: 'vinext',
+      files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
+      env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
+      proc: { [`/proc/${KPID}/environ`]: envOf('/app/.compile-cache') },
+    });
+    for (const c of [nodeCase(), bunCase(), vinextNode]) {
       const r = run(c);
       expect(r.status).toBe(0);
       const lastExec = r.calls.lastIndexOf('exec');
@@ -942,14 +952,18 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
 
   it('every /proc read names the kind node it was given: a wrong node fails', () => {
     const r = run(nodeCase({ args: ['some-other-node', KPID] }));
-    expect(r.status).not.toBe(0);
+    expect(r.status).toBe(1);
+    // The docker stderr of the failed read is quoted, so a wrong node name stays visible.
+    expect(r.err).toContain('No such container: some-other-node');
     expect(run(nodeCase()).status).toBe(0);
   });
 
   it('refuses a missing kind node or pid, and a non-numeric pid, with exit 2', () => {
-    expect(run(nodeCase({ args: [] })).status).not.toBe(0);
-    expect(run(nodeCase({ args: [NODE] })).status).not.toBe(0);
+    expect(run(nodeCase({ args: [] })).status).toBe(2);
+    expect(run(nodeCase({ args: [NODE] })).status).toBe(2);
     expect(run(nodeCase({ args: [NODE, 'abc'] })).status).toBe(2);
+    expect(run(nodeCase({ args: [NODE, ''] })).status).toBe(2);
+    expect(run(nodeCase({ args: [NODE, KPID, 'extra'] })).status).toBe(2);
   });
 
   const M = 'knext-standalone-exec:aaaaaaaaaaaaaaaaaaaaaaaa';
@@ -1038,10 +1052,85 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(fallback.status).toBe(1);
     expect(fallback.err).toContain('fell back');
     expect(fallback.err).not.toContain('scaled away');
-    // No child at all.
+    // A supervisor that is alive with no child: the executable exited or is draining.
     const none = run(bunCase({ proc: { [CHILDREN]: '' } }));
     expect(none.status).toBe(1);
-    expect(none.err).toContain('has no child process');
+    expect(none.err).toContain('pod scaled away before the live check');
+    expect(none.err).toContain('exited or is draining');
+  });
+
+  it('standalone bun: a zombie child never matches, not even on its surviving comm', () => {
+    const stat = (state: string) => `4301 (knext-standalon) ${state} 4242 4301 4301 0 -1 4194560\n`;
+    const only = (state: string, extra: Record<string, string> = {}) =>
+      bunCase({
+        proc: {
+          [CHILDREN]: '4301 ',
+          '/proc/4301/cmdline': '',
+          '/proc/4301/comm': 'knext-standalon\n',
+          '/proc/4301/stat': stat(state),
+          ...extra,
+        },
+      });
+    // Alive (S): the comm match is accepted.
+    const alive = run(only('S'));
+    expect(alive.status).toBe(0);
+    expect((alive.ev?.bytecode as Record<string, unknown>).live_child_matched_by).toBe('comm');
+    // Zombie (Z): the child exited, so this is a scaled-away pod, and not a match.
+    const zombie = run(only('Z'));
+    expect(zombie.status).toBe(1);
+    expect(zombie.err).toContain('pod scaled away before the live check');
+    expect(zombie.err).toContain('state=Z');
+    expect(zombie.err).not.toContain('fell back');
+    // The state is read after the LAST ')' of stat: a comm holding ')' and spaces still parses.
+    const odd = run(
+      only('S', { '/proc/4301/stat': '4301 (knext) (x) Z 4242 4301 4301 0\n' }),
+    );
+    expect(odd.status).toBe(1);
+    expect(odd.err).toContain('state=Z');
+    // A live compiled child next to a zombie one is still found.
+    const both = run(
+      bunCase({
+        proc: {
+          [CHILDREN]: '4300 4301 ',
+          '/proc/4300/cmdline': '',
+          '/proc/4300/comm': 'knext-standalon\n',
+          '/proc/4300/stat': stat('Z'),
+          '/proc/4301/cmdline': `${SEXEC}\0`,
+          '/proc/4301/comm': 'knext-standalon\n',
+          '/proc/4301/stat': stat('S'),
+        },
+      }),
+    );
+    expect(both.status).toBe(0);
+    expect((both.ev?.bytecode as Record<string, unknown>).live_child_pid).toBe(4301);
+  });
+
+  it('standalone bun: one child readable but not the executable, another unreadable: scaled away', () => {
+    const r = run(
+      bunCase({
+        proc: {
+          [CHILDREN]: '4300 4301 ',
+          '/proc/4300/cmdline': 'bun\0server.js\0',
+          '/proc/4300/exe': '/usr/local/bin/bun\n',
+          '/proc/4300/comm': 'bun\n',
+          // 4301 has no /proc entries at all: it exited between the children read and its own read.
+        },
+      }),
+    );
+    expect(r.status).toBe(1);
+    expect(r.err).toContain('pod scaled away before the live check');
+    expect(r.err).not.toContain('fell back');
+    // The same node shape: one child with the wrong env, another unreadable.
+    const n = run(
+      nodeCase({
+        proc: {
+          [CHILDREN]: '4300 4301 ',
+          '/proc/4300/environ': 'PATH=/usr/bin\0',
+        },
+      }),
+    );
+    expect(n.status).toBe(1);
+    expect(n.err).toContain('pod scaled away before the live check');
   });
 
   it('vinext bun: needs BYTECODE_BASELINE and a higher @bytecode pragma count than it', () => {
@@ -1055,7 +1144,9 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
         build: 'vinext',
         files: { 'app/server': body },
       });
-      expect(run(vcase(`${P}${P}`)).status).not.toBe(0);
+      const noBaseline = run(vcase(`${P}${P}`));
+      expect(noBaseline.status).toBe(2);
+      expect(noBaseline.err).toContain('BYTECODE_BASELINE');
       const ok = run(vcase(`${P}${P}`), baseline);
       expect(ok.status).toBe(0);
       const bc = ok.ev?.bytecode as Record<string, unknown>;
@@ -1184,6 +1275,22 @@ describe('workflow wiring of the evidence and version checks', () => {
     expect(ver).toBeGreaterThan(loopEnd);
     expect(ver).toBeLessThan(drive);
     expect(rec).toBeLessThan(drive);
+  });
+
+  it('records evidence BEFORE the kubectl spec checks, to shrink the scale-to-zero gap', () => {
+    const rec = idx(/kind\/record-evidence\.sh/);
+    const specBuild = idx(/spec_build="\$\(kubectl/);
+    const specRuntime = idx(/spec_runtime="\$\(kubectl/);
+    expect(specBuild).toBeGreaterThan(rec);
+    expect(specRuntime).toBeGreaterThan(rec);
+    // The merge that needs those values comes after them.
+    expect(idx(/--arg sb "\$\{spec_build:-turbopack\}"/)).toBeGreaterThan(specRuntime);
+  });
+
+  it('says "scaled away" when its own cmdline read fails', () => {
+    expect(code).toMatch(
+      /pod scaled away before the live check: could not read \/proc\/\$\{kpid\}\/cmdline/,
+    );
   });
 
   it('judges a vinext+bun process as bun-exec only when BOTH build and runtime say so', () => {

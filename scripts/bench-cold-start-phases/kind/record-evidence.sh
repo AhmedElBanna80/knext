@@ -7,14 +7,18 @@
 #
 # Writes <out-dir>/evidence-<arm>.json and exits non-zero (writing nothing) when the proof is absent,
 # so an arm that would have measured a bytecode-less image fails the job instead of producing a row.
-# Exit 0 evidence written; 1 the proof is absent or wrong; 2 bad arguments (unknown runtime or build,
-# missing argument, non-numeric pid). <kind-node> is the kind node container and <kind-node-pid> the pid,
+# Exit 0 evidence written; 1 the proof is absent or wrong (including a pod that scaled away); 2 bad
+# arguments or setup (a missing or empty argument, an unknown runtime or build, a non-numeric pid, or a
+# vinext+bun arm with no BYTECODE_BASELINE). <kind-node> is the kind node container and <kind-node-pid> the pid,
 # in the kind node's pid namespace (what `crictl inspect` reports), of the arm's live main process.
 #
 # ORDER MATTERS. The pod lives only about 40 s after Ready (stable window plus grace period) and then
 # scales to zero, so every live /proc read happens FIRST, before the image pull, the file copies and the
 # 100 MB bytecode scan. A /proc read that fails therefore means "the pod scaled away before the live
-# check", and that is what the error says. Only then are the image and its files checked.
+# check", and that is what the error says, with the docker stderr of the failed read appended so a wrong
+# node name or a daemon error stays visible. A supervisor whose children file is empty, a child that is
+# unreadable, and a child that is a zombie are all the same story (the child exited or is draining) and
+# say "scaled away" too. Only then are the image and its files checked.
 #
 # Live checks (the supervisor is the main process; its child is the real server):
 #   node, turbopack -> a CHILD of the supervisor (the Next server) must have NODE_COMPILE_CACHE equal to
@@ -44,14 +48,25 @@
 #            compiled without bytecode (required).
 set -euo pipefail
 
-arm="${1:?arm}"; runtime="${2:?runtime}"; build="${3:?build}"; app="${4:?app}"
-image="${5:?image}"; buildlog="${6:?build log}"; outdir="${7:?out dir}"
-knode="${8:?kind node container}"; kpid="${9:?kind-node pid of the live main process}"
-case "$kpid" in '' | *[!0-9]*) echo "record-evidence: kind-node pid '$kpid' is not a number" >&2; exit 2 ;; esac
+usage() {
+  echo "usage: record-evidence.sh <arm> <runtime> <build> <app> <image> <build-log> <out-dir> <kind-node> <kind-node-pid>" >&2
+  exit 2
+}
+# Explicit checks, not ${N:?}: an unset-parameter expansion exits 1 and the contract says 2.
+[ "$#" -eq 9 ] || { echo "record-evidence: expected 9 arguments, got $#" >&2; usage; }
+for a in "$@"; do [ -n "$a" ] || { echo "record-evidence: an argument is empty" >&2; usage; }; done
+arm="$1"; runtime="$2"; build="$3"; app="$4"
+image="$5"; buildlog="$6"; outdir="$7"
+knode="$8"; kpid="$9"
+case "$kpid" in *[!0-9]*) echo "record-evidence: kind-node pid '$kpid' is not a number" >&2; exit 2 ;; esac
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$runtime" in node | bun) ;; *) echo "record-evidence: unknown runtime '$runtime'" >&2; exit 2 ;; esac
 case "$build" in turbopack | vinext) ;; *) echo "record-evidence: unknown build '$build'" >&2; exit 2 ;; esac
+if [ "$runtime" = bun ] && [ "$build" = vinext ] && [ -z "${BYTECODE_BASELINE:-}" ]; then
+  echo "record-evidence: vinext+bun needs BYTECODE_BASELINE, a probe compiled without bytecode" >&2
+  exit 2
+fi
 
 if [ "$runtime" = node ]; then
   if [ "$build" = vinext ]; then
@@ -76,16 +91,19 @@ trap cleanup EXIT
 
 # Read one /proc file of a process on the kind node (the app image is distroless: nothing is exec'd
 # into the app container).
-dx() { docker exec "$knode" "$@"; }
+# Its stderr goes to a file (truncated per call) so a failed read can quote it.
+dx() { docker exec "$knode" "$@" 2>"$tmp/dx.err"; }
 # One variable of the image's own ENV.
 image_env() { docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" | awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }'; }
 # A /proc file as text, NULs turned into newlines IN the pipeline (a bash command substitution would drop
 # them and run the entries together). Fails when the read fails (pipefail), i.e. when the process is gone.
-proc_text() { dx cat "$1" 2>/dev/null | tr '\0' '\n'; }
+proc_text() { dx cat "$1" | tr '\0' '\n'; }
 # A variable out of the text of a /proc/<pid>/environ.
 environ_var() { awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }'; }
 scaled_away() {
-  echo "record-evidence: arm $arm: pod scaled away before the live check ($1)" >&2
+  local why=""
+  [ -s "$tmp/dx.err" ] && why=": $(tr '\n' ' ' < "$tmp/dx.err")"
+  echo "record-evidence: arm $arm: pod scaled away before the live check ($1)${why}" >&2
   exit 1
 }
 
@@ -97,7 +115,7 @@ live='{}'
 children_of() {
   # Prints the pids of the main thread's children, or exits the script when the pod is gone.
   local out
-  out="$(dx cat "/proc/${kpid}/task/${kpid}/children" 2>/dev/null)" \
+  out="$(dx cat "/proc/${kpid}/task/${kpid}/children")" \
     || scaled_away "cannot read /proc/${kpid}/task/${kpid}/children on ${knode}"
   printf '%s\n' "$out"
 }
@@ -115,7 +133,7 @@ if [ "$runtime" = node ] && [ "$build" = vinext ]; then
 
 elif [ "$runtime" = node ]; then
   children="$(children_of)"
-  [ -n "$children" ] || { echo "record-evidence: arm $arm supervisor (pid ${kpid}) has no child process: no Next server to check" >&2; exit 1; }
+  [ -n "$children" ] || scaled_away "supervisor pid ${kpid} is alive but has no child: the Next server exited or is draining"
   found=""; liveenv=""; unreadable=0
   for c in $children; do
     if ! environ="$(proc_text "/proc/${c}/environ")"; then unreadable=1; continue; fi
@@ -132,7 +150,7 @@ elif [ "$runtime" = node ]; then
 
 elif [ "$build" = turbopack ]; then
   children="$(children_of)"
-  [ -n "$children" ] || { echo "record-evidence: arm $arm supervisor (pid ${kpid}) has no child process: the compiled executable is not running" >&2; exit 1; }
+  [ -n "$children" ] || scaled_away "supervisor pid ${kpid} is alive but has no child: the compiled executable exited or is draining"
   want_base="${binpath##*/}"
   child=""; matched=""; c_argv0=""; c_exe=""; c_comm=""; unreadable=0; seen=""
   for c in $children; do
@@ -142,10 +160,17 @@ elif [ "$build" = turbopack ]; then
       cmdline_ok=1
       argv0="${cmd%%$'\n'*}"
     fi
-    exe="$(dx readlink "/proc/${c}/exe" 2>/dev/null || true)"
-    comm="$(dx cat "/proc/${c}/comm" 2>/dev/null || true)"
+    exe="$(dx readlink "/proc/${c}/exe" || true)"
+    comm="$(dx cat "/proc/${c}/comm" || true)"
     comm="${comm%$'\n'}"
     if [ "$cmdline_ok" = 0 ] && [ -z "$exe" ] && [ -z "$comm" ]; then unreadable=1; continue; fi
+    # A zombie keeps its comm after the process is gone, so a comm match on it proves nothing: the
+    # child exited. The state is the first field after the LAST ')' of /proc/<pid>/stat (comm may hold
+    # ')' and spaces). An unreadable stat leaves the state unknown and does not reject the child.
+    stat="$(dx cat "/proc/${c}/stat" || true)"
+    state=""
+    case "$stat" in *') '*) state="${stat##*) }"; state="${state:0:1}" ;; esac
+    if [ "$state" = Z ] || [ "$state" = X ]; then unreadable=1; seen="$seen ${c}:state=${state}"; continue; fi
     seen="$seen ${c}:argv0='${argv0}',exe='${exe}',comm='${comm}'"
     how=""
     if [ -n "$argv0" ] && [ "${argv0##*/}" = "$want_base" ]; then how="argv0"
@@ -155,7 +180,7 @@ elif [ "$build" = turbopack ]; then
     if [ -n "$how" ]; then child="$c"; matched="$how"; c_argv0="$argv0"; c_exe="$exe"; c_comm="$comm"; break; fi
   done
   if [ -z "$child" ]; then
-    [ "$unreadable" = 0 ] || [ -n "$seen" ] || scaled_away "cannot read any child of pid ${kpid} on ${knode}"
+    [ "$unreadable" = 0 ] || scaled_away "a child of pid ${kpid} on ${knode} was unreadable or a zombie, and none of the others is ${want_base}${seen:+ (seen:${seen})}"
     echo "record-evidence: arm $arm supervisor (pid ${kpid}) has no child running ${want_base} (${seen# }); it fell back to an uncompiled server" >&2
     exit 1
   fi
@@ -193,7 +218,6 @@ else
   extra="$live"
   if [ "$build" = vinext ]; then
     method=pragma-differential
-    : "${BYTECODE_BASELINE:?record-evidence: vinext+bun needs BYTECODE_BASELINE, a probe compiled without bytecode}"
     verdict="$(node "$here/verify-bytecode.mjs" pragma "$tmp/exe" "$BYTECODE_BASELINE")"
   else
     method=marker

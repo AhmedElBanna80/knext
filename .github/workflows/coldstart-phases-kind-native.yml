@@ -396,13 +396,19 @@ jobs:
               || { echo "::error::crictl inspect output for ${cid} (arm ${arm}) is not JSON"; exit 1; }
             case "$kpid" in ''|null|*[!0-9]*) echo "::error::crictl gave no pid for ${cid} (arm ${arm}): '${kpid}'"; exit 1 ;; esac
             docker exec "$knode" cat "/proc/${kpid}/cmdline" > "${RUNNER_TEMP}/proc-${arm}.bin" \
-              || { echo "::error::could not read /proc/${kpid}/cmdline on ${knode} (arm ${arm})"; exit 1; }
+              || { echo "::error::pod scaled away before the live check: could not read /proc/${kpid}/cmdline on ${knode} (arm ${arm})"; exit 1; }
             echo "arm ${arm}: main process = $(tr '\0' ' ' < "${RUNNER_TEMP}/proc-${arm}.bin")"
             "$chk" "$proc_rt" < "${RUNNER_TEMP}/proc-${arm}.bin" \
               || { echo "::error::arm ${arm} (${runtime}, ${build}) main process is not ${proc_rt}"; exit 1; }
+            # Proof that bytecode (bun) or the compile cache (node) is in the image and in the live
+            # process, read from the pushed image and the kind node. It fails the job when absent, so
+            # no row is measured without it.
+            scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$kpid"
+            ev="${out}/evidence-${arm}.json"
             # The arm must also be the build tool its name says: spec.build on the CR (absent means
             # turbopack), and spec.runtime for the standalone shape (the CLI omits it for vinext,
-            # where the runtime is fixed by the image).
+            # where the runtime is fixed by the image). These come after the evidence on purpose:
+            # the pod scales to zero about 40 s after Ready, and the live checks race it.
             spec_build="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.build}')"
             spec_runtime="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.runtime}')"
             [ "${spec_build:-turbopack}" = "$build" ] \
@@ -410,11 +416,6 @@ jobs:
             if [ "$build" != vinext ] && [ "$spec_runtime" != "$runtime" ]; then
               echo "::error::arm ${arm} is a ${runtime} arm but NextApp spec.runtime is '${spec_runtime}'"; exit 1
             fi
-            # Proof that bytecode (bun) or the compile cache (node) is in the image and in the live
-            # process, read from the pushed image and the kind node. It fails the job when absent, so
-            # no row is measured without it.
-            scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$kpid"
-            ev="${out}/evidence-${arm}.json"
             # The versions the arm's app actually resolved (shared by every arm with this key).
             versions="$(cd "${RUNNER_TEMP}/zone-${key}" && node -e "const o={}; for (const n of ['next','react','react-dom']) o[n]=require('./node_modules/'+n+'/package.json').version; console.log(JSON.stringify(o))")"
             jq --arg sb "${spec_build:-turbopack}" --arg sr "$spec_runtime" --arg cpu "$cpulimit" --argjson v "$versions" \

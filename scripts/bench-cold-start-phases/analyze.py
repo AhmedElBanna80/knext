@@ -146,6 +146,16 @@ def table(rows, title):
                   f"{s['min']:.0f}–{s['max']:.0f}" + ("" if s["n"] == len(rows) else f" (n={s['n']})") + " |")
 
 
+PROBE_KEYS = ("qp_probe_ok", "app_tcp_3000", "same_node_tcp_3000", "same_node_health_ok")
+
+
+def probes_missing_everywhere(rows):
+    """True when the input has rows and no row carries any probe milestone (null or absent)."""
+    return bool(rows) and all(
+        all((r.get("watch") or {}).get(k) is None for k in PROBE_KEYS) for r in rows
+    )
+
+
 def flag(name, argv=None):
     return next((a.split("=", 1)[1] for a in (argv or sys.argv) if a.startswith(f"--{name}=")), None)
 
@@ -164,6 +174,17 @@ def main():
         if a.startswith("--autoscaler="):
             load_cp("autoscaler", a.split("=", 1)[1])
     rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+    if probes_missing_everywhere(rows):
+        # Every row lacks every probe: the harness probes never reached the pod, so the
+        # tables would silently fall back to the cond_Ready/first_byte milestones.
+        sys.stderr.write(
+            f"analyze.py: refusing {len(rows)} row(s): every row is missing every probe milestone "
+            f"({', '.join(PROBE_KEYS)}). The probes never reached the pod. A NetworkPolicy that "
+            "drops the harness probes is the likely cause (the kind harness allow rule lives in "
+            "kind/phase-harness-kind.yaml). Partial nulls are allowed; a run with no probe data "
+            "at all cannot be analyzed.\n"
+        )
+        sys.exit(2)
     # --no-marker: the app under test is not file-manager, so the body has no "items:50" marker.
     need_marker = "--no-marker" not in sys.argv
     bad = [r for r in rows if "error" in r or r.get("code") != 200 or (need_marker and not r.get("marker"))]

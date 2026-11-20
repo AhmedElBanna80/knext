@@ -732,6 +732,8 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     /** Files on the kind node, keyed by their /proc path. */
     proc?: Record<string, string>;
     args?: string[];
+    /** Pids whose /proc/<pid>/stat is NOT created (the default fixtures give every pid a live one). */
+    noStat?: string[];
   };
 
   /**
@@ -750,6 +752,16 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
       for (const [rel, body] of Object.entries(c.proc ?? {})) {
         mkdirSync(join(d, 'proc', dirname(rel)), { recursive: true });
         writeFileSync(join(d, 'proc', rel), body);
+      }
+      // Every pid that has any fixture gets a live /proc/<pid>/stat unless the case says otherwise
+      // (noStat) or supplies its own: the script requires a readable stat for every child.
+      const pids = new Set(
+        Object.keys(c.proc ?? {}).flatMap((k) => k.match(/^\/proc\/(\d+)\//)?.[1] ?? []),
+      );
+      for (const pid of pids) {
+        const key = `/proc/${pid}/stat`;
+        if ((c.noStat ?? []).includes(pid) || key in (c.proc ?? {})) continue;
+        writeFileSync(join(d, 'proc', key), `${pid} (x) S 1 ${pid} ${pid} 0 -1\n`);
       }
       writeFileSync(
         join(d, 'docker'),
@@ -1133,6 +1145,150 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     expect(n.err).toContain('pod scaled away before the live check');
   });
 
+  it('fails CLOSED when a child stat is unreadable, whatever the child matched on', () => {
+    const base = (proc: Record<string, string>, noStat: string[] = ['4301']) =>
+      bunCase({ proc: { [CHILDREN]: '4301 ', ...proc }, noStat });
+    // comm-only match, stat unreadable: scaled away, never accepted.
+    const comm = run(
+      base({
+        '/proc/4301/cmdline': '',
+        '/proc/4301/comm': 'knext-standalon\n',
+      }),
+    );
+    expect(comm.status).toBe(1);
+    expect(comm.err).toContain('pod scaled away before the live check');
+    expect(comm.err).toContain('state=unreadable');
+    expect(comm.err).not.toContain('fell back');
+    expect(comm.ev).toBeNull();
+    // argv0 and exe matches are held to the same rule.
+    const argv0 = run(base({ '/proc/4301/cmdline': `${SEXEC}\0` }));
+    expect(argv0.status).toBe(1);
+    expect(argv0.err).toContain('scaled away');
+    const exe = run(
+      base({ '/proc/4301/cmdline': '', '/proc/4301/exe': `${SEXEC}\n`, '/proc/4301/comm': 'x\n' }),
+    );
+    expect(exe.status).toBe(1);
+    expect(exe.err).toContain('scaled away');
+    // A stat with no state field is unreadable too.
+    const junk = run(
+      base(
+        {
+          '/proc/4301/cmdline': `${SEXEC}\0`,
+          '/proc/4301/stat': 'garbage\n',
+        },
+        [],
+      ),
+    );
+    expect(junk.status).toBe(1);
+    expect(junk.err).toContain('scaled away');
+  });
+
+  it('node: a zombie child, or one with an unreadable stat, is scaled away, never a match', () => {
+    const withState = (state: string) =>
+      nodeCase({
+        proc: {
+          [CHILDREN]: '4300 ',
+          // The zombie still shows the right environment: it must not count.
+          '/proc/4300/environ': envOf(TCACHE),
+          '/proc/4300/stat': `4300 (next-server (v1) ${state} 4242 4300 4300 0\n`,
+        },
+      });
+    expect(run(withState('S')).status).toBe(0);
+    const z = run(withState('Z'));
+    expect(z.status).toBe(1);
+    expect(z.err).toContain('pod scaled away before the live check');
+    expect(z.ev).toBeNull();
+    expect(run(withState('X')).status).toBe(1);
+    const noStat = run(nodeCase({ noStat: ['4300'] }));
+    expect(noStat.status).toBe(1);
+    expect(noStat.err).toContain('scaled away');
+    // A live child next to a zombie one is still found.
+    const both = run(
+      nodeCase({
+        proc: {
+          [CHILDREN]: '4299 4300 ',
+          '/proc/4299/environ': envOf(TCACHE),
+          '/proc/4299/stat': '4299 (n) Z 4242 0 0\n',
+          '/proc/4300/environ': envOf(TCACHE),
+        },
+      }),
+    );
+    expect(both.status).toBe(0);
+    expect((both.ev?.bytecode as Record<string, unknown>).live_pid).toBe(4300);
+  });
+
+  it('vinext+node: a zombie or stat-less main process is scaled away', () => {
+    const vn = (over: Partial<Case>) =>
+      nodeCase({
+        build: 'vinext',
+        files: { 'app/.compile-cache/v24/a.bin': 'y'.repeat(70000) },
+        env: 'NODE_COMPILE_CACHE=/app/.compile-cache',
+        proc: { [`/proc/${KPID}/environ`]: envOf('/app/.compile-cache') },
+        ...over,
+      });
+    expect(run(vn({})).status).toBe(0);
+    const noStat = run(vn({ noStat: [KPID] }));
+    expect(noStat.status).toBe(1);
+    expect(noStat.err).toContain('scaled away');
+    const z = run(
+      vn({
+        proc: {
+          [`/proc/${KPID}/environ`]: envOf('/app/.compile-cache'),
+          [`/proc/${KPID}/stat`]: `${KPID} (node) Z 1 0 0\n`,
+        },
+      }),
+    );
+    expect(z.status).toBe(1);
+    expect(z.err).toContain('zombie');
+  });
+
+  it('a non-numeric entry in the children file is never followed, node or bun', () => {
+    // `4301/../4301` would resolve to a real fixture dir if it were used as a path.
+    const bun = run(bunCase({ proc: { ...bunCase().proc, [CHILDREN]: '4301/../4301 ' } }));
+    expect(bun.status).toBe(1);
+    expect(bun.err).toContain('scaled away');
+    expect(bun.err).toContain('not-a-pid');
+    const node = run(nodeCase({ proc: { ...nodeCase().proc, [CHILDREN]: '4300/../4300 ' } }));
+    expect(node.status).toBe(1);
+    expect(node.err).toContain('scaled away');
+  });
+
+  it('whitespace-only children counts as no children, not as a child', () => {
+    expect(run(nodeCase({ proc: { [CHILDREN]: ' \n' } })).err).toContain('exited or is draining');
+    expect(run(bunCase({ proc: { [CHILDREN]: '  ' } })).err).toContain('exited or is draining');
+  });
+
+  it('quotes the read that FAILED even when a later read succeeds', () => {
+    // node: 4300 environ is missing (its read fails first), 4301 is readable but has no cache env.
+    const n = run(
+      nodeCase({
+        proc: {
+          [CHILDREN]: '4300 4301 ',
+          '/proc/4300/stat': '4300 (a) S 1 0 0\n',
+          '/proc/4301/environ': 'PATH=/usr/bin\0',
+        },
+      }),
+    );
+    expect(n.status).toBe(1);
+    expect(n.err).toContain('failed reads:');
+    expect(n.err).toContain('[cat /proc/4300/environ]');
+    expect(n.err).toContain('No such file');
+    // bun: the first child has nothing readable, the second is readable but not the executable.
+    const b = run(
+      bunCase({
+        proc: {
+          [CHILDREN]: '4300 4301 ',
+          '/proc/4301/cmdline': 'bun\0server.js\0',
+          '/proc/4301/exe': '/usr/local/bin/bun\n',
+          '/proc/4301/comm': 'bun\n',
+        },
+      }),
+    );
+    expect(b.status).toBe(1);
+    expect(b.err).toContain('[cat /proc/4300/cmdline]');
+    expect(b.err).not.toContain('fell back');
+  });
+
   it('vinext bun: needs BYTECODE_BASELINE and a higher @bytecode pragma count than it', () => {
     const P = '// @bun @bytecode @bun-cjs\n';
     const d = mkdtempSync(join(tmpdir(), 'base-'));
@@ -1277,14 +1433,24 @@ describe('workflow wiring of the evidence and version checks', () => {
     expect(rec).toBeLessThan(drive);
   });
 
-  it('records evidence BEFORE the kubectl spec checks, to shrink the scale-to-zero gap', () => {
-    const rec = idx(/kind\/record-evidence\.sh/);
+  it('checks spec.build/spec.runtime BEFORE the pod and pid lookup, and the evidence right after the process check', () => {
     const specBuild = idx(/spec_build="\$\(kubectl/);
     const specRuntime = idx(/spec_runtime="\$\(kubectl/);
-    expect(specBuild).toBeGreaterThan(rec);
-    expect(specRuntime).toBeGreaterThan(rec);
-    // The merge that needs those values comes after them.
-    expect(idx(/--arg sb "\$\{spec_build:-turbopack\}"/)).toBeGreaterThan(specRuntime);
+    const podLookup = idx(/^\s*pod=""$/);
+    const crictl = idx(/crictl inspect "\$cid"/);
+    const proc = idx(/"\$chk" "\$proc_rt"/);
+    const rec = idx(/kind\/record-evidence\.sh/);
+    expect(specBuild).toBeGreaterThan(0);
+    expect(specBuild).toBeLessThan(podLookup);
+    expect(specRuntime).toBeLessThan(podLookup);
+    expect(podLookup).toBeLessThan(crictl);
+    // Nothing but the error line and comments sits between the process check and the evidence call.
+    const between = lines.slice(proc + 1, rec).filter((l) => !/^\s*#/.test(l) && l.trim() !== '');
+    expect(between.map((l) => l.trim())).toEqual([
+      '|| { echo "::error::arm ${arm} (${runtime}, ${build}) main process is not ${proc_rt}"; exit 1; }',
+    ]);
+    // The merge that needs the spec values comes after the evidence.
+    expect(idx(/--arg sb "\$\{spec_build:-turbopack\}"/)).toBeGreaterThan(rec);
   });
 
   it('says "scaled away" when its own cmdline read fails', () => {

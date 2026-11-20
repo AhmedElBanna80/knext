@@ -373,6 +373,18 @@ jobs:
             echo "arm ${arm}: container command=$(tr '\0' ' ' < "${RUNNER_TEMP}/cmd-${arm}.bin")"
             "$chk" "$runtime" $flag < "${RUNNER_TEMP}/cmd-${arm}.bin" \
               || { echo "::error::arm ${arm} is a ${runtime} arm but its container command does not run ${runtime}"; exit 1; }
+            # The arm must also be the build tool its name says: spec.build on the CR (absent means
+            # turbopack), and spec.runtime for the standalone shape (the CLI omits it for vinext,
+            # where the runtime is fixed by the image). The spec does not change after Ready, so this
+            # runs BEFORE the pod and pid lookup: a wrong build tool is reported as that, not as a
+            # race, and it costs the live-check race nothing.
+            spec_build="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.build}')"
+            spec_runtime="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.runtime}')"
+            [ "${spec_build:-turbopack}" = "$build" ] \
+              || { echo "::error::arm ${arm} is a ${build} arm but NextApp spec.build is '${spec_build}'"; exit 1; }
+            if [ "$build" != vinext ] && [ "$spec_runtime" != "$runtime" ]; then
+              echo "::error::arm ${arm} is a ${runtime} arm but NextApp spec.runtime is '${spec_runtime}'"; exit 1
+            fi
             # The newest Running pod that is not terminating (no deletionTimestamp).
             pod=""
             for _ in $(seq 1 30); do
@@ -405,17 +417,6 @@ jobs:
             # no row is measured without it.
             scripts/bench-cold-start-phases/kind/record-evidence.sh "$arm" "$runtime" "$build" "$app" "$img" "${out}/build-${key}.log" "$out" "$knode" "$kpid"
             ev="${out}/evidence-${arm}.json"
-            # The arm must also be the build tool its name says: spec.build on the CR (absent means
-            # turbopack), and spec.runtime for the standalone shape (the CLI omits it for vinext,
-            # where the runtime is fixed by the image). These come after the evidence on purpose:
-            # the pod scales to zero about 40 s after Ready, and the live checks race it.
-            spec_build="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.build}')"
-            spec_runtime="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.runtime}')"
-            [ "${spec_build:-turbopack}" = "$build" ] \
-              || { echo "::error::arm ${arm} is a ${build} arm but NextApp spec.build is '${spec_build}'"; exit 1; }
-            if [ "$build" != vinext ] && [ "$spec_runtime" != "$runtime" ]; then
-              echo "::error::arm ${arm} is a ${runtime} arm but NextApp spec.runtime is '${spec_runtime}'"; exit 1
-            fi
             # The versions the arm's app actually resolved (shared by every arm with this key).
             versions="$(cd "${RUNNER_TEMP}/zone-${key}" && node -e "const o={}; for (const n of ['next','react','react-dom']) o[n]=require('./node_modules/'+n+'/package.json').version; console.log(JSON.stringify(o))")"
             jq --arg sb "${spec_build:-turbopack}" --arg sr "$spec_runtime" --arg cpu "$cpulimit" --argjson v "$versions" \

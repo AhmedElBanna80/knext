@@ -15,10 +15,13 @@
 # ORDER MATTERS. The pod lives only about 40 s after Ready (stable window plus grace period) and then
 # scales to zero, so every live /proc read happens FIRST, before the image pull, the file copies and the
 # 100 MB bytecode scan. A /proc read that fails therefore means "the pod scaled away before the live
-# check", and that is what the error says, with the docker stderr of the failed read appended so a wrong
-# node name or a daemon error stays visible. A supervisor whose children file is empty, a child that is
-# unreadable, and a child that is a zombie are all the same story (the child exited or is draining) and
-# say "scaled away" too. Only then are the image and its files checked.
+# check", and that is what the error says, with the docker stderr of EVERY failed read (each labelled
+# with its command) appended, so a wrong node name or a daemon error stays visible. A supervisor whose
+# children file is empty, a child that is unreadable, a child whose /proc/<child>/stat cannot be read or
+# parsed, and a child that is a zombie (Z or X) are all the same story (the child exited or is
+# draining) and say "scaled away" too: the script fails CLOSED, an unknown state is never accepted, and
+# the state check applies to every child, node and bun, whatever it matched on. Only then are the image
+# and its files checked.
 #
 # Live checks (the supervisor is the main process; its child is the real server):
 #   node, turbopack -> a CHILD of the supervisor (the Next server) must have NODE_COMPILE_CACHE equal to
@@ -81,6 +84,7 @@ else
 fi
 
 tmp="$(mktemp -d)"
+: >"$tmp/dx.err"
 cid=""
 cleanup() {
   [ -z "$cid" ] || docker rm -f "$cid" >/dev/null 2>&1 || true
@@ -91,8 +95,25 @@ trap cleanup EXIT
 
 # Read one /proc file of a process on the kind node (the app image is distroless: nothing is exec'd
 # into the app container).
-# Its stderr goes to a file (truncated per call) so a failed read can quote it.
-dx() { docker exec "$knode" "$@" 2>"$tmp/dx.err"; }
+# A FAILED call appends its own stderr, labelled with the command, to $tmp/dx.err, so scaled_away can
+# quote the read that failed even when later reads succeed (or fail differently).
+dx() {
+  local rc=0
+  docker exec "$knode" "$@" 2>"$tmp/dx.last" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    { printf '[%s] ' "$*"; tr '\n' ' ' <"$tmp/dx.last"; printf '\n'; } >>"$tmp/dx.err"
+  fi
+  return "$rc"
+}
+# The state letter of /proc/<pid>/stat (S, R, Z, ...), read after the LAST ')' (comm may hold ')' and
+# spaces). FAILS when stat is unreadable or has no state: an unknown state is never accepted.
+proc_state() {
+  local stat st
+  stat="$(dx cat "/proc/$1/stat")" || return 1
+  case "$stat" in *') '*) ;; *) return 1 ;; esac
+  st="${stat##*) }"
+  printf '%s' "${st:0:1}"
+}
 # One variable of the image's own ENV.
 image_env() { docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$image" | awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }'; }
 # A /proc file as text, NULs turned into newlines IN the pipeline (a bash command substitution would drop
@@ -102,7 +123,7 @@ proc_text() { dx cat "$1" | tr '\0' '\n'; }
 environ_var() { awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }'; }
 scaled_away() {
   local why=""
-  [ -s "$tmp/dx.err" ] && why=": $(tr '\n' ' ' < "$tmp/dx.err")"
+  [ -s "$tmp/dx.err" ] && why=": failed reads: $(tr '\n' ' ' < "$tmp/dx.err")"
   echo "record-evidence: arm $arm: pod scaled away before the live check ($1)${why}" >&2
   exit 1
 }
@@ -121,6 +142,8 @@ children_of() {
 }
 
 if [ "$runtime" = node ] && [ "$build" = vinext ]; then
+  mstate="$(proc_state "$kpid")" || scaled_away "cannot read the state of /proc/${kpid}/stat on ${knode}"
+  case "$mstate" in Z | X) scaled_away "pid ${kpid} is a zombie (state ${mstate})" ;; esac
   environ="$(proc_text "/proc/${kpid}/environ")" \
     || scaled_away "cannot read /proc/${kpid}/environ on ${knode}"
   liveenv="$(printf '%s' "$environ" | environ_var NODE_COMPILE_CACHE)"
@@ -133,15 +156,20 @@ if [ "$runtime" = node ] && [ "$build" = vinext ]; then
 
 elif [ "$runtime" = node ]; then
   children="$(children_of)"
-  [ -n "$children" ] || scaled_away "supervisor pid ${kpid} is alive but has no child: the Next server exited or is draining"
+  [ -n "${children//[[:space:]]/}" ] || scaled_away "supervisor pid ${kpid} is alive but has no child: the Next server exited or is draining"
   found=""; liveenv=""; unreadable=0
   for c in $children; do
+    # Same rule as the bun loop: a child whose state cannot be read, or that is a zombie (Z/X), is a
+    # child that exited, never a match. A non-numeric entry in the children file is unreadable too.
+    case "$c" in *[!0-9]*) unreadable=1; continue ;; esac
+    if ! state="$(proc_state "$c")"; then unreadable=1; continue; fi
+    if [ "$state" = Z ] || [ "$state" = X ]; then unreadable=1; continue; fi
     if ! environ="$(proc_text "/proc/${c}/environ")"; then unreadable=1; continue; fi
     v="$(printf '%s' "$environ" | environ_var NODE_COMPILE_CACHE)"
     if [ "$v" = "$cachedir" ]; then found="$c"; liveenv="$v"; break; fi
   done
   if [ -z "$found" ]; then
-    [ "$unreadable" = 0 ] || scaled_away "cannot read the environ of a child of pid ${kpid} on ${knode}"
+    [ "$unreadable" = 0 ] || scaled_away "a child of pid ${kpid} on ${knode} was unreadable or a zombie, and none of the others has NODE_COMPILE_CACHE='$cachedir'"
     echo "record-evidence: arm $arm no child of the supervisor (pid ${kpid}; children: ${children//$'\n'/ }) has NODE_COMPILE_CACHE='$cachedir'" >&2
     exit 1
   fi
@@ -150,10 +178,11 @@ elif [ "$runtime" = node ]; then
 
 elif [ "$build" = turbopack ]; then
   children="$(children_of)"
-  [ -n "$children" ] || scaled_away "supervisor pid ${kpid} is alive but has no child: the compiled executable exited or is draining"
+  [ -n "${children//[[:space:]]/}" ] || scaled_away "supervisor pid ${kpid} is alive but has no child: the compiled executable exited or is draining"
   want_base="${binpath##*/}"
   child=""; matched=""; c_argv0=""; c_exe=""; c_comm=""; unreadable=0; seen=""
   for c in $children; do
+    case "$c" in *[!0-9]*) unreadable=1; seen="$seen ${c}:not-a-pid"; continue ;; esac
     argv0=""; exe=""; comm=""
     cmdline_ok=0
     if cmd="$(proc_text "/proc/${c}/cmdline")"; then
@@ -165,11 +194,9 @@ elif [ "$build" = turbopack ]; then
     comm="${comm%$'\n'}"
     if [ "$cmdline_ok" = 0 ] && [ -z "$exe" ] && [ -z "$comm" ]; then unreadable=1; continue; fi
     # A zombie keeps its comm after the process is gone, so a comm match on it proves nothing: the
-    # child exited. The state is the first field after the LAST ')' of /proc/<pid>/stat (comm may hold
-    # ')' and spaces). An unreadable stat leaves the state unknown and does not reject the child.
-    stat="$(dx cat "/proc/${c}/stat" || true)"
-    state=""
-    case "$stat" in *') '*) state="${stat##*) }"; state="${state:0:1}" ;; esac
+    # child exited. A stat that cannot be read (or parsed) is NOT an unknown-but-acceptable state: the
+    # child counts as unreadable, for every kind of match, not only comm.
+    if ! state="$(proc_state "$c")"; then unreadable=1; seen="$seen ${c}:state=unreadable"; continue; fi
     if [ "$state" = Z ] || [ "$state" = X ]; then unreadable=1; seen="$seen ${c}:state=${state}"; continue; fi
     seen="$seen ${c}:argv0='${argv0}',exe='${exe}',comm='${comm}'"
     how=""

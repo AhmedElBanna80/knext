@@ -9,7 +9,7 @@ name: Install smoke (outside consumer)
 #
 # Trigger note (deliberate): NOT branch-filtered to main. Most knext workflows gate on
 # `pull_request: branches: [main]`, which would never run on the stacked PK-series PRs
-# (their base is the previous PK branch, not main). This smoke runs on ALL PRs + pushes +
+# (their base is the previous PK branch, not main). This smoke runs on ALL PRs + pushes (except bench/**, see the push filter below) +
 # manual dispatch so it is useful on the very stack that introduces the packaging.
 on:
   pull_request:

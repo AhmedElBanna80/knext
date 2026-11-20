@@ -31,6 +31,7 @@ const SA = '/var/run/secrets/kubernetes.io/serviceaccount';
 const PRINT_CONFIG = process.argv.includes('--print-config');
 const ARM = process.argv.slice(2).find((a) => !a.startsWith('--'));
 const HEALTH = process.env.HEALTH_PATH ?? '/api/health';
+const READY_WINDOW_MS = Number(process.env.READY_WINDOW_MS ?? 1500);
 // Settings come from the environment (drive.py sets them from its flags / config file).
 // NS defaults to the namespace this pod runs in. AGENT_PODS optionally maps node name ->
 // node-agent pod; otherwise the agent is the pod labelled AGENT_LABEL that runs on that node.
@@ -401,7 +402,9 @@ async function main() {
     req.on('error', reject);
   });
 
-  await sleep(1500); // let trailing status updates arrive
+  // Let trailing status updates arrive. READY_WINDOW_MS widens the wait so the pod Ready condition
+  // (kubelet probe period 10 s) lands in the row; the default is the original 1500 ms.
+  await sleep(READY_WINDOW_MS);
   stop.done = true;
   const pr = probes ? await probes : [null, null, null, null, null];
   if (pr[0]) T.app_tcp_3000 = pr[0].at;

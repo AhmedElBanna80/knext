@@ -1,0 +1,335 @@
+name: Cold-start phases on kind (native amd64, dispatch-only)
+
+# The kind cold-start phase harness (scripts/bench-cold-start-phases, the kind variant in kind/)
+# on an amd64 ubuntu-latest runner. The earlier local-kind study ran the amd64 app image under
+# Rosetta on an Apple-Silicon Mac, so its runtime-boot phase includes emulation. Here the node
+# is amd64 and the image is amd64, so runtime boot is measured without it.
+#
+# DISPATCH-ONLY by design: a measurement tool, not a gate or a monitor. There is no schedule, push
+# or pull_request trigger (guard-tested in tests/coldstart-phases-kind-native-workflow.test.ts).
+# One run takes the runner for about an hour at the defaults; cancel-in-progress keeps a re-dispatch
+# from running two measurements against one runner pool.
+#
+# Arms (one Knative Service each, interleaved by drive.py, N true scale-from-zero wakes per arm):
+#   node-1000m    node runtime, cpu limit 1000m (the platform default)
+#   node-nolimit  node runtime, cpu limit 64 CPUs (above any runner, so the CFS quota never binds)
+#   bun-1000m     bun runtime, cpu limit 1000m
+# The cpu limit is the NextApp scaling.cpuLimit, resolved by scripts/bench-cold-start-phases/kind/arms.sh.
+#
+# Image pull is 0 by construction: every arm is deployed and reaches Ready (which pulls the app and
+# queue-proxy images onto the single node) before the first measured wake, and the summary counts
+# any wake that still shows a Pulling event. The Ready window (ready_window_s) widens the harness's
+# post-response wait so the pod Ready condition is recorded for every row.
+
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: 'True scale-from-zero wakes per arm (integer, 12 or more)'
+        required: false
+        type: string
+        default: '12'
+      arms:
+        description: 'Comma-separated arms: node-1000m, node-nolimit, bun-1000m'
+        required: false
+        type: string
+        default: 'node-1000m,node-nolimit,bun-1000m'
+      ready_window_s:
+        description: 'Seconds the harness keeps watching after the first byte (integer, 16 to 45)'
+        required: false
+        type: string
+        default: '20'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coldstart-phases-kind-native
+  cancel-in-progress: true
+
+jobs:
+  phases:
+    name: Cold-start phases (native amd64 kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CLUSTER: coldstart-native
+      APP_NS: z2
+      NEXT_VERSION: 16.4.5
+      N: ${{ github.event.inputs.n || '12' }}
+      ARMS: ${{ github.event.inputs.arms || 'node-1000m,node-nolimit,bun-1000m' }}
+      READY_WINDOW_S: ${{ github.event.inputs.ready_window_s || '20' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Dispatch inputs reach the shell through env only (never templated into run:).
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          case "$N" in ''|*[!0-9]*) echo "::error::n must be an integer"; exit 1 ;; esac
+          [ "$N" -ge 12 ] || { echo "::error::n must be 12 or more (got $N)"; exit 1; }
+          case "$READY_WINDOW_S" in ''|*[!0-9]*) echo "::error::ready_window_s must be an integer"; exit 1 ;; esac
+          if [ "$READY_WINDOW_S" -lt 16 ] || [ "$READY_WINDOW_S" -gt 45 ]; then
+            echo "::error::ready_window_s must be 16 to 45 (got $READY_WINDOW_S)"; exit 1
+          fi
+          scripts/bench-cold-start-phases/kind/arms.sh "$ARMS" | tee "${RUNNER_TEMP}/arms.txt"
+          test "$(uname -m)" = x86_64 || { echo "::error::runner is not amd64"; exit 1; }
+
+      - name: Route Docker Hub pulls through mirror.gcr.io (anonymous rate limit)
+        id: docker-hub-mirror
+        uses: ./.github/actions/docker-hub-mirror
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: packages/kn-next-operator/go.mod
+          cache-dependency-path: packages/kn-next-operator/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      - name: Install kind
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: true
+
+      - name: Install workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the workspace packages + the kn-next CLI
+        run: |
+          set -euo pipefail
+          bun run --filter "@getknext/lib" build
+          bun run --filter "@getknext/db" build
+          bun run --filter "@getknext/core" build
+          test -f packages/kn-next/dist/cli/kn-next.js
+
+      - name: Pack knext adapter tarballs (npm pack, the real publish tool)
+        run: |
+          set -euo pipefail
+          DEST="${RUNNER_TEMP}/knext-tarballs"
+          node scripts/pack-release-tarballs.mjs --dest "${DEST}" \
+            --dirs packages/lib,packages/db,packages/kn-next
+          ls -la "${DEST}"
+          echo "TARBALLS_DIR=${DEST}" >> "$GITHUB_ENV"
+
+      - name: Create kind cluster (registry certs.d config_path)
+        run: |
+          set -euo pipefail
+          cat <<'YAML' | kind create cluster --name "$CLUSTER" --wait 120s --config=-
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          containerdConfigPatches:
+          - |-
+            [plugins."io.containerd.grpc.v1.cri".registry]
+              config_path = "/etc/containerd/certs.d"
+          YAML
+          kubectl get node -o jsonpath='{.items[0].status.nodeInfo.architecture}{"\n"}' | tee "${RUNNER_TEMP}/node-arch.txt"
+          test "$(cat "${RUNNER_TEMP}/node-arch.txt")" = amd64
+
+      - name: Start in-cluster registry + wire the kind node to it
+        run: |
+          set -euo pipefail
+          reg=kind-registry
+          docker run -d --restart=always -p 127.0.0.1:5001:5000 --name "$reg" \
+            registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          docker network connect kind "$reg"
+          node="${CLUSTER}-control-plane"
+          docker exec "$node" mkdir -p /etc/containerd/certs.d/localhost:5001
+          printf '[host."http://%s:5000"]\n' "$reg" \
+            | docker exec -i "$node" cp /dev/stdin /etc/containerd/certs.d/localhost:5001/hosts.toml
+
+      - name: Install cert-manager
+        run: |
+          set -euo pipefail
+          scripts/kind-manifests/apply-cert-manager.sh
+          kubectl wait --for=condition=Available --timeout=300s \
+            -n cert-manager deployment/cert-manager deployment/cert-manager-webhook deployment/cert-manager-cainjector
+
+      - name: Install Knative Serving + Kourier
+        run: |
+          set -euo pipefail
+          scripts/kind-manifests/apply-knative-kourier.sh "knative-v1.16.0"
+          kubectl patch configmap/config-network -n knative-serving --type merge \
+            --patch '{"data":{"ingress-class":"kourier.ingress.networking.knative.dev"}}'
+          kubectl wait --for=condition=Available --timeout=300s \
+            -n knative-serving deployment/controller deployment/webhook deployment/autoscaler deployment/net-kourier-controller
+          # Faster scale-to-zero so a cold sample does not cost a minute of waiting. It changes only
+          # how soon a pod is removed, not how a cold start proceeds. The grace period is kept longer
+          # than the Ready window so the pod outlives the harness's post-response watch.
+          grace=$((READY_WINDOW_S + 10))
+          kubectl patch configmap/config-autoscaler -n knative-serving --type merge \
+            --patch "{\"data\":{\"stable-window\":\"10s\",\"scale-to-zero-grace-period\":\"${grace}s\",\"scale-to-zero-pod-retention-period\":\"0s\"}}"
+
+      - name: Build the operator from HEAD (native amd64) and load it into kind
+        working-directory: packages/kn-next-operator
+        run: |
+          set -euo pipefail
+          IMG=example.com/kn-next-operator:e2e
+          for attempt in 1 2 3; do
+            make docker-build IMG="$IMG" && break
+            [ "$attempt" = 3 ] && { echo "::error::operator image build failed 3x"; exit 1; }
+            echo "docker-build attempt $attempt failed; retrying"; sleep 10
+          done
+          kind load docker-image "$IMG" --name "$CLUSTER"
+          make install
+          make deploy IMG="$IMG"
+          kubectl rollout status deployment/kn-next-operator-controller-manager \
+            -n kn-next-operator-system --timeout=180s
+          kubectl wait --for=condition=Ready --timeout=120s \
+            -n kn-next-operator-system certificate/kn-next-operator-serving-cert
+          kubectl wait --for=jsonpath='{.subsets[0].addresses[0]}' --timeout=120s \
+            -n kn-next-operator-system endpoints/kn-next-operator-webhook-service
+          "${GITHUB_WORKSPACE}/scripts/kind-manifests/wait-for-webhook-ready.sh"
+
+      - name: Namespace
+        run: kubectl create namespace "$APP_NS"
+
+      # One Knative Service per arm, each through the real `kn-next deploy`. The zone is the minimal
+      # Next.js app from the cold-start spike, staged OUTSIDE the repo (a real app is its own project
+      # dir). The first arm of each runtime builds and pushes the amd64 image natively; a later arm
+      # of the same runtime reuses that digest with --image, so a cpu-limit arm differs from its
+      # sibling in the limit alone. Each arm is deployed to Ready, which pulls the app and
+      # queue-proxy images onto the node before any measured wake.
+      - name: Deploy every arm (kn-next deploy) and warm the node image cache
+        run: |
+          set -euo pipefail
+          CLI="${GITHUB_WORKSPACE}/packages/kn-next/dist/cli/kn-next.js"
+          : > "${RUNNER_TEMP}/arm-images.txt"
+          # fd 3, not stdin: kubectl, node and bun inside the loop must not eat the arm list.
+          while read -r -u 3 arm runtime cpulimit; do
+            cat > "${RUNNER_TEMP}/knext.config.${arm}.ts" <<EOF
+          const config = {
+            name: "${arm}",
+            runtime: "${runtime}",
+            registry: "localhost:5001",
+            healthCheckPath: "/api/health",
+            scaling: { minScale: 0, maxScale: 1, cpuRequest: "250m", cpuLimit: "${cpulimit}", memoryRequest: "256Mi", memoryLimit: "512Mi" },
+          };
+          export default config;
+          EOF
+            reuse="$(awk -v r="$runtime" '$1==r {print $2; exit}' "${RUNNER_TEMP}/arm-images.txt")"
+            if [ -n "$reuse" ]; then
+              dir="${RUNNER_TEMP}/cfg-${arm}"
+              mkdir -p "$dir"
+              cp "${RUNNER_TEMP}/knext.config.${arm}.ts" "$dir/knext.config.ts"
+              (cd "$dir" && node "$CLI" deploy --image "$reuse" --namespace "$APP_NS" --tag "r${GITHUB_RUN_ID}-${arm}")
+            else
+              dir="${RUNNER_TEMP}/zone-${runtime}"
+              mkdir -p "$dir"
+              cp -R spikes/zone-functions-coldstart/zone/. "$dir/"
+              (
+                cd "$dir"
+                mkdir -p public
+                cp "${RUNNER_TEMP}/knext.config.${arm}.ts" knext.config.ts
+                bun install
+                bun add "$(ls "${TARBALLS_DIR}"/getknext-lib-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-db-*.tgz)" "$(ls "${TARBALLS_DIR}"/getknext-core-*.tgz)"
+                test -d node_modules/@getknext/core
+                node -e "const v=require('./node_modules/next/package.json').version; if (v !== process.env.NEXT_VERSION) { console.error('next is ' + v); process.exit(1) }"
+                node "$CLI" deploy --registry localhost:5001 --namespace "$APP_NS" --tag "r${GITHUB_RUN_ID}-${arm}"
+              )
+            fi
+            kubectl -n "$APP_NS" wait --for=condition=Ready --timeout=300s "nextapp/${arm}" \
+              || (kubectl -n "$APP_NS" get nextapp,ksvc,pods -o wide; kubectl -n "$APP_NS" describe "nextapp/${arm}"; exit 1)
+            img="$(kubectl -n "$APP_NS" get nextapp "$arm" -o jsonpath='{.spec.image}')"
+            test -n "$img"
+            echo "$runtime $img" >> "${RUNNER_TEMP}/arm-images.txt"
+            echo "arm ${arm}: runtime=${runtime} cpuLimit=${cpulimit} image=${img}"
+            kubectl -n "$APP_NS" get ksvc "$arm" -o jsonpath='{.spec.template.spec.containers[0].resources}{"\n"}'
+          done 3< "${RUNNER_TEMP}/arms.txt"
+
+      # The harness pods run node:24-alpine. Load it into the node so no measured wake pays a pull
+      # for it, then apply the kind harness manifest (harness, clock and agent pods plus the
+      # additive NetworkPolicy that lets them probe the app past the operator's default policy).
+      - name: Load the harness image and apply the kind harness manifest
+        run: |
+          set -euo pipefail
+          docker pull node:24-alpine
+          kind load docker-image node:24-alpine --name "$CLUSTER"
+          kubectl apply -f scripts/bench-cold-start-phases/kind/phase-harness-kind.yaml
+          kubectl -n "$APP_NS" wait --for=condition=Ready --timeout=180s pod/phase-bench pod/clock-kind pod/agent-kind
+
+      - name: Run the interleaved cold-start wakes
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/out"
+          export READY_WINDOW_MS=$((READY_WINDOW_S * 1000))
+          python3 scripts/bench-cold-start-phases/drive.py "$N" "$ARMS" "${RUNNER_TEMP}/out/phases.jsonl" \
+            --context "kind-${CLUSTER}" --namespace "$APP_NS" --settle 5
+          wc -l "${RUNNER_TEMP}/out/phases.jsonl"
+
+      - name: Collect control-plane logs and analyse each arm
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/out"
+          kubectl -n knative-serving logs deploy/activator --tail=-1 > "$out/activator.jsonl" || true
+          kubectl -n knative-serving logs deploy/autoscaler --tail=-1 > "$out/autoscaler.jsonl" || true
+          analyse() {
+            python3 scripts/bench-cold-start-phases/analyze.py "$1" --namespace="$APP_NS" --no-marker --p95 \
+              --activator="$out/activator.jsonl" --autoscaler="$out/autoscaler.jsonl"
+          }
+          analyse "$out/phases.jsonl" > "$out/analysis-all.txt"
+          while read -r -u 3 arm _; do
+            python3 - "$out/phases.jsonl" "$arm" "$out/phases-${arm}.jsonl" <<'PY'
+          import json, sys
+          src, arm, dst = sys.argv[1:4]
+          with open(dst, "w") as f:
+              for line in open(src):
+                  if line.strip() and json.loads(line).get("arm") == arm:
+                      f.write(line)
+          PY
+            analyse "$out/phases-${arm}.jsonl" > "$out/analysis-${arm}.txt"
+          done 3< "${RUNNER_TEMP}/arms.txt"
+
+      - name: Step summary
+        if: always()
+        run: |
+          out="${RUNNER_TEMP}/out"
+          {
+            echo "## Cold-start phases, native amd64 kind"
+            echo
+            echo "Runner arch: $(uname -m); kind node arch: $(cat "${RUNNER_TEMP}/node-arch.txt" 2>/dev/null || echo unknown); n=${N}; ready window=${READY_WINDOW_S}s."
+            echo "Image pull: 0 by construction (every arm deployed to Ready before the first wake); the 'image pulled' column counts wakes that still show a Pulling event."
+            echo
+            if [ -s "$out/phases.jsonl" ]; then
+              cut -d' ' -f1 "${RUNNER_TEMP}/arms.txt" | paste -sd, - | xargs python3 scripts/bench-cold-start-phases/kind/summarize-native.py "$out/phases.jsonl" || echo "(an arm has no rows)"
+            else
+              echo "No rows were written."
+            fi
+            for f in "$out"/analysis-*.txt; do
+              [ -e "$f" ] || continue
+              echo
+              echo "### $(basename "$f" .txt)"
+              echo
+              cat "$f"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the jsonl and the analysis
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coldstart-phases-kind-native
+          path: ${{ runner.temp }}/out/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n "$APP_NS" get nextapp,ksvc,revision,pods -o wide 2>&1 || true
+          kubectl -n "$APP_NS" get events --sort-by=.lastTimestamp 2>&1 | tail -40 || true
+          kubectl -n kn-next-operator-system logs deploy/kn-next-operator-controller-manager --tail=100 2>&1 || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          kind delete cluster --name "$CLUSTER" || true
+          docker rm -f kind-registry || true

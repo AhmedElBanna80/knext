@@ -14,7 +14,9 @@ name: Install smoke (outside consumer)
 on:
   pull_request:
   push:
-    branches: ['**']
+    # bench/** measurement branches are pushed repeatedly; skip them (branches and
+    # branches-ignore cannot coexist, so this alone still matches every other branch).
+    branches-ignore: ['bench/**']
   workflow_dispatch:
   # This job posts the REQUIRED "Pack + clean-install + CLI + app-import" context.
   # The merge queue runs required checks on a `refs/heads/gh-readonly-queue/main/...`

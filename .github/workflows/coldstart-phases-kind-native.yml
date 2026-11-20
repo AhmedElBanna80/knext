@@ -1,12 +1,20 @@
-name: Cold-start phases on kind (native amd64, dispatch-only)
+name: Cold-start phases on kind (native amd64, manual)
 
 # The kind cold-start phase harness (scripts/bench-cold-start-phases, the kind variant in kind/)
 # on an amd64 ubuntu-latest runner. The earlier local-kind study ran the amd64 app image under
 # Rosetta on an Apple-Silicon Mac, so its runtime-boot phase includes emulation. Here the node
 # is amd64 and the image is amd64, so runtime boot is measured without it.
 #
-# DISPATCH-ONLY by design: a measurement tool, not a gate or a monitor. There is no schedule, push
-# or pull_request trigger (guard-tested in tests/coldstart-phases-kind-native-workflow.test.ts).
+# MANUAL by design: a measurement tool, not a gate or a monitor. There is no schedule or
+# pull_request trigger, and exactly one push trigger (guard-tested in
+# tests/coldstart-phases-kind-native-workflow.test.ts).
+#
+# Why a push trigger exists: GitHub only dispatches a workflow file that exists on the default
+# branch, and this file lives only on the v2 line, so `gh workflow run` returns 404. The one
+# dedicated branch below stands in for the dispatch. It is pushed only by a maintainer, once per
+# measurement; nothing else triggers on push. A push carries no dispatch inputs, so the env block
+# falls back to the documented defaults (n=12, all three arms, ready_window_s=20), and the
+# validation step below checks those defaults exactly as it checks dispatched values.
 # One run takes the runner for about an hour at the defaults; the concurrency group queues a
 # re-dispatch behind it so two measurements never share the runner pool.
 #
@@ -22,6 +30,8 @@ name: Cold-start phases on kind (native amd64, dispatch-only)
 # post-response wait so the pod Ready condition is recorded for every row.
 
 on:
+  push:
+    branches: [bench/run-coldstart-native]
   workflow_dispatch:
     inputs:
       n:
@@ -59,13 +69,13 @@ jobs:
       CLUSTER: coldstart-native
       APP_NS: z2
       NEXT_VERSION: 16.4.5
-      N: ${{ github.event.inputs.n || '12' }}
-      ARMS: ${{ github.event.inputs.arms || 'node-1000m,node-nolimit,bun-1000m' }}
-      READY_WINDOW_S: ${{ github.event.inputs.ready_window_s || '20' }}
+      N: ${{ inputs.n || '12' }}
+      ARMS: ${{ inputs.arms || 'node-1000m,node-nolimit,bun-1000m' }}
+      READY_WINDOW_S: ${{ inputs.ready_window_s || '20' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Dispatch inputs reach the shell through env only (never templated into run:).
+      # Dispatch inputs (or the push defaults) reach the shell through env only (never templated into run:).
       - name: Validate inputs
         run: |
           set -euo pipefail

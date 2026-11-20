@@ -6,17 +6,20 @@ name: Cold-start phases on kind (native amd64, manual)
 # is amd64 and the image is amd64, so runtime boot is measured without it.
 #
 # MANUAL by design: a measurement tool, not a gate or a monitor. There is no schedule or
-# pull_request trigger, and exactly one push trigger (guard-tested in
-# tests/coldstart-phases-kind-native-workflow.test.ts).
+# pull_request trigger. The push trigger lists four dedicated branches (guard-tested in
+# tests/coldstart-phases-kind-native-workflow.test.ts), each selecting one arm set:
+#   bench/run-coldstart-native         default set (node-1000m, node-nolimit, bun-1000m)
+#   bench/run-coldstart-native-ladder  ladder set (node 1000m, 2000m, 4000m, nolimit)
+#   bench/run-coldstart-native-bun     bun set (bun-1000m, bun-nolimit, node-1000m control)
+#   bench/run-coldstart-native-smoke   smoke set (node-1000m, N=1 allowed)
 #
-# Why a push trigger exists: GitHub only dispatches a workflow file that exists on the default
-# branch, and this file lives only on the v2 line, so `gh workflow run` returns 404. The one
-# dedicated branch below stands in for the dispatch. It is pushed only by a maintainer, once per
-# measurement; nothing else triggers on push. The push branch names are exactly four (no wildcard):
-# bench/run-coldstart-native (the default set), -ladder, -bun and -smoke; the env block maps
-# github.ref_name to the arm set. A push carries no dispatch inputs, so the set default N applies
-# (12, or 1 for smoke) with ready_window_s=20, and the
-# validation step below checks those defaults exactly as it checks dispatched values.
+# Why push triggers exist: GitHub only dispatches a workflow file that exists on the default
+# branch, and this file lives only on the v2 line, so `gh workflow run` returns 404. The four
+# branches above stand in for the dispatch. They are pushed only by a maintainer, once per
+# measurement; no other branch triggers on push. The names are exact (no wildcard). A push carries
+# no dispatch inputs, so the set's default N applies (12, or 1 for smoke) with ready_window_s=20,
+# and the validation step below checks those defaults exactly as it checks dispatched values. On
+# dispatch, the `set` input (default `default`) selects the set instead of the branch name.
 # One run takes the runner for about an hour at the defaults; the concurrency group queues a
 # re-dispatch behind it so two measurements never share the runner pool.
 #

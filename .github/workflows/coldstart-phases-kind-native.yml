@@ -20,7 +20,11 @@ name: Cold-start phases on kind (native amd64, manual)
 # no dispatch inputs, so the set's default N applies (12, or 1 for smoke) with ready_window_s=20,
 # and the validation step below checks those defaults exactly as it checks dispatched values. On
 # dispatch, the `set` input (default `default`) selects the set instead of the branch name.
-# One run takes the runner for about an hour at the defaults; the concurrency group queues a
+# Runner time per run, from run-budget.sh's estimate (n x arms x (45 s + window) + 25 min setup, with
+# window 20 s on push): default about 64 min (3 x 12 x 65 s + 25 min), ladder about 77 min (4 x 12 x
+# 65 s + 25 min), bun about 64 min (3 x 12 x 65 s + 25 min), smoke about 26 min (1 x 1 x 65 s + 25 min).
+# A larger N fits only while it stays within the 135 min budget; run-budget.sh refuses anything above
+# it. The concurrency group queues a
 # re-dispatch behind it so two measurements never share the runner pool.
 #
 # Arms (one Knative Service each, interleaved by drive.py, N true scale-from-zero wakes per arm):

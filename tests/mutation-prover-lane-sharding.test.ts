@@ -261,6 +261,21 @@ describe('#2499 aggregateReports — declared == run, and a missing prover FAILS
     expect(findings.join('\n')).toMatch(/integration\/v2.*2\/3.*no report/s);
   });
 
+  it('a SKIPPED prover (prerequisite absent) is a finding, never counted as proved', () => {
+    const expected = legsFor(2);
+    const reports = reportsFor(expected);
+    reports[0].results[0] = {
+      relPath: reports[0].results[0].relPath,
+      declared: null,
+      run: null,
+      skipped: 'docker is not usable; NOT proved',
+      findings: [],
+    } as never;
+    expect(aggregateReports({ expected, reports }).findings.join('\n')).toMatch(
+      /SKIPPED, not proved.*docker/s,
+    );
+  });
+
   it('a prover that ran fewer mutations than it declared is a finding', () => {
     const expected = legsFor(2);
     const reports = reportsFor(expected);

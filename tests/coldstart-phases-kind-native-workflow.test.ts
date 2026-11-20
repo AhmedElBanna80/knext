@@ -168,7 +168,25 @@ describe('coldstart-phases-kind-native workflow shape', () => {
 
   it('loads images into kind rather than pulling inside it', () => {
     expect(code).toMatch(/kind load docker-image "\$IMG" --name "\$CLUSTER"/);
-    expect(code).toMatch(/kind load docker-image node:24-alpine --name "\$CLUSTER"/);
+  });
+
+  it('loads the harness node image as a single-platform digest-pinned archive, never docker-image', () => {
+    // A multi-platform index pulled for one platform makes `kind load docker-image` fail with
+    // "content digest ... not found" (ctr import --all-platforms).
+    const D = 'sha256:4eefa1bfce4197942661ef9148247d779ddf1bb0ee006d3294a467609de60724';
+    expect(code).toContain(`docker pull --platform linux/amd64 node@${D}`);
+    expect(code).toContain(`docker tag node@${D} node:24-alpine`);
+    expect(code).toMatch(/docker save -o "\$\{RUNNER_TEMP\}\/node-24-alpine\.tar" node:24-alpine/);
+    expect(code).toMatch(/kind load image-archive "\$\{RUNNER_TEMP\}\/node-24-alpine\.tar" --name "\$CLUSTER"/);
+    expect(code).not.toMatch(/kind load docker-image node:/);
+    expect(code).not.toMatch(/docker pull node:/);
+  });
+
+  it('the kind harness manifest never pulls: every node:24-alpine container is IfNotPresent', () => {
+    const y = readFileSync(resolve(DIR, 'kind/phase-harness-kind.yaml'), 'utf8');
+    const n = (y.match(/image: node:24-alpine\n/g) ?? []).length;
+    expect(n).toBe(3);
+    expect((y.match(/image: node:24-alpine\n\s+imagePullPolicy: IfNotPresent\n/g) ?? []).length).toBe(n);
   });
 
   it('drives the existing harness unchanged and calls analyze.py with --p95', () => {

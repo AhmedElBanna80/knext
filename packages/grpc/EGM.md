@@ -96,8 +96,7 @@ has an optional peer dependency on `@getknext/core` (`>=2.0.0-0 <3.0.0`).
     through the generated Server Action, a read keeps `NotFound` through `"use cache"`, a refused
     caller gets the refusal message, and a warm wake loads the function from `KNEXT_WAKE_FUNCTIONS`.
     Prerequisite: a kind cluster from the Z7 `up` phase (`PHASES=up e2e/z7-identity-kind/run.sh`).
-    No test or workflow names it. It was merged 2026-11-11 and has never run in CI; see
-    the Sprint 14 debt in `.claude/plans/v2-sprint14.md`.
+    Manual-only; not run by any workflow. No test names it. It was merged 2026-11-11 and has never run in CI.
 
 ## Invariants
 

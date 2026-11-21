@@ -7,7 +7,7 @@
 # it must fail to load.
 #
 # Also run by .github/workflows/bun-patched-release.yml against the downloaded release asset
-# (BUN=<asset> STOCK_BUN=<stock bun-v1.4.4, the same release unpatched>).
+# (BUN=<asset> STOCK_BUN=<stock bun-v1.4.5, the same release unpatched>).
 set -euo pipefail
 WS=/workspace
 BUN="${BUN:-$WS/out/bun-linux-x64}"

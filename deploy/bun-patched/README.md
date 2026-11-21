@@ -11,7 +11,7 @@
 
 `compile: { bun: 'knext-patched', include?: string[] }` in `knext.config.ts` (compiled vinext
 executable only) makes `knext build` run the `bun build --compile` step with a release build of
-**Bun 1.4.4 + oven-sh/bun#44059**,
+**Bun 1.4.5 + oven-sh/bun#44059**,
 downloaded from this repo's GitHub release and checked against the sha256 pinned in
 `packages/kn-next/src/cli/bun-toolchain.ts` (fail closed — never a fallback to stock Bun). The
 default is unchanged: the Bun on PATH, where `compile.include` embeds through extra entrypoints.
@@ -31,11 +31,11 @@ its target (`bun-linux-*-musl`, which Bun downloads for a cross-target compile).
 
 | File | Purpose |
 |---|---|
-| `UPSTREAM` | `bun-v1.4.4 38afee6c…` — the tag and the commit it must resolve to. |
-| `patches/001-bun-44059-compile-include.patch` | The 17 non-merge commits of oven-sh/bun#44059 (`AhmedElBanna80/bun` `feat/compile-include`, head `903936e16a6b`), cherry-picked onto `bun-v1.4.2` **with no conflicts** and squashed, then carried to `bun-v1.4.4` with `git am --3way` (it merged the upstream 1.4.2→1.4.4 edits to six of its seven files without a conflict); the commit list is in the patch header. `patches/SHA256SUMS` pins it. |
+| `UPSTREAM` | `bun-v1.4.5 a7733435…` — the tag and the commit it must resolve to. |
+| `patches/001-bun-44059-compile-include.patch` | The 17 non-merge commits of oven-sh/bun#44059 (`AhmedElBanna80/bun` `feat/compile-include`, head `903936e16a6b`), cherry-picked onto `bun-v1.4.2` **with no conflicts** and squashed, then carried to `bun-v1.4.4` and `bun-v1.4.5` with `git am --3way` (it merged the upstream 1.4.2→1.4.4 edits to six of its seven files without a conflict); the commit list is in the patch header. `patches/SHA256SUMS` pins it. |
 | `fetch-pins.sha256` | sha256 of every downloaded build input (bootstrap Bun zip, rustup-init, prebuilt WebKit per arch, gcc-13 focal debs per arch). |
 | `sysroot.sh` | Step 1 (`ubuntu:20.04`): the glibc 2.31 + gcc-13 libstdc++ sysroot Bun's own release lanes link against. |
-| `build.sh` | Step 2 (`ubuntu:24.04`): toolchain, `git am`, `bun scripts/build.ts --profile=release --lto=off --abi=gnu --canary=off` (LLVM 23, what bun-v1.4.4 pins), the WebKit prefetch proof, a glibc-symbol ceiling check (≤ 2.31), manifest. |
+| `build.sh` | Step 2 (`ubuntu:24.04`): toolchain, `git am`, `bun scripts/build.ts --profile=release --lto=off --abi=gnu --canary=off` (LLVM 23, what bun-v1.4.5 pins), the WebKit prefetch proof, a glibc-symbol ceiling check (≤ 2.31), manifest. |
 | `smoke.sh` | Step 3 (`ubuntu:20.04`, x64 only): runs the binary on glibc 2.31 and proves lazy `--include` from the executable, with stock Bun as the negative control (1.4.2, the bootstrap Bun, in Cloud Build; 1.4.4 in the release workflow). Re-run by the release workflow against the downloaded asset. |
 | `cloudbuild.yaml` | One build per target (`_TARGET=x64` / `aarch64`), `E2_HIGHCPU_32`; syft SBOMs; sha256s; upload to `gs://gsw-mcp-bun-verify/bun-patched/<BUILD_ID>/`. |
 | `RELEASE.sha256` | sha256 of each published binary — the release workflow refuses to sign anything else, and a unit test keeps it in lockstep with the pins knext embeds. |
@@ -87,6 +87,20 @@ that workflow checked the bytes against the committed pins, gated them and publi
 nightly and goes red when a stock Bun newer than the pinned `bunVersion` has shipped — the patch has
 to be refreshed (a 3-way apply), rebuilt, re-pinned and re-released. It also reports when
 oven-sh/bun#44059 merges, the signal to retire this directory.
+
+## Provenance of the 1.4.5 build candidates (not yet released or pinned)
+
+| | |
+|---|---|
+| Upstream | `oven-sh/bun` tag `bun-v1.4.5` = `a7733435cf40429e3b35c36072769df2052b80f1` |
+| Patch | `001-bun-44059-compile-include.patch`, carried with `git am --3way` with no conflicts (sha256 in `patches/SHA256SUMS`) |
+| Patched HEAD | `e3dc209970c70e25eae8e894f8d369a485de8dd8` |
+| Toolchain | clang/lld 23 (`1:23.1.6~++20261116013850+5b10d2d74929-1~exp1~20261116133903.98`), `rustc 1.100.0-nightly (574ff7d98 2026-09-14)`, bootstrap Bun 1.4.4 (what bun-v1.4.5's `ci-images/spec.ts` pins; zip sha256 re-pinned in `fetch-pins.sha256`), prebuilt WebKit `d6375c72affe0f70` (unchanged) |
+| linux-x64 | Cloud Build `21641b87-0c56-4b07-aa6c-ea7963a4d2c6` - sha256 `78fa8c64572363b83015b40ec61ff84b09087d39231dfe05836b3686129de89a`, highest glibc symbol `GLIBC_2.17`; `smoke.sh` exit 0 in Cloud Build (stock 1.4.4 control) |
+| linux-arm64 | Cloud Build `0c492dda-5c06-4bc4-8bca-f9b8232f8da0` - sha256 `249ea6bcf9915a82a4b9ee9910f2ce6a080ff65b0d948e07b967ef0f2ead32a5`; cross-compiled on x64 |
+
+These bytes are not yet in `RELEASE.sha256` or `bun-toolchain.ts`: the pins move together with the
+GitHub release of `bun-patched-1.4.5-knext.1` (see the release procedure above).
 
 ## Provenance of the 1.4.4-knext.3 binaries
 

@@ -6,4 +6,4 @@
 # stock Bun release ships oven-sh/bun#44059 — the `bun-patched-toolchain` probe in
 # tests/upstream-retirement/registry.ts goes red on the first stock Bun that embeds through
 # `--compile --include`.
-bun-v1.4.4 38afee6c84fcf48c0edb2466aa4b27d287a59c30
+bun-v1.4.5 a7733435cf40429e3b35c36072769df2052b80f1

@@ -3,9 +3,10 @@
 Status: **advisory.** No code, no default change. Any change to the built-in default needs an ADR (see Recommendation).
 Date: 2026-11-21. Base: `integration/v2` at 3fb53a918. Evidence lives in `docs/benchmarks/`.
 
-Line-number citations refer to the PR head at the time of this round, not to the base. Since the base, one cited code
-file changed: `scripts/bench-cold-start-phases/kind/arms.sh` (several hunks), so its line numbers here are from the PR
-head. Every other cited code file and cited report is unchanged (`git diff 3fb53a918 HEAD -- <file>`). New since the
+Line-number citations refer to the PR head at the time of this round, not to the base. Since the base, two cited code files
+changed: `scripts/bench-cold-start-phases/kind/arms.sh` (several hunks), so its line numbers here are from the PR head;
+and `.github/workflows/coldstart-phases-kind-native.yml` (+142/−38 in `git diff 3fb53a918 HEAD`), which the note cites by
+name only, with no line numbers. Every other cited code file and cited report is unchanged (`git diff 3fb53a918 HEAD -- <file>`). New since the
 base: the run 1 report and the ladder report (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md`,
 `docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md`), the run B data files
 (`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*`), and this note.
@@ -131,10 +132,11 @@ IQR: Q1 and Q3 are the medians of the lower and upper halves of the sorted sampl
 | bun-nolimit | 961 | 985 | [948, 973] |
 | node-1000m (control) | 1541 | 1588 | [1517, 1561] |
 
-- **Removing the limit saves 172 ms on Bun** (1133 to 961). Run A (ladder) saved about 320 ms on node (1556 to 1236).
-- **node-1000m is consistent with run A, not with run 1.** It is 14 ms apart from run A on unrounded medians (1541.2
-  here, 1555.6 in run A). Run 1's node-1000m control is 934 ms (`coldstart-phases-kind-native-2026-11-20-analysis-all.txt`),
-  607 ms faster than run B and 621 ms faster than run A (unrounded medians, 934.45 vs 1541.2 and 1555.6). Absolute times drift between runs even for the same arm. The runner is a shared VM, and
+- **In run B, no-limit measured 172 ms faster than 1000m** (1133 to 961; one run, n = 12, no CI). In run A, no-limit
+  measured about 320 ms faster than 1000m on node (1556 to 1236; one run, n = 12, no CI).
+- **node-1000m is 14 ms from run A and 607 ms from run 1** (unrounded medians, recomputed from the committed jsonl:
+  1541.2 in run B, 1555.6 in run A, 934.45 in run 1). Run 1's node-1000m control is 934 ms (`coldstart-phases-kind-native-2026-11-20-analysis-all.txt`),
+  607 ms below run B and 621 ms below run A (unrounded medians, 934.45 vs 1541.2 and 1555.6). Absolute times drift between runs even for the same arm. The runner is a shared VM, and
   run 1's report says its neighbour noise is uncontrolled (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:170`).
   So within-run contrasts are the comparisons here. The cross-run gaps (14, 607 and 621 ms) are descriptive, not evidence.
 - **In this run, Bun beats node by 408 ms at 1000m** (1541 to 1133; n = 12, no CI on the difference). Run 1 gives
@@ -228,7 +230,7 @@ Power is about 19% at δ = 150 ms and about 59% at δ = 300 ms. So N = 20 cannot
 
 **Paired or interleaved on one pinned node.** The reviewer suggested this to remove the node effect. It removes the
 node effect, but that effect is small in variance terms (above), so it does not cut n. Pairing by round does not help
-either: there are 20 rounds of about three wakes, and the SD of round means is 170 ms, against about 194 ms expected
+either: there are 20 rounds of about three wakes, and the SD of round means is 170 ms (population SD; 174 with n−1), against about 194 ms expected
 if wakes were independent (336 / √3, divisor N as above). No shared round component is visible, so the within-pair correlation is about
 zero, and the paired variance equals the unpaired variance. Interleaving still guards against drift over time, which
 this data cannot test.

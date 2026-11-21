@@ -96,6 +96,9 @@ export const CASES = [
         [["lib/**/*.js"], ["lib/{a,b}.js"]],
         [["lib/**/*.js"], ["lib/deep/**"]],
         [["lib"], ["lib/deep"]],
+        [["lib"], ["lib/*.js"]], // a wildcard exclude DOES match dotfiles (a path match)
+        [["lib"], ["lib/**/*.js"]],
+        [["lib"], ["**/.*"]],
     ].map(([include, exclude]) => ({ fn: "planEmbed", include, exclude })),
 ];
 

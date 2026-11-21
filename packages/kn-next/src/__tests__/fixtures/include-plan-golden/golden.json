@@ -857,5 +857,121 @@
       "nonModule": [],
       "unmatched": []
     }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib"
+    ],
+    "exclude": [
+      "lib/*.js"
+    ],
+    "relpaths": [
+      "lib/.dot/inner.js",
+      "lib/deep/.d2.js",
+      "lib/deep/d1.js",
+      "lib/m.js",
+      "lib/x.js",
+      "lib/z.js"
+    ],
+    "entrypoints": [
+      "lib/.dot/inner.js",
+      "lib/deep/.d2.js",
+      "lib/deep/d1.js",
+      "lib/m.mjs",
+      "lib/x.ts",
+      "lib/z.cjs"
+    ],
+    "report": {
+      "excluded": [
+        "lib/.hidden.js",
+        "lib/Case.js",
+        "lib/a.js",
+        "lib/b.js",
+        "lib/c.js",
+        "lib/f1.js",
+        "lib/f2.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib"
+    ],
+    "exclude": [
+      "lib/**/*.js"
+    ],
+    "relpaths": [
+      "lib/m.js",
+      "lib/x.js",
+      "lib/z.js"
+    ],
+    "entrypoints": [
+      "lib/m.mjs",
+      "lib/x.ts",
+      "lib/z.cjs"
+    ],
+    "report": {
+      "excluded": [
+        "lib/.dot/inner.js",
+        "lib/.hidden.js",
+        "lib/Case.js",
+        "lib/a.js",
+        "lib/b.js",
+        "lib/c.js",
+        "lib/deep/.d2.js",
+        "lib/deep/d1.js",
+        "lib/f1.js",
+        "lib/f2.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib"
+    ],
+    "exclude": [
+      "**/.*"
+    ],
+    "relpaths": [
+      "lib/.dot/inner.js",
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.js",
+      "lib/x.js",
+      "lib/z.js"
+    ],
+    "entrypoints": [
+      "lib/.dot/inner.js",
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.mjs",
+      "lib/x.ts",
+      "lib/z.cjs"
+    ],
+    "report": {
+      "excluded": [
+        "lib/.hidden.js",
+        "lib/deep/.d2.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
   }
 ]

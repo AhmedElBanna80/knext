@@ -192,7 +192,7 @@ describe('readiness-probe-summary.py input validation', () => {
   it('fails, not "0 failures", on an empty events capture', () => {
     for (const empty of [{ kind: 'List', items: [] }, {}]) {
       const r = runRaw(rowsText, [empty]);
-      expect(r.status).not.toBe(0);
+      expect(r.status).toBe(2); // input errors exit exactly 2
       expect(r.stderr).toContain('events capture is empty');
       expect(r.stdout).not.toContain('timeouts/wake');
     }
@@ -200,33 +200,47 @@ describe('readiness-probe-summary.py input validation', () => {
 
   it('fails on an events capture that mentions none of the pods', () => {
     const r = runRaw(rowsText, [{ kind: 'List', items: [scheduled('someone-else')] }]);
-    expect(r.status).not.toBe(0);
+    expect(r.status).toBe(2); // input errors exit exactly 2
     expect(r.stderr).toContain('mentions none of the pods');
   });
 
   it('fails loudly on an empty phases file', () => {
     const r = runRaw('\n', [EVENTS]);
-    expect(r.status).not.toBe(0);
+    expect(r.status).toBe(2); // input errors exit exactly 2
     expect(r.stderr).toContain('no rows');
   });
 
   it('names the missing key and line instead of a KeyError', () => {
     const bad = `${JSON.stringify(ROWS[0])}\n${JSON.stringify({ arm: 'a', pod: 'p9', code: 200 })}\n`;
     const r = runRaw(bad, [EVENTS]);
-    expect(r.status).not.toBe(0);
+    expect(r.status).toBe(2); // input errors exit exactly 2
     expect(r.stderr).toContain(':2: row is missing wall_start, watch');
     expect(r.stderr).not.toContain('Traceback');
   });
 
   it('reports a non-JSON line with its number', () => {
     const r = runRaw(`${JSON.stringify(ROWS[0])}\nnot json\n`, [EVENTS]);
-    expect(r.status).not.toBe(0);
+    expect(r.status).toBe(2); // input errors exit exactly 2
     expect(r.stderr).toContain(':2: not JSON');
+  });
+
+  it('exits 2 on an unknown option and on a missing events file', () => {
+    const bad = runRaw(rowsText, [EVENTS], ['--bogus=1']);
+    expect(bad.status).toBe(2);
+    expect(bad.stderr).toContain('unknown or valueless option');
+    const r = spawnSync(
+      'python3',
+      ['-I', SCRIPT, '/nonexistent.jsonl', '/nonexistent-events.json'],
+      {
+        encoding: 'utf8',
+      },
+    );
+    expect(r.status).toBe(2);
   });
 
   it('exits non-zero with a usage line when no events file is given', () => {
     const r = spawnSync('python3', ['-I', SCRIPT, '/nonexistent.jsonl'], { encoding: 'utf8' });
-    expect(r.status).not.toBe(0);
+    expect(r.status).toBe(2); // input errors exit exactly 2
     expect(r.stderr).toContain('usage: readiness-probe-summary.py');
   });
 });
@@ -344,9 +358,62 @@ describe('readiness-probe-summary.py estimators', () => {
     expect(hi[2] - hi[1]).toBeGreaterThan(lo[2] - lo[1]);
   });
 
+  it('Mann-Whitney applies the tie correction when there are ties', () => {
+    // a=[1,1,2], b=[2,3,3]: U = 0.5, mu = 4.5, tie sum 3*(2^3-2) = 18, N = 6,
+    // var = 9/12 * (7 - 18/30) = 4.8, z = (|0.5-4.5| - 0.5)/sqrt(4.8) = 1.59752, p = erfc(z/sqrt 2) = 0.11015.
+    // The uncorrected approximation would give 0.12663.
+    expect(py('m.mann_whitney_p([1,1,2],[2,3,3])')).toBeCloseTo(0.11015, 4);
+    expect(py('m.mann_whitney_p([5,5,5],[5,5,5])')).toBe(1);
+  });
+
   it('Mann-Whitney is exact and two-sided without ties, symmetric in its arguments', () => {
     expect(py('m.mann_whitney_p([1,2,3],[4,5,6])')).toBeCloseTo(0.1, 10);
     expect(py('m.mann_whitney_p([4,5,6],[1,2,3])')).toBeCloseTo(0.1, 10);
     expect(py('m.mann_whitney_p([1,2,3],[1,2,3])')).toBeGreaterThan(0.9);
+  });
+});
+
+// "Ready timing" block: counted by the tool so a write-up quotes it. Arm "t", three wakes (first byte 1000):
+//   w1 Ready 900  (before first byte), endpoint 1010 (after), queue-proxy probe 1020, timeout stamped +1 s
+//   w2 Ready 1000 (equal: not after),  endpoint 990  (before), queue-proxy probe 800,  no timeout
+//   w3 Ready 12000 (after, >5 s later), endpoint 12010 (after), queue-proxy probe 1100, timeout stamped +2 s
+// Ready>fb = 1/3; eps>fb = 2/3; Ready>fb+5s = 1/3; qp-fb = -200..100; timeout stamps 1.0..2.0 s; 2 timeout pods;
+// gap from first timeout to Ready: w1 0.9-1 = -0.1 s (<9), w3 12-2 = 10 s (>=9) -> gap>=9s 1, gap<9s 1.
+describe('readiness-probe-summary.py Ready timing block', () => {
+  const rowT = (pod: string, ready: number, eps: number, qp: number) => ({
+    arm: 't',
+    pod,
+    code: 200,
+    wall_start: T0,
+    watch: { first_byte: 1000, cond_Ready: ready, eps_ready: eps, qp_probe_ok: qp },
+  });
+  const rows = [
+    rowT('w1', 900, 1010, 1020),
+    rowT('w2', 1000, 990, 800),
+    rowT('w3', 12000, 12010, 1100),
+  ];
+  const events = {
+    kind: 'List',
+    items: [
+      scheduled('w1'),
+      scheduled('w2'),
+      scheduled('w3'),
+      unhealthy('t1', 'w1', TIMEOUT, 1, 1, 1),
+      unhealthy('t3', 'w3', TIMEOUT, 1, 2, 2),
+    ],
+  };
+  const out = run(rows, [events]);
+  const block = out
+    .split('\n')
+    .slice(out.split('\n').findIndex((l) => l.startsWith('Ready timing per arm')));
+
+  it('counts Ready and endpoint-ready strictly after the first byte', () => {
+    const t = (block.find((l) => l.startsWith('t ')) as string).trim().split(/\s+/);
+    // arm Ready>fb eps>fb Ready>fb+5s qp-fb timeout-stamp timeout-pods gap>=9s gap<9s
+    expect(t).toEqual(['t', '1/3', '2/3', '1/3', '-200..100', '1.0..2.0', '2', '1', '1']);
+  });
+
+  it('flags the straddle artefact of the failure count', () => {
+    expect(out).toContain('counting artefact');
   });
 });

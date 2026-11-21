@@ -14,7 +14,8 @@ one stamp per event, no count), and, through any other event naming the pod (eve
 
 A pod the capture never mentions has UNKNOWN failures, not zero: it is left out of the failure
 columns and counted in `no events`. An empty capture, or one that mentions none of the pods, is an
-error (exit 2), because "no failures" and "no capture" must not look the same.
+error, because "no failures" and "no capture" must not look the same. Every input error (a bad
+option, a missing file, an empty or malformed input) prints its message to stderr and exits 2.
 
 Table 1, per arm: n, median / p95 / max of first byte and of pod Ready (ms after the request), how
 many rows saw Ready inside the harness window, and the failed readiness probes per wake counted up
@@ -23,10 +24,18 @@ to the pod's Ready. That count is a lower bound: kubelet stamps events at 1 s re
 `timeouts` is the kubelet's own 1 s probe timeout. p95 is linear interpolation between order
 statistics (the same rule as analyze.py --p95); at small n read it as a tail bound.
 
+Ready timing, per arm (every "k/m" is counted by this tool, so a write-up quotes it instead of
+recounting by hand): `Ready>fb` rows whose pod Ready condition came strictly after the first byte;
+`eps>fb` rows whose endpoint became ready strictly after the first byte; `Ready>fb+5s` rows where Ready
+trailed the first byte by more than 5 s; `qp-fb` the range of the harness's own queue-proxy probe minus
+the first byte (ms); `timeout stamp` the range, in seconds after the request, of each pod's first
+kubelet probe timeout; `timeout pods`, how many pods have one; and for those pods the gap from that
+first timeout to Ready, split at 9 s (`gap>=9s`, what a 10 s kubelet period predicts, vs `gap<9s`).
+
 Table 2, per metric (first byte, Ready), each arm against the baseline arm (default: the first arm
 in the file): the difference of medians, the Hodges-Lehmann shift (median of all pairwise
 differences), a percentile-bootstrap 95% CI for the difference of medians (seeded, --reps resamples,
-default 10000), the exact two-sided Mann-Whitney p (normal approximation when there are ties), and
+default 10000), the two-sided Mann-Whitney p (exact without ties; tie-corrected normal approximation with them), and
 whether the CI excludes a shift of +-`--effect-ms` (default 1200, the size the operator's readiness
 probe comment cites). The p-values are unadjusted: with several arms and two metrics there are
 several tests, so read them as descriptive; a CI that includes zero means "no difference detected
@@ -39,10 +48,18 @@ import os
 import random
 import statistics
 import sys
+from collections import Counter
 from datetime import datetime
 from functools import lru_cache
 
 REQUIRED_ROW_KEYS = ("arm", "pod", "wall_start", "watch")
+EXIT_INPUT_ERROR = 2
+
+
+def fail(msg):
+    """Report an input error on stderr and exit 2 (never 0, and not Python's default 1)."""
+    print(msg, file=sys.stderr)
+    sys.exit(EXIT_INPUT_ERROR)
 
 
 def pct(xs, q):
@@ -85,11 +102,16 @@ def bootstrap_median_diff_ci(a, b, reps=10000, seed=7, level=0.95):
 
 
 def mann_whitney_p(a, b):
-    """Two-sided Mann-Whitney U p-value: exact without ties, normal approximation with them."""
+    """Two-sided Mann-Whitney U p-value: exact without ties, tie-corrected normal approximation with them."""
     n, m = len(a), len(b)
     u = sum(1.0 if x > y else 0.5 if x == y else 0.0 for x in a for y in b)
     if len(set(a + b)) < n + m:
-        mu, sd = n * m / 2, math.sqrt(n * m * (n + m + 1) / 12)
+        # normal approximation with the standard tie correction to the variance
+        N = n + m
+        ties = sum(t**3 - t for t in Counter(a + b).values())
+        mu, sd = n * m / 2, math.sqrt(n * m / 12 * ((N + 1) - ties / (N * (N - 1))))
+        if sd == 0:  # every value equal: no evidence of a difference
+            return 1.0
         z = (abs(u - mu) - 0.5) / sd
         return math.erfc(max(z, 0) / math.sqrt(2))
 
@@ -115,7 +137,10 @@ def load_events(paths):
     dec = json.JSONDecoder()
     latest = {}
     for path in paths:
-        text = open(path).read()
+        try:
+            text = open(path).read()
+        except OSError as e:
+            fail(f"{path}: cannot read ({e.strerror})")
         i = 0
         while i < len(text):
             while i < len(text) and text[i].isspace():
@@ -125,7 +150,7 @@ def load_events(paths):
             try:
                 obj, i = dec.raw_decode(text, i)
             except json.JSONDecodeError as e:
-                sys.exit(f"{path}: not a JSON events capture ({e})")
+                fail(f"{path}: not a JSON events capture ({e})")
             # a watch stream (one {type, object} per change), a core/v1 List, or one event
             evs = obj["items"] if isinstance(obj, dict) and "items" in obj else [obj.get("object", obj)]
             for ev in evs:
@@ -165,26 +190,73 @@ def pre_ready_failures(row, events):
     return fails, timeouts
 
 
+def first_timeout_stamp(events):
+    """Earliest stamp (epoch s) among a pod's kubelet probe timeouts, or None."""
+    ts = [f for f, _l, _c, msg in events if "deadline exceeded" in msg or "Timeout exceeded" in msg]
+    return min(ts) if ts else None
+
+
+def ready_timing(rs, unhealthy, seen):
+    """Counts and ranges behind the "Ready vs first byte" and mechanism statements for one arm.
+
+    Returns a dict; "k/m" pairs are (k, m) tuples. Rows missing a field are left out of that
+    field's m, not counted as k.
+    """
+    w = [r["watch"] for r in rs]
+
+    def after(key):
+        both = [x for x in w if x.get(key) is not None and x.get("first_byte") is not None]
+        return sum(1 for x in both if x[key] > x["first_byte"]), len(both)
+
+    both = [x for x in w if x.get("cond_Ready") is not None and x.get("first_byte") is not None]
+    qp = [x["qp_probe_ok"] - x["first_byte"] for x in w if x.get("qp_probe_ok") is not None and x.get("first_byte") is not None]
+    stamps, gaps = [], []
+    for r in rs:
+        if r["pod"] not in seen:
+            continue
+        t = first_timeout_stamp(unhealthy.get(r["pod"], []))
+        if t is None:
+            continue
+        t0 = iso(r["wall_start"])
+        stamps.append(t - t0)
+        if r["watch"].get("cond_Ready") is not None:
+            gaps.append(t0 + r["watch"]["cond_Ready"] / 1000 - t)
+    return {
+        "ready_after_fb": after("cond_Ready"),
+        "eps_after_fb": after("eps_ready"),
+        "ready_late": (sum(1 for x in both if x["cond_Ready"] - x["first_byte"] > 5000), len(both)),
+        "qp": (min(qp), max(qp)) if qp else None,
+        "stamps": (min(stamps), max(stamps)) if stamps else None,
+        "timeout_pods": len(stamps),
+        "gap_ge9": sum(1 for g in gaps if g >= 9),
+        "gap_lt9": sum(1 for g in gaps if g < 9),
+    }
+
+
 def fmt(v):
     return "-" if v is None else f"{v:.0f}"
 
 
 def load_rows(path):
     rows = []
-    with open(path) as f:
+    try:
+        f = open(path)
+    except OSError as e:
+        fail(f"{path}: cannot read ({e.strerror})")
+    with f:
         for lineno, line in enumerate(f, 1):
             if not line.strip():
                 continue
             try:
                 r = json.loads(line)
             except json.JSONDecodeError as e:
-                sys.exit(f"{path}:{lineno}: not JSON ({e})")
+                fail(f"{path}:{lineno}: not JSON ({e})")
             missing = [k for k in REQUIRED_ROW_KEYS if k not in r]
             if missing:
-                sys.exit(f"{path}:{lineno}: row is missing {', '.join(missing)} (is this drive.py output?)")
+                fail(f"{path}:{lineno}: row is missing {', '.join(missing)} (is this drive.py output?)")
             rows.append(r)
     if not rows:
-        sys.exit(f"{path}: no rows; an empty phases file is not a result")
+        fail(f"{path}: no rows; an empty phases file is not a result")
     return rows
 
 
@@ -199,12 +271,12 @@ def parse_args(argv):
         if a.startswith("--"):
             k, _, v = a[2:].partition("=")
             if k not in opts or not v:
-                sys.exit(f"unknown or valueless option {a}")
+                fail(f"unknown or valueless option {a}")
             opts[k] = v if k == "baseline" else float(v)
         else:
             pos.append(a)
     if len(pos) < 2:
-        sys.exit(
+        fail(
             "usage: readiness-probe-summary.py [--baseline=ARM] [--effect-ms=N] [--reps=N] "
             "<phases.jsonl> <events.json> [<events.json> ...]"
         )
@@ -217,13 +289,13 @@ def main():
     rows = load_rows(pos[0])
     for p in pos[1:]:
         if not os.path.isfile(p):
-            sys.exit(f"{p}: events file not found")
+            fail(f"{p}: events file not found")
     unhealthy, seen = load_events(pos[1:])
     if not seen:
-        sys.exit("events capture is empty: no event objects in " + ", ".join(pos[1:]))
+        fail("events capture is empty: no event objects in " + ", ".join(pos[1:]))
     pods = {r["pod"] for r in rows}
     if not pods & seen:
-        sys.exit("events capture mentions none of the pods in the phases file; refusing to report 0 failures")
+        fail("events capture mentions none of the pods in the phases file; refusing to report 0 failures")
     arms = list(dict.fromkeys(r["arm"] for r in rows))
     print(
         f"{'arm':<12}{'n':>3} | {'first byte med':>14}{'p95':>7}{'max':>7} | "
@@ -259,9 +331,31 @@ def main():
             f"{fmt(statistics.median(gap) if gap else None):>12} | {fcols}{len(rs) - len(covered):>10}"
         )
 
+    print(
+        "\nReady timing per arm "
+        "(Ready>fb = pod Ready strictly after first byte; eps>fb = endpoint ready strictly after first byte)"
+    )
+    print(
+        f"{'arm':<12}{'Ready>fb':>9}{'eps>fb':>8}{'Ready>fb+5s':>12}{'qp-fb ms':>16}"
+        f"{'timeout stamp s':>17}{'timeout pods':>13}{'gap>=9s':>8}{'gap<9s':>7}"
+    )
+    for arm in arms:
+        t = ready_timing(usable(rows, arm), unhealthy, seen)
+        pair = lambda kv: f"{kv[0]}/{kv[1]}"
+        rng = lambda x, f: "-" if x is None else f"{f(x[0])}..{f(x[1])}"
+        print(
+            f"{arm:<12}{pair(t['ready_after_fb']):>9}{pair(t['eps_after_fb']):>8}{pair(t['ready_late']):>12}"
+            f"{rng(t['qp'], lambda v: f'{v:.0f}'):>16}{rng(t['stamps'], lambda v: f'{v:.1f}'):>17}"
+            f"{t['timeout_pods']:>13}{t['gap_ge9']:>8}{t['gap_lt9']:>7}"
+        )
+    print(
+        "note: `fails/wake` counts an event that straddles Ready once, so a period-1 arm whose 503 event spans "
+        "boot and scale-down shows 1.00 with 0 timeouts; that is a counting artefact, not a measured failure."
+    )
+
     base = opts["baseline"] or arms[0]
     if base not in arms:
-        sys.exit(f"--baseline={base}: no such arm (arms: {', '.join(arms)})")
+        fail(f"--baseline={base}: no such arm (arms: {', '.join(arms)})")
     eff = opts["effect-ms"]
     print(
         f"\nvs baseline {base}: candidate minus baseline, ms. CI = {opts['reps']}-resample percentile "

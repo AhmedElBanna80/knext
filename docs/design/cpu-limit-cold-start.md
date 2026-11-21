@@ -66,7 +66,7 @@ Its gain on OKE is not established.
 | OKE 2026-11-02 (`cpu-boost-and-ready-gap-oke-2026-11-02.md`) | OKE, Bun bench image | 1000m vs limit 2000m, request 250m | 20 | Hodges-Lehmann +141 ms; difference of medians +223 ms, 95% CI [−88, +488]; p = 0.18 | Underpowered. Node placement moves the arm medians by 200 to 360 ms (section 4). The interval excludes gains above 88 ms |
 
 **Rounding convention.** Differences in the tables use the medians as printed (rounded). Where the prose gives a
-difference from unrounded medians, it says so, as in the run B and run 1 control gaps (14 ms; 607 and 621 ms).
+difference from unrounded medians, it says so, as in the run A/run B and run 1 control gaps (14 ms; 607 and 621 ms).
 
 **Sign convention.** Every "difference" here is treatment minus baseline. For the OKE 2026-11-02 run, the treatment is
 the 2000m arm and the baseline is the 1000m arm (`cpu-base`). So +223 ms means the 2000m arm's median was 223 ms
@@ -107,7 +107,7 @@ throttling counter was read on kind. Treat the mechanism as open.
 
 ### Run B (bun set, 2026-11-21)
 
-Workflow `coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442 (https://github.com/AhmedElBanna80/knext/actions/runs/44865490442). Harness: integration/v2 merge commit `7e742381a`; the bench branch was deleted after the run. Runs 1 and A used `52a2cff86`. Kind, Bun arms, n = 12 per arm, with the
+Workflow `coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442 (https://github.com/AhmedElBanna80/knext/actions/runs/44865490442). Harness: integration/v2 merge commit `7e742381a`; the bench branch was deleted after the run. Run 1 used `52a2cff86` (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:16`); run A used `3fb53a918` (Actions run 44725565328). Kind, Bun arms, n = 12 per arm, with the
 node-1000m control. Runner type is unverified: the workflow runs on `ubuntu-latest`, and no run logs the vCPU count, so
 "same runner type as run 1 and run A" is not checked. Data:
 `docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*` (combined jsonl, per-arm jsonl, and analysis files).
@@ -136,7 +136,7 @@ IQR: Q1 and Q3 are the medians of the lower and upper halves of the sorted sampl
   here, 1555.6 in run A). Run 1's node-1000m control is 934 ms (`coldstart-phases-kind-native-2026-11-20-analysis-all.txt`),
   607 ms faster than run B and 621 ms faster than run A (unrounded medians, 934.45 vs 1541.2 and 1555.6). Absolute times drift between runs even for the same arm. The runner is a shared VM, and
   run 1's report says its neighbour noise is uncontrolled (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:170`).
-  So only within-run contrasts are compared here.
+  So within-run contrasts are the comparisons here. The cross-run gaps (14, 607 and 621 ms) are descriptive, not evidence.
 - **In this run, Bun beats node by 408 ms at 1000m** (1541 to 1133; n = 12, no CI on the difference). Run 1 gives
   131 ms on the same contrast (803 for bun-1000m against 934 for node-1000m). The within-run gap also moved between runs.
 

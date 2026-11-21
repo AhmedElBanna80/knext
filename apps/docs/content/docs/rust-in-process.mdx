@@ -540,9 +540,16 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    `knext ffi generate` and `knext ffi check`. They do not read what your commands do. They confirm one form,
    and say nothing only for it: the scaffolded `COPY` of `native/`, then that line as the very next line of the
    file, byte for byte, and after it nothing but `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`, `ENTRYPOINT`,
-   `CMD`, `HEALTHCHECK`, `STOPSIGNAL` and the scaffolded read-only check
-   (`RUN test -f /app/native/.integrity.json || { echo "..." >&2; exit 1; }`), in a `Dockerfile` with no heredoc, no `escape`
-   directive and no `SHELL` instruction.
+   `CMD`, `HEALTHCHECK`, `STOPSIGNAL` and a read-only check of the shape
+   `RUN test -f <path> || { echo "<text>" >&2; exit 1; }` (the scaffolded `RUN test -f /app/native/.integrity.json || { ... }`
+   is one; the text is a plain string with no `$`, backtick or backslash). The whole file has to be clean as well,
+   and that is judged before anything else is looked at: no `<<` anywhere (a heredoc's body is not `Dockerfile` text),
+   no `escape` or `syntax` parser directive on any line (a byte-order mark or an indent does not hide one; the
+   scaffolded file's own pinned `# syntax=` line, as its first line and byte for byte, is the one that passes),
+   no `SHELL` instruction in any stage, and no character that another reader may take for something else: a
+   byte-order mark, a no-break space, a form feed or any other space-like, control or invisible character
+   (visible non-ASCII text, such as a dash in a comment, is fine). A `Dockerfile` that fails any of these is not
+   confirmed, and is told so whenever it mentions `native/` at all.
    Anything else is not confirmed: any other `RUN`, a `COPY` or `ADD` after the line, an instruction they do not
    know, a blank line or a comment between the `COPY` and the line, a space or anything else on either of the two
    lines, or a `COPY` of `native/` that is not the scaffolded one. They then say which of these it was, and never say that the loader will accept the directories.
@@ -579,7 +586,7 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    it must hold `native/` (with its `.integrity.json`) and one other entry, your executable as a regular file, and nothing else,
    and it must not be a system, home or temporary directory (`/`, `/opt` itself, `/tmp`, `/var/lib`, `/dev`, `/run`, `/etc`, a home directory or anything under one, and, on macOS, what `/tmp`, `/etc` and `$TMPDIR` really are under `/private`, and the like).
    A path that is not absolute, does not exist or fails either check is refused with the reason, and nothing is run.
-   The commands need bash: run under `sh`, `dash` or `zsh` they refuse before they look at anything.
+   The commands need bash and refuse unless bash runs them, before they look at anything: `sh` where it is bash (as on macOS) runs them, `dash`, `zsh` and `ksh` do not. `zsh` stops with "no matches found" on a glob that matches nothing, which would refuse a good directory for the wrong reason, and `local`, which the commands use, is not part of POSIX `sh` (`ksh` has none).
    `/opt/<app>` and `/usr/local/<app>` pass. The directories above it must
    already be root's and closed to group and other: a root-owned `/opt/<app>` is fine, a home directory or
    `/tmp` is not, and the refusal names the directory:
@@ -589,7 +596,7 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    # nothing else (for example /opt/myapp). All of it is handed to root, so this checks first that
    # it is exactly that, after following any link to the real directory: native/ with its
    # .integrity.json, and one other entry, the executable, a regular file; and that it is not a
-   # system, home or temporary directory. It needs bash and refuses under any other shell.
+   # system, home or temporary directory. It needs bash and refuses unless bash runs it.
    real_dir() {
      local p lead
      p=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 1

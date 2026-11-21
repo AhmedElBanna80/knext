@@ -401,6 +401,134 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     expect(hinted(FINAL(COPY_LINE, CLOSE_RUN, CHECK_RUN))).toBe(false);
   });
 
+  // Silence needs a file that is clean AS A WHOLE, and that is judged before the final stage is cut
+  // out of it, before the COPY is looked for and before any line is trimmed: otherwise the thing a
+  // check is there to find can hide inside what it cuts out or trims away.
+  const PINNED = readFileSync(VINEXT_DOCKERFILE, 'utf8').split('\n')[0] as string;
+  const BODY = FINAL(COPY_LINE, CLOSE_RUN, CHECK_RUN);
+  const SHELL_ARG = 'SHELL ["/bin/sh", "-c", "chmod -R 777 /app; true"]';
+
+  it('does not confirm a Dockerfile with a heredoc anywhere in it, in any stage: a body that holds a FROM line cannot move the final stage', () => {
+    for (const dockerfile of [
+      // the body's `FROM t;` is read as the last FROM, so the stage after it is empty and no COPY is found
+      FINAL(COPY_LINE, CLOSE_RUN, 'RUN psql <<EOF\nFROM t;\nEOF'),
+      `FROM alpine AS build\nRUN psql <<EOF\nFROM t;\nEOF\n${BODY}`,
+      `# a comment with << in it\n${BODY}`,
+    ]) {
+      const out = init(dockerfile).out;
+      expect(out, dockerfile).toContain('cannot confirm');
+      expect(out, dockerfile).toContain('heredoc');
+      expect(out, dockerfile).not.toMatch(CLAIM);
+    }
+  });
+
+  it('does not confirm a file with a SHELL instruction in any stage: one in a stage the last builds on (`FROM base`) changes what its RUNs run', () => {
+    for (const dockerfile of [
+      `FROM alpine AS base\n${SHELL_ARG}\nFROM base\nWORKDIR /app\n${COPY_LINE}\n${CLOSE_RUN}\n${CHECK_RUN}\n`,
+      `FROM alpine AS base\nshell ["/bin/sh", "-c"]\nFROM base\nWORKDIR /app\n${COPY_LINE}\n${CLOSE_RUN}\n`,
+      `FROM alpine AS base\n${SHELL_ARG}\nFROM alpine\nWORKDIR /app\n${COPY_LINE}\n${CLOSE_RUN}\n`,
+    ]) {
+      const out = init(dockerfile).out;
+      expect(out, dockerfile).toContain('cannot confirm');
+      expect(out, dockerfile).toContain('SHELL');
+      expect(out, dockerfile).not.toMatch(CLAIM);
+    }
+  });
+
+  it("does not confirm a file with an escape or syntax directive on any line, a byte-order mark, an indent or a different case notwithstanding; the scaffolded file's own pinned syntax line, first and byte for byte, is the one that passes", () => {
+    expect(PINNED).toMatch(/^# syntax=docker\/dockerfile:\S+@sha256:[0-9a-f]{64}$/);
+    expect(hinted(`${PINNED}\n${BODY}`)).toBe(false);
+    for (const head of [
+      '# escape=`',
+      '\ufeff# escape=`',
+      '  # escape=`',
+      '\t# escape=`',
+      '# ESCAPE = `',
+      '#escape=`',
+      '# syntax=example.com/frontend:1',
+      '# syntax = docker/dockerfile:1',
+      '\ufeff# syntax=docker/dockerfile:1',
+      `${PINNED} `, // not byte for byte
+      PINNED.replace('1.28', '1.29'),
+      `${PINNED}\n# syntax=example.com/frontend:1`, // the pinned line does not cover a second one
+      `# a comment first\n${PINNED}`, // and is the pinned line only as the first line
+    ]) {
+      const out = init(`${head}\n${BODY}`).out;
+      expect(out, JSON.stringify(head)).toContain('cannot confirm');
+      expect(out, JSON.stringify(head)).not.toMatch(CLAIM);
+    }
+  });
+
+  it('does not confirm a file with a character a reader may take for something else, wherever it sits, a comment included, and says which line without printing it', () => {
+    for (const ch of [
+      '\ufeff', // byte-order mark
+      '\u00a0', // no-break space
+      '\f',
+      '\v',
+      '\u2028',
+      '\u2029',
+      '\u3000', // ideographic space
+      '\u0085', // next line
+      '\u200b', // zero-width space
+      '\u00ad', // soft hyphen
+      '\u0000',
+      '\u001b',
+      '\ufffd', // an invalid byte read as text
+      '\r', // one that does not end a line
+    ]) {
+      const dockerfile = FINAL(COPY_LINE, CLOSE_RUN, `# a note${ch}about it`);
+      const out = init(dockerfile).out;
+      expect(out, JSON.stringify(ch)).toContain('cannot confirm');
+      expect(out, JSON.stringify(ch)).toContain('not plain text');
+      expect(out, JSON.stringify(ch)).toContain('line 5 '); // FROM, WORKDIR, COPY, CLOSE, then the comment
+      expect(out, JSON.stringify(ch)).not.toContain(ch === '\r' ? 'a note\r' : ch);
+      expect(out, JSON.stringify(ch)).not.toMatch(CLAIM);
+    }
+    // Visible non-ASCII is not one of them: the scaffolded file's own comments and check use an em dash.
+    expect(hinted(FINAL(COPY_LINE, CLOSE_RUN, '# a note — here', 'LABEL d="café"'))).toBe(false);
+  });
+
+  it('does not let a no-break space after a backslash join the next line to the one above it: it is not a continuation for BuildKit, so the next line is an instruction, and the file is not confirmed either way', () => {
+    const nbsp = '\u00a0';
+    for (const dockerfile of [
+      // after the line: a CMD that looks continued, then a chmod of its own
+      FINAL(COPY_LINE, CLOSE_RUN, `CMD /app/server \\${nbsp}`, 'RUN chmod -R 777 /app'),
+      // before the COPY: the COPY would otherwise be read as part of the CMD, and no COPY would be found
+      [
+        'FROM alpine',
+        'WORKDIR /app',
+        `CMD /app/server \\${nbsp}`,
+        COPY_LINE,
+        CLOSE_RUN,
+        'USER 1',
+        '',
+      ].join('\n'),
+    ]) {
+      const out = init(dockerfile).out;
+      expect(out, JSON.stringify(dockerfile)).toContain('cannot confirm');
+      expect(out, JSON.stringify(dockerfile)).toContain('not plain text');
+    }
+  });
+
+  it('reads a continuation that runs into the end of the file as the instruction it is', () => {
+    for (const end of ['RUN chmod -R 777 /app \\', 'RUN chmod -R 777 /app \\\n']) {
+      const dockerfile = ['FROM alpine', 'WORKDIR /app', COPY_LINE, CLOSE_RUN, end].join('\n');
+      const out = init(dockerfile).out;
+      expect(out, JSON.stringify(dockerfile)).toContain('cannot confirm');
+      expect(out, JSON.stringify(dockerfile)).toContain('line 5 comes after it');
+    }
+  });
+
+  it('says nothing about a file it cannot read that does not mention native/ at all, and prints for one that does, a stage that is not the last one included', () => {
+    expect(hinted('FROM alpine\nRUN cat <<EOF\nx\nEOF\n')).toBe(false);
+    expect(hinted('\ufeffFROM alpine\nCOPY server /app/server\n')).toBe(false);
+    expect(
+      cannotConfirm(
+        'FROM alpine AS b\nCOPY native /app/native\nFROM alpine\nRUN cat <<EOF\nx\nEOF\n',
+      ),
+    ).toBe(true);
+    expect(cannotConfirm('\ufeffFROM alpine\nCOPY native /srv/native\n')).toBe(true);
+  });
   it('does not confirm a COPY that is another spelling of the scaffolded one, or a line that is not the very next line of the file, and says which', () => {
     for (const copy of [
       'COPY native /app/native',

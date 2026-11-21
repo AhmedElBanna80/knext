@@ -757,7 +757,7 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed) and on `0c07c17`, where all of them and `Lint & Test` were green; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed), on `0c07c17`, where all of them and `Lint & Test` were green, on `78b7acf` (where `Lint & Test` was red, on a type error in two tests, since fixed) and on `d4d7a76`, where all of them and `Lint & Test` were green; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
     );
     // The CI result on the previous head is recorded, with the one red and how it was fixed.
     expect(amendment).toContain('b4d81ae9b346023ddea03b5a6c5124588c8d2b3d');
@@ -786,7 +786,15 @@ describe('docs — in-process Rust page', () => {
     expect(flatAdr).toContain(
       'It confirms one form and says nothing only for it: the scaffolded `COPY` of `native/` (`VINEXT_NATIVE_COPY`), then `VINEXT_CLOSE_LINE` as the very next line of the file, byte for byte',
     );
-    expect(flatAdr).toContain('in a `Dockerfile` with no `<<` anywhere in it');
+    expect(flatAdr).toContain('The whole file has to be clean as well, **judged first**');
+    expect(flatAdr).toContain('no `<<` anywhere in it');
+    expect(flatAdr).toContain('no `escape` or `syntax` parser directive on any line');
+    expect(flatAdr).toContain('no `SHELL` instruction in any stage');
+    expect(flatAdr).toContain('and no character a reader may take for something else');
+    expect(flatAdr).toContain('a read-only check of the shape `RUN test -f <path> ||');
+    expect(flatAdr).toContain(
+      'for a file that is not clean as a whole it prints whenever the file mentions `native` at all',
+    );
     expect(flatAdr).toContain('Neither message says that the loader will accept the directories');
     expect(flatAdr).toContain(
       'knext does not read it and `knext deploy` takes the slower image-sourced path for it',
@@ -925,7 +933,13 @@ describe('docs — in-process Rust page', () => {
     // The hint does not read commands: one confirmed form, and no claim stronger than that.
     expect(flat).toContain('They do not read what your commands do. They confirm one form');
     expect(flat).toContain('then that line as the very next line of the file, byte for byte');
-    expect(flat).toContain('in a `Dockerfile` with no heredoc');
+    expect(flat).toContain('The whole file has to be clean as well');
+    expect(flat).toContain('no `<<` anywhere');
+    expect(flat).toContain('no `escape` or `syntax` parser directive on any line');
+    expect(flat).toContain('no `SHELL` instruction in any stage');
+    expect(flat).toContain('a read-only check of the shape');
+    expect(flat).toContain('is told so whenever it mentions `native/` at all');
+    expect(flat).not.toContain('the scaffolded read-only check');
     expect(flat).toContain('and never say that the loader will accept the directories');
     expect(flat).not.toContain('read the way a shell reads them');
     expect(flat).toContain('which one line to add');
@@ -944,6 +958,18 @@ describe('docs — in-process Rust page', () => {
     expect(changeset).toContain(
       'with another builder the first call is refused, and the message says how to fix the directories',
     );
+    // The changeset states the same whole-file rule and the same shell rule as the page.
+    const flatChangeset = changeset.replace(/\s+/g, ' ');
+    expect(flatChangeset).toContain('a read-only check of the shape `RUN test -f <path> ||');
+    expect(flatChangeset).toContain(
+      'The whole file has to be clean as well, judged before anything else is looked at',
+    );
+    expect(flatChangeset).toContain('no `escape` or `syntax` parser directive on any line');
+    expect(flatChangeset).toContain('no `SHELL` instruction in any stage');
+    expect(flatChangeset).not.toContain('the scaffolded read-only check');
+    expect(flatChangeset).toContain('refuse unless bash runs them');
+    expect(flatChangeset).not.toContain('refuse under `sh`');
+    expect(flat).not.toContain('run under `sh`, `dash` or `zsh`');
     const model = repoFile('docs/security/threat-model.md').replace(/\s+/g, ' ');
     expect(model).toContain(
       "the vinext template is the app's own scaffolded file and is not changed",

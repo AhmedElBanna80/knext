@@ -56,8 +56,8 @@ against a host-arch twin or against the shipped image.
   asserts the modes BuildKit left under `/app`, loads it as the image's own USER, and expects the
   same recipe with `RUN chown -R 65532:65532 /app` appended to be refused. It runs the `shell`
   recipe with `APP_DIR` set to a copy of the compiled leg's directory under `/opt/knext-ffi-caller`:
-  the recipe needs bash (its first branch refuses under any other shell, where a hidden file would otherwise pass
-  unseen; it lists entries without a bash option), resolves the directory to its real path (on macOS `/tmp`, `/etc` and `$TMPDIR` come out under
+  the recipe needs bash and refuses unless bash runs it (its first branch; under `zsh` a glob that matches nothing stops the script with "no matches found"
+  and `local` is not POSIX, `ksh` has none; it lists entries without a bash option, so even bash in POSIX mode sees a hidden file), resolves the directory to its real path (on macOS `/tmp`, `/etc` and `$TMPDIR` come out under
   `/private`, which it refuses too) and refuses `/tmp`, a home directory (the runner's temp
   directory is under `/home/runner`) and other places that can hold other things, and accepts a directory only
   when it holds `native/` (with its `.integrity.json`) and exactly one other entry, a regular file, so the lane

@@ -110,7 +110,8 @@
  *   Init hint (`knext ffi init`, proved against init.test.ts, its own spec). The hint does not read
  *   what a command does: it confirms ONE form (the scaffolded COPY, the close line as the very next
  *   line of the file, byte for byte, then only instructions that cannot change a mode and the one
- *   read-only RUN, in a file with no heredoc, no escape directive and no SHELL) and everything else
+ *   read-only RUN, in a file that is clean as a whole: no unreadable character, no heredoc, no
+ *   escape or syntax directive and no SHELL in any stage) and everything else
  *   prints. Each row below widens that rule by one clause, or lets one named form through, and the
  *   spec must go red:
  *   V01  the confirmed form is told it cannot be confirmed    V02  no native/ COPY is told anyway
@@ -128,8 +129,8 @@
  *   V56  the line need not be the next line (a blank line or a comment between)
  *   V57  the line is compared trimmed    V58  a CRLF file is read with its carriage returns
  *   V59  a heredoc is not looked for    V60  only the usual heredoc spellings (<<\EOF is missed)
- *   V61  an escape directive is not looked for    V62  a SHELL is not looked for
- *   V63  a SHELL is looked for only after the line
+ *   V61  a directive is not looked for    V62  a SHELL is not looked for
+ *   V63  a SHELL is looked for only in the final stage
  *   V64  an unknown instruction is allowed    V65  any RUN is allowed
  *   V66 to V71  the read-only check is matched loosely, one clause at a time: not whole (V66), not
  *        from its start (V67), the text may hold $ (V68), a backtick (V69), a backslash (V70), the
@@ -142,9 +143,21 @@
  *   V96  the cannot-confirm message says the loader should accept the directories (fragment)
  *   V97  the add-this-line message says it of a Dockerfile closed another way (fragment)
  *   V98  the cannot-confirm message prints the text of the instruction (a control character reaches the terminal)
+ *   The whole-file rule (judged first, before the stage is cut, the COPY found or a line trimmed):
+ *   V99  unreadable characters are not looked for    V100 to V105  one clause of the class each: controls,
+ *        invisible format characters, space-like characters, an invalid byte, a carriage return that
+ *        does not end a line, and the lookahead that lets a space, tab and line end through
+ *   V106 the line number is off by one    V107 a file that is not clean is told nothing
+ *   V108 it is told even without a mention of native/    V109 it needs native/ with a slash
+ *   V110 a heredoc is looked for only from the last FROM on
+ *   V111 to V115  one clause of the directive pattern each: an indent, the case, escape only, syntax only,
+ *        the space after the hash    V116 the pinned syntax line passes on any line
+ *   V117 it passes when it is not byte for byte    V118 it is not let through at all
+ *   V119 a continuation that runs into the end of the file is dropped
  *   Directory pair (vinext-pair.test.ts, its own spec; the package's sources copied with the pair changed)
  *   Z01  the line is typed out, not built from the pair    Z02  the scaffolded COPY is
  *   Z03  the generated module's test of which directories the line fixes is    Z04  the hint's reading of the COPY is
+ *   Z05 to Z07  the words the hint prints (the destination, the directories, the example check) are typed out
  *   Known-good variant (core, ffi-vinext-known-good.test.ts, its own spec): `knext deploy` knows
  *   the scaffolded vinext Dockerfile byte for byte and takes another path for any other; the one
  *   line the hint adds must not take an app off it
@@ -155,6 +168,7 @@
  *   G08  the one build the hint speaks to is not the builder core calls vinext
  *   G09  the COPY the hint and the refusal look for drifts from core's    G12  so does the line
  *   G13  the directory pair moves in the package and core's two lines still name /app and /app/native
+ *   G14  the pinned syntax line the hint lets through drifts from the shipped template's first line
  *   G10  the refusal's sentence is not built from the line constant (fragment)    G11  nor from the
  *        COPY constant (fragment)
  *   Generate and check (generate-check.test.ts, its own spec)
@@ -184,7 +198,7 @@
  *   R04  the doubled slashes of //home/me are kept    R05  /dev is not refused
  *   R06  /var/lib is not refused    R07  a directory under the home directory is not refused
  *   R08  a parent of the home directory is not refused    R09  native/ need not hold its manifest
- *   R16  the commands run under any shell (a hidden file is invisible without dotglob)
+ *   R16  the commands run under any shell (zsh stops on a glob that matches nothing, ksh has no `local`)
  *   R17 to R19  /private/tmp, /private/var, /private/etc are not refused (macOS)
  *   R20  hidden entries are not listed    R21  an entry starting with two dots is not
  *   R22  a link that points nowhere is not an entry
@@ -1137,8 +1151,8 @@ const INIT = [
     subject: 'init',
     claim:
       'the one form knext can confirm is told it cannot be confirmed: the hint never goes quiet',
-    anchor: "  if (why === undefined) return '';\n",
-    replacement: '\n',
+    anchor: "  return why === undefined ? '' : cannotConfirm(why);\n",
+    replacement: "  return cannotConfirm(why ?? 'unknown');\n",
   },
   {
     id: 'V03',
@@ -1184,7 +1198,8 @@ const INIT = [
     id: 'V07',
     subject: 'init',
     claim: 'the hint no longer says where the line goes (fragment)',
-    anchor: 'add this one line directly after the `COPY` that brings native/ in and before `USER`,',
+    anchor:
+      'add this one line directly after the \\`COPY\\` that brings native/ in and before \\`USER\\`,',
     replacement: 'add this line to it,',
   },
   {
@@ -1254,8 +1269,8 @@ const INIT = [
     id: 'V13',
     subject: 'init',
     claim: 'every stage is read, not the final one: a copy in a build stage counts for the image',
-    anchor: "  return all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1);\n",
-    replacement: '  return all;\n',
+    anchor: "  const stage = all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1);\n",
+    replacement: '  const stage = all;\n',
   },
   {
     id: 'V45',
@@ -1287,16 +1302,16 @@ const INIT = [
     subject: 'init',
     claim:
       'the close line may be anywhere after the COPY: a file that has it later, past a RUN, is not asked to put it directly after',
-    anchor: '  if (next?.text !== VINEXT_CLOSE_LINE) {\n',
-    replacement: '  if (next === undefined) {\n',
+    anchor: '  if (next?.text !== VINEXT_CLOSE_LINE) return addLine();\n',
+    replacement: '  if (next === undefined) return addLine();\n',
   },
   {
     id: 'V53',
     subject: 'init',
     claim:
       'the close line is matched by its start: the line followed by a second command is taken for the line',
-    anchor: '  if (next?.text !== VINEXT_CLOSE_LINE) {\n',
-    replacement: '  if (!next?.text.startsWith(VINEXT_CLOSE_LINE)) {\n',
+    anchor: '  if (next?.text !== VINEXT_CLOSE_LINE) return addLine();\n',
+    replacement: '  if (!next?.text.startsWith(VINEXT_CLOSE_LINE)) return addLine();\n',
   },
   {
     id: 'V54',
@@ -1342,40 +1357,44 @@ const INIT = [
     subject: 'init',
     claim:
       'a heredoc is not looked for: a body that reads as the confirmed form, ended by a word that is an allowed instruction, is confirmed',
-    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
-    replacement: '        : /^#\\s*escape\\s*=/im.test(text)\n',
+    anchor:
+      "  if (text.includes('<<')) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';\n",
+    replacement: '\n',
   },
   {
     id: 'V60',
     subject: 'init',
     claim:
       'a heredoc is looked for only in the forms a reader expects (<<EOF, <<-EOF, <<"EOF"): <<\\EOF is missed',
-    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
-    replacement: '        : /<<-?\\s*["\']?\\w|^#\\s*escape\\s*=/im.test(text)\n',
+    anchor:
+      "  if (text.includes('<<')) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';\n",
+    replacement:
+      "  if (/<<-?\\s*[\"']?\\w/.test(text)) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';\n",
   },
   {
     id: 'V61',
     subject: 'init',
     claim:
-      'an escape directive is not looked for: the continuation character moves, and a line that ends in a backslash continues nothing',
-    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
-    replacement: '        : /<</.test(text)\n',
+      'an escape or syntax directive is not looked for: the continuation character moves, a frontend is named, and the file is read differently',
+    anchor: '  if (directive !== -1) {\n',
+    replacement: '  if (false as boolean) {\n',
   },
   {
     id: 'V62',
     subject: 'init',
     claim:
       'a SHELL instruction is not looked for: it replaces the shell of every RUN, the read-only check included',
-    anchor: "          : stage.some((inst) => inst.word === 'SHELL')\n",
-    replacement: '          : false\n',
+    anchor: "  return all.some((inst) => inst.word === 'SHELL')\n",
+    replacement: "  return all.slice(0, 0).some((inst) => inst.word === 'SHELL')\n",
   },
   {
     id: 'V63',
     subject: 'init',
     claim:
-      'a SHELL is looked for only after the line: one before the COPY still runs the check after it',
-    anchor: "          : stage.some((inst) => inst.word === 'SHELL')\n",
-    replacement: "          : after.some((inst) => inst.word === 'SHELL')\n",
+      'a SHELL is looked for only in the final stage: one in a stage it builds on (`FROM base`) still changes its RUNs',
+    anchor: "  return all.some((inst) => inst.word === 'SHELL')\n",
+    replacement:
+      "  return all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1).some((inst) => inst.word === 'SHELL')\n",
   },
   {
     id: 'V64',
@@ -1671,9 +1690,10 @@ const INIT = [
     subject: 'init',
     claim:
       "a heredoc into cat that writes a script (`RUN cat > /entry.sh <<'ENV'`) is let through: its body is read as Dockerfile instructions",
-    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
+    anchor:
+      "  if (text.includes('<<')) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';\n",
     replacement:
-      '        : (/<<|^#\\s*escape\\s*=/im.test(text) && !text.includes("cat > /entry.sh <<\'ENV\'"))\n',
+      "  if (text.includes('<<') && !text.includes(\"cat > /entry.sh <<'ENV'\")) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';\n",
   },
   {
     id: 'V96',
@@ -1702,6 +1722,172 @@ const INIT = [
       '  return `line ${inst.first + 1} comes after it, and knext does not know that it leaves them alone`;\n',
     replacement:
       '  return `${inst.text} comes after it, and knext does not know that it leaves them alone`;\n',
+  },
+  {
+    id: 'V99',
+    subject: 'init',
+    claim:
+      'a character a reader may take for something else is not looked for at all: a BOM, a no-break space or a form feed passes',
+    anchor: '  const bad = text.search(UNREADABLE);\n',
+    replacement: '  const bad = -1;\n',
+  },
+  {
+    id: 'V100',
+    subject: 'init',
+    claim: 'control characters (a form feed, a vertical tab, U+0085, NUL, ESC) are not unreadable',
+    anchor: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+    replacement: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+  },
+  {
+    id: 'V101',
+    subject: 'init',
+    claim:
+      'invisible format characters (a byte-order mark, a zero-width space, a soft hyphen) are not unreadable',
+    anchor: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+    replacement: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+  },
+  {
+    id: 'V102',
+    subject: 'init',
+    claim: 'space-like characters (a no-break space, U+2028, U+2029, U+3000) are not unreadable',
+    anchor: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+    replacement: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\ufffd]|\\r(?!\\n)/u;\n',
+  },
+  {
+    id: 'V103',
+    subject: 'init',
+    claim: 'an invalid byte (read as U+FFFD) is not unreadable',
+    anchor: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+    replacement: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}]|\\r(?!\\n)/u;\n',
+  },
+  {
+    id: 'V104',
+    subject: 'init',
+    claim: 'a carriage return that does not end a line is not unreadable',
+    anchor: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+    replacement: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]/u;\n',
+  },
+  {
+    id: 'V105',
+    subject: 'init',
+    claim:
+      'a plain space, tab and line end are unreadable too (the lookahead is gone): every Dockerfile is',
+    anchor: 'const UNREADABLE = /(?![\\t\\n\\r ])[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+    replacement: 'const UNREADABLE = /[\\p{Cc}\\p{Cf}\\p{Z}\\ufffd]|\\r(?!\\n)/u;\n',
+  },
+  {
+    id: 'V106',
+    subject: 'init',
+    claim: 'the line number the message gives for such a character is off by one (fragment)',
+    anchor: "${text.slice(0, bad).split('\\n').length}",
+    replacement: "${text.slice(0, bad).split('\\n').length + 1}",
+  },
+  {
+    id: 'V107',
+    subject: 'init',
+    claim:
+      'a file that is not clean as a whole is never told anything: it is taken for one with nothing to say',
+    anchor:
+      "  if (unclean !== undefined) return /native/i.test(text) ? cannotConfirm(unclean) : '';\n",
+    replacement: "  if (unclean !== undefined) return '';\n",
+  },
+  {
+    id: 'V108',
+    subject: 'init',
+    claim: 'a file that is not clean as a whole is told even when it never mentions native/',
+    anchor:
+      "  if (unclean !== undefined) return /native/i.test(text) ? cannotConfirm(unclean) : '';\n",
+    replacement: '  if (unclean !== undefined) return cannotConfirm(unclean);\n',
+  },
+  {
+    id: 'V109',
+    subject: 'init',
+    claim: 'a file that is not clean as a whole is told only when it mentions native/ with a slash',
+    anchor:
+      "  if (unclean !== undefined) return /native/i.test(text) ? cannotConfirm(unclean) : '';\n",
+    replacement:
+      "  if (unclean !== undefined) return /native\\//i.test(text) ? cannotConfirm(unclean) : '';\n",
+  },
+  {
+    id: 'V110',
+    subject: 'init',
+    claim:
+      'a heredoc is looked for only from the last FROM on: a body that holds a FROM line moves the stage and hides it',
+    anchor:
+      "  if (text.includes('<<')) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';\n",
+    replacement:
+      "  if (text.slice(text.lastIndexOf('FROM')).includes('<<')) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';\n",
+  },
+  {
+    id: 'V111',
+    subject: 'init',
+    claim: 'a directive may not be indented: `  # escape=` is not one',
+    anchor: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:escape|syntax)[ \\t]*=/i;\n',
+    replacement: 'const DIRECTIVE = /^#[ \\t]*(?:escape|syntax)[ \\t]*=/i;\n',
+  },
+  {
+    id: 'V112',
+    subject: 'init',
+    claim: 'a directive is case-sensitive: `# ESCAPE=` is not one',
+    anchor: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:escape|syntax)[ \\t]*=/i;\n',
+    replacement: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:escape|syntax)[ \\t]*=/;\n',
+  },
+  {
+    id: 'V113',
+    subject: 'init',
+    claim:
+      'only an escape directive is looked for: a syntax directive names a frontend that reads the file differently',
+    anchor: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:escape|syntax)[ \\t]*=/i;\n',
+    replacement: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:escape)[ \\t]*=/i;\n',
+  },
+  {
+    id: 'V114',
+    subject: 'init',
+    claim:
+      'only a syntax directive is looked for: an escape directive moves the continuation character',
+    anchor: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:escape|syntax)[ \\t]*=/i;\n',
+    replacement: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:syntax)[ \\t]*=/i;\n',
+  },
+  {
+    id: 'V115',
+    subject: 'init',
+    claim: 'a directive needs no space or none after the hash: `#escape=` is not one',
+    anchor: 'const DIRECTIVE = /^[ \\t]*#[ \\t]*(?:escape|syntax)[ \\t]*=/i;\n',
+    replacement: 'const DIRECTIVE = /^[ \\t]*#[ ](?:escape|syntax)[ \\t]*=/i;\n',
+  },
+  {
+    id: 'V116',
+    subject: 'init',
+    claim:
+      "the scaffolded file's pinned syntax line passes on any line, not only as the first: a comment first and the pin second is the scaffolded file",
+    anchor: '    (l, n) => DIRECTIVE.test(l) && !(n === 0 && l === VINEXT_SYNTAX_LINE),\n',
+    replacement: '    (l, n) => DIRECTIVE.test(l) && !(l === VINEXT_SYNTAX_LINE),\n',
+  },
+  {
+    id: 'V117',
+    subject: 'init',
+    claim:
+      "the scaffolded file's pinned syntax line passes when it is not byte for byte: any pinned official frontend, a trailing space",
+    anchor: '    (l, n) => DIRECTIVE.test(l) && !(n === 0 && l === VINEXT_SYNTAX_LINE),\n',
+    replacement:
+      "    (l, n) => DIRECTIVE.test(l) && !(n === 0 && l.startsWith('# syntax=docker/dockerfile:')),\n",
+  },
+  {
+    id: 'V118',
+    subject: 'init',
+    claim:
+      "the scaffolded file's pinned syntax line is not let through: every app that followed the advice is told it cannot be confirmed",
+    anchor: '    (l, n) => DIRECTIVE.test(l) && !(n === 0 && l === VINEXT_SYNTAX_LINE),\n',
+    replacement: '    (l, n) => DIRECTIVE.test(l),\n',
+  },
+  {
+    id: 'V119',
+    subject: 'init',
+    claim:
+      'a continuation that runs into the end of the file is dropped: a last instruction ending in a backslash is not read',
+    anchor:
+      "  if (acc !== '') push(acc.trimEnd(), lines.length - 1); // a continuation that runs into the end of the file\n",
+    replacement: '\n',
   },
 ];
 
@@ -1811,6 +1997,16 @@ const KNOWN = [
     anchor: "export const VINEXT_DIRS = ['/app', '/app/native'] as const;\n",
     replacement: "export const VINEXT_DIRS = ['/app', '/app/legacy'] as const;\n",
   },
+  {
+    id: 'G14',
+    subject: 'vimage',
+    claim:
+      "the pinned syntax line the hint lets through drifts from the shipped template's first line",
+    anchor:
+      "  '# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b';\n",
+    replacement:
+      "  '# syntax=docker/dockerfile:1.29@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b';\n",
+  },
 ];
 
 // `knext ffi generate` and `knext ffi check` print the hint for an app that already has its config.
@@ -1889,11 +2085,36 @@ const PAIR = [
     replacement:
       "    if (dest !== undefined && resolvePath(dest, dir) === '/app/native') copy = n;\n",
   },
+  {
+    id: 'Z05',
+    subject: 'init',
+    claim:
+      'the add-this-line message types the first line of its sentence out: /app/native is named whatever the pair is (fragment)',
+    anchor: 'Your Dockerfile copies native/ to ${VINEXT_DIRS[1]}.',
+    replacement: 'Your Dockerfile copies native/ to /app/native.',
+  },
+  {
+    id: 'Z06',
+    subject: 'init',
+    claim: 'the directories every message names are typed out, not built from the pair',
+    anchor: 'const DIRS = `${VINEXT_DIRS[0]} and ${VINEXT_DIRS[1]}`;\n',
+    replacement: "const DIRS = '/app and /app/native';\n",
+  },
+  {
+    id: 'Z07',
+    subject: 'init',
+    claim: 'the example check in the cannot-confirm message types the path out (fragment)',
+    anchor: 'RUN test -f ${VINEXT_DIRS[1]}/.integrity.json',
+    replacement: 'RUN test -f /app/native/.integrity.json',
+  },
 ];
 
 // The musl lane's workflow is read as text by its spec, so the lint counts its rows as wiring. The
-// page's recipe is run, not read, but through a helper that extracts it, which the lint cannot
-// follow: those rows are unattributed (the baseline says how many).
+// page's recipe is run, not read, but through a helper that extracts it (doc-recipe.ts), which the
+// lint cannot follow: the rows on the page (R01-R22 and the canary) are unattributed, and they are
+// the whole of what the baseline counts. The module that defines the directory pair is not among
+// them: vinext-pair.test.ts finds it by what it holds and never names it, so the lint credits the
+// specs that import it.
 export const WIRING_SUBJECTS = ['lane'];
 
 // The recipe the page gives for a compiled binary run outside a container (doc-recipe.test.ts
@@ -2035,7 +2256,7 @@ const DOC = [
     id: 'R16',
     subject: 'page',
     claim:
-      'the commands run under any shell: a hidden file is invisible to a shell that has no dotglob, and a directory that holds a .env passes',
+      'the guard against another shell is removed: zsh stops with "no matches found" on a glob that matches nothing and refuses a good directory for the wrong reason, ksh has no `local`, and dash goes on to hand a directory to root without ever being asked to',
     anchor: '   if [ -z "${BASH_VERSION:-}" ]; then\n',
     replacement: '   if false; then\n',
     options: { commentPrefix: '#' },

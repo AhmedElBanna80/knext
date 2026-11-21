@@ -39,6 +39,7 @@ import { renderModule } from "../../../ffi/src/render";
 import {
     VINEXT_NATIVE_COPY as FFI_NATIVE_COPY,
     VINEXT_DIRS,
+    VINEXT_SYNTAX_LINE,
 } from "../../../ffi/src/vinext-image";
 import { BUILDERS, DEFAULT_BUILDER_ID } from "../adapters/artifact-contract";
 import { packageRoot } from "../cli/create";
@@ -93,6 +94,14 @@ describe("the scaffolded vinext Dockerfile plus the one line knext ffi init adds
         expect(VINEXT_NATIVE_COPY.trimEnd()).toBe(
             `COPY --chown=0:0 --chmod=a-w native ${VINEXT_DIRS[1]}`,
         );
+    });
+
+    it("the one parser directive the hint lets through is the shipped template's own first line, byte for byte: a bump of the template's frontend pin fails here until the hint's copy follows it, rather than every app that followed the advice being told it cannot be confirmed", () => {
+        expect(template().split("\n")[0]).toBe(VINEXT_SYNTAX_LINE);
+        // and with that line and the close line in place the hint is silent: the pin is the only directive.
+        const cwd = tmp();
+        writeFileSync(join(cwd, "Dockerfile"), afterCopy(`${LINE}\n`));
+        expect(dockerfileHint(cwd, "vinext")).toBe("");
     });
 
     it("the shipped template holds the COPY exactly once, as a line of its own: a template that moves on makes this fail, not the hint go quiet", () => {

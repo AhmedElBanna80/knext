@@ -579,25 +579,29 @@ describe('the commands for a compiled binary run outside a container', () => {
         }).stdout?.trim() === 'none',
     );
 
-  it('refuses under any shell that is not bash, before it looks at anything: a directory that holds a hidden file would otherwise pass for one that holds only the app', () => {
+  it('refuses unless bash runs it, before it looks at anything, whatever the directory: zsh stops on a glob that matches nothing and ksh has no `local`, so another shell either refuses a good directory for the wrong reason or does something nobody tried', () => {
     const shells = otherShells();
     expect(shells.length, 'no shell but bash on this machine to try').toBeGreaterThan(0);
-    // An app that is exactly one, plus a hidden .env: the one thing only a listing that sees dotfiles refuses.
-    const dir = stage((d) => writeFileSync(join(d, '.env'), 'x'));
+    // A directory that is exactly an app (which dash would take and hand to root) and one with a hidden
+    // .env besides: both are refused for the one reason, that this is not bash.
+    const good = stage();
+    const hidden = stage((d) => writeFileSync(join(d, '.env'), 'x'));
     for (const sh of shells) {
-      const sudo = fakeSudo('record');
-      const r = spawnSync(sh, ['-c', lifted()], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${sudo.bin}:${process.env.PATH}`,
-          APP_DIR: dir,
-          HOME: NOHOME,
-        },
-      });
-      expect(r.status, `${sh}: ${r.stderr}`).not.toBe(0);
-      expect(r.stderr, sh).toContain('needs bash');
-      expect(existsSync(sudo.log), `sudo ran under ${sh}`).toBe(false);
+      for (const dir of [good, hidden]) {
+        const sudo = fakeSudo('record');
+        const r = spawnSync(sh, ['-c', lifted()], {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            PATH: `${sudo.bin}:${process.env.PATH}`,
+            APP_DIR: dir,
+            HOME: NOHOME,
+          },
+        });
+        expect(r.status, `${sh}: ${r.stderr}`).not.toBe(0);
+        expect(r.stderr, sh).toContain('needs bash');
+        expect(existsSync(sudo.log), `sudo ran under ${sh}`).toBe(false);
+      }
     }
   });
 
@@ -616,7 +620,7 @@ describe('the commands for a compiled binary run outside a container', () => {
 
   it('says on the page that the commands need bash', () => {
     expect(page.replace(/\s+/g, ' ')).toContain(
-      'The commands need bash: run under `sh`, `dash` or `zsh` they refuse before they look at anything.',
+      'The commands need bash and refuse unless bash runs them, before they look at anything: `sh` where it is bash (as on macOS) runs them, `dash`, `zsh` and `ksh` do not. `zsh` stops with "no matches found" on a glob that matches nothing, which would refuse a good directory for the wrong reason, and `local`, which the commands use, is not part of POSIX `sh` (`ksh` has none).',
     );
     expect(script).toContain('${BASH_VERSION:-}');
   });

@@ -22,7 +22,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     out:'src/generated/ffi'}`), `FfiUsageError`, `parseConfig`, `loadConfig` and `serializeConfig`.
   - Exported type: `FfiConfig`.
 - `init.ts` holds `runInit`, `recordedCrateRev`, `CRATE_GIT` (`https://github.com/getknext-dev/knext`),
-  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`) and `VINEXT_NATIVE_COPY` (the scaffolded `COPY` it follows), both re-exported from `vinext-image.ts` (a module with no imports, also read by `render.ts` for the refusal's sentence, so the hint and the generated module cannot differ), which also defines the two directories once (`VINEXT_DIRS`: the line, the `COPY`, the generated module's test of which failing directories the line fixes and the hint's reading of the `COPY` are all built from it, and `vinext-pair.test.ts` moves it in a copy of the sources and watches them follow), `DEFAULT_BUILD` (`turbopack`, core's default builder, held in step by `ffi-vinext-known-good.test.ts`), `appBuild(cwd)`, `dockerfileHint(cwd, build?)` and the `RunInitOptions` type (`build?` is the app's build target).
+  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`) and `VINEXT_NATIVE_COPY` (the scaffolded `COPY` it follows), both re-exported from `vinext-image.ts` (a module with no imports, also read by `render.ts` for the refusal's sentence, so the hint and the generated module cannot differ), which also defines the scaffolded file's own pinned `syntax` line (`VINEXT_SYNTAX_LINE`, the one parser directive the hint lets through, held to the shipped template by core's drift test) and the two directories once (`VINEXT_DIRS`: the line, the `COPY`, the generated module's test of which failing directories the line fixes and the hint's reading of the `COPY` are all built from it, and `vinext-pair.test.ts` moves it in a copy of the sources and watches them follow), `DEFAULT_BUILD` (`turbopack`, core's default builder, held in step by `ffi-vinext-known-good.test.ts`), `appBuild(cwd)`, `dockerfileHint(cwd, build?)` and the `RunInitOptions` type (`build?` is the app's build target).
 - `generate.ts` holds `runGenerate({cwd, check, io, deps})` and
   `generateFiles(libraryPath, config)`. `generateFiles` returns a `Map` of `.knext-generated.json`
   and `index.ts`. The file also exports the `Io`, `GenerateDeps` and `RunGenerateOptions` types and
@@ -95,23 +95,30 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     `knext.config.ts`, its default export's `build`, `turbopack` when it names none; `undefined` when there is no
     config, it does not load, or its `build` is not a string, and then the hint is still given) and passes it to
     `runInit` and `runGenerate`; any other build gets no hint, because it stages a Dockerfile that already has the line.
-    The final stage only is read (a `COPY` or a `chmod` in a build stage does not reach the image), as instructions
-    with their line continuations joined (`finalStage`). The hint does not read what a command does: it confirms ONE
-    form and says nothing only for it. When that stage copies `native/` to `/app/native` (any `COPY` flags, the JSON
+    The hint does not read what a command does: it confirms ONE form and says nothing only for it. Silence needs a
+    file that is clean AS A WHOLE, judged first (`unreadable`), before the final stage is cut out, the `COPY` looked
+    for or a line trimmed: no character a reader may take for something else (`UNREADABLE`: a space-like character
+    but a space and a tab, a control or invisible format character, an invalid byte, a carriage return that does not end a line; visible
+    non-ASCII is allowed, the scaffolded file carries em dashes), no `<<` anywhere, no `escape` or `syntax` directive
+    on any line (only the scaffolded file's own pinned `VINEXT_SYNTAX_LINE`, as its first line and byte for byte, passes;
+    `ffi-vinext-known-good.test.ts` holds it to the shipped template), and no `SHELL` instruction in any stage. A file that
+    is not clean as a whole gets the cannot-confirm message whenever it mentions `native` at all. Lines are
+    trimmed of a space, a tab and a carriage return only and continue only at a backslash then spaces and tabs, as BuildKit reads
+    them (`instructions`, all stages, a continuation that runs into the end of the file kept). Then the final stage
+    only is read (a `COPY` or a `chmod` in a build stage does not reach the image). When that stage copies `native/` to `/app/native` (any `COPY` flags, the JSON
     form, `--from=`, trailing slashes, quotes, `.` components, a relative destination under a `WORKDIR` that can be
     read, line continuations and lower case are found; the destination is `VINEXT_DIRS[1]`), the output is empty only
     when the `COPY` is exactly `VINEXT_NATIVE_COPY`, `VINEXT_CLOSE_LINE` is the very next line of the file (each is one physical line compared as the file has it, so a blank line,
-    a comment or a space fails it, as it fails `deploy`'s byte-for-byte recognition), the file has no `<<`
-    anywhere, no `# escape=` directive and no `SHELL` instruction (it replaces the shell of every `RUN`), and every instruction after the line is `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`,
-    `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL` or the scaffolded read-only `RUN test -f <path> || { echo "<text>"
-    >&2; exit 1; }` (`READ_ONLY_RUN`, matched whole; the text holds no `$`, backtick, backslash or quote). Any other `RUN`, a
+    a comment or a space fails it, as it fails `deploy`'s byte-for-byte recognition), and every instruction after the line is `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`,
+    `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL` or a read-only `RUN test -<x> <path> || { echo "<text>"
+    >&2; exit 1; }` (`READ_ONLY_RUN`, matched whole; the scaffolded check is one; the text holds no `$`, backtick, backslash or quote). Any other `RUN`, a
     `COPY` or `ADD`, `ONBUILD`, `SHELL`, `VOLUME` or an instruction it does not know is not confirmed. When the line is
     not directly after the `COPY`, the output says to add `VINEXT_CLOSE_LINE` there (before `USER`, changing nothing
     else, and why: knext recognises the scaffolded Dockerfile with just that line, so the app keeps the build and
     asset upload it has) and that a Dockerfile that closes them another way may load, but is not read, and takes the
     slower image-sourced path. When it is directly after but one of the above fails, the output says that knext cannot
     confirm that `/app` and `/app/native` stay closed, and which it was (the `COPY` is another spelling, a blank
-    line or a comment sits between, a line number for an unread instruction, or a heredoc), never the text of the
+    line or a comment sits between, a line number for an unread instruction or for a character that is not plain text, a heredoc, a directive, a `SHELL`), never the text of the
     file (a control character in it would reach the terminal). Neither message says the loader will accept the
     directories. An app with no `Dockerfile`, or one that does not copy `native/` there, or that is the confirmed
     form, gets no extra output. `knext ffi generate` and `knext ffi check` print the same hint after their own line, so

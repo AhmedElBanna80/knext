@@ -21,3 +21,12 @@ export const VINEXT_CLOSE_LINE = `RUN chmod go-w ${VINEXT_DIRS.join(' ')}`;
  * directly after.
  */
 export const VINEXT_NATIVE_COPY = `COPY --chown=0:0 --chmod=a-w native ${VINEXT_DIRS[1]}`;
+
+/**
+ * The scaffolded vinext Dockerfile's first line: its own pinned `syntax` directive. The hint reads a
+ * parser directive as a change in how the file is read and confirms nothing past one, except this line,
+ * byte for byte, as the first line of the file. `ffi-vinext-known-good.test.ts` holds it to the
+ * shipped template's first line, so a bump of the pin there fails until it is bumped here.
+ */
+export const VINEXT_SYNTAX_LINE =
+  '# syntax=docker/dockerfile:1.28@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b';

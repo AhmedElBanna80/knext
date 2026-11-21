@@ -37,7 +37,16 @@ import {
 import { join } from 'node:path';
 import { fnv1a64, type Manifest, scanManifest, schemaString } from '../manifest';
 import { renderModule } from '../render';
-import { blob, D, emptyDir, fn, KITCHEN_SINK, PKG_DIR, removeScratchDirs } from './helpers';
+import {
+  blob,
+  D,
+  emptyDir,
+  fn,
+  KITCHEN_SINK,
+  makeWritable,
+  PKG_DIR,
+  removeScratchDirs,
+} from './helpers';
 import { integerMatrix } from './integer-matrix';
 
 const FIXTURE_C = join(PKG_DIR, 'fixtures', 'abi-v1', 'fixture.c');
@@ -104,14 +113,22 @@ function cc(name: string, flags: string[]): string {
 
 const sha256 = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
+/** `dev:ino` of a path: the key FAKE_OWNER_INO answers to (an object keeps it through a rename). */
+function idOf(p: string): string {
+  const st = statSync(p, { bigint: true });
+  return `${st.dev}:${st.ino}`;
+}
+
 /**
  * Make a staged tree what the image carries (`COPY --chown=0:0 --chmod=a-w`):
- * every library and every directory above it, up to native/, read-only. The
- * integrity manifest is left as it is: the loader does not check its mode.
+ * the integrity manifest, every library and every directory above it, up to
+ * native/, read-only. The loader judges the manifest by owner and mode like the
+ * library: a swapped-in manifest is what lets any root-owned file pass.
  */
 function sealImage(exe: string): void {
   const native = join(exe, '..', 'native');
   const readOnly = (p: string) => chmodSync(p, statSync(p).mode & ~0o222); // a-w
+  if (existsSync(join(native, '.integrity.json'))) readOnly(join(native, '.integrity.json'));
   for (const triple of readdirSync(join(native, 'ffi'))) {
     for (const f of readdirSync(join(native, 'ffi', triple))) {
       readOnly(join(native, 'ffi', triple, f));
@@ -181,20 +198,36 @@ const FAKE_IDS = () => {
   const mod = process.getBuiltinModule('node:module') as unknown as {
     syncBuiltinESMExports: () => void;
   };
-  const { FAKE_EUID: euid, FAKE_OWNER: owner, FAKE_OWNER_AT: at } = process.env;
+  const {
+    FAKE_EUID: euid,
+    FAKE_OWNER: owner,
+    FAKE_OWNER_AT: at,
+    FAKE_OWNER_INO: ino,
+  } = process.env;
   const overrides = at ? (JSON.parse(at) as Record<string, number>) : {};
+  // uid by "dev:ino": an object keeps its owner wherever a rename puts it, which a by-path
+  // override cannot say (a swapped-in tree answers to the same path as the one it replaced).
+  const byInode = ino ? (JSON.parse(ino) as Record<string, number>) : {};
   const statted: string[] = [];
   (globalThis as unknown as { statted: string[] }).statted = statted;
   if (euid !== undefined)
     (process as unknown as { geteuid: () => number }).geteuid = () => Number(euid);
-  for (const k of ['fstatSync', 'statSync'] as const) {
-    const real = fs[k] as (...x: unknown[]) => object;
+  for (const k of ['fstatSync', 'statSync', 'lstatSync'] as const) {
+    const real = fs[k] as (...x: unknown[]) => object | undefined;
     (fs as unknown as Record<string, unknown>)[k] = function (this: unknown, ...a: unknown[]) {
-      const st = real.apply(this, a);
+      const st = real.apply(this, a) as
+        | { dev: number | bigint; ino: number | bigint; uid: number | bigint }
+        | undefined;
+      if (st === undefined) return st;
       statted.push(k === 'fstatSync' ? 'fd' : String(a[0]));
-      const uid = overrides[String(a[0])] ?? (owner === undefined ? undefined : Number(owner));
+      const uid =
+        byInode[`${st.dev}:${st.ino}`] ??
+        overrides[String(a[0])] ??
+        (owner === undefined ? undefined : Number(owner));
       if (uid === undefined) return st;
-      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid });
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, {
+        uid: typeof st.uid === 'bigint' ? BigInt(uid) : uid,
+      });
     };
   }
   mod.syncBuiltinESMExports();
@@ -862,6 +895,8 @@ describe('path 1 — native/ffi/<triple> beside the executable, integrity requir
           .update(fs.readFileSync(path.join(native, rel)))
           .digest('hex');
         manifest.files[rel] = hash;
+        // The staged manifest is read-only, like the image's: the fix is made as its owner.
+        fs.chmodSync(path.join(native, '.integrity.json'), 0o644);
         fs.writeFileSync(path.join(native, '.integrity.json'), JSON.stringify(manifest));
         return [first, c(() => m.greet('x'))];
       },
@@ -1119,6 +1154,130 @@ describe('the library loaded is the library hashed (nothing swapped in between t
   });
 });
 
+describe('a whole-tree swap between the checks cannot change what passes (an attacker who can write the parent of the executable directory)', () => {
+  /**
+   * BEFORE: the attacker renames the whole tree. At the loader's first touch of the integrity
+   * manifest by path, the real directory HOME is renamed to AWAY and EVIL is renamed to HOME.
+   * With BACK=1 the real one is put back at the first directory stat after that: the old order
+   * of checks judged the directories last, so they saw the real tree while the manifest and the
+   * library had come from the attacker's. globalThis.swaps records what happened.
+   */
+  const TREE = () => {
+    const fs = process.getBuiltinModule('node:fs');
+    const mod = process.getBuiltinModule('node:module') as unknown as {
+      syncBuiltinESMExports: () => void;
+    };
+    const {
+      HOME: home,
+      EVIL: evil,
+      AWAY: away,
+      BACK: back,
+    } = process.env as Record<string, string>;
+    const swaps: string[] = [];
+    (globalThis as unknown as { swaps: string[] }).swaps = swaps;
+    for (const k of ['existsSync', 'openSync', 'readFileSync', 'statSync', 'lstatSync'] as const) {
+      const real = fs[k] as (...x: unknown[]) => unknown;
+      (fs as unknown as Record<string, unknown>)[k] = function (this: unknown, ...a: unknown[]) {
+        const p = typeof a[0] === 'string' ? a[0] : '';
+        if (swaps.length === 0 && p.endsWith('/.integrity.json')) {
+          fs.renameSync(home, away);
+          fs.renameSync(evil, home);
+          swaps.push('in');
+        } else if (swaps.length === 1 && back === '1' && (k === 'statSync' || k === 'lstatSync')) {
+          fs.renameSync(home, evil);
+          fs.renameSync(away, home);
+          swaps.push('back');
+        }
+        return real.apply(this, a);
+      };
+    }
+    mod.syncBuiltinESMExports();
+  };
+
+  type Swap = {
+    greet: { ok?: unknown; cls?: string; message?: string };
+    swaps: string[];
+  };
+
+  /**
+   * Run the real tree with the attacker's tree ready beside it. The attacker's is a complete,
+   * sealed image of its own whose manifest lists its own library (libs.debug: its greet says
+   * "Debug"). Who owns what is told by inode, so it survives the renames:
+   *   link       the manifest and every directory are the attacker's (uid 1000); the library is a
+   *              symlink to a root-owned file that already exists (the attacker cannot write one);
+   *   file       the same, but the library is a regular file that passes as root's: a hard link
+   *              where fs.protected_hardlinks is off;
+   *   root-tree  nothing is the attacker's: a tree that passes every check (root wrote it), as
+   *              an older release left on the host would.
+   */
+  function attack(kind: 'link' | 'file' | 'root-tree', back: boolean): Run {
+    const exe = image();
+    const home = join(exe, '..');
+    const evilHome = join(image({ lib: libs.debug }), '..');
+    const native = join(evilHome, 'native');
+    const evilTriple = join(native, 'ffi', TRIPLE);
+    const evilLib = join(evilTriple, LIB);
+    if (kind === 'link') {
+      const rootLib = join(emptyDir('root-owned'), LIB);
+      copyFileSync(libs.debug as string, rootLib);
+      chmodSync(rootLib, 0o444);
+      chmodSync(evilTriple, 0o755);
+      rmSync(evilLib);
+      symlinkSync(rootLib, evilLib);
+      chmodSync(evilTriple, 0o555);
+    }
+    const attacker =
+      kind === 'root-tree'
+        ? []
+        : [evilHome, native, join(native, 'ffi'), evilTriple, join(native, '.integrity.json')];
+    const away = `${home}.away`;
+    const r = inBun(
+      (m, c) => ({
+        greet: c(() => m.greet('World')),
+        swaps: [...(globalThis as unknown as { swaps: string[] }).swaps],
+      }),
+      {
+        FAKE_EXEC: exe,
+        FAKE_OWNER_INO: JSON.stringify(Object.fromEntries(attacker.map((p) => [idOf(p), 1000]))),
+        BEFORE: TREE.toString(),
+        HOME: home,
+        EVIL: evilHome,
+        AWAY: away,
+        BACK: back ? '1' : '0',
+      },
+    );
+    // Whichever tree the swap left at AWAY is not a registered scratch directory.
+    makeWritable(away);
+    rmSync(away, { recursive: true, force: true });
+    return r;
+  }
+
+  const defeated = (r: Run, why: RegExp) => {
+    const out = r.result as Swap;
+    // The attacker really acted, at the moment the loader reached for the manifest...
+    expect(out?.swaps[0], r.stderr).toBe('in');
+    // ...and what they put there did not load.
+    expect(out.greet).not.toEqual({ ok: 'Debug, World!' });
+    expect(out.greet.cls).toBe('FfiLoadError');
+    expect(out.greet.message).toMatch(why);
+    expect(r.status).toBe(0);
+  };
+
+  const MANIFEST_OWNER = /\.integrity\.json is owned by uid 1000, but only root may own it/;
+
+  it("the reported attack: the attacker's manifest and a symlink to any root-owned library, the real tree put back before the directories are judged", () => {
+    defeated(attack('link', true), MANIFEST_OWNER);
+  });
+
+  it('the same with a root-owned library that is a regular file (a hard link): only the manifest gives it away', () => {
+    defeated(attack('file', true), MANIFEST_OWNER);
+  });
+
+  it('a tree that passes every check, swapped in and left (root wrote all of it): the directories are no longer the ones that were judged', () => {
+    defeated(attack('root-tree', false), /changed while it was being checked/);
+  });
+});
+
 describe('the library is refused unless only root can write it and own the way to it (a hash of bytes someone else can still change binds nothing)', () => {
   const nativeOf = (exe: string) => join(exe, '..', 'native');
   /** The library's directories, deepest first, then the one native/ sits in (beside the executable). */
@@ -1224,7 +1383,9 @@ describe('the library is refused unless only root can write it and own the way t
     );
     const [greet, statted] = r.result as [unknown, string[]];
     expect(greet, r.stderr).toEqual({ ok: 'Hello, World!' });
-    expect([...statted].sort()).toEqual(['fd', ...dirsOf(exe)].sort());
+    // Each directory is stat-ed twice (before the manifest is read, and again after the library
+    // is hashed), so judge the set of what was touched, not the count.
+    expect([...new Set(statted)].sort()).toEqual(['fd', ...dirsOf(exe)].sort());
     expect(statted).not.toContain(join(exe, '..', '..'));
   });
 
@@ -1235,20 +1396,66 @@ describe('the library is refused unless only root can write it and own the way t
     refused(load(exe), /the directory that holds native\/ /);
   });
 
-  it('a symlink at the staged path is judged by the file it points at, the one that is hashed and loaded', () => {
+  it('a symlink at the staged path is refused as a link, never followed: whatever it points at, root-owned and read-only included', () => {
     const exe = image({ seal: false });
-    const away = emptyDir('away');
-    const target = join(away, LIB);
+    const target = join(emptyDir('away'), LIB);
     copyFileSync(libOf(exe), target);
-    chmodSync(target, 0o666);
+    chmodSync(target, 0o444);
     rmSync(libOf(exe));
     symlinkSync(target, libOf(exe));
-    for (const d of dirsOf(exe).slice(0, 3)) chmodSync(d, 0o555);
-    // The manifest's hash is right (same bytes): only the writable target is wrong.
-    refused(
-      load(exe),
-      new RegExp(`: ${reEscape(libOf(exe))} is writable by its group or by everyone`),
-    );
+    sealImage(exe);
+    // The manifest's hash is right (same bytes), and a 0444 target passes the owner and mode
+    // rule: only the link itself is wrong. Following it is what let a swapped-in tree point
+    // at any root-owned library.
+    refused(load(exe), new RegExp(`${reEscape(libOf(exe))} is a symbolic link`));
+  });
+
+  it('a symlink at the integrity manifest is refused as a link, whatever it points at', () => {
+    const exe = image({ seal: false });
+    const manifest = join(nativeOf(exe), '.integrity.json');
+    const target = join(emptyDir('away'), 'integrity.json');
+    copyFileSync(manifest, target);
+    chmodSync(target, 0o444);
+    rmSync(manifest);
+    symlinkSync(target, manifest);
+    sealImage(exe);
+    refused(load(exe), new RegExp(`${reEscape(manifest)} is a symbolic link`));
+  });
+
+  describe('the integrity manifest is judged like the library: whoever can write it chooses what loads', () => {
+    const manifestOf = (exe: string) => join(nativeOf(exe), '.integrity.json');
+    const loadWith = (exe: string, ino: Record<string, number>) =>
+      inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+        FAKE_EXEC: exe,
+        FAKE_OWNER_INO: JSON.stringify(ino),
+      });
+
+    it('a manifest owned by anyone but root is refused, and the refusal names it', () => {
+      const exe = image();
+      refused(
+        loadWith(exe, { [idOf(manifestOf(exe))]: 1000 }),
+        new RegExp(`${reEscape(manifestOf(exe))} is owned by uid 1000, but only root may own it`),
+      );
+    });
+
+    it('a manifest its group or everyone can write is refused', () => {
+      for (const mode of [0o464, 0o446]) {
+        const exe = image();
+        chmodSync(manifestOf(exe), mode);
+        refused(
+          load(exe),
+          new RegExp(
+            `${reEscape(manifestOf(exe))} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
+          ),
+        );
+      }
+    });
+
+    it('a root-owned manifest with the owner-write bit set still loads (a plain COPY leaves 0644)', () => {
+      const exe = image();
+      chmodSync(manifestOf(exe), 0o644);
+      loaded(load(exe));
+    });
   });
 
   it('the image layout loads: root-owned, read-only, run by a non-root user or by root', () => {
@@ -1344,6 +1551,24 @@ describe('path 2 — the development fallback, only when NODE_ENV !== production
         () => image(),
         { FAKE_OWNER: '1000', FAKE_EUID: '1000' },
         /is owned by uid 1000, but only root may own it/,
+      ],
+      [
+        // existsSync() follows a link and says no to a dangling one, which would read as "nothing
+        // staged" and fall through to the unchecked development build.
+        'a dangling symlink at the staged path',
+        () => {
+          const exe = image({ seal: false });
+          const native = join(exe, '..', 'native');
+          rmSync(join(native, 'ffi', TRIPLE, LIB));
+          symlinkSync(join(emptyDir('gone'), 'missing.so'), join(native, 'ffi', TRIPLE, LIB));
+          chmodSync(join(native, '.integrity.json'), 0o444);
+          for (const d of [join(native, 'ffi', TRIPLE), join(native, 'ffi'), native]) {
+            chmodSync(d, 0o555);
+          }
+          return exe;
+        },
+        {},
+        /is a symbolic link/,
       ],
     ];
 

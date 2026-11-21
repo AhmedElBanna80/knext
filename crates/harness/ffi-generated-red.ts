@@ -2,7 +2,7 @@
 //
 //   bun crates/harness/ffi-generated-red.ts <path-to-fixture-lib>
 //
-// `ffi-generated.ts wrapper` runs four controls that fail when the loader's directory walk is
+// `ffi-generated.ts wrapper` runs five controls that fail when the loader's directory walk is
 // weakened. A control that stays green with its subject removed is decoration, so this runs the
 // harness once per weakening in loader-weakenings.ts, each with KNEXT_FFI_HARNESS_MUTATE=<id>
 // weakening the rendered loader in memory, and requires of each run:
@@ -13,8 +13,10 @@
 //
 //   W01  the directories above the one native/ sits in are never walked   controls 1, 3, 4
 //   W02  the walk stops one short of the root directory                   control 4
-//   W03  a path that is not its directory's real path is let through      control 2
-//        (the assertion that the executable's directory is its own real path)
+//   W03  a path that is not its directory's real path is let through      controls 2, 5
+//        (the assertion that the executable's directory is its own real path: control 2 sees
+//        the link refused for another reason, control 5, a RELATIVE path whose walk would stop at
+//        ".", sees a tree that must not load LOAD)
 //   W04  a sticky, world-writable directory (a /tmp) is let through       control 1
 //   W05  the owner of a directory is not judged (a walk by mode alone)    control 1
 //        (only as a user that is not root: a root-owned tree has nothing to show it)

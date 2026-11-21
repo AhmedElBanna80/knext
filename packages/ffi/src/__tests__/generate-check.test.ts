@@ -45,9 +45,15 @@ function app(records: Record<string, unknown>[] = KITCHEN_SINK, libFile = 'libzo
       return lib;
     },
   };
-  const gen = async (check = false) => {
+  const gen = async (check = false, build?: string) => {
     const c = capture();
-    const code = await runGenerate({ cwd, check, io: c.io, deps });
+    const code = await runGenerate({
+      cwd,
+      check,
+      io: c.io,
+      deps,
+      ...(build === undefined ? {} : { build }),
+    });
     return { code, out: c.out(), err: c.err() };
   };
   return { cwd, lib, setLib, gen, calls, outDir: join(cwd, 'src', 'generated', 'ffi') };
@@ -231,6 +237,19 @@ describe('knext ffi generate and check say what a vinext app still has to add to
     expect(r.code).toBe(1);
     expect(r.out).toBe('');
     expect(r.err).not.toContain(LINE);
+  });
+
+  it('say nothing for an app whose build is not vinext (a standalone build stages its own Dockerfile), and say it for a vinext one', async () => {
+    for (const build of ['turbopack', 'webpack']) {
+      const a = withDockerfile(scaffolded());
+      for (const check of [false, true]) {
+        const r = await a.gen(check, build);
+        expect(r.out, `${build} check=${check}`).not.toContain('chmod go-w');
+      }
+    }
+    const a = withDockerfile(scaffolded());
+    expect((await a.gen(false, 'vinext')).out).toContain(LINE);
+    expect((await a.gen(true, 'vinext')).out).toContain(LINE);
   });
 
   it('say nothing when the Dockerfile already closes both directories, when there is none, or when it is not a vinext one', async () => {

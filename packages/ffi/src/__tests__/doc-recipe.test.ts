@@ -8,7 +8,7 @@
 
 import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DOCS_PAGE, extractRecipe, RECIPES } from '../../scripts/doc-recipe';
 import { emptyDir, removeScratchDirs } from './helpers';
@@ -94,6 +94,30 @@ describe('the Dockerfile recipe on the docs page', () => {
 describe('the commands for a compiled binary run outside a container', () => {
   const script = extractRecipe(page, RECIPES.shell);
 
+  /**
+   * A `sudo` on the PATH that records what it was asked to run and runs nothing, or (`run`) runs
+   * everything but the chown, which a user who is not root cannot do.
+   */
+  const fakeSudo = (mode: 'record' | 'run') => {
+    const bin = emptyDir('fake-sudo');
+    const log = join(bin, 'sudo.log');
+    writeFileSync(
+      join(bin, 'sudo'),
+      `#!/bin/sh\necho "$@" >> "${log}"\n${mode === 'run' ? 'case "$1" in chown) exit 0 ;; esac\nexec "$@"\n' : 'exit 0\n'}`,
+      { mode: 0o755 },
+    );
+    return { bin, log };
+  };
+  const runScript = (appDir: string, extra: Record<string, string> = {}, text = script) => {
+    const sudo = fakeSudo('record');
+    const r = spawnSync('bash', ['-euo', 'pipefail', '-c', text], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${sudo.bin}:${process.env.PATH}`, APP_DIR: appDir, ...extra },
+    });
+    const calls = existsSync(sudo.log) ? readFileSync(sudo.log, 'utf8').trim().split('\n') : [];
+    return { r, calls };
+  };
+
   it('hands the executable, its directory and native/ to root, then removes group and other write', () => {
     expect(script).toContain('sudo chown -R root:root "$APP_DIR"');
     expect(script).toContain('sudo chmod -R go-w "$APP_DIR"');
@@ -105,13 +129,83 @@ describe('the commands for a compiled binary run outside a container', () => {
     expect(r.status, r.stderr).toBe(0);
   });
 
-  it('does what it says on a directory this user owns, apart from the sudo (the lane runs the real one)', () => {
-    // The same two commands without sudo and without root: chmod is the part a plain user can run.
+  it('says that APP_DIR must hold only this app, in the script and on the page', () => {
+    expect(script.replace(/\s*\n#\s*/g, ' ')).toContain('and nothing else');
+    expect(script).toContain('a directory that holds anything else');
+    const flat = page.replace(/\s+/g, ' ');
+    expect(flat).toContain('so it must hold only this app (`/opt/<app>`)');
+    expect(flat).toContain('and they refuse those');
+  });
+
+  it('hands over a directory that holds only an app, and nothing else is ever run', () => {
+    for (const dir of [
+      '/opt/myapp',
+      '/opt/knext-ffi-caller',
+      '/srv/app',
+      '/var/lib/myapp',
+      '/opt/a/b',
+    ]) {
+      const { r, calls } = runScript(dir);
+      expect(r.status, `${dir}: ${r.stderr}`).toBe(0);
+      expect(calls, dir).toEqual([`chown -R root:root ${dir}`, `chmod -R go-w ${dir}`]);
+    }
+  });
+
+  it('refuses a directory that can hold other things, before sudo is ever called: the root, a home directory, /tmp, /opt itself, a system directory, a relative path, nothing at all, a path with a dot component', () => {
+    const refused = [
+      '/',
+      '/opt',
+      '/opt/',
+      '/root',
+      '/tmp',
+      '/tmp/x',
+      '/tmpfoo',
+      '/var/tmp',
+      '/var/tmp/app',
+      '/var',
+      '/srv',
+      '/mnt',
+      '/media',
+      '/home',
+      '/home/',
+      '/home/me',
+      '/home/me/app',
+      '/usr',
+      '/usr/local/app',
+      '/etc',
+      '/etc/app',
+      '',
+      'relative/dir',
+      '.',
+      './app',
+      '/opt/..',
+      '/opt/app/..',
+      '/opt/../etc',
+      '/opt/./app',
+      '/opt/.hidden',
+    ];
+    for (const dir of refused) {
+      const { r, calls } = runScript(dir);
+      expect(r.status, `${JSON.stringify(dir)} was handed over`).not.toBe(0);
+      expect(r.stderr, dir).toContain('refusing');
+      expect(calls, `sudo ran for ${JSON.stringify(dir)}`).toEqual([]);
+    }
+    // $HOME itself, wherever it is (a home directory that is not under /home too).
+    const { r, calls } = runScript('/srv/me', { HOME: '/srv/me' });
+    expect(r.status).not.toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('does what it says on a directory this user owns, apart from the sudo and the refusal of temp directories (the lane runs the real one)', () => {
+    // The guard refuses /tmp and /home, where a test directory lives on Linux: lift the refusal of
+    // them (keeping the one for an empty or relative path), and let sudo run everything but the chown.
+    const lifted = script.replace(/^ {2}"" \| .*\)\n/m, '  "" | [!/]*)\n');
+    expect(lifted).not.toBe(script);
     const dir = emptyDir('recipe');
-    const run = script.replace(/sudo chown -R root:root "\$APP_DIR"\n/, '').replace(/sudo /g, '');
-    const r = spawnSync('bash', ['-euo', 'pipefail', '-c', `chmod 775 "$APP_DIR"\n${run}`], {
+    const sudo = fakeSudo('run');
+    const r = spawnSync('bash', ['-euo', 'pipefail', '-c', `chmod 775 "$APP_DIR"\n${lifted}`], {
       encoding: 'utf8',
-      env: { ...process.env, APP_DIR: dir },
+      env: { ...process.env, PATH: `${sudo.bin}:${process.env.PATH}`, APP_DIR: dir },
     });
     expect(r.status, r.stderr).toBe(0);
     const mode = Number.parseInt(

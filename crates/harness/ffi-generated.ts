@@ -15,7 +15,7 @@
 //            (native/ffi/<triple>/ + a sha256 integrity manifest, owned by root
 //            under a root-owned path whose every ancestor is root's and closed,
 //            NODE_ENV=production: the loader judges the real owners and modes,
-//            so this mode needs root or passwordless sudo), with four controls
+//            so this mode needs root or passwordless sudo), with five controls
 //            that show the loader's walk is live:
 //              1. the same tree made as the running user, under the sticky /tmp,
 //                 is refused, /tmp itself is listed with its mode (1777), and
@@ -28,7 +28,10 @@
 //                 sits in made group-writable by root is refused, and that one
 //                 directory is the only one listed (mode 0775);
 //              4. the same tree with the root directory alone answering 0775 is
-//                 refused, with / the only one listed.
+//                 refused, with / the only one listed;
+//              5. the same tree reached by a RELATIVE executable path (a working
+//                 directory that is root's and closed, so judging "image" and "."
+//                 would pass) is refused, because the path is relative.
 //            Then call through the generated module: scalars, strings, bytes,
 //            records with 64-bit fields, enums, Option/Vec, Err, a panic, and
 //            the non-finite float rule in every JSON position (refused by the
@@ -36,7 +39,7 @@
 //            With KNEXT_FFI_HARNESS_MUTATE=W01|W02|W03|W04|W05 the rendered loader
 //            is weakened in memory (the walk above the executable's directory, its
 //            last step to /, the real-path assertion, the sticky exemption, the
-//            owner check), only the four controls run, and the run must fail;
+//            owner check), only the five controls run, and the run must fail;
 //            ffi-generated-red.ts requires exactly that and the controls each
 //            weakening turns red.
 //   init     `knext ffi init` with the knext-ffi revision this @getknext/ffi
@@ -324,11 +327,14 @@ function inBun(
   // biome-ignore lint/suspicious/noExplicitAny: the body runs in another process, untyped.
   body: (m: any, c: (f: () => unknown) => unknown) => unknown,
   env: Record<string, string>,
+  cwd: string = dir,
 ): Promise<unknown> {
   writeFileSync(join(dir, 'child.ts'), CHILD);
   return new Promise((settle) => {
-    const child = spawn(process.execPath, ['--conditions=react-server', 'child.ts'], {
-      cwd: dir,
+    // From another working directory the entry is named by its path, so it is still this one.
+    const entry = cwd === dir ? 'child.ts' : join(dir, 'child.ts');
+    const child = spawn(process.execPath, ['--conditions=react-server', entry], {
+      cwd,
       env: { ...process.env, NEXT_PHASE: '', BODY: body.toString(), ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -569,7 +575,33 @@ async function wrapper(libPath: string): Promise<void> {
     );
   }
 
-  // A weakened loader (KNEXT_FFI_HARNESS_MUTATE) is judged by the four controls alone.
+  // Control 5. The same tree by a RELATIVE executable path: the working directory is the root-owned,
+  // closed directory the image sits in, and the executable is "image/server". Were the directory
+  // beside it judged by that name, the walk would be "image" and "." (a relative path's walk stops at
+  // ".", and both are root's and closed here), so the load would SUCCEED, judging the wrong
+  // directories. The loader's assertion that the executable's directory is its own real path is
+  // what refuses it, and it says why. With that assertion removed (W03) this control, unlike
+  // control 2, goes red because a tree that should not load LOADS, not because of the wording.
+  const relative = (await inBun(
+    dir,
+    (m, c) => c(() => m.echo_opt_f64(0.25)),
+    { FAKE_EXEC: join(basename(rootImage), 'server'), NODE_ENV: 'production' },
+    stage,
+  )) as { cls?: string; message?: string } | undefined;
+  if (relative !== undefined) {
+    same(
+      relative.cls,
+      'FfiLoadError',
+      `control 5: a tree reached by a relative executable path is refused, not loaded (${JSON.stringify(relative)})`,
+    );
+    check(
+      /is not the real path of its directory/.test(relative.message ?? '') &&
+        (relative.message ?? '').includes("because the executable's path is relative"),
+      `control 5: the refusal says the path is relative: ${relative.message}`,
+    );
+  }
+
+  // A weakened loader (KNEXT_FFI_HARNESS_MUTATE) is judged by the five controls alone.
   if (mutating !== undefined) return;
 
   const result = (await inBun(

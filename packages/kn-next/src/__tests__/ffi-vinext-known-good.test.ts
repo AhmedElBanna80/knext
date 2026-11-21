@@ -20,7 +20,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dockerfileHint, VINEXT_CLOSE_LINE } from "../../../ffi/src/init";
+import {
+    DEFAULT_BUILD,
+    dockerfileHint,
+    VINEXT_CLOSE_LINE,
+} from "../../../ffi/src/init";
+import { BUILDERS, DEFAULT_BUILDER_ID } from "../adapters/artifact-contract";
 import { packageRoot } from "../cli/create";
 import {
     isKnownGoodTemplateDockerfile,
@@ -61,6 +66,19 @@ describe("the scaffolded vinext Dockerfile plus the one line knext ffi init adds
     it("the line core recognises is exactly the line the hint prints", () => {
         expect(VINEXT_FFI_CLOSE_LINE).toBe(LINE);
         expect(VINEXT_CLOSE_LINE).toBe(VINEXT_FFI_CLOSE_LINE);
+    });
+
+    it("the build the hint assumes when a config names none is core's default, and the one build it speaks to is a builder core has", () => {
+        // Core owns both: the ffi package keeps its own copy of the default and of the builder name
+        // (it cannot import core), so this is where a change in core is noticed.
+        expect(DEFAULT_BUILD).toBe(DEFAULT_BUILDER_ID);
+        expect(BUILDERS.map((b) => b.id)).toContain("vinext");
+        const cwd = tmp();
+        writeFileSync(join(cwd, "Dockerfile"), template());
+        expect(dockerfileHint(cwd, "vinext")).toContain(LINE);
+        for (const b of BUILDERS.filter((b) => b.id !== "vinext")) {
+            expect(dockerfileHint(cwd, b.id), b.id).toBe("");
+        }
     });
 
     it("the template with the line directly after its native/ COPY is known-good: following the hint does not take the app off the host-built path", () => {

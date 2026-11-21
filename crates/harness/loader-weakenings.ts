@@ -35,7 +35,7 @@ export const WEAKENINGS: Readonly<Record<string, Weakening>> = {
       'a path that is not the real path of its directory is let through: the walk follows the link',
     anchor: '  if (real !== home) {\n',
     replacement: '  if (false as boolean) {\n',
-    controls: [2],
+    controls: [2, 5],
   },
   W04: {
     claim: 'a sticky, world-writable directory (a /tmp) is let through',

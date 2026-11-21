@@ -50,7 +50,7 @@ import {
   removeScratchDirs,
 } from './helpers';
 import { integerMatrix } from './integer-matrix';
-import { type Leaf, leaves } from './template-scan';
+import { type Leaf, leaves, sinkCalls } from './template-scan';
 
 const FIXTURE_C = join(PKG_DIR, 'fixtures', 'abi-v1', 'fixture.c');
 const EXT = process.platform === 'darwin' ? 'dylib' : 'so';
@@ -528,7 +528,12 @@ describe('path 1 — native/ffi/<triple> beside the executable, integrity requir
       (m, c, fixture) => {
         const two = (n: number) => BigInt(2) ** BigInt(n);
         const out: Record<string, unknown> = {};
-        out.greet = [m.greet('World'), m.greet(''), m.greet('héllo 🌍 👩‍💻'), m.greet('a\u0000b')];
+        out.greet = [
+          m.greet('World'),
+          m.greet(''),
+          m.greet('héllo 🌍 👩\u200d💻'),
+          m.greet('a\u0000b'),
+        ];
         out.add = m.add(2, 3);
         m.add(-1, 0); // leaves 0xFF in bytes 1..3 of the out slot
         out.tiny = [m.tiny(5), m.tiny(-5)];
@@ -580,7 +585,7 @@ describe('path 1 — native/ffi/<triple> beside the executable, integrity requir
     );
     expect(r.stderr).not.toContain('development build');
     expect(r.result, r.stderr).toEqual({
-      greet: ['Hello, World!', 'Hello, !', 'Hello, héllo 🌍 👩‍💻!', 'Hello, a\u0000b!'],
+      greet: ['Hello, World!', 'Hello, !', 'Hello, héllo 🌍 👩\u200d💻!', 'Hello, a\u0000b!'],
       add: 5,
       tiny: [5, -5],
       flag: [false, true],
@@ -1476,10 +1481,11 @@ function rawControls(text: string): string[] {
       n === 0x2028 ||
       n === 0x2029 ||
       n === 0x61c ||
-      n === 0x200e ||
-      n === 0x200f ||
+      (n >= 0x200b && n <= 0x200f) ||
       (n >= 0x202a && n <= 0x202e) ||
-      (n >= 0x2066 && n <= 0x2069)
+      n === 0x2060 ||
+      (n >= 0x2066 && n <= 0x2069) ||
+      n === 0xfeff
     );
   });
 }
@@ -1734,6 +1740,14 @@ describe('the library is refused unless only root can write it and own the way t
       'The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.';
     const MOVE =
       'A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.';
+    // The one Dockerfile line that keeps a vinext app on the known-good path (deploy takes the fast
+    // host-built-assets path only for the template, plus exactly this line directly after the COPY of
+    // native/), said wherever a directory can be fixed in place, and only there.
+    const VINEXT =
+      "In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there).";
+    // When a sticky directory is on the way AND other directories fail, fixing the others is not enough.
+    const ALONE =
+      'The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move.';
     const count = (text: string, part: string) => text.split(part).length - 1;
 
     it('a directory inside native/ always gets the fix in place: chmod go-w, chown root, a Dockerfile RUN; never the file COPY flags, never the move', () => {
@@ -1747,9 +1761,12 @@ describe('the library is refused unless only root can write it and own the way t
           expect(text).toContain('`RUN chmod go-w <dir>`');
           expect(text).toContain("a directory inside a copied tree keeps the build host's mode");
           expect(text).toContain('could be renamed or replaced after it was checked');
+          expect(text).toContain(VINEXT);
           expect(text).not.toContain(EITHER);
           expect(text).not.toContain(MOVE);
-          expect(text).not.toContain('COPY --chown');
+          expect(text).not.toContain(ALONE);
+          // The file COPY flags are the file hint's: the only COPY a directory refusal names is the vinext one.
+          expect(text.replace(VINEXT, '')).not.toContain('COPY --chown');
           expect(text).not.toContain('its bytes could change');
         }
       }
@@ -1772,9 +1789,11 @@ describe('the library is refused unless only root can write it and own the way t
         expect(text).toContain('`RUN chmod go-w <dir>`');
         expect(text).toContain(SHARED_IF);
         expect(text).toContain(OWN_DIR);
+        expect(count(text, VINEXT)).toBe(1);
         expect(text).not.toContain(MOVE);
+        expect(text).not.toContain(ALONE);
         expect(text).not.toContain(FIX);
-        expect(text).not.toContain('COPY --chown');
+        expect(text.replace(VINEXT, '')).not.toContain('COPY --chown');
       }
     });
 
@@ -1795,7 +1814,9 @@ describe('the library is refused unless only root can write it and own the way t
           expect(text).toContain('`RUN chmod go-w <dir>`');
           expect(text).toContain(SHARED_IF);
           expect(text).toContain(OWN_DIR);
+          expect(count(text, VINEXT)).toBe(1);
           expect(text).not.toContain(MOVE);
+          expect(text).not.toContain(ALONE);
           expect(text).not.toContain(FIX);
         }
       }
@@ -1810,6 +1831,10 @@ describe('the library is refused unless only root can write it and own the way t
           expect(text).not.toContain(EITHER);
           expect(text).not.toContain(FIX);
           expect(text).not.toContain(SHARED_IF);
+          // Nothing else on the list: a closing chmod cannot help, so neither the vinext line nor
+          // the "fixing the others is not enough" sentence is said.
+          expect(text).not.toContain(VINEXT);
+          expect(text).not.toContain(ALONE);
         }
       }
       // Sticky and owned by somebody else (not world-writable): still shared, still a move.
@@ -1853,6 +1878,8 @@ describe('the library is refused unless only root can write it and own the way t
       );
       expect(count(text, FIX)).toBe(1);
       expect(count(text, MOVE)).toBe(1);
+      expect(count(text, VINEXT)).toBe(1);
+      expect(count(text, ALONE)).toBe(1);
       expect(text).not.toContain(EITHER);
       // inside native/ + the executable's directory + shared above: all three, once each.
       text = message(
@@ -1868,11 +1895,28 @@ describe('the library is refused unless only root can write it and own the way t
       expect(count(text, FIX)).toBe(1);
       expect(count(text, EITHER)).toBe(1);
       expect(count(text, MOVE)).toBe(1);
+      expect(count(text, VINEXT)).toBe(1);
+      expect(count(text, ALONE)).toBe(1);
       // two of the conditional kind: one sentence, not two.
       text = message(load(exe, { modes: { [home as string]: 0o775, [parent as string]: 0o775 } }));
       expect(count(text, EITHER)).toBe(1);
+      expect(count(text, VINEXT)).toBe(1);
       expect(text).not.toContain(FIX);
       expect(text).not.toContain(MOVE);
+      expect(text).not.toContain(ALONE);
+    });
+
+    it('a binary under a sticky directory (/tmp/x/server) with its own directory failing too is told the directories listed with it cannot do it alone: fixing /tmp/x leaves a sticky /tmp above it, and the install has to move', () => {
+      const exe = image();
+      const [home] = [dirsOf(exe)[3] as string];
+      const above = aboveOf(exe);
+      // The executable's own directory fails (group-writable) and the one above it is sticky.
+      const text = message(load(exe, { modes: { [home]: 0o775, [above[0] as string]: 0o1777 } }));
+      expect(text).toContain(EITHER);
+      expect(text).toContain(MOVE);
+      expect(text).toContain(ALONE);
+      // The sentence comes after the move advice it qualifies.
+      expect(text.indexOf(MOVE)).toBeLessThan(text.indexOf(ALONE));
     });
 
     it('a file refusal keeps the file hint (COPY --chown=0:0 --chmod=a-w) and does not talk about directories', () => {
@@ -2007,6 +2051,59 @@ describe('the library is refused unless only root can write it and own the way t
       expect(message(load(join(fine, 'x', 'server')))).toContain('caf\u00e9 \u{1f600}');
     });
 
+    it('zero-width and format characters in a directory name are shown as unicode escapes too, never printed raw: a name that holds one must not read as the name without it', () => {
+      const marks = [0x200b, 0x200c, 0x200d, 0x2060, 0xfeff];
+      const exe = image();
+      const odd = join(emptyDir('weird9'), `q${String.fromCodePoint(...marks)}z`);
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      chmodSync(join(odd, 'x'), 0o775);
+      const text = message(load(join(odd, 'x', 'server')));
+      expect(text).toContain(
+        `q${marks.map((n) => `\\u${n.toString(16).padStart(4, '0')}`).join('')}z`,
+      );
+      expect(rawControls(text)).toEqual([]);
+    });
+
+    it('a value that is not text at all is shown without throwing: a thrown object with no prototype, or whose toString throws, is "[object Object]", never a TypeError out of the refusal', () => {
+      const THROW_ODD = () => {
+        const fs = process.getBuiltinModule('node:fs') as unknown as Record<string, unknown>;
+        const mod = process.getBuiltinModule('node:module') as unknown as {
+          syncBuiltinESMExports: () => void;
+        };
+        fs.realpathSync = () => {
+          throw process.env.ODD === 'bare'
+            ? Object.create(null)
+            : {
+                toString() {
+                  throw new Error('no text');
+                },
+              };
+        };
+        mod.syncBuiltinESMExports();
+      };
+      for (const odd of ['bare', 'toString']) {
+        const r = inBun((m, c) => c(() => m.greet('x')), {
+          FAKE_EXEC: image(),
+          BEFORE: THROW_ODD.toString(),
+          ODD: odd,
+        });
+        const got = r.result as { cls: string; message: string };
+        expect(got?.cls, `${odd}: ${r.stderr}`).toBe('FfiLoadError');
+        expect(got.message).toMatch(/cannot resolve the directory .* \(\[object Object\]\)\.$/);
+      }
+    });
+
+    it('invalid UTF-8 and a lone surrogate become U+FFFD before the text is shown, which is printed as it is: the replacement character is not a control and hides nothing', () => {
+      const r = inBun((m) => m.add(1, 2), {
+        FAKE_EXEC: image(),
+        KNEXT_FFI_SLOW_CALL_MS: `a${String.fromCodePoint(0xd800)}b`,
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toContain(`KNEXT_FFI_SLOW_CALL_MS="a${String.fromCodePoint(0xfffd)}b"`);
+      expect(rawControls(r.stderr)).toEqual([]);
+    });
+
     it('a manifest that lists something that is not a sha256 digest is refused before the library is read, with the value shown escaped', () => {
       for (const [bad, shown] of [
         ['ab\u0085cd', 'ab\\u0085cd'],
@@ -2042,6 +2139,37 @@ describe('the library is refused unless only root can write it and own the way t
       expect(rawControls(r.stderr)).toEqual([]);
     });
 
+    it('the value a decoder quotes when the library returns the wrong kind is shown escaped: a 64-bit integer or a float that arrives as a string with control characters in it', () => {
+      // The fixture library returns a number where a decimal string is due, and a null where a float
+      // is. What a library returns is not trusted text: the parse is patched here to put a string
+      // with a C1 control, a line separator, a bidirectional override and a newline where the
+      // value is, and the refusal must quote it escaped.
+      const REPLACE_VALUES = () => {
+        const real = JSON.parse;
+        JSON.parse = function (this: unknown, ...a: Parameters<typeof JSON.parse>) {
+          const v = real.apply(this, a);
+          if (v !== null && typeof v === 'object' && 'inner' in v && 'color' in v) {
+            if (v.id === 1) v.id = 'a\u0085b\u2028c\nd';
+            if (v.x === null) v.x = 'q\u202ez';
+          }
+          return v;
+        } as typeof JSON.parse;
+      };
+      const r = inBun((m, c) => [c(() => m.bad_id()), c(() => m.bad_point())], {
+        FAKE_EXEC: image(),
+        BEFORE: REPLACE_VALUES.toString(),
+      });
+      const [id, point] = r.result as { cls: string; message: string }[];
+      expect(id?.cls, r.stderr).toBe('RustError');
+      expect(id?.message).toBe(
+        'result.id: expected a 64-bit integer as a decimal string, got "a\\u0085b\\u2028c\\\\nd"',
+      );
+      expect(point?.cls).toBe('RustError');
+      expect(point?.message).toBe('result.x: expected a finite number, got "q\\u202ez"');
+      expect(rawControls(id?.message ?? '')).toEqual([]);
+      expect(rawControls(point?.message ?? '')).toEqual([]);
+    });
+
     it('the other printed paths are shown escaped too: the platform directories it found, the manifest it could not read, and the file it could not open', () => {
       // The directories under native/ffi/ it names when none is for this platform.
       const wrongPlatform = image({ triple: 'zz\u2028q\u0085r\ns' });
@@ -2064,15 +2192,20 @@ describe('the library is refused unless only root can write it and own the way t
       expect(rawControls(text)).toEqual([]);
     });
 
-    it('a file that cannot be opened is refused with its path shown escaped, in the message and in the system error it quotes', () => {
+    /** An image moved under a directory whose name holds a C1 control and a line separator. */
+    const oddImage = () => {
       const exe = image();
-      const odd = join(emptyDir('weird4'), 'q\u0085 z');
+      const odd = join(emptyDir('weird4'), `q${String.fromCodePoint(0x85, 0x2028)}z`);
       mkdirSync(odd);
       renameSync(join(exe, '..'), `${odd}/x`);
-      const moved = join(odd, 'x', 'server');
+      return join(odd, 'x', 'server');
+    };
+    const SHOWN = 'q\\u0085\\u2028z';
+
+    it('a file that cannot be opened is refused with its path shown escaped, in the message and in the system error it quotes (the open is made to fail with an EACCES, so it is the same for whoever runs the test)', () => {
       // The open of the manifest fails with the system's own message, which quotes the path: an
-      // EACCES, as a mode-000 file gives a user that is not root. Faked, so that it is the same for
-      // whoever runs the test (root reads a mode-000 file) and no case has to skip.
+      // EACCES, as a mode-000 file gives a user that is not root. Faked here, because root reads a
+      // mode-000 file; the test below runs the real one.
       const DENY_OPEN = () => {
         const fs = process.getBuiltinModule('node:fs');
         const mod = process.getBuiltinModule('node:module') as unknown as {
@@ -2094,14 +2227,32 @@ describe('the library is refused unless only root can write it and own the way t
         mod.syncBuiltinESMExports();
       };
       const r = inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
-        FAKE_EXEC: moved,
+        FAKE_EXEC: oddImage(),
         BEFORE: DENY_OPEN.toString(),
       });
       const [first] = r.result as { message: string }[];
       expect(first?.message, r.stderr).toContain('cannot open');
       expect(first?.message).toContain('EACCES: permission denied');
-      expect(first?.message).toContain('q\\u0085\\u2028z');
+      expect(first?.message).toContain(SHOWN);
       expect(rawControls(first?.message ?? '')).toEqual([]);
+    });
+
+    it("the same with a real mode-000 manifest, so Bun's own errno mapping and its message are covered: a user that is not root is refused with the system's EACCES; root reads a mode-000 file, so for root the call succeeds (nothing to quote, and no case skips)", () => {
+      const moved = oddImage();
+      chmodSync(join(moved, '..', 'native', '.integrity.json'), 0o000);
+      const r = inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+        FAKE_EXEC: moved,
+      });
+      const [first, second] = r.result as { ok?: unknown; message?: string }[];
+      if (process.getuid?.() === 0) {
+        expect(first?.ok, r.stderr).toBe('Hello, World!');
+        expect(second?.ok).toBe(3);
+      } else {
+        expect(first?.message, r.stderr).toContain('cannot open');
+        expect(first?.message).toContain('EACCES');
+        expect(first?.message).toContain(SHOWN);
+        expect(rawControls(first?.message ?? '')).toEqual([]);
+      }
     });
   });
 
@@ -2359,9 +2510,20 @@ describe('the library is refused unless only root can write it and own the way t
   });
 });
 
-describe('everything the loader prints goes through $show, or is classified (a scan of the generated module, so a new message cannot forget it)', () => {
+describe('everything the module prints goes through $show, or is classified (a scan of the whole generated module, so a new message cannot forget it)', () => {
+  const IDENT =
+    'a generated identifier: the export name or an argument name, validated by the generator';
+  const PATH =
+    "a path built by the generated code from the generator's own field names and loop indexes";
+  const WORD = 'typeof of a value: one fixed word';
+  const NUM = 'a number';
+  /** The same reason for each expression in each function: a name is allowed per function. */
+  const allow = (fns: string[], exprs: string[], reason: string): Record<string, string> =>
+    Object.fromEntries(fns.flatMap((f) => exprs.map((e) => [`${f}::${e}`, reason])));
+  const CHECKS = ['$int', '$big', '$num', '$bool', '$str', '$bytes'];
+
   /**
-   * What the loader may interpolate or concatenate into text WITHOUT $show, each keyed by the
+   * What the module may interpolate or concatenate into text WITHOUT $show, each keyed by the
    * function it is in and the expression, and each with the reason it is safe. A name is allowed in
    * ONE function only: the same name in another function is a new finding, not a pass.
    */
@@ -2403,39 +2565,60 @@ describe('everything the loader prints goes through $show, or is classified (a s
       "the entries pushed above, each built from $show'd parts",
     '$sealed::b':
       "one entry pushed to bad, each built from $show'd parts (every bad.push is scanned)",
-    '$openFile::what':
-      "a fixed phrase from the call sites ('the library', 'the integrity manifest')",
-    '$openFile::missing': 'the message the call site built, which is scanned where it is built',
+    // $openFile takes its `what` and `missing` through PARAM_SINKS: the call sites are scanned, so
+    // the parameters are not listed here.
     '$verify::expected':
       'a string that matched /^[0-9a-f]{64}$/ a few lines above, or the refusal would have been raised',
     '$verify::actual': 'a sha256 hex digest the process computed',
     '$verify::process.platform': 'the platform name Bun reports (a fixed word)',
     '$verify::lib.fd': 'a file descriptor number',
+    // Past the loader: the wrappers' own errors. What a library returns is shown through $show
+    // ($d64 and $fin quote the value that was wrong); the rest is generated text, numbers and words.
+    '$fail::message':
+      "the Rust library's own error text (RustError.message is that text, unchanged: wording it is the Rust code's job, and the library is the one that was hashed and sealed)",
+    '$fail::status': 'a number (the status the library returned)',
+    '$shown::hex * 4': 'a number',
+    '$int::$shown(v)': 'a number, bounded: a huge bigint is a bit count',
+    '$big::$shown(v)': 'a number, bounded: a huge bigint is a bit count',
+    '$big::got': 'built on the line above from typeof and $shown: words and a bounded number',
+    '$efin::String(v)': 'a number: v is typeof number here',
+    '$vec::i': NUM,
+    ...allow(['$fail', ...CHECKS, '$d64', '$fin', '$efin'], ['fn'], IDENT),
+    ...allow(CHECKS, ['arg'], IDENT),
+    ...allow(['$d64', '$fin', '$efin', '$vec'], ['at'], PATH),
+    ...allow(['$int', '$big'], ['min', 'max'], 'a bound the generator wrote: a number'),
+    ...allow(['$int', '$big', '$num', '$bool', '$str'], ['typeof v'], WORD),
   };
 
-  /** The loader proper: from the first call's entry to the first helper after it. */
-  const loaderOf = (source: string) => {
-    const from = source.indexOf('function $load(');
-    const to = source.indexOf('/** A Rust-owned (ptr, len) pair');
-    expect(from, 'the loader starts at function $load').toBeGreaterThan(0);
-    expect(to, 'the loader ends before $takeString').toBeGreaterThan(from);
-    return { text: source.slice(from, to), outside: source.slice(0, from) + source.slice(to) };
-  };
+  /** Per-export and per-record generated functions, whose names depend on the crate. */
+  const ALLOWED_PATTERNS: [RegExp, string][] = [
+    [/^[A-Za-z_][\w$]*::\$i\d+$/, 'a loop index in an argument path: a number'],
+    [/^\$[de]_\w+::at$/, PATH],
+  ];
+
   const source = () => renderModule(manifest, { libName: 'fixture', crate: 'rust' });
   const named = (found: readonly Leaf[]) => found.map((l) => `${l.key} (line ${l.line})`);
+  const classified = (key: string) =>
+    key in ALLOWED || ALLOWED_PATTERNS.some(([re]) => re.test(key));
 
-  it('every value the loader puts in text without $show is classified above: no template, concatenation or bare argument of a raise or a warning slips by, whatever the message says', () => {
-    const found = leaves(loaderOf(source()).text);
-    expect(named(found.filter((l) => !(l.key in ALLOWED)))).toEqual([]);
+  it('every value the module puts in text without $show is classified above: no template, concatenation or bare argument of a raise or a warning slips by, whatever the message says and wherever it is', () => {
+    const found = leaves(source());
+    expect(found.length).toBeGreaterThan(50);
+    expect(named(found.filter((l) => !classified(l.key)))).toEqual([]);
   });
 
   it('and nothing on the list is stale: every entry is still found, in the function it is listed under', () => {
-    const keys = new Set(leaves(loaderOf(source()).text).map((l) => l.key));
+    const keys = new Set(leaves(source()).map((l) => l.key));
     expect(Object.keys(ALLOWED).filter((k) => !keys.has(k))).toEqual([]);
+    expect(
+      ALLOWED_PATTERNS.filter(([re]) => ![...keys].some((k) => re.test(k))).map(([re]) =>
+        String(re),
+      ),
+    ).toEqual([]);
   });
 
-  it('the scan covers the loader: it sees the functions that print, and nothing outside the loader raises or warns', () => {
-    const { text, outside } = loaderOf(source());
+  it('the scan covers the whole module: it sees the functions that print, the wrappers that fail and the decoders, and it recognises every raising and printing call the source text holds', () => {
+    const src = source();
     for (const name of [
       '$load',
       '$threshold',
@@ -2448,11 +2631,34 @@ describe('everything the loader prints goes through $show, or is classified (a s
       '$same',
       '$openFile',
       '$verify',
+      '$fail',
+      '$int',
+      '$big',
+      '$d64',
+      '$fin',
+      '$efin',
     ]) {
-      expect(text, name).toContain(`function ${name}(`);
+      expect(src, name).toContain(`function ${name}(`);
     }
-    // A loader message added OUTSIDE the region the scan reads would never be looked at.
-    expect(outside).not.toMatch(/new FfiLoadError\(|console\.warn\(|console\.error\(|bad\.push\(/);
+    // A call the AST scan does not recognise is one a message could slip through: every line of the
+    // source that holds one (a raise of any Error class, a console call, a stream write, a push to the
+    // list of failing directories) must be a line the scan saw.
+    const textual = src
+      .split('\n')
+      .flatMap((line, i) =>
+        /(?:new\s+)?\b(?:\w*Error|console\.\w+|process\.std(?:err|out)\.write|bad\.push)\(/.test(
+          line,
+        )
+          ? [i + 1]
+          : [],
+      );
+    expect(textual.length).toBeGreaterThan(30);
+    expect([...new Set(sinkCalls(src).map((s) => s.line))]).toEqual(textual);
+    // And the scan is not looking at a slice of it: leaves are found past the loader too.
+    const fns = new Set(leaves(src).map((l) => l.fn));
+    for (const name of ['$fail', '$int', '$d64', '$fin', '$efin', '$vec']) {
+      expect(fns.has(name), name).toBe(true);
+    }
   });
 
   it('the scan sees what it is meant to: a bare path, a bare error message, a message that does not say knext ffi:, a concatenation, a bare argument and a call that only starts with $show are all flagged, and strings, comments and arithmetic are not', () => {
@@ -2486,19 +2692,75 @@ describe('everything the loader prints goes through $show, or is classified (a s
     ]);
   });
 
-  it('removing $show from what the loader prints is seen: file, the manifest entry, the library and a raised message each turn up as a finding the list does not allow', () => {
+  it('every other way a message reaches a reader is a sink too: any Error class, an alias of one, Reflect.construct, an assignment to .message, console.log/info/debug and process.stderr/stdout.write; and the arguments of $openFile that become message text (the 2nd and the 4th) are checked where they are passed', () => {
+    const snippet = [
+      'function m(p) { throw new TypeError(p); }',
+      'function n(p) { throw Reflect.construct(FfiLoadError, [p]); }',
+      'function o(p) { err.message = p; }',
+      'function q(p) { console.log(p); console.info(p); console.debug(p); }',
+      'function r(p) { process.stderr.write(p); process.stdout.write(p); }',
+      'const Alias = FfiLoadError;',
+      'function s(p) { throw new Alias(p); }',
+      'class Sub extends RustError {}',
+      'function t(p) { throw new Sub(p); }',
+      'function $openFile(path, what, lib, missing) { throw new FfiLoadError(missing); throw new FfiLoadError(`x ${what} ${lib}`); }',
+      'function u(x) { $openFile(x, x, x, x); }',
+      "function v(x) { $openFile(x, 'a phrase', x, `knext ffi: ${$show(x)}`); }",
+      'function w(p) { throw new RangeError(`${$show(p)}`); console.warn($show(p)); }',
+      'function x(p) { throw new Error(p); }',
+    ].join('\n');
+    expect(leaves(snippet).map((l) => l.key)).toEqual([
+      'm::p',
+      'n::p',
+      'o::p',
+      'q::p',
+      'q::p',
+      'q::p',
+      'r::p',
+      'r::p',
+      's::p',
+      't::p',
+      '$openFile::lib',
+      'u::x',
+      'u::x',
+      'x::p',
+    ]);
+  });
+
+  it('the scan also reports the raising and printing calls it recognised, so a count can be checked against the module: a call it does not recognise is the one a message slips through', () => {
+    const snippet = [
+      'function a(p) { throw new FfiLoadError(p); }',
+      'function b(p) { throw new TypeError(p); console.warn(p); bad.push(p); }',
+      'const E = RustError;',
+      'function c(p) { return new E(p); }',
+      'function d(p) { return [p, new Map()]; }',
+      'function e(p) { throw new Error(p); }',
+    ].join('\n');
+    expect(sinkCalls(snippet).map((s) => `${s.fn}::${s.callee}`)).toEqual([
+      'a::FfiLoadError',
+      'b::TypeError',
+      'b::console.warn',
+      'b::bad.push',
+      'c::E',
+      'e::Error',
+    ]);
+  });
+
+  it('removing $show from what the module prints is seen: the file, the manifest entry, the library, a raised message and the value a decoder quotes each turn up as a finding the list does not allow', () => {
     for (const [anchor, plain] of [
       ['${$show(file)}', '${file}'],
       ['${$show(rel)}', '${rel}'],
       ['${$show(raw)}', '${raw}'],
       ['${$show(path)}: sha256', '${path}: sha256'],
       ['${$show(manifest)}', '${manifest}'],
+      ['got ${$show(JSON.stringify(v))}`', 'got ${JSON.stringify(v)}`'],
+      [': $show(JSON.stringify(v))}', ': JSON.stringify(v)}'],
     ] as const) {
-      const text = loaderOf(source()).text;
+      const text = source();
       expect(text.split(anchor).length - 1, anchor).toBeGreaterThanOrEqual(1);
       const weakened = text.replace(anchor, plain);
       expect(weakened).not.toBe(text);
-      const unlisted = leaves(weakened).filter((l) => !(l.key in ALLOWED));
+      const unlisted = leaves(weakened).filter((l) => !classified(l.key));
       expect(unlisted.length, anchor).toBeGreaterThan(0);
     }
   });

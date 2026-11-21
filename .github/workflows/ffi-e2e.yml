@@ -206,7 +206,7 @@ jobs:
           # containers below run against these bind mounts, so hand the trees to root, as the
           # image's COPY --chown=0:0 does. (Above native/ the walk meets the directory the mount
           # sits in: the bun image's own /usr/local/bin here, root-owned, with /usr/local, /usr
-          # and / above it; the compiled leg's /opt/caller is handed to root where it is built.)
+          # and / above it; the compiled leg's copy under /opt is handed to root where it is built.)
           sudo chown -R root:root "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl-wrong/native"
 
       - name: Pull the image and find the bun binary's directory (process.execPath)
@@ -296,22 +296,27 @@ jobs:
           (cd "${RUNNER_TEMP}/musl/app" && bun build --compile --target="${{ matrix.bun_target }}" \
             --conditions=react-server driver.ts --outfile "${RUNNER_TEMP}/musl/exe/ffi-caller")
           cp -R "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl/exe/native"
+          # The installed copy goes where the docs page says an install goes, a directory under
+          # /opt that holds only this app: the page's commands refuse the runner's temp directory
+          # (it is under /home/runner), as they refuse any directory that can hold other things.
           # The loader also checks every directory from native/ up to /: here the bind mount
-          # /opt/caller (made root's below) and the image's own /opt and /, both root's and closed.
-          # The ownership comes from the docs page's own commands for a compiled binary run
+          # /opt/caller (the copy below, made root's) and the image's own /opt and /, both root's
+          # and closed. The ownership comes from the page's own commands for a compiled binary run
           # outside a container, extracted and run verbatim (APP_DIR is the page's variable),
           # not from a hand-written copy of them.
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/knext-ffi-caller
+          cp -R "${RUNNER_TEMP}/musl/exe/." /opt/knext-ffi-caller/
           bun packages/ffi/scripts/doc-recipe.ts shell "${RUNNER_TEMP}/own-binary.sh"
           cat "${RUNNER_TEMP}/own-binary.sh"
-          APP_DIR="${RUNNER_TEMP}/musl/exe" bash -euo pipefail "${RUNNER_TEMP}/own-binary.sh"
-          ls -la "${RUNNER_TEMP}/musl/exe"
+          APP_DIR="/opt/knext-ffi-caller" bash -euo pipefail "${RUNNER_TEMP}/own-binary.sh"
+          ls -la /opt/knext-ffi-caller
 
       - name: compiled leg — every export, Err, 1000 panics, timings, leak phases
         run: |
           set -euo pipefail
           run() {
             docker run --rm --read-only --network none -e NODE_ENV=production -e TMPDIR=/tmp \
-              -v "${RUNNER_TEMP}/musl/exe:/opt/caller:ro" --entrypoint /opt/caller/ffi-caller \
+              -v "/opt/knext-ffi-caller:/opt/caller:ro" --entrypoint /opt/caller/ffi-caller \
               "$BUN_IMAGE" "$@"
           }
           if ! run all 2> "${RUNNER_TEMP}/exe-all.stderr" | tee "${RUNNER_TEMP}/exe-all.out"; then
@@ -339,7 +344,7 @@ jobs:
           grep -q '^ffi-musl-driver: PASS$' "${RUNNER_TEMP}/bun-nonroot.out"
           docker run --rm --read-only --network none --user 65532:65532 \
             -e NODE_ENV=production -e TMPDIR=/tmp \
-            -v "${RUNNER_TEMP}/musl/exe:/opt/caller:ro" --entrypoint /opt/caller/ffi-caller \
+            -v "/opt/knext-ffi-caller:/opt/caller:ro" --entrypoint /opt/caller/ffi-caller \
             "$BUN_IMAGE" all 2> "${RUNNER_TEMP}/exe-nonroot.stderr" | tee "${RUNNER_TEMP}/exe-nonroot.out" \
             || { tail -n 40 "${RUNNER_TEMP}/exe-nonroot.stderr"; exit 1; }
           grep -q '^ffi-musl-driver: PASS$' "${RUNNER_TEMP}/exe-nonroot.out"
@@ -453,6 +458,9 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned" "${RUNNER_TEMP}/recipe"
           chmod -R u+rwX "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned" "${RUNNER_TEMP}/recipe"
           rm -rf "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned" "${RUNNER_TEMP}/recipe"
+          # The installed copy of the compiled leg is root's (the page's commands did that) and
+          # outside the temp directory, so it is removed with sudo, or a reused runner finds it.
+          sudo rm -rf /opt/knext-ffi-caller
           exit 0
 
   kind-e2e:

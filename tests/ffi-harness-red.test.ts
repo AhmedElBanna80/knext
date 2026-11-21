@@ -1,5 +1,5 @@
 /**
- * The Rust crates lane's wrapper harness shows its four loader controls go red by weakening the
+ * The Rust crates lane's wrapper harness shows its five loader controls go red by weakening the
  * rendered loader in memory (crates/harness/loader-weakenings.ts, ffi-generated-red.ts). The weakening
  * needs the loader's text to still hold its anchor exactly once; this is where a change to the loader
  * that moves one is found, instead of first in the lane (which needs cargo and root).
@@ -54,7 +54,7 @@ describe('the verdict on a weakened harness run', () => {
   it('accepts exactly the controls each weakening lists, with exit code 1', () => {
     expect(judge('W01', 1, FAIL(1) + FAIL(3) + FAIL(4))).toEqual([]);
     expect(judge('W02', 1, FAIL(4))).toEqual([]);
-    expect(judge('W03', 1, FAIL(2))).toEqual([]);
+    expect(judge('W03', 1, FAIL(2) + FAIL(5))).toEqual([]);
     expect(judge('W04', 1, FAIL(1))).toEqual([]);
   });
 
@@ -69,6 +69,10 @@ describe('the verdict on a weakened harness run', () => {
     expect(judge('W02', 1, FAIL(4) + FAIL(2))[0]).toContain('[2,4] went red');
     expect(judge('W03', 1, FAIL(2) + FAIL(3))[0]).toContain('[2,3] went red');
     expect(judge('W03', 1, FAIL(1))[0]).toContain('[1] went red');
+    // W03 is caught by control 5 as well as control 2: 5 is the one that goes red because a tree
+    // that must not load LOADS, so a run in which only 2 went red is not enough.
+    expect(judge('W03', 1, FAIL(2))[0]).toContain('[2] went red');
+    expect(judge('W03', 1, FAIL(5))[0]).toContain('[5] went red');
     expect(judge('W04', 1, `${FAIL(1)}ffi-generated: FAIL: calls\n`)[0]).toContain(
       'no control label',
     );
@@ -77,7 +81,7 @@ describe('the verdict on a weakened harness run', () => {
 
   it('the harness labels every control check, so a red run can be attributed', () => {
     const text = readFileSync(resolve(ROOT, 'crates/harness/ffi-generated.ts'), 'utf8');
-    for (const n of [1, 2, 3, 4]) {
+    for (const n of [1, 2, 3, 4, 5]) {
       expect(text, `control ${n} has no labelled check`).toContain(`control ${n}:`);
     }
   });

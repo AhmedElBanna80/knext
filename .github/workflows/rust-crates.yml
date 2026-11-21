@@ -180,13 +180,14 @@ jobs:
         # (this runner has passwordless sudo) under the first of /var/lib and / whose whole ancestry
         # is root's and closed: it checks that first, never changes the mode of a system directory
         # (this runner has /opt at 0777, which the loader rightly refuses), and stops with a clear
-        # message when neither fits. It then runs four controls, each of which fails if the loader's
+        # message when neither fits. It then runs five controls, each of which fails if the loader's
         # walk is weakened: the same tree made by this user under the sticky /tmp is refused,
         # /tmp is named with its mode and (as a user that is not root) the temp directory made here
         # is named as owned by this user; the good tree reached through a link is refused; a
         # group-writable directory above the executable is the one directory listed; and a root
-        # directory answering 0775 is the one directory listed. Only the last uses a faked value
-        # (the mode of /, in the child). Nothing else in the child process is faked.
+        # directory answering 0775 is the one directory listed; and the good tree reached by a
+        # relative executable path is refused because the path is relative. Only the fourth uses a
+        # faked value (the mode of /, in the child). Nothing else in the child process is faked.
         run: bun harness/ffi-generated.ts wrapper target/release/libknext_ffi_fixture.so
 
       - name: Generator — the wrapper harness's controls go red when the loader's walk is weakened

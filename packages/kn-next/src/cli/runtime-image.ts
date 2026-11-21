@@ -176,9 +176,10 @@ function stageLiteralTemplate(src: string, dest: string): boolean {
  * every directory above it is root's and closed to group and other, which
  * includes `/app` and `/app/native`; BuildKit leaves them so, a builder that
  * gives a COPY's destination the build host's mode does not, so the app closes
- * them itself. `@getknext/ffi` (a separate, unpublished package) prints the same
- * line as its own constant (`VINEXT_CLOSE_LINE`); `ffi-vinext-known-good.test.ts`
- * fails if the two drift apart.
+ * them itself. The `knext ffi` verbs print the same line from their own copy of
+ * it; core owns this constant and never imports that copy, and the drift test
+ * (`ffi-vinext-known-good.test.ts`, which lives with the tests, not in core
+ * source) fails if the two diverge.
  */
 export const VINEXT_FFI_CLOSE_LINE = "RUN chmod go-w /app /app/native";
 

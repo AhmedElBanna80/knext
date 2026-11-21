@@ -8,7 +8,15 @@ import { afterAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { CRATE_GIT, recordedCrateRev, runInit, TEMPLATE_DIR } from '../init';
+import { run } from '../cli';
+import {
+  appBuild,
+  CRATE_GIT,
+  dockerfileHint,
+  recordedCrateRev,
+  runInit,
+  TEMPLATE_DIR,
+} from '../init';
 import { capture, emptyDir, PKG_DIR, readTree, removeScratchDirs } from './helpers';
 
 afterAll(removeScratchDirs);
@@ -132,11 +140,14 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
   const VINEXT_DOCKERFILE = join(PKG_DIR, '..', 'kn-next', 'templates', 'app', 'Dockerfile.hbs');
   const LINE = 'RUN chmod go-w /app /app/native';
 
-  const init = (dockerfile?: string) => {
+  const init = (dockerfile?: string, build?: string) => {
     const cwd = emptyDir('init-vinext');
     if (dockerfile !== undefined) writeFileSync(join(cwd, 'Dockerfile'), dockerfile);
     const c = capture();
-    expect(runInit({ cwd, io: c.io, crateRev: REV }), c.err()).toBe(0);
+    expect(
+      runInit({ cwd, io: c.io, crateRev: REV, ...(build === undefined ? {} : { build }) }),
+      c.err(),
+    ).toBe(0);
     return { cwd, out: c.out() };
   };
 
@@ -179,7 +190,8 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
   });
 
   // The hint has to be right about which Dockerfile it is looking at.
-  const hinted = (dockerfile: string) => init(dockerfile).out.includes(LINE);
+  const hinted = (dockerfile: string) => init(dockerfile).out.includes('add this one line');
+  const slower = (dockerfile: string) => init(dockerfile).out.includes('slower');
   const FINAL = (...lines: string[]) =>
     ['FROM alpine', 'WORKDIR /app', ...lines, 'USER 65532:65532', ''].join('\n');
 
@@ -239,6 +251,9 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
       'RUN chmod --recursive go-w /app',
     ]) {
       expect(hinted(FINAL(COPY, closes)), closes).toBe(false);
+      // Closed, so nothing to add; but only the one line directly after the COPY is what deploy
+      // recognises, so any other way of closing them is a warning about the slower path.
+      expect(slower(FINAL(COPY, closes)), closes).toBe(closes !== LINE);
     }
     for (const closes of [
       'RUN chmod go-w /app/native', // /app is left as the builder made it
@@ -269,6 +284,218 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
       ),
     ).toBe(false);
   });
+
+  const COPY_LINE = 'COPY --chown=0:0 --chmod=a-w native /app/native';
+  const CLOSE_RUN = 'RUN chmod go-w /app /app/native';
+
+  it('a mode with no who-letter closes nothing: it is subject to the umask, so it is not what the loader needs', () => {
+    for (const closes of [
+      'RUN chmod -w /app /app/native',
+      'RUN chmod =rx /app /app/native',
+      'RUN chmod -R -w /app',
+      'RUN chmod -w,=rx /app /app/native',
+      'RUN chmod -w /app && chmod =rx /app/native',
+    ]) {
+      expect(hinted(FINAL(COPY_LINE, closes)), closes).toBe(true);
+    }
+    // The same with a who-letter is a close.
+    for (const closes of [
+      'RUN chmod a-w /app /app/native',
+      'RUN chmod ugo=rx /app /app/native',
+      'RUN chmod go=rx /app /app/native',
+      'RUN chmod og-w /app /app/native',
+    ]) {
+      expect(hinted(FINAL(COPY_LINE, closes)), closes).toBe(false);
+    }
+  });
+
+  it('a later chmod that gives group or other write, or a chown to somebody else, undoes the close; a close after it closes again', () => {
+    for (const after of [
+      'RUN chmod g+w /app',
+      'RUN chmod o+w /app/native',
+      'RUN chmod a+w /app /app/native',
+      'RUN chmod +w /app',
+      'RUN chmod 775 /app',
+      'RUN chmod -R 777 /app',
+      'RUN chmod -R g+w /app',
+      'RUN chmod go=rwx /app/native',
+      'RUN chown app /app',
+      'RUN chown -R app:app /app',
+      'RUN chown 65532 /app/native',
+      'RUN chmod go-w /app /app/native && chown -R app /app',
+    ]) {
+      expect(hinted(FINAL(COPY_LINE, CLOSE_RUN, after)), after).toBe(true);
+    }
+    for (const after of [
+      'RUN chmod g+w /app/server', // another path
+      'RUN chmod u+w /app', // the owner is root and may write
+      'RUN chown root:root /app',
+      'RUN chown -R 0:0 /app',
+      'RUN chown app /srv/data',
+      'RUN chown -R app /app/server', // a path inside /app, not /app itself
+    ]) {
+      expect(hinted(FINAL(COPY_LINE, CLOSE_RUN, after)), after).toBe(false);
+    }
+    expect(hinted(FINAL(COPY_LINE, 'RUN chmod g+w /app', CLOSE_RUN))).toBe(false);
+    expect(hinted(FINAL(COPY_LINE, 'RUN chown -R app /app && chmod go-w /app /app/native'))).toBe(
+      false,
+    );
+    expect(hinted(FINAL(COPY_LINE, 'RUN chmod -R go-w /app', 'RUN chown app /app/native'))).toBe(
+      true,
+    );
+  });
+
+  it('a heredoc body is not read as instructions, and a chmod inside one is not counted as a close', () => {
+    const heredoc = (head: string, marker: string, ...body: string[]) =>
+      [head, ...body, marker].join('\n');
+    // A body line that looks like a COPY of native/ is not the copy: with no real one, nothing to say.
+    expect(hinted(FINAL(heredoc('RUN <<EOT', 'EOT', 'COPY native /app/native')))).toBe(false);
+    // A body line that looks like a FROM does not start a new stage, so the real copy still stands.
+    expect(hinted(FINAL(COPY_LINE, heredoc('RUN <<EOT', 'EOT', 'FROM scratch')))).toBe(true);
+    // A body line that looks like the close is not one.
+    expect(hinted(FINAL(COPY_LINE, heredoc('RUN <<EOT', 'EOT', CLOSE_RUN)))).toBe(true);
+    expect(
+      hinted(FINAL(COPY_LINE, heredoc('RUN <<EOT', 'EOT', 'chmod go-w /app /app/native'))),
+    ).toBe(true);
+    expect(hinted(FINAL(COPY_LINE, heredoc('COPY <<EOT /app/note', 'EOT', CLOSE_RUN)))).toBe(true);
+    // Every spelling of the marker, a blank line and a comment inside the body, and what follows it is read again.
+    for (const head of [
+      "RUN <<'EOT'",
+      'RUN <<"EOT"',
+      'RUN <<-EOT',
+      'RUN <<EOT',
+      'RUN sh -e <<EOT',
+    ]) {
+      const closed = FINAL(
+        COPY_LINE,
+        heredoc(head, 'EOT', '', '# not a comment', 'FROM scratch'),
+        CLOSE_RUN,
+      );
+      expect(hinted(closed), head).toBe(false);
+      expect(hinted(FINAL(COPY_LINE, heredoc(head, 'EOT', '', 'FROM scratch'))), head).toBe(true);
+    }
+    // Two heredocs on one instruction, and a tab-indented terminator for <<-.
+    expect(
+      hinted(FINAL(COPY_LINE, ['RUN cat <<A <<B', 'x', 'A', 'FROM scratch', 'B'].join('\n'))),
+    ).toBe(true);
+    expect(hinted(FINAL(COPY_LINE, 'RUN <<-EOT\n\tFROM scratch\n\tEOT'))).toBe(true);
+    // <<- ends at a terminator the tabs come before, so the close after it is read; a plain << does not
+    // end there (the tab is part of the line), so everything after it is still the body.
+    expect(hinted(FINAL(COPY_LINE, 'RUN <<-EOT\n\techo hi\n\tEOT', CLOSE_RUN))).toBe(false);
+    expect(hinted(FINAL(COPY_LINE, 'RUN <<EOT\n\techo hi\n\tEOT', CLOSE_RUN))).toBe(true);
+  });
+
+  it('a close that is not the one line directly after the scaffolded COPY is a warning that deploy takes the slower, image-sourced path, not a request to add a line', () => {
+    const scaffolded = readFileSync(VINEXT_DOCKERFILE, 'utf8');
+    const placed = (insert: string) =>
+      scaffolded.replace(COPY_LINE, () => `${COPY_LINE}\n${insert}`);
+    for (const elsewhere of [
+      FINAL(COPY_LINE, 'RUN echo hi', CLOSE_RUN),
+      FINAL(COPY_LINE, '', CLOSE_RUN), // a blank line between them
+      FINAL(COPY_LINE, '# close them', CLOSE_RUN),
+      FINAL(COPY_LINE, 'RUN chmod go-w /app/native /app'),
+      FINAL(COPY_LINE, 'RUN chmod go-w /app && chmod go-w /app/native'),
+    ]) {
+      const out = init(elsewhere).out;
+      expect(out, elsewhere).toContain('slower');
+      expect(out).toContain('closes /app and /app/native');
+      expect(out).toContain('directly after the `COPY` that brings native/ in');
+      expect(out).toContain(`  ${CLOSE_RUN}\n`);
+      expect(out).not.toContain('add this one line');
+    }
+    // The one line directly after: silent. Nothing is said for a Dockerfile that is not the
+    // scaffolded one either (a different spelling of the COPY): it was never on that path.
+    expect(init(FINAL(COPY_LINE, CLOSE_RUN)).out).not.toContain('slower');
+    expect(init(placed(CLOSE_RUN)).out).not.toContain('slower');
+    expect(init(FINAL('COPY native /app/native', 'RUN echo hi', CLOSE_RUN)).out).not.toContain(
+      'slower',
+    );
+  });
+
+  it('the hint is for a vinext build only: a standalone build stages its own Dockerfile, so an app on turbopack or webpack is told nothing, and an unknown build is told as before', () => {
+    const text = readFileSync(VINEXT_DOCKERFILE, 'utf8');
+    for (const build of ['turbopack', 'webpack']) {
+      expect(init(text, build).out, build).not.toContain('chmod go-w');
+      const cwd = emptyDir('hint-build');
+      writeFileSync(join(cwd, 'Dockerfile'), text);
+      expect(dockerfileHint(cwd, build)).toBe('');
+    }
+    expect(init(text, 'vinext').out).toContain(LINE);
+    expect(init(text, undefined).out).toContain(LINE);
+    // The warning is for a vinext build too.
+    const closedElsewhere = FINAL(COPY_LINE, 'RUN echo hi', CLOSE_RUN);
+    expect(init(closedElsewhere, 'turbopack').out).not.toContain('slower');
+    expect(init(closedElsewhere, 'vinext').out).toContain('slower');
+  });
+});
+
+describe('appBuild reads the build target the way the CLI does: knext.config.ts, build ?? "turbopack"', () => {
+  const withConfig = (text?: string) => {
+    const cwd = emptyDir('app-build');
+    if (text !== undefined) writeFileSync(join(cwd, 'knext.config.ts'), text);
+    return cwd;
+  };
+
+  it('is the build the config names, and turbopack when it names none (the default target)', async () => {
+    expect(
+      await appBuild(withConfig("export default { name: 'a', registry: 'r', build: 'vinext' };\n")),
+    ).toBe('vinext');
+    expect(
+      await appBuild(
+        withConfig("export default { name: 'a', registry: 'r', build: 'webpack' };\n"),
+      ),
+    ).toBe('webpack');
+    expect(await appBuild(withConfig("export default { name: 'a', registry: 'r' };\n"))).toBe(
+      'turbopack',
+    );
+  });
+
+  it('is undefined when it cannot tell: no config, one that throws, one with no default export, one whose build is not a string', async () => {
+    expect(await appBuild(withConfig())).toBeUndefined();
+    expect(await appBuild(withConfig("throw new Error('no env');\n"))).toBeUndefined();
+    expect(await appBuild(withConfig('export const x = 1;\n'))).toBeUndefined();
+    expect(await appBuild(withConfig('export default { build: 5 };\n'))).toBeUndefined();
+  });
+});
+
+describe('the hint reads the config of the app it runs in', () => {
+  const VINEXT = readFileSync(
+    join(PKG_DIR, '..', 'kn-next', 'templates', 'app', 'Dockerfile.hbs'),
+    'utf8',
+  );
+  const out = async (build?: string) => {
+    const cwd = emptyDir('cli-build');
+    writeFileSync(join(cwd, 'Dockerfile'), VINEXT);
+    if (build !== undefined) {
+      writeFileSync(
+        join(cwd, 'knext.config.ts'),
+        `export default { name: 'a', registry: 'r', build: '${build}' };\n`,
+      );
+    }
+    const c = capture();
+    const code = await run('ffi', ['init'], { ...c.io, cwd, crateRev: REV });
+    expect(code, c.err()).toBe(0);
+    return c.out();
+  };
+
+  it('knext ffi init says nothing for a turbopack or webpack app, and prints the line for a vinext one, and for one with no readable config', async () => {
+    expect(await out('turbopack')).not.toContain('chmod go-w');
+    expect(await out('webpack')).not.toContain('chmod go-w');
+    expect(await out('vinext')).toContain('RUN chmod go-w /app /app/native');
+    expect(await out()).toContain('RUN chmod go-w /app /app/native');
+  });
+});
+
+describe('the line the hint prints', () => {
+  const VINEXT_DOCKERFILE = join(PKG_DIR, '..', 'kn-next', 'templates', 'app', 'Dockerfile.hbs');
+  const LINE = 'RUN chmod go-w /app /app/native';
+  const init = (dockerfile?: string) => {
+    const cwd = emptyDir('init-vinext');
+    if (dockerfile !== undefined) writeFileSync(join(cwd, 'Dockerfile'), dockerfile);
+    const c = capture();
+    expect(runInit({ cwd, io: c.io, crateRev: REV }), c.err()).toBe(0);
+    return { cwd, out: c.out() };
+  };
 
   it('the line the hint prints, put directly after the copy of the scaffolded Dockerfile, is what silences it', () => {
     const text = readFileSync(VINEXT_DOCKERFILE, 'utf8');

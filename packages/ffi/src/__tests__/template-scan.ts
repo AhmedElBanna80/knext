@@ -10,10 +10,16 @@
  * - every `${...}` of every template literal (whatever the template says: nothing is filtered by its
  *   text, so a message that does not start with `knext ffi:` is scanned like any other);
  * - every `+` chain that has a string or a template among its operands (`'text ' + path`);
- * - every argument of a call that prints or raises: `new FfiLoadError(...)`, `new Error(...)`,
- *   `new RustError(...)`, `new RustPanicError(...)`, `console.warn(...)`, `console.error(...)` and
- *   `bad.push(...)` (the list of failing directories a refusal prints), so a bare variable handed to
- *   one of them is a leaf too.
+ * - every argument of a call that prints or raises (a "sink"): any `new XError(...)` or `XError(...)`
+ *   (`Error`, `TypeError`, `RangeError`, `FfiLoadError`, `RustError`, `RustPanicError`...), an alias
+ *   of one (`const E = FfiLoadError`, `class Sub extends RustError`), `Reflect.construct(<sink>,
+ *   [...])` (the array's elements), `console.log/info/debug/warn/error(...)`,
+ *   `process.stderr.write(...)`, `process.stdout.write(...)` and `bad.push(...)` (the list of
+ *   failing directories a refusal prints), so a bare variable handed to one of them is a leaf too;
+ * - the right-hand side of an assignment to a `.message`;
+ * - the arguments a function declares as text-bearing (`PARAM_SINKS`: `$openFile`'s second and fourth,
+ *   which it puts into its refusals), checked at every call, so the function itself needs no
+ *   allowance for them.
  *
  * A conditional or a `||`/`&&`/`??` is looked through to the values it can yield. A string literal, a
  * template (its own interpolations are leaves of their own) and a call of `$show(...)` are not leaves.
@@ -33,47 +39,158 @@ export interface Leaf {
   readonly line: number;
 }
 
-/** What a call must be named to count as printing or raising. */
+/** A raising or printing call the scan recognised. */
+export interface SinkCall {
+  /** The top-level function, class or variable it is in. */
+  readonly fn: string;
+  /** What is called (`FfiLoadError`, `console.warn`, an alias such as `E`). */
+  readonly callee: string;
+  /** The 1-based line it is on. */
+  readonly line: number;
+}
+
+/** What a call must be named to count as printing or raising, besides anything ending in `Error`. */
 const SINKS = new Set([
-  'FfiLoadError',
-  'Error',
-  'RustError',
-  'RustPanicError',
+  'console.log',
+  'console.info',
+  'console.debug',
   'console.warn',
   'console.error',
+  'process.stderr.write',
+  'process.stdout.write',
   'bad.push',
 ]);
 
+/** Any error class: `Error`, `TypeError`, `FfiLoadError`... (a `new` of one, or a call of one). */
+const ERROR_CLASS = /^(?:[A-Za-z_$][\w$]*\.)*[\w$]*Error$/;
+
+/**
+ * A function whose arguments (by position) become message text inside it. At every call of it those
+ * arguments are leaves; inside it, the parameter at that position is covered by the call sites.
+ * `$openFile(path, what, lib, missing)`: `what` is spliced into its refusals, `missing` is the refusal
+ * for an absent file, raised as it is.
+ */
+const PARAM_SINKS: Record<string, readonly number[]> = { $openFile: [1, 3] };
+
 const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+const parse = (source: string) =>
+  ts.createSourceFile('module.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+
+/** The top-level function, class or variable `node` is inside. */
+const ownerOf = (node: ts.Node): string => {
+  let top: ts.Node = node;
+  while (top.parent && top.parent.kind !== ts.SyntaxKind.SourceFile) top = top.parent;
+  if (ts.isFunctionDeclaration(top) || ts.isClassDeclaration(top)) {
+    return top.name?.text ?? '<anonymous>';
+  }
+  if (ts.isVariableStatement(top)) {
+    const decl = top.declarationList.declarations[0];
+    return decl && ts.isIdentifier(decl.name) ? decl.name.text : '<top>';
+  }
+  return '<top>';
+};
+
+const unwrap = (e: ts.Expression): ts.Expression =>
+  ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e)
+    ? unwrap(e.expression)
+    : e;
+
+/**
+ * The names that raise: every error class by name, plus every name bound to one (`const E =
+ * FfiLoadError`, `class Sub extends RustError`), to a fixed point so an alias of an alias counts.
+ */
+const sinkNames = (sf: ts.SourceFile): Set<string> => {
+  const names = new Set<string>();
+  const isSinkName = (text: string) => ERROR_CLASS.test(text) || names.has(text);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    const add = (name: string) => {
+      if (!names.has(name)) {
+        names.add(name);
+        grew = true;
+      }
+    };
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isClassDeclaration(node) || ts.isClassExpression(node)) &&
+        node.heritageClauses?.some(
+          (h) =>
+            h.token === ts.SyntaxKind.ExtendsKeyword &&
+            h.types.some((t) => isSinkName(collapse(t.expression.getText(sf)))),
+        )
+      ) {
+        if (node.name) add(node.name.text);
+        else if (
+          ts.isVariableDeclaration(node.parent) &&
+          ts.isIdentifier(node.parent.name) &&
+          node.parent.initializer === node
+        ) {
+          add(node.parent.name.text);
+        }
+      }
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer &&
+        isSinkName(collapse(unwrap(node.initializer).getText(sf)))
+      ) {
+        add(node.name.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return names;
+};
+
+/** Every raising and printing call in `source`, in source order. */
+export function sinkCalls(source: string): SinkCall[] {
+  const sf = parse(source);
+  const names = sinkNames(sf);
+  const out: SinkCall[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isNewExpression(node) || ts.isCallExpression(node)) {
+      const callee = collapse(node.expression.getText(sf));
+      if (SINKS.has(callee) || ERROR_CLASS.test(callee) || names.has(callee)) {
+        out.push({
+          fn: ownerOf(node),
+          callee,
+          line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
 
 /** Every value in `source` that reaches text without going through `$show`, in source order. */
 export function leaves(source: string): Leaf[] {
-  const sf = ts.createSourceFile(
-    'module.ts',
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const sf = parse(source);
+  const names = sinkNames(sf);
+  const isSink = (callee: string) =>
+    SINKS.has(callee) || ERROR_CLASS.test(callee) || names.has(callee);
   const found = new Map<number, Leaf>();
 
-  const owner = (node: ts.Node): string => {
-    let top: ts.Node = node;
-    while (top.parent && top.parent.kind !== ts.SyntaxKind.SourceFile) top = top.parent;
-    if (ts.isFunctionDeclaration(top) || ts.isClassDeclaration(top)) {
-      return top.name?.text ?? '<anonymous>';
+  // The parameter names a PARAM_SINKS function takes its text through, by function.
+  const covered = new Map<string, Set<string>>();
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.name.text in PARAM_SINKS) {
+      const at = PARAM_SINKS[stmt.name.text] as readonly number[];
+      covered.set(
+        stmt.name.text,
+        new Set(
+          at.flatMap((i) => {
+            const p = stmt.parameters[i];
+            return p && ts.isIdentifier(p.name) ? [p.name.text] : [];
+          }),
+        ),
+      );
     }
-    if (ts.isVariableStatement(top)) {
-      const decl = top.declarationList.declarations[0];
-      return decl && ts.isIdentifier(decl.name) ? decl.name.text : '<top>';
-    }
-    return '<top>';
-  };
-
-  const unwrap = (e: ts.Expression): ts.Expression =>
-    ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e)
-      ? unwrap(e.expression)
-      : e;
+  }
 
   const isPlus = (e: ts.Expression): e is ts.BinaryExpression =>
     ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken;
@@ -121,7 +238,9 @@ export function leaves(source: string): Leaf[] {
     for (const l of out) {
       const start = l.getStart(sf);
       const expr = collapse(l.getText(sf));
-      const fn = owner(l);
+      const fn = ownerOf(l);
+      // A parameter a PARAM_SINKS function takes its text through: its callers are scanned instead.
+      if (ts.isIdentifier(l) && covered.get(fn)?.has(l.text)) continue;
       found.set(start, {
         fn,
         expr,
@@ -136,9 +255,34 @@ export function leaves(source: string): Leaf[] {
       for (const span of node.templateSpans) record(span.expression);
     } else if (ts.isBinaryExpression(node) && isConcat(node)) {
       record(node);
+    } else if (
+      ts.isBinaryExpression(node) &&
+      (node.operatorToken.kind === ts.SyntaxKind.EqualsToken ||
+        node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken) &&
+      ((ts.isPropertyAccessExpression(node.left) && node.left.name.text === 'message') ||
+        (ts.isElementAccessExpression(node.left) &&
+          ts.isStringLiteralLike(node.left.argumentExpression) &&
+          node.left.argumentExpression.text === 'message'))
+    ) {
+      record(node.right);
     } else if (ts.isNewExpression(node) || ts.isCallExpression(node)) {
-      if (SINKS.has(collapse(node.expression.getText(sf)))) {
-        for (const arg of node.arguments ?? []) record(arg);
+      const callee = collapse(node.expression.getText(sf));
+      const args = node.arguments ?? [];
+      if (isSink(callee)) {
+        for (const arg of args) record(arg);
+      } else if (
+        callee === 'Reflect.construct' &&
+        args[0] &&
+        isSink(collapse(args[0].getText(sf)))
+      ) {
+        const list = args[1] && unwrap(args[1]);
+        if (list && ts.isArrayLiteralExpression(list)) for (const el of list.elements) record(el);
+        else if (args[1]) record(args[1]); // an array it cannot see into is a leaf as a whole
+      } else if (callee in PARAM_SINKS) {
+        for (const i of PARAM_SINKS[callee] as readonly number[]) {
+          const arg = args[i];
+          if (arg) record(arg);
+        }
       }
     }
     ts.forEachChild(node, visit);

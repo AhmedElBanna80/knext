@@ -204,7 +204,7 @@ function $load(): void {
       err instanceof FfiLoadError
         ? err
         : new FfiLoadError(
-            `knext ffi: could not load the Rust library: ${$show(err instanceof Error ? err.message : String(err))}`,
+            `knext ffi: could not load the Rust library: ${$show(err instanceof Error ? err.message : err)}`,
           );
     throw $failed;
   }
@@ -312,7 +312,7 @@ function $open(): void {
         ? ''
         : ` (opened as ${$show(load)}${load.startsWith('/proc/') ? ', which needs /proc mounted' : ''})`;
     throw new FfiLoadError(
-      `knext ffi: could not load ${$show(path)}${via}: ${$show(err instanceof Error ? err.message : String(err))}\n` +
+      `knext ffi: could not load ${$show(path)}${via}: ${$show(err instanceof Error ? err.message : err)}\n` +
         'If the library does not export a function this module calls, the module is stale: run `knext ffi generate` and commit the result.',
     );
   }
@@ -475,25 +475,39 @@ function $upTo(dir: string): string[] {
  * control or DEL is shown in caret notation (a newline as ^J). A backslash is doubled and a caret
  * gets a backslash before it, so a name that really holds ^J, or the text of a unicode escape, can
  * never be read as a control character. A C1 control, a line or paragraph separator (U+2028,
- * U+2029: a line end to many terminals and log readers) and a bidirectional control (U+061C,
- * U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) are shown as a unicode escape (a backslash,
- * u and four hex digits). None is ever printed as itself, and it never throws.
+ * U+2029: a line end to many terminals and log readers), a bidirectional control (U+061C, U+200E,
+ * U+200F, U+202A to U+202E, U+2066 to U+2069) and an invisible format character (the zero-width
+ * U+200B to U+200D, the word joiner U+2060 and the byte order mark U+FEFF: a name that holds one
+ * would read as the name without it) are shown as a unicode escape (a backslash, u and four hex
+ * digits). None is ever printed as itself.
+ *
+ * It never throws. What is not text is converted with String(); an object that has no text (it has
+ * no prototype, or its toString throws) is shown as [object Object]. Invalid UTF-8 in a file name,
+ * and a lone surrogate, have already become U+FFFD (the replacement character) by the time they
+ * are a string, and are shown as that character: it is not a control and hides nothing.
  */
-function $show(p: string): string {
+function $show(p: unknown): string {
+  let text: string;
+  try {
+    text = String(p);
+  } catch {
+    text = '[object Object]';
+  }
   let out = '';
-  for (const ch of String(p)) {
+  for (const ch of text) {
     const n = ch.codePointAt(0) as number;
     if (n < 0x20 || n === 0x7f) out += `^${String.fromCharCode(n ^ 0x40)}`;
     else if (ch === '\\' || ch === '^') out += `\\${ch}`;
     else if (
       (n >= 0x80 && n <= 0x9f) ||
       n === 0x61c ||
-      n === 0x200e ||
-      n === 0x200f ||
+      (n >= 0x200b && n <= 0x200f) ||
       n === 0x2028 ||
       n === 0x2029 ||
       (n >= 0x202a && n <= 0x202e) ||
-      (n >= 0x2066 && n <= 0x2069)
+      n === 0x2060 ||
+      (n >= 0x2066 && n <= 0x2069) ||
+      n === 0xfeff
     ) {
       out += `\\u${n.toString(16).padStart(4, '0')}`;
     } else out += ch;
@@ -545,7 +559,7 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
     real = $realpathSync(home);
   } catch (err) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${$show(path)}: cannot resolve the directory ${$show(home)} (${$show(err instanceof Error ? err.message : String(err))}).`,
+      `knext ffi: refusing to load ${$show(path)}: cannot resolve the directory ${$show(home)} (${$show(err instanceof Error ? err.message : err)}).`,
     );
   }
   if (real !== home) {
@@ -590,7 +604,7 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
   }
   if (bad.length > 0) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${$show(path)}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.${fix ? " To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}`,
+      `knext ffi: refusing to load ${$show(path)}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.${fix ? " To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}${fix || either ? " In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there)." : ''}${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}${move && (fix || either) ? " The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move." : ''}${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}`,
     );
   }
   return pins;
@@ -646,7 +660,7 @@ function $openFile(path: string, what: string, lib: string, missing: string): $O
     throw new FfiLoadError(
       code === 'ELOOP'
         ? `knext ffi: refusing to load ${$show(lib)}: ${$show(path)} is a symbolic link. ${what} must be the file itself: a link is never followed, whatever it points at.`
-        : `knext ffi: refusing to load ${$show(lib)}: cannot open ${$show(path)} (${$show(err instanceof Error ? err.message : String(err))}).`,
+        : `knext ffi: refusing to load ${$show(lib)}: cannot open ${$show(path)} (${$show(err instanceof Error ? err.message : err)}).`,
     );
   }
   const st = $fstatSync(fd, { bigint: true });
@@ -693,7 +707,7 @@ function $verify(native: string, rel: string, path: string): string {
     files = parsed.files;
   } catch (err) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${$show(path)}: cannot read ${$show(manifest)} (${$show(err instanceof Error ? err.message : String(err))}).`,
+      `knext ffi: refusing to load ${$show(path)}: cannot read ${$show(manifest)} (${$show(err instanceof Error ? err.message : err)}).`,
     );
   }
   if (version !== 1) {

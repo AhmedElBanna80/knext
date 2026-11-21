@@ -57,6 +57,8 @@ export interface RunGenerateOptions {
   readonly check?: boolean;
   readonly io: Io;
   readonly deps?: GenerateDeps;
+  /** The app's build target (`appBuild`), when known: only a vinext build is told about its Dockerfile. */
+  readonly build?: string;
 }
 
 /** The `generate` / `check` verbs. Returns the process exit code. */
@@ -78,7 +80,7 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<number> {
     if (opts.check) {
       if (drift.length === 0) {
         io.stdout(
-          `generated code in ${config.out} is up to date (${expected.size} files)\n${dockerfileHint(cwd)}`,
+          `generated code in ${config.out} is up to date (${expected.size} files)\n${dockerfileHint(cwd, opts.build)}`,
         );
         return 0;
       }
@@ -108,7 +110,7 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<number> {
         drift.length === 0
           ? `generated code in ${config.out} is already up to date\n`
           : `wrote ${config.out} (${drift.length} file${drift.length === 1 ? '' : 's'} changed)\n`
-      }${dockerfileHint(cwd)}`,
+      }${dockerfileHint(cwd, opts.build)}`,
     );
     return 0;
   } catch (err) {

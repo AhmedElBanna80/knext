@@ -412,9 +412,16 @@ describe('docs — in-process Rust page', () => {
       "A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.";
     const move =
       'A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.';
+    // Said wherever a directory can be fixed in place: the one Dockerfile line that keeps a vinext app
+    // on the known-good path; and, with a sticky directory on the list with others, that fixing the
+    // others alone is not enough.
+    const vinext =
+      "In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there).";
+    const alone =
+      'The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move.';
     // The module's source escapes the backticks it carries inside a template literal.
     const unescaped = rendered.replace(/\\`/g, '`');
-    for (const sentence of [fix, either, move]) {
+    for (const sentence of [fix, either, move, vinext, alone]) {
       expect(unescaped).toContain(sentence);
       expect(body).toContain(sentence);
     }
@@ -568,6 +575,9 @@ describe('docs — in-process Rust page', () => {
     const lane = repoFile('.github/workflows/ffi-e2e.yml');
     expect(lane).toContain('packages/ffi/scripts/doc-recipe.ts dockerfile');
     expect(lane).toContain('packages/ffi/scripts/doc-recipe.ts shell');
+    // The commands hand a whole directory to root, so they refuse one that can hold other things: the
+    // lane runs them on a directory of its own under /opt, as the page says, not under the temp directory.
+    expect(lane).toContain('APP_DIR="/opt/knext-ffi-caller" bash -euo pipefail');
   });
 
   it('records the rule in the threat model: who it stops, its limits, the files it does not judge, the development path, and why the sealed copy was not used', () => {
@@ -747,7 +757,30 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and every lane, the Rust crates lane included, is green on `abca3e3` and again on `81753d6`; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and every lane, the Rust crates lane included, is green on `abca3e3` and again on `81753d6` and `b4d81ae`; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+    );
+    // The CI result on the previous head is recorded, with the one red and how it was fixed.
+    expect(amendment).toContain('b4d81ae9b346023ddea03b5a6c5124588c8d2b3d');
+    expect(amendment).toContain('actions/runs/44900618316');
+    expect(amendment).toContain('the guard is not relaxed');
+    // The amendment names every decision it changes and every trigger it is, and D17 and D18 carry the change.
+    expect(amendment).toContain('It also amends **D17**');
+    expect(amendment).toContain('and **D18**');
+    expect(amendment).toContain(
+      'It is an ADR trigger, a security-invariant trigger and a core-vs-app-boundary trigger',
+    );
+    const flatAdr = adr.replace(/\s+/g, ' ');
+    expect(flatAdr).toContain('with one exception named below');
+    expect(flatAdr).toContain('**The exception (Amendment 1), and why it is safe.**');
+    expect(flatAdr).toContain('is a behaviour change without the opt-in');
+    expect(flatAdr).toContain(
+      "and the recognition of the scaffolded vinext `Dockerfile` with one extra line, `RUN chmod go-w /app /app/native`, directly after its `native/` `COPY` (`isKnownGoodTemplateDockerfile`, D17's exception)",
+    );
+    // The hint comes from all three verbs, for a vinext app only, and says where the line goes.
+    expect(flatAdr).toContain('The hint comes from all three verbs');
+    expect(flatAdr).toContain('printed only for an app built for vinext');
+    expect(flatAdr).toContain(
+      'the hint warns instead that `knext deploy` takes the slower image-sourced path',
     );
     // What accepts the amendment, and what does not: three lanes on the final head; the nested leg is debt.
     expect(amendment).toContain(
@@ -858,7 +891,7 @@ describe('docs — in-process Rust page', () => {
     expect(flat).toContain('An app scaffolded for the vinext build');
     expect(flat).toContain('That file is yours and knext does not edit it');
     expect(flat).toContain(
-      `put \`${LINE}\` after the \`COPY\` that brings \`native/\` in and before \`USER\``,
+      `put \`${LINE}\` directly after the \`COPY\` that brings \`native/\` in (and so before \`USER\`)`,
     );
     expect(flat).toContain('`knext ffi init` prints that line');
     expect(flat).toContain('and so do `knext ffi generate` and `knext ffi check`');
@@ -871,6 +904,12 @@ describe('docs — in-process Rust page', () => {
     );
     expect(flat).toContain('Under BuildKit nothing changes for an existing app');
     expect(flat).toContain('With another builder the first call of the module is refused');
+    // Only the one line directly after the COPY is what deploy recognises: a chmod anywhere else closes
+    // the directories but takes the slower path, and the hint says so for a vinext app only.
+    expect(flat).toContain('they warn that `knext deploy` takes the slower path');
+    expect(flat).toContain('Only an app built for vinext is told any of this');
+    expect(flat).toContain('which one line to add');
+    expect(flat).not.toContain('the message names the fix');
     // The ADR says the template is unchanged, and nothing says it gains the line or that the image is untouched.
     const adr = repoFile('docs/adr/0069-bun-ffi-inprocess-rust.md').replace(/\s+/g, ' ');
     expect(adr).toContain('The vinext template (`templates/app/Dockerfile.hbs`) is not changed');
@@ -883,7 +922,7 @@ describe('docs — in-process Rust page', () => {
     );
     expect(changeset).toContain('Under BuildKit nothing changes for an existing app');
     expect(changeset).toContain(
-      'with another builder the first call is refused, and the message names the fix',
+      'with another builder the first call is refused, and the message says how to fix the directories',
     );
     const model = repoFile('docs/security/threat-model.md').replace(/\s+/g, ' ');
     expect(model).toContain(

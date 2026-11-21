@@ -63,12 +63,20 @@
  *   A11  the move advice is always given
  *   A12  the sticky bit is checked before the directory is known to be inside native/
  *   A13  the conditional advice loses its sentence about a home directory (fragment)
+ *   A14  the one Dockerfile line that keeps a vinext app on the known-good path is never named (fragment)
+ *   A15  it is named only next to the in-place fix of native/ (fragment)
+ *   A16  it is no longer said to go DIRECTLY after the COPY (fragment)
+ *   A17  "fixing the other directories is not enough" is never said (fragment)
+ *   A18  it is said only next to the in-place fix, not next to the conditional advice (fragment)
  *   Printing (every path and system error a refusal prints goes through $show; the generated
  *   module is also scanned for any interpolation that is not, so a message cannot forget it)
  *   C01  a C0 control (a newline forges a list line) is printed raw    C02  a delete character
  *   C03  the list prints the raw name                 C04  a C1 control    C05  U+2028, U+2029
  *   C06  a backslash is not doubled    C07  a caret is not escaped (the output is ambiguous)
- *   C08  U+202A to U+202E    C09  U+2066 to U+2069    C10  U+061C, U+200E, U+200F (bidi controls)
+ *   C08  U+202A to U+202E    C09  U+2066 to U+2069    C10  U+061C (the Arabic letter mark)
+ *   C11  U+200E, U+200F (the direction marks)   C12  U+200B to U+200D (zero-width)
+ *   C13  U+2060 (the word joiner)   C14  U+FEFF (the byte order mark)
+ *   C15  $show can throw (a null-prototype value, or a toString that throws)
  *   E01  the system error of an unparseable manifest  E02  of a file that cannot be opened
  *   E03  the library path of a not-a-regular-file refusal   E04  of an unresolvable directory
  *   E05  the platform directory names it found        E06  the system error of a failed load
@@ -79,6 +87,9 @@
  *        only by the scan of the generated module (the names are the generator's), so each is a
  *        row on the scan itself, which is keyed by function and expression (fragment)
  *   E11  the unsupported manifest version (fragment)   E12  the digest a manifest lists (fragment)
+ *   E14  the system error of a load that fails outside the loader
+ *   E15  the value of a 64-bit integer argument that is refused (fragment)
+ *   E16  the value of a number argument that is refused (fragment)
  *   Digest and schema (a value compared as text and printed must be what it claims to be)
  *   Q01  a manifest entry that is not a sha256 digest is not refused    Q02  upper case is accepted
  *   Q03  the length is not required                    Q04  an unknown manifest version is accepted
@@ -98,14 +109,30 @@
  *   V16  a chmod before the copy counts            V17  any chmod counts, go+w included
  *   V18  a recursive chmod of /app is not taken to close /app/native
  *   V19  a RUN line is read as one command (a chmod after && or ; is missed)
+ *   V20  a mode with no who-letter (-w, =rx) is taken to close the directories (it is subject to the umask)
+ *   V21  a later who-less +w is not seen to open them again
+ *   V22  a later g+w or o+w does not take an earlier close back
+ *   V23  a later chown to somebody but root does not take an earlier close back
+ *   V24  a heredoc body is read as instructions     V25  the tabs of a <<- heredoc are not stripped
+ *   V26  an app built with another builder is told   V27  the slower-path warning is never given
+ *   V28  the slower-path warning is always given     V29  a config with no build is not read as turbopack
+ *   V30  the CLI never reads the app's build (init.test.ts, through the CLI)
+ *   V31  the tabs before the terminator of a plain << heredoc are stripped too
  *   Known-good variant (core, ffi-vinext-known-good.test.ts, its own spec): `knext deploy` knows
  *   the scaffolded vinext Dockerfile byte for byte and takes another path for any other; the one
  *   line the hint adds must not take an app off it
  *   G01  the template plus the line is not recognised    G02  the line goes before the COPY
  *   G03  any Dockerfile holding the line is recognised   G04  the line differs from the hint's
  *   G05  a template with no native/ COPY gets a variant  G06  one with the COPY twice does
+ *   G07  the build the hint assumes for a config that names none drifts from core's default builder
+ *   G08  the one build the hint speaks to is not the builder core calls vinext
  *   Generate and check (generate-check.test.ts, its own spec)
  *   H01  generate does not print the hint    H02  check does not print the hint
+ *   H03  generate ignores the build           H04  check ignores the build
+ *   Scan (template-scan.ts, the guard that every printed value went through $show; ffi-loader.test.ts
+ *   feeds it a snippet for each sink and requires every one to be seen)
+ *   T01  process.stderr.write is no longer a sink    T02  $openFile's 2nd and 4th arguments are not
+ *   T03  Reflect.construct of an error class is not  T04  an assignment to .message is not
  *   Second look
  *   S01  the directories are not looked at again       S02  the second look uses stat, not lstat
  *   S03  the second look checks existence, not identity
@@ -135,8 +162,8 @@
  * crates lane. Its weakenings (loader-weakenings.ts):
  *   W01  the directories above the one native/ sits in are never walked    controls 1, 3, 4
  *   W02  the walk stops one short of the root directory                    control 4
- *   W03  the real-path assertion is removed (a link at or above the executable's directory)
- *                                                                           control 2
+ *   W03  the real-path assertion is removed (a link at or above the executable's directory, or a
+ *        relative executable path)                                          controls 2, 5
  *   W04  the sticky exemption (a /tmp is let through)                       control 1
  *   W05  the owner of a directory is not judged                             control 1
  * W05 edits $why, which the library and manifest checks share with the directory walk, so it
@@ -168,6 +195,44 @@ const SEALED_LSTAT = '    const st = $lstatSync(dir, { bigint: true });\n';
 const UNCHANGED_LSTAT =
   '    const now = $lstatSync(dir, { bigint: true, throwIfNoEntry: false });\n';
 const ID = '  return \\`\\${st.dev}:\\${st.ino}\\`;\n';
+
+// The scan of the generated module (template-scan.ts) is the guard that says every value a message
+// prints went through $show. Its sink list is what it looks at; ffi-loader.test.ts feeds it snippets
+// that use each sink and requires every one to be seen.
+const SCAN = [
+  {
+    id: 'T01',
+    subject: 'scan',
+    claim:
+      'process.stderr.write is no longer a sink: a value written there is not required to be shown',
+    anchor: "  'process.stderr.write',\n",
+    replacement: '\n',
+  },
+  {
+    id: 'T02',
+    subject: 'scan',
+    claim:
+      'the arguments of $openFile that become message text (the 2nd and the 4th) are no longer sinks: what is passed there is not required to be shown',
+    anchor: 'const PARAM_SINKS: Record<string, readonly number[]> = { $openFile: [1, 3] };\n',
+    replacement: 'const PARAM_SINKS: Record<string, readonly number[]> = { $openFile: [] };\n',
+  },
+  {
+    id: 'T03',
+    subject: 'scan',
+    claim: 'Reflect.construct of an error class is no longer a sink',
+    anchor: "        callee === 'Reflect.construct' &&\n",
+    replacement: '        false &&\n',
+  },
+  {
+    id: 'T04',
+    subject: 'scan',
+    claim: 'an assignment to a .message is no longer a sink',
+    anchor:
+      "      ((ts.isPropertyAccessExpression(node.left) && node.left.name.text === 'message') ||\n",
+    replacement:
+      "      ((ts.isPropertyAccessExpression(node.left) && node.left.name.text === 'messag') ||\n",
+  },
+];
 
 const LOADER = [
   {
@@ -510,16 +575,94 @@ const LOADER = [
     subject: 'render',
     claim:
       'the bidirectional isolates (U+2066 to U+2069) in a directory name are printed as themselves',
-    anchor: '      (n >= 0x2066 && n <= 0x2069)\n',
-    replacement: '      false\n',
+    anchor: '      (n >= 0x2066 && n <= 0x2069) ||\n',
+    replacement: '      false ||\n',
   },
   {
     id: 'C10',
     subject: 'render',
     claim:
-      'the bidirectional marks (U+061C, U+200E, U+200F) in a directory name are printed as themselves',
-    anchor: '      n === 0x61c ||\n      n === 0x200e ||\n      n === 0x200f ||\n',
+      'the Arabic letter mark (U+061C, a bidirectional control) in a directory name is printed as itself',
+    anchor: '      n === 0x61c ||\n',
     replacement: '      false ||\n',
+  },
+  {
+    id: 'C11',
+    subject: 'render',
+    claim:
+      'the left-to-right and right-to-left marks (U+200E, U+200F) in a directory name are printed as themselves',
+    anchor: '      (n >= 0x200b && n <= 0x200f) ||\n',
+    replacement: '      (n >= 0x200b && n <= 0x200d) ||\n',
+  },
+  {
+    id: 'C12',
+    subject: 'render',
+    claim:
+      'the zero-width characters (U+200B to U+200D) in a directory name are printed as themselves: a name that holds one reads as the name without it',
+    anchor: '      (n >= 0x200b && n <= 0x200f) ||\n',
+    replacement: '      (n >= 0x200e && n <= 0x200f) ||\n',
+  },
+  {
+    id: 'C13',
+    subject: 'render',
+    claim: 'the word joiner (U+2060) in a directory name is printed as itself',
+    anchor: '      n === 0x2060 ||\n',
+    replacement: '      false ||\n',
+  },
+  {
+    id: 'C14',
+    subject: 'render',
+    claim: 'the byte order mark (U+FEFF) in a directory name is printed as itself',
+    anchor: '      n === 0xfeff\n',
+    replacement: '      false\n',
+  },
+  {
+    id: 'C15',
+    subject: 'render',
+    claim:
+      'the printing of a value can throw: an error value with no prototype, or a toString that throws, takes the refusal down with a TypeError instead of being shown',
+    anchor: "  try {\n    text = String(p);\n  } catch {\n    text = '[object Object]';\n  }\n",
+    replacement: '  text = String(p);\n',
+  },
+  {
+    id: 'A14',
+    subject: 'render',
+    claim:
+      'the one Dockerfile line that keeps a vinext app on the known-good path is never named in the refusal (fragment)',
+    anchor: String.raw`\${fix || either ? " In a vinext app's Dockerfile, put exactly`,
+    replacement: String.raw`\${false ? " In a vinext app's Dockerfile, put exactly`,
+  },
+  {
+    id: 'A15',
+    subject: 'render',
+    claim:
+      'the vinext line is named only where a directory inside native/ is fixed in place, and not for the conditional advice (fragment)',
+    anchor: String.raw`\${fix || either ? " In a vinext app's Dockerfile, put exactly`,
+    replacement: String.raw`\${fix ? " In a vinext app's Dockerfile, put exactly`,
+  },
+  {
+    id: 'A16',
+    subject: 'render',
+    claim:
+      'the vinext line is no longer said to go DIRECTLY after the COPY: any later place reads as fine, and a deploy takes the slower path (fragment)',
+    anchor: String.raw`put exactly \`RUN chmod go-w /app /app/native\` directly after the \`COPY`,
+    replacement: String.raw`put exactly \`RUN chmod go-w /app /app/native\` after the \`COPY`,
+  },
+  {
+    id: 'A17',
+    subject: 'render',
+    claim:
+      'a sticky directory on the list together with others is never said to need the install moved even if the others are fixed (fragment)',
+    anchor: String.raw`\${move && (fix || either) ? " The other directories on this list`,
+    replacement: String.raw`\${false ? " The other directories on this list`,
+  },
+  {
+    id: 'A18',
+    subject: 'render',
+    claim:
+      'the "fixing the others is not enough" sentence is given only next to the in-place fix of native/, not next to the conditional advice (fragment)',
+    anchor: String.raw`\${move && (fix || either) ? " The other directories on this list`,
+    replacement: String.raw`\${move && fix ? " The other directories on this list`,
   },
   {
     id: 'C03',
@@ -579,9 +722,9 @@ const LOADER = [
     claim:
       'the system error quoted when the manifest cannot be parsed is printed raw (it carries what the manifest holds, and a path)',
     anchor:
-      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot read \\${$show(manifest)} (\\${$show(err instanceof Error ? err.message : String(err))}).\\`,\n',
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot read \\${$show(manifest)} (\\${$show(err instanceof Error ? err.message : err)}).\\`,\n',
     replacement:
-      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot read \\${$show(manifest)} (\\${err instanceof Error ? err.message : String(err)}).\\`,\n',
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot read \\${$show(manifest)} (\\${err instanceof Error ? err.message : err}).\\`,\n',
   },
   {
     id: 'E02',
@@ -589,9 +732,9 @@ const LOADER = [
     claim:
       'the system error quoted when a file cannot be opened is printed raw (it quotes the path)',
     anchor:
-      '        : \\`knext ffi: refusing to load \\${$show(lib)}: cannot open \\${$show(path)} (\\${$show(err instanceof Error ? err.message : String(err))}).\\`,\n',
+      '        : \\`knext ffi: refusing to load \\${$show(lib)}: cannot open \\${$show(path)} (\\${$show(err instanceof Error ? err.message : err)}).\\`,\n',
     replacement:
-      '        : \\`knext ffi: refusing to load \\${$show(lib)}: cannot open \\${$show(path)} (\\${err instanceof Error ? err.message : String(err)}).\\`,\n',
+      '        : \\`knext ffi: refusing to load \\${$show(lib)}: cannot open \\${$show(path)} (\\${err instanceof Error ? err.message : err}).\\`,\n',
   },
   {
     id: 'E03',
@@ -608,9 +751,9 @@ const LOADER = [
     claim:
       "the system error quoted when the executable's directory cannot be resolved is printed raw",
     anchor:
-      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot resolve the directory \\${$show(home)} (\\${$show(err instanceof Error ? err.message : String(err))}).\\`,\n',
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot resolve the directory \\${$show(home)} (\\${$show(err instanceof Error ? err.message : err)}).\\`,\n',
     replacement:
-      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot resolve the directory \\${$show(home)} (\\${err instanceof Error ? err.message : String(err)}).\\`,\n',
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot resolve the directory \\${$show(home)} (\\${err instanceof Error ? err.message : err}).\\`,\n',
   },
   {
     id: 'E05',
@@ -626,9 +769,9 @@ const LOADER = [
     subject: 'render',
     claim: 'the system error quoted when the library cannot be loaded is printed raw',
     anchor:
-      '      \\`knext ffi: could not load \\${$show(path)}\\${via}: \\${$show(err instanceof Error ? err.message : String(err))}\\\\n\\` +\n',
+      '      \\`knext ffi: could not load \\${$show(path)}\\${via}: \\${$show(err instanceof Error ? err.message : err)}\\\\n\\` +\n',
     replacement:
-      '      \\`knext ffi: could not load \\${$show(path)}\\${via}: \\${err instanceof Error ? err.message : String(err)}\\\\n\\` +\n',
+      '      \\`knext ffi: could not load \\${$show(path)}\\${via}: \\${err instanceof Error ? err.message : err}\\\\n\\` +\n',
   },
   {
     id: 'E07',
@@ -686,6 +829,32 @@ const LOADER = [
       'the name the library was opened as, in the load-failure message, is printed raw (only the scan of the generated module sees it) (fragment)',
     anchor: String.raw`(opened as \${$show(load)}`,
     replacement: String.raw`(opened as \${load}`,
+  },
+  {
+    id: 'E14',
+    subject: 'render',
+    claim:
+      'the system error quoted when the load fails outside the loader (the generic "could not load the Rust library") is printed raw',
+    anchor:
+      '            \\`knext ffi: could not load the Rust library: \\${$show(err instanceof Error ? err.message : err)}\\`,\n',
+    replacement:
+      '            \\`knext ffi: could not load the Rust library: \\${err instanceof Error ? err.message : err}\\`,\n',
+  },
+  {
+    id: 'E15',
+    subject: 'render',
+    claim:
+      'the value a 64-bit integer argument was given, quoted when it is refused as not a decimal string, is printed raw (it is whatever the caller passed: it can hold a newline) (fragment)',
+    anchor: String.raw`expected a 64-bit integer as a decimal string, got \${$show(JSON.stringify(v))}`,
+    replacement: String.raw`expected a 64-bit integer as a decimal string, got \${JSON.stringify(v)}`,
+  },
+  {
+    id: 'E16',
+    subject: 'render',
+    claim:
+      'the value a finite-number argument was given, quoted when it is refused, is printed raw (it is whatever the caller passed) (fragment)',
+    anchor: String.raw`(NaN and Infinity cannot cross as JSON)' : $show(JSON.stringify(v))}`,
+    replacement: String.raw`(NaN and Infinity cannot cross as JSON)' : JSON.stringify(v)}`,
   },
   {
     id: 'Q01',
@@ -790,8 +959,8 @@ const INIT = [
     id: 'V01',
     subject: 'init',
     claim: 'a Dockerfile that already closes /app and /app/native is told to add the line again',
-    anchor: "  if (closed.has('/app') && closed.has('/app/native')) return '';\n",
-    replacement: '\n',
+    anchor: "  if (!(closed.has('/app') && closed.has('/app/native'))) {\n",
+    replacement: '  if (true as boolean) {\n',
   },
   {
     id: 'V02',
@@ -811,7 +980,8 @@ const INIT = [
     id: 'V04',
     subject: 'init',
     claim: 'the hint is never printed',
-    anchor: '      `the typed wrapper to ${DEFAULT_CONFIG.out}/.\\n${dockerfileHint(cwd)}`,\n',
+    anchor:
+      '      `the typed wrapper to ${DEFAULT_CONFIG.out}/.\\n${dockerfileHint(cwd, opts.build)}`,\n',
     replacement: '      `the typed wrapper to ${DEFAULT_CONFIG.out}/.\\n`,\n',
   },
   {
@@ -888,35 +1058,37 @@ const INIT = [
     id: 'V14',
     subject: 'init',
     claim: 'closing /app/native alone is enough: /app is left as the builder made it',
-    anchor: "  if (closed.has('/app') && closed.has('/app/native')) return '';\n",
-    replacement: "  if (closed.has('/app/native')) return '';\n",
+    anchor: "  if (!(closed.has('/app') && closed.has('/app/native'))) {\n",
+    replacement: "  if (!closed.has('/app/native')) {\n",
   },
   {
     id: 'V15',
     subject: 'init',
     claim: 'closing /app alone is enough: /app/native is left as the builder made it',
-    anchor: "  if (closed.has('/app') && closed.has('/app/native')) return '';\n",
-    replacement: "  if (closed.has('/app')) return '';\n",
+    anchor: "  if (!(closed.has('/app') && closed.has('/app/native'))) {\n",
+    replacement: "  if (!closed.has('/app')) {\n",
   },
   {
     id: 'V16',
     subject: 'init',
     claim: 'a chmod before the copy counts: the copy then makes the directory again',
-    anchor: '  for (const i of stage.slice(copy + 1)) {\n',
-    replacement: '  for (const i of stage) {\n',
+    anchor:
+      "  for (const i of stage.slice(copy + 1)) if (i.word === 'RUN') applyRun(i.rest, closed);\n",
+    replacement: "  for (const i of stage) if (i.word === 'RUN') applyRun(i.rest, closed);\n",
   },
   {
     id: 'V17',
     subject: 'init',
     claim: 'any chmod counts, whatever mode it sets (go+w opens the directories)',
-    anchor: '    if (mode === undefined || !closesGroupAndOther(mode)) continue;\n',
-    replacement: '    if (mode === undefined) continue;\n',
+    anchor:
+      "      if (effect === 'closes') closed.add(d);\n      else if (effect === 'opens') closed.delete(d);\n",
+    replacement: '      closed.add(d);\n',
   },
   {
     id: 'V18',
     subject: 'init',
     claim: 'a recursive chmod of /app is not taken to close /app/native too',
-    anchor: "      if (recursive && p === '/app') closed.add('/app/native');\n",
+    anchor: "    if (recursive && p === '/app') dirs.add('/app/native');\n",
     replacement: '\n',
   },
   {
@@ -925,6 +1097,106 @@ const INIT = [
     claim: 'a RUN line is read as one command: a chmod after && or ; is not seen',
     anchor: String.raw`  for (const command of run.split(/&&|\|\||;/)) {` + '\n',
     replacement: '  for (const command of [run]) {\n',
+  },
+  {
+    id: 'V20',
+    subject: 'init',
+    claim:
+      'a mode with no who-letter (-w, =rx) is taken as go-w: it is subject to the umask, so it closes nothing the loader needs',
+    anchor: '    const who = m[1] as string;\n',
+    replacement: "    const who = (m[1] as string) || 'go';\n",
+  },
+  {
+    id: 'V21',
+    subject: 'init',
+    claim:
+      'a later mode with no who-letter that gives write (+w) is not seen to open the directories again',
+    anchor: "      if (writes && m[2] !== '-') for (const c of ['g', 'o']) last.set(c, 'open');\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V22',
+    subject: 'init',
+    claim: 'a later chmod that gives group or other write does not take back an earlier close',
+    anchor: "      else if (effect === 'opens') closed.delete(d);\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V23',
+    subject: 'init',
+    claim: 'a later chown to somebody but root does not take back an earlier close',
+    anchor:
+      '      if (!staysRootOwned(what)) for (const d of named(paths, recursive)) closed.delete(d);\n',
+    replacement: '\n',
+  },
+  {
+    id: 'V24',
+    subject: 'init',
+    claim:
+      'the body of a heredoc is read as instructions: a chmod, a COPY or a FROM inside one is taken for a real one',
+    anchor: '      open = heredocsOf(m[2] as string);\n',
+    replacement: '      open = [];\n',
+  },
+  {
+    id: 'V25',
+    subject: 'init',
+    claim:
+      'the tabs before the terminator of a <<- heredoc are not stripped: the heredoc never ends and swallows what follows',
+    anchor:
+      String.raw`      if ((inside.stripTabs ? raw.replace(/^\t+/, '') : raw).trimEnd() === inside.terminator) {` +
+      '\n',
+    replacement: '      if (raw.trimEnd() === inside.terminator) {\n',
+  },
+  {
+    id: 'V26',
+    subject: 'init',
+    claim:
+      'the hint is printed for an app built with another builder too (turbopack, webpack): its image already has the line',
+    anchor: "  if (build !== undefined && build !== VINEXT_BUILD) return '';\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V27',
+    subject: 'init',
+    claim:
+      'a Dockerfile that closes both directories somewhere other than directly after the scaffolded COPY is never warned that deploy takes the slower path',
+    anchor: '  if (at !== -1 && lines[at + 1] !== VINEXT_CLOSE_LINE) {\n',
+    replacement: '  if (false as boolean) {\n',
+  },
+  {
+    id: 'V28',
+    subject: 'init',
+    claim:
+      'the slower-path warning is given even where the line IS directly after the COPY: the hint never goes quiet',
+    anchor: '  if (at !== -1 && lines[at + 1] !== VINEXT_CLOSE_LINE) {\n',
+    replacement: '  if (at !== -1) {\n',
+  },
+  {
+    id: 'V29',
+    subject: 'init',
+    claim:
+      'an app whose config names no build is not read as turbopack (the default): it is told as an unknown build is',
+    anchor: '    const build = (config as { build?: unknown }).build ?? DEFAULT_BUILD;\n',
+    replacement: '    const build = (config as { build?: unknown }).build;\n',
+  },
+  {
+    id: 'V31',
+    subject: 'init',
+    claim:
+      'the tabs before the terminator of a plain << heredoc are stripped too: the heredoc ends where it does not, and the chmod inside it is read as one',
+    anchor:
+      String.raw`      if ((inside.stripTabs ? raw.replace(/^\t+/, '') : raw).trimEnd() === inside.terminator) {` +
+      '\n',
+    replacement:
+      String.raw`      if (raw.replace(/^\t+/, '').trimEnd() === inside.terminator) {` + '\n',
+  },
+  {
+    id: 'V30',
+    subject: 'cli',
+    claim:
+      "the CLI never reads the app's build: init and generate tell every app, whatever it builds with",
+    anchor: '    const build = await appBuild(cwd);\n',
+    replacement: '    const build = undefined;\n',
   },
 ];
 
@@ -977,6 +1249,22 @@ const KNOWN = [
     anchor: '    if (at === -1 || template.indexOf(VINEXT_NATIVE_COPY, at + 1) !== -1) {\n',
     replacement: '    if (at === -1) {\n',
   },
+  {
+    id: 'G07',
+    subject: 'init',
+    claim:
+      "the build the hint assumes when a config names none drifts from core's default builder (the ffi package cannot import core, so it keeps its own copy)",
+    anchor: "export const DEFAULT_BUILD = 'turbopack';\n",
+    replacement: "export const DEFAULT_BUILD = 'webpack';\n",
+  },
+  {
+    id: 'G08',
+    subject: 'init',
+    claim:
+      'the one build the hint speaks to is not the builder core calls vinext: a vinext app is told nothing',
+    anchor: "const VINEXT_BUILD = 'vinext';\n",
+    replacement: "const VINEXT_BUILD = 'vinxet';\n",
+  },
 ];
 
 // `knext ffi generate` and `knext ffi check` print the hint for an app that already has its config.
@@ -985,17 +1273,35 @@ const GENERATE = [
     id: 'H01',
     subject: 'generate',
     claim: 'generate no longer prints the Dockerfile hint',
-    anchor: '      }${dockerfileHint(cwd)}`,\n',
+    anchor: '      }${dockerfileHint(cwd, opts.build)}`,\n',
     replacement: '      }`,\n',
+  },
+  {
+    id: 'H03',
+    subject: 'generate',
+    claim:
+      'generate ignores the build: an app built with turbopack or webpack is told about its Dockerfile too',
+    anchor: '      }${dockerfileHint(cwd, opts.build)}`,\n',
+    replacement: '      }${dockerfileHint(cwd)}`,\n',
   },
   {
     id: 'H02',
     subject: 'generate',
     claim: 'check no longer prints the Dockerfile hint',
     anchor:
-      '          `generated code in ${config.out} is up to date (${expected.size} files)\\n${dockerfileHint(cwd)}`,\n',
+      '          `generated code in ${config.out} is up to date (${expected.size} files)\\n${dockerfileHint(cwd, opts.build)}`,\n',
     replacement:
       '          `generated code in ${config.out} is up to date (${expected.size} files)\\n`,\n',
+  },
+  {
+    id: 'H04',
+    subject: 'generate',
+    claim:
+      'check ignores the build: an app built with turbopack or webpack is told about its Dockerfile too',
+    anchor:
+      '          `generated code in ${config.out} is up to date (${expected.size} files)\\n${dockerfileHint(cwd, opts.build)}`,\n',
+    replacement:
+      '          `generated code in ${config.out} is up to date (${expected.size} files)\\n${dockerfileHint(cwd)}`,\n',
   },
 ];
 
@@ -1004,12 +1310,16 @@ const GENERATE = [
 const loader = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: 'packages/ffi/src/__tests__/ffi-loader.test.ts',
-  subjects: { render: 'packages/ffi/src/render.ts' },
+  subjects: {
+    render: 'packages/ffi/src/render.ts',
+    scan: 'packages/ffi/src/__tests__/template-scan.ts',
+  },
 });
 
 console.log('=== mutation proof: the loader against a whole-tree swap (TD-S17-close-1) ===');
 loader.preflight(LOADER);
-declareMutations(LOADER.length + INIT.length + KNOWN.length + GENERATE.length);
+loader.preflight(SCAN);
+declareMutations(LOADER.length + SCAN.length + INIT.length + KNOWN.length + GENERATE.length);
 
 console.log('\n=== the behaviour, against a real library (ffi-loader.test.ts) ===');
 loader.baseline();
@@ -1020,16 +1330,16 @@ loader.proveCanSeeRed({
   replacement:
     '  if (Number(st.uid) === 12345) return \\`is owned by uid \\${st.uid}, but only root may own it\\`;\n',
 });
-for (const m of LOADER) {
+for (const m of [...LOADER, ...SCAN]) {
   loader.run({ ...m, expect: 'red' });
   recordMutation();
 }
-loader.finish(LOADER.length);
+loader.finish(LOADER.length + SCAN.length);
 
 const init = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: 'packages/ffi/src/__tests__/init.test.ts',
-  subjects: { init: 'packages/ffi/src/init.ts' },
+  subjects: { init: 'packages/ffi/src/init.ts', cli: 'packages/ffi/src/cli.ts' },
 });
 init.preflight(INIT);
 
@@ -1049,7 +1359,10 @@ init.finish(INIT.length);
 const known = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: 'packages/kn-next/src/__tests__/ffi-vinext-known-good.test.ts',
-  subjects: { image: 'packages/kn-next/src/cli/runtime-image.ts' },
+  subjects: {
+    image: 'packages/kn-next/src/cli/runtime-image.ts',
+    init: 'packages/ffi/src/init.ts',
+  },
 });
 known.preflight(KNOWN);
 

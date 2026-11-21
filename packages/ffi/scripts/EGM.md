@@ -55,7 +55,10 @@ against a host-arch twin or against the shipped image.
   image as its `BASE_IMAGE` build argument and nothing else changed, from a group-writable source,
   asserts the modes BuildKit left under `/app`, loads it as the image's own USER, and expects the
   same recipe with `RUN chown -R 65532:65532 /app` appended to be refused. It runs the `shell`
-  recipe with `APP_DIR` set to the compiled leg's directory.
+  recipe with `APP_DIR` set to a copy of the compiled leg's directory under `/opt/knext-ffi-caller`:
+  the recipe's own guard refuses `/tmp`, a home directory (the runner's temp directory is under
+  `/home/runner`) and other directories that can hold other things, so the lane stages the copy where the
+  page says an install goes, and removes it with `sudo` at the end.
 - `stage-ffi-zone.sh <repo-root> <dest>` uses `git archive` to copy the tracked
   `apps/file-manager` into `<dest>` and lays the `fixtures/ffi-zone` opt-in over it.
   `FFI_E2E_OVERLAY=none` skips the overlay. `FFI_E2E_MUTATION` accepts `none`, `wrong-triple`,

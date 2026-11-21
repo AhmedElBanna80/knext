@@ -452,20 +452,23 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    install or may be shared, and the refusal cannot tell which, so it gives both pieces of advice, each with
    its condition, and says that the executable needs a directory of its own. A home directory such as
    `/home/<user>` belongs to the account that owns it: the advice for it is to move the install, never to give
-   the home directory to root:
+   the home directory to root. Where a directory can be fixed in place, the refusal also names the one
+   Dockerfile line that keeps a vinext app on the path `knext deploy` takes for its scaffolded `Dockerfile`
+   (below), and when a sticky directory is on the list together with others it says that fixing the others
+   alone will not be enough, because the install has to move:
 
    ```
    knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: 2 directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:
      /srv/app/native is owned by uid 1000, but only root may own it
      /srv is writable by its group or by everyone (mode 1777)
-   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode). A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.
+   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode). In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there). A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead. The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move.
    ```
 
    ```
    knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: 2 directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:
      /srv/app is owned by uid 1000, but only root may own it
      /srv is writable by its group or by everyone (mode 0775)
-   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.
+   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>. In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there).
    ```
 
    Each refusal carries only the advice that applies to the directories it lists. Check the parent you choose
@@ -523,10 +526,12 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
 
    An app scaffolded for the vinext build (a Bun single executable) is built from the `Dockerfile` it was
    scaffolded with. That file is yours and knext does not edit it, so the line is yours to add: put
-   `RUN chmod go-w /app /app/native` after the `COPY` that brings `native/` in and before `USER`, as in the
-   recipe above, and change nothing else in the file. `knext ffi init` prints that line when your `Dockerfile`
-   copies `native/` to `/app/native` and does not already close both directories, and so do `knext ffi generate`
-   and `knext ffi check`.
+   `RUN chmod go-w /app /app/native` directly after the `COPY` that brings `native/` in (and so before `USER`),
+   as in the recipe above, and change nothing else in the file. `knext ffi init` prints that line when your
+   `Dockerfile` copies `native/` to `/app/native` and does not already close both directories, and so do
+   `knext ffi generate` and `knext ffi check`. When both are closed, but not by that one line directly after
+   the `COPY`, they warn that `knext deploy` takes the slower path described next. Only an app built for vinext
+   is told any of this: the other builds stage a `Dockerfile` that already has the line.
 
    Adding that line keeps your app on the path `knext deploy` takes for the scaffolded file. `knext deploy`
    recognises the scaffolded `Dockerfile` byte for byte, as one that copies your host build, and uploads the
@@ -536,7 +541,9 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    and the asset upload it has; a blank line, a comment, another place for the line, or any other edit takes it
    off that path. Under BuildKit nothing changes for an existing app: both directories are already root's and
    closed, so it loads without the line. With another builder the first call of the module is refused, and the
-   message names the fix.
+   message says how to fix the directories and, for a vinext app, which one line to add. A closing `chmod`
+   anywhere else, or one per directory, closes them too and the module loads, but it takes `knext deploy` to
+   the slower path.
 
    If your Dockerfile copies a whole source tree instead (`COPY . /app`), the directories inside the copy
    keep the mode they have on the machine that builds the image, and a build machine with a `umask` of
@@ -549,14 +556,25 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
 
    A compiled binary you run outside a container needs the same ownership, and so does every directory
    above it. Hand the directory that holds the executable and `native/` to root, remove group and
-   other write, and run the binary as an ordinary user. The directories above it must already be
-   root's and closed to group and other: a root-owned `/opt/<app>` is fine, a home directory or
+   other write, and run the binary as an ordinary user. The commands below hand over the whole
+   directory, `-R`, so it must hold only this app (`/opt/<app>`): never a home directory, `/tmp`, `/opt`
+   itself or a directory that holds anything else, and they refuse those. The directories above it must
+   already be root's and closed to group and other: a root-owned `/opt/<app>` is fine, a home directory or
    `/tmp` is not, and the refusal names the directory:
 
    ```bash title="own-binary.sh"
-   # APP_DIR: the directory that holds your server executable and its native/ directory.
-   sudo chown -R root:root "$APP_DIR"
-   sudo chmod -R go-w "$APP_DIR"
+   # APP_DIR: the directory that holds your server executable and its native/ directory, and
+   # nothing else (for example /opt/myapp). All of it is handed to root, so it must not be a
+   # home directory, /tmp, /opt itself or a directory that holds anything else.
+   APP_DIR="${APP_DIR%/}"
+   case "$APP_DIR" in
+     "" | / | [!/]* | */.* | /opt | /var | /srv | /mnt | /media | /home | /home/* | /root | "${HOME:-/}" | /tmp* | /var/tmp* | /usr* | /etc*)
+       echo "refusing: $APP_DIR must be an absolute path to a directory that holds only this app, such as /opt/myapp" >&2
+       false ;;
+     *)
+       sudo chown -R root:root "$APP_DIR"
+       sudo chmod -R go-w "$APP_DIR" ;;
+   esac
    ```
 
    A volume mounted at `native/` or above it (a shared volume, a sidecar's, or one made group-writable

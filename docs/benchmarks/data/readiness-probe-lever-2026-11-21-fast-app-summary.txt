@@ -3,6 +3,12 @@ fast-cur     12 |           1100   1815   2041 |       1238   6057  10965  12/12
 fast-p1      12 |           1080   1424   1466 |       1129   1984   2388  12/12|            5 |                   0/12    0.00          0.00         0
 fast-p1t2    12 |            896   1390   1425 |        883   1386   1422  12/12|           -1 |                   0/12    0.00          0.00         0
 
+Rows per arm (valid = no error and code 200; excluded rows are not in any table)
+arm          rows valid error no code non-200
+fast-cur       12    12     0       0       0
+fast-p1        12    12     0       0       0
+fast-p1t2      12    12     0       0       0
+
 Ready timing per arm (Ready>fb = pod Ready strictly after first byte; eps>fb = endpoint ready strictly after first byte)
 arm          Ready>fb  eps>fb Ready>fb+5s        qp-fb ms  timeout stamp s timeout pods gap>=9s gap<9s
 fast-cur         7/12   12/12        1/12          -36..4                -            0       0      0

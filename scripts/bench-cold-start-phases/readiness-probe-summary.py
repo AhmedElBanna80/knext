@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-arm first byte / pod Ready / probe-failure summary for a readiness-probe A/B.
 
-Usage: python3 -I readiness-probe-summary.py [--baseline=ARM] [--effect-ms=N] [--reps=N]
+Usage: python3 -I readiness-probe-summary.py [--baseline=ARM] [--effect-ms=N] [--reps=N] [--min-valid=N]
            <phases.jsonl> <events.json> [<events.json> ...]
 
 phases.jsonl is drive.py output. The events files are
@@ -17,16 +17,19 @@ columns and counted in `no events`. An empty capture, or one that mentions none 
 error, because "no failures" and "no capture" must not look the same. Every input error (a bad
 option or option value, a missing file, an empty input, an input of the wrong JSON shape or with
 fields of the wrong type) prints its message to stderr and exits 2. Option values are range-checked
-(`--reps` an integer in 1..1e7, `--effect-ms` a number in 0..1e12), each row and event is shape- and
+(`--reps` an integer in 1..1e7, `--effect-ms` a number in 0..1e12, `--min-valid` an integer in 1..1e6), each row and event is shape- and
 type-checked (a row's `code` must be an integer; an event's `reason` must be a string; a watch number
 must be a number with |x| <= 1e12, an event `count` an integer in 0..1e6), and the stages that read
 input run under a guard (`guarded`) that maps only ValueError, OverflowError, UnicodeDecodeError,
 JSONDecodeError and OSError to that same exit 2. A TypeError, AttributeError or KeyError is a bug in
 this tool and shows a traceback. Watch numbers that are null or absent are accepted: they mean "not
 observed" (a wake can end before Ready, for instance) and are left out of that statistic. A row that
-carries an `error` (drive.py's failed-wake record) needs only its `arm`.
-Nothing is dropped for its type: a row is excluded only for carrying an `error` or a `code` other
-than 200; an event adds failures only when its reason is `Unhealthy`, and any event naming a pod
+carries an `error` (drive.py's failed-wake record) needs only its `arm`; any other field it has
+(`pod`, `wall_start`, `watch`) must still have its usual type. JSON nested too deeply to parse
+(RecursionError) is an input error too. `--min-valid=N` (default 3, 1..1e6) makes an arm with fewer
+than N valid rows an exit-2 error: a comparison on an arm of failed wakes must not print as a result.
+Nothing is dropped for its type: a row is excluded only for carrying an `error`, a missing `code`
+or a `code` other than 200, and the "Rows per arm" table counts each kind per arm; an event adds failures only when its reason is `Unhealthy`, and any event naming a pod
 counts as capture coverage for it.
 
 Table 1, per arm: n, median / p95 / max of first byte and of pod Ready (ms after the request), how
@@ -70,16 +73,17 @@ EXIT_INPUT_ERROR = 2
 
 
 # What malformed INPUT can raise while it is parsed: a value that does not parse or is out of range
-# (ValueError, which JSONDecodeError and UnicodeDecodeError subclass, and OverflowError) or a file
-# that cannot be read (OSError). TypeError, AttributeError and KeyError are NOT here: the explicit
+# (ValueError, which JSONDecodeError and UnicodeDecodeError subclass, and OverflowError), JSON nested
+# deeper than the interpreter allows (RecursionError) or a file that cannot be read (OSError). TypeError, AttributeError and KeyError are NOT here: the explicit
 # shape and type checks below cover bad-type input, so one of those escaping is a bug in this tool
 # and must show a traceback rather than pass as "bad input".
-INPUT_ERRORS = (ValueError, OverflowError, UnicodeDecodeError, json.JSONDecodeError, OSError)
+INPUT_ERRORS = (ValueError, OverflowError, UnicodeDecodeError, json.JSONDecodeError, OSError, RecursionError)
 
 # Magnitude bounds, checked when input is read so absurd values fail there, not in the statistics.
 MAX_MS = 1e12  # any millisecond value (first byte, Ready, --effect-ms): about 31 years
 MAX_COUNT = 1_000_000  # a kubelet event count
 MAX_REPS = 10_000_000  # --reps
+MAX_MIN_VALID = 1_000_000  # --min-valid
 
 
 def fail(msg):
@@ -338,6 +342,16 @@ def check_row(where, r):
         # excluded from every table anyway, so it only needs to name its arm.
         if not isinstance(r.get("arm"), str) or not r["arm"]:
             fail(f"{where}: `arm` must be a non-empty string, got {r.get('arm')!r}")
+        # every other field is optional on an error row, but if present it must have its usual type
+        for k in ("pod", "wall_start"):
+            if k in r and (not isinstance(r[k], str) or not r[k]):
+                fail(f"{where}: `{k}` must be a non-empty string or absent, got {r[k]!r}")
+        if "watch" in r and not isinstance(r["watch"], dict):
+            fail(f"{where}: `watch` must be an object or absent, got {type(r['watch']).__name__}")
+        for k in WATCH_NUMERIC_KEYS:
+            v = r["watch"].get(k) if isinstance(r.get("watch"), dict) else None
+            if v is not None and not is_number(v):
+                fail(f"{where}: watch.{k} must be null or a number with |x| <= {MAX_MS:g}, got {v!r}")
         return
     missing = [k for k in REQUIRED_ROW_KEYS if k not in r]
     if missing:
@@ -382,8 +396,17 @@ def usable(rows, arm):
     return [r for r in rows if r["arm"] == arm and not r.get("error") and r.get("code") == 200]
 
 
+def excluded(rows, arm):
+    """Why rows of `arm` are left out: (error, no code, non-200). Each row is counted once, in that order."""
+    mine = [r for r in rows if r["arm"] == arm]
+    err = [r for r in mine if r.get("error")]
+    rest = [r for r in mine if not r.get("error")]
+    nocode = [r for r in rest if "code" not in r]
+    return len(err), len(nocode), len([r for r in rest if "code" in r and r["code"] != 200])
+
+
 def parse_args(argv):
-    opts = {"baseline": None, "effect-ms": 1200.0, "reps": 10000}
+    opts = {"baseline": None, "effect-ms": 1200.0, "reps": 10000, "min-valid": 3}
     pos = []
     for a in argv:
         if a.startswith("--"):
@@ -399,6 +422,13 @@ def parse_args(argv):
                     fail(f"--reps must be an integer in 1..{MAX_REPS}, got {v!r}")
                 if not 1 <= opts[k] <= MAX_REPS:
                     fail(f"--reps must be an integer in 1..{MAX_REPS}, got {v!r}")
+            elif k == "min-valid":
+                try:
+                    opts[k] = int(v)
+                except ValueError:
+                    fail(f"--min-valid must be an integer in 1..{MAX_MIN_VALID}, got {v!r}")
+                if not 1 <= opts[k] <= MAX_MIN_VALID:
+                    fail(f"--min-valid must be an integer in 1..{MAX_MIN_VALID}, got {v!r}")
             else:  # effect-ms
                 try:
                     opts[k] = float(v)
@@ -410,7 +440,7 @@ def parse_args(argv):
             pos.append(a)
     if len(pos) < 2:
         fail(
-            "usage: readiness-probe-summary.py [--baseline=ARM] [--effect-ms=N] [--reps=N] "
+            "usage: readiness-probe-summary.py [--baseline=ARM] [--effect-ms=N] [--reps=N] [--min-valid=N] "
             "<phases.jsonl> <events.json> [<events.json> ...]"
         )
     return opts, pos
@@ -429,6 +459,14 @@ def main():
     if not pods & seen:
         fail("events capture mentions none of the pods in the phases file; refusing to report 0 failures")
     arms = list(dict.fromkeys(r["arm"] for r in rows))
+    for arm in arms:
+        n_valid = len(usable(rows, arm))
+        if n_valid < opts["min-valid"]:
+            e, nc, bad = excluded(rows, arm)
+            fail(
+                f"arm {arm!r} has {n_valid} valid row(s), fewer than --min-valid={opts['min-valid']} "
+                f"(excluded: {e} error, {nc} no code, {bad} non-200); a comparison on that is not a result"
+            )
     print(
         f"{'arm':<12}{'n':>3} | {'first byte med':>14}{'p95':>7}{'max':>7} | "
         f"{'Ready med':>10}{'p95':>7}{'max':>7}{'seen':>6} | {'Ready-fb med':>12} | "
@@ -463,6 +501,12 @@ def main():
             f"{fmt(statistics.median(gap) if gap else None):>12} | {fcols}{len(rs) - len(covered):>10}"
         )
 
+    print("\nRows per arm (valid = no error and code 200; excluded rows are not in any table)")
+    print(f"{'arm':<12}{'rows':>5}{'valid':>6}{'error':>6}{'no code':>8}{'non-200':>8}")
+    for arm in arms:
+        e, nc, bad = excluded(rows, arm)
+        total = sum(1 for r in rows if r["arm"] == arm)
+        print(f"{arm:<12}{total:>5}{len(usable(rows, arm)):>6}{e:>6}{nc:>8}{bad:>8}")
     print(
         "\nReady timing per arm "
         "(Ready>fb = pod Ready strictly after first byte; eps>fb = endpoint ready strictly after first byte)"

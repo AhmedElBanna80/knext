@@ -4,6 +4,13 @@ pr-clone     12 |           3519   5533   6075 |      11624  12509  12834  12/12
 pr-p1        12 |           3760   5573   6487 |       3667   5424   6297  12/12|         -137 |                  12/12    1.00          0.00         0
 pr-p1t2      12 |           3675   5694   5700 |       3707   5460   5499  12/12|          -98 |                  12/12    1.00          0.00         0
 
+Rows per arm (valid = no error and code 200; excluded rows are not in any table)
+arm          rows valid error no code non-200
+probe-cur      12    12     0       0       0
+pr-clone       12    12     0       0       0
+pr-p1          12    12     0       0       0
+pr-p1t2        12    12     0       0       0
+
 Ready timing per arm (Ready>fb = pod Ready strictly after first byte; eps>fb = endpoint ready strictly after first byte)
 arm          Ready>fb  eps>fb Ready>fb+5s        qp-fb ms  timeout stamp s timeout pods gap>=9s gap<9s
 probe-cur       11/12   12/12       11/12        -328..60         0.9..6.1            9       9      0

@@ -62,6 +62,9 @@ const unhealthy = (uid: string, pod: string, msg: string, n: number, f: number, 
   ev(uid, pod, 'Unhealthy', msg, n, f, l);
 const scheduled = (pod: string) => ev(`s-${pod}`, pod, 'Scheduled', 'assigned', 1, 0, 0);
 
+// pass this in args to run with the script's own --min-valid default instead of the test default of 1
+const DEFAULT_GATE = '--default-gate';
+
 type Result = { status: number | null; stdout: string; stderr: string };
 
 function runRaw(rowsText: string, eventFiles: unknown[], args: string[] = []): Result {
@@ -74,7 +77,12 @@ function runRaw(rowsText: string, eventFiles: unknown[], args: string[] = []): R
       writeFileSync(f, JSON.stringify(e));
       return f;
     });
-    const r = spawnSync('python3', ['-I', SCRIPT, ...args, phases, ...files], {
+    // the small fixtures here have one-row arms; the --min-valid gate has its own tests below
+    const defaultGate = args.includes(DEFAULT_GATE);
+    args = args.filter((a) => a !== DEFAULT_GATE);
+    const gate =
+      defaultGate || args.some((a) => a.startsWith('--min-valid')) ? [] : ['--min-valid=1'];
+    const r = spawnSync('python3', ['-I', SCRIPT, ...gate, ...args, phases, ...files], {
       encoding: 'utf8',
     });
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };
@@ -568,11 +576,12 @@ describe('readiness-probe-summary.py nothing is dropped for its type', () => {
     expect(line(r.stdout, 'a').slice(0, 2)).toEqual(['a', '4']);
   });
 
-  it('a row with an integer non-200 code is excluded on purpose, and says so by its absence', () => {
-    const text = `${rowsText}${JSON.stringify({ ...ROWS[0], arm: 'bad', code: 404 })}\n`;
+  it('a row with an integer non-200 code is excluded on purpose, and counted', () => {
+    const text = `${rowsText}${JSON.stringify({ ...ROWS[0], arm: 'bad', code: 404 })}\n${JSON.stringify({ ...ROWS[0], arm: 'bad' })}\n`;
     const r = runRaw(text, [EVENTS]);
     expect(r.status).toBe(0);
-    expect(line(r.stdout, 'bad').slice(0, 2)).toEqual(['bad', '0']);
+    expect(line(r.stdout, 'bad').slice(0, 2)).toEqual(['bad', '1']);
+    expect(rowsLine(r.stdout, 'bad')).toEqual(['bad', '2', '1', '0', '0', '1']);
   });
 
   it('null or absent watch numbers are accepted as "not observed"', () => {
@@ -627,4 +636,118 @@ describe('readiness-probe-summary.py guarded() scope', () => {
       expect(r.stderr).toContain(name);
     });
   }
+});
+
+// rows-per-arm table: arm rows valid error no-code non-200
+function rowsLine(out: string, arm: string): string[] {
+  const sect = out.split('Rows per arm')[1].split('Ready timing')[0];
+  const l = sect.split('\n').find((x) => x.startsWith(`${arm} `));
+  expect(l).toBeDefined();
+  return (l as string)
+    .trim()
+    .split(/\s+/)
+    .filter((x) => x !== 'code');
+}
+
+describe('readiness-probe-summary.py excluded-row counts', () => {
+  const good = (arm: string, i: number) => ({ ...ROWS[0], arm, pod: `${arm}${i}` });
+  const mk = (extra: unknown[]) =>
+    [...[0, 1, 2].map((i) => good('a', i)), ...[0, 1, 2].map((i) => good('b', i)), ...extra]
+      .map((x) => JSON.stringify(x))
+      .join('\n');
+  const evs = {
+    items: [0, 1, 2].flatMap((i) => [scheduled(`a${i}`), scheduled(`b${i}`)]),
+  };
+
+  it('counts error, missing-code and non-200 rows per arm, each once', () => {
+    const noCode: Record<string, unknown> = { ...good('b', 9) };
+    delete noCode.code;
+    const text = `${mk([{ arm: 'b', error: 'pod gone' }, noCode, { ...good('b', 8), code: 503 }, { ...good('b', 7), code: 503, error: 'x' }])}\n`;
+    const r = runRaw(text, [evs]);
+    expect(r.status).toBe(0);
+    expect(rowsLine(r.stdout, 'a')).toEqual(['a', '3', '3', '0', '0', '0']);
+    expect(rowsLine(r.stdout, 'b')).toEqual(['b', '7', '3', '2', '1', '1']);
+  });
+});
+
+describe('readiness-probe-summary.py --min-valid gate', () => {
+  const good = (arm: string, i: number) => ({ ...ROWS[0], arm, pod: `${arm}${i}` });
+  const evs = { items: [0, 1, 2, 3].flatMap((i) => [scheduled(`a${i}`), scheduled(`b${i}`)]) };
+  const text = (rows: unknown[]) => `${rows.map((x) => JSON.stringify(x)).join('\n')}\n`;
+
+  it('exits 2 when the baseline arm is made only of error rows (it used to print "no values" and exit 0)', () => {
+    const rows = [
+      good('a', 0),
+      good('a', 1),
+      good('a', 2),
+      ...[0, 1, 2].map(() => ({ arm: 'b', error: 'pod gone' })),
+    ];
+    const r = runRaw(text(rows), [evs], ['--baseline=b', DEFAULT_GATE]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("arm 'b' has 0 valid row(s)");
+    expect(r.stderr).toContain('--min-valid=3');
+    expect(r.stderr).toContain('3 error');
+    expect(r.stdout).toBe('');
+  });
+
+  it('exits 2 when a non-baseline arm has too few valid rows', () => {
+    const rows = [0, 1, 2].map((i) => good('a', i)).concat([good('b', 0), good('b', 1)]);
+    const r = runRaw(text(rows), [evs], [DEFAULT_GATE]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain("arm 'b' has 2 valid row(s)");
+  });
+
+  it('exactly the minimum passes, and the default is 3', () => {
+    const rows = [0, 1, 2].flatMap((i) => [good('a', i), good('b', i)]);
+    expect(runRaw(text(rows), [evs], [DEFAULT_GATE]).status).toBe(0);
+    expect(runRaw(text(rows), [evs], ['--min-valid=4']).status).toBe(2);
+    const two = [0, 1].flatMap((i) => [good('a', i), good('b', i)]);
+    expect(runRaw(text(two), [evs], [DEFAULT_GATE]).status).toBe(2);
+    expect(runRaw(text(two), [evs], ['--min-valid=2']).status).toBe(0);
+  });
+
+  it.each([['0'], ['-1'], ['abc'], ['2.5'], ['1000001']])('--min-valid=%s exits 2', (v) => {
+    const rows = [0, 1, 2].flatMap((i) => [good('a', i), good('b', i)]);
+    const r = runRaw(text(rows), [evs], [`--min-valid=${v}`]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('--min-valid');
+  });
+});
+
+describe('readiness-probe-summary.py error-row fields and nesting', () => {
+  const errRow = (extra: Record<string, unknown>) =>
+    `${JSON.stringify({ arm: 'a', error: 'x', ...extra })}\n`;
+  const base = `${ROWS.map((x) => JSON.stringify(x)).join('\n')}\n`;
+
+  it.each([
+    ['pod is a list', { pod: ['p'] }],
+    ['pod is a dict', { pod: { a: 1 } }],
+    ['pod is a number', { pod: 5 }],
+    ['pod is empty', { pod: '' }],
+    ['wall_start is a number', { wall_start: 5 }],
+    ['watch is a list', { watch: [] }],
+    ['watch.first_byte is a string', { watch: { first_byte: 'x' } }],
+  ])('an error row where %s exits 2 with a message, not a traceback', (_n, extra) => {
+    const r = runRaw(base + errRow(extra), [EVENTS]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).not.toContain('Traceback');
+  });
+
+  it('an error row with a string pod, a watch object or nothing else is accepted', () => {
+    for (const extra of [{}, { pod: 'p9' }, { watch: { first_byte: null } }]) {
+      expect(runRaw(base + errRow(extra), [EVENTS]).status).toBe(0);
+    }
+  });
+
+  it('deeply nested JSON exits 2, not a RecursionError traceback', () => {
+    const deep = `${'['.repeat(100000)}${']'.repeat(100000)}`;
+    for (const text of [`${deep}\n`, `${base}{"arm":"a","error":"x","pod":${deep}}\n`]) {
+      const r = runRaw(text, [EVENTS]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).not.toContain('Traceback');
+    }
+    const r = runRaw(base, [{ items: [{ metadata: { uid: deep } }] }]);
+    expect(r.status).toBe(2);
+    expect(r.stderr).not.toContain('Traceback');
+  });
 });

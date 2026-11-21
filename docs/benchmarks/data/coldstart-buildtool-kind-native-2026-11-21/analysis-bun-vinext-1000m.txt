@@ -1,0 +1,16 @@
+valid 12, excluded 0: []
+
+### bun-vinext-1000m (n=12)
+
+| phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
+|---|---|---|---|---|
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 16 | 18 | 3 [14, 17] | 13–19 |
+| 1 activation: request -> Pod object | 36 | 50 | 6 [34, 41] | 31–59 |
+| 2 scheduling: Pod -> bound to node | 11 | 17 | 5 [9, 14] | 6–17 |
+| 3 sandbox + containers start: bound -> first log line | 342 | 402 | 46 [313, 359] | 300–416 |
+| 6 forward + render: ready -> first byte | 0 | 3 | 3 [0, 3] | 0–3 |
+| total: request -> first byte | 523 | 601 | 47 [494, 541] | 474–602 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 83 | 91 | 12 [74, 86] | 68–94 |
+|   5y net: first log -> TCP :3000 from the other node | 96 | 104 | 14 [86, 99] | 83–104 |
+|   5y net: first log -> TCP :3000 from the same node | 118 | 161 | 15 [107, 122] | 103–206 |
+|   5w activator: first log -> activator marks pod healthy | 99 | 108 | 17 [87, 105] | 82–109 |

@@ -78,6 +78,7 @@ const ROWS = [
   row('a', 'p2', 3000, 3100),
   row('a', 'p3', 4000, 11000),
   row('b', 'q0', 500, null),
+  row('c', 'r0', 1500, 2000),
 ];
 
 const EVENTS = {
@@ -87,6 +88,8 @@ const EVENTS = {
     ev('u2', 'p2', R503, 5, 1, 30),
     ev('u3a', 'p3', TIMEOUT, 3, 1, 3),
     ev('u3b', 'p3', R503, 3, 21, 41),
+    // stamped exactly 1 s after Ready: still before Ready in real time, kubelet stamps are 1 s coarse
+    ev('u4', 'r0', TIMEOUT, 2, 3, 3),
   ],
 };
 
@@ -149,6 +152,11 @@ describe('readiness-probe-summary.py', () => {
       '|',
     ]);
     expect(t.slice(12)).toEqual(['-', '|', '0/0', '0.00', '0.00']);
+  });
+
+  it('allows one second of stamp resolution after Ready', () => {
+    const t = line(run(ROWS, [EVENTS]), 'c');
+    expect(t.slice(14)).toEqual(['1/1', '2.00', '2.00']);
   });
 
   it('exits non-zero with a usage line when no events file is given', () => {

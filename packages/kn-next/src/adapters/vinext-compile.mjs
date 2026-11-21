@@ -47,7 +47,6 @@
  * `.output/server/index.mjs`, so sharp only enters a module graph now.
  */
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import {
     existsSync,
     readdirSync,
@@ -88,7 +87,7 @@ import {
     importedRequireEscapes,
     wrapRequireBindings,
 } from "./entry-require-staticize.mjs";
-import { verifyBytecodeExec, verifyBytecodeModules } from "./bytecode-exec-verify.mjs";
+import { isExecMarker, mintExecMarker, verifyBytecodeExec, verifyBytecodeModules } from "./bytecode-exec-verify.mjs";
 import {
     dataPathsMissing,
     discoverDataLiterals,
@@ -1059,7 +1058,15 @@ const externalSidecar = {
  */
 const EMBEDDED_PREFIX = "knext-embedded:";
 // Unique per build, so a stale binary cannot pass the bytecode proof.
-const BYTECODE_MARKER = `knext-vinext-exec:${randomBytes(12).toString("hex")}`;
+// The CLI passes its own (`--marker`) so it can check, from the binary bytes alone,
+// that bytecode and this marker are present (the include module COUNT is not
+// re-derived there; see the plan sidecar below).
+const MARKER_PREFIX = "knext-vinext-exec";
+const BYTECODE_MARKER = args.marker ?? mintExecMarker(MARKER_PREFIX);
+if (!isExecMarker(MARKER_PREFIX, BYTECODE_MARKER)) {
+    console.error(`[knext compile] --marker must be ${MARKER_PREFIX}:<24 hex chars>, got ${JSON.stringify(BYTECODE_MARKER)}`);
+    process.exit(1);
+}
 const APP_ROOT = dirname(dirname(ENTRY_DIR));
 // Round-2 review (#1877): `planRuntimeRequires`'s embed computation resolves
 // a confirmed require's spec via `Bun.resolveSync(spec, dirname(ENTRY))` —
@@ -1480,6 +1487,9 @@ const result = await Bun.build(
                   plugins: [importMetaToCjs, sharpAddonDlopen, externalSidecar],
                   minify: true,
                   bytecode: true,
+                  // The bytecode-proof marker, as in the other two shapes: the CLI
+                  // (vinext-build.ts) re-verifies the executable against it.
+                  banner: `globalThis.__knextVinextExecMarker=${JSON.stringify(BYTECODE_MARKER)};`,
                   // NEVER set `autoloadPackageJson` here: it widens runtime package
                   // resolution beyond the sidecar. The sidecar is resolved by
                   // sidecar-runtime.mjs instead, confined to <dir of the binary>/.output/
@@ -1552,6 +1562,15 @@ if (INCLUDE_PLAN) {
         process.exit(1);
     }
 }
+if (!INCLUDE_PLAN && !SELF_CONTAINED) {
+    // Fail closed on the default disk-mode shape too (the CLI re-checks).
+    const verdict = verifyBytecodeExec(readFileSync(OUTFILE), BYTECODE_MARKER);
+    if (!verdict.ok) {
+        rmSync(OUTFILE, { force: true });
+        console.error(`[knext compile] the executable failed the bytecode check: ${verdict.reason}`);
+        process.exit(1);
+    }
+}
 if (INCLUDE_PLAN && !SELF_CONTAINED) {
     // Fail closed, as self-contained mode does: a binary without bytecode boots
     // and serves, just slower — the regression nobody notices.
@@ -1565,6 +1584,16 @@ if (INCLUDE_PLAN && !SELF_CONTAINED) {
         console.error(`[knext compile] the executable failed the bytecode check: ${verdict.reason}`);
         process.exit(1);
     }
+    // ATTEST the planned module count (entry + included) to the CLI, which cannot
+    // run this Bun-only planner. The count is this script's claim: the CLI checks
+    // from the binary bytes that bytecode, the marker and exactly this many
+    // banner-headed modules are present, but does not recompute the planned set.
+    // The CLI deletes the sidecar after reading; it is never COPYed into an image
+    // (exact-name COPYs only).
+    writeFileSync(
+        `${OUTFILE}.knext-plan.json`,
+        JSON.stringify({ marker: BYTECODE_MARKER, modules: 1 + INCLUDE_PLAN.relpaths.length }),
+    );
 }
 if (INCLUDE_PLAN) {
     console.log(

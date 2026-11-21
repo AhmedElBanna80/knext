@@ -40,6 +40,7 @@ import { createHash } from "node:crypto";
 import {
     cpSync,
     existsSync,
+    lstatSync,
     mkdirSync,
     mkdtempSync,
     readdirSync,
@@ -50,12 +51,21 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import {
+    mintExecMarker,
+    verifyBytecodeExec,
+    verifyBytecodeModules,
+} from "../adapters/bytecode-exec-verify.mjs";
 import { rewriteVinextHarfbuzzAnchors } from "../adapters/entry-asset-anchor.mjs";
 import {
     ogHarfbuzzWarning,
     resolvePinnedHarfbuzzWasm,
     vinextOgPackageJson,
 } from "../adapters/og-harfbuzz.mjs";
+import {
+    type BytecodeVerdict,
+    enforceBytecodeVerdict,
+} from "./bytecode-enforce";
 import { packageRoot } from "./create";
 import { runQuiet } from "./exec";
 import { ffiOptedIn } from "./ffi-preflight";
@@ -153,6 +163,14 @@ export function compileArgv(
      * by bun-toolchain.ts). Absent: plain `bun` on PATH, argv unchanged.
      */
     compilerBin?: string,
+    /**
+     * The unique entry marker the compile script bakes into the entry's banner
+     * (it mints its own when absent). The CLI passes one so it can check, from
+     * the binary bytes alone, that bytecode and this marker are present
+     * (`verifyCompiledExecutable`); that check does not cover how the include
+     * module count was planned, which the compile script attests.
+     */
+    marker?: string,
 ): string[] {
     const target = bunCompileTarget(arch);
     // `bun run <script>`, not `bun build`. The compile needs BUILD PLUGINS and
@@ -189,6 +207,7 @@ export function compileArgv(
         // The patched toolchain embeds the SAME checked plan through its
         // native `compile.include` (compile-embed.mjs nativeIncludePaths).
         ...(compilerBin && include.length > 0 ? ["--include-native", "1"] : []),
+        ...(marker ? ["--marker", marker] : []),
     ];
 }
 
@@ -410,6 +429,136 @@ export interface VinextBuildOptions {
      * bun-toolchain.ts). Absent: stock `bun` on PATH.
      */
     readonly compilerBin?: string;
+    /** Injectable for tests: read the produced executable. */
+    readonly readArtifact?: (path: string) => Uint8Array;
+}
+
+/**
+ * The bytecode verdict for the shape the compile script produced, mirroring the
+ * script's own per-shape choice in `vinext-compile.mjs`:
+ *
+ *   - self-contained: `verifyBytecodeExec` (one banner-headed entry);
+ *   - `compile.include` (disk mode): `verifyBytecodeModules`, which demands
+ *     that the binary carry the ATTESTED number of banner-headed bytecode
+ *     modules. The count is ATTESTED BY THE COMPILE SCRIPT (it plans the globs
+ *     with its Bun-only planner and writes the total to a sidecar,
+ *     `readPlanSidecar`); the CLI does not recompute it. What the CLI checks on
+ *     its own, from the binary bytes, is that bytecode and the per-build marker
+ *     are present and that exactly that many modules are banner-headed;
+ *   - default: `verifyBytecodeExec`.
+ */
+function vinextBytecodeVerdict(
+    bytes: Uint8Array,
+    marker: string,
+    shape: {
+        readonly selfContained?: boolean;
+        readonly include?: readonly string[];
+        /** The module count (entry + included) the compile script attested. */
+        readonly plannedModules?: number;
+    },
+): BytecodeVerdict {
+    const include = shape.include ?? [];
+    if (!shape.selfContained && include.length > 0) {
+        if (shape.plannedModules === undefined) {
+            return {
+                ok: false,
+                reason: "no planned module count for the include shape",
+            };
+        }
+        return verifyBytecodeModules(bytes, marker, shape.plannedModules);
+    }
+    return verifyBytecodeExec(bytes, marker);
+}
+
+/**
+ * Fail closed unless the compiled vinext executable carries bytecode for the
+ * entry whose banner is `marker`. The compile script checks too, but a build
+ * must not trust the script's own claim about its own output.
+ */
+function verifyCompiledExecutable(
+    opts: VinextBuildOptions,
+    outFile: string,
+    marker: string,
+): void {
+    const abs = resolve(opts.cwd, outFile);
+    const read = opts.readArtifact ?? ((p: string) => readFileSync(p));
+    let bytes: Uint8Array;
+    try {
+        bytes = read(abs);
+    } catch (e) {
+        throw new UsageError(
+            `The compiled vinext executable '${outFile}' could not be read for the check: ${e instanceof Error ? e.message : String(e)}`,
+        );
+    }
+    const needsPlan = !opts.selfContained && (opts.include?.length ?? 0) > 0;
+    let plannedModules: number | undefined;
+    if (needsPlan) {
+        try {
+            // ATTESTED by the compile script, not derived here (see
+            // vinextBytecodeVerdict); the binary is then held to that count.
+            plannedModules = readPlanSidecar(abs, marker);
+        } catch (e) {
+            rmSync(abs, { force: true });
+            throw e;
+        }
+    }
+    enforceBytecodeVerdict(
+        vinextBytecodeVerdict(bytes, marker, { ...opts, plannedModules }),
+        abs,
+        "vinext",
+    );
+}
+
+/**
+ * Read (and ALWAYS delete) the plan sidecar `vinext-compile.mjs` writes beside
+ * the executable in the include shape: `{ marker, modules }`. `modules` is the
+ * compile script's ATTESTATION of how many modules (entry + included) it
+ * planned; the CLI only holds the binary to it. Fails closed when
+ * it is missing, unparseable, carries another build's marker, or a count that is
+ * not a positive integer.
+ */
+function readPlanSidecar(executable: string, marker: string): number {
+    const path = `${executable}.knext-plan.json`;
+    const bad = (why: string) =>
+        new UsageError(
+            `The compile.include plan sidecar '${path}' ${why}.\n\n` +
+                "Refusing to trust the executable's module count without it.",
+        );
+    let raw: string;
+    try {
+        let st: ReturnType<typeof lstatSync>;
+        try {
+            st = lstatSync(path);
+        } catch {
+            throw bad("is missing");
+        }
+        if (st.isSymbolicLink() || !st.isFile()) {
+            throw bad("is a symlink or not a regular file");
+        }
+        raw = readFileSync(path, "utf8");
+    } finally {
+        rmSync(path, { force: true });
+    }
+    let plan: { marker?: unknown; modules?: unknown } | null;
+    try {
+        plan = JSON.parse(raw);
+    } catch {
+        throw bad("is not valid JSON");
+    }
+    if (plan === null || typeof plan !== "object") {
+        throw bad("is not a JSON object");
+    }
+    if (plan.marker !== marker) {
+        throw bad("carries a marker that is not this build's");
+    }
+    if (
+        typeof plan.modules !== "number" ||
+        !Number.isInteger(plan.modules) ||
+        plan.modules < 1
+    ) {
+        throw bad("has an invalid module count");
+    }
+    return plan.modules;
 }
 
 /**
@@ -476,6 +625,11 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
     // smoke's host-arch twin) can point it somewhere that does not clobber
     // the ship build's already-staged tree.
     const nativeDirArg = opts.nativeDir ?? "native";
+    const marker = mintExecMarker("knext-vinext-exec");
+    // ABSOLUTE, so the compile script (which resolves --outfile against its own
+    // process.cwd()) and the post-compile verify (which resolves against
+    // opts.cwd) can never read two different paths.
+    const compiledAbs = resolve(opts.cwd, outFile);
 
     if (opts.selfContained) {
         // Self-contained: stage sharp's native tree for the target arch FIRST
@@ -487,20 +641,32 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
             ...compileArgv(
                 arch,
                 entry,
-                outFile,
+                compiledAbs,
                 opts.include,
                 opts.compilerBin,
+                marker,
             ),
             "--self-contained",
             "1",
             "--native-dir",
             nativeDirArg,
         ]);
+        verifyCompiledExecutable(opts, outFile, marker);
         return outFile;
     }
 
     // 2. compile + bytecode
-    run(compileArgv(arch, entry, outFile, opts.include, opts.compilerBin));
+    run(
+        compileArgv(
+            arch,
+            entry,
+            compiledAbs,
+            opts.include,
+            opts.compilerBin,
+            marker,
+        ),
+    );
+    verifyCompiledExecutable(opts, outFile, marker);
 
     // 3. stage sharp's native module beside the binary — for the arch being
     // compiled, which is NOT necessarily the host's (#949).

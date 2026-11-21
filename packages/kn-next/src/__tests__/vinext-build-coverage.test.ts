@@ -46,6 +46,7 @@ import {
     extractVerifiedTarball,
     stageSharpNative,
 } from "../cli/vinext-build";
+import { bytecodeFor } from "./helpers/vinext-bytecode-artifact";
 
 /** Every temp dir this file creates, drained after the run (D9, #880). */
 const tempDirs: string[] = [];
@@ -83,6 +84,7 @@ describe("#ADR-0048 buildVinextExecutable runs the compile + stage tail", () => 
             bunVersion: "1.4.0",
             skipViteBuild: true,
             run: (argv) => calls.push([...argv]),
+            readArtifact: () => bytecodeFor(calls[0]),
         });
 
         // Default output name for the arch — never a runtime word.
@@ -100,6 +102,7 @@ describe("#ADR-0048 buildVinextExecutable runs the compile + stage tail", () => 
 
     it("honours an explicit outFile, still staging native/", () => {
         const cwd = appWithOutput("knext-vbc-outfile-");
+        const argvs: string[][] = [];
 
         const out = buildVinextExecutable({
             cwd,
@@ -107,7 +110,10 @@ describe("#ADR-0048 buildVinextExecutable runs the compile + stage tail", () => 
             outFile: "my-binary",
             bunVersion: "1.4.0",
             skipViteBuild: true,
-            run: () => {},
+            run: (argv) => {
+                argvs.push([...argv]);
+            },
+            readArtifact: () => bytecodeFor(argvs[0]),
         });
 
         expect(out).toBe("my-binary");
@@ -127,12 +133,16 @@ describe("#ADR-0048 buildVinextExecutable runs the compile + stage tail", () => 
             encoding: "utf8",
         }).trim();
 
+        const argvs: string[][] = [];
         const run = (): string =>
             buildVinextExecutable({
                 cwd,
                 arch: "linux-x64",
                 skipViteBuild: true,
-                run: () => {},
+                run: (argv) => {
+                    argvs.push([...argv]);
+                },
+                readArtifact: () => bytecodeFor(argvs[0]),
             });
 
         if (bunMeetsFloor(ambient)) {

@@ -24,12 +24,13 @@ import {
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { ACCEPTED_BUILD_FLAGS, BUILD_HELP } from "../cli/build";
 import { buildNextAppCRObject } from "../cli/cr-builder";
 import { validateConfig } from "../cli/validate";
 import { buildVinextExecutable } from "../cli/vinext-build";
 import type { KnativeNextConfig } from "../config";
+import { bytecodeFor } from "./helpers/vinext-bytecode-artifact";
 
 function cfg(over: Record<string, unknown> = {}): KnativeNextConfig {
     return {
@@ -116,9 +117,26 @@ describe("compile argv: byte-identical absent or false; true adds only the self-
                 bunVersion: "1.4.0",
                 skipViteBuild: true,
                 run: (argv) => calls.push([...argv]),
+                // The CLI re-verifies the executable against the marker it
+                // passed; stand in a bytecode artifact for that marker.
+                readArtifact: () => bytecodeFor(calls[0]),
                 ...(selfContained === undefined ? {} : { selfContained }),
             });
-            return calls;
+            // The marker is random per build: assert it is present and well
+            // formed in EVERY compile argv, then compare the rest verbatim.
+            return calls.map((a) => {
+                const i = a.indexOf("--marker");
+                expect(i, "the compile argv carries --marker").toBeGreaterThan(
+                    -1,
+                );
+                expect(a[i + 1]).toMatch(/^knext-vinext-exec:[0-9a-f]{24}$/);
+                // --outfile is absolute under THIS call's temp cwd; compare it
+                // relative to that cwd so the three calls stay comparable.
+                const rest = [...a.slice(0, i), ...a.slice(i + 2)];
+                const o = rest.indexOf("--outfile");
+                if (o >= 0) rest[o + 1] = relative(cwd, rest[o + 1] as string);
+                return rest;
+            });
         } finally {
             rmSync(cwd, { recursive: true, force: true });
         }

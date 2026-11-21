@@ -103,6 +103,16 @@ function makeVinextApp(bun: FakeBun): Fixture {
                 ? [
                       "#!/bin/sh",
                       'if [ "$1" = "--version" ]; then echo "1.4.0"; exit 0; fi',
+                      // A compile: leave what a bytecode compile leaves (the
+                      // CLI re-verifies the executable against its marker).
+                      'out=""; marker=""',
+                      "while [ $# -gt 0 ]; do",
+                      '  case "$1" in --outfile) out="$2";; --marker) marker="$2";; esac',
+                      "  shift",
+                      "done",
+                      'if [ -n "$out" ]; then',
+                      '  printf "ELF...pool:%s...// @bun @bytecode @bun-esm\\nglobalThis.m=\\"%s\\";" "$marker" "$marker" > "$out"',
+                      "fi",
                       "exit 0",
                       "",
                   ]

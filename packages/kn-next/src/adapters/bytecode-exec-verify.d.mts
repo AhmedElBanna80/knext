@@ -33,3 +33,9 @@ export declare function verifyBytecodeEmbedded(
     marker: string,
     routeCount: number,
 ): { ok: true } | { ok: false; reason: string };
+
+/** Mint a unique per-build marker `<prefix>:<24 hex>`. */
+export declare function mintExecMarker(prefix: string): string;
+
+/** Is `marker` exactly a marker `mintExecMarker(prefix)` could have minted? */
+export declare function isExecMarker(prefix: string, marker: unknown): boolean;

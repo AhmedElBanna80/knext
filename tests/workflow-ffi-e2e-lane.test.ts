@@ -286,8 +286,14 @@ describe('ffi-e2e.yml musl-load: the loader refuses anything but a root-owned tr
     expect(steps[clean]?.if).toBe('always()');
     expect(clean).toBeGreaterThan(find('Job summary'));
     const run = text(clean);
-    for (const dir of ['musl', 'musl-wrong', 'musl-appowned', 'recipe']) {
-      expect(run).toContain(`\${RUNNER_TEMP}/${dir}`);
+    // Each of the three commands must name every directory: a directory missing from the
+    // chown (or the chmod) is the one `rm -rf` then cannot remove, on a runner that is reused.
+    for (const cmd of ['sudo chown -R', 'chmod -R u+rwX', 'rm -rf']) {
+      const line = run.split('\n').find((l) => l.includes(cmd)) ?? '';
+      expect(line, `no line runs \`${cmd}\``).not.toBe('');
+      for (const dir of ['musl', 'musl-wrong', 'musl-appowned', 'recipe']) {
+        expect(line, `\`${cmd}\` does not name ${dir}`).toContain(`"\${RUNNER_TEMP}/${dir}"`);
+      }
     }
   });
 });

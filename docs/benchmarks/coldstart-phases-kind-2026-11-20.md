@@ -118,8 +118,9 @@ PR. The four rows above, with Ready 1.4 s after a failure, contradict a strict 1
 operator's own comment says Knative's aggressive probing makes the revision Ready as soon as the app answers.
 No mechanism is claimed. Nothing here shows what else depends on Ready; that was not measured.
 
-Debt: extend the harness's post-first-byte window past 15 s on the next run, record every row's Ready time
-and every probe event, and check whether the 10 s gap reappears and when.
+Follow-up done: [`readiness-probe-lever-2026-11-21.md`](readiness-probe-lever-2026-11-21.md) widened the
+window to 20 s, recorded Ready and every probe failure per row, and found the 10 s gap (Ready 10.2 to 11.8 s
+after the first timed-out probe in 9 of 9 pods), plus that the probe shape moves Ready but not the first byte.
 
 ## Comparison with OKE
 

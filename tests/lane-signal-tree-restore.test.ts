@@ -138,12 +138,12 @@ describe('the runner under test is hermetic against the lane (the S13-5 baseline
   });
 
   it('a bogus PROVER_LANE_SHA in the parent env does not stop the fixture prover from running', async () => {
-    const dir = fixtureRepo();
+    const leakDir = fixtureRepo();
     const saved = process.env.PROVER_LANE_SHA;
     process.env.PROVER_LANE_SHA = 'c'.repeat(40); // not the fixture repo's HEAD: leaked, the runner fatals
-    const proc = spawnRunner(dir);
+    const proc = spawnRunner(leakDir);
     try {
-      const mutated = () => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
+      const mutated = () => readFileSync(join(leakDir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
       expect(await waitFor(mutated, 10_000)).toBe(true);
     } finally {
       if (saved === undefined) delete process.env.PROVER_LANE_SHA;
@@ -153,8 +153,8 @@ describe('the runner under test is hermetic against the lane (the S13-5 baseline
       } catch {
         // already gone
       }
-      killFixtureGroups(dir);
-      rmSync(dir, { recursive: true, force: true });
+      killFixtureGroups(leakDir);
+      rmSync(leakDir, { recursive: true, force: true });
     }
   }, 30_000);
 });

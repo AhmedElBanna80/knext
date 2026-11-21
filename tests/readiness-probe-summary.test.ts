@@ -379,7 +379,8 @@ describe('readiness-probe-summary.py estimators', () => {
 //   w3 Ready 12000 (after, 11 s later), endpoint 12010, queue-proxy probe 1100, timeout stamped +2 s
 //   w4 Ready 3000 (2 s later, under the 5 s bar), endpoint 3010, queue-proxy probe 1000, timeout stamped +1 s
 //   w5 Ready 7500 (6.5 s later), endpoint 7510, queue-proxy probe 1000, timeout stamped +1 s
-// Ready>fb = 3/5 (w3 w4 w5); eps>fb = 4/5 (all but w2); Ready>fb+5s = 2/5 (w3 w5); qp-fb = -200..100;
+//   w6 Ready 1500 (0.5 s later), endpoint 1510, queue-proxy probe 1000, its only timeout stamped +300 s (scale-down)
+// Ready>fb = 4/6 (w3 w4 w5 w6); eps>fb = 5/6 (all but w2); Ready>fb+5s = 2/6 (w3 w5); qp-fb = -200..100;
 // timeout stamps 1.0..2.0 s over 4 timeout pods; gap from the first timeout to Ready: w1 0.9-1 = -0.1 s,
 // w3 12-2 = 10 s, w4 3-1 = 2 s, w5 7.5-1 = 6.5 s -> gap>=9s 1 (w3), gap<9s 3.
 describe('readiness-probe-summary.py Ready timing block', () => {
@@ -396,6 +397,7 @@ describe('readiness-probe-summary.py Ready timing block', () => {
     rowT('w3', 12000, 12010, 1100),
     rowT('w4', 3000, 3010, 1000),
     rowT('w5', 7500, 7510, 1000),
+    rowT('w6', 1500, 1510, 1000),
   ];
   const events = {
     kind: 'List',
@@ -405,10 +407,13 @@ describe('readiness-probe-summary.py Ready timing block', () => {
       scheduled('w3'),
       scheduled('w4'),
       scheduled('w5'),
+      scheduled('w6'),
       unhealthy('t1', 'w1', TIMEOUT, 1, 1, 1),
       unhealthy('t3', 'w3', TIMEOUT, 1, 2, 2),
       unhealthy('t4', 'w4', TIMEOUT, 1, 1, 1),
       unhealthy('t5', 'w5', TIMEOUT, 1, 1, 1),
+      // a timeout 300 s after the request (the scale-down) is not a boot timeout and must not count
+      unhealthy('t6', 'w6', TIMEOUT, 1, 300, 300),
     ],
   };
   const out = run(rows, [events]);
@@ -419,7 +424,7 @@ describe('readiness-probe-summary.py Ready timing block', () => {
   it('counts Ready and endpoint-ready strictly after the first byte', () => {
     const t = (block.find((l) => l.startsWith('t ')) as string).trim().split(/\s+/);
     // arm Ready>fb eps>fb Ready>fb+5s qp-fb timeout-stamp timeout-pods gap>=9s gap<9s
-    expect(t).toEqual(['t', '3/5', '4/5', '2/5', '-200..100', '1.0..2.0', '4', '1', '3']);
+    expect(t).toEqual(['t', '4/6', '5/6', '2/6', '-200..100', '1.0..2.0', '4', '1', '3']);
   });
 
   it('flags the straddle artefact of the failure count', () => {

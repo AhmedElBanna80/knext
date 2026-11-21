@@ -4,6 +4,14 @@ pr-clone     12 |           3519   5533   6075 |      11624  12509  12834  12/12
 pr-p1        12 |           3760   5573   6487 |       3667   5424   6297  12/12|         -137 |                  12/12    1.00          0.00         0
 pr-p1t2      12 |           3675   5694   5700 |       3707   5460   5499  12/12|          -98 |                  12/12    1.00          0.00         0
 
+Ready timing per arm (Ready>fb = pod Ready strictly after first byte; eps>fb = endpoint ready strictly after first byte)
+arm          Ready>fb  eps>fb Ready>fb+5s        qp-fb ms  timeout stamp s timeout pods gap>=9s gap<9s
+probe-cur       11/12   12/12       11/12        -328..60         0.9..6.1            9       9      0
+pr-clone         8/12    9/12        8/12        -182..52         0.8..2.3           12       8      4
+pr-p1            0/12    0/12        0/12       -512..-41                -            0       0      0
+pr-p1t2          3/12    3/12        0/12         -90..71                -            0       0      0
+note: `fails/wake` counts an event that straddles Ready once, so a period-1 arm whose 503 event spans boot and scale-down shows 1.00 with 0 timeouts; that is a counting artefact, not a measured failure.
+
 vs baseline probe-cur: candidate minus baseline, ms. CI = 10000-resample percentile bootstrap 95% of the difference of medians; p = two-sided Mann-Whitney, unadjusted for 6 comparisons.
 metric     arm           n median diff HL shift              95% CI       p  excludes +-1200 ms?
 first byte pr-clone     12        -188     -201        [-2201, 814]  0.3474  slowdown excluded; speedup NOT excluded

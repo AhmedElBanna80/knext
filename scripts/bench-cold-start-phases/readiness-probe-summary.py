@@ -29,7 +29,7 @@ recounting by hand): `Ready>fb` rows whose pod Ready condition came strictly aft
 `eps>fb` rows whose endpoint became ready strictly after the first byte; `Ready>fb+5s` rows where Ready
 trailed the first byte by more than 5 s; `qp-fb` the range of the harness's own queue-proxy probe minus
 the first byte (ms); `timeout stamp` the range, in seconds after the request, of each pod's first
-kubelet probe timeout; `timeout pods`, how many pods have one; and for those pods the gap from that
+kubelet probe timeout up to Ready (a timeout during the scale-down is not counted); `timeout pods`, how many pods have one; and for those pods the gap from that
 first timeout to Ready, split at 9 s (`gap>=9s`, what a 10 s kubelet period predicts, vs `gap<9s`).
 
 Table 2, per metric (first byte, Ready), each arm against the baseline arm (default: the first arm
@@ -190,9 +190,17 @@ def pre_ready_failures(row, events):
     return fails, timeouts
 
 
-def first_timeout_stamp(events):
-    """Earliest stamp (epoch s) among a pod's kubelet probe timeouts, or None."""
-    ts = [f for f, _l, _c, msg in events if "deadline exceeded" in msg or "Timeout exceeded" in msg]
+def first_timeout_stamp(events, not_after=None):
+    """Earliest stamp (epoch s) among a pod's kubelet probe timeouts, or None.
+
+    not_after drops timeouts stamped later than it: a timeout during the scale-down is not a boot
+    timeout.
+    """
+    ts = [
+        f
+        for f, _l, _c, msg in events
+        if ("deadline exceeded" in msg or "Timeout exceeded" in msg) and (not_after is None or f <= not_after)
+    ]
     return min(ts) if ts else None
 
 
@@ -214,10 +222,12 @@ def ready_timing(rs, unhealthy, seen):
     for r in rs:
         if r["pod"] not in seen:
             continue
-        t = first_timeout_stamp(unhealthy.get(r["pod"], []))
+        t0 = iso(r["wall_start"])
+        ready = r["watch"].get("cond_Ready")
+        # Ready (+1 s of stamp resolution) bounds the boot-time timeouts; unknown when Ready was not seen
+        t = first_timeout_stamp(unhealthy.get(r["pod"], []), None if ready is None else t0 + ready / 1000 + 1)
         if t is None:
             continue
-        t0 = iso(r["wall_start"])
         stamps.append(t - t0)
         if r["watch"].get("cond_Ready") is not None:
             gaps.append(t0 + r["watch"]["cond_Ready"] / 1000 - t)

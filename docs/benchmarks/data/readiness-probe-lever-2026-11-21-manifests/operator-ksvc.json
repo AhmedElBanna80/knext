@@ -1,0 +1,144 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {
+    "annotations": {
+      "serving.knative.dev/creator": "system:serviceaccount:kn-next-operator-system:kn-next-operator-controller-manager",
+      "serving.knative.dev/lastModifier": "system:serviceaccount:kn-next-operator-system:kn-next-operator-controller-manager"
+    },
+    "creationTimestamp": "2026-11-21T00:29:52Z",
+    "generation": 1,
+    "labels": {
+      "app": "probe-cur",
+      "generated-by": "kn-next-operator"
+    },
+    "name": "probe-cur",
+    "namespace": "z2",
+    "ownerReferences": [
+      {
+        "apiVersion": "apps.kn-next.dev/v1alpha1",
+        "blockOwnerDeletion": true,
+        "controller": true,
+        "kind": "NextApp",
+        "name": "probe-cur",
+        "uid": "e9c8fb1b-3e76-45d6-8a15-7e33f7b11837"
+      }
+    ],
+    "resourceVersion": "1771",
+    "uid": "930119d1-290a-4606-8860-c24c22fefebf"
+  },
+  "spec": {
+    "template": {
+      "metadata": {
+        "annotations": {
+          "autoscaling.knative.dev/max-scale": "1",
+          "autoscaling.knative.dev/min-scale": "0"
+        },
+        "creationTimestamp": null
+      },
+      "spec": {
+        "containerConcurrency": 20,
+        "containers": [
+          {
+            "env": [
+              {
+                "name": "HOSTNAME",
+                "value": "0.0.0.0"
+              },
+              {
+                "name": "NODE_ENV",
+                "value": "production"
+              }
+            ],
+            "image": "localhost:5001/s156-zone:z2-node-1795150381@sha256:c2e261119ddffb0904f46d31f07f00d43922fc96f50f6f09c2af965a9e7c2fab",
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/api/health",
+                "port": 3000
+              },
+              "initialDelaySeconds": 5,
+              "periodSeconds": 10
+            },
+            "name": "user-container",
+            "ports": [
+              {
+                "containerPort": 3000,
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/api/health",
+                "port": 3000
+              },
+              "successThreshold": 1
+            },
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "250m",
+                "memory": "256Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": ["ALL"]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            }
+          }
+        ],
+        "enableServiceLinks": false,
+        "serviceAccountName": "probe-cur-sa",
+        "timeoutSeconds": 300
+      }
+    },
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100
+      }
+    ]
+  },
+  "status": {
+    "address": {
+      "url": "http://probe-cur.z2.svc.cluster.local"
+    },
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-21T00:30:02Z",
+        "status": "True",
+        "type": "ConfigurationsReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-21T00:30:02Z",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-21T00:30:02Z",
+        "status": "True",
+        "type": "RoutesReady"
+      }
+    ],
+    "latestCreatedRevisionName": "probe-cur-00001",
+    "latestReadyRevisionName": "probe-cur-00001",
+    "observedGeneration": 1,
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100,
+        "revisionName": "probe-cur-00001"
+      }
+    ],
+    "url": "http://probe-cur.z2.svc.cluster.local"
+  }
+}

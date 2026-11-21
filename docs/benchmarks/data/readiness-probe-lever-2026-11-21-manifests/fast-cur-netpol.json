@@ -1,0 +1,140 @@
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "name": "fast-cur-allow-ingress",
+    "namespace": "z2"
+  },
+  "spec": {
+    "ingress": [
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "activator"
+              }
+            }
+          },
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "kourier-system"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "3scale-kourier-gateway"
+              }
+            }
+          },
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "3scale-kourier-gateway"
+              }
+            }
+          },
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving-ingress"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "3scale-kourier-gateway"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 8012,
+            "protocol": "TCP"
+          },
+          {
+            "port": 8013,
+            "protocol": "TCP"
+          },
+          {
+            "port": 8112,
+            "protocol": "TCP"
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "autoscaler"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 9090,
+            "protocol": "TCP"
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "podSelector": {}
+          }
+        ],
+        "ports": [
+          {
+            "port": 9090,
+            "protocol": "TCP"
+          },
+          {
+            "port": 9464,
+            "protocol": "TCP"
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "knext.dev/metrics-scrape": "true"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 9464,
+            "protocol": "TCP"
+          }
+        ]
+      }
+    ],
+    "podSelector": {
+      "matchLabels": {
+        "serving.knative.dev/service": "fast-cur"
+      }
+    },
+    "policyTypes": ["Ingress"]
+  }
+}

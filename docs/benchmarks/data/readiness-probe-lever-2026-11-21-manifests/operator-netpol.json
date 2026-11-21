@@ -1,0 +1,158 @@
+{
+  "apiVersion": "networking.k8s.io/v1",
+  "kind": "NetworkPolicy",
+  "metadata": {
+    "creationTimestamp": "2026-11-21T00:29:52Z",
+    "generation": 1,
+    "labels": {
+      "app": "probe-cur",
+      "generated-by": "kn-next-operator"
+    },
+    "name": "probe-cur-allow-ingress",
+    "namespace": "z2",
+    "ownerReferences": [
+      {
+        "apiVersion": "apps.kn-next.dev/v1alpha1",
+        "blockOwnerDeletion": true,
+        "controller": true,
+        "kind": "NextApp",
+        "name": "probe-cur",
+        "uid": "e9c8fb1b-3e76-45d6-8a15-7e33f7b11837"
+      }
+    ],
+    "resourceVersion": "1618",
+    "uid": "aeaa03f9-ca31-4bc6-97a2-f4302083949d"
+  },
+  "spec": {
+    "ingress": [
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "activator"
+              }
+            }
+          },
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "kourier-system"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "3scale-kourier-gateway"
+              }
+            }
+          },
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "3scale-kourier-gateway"
+              }
+            }
+          },
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving-ingress"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "3scale-kourier-gateway"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 8012,
+            "protocol": "TCP"
+          },
+          {
+            "port": 8013,
+            "protocol": "TCP"
+          },
+          {
+            "port": 8112,
+            "protocol": "TCP"
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "kubernetes.io/metadata.name": "knative-serving"
+              }
+            },
+            "podSelector": {
+              "matchLabels": {
+                "app": "autoscaler"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 9090,
+            "protocol": "TCP"
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "podSelector": {}
+          }
+        ],
+        "ports": [
+          {
+            "port": 9090,
+            "protocol": "TCP"
+          },
+          {
+            "port": 9464,
+            "protocol": "TCP"
+          }
+        ]
+      },
+      {
+        "from": [
+          {
+            "namespaceSelector": {
+              "matchLabels": {
+                "knext.dev/metrics-scrape": "true"
+              }
+            }
+          }
+        ],
+        "ports": [
+          {
+            "port": 9464,
+            "protocol": "TCP"
+          }
+        ]
+      }
+    ],
+    "podSelector": {
+      "matchLabels": {
+        "serving.knative.dev/service": "probe-cur"
+      }
+    },
+    "policyTypes": ["Ingress"]
+  }
+}

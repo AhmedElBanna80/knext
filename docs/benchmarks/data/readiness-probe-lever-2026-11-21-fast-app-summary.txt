@@ -1,4 +1,11 @@
-arm           n | first byte med    p95    max |  Ready med    p95    max  seen | Ready-fb med |  pods w/ pre-Ready fail fails/wake timeouts/wake
-fast-cur     12 |           1100   1815   2041 |       1238   6057  10965  12/12|            0 |                   0/12    0.00          0.00
-fast-p1      12 |           1080   1424   1466 |       1129   1984   2388  12/12|            5 |                   0/12    0.00          0.00
-fast-p1t2    12 |            896   1390   1425 |        883   1386   1422  12/12|           -1 |                   0/12    0.00          0.00
+arm           n | first byte med    p95    max |  Ready med    p95    max  seen | Ready-fb med |  pods w/ pre-Ready fail fails/wake timeouts/wake no events
+fast-cur     12 |           1100   1815   2041 |       1238   6057  10965  12/12|            0 |                   0/12    0.00          0.00         0
+fast-p1      12 |           1080   1424   1466 |       1129   1984   2388  12/12|            5 |                   0/12    0.00          0.00         0
+fast-p1t2    12 |            896   1390   1425 |        883   1386   1422  12/12|           -1 |                   0/12    0.00          0.00         0
+
+vs baseline fast-cur: candidate minus baseline, ms. CI = 10000-resample percentile bootstrap 95% of the difference of medians; p = two-sided Mann-Whitney, unadjusted for 4 comparisons.
+metric     arm           n median diff HL shift              95% CI       p  excludes +-1200 ms?
+first byte fast-p1      12         -21     -118         [-558, 370]  0.6297  slowdown excluded; speedup excluded
+first byte fast-p1t2    12        -204     -151         [-541, 203]  0.2657  slowdown excluded; speedup excluded
+Ready      fast-p1      12        -109     -168         [-680, 328]  0.4776  slowdown excluded; speedup excluded
+Ready      fast-p1t2    12        -355     -342          [-895, 68]  0.0684  slowdown excluded; speedup excluded

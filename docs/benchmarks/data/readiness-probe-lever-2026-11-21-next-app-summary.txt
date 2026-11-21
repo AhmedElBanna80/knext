@@ -1,5 +1,14 @@
-arm           n | first byte med    p95    max |  Ready med    p95    max  seen | Ready-fb med |  pods w/ pre-Ready fail fails/wake timeouts/wake
-probe-cur    12 |           3707   9469   9807 |      12031  16785  17448  12/12|         7824 |                   9/12    1.50          1.50
-pr-clone     12 |           3519   5533   6075 |      11624  12509  12834  12/12|         7201 |                  12/12    1.83          1.83
-pr-p1        12 |           3760   5573   6487 |       3667   5424   6297  12/12|         -137 |                  12/12    1.00          0.00
-pr-p1t2      12 |           3675   5694   5700 |       3707   5460   5499  12/12|          -98 |                  12/12    1.00          0.00
+arm           n | first byte med    p95    max |  Ready med    p95    max  seen | Ready-fb med |  pods w/ pre-Ready fail fails/wake timeouts/wake no events
+probe-cur    12 |           3707   9469   9807 |      12031  16785  17448  12/12|         7824 |                   9/12    1.50          1.50         0
+pr-clone     12 |           3519   5533   6075 |      11624  12509  12834  12/12|         7201 |                  12/12    1.83          1.83         0
+pr-p1        12 |           3760   5573   6487 |       3667   5424   6297  12/12|         -137 |                  12/12    1.00          0.00         0
+pr-p1t2      12 |           3675   5694   5700 |       3707   5460   5499  12/12|          -98 |                  12/12    1.00          0.00         0
+
+vs baseline probe-cur: candidate minus baseline, ms. CI = 10000-resample percentile bootstrap 95% of the difference of medians; p = two-sided Mann-Whitney, unadjusted for 6 comparisons.
+metric     arm           n median diff HL shift              95% CI       p  excludes +-1200 ms?
+first byte pr-clone     12        -188     -201        [-2201, 814]  0.3474  slowdown excluded; speedup NOT excluded
+first byte pr-p1        12          53       11        [-1960, 494]  0.9774  slowdown excluded; speedup NOT excluded
+first byte pr-p1t2      12         -32     -147       [-1933, 1568]  0.5899  slowdown NOT excluded; speedup NOT excluded
+Ready      pr-clone     12        -407     -664        [-8129, 390]  0.1782  slowdown excluded; speedup NOT excluded
+Ready      pr-p1        12       -8363    -8336      [-9377, -7634]  0.0001  slowdown excluded; speedup NOT excluded
+Ready      pr-p1t2      12       -8323    -8115      [-9401, -6819]  0.0001  slowdown excluded; speedup NOT excluded

@@ -5,11 +5,15 @@ condition arrive late on the operator-rendered readiness probe and left a debt: 
 record every row's Ready time and every probe failure, and check whether a 10 s gap appears. This is that
 measurement, plus an A/B of probe shapes.
 
-**Answer.** There is **no lever on request to first byte**. The probe shape changes when the pod becomes
-`Ready`, not when the first byte arrives. With the operator's current probe, `Ready` landed a median 12.0 s
-after the request (p95 16.8 s) while the first byte arrived at 3.7 s. With an explicit `periodSeconds: 1`
-the same app was `Ready` at 3.7 s (p95 5.4 s) and the first byte was statistically unchanged. The operator
-default is **not changed** by this study; the reasons and the open check are below.
+**Answer.** **No difference in request to first byte was detected, and this study is too small to
+rule one out on the real app.** The probe shape clearly changes when the pod becomes `Ready`. With the
+operator's current probe, `Ready` landed a median 12.0 s after the request (p95 16.8 s) while the first byte
+arrived at 3.7 s. With an explicit `periodSeconds: 1` the same app was `Ready` at 3.7 s (p95 5.4 s). First
+byte moved by a median +53 ms (bootstrap 95% CI [-1960, +494] ms): that interval does not exclude a 1.2 s
+speedup, and for the `timeoutSeconds: 2` variant it does not exclude a 1.2 s slowdown either (CI
+[-1933, +1568] ms). On a fast-booting app the first-byte intervals are narrower (about +-0.5 s) and do exclude
+a 1.2 s effect in either direction. The operator default is **not changed**; the reasons and the open check
+are below.
 
 ## Environment
 
@@ -35,8 +39,20 @@ default is **not changed** by this study; the reasons and the open check are bel
 
 The clones exist because only the NextApp is operator-managed; to vary the probe without changing the
 operator, each candidate is the operator's rendered Service (`kubectl get ksvc -o json`) with the probe edited
-and a copy of the operator's ingress NetworkPolicy pointed at it. `pr-clone` is the control for "a clone
-behaves like the operator's object". Knative rejects `timeoutSeconds` and `failureThreshold` when
+and a copy of the operator's ingress NetworkPolicy pointed at it. The manifests actually applied, the
+generator, and the diff against the operator's objects are committed in
+`data/readiness-probe-lever-2026-11-21-manifests/` (`generate-arms.py` regenerates every arm from
+`operator-ksvc.json` and `operator-netpol.json`; `operator-vs-pr-clone.diff` is the diff).
+
+The diff shows the `pr-clone` Service **`.spec` is identical** to the operator's (same template, probe,
+resources, service account), and its NetworkPolicy `.spec` differs only in the `podSelector` target. What
+differs is metadata: name, labels (`app`, `bench` instead of `app`, `generated-by`), and no `ownerReference`
+to a NextApp. So "differs only in the probe" holds for the pod template and the policy, which is what the
+pod sees. It does not cover anything else the operator reconciles for a NextApp (I did not enumerate the
+operator's other objects for `probe-cur`), nor timing differences from the operator reconciling its own
+object. `pr-clone` and `probe-cur` differ on one mechanism count (12/12 vs 9/12 pods with a pre-Ready failure
+event); see the mechanism bullet below. Treat the clone as a control that is close to, not proven equal to,
+the operator's object. Knative rejects `timeoutSeconds` and `failureThreshold` when
 `periodSeconds` is zero (the operator test file records this), so the only shapes reachable from the user
 container probe are "no period" and "some period".
 
@@ -44,7 +60,11 @@ Failed-probe counts come from the kubelet's `Unhealthy` events with their `count
 watch plus a final snapshot (the harness records one stamp per event and no count). Event stamps have 1 s
 resolution, and the kubelet's 503 event keeps counting through the scale-down, so the failures column is a
 lower bound counted up to `Ready`; the timeout column is clean because kubelet timeouts only happen during
-boot.
+boot. Both `fails/wake` figures for the period-1 arms (1.00 with 0 timeouts) are an artefact of that
+straddling rule (their 503 event spans boot and scale-down and counts once), not a measured failure count.
+The summary tool refuses an empty events capture and reports `unknown` for any pod the capture never
+mentions (here: 0 of 84 pods), so "0 failures" cannot silently mean "no capture". The committed events file
+holds the `Unhealthy` events plus each pod's `Scheduled` event as proof the capture saw the pod.
 
 ## Result: real app (Next.js, Rosetta)
 
@@ -58,34 +78,55 @@ boot.
 | pr-p1 | 12 | 3760 | 5573 | 6487 | **3667** | 5424 | 6297 | 12/12 | 12/12 | 0.00 |
 | pr-p1t2 | 12 | 3675 | 5694 | 5700 | **3707** | 5460 | 5499 | 12/12 | 12/12 | 0.00 |
 
-Exact Mann-Whitney against `probe-cur` (`stats.py`'s `exact_p`):
+Each arm against `probe-cur`, candidate minus baseline (`readiness-probe-summary.py`, second table).
+CI = percentile bootstrap, 10000 resamples, seed 7, of the difference of medians; HL = Hodges-Lehmann shift;
+p = **two-sided** Mann-Whitney U (exact when there are no ties, normal approximation otherwise). **The p-values
+are unadjusted**: there are six comparisons on the real app and four on the fast app (two metrics each), and
+no correction was applied, so read them as descriptive. The last column asks whether the CI excludes a
+shift of +-1200 ms, the size of the probe-grid regression the operator's readiness-probe comment cites.
 
-| | first byte | Ready |
-|---|---|---|
-| vs `pr-clone` | p = 0.35 | p = 0.18 |
-| vs `pr-p1` | p = 0.98 | p = 0.0001 |
-| vs `pr-p1t2` | p = 0.59 | p = 0.0001 |
+| metric | arm | median diff | HL shift | 95% CI | p | excludes a 1.2 s slowdown / speedup? |
+|---|---|---|---|---|---|---|
+| first byte | pr-clone | -188 | -201 | [-2201, +814] | 0.35 | slowdown yes / speedup no |
+| first byte | pr-p1 | +53 | +11 | [-1960, +494] | 0.98 | slowdown yes / speedup no |
+| first byte | pr-p1t2 | -32 | -147 | [-1933, +1568] | 0.59 | slowdown **no** / speedup no |
+| Ready | pr-clone | -407 | -664 | [-8129, +390] | 0.18 | slowdown yes / speedup no |
+| Ready | pr-p1 | -8363 | -8336 | [-9377, -7634] | 0.0001 | slowdown yes / speedup no (it is a 7.6 s or larger speedup) |
+| Ready | pr-p1t2 | -8323 | -8115 | [-9401, -6819] | 0.0001 | slowdown yes / speedup no (it is a 6.8 s or larger speedup) |
 
-- **First byte does not move.** All four arms sit at 3.5 to 3.8 s median with overlapping tails; none of the
-  three comparisons is distinguishable from `probe-cur`. The 9 to 10 s maxima in `probe-cur` are two wakes
-  (rows 8 and 11); the other arms have comparable single slow wakes (6.1, 6.5, 5.7 s), which is Rosetta jitter,
-  not a probe effect.
-- **Ready moves a lot.** Under the current probe, 11 of 12 pods were Ready 10.7 to 17.4 s after the request,
-  one at 3.2 s. Under `periodSeconds: 1`, Ready was within a few hundred ms of the first byte in every wake
-  (median Ready minus first byte: -137 ms and -98 ms; under the current probe: +7824 ms).
-- **Mechanism, from the events.** The kubelet's first probe of queue-proxy lands while the app is still
-  booting and times out after 1 s (`Readiness probe failed: … Client.Timeout exceeded while awaiting
-  headers`, stamped 0.5 to 2 s after the request); we infer, without having read queue-proxy's code, that it
-  holds the request while it retries the app. The next probe is one period later. In `probe-cur`, Ready came 10.2 to 11.8 s after the first timeout stamp in 9 of 9 pods with a
-  recorded timeout. In `pr-clone`, 8 of 12 did the same (10.3 to 10.9 s); the other 4 became Ready 1.1 to
-  2.3 s after the timeout, and these data do not say why. So the 10 s gap is real and is the probe period,
-  but it is not universal. One pod in `probe-cur` was Ready at 3.2 s with no failure event: its first probe
-  succeeded.
-- **The first byte does not wait for Ready.** The activator probes the pod directly and routes as soon as
-  queue-proxy answers: the harness's own queue-proxy probe (`qp_probe_ok`) succeeds between 512 ms before and
-  71 ms after the first byte in all 48 rows, while the endpoint became Ready after the first byte in 12 of 12
-  `probe-cur` wakes and 9 of 12 `pr-clone` wakes (and 0 of 12 `pr-p1`). This is the same finding as the
-  earlier kind run, now with a 20 s window so Ready is seen in 48 of 48 rows.
+- **No first-byte difference was detected, and the interval is too wide to exclude one.** All four arms sit
+  at 3.5 to 3.8 s median with overlapping tails and none of the three comparisons is significant, but at
+  n = 12 on a Rosetta app the 95% CIs for the median difference are 2.5 to 3.5 s wide: they exclude a 1.2 s
+  *slowdown* for `pr-p1` (upper bound +494 ms) but do not exclude a 1.2 s speedup for any arm, and for
+  `pr-p1t2` they exclude neither direction. The wide intervals come from slow wakes in every arm (the two
+  9 to 10 s wakes in `probe-cur` are its 8th and 11th wakes, file lines 30 and 43 of the committed
+  `next-app.jsonl`; the other arms have single slow wakes of 6.1, 6.5 and 5.7 s), which I attribute to Rosetta
+  jitter but did not isolate. "No detected difference" is the claim; "no first-byte lever" is not shown.
+- **Ready moves a lot.** Under the current probe, 11 of 12 pods were Ready 10.7 to 17.4 s after the request
+  and one at 3.2 s. Under `periodSeconds: 1`, Ready was within a few hundred ms of the first byte in every
+  wake (median Ready minus first byte: -137 ms and -98 ms; under the current probe: +7824 ms).
+- **Mechanism: consistent with the next kubelet probe one period later in most pods; not established.** The
+  kubelet's first probe of queue-proxy times out after 1 s while the app is still booting (`Readiness probe
+  failed: … Client.Timeout exceeded while awaiting headers`, stamped 0.5 to 2 s after the request); I infer,
+  without having read queue-proxy's code, that queue-proxy holds the request while it retries the app. Counting
+  `probe-cur` and `pr-clone` together (24 wakes): 21 pods have a recorded timeout, and in 17 of
+  them Ready came 10.2 to 11.8 s after the first timeout stamp, which is what a 10 s kubelet period predicts.
+  The other 4 (all `pr-clone`, wakes 5, 9, 11 and 12, file lines 18, 34, 44 and 47) became Ready 1.1 to 2.3 s
+  after the timeout, at about the first byte (3.1 to 4.3 s), which a strict 10 s grid does not predict, and
+  these data do not say why. In `probe-cur`, 11 of 12 pods were late (Ready 10.7 to 17.4 s) but only 9 have a
+  recorded timeout; the other 2 (wakes 5 and 6, file lines 17 and 24; Ready 10.7 and 11.1 s) are late with no
+  failure event in the capture, which covers those pods (each has its `Scheduled` event). The 12th pod
+  (wake 2, line 8) was Ready at 3.2 s with no failure event: its first probe succeeded. So the 10 s gap is
+  real and common, the period explanation fits 17 of the 21 pods that have a timeout, and the rest are
+  unexplained.
+- **The first byte arrived before the endpoint was Ready.** The endpoint became Ready after the first byte in
+  12 of 12 `probe-cur` wakes and 9 of 12 `pr-clone` wakes (0 of 12 `pr-p1`), so the request was served
+  while the pod was not yet Ready. The harness's own queue-proxy probe (`qp_probe_ok`) succeeds between 512 ms
+  before and 71 ms after the first byte in all 48 rows. That is consistent with the activator probing queue-proxy
+  directly (the earlier native-kind study times that as phase `5w`, "activator marks pod healthy", about 0.4
+  to 0.6 s after the first log there), but I did not read the activator logs for these
+  runs, so how the activator decided is inferred, not observed. This is the earlier kind run's finding, now
+  with a 20 s window so Ready is seen in 48 of 48 rows.
 
 ## Result: fast app (native boot)
 
@@ -95,10 +136,13 @@ Exact Mann-Whitney against `probe-cur` (`stats.py`'s `exact_p`):
 | fast-p1 | 12 | 1080 | 1424 | 1466 | 1129 | 1984 | 2388 | 12/12 |
 | fast-p1t2 | 12 | 896 | 1390 | 1425 | 883 | 1386 | 1422 | 12/12 |
 
-Against `fast-cur`: first byte p = 0.63 (`fast-p1`) and p = 0.27 (`fast-p1t2`); Ready p = 0.48 and p = 0.07.
-None is distinguishable at n = 12. The one Ready outlier in `fast-cur` (10965 ms) is its first wake, with no
-pre-Ready failure event recorded, so its cause is unexplained. Nothing here suggests `periodSeconds: 1`
-**slows** a fast-booting app on kind: the p1 arms are no later than the current one at the median.
+Against `fast-cur` (same method; unadjusted, two-sided): first byte median difference -21 ms (95% CI
+[-558, +370], p = 0.63) for `fast-p1` and -204 ms ([-541, +203], p = 0.27) for `fast-p1t2`; Ready -109 ms
+([-680, +328], p = 0.48) and -355 ms ([-895, +68], p = 0.07). **Every one of these intervals excludes a 1.2 s
+shift in either direction**, so on a fast-booting app on kind `periodSeconds: 1` does not cost 1.2 s of
+first byte or of Ready (it could still cost or save a few hundred ms at n = 12). The one Ready outlier in
+`fast-cur` (10965 ms) is its first wake, with no pre-Ready failure event recorded, so its cause is
+unexplained.
 
 Side observation: the `node -e` server does not exit on SIGTERM (it is PID 1 with no handler), so these pods
 lingered for the Service's 300 s termination grace, which made the rounds long. That affects scale-down only,
@@ -108,13 +152,15 @@ never a wake, because the harness waits for zero pods before each one.
 
 The operator keeps Knative's aggressive probe (no `periodSeconds`). The reasons:
 
-1. **The metric the project optimises is first byte, and the data shows no first-byte lever.** The change
-   buys earlier `Ready`, which matters for rollout and deploy waits and for how long requests keep taking the
-   activator hop, not for scale-from-zero latency.
+1. **No first-byte benefit was detected.** The change buys earlier `Ready`, which matters for rollout and
+   deploy waits and for how long requests keep taking the activator hop; the first-byte intervals on the real
+   app are too wide to show a benefit or to exclude a loss (above), and first byte is the metric the project
+   optimises.
 2. **An earlier OKE A/B found the opposite sign for a different shape.** The operator's old probe
    (`initialDelaySeconds 2`, `periodSeconds 3`) cost about 1.2 s of median cold start on OKE; that finding is
    pinned by `aggressive_readiness_probe_test.go`. This study's shapes (`periodSeconds 1`, no delay) differ,
-   and kind with Rosetta cannot reproduce OKE's CRI-O node, so the kind result does not clear that finding.
+   and kind with Rosetta cannot reproduce OKE's CRI-O node. On the real app the `pr-p1t2` CI
+   ([-1933, +1568] ms) does not exclude a 1.2 s slowdown, so the kind result cannot clear that finding.
    Flipping a measured default on kind data alone is the wrong direction of evidence.
 3. **The change would be a trade, not a pure win.** With an explicit period Knative stops probing the user
    container aggressively from queue-proxy, and the kubelet probes queue-proxy every second for the pod's
@@ -124,7 +170,10 @@ The operator keeps Knative's aggressive probe (no `periodSeconds`). The reasons:
 
 - No OKE run. The `Ready` lag will appear on OKE if the app is still booting at the kubelet's first probe;
   OKE boots are about 1.9 to 2.4 s, so it probably does, but that is unmeasured here.
-- The 4 of 12 `pr-clone` pods that were Ready 1 to 2 s after a timeout: cause unestablished.
+- The 4 `pr-clone` pods that were Ready 1 to 2 s after a timeout, and the 2 `probe-cur` pods that were late
+  with no recorded failure: cause unestablished.
+- A first-byte effect smaller than about 2 s on the real app: the CIs are too wide to see it.
+- Multiplicity: no correction was applied across the six (real app) and four (fast app) comparisons.
 - The fast-app Ready outlier: cause unestablished.
 - Nothing here measures what else depends on `Ready` (rollout traffic shifting, the `kn-next deploy` wait).
   If those matter, they are the argument for a probe change, and they are deploy latency, not cold start.
@@ -156,5 +205,6 @@ All under `docs/benchmarks/data/`, prefix `readiness-probe-lever-2026-11-21-`:
 |---|---|
 | `next-app.jsonl` | the 48 real-app rows (compacted with `compact.py`) |
 | `fast-app.jsonl` | the 36 fast-app rows |
-| `unhealthy-events.json` | every kubelet `Unhealthy` event with its count and stamps, from the watch and a snapshot |
+| `unhealthy-events.json` | every kubelet `Unhealthy` event with its count and stamps, plus each pod's `Scheduled` event as capture coverage, from the watch and a snapshot |
 | `next-app-summary.txt`, `fast-app-summary.txt` | the summary tool's output, verbatim |
+| `manifests/` | the Services and NetworkPolicies applied, `generate-arms.py`, `operator-vs-pr-clone.diff` |

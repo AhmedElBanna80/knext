@@ -1,0 +1,27 @@
+{
+  "arm": "node-vinext-1000m",
+  "runtime": "node",
+  "build_target": "vinext",
+  "app": "scaffold",
+  "image": "localhost:5001/node-vinext-1000m:r44841667176-node-vinext-1000m@sha256:905230e07f1e48eeba8775f14af92c46f0f1eefb099f1d4d93ea9bb61b26b8d1",
+  "bytecode": {
+    "kind": "v8-compile-cache",
+    "cache_dir": "/app/.compile-cache",
+    "bytes": 1462428,
+    "files": 103,
+    "floor": 65536,
+    "env_NODE_COMPILE_CACHE": "/app/.compile-cache",
+    "bake_line": "#12 0.549 compile cache baked: 1462428 bytes in 103 file(s)",
+    "live_pid": 6180,
+    "live_via": "main-process",
+    "live_env_NODE_COMPILE_CACHE": "/app/.compile-cache"
+  },
+  "spec_build": "vinext",
+  "spec_runtime": "",
+  "cpu_limit": "1000m",
+  "versions": {
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

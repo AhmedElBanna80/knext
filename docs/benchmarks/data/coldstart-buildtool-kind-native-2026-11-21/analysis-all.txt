@@ -1,0 +1,67 @@
+valid 48, excluded 0: []
+
+### bun-turbopack-1000m (n=12)
+
+| phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
+|---|---|---|---|---|
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 16 | 20 | 2 [14, 17] | 13–23 |
+| 1 activation: request -> Pod object | 36 | 48 | 5 [34, 40] | 28–50 |
+| 2 scheduling: Pod -> bound to node | 10 | 25 | 5 [8, 14] | 6–37 |
+| 3 sandbox + containers start: bound -> first log line | 371 | 469 | 39 [350, 389] | 340–497 |
+| 4 runtime boot: first log -> Next listening | 165 | 180 | 17 [157, 173] | 140–184 |
+| 5 routable: listening -> ready | 478 | 516 | 68 [436, 504] | 389–519 |
+| 6 forward + render: ready -> first byte | 68 | 120 | 95 [8, 104] | 1–137 |
+| total: request -> first byte | 1104 | 1236 | 102 [1073, 1175] | 1057–1287 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 71 | 96 | 16 [61, 77] | 48–118 |
+|   5y net: first log -> TCP :3000 from the other node | 161 | 182 | 15 [157, 172] | 143–185 |
+|   5y net: first log -> TCP :3000 from the same node | 163 | 183 | 15 [159, 174] | 144–183 |
+|   5z app: listening -> /api/health 200 (same node, direct) | 389 | 417 | 21 [378, 399] | 337–431 |
+|   5w activator: first log -> activator marks pod healthy | 585 | 668 | 55 [578, 633] | 552–675 |
+
+### bun-vinext-1000m (n=12)
+
+| phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
+|---|---|---|---|---|
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 16 | 18 | 3 [14, 17] | 13–19 |
+| 1 activation: request -> Pod object | 36 | 50 | 6 [34, 41] | 31–59 |
+| 2 scheduling: Pod -> bound to node | 11 | 17 | 5 [9, 14] | 6–17 |
+| 3 sandbox + containers start: bound -> first log line | 342 | 402 | 46 [313, 359] | 300–416 |
+| 6 forward + render: ready -> first byte | 0 | 3 | 3 [0, 3] | 0–3 |
+| total: request -> first byte | 523 | 601 | 47 [494, 541] | 474–602 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 83 | 91 | 12 [74, 86] | 68–94 |
+|   5y net: first log -> TCP :3000 from the other node | 96 | 104 | 14 [86, 99] | 83–104 |
+|   5y net: first log -> TCP :3000 from the same node | 118 | 161 | 15 [107, 122] | 103–206 |
+|   5w activator: first log -> activator marks pod healthy | 99 | 108 | 17 [87, 105] | 82–109 |
+
+### node-turbopack-1000m (n=12)
+
+| phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
+|---|---|---|---|---|
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 16 | 18 | 2 [15, 16] | 13–18 |
+| 1 activation: request -> Pod object | 34 | 40 | 6 [32, 37] | 28–40 |
+| 2 scheduling: Pod -> bound to node | 11 | 20 | 10 [8, 17] | 5–22 |
+| 3 sandbox + containers start: bound -> first log line | 395 | 442 | 30 [379, 409] | 376–470 |
+| 4 runtime boot: first log -> Next listening | 486 | 521 | 43 [463, 506] | 447–526 |
+| 5 routable: listening -> ready | 564 | 602 | 35 [550, 585] | 539–612 |
+| 6 forward + render: ready -> first byte | 14 | 35 | 20 [12, 32] | 4–35 |
+| total: request -> first byte | 1507 | 1604 | 68 [1481, 1549] | 1466–1613 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 8 | 16 | 6 [5, 11] | -9–18 |
+|   5y net: first log -> TCP :3000 from the other node | 484 | 521 | 45 [466, 511] | 443–526 |
+|   5y net: first log -> TCP :3000 from the same node | 484 | 522 | 42 [466, 508] | 451–522 |
+|   5z app: listening -> /api/health 200 (same node, direct) | 434 | 470 | 9 [431, 441] | 408–482 |
+|   5w activator: first log -> activator marks pod healthy | 1048 | 1122 | 62 [1029, 1091] | 1007–1146 |
+
+### node-vinext-1000m (n=12)
+
+| phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
+|---|---|---|---|---|
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 15 | 19 | 3 [14, 17] | 14–20 |
+| 1 activation: request -> Pod object | 36 | 44 | 8 [33, 40] | 28–46 |
+| 2 scheduling: Pod -> bound to node | 8 | 20 | 7 [6, 13] | 4–26 |
+| 3 sandbox + containers start: bound -> first log line | 395 | 449 | 32 [383, 415] | 364–481 |
+| 6 forward + render: ready -> first byte | 31 | 46 | 16 [20, 36] | 18–49 |
+| total: request -> first byte | 766 | 838 | 55 [746, 801] | 732–856 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 6 | 12 | 6 [3, 10] | -3–14 |
+|   5y net: first log -> TCP :3000 from the other node | 135 | 142 | 9 [129, 139] | 122–145 |
+|   5y net: first log -> TCP :3000 from the same node | 136 | 146 | 12 [131, 143] | 127–147 |
+|   5w activator: first log -> activator marks pod healthy | 281 | 352 | 98 [228, 326] | 213–359 |

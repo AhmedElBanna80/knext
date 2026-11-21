@@ -1,0 +1,19 @@
+{
+  "arm": "node-vinext-1000m",
+  "runtime": "node",
+  "build_target": "vinext",
+  "app": "scaffold",
+  "image": "localhost:5001/node-vinext-1000m:r44808959901-node-vinext-1000m@sha256:110a76b3d49e37a83cdac6eb075ea0e9200db554f188d8f1af0257b20dae430c",
+  "bytecode": {
+    "kind": "v8-compile-cache",
+    "cache_dir": "/app/.compile-cache",
+    "bytes": 1462500,
+    "files": 103,
+    "floor": 65536,
+    "env_NODE_COMPILE_CACHE": "/app/.compile-cache",
+    "bake_line": "#12 0.537 compile cache baked: 1462500 bytes in 103 file(s)"
+  },
+  "spec_build": "vinext",
+  "spec_runtime": "",
+  "cpu_limit": "1000m"
+}

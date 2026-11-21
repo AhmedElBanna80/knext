@@ -1,0 +1,28 @@
+{
+  "arm": "bun-turbopack-1000m",
+  "runtime": "bun",
+  "build_target": "turbopack",
+  "app": "scaffold",
+  "image": "localhost:5001/bun-turbopack-1000m:r44841667176-bun-turbopack-1000m@sha256:44aa68b94bd2cf68d15afe6aac7d8ab3e8624954edc5e393c7ab1f40e52d1fb6",
+  "bytecode": {
+    "kind": "bun-bytecode",
+    "binary": "/app/.next/standalone/knext-standalone-exec",
+    "size_bytes": 92411440,
+    "method": "marker",
+    "verdict": "bytecode verified: knext-standalone-exec:4a51c2d320756ad490ec4cac sits under a @bytecode pragma with a constant-pool copy",
+    "server_exec_env": "/app/.next/standalone/knext-standalone-exec",
+    "live_child_pid": 5819,
+    "live_child_argv0": "/app/.next/standalone/knext-standalone-exec",
+    "live_child_exe": "/app/.next/standalone/knext-standalone-exec",
+    "live_child_comm": "knext-standalon",
+    "live_child_matched_by": "argv0"
+  },
+  "spec_build": "turbopack",
+  "spec_runtime": "bun",
+  "cpu_limit": "1000m",
+  "versions": {
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

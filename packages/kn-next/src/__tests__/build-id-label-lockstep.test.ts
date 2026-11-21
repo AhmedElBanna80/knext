@@ -51,7 +51,7 @@ function readOperatorBuildIDLabel(): string {
     const m = src.match(/const\s+BuildIDLabel\s*=\s*"([^"]+)"/);
     if (!m) {
         throw new Error(
-            `could not find "const BuildIDLabel = \"...\"" in ${OPERATOR_TYPES_FILE} — ` +
+            `could not find "const BuildIDLabel = "..."" in ${OPERATOR_TYPES_FILE} — ` +
                 "has it moved or been renamed? Update this guard's regex, don't delete it.",
         );
     }

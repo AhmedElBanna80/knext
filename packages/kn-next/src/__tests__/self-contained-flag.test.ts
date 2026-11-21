@@ -116,9 +116,23 @@ describe("compile argv: byte-identical absent or false; true adds only the self-
                 bunVersion: "1.4.0",
                 skipViteBuild: true,
                 run: (argv) => calls.push([...argv]),
+                // The CLI re-verifies the executable against the marker it
+                // passed; stand in a bytecode artifact for that marker.
+                readArtifact: () => {
+                    const a = calls[0] ?? [];
+                    const m = a[a.indexOf("--marker") + 1] ?? "";
+                    return Buffer.from(
+                        `ELF…pool:${m}…// @bun @bytecode @bun-esm\n(function(){globalThis.m="${m}";})`,
+                        "latin1",
+                    );
+                },
                 ...(selfContained === undefined ? {} : { selfContained }),
             });
-            return calls;
+            // The marker is random per build; everything else must be identical.
+            return calls.map((a) => {
+                const i = a.indexOf("--marker");
+                return i < 0 ? a : [...a.slice(0, i), ...a.slice(i + 2)];
+            });
         } finally {
             rmSync(cwd, { recursive: true, force: true });
         }

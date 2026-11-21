@@ -1481,6 +1481,9 @@ const result = await Bun.build(
                   plugins: [importMetaToCjs, sharpAddonDlopen, externalSidecar],
                   minify: true,
                   bytecode: true,
+                  // The bytecode-proof marker, as in the other two shapes: the CLI
+                  // (vinext-build.ts) re-verifies the executable against it.
+                  banner: `globalThis.__knextVinextExecMarker=${JSON.stringify(BYTECODE_MARKER)};`,
                   // NEVER set `autoloadPackageJson` here: it widens runtime package
                   // resolution beyond the sidecar. The sidecar is resolved by
                   // sidecar-runtime.mjs instead, confined to <dir of the binary>/.output/
@@ -1550,6 +1553,15 @@ if (INCLUDE_PLAN) {
             `[knext compile] compile.include: not embedded in the executable: ${missing.join(", ")}` +
                 (INCLUDE_NATIVE ? " (this Bun did not honour compile.include)" : ""),
         );
+        process.exit(1);
+    }
+}
+if (!INCLUDE_PLAN && !SELF_CONTAINED) {
+    // Fail closed on the default disk-mode shape too (the CLI re-checks).
+    const verdict = verifyBytecodeExec(readFileSync(OUTFILE), BYTECODE_MARKER);
+    if (!verdict.ok) {
+        rmSync(OUTFILE, { force: true });
+        console.error(`[knext compile] the executable failed the bytecode check: ${verdict.reason}`);
         process.exit(1);
     }
 }

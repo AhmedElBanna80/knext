@@ -144,6 +144,7 @@ import {
   schemaString,
   type TypeDesc,
 } from './manifest';
+import { VINEXT_CLOSE_LINE, VINEXT_NATIVE_COPY } from './vinext-image';
 
 // The image build's drift check (knext ffi build) scans the library it is
 // about to ship and renders from it; these are what it needs.
@@ -893,16 +894,21 @@ function $upTo(dir: string): string[] {
  * control or DEL is shown in caret notation (a newline as ^J). A backslash is doubled and a caret
  * gets a backslash before it, so a name that really holds ^J, or the text of a unicode escape, can
  * never be read as a control character. A C1 control, a line or paragraph separator (U+2028,
- * U+2029: a line end to many terminals and log readers), a bidirectional control (U+061C, U+200E,
- * U+200F, U+202A to U+202E, U+2066 to U+2069) and an invisible format character (the zero-width
- * U+200B to U+200D, the word joiner U+2060 and the byte order mark U+FEFF: a name that holds one
- * would read as the name without it) are shown as a unicode escape (a backslash, u and four hex
- * digits). None is ever printed as itself.
+ * U+2029: a line end to many terminals and log readers), every format character (Unicode category
+ * Cf, asked of the engine: the bidirectional controls U+061C, U+200E, U+200F, U+202A to U+202E and
+ * U+2066 to U+2069, the zero-width U+200B to U+200D, the word joiner and the invisible operators
+ * U+2060 to U+2064, the soft hyphen U+00AD, the Mongolian vowel separator U+180E, the byte order
+ * mark U+FEFF, the Unicode tag characters U+E0001 and U+E0020 to U+E007F, which spell a string
+ * nobody sees: a name that holds one would read as the name without it), the combining grapheme
+ * joiner U+034F (invisible, though not a format character) and a lone surrogate (a half of a pair:
+ * a JSON string in the manifest can hold one, and what prints it turns it into U+FFFD or into
+ * nothing) are shown as a unicode escape: a backslash, u and four hex digits, or, beyond U+FFFF,
+ * u and the hex digits in braces. None is ever printed as itself.
  *
  * It never throws. What is not text is converted with String(); an object that has no text (it has
- * no prototype, or its toString throws) is shown as [object Object]. Invalid UTF-8 in a file name,
- * and a lone surrogate, have already become U+FFFD (the replacement character) by the time they
- * are a string, and are shown as that character: it is not a control and hides nothing.
+ * no prototype, or its toString throws) is shown as [object Object]. Invalid UTF-8 in a file name
+ * or an environment value has already become U+FFFD (the replacement character) by the time it is
+ * a string, and is shown as that character: it is not a control and hides nothing.
  */
 function $show(p: unknown): string {
   let text: string;
@@ -918,16 +924,13 @@ function $show(p: unknown): string {
     else if (ch === '\\\\' || ch === '^') out += \`\\\\\${ch}\`;
     else if (
       (n >= 0x80 && n <= 0x9f) ||
-      n === 0x61c ||
-      (n >= 0x200b && n <= 0x200f) ||
+      n === 0x34f ||
       n === 0x2028 ||
       n === 0x2029 ||
-      (n >= 0x202a && n <= 0x202e) ||
-      n === 0x2060 ||
-      (n >= 0x2066 && n <= 0x2069) ||
-      n === 0xfeff
+      (n >= 0xd800 && n <= 0xdfff) ||
+      /\\p{Cf}/u.test(ch)
     ) {
-      out += \`\\\\u\${n.toString(16).padStart(4, '0')}\`;
+      out += n > 0xffff ? \`\\\\u{\${n.toString(16)}}\` : \`\\\\u\${n.toString(16).padStart(4, '0')}\`;
     } else out += ch;
   }
   return out;
@@ -1000,6 +1003,8 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
   let move = false;
   let link = false;
   let other = false;
+  // /app or /app/native fails: the two a vinext image's one close line names.
+  let closable = false;
   for (const [i, dir] of dirs.entries()) {
     const st = $lstatSync(dir, { bigint: true });
     const type = $type(st);
@@ -1014,6 +1019,7 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
     const why = $why(st);
     if (why !== '') {
       bad.push(\`\${$show(dir)} \${why}\`);
+      if (dir === '/app' || dir === '/app/native') closable = true;
       if (i < inside) fix = true;
       else if ((Number(st.mode) & 0o1000) !== 0) move = true;
       else either = true;
@@ -1022,7 +1028,7 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
   }
   if (bad.length > 0) {
     throw new FfiLoadError(
-      \`knext ffi: refusing to load \${$show(path)}: \${bad.length === 1 ? '1 directory' : \`\${bad.length} directories\`} on the way to it cannot be trusted, so what is under \${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\\n\${bad.map((b) => \`  \${b}\`).join('\\n')}\\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.\${fix ? " To fix a directory inside native/: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}\${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root, or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}\${fix || either ? " In a vinext app's Dockerfile, put exactly \`RUN chmod go-w /app /app/native\` directly after the \`COPY --chown=0:0 --chmod=a-w native /app/native\` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (\`knext ffi check\` says whether the line is there)." : ''}\${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}\${move && (fix || either) ? " The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move." : ''}\${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}\${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}\`,
+      \`knext ffi: refusing to load \${$show(path)}: \${bad.length === 1 ? '1 directory' : \`\${bad.length} directories\`} on the way to it cannot be trusted, so what is under \${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\\n\${bad.map((b) => \`  \${b}\`).join('\\n')}\\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.\${fix ? " To fix a directory inside native/: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}\${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root, or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}\${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly \`${VINEXT_CLOSE_LINE}\` directly after the \`${VINEXT_NATIVE_COPY}\` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (\`knext ffi check\` says whether the line is there)." : ''}\${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}\${move && (fix || either) ? " The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move." : ''}\${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}\${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}\`,
     );
   }
   return pins;

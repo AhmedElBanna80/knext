@@ -784,15 +784,19 @@ a developer machine (D20).
   `COPY` line, the `RUN chmod go-w` line that closes `native/` and the directories above the executable
   (Amendment 1: the loader refuses a tree any of them could be swapped through), and the recognition of the
   scaffolded vinext `Dockerfile` with one extra line, `RUN chmod go-w /app /app/native`, directly after its
-  `native/` `COPY` (`isKnownGoodTemplateDockerfile`, D17's exception). The line's text is a constant core owns;
-  `@getknext/ffi` keeps its own copy of it for the hint it prints, and `ffi-vinext-known-good.test.ts` (which
-  lives in core's test directory, never in core's source) holds the two in step. Everything that knows Rust is
-  in `@getknext/ffi` and `crates/`.
+  `native/` `COPY` (`isKnownGoodTemplateDockerfile`, D17's exception). The line's text and the `COPY` it follows
+  are two constants core owns (`VINEXT_FFI_CLOSE_LINE` and `VINEXT_NATIVE_COPY`, in `runtime-image.ts`).
+  `@getknext/ffi` keeps its own pair in one module (`vinext-image.ts`, which has no imports) that the hint it
+  prints and the refusal the generated module raises both read, so those two cannot differ.
+  `ffi-vinext-known-good.test.ts` (which lives in core's test directory, never in core's source) holds core's
+  pair and the package's pair in step, checks that the generated module carries both lines in the sentence it
+  tells an app, and checks that the shipped template holds the `COPY` exactly once, so a template that moves on
+  fails a test instead of silencing the hint. Everything that knows Rust is in `@getknext/ffi` and `crates/`.
 - The generated module and the zone's crate are **app code**, owned by the app.
 - A guard test (in core) asserts no `bun:ffi`, `cargo`, `zigbuild` or `@getknext/ffi` static import
   appears under `packages/kn-next/src`, mirroring `grpc-dispatch.test.ts`, and that the package's name
-  appears in core source only in the lazy dispatcher (`cli/ffi-dispatch.ts`). Core's comments therefore say "the
-  ffi native-dir chmod line", not the package's name.
+  appears in core source only in the lazy dispatcher (`cli/ffi-dispatch.ts`). Core's comments therefore name the
+  constant (`VINEXT_FFI_CLOSE_LINE`) and say "the `knext ffi` verbs", never the package's name.
 
 ### D19. Graduation from Beta (jev: Bun's docs **and** knext's gates **0.95**, Bun's docs only 0.03, knext's gates only 0.02)
 
@@ -1000,8 +1004,8 @@ pinned before the manifest is read.
    is staged, the module loads `<crate>/target/{release,debug}` with no check (D13 item 5.2), as before. A staged
    library that is refused throws and never falls through to the development build; a loader test pins that for
    a hash mismatch, an unlisted library, a missing manifest, a group-writable library and an app-owned one.
-6. **The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and every lane, the Rust crates
-   lane included, is green on `abca3e3` and again on `81753d6` and `b4d81ae`; they are re-run on the final head; the nested layout is model-tested only
+6. **The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates
+   lane are green on `abca3e3`, on `81753d6` and on `b4d81ae` (on `b4d81ae` the `Lint & Test` job was red, on a comment in core, since fixed); they are re-run on the final head; the nested layout is model-tested only
    (`TD-S18-1b`).** The base images' own directories
    (`/`, `/usr`, `/usr/local`, `/usr/local/bin`, `/opt`) are root-owned 0755 (measured on the pinned Bun images).
    BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the copied files 0444, the directories below `native/` 0555,
@@ -1020,26 +1024,36 @@ pinned before the manifest is read.
    `vinextTemplateWithCloseLine(template)` (the template's own text with `RUN chmod go-w /app /app/native` spliced in,
    `undefined` unless the `COPY` occurs exactly once) and nothing else. `ffi-vinext-known-good.test.ts` proves it, with
    every near miss (a blank line, a comment, the line twice, before the `COPY`, after `USER`, `/app` alone, a recursive
-   chmod, a mode that opens the directories, an edit elsewhere) not recognised, and holds `VINEXT_FFI_CLOSE_LINE` in
-   step with the line the hint prints. An app that follows the advice therefore keeps the host-built path, its build and
+   chmod, a mode that opens the directories, an edit elsewhere) not recognised, and holds core's `VINEXT_FFI_CLOSE_LINE`
+   and `VINEXT_NATIVE_COPY` in step with the package's pair that the hint and the generated module's refusal read. An app that follows the advice therefore keeps the host-built path, its build and
    its asset upload, instead of being moved onto the image-sourced path with its `docker create` / `docker cp --platform
    linux/amd64` lock-step (`deploy.ts`). An app on the template adds `RUN chmod go-w /app /app/native` directly after the
    `COPY` that brings `native/` in, and changes nothing else; that closes the two directories whatever mode its builder
    gives a copy's destination. The hint comes from all three verbs: `knext ffi init` prints that line, and `knext ffi generate`
    and `knext ffi check` print it for an app that already has its `knext.ffi.json`; none of them edits the file. It is
-   printed only for an app built for vinext (the build is read from `knext.config.ts` the way the CLI reads it, its
-   `build` or the default `turbopack`; the other builds stage a Dockerfile that already has the line, so they hear
-   nothing), when the final stage of the app's `Dockerfile` copies `native/` to `/app/native` and `/app` and
+   printed for an app built for vinext, and for one whose build cannot be told (the build is read from `knext.config.ts`
+   the way the CLI reads it, its `build` or the default `turbopack`, and is unknown when the config cannot be loaded:
+   a Node process cannot import it, for one); the other builds stage a Dockerfile that already has the line, so they hear
+   nothing. It is printed when the final stage of the app's `Dockerfile` copies `native/` to `/app/native` and `/app` and
    `/app/native` are not both closed to group and other by the chmods after that `COPY`. What counts as closing is
-   judged the way the loader would: a mode with no who-letter (`-w`, `=rx`) is subject to the umask and does not
-   count, a later `chmod g+w` or `o+w`, or a `chown` to somebody but root, on the same directories takes the close
-   back, and a heredoc body is never read as instructions. When both are closed but the scaffolded `COPY` is not
+   judged the way the loader would, and the `RUN`s are read the way a shell would read them: quoted words, any path to
+   `chmod` or `chown` (`/bin/chmod`), `sudo` and its relatives, a path with a dot in it (`/app/.`, `.` after
+   `WORKDIR /app`), the working directory (a relative `COPY` destination too), the exec form, `sh -c`, `cd`,
+   `find -exec` and a heredoc body of a `RUN`. A mode with no who-letter (`-w`, `=rx`) is subject to the umask and
+   does not count, a later `chmod g+w` or `o+w`, or a `chown` to somebody but root, on the same directories takes the
+   close back, and the body of a `COPY` or `ADD` heredoc is never read as instructions (nor is the text of a `LABEL`
+   or an `ENV` that holds `<<`). What cannot be read counts as opening, never as closing (a path with a variable or a
+   glob in it, `xargs`), because a wrong hint to add the line costs nothing and a wrong claim that the directories
+   are closed costs a refused load. When a `RUN` after the `COPY` opens them, or may, the line directly after the
+   `COPY` would not help, so the hint says that a later `RUN` opens them and where to close them again. When both are closed but the scaffolded `COPY` is not
    directly followed by the one line, the hint warns instead that `knext deploy` takes the slower image-sourced
    path. Under BuildKit nothing changes for an existing app (both directories are already root's and 0755); with
    another builder the first call is refused, and the message says how to fix the directories and, for a vinext
    app, which one line to add (a closing `chmod` anywhere else closes them too and the module loads, but it takes
-   `knext deploy` to the slower path). Not covered by the hint, and debt: a `COPY` with a relative destination, an
-   exec-form `RUN`, a heredoc beyond the case above, and a versioned set of known-good variants instead of this one. `ffi-image-staging.test.ts` models the build host's worst-case modes
+   `knext deploy` to the slower path). Not covered by the hint, and debt: a `RUN` that is not a shell command (a
+   distroless or scratch final stage has no shell to run a `chmod`, and the line would fail there), a mode with no
+   who-letter such as `=rx` (read as no change), one line of advice for a directory below `native/` under a builder that
+   ignores `--chmod` on directories, and a versioned set of known-good variants instead of this one. `ffi-image-staging.test.ts` models the build host's worst-case modes
    against the staged Dockerfiles of the flat and nested layouts, including a builder that gives a COPY destination the
    host's mode (and fails without the line). The images run as `USER 65532`.
    The same line is staged by all three commands that stage the Dockerfile (`knext build`, `knext deploy` and
@@ -1159,8 +1173,13 @@ Measured on Bun 1.4.2, Linux, unless stated.
   writable by group or other: a binary under a user's home directory or `/tmp` is, one installed under a
   root-owned `/opt/<app>` is not (nor is `/usr/local` where root owns it and group and other cannot write it:
   Homebrew on Intel macOS gives it to your user, and some Debian systems ship it `root:staff` with mode 2775, so
-  check it). The page's two commands (`chown` to root, `chmod go-w`) cover
-  `native/`; the directories above it must already be root's.
+  check it). The page's commands (`chown -R` to root, `chmod -R go-w`) cover
+  `native/` and everything in the directory, so they check the directory first and change nothing unless it is
+  exactly an app: it is resolved to its real path (a link is followed, the doubled slashes in `//home/me` and
+  `/opt//` are gone), must exist, must hold `native/` with its `.integrity.json` and one other entry, a regular
+  file, and must not be a system, home or temporary directory (`/`, `/opt`, `/tmp`, `/var/lib`, `/dev`, `/run`,
+  `/etc`, a home directory or anything under one, `$HOME` and every directory above it); `/opt/<app>` and
+  `/usr/local/<app>` pass. The directories above it must already be root's.
 - **Committed wrappers must be regenerated.** The loader is generated code, so every committed wrapper changes:
   `knext ffi check` (CI) and `knext ffi build` report it out of date until `knext ffi generate` is re-run and
   committed. A wrapper generated before this change keeps the old loader, so it is not protected until it is
@@ -1174,7 +1193,7 @@ Measured on Bun 1.4.2, Linux, unless stated.
   the `native/` COPY. An app without the file gets today's Dockerfile byte for byte (D17). The vinext template is
   unchanged, so a vinext app's image is unchanged unless its owner adds `RUN chmod go-w /app /app/native` to their own
   `Dockerfile`, directly after the `COPY` that brings `native/` in. The hint comes from `knext ffi init`, `knext ffi generate`
-  and `knext ffi check` alike, only for an app built for vinext, and never edits the file. An app whose `Dockerfile`
+  and `knext ffi check` alike, for an app built for vinext (or whose build cannot be read), and never edits the file. An app whose `Dockerfile`
   closes the directories some other way loads, but `knext deploy` takes it by the slower image-sourced path, and
   the hint says so. And a vinext app that adds that one line stays on the template's path even without
   `knext.ffi.json`: the one place the zero-diff guarantee is not inert (D17).

@@ -757,7 +757,7 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and every lane, the Rust crates lane included, is green on `abca3e3` and again on `81753d6` and `b4d81ae`; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6` and on `b4d81ae` (on `b4d81ae` the `Lint & Test` job was red, on a comment in core, since fixed); they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
     );
     // The CI result on the previous head is recorded, with the one red and how it was fixed.
     expect(amendment).toContain('b4d81ae9b346023ddea03b5a6c5124588c8d2b3d');
@@ -778,7 +778,9 @@ describe('docs — in-process Rust page', () => {
     );
     // The hint comes from all three verbs, for a vinext app only, and says where the line goes.
     expect(flatAdr).toContain('The hint comes from all three verbs');
-    expect(flatAdr).toContain('printed only for an app built for vinext');
+    expect(flatAdr).toContain(
+      'printed for an app built for vinext, and for one whose build cannot be told',
+    );
     expect(flatAdr).toContain(
       'the hint warns instead that `knext deploy` takes the slower image-sourced path',
     );
@@ -905,9 +907,15 @@ describe('docs — in-process Rust page', () => {
     expect(flat).toContain('Under BuildKit nothing changes for an existing app');
     expect(flat).toContain('With another builder the first call of the module is refused');
     // Only the one line directly after the COPY is what deploy recognises: a chmod anywhere else closes
-    // the directories but takes the slower path, and the hint says so for a vinext app only.
+    // the directories but takes the slower path, and the hint says so for a vinext app (or one whose
+    // build cannot be read) and no other.
     expect(flat).toContain('they warn that `knext deploy` takes the slower path');
-    expect(flat).toContain('Only an app built for vinext is told any of this');
+    expect(flat).toContain('An app built with another builder is told none of this');
+    expect(flat).toContain('an app whose build cannot be read');
+    expect(flat).toContain('is told as if it were vinext');
+    expect(flat).toContain(
+      'and what cannot be read counts as opening the directories, never as closing them',
+    );
     expect(flat).toContain('which one line to add');
     expect(flat).not.toContain('the message names the fix');
     // The ADR says the template is unchanged, and nothing says it gains the line or that the image is untouched.

@@ -190,7 +190,11 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
   });
 
   // The hint has to be right about which Dockerfile it is looking at.
-  const hinted = (dockerfile: string) => init(dockerfile).out.includes('add this one line');
+  const addLine = (dockerfile: string) => init(dockerfile).out.includes('add this one line');
+  const reopened = (dockerfile: string) =>
+    init(dockerfile).out.includes('a RUN after that COPY opens');
+  /** Some advice about the line is printed: to add it, or to close the directories again after a RUN that opens them. */
+  const hinted = (dockerfile: string) => addLine(dockerfile) || reopened(dockerfile);
   const slower = (dockerfile: string) => init(dockerfile).out.includes('slower');
   const FINAL = (...lines: string[]) =>
     ['FROM alpine', 'WORKDIR /app', ...lines, 'USER 65532:65532', ''].join('\n');
@@ -345,18 +349,20 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     );
   });
 
-  it('a heredoc body is not read as instructions, and a chmod inside one is not counted as a close', () => {
+  it('a heredoc body is not read as Dockerfile instructions; the body of a RUN is read as the commands it holds, and a COPY or ADD body is data', () => {
     const heredoc = (head: string, marker: string, ...body: string[]) =>
       [head, ...body, marker].join('\n');
     // A body line that looks like a COPY of native/ is not the copy: with no real one, nothing to say.
     expect(hinted(FINAL(heredoc('RUN <<EOT', 'EOT', 'COPY native /app/native')))).toBe(false);
     // A body line that looks like a FROM does not start a new stage, so the real copy still stands.
     expect(hinted(FINAL(COPY_LINE, heredoc('RUN <<EOT', 'EOT', 'FROM scratch')))).toBe(true);
-    // A body line that looks like the close is not one.
+    // A body line that looks like the close INSTRUCTION is not one (a shell is not told to run `RUN`), ...
     expect(hinted(FINAL(COPY_LINE, heredoc('RUN <<EOT', 'EOT', CLOSE_RUN)))).toBe(true);
+    // ... but the chmod a RUN's body runs is a chmod, ...
     expect(
       hinted(FINAL(COPY_LINE, heredoc('RUN <<EOT', 'EOT', 'chmod go-w /app /app/native'))),
-    ).toBe(true);
+    ).toBe(false);
+    // ... and the body of a COPY is the file it writes, not a command.
     expect(hinted(FINAL(COPY_LINE, heredoc('COPY <<EOT /app/note', 'EOT', CLOSE_RUN)))).toBe(true);
     // Every spelling of the marker, a blank line and a comment inside the body, and what follows it is read again.
     for (const head of [
@@ -398,7 +404,7 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     ]) {
       const out = init(elsewhere).out;
       expect(out, elsewhere).toContain('slower');
-      expect(out).toContain('closes /app and /app/native');
+      expect(out).toContain('close /app and /app/native');
       expect(out).toContain('directly after the `COPY` that brings native/ in');
       expect(out).toContain(`  ${CLOSE_RUN}\n`);
       expect(out).not.toContain('add this one line');
@@ -410,6 +416,228 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     expect(init(FINAL('COPY native /app/native', 'RUN echo hi', CLOSE_RUN)).out).not.toContain(
       'slower',
     );
+  });
+
+  it('reads a chmod the way a shell does: quoted words, any path to the tool, sudo and its relatives, a path with a dot in it, the working directory, the exec form, sh -c, cd', () => {
+    // Every one of these closes both directories, and is a close the hint accepts (it then warns
+    // about the slower path, because none is the one line directly after the COPY).
+    for (const closes of [
+      'RUN chmod go-w "/app" "/app/native"',
+      "RUN chmod 'go-w' '/app' /app/native",
+      'RUN chmod "go-w" /app /app/native',
+      'RUN /bin/chmod go-w /app /app/native',
+      'RUN /usr/bin/chmod go-w /app /app/native',
+      'RUN busybox chmod go-w /app /app/native',
+      'RUN sudo chmod go-w /app /app/native',
+      'RUN sudo -u root chmod go-w /app /app/native',
+      'RUN env FOO=1 chmod go-w /app /app/native',
+      'RUN FOO=1 chmod go-w /app /app/native',
+      'RUN command chmod go-w /app /app/native',
+      'RUN chmod go-w /app/. /app/native/.',
+      'RUN chmod go-w /app//native /app/',
+      'RUN chmod go-w /app/./native /app/../app',
+      'RUN chmod go-w /app /app/native/',
+      'RUN ["chmod", "go-w", "/app", "/app/native"]',
+      'RUN ["/bin/chmod", "go-w", "/app", "/app/native"]',
+      'RUN sh -c "chmod go-w /app /app/native"',
+      "RUN sh -c 'chmod go-w /app && chmod go-w /app/native'",
+      'RUN cd /app && chmod go-w . native',
+      'RUN cd /app && chmod -R go-w .',
+      'RUN (cd /app && chmod -R go-w .)',
+      'RUN chmod -R go-w /',
+      'RUN chmod -Rf go-w /app',
+      'RUN chmod go-w /app /app/native && echo "a; chmod g+w /app"',
+    ]) {
+      expect(hinted(FINAL(COPY_LINE, closes)), closes).toBe(false);
+      expect(slower(FINAL(COPY_LINE, closes)), closes).toBe(true);
+    }
+    // After WORKDIR /app, a relative path is under it. FINAL() already says WORKDIR /app.
+    for (const closes of [
+      'RUN chmod go-w . native',
+      'RUN chmod go-w ./ ./native/',
+      'RUN chmod -R go-w .',
+      'RUN chmod go-w /app native',
+    ]) {
+      expect(hinted(FINAL(COPY_LINE, closes)), closes).toBe(false);
+    }
+    // With no working directory known, a relative path names nothing: it closes nothing, so the hint stays.
+    for (const df of [
+      ['FROM alpine', COPY_LINE, 'RUN chmod go-w . native', ''].join('\n'),
+      ['FROM alpine', 'WORKDIR $APP', COPY_LINE, 'RUN chmod go-w . native', ''].join('\n'),
+      ['FROM alpine', 'WORKDIR /srv', COPY_LINE, 'RUN chmod go-w . native', ''].join('\n'),
+    ]) {
+      expect(hinted(df), df).toBe(true);
+    }
+    // `cd` moves the working directory a relative path is under, with a WORKDIR set or not: a `.` after a
+    // cd to somewhere else is not /app, and one after a cd to /app is, whatever the WORKDIR was.
+    expect(
+      hinted(['FROM alpine', COPY_LINE, 'RUN cd /app && chmod go-w . native', ''].join('\n')),
+    ).toBe(false);
+    expect(hinted(FINAL(COPY_LINE, 'RUN cd /srv && chmod go-w . native'))).toBe(true);
+    expect(hinted(FINAL(COPY_LINE, 'RUN cd /srv && cd /app && chmod go-w . native'))).toBe(false);
+    expect(
+      reopened(
+        ['FROM alpine', COPY_LINE, CLOSE_RUN, 'RUN cd /app && chmod g+w native', ''].join('\n'),
+      ),
+    ).toBe(true);
+    // WORKDIR may be relative to the one before it, and may be quoted.
+    expect(
+      hinted(
+        ['FROM alpine', 'WORKDIR /', 'WORKDIR app', COPY_LINE, 'RUN chmod go-w . native', ''].join(
+          '\n',
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      hinted(
+        ['FROM alpine', 'WORKDIR "/app"', COPY_LINE, 'RUN chmod go-w . native', ''].join('\n'),
+      ),
+    ).toBe(false);
+  });
+
+  it('a chmod that opens the directories is never taken for a close, however it is spelled: quotes, a path to the tool, sudo, a dot, the working directory, the exec form, sh -c, cd, find -exec, xargs, a glob or a variable', () => {
+    for (const opens of [
+      'RUN chmod g+w "/app"',
+      "RUN chmod 'g+w' /app",
+      'RUN /bin/chmod g+w /app',
+      'RUN sudo chmod g+w /app',
+      'RUN sudo -u root chmod g+w /app/native',
+      'RUN busybox chmod -R 777 /app',
+      'RUN chmod g+w .',
+      'RUN chmod g+w ./',
+      'RUN chmod o+w /app/.',
+      'RUN chmod o+w /app//native',
+      'RUN chmod -R 777 "/app/"',
+      'RUN chmod 777 /app/native/.',
+      'RUN ["chmod", "-R", "777", "/app"]',
+      'RUN ["/bin/chmod", "g+w", "/app/native"]',
+      'RUN sh -c "chmod -R g+w /app"',
+      'RUN bash -ec "chmod -R g+w /app"',
+      'RUN cd /app && chmod -R g+w .',
+      'RUN (cd /app && chmod g+w native)',
+      'RUN chmod -R 777 /',
+      'RUN find /app -type d -exec chmod 775 {} +',
+      'RUN find /app -exec chmod g+w {} \\;',
+      'RUN find /app -type d | xargs chmod g+w',
+      'RUN chmod -R g+w /app/*',
+      'RUN chmod g+w $APP_DIR',
+      'RUN chmod g+w $(echo /app)',
+      'RUN chown -R app:app "/app"',
+      'RUN /bin/chown -R app /app',
+      'RUN sudo chown app /app/native',
+      'RUN chown -R app .',
+      'RUN ["chown", "-R", "app", "/app"]',
+      'RUN find /app -exec chown app {} +',
+      // A command this does not know that runs a chmod or a chown: not knowing is a reason to say so.
+      'RUN su-exec app chmod g+w /app',
+      'RUN gosu app chmod -R 777 /app',
+      'RUN runuser -u app -- chmod g+w /app/native',
+    ]) {
+      // Closed first, so a close that is not undone would be silent: what is under test is that the
+      // open is seen, and the message says it is an open, not that the line is missing.
+      const df = FINAL(COPY_LINE, CLOSE_RUN, opens);
+      expect(hinted(df), opens).toBe(true);
+      expect(reopened(df), opens).toBe(true);
+      expect(addLine(df), opens).toBe(false);
+    }
+    // Opened and never closed: the same message, since adding the line right after the COPY would
+    // not help while a later RUN opens them again.
+    expect(reopened(FINAL(COPY_LINE, 'RUN chmod -R 777 /app'))).toBe(true);
+    // A RUN that opens nothing it names is not one: other paths, a variable assignment, an echo.
+    for (const fine of [
+      'RUN chmod g+w /srv/data',
+      'RUN chmod g+w /app/server',
+      'RUN chmod g+w ./server',
+      'RUN echo "chmod -R 777 /app"',
+      'RUN echo chmod -R 777 /app',
+      'RUN printf "%s" "chmod 777 /app"',
+      'RUN ls -l /app',
+      'RUN chmod go-w /app /app/native',
+    ]) {
+      expect(reopened(FINAL(COPY_LINE, CLOSE_RUN, fine)), fine).toBe(false);
+      expect(hinted(FINAL(COPY_LINE, CLOSE_RUN, fine)), fine).toBe(false);
+    }
+  });
+
+  it('a RUN heredoc is read as commands, the way a shell would run it: a chmod in the body closes the directories, or opens them again', () => {
+    expect(hinted(FINAL(COPY_LINE, 'RUN <<EOT\nchmod go-w /app /app/native\nEOT'))).toBe(false);
+    expect(
+      hinted(FINAL(COPY_LINE, 'RUN <<EOT\nset -e\nchmod go-w /app\nchmod go-w /app/native\nEOT')),
+    ).toBe(false);
+    expect(reopened(FINAL(COPY_LINE, CLOSE_RUN, 'RUN <<EOT\nchmod -R 777 /app\nEOT'))).toBe(true);
+    expect(reopened(FINAL(COPY_LINE, CLOSE_RUN, "RUN <<'EOT'\nchown -R app /app\nEOT"))).toBe(true);
+    // A body that is not a RUN's is data: it is skipped as before.
+    expect(
+      hinted(FINAL(COPY_LINE, CLOSE_RUN, 'COPY <<EOT /app/note\nchmod -R 777 /app\nEOT')),
+    ).toBe(false);
+  });
+
+  it('a heredoc is only started by RUN, COPY and ADD: the text of a LABEL, ENV or ARG that holds << is not one, so what follows it is still read', () => {
+    for (const line of [
+      'LABEL x="<<EOF"',
+      "LABEL x='<<EOF'",
+      'ENV BANNER="<<EOF"',
+      'ARG X=<<EOF',
+      'EXPOSE 80 # <<EOF',
+      'USER 65532 <<EOF',
+    ]) {
+      // If the line opened a heredoc, the close below would be its body and the hint would stay.
+      expect(hinted(FINAL(COPY_LINE, line, CLOSE_RUN)), line).toBe(false);
+      expect(hinted(FINAL(line, COPY_LINE, CLOSE_RUN)), line).toBe(false);
+    }
+    // The three that do start one.
+    for (const head of ['RUN <<EOF', 'COPY <<EOF /app/x', 'ADD <<EOF /app/x']) {
+      expect(hinted(FINAL(COPY_LINE, `${head}\nx\nEOF`, CLOSE_RUN)), head).toBe(false);
+      // The close inside the body counts when the body is a RUN's (a script the shell runs), and not
+      // when it is the file a COPY or an ADD writes.
+      expect(hinted(FINAL(COPY_LINE, `${head}\nchmod go-w /app /app/native\nEOF`)), head).toBe(
+        !head.startsWith('RUN'),
+      );
+    }
+  });
+
+  it('says a later RUN opens them, not "add this one line", when the line is there and something after it undoes it, and never claims the loader accepts a Dockerfile it could not read all the way', () => {
+    const out = init(FINAL(COPY_LINE, CLOSE_RUN, 'RUN chown -R app:app /app')).out;
+    expect(out).toContain('a RUN after that COPY opens');
+    expect(out).toContain('/app');
+    expect(out).toContain(`  ${CLOSE_RUN}\n`);
+    expect(out).toContain('after the last such RUN');
+    expect(out).not.toContain('add this one line');
+    expect(out).not.toContain('so the loader accepts');
+    // Names exactly the directories that were opened, not both.
+    const one = init(FINAL(COPY_LINE, CLOSE_RUN, 'RUN chmod g+w /app/native')).out;
+    expect(one).toMatch(/opens \/app\/native /);
+    expect(one).not.toMatch(/opens \/app and/);
+    // A path it cannot read is one that may open them: the hint stays, and says so.
+    const unknown = init(FINAL(COPY_LINE, CLOSE_RUN, 'RUN chmod g+w $APP_DIR')).out;
+    expect(unknown).toContain('a RUN after that COPY opens');
+    expect(unknown).toContain('or may open');
+    // The same Dockerfile with the close after the last RUN that opens is silent.
+    expect(init(FINAL(COPY_LINE, 'RUN chown -R app:app /app', CLOSE_RUN)).out).not.toContain(
+      'a RUN after that COPY opens',
+    );
+  });
+
+  it('the copy of native/ is found whatever way a Dockerfile spells the destination: a relative one under WORKDIR /app, a quoted one', () => {
+    for (const copy of [
+      'COPY native native',
+      'COPY native ./native',
+      'COPY native ./native/',
+      'COPY native "/app/native"',
+      "COPY native '/app/native'",
+      'COPY native /app/./native',
+      'COPY ["native", "native"]',
+    ]) {
+      expect(addLine(FINAL(copy)), copy).toBe(true);
+    }
+    // Under another working directory, or one that cannot be read, a relative destination is not /app/native.
+    expect(addLine(['FROM alpine', 'WORKDIR /srv', 'COPY native native', ''].join('\n'))).toBe(
+      false,
+    );
+    expect(addLine(['FROM alpine', 'WORKDIR $APP', 'COPY native native', ''].join('\n'))).toBe(
+      false,
+    );
+    expect(addLine(['FROM alpine', 'COPY native native', ''].join('\n'))).toBe(false);
   });
 
   it('the hint is for a vinext build only: a standalone build stages its own Dockerfile, so an app on turbopack or webpack is told nothing, and an unknown build is told as before', () => {

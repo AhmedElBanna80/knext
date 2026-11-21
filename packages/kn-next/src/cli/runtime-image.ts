@@ -176,15 +176,22 @@ function stageLiteralTemplate(src: string, dest: string): boolean {
  * every directory above it is root's and closed to group and other, which
  * includes `/app` and `/app/native`; BuildKit leaves them so, a builder that
  * gives a COPY's destination the build host's mode does not, so the app closes
- * them itself. The `knext ffi` verbs print the same line from their own copy of
- * it; core owns this constant and never imports that copy, and the drift test
- * (`ffi-vinext-known-good.test.ts`, which lives with the tests, not in core
- * source) fails if the two diverge.
+ * them itself. The `knext ffi` verbs print the same line, and so does the
+ * refusal the module they generate raises, both from one copy of it and of the
+ * `COPY` below that core never imports. Core owns `VINEXT_FFI_CLOSE_LINE` and
+ * {@link VINEXT_NATIVE_COPY}, and the drift test (`ffi-vinext-known-good.test.ts`,
+ * which lives with the tests, not in core source) fails if either diverges from
+ * that copy, if the generated module stops carrying either line, or if the
+ * shipped template stops holding the `COPY`.
  */
 export const VINEXT_FFI_CLOSE_LINE = "RUN chmod go-w /app /app/native";
 
-/** The scaffolded vinext `Dockerfile`'s `native/` COPY, which the close line goes directly after. */
-const VINEXT_NATIVE_COPY = "COPY --chown=0:0 --chmod=a-w native /app/native\n";
+/**
+ * The scaffolded vinext `Dockerfile`'s `native/` COPY, with its line end, which
+ * the close line goes directly after.
+ */
+export const VINEXT_NATIVE_COPY =
+    "COPY --chown=0:0 --chmod=a-w native /app/native\n";
 
 /**
  * The scaffolded vinext `Dockerfile` text with {@link VINEXT_FFI_CLOSE_LINE}

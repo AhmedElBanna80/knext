@@ -8,6 +8,14 @@
  * `docker create` / `docker cp --platform linux/amd64` lock-step check (`deploy.ts`), a different and
  * slower path that an arm64-only image may not survive. So the template plus exactly that line, right
  * after the `native/` COPY, has to be recognised too, and nothing near it may be.
+ *
+ * The line and the COPY it follows are written in four places that must say the same thing: core's
+ * constants (`runtime-image.ts`, which never imports the ffi package) and the ffi package's one
+ * module of them (`vinext-image.ts`), which the hint it prints and the refusal the generated module
+ * raises both read. This file lives in core's test directory, not in core's source, so it may import
+ * both, and holds them together: the two constants are equal, the generated module carries both
+ * halves of the sentence it tells an app, and the shipped template holds the COPY the sentence
+ * names.
  */
 
 import { afterAll, describe, expect, it } from "bun:test";
@@ -20,16 +28,21 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { blob, KITCHEN_SINK } from "../../../ffi/src/__tests__/helpers";
 import {
     DEFAULT_BUILD,
     dockerfileHint,
     VINEXT_CLOSE_LINE,
 } from "../../../ffi/src/init";
+import { scanManifest } from "../../../ffi/src/manifest";
+import { renderModule } from "../../../ffi/src/render";
+import { VINEXT_NATIVE_COPY as FFI_NATIVE_COPY } from "../../../ffi/src/vinext-image";
 import { BUILDERS, DEFAULT_BUILDER_ID } from "../adapters/artifact-contract";
 import { packageRoot } from "../cli/create";
 import {
     isKnownGoodTemplateDockerfile,
     VINEXT_FFI_CLOSE_LINE,
+    VINEXT_NATIVE_COPY,
     vinextTemplateWithCloseLine,
 } from "../cli/runtime-image";
 
@@ -46,8 +59,9 @@ afterAll(() => {
 const templateDir = join(packageRoot(), "templates", "app");
 const template = () =>
     readFileSync(join(templateDir, "Dockerfile.hbs"), "utf8");
-const NATIVE_COPY = "COPY --chown=0:0 --chmod=a-w native /app/native\n";
-const LINE = "RUN chmod go-w /app /app/native";
+// Core's own constants, the ones the recognition is written against: nothing here retypes them.
+const NATIVE_COPY = VINEXT_NATIVE_COPY;
+const LINE = VINEXT_FFI_CLOSE_LINE;
 
 /** Whether core recognises `text` as the known-good vinext Dockerfile. */
 function known(text: string): boolean {
@@ -63,9 +77,54 @@ function afterCopy(insert: string, text = template()): string {
 }
 
 describe("the scaffolded vinext Dockerfile plus the one line knext ffi init adds is known-good", () => {
-    it("the line core recognises is exactly the line the hint prints", () => {
-        expect(VINEXT_FFI_CLOSE_LINE).toBe(LINE);
+    it("the line core recognises is exactly the line the hint prints, and the COPY it follows is the one the ffi package names (a newline apart)", () => {
         expect(VINEXT_CLOSE_LINE).toBe(VINEXT_FFI_CLOSE_LINE);
+        expect(FFI_NATIVE_COPY).toBe(VINEXT_NATIVE_COPY.replace(/\n$/, ""));
+        expect(VINEXT_NATIVE_COPY.endsWith("\n")).toBe(true);
+    });
+
+    it("the shipped template holds the COPY exactly once, as a line of its own: a template that moves on makes this fail, not the hint go quiet", () => {
+        // The hint looks for the scaffolded COPY by its text; one it cannot find is a Dockerfile it
+        // takes to be somebody else's and says nothing about. So a template that changed that line
+        // would silence the slower-path warning without any other test noticing: this is the one.
+        const lines = template().split("\n");
+        expect(
+            lines.filter((l) => l === FFI_NATIVE_COPY).length,
+            `the template has to carry ${FFI_NATIVE_COPY} once`,
+        ).toBe(1);
+        expect(template().split(VINEXT_NATIVE_COPY).length - 1).toBe(1);
+    });
+
+    it("a close that is not directly after the template's COPY is warned about, so the COPY the hint looks for is the template's own", () => {
+        const cwd = tmp();
+        // The line after USER: closed, but not where deploy recognises it.
+        writeFileSync(
+            join(cwd, "Dockerfile"),
+            template().replace(
+                "USER 65532:65532\n",
+                () => `USER 65532:65532\n${LINE}\n`,
+            ),
+        );
+        const out = dockerfileHint(cwd, "vinext");
+        expect(out).toContain("slower");
+        expect(out).toContain(`  ${LINE}\n`);
+        expect(out).not.toContain("add this one line");
+    });
+
+    it("the generated module tells an app the same two lines core recognises: both halves of the sentence are in what the generator renders", () => {
+        const text = renderModule(scanManifest(blob(KITCHEN_SINK)), {
+            libName: "fixture",
+            crate: "rust",
+        });
+        // Core's constants (not the ffi package's), so a core change that the ffi package did not
+        // follow fails here.
+        expect(text).toContain(`\`${VINEXT_FFI_CLOSE_LINE}\``);
+        expect(text).toContain(`\`${VINEXT_NATIVE_COPY.replace(/\n$/, "")}\``);
+        expect(text).toContain(
+            `put exactly \`${VINEXT_FFI_CLOSE_LINE}\` directly after the \`${VINEXT_NATIVE_COPY.replace(/\n$/, "")}\` line`,
+        );
+        // And the COPY it names is the template's own line.
+        expect(template()).toContain(VINEXT_NATIVE_COPY);
     });
 
     it("the build the hint assumes when a config names none is core's default, and the one build it speaks to is a builder core has", () => {

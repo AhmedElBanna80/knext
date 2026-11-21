@@ -39,6 +39,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { fnv1a64, type Manifest, scanManifest, schemaString } from '../manifest';
 import { renderModule } from '../render';
+import { VINEXT_CLOSE_LINE, VINEXT_NATIVE_COPY } from '../vinext-image';
 import {
   blob,
   D,
@@ -1468,8 +1469,12 @@ describe('a whole-tree swap between the checks cannot change what passes (an att
 });
 /**
  * The characters a refusal must never print as themselves: C0 controls (the message's own newlines
- * excepted), DEL, C1 controls, the line and paragraph separators, and the bidirectional controls
- * (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), which reorder what is around them.
+ * excepted), DEL, C1 controls, the line and paragraph separators, every format character (Unicode
+ * category Cf: the bidirectional controls, the zero-width characters, the soft hyphen, the invisible
+ * operators, the tag characters and the like, which reorder or hide what is around them), the
+ * combining grapheme joiner (U+034F, invisible, not a format character) and a lone surrogate. The
+ * format characters are asked of the engine's own tables, not listed, so this does not share a list
+ * with the code it checks.
  */
 function rawControls(text: string): string[] {
   return [...text].filter((ch) => {
@@ -1480,15 +1485,16 @@ function rawControls(text: string): string[] {
       (n >= 0x80 && n <= 0x9f) ||
       n === 0x2028 ||
       n === 0x2029 ||
-      n === 0x61c ||
-      (n >= 0x200b && n <= 0x200f) ||
-      (n >= 0x202a && n <= 0x202e) ||
-      n === 0x2060 ||
-      (n >= 0x2066 && n <= 0x2069) ||
-      n === 0xfeff
+      n === 0x34f ||
+      (n >= 0xd800 && n <= 0xdfff) ||
+      /\p{Cf}/u.test(ch)
     );
   });
 }
+
+/** How a refusal writes an escaped character: four hex digits, or braces beyond U+FFFF. */
+const escapedAs = (n: number): string =>
+  n > 0xffff ? `\\u{${n.toString(16)}}` : `\\u${n.toString(16).padStart(4, '0')}`;
 
 describe('the library is refused unless only root can write it and own the way to it (a hash of bytes someone else can still change binds nothing)', () => {
   const nativeOf = (exe: string) => join(exe, '..', 'native');
@@ -1742,9 +1748,10 @@ describe('the library is refused unless only root can write it and own the way t
       'A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.';
     // The one Dockerfile line that keeps a vinext app on the known-good path (deploy takes the fast
     // host-built-assets path only for the template, plus exactly this line directly after the COPY of
-    // native/), said wherever a directory can be fixed in place, and only there.
-    const VINEXT =
-      "In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there).";
+    // native/), said where a directory can be fixed in place AND the one that fails is /app or
+    // /app/native, the two a vinext image's line closes, and only there. Built from the two lines the
+    // generator reads (`vinext-image.ts`), so the text is not typed a second time here.
+    const VINEXT = `In a vinext app's Dockerfile, put exactly \`${VINEXT_CLOSE_LINE}\` directly after the \`${VINEXT_NATIVE_COPY}\` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (\`knext ffi check\` says whether the line is there).`;
     // When a sticky directory is on the way AND other directories fail, fixing the others is not enough.
     const ALONE =
       'The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move.';
@@ -1761,7 +1768,9 @@ describe('the library is refused unless only root can write it and own the way t
           expect(text).toContain('`RUN chmod go-w <dir>`');
           expect(text).toContain("a directory inside a copied tree keeps the build host's mode");
           expect(text).toContain('could be renamed or replaced after it was checked');
-          expect(text).toContain(VINEXT);
+          // None of these is /app or /app/native (the tree is a temporary one): the vinext line is
+          // for a failing /app or /app/native, and is not said here.
+          expect(text).not.toContain(VINEXT);
           expect(text).not.toContain(EITHER);
           expect(text).not.toContain(MOVE);
           expect(text).not.toContain(ALONE);
@@ -1789,7 +1798,7 @@ describe('the library is refused unless only root can write it and own the way t
         expect(text).toContain('`RUN chmod go-w <dir>`');
         expect(text).toContain(SHARED_IF);
         expect(text).toContain(OWN_DIR);
-        expect(count(text, VINEXT)).toBe(1);
+        expect(count(text, VINEXT)).toBe(0);
         expect(text).not.toContain(MOVE);
         expect(text).not.toContain(ALONE);
         expect(text).not.toContain(FIX);
@@ -1814,7 +1823,7 @@ describe('the library is refused unless only root can write it and own the way t
           expect(text).toContain('`RUN chmod go-w <dir>`');
           expect(text).toContain(SHARED_IF);
           expect(text).toContain(OWN_DIR);
-          expect(count(text, VINEXT)).toBe(1);
+          expect(count(text, VINEXT)).toBe(0);
           expect(text).not.toContain(MOVE);
           expect(text).not.toContain(ALONE);
           expect(text).not.toContain(FIX);
@@ -1878,7 +1887,7 @@ describe('the library is refused unless only root can write it and own the way t
       );
       expect(count(text, FIX)).toBe(1);
       expect(count(text, MOVE)).toBe(1);
-      expect(count(text, VINEXT)).toBe(1);
+      expect(count(text, VINEXT)).toBe(0);
       expect(count(text, ALONE)).toBe(1);
       expect(text).not.toContain(EITHER);
       // inside native/ + the executable's directory + shared above: all three, once each.
@@ -1895,15 +1904,102 @@ describe('the library is refused unless only root can write it and own the way t
       expect(count(text, FIX)).toBe(1);
       expect(count(text, EITHER)).toBe(1);
       expect(count(text, MOVE)).toBe(1);
-      expect(count(text, VINEXT)).toBe(1);
+      expect(count(text, VINEXT)).toBe(0);
       expect(count(text, ALONE)).toBe(1);
       // two of the conditional kind: one sentence, not two.
       text = message(load(exe, { modes: { [home as string]: 0o775, [parent as string]: 0o775 } }));
       expect(count(text, EITHER)).toBe(1);
-      expect(count(text, VINEXT)).toBe(1);
+      expect(count(text, VINEXT)).toBe(0);
       expect(text).not.toContain(FIX);
       expect(text).not.toContain(MOVE);
       expect(text).not.toContain(ALONE);
+    });
+
+    // A tree at the real /app cannot be staged here, so the child process is shown one: lstat and
+    // realpath answer for /app, /app/native and what is under it as directories (root's, 0755 unless
+    // a mode is named), and the refusal is raised before anything is opened.
+    const VIRTUAL_APP = () => {
+      const fs = process.getBuiltinModule('node:fs') as unknown as Record<
+        string,
+        (...a: unknown[]) => unknown
+      >;
+      const mod = process.getBuiltinModule('node:module') as unknown as {
+        syncBuiltinESMExports: () => void;
+      };
+      const dirs = JSON.parse(process.env.VIRTUAL_DIRS as string) as string[];
+      const modes = JSON.parse(process.env.VIRTUAL_MODES as string) as Record<string, number>;
+      const file = process.env.VIRTUAL_FILE;
+      const realLstat = fs.lstatSync as (...a: unknown[]) => object;
+      const realReal = fs.realpathSync as (...a: unknown[]) => unknown;
+      fs.lstatSync = function (this: unknown, p: unknown, ...a: unknown[]) {
+        const isDir = dirs.includes(String(p));
+        if (!isDir && p !== file) return realLstat.call(this, p, ...a);
+        const st = realLstat.call(this, '/', ...a) as { mode: number | bigint };
+        const type = isDir ? 0o040000 : 0o100000;
+        const bits = type | (isDir ? (modes[String(p)] ?? 0o755) : 0o444);
+        const big = typeof st.mode === 'bigint';
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, {
+          uid: big ? 0n : 0,
+          mode: big ? BigInt(bits) : bits,
+        });
+      };
+      fs.realpathSync = function (this: unknown, p: unknown, ...a: unknown[]) {
+        return dirs.includes(String(p)) ? p : realReal.call(this, p, ...a);
+      };
+      mod.syncBuiltinESMExports();
+    };
+    const atApp = (modes: Record<string, number>) => {
+      const lib = `/app/native/ffi/${TRIPLE}`;
+      const r = inBun((m, c) => c(() => m.greet('World')), {
+        FAKE_EXEC: '/app/server',
+        BEFORE: VIRTUAL_APP.toString(),
+        VIRTUAL_DIRS: JSON.stringify([lib, '/app/native/ffi', '/app/native', '/app']),
+        VIRTUAL_MODES: JSON.stringify(modes),
+        VIRTUAL_FILE: `${lib}/${LIB}`,
+      });
+      const got = r.result as { cls?: string; message?: string };
+      expect(got?.cls, r.stderr).toBe('FfiLoadError');
+      return got.message as string;
+    };
+
+    it('the vinext line is said when /app or /app/native is on the list, once, and only then: a vinext image is closed by that one line, and a failing directory it does not name is not helped by it', () => {
+      // The control: with a directory that cannot be fixed by it failing, the sentence is not there.
+      expect(count(atApp({ '/app/native/ffi': 0o775 }), VINEXT)).toBe(0);
+      expect(count(atApp({ [`/app/native/ffi/${TRIPLE}`]: 0o775 }), VINEXT)).toBe(0);
+      for (const modes of [
+        { '/app/native': 0o775 },
+        { '/app': 0o775 },
+        { '/app': 0o777 },
+        { '/app/native': 0o757, '/app': 0o775 },
+        { '/app/native': 0o775, '/app/native/ffi': 0o775 },
+      ]) {
+        const text = atApp(modes);
+        expect(count(text, VINEXT), JSON.stringify(modes)).toBe(1);
+      }
+      // A sticky /app is a shared directory: the install moves, and the line would not help.
+      const sticky = atApp({ '/app': 0o1777 });
+      expect(sticky).toContain(MOVE);
+      expect(sticky).not.toContain(VINEXT);
+      // /app/native failing and /app sticky: both are on the list and the move is the answer for /app,
+      // but /app/native can be closed by the line, so it is said, with the sentence that says the move wins.
+      const mixed = atApp({ '/app/native': 0o775, '/app': 0o1777 });
+      expect(count(mixed, VINEXT)).toBe(1);
+      expect(mixed).toContain(ALONE);
+    });
+
+    it('a failing directory above /app (the root) is not helped by the vinext line either', () => {
+      const lib = `/app/native/ffi/${TRIPLE}`;
+      const r = inBun((m, c) => c(() => m.greet('World')), {
+        FAKE_EXEC: '/app/server',
+        BEFORE: VIRTUAL_APP.toString(),
+        VIRTUAL_DIRS: JSON.stringify([lib, '/app/native/ffi', '/app/native', '/app', '/']),
+        VIRTUAL_MODES: JSON.stringify({ '/': 0o775 }),
+        VIRTUAL_FILE: `${lib}/${LIB}`,
+      });
+      const got = r.result as { cls?: string; message?: string };
+      expect(got?.cls, r.stderr).toBe('FfiLoadError');
+      expect(got.message).toContain(EITHER);
+      expect(got.message).not.toContain(VINEXT);
     });
 
     it('a binary under a sticky directory (/tmp/x/server) with its own directory failing too is told the directories listed with it cannot do it alone: fixing /tmp/x leaves a sticky /tmp above it, and the install has to move', () => {
@@ -2065,6 +2161,56 @@ describe('the library is refused unless only root can write it and own the way t
       expect(rawControls(text)).toEqual([]);
     });
 
+    it('every other format character is shown as an escape too, the soft hyphen, the Mongolian vowel separator, the invisible operators, the interlinear annotation marks, the Unicode tag characters and the combining grapheme joiner included: a name that holds one reads as the name without it', () => {
+      // U+00AD, U+0600, U+06DD, U+070F, U+180E, U+2061 to U+2064, U+206A to U+206F, U+FFF9 to U+FFFB,
+      // U+034F (not a format character, but as invisible), and beyond U+FFFF: U+1D173, U+E0001,
+      // U+E0020 and U+E007F (the tag characters, which spell a hidden string).
+      const marks = [
+        0xad, 0x34f, 0x600, 0x6dd, 0x70f, 0x180e, 0x2061, 0x2062, 0x2063, 0x2064, 0x206a, 0x206f,
+        0xfff9, 0xfffb, 0x1d173, 0xe0001, 0xe0020, 0xe007f,
+      ];
+      const expected = `q${marks.map(escapedAs).join('')}z`;
+      // As a directory name.
+      const exe = image();
+      const odd = join(emptyDir('weird10'), `q${String.fromCodePoint(...marks)}z`);
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      chmodSync(join(odd, 'x'), 0o775);
+      const text = message(load(join(odd, 'x', 'server')));
+      expect(text).toContain(expected);
+      expect(rawControls(text)).toEqual([]);
+      // As a value the manifest holds (a string in a JSON file reaches the loader as it is).
+      const exe2 = image({ seal: false });
+      const file = join(exe2, '..', 'native', '.integrity.json');
+      const doc = JSON.parse(readFileSync(file, 'utf8')) as { files: Record<string, string> };
+      doc.files[`ffi/${TRIPLE}/${LIB}`] = `q${String.fromCodePoint(...marks)}z`;
+      writeFileSync(file, JSON.stringify(doc));
+      sealImage(exe2);
+      const viaManifest = (load(exe2).result as { message: string }[])[0]?.message as string;
+      expect(viaManifest).toContain(`as "${expected}", which is not a sha256 digest`);
+      expect(rawControls(viaManifest)).toEqual([]);
+    });
+
+    it('a lone surrogate in a value the manifest holds is shown as an escape, not printed: JSON can carry one, and a terminal or a log writer would turn it into U+FFFD or into nothing; a valid pair is the character it spells', () => {
+      for (const [bad, shown] of [
+        ['a\ud800b', 'a\\ud800b'],
+        ['a\udfffb', 'a\\udfffb'],
+        ['\udc00\ud800', '\\udc00\\ud800'], // low before high: two lone halves
+        ['x\ud83d', 'x\\ud83d'], // a high surrogate at the end
+        ['\u{1f600}z', '\u{1f600}z'], // a pair is an emoji, left as it is
+      ] as const) {
+        const exe = image({ seal: false });
+        const file = join(exe, '..', 'native', '.integrity.json');
+        const doc = JSON.parse(readFileSync(file, 'utf8')) as { files: Record<string, string> };
+        doc.files[`ffi/${TRIPLE}/${LIB}`] = bad;
+        writeFileSync(file, JSON.stringify(doc));
+        sealImage(exe);
+        const text = (load(exe).result as { message: string }[])[0]?.message as string;
+        expect(text, bad).toContain(`as "${shown}", which is not a sha256 digest`);
+        expect(rawControls(text), bad).toEqual([]);
+      }
+    });
+
     it('a value that is not text at all is shown without throwing: a thrown object with no prototype, or whose toString throws, is "[object Object]", never a TypeError out of the refusal', () => {
       const THROW_ODD = () => {
         const fs = process.getBuiltinModule('node:fs') as unknown as Record<string, unknown>;
@@ -2094,7 +2240,7 @@ describe('the library is refused unless only root can write it and own the way t
       }
     });
 
-    it('invalid UTF-8 and a lone surrogate become U+FFFD before the text is shown, which is printed as it is: the replacement character is not a control and hides nothing', () => {
+    it('through the environment, invalid UTF-8 and a lone surrogate become U+FFFD before the text is shown, which is printed as it is: the replacement character is not a control and hides nothing (a manifest value keeps a lone surrogate, and is shown as an escape: the next tests)', () => {
       const r = inBun((m) => m.add(1, 2), {
         FAKE_EXEC: image(),
         KNEXT_FFI_SLOW_CALL_MS: `a${String.fromCodePoint(0xd800)}b`,
@@ -2141,9 +2287,12 @@ describe('the library is refused unless only root can write it and own the way t
 
     it('the value a decoder quotes when the library returns the wrong kind is shown escaped: a 64-bit integer or a float that arrives as a string with control characters in it', () => {
       // The fixture library returns a number where a decimal string is due, and a null where a float
-      // is. What a library returns is not trusted text: the parse is patched here to put a string
-      // with a C1 control, a line separator, a bidirectional override and a newline where the
-      // value is, and the refusal must quote it escaped.
+      // is. The one policy for library output: a value that broke the contract is not text anyone
+      // wrote for a reader, and the module quotes it in a message of its own, so it is shown
+      // escaped. (The error text the library's author wrote on purpose, RustError.message, is not
+      // the module's to rewrite: see the $fail::message entry in the allowlist below.) The parse
+      // is patched here to put a string with a C1 control, a line separator, a bidirectional
+      // override and a newline where the value is, and the refusal must quote it escaped.
       const REPLACE_VALUES = () => {
         const real = JSON.parse;
         JSON.parse = function (this: unknown, ...a: Parameters<typeof JSON.parse>) {
@@ -2559,6 +2708,7 @@ describe('everything the module prints goes through $show, or is classified (a s
     '$show::String.fromCharCode(n ^ 0x40)': 'one caret-notation character, a printable one',
     '$show::ch': 'a backslash or a caret, written after the backslash that escapes it',
     "$show::n.toString(16).padStart(4, '0')": 'four hexadecimal digits',
+    '$show::n.toString(16)': 'hexadecimal digits of a code point beyond U+FFFF',
     '$sealed::why': "$why's text: a number and a mode",
     '$sealed::bad.length': 'a count',
     "$sealed::bad.map((b) => ` ${b}`).join('\\n')":
@@ -2572,10 +2722,12 @@ describe('everything the module prints goes through $show, or is classified (a s
     '$verify::actual': 'a sha256 hex digest the process computed',
     '$verify::process.platform': 'the platform name Bun reports (a fixed word)',
     '$verify::lib.fd': 'a file descriptor number',
-    // Past the loader: the wrappers' own errors. What a library returns is shown through $show
-    // ($d64 and $fin quote the value that was wrong); the rest is generated text, numbers and words.
+    // Past the loader: the wrappers' own errors. The one policy for what a library returns: a value
+    // that broke the contract (the wrong kind, quoted by $d64 and $fin in a message the module
+    // writes) goes through $show; the error text the library's author wrote on purpose for the app
+    // does not. The rest is generated text, numbers and words.
     '$fail::message':
-      "the Rust library's own error text (RustError.message is that text, unchanged: wording it is the Rust code's job, and the library is the one that was hashed and sealed)",
+      "the error text the Rust code's author wrote for the app, delivered as RustError.message as it is (the module adds only a fixed prefix to an invalid-input one): it is the payload the app's handlers match and log, not a message the module composes about a broken value, so rewriting it would change what the author wrote; the library is the one that was hashed and sealed, and an app that prints it to a terminal chooses how",
     '$fail::status': 'a number (the status the library returned)',
     '$shown::hex * 4': 'a number',
     '$int::$shown(v)': 'a number, bounded: a huge bigint is a bit count',
@@ -2646,7 +2798,7 @@ describe('everything the module prints goes through $show, or is classified (a s
     const textual = src
       .split('\n')
       .flatMap((line, i) =>
-        /(?:new\s+)?\b(?:\w*Error|console\.\w+|process\.std(?:err|out)\.write|bad\.push)\(/.test(
+        /(?:new\s+)?\b(?:\w*Error|console(?:\.\w+|\s*\[[^\]]*\])|process\.(?:std(?:err|out)\.write|emitWarning)|bad\.push)\(|\bBun\.write\(\s*(?:Bun|process)\.std(?:err|out)\b/.test(
           line,
         )
           ? [i + 1]
@@ -2654,6 +2806,21 @@ describe('everything the module prints goes through $show, or is classified (a s
       );
     expect(textual.length).toBeGreaterThan(30);
     expect([...new Set(sinkCalls(src).map((s) => s.line))]).toEqual(textual);
+    // A sink bound to another name (`const w = console.warn`, `const { warn } = console`,
+    // `console.warn.bind(console)`) is called as `w(...)`, which no line of text says is a print. The
+    // scan follows such a binding, but the generator has no reason to write one, so it is refused:
+    // a call by a bare name is then always one the scan or this list names.
+    expect(
+      src
+        .split('\n')
+        .flatMap((line, i) =>
+          /=\s*(?:console\b|process\.(?:stderr|stdout)\b|process\.emitWarning\b|Bun\.(?:write|stderr|stdout)\b)|\bconsole\.\w+\.bind\b/.test(
+            line,
+          )
+            ? [i + 1]
+            : [],
+        ),
+    ).toEqual([]);
     // And the scan is not looking at a slice of it: leaves are found past the loader too.
     const fns = new Set(leaves(src).map((l) => l.fn));
     for (const name of ['$fail', '$int', '$d64', '$fin', '$efin', '$vec']) {
@@ -2743,6 +2910,56 @@ describe('everything the module prints goes through $show, or is classified (a s
       'b::bad.push',
       'c::E',
       'e::Error',
+    ]);
+  });
+
+  it('the scan sees the same calls under another spelling: a bracket access, a name bound to a sink (also through another name or .bind), one destructured from its object, process.emitWarning and a write to a stream, and not a write to something else', () => {
+    const snippet = [
+      'const w = console.warn;',
+      'function a(p) { w(p); }',
+      'const { warn } = console;',
+      'function b(p) { warn(p); }',
+      'const { error: e2 } = console;',
+      'function c(p) { e2(p); }',
+      'function d(p) { console[\'warn\'](p); console["error"](p); }',
+      'function e(p) { process.emitWarning(p); }',
+      'function f(p) { Bun.write(Bun.stderr, p); }',
+      'const log = w;',
+      'function g(p) { log(p); }',
+      'const h2 = console.error.bind(console);',
+      'function h(p) { h2(p); }',
+      'function i(p) { Bun.write(Bun.stdout, `${p}`, p); }',
+      'function j(p) { Bun.write(path, p); fs.write(p); other.warn(p); }',
+      'function k(p) { Bun.write(process.stderr, p); }',
+      'const { x: plain } = somethingElse;',
+      'function l(p) { plain(p); }',
+    ].join('\n');
+    expect(leaves(snippet).map((l) => l.key)).toEqual([
+      'a::p',
+      'b::p',
+      'c::p',
+      'd::p',
+      'd::p',
+      'e::p',
+      'f::p',
+      'g::p',
+      'h::p',
+      'i::p',
+      'i::p',
+      'k::p',
+    ]);
+    expect(sinkCalls(snippet).map((s) => `${s.fn}::${s.callee}`)).toEqual([
+      'a::w',
+      'b::warn',
+      'c::e2',
+      'd::console.warn',
+      'd::console.error',
+      'e::process.emitWarning',
+      'f::Bun.write',
+      'g::log',
+      'h::h2',
+      'i::Bun.write',
+      'k::Bun.write',
     ]);
   });
 

@@ -14,8 +14,12 @@
  *   (`Error`, `TypeError`, `RangeError`, `FfiLoadError`, `RustError`, `RustPanicError`...), an alias
  *   of one (`const E = FfiLoadError`, `class Sub extends RustError`), `Reflect.construct(<sink>,
  *   [...])` (the array's elements), `console.log/info/debug/warn/error(...)`,
- *   `process.stderr.write(...)`, `process.stdout.write(...)` and `bad.push(...)` (the list of
- *   failing directories a refusal prints), so a bare variable handed to one of them is a leaf too;
+ *   `process.stderr.write(...)`, `process.stdout.write(...)`, `process.emitWarning(...)`,
+ *   `Bun.write(Bun.stderr | Bun.stdout, ...)` (what follows the stream) and `bad.push(...)` (the list
+ *   of failing directories a refusal prints), so a bare variable handed to one of them is a leaf too;
+ * - the same calls under another spelling: `console['warn'](p)`, a name bound to one (`const w =
+ *   console.warn`, `const log = w`, `console.error.bind(console)`) or destructured from its object
+ *   (`const { warn } = console`, `const { warn: w } = console`);
  * - the right-hand side of an assignment to a `.message`;
  * - the arguments a function declares as text-bearing (`PARAM_SINKS`: `$openFile`'s second and fourth,
  *   which it puts into its refusals), checked at every call, so the function itself needs no
@@ -58,8 +62,16 @@ const SINKS = new Set([
   'console.error',
   'process.stderr.write',
   'process.stdout.write',
+  'process.emitWarning',
   'bad.push',
 ]);
+
+/**
+ * Calls that print only when their first argument is a stream: `Bun.write(Bun.stderr, text)` writes
+ * `text` there, so what follows the stream is what reaches a reader.
+ */
+const STREAM_WRITERS = new Set(['Bun.write']);
+const STREAMS = /^(?:Bun\.(?:stderr|stdout)|process\.std(?:err|out))$/;
 
 /** Any error class: `Error`, `TypeError`, `FfiLoadError`... (a `new` of one, or a call of one). */
 const ERROR_CLASS = /^(?:[A-Za-z_$][\w$]*\.)*[\w$]*Error$/;
@@ -96,13 +108,44 @@ const unwrap = (e: ts.Expression): ts.Expression =>
     ? unwrap(e.expression)
     : e;
 
+/** What is called, with `a['b']` and `a["b"]` read as `a.b`, so a spelling does not hide a sink. */
+const calleeText = (e: ts.Expression, sf: ts.SourceFile): string => {
+  const u = unwrap(e);
+  if (ts.isPropertyAccessExpression(u)) return `${calleeText(u.expression, sf)}.${u.name.text}`;
+  if (ts.isElementAccessExpression(u) && ts.isStringLiteralLike(u.argumentExpression)) {
+    return `${calleeText(u.expression, sf)}.${u.argumentExpression.text}`;
+  }
+  return collapse(u.getText(sf));
+};
+
+/** The function a binding is given, with `.bind(...)` looked through: `console.warn.bind(console)` is `console.warn`. */
+const boundName = (init: ts.Expression, sf: ts.SourceFile): string => {
+  const u = unwrap(init);
+  if (ts.isCallExpression(u)) {
+    const callee = calleeText(u.expression, sf);
+    if (callee.endsWith('.bind')) return callee.slice(0, -'.bind'.length);
+  }
+  return calleeText(u, sf);
+};
+
+/** `Bun.write(Bun.stderr, a, b)`: the arguments after the stream, or undefined when it is not a write to one. */
+const streamWriteArgs = (
+  callee: string,
+  args: readonly ts.Expression[],
+  sf: ts.SourceFile,
+): readonly ts.Expression[] | undefined =>
+  STREAM_WRITERS.has(callee) && args[0] && STREAMS.test(calleeText(args[0], sf))
+    ? args.slice(1)
+    : undefined;
+
 /**
- * The names that raise: every error class by name, plus every name bound to one (`const E =
- * FfiLoadError`, `class Sub extends RustError`), to a fixed point so an alias of an alias counts.
+ * The names that raise or print: every error class by name, every sink by its dotted name, plus every
+ * name bound to one (`const E = FfiLoadError`, `class Sub extends RustError`, `const w = console.warn`,
+ * `const { warn } = console`), to a fixed point so an alias of an alias counts.
  */
 const sinkNames = (sf: ts.SourceFile): Set<string> => {
   const names = new Set<string>();
-  const isSinkName = (text: string) => ERROR_CLASS.test(text) || names.has(text);
+  const isSinkName = (text: string) => SINKS.has(text) || ERROR_CLASS.test(text) || names.has(text);
   let grew = true;
   while (grew) {
     grew = false;
@@ -134,9 +177,24 @@ const sinkNames = (sf: ts.SourceFile): Set<string> => {
         ts.isVariableDeclaration(node) &&
         ts.isIdentifier(node.name) &&
         node.initializer &&
-        isSinkName(collapse(unwrap(node.initializer).getText(sf)))
+        isSinkName(boundName(node.initializer, sf))
       ) {
         add(node.name.text);
+      }
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isObjectBindingPattern(node.name) &&
+        node.initializer
+      ) {
+        const base = boundName(node.initializer, sf);
+        for (const el of node.name.elements) {
+          if (!ts.isIdentifier(el.name)) continue;
+          const prop =
+            el.propertyName && ts.isIdentifier(el.propertyName)
+              ? el.propertyName.text
+              : el.name.text;
+          if (isSinkName(`${base}.${prop}`)) add(el.name.text);
+        }
       }
       ts.forEachChild(node, visit);
     };
@@ -152,8 +210,13 @@ export function sinkCalls(source: string): SinkCall[] {
   const out: SinkCall[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isNewExpression(node) || ts.isCallExpression(node)) {
-      const callee = collapse(node.expression.getText(sf));
-      if (SINKS.has(callee) || ERROR_CLASS.test(callee) || names.has(callee)) {
+      const callee = calleeText(node.expression, sf);
+      if (
+        SINKS.has(callee) ||
+        ERROR_CLASS.test(callee) ||
+        names.has(callee) ||
+        streamWriteArgs(callee, node.arguments ?? [], sf) !== undefined
+      ) {
         out.push({
           fn: ownerOf(node),
           callee,
@@ -266,10 +329,13 @@ export function leaves(source: string): Leaf[] {
     ) {
       record(node.right);
     } else if (ts.isNewExpression(node) || ts.isCallExpression(node)) {
-      const callee = collapse(node.expression.getText(sf));
+      const callee = calleeText(node.expression, sf);
       const args = node.arguments ?? [];
+      const streamed = streamWriteArgs(callee, args, sf);
       if (isSink(callee)) {
         for (const arg of args) record(arg);
+      } else if (streamed) {
+        for (const arg of streamed) record(arg);
       } else if (
         callee === 'Reflect.construct' &&
         args[0] &&

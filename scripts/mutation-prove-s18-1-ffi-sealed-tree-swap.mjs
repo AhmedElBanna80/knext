@@ -66,6 +66,10 @@
  *   A14  the one Dockerfile line that keeps a vinext app on the known-good path is never named (fragment)
  *   A15  it is named only next to the in-place fix of native/ (fragment)
  *   A16  it is no longer said to go DIRECTLY after the COPY (fragment)
+ *   A19  it is named for any directory that can be fixed in place, not only /app and /app/native
+ *        (fragment)    A20  /app/native is not counted among those two    A21  /app is not
+ *   A22  the sentence names another line than core recognises (it is not built from the constant)
+ *        (fragment)    A23  it names another COPY than the scaffolded one (fragment)
  *   A17  "fixing the other directories is not enough" is never said (fragment)
  *   A18  it is said only next to the in-place fix, not next to the conditional advice (fragment)
  *   Printing (every path and system error a refusal prints goes through $show; the generated
@@ -73,10 +77,14 @@
  *   C01  a C0 control (a newline forges a list line) is printed raw    C02  a delete character
  *   C03  the list prints the raw name                 C04  a C1 control    C05  U+2028, U+2029
  *   C06  a backslash is not doubled    C07  a caret is not escaped (the output is ambiguous)
- *   C08  U+202A to U+202E    C09  U+2066 to U+2069    C10  U+061C (the Arabic letter mark)
- *   C11  U+200E, U+200F (the direction marks)   C12  U+200B to U+200D (zero-width)
- *   C13  U+2060 (the word joiner)   C14  U+FEFF (the byte order mark)
+ *   C08  every format character (Unicode category Cf) is printed raw    C09  the soft hyphen U+00AD
+ *   C10  the tag characters U+E0001, U+E0020 to U+E007F    C11  the invisible operators U+2061 to U+2064
+ *   C12  U+202A to U+202E (bidirectional overrides)    C13  U+200B to U+200F (zero-width, direction marks)
+ *   C14  U+FEFF (the byte order mark)
  *   C15  $show can throw (a null-prototype value, or a toString that throws)
+ *   C16  U+034F (the combining grapheme joiner, not a format character)
+ *   C17  a lone surrogate (a JSON string in the manifest can hold one) is printed raw
+ *   C18  a character beyond U+FFFF is shown as a four-digit escape (the braces form is dropped)
  *   E01  the system error of an unparseable manifest  E02  of a file that cannot be opened
  *   E03  the library path of a not-a-regular-file refusal   E04  of an unresolvable directory
  *   E05  the platform directory names it found        E06  the system error of a failed load
@@ -88,8 +96,8 @@
  *        row on the scan itself, which is keyed by function and expression (fragment)
  *   E11  the unsupported manifest version (fragment)   E12  the digest a manifest lists (fragment)
  *   E14  the system error of a load that fails outside the loader
- *   E15  the value of a 64-bit integer argument that is refused (fragment)
- *   E16  the value of a number argument that is refused (fragment)
+ *   E15  the value a call returned in place of a 64-bit integer string, refused by $d64 (fragment)
+ *   E16  the value a call returned in place of a finite number, refused by $fin (fragment)
  *   Digest and schema (a value compared as text and printed must be what it claims to be)
  *   Q01  a manifest entry that is not a sha256 digest is not refused    Q02  upper case is accepted
  *   Q03  the length is not required                    Q04  an unknown manifest version is accepted
@@ -108,7 +116,7 @@
  *   V14  /app/native alone is enough               V15  /app alone is enough
  *   V16  a chmod before the copy counts            V17  any chmod counts, go+w included
  *   V18  a recursive chmod of /app is not taken to close /app/native
- *   V19  a RUN line is read as one command (a chmod after && or ; is missed)
+ *   V19  a RUN line is read as one command (a chmod after &&, ;, || or | is missed)
  *   V20  a mode with no who-letter (-w, =rx) is taken to close the directories (it is subject to the umask)
  *   V21  a later who-less +w is not seen to open them again
  *   V22  a later g+w or o+w does not take an earlier close back
@@ -118,6 +126,16 @@
  *   V28  the slower-path warning is always given     V29  a config with no build is not read as turbopack
  *   V30  the CLI never reads the app's build (init.test.ts, through the CLI)
  *   V31  the tabs before the terminator of a plain << heredoc are stripped too
+ *   V32  a heredoc is opened by any instruction (a LABEL holding "<<EOF" swallows the file)
+ *   V33  the body of a RUN heredoc is not read as commands    V34  quotes are not taken off a path
+ *   V35  a path to chmod (/bin/chmod) is not the command    V36  a path is not normalised (/app/.)
+ *   V37  the WORKDIR is not tracked                          V38  an unreadable path is skipped
+ *   V39  a RUN that reopens the directories is told to add the line anyway
+ *   V40  sh -c is not read    V41  find -exec is not read    V42  sudo is not a wrapper
+ *   V43  an unknown wrapper that runs chmod counts as nothing    V44  xargs is not told apart
+ *   V45  a COPY destination is compared as written (relative, quoted, dotted)
+ *   V46  the exec form of RUN is not read    V47  cd is not followed
+ *   V48  -R is not told apart    V49  a recursive chmod of / does not reach /app
  *   Known-good variant (core, ffi-vinext-known-good.test.ts, its own spec): `knext deploy` knows
  *   the scaffolded vinext Dockerfile byte for byte and takes another path for any other; the one
  *   line the hint adds must not take an app off it
@@ -126,6 +144,9 @@
  *   G05  a template with no native/ COPY gets a variant  G06  one with the COPY twice does
  *   G07  the build the hint assumes for a config that names none drifts from core's default builder
  *   G08  the one build the hint speaks to is not the builder core calls vinext
+ *   G09  the COPY the hint and the refusal look for drifts from core's    G12  so does the line
+ *   G10  the refusal's sentence is not built from the line constant (fragment)    G11  nor from the
+ *        COPY constant (fragment)
  *   Generate and check (generate-check.test.ts, its own spec)
  *   H01  generate does not print the hint    H02  check does not print the hint
  *   H03  generate ignores the build           H04  check ignores the build
@@ -133,6 +154,10 @@
  *   feeds it a snippet for each sink and requires every one to be seen)
  *   T01  process.stderr.write is no longer a sink    T02  $openFile's 2nd and 4th arguments are not
  *   T03  Reflect.construct of an error class is not  T04  an assignment to .message is not
+ *   T05  process.emitWarning is not    T06  Bun.write(Bun.stderr, text) is not
+ *   T07  console['warn'](p) is read as another call    T08  a name bound to a sink (const w =
+ *   console.warn) is not a sink    T09  a name destructured from one (const { warn } = console) is
+ *   not    T10  .bind is not looked through
  *   Second look
  *   S01  the directories are not looked at again       S02  the second look uses stat, not lstat
  *   S03  the second look checks existence, not identity
@@ -141,6 +166,21 @@
  *   Ids
  *   B01  the pin is taken as Numbers                   B02  the second look is taken as Numbers
  *   B03  ids are compared as Numbers (2^53 collides)
+ *   The page's commands for a binary run outside a container (doc-recipe.test.ts extracts the block
+ *   from the page and runs it, with a recording sudo; each row edits the page's recipe, with a shell
+ *   comment as its residue marker)
+ *   R01  an empty or relative APP_DIR is accepted     R02  nothing is refused as a system, home or
+ *        temporary directory    R03  a directory that holds anything else is accepted
+ *   R04  the doubled slashes of //home/me are kept    R05  /dev is not refused
+ *   R06  /var/lib is not refused    R07  a directory under the home directory is not refused
+ *   R08  a parent of the home directory is not refused    R09  native/ need not hold its manifest
+ *   R10  native/ may be a link    R11  the executable may be anything that exists
+ *   R12  more than one other entry is accepted    R13  the commands run on APP_DIR as typed, not on
+ *        the checked real directory    R14  a path that does not exist is not refused as that
+ *   R15  /usr/local/<app> is refused (a prefix test, not the directory itself)
+ *   The musl lane (workflow-ffi-e2e-lane.test.ts)
+ *   Y01  the staged directory of an earlier run is not cleared before it is made again
+ *   Y02  the page's commands are not run on the staged copy
  *        (B01 and B02 are caught through the bigint-option spy: a test records every stat the
  *        loader makes and requires the bigint option on each; a collision test catches B03)
  *
@@ -231,6 +271,53 @@ const SCAN = [
       "      ((ts.isPropertyAccessExpression(node.left) && node.left.name.text === 'message') ||\n",
     replacement:
       "      ((ts.isPropertyAccessExpression(node.left) && node.left.name.text === 'messag') ||\n",
+  },
+  {
+    id: 'T05',
+    subject: 'scan',
+    claim:
+      'process.emitWarning is no longer a sink: a value handed to it is not required to be shown',
+    anchor: "  'process.emitWarning',\n",
+    replacement: '\n',
+  },
+  {
+    id: 'T06',
+    subject: 'scan',
+    claim:
+      'Bun.write(Bun.stderr, text) is no longer a sink: what follows the stream is not required to be shown',
+    anchor: "const STREAM_WRITERS = new Set(['Bun.write']);\n",
+    replacement: 'const STREAM_WRITERS = new Set<string>([]);\n',
+  },
+  {
+    id: 'T07',
+    subject: 'scan',
+    claim:
+      "console['warn'](p) is read as another call than console.warn(p): a spelling hides the sink",
+    anchor:
+      '  if (ts.isElementAccessExpression(u) && ts.isStringLiteralLike(u.argumentExpression)) {\n',
+    replacement: '  if (false as boolean) {\n',
+  },
+  {
+    id: 'T08',
+    subject: 'scan',
+    claim:
+      'a name bound to a sink (const w = console.warn) is not a sink: w(p) is not required to show p',
+    anchor: '        isSinkName(boundName(node.initializer, sf))\n',
+    replacement: '        false\n',
+  },
+  {
+    id: 'T09',
+    subject: 'scan',
+    claim: 'a name destructured from a sink object (const { warn } = console) is not a sink',
+    anchor: '          if (isSinkName(`${base}.${prop}`)) add(el.name.text);\n',
+    replacement: '\n',
+  },
+  {
+    id: 'T10',
+    subject: 'scan',
+    claim: '.bind is not looked through: console.warn.bind(console) is not a sink',
+    anchor: "    if (callee.endsWith('.bind')) return callee.slice(0, -'.bind'.length);\n",
+    replacement: '\n',
   },
 ];
 
@@ -563,60 +650,6 @@ const LOADER = [
     replacement: String.raw`    else if (ch === '\\\\') out += \`\\\\\${ch}\`;` + '\n',
   },
   {
-    id: 'C08',
-    subject: 'render',
-    claim:
-      'the bidirectional embeddings and overrides (U+202A to U+202E) in a directory name are printed as themselves: a right-to-left override reorders the text around it',
-    anchor: '      (n >= 0x202a && n <= 0x202e) ||\n',
-    replacement: '      false ||\n',
-  },
-  {
-    id: 'C09',
-    subject: 'render',
-    claim:
-      'the bidirectional isolates (U+2066 to U+2069) in a directory name are printed as themselves',
-    anchor: '      (n >= 0x2066 && n <= 0x2069) ||\n',
-    replacement: '      false ||\n',
-  },
-  {
-    id: 'C10',
-    subject: 'render',
-    claim:
-      'the Arabic letter mark (U+061C, a bidirectional control) in a directory name is printed as itself',
-    anchor: '      n === 0x61c ||\n',
-    replacement: '      false ||\n',
-  },
-  {
-    id: 'C11',
-    subject: 'render',
-    claim:
-      'the left-to-right and right-to-left marks (U+200E, U+200F) in a directory name are printed as themselves',
-    anchor: '      (n >= 0x200b && n <= 0x200f) ||\n',
-    replacement: '      (n >= 0x200b && n <= 0x200d) ||\n',
-  },
-  {
-    id: 'C12',
-    subject: 'render',
-    claim:
-      'the zero-width characters (U+200B to U+200D) in a directory name are printed as themselves: a name that holds one reads as the name without it',
-    anchor: '      (n >= 0x200b && n <= 0x200f) ||\n',
-    replacement: '      (n >= 0x200e && n <= 0x200f) ||\n',
-  },
-  {
-    id: 'C13',
-    subject: 'render',
-    claim: 'the word joiner (U+2060) in a directory name is printed as itself',
-    anchor: '      n === 0x2060 ||\n',
-    replacement: '      false ||\n',
-  },
-  {
-    id: 'C14',
-    subject: 'render',
-    claim: 'the byte order mark (U+FEFF) in a directory name is printed as itself',
-    anchor: '      n === 0xfeff\n',
-    replacement: '      false\n',
-  },
-  {
     id: 'C15',
     subject: 'render',
     claim:
@@ -625,11 +658,91 @@ const LOADER = [
     replacement: '  text = String(p);\n',
   },
   {
+    id: 'C08',
+    subject: 'render',
+    claim:
+      'every Unicode format character (category Cf) in a directory name is printed as itself: the bidirectional controls, the zero-width characters, the soft hyphen and the tag characters all read as nothing or reorder the text around them',
+    anchor: String.raw`      /\\p{Cf}/u.test(ch)` + '\n',
+    replacement: '      false\n',
+  },
+  {
+    id: 'C09',
+    subject: 'render',
+    claim:
+      'the soft hyphen (U+00AD, invisible in a terminal) in a directory name is printed as itself',
+    anchor: String.raw`      /\\p{Cf}/u.test(ch)` + '\n',
+    replacement: String.raw`      (/\\p{Cf}/u.test(ch) && n !== 0xad)` + '\n',
+  },
+  {
+    id: 'C10',
+    subject: 'render',
+    claim:
+      'the Unicode tag characters (U+E0001, U+E0020 to U+E007F, which spell a string nobody sees) in a directory name are printed as themselves',
+    anchor: String.raw`      /\\p{Cf}/u.test(ch)` + '\n',
+    replacement: String.raw`      (/\\p{Cf}/u.test(ch) && n < 0xe0000)` + '\n',
+  },
+  {
+    id: 'C11',
+    subject: 'render',
+    claim:
+      'the invisible operators (U+2061 to U+2064) in a directory name are printed as themselves',
+    anchor: String.raw`      /\\p{Cf}/u.test(ch)` + '\n',
+    replacement: String.raw`      (/\\p{Cf}/u.test(ch) && !(n >= 0x2061 && n <= 0x2064))` + '\n',
+  },
+  {
+    id: 'C12',
+    subject: 'render',
+    claim:
+      'the bidirectional embeddings and overrides (U+202A to U+202E) in a directory name are printed as themselves: a right-to-left override reorders the text around it',
+    anchor: String.raw`      /\\p{Cf}/u.test(ch)` + '\n',
+    replacement: String.raw`      (/\\p{Cf}/u.test(ch) && !(n >= 0x202a && n <= 0x202e))` + '\n',
+  },
+  {
+    id: 'C13',
+    subject: 'render',
+    claim:
+      'the zero-width characters and the direction marks (U+200B to U+200F) in a directory name are printed as themselves: a name that holds one reads as the name without it',
+    anchor: String.raw`      /\\p{Cf}/u.test(ch)` + '\n',
+    replacement: String.raw`      (/\\p{Cf}/u.test(ch) && !(n >= 0x200b && n <= 0x200f))` + '\n',
+  },
+  {
+    id: 'C14',
+    subject: 'render',
+    claim: 'the byte order mark (U+FEFF) in a directory name is printed as itself',
+    anchor: String.raw`      /\\p{Cf}/u.test(ch)` + '\n',
+    replacement: String.raw`      (/\\p{Cf}/u.test(ch) && n !== 0xfeff)` + '\n',
+  },
+  {
+    id: 'C16',
+    subject: 'render',
+    claim:
+      'the combining grapheme joiner (U+034F, invisible though not a format character) in a directory name is printed as itself',
+    anchor: '      n === 0x34f ||\n',
+    replacement: '      false ||\n',
+  },
+  {
+    id: 'C17',
+    subject: 'render',
+    claim:
+      'a lone surrogate (a half of a pair, which a JSON string in the manifest can hold) is printed as itself and turns into U+FFFD or nothing where it lands',
+    anchor: '      (n >= 0xd800 && n <= 0xdfff) ||\n',
+    replacement: '      false ||\n',
+  },
+  {
+    id: 'C18',
+    subject: 'render',
+    claim:
+      'a character beyond U+FFFF is shown as a four-digit escape that cannot say which character it was (the braces form is dropped)',
+    anchor:
+      "      out += n > 0xffff ? \\`\\\\\\\\u{\\${n.toString(16)}}\\` : \\`\\\\\\\\u\\${n.toString(16).padStart(4, '0')}\\`;\n",
+    replacement: "      out += \\`\\\\\\\\u\\${n.toString(16).padStart(4, '0')}\\`;\n",
+  },
+  {
     id: 'A14',
     subject: 'render',
     claim:
       'the one Dockerfile line that keeps a vinext app on the known-good path is never named in the refusal (fragment)',
-    anchor: String.raw`\${fix || either ? " In a vinext app's Dockerfile, put exactly`,
+    anchor: String.raw`\${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly`,
     replacement: String.raw`\${false ? " In a vinext app's Dockerfile, put exactly`,
   },
   {
@@ -637,16 +750,54 @@ const LOADER = [
     subject: 'render',
     claim:
       'the vinext line is named only where a directory inside native/ is fixed in place, and not for the conditional advice (fragment)',
-    anchor: String.raw`\${fix || either ? " In a vinext app's Dockerfile, put exactly`,
-    replacement: String.raw`\${fix ? " In a vinext app's Dockerfile, put exactly`,
+    anchor: String.raw`\${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly`,
+    replacement: String.raw`\${closable && fix ? " In a vinext app's Dockerfile, put exactly`,
   },
   {
     id: 'A16',
     subject: 'render',
     claim:
       'the vinext line is no longer said to go DIRECTLY after the COPY: any later place reads as fine, and a deploy takes the slower path (fragment)',
-    anchor: String.raw`put exactly \`RUN chmod go-w /app /app/native\` directly after the \`COPY`,
-    replacement: String.raw`put exactly \`RUN chmod go-w /app /app/native\` after the \`COPY`,
+    anchor: 'directly after the \\`${VINEXT_NATIVE_COPY}\\` line',
+    replacement: 'after the \\`${VINEXT_NATIVE_COPY}\\` line',
+  },
+  {
+    id: 'A19',
+    subject: 'render',
+    claim:
+      'the vinext line is named for any directory that can be fixed in place, /app and /app/native or not: a refusal about /srv/app is told to edit a Dockerfile line that cannot help it (fragment)',
+    anchor: String.raw`\${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly`,
+    replacement: String.raw`\${(fix || either) ? " In a vinext app's Dockerfile, put exactly`,
+  },
+  {
+    id: 'A20',
+    subject: 'render',
+    claim: '/app/native is not counted among the directories the vinext line closes',
+    anchor: "      if (dir === '/app' || dir === '/app/native') closable = true;\n",
+    replacement: "      if (dir === '/app') closable = true;\n",
+  },
+  {
+    id: 'A21',
+    subject: 'render',
+    claim: '/app is not counted among the directories the vinext line closes',
+    anchor: "      if (dir === '/app' || dir === '/app/native') closable = true;\n",
+    replacement: "      if (dir === '/app/native') closable = true;\n",
+  },
+  {
+    id: 'A22',
+    subject: 'render',
+    claim:
+      'the refusal names another line than the one core recognises: the sentence is not built from the one constant the hint and core hold in step (fragment)',
+    anchor: 'put exactly \\`${VINEXT_CLOSE_LINE}\\` directly after',
+    replacement: 'put exactly \\`RUN chmod go-w /app\\` directly after',
+  },
+  {
+    id: 'A23',
+    subject: 'render',
+    claim:
+      'the refusal names another COPY than the scaffolded one: the line is said to follow a COPY that is not in the Dockerfile (fragment)',
+    anchor: 'directly after the \\`${VINEXT_NATIVE_COPY}\\` line',
+    replacement: 'directly after the \\`COPY native /app/native\\` line',
   },
   {
     id: 'A17',
@@ -844,7 +995,7 @@ const LOADER = [
     id: 'E15',
     subject: 'render',
     claim:
-      'the value a 64-bit integer argument was given, quoted when it is refused as not a decimal string, is printed raw (it is whatever the caller passed: it can hold a newline) (fragment)',
+      'the value a call returned in place of a 64-bit integer decimal string, quoted when $d64 refuses the result as not one, is printed raw (what a library returned that broke the contract: it can hold a newline) (fragment)',
     anchor: String.raw`expected a 64-bit integer as a decimal string, got \${$show(JSON.stringify(v))}`,
     replacement: String.raw`expected a 64-bit integer as a decimal string, got \${JSON.stringify(v)}`,
   },
@@ -852,7 +1003,7 @@ const LOADER = [
     id: 'E16',
     subject: 'render',
     claim:
-      'the value a finite-number argument was given, quoted when it is refused, is printed raw (it is whatever the caller passed) (fragment)',
+      'the value a call returned in place of a finite number, quoted when $fin refuses the result, is printed raw (what a library returned that broke the contract) (fragment)',
     anchor: String.raw`(NaN and Infinity cannot cross as JSON)' : $show(JSON.stringify(v))}`,
     replacement: String.raw`(NaN and Infinity cannot cross as JSON)' : JSON.stringify(v)}`,
   },
@@ -959,7 +1110,7 @@ const INIT = [
     id: 'V01',
     subject: 'init',
     claim: 'a Dockerfile that already closes /app and /app/native is told to add the line again',
-    anchor: "  if (!(closed.has('/app') && closed.has('/app/native'))) {\n",
+    anchor: "  if (!(walk.closed.has('/app') && walk.closed.has('/app/native'))) {\n",
     replacement: '  if (true as boolean) {\n',
   },
   {
@@ -971,7 +1122,7 @@ const INIT = [
   },
   {
     id: 'V03',
-    subject: 'init',
+    subject: 'vimage',
     claim: 'the line it tells the reader to add leaves /app itself open',
     anchor: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app /app/native';\n",
     replacement: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app/native';\n",
@@ -1035,8 +1186,9 @@ const INIT = [
     subject: 'init',
     claim: 'a destination with a trailing slash (/app/native/) is not the destination',
     anchor:
-      String.raw`  return dest === undefined ? undefined : dest.replace(/(?<=.)\/+$/, '');` + '\n',
-    replacement: '  return dest;\n',
+      String.raw`  return abs === undefined ? undefined : posix.normalize(abs).replace(/(?<=.)\/+$/, '');` +
+      '\n',
+    replacement: '  return abs === undefined ? undefined : posix.normalize(abs);\n',
   },
   {
     id: 'V12',
@@ -1058,45 +1210,43 @@ const INIT = [
     id: 'V14',
     subject: 'init',
     claim: 'closing /app/native alone is enough: /app is left as the builder made it',
-    anchor: "  if (!(closed.has('/app') && closed.has('/app/native'))) {\n",
-    replacement: "  if (!closed.has('/app/native')) {\n",
+    anchor: "  if (!(walk.closed.has('/app') && walk.closed.has('/app/native'))) {\n",
+    replacement: "  if (!walk.closed.has('/app/native')) {\n",
   },
   {
     id: 'V15',
     subject: 'init',
     claim: 'closing /app alone is enough: /app/native is left as the builder made it',
-    anchor: "  if (!(closed.has('/app') && closed.has('/app/native'))) {\n",
-    replacement: "  if (!closed.has('/app')) {\n",
+    anchor: "  if (!(walk.closed.has('/app') && walk.closed.has('/app/native'))) {\n",
+    replacement: "  if (!walk.closed.has('/app')) {\n",
   },
   {
     id: 'V16',
     subject: 'init',
     claim: 'a chmod before the copy counts: the copy then makes the directory again',
-    anchor:
-      "  for (const i of stage.slice(copy + 1)) if (i.word === 'RUN') applyRun(i.rest, closed);\n",
-    replacement: "  for (const i of stage) if (i.word === 'RUN') applyRun(i.rest, closed);\n",
+    anchor: '  const walk = walkRuns(stage, copy + 1, cwds);\n',
+    replacement: '  const walk = walkRuns(stage, 0, cwds);\n',
   },
   {
     id: 'V17',
     subject: 'init',
     claim: 'any chmod counts, whatever mode it sets (go+w opens the directories)',
-    anchor:
-      "      if (effect === 'closes') closed.add(d);\n      else if (effect === 'opens') closed.delete(d);\n",
-    replacement: '      closed.add(d);\n',
+    anchor: "  if (effect === 'closes') {\n",
+    replacement: "  if (effect !== 'neither') {\n",
   },
   {
     id: 'V18',
     subject: 'init',
     claim: 'a recursive chmod of /app is not taken to close /app/native too',
-    anchor: "    if (recursive && p === '/app') dirs.add('/app/native');\n",
-    replacement: '\n',
+    anchor: "    (d) => d === path || (recursive && (path === '/' || d.startsWith(`${path}/`))),\n",
+    replacement: '    (d) => d === path,\n',
   },
   {
     id: 'V19',
     subject: 'init',
     claim: 'a RUN line is read as one command: a chmod after && or ; is not seen',
-    anchor: String.raw`  for (const command of run.split(/&&|\|\||;/)) {` + '\n',
-    replacement: '  for (const command of [run]) {\n',
+    anchor: "    } else if (c === '\\n' || c === ';' || c === '&' || c === '|') endCommand();\n",
+    replacement: "    } else if (c === '\\n') endCommand();\n",
   },
   {
     id: 'V20',
@@ -1118,23 +1268,23 @@ const INIT = [
     id: 'V22',
     subject: 'init',
     claim: 'a later chmod that gives group or other write does not take back an earlier close',
-    anchor: "      else if (effect === 'opens') closed.delete(d);\n",
-    replacement: '\n',
+    anchor: '    walk.closed.delete(d);\n    if (!unknown) walk.opened.add(d);\n',
+    replacement: '    if (!unknown) walk.opened.add(d);\n',
   },
   {
     id: 'V23',
     subject: 'init',
     claim: 'a later chown to somebody but root does not take back an earlier close',
     anchor:
-      '      if (!staysRootOwned(what)) for (const d of named(paths, recursive)) closed.delete(d);\n',
-    replacement: '\n',
+      "  const effect = tool === 'chown' ? (staysRootOwned(what) ? 'neither' : 'opens') : modeEffect(what);\n",
+    replacement: "  const effect = tool === 'chown' ? 'neither' : modeEffect(what);\n",
   },
   {
     id: 'V24',
     subject: 'init',
     claim:
       'the body of a heredoc is read as instructions: a chmod, a COPY or a FROM inside one is taken for a real one',
-    anchor: '      open = heredocsOf(m[2] as string);\n',
+    anchor: '      open = HEREDOC_WORDS.has(word) ? heredocsOf(m[2] as string) : [];\n',
     replacement: '      open = [];\n',
   },
   {
@@ -1178,6 +1328,145 @@ const INIT = [
       'an app whose config names no build is not read as turbopack (the default): it is told as an unknown build is',
     anchor: '    const build = (config as { build?: unknown }).build ?? DEFAULT_BUILD;\n',
     replacement: '    const build = (config as { build?: unknown }).build;\n',
+  },
+  {
+    id: 'V32',
+    subject: 'init',
+    claim:
+      'a heredoc opened by an instruction that only holds text (LABEL x="<<EOF") swallows the rest of the file',
+    anchor: '      open = HEREDOC_WORDS.has(word) ? heredocsOf(m[2] as string) : [];\n',
+    replacement: '      open = heredocsOf(m[2] as string);\n',
+  },
+  {
+    id: 'V33',
+    subject: 'init',
+    claim: 'the body of a RUN heredoc is not read as commands: a chmod inside one is missed',
+    anchor:
+      '  return [...(exec ? [exec] : shellCommands(run.rest)), ...run.body.flatMap(shellCommands)];\n',
+    replacement: '  return [...(exec ? [exec] : shellCommands(run.rest))];\n',
+  },
+  {
+    id: 'V34',
+    subject: 'init',
+    claim: 'a quoted path ("/app") is read with its quotes on: a close or an open of it is missed',
+    anchor: '  return m ? (m[2] as string) : text.trim();\n',
+    replacement: '  return text.trim();\n',
+  },
+  {
+    id: 'V35',
+    subject: 'init',
+    claim: 'a path to chmod (/bin/chmod) is not the command chmod',
+    anchor: "const base = (word: string): string => word.slice(word.lastIndexOf('/') + 1);\n",
+    replacement: 'const base = (word: string): string => word;\n',
+  },
+  {
+    id: 'V36',
+    subject: 'init',
+    claim: 'a path is not normalised: /app/. and /app//native name other directories',
+    anchor:
+      String.raw`  return abs === undefined ? undefined : posix.normalize(abs).replace(/(?<=.)\/+$/, '');` +
+      '\n',
+    replacement:
+      String.raw`  return abs === undefined ? undefined : abs.replace(/(?<=.)\/+$/, '');` + '\n',
+  },
+  {
+    id: 'V37',
+    subject: 'init',
+    claim:
+      'the WORKDIR is not tracked: a relative path after WORKDIR /app is not read, and a relative COPY destination is not found',
+    anchor: "    if (inst.word === 'WORKDIR') dir = resolvePath(inst.rest, dir);\n",
+    replacement: "    if (inst.word === 'WORKDIR') dir = undefined;\n",
+  },
+  {
+    id: 'V38',
+    subject: 'init',
+    claim:
+      'a path that cannot be read (a variable, a glob) is skipped: a chmod that may open the directories is taken for one that does not',
+    anchor: '    if (p === undefined) unknown = true;\n',
+    replacement: '    if (p === undefined) continue;\n',
+  },
+  {
+    id: 'V39',
+    subject: 'init',
+    claim:
+      'a RUN after the copy that opens the directories is told to add the line anyway, which would not help',
+    anchor: '    if (walk.opened.size > 0 || walk.maybe) {\n',
+    replacement: '    if (false as boolean) {\n',
+  },
+  {
+    id: 'V40',
+    subject: 'init',
+    claim: 'sh -c "..." is not read: a chmod inside the string is missed',
+    anchor: '    if (at !== -1 && script !== undefined) {\n',
+    replacement: '    if (false as boolean) {\n',
+  },
+  {
+    id: 'V41',
+    subject: 'init',
+    claim: 'find -exec is not read: a chmod it runs is missed',
+    anchor: '      if (!/^-(?:exec|execdir|ok|okdir)$/.test(w)) return;\n',
+    replacement: "      if (w !== '') return;\n",
+  },
+  {
+    id: 'V42',
+    subject: 'init',
+    claim: 'sudo is not a wrapper: a chmod behind it is not the command chmod',
+    anchor: "  'sudo',\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V43',
+    subject: 'init',
+    claim:
+      'a command that runs a chmod this does not know (an unknown wrapper) is taken for one that does not',
+    anchor: '      words.some((w) => /^(?:chmod|chown)$/.test(base(w)))\n',
+    replacement: '      false\n',
+  },
+  {
+    id: 'V44',
+    subject: 'init',
+    claim: 'xargs is not told apart: the paths it hands a chmod are taken as read',
+    anchor: "    if (name === 'xargs') stdin = true;\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V45',
+    subject: 'init',
+    claim:
+      'a COPY destination is compared as written: a relative one, a quoted one or one with a dot is not /app/native',
+    anchor: "    if (dest !== undefined && resolvePath(dest, dir) === '/app/native') copy = n;\n",
+    replacement: "    if (dest !== undefined && dest === '/app/native') copy = n;\n",
+  },
+  {
+    id: 'V46',
+    subject: 'init',
+    claim: 'the exec form of a RUN is not read: a chmod written as a JSON array is missed',
+    anchor:
+      "      if (Array.isArray(parsed) && parsed.every((p) => typeof p === 'string')) exec = parsed;\n",
+    replacement: '      exec = undefined;\n',
+  },
+  {
+    id: 'V47',
+    subject: 'init',
+    claim: 'cd is not followed: a relative path after a cd names the wrong directory',
+    anchor: "  if (tool === 'cd') {\n",
+    replacement: '  if (false as boolean) {\n',
+  },
+  {
+    id: 'V48',
+    subject: 'init',
+    claim:
+      'a recursive chmod is not told apart from a plain one: -R on /app does not reach /app/native',
+    anchor:
+      "  const recursive = args.some((a) => a === '--recursive' || /^-[A-Za-z]*R[A-Za-z]*$/.test(a));\n",
+    replacement: '  const recursive = false;\n',
+  },
+  {
+    id: 'V49',
+    subject: 'init',
+    claim: 'a recursive chmod of / does not reach /app',
+    anchor: "    (d) => d === path || (recursive && (path === '/' || d.startsWith(`${path}/`))),\n",
+    replacement: '    (d) => d === path || (recursive && d.startsWith(`${path}/`)),\n',
   },
   {
     id: 'V31',
@@ -1265,6 +1554,38 @@ const KNOWN = [
     anchor: "const VINEXT_BUILD = 'vinext';\n",
     replacement: "const VINEXT_BUILD = 'vinxet';\n",
   },
+  {
+    id: 'G09',
+    subject: 'vimage',
+    claim:
+      'the COPY the hint and the refusal look for drifts from the one core holds (a newline apart is the only difference allowed)',
+    anchor:
+      "export const VINEXT_NATIVE_COPY = 'COPY --chown=0:0 --chmod=a-w native /app/native';\n",
+    replacement:
+      "export const VINEXT_NATIVE_COPY = 'COPY --chown=0:0 --chmod=a-w native /app/native/';\n",
+  },
+  {
+    id: 'G10',
+    subject: 'render',
+    claim:
+      'the refusal names another line than the one core recognises: the sentence is not built from the constants (fragment)',
+    anchor: 'put exactly \\`${VINEXT_CLOSE_LINE}\\` directly after',
+    replacement: 'put exactly \\`RUN chmod go-w /app\\` directly after',
+  },
+  {
+    id: 'G11',
+    subject: 'render',
+    claim: 'the refusal names another COPY than the one core knows (fragment)',
+    anchor: 'directly after the \\`${VINEXT_NATIVE_COPY}\\` line',
+    replacement: 'directly after the \\`COPY native /app/native\\` line',
+  },
+  {
+    id: 'G12',
+    subject: 'vimage',
+    claim: 'the line the hint prints drifts from the one core recognises',
+    anchor: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app /app/native';\n",
+    replacement: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app/native /app';\n",
+  },
 ];
 
 // `knext ffi generate` and `knext ffi check` print the hint for an app that already has its config.
@@ -1305,6 +1626,171 @@ const GENERATE = [
   },
 ];
 
+// The musl lane's workflow is read as text by its spec, so the lint counts its rows as wiring. The
+// page's recipe is run, not read, but through a helper that extracts it, which the lint cannot
+// follow: those rows are unattributed (the baseline says how many).
+export const WIRING_SUBJECTS = ['lane'];
+
+// The recipe the page gives for a compiled binary run outside a container (doc-recipe.test.ts
+// extracts and runs it).
+const DOC = [
+  {
+    id: 'R01',
+    subject: 'page',
+    claim:
+      'an empty or relative APP_DIR is accepted: cd "" stays where it is, and the commands run on whatever that is',
+    anchor: '   if [ -z "${APP_DIR:-}" ] || [ "${APP_DIR#/}" = "$APP_DIR" ]; then\n',
+    replacement: '   if false; then\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R02',
+    subject: 'page',
+    claim: 'no directory is refused as a system, home or temporary directory',
+    anchor: '   elif unsafe_dir "$R" "$(real_dir "${HOME:-/}" || echo /)"; then\n',
+    replacement: '   elif false; then\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R03',
+    subject: 'page',
+    claim: 'a directory that holds anything but the app is handed to root with all of it',
+    anchor: '   elif ! holds_only_app "$R"; then\n',
+    replacement: '   elif false; then\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R04',
+    subject: 'page',
+    claim: 'the doubled slashes of //home/me are kept, so it is not read as /home/me',
+    anchor: '     lead=${p%%[!/]*}\n',
+    replacement: '     lead=\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R05',
+    subject: 'page',
+    claim: '/dev is missing from the system directories',
+    anchor:
+      '     for d in /bin /boot /dev /etc /lib /lib64 /proc /run /sbin /sys /usr/bin /usr/lib /usr/libexec /usr/sbin /usr/share; do\n',
+    replacement:
+      '     for d in /bin /boot /etc /lib /lib64 /proc /run /sbin /sys /usr/bin /usr/lib /usr/libexec /usr/sbin /usr/share; do\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R06',
+    subject: 'page',
+    claim: '/var/lib is missing from the directories that are never an app of their own',
+    anchor:
+      '       / | /opt | /srv | /mnt | /media | /nix | /snap | /usr | /usr/local | /usr/local/bin | /usr/local/lib | /usr/local/sbin | /usr/local/share | /var | /var/cache | /var/lib | /var/log | /var/spool | /var/www) return 0 ;;\n',
+    replacement:
+      '       / | /opt | /srv | /mnt | /media | /nix | /snap | /usr | /usr/local | /usr/local/bin | /usr/local/lib | /usr/local/sbin | /usr/local/share | /var | /var/cache | /var/log | /var/spool | /var/www) return 0 ;;\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R07',
+    subject: 'page',
+    claim: 'a directory under the home directory is not refused',
+    anchor: '     case "$1/" in "$2"/*) return 0 ;; esac\n',
+    replacement: '\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R08',
+    subject: 'page',
+    claim: 'a directory that holds the home directory (a parent of it) is not refused',
+    anchor: '     case "$2/" in "$1"/*) return 0 ;; esac\n',
+    replacement: '\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R09',
+    subject: 'page',
+    claim:
+      'native/ is not required to hold its .integrity.json, nor to be a plain directory with a plain manifest',
+    anchor:
+      '         [ -d "$e" ] && [ ! -L "$e" ] && [ -f "$e/.integrity.json" ] && [ ! -L "$e/.integrity.json" ] || return 1\n',
+    replacement: '         [ -d "$e" ] || return 1\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R10',
+    subject: 'page',
+    claim: 'native/ may be a link',
+    anchor:
+      '         [ -d "$e" ] && [ ! -L "$e" ] && [ -f "$e/.integrity.json" ] && [ ! -L "$e/.integrity.json" ] || return 1\n',
+    replacement:
+      '         [ -d "$e" ] && [ -f "$e/.integrity.json" ] && [ ! -L "$e/.integrity.json" ] || return 1\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R11',
+    subject: 'page',
+    claim: 'the executable may be anything that exists (a directory, a link)',
+    anchor: '         [ -f "$e" ] && [ ! -L "$e" ] || return 1\n',
+    replacement: '         [ -e "$e" ] || return 1\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R12',
+    subject: 'page',
+    claim: 'more than one other entry is accepted',
+    anchor: '     [ "$native" = 1 ] && [ "$exe" = 1 ]\n',
+    replacement: '     [ "$native" = 1 ] && [ "$exe" -ge 1 ]\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R13',
+    subject: 'page',
+    claim: 'the commands run on APP_DIR as typed, not on the real directory that was checked',
+    anchor: '     sudo chown -R root:root "$R"\n',
+    replacement: '     sudo chown -R root:root "$APP_DIR"\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R14',
+    subject: 'page',
+    claim: 'a failed resolution (a path that does not exist) is let through as the empty path',
+    anchor: '   elif ! R=$(real_dir "$APP_DIR"); then\n',
+    replacement: '   elif R=$(real_dir "$APP_DIR") && false; then\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R15',
+    subject: 'page',
+    claim:
+      '/usr/local/<app> is refused along with /usr/local itself (the check is a prefix, not the directory)',
+    anchor:
+      '       / | /opt | /srv | /mnt | /media | /nix | /snap | /usr | /usr/local | /usr/local/bin | /usr/local/lib | /usr/local/sbin | /usr/local/share | /var | /var/cache | /var/lib | /var/log | /var/spool | /var/www) return 0 ;;\n',
+    replacement:
+      '       / | /opt | /srv | /mnt | /media | /nix | /snap | /usr | /usr/local | /usr/local/* | /usr/local/bin | /usr/local/lib | /usr/local/sbin | /usr/local/share | /var | /var/cache | /var/lib | /var/log | /var/spool | /var/www) return 0 ;;\n',
+    options: { commentPrefix: '#' },
+  },
+];
+
+// The musl lane stages the directory the page's commands accept (tests/workflow-ffi-e2e-lane.test.ts).
+const LANE = [
+  {
+    id: 'Y01',
+    subject: 'lane',
+    claim:
+      "the staged directory of an earlier run is not cleared: the page's commands see what it left (a reused runner) and refuse, or hand it to root with the leftovers",
+    anchor:
+      '          sudo rm -rf /opt/knext-ffi-caller\n          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/knext-ffi-caller\n',
+    replacement:
+      '          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/knext-ffi-caller\n',
+  },
+  {
+    id: 'Y02',
+    subject: 'lane',
+    claim:
+      "the page's commands run after the loader loads, not before: the staged copy is the runner's, not root's",
+    anchor:
+      '          APP_DIR="/opt/knext-ffi-caller" bash -euo pipefail "${RUNNER_TEMP}/own-binary.sh"\n',
+    replacement: '          true\n',
+  },
+];
+
 // The subject is an inline literal, not a shared constant: the lane's
 // subject-existence audit reads it from the createGuardProver call.
 const loader = createGuardProver({
@@ -1319,7 +1805,15 @@ const loader = createGuardProver({
 console.log('=== mutation proof: the loader against a whole-tree swap (TD-S17-close-1) ===');
 loader.preflight(LOADER);
 loader.preflight(SCAN);
-declareMutations(LOADER.length + SCAN.length + INIT.length + KNOWN.length + GENERATE.length);
+declareMutations(
+  LOADER.length +
+    SCAN.length +
+    INIT.length +
+    KNOWN.length +
+    GENERATE.length +
+    DOC.length +
+    LANE.length,
+);
 
 console.log('\n=== the behaviour, against a real library (ffi-loader.test.ts) ===');
 loader.baseline();
@@ -1339,7 +1833,11 @@ loader.finish(LOADER.length + SCAN.length);
 const init = createGuardProver({
   repoRoot: REPO_ROOT,
   spec: 'packages/ffi/src/__tests__/init.test.ts',
-  subjects: { init: 'packages/ffi/src/init.ts', cli: 'packages/ffi/src/cli.ts' },
+  subjects: {
+    init: 'packages/ffi/src/init.ts',
+    cli: 'packages/ffi/src/cli.ts',
+    vimage: 'packages/ffi/src/vinext-image.ts',
+  },
 });
 init.preflight(INIT);
 
@@ -1362,6 +1860,8 @@ const known = createGuardProver({
   subjects: {
     image: 'packages/kn-next/src/cli/runtime-image.ts',
     init: 'packages/ffi/src/init.ts',
+    vimage: 'packages/ffi/src/vinext-image.ts',
+    render: 'packages/ffi/src/render.ts',
   },
 });
 known.preflight(KNOWN);
@@ -1400,3 +1900,50 @@ for (const m of GENERATE) {
   recordMutation();
 }
 generate.finish(GENERATE.length);
+
+const doc = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: 'packages/ffi/src/__tests__/doc-recipe.test.ts',
+  subjects: { page: 'apps/docs/content/docs/rust-in-process.mdx' },
+});
+doc.preflight(DOC);
+
+console.log(
+  "\n=== the page's commands for a binary run outside a container (doc-recipe.test.ts) ===",
+);
+doc.baseline();
+doc.proveCanSeeRed({
+  subject: 'page',
+  anchor: '   elif ! holds_only_app "$R"; then\n',
+  replacement: '   elif false; then\n',
+  options: { commentPrefix: '#' },
+});
+for (const m of DOC) {
+  doc.run({ ...m, expect: 'red' });
+  recordMutation();
+}
+doc.finish(DOC.length);
+
+const lane = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: 'tests/workflow-ffi-e2e-lane.test.ts',
+  subjects: { lane: '.github/workflows/ffi-e2e.yml' },
+});
+lane.preflight(LANE);
+
+console.log(
+  '\n=== the musl lane stages the directory the commands accept (workflow-ffi-e2e-lane.test.ts) ===',
+);
+lane.baseline();
+lane.proveCanSeeRed({
+  subject: 'lane',
+  anchor:
+    '          sudo rm -rf /opt/knext-ffi-caller\n          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/knext-ffi-caller\n',
+  replacement:
+    '          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/knext-ffi-caller\n',
+});
+for (const m of LANE) {
+  lane.run({ ...m, expect: 'red' });
+  recordMutation();
+}
+lane.finish(LANE.length);

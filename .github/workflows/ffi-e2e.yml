@@ -298,12 +298,19 @@ jobs:
           cp -R "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl/exe/native"
           # The installed copy goes where the docs page says an install goes, a directory under
           # /opt that holds only this app: the page's commands refuse the runner's temp directory
-          # (it is under /home/runner), as they refuse any directory that can hold other things.
-          # The loader also checks every directory from native/ up to /: here the bind mount
-          # /opt/caller (the copy below, made root's) and the image's own /opt and /, both root's
-          # and closed. The ownership comes from the page's own commands for a compiled binary run
-          # outside a container, extracted and run verbatim (APP_DIR is the page's variable),
-          # not from a hand-written copy of them.
+          # (it is under /home/runner), as they refuse any directory that can hold other things,
+          # and accept a directory only when it holds native/ (with its .integrity.json) and the
+          # one executable, which is all this one gets (musl/exe/ffi-caller and musl/exe/native).
+          # It is cleared first, as root, because an earlier run on a reused runner leaves it
+          # root's and the page's commands would find its files and refuse.
+          # The loader also checks every directory from native/ up to /, but not the host's: the
+          # host's /opt is writable by everyone (mode 0777) on a GitHub runner, and that does not
+          # matter, because the container sees only the bind mount /opt/caller (the copy below,
+          # made root's by the page's commands) under the image's own /opt and /, both root's and
+          # closed: the bind mount replaces that ancestry. The ownership comes from the page's
+          # own commands for a compiled binary run outside a container, extracted and run verbatim
+          # (APP_DIR is the page's variable), not from a hand-written copy of them.
+          sudo rm -rf /opt/knext-ffi-caller
           sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 /opt/knext-ffi-caller
           cp -R "${RUNNER_TEMP}/musl/exe/." /opt/knext-ffi-caller/
           bun packages/ffi/scripts/doc-recipe.ts shell "${RUNNER_TEMP}/own-binary.sh"

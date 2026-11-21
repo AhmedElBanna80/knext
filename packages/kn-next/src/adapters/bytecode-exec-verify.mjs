@@ -34,6 +34,8 @@
  * on purpose: bundled into the compile script and imported by the CLI.
  */
 
+import { randomBytes } from "node:crypto";
+
 /** The pragma prefix Bun stamps on every module it bundles for `--compile`. */
 const PRAGMA = "// @bun";
 
@@ -102,6 +104,31 @@ export function verifyBytecodeExec(bytes, marker) {
         };
     }
     return { ok: true };
+}
+
+/**
+ * Mint a unique per-build marker `<prefix>:<24 hex>`. One implementation for
+ * every compiled target, so the format cannot drift between the CLI and a
+ * compile script.
+ *
+ * @param {string} prefix e.g. `knext-vinext-exec`
+ */
+export function mintExecMarker(prefix) {
+    return `${prefix}:${randomBytes(12).toString("hex")}`;
+}
+
+/**
+ * Is `marker` exactly a marker `mintExecMarker(prefix)` could have minted?
+ *
+ * @param {string} prefix
+ * @param {unknown} marker
+ */
+export function isExecMarker(prefix, marker) {
+    return (
+        typeof marker === "string" &&
+        marker.startsWith(`${prefix}:`) &&
+        /^[0-9a-f]{24}$/.test(marker.slice(prefix.length + 1))
+    );
 }
 
 /**

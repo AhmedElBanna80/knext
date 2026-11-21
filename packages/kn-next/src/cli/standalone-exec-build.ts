@@ -18,13 +18,14 @@
  * ADR-0001: this module writes a file into the local build context only.
  */
 
-import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+    mintExecMarker,
     verifyBytecodeEmbedded,
     verifyBytecodeExec,
 } from "../adapters/bytecode-exec-verify.mjs";
+import { enforceBytecodeVerdict } from "./bytecode-enforce";
 import { packageRoot } from "./create";
 import { runQuiet } from "./exec";
 import { UsageError } from "./shared";
@@ -168,7 +169,7 @@ export function buildStandaloneExecutable(
 
     const outFile =
         opts.outFile ?? join(opts.cwd, standaloneExecFileName(opts.arch));
-    const marker = `knext-standalone-exec:${randomBytes(12).toString("hex")}`;
+    const marker = mintExecMarker("knext-standalone-exec");
     run(
         standaloneCompileArgv({
             arch: opts.arch,
@@ -186,12 +187,6 @@ export function buildStandaloneExecutable(
     const verdict = opts.selfContained
         ? verifyBytecodeEmbedded(read(outFile), marker, 1)
         : verifyBytecodeExec(read(outFile), marker);
-    if (!verdict.ok) {
-        rmSync(outFile, { force: true });
-        throw new UsageError(
-            `The compiled standalone executable failed the bytecode check: ${verdict.reason}.\n\n` +
-                "Refusing to ship it — a binary without bytecode boots, but pays a full compile on every cold start.",
-        );
-    }
+    enforceBytecodeVerdict(verdict, outFile, "standalone");
     return outFile;
 }

@@ -34,6 +34,7 @@ const runQuiet = (() => mock())();
 mock.module("../cli/exec", () => ({ runQuiet }));
 
 import { buildVinextExecutable, COMPILE_LOG_PREFIX } from "../cli/vinext-build";
+import { bytecodeFor } from "./helpers/vinext-bytecode-artifact";
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -50,6 +51,10 @@ function cwdWithOutput(): string {
     return cwd;
 }
 
+/** The artifact for the compile the (mocked) runner was last asked to run. */
+const lastCompileArtifact = () =>
+    bytecodeFor(runQuiet.mock.calls.at(-1)?.[0] as string[] | undefined);
+
 beforeEach(() => {
     runQuiet.mockClear();
     runQuiet.mockImplementation(() => {});
@@ -63,6 +68,7 @@ describe("buildVinextExecutable's default run (#1385)", () => {
             cwd: cwdWithOutput(),
             bunVersion: "1.4.0",
             skipViteBuild: true,
+            readArtifact: lastCompileArtifact,
             // opts.run deliberately OMITTED — this is the real `kn-next
             // build` path, not a test double for the exec layer itself.
         });
@@ -85,6 +91,7 @@ describe("buildVinextExecutable's default run (#1385)", () => {
                 cwd: cwdWithOutput(),
                 bunVersion: "1.4.0",
                 skipViteBuild: true,
+                readArtifact: lastCompileArtifact,
             });
             expect(
                 (
@@ -101,6 +108,7 @@ describe("buildVinextExecutable's default run (#1385)", () => {
                 cwd: cwdWithOutput(),
                 bunVersion: "1.4.0",
                 skipViteBuild: true,
+                readArtifact: lastCompileArtifact,
             });
             expect(
                 (

@@ -1,0 +1,17 @@
+{
+  "arm": "bun-vinext-1000m",
+  "runtime": "bun",
+  "build_target": "vinext",
+  "app": "scaffold",
+  "image": "localhost:5001/bun-vinext-1000m:r44808959901-bun-vinext-1000m@sha256:8465d5dc181cdcc755d84b3bfe1460b3774cfefce32d3e9a0660292ffd0a84a8",
+  "bytecode": {
+    "kind": "bun-bytecode",
+    "binary": "/app/server",
+    "size_bytes": 84678192,
+    "method": "pragma-differential",
+    "verdict": "bytecode pragma count app=2 baseline=1: the executable carries bytecode modules"
+  },
+  "spec_build": "vinext",
+  "spec_runtime": "",
+  "cpu_limit": "1000m"
+}

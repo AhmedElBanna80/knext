@@ -1,0 +1,17 @@
+{
+  "arm": "bun-turbopack-1000m",
+  "runtime": "bun",
+  "build_target": "turbopack",
+  "app": "scaffold",
+  "image": "localhost:5001/bun-turbopack-1000m:r44808959901-bun-turbopack-1000m@sha256:cef0861cc1bfc66ccac827587c6c3b301fb476ab644bb5c09b4aadfff7f171be",
+  "bytecode": {
+    "kind": "bun-bytecode",
+    "binary": "/app/.next/standalone/knext-standalone-exec",
+    "size_bytes": 92411440,
+    "method": "marker",
+    "verdict": "bytecode verified: knext-standalone-exec:1402cf7e04a66dc47243eae4 sits under a @bytecode pragma with a constant-pool copy"
+  },
+  "spec_build": "turbopack",
+  "spec_runtime": "bun",
+  "cpu_limit": "1000m"
+}

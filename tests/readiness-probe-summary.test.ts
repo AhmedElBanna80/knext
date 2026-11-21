@@ -273,6 +273,7 @@ describe('readiness-probe-summary.py table 2 (effect vs baseline)', () => {
     const rev = run(T2_ROWS, [T2_EVENTS], ['--baseline=slow']);
     expect(rev).toContain('vs baseline slow');
     expect(rev).toMatch(/first byte\s+base\s+3\s+-2000\s+-2000/);
+    expect(rev).toMatch(/base\s+3\s+-2000.*slowdown excluded; speedup NOT excluded/);
   });
 
   it('reports the two-sided exact Mann-Whitney p of fully separated samples', () => {
@@ -327,6 +328,12 @@ describe('readiness-probe-summary.py estimators', () => {
       'm.bootstrap_median_diff_ci([1,5,9,30,31],[1002,1006,1008,1040,1070],2000)',
     ) as number[];
     expect(shifted.map((x, i) => x - base[i])).toEqual([1000, 1000, 1000]);
+  });
+
+  it('bootstrap CI bounds are the (1-level)/2 and (1+level)/2 percentiles', () => {
+    // a = [0]; b resampled from [0,10,10,10,10]: the resampled median is 0 with probability ~0.058
+    // (>= 2.5%, so the 2.5th percentile is 0) and 10 otherwise.
+    expect(py('m.bootstrap_median_diff_ci([0],[0,10,10,10,10],4000)')).toEqual([10, 0, 10]);
   });
 
   it('bootstrap CI widens with the confidence level', () => {

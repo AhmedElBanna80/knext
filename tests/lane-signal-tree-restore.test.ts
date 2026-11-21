@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { hermeticLaneEnv, LANE_ENV } from './helpers/lane-env';
+import { LANE_ENV, runnerEnv, spawnLaneRunner } from './helpers/lane-env';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -101,21 +101,6 @@ async function waitFor(check: () => boolean, ms = 20_000) {
   return check();
 }
 
-/** The env the fixture runner gets: the ambient env minus the lane's own variables (see helpers/lane-env.ts), plus the restore opt-in. */
-function runnerEnv(): Record<string, string> {
-  return hermeticLaneEnv({ KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' });
-}
-
-/** THE spawn site of the runner under test (one place, so the env scrub cannot be skipped at one of several). */
-function spawnRunner(dir: string) {
-  return Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
-    cwd: dir,
-    env: runnerEnv(),
-    stdout: 'ignore',
-    stderr: 'ignore',
-  });
-}
-
 describe('the runner under test is hermetic against the lane (the S13-5 baseline bug)', () => {
   it('runnerEnv drops PROVER_LANE_SHA and every other lane variable, keeps unrelated ones', () => {
     const saved = { sha: process.env.PROVER_LANE_SHA, ci: process.env.GITHUB_ACTIONS };
@@ -144,7 +129,7 @@ describe('the runner under test is hermetic against the lane (the S13-5 baseline
     const leakDir = fixtureRepo();
     const saved = process.env.PROVER_LANE_SHA;
     process.env.PROVER_LANE_SHA = 'c'.repeat(40); // not the fixture repo's HEAD: leaked, the runner fatals
-    const proc = spawnRunner(leakDir);
+    const proc = spawnLaneRunner(leakDir);
     try {
       const mutated = () => readFileSync(join(leakDir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
       expect(await waitFor(mutated)).toBe(true);
@@ -173,7 +158,7 @@ describe('the fixture kill never targets the test process group (ROUND 4 item 4)
 describe('a signal to the lane runner restores the tree its killed prover left (ROUND 2 item 6)', () => {
   it('SIGTERM mid-mutation: the tracked file is restored, the untracked file removed, the tree clean', async () => {
     const dir = fixtureRepo();
-    const proc = spawnRunner(dir);
+    const proc = spawnLaneRunner(dir);
     try {
       const mutated = () => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
       expect(await waitFor(mutated)).toBe(true);
@@ -193,7 +178,7 @@ describe('a signal to the lane runner restores the tree its killed prover left (
 
   it('a SIGKILLed runner cannot run its handler, so the prover survives until the test kills its group, and nothing is left', async () => {
     const dir = fixtureRepo();
-    const proc = spawnRunner(dir);
+    const proc = spawnLaneRunner(dir);
     try {
       expect(
         await waitFor(() => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n'),

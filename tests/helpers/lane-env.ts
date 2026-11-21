@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 /**
  * The nightly mutation-prover lane's OWN environment variables, and the hermetic env a runner under test
  * must get instead.
@@ -35,4 +37,19 @@ export function hermeticLaneEnv(
   const env: Record<string, string | undefined> = { ...ambient };
   for (const k of LANE_ENV) delete env[k];
   return { ...env, ...extra } as Record<string, string>;
+}
+
+/** The env the fixture runner gets: the ambient env minus the lane's own variables, plus the restore opt-in. */
+export function runnerEnv(): Record<string, string> {
+  return hermeticLaneEnv({ KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' });
+}
+
+/** THE spawn site of the runner under test in a throwaway repo (one place, so the env scrub cannot be skipped at one of several). */
+export function spawnLaneRunner(dir: string) {
+  return Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
+    cwd: dir,
+    env: runnerEnv(),
+    stdout: 'ignore',
+    stderr: 'ignore',
+  });
 }

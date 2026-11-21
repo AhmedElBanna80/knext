@@ -110,10 +110,11 @@ mkdirSync(join(native, 'ffi', stageTriple), { recursive: true });
 copyFileSync(lib, join(native, 'ffi', stageTriple, basename(lib)));
 writeNativeIntegrityManifest(native, undefined);
 // Read-only, as the image's `COPY --chmod=a-w` leaves it. The loader also wants root to OWN the
-// library, its directories up to native/ and the directory native/ sits in: the workflow hands
-// the tree to root (`sudo chown`), the way the image's `COPY --chown=0:0` does, because this
-// script runs as the runner user and cannot.
+// integrity manifest, the library, its directories up to native/ and the directory native/ sits
+// in: the workflow hands the tree to root (`sudo chown`), the way the image's `COPY --chown=0:0`
+// does, because this script runs as the runner user and cannot.
 for (const p of [
+  join(native, '.integrity.json'),
   join(native, 'ffi', stageTriple, basename(lib)),
   join(native, 'ffi', stageTriple),
   join(native, 'ffi'),

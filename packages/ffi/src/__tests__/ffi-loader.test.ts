@@ -977,8 +977,10 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       const read = fs.readFileSync;
       (fs as { readFileSync: unknown }).readFileSync = function (this: unknown, ...a: unknown[]) {
         const out = (read as (...x: unknown[]) => unknown).apply(this, a);
-        // The library's bytes, not the manifest's (read by path as UTF-8).
-        if (typeof a[0] === 'number' || String(a[0]) === staged) swap('read');
+        // The library's bytes (through a descriptor, with no encoding), not the manifest's (UTF-8).
+        if ((typeof a[0] === 'number' && a[1] === undefined) || String(a[0]) === staged) {
+          swap('read');
+        }
         return out;
       };
       mod.syncBuiltinESMExports();
@@ -1055,7 +1057,8 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       const read = fs.readFileSync;
       (fs as { readFileSync: unknown }).readFileSync = function (this: unknown, ...a: unknown[]) {
         const out = (read as (...x: unknown[]) => unknown).apply(this, a);
-        if (String(a[0]).endsWith('.integrity.json')) flipped = true;
+        // The manifest is the one file read as UTF-8, through the descriptor it was opened as.
+        if (typeof a[0] === 'number' && a[1] === 'utf8') flipped = true;
         return out;
       };
       mod.syncBuiltinESMExports();
@@ -1385,7 +1388,8 @@ describe('the library is refused unless only root can write it and own the way t
     expect(greet, r.stderr).toEqual({ ok: 'Hello, World!' });
     // Each directory is stat-ed twice (before the manifest is read, and again after the library
     // is hashed), so judge the set of what was touched, not the count.
-    expect([...new Set(statted)].sort()).toEqual(['fd', ...dirsOf(exe)].sort());
+    // The library's own path is looked at once too (an lstat: is anything staged?).
+    expect([...new Set(statted)].sort()).toEqual(['fd', libOf(exe), ...dirsOf(exe)].sort());
     expect(statted).not.toContain(join(exe, '..', '..'));
   });
 
@@ -1420,6 +1424,22 @@ describe('the library is refused unless only root can write it and own the way t
     symlinkSync(target, manifest);
     sealImage(exe);
     refused(load(exe), new RegExp(`${reEscape(manifest)} is a symbolic link`));
+  });
+
+  it('a platform with no O_NOFOLLOW is refused: an absent flag would OR in as 0 and quietly follow links', () => {
+    const NOFOLLOW_GONE = () => {
+      const fs = process.getBuiltinModule('node:fs');
+      Object.defineProperty(fs.constants, 'O_NOFOLLOW', { value: undefined, configurable: true });
+    };
+    const r = inBun((m, c) => c(() => m.greet('World')), {
+      FAKE_EXEC: image(),
+      BEFORE: NOFOLLOW_GONE.toString(),
+    });
+    const out = r.result as { cls?: string; message?: string };
+    expect(out?.cls, r.stderr).toBe('FfiLoadError');
+    expect(out.message).toContain(
+      'this platform cannot open the integrity manifest without following links',
+    );
   });
 
   describe('the integrity manifest is judged like the library: whoever can write it chooses what loads', () => {

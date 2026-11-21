@@ -5,8 +5,10 @@ import 'server-only';
 import { createHash as $createHash } from 'node:crypto';
 import {
   closeSync as $closeSync,
+  constants as $constants,
   existsSync as $existsSync,
   fstatSync as $fstatSync,
+  lstatSync as $lstatSync,
   openSync as $openSync,
   readdirSync as $readdirSync,
   readFileSync as $readFileSync,
@@ -370,7 +372,9 @@ function $resolve(): readonly [string, string] {
   const native = $join($dirname(process.execPath), 'native');
   const staged = $join(native, 'ffi', triple, file);
   const tried = [staged];
-  if ($existsSync(staged)) {
+  // lstat, not existsSync: existsSync follows a link and says no to a dangling one, which would
+  // read as "nothing staged" and fall through to the unchecked development build.
+  if ($lstatSync(staged, { throwIfNoEntry: false }) !== undefined) {
     return [staged, $verify(native, `ffi/${triple}/${file}`, staged)];
   }
   let others: string[] = [];
@@ -404,58 +408,126 @@ function $resolve(): readonly [string, string] {
 }
 
 /**
- * Fail closed unless only root can write the library. The hash covers the bytes
- * read now, and a descriptor pins the inode, not its bytes, so whoever can write
- * the file (or swap it, from a directory they can write) changes what gets
- * mapped. Judged by owner and mode, not access(), which answers yes to root for
- * everything: the file through the descriptor it was hashed from, then its
- * directories up to native/ itself, then the directory native/ sits in. Exactly
- * those, never the rest of the path. Each must be owned by root and not writable
- * by group or other. The user this process runs as is NOT trusted: it can chmod
- * what it owns, so a tree it owns protects nothing from a bug that writes files.
+ * Fail closed unless root owns the stat'ed object and group and other cannot write it. Judged by owner and
+ * mode, never access(), which answers yes to root for everything. The user this process runs as
+ * is NOT trusted: it can chmod what it owns, so a tree it owns protects nothing from a bug that
+ * writes files. p is what is being judged, path the library the refusal is about.
  */
-function $sealed(native: string, rel: string, path: string, fd: number): void {
-  const parts = rel.split('/');
-  const checks: [string, { uid: number; mode: number }][] = [[path, $fstatSync(fd)]];
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const dir = $join(native, ...parts.slice(0, i));
-    checks.push([dir, $statSync(dir)]);
+function $judge(path: string, p: string, st: { uid: number | bigint; mode: number | bigint }): void {
+  const bits = Number(st.mode);
+  const mode = (bits & 0o777).toString(8).padStart(4, '0');
+  let why = '';
+  if (Number(st.uid) !== 0) {
+    why = `is owned by uid ${st.uid}, but only root may own it`;
+  } else if ((bits & 0o022) !== 0) {
+    why = `is writable by its group or by everyone (mode ${mode})`;
   }
-  const home = $dirname(native);
-  checks.push([home, $statSync(home)]);
-  for (const [p, st] of checks) {
-    const mode = (st.mode & 0o777).toString(8).padStart(4, '0');
-    let why = '';
-    if (st.uid !== 0) {
-      why = `is owned by uid ${st.uid}, but only root may own it`;
-    } else if ((st.mode & 0o022) !== 0) {
-      why = `is writable by its group or by everyone (mode ${mode})`;
-    }
-    if (why !== '') {
+  if (why !== '') {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${path}: ${p} ${why}, so its bytes could change after they were checked. The library, its integrity manifest, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image \`knext build\` generates copies native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user.`,
+    );
+  }
+}
+
+/** Which object a stat describes. An object keeps it through a rename; a replacement has another. */
+function $id(st: { dev: number | bigint; ino: number | bigint }): string {
+  return `${st.dev}:${st.ino}`;
+}
+
+/** A directory the check relied on, and which object it was: [path, $id]. */
+type $Pin = readonly [string, string];
+
+/**
+ * Judge, and pin, every directory the check relies on: the library's, from the one it sits in up
+ * to native/ itself, then the directory native/ sits in. Exactly those, never the rest of the
+ * path. Each must be owned by root and not writable by group or other. They are stat-ed here,
+ * BEFORE the manifest or the library is opened, and $unchanged looks at the same names again
+ * once the bytes are hashed, so a tree renamed over them in between is refused.
+ *
+ * Limit: these are looked up by path, so they are pinned, not locked (Bun has no openat, and
+ * there is no descriptor-relative path on macOS). What stops a swap from changing what loads is
+ * not the pin: the manifest and the library are each judged on the descriptor they are read
+ * through, so a tree an attacker made cannot pass. The pin turns a swap seen in the window into
+ * a refusal. It cannot see one put back before the second look, and does not need to: a tree
+ * that root wrote is the only thing left to aim the path at.
+ */
+function $sealed(native: string, rel: string, path: string): $Pin[] {
+  const parts = rel.split('/');
+  const dirs: string[] = [];
+  for (let i = parts.length - 1; i >= 0; i--) dirs.push($join(native, ...parts.slice(0, i)));
+  dirs.push($dirname(native));
+  return dirs.map((dir): $Pin => {
+    const st = $statSync(dir, { bigint: true });
+    $judge(path, dir, st);
+    return [dir, $id(st)];
+  });
+}
+
+/** Every pinned directory must still be the object that was judged; fail closed if one is not. */
+function $unchanged(path: string, pins: readonly $Pin[]): void {
+  for (const [dir, id] of pins) {
+    const now = $statSync(dir, { bigint: true, throwIfNoEntry: false });
+    if (now === undefined || $id(now) !== id) {
       throw new FfiLoadError(
-        `knext ffi: refusing to load ${path}: ${p} ${why}, so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image \`knext build\` generates copies native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user.`,
+        `knext ffi: refusing to load ${path}: ${dir} changed while it was being checked (it was renamed, replaced or removed, so it is not the directory that was judged), and the manifest or the library may have come from another tree.`,
       );
     }
   }
 }
 
 /**
- * Fail closed: the library must be listed in native/.integrity.json with a matching sha256,
- * and only root may be able to write it (see $sealed).
+ * Open a file read-only WITHOUT following a symlink at the end of its path (O_NOFOLLOW): a link
+ * is refused, never followed to whatever it points at. missing is the refusal for a file that
+ * is not there.
+ */
+function $openFile(path: string, what: string, lib: string, missing: string): number {
+  const nofollow = $constants.O_NOFOLLOW;
+  if (typeof nofollow !== 'number') {
+    throw new FfiLoadError(`knext ffi: refusing to load ${lib}: this platform cannot open ${what} without following links.`);
+  }
+  try {
+    return $openSync(path, $constants.O_RDONLY | nofollow);
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    if (code === 'ENOENT') throw new FfiLoadError(missing);
+    throw new FfiLoadError(
+      code === 'ELOOP'
+        ? `knext ffi: refusing to load ${lib}: ${path} is a symbolic link. ${what} must be the file itself: a link is never followed, whatever it points at.`
+        : `knext ffi: refusing to load ${lib}: cannot open ${path} (${err instanceof Error ? err.message : String(err)}).`,
+    );
+  }
+}
+
+/**
+ * Fail closed: the library must be listed in native/.integrity.json with a matching sha256, and
+ * only root may be able to write the manifest, the library or the way to them (see $sealed and
+ * $judge). Each of the two files is opened without following a link, judged on the descriptor it
+ * was opened as, and read through that descriptor: nothing renamed over its path afterwards can
+ * change what was judged. The manifest is judged because it is what authorises a file: one
+ * anyone else could write would let any file root owns pass.
  * Returns the name to dlopen: the descriptor the hashed bytes were read through
  * (/proc/self/fd/<n> on Linux, /dev/fd/<n> on macOS), so a file renamed or linked
  * over the path after the check is not the one loaded.
  */
 function $verify(native: string, rel: string, path: string): string {
+  const pins = $sealed(native, rel, path);
   const manifest = $join(native, '.integrity.json');
-  if (!$existsSync(manifest)) {
-    throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: there is no integrity manifest at ${manifest}. Images built by \`knext build\` carry one.`,
-    );
+  const mfd = $openFile(
+    manifest,
+    'the integrity manifest',
+    path,
+    `knext ffi: refusing to load ${path}: there is no integrity manifest at ${manifest}. Images built by \`knext build\` carry one.`,
+  );
+  let text: string;
+  try {
+    $judge(path, manifest, $fstatSync(mfd, { bigint: true }));
+    text = $readFileSync(mfd, 'utf8');
+  } finally {
+    $closeSync(mfd);
   }
   let files: unknown;
   try {
-    const parsed = JSON.parse($readFileSync(manifest, 'utf8')) as { version?: unknown; files?: unknown };
+    const parsed = JSON.parse(text) as { version?: unknown; files?: unknown };
     if (parsed.version !== 1) {
       throw new Error(`unsupported version ${JSON.stringify(parsed.version)}`);
     }
@@ -470,11 +542,12 @@ function $verify(native: string, rel: string, path: string): string {
   if (typeof expected !== 'string') {
     throw new FfiLoadError(`knext ffi: refusing to load ${path}: ${rel} is not listed in ${manifest}.`);
   }
-  const fd = $openSync(path, 'r');
+  const fd = $openFile(path, 'the library', path, `knext ffi: refusing to load ${path}: it is gone.`);
   let actual: string;
   try {
-    $sealed(native, rel, path, fd);
+    $judge(path, path, $fstatSync(fd, { bigint: true }));
     actual = $createHash('sha256').update($readFileSync(fd)).digest('hex');
+    $unchanged(path, pins);
   } catch (err) {
     $closeSync(fd);
     throw err;

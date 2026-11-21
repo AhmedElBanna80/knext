@@ -186,6 +186,104 @@ describe('readiness-probe-summary.py table 1', () => {
   });
 });
 
+// Every input-shape and option error must exit exactly 2 with a message and no traceback; one
+// well-formed control exits 0. The "guard:" cases are ones only the top-level guard catches (the event
+// timestamps, which no explicit check covers).
+describe('readiness-probe-summary.py every input error exits 2', () => {
+  const rowsText = `${ROWS.map((x) => JSON.stringify(x)).join('\n')}\n`;
+  const goodEvent = (extra: Record<string, unknown> = {}) => ({
+    metadata: { uid: 'u-ok' },
+    reason: 'Unhealthy',
+    involvedObject: { name: 'p0' },
+    message: TIMEOUT,
+    count: 1,
+    firstTimestamp: '2026-11-21T00:00:01Z',
+    lastTimestamp: '2026-11-21T00:00:01Z',
+    ...extra,
+  });
+  const withRow = (patch: Record<string, unknown>) =>
+    `${JSON.stringify({ ...ROWS[0], ...patch })}\n`;
+
+  const optionCases: [string, string[]][] = [
+    ['--effect-ms=abc', ['--effect-ms=abc']],
+    ['--effect-ms=nan', ['--effect-ms=nan']],
+    ['--effect-ms=inf', ['--effect-ms=inf']],
+    ['--effect-ms=1e999 (overflows to inf)', ['--effect-ms=1e999']],
+    ['--effect-ms=-1', ['--effect-ms=-1']],
+    ['--reps=abc', ['--reps=abc']],
+    ['--reps=0', ['--reps=0']],
+    ['--reps=-5', ['--reps=-5']],
+    ['--reps=1.5', ['--reps=1.5']],
+    ['--baseline=nosucharm', ['--baseline=nosucharm']],
+  ];
+  for (const [name, args] of optionCases) {
+    it(`option ${name}`, () => {
+      const r = runRaw(rowsText, [EVENTS], args);
+      expect(r.status).toBe(2);
+      expect(r.stderr).not.toContain('Traceback');
+      expect(r.stderr.length).toBeGreaterThan(0);
+    });
+  }
+
+  const eventCases: [string, unknown][] = [
+    ['top-level array', [goodEvent()]],
+    ['top-level number', 5],
+    ['items is a string', { kind: 'List', items: 'x' }],
+    ['an item is a number', { kind: 'List', items: [1] }],
+    ['an item is an array', { kind: 'List', items: [[]] }],
+    ['metadata without uid', { items: [{ metadata: {}, involvedObject: { name: 'p0' } }] }],
+    ['involvedObject is a string', { items: [goodEvent({ involvedObject: 'p0' })] }],
+    ['involvedObject.name is a number', { items: [goodEvent({ involvedObject: { name: 5 } })] }],
+    ['message is a number', { items: [goodEvent({ message: 5 })] }],
+    ['count is a string', { items: [goodEvent({ count: 'x' })] }],
+    ['count is negative', { items: [goodEvent({ count: -1 })] }],
+    ['guard: firstTimestamp is a number', { items: [goodEvent({ firstTimestamp: 5 })] }],
+    ['guard: firstTimestamp is not a date', { items: [goodEvent({ firstTimestamp: 'soon' })] }],
+  ];
+  for (const [name, capture] of eventCases) {
+    it(`events: ${name}`, () => {
+      // EVENTS mentions every pod, so only the malformed second capture can explain a failure
+      const r = runRaw(rowsText, [EVENTS, capture]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).not.toContain('Traceback');
+      expect(r.stderr.length).toBeGreaterThan(0);
+    });
+  }
+
+  const rowCases: [string, string][] = [
+    ['watch is null', withRow({ watch: null })],
+    ['watch is an array', withRow({ watch: [] })],
+    ['arm is a number', withRow({ arm: 5 })],
+    ['pod is empty', withRow({ pod: '' })],
+    ['wall_start is not a date', withRow({ wall_start: 'yesterday' })],
+    ['wall_start is a number', withRow({ wall_start: 5 })],
+    ['first_byte is a string', withRow({ watch: { first_byte: 'x' } })],
+    ['cond_Ready is a boolean', withRow({ watch: { first_byte: 1, cond_Ready: true } })],
+    [
+      'first_byte overflows to infinity',
+      `{"arm":"a","pod":"p0","wall_start":"${T0}","watch":{"first_byte":1e999}}\n`,
+    ],
+    ['row is an array', '[1,2]\n'],
+    ['row is a number', '7\n'],
+    ['row lacks pod', `${JSON.stringify({ arm: 'a', wall_start: T0, watch: {} })}\n`],
+  ];
+  for (const [name, text] of rowCases) {
+    it(`row: ${name}`, () => {
+      const r = runRaw(text, [EVENTS]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).not.toContain('Traceback');
+      expect(r.stderr.length).toBeGreaterThan(0);
+    });
+  }
+
+  it('control: well-formed input with every option set exits 0', () => {
+    const r = runRaw(rowsText, [EVENTS], ['--effect-ms=0', '--reps=1', '--baseline=a']);
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toContain('vs baseline a');
+  });
+});
+
 describe('readiness-probe-summary.py input validation', () => {
   const rowsText = `${ROWS.map((x) => JSON.stringify(x)).join('\n')}\n`;
 

@@ -15,7 +15,12 @@ one stamp per event, no count), and, through any other event naming the pod (eve
 A pod the capture never mentions has UNKNOWN failures, not zero: it is left out of the failure
 columns and counted in `no events`. An empty capture, or one that mentions none of the pods, is an
 error, because "no failures" and "no capture" must not look the same. Every input error (a bad
-option, a missing file, an empty or malformed input) prints its message to stderr and exits 2.
+option or option value, a missing file, an empty input, an input of the wrong JSON shape or with
+fields of the wrong type) prints its message to stderr and exits 2. Option values are range-checked
+(`--reps` an integer >= 1, `--effect-ms` a finite number >= 0), each row and event is shape-checked,
+and the stages that read input run under a guard (`guarded`) that turns any exception malformed input
+can cause into that same exit 2. The arithmetic after input is read is not guarded: a bug there is a
+programming error and shows a traceback.
 
 Table 1, per arm: n, median / p95 / max of first byte and of pod Ready (ms after the request), how
 many rows saw Ready inside the harness window, and the failed readiness probes per wake counted up
@@ -53,13 +58,31 @@ from datetime import datetime
 from functools import lru_cache
 
 REQUIRED_ROW_KEYS = ("arm", "pod", "wall_start", "watch")
+WATCH_NUMERIC_KEYS = ("first_byte", "cond_Ready", "eps_ready", "qp_probe_ok")
 EXIT_INPUT_ERROR = 2
+
+
+# What malformed INPUT can raise while it is parsed or shaped. Anything else (a bug in the
+# statistics, say) is a programming error and is allowed to surface with a traceback.
+INPUT_ERRORS = (ValueError, KeyError, TypeError, AttributeError, OSError, RecursionError)
 
 
 def fail(msg):
     """Report an input error on stderr and exit 2 (never 0, and not Python's default 1)."""
     print(msg, file=sys.stderr)
     sys.exit(EXIT_INPUT_ERROR)
+
+
+def guarded(what, fn, *args):
+    """Run an input-handling stage; turn any exception malformed input can cause into fail().
+
+    Only the stages that read the command line, the phases file and the events captures run under
+    this guard. The summary arithmetic does not, so a real bug there still shows a traceback.
+    """
+    try:
+        return fn(*args)
+    except INPUT_ERRORS as e:
+        fail(f"{what}: malformed input ({type(e).__name__}: {e})")
 
 
 def pct(xs, q):
@@ -152,10 +175,30 @@ def load_events(paths):
             except json.JSONDecodeError as e:
                 fail(f"{path}: not a JSON events capture ({e})")
             # a watch stream (one {type, object} per change), a core/v1 List, or one event
-            evs = obj["items"] if isinstance(obj, dict) and "items" in obj else [obj.get("object", obj)]
+            if not isinstance(obj, dict):
+                fail(f"{path}: expected JSON objects (watch events, a List or an event), got {type(obj).__name__}")
+            if "items" in obj:
+                if not isinstance(obj["items"], list):
+                    fail(f"{path}: `items` must be a list, got {type(obj['items']).__name__}")
+                evs = obj["items"]
+            else:
+                evs = [obj.get("object", obj)]
             for ev in evs:
-                if not (isinstance(ev, dict) and "uid" in ev.get("metadata", {}) and "involvedObject" in ev):
+                if not isinstance(ev, dict):
+                    fail(f"{path}: an event must be a JSON object, got {type(ev).__name__}")
+                if "metadata" not in ev and "involvedObject" not in ev:
                     continue  # not an event object (e.g. an empty {}): contributes nothing
+                if not isinstance(ev.get("metadata"), dict) or "uid" not in ev["metadata"]:
+                    fail(f"{path}: an event is missing metadata.uid")
+                if not isinstance(ev.get("involvedObject"), dict) or not isinstance(
+                    ev["involvedObject"].get("name"), str
+                ):
+                    fail(f"{path}: an event is missing involvedObject.name")
+                if not isinstance(ev.get("message", ""), str):
+                    fail(f"{path}: an event's message must be a string")
+                count = ev.get("count")
+                if count is not None and (not isinstance(count, int) or isinstance(count, bool) or count < 0):
+                    fail(f"{path}: an event's count must be a non-negative integer, got {count!r}")
                 uid = ev["metadata"]["uid"]
                 if uid not in latest or (ev.get("count") or 1) >= (latest[uid].get("count") or 1):
                     latest[uid] = ev
@@ -247,6 +290,32 @@ def fmt(v):
     return "-" if v is None else f"{v:.0f}"
 
 
+def is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def check_row(where, r):
+    """A phases row must be an object with the required keys AND the right types for them."""
+    if not isinstance(r, dict):
+        fail(f"{where}: a row must be a JSON object, got {type(r).__name__}")
+    missing = [k for k in REQUIRED_ROW_KEYS if k not in r]
+    if missing:
+        fail(f"{where}: row is missing {', '.join(missing)} (is this drive.py output?)")
+    for k in ("arm", "pod", "wall_start"):
+        if not isinstance(r[k], str) or not r[k]:
+            fail(f"{where}: `{k}` must be a non-empty string, got {r[k]!r}")
+    try:
+        iso(r["wall_start"])
+    except ValueError:
+        fail(f"{where}: `wall_start` is not an ISO-8601 timestamp: {r['wall_start']!r}")
+    if not isinstance(r["watch"], dict):
+        fail(f"{where}: `watch` must be an object, got {type(r['watch']).__name__}")
+    for k in WATCH_NUMERIC_KEYS:
+        v = r["watch"].get(k)
+        if v is not None and not is_number(v):
+            fail(f"{where}: watch.{k} must be a finite number or null, got {v!r}")
+
+
 def load_rows(path):
     rows = []
     try:
@@ -261,9 +330,7 @@ def load_rows(path):
                 r = json.loads(line)
             except json.JSONDecodeError as e:
                 fail(f"{path}:{lineno}: not JSON ({e})")
-            missing = [k for k in REQUIRED_ROW_KEYS if k not in r]
-            if missing:
-                fail(f"{path}:{lineno}: row is missing {', '.join(missing)} (is this drive.py output?)")
+            check_row(f"{path}:{lineno}", r)
             rows.append(r)
     if not rows:
         fail(f"{path}: no rows; an empty phases file is not a result")
@@ -282,7 +349,22 @@ def parse_args(argv):
             k, _, v = a[2:].partition("=")
             if k not in opts or not v:
                 fail(f"unknown or valueless option {a}")
-            opts[k] = v if k == "baseline" else float(v)
+            if k == "baseline":
+                opts[k] = v
+            elif k == "reps":
+                try:
+                    opts[k] = int(v)
+                except ValueError:
+                    fail(f"--reps must be an integer >= 1, got {v!r}")
+                if opts[k] < 1:
+                    fail(f"--reps must be an integer >= 1, got {v!r}")
+            else:  # effect-ms
+                try:
+                    opts[k] = float(v)
+                except ValueError:
+                    fail(f"--effect-ms must be a finite number >= 0, got {v!r}")
+                if not math.isfinite(opts[k]) or opts[k] < 0:
+                    fail(f"--effect-ms must be a finite number >= 0, got {v!r}")
         else:
             pos.append(a)
     if len(pos) < 2:
@@ -290,17 +372,16 @@ def parse_args(argv):
             "usage: readiness-probe-summary.py [--baseline=ARM] [--effect-ms=N] [--reps=N] "
             "<phases.jsonl> <events.json> [<events.json> ...]"
         )
-    opts["reps"] = int(opts["reps"])
     return opts, pos
 
 
 def main():
-    opts, pos = parse_args(sys.argv[1:])
-    rows = load_rows(pos[0])
+    opts, pos = guarded("arguments", parse_args, sys.argv[1:])
+    rows = guarded(pos[0], load_rows, pos[0])
     for p in pos[1:]:
         if not os.path.isfile(p):
             fail(f"{p}: events file not found")
-    unhealthy, seen = load_events(pos[1:])
+    unhealthy, seen = guarded("events capture", load_events, pos[1:])
     if not seen:
         fail("events capture is empty: no event objects in " + ", ".join(pos[1:]))
     pods = {r["pod"] for r in rows}

@@ -355,7 +355,7 @@ const SHIM = join(
     "sharp-addon-dlopen.mjs",
 );
 
-function stageVerifiable(libName = "libvips-cpp.so.42"): {
+function stageVerifiable(): {
     dir: string;
     addon: string;
     manifest: string;
@@ -368,7 +368,7 @@ function stageVerifiable(libName = "libvips-cpp.so.42"): {
     writeFileSync(addon, "ADDON BYTES");
     const vipsLib = join(dir, "native", "sharp-libvips-linux-x64", "lib");
     mkdirSync(vipsLib, { recursive: true });
-    const lib = join(vipsLib, libName);
+    const lib = join(vipsLib, "libvips-cpp.so.42");
     writeFileSync(lib, "VIPS BYTES");
 
     const sha = (p: string) =>
@@ -382,7 +382,7 @@ function stageVerifiable(libName = "libvips-cpp.so.42"): {
             packages: {},
             files: {
                 "sharp-linux-x64/lib/sharp-linux-x64.node": sha(addon),
-                [`sharp-libvips-linux-x64/lib/${libName}`]: sha(lib),
+                "sharp-libvips-linux-x64/lib/libvips-cpp.so.42": sha(lib),
             },
         }),
     );
@@ -528,38 +528,6 @@ describe("sharp addon integrity verification", () => {
         expect(r.stderr).toContain(
             "sharp-libvips-linux-x64/lib/libvips-cpp.so.42",
         );
-    });
-
-    it.each([
-        "libvips-cpp.so.8.18.6",
-        "libfoo.so.1.2",
-    ])("REFUSES a tampered multi-part soname %s (the real libvips shape)", (name) => {
-        const { dir, addon, lib } = stageVerifiable(name);
-        expect(loadShim(addon, dir).status).toBe(0);
-        writeFileSync(lib, "vIPS BYTES");
-        const r = loadShim(addon, dir);
-        expect(r.status).not.toBe(0);
-        expect(r.stderr).toContain(`sharp-libvips-linux-x64/lib/${name}`);
-    });
-
-    it("classifies native payloads by loader-executable name", () => {
-        const src = readFileSync(SHIM, "utf8");
-        const m = src.match(/function isNativePayload\(file\) \{[\s\S]*?\n\}/);
-        expect(m).not.toBeNull();
-        const isNative = new Function(
-            `${m?.[0]}; return isNativePayload;`,
-        )() as (f: string) => boolean;
-        for (const yes of [
-            "a.node",
-            "a.dylib",
-            "libx.so",
-            "libx.so.42",
-            "libvips-cpp.so.8.18.6",
-            "libfoo.so.1.2",
-        ])
-            expect(isNative(yes), yes).toBe(true);
-        for (const no of ["foo.so.txt", "foo.sox", "foo.so.", "README"])
-            expect(isNative(no), no).toBe(false);
     });
 
     it("REFUSES an addon the manifest does not list", () => {

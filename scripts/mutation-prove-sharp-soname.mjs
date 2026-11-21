@@ -18,7 +18,7 @@ import { createGuardProver } from './lib/guard-prover.mjs';
 import { declareMutations, recordMutation } from './lib/prover-report.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const SPEC = 'packages/kn-next/src/__tests__/sharp-addon-dlopen.test.ts';
+const SPEC = 'packages/kn-next/src/__tests__/sharp-native-payload.test.ts';
 const ANCHOR = String.raw`  return /\.(node|dylib)$|\.so(\.[0-9]+)*$/.test(file);`;
 
 const MUTATIONS = [

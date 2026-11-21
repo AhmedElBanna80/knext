@@ -187,8 +187,8 @@ describe('readiness-probe-summary.py table 1', () => {
 });
 
 // Every input-shape and option error must exit exactly 2 with a message and no traceback; one
-// well-formed control exits 0. The "guard:" cases are ones only the top-level guard catches (the event
-// timestamps, which no explicit check covers).
+// well-formed control exits 0. The "guard:" cases are ones only the top-level guard catches: a value that
+// is a string of the right type but does not parse or is out of range (ValueError / OverflowError).
 describe('readiness-probe-summary.py every input error exits 2', () => {
   const rowsText = `${ROWS.map((x) => JSON.stringify(x)).join('\n')}\n`;
   const goodEvent = (extra: Record<string, unknown> = {}) => ({
@@ -215,6 +215,8 @@ describe('readiness-probe-summary.py every input error exits 2', () => {
     ['--reps=-5', ['--reps=-5']],
     ['--reps=1.5', ['--reps=1.5']],
     ['--baseline=nosucharm', ['--baseline=nosucharm']],
+    ['--effect-ms=1e13 (above the 1e12 bound)', ['--effect-ms=1e13']],
+    ['--reps=100000000 (above the 1e7 bound)', ['--reps=100000000']],
   ];
   for (const [name, args] of optionCases) {
     it(`option ${name}`, () => {
@@ -237,7 +239,19 @@ describe('readiness-probe-summary.py every input error exits 2', () => {
     ['message is a number', { items: [goodEvent({ message: 5 })] }],
     ['count is a string', { items: [goodEvent({ count: 'x' })] }],
     ['count is negative', { items: [goodEvent({ count: -1 })] }],
-    ['guard: firstTimestamp is a number', { items: [goodEvent({ firstTimestamp: 5 })] }],
+    ['firstTimestamp is a number', { items: [goodEvent({ firstTimestamp: 5 })] }],
+    ['an Unhealthy event has no stamp', { items: [goodEvent({ firstTimestamp: undefined })] }],
+    ['reason is missing', { items: [goodEvent({ reason: undefined })] }],
+    ['reason is a number', { items: [goodEvent({ reason: 7 })] }],
+    ['reason is null', { items: [goodEvent({ reason: null })] }],
+    [
+      'a non-Unhealthy event with a non-string reason is not skipped',
+      {
+        items: [{ metadata: { uid: 'x' }, involvedObject: { name: 'p0' }, reason: ['Scheduled'] }],
+      },
+    ],
+    ['metadata.uid is a list', { items: [goodEvent({ metadata: { uid: ['u'] } })] }],
+    ['count is above the 1e6 bound', { items: [goodEvent({ count: 2000000 })] }],
     ['guard: firstTimestamp is not a date', { items: [goodEvent({ firstTimestamp: 'soon' })] }],
   ];
   for (const [name, capture] of eventCases) {
@@ -265,6 +279,19 @@ describe('readiness-probe-summary.py every input error exits 2', () => {
     ],
     ['row is an array', '[1,2]\n'],
     ['row is a number', '7\n'],
+    ['code is the string "200"', withRow({ code: '200' })],
+    ['code is a float', withRow({ code: 200.5 })],
+    ['code is null', withRow({ code: null })],
+    ['code is a boolean', withRow({ code: true })],
+    ['first_byte is above the 1e12 bound', withRow({ watch: { first_byte: 1e13 } })],
+    ['first_byte is below -1e12', withRow({ watch: { first_byte: -1e13 } })],
+    [
+      'first_byte is an integer too big for a float',
+      withRow({ watch: { first_byte: 'BIGINT' } }).replace('"BIGINT"', '9'.repeat(400)),
+    ],
+    ['guard: wall_start is year 0', withRow({ wall_start: '0000-01-01T00:00:00Z' })],
+    ['an error row without an arm', `${JSON.stringify({ error: 'pod gone' })}\n`],
+    ['an error row with a numeric arm', `${JSON.stringify({ arm: 5, error: 'pod gone' })}\n`],
     ['row lacks pod', `${JSON.stringify({ arm: 'a', wall_start: T0, watch: {} })}\n`],
   ];
   for (const [name, text] of rowCases) {
@@ -528,4 +555,76 @@ describe('readiness-probe-summary.py Ready timing block', () => {
   it('flags the straddle artefact of the failure count', () => {
     expect(out).toContain('counting artefact');
   });
+});
+
+describe('readiness-probe-summary.py nothing is dropped for its type', () => {
+  const rowsText = `${ROWS.map((x) => JSON.stringify(x)).join('\n')}\n`;
+
+  it('a drive.py failed-wake row ({arm, error}) is accepted and excluded, not rejected', () => {
+    const text = `${rowsText}${JSON.stringify({ arm: 'a', error: 'pod gone' })}\n`;
+    const r = runRaw(text, [EVENTS]);
+    expect(r.status).toBe(0);
+    // arm "a" still reports its four real wakes
+    expect(line(r.stdout, 'a').slice(0, 2)).toEqual(['a', '4']);
+  });
+
+  it('a row with an integer non-200 code is excluded on purpose, and says so by its absence', () => {
+    const text = `${rowsText}${JSON.stringify({ ...ROWS[0], arm: 'bad', code: 404 })}\n`;
+    const r = runRaw(text, [EVENTS]);
+    expect(r.status).toBe(0);
+    expect(line(r.stdout, 'bad').slice(0, 2)).toEqual(['bad', '0']);
+  });
+
+  it('null or absent watch numbers are accepted as "not observed"', () => {
+    const text = `${JSON.stringify({ ...ROWS[0], arm: 'nul', watch: { first_byte: null } })}\n`;
+    const r = runRaw(`${rowsText}${text}`, [EVENTS]);
+    expect(r.status).toBe(0);
+    expect(line(r.stdout, 'nul').slice(0, 2)).toEqual(['nul', '1']);
+  });
+});
+
+// guarded() must map ONLY value / overflow / decode / OS errors to exit 2. A TypeError, AttributeError or
+// KeyError escaping an input stage is a bug in the tool and has to show a traceback (exit 1).
+function guardExit(raiseExpr: string): { status: number | null; stderr: string } {
+  const code = [
+    'import importlib.util',
+    `spec = importlib.util.spec_from_file_location("rps", ${JSON.stringify(SCRIPT)})`,
+    'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)',
+    `m.guarded("stage", lambda: ${raiseExpr})`,
+  ].join('\n');
+  const r = spawnSync('python3', ['-I', '-c', code], { encoding: 'utf8' });
+  return { status: r.status, stderr: r.stderr };
+}
+
+describe('readiness-probe-summary.py guarded() scope', () => {
+  const mapped: [string, string][] = [
+    ['ValueError', 'int("x")'],
+    ['OverflowError', 'int(float("inf"))'],
+    ['UnicodeDecodeError', 'b"\\xff".decode("utf-8")'],
+    ['JSONDecodeError', '__import__("json").loads("{")'],
+    ['OSError', 'open("/nonexistent/x")'],
+  ];
+  for (const [name, expr] of mapped) {
+    it(`maps ${name} to exit 2 with a message`, () => {
+      const r = guardExit(expr);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain('stage: malformed input');
+      expect(r.stderr).not.toContain('Traceback');
+    });
+  }
+
+  const bugs: [string, string][] = [
+    ['TypeError', '1 + "a"'],
+    ['AttributeError', 'None.x'],
+    ['KeyError', '{}["k"]'],
+    ['IndexError', '[][1]'],
+  ];
+  for (const [name, expr] of bugs) {
+    it(`lets ${name} through as a bug (traceback, exit 1)`, () => {
+      const r = guardExit(expr);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain('Traceback');
+      expect(r.stderr).toContain(name);
+    });
+  }
 });

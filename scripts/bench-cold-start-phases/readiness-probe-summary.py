@@ -17,10 +17,17 @@ columns and counted in `no events`. An empty capture, or one that mentions none 
 error, because "no failures" and "no capture" must not look the same. Every input error (a bad
 option or option value, a missing file, an empty input, an input of the wrong JSON shape or with
 fields of the wrong type) prints its message to stderr and exits 2. Option values are range-checked
-(`--reps` an integer >= 1, `--effect-ms` a finite number >= 0), each row and event is shape-checked,
-and the stages that read input run under a guard (`guarded`) that turns any exception malformed input
-can cause into that same exit 2. The arithmetic after input is read is not guarded: a bug there is a
-programming error and shows a traceback.
+(`--reps` an integer in 1..1e7, `--effect-ms` a number in 0..1e12), each row and event is shape- and
+type-checked (a row's `code` must be an integer; an event's `reason` must be a string; a watch number
+must be a number with |x| <= 1e12, an event `count` an integer in 0..1e6), and the stages that read
+input run under a guard (`guarded`) that maps only ValueError, OverflowError, UnicodeDecodeError,
+JSONDecodeError and OSError to that same exit 2. A TypeError, AttributeError or KeyError is a bug in
+this tool and shows a traceback. Watch numbers that are null or absent are accepted: they mean "not
+observed" (a wake can end before Ready, for instance) and are left out of that statistic. A row that
+carries an `error` (drive.py's failed-wake record) needs only its `arm`.
+Nothing is dropped for its type: a row is excluded only for carrying an `error` or a `code` other
+than 200; an event adds failures only when its reason is `Unhealthy`, and any event naming a pod
+counts as capture coverage for it.
 
 Table 1, per arm: n, median / p95 / max of first byte and of pod Ready (ms after the request), how
 many rows saw Ready inside the harness window, and the failed readiness probes per wake counted up
@@ -62,9 +69,17 @@ WATCH_NUMERIC_KEYS = ("first_byte", "cond_Ready", "eps_ready", "qp_probe_ok")
 EXIT_INPUT_ERROR = 2
 
 
-# What malformed INPUT can raise while it is parsed or shaped. Anything else (a bug in the
-# statistics, say) is a programming error and is allowed to surface with a traceback.
-INPUT_ERRORS = (ValueError, KeyError, TypeError, AttributeError, OSError, RecursionError)
+# What malformed INPUT can raise while it is parsed: a value that does not parse or is out of range
+# (ValueError, which JSONDecodeError and UnicodeDecodeError subclass, and OverflowError) or a file
+# that cannot be read (OSError). TypeError, AttributeError and KeyError are NOT here: the explicit
+# shape and type checks below cover bad-type input, so one of those escaping is a bug in this tool
+# and must show a traceback rather than pass as "bad input".
+INPUT_ERRORS = (ValueError, OverflowError, UnicodeDecodeError, json.JSONDecodeError, OSError)
+
+# Magnitude bounds, checked when input is read so absurd values fail there, not in the statistics.
+MAX_MS = 1e12  # any millisecond value (first byte, Ready, --effect-ms): about 31 years
+MAX_COUNT = 1_000_000  # a kubelet event count
+MAX_REPS = 10_000_000  # --reps
 
 
 def fail(msg):
@@ -77,7 +92,8 @@ def guarded(what, fn, *args):
     """Run an input-handling stage; turn any exception malformed input can cause into fail().
 
     Only the stages that read the command line, the phases file and the events captures run under
-    this guard. The summary arithmetic does not, so a real bug there still shows a traceback.
+    this guard, and it maps only INPUT_ERRORS. The summary arithmetic does not run under it, and a
+    TypeError/AttributeError/KeyError anywhere is a bug that still shows a traceback.
     """
     try:
         return fn(*args)
@@ -194,11 +210,26 @@ def load_events(paths):
                     ev["involvedObject"].get("name"), str
                 ):
                     fail(f"{path}: an event is missing involvedObject.name")
+                if not isinstance(ev["metadata"]["uid"], str):
+                    fail(f"{path}: an event's metadata.uid must be a string")
+                if not isinstance(ev.get("reason"), str):
+                    fail(f"{path}: an event's reason must be a string, got {ev.get('reason')!r}")
                 if not isinstance(ev.get("message", ""), str):
                     fail(f"{path}: an event's message must be a string")
                 count = ev.get("count")
-                if count is not None and (not isinstance(count, int) or isinstance(count, bool) or count < 0):
-                    fail(f"{path}: an event's count must be a non-negative integer, got {count!r}")
+                if count is not None and (
+                    not isinstance(count, int) or isinstance(count, bool) or not 0 <= count <= MAX_COUNT
+                ):
+                    fail(f"{path}: an event's count must be an integer in 0..{MAX_COUNT}, got {count!r}")
+                if ev["reason"] == "Unhealthy":
+                    # the only events whose stamps are used: each must be an ISO string (ValueError, so
+                    # an unparseable one is caught by the guard)
+                    first = ev.get("firstTimestamp") or ev.get("eventTime")
+                    stamps = [first, ev.get("lastTimestamp")] if ev.get("lastTimestamp") is not None else [first]
+                    if any(not isinstance(t, str) for t in stamps):
+                        fail(f"{path}: an Unhealthy event needs string firstTimestamp/eventTime (and lastTimestamp) stamps")
+                    for t in stamps:
+                        iso(t)
                 uid = ev["metadata"]["uid"]
                 if uid not in latest or (ev.get("count") or 1) >= (latest[uid].get("count") or 1):
                     latest[uid] = ev
@@ -291,13 +322,23 @@ def fmt(v):
 
 
 def is_number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    """A real, finite number of sane magnitude (a bool is not a number here)."""
+    # abs() and the bound are compared before isfinite, which raises OverflowError on a huge int
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and abs(v) <= MAX_MS
 
 
 def check_row(where, r):
     """A phases row must be an object with the required keys AND the right types for them."""
     if not isinstance(r, dict):
         fail(f"{where}: a row must be a JSON object, got {type(r).__name__}")
+    if "code" in r and (not isinstance(r["code"], int) or isinstance(r["code"], bool)):
+        fail(f"{where}: `code` must be an integer, got {r['code']!r}")
+    if r.get("error"):
+        # drive.py writes {"arm", "error"} for a wake that failed: no pod, no watch. Such a row is
+        # excluded from every table anyway, so it only needs to name its arm.
+        if not isinstance(r.get("arm"), str) or not r["arm"]:
+            fail(f"{where}: `arm` must be a non-empty string, got {r.get('arm')!r}")
+        return
     missing = [k for k in REQUIRED_ROW_KEYS if k not in r]
     if missing:
         fail(f"{where}: row is missing {', '.join(missing)} (is this drive.py output?)")
@@ -313,7 +354,7 @@ def check_row(where, r):
     for k in WATCH_NUMERIC_KEYS:
         v = r["watch"].get(k)
         if v is not None and not is_number(v):
-            fail(f"{where}: watch.{k} must be a finite number or null, got {v!r}")
+            fail(f"{where}: watch.{k} must be null or a number with |x| <= {MAX_MS:g}, got {v!r}")
 
 
 def load_rows(path):
@@ -355,16 +396,16 @@ def parse_args(argv):
                 try:
                     opts[k] = int(v)
                 except ValueError:
-                    fail(f"--reps must be an integer >= 1, got {v!r}")
-                if opts[k] < 1:
-                    fail(f"--reps must be an integer >= 1, got {v!r}")
+                    fail(f"--reps must be an integer in 1..{MAX_REPS}, got {v!r}")
+                if not 1 <= opts[k] <= MAX_REPS:
+                    fail(f"--reps must be an integer in 1..{MAX_REPS}, got {v!r}")
             else:  # effect-ms
                 try:
                     opts[k] = float(v)
                 except ValueError:
-                    fail(f"--effect-ms must be a finite number >= 0, got {v!r}")
-                if not math.isfinite(opts[k]) or opts[k] < 0:
-                    fail(f"--effect-ms must be a finite number >= 0, got {v!r}")
+                    fail(f"--effect-ms must be a number in 0..{MAX_MS:g}, got {v!r}")
+                if not 0 <= opts[k] <= MAX_MS:
+                    fail(f"--effect-ms must be a number in 0..{MAX_MS:g}, got {v!r}")
         else:
             pos.append(a)
     if len(pos) < 2:
@@ -384,7 +425,7 @@ def main():
     unhealthy, seen = guarded("events capture", load_events, pos[1:])
     if not seen:
         fail("events capture is empty: no event objects in " + ", ".join(pos[1:]))
-    pods = {r["pod"] for r in rows}
+    pods = {r["pod"] for r in rows if "pod" in r}  # a failed-wake row has none
     if not pods & seen:
         fail("events capture mentions none of the pods in the phases file; refusing to report 0 failures")
     arms = list(dict.fromkeys(r["arm"] for r in rows))

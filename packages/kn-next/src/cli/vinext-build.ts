@@ -165,8 +165,10 @@ export function compileArgv(
     compilerBin?: string,
     /**
      * The unique entry marker the compile script bakes into the entry's banner
-     * (it mints its own when absent). The CLI passes one so it can re-verify the
-     * produced executable independently (`verifyCompiledExecutable`).
+     * (it mints its own when absent). The CLI passes one so it can check, from
+     * the binary bytes alone, that bytecode and this marker are present
+     * (`verifyCompiledExecutable`); that check does not cover how the include
+     * module count was planned, which the compile script attests.
      */
     marker?: string,
 ): string[] {
@@ -444,10 +446,8 @@ export interface VinextBuildOptions {
  *     its own, from the binary bytes, is that bytecode and the per-build marker
  *     are present and that exactly that many modules are banner-headed;
  *   - default: `verifyBytecodeExec`.
- *
- * Exported so a test can drive each shape directly.
  */
-export function vinextBytecodeVerdict(
+function vinextBytecodeVerdict(
     bytes: Uint8Array,
     marker: string,
     shape: {

@@ -1058,7 +1058,9 @@ const externalSidecar = {
  */
 const EMBEDDED_PREFIX = "knext-embedded:";
 // Unique per build, so a stale binary cannot pass the bytecode proof.
-// The CLI passes its own (`--marker`) so it can re-verify the output independently.
+// The CLI passes its own (`--marker`) so it can check, from the binary bytes alone,
+// that bytecode and this marker are present (the include module COUNT is not
+// re-derived there; see the plan sidecar below).
 const MARKER_PREFIX = "knext-vinext-exec";
 const BYTECODE_MARKER = args.marker ?? mintExecMarker(MARKER_PREFIX);
 if (!isExecMarker(MARKER_PREFIX, BYTECODE_MARKER)) {

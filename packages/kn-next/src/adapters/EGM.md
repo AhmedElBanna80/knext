@@ -652,7 +652,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   error returns the original bytes, labelled with their real `sourceFormat`
   rather than the requested format, instead of an error status.
 - `sharp-addon-dlopen.mjs` checks every native payload the integrity manifest
-  lists against its sha256 and throws on a mismatch, or on a manifest version
+  lists against its sha256. A payload is a `.node`, `.dylib` or `.so` file, or
+  a versioned soname with any number of numeric parts, such as
+  `libvips-cpp.so.8.18.6`. It throws on a mismatch, or on a manifest version
   it does not know. A missing manifest is only a warning and the addon loads
   unverified, unless `KNEXT_REQUIRE_NATIVE_INTEGRITY` is set to an "on" value,
   which makes the absence fatal. An unrecognised value for that variable

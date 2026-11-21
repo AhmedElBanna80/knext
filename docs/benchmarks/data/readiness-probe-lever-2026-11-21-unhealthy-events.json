@@ -1,0 +1,2995 @@
+{
+  "kind": "List",
+  "items": [
+    {
+      "metadata": {
+        "uid": "c0b3ad4f-20b9-4118-8beb-0cf5ddad7124"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "z2-drv"
+      },
+      "message": "Successfully assigned z2/z2-drv to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:29:10Z",
+      "lastTimestamp": "2026-11-21T00:29:10Z"
+    },
+    {
+      "metadata": {
+        "uid": "53a589df-88de-4048-810b-e611b5806dc3"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-jhs2w"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-jhs2w to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:29:52Z",
+      "lastTimestamp": "2026-11-21T00:29:52Z"
+    },
+    {
+      "metadata": {
+        "uid": "d8e03b0c-4439-4357-bcfd-bd8a38d275f4"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-jhs2w"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:30:12Z",
+      "lastTimestamp": "2026-11-21T00:30:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "a71d1acc-f3ad-4041-b1e7-451dfbe56720"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "agent-kind"
+      },
+      "message": "Successfully assigned z2/agent-kind to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:31:19Z",
+      "lastTimestamp": "2026-11-21T00:31:19Z"
+    },
+    {
+      "metadata": {
+        "uid": "1979df3c-c281-4423-b68a-17e175e1a82d"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "clock-kind"
+      },
+      "message": "Successfully assigned z2/clock-kind to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:31:19Z",
+      "lastTimestamp": "2026-11-21T00:31:19Z"
+    },
+    {
+      "metadata": {
+        "uid": "aec71a13-7bff-4383-bee6-36150af1dc78"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "phase-bench"
+      },
+      "message": "Successfully assigned z2/phase-bench to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:31:19Z",
+      "lastTimestamp": "2026-11-21T00:31:19Z"
+    },
+    {
+      "metadata": {
+        "uid": "0f35a713-f56d-4516-8980-5c07bb911852"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5mgz7"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-5mgz7 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:31:21Z",
+      "lastTimestamp": "2026-11-21T00:31:21Z"
+    },
+    {
+      "metadata": {
+        "uid": "1d967554-a358-4991-a4e8-f80bff6dc633"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-vvnjk"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-vvnjk to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:31:21Z",
+      "lastTimestamp": "2026-11-21T00:31:21Z"
+    },
+    {
+      "metadata": {
+        "uid": "fd1e89f6-096c-457f-89c1-f88d65940a63"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-kdpbq"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-kdpbq to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:31:21Z",
+      "lastTimestamp": "2026-11-21T00:31:21Z"
+    },
+    {
+      "metadata": {
+        "uid": "cc678743-9dea-4856-b17b-f3f34dfaaf3f"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-vvnjk"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:31:22Z",
+      "lastTimestamp": "2026-11-21T00:31:56Z"
+    },
+    {
+      "metadata": {
+        "uid": "c1f36bb8-f7e5-4b30-98c6-b19ec68e5779"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-kdpbq"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:31:22Z",
+      "lastTimestamp": "2026-11-21T00:31:56Z"
+    },
+    {
+      "metadata": {
+        "uid": "f91891d6-3fe2-472a-865f-9540d8c05cbd"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5mgz7"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.21:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:31:23Z",
+      "lastTimestamp": "2026-11-21T00:31:24Z"
+    },
+    {
+      "metadata": {
+        "uid": "01c1514e-680e-49a3-9dc1-82ba5d5eb62d"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5mgz7"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:31:44Z",
+      "lastTimestamp": "2026-11-21T00:32:04Z"
+    },
+    {
+      "metadata": {
+        "uid": "ff76804a-3a5d-4eea-a03c-3055c21cc62f"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-8gw92"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-8gw92 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:32:12Z",
+      "lastTimestamp": "2026-11-21T00:32:12Z"
+    },
+    {
+      "metadata": {
+        "uid": "9e265f40-5b40-4f53-904e-3c2fb6b2d0a5"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-8gw92"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:32:33Z",
+      "lastTimestamp": "2026-11-21T00:32:53Z"
+    },
+    {
+      "metadata": {
+        "uid": "57491377-047a-41b0-b690-65789045ce32"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-8gw92"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.24:8012/\": dial tcp 10.244.0.24:8012: connect: connection reset by peer",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:33:03Z",
+      "lastTimestamp": "2026-11-21T00:33:03Z"
+    },
+    {
+      "metadata": {
+        "uid": "f6666a29-ce91-40c3-9b69-2b398cb060d4"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-krssq"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-krssq to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:33:32Z",
+      "lastTimestamp": "2026-11-21T00:33:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "77370ed7-6f92-44c4-8b55-c06b3aa47e77"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-krssq"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.25:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:33:34Z",
+      "lastTimestamp": "2026-11-21T00:33:35Z"
+    },
+    {
+      "metadata": {
+        "uid": "72c3a530-38e5-42e6-bce4-8c97da764bd9"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-krssq"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:33:54Z",
+      "lastTimestamp": "2026-11-21T00:34:14Z"
+    },
+    {
+      "metadata": {
+        "uid": "fff91eef-1dab-4d20-9344-b1b2272dc867"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-lw6lm"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-lw6lm to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:33:57Z",
+      "lastTimestamp": "2026-11-21T00:33:57Z"
+    },
+    {
+      "metadata": {
+        "uid": "a37276cd-4397-4bb0-a500-56e6c00d7885"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-lw6lm"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.26:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:33:59Z",
+      "lastTimestamp": "2026-11-21T00:34:00Z"
+    },
+    {
+      "metadata": {
+        "uid": "5f539c61-37d7-418c-b497-acec6d0e0e7e"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-lw6lm"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:34:19Z",
+      "lastTimestamp": "2026-11-21T00:34:39Z"
+    },
+    {
+      "metadata": {
+        "uid": "10e95f9c-4dcd-4fa8-b879-4471b36eb1ff"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-whz65"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-whz65 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:34:22Z",
+      "lastTimestamp": "2026-11-21T00:34:22Z"
+    },
+    {
+      "metadata": {
+        "uid": "03ea8c57-4cac-4893-956b-4341b8f10e9f"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-whz65"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:34:23Z",
+      "lastTimestamp": "2026-11-21T00:34:58Z"
+    },
+    {
+      "metadata": {
+        "uid": "2d1ef171-c913-43e6-ace4-abc417da10f1"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-c4csb"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-c4csb to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:34:47Z",
+      "lastTimestamp": "2026-11-21T00:34:47Z"
+    },
+    {
+      "metadata": {
+        "uid": "7f819a36-ca35-4ac9-8c81-3b0121417dc3"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-c4csb"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:34:49Z",
+      "lastTimestamp": "2026-11-21T00:35:23Z"
+    },
+    {
+      "metadata": {
+        "uid": "a5fe1481-2e62-4085-8516-dbe435344ce6"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-phx25"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-phx25 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:35:40Z",
+      "lastTimestamp": "2026-11-21T00:35:40Z"
+    },
+    {
+      "metadata": {
+        "uid": "bd435be5-c06c-4bd2-9424-cf57e16caac5"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-phx25"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.29:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:35:42Z",
+      "lastTimestamp": "2026-11-21T00:35:43Z"
+    },
+    {
+      "metadata": {
+        "uid": "a9e25b6e-b909-49a4-9f33-9c1df0041262"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-phx25"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:36:02Z",
+      "lastTimestamp": "2026-11-21T00:36:22Z"
+    },
+    {
+      "metadata": {
+        "uid": "2249f54f-4afb-4281-a8f1-573fe41e356b"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-5qzfm"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-5qzfm to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:36:05Z",
+      "lastTimestamp": "2026-11-21T00:36:05Z"
+    },
+    {
+      "metadata": {
+        "uid": "9b1ce9b2-4b0c-4a4b-b40b-5ccb960d254c"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-5qzfm"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:36:06Z",
+      "lastTimestamp": "2026-11-21T00:36:41Z"
+    },
+    {
+      "metadata": {
+        "uid": "2f58a000-1259-4b86-b3ae-f675e47720b0"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-mwtf2"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-mwtf2 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:36:30Z",
+      "lastTimestamp": "2026-11-21T00:36:30Z"
+    },
+    {
+      "metadata": {
+        "uid": "4d5898da-ce1a-4d0d-94a9-c26a9e76c8dd"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-mwtf2"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:36:31Z",
+      "lastTimestamp": "2026-11-21T00:37:07Z"
+    },
+    {
+      "metadata": {
+        "uid": "2702b5e0-c948-41d1-81ef-8971fe22afab"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-6tsgz"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-6tsgz to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:36:55Z",
+      "lastTimestamp": "2026-11-21T00:36:55Z"
+    },
+    {
+      "metadata": {
+        "uid": "603121bf-4f1c-4bb9-89d4-c66d3c5cd95e"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-6tsgz"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:37:17Z",
+      "lastTimestamp": "2026-11-21T00:37:37Z"
+    },
+    {
+      "metadata": {
+        "uid": "d6234bf7-48c1-4913-8937-d49839cd8115"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-8kq5p"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-8kq5p to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:37:48Z",
+      "lastTimestamp": "2026-11-21T00:37:48Z"
+    },
+    {
+      "metadata": {
+        "uid": "a076eb0b-f008-455d-8694-60537d0d3bf8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-8kq5p"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:37:49Z",
+      "lastTimestamp": "2026-11-21T00:38:24Z"
+    },
+    {
+      "metadata": {
+        "uid": "7c1b8064-c784-42f3-b43e-2daee3ea92f2"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-mm8qw"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-mm8qw to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:38:13Z",
+      "lastTimestamp": "2026-11-21T00:38:13Z"
+    },
+    {
+      "metadata": {
+        "uid": "69bcf481-c532-43cc-bf72-6394c8e6432d"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-mm8qw"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:38:14Z",
+      "lastTimestamp": "2026-11-21T00:38:48Z"
+    },
+    {
+      "metadata": {
+        "uid": "33eda89a-7793-4a1c-bcbf-b1b7066639f1"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-n7snp"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-n7snp to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:38:39Z",
+      "lastTimestamp": "2026-11-21T00:38:39Z"
+    },
+    {
+      "metadata": {
+        "uid": "c66c1642-7396-46ca-b248-71af49a84808"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-n7snp"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.35:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:38:40Z",
+      "lastTimestamp": "2026-11-21T00:38:41Z"
+    },
+    {
+      "metadata": {
+        "uid": "ca6ee272-0a21-458d-813f-c1c9b57674f0"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-n7snp"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:39:00Z",
+      "lastTimestamp": "2026-11-21T00:39:20Z"
+    },
+    {
+      "metadata": {
+        "uid": "ded4db6a-0b51-446f-9fe9-cd60ff9749b5"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-tltwl"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-tltwl to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:39:04Z",
+      "lastTimestamp": "2026-11-21T00:39:04Z"
+    },
+    {
+      "metadata": {
+        "uid": "610b5da4-6a34-40f5-8e83-4272cdc7c6d7"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-tltwl"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.36:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:39:05Z",
+      "lastTimestamp": "2026-11-21T00:39:06Z"
+    },
+    {
+      "metadata": {
+        "uid": "82864075-b62f-40ed-9077-344a446c9518"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-tltwl"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:39:25Z",
+      "lastTimestamp": "2026-11-21T00:39:45Z"
+    },
+    {
+      "metadata": {
+        "uid": "f794ae45-7750-444a-9bbf-e862eed0bd7d"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-524dn"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-524dn to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:40:02Z",
+      "lastTimestamp": "2026-11-21T00:40:02Z"
+    },
+    {
+      "metadata": {
+        "uid": "5615abe2-9960-425f-a318-aeaa0caf6fb8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-524dn"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:40:04Z",
+      "lastTimestamp": "2026-11-21T00:40:40Z"
+    },
+    {
+      "metadata": {
+        "uid": "3a30c349-3d0f-496a-ae6e-6995790c80b0"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-d495f"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-d495f to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:40:30Z",
+      "lastTimestamp": "2026-11-21T00:40:30Z"
+    },
+    {
+      "metadata": {
+        "uid": "7c47888b-69fc-4e72-a245-0b835a39729b"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-d495f"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.38:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 4,
+      "firstTimestamp": "2026-11-21T00:40:33Z",
+      "lastTimestamp": "2026-11-21T00:41:25Z"
+    },
+    {
+      "metadata": {
+        "uid": "df521439-e8c3-48ef-bed9-7f63b9f9d72d"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-d495f"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:40:54Z",
+      "lastTimestamp": "2026-11-21T00:41:14Z"
+    },
+    {
+      "metadata": {
+        "uid": "16d41857-8831-4569-904b-2d983624f62d"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5jwwr"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-5jwwr to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:40:56Z",
+      "lastTimestamp": "2026-11-21T00:40:56Z"
+    },
+    {
+      "metadata": {
+        "uid": "dc0ef268-3974-45de-847c-d0546370b063"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5jwwr"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.39:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:40:58Z",
+      "lastTimestamp": "2026-11-21T00:40:59Z"
+    },
+    {
+      "metadata": {
+        "uid": "927e8940-a22c-44d9-803e-b87a73d74f42"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5jwwr"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:41:18Z",
+      "lastTimestamp": "2026-11-21T00:41:38Z"
+    },
+    {
+      "metadata": {
+        "uid": "af4b4fa3-5267-44fd-b8ea-84fab6980fbb"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-km84q"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-km84q to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:41:24Z",
+      "lastTimestamp": "2026-11-21T00:41:24Z"
+    },
+    {
+      "metadata": {
+        "uid": "7a95536c-28ca-49f5-8e58-2b6413b0fd3c"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-km84q"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:41:25Z",
+      "lastTimestamp": "2026-11-21T00:42:00Z"
+    },
+    {
+      "metadata": {
+        "uid": "ef5365d5-ccd5-40aa-9cc2-62746cdaeafb"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-5mxvp"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-5mxvp to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:42:17Z",
+      "lastTimestamp": "2026-11-21T00:42:17Z"
+    },
+    {
+      "metadata": {
+        "uid": "92efeba5-cfea-4093-9af0-57710c2c89f8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-5mxvp"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:42:37Z",
+      "lastTimestamp": "2026-11-21T00:42:57Z"
+    },
+    {
+      "metadata": {
+        "uid": "1675b7a4-104b-40ed-b5dc-81a65d3c4520"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-2kzfj"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-2kzfj to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:42:42Z",
+      "lastTimestamp": "2026-11-21T00:42:42Z"
+    },
+    {
+      "metadata": {
+        "uid": "a7422c62-94a9-473d-8571-10ea860fb2bf"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-2kzfj"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.42:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:42:44Z",
+      "lastTimestamp": "2026-11-21T00:42:46Z"
+    },
+    {
+      "metadata": {
+        "uid": "947b4c3d-fe80-4452-92f8-854bac8eabef"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-2kzfj"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:43:06Z",
+      "lastTimestamp": "2026-11-21T00:43:26Z"
+    },
+    {
+      "metadata": {
+        "uid": "856adc6e-b55b-4e38-82ab-b1c8baed40f0"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-t759v"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-t759v to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:43:07Z",
+      "lastTimestamp": "2026-11-21T00:43:07Z"
+    },
+    {
+      "metadata": {
+        "uid": "c90a8278-c1f3-4016-a1eb-4ded90ae541e"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-t759v"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:43:09Z",
+      "lastTimestamp": "2026-11-21T00:43:45Z"
+    },
+    {
+      "metadata": {
+        "uid": "7843c284-67e2-4230-bcc5-8853a35bb9b9"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-kwjxv"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-kwjxv to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:43:35Z",
+      "lastTimestamp": "2026-11-21T00:43:35Z"
+    },
+    {
+      "metadata": {
+        "uid": "ed65f445-30f0-4385-a745-b73274bed0df"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-kwjxv"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:43:37Z",
+      "lastTimestamp": "2026-11-21T00:44:14Z"
+    },
+    {
+      "metadata": {
+        "uid": "d183c707-84d8-4106-bcfb-b18f2d15e83d"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-dbbcd"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-dbbcd to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:44:32Z",
+      "lastTimestamp": "2026-11-21T00:44:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "792d0e37-b693-42e6-ade7-aa83db600491"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-dbbcd"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.45:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:44:35Z",
+      "lastTimestamp": "2026-11-21T00:44:36Z"
+    },
+    {
+      "metadata": {
+        "uid": "435d09ed-1541-4370-8f5b-64b2da699003"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-dbbcd"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:44:55Z",
+      "lastTimestamp": "2026-11-21T00:45:15Z"
+    },
+    {
+      "metadata": {
+        "uid": "3c73b592-695b-43e9-ae5e-010fafe1c0b2"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-qjlhd"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-qjlhd to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:45:00Z",
+      "lastTimestamp": "2026-11-21T00:45:00Z"
+    },
+    {
+      "metadata": {
+        "uid": "5b68a8be-a0f9-492b-828c-2b16ebbfc5b8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-qjlhd"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:45:02Z",
+      "lastTimestamp": "2026-11-21T00:45:37Z"
+    },
+    {
+      "metadata": {
+        "uid": "183eebc8-170c-4069-91dd-a63d40b92bde"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-wcdgs"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-wcdgs to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:45:25Z",
+      "lastTimestamp": "2026-11-21T00:45:25Z"
+    },
+    {
+      "metadata": {
+        "uid": "b5ea3f5c-02aa-405f-9c37-82a8396d6d38"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-wcdgs"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:45:26Z",
+      "lastTimestamp": "2026-11-21T00:46:02Z"
+    },
+    {
+      "metadata": {
+        "uid": "5b881536-7e94-4854-aa78-5c96adf30dd0"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-92lqr"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-92lqr to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:45:50Z",
+      "lastTimestamp": "2026-11-21T00:45:50Z"
+    },
+    {
+      "metadata": {
+        "uid": "a927b392-462d-4760-a2fa-a17a3386ab64"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-92lqr"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:46:11Z",
+      "lastTimestamp": "2026-11-21T00:46:31Z"
+    },
+    {
+      "metadata": {
+        "uid": "4a7b9009-6883-44ae-a140-2ff87f2c8792"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-x2wjj"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-x2wjj to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:46:50Z",
+      "lastTimestamp": "2026-11-21T00:46:50Z"
+    },
+    {
+      "metadata": {
+        "uid": "13505f1a-1e08-419b-8699-9f40e7d90d2a"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-x2wjj"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:46:51Z",
+      "lastTimestamp": "2026-11-21T00:47:27Z"
+    },
+    {
+      "metadata": {
+        "uid": "57cc9371-7c2d-477c-ac95-5e14a96d689e"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-x6nbk"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-x6nbk to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:47:15Z",
+      "lastTimestamp": "2026-11-21T00:47:15Z"
+    },
+    {
+      "metadata": {
+        "uid": "d6129982-fedd-42aa-8f50-928a35c191d9"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-x6nbk"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:47:16Z",
+      "lastTimestamp": "2026-11-21T00:47:52Z"
+    },
+    {
+      "metadata": {
+        "uid": "7acb2b05-38af-420b-930a-bd6a34c0ce10"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-qpg22"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-qpg22 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:47:44Z",
+      "lastTimestamp": "2026-11-21T00:47:44Z"
+    },
+    {
+      "metadata": {
+        "uid": "1c0a015c-45ad-474a-b75b-409e1c808962"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-qpg22"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.51:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:47:46Z",
+      "lastTimestamp": "2026-11-21T00:47:47Z"
+    },
+    {
+      "metadata": {
+        "uid": "7551b3cf-8179-4d4f-aef0-01f03ee5d4df"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-qpg22"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:48:06Z",
+      "lastTimestamp": "2026-11-21T00:48:26Z"
+    },
+    {
+      "metadata": {
+        "uid": "f8e137b1-4caa-4e67-9b5e-fcd1f8d78b95"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-bxj54"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-bxj54 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:48:12Z",
+      "lastTimestamp": "2026-11-21T00:48:12Z"
+    },
+    {
+      "metadata": {
+        "uid": "017d09c4-30dd-4ffc-8541-030a604d04f9"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-bxj54"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.52:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:48:14Z",
+      "lastTimestamp": "2026-11-21T00:48:15Z"
+    },
+    {
+      "metadata": {
+        "uid": "51f33723-42b9-4ec5-8d2c-d0d01ec08263"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-bxj54"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:48:34Z",
+      "lastTimestamp": "2026-11-21T00:48:54Z"
+    },
+    {
+      "metadata": {
+        "uid": "c23e8978-0702-4e25-9400-0d14439cac16"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-vwhwm"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-vwhwm to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:49:11Z",
+      "lastTimestamp": "2026-11-21T00:49:11Z"
+    },
+    {
+      "metadata": {
+        "uid": "88568534-f88f-4468-95a6-ecccc0240557"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-vwhwm"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:49:11Z",
+      "lastTimestamp": "2026-11-21T00:49:47Z"
+    },
+    {
+      "metadata": {
+        "uid": "93990232-b8ce-436f-a0b0-d9aa897495e5"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-7l866"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-7l866 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:49:41Z",
+      "lastTimestamp": "2026-11-21T00:49:41Z"
+    },
+    {
+      "metadata": {
+        "uid": "f99165a3-a8d9-448f-98c6-e69c936bbae1"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-7l866"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.54:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:49:46Z",
+      "lastTimestamp": "2026-11-21T00:49:47Z"
+    },
+    {
+      "metadata": {
+        "uid": "c5100c4e-87b4-4e4a-b248-1a028380d5a7"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-7l866"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:50:06Z",
+      "lastTimestamp": "2026-11-21T00:50:26Z"
+    },
+    {
+      "metadata": {
+        "uid": "77018930-9e47-400a-8e83-beef3a57f02a"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-59gcl"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-59gcl to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:50:11Z",
+      "lastTimestamp": "2026-11-21T00:50:11Z"
+    },
+    {
+      "metadata": {
+        "uid": "a20daa3c-5b2f-4832-a212-56e11928ae03"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-59gcl"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.55:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:50:13Z",
+      "lastTimestamp": "2026-11-21T00:50:14Z"
+    },
+    {
+      "metadata": {
+        "uid": "77d723d5-327c-4995-87f6-d3b3d4a581d8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-59gcl"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:50:33Z",
+      "lastTimestamp": "2026-11-21T00:50:53Z"
+    },
+    {
+      "metadata": {
+        "uid": "76f80df1-84ee-4cbc-8a26-e3a4d6b0da54"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-7l866"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.54:8012/\": dial tcp 10.244.0.54:8012: connect: connection refused",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:50:36Z",
+      "lastTimestamp": "2026-11-21T00:50:36Z"
+    },
+    {
+      "metadata": {
+        "uid": "8f82d36a-8100-4dac-9783-139bc7a9811c"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-t42dq"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-t42dq to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:50:37Z",
+      "lastTimestamp": "2026-11-21T00:50:37Z"
+    },
+    {
+      "metadata": {
+        "uid": "43286b09-522e-4360-8ef6-539259395efd"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-t42dq"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:50:38Z",
+      "lastTimestamp": "2026-11-21T00:51:14Z"
+    },
+    {
+      "metadata": {
+        "uid": "c7e8fd9f-b796-4f42-8f1b-9e8710737561"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-59gcl"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.55:8012/\": dial tcp 10.244.0.55:8012: connect: connection refused",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:51:03Z",
+      "lastTimestamp": "2026-11-21T00:51:03Z"
+    },
+    {
+      "metadata": {
+        "uid": "80eb644d-6e7c-4f52-80bd-a2a1d0d8f9ec"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-xw8r6"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-xw8r6 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:51:32Z",
+      "lastTimestamp": "2026-11-21T00:51:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "f0ef207e-076d-4ad9-83a2-7d3528cd9029"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-xw8r6"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.57:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:51:34Z",
+      "lastTimestamp": "2026-11-21T00:51:35Z"
+    },
+    {
+      "metadata": {
+        "uid": "01ecd74e-e28e-4663-b48a-13550d431a38"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-xw8r6"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:51:54Z",
+      "lastTimestamp": "2026-11-21T00:52:14Z"
+    },
+    {
+      "metadata": {
+        "uid": "b64de3f4-1d46-4d85-982c-e13ffc83db16"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-tpqdz"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-tpqdz to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:51:57Z",
+      "lastTimestamp": "2026-11-21T00:51:57Z"
+    },
+    {
+      "metadata": {
+        "uid": "aa06f7ce-0095-46a2-a9fe-d2811cac15ea"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-tpqdz"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.58:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:51:59Z",
+      "lastTimestamp": "2026-11-21T00:51:59Z"
+    },
+    {
+      "metadata": {
+        "uid": "4e66e761-1d53-45dd-902b-5a2a361f6a71"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-tpqdz"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:52:19Z",
+      "lastTimestamp": "2026-11-21T00:52:39Z"
+    },
+    {
+      "metadata": {
+        "uid": "87892d7e-2002-4d02-8bc3-2040047255ab"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-rg9gl"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-rg9gl to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:52:22Z",
+      "lastTimestamp": "2026-11-21T00:52:22Z"
+    },
+    {
+      "metadata": {
+        "uid": "94291203-947d-4152-8baa-005811ce5545"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-rg9gl"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:52:22Z",
+      "lastTimestamp": "2026-11-21T00:52:57Z"
+    },
+    {
+      "metadata": {
+        "uid": "b63595e3-9f11-4ee2-ab4b-6695e92aac75"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-ldq2n"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-ldq2n to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:52:47Z",
+      "lastTimestamp": "2026-11-21T00:52:47Z"
+    },
+    {
+      "metadata": {
+        "uid": "f001e784-be30-4c33-97f0-a1d91fa7d7d2"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-ldq2n"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:52:48Z",
+      "lastTimestamp": "2026-11-21T00:53:23Z"
+    },
+    {
+      "metadata": {
+        "uid": "3372f0a5-c022-44ae-8922-8fe5426fe5b5"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5sftz"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-5sftz to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:53:39Z",
+      "lastTimestamp": "2026-11-21T00:53:39Z"
+    },
+    {
+      "metadata": {
+        "uid": "deaf6693-a531-4ea8-9a28-945b001ca568"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5sftz"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.61:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:53:41Z",
+      "lastTimestamp": "2026-11-21T00:53:42Z"
+    },
+    {
+      "metadata": {
+        "uid": "120f84dc-04f6-4cf3-978c-affb08bf93ff"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-5sftz"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:54:01Z",
+      "lastTimestamp": "2026-11-21T00:54:21Z"
+    },
+    {
+      "metadata": {
+        "uid": "d495f891-dab1-4660-ba90-36995e05db20"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-hk98f"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-hk98f to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:54:05Z",
+      "lastTimestamp": "2026-11-21T00:54:05Z"
+    },
+    {
+      "metadata": {
+        "uid": "079b20a9-0982-4f48-b696-c9173e0b81bd"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-hk98f"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:54:05Z",
+      "lastTimestamp": "2026-11-21T00:54:40Z"
+    },
+    {
+      "metadata": {
+        "uid": "efaf236b-1df8-44c8-b03e-d14273ab07c0"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-k98d4"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-k98d4 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:54:29Z",
+      "lastTimestamp": "2026-11-21T00:54:29Z"
+    },
+    {
+      "metadata": {
+        "uid": "9f23dc6f-faac-498a-94ad-511b1146f0e6"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-k98d4"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:54:30Z",
+      "lastTimestamp": "2026-11-21T00:55:05Z"
+    },
+    {
+      "metadata": {
+        "uid": "4dacaa26-a6fd-4142-81c1-4bc734bf18b0"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-222f9"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-222f9 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:54:55Z",
+      "lastTimestamp": "2026-11-21T00:54:55Z"
+    },
+    {
+      "metadata": {
+        "uid": "f0ab8234-2f72-49f8-8fcc-10bb8d11c6a0"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-222f9"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.64:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:54:56Z",
+      "lastTimestamp": "2026-11-21T00:54:57Z"
+    },
+    {
+      "metadata": {
+        "uid": "a64d93d0-c112-43d1-a939-283bae132ba7"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-222f9"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:55:16Z",
+      "lastTimestamp": "2026-11-21T00:55:36Z"
+    },
+    {
+      "metadata": {
+        "uid": "0c97d677-db5d-4dfb-aacd-fd22fed05f54"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-7wrlv"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-7wrlv to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:55:54Z",
+      "lastTimestamp": "2026-11-21T00:55:54Z"
+    },
+    {
+      "metadata": {
+        "uid": "f89fd31a-0d54-4004-bf77-d55aee8ae4f4"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-7wrlv"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:55:55Z",
+      "lastTimestamp": "2026-11-21T00:56:30Z"
+    },
+    {
+      "metadata": {
+        "uid": "899776cc-2374-4bf1-82ae-99dc67152143"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-5jwnv"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-5jwnv to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:56:19Z",
+      "lastTimestamp": "2026-11-21T00:56:19Z"
+    },
+    {
+      "metadata": {
+        "uid": "9f89b3be-2c1a-4838-97d5-9b9289ac7abb"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-5jwnv"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:56:20Z",
+      "lastTimestamp": "2026-11-21T00:56:56Z"
+    },
+    {
+      "metadata": {
+        "uid": "07b487d6-ebb5-4499-8075-948d573c4a73"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-npbx5"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-npbx5 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:56:46Z",
+      "lastTimestamp": "2026-11-21T00:56:46Z"
+    },
+    {
+      "metadata": {
+        "uid": "e2fb5baf-113b-471f-b24c-d472b413a973"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-npbx5"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.67:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:56:51Z",
+      "lastTimestamp": "2026-11-21T00:56:53Z"
+    },
+    {
+      "metadata": {
+        "uid": "0ebce96c-3353-49ee-8582-148ee110f2a8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-npbx5"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:57:12Z",
+      "lastTimestamp": "2026-11-21T00:57:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "79256e7e-f577-4e11-94ff-721fe63d442b"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-stj7w"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-stj7w to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:57:17Z",
+      "lastTimestamp": "2026-11-21T00:57:17Z"
+    },
+    {
+      "metadata": {
+        "uid": "90f3765b-67b2-4df3-b377-49800ede966c"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-stj7w"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.68:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:57:19Z",
+      "lastTimestamp": "2026-11-21T00:57:20Z"
+    },
+    {
+      "metadata": {
+        "uid": "f90d017e-b895-4a6c-b4c4-5e37fe5947ba"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-stj7w"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:57:40Z",
+      "lastTimestamp": "2026-11-21T00:58:00Z"
+    },
+    {
+      "metadata": {
+        "uid": "d25054e8-1f5f-49f4-aa43-9aba0edbb7fd"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-npbx5"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.67:8012/\": dial tcp 10.244.0.67:8012: connect: connection refused",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:57:42Z",
+      "lastTimestamp": "2026-11-21T00:57:42Z"
+    },
+    {
+      "metadata": {
+        "uid": "beccfce2-d819-42d1-9162-0d60e45fd542"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-w7x4p"
+      },
+      "message": "Successfully assigned z2/pr-p1t2-00001-deployment-8554d54464-w7x4p to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:58:10Z",
+      "lastTimestamp": "2026-11-21T00:58:10Z"
+    },
+    {
+      "metadata": {
+        "uid": "4e14e4bd-8069-4293-a2cb-6aa1c38565b5"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1t2-00001-deployment-8554d54464-w7x4p"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:58:12Z",
+      "lastTimestamp": "2026-11-21T00:58:47Z"
+    },
+    {
+      "metadata": {
+        "uid": "04dd243b-0c72-4f24-b9df-70db1ccb78eb"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-z4qpt"
+      },
+      "message": "Successfully assigned z2/probe-cur-00001-deployment-758bdd989c-z4qpt to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:58:38Z",
+      "lastTimestamp": "2026-11-21T00:58:38Z"
+    },
+    {
+      "metadata": {
+        "uid": "b7661257-14d8-4a8f-bd99-32e29e14258a"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-z4qpt"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.70:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 2,
+      "firstTimestamp": "2026-11-21T00:58:40Z",
+      "lastTimestamp": "2026-11-21T00:58:41Z"
+    },
+    {
+      "metadata": {
+        "uid": "128936ed-dfb4-4a39-b3df-11379586db10"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "probe-cur-00001-deployment-758bdd989c-z4qpt"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:59:00Z",
+      "lastTimestamp": "2026-11-21T00:59:20Z"
+    },
+    {
+      "metadata": {
+        "uid": "9eff3996-98d2-47a9-bc67-0875861a1388"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-ssvkb"
+      },
+      "message": "Successfully assigned z2/pr-clone-00001-deployment-85f64dfdd5-ssvkb to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:59:03Z",
+      "lastTimestamp": "2026-11-21T00:59:03Z"
+    },
+    {
+      "metadata": {
+        "uid": "aa353314-13a7-4819-b08b-59f26f96658c"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-ssvkb"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.71:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:59:05Z",
+      "lastTimestamp": "2026-11-21T00:59:05Z"
+    },
+    {
+      "metadata": {
+        "uid": "74e3da30-dfa6-462b-81aa-db719ccd9637"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-clone-00001-deployment-85f64dfdd5-ssvkb"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T00:59:25Z",
+      "lastTimestamp": "2026-11-21T00:59:45Z"
+    },
+    {
+      "metadata": {
+        "uid": "10f50fe2-40c1-4fd9-9647-0ba53cafbaf9"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-fqx56"
+      },
+      "message": "Successfully assigned z2/pr-p1-00001-deployment-765c956b6d-fqx56 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T00:59:27Z",
+      "lastTimestamp": "2026-11-21T00:59:27Z"
+    },
+    {
+      "metadata": {
+        "uid": "8e883d9d-e0f5-4d41-8b10-c2cb4572e9cb"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "pr-p1-00001-deployment-765c956b6d-fqx56"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T00:59:28Z",
+      "lastTimestamp": "2026-11-21T01:00:02Z"
+    },
+    {
+      "metadata": {
+        "uid": "de2d6442-eace-42ef-b20c-92b0bdb16261"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-lbs6h"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-lbs6h to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:00:59Z",
+      "lastTimestamp": "2026-11-21T01:00:59Z"
+    },
+    {
+      "metadata": {
+        "uid": "9de5f442-0e28-4f8c-aab5-ed5a6ea5b5a5"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-d2xb5"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-d2xb5 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:00:59Z",
+      "lastTimestamp": "2026-11-21T01:00:59Z"
+    },
+    {
+      "metadata": {
+        "uid": "ff05f868-2057-4a7f-8d37-ee2244ce2830"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-wrr72"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-wrr72 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:00:59Z",
+      "lastTimestamp": "2026-11-21T01:00:59Z"
+    },
+    {
+      "metadata": {
+        "uid": "5723ab38-c7aa-42b2-885b-88809c7571ce"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-lbs6h"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:01:31Z",
+      "lastTimestamp": "2026-11-21T01:01:51Z"
+    },
+    {
+      "metadata": {
+        "uid": "1a232529-a8c5-40c8-9961-501123923581"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-d2xb5"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:01:31Z",
+      "lastTimestamp": "2026-11-21T01:01:55Z"
+    },
+    {
+      "metadata": {
+        "uid": "b69baae6-1b9e-4875-969b-47b9604495ae"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-wrr72"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:01:31Z",
+      "lastTimestamp": "2026-11-21T01:01:55Z"
+    },
+    {
+      "metadata": {
+        "uid": "da4d6c20-e8d3-478e-ab60-a79dab438764"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-lbs6h"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.73:8012/\": dial tcp 10.244.0.73:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:02:01Z",
+      "lastTimestamp": "2026-11-21T01:05:31Z"
+    },
+    {
+      "metadata": {
+        "uid": "7de2fd83-9933-4602-904b-0ed0fb0e57a7"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-twpg6"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-twpg6 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:06:38Z",
+      "lastTimestamp": "2026-11-21T01:06:38Z"
+    },
+    {
+      "metadata": {
+        "uid": "b7fb84b5-bbb3-4e8a-a72d-65ccbee0434e"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-twpg6"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:06:59Z",
+      "lastTimestamp": "2026-11-21T01:07:19Z"
+    },
+    {
+      "metadata": {
+        "uid": "6e7454ae-1e2d-4727-a8f5-7b03ab882ba6"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-xbzpm"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-xbzpm to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:07:00Z",
+      "lastTimestamp": "2026-11-21T01:07:00Z"
+    },
+    {
+      "metadata": {
+        "uid": "2e009af8-e61a-43ce-aa56-759cb865334e"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-xbzpm"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:07:12Z",
+      "lastTimestamp": "2026-11-21T01:07:36Z"
+    },
+    {
+      "metadata": {
+        "uid": "82c5149e-9b46-4e6a-80a9-f6d3cca24f67"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-xthhm"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-xthhm to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:07:24Z",
+      "lastTimestamp": "2026-11-21T01:07:24Z"
+    },
+    {
+      "metadata": {
+        "uid": "64d023d4-4742-429d-9ad6-f89c40e604d6"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-twpg6"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.76:8012/\": dial tcp 10.244.0.76:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:07:29Z",
+      "lastTimestamp": "2026-11-21T01:10:59Z"
+    },
+    {
+      "metadata": {
+        "uid": "462e43b8-71ae-49d1-9ead-64802e95d79d"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-xthhm"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:07:36Z",
+      "lastTimestamp": "2026-11-21T01:08:00Z"
+    },
+    {
+      "metadata": {
+        "uid": "83187b10-f796-45a6-8fd0-986251052744"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-n9jhf"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-n9jhf to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:12:43Z",
+      "lastTimestamp": "2026-11-21T01:12:43Z"
+    },
+    {
+      "metadata": {
+        "uid": "34b70921-61a8-45a3-8345-33842b85e420"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-n9jhf"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:12:56Z",
+      "lastTimestamp": "2026-11-21T01:13:20Z"
+    },
+    {
+      "metadata": {
+        "uid": "326db950-0365-4712-8c6b-8cad811939d9"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-b6dtz"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-b6dtz to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:13:05Z",
+      "lastTimestamp": "2026-11-21T01:13:05Z"
+    },
+    {
+      "metadata": {
+        "uid": "20d1779d-f2c0-4a20-ab92-7f1667d18c36"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-b6dtz"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:13:18Z",
+      "lastTimestamp": "2026-11-21T01:13:42Z"
+    },
+    {
+      "metadata": {
+        "uid": "98d97f69-00e1-4d0c-ada5-a891c5be8c41"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-475jt"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-475jt to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:13:27Z",
+      "lastTimestamp": "2026-11-21T01:13:27Z"
+    },
+    {
+      "metadata": {
+        "uid": "6e8c3ac3-2afa-42e7-9d95-a0e1ef94b5c8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-475jt"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:13:48Z",
+      "lastTimestamp": "2026-11-21T01:14:08Z"
+    },
+    {
+      "metadata": {
+        "uid": "70980eef-7e66-4470-89b6-5717a9799359"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-475jt"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.81:8012/\": dial tcp 10.244.0.81:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:14:18Z",
+      "lastTimestamp": "2026-11-21T01:17:48Z"
+    },
+    {
+      "metadata": {
+        "uid": "e0fad913-0ea7-4632-8096-60946e23b084"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-q6nrf"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-q6nrf to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:18:48Z",
+      "lastTimestamp": "2026-11-21T01:18:48Z"
+    },
+    {
+      "metadata": {
+        "uid": "7e03ec3e-a2c4-45ea-891a-9f564bbd82d6"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-q6nrf"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:19:02Z",
+      "lastTimestamp": "2026-11-21T01:19:26Z"
+    },
+    {
+      "metadata": {
+        "uid": "a16bfaeb-d9d0-4b17-af4a-d7448dcca814"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-qq5t6"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-qq5t6 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:19:11Z",
+      "lastTimestamp": "2026-11-21T01:19:11Z"
+    },
+    {
+      "metadata": {
+        "uid": "48b13b77-b05c-476f-9901-5f5b78580da2"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-qq5t6"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:19:32Z",
+      "lastTimestamp": "2026-11-21T01:19:52Z"
+    },
+    {
+      "metadata": {
+        "uid": "a168a188-7a41-4fa1-b3dd-308dd4ba61c1"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-6r7dt"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-6r7dt to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:19:33Z",
+      "lastTimestamp": "2026-11-21T01:19:33Z"
+    },
+    {
+      "metadata": {
+        "uid": "0acfabca-c97c-44b5-8b74-47bd20cf345b"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-6r7dt"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:19:46Z",
+      "lastTimestamp": "2026-11-21T01:20:10Z"
+    },
+    {
+      "metadata": {
+        "uid": "c2c5b1d7-a2fe-42df-9033-9c3eb68a50b8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-qq5t6"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.83:8012/\": dial tcp 10.244.0.83:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:20:02Z",
+      "lastTimestamp": "2026-11-21T01:23:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "da0c93cd-c5ec-4b23-b2d0-9457e320cfbb"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-s9ls6"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-s9ls6 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:24:53Z",
+      "lastTimestamp": "2026-11-21T01:24:53Z"
+    },
+    {
+      "metadata": {
+        "uid": "14abc8b8-b80c-47f0-84be-838c1c2cb1ef"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-s9ls6"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:25:15Z",
+      "lastTimestamp": "2026-11-21T01:25:35Z"
+    },
+    {
+      "metadata": {
+        "uid": "a1a2d772-6dcd-4da6-b6a1-45eba8238694"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-prvbf"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-prvbf to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:25:18Z",
+      "lastTimestamp": "2026-11-21T01:25:18Z"
+    },
+    {
+      "metadata": {
+        "uid": "3382f40a-219d-49ee-8fea-58c069aed60a"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-prvbf"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:25:32Z",
+      "lastTimestamp": "2026-11-21T01:25:56Z"
+    },
+    {
+      "metadata": {
+        "uid": "a1dfcad1-68d7-491e-be65-e383408e1ac1"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-xcrdg"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-xcrdg to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:25:41Z",
+      "lastTimestamp": "2026-11-21T01:25:41Z"
+    },
+    {
+      "metadata": {
+        "uid": "432514c3-4fa8-4c96-a613-3d36fb467dbd"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-s9ls6"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.85:8012/\": dial tcp 10.244.0.85:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:25:45Z",
+      "lastTimestamp": "2026-11-21T01:29:15Z"
+    },
+    {
+      "metadata": {
+        "uid": "35bc9e2c-57fe-419c-b46c-bd15259764d5"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-xcrdg"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:25:54Z",
+      "lastTimestamp": "2026-11-21T01:26:18Z"
+    },
+    {
+      "metadata": {
+        "uid": "ce70a7ab-a8d0-4ded-b5af-29ac4ef6674a"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-hdjds"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-hdjds to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:31:02Z",
+      "lastTimestamp": "2026-11-21T01:31:02Z"
+    },
+    {
+      "metadata": {
+        "uid": "830f0662-8a44-417f-a7f3-8aeebb499064"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-hdjds"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:31:14Z",
+      "lastTimestamp": "2026-11-21T01:31:38Z"
+    },
+    {
+      "metadata": {
+        "uid": "c552e757-6a8e-4f52-9007-281c2483efd9"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-tprfk"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-tprfk to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:31:24Z",
+      "lastTimestamp": "2026-11-21T01:31:24Z"
+    },
+    {
+      "metadata": {
+        "uid": "bc22110f-ad3f-496d-a7bd-fc144be4c981"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-tprfk"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:31:36Z",
+      "lastTimestamp": "2026-11-21T01:32:00Z"
+    },
+    {
+      "metadata": {
+        "uid": "be0c5d3f-dedb-4485-8220-699bbd6c5980"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-xq62g"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-xq62g to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:31:46Z",
+      "lastTimestamp": "2026-11-21T01:31:46Z"
+    },
+    {
+      "metadata": {
+        "uid": "f22a5c66-79b7-4c2d-9e23-e7eb57ad8c81"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-xq62g"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:32:07Z",
+      "lastTimestamp": "2026-11-21T01:32:27Z"
+    },
+    {
+      "metadata": {
+        "uid": "995c886f-ba90-47ad-8784-efa7e212cb21"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-xq62g"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.90:8012/\": dial tcp 10.244.0.90:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:32:37Z",
+      "lastTimestamp": "2026-11-21T01:36:07Z"
+    },
+    {
+      "metadata": {
+        "uid": "0e711e37-3b98-4c71-b2fa-006938ba4a0f"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-hdjds"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.88:8012/\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:36:15Z",
+      "lastTimestamp": "2026-11-21T01:36:15Z"
+    },
+    {
+      "metadata": {
+        "uid": "c8bb1060-c34f-4fd4-8fe3-2a3e906b6562"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-m4wds"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-m4wds to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:37:06Z",
+      "lastTimestamp": "2026-11-21T01:37:06Z"
+    },
+    {
+      "metadata": {
+        "uid": "9bfa1681-c7aa-4334-aa75-628a185d6f17"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-m4wds"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:37:20Z",
+      "lastTimestamp": "2026-11-21T01:37:44Z"
+    },
+    {
+      "metadata": {
+        "uid": "71919b98-c91a-4a81-977c-c5adc25fe715"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-lm57s"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-lm57s to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:37:28Z",
+      "lastTimestamp": "2026-11-21T01:37:28Z"
+    },
+    {
+      "metadata": {
+        "uid": "398cc8d2-67b3-4580-a8c0-f44b6a4e6493"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-lm57s"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:37:50Z",
+      "lastTimestamp": "2026-11-21T01:38:10Z"
+    },
+    {
+      "metadata": {
+        "uid": "f631170a-aeb0-4168-bd79-4f1d6e4f4d09"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-xqm4h"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-xqm4h to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:37:50Z",
+      "lastTimestamp": "2026-11-21T01:37:50Z"
+    },
+    {
+      "metadata": {
+        "uid": "4b2625b9-fdf8-4598-8820-28cfd3fa4bab"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-xqm4h"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:38:02Z",
+      "lastTimestamp": "2026-11-21T01:38:26Z"
+    },
+    {
+      "metadata": {
+        "uid": "cb2da1aa-cde6-43a7-b953-b08348a3f82c"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-lm57s"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.92:8012/\": dial tcp 10.244.0.92:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:38:20Z",
+      "lastTimestamp": "2026-11-21T01:41:50Z"
+    },
+    {
+      "metadata": {
+        "uid": "cb23512f-3065-40b4-b181-d91534f4a706"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-4px6z"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-4px6z to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:43:10Z",
+      "lastTimestamp": "2026-11-21T01:43:10Z"
+    },
+    {
+      "metadata": {
+        "uid": "1a24b05b-d700-43d6-8ac8-5804015edb2e"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-4px6z"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:43:31Z",
+      "lastTimestamp": "2026-11-21T01:43:51Z"
+    },
+    {
+      "metadata": {
+        "uid": "c15930ea-00a6-4636-bcc2-994cee3f6d69"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-dgjct"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-dgjct to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:43:32Z",
+      "lastTimestamp": "2026-11-21T01:43:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "47e85afd-b9b6-47f9-95c5-d8461b3cebf6"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-dgjct"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:43:45Z",
+      "lastTimestamp": "2026-11-21T01:44:09Z"
+    },
+    {
+      "metadata": {
+        "uid": "02559922-7ba6-4fb5-8bf1-7176fe119127"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-4r52s"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-4r52s to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:43:54Z",
+      "lastTimestamp": "2026-11-21T01:43:54Z"
+    },
+    {
+      "metadata": {
+        "uid": "29201980-ba8f-474c-be83-9c497b1d131c"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-4px6z"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.94:8012/\": dial tcp 10.244.0.94:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:44:01Z",
+      "lastTimestamp": "2026-11-21T01:47:31Z"
+    },
+    {
+      "metadata": {
+        "uid": "40c157b1-5777-4662-9207-4117dfe0ecb4"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-4r52s"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:44:06Z",
+      "lastTimestamp": "2026-11-21T01:44:30Z"
+    },
+    {
+      "metadata": {
+        "uid": "b9eed0db-cf33-4fb5-9b13-9e062b9bc20d"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-4r52s"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.96:8012/\": dial tcp 10.244.0.96:8012: connect: connection refused",
+      "count": 271,
+      "firstTimestamp": "2026-11-21T01:44:36Z",
+      "lastTimestamp": "2026-11-21T01:49:06Z"
+    },
+    {
+      "metadata": {
+        "uid": "2845223f-d35a-45d4-b621-5a766e126e71"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-gck5s"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-gck5s to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:49:12Z",
+      "lastTimestamp": "2026-11-21T01:49:12Z"
+    },
+    {
+      "metadata": {
+        "uid": "6894f40b-30c7-4b39-b3bb-d3a54e70b892"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-gck5s"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:49:24Z",
+      "lastTimestamp": "2026-11-21T01:49:48Z"
+    },
+    {
+      "metadata": {
+        "uid": "cc5339b7-3415-44e9-95c7-d4c73f0f9760"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-fhtqq"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-fhtqq to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:49:33Z",
+      "lastTimestamp": "2026-11-21T01:49:33Z"
+    },
+    {
+      "metadata": {
+        "uid": "95860d9c-04d3-4414-a556-2a7910404bb0"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-fhtqq"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:49:46Z",
+      "lastTimestamp": "2026-11-21T01:50:10Z"
+    },
+    {
+      "metadata": {
+        "uid": "2588f10d-a4dd-4fc3-92c6-4865f45527c1"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-6zdth"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-6zdth to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:49:55Z",
+      "lastTimestamp": "2026-11-21T01:49:55Z"
+    },
+    {
+      "metadata": {
+        "uid": "d5521209-99f5-4385-92d3-5ccb3a941baa"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-6zdth"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:50:16Z",
+      "lastTimestamp": "2026-11-21T01:50:36Z"
+    },
+    {
+      "metadata": {
+        "uid": "f7e247b5-032b-4fab-bfda-7ec64904cb99"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-6zdth"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.99:8012/\": dial tcp 10.244.0.99:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:50:46Z",
+      "lastTimestamp": "2026-11-21T01:54:16Z"
+    },
+    {
+      "metadata": {
+        "uid": "4c46c5ef-fb70-466b-adbb-990449be367a"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-67g5n"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-67g5n to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:55:17Z",
+      "lastTimestamp": "2026-11-21T01:55:17Z"
+    },
+    {
+      "metadata": {
+        "uid": "1e2d42c4-25eb-49ff-a423-62afda990153"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-67g5n"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:55:30Z",
+      "lastTimestamp": "2026-11-21T01:55:54Z"
+    },
+    {
+      "metadata": {
+        "uid": "c3982d38-fd1b-4683-833e-fcef22d9533d"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-z9bv8"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-z9bv8 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:55:39Z",
+      "lastTimestamp": "2026-11-21T01:55:39Z"
+    },
+    {
+      "metadata": {
+        "uid": "3f04ec2d-d365-442c-84ba-76a102271cb8"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-z9bv8"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T01:55:59Z",
+      "lastTimestamp": "2026-11-21T01:56:19Z"
+    },
+    {
+      "metadata": {
+        "uid": "d3a5775c-fb9a-4b42-b827-77c9d4a9cafe"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-459zp"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-459zp to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T01:56:01Z",
+      "lastTimestamp": "2026-11-21T01:56:01Z"
+    },
+    {
+      "metadata": {
+        "uid": "bd11af93-2ad8-4b21-aee5-0974f5211b71"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-459zp"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T01:56:14Z",
+      "lastTimestamp": "2026-11-21T01:56:38Z"
+    },
+    {
+      "metadata": {
+        "uid": "0c359a58-8fa5-498b-b5ad-555b37f6b256"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-z9bv8"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.101:8012/\": dial tcp 10.244.0.101:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T01:56:29Z",
+      "lastTimestamp": "2026-11-21T01:59:59Z"
+    },
+    {
+      "metadata": {
+        "uid": "1306e39b-0a40-4e9a-b88f-67f95dbb0715"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-79x26"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-79x26 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:01:22Z",
+      "lastTimestamp": "2026-11-21T02:01:22Z"
+    },
+    {
+      "metadata": {
+        "uid": "b4165f6c-e930-4cc7-9efa-92f705c8a7fb"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-79x26"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T02:01:43Z",
+      "lastTimestamp": "2026-11-21T02:02:03Z"
+    },
+    {
+      "metadata": {
+        "uid": "e6932dfc-38ff-4143-8107-4d6876fb22b2"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-fgczn"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-fgczn to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:01:44Z",
+      "lastTimestamp": "2026-11-21T02:01:44Z"
+    },
+    {
+      "metadata": {
+        "uid": "49d4678f-b0bf-4ae9-ba6e-08cf51ed8569"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-fgczn"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T02:01:56Z",
+      "lastTimestamp": "2026-11-21T02:02:20Z"
+    },
+    {
+      "metadata": {
+        "uid": "480c9b65-d374-4f12-b0c6-4cfcad73c7f7"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-d5g9f"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-d5g9f to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:02:05Z",
+      "lastTimestamp": "2026-11-21T02:02:05Z"
+    },
+    {
+      "metadata": {
+        "uid": "a9de46c7-ebbf-4b5a-9fdd-7ce77b1b9ffe"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-79x26"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.103:8012/\": dial tcp 10.244.0.103:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T02:02:13Z",
+      "lastTimestamp": "2026-11-21T02:05:43Z"
+    },
+    {
+      "metadata": {
+        "uid": "8a624a98-90b3-4d5a-bbc0-9ce0193c812c"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-d5g9f"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T02:02:18Z",
+      "lastTimestamp": "2026-11-21T02:02:42Z"
+    },
+    {
+      "metadata": {
+        "uid": "35ec309f-8199-4b52-bd7b-656692fca4cd"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-d5g9f"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.105:8012/\": dial tcp 10.244.0.105:8012: connect: connection refused",
+      "count": 271,
+      "firstTimestamp": "2026-11-21T02:02:48Z",
+      "lastTimestamp": "2026-11-21T02:07:18Z"
+    },
+    {
+      "metadata": {
+        "uid": "f69a4205-2ebd-4a53-944c-ef6a498ce020"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-6t48l"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-6t48l to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:07:25Z",
+      "lastTimestamp": "2026-11-21T02:07:25Z"
+    },
+    {
+      "metadata": {
+        "uid": "f0bdaeb2-5294-4c41-b9f4-419a64a52a0a"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-6t48l"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T02:07:38Z",
+      "lastTimestamp": "2026-11-21T02:08:02Z"
+    },
+    {
+      "metadata": {
+        "uid": "69ec4e58-241b-42f7-8f77-e1986fcee023"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-62g96"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-62g96 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:07:47Z",
+      "lastTimestamp": "2026-11-21T02:07:47Z"
+    },
+    {
+      "metadata": {
+        "uid": "3c6964b4-7103-4694-a565-15d1196e4cf2"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-62g96"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T02:08:01Z",
+      "lastTimestamp": "2026-11-21T02:08:25Z"
+    },
+    {
+      "metadata": {
+        "uid": "928dd23a-4c13-4623-aa9b-f684db371d07"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-gqqkt"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-gqqkt to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:08:09Z",
+      "lastTimestamp": "2026-11-21T02:08:09Z"
+    },
+    {
+      "metadata": {
+        "uid": "a5b4ac77-b92b-4d19-9749-8dd43212c3a1"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-gqqkt"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T02:08:30Z",
+      "lastTimestamp": "2026-11-21T02:08:50Z"
+    },
+    {
+      "metadata": {
+        "uid": "94a410f6-5b3c-4819-8b02-4b4441030146"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-gqqkt"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.108:8012/\": dial tcp 10.244.0.108:8012: connect: connection refused",
+      "count": 22,
+      "firstTimestamp": "2026-11-21T02:09:00Z",
+      "lastTimestamp": "2026-11-21T02:12:30Z"
+    },
+    {
+      "metadata": {
+        "uid": "441e166b-f275-4e6d-9121-c2d8851c9367"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-r67lq"
+      },
+      "message": "Successfully assigned z2/fast-p1t2-00001-deployment-65976847dd-r67lq to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:13:29Z",
+      "lastTimestamp": "2026-11-21T02:13:29Z"
+    },
+    {
+      "metadata": {
+        "uid": "30d0885b-fdce-4cb2-aaf4-9fbc7f8e4783"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1t2-00001-deployment-65976847dd-r67lq"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T02:13:43Z",
+      "lastTimestamp": "2026-11-21T02:14:07Z"
+    },
+    {
+      "metadata": {
+        "uid": "83d914f8-631c-463d-8261-d6e54108ada7"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-7wwq2"
+      },
+      "message": "Successfully assigned z2/fast-cur-00001-deployment-687c8bd8db-7wwq2 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:13:51Z",
+      "lastTimestamp": "2026-11-21T02:13:51Z"
+    },
+    {
+      "metadata": {
+        "uid": "4ba85ea3-3917-48ff-8434-96440e721576"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-7wwq2"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 3,
+      "firstTimestamp": "2026-11-21T02:14:12Z",
+      "lastTimestamp": "2026-11-21T02:14:32Z"
+    },
+    {
+      "metadata": {
+        "uid": "a6c491a3-8973-4006-83a7-e8ec1be8a3ef"
+      },
+      "reason": "Scheduled",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-5vj54"
+      },
+      "message": "Successfully assigned z2/fast-p1-00001-deployment-7bd4cd7d7f-5vj54 to knext-z2-coldstart-control-plane",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:14:13Z",
+      "lastTimestamp": "2026-11-21T02:14:13Z"
+    },
+    {
+      "metadata": {
+        "uid": "77cd574a-fa9a-4b88-b4c9-4d3a171cee5a"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-p1-00001-deployment-7bd4cd7d7f-5vj54"
+      },
+      "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+      "count": 25,
+      "firstTimestamp": "2026-11-21T02:14:26Z",
+      "lastTimestamp": "2026-11-21T02:14:50Z"
+    },
+    {
+      "metadata": {
+        "uid": "0bf4f100-0d93-4d66-b9db-6f75ee920ca3"
+      },
+      "reason": "Unhealthy",
+      "involvedObject": {
+        "name": "fast-cur-00001-deployment-687c8bd8db-7wwq2"
+      },
+      "message": "Readiness probe failed: Get \"http://10.244.0.110:8012/\": dial tcp 10.244.0.110:8012: connect: connection refused",
+      "count": 1,
+      "firstTimestamp": "2026-11-21T02:14:42Z",
+      "lastTimestamp": "2026-11-21T02:14:42Z"
+    }
+  ]
+}

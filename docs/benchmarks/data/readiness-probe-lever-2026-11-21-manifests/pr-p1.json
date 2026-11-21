@@ -1,0 +1,94 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {
+    "name": "pr-p1",
+    "namespace": "z2",
+    "labels": {
+      "app": "pr-p1",
+      "bench": "readiness-probe-lever"
+    }
+  },
+  "spec": {
+    "template": {
+      "metadata": {
+        "annotations": {
+          "autoscaling.knative.dev/max-scale": "1",
+          "autoscaling.knative.dev/min-scale": "0"
+        },
+        "creationTimestamp": null
+      },
+      "spec": {
+        "containerConcurrency": 20,
+        "containers": [
+          {
+            "env": [
+              {
+                "name": "HOSTNAME",
+                "value": "0.0.0.0"
+              },
+              {
+                "name": "NODE_ENV",
+                "value": "production"
+              }
+            ],
+            "image": "localhost:5001/s156-zone:z2-node-1795150381@sha256:c2e261119ddffb0904f46d31f07f00d43922fc96f50f6f09c2af965a9e7c2fab",
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/api/health",
+                "port": 3000
+              },
+              "initialDelaySeconds": 5,
+              "periodSeconds": 10
+            },
+            "name": "user-container",
+            "ports": [
+              {
+                "containerPort": 3000,
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/api/health",
+                "port": 3000
+              },
+              "successThreshold": 1,
+              "periodSeconds": 1
+            },
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "250m",
+                "memory": "256Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": ["ALL"]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            }
+          }
+        ],
+        "enableServiceLinks": false,
+        "serviceAccountName": "probe-cur-sa",
+        "timeoutSeconds": 300
+      }
+    },
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100
+      }
+    ]
+  }
+}

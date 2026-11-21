@@ -118,8 +118,12 @@ PR. The four rows above, with Ready 1.4 s after a failure, contradict a strict 1
 operator's own comment says Knative's aggressive probing makes the revision Ready as soon as the app answers.
 No mechanism is claimed. Nothing here shows what else depends on Ready; that was not measured.
 
-Debt: extend the harness's post-first-byte window past 15 s on the next run, record every row's Ready time
-and every probe event, and check whether the 10 s gap reappears and when.
+Follow-up: [`readiness-probe-lever-2026-11-21.md`](readiness-probe-lever-2026-11-21.md) widened the window
+to 20 s and recorded Ready and every probe failure per row. A late Ready reappeared (Ready 10.7 to 17.4 s in
+11 of 12 pods under the operator's probe), and in 17 of the 21 pods with a recorded timeout it came 10.2 to
+11.8 s after the first timeout, consistent with the next probe one period later; 4 of the 21 did not fit that,
+so the mechanism is still not established. That study also found no detected first-byte difference between
+probe shapes, with intervals too wide on this Rosetta app to exclude a 1.2 s effect.
 
 ## Comparison with OKE
 

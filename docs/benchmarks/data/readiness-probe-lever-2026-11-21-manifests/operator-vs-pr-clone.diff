@@ -1,0 +1,78 @@
+# Service .spec: identical (no differences)
+
+# Service .metadata: differences below
+--- operator ksvc .metadata
++++ pr-clone .metadata
+@@ -1,26 +1,8 @@
+ {
+- "annotations": {
+-  "serving.knative.dev/creator": "system:serviceaccount:kn-next-operator-system:kn-next-operator-controller-manager",
+-  "serving.knative.dev/lastModifier": "system:serviceaccount:kn-next-operator-system:kn-next-operator-controller-manager"
++ "labels": {
++  "app": "pr-clone",
++  "bench": "readiness-probe-lever"
+  },
+- "creationTimestamp": "2026-11-21T00:29:52Z",
+- "generation": 1,
+- "labels": {
+-  "app": "probe-cur",
+-  "generated-by": "kn-next-operator"
+- },
+- "name": "probe-cur",
+- "namespace": "z2",
+- "ownerReferences": [
+-  {
+-   "apiVersion": "apps.kn-next.dev/v1alpha1",
+-   "blockOwnerDeletion": true,
+-   "controller": true,
+-   "kind": "NextApp",
+-   "name": "probe-cur",
+-   "uid": "e9c8fb1b-3e76-45d6-8a15-7e33f7b11837"
+-  }
+- ],
+- "resourceVersion": "1771",
+- "uid": "930119d1-290a-4606-8860-c24c22fefebf"
++ "name": "pr-clone",
++ "namespace": "z2"
+ }
+# NetworkPolicy .spec: differences below
+--- operator netpol .spec
++++ pr-clone netpol .spec
+@@ -125,7 +125,7 @@
+  ],
+  "podSelector": {
+   "matchLabels": {
+-   "serving.knative.dev/service": "probe-cur"
++   "serving.knative.dev/service": "pr-clone"
+   }
+  },
+  "policyTypes": [
+
+# NetworkPolicy .metadata: differences below
+--- operator netpol .metadata
++++ pr-clone netpol .metadata
+@@ -1,22 +1,4 @@
+ {
+- "creationTimestamp": "2026-11-21T00:29:52Z",
+- "generation": 1,
+- "labels": {
+-  "app": "probe-cur",
+-  "generated-by": "kn-next-operator"
+- },
+- "name": "probe-cur-allow-ingress",
+- "namespace": "z2",
+- "ownerReferences": [
+-  {
+-   "apiVersion": "apps.kn-next.dev/v1alpha1",
+-   "blockOwnerDeletion": true,
+-   "controller": true,
+-   "kind": "NextApp",
+-   "name": "probe-cur",
+-   "uid": "e9c8fb1b-3e76-45d6-8a15-7e33f7b11837"
+-  }
+- ],
+- "resourceVersion": "1618",
+- "uid": "aeaa03f9-ca31-4bc6-97a2-f4302083949d"
++ "name": "pr-clone-allow-ingress",
++ "namespace": "z2"
+ }

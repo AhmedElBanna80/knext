@@ -1,0 +1,101 @@
+{
+  "apiVersion": "serving.knative.dev/v1",
+  "kind": "Service",
+  "metadata": {
+    "name": "fast-p1t2",
+    "namespace": "z2",
+    "labels": {
+      "app": "fast-p1t2",
+      "bench": "readiness-probe-lever"
+    }
+  },
+  "spec": {
+    "template": {
+      "metadata": {
+        "annotations": {
+          "autoscaling.knative.dev/max-scale": "1",
+          "autoscaling.knative.dev/min-scale": "0"
+        },
+        "creationTimestamp": null
+      },
+      "spec": {
+        "containerConcurrency": 20,
+        "containers": [
+          {
+            "env": [
+              {
+                "name": "HOSTNAME",
+                "value": "0.0.0.0"
+              },
+              {
+                "name": "NODE_ENV",
+                "value": "production"
+              }
+            ],
+            "image": "node:24-alpine",
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/api/health",
+                "port": 3000
+              },
+              "initialDelaySeconds": 5,
+              "periodSeconds": 10
+            },
+            "name": "user-container",
+            "ports": [
+              {
+                "containerPort": 3000,
+                "protocol": "TCP"
+              }
+            ],
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/api/health",
+                "port": 3000
+              },
+              "successThreshold": 1,
+              "periodSeconds": 1,
+              "timeoutSeconds": 2
+            },
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "250m",
+                "memory": "256Mi"
+              }
+            },
+            "securityContext": {
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": ["ALL"]
+              },
+              "readOnlyRootFilesystem": true,
+              "runAsNonRoot": true,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              },
+              "runAsUser": 1000
+            },
+            "command": [
+              "node",
+              "-e",
+              "require('http').createServer((q,s)=>s.end('ok')).listen(3000,'0.0.0.0')"
+            ]
+          }
+        ],
+        "enableServiceLinks": false,
+        "serviceAccountName": "probe-cur-sa",
+        "timeoutSeconds": 300
+      }
+    },
+    "traffic": [
+      {
+        "latestRevision": true,
+        "percent": 100
+      }
+    ]
+  }
+}

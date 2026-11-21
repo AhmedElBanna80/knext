@@ -3,7 +3,11 @@
 Status: **advisory.** No code, no default change. Any change to the built-in default needs an ADR (see Recommendation).
 Date: 2026-11-21. Base: `integration/v2` at 3fb53a918. Evidence lives in `docs/benchmarks/`.
 
-Every file reference below was checked against that tree.
+Line-number citations refer to the PR head at the time of this round, not to the base. Since the base, the cited code
+and data files changed only as follows (`git diff 3fb53a918 HEAD -- <file>`): `scripts/bench-cold-start-phases/kind/arms.sh`
+gained four lines at the top, so the "operator always renders a limit" comment, at 14-15 in the base, is at 20-22, and the
+`node-nolimit` and `bun-nolimit` lines, at 47 and 49 in the base, are at 54 and 56. The run 1 and ladder reports and this
+note are new since the base. Every other cited file is unchanged.
 
 ## The question
 
@@ -70,7 +74,7 @@ The same report's `cpu-boost2req` arm (request 1000m, limit 2000m) gave Hodges-L
 **The conflict, stated plainly.**
 
 - **Kind and GKE show a gain** when the limit is raised above one CPU or removed. Across single runs on runners whose
-  absolute times are not comparable (see Run B), the single-run figures range from about 170 to 700 ms. Kind on node
+  absolute times are not comparable (see Run B): kind on node
   gives 224 to 335 ms (run 1 and run A). Kind on Bun gives 172 ms (run B, no limit rather than a CPU step). GKE on Bun
   gives 675 ms at 4 CPU. Read each as a one-run figure, not as a range.
 - **OKE shows none at two CPUs.** The Nov 2 interval excludes a gain larger than 88 ms at 95%. At face value, the
@@ -103,10 +107,16 @@ Workflow `coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442 (htt
 node-1000m control. Runner type is unverified: the workflow runs on `ubuntu-latest`, and no run logs the vCPU count, so
 "same runner type as run 1 and run A" is not checked. Data:
 `docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*` (combined jsonl, per-arm jsonl, and analysis files).
-Totals are `first_byte` taken unadjusted: `analyze.py:108` reads it with no subtraction. The jsonl `t0` key is unused by
-the analysis. (`analyze.py` has its own local `t0`, derived from `wall_start` at line 92, for the controller-log windows.)
-Recomputed from the jsonl, they match
-`coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt`. Methods, as `analyze.py` computes them: p95 is linear
+Totals are `watch.first_byte` taken unadjusted: `analyze.py:108` reads it with no subtraction. The `watch.t0` key is
+unused by the analysis. (`analyze.py` has its own local `t0`, derived from `wall_start` at line 92, for the controller-log
+windows.)
+
+Reproduce the tables from the repo root with `python3 scripts/bench-cold-start-phases/analyze.py
+docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21.jsonl --no-marker --p95`. Every row has `"marker": false`,
+so `--no-marker` is required. `--p95` adds the p95 column. The output matches
+`coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt` except for two rows, `0 autoscaler decides` and `5w
+activator`, which need the control-plane logs. Those logs were not committed, so reproducing them needs `--autoscaler=`
+and `--activator=` with the original files. The rest of the table reproduces from the committed jsonl alone. Methods, as `analyze.py` computes them: p95 is linear
 interpolation between the two nearest order statistics (`q()`, `analyze.py:65-76`). Medians and IQR bounds are printed
 with `:.0f`, and p95 goes through Python `round()` (`analyze.py:145`). Both round exact ties to even. The bracket is the
 IQR: Q1 and Q3 are the medians of the lower and upper halves of the sorted sample. It is not a confidence interval.
@@ -127,7 +137,7 @@ IQR: Q1 and Q3 are the medians of the lower and upper halves of the sorted sampl
   131 ms on the same contrast (803 for bun-1000m against 934 for node-1000m). The within-run gap also moved between runs.
 
 **Conclusion: this does not change the recommendation.** The new data changes one fact. Run B: Bun −172 ms; run A: node −320 ms.
-Runtime dependence is suggested across two runs, not tested within one. Within-run Bun-vs-node at 1000m is −131 ms in
+The data are compatible with runtime dependence, but it is not tested. The no-limit arms come from different runs (node in run 1 and run A, Bun in run B only), and the runner type is unverified. Within-run Bun-vs-node at 1000m is −131 ms in
 run 1 (803 vs 934) and −408 ms in run B (1133 vs 1541), so the Bun advantage also differs by run. Run B has no node-nolimit arm, so the two
 gains were never measured in the same run. The difference itself is not tested either: there is no CI on 320 vs 172 ms. Option 4 stays rejected. It was rejected on admission and noisy-neighbour
 risk, not on gain size. The built-in default stays 1000m / 250m. At 1000m, Bun has two runs (run 1 and run B) and node has two
@@ -172,8 +182,9 @@ many wakes are needed.
   `docs/benchmarks/data/cpu-boost-oke-2026-11-02.jsonl`: 60 wakes, 3 arms, residuals about each arm's mean, n − 3
   degrees of freedom (divisor 57). The same residuals divided by N = 60 give 336 ms; the node decomposition below uses that divisor. Per arm: 315 ms (`cpu-base`), 324 ms (`cpu-boost2`), 390 ms (`cpu-boost2req`). A robust
   cross-check: the `cpu-base` IQR of 369 ms (median of halves, n = 20) gives σ ≈ 273 ms, close to the 280 ms low case used in the table.
+  *Correction:* an earlier version of this note gave 376 ms, which is `statistics.quantiles` exclusive. The note's method gives 369 ms.
 - **Consistency check.** With σ = 345 ms and n = 20, the predicted 95% half-width of the difference of medians is
-  about 268 ms. The Nov 2 report's bootstrap gave 288 ms. That is close to the report (268 vs 288 ms).
+  about 268 ms. The 288 ms is a half-width derived here from the report's 95% bootstrap CI [−88, +488] (`docs/benchmarks/cpu-boost-and-ready-gap-oke-2026-11-02.md:41`): (488 − (−88)) / 2. The report does not state a half-width. So 268 is close to 288 (268 vs 288 ms).
 - **α = 0.05** two-sided; **power = 0.80**.
 - **Estimator: the median.** For roughly normal data the median's variance is π/2 ≈ 1.57 times the mean's. Cold-start
   totals are right-skewed, so this is an approximation.

@@ -657,6 +657,9 @@ module by hand: `cache-handler.d.ts`, `cache-handler.public.d.ts`,
   unverified, unless `KNEXT_REQUIRE_NATIVE_INTEGRITY` is set to an "on" value,
   which makes the absence fatal. An unrecognised value for that variable
   throws.
+- Planned and not built yet: the owner and mode rule, the pins and the off
+  switch for this shim are in `docs/adr/0074-sharp-addon-sealed-load.md`
+  (Proposed).
 - `sharp-native-extract.mjs` extracts into a directory private to the user and
   rejects path escapes.
 - `image-cache-sync.ts:startImageCacheSync` does nothing in these cases:

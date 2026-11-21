@@ -46,6 +46,7 @@ import {
   WEIGHTED_ON_ONE_REF_ONLY,
 } from '../scripts/lib/prover-shard.mjs';
 import { auditJobCanNotSkip } from './helpers/blocking-gate.js';
+import { hermeticLaneEnv, LANE_ENV } from './helpers/lane-env';
 
 /**
  * GUARDS for the SHARDED, multi-ref mutation-prover lane (#2499 / #2208).
@@ -986,30 +987,9 @@ describe('#2208 the runner: --shard, --list, --report and a PER-PROVER timeout',
   // INSIDE the lane (the lane prover grades it), where PROVER_LANE_SHA is the real
   // planned sha and GITHUB_ACTIONS is true: leaking either turned every temp-repo
   // runner test red on the first live run that carried the HEAD check.
-  const LANE_ENV = [
-    'PROVER_LANE_SHA',
-    'PROVER_LANE_REF',
-    'KNEXT_PROVER_TIMEOUT_MS',
-    'KNEXT_LANE_RESTORE_AFTER_KILL',
-    'KNEXT_LANE_CARGO_TARGET_DIR',
-    'KNEXT_RUST_CODEGEN_DIR',
-    'CARGO_TARGET_DIR',
-    'GITHUB_ACTIONS',
-    'KNEXT_LANE_CLEANUP',
-    'KNEXT_LANE_MIN_FREE_DISK_MIB',
-    'KNEXT_LANE_MIN_AVAIL_MEM_MIB',
-    'KNEXT_LANE_SOFT_FREE_DISK_MIB',
-    'KNEXT_LANE_KILL_AVAIL_MEM_MIB',
-    'KNEXT_LANE_MEMINFO_PATH',
-    'KNEXT_LANE_SAMPLE_MS',
-    'KNEXT_LANE_WATCH_MS',
-    'KNEXT_LANE_EXTRAS_CMD',
-  ];
-  const hermeticEnv = (extra: Record<string, string> = {}) => {
-    const env: Record<string, string | undefined> = { ...process.env };
-    for (const k of LANE_ENV) delete env[k];
-    return { ...env, ...extra } as Record<string, string>;
-  };
+  // The list and the scrub live in tests/helpers/lane-env.ts, shared with every other spec that
+  // drives the runner in a throwaway repo.
+  const hermeticEnv = hermeticLaneEnv;
   // The runner under test gets its OWN temp dir (#2775). Its between-prover sweep
   // (KNEXT_LANE_CLEANUP=1) deletes every entry that appeared in `os.tmpdir()` since the
   // prover started; `bun-test.mjs` runs test files concurrently in one shared temp dir, so
@@ -1915,6 +1895,7 @@ describe('#2499 the live tree: every committed prover is in exactly one shard of
         [resolve(REPO_ROOT, RUNNER), '--list', '--shard', `${i}/${n}`],
         {
           encoding: 'utf8',
+          env: hermeticLaneEnv(),
         },
       );
       expect(r.status, r.stderr).toBe(0);

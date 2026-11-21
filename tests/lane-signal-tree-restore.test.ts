@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { LANE_ENV, runnerEnv, spawnLaneRunner } from './helpers/lane-env';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -100,6 +101,52 @@ async function waitFor(check: () => boolean, ms = 20_000) {
   return check();
 }
 
+describe('the runner under test is hermetic against the lane (the S13-5 baseline bug)', () => {
+  it('runnerEnv drops PROVER_LANE_SHA and every other lane variable, keeps unrelated ones', () => {
+    const saved = { sha: process.env.PROVER_LANE_SHA, ci: process.env.GITHUB_ACTIONS };
+    process.env.PROVER_LANE_SHA = 'b'.repeat(40);
+    process.env.GITHUB_ACTIONS = 'true';
+    try {
+      const env = runnerEnv();
+      // Emptying the shared list would make the loop below vacuous: pin its floor.
+      expect(LANE_ENV.length).toBeGreaterThanOrEqual(17);
+      expect(LANE_ENV).toContain('PROVER_LANE_SHA');
+      for (const k of LANE_ENV)
+        if (k !== 'KNEXT_LANE_RESTORE_AFTER_KILL' && k !== 'GITHUB_ACTIONS')
+          expect(k in env).toBe(false);
+      expect(env.PATH).toBe(process.env.PATH ?? '');
+      expect(env.KNEXT_LANE_RESTORE_AFTER_KILL).toBe('1');
+      expect(env.GITHUB_ACTIONS).toBe('');
+    } finally {
+      if (saved.sha === undefined) delete process.env.PROVER_LANE_SHA;
+      else process.env.PROVER_LANE_SHA = saved.sha;
+      if (saved.ci === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = saved.ci;
+    }
+  });
+
+  it('a bogus PROVER_LANE_SHA in the parent env does not stop the fixture prover from running', async () => {
+    const leakDir = fixtureRepo();
+    const saved = process.env.PROVER_LANE_SHA;
+    process.env.PROVER_LANE_SHA = 'c'.repeat(40); // not the fixture repo's HEAD: leaked, the runner fatals
+    const proc = spawnLaneRunner(leakDir);
+    try {
+      const mutated = () => readFileSync(join(leakDir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
+      expect(await waitFor(mutated)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.PROVER_LANE_SHA;
+      else process.env.PROVER_LANE_SHA = saved;
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // already gone
+      }
+      killFixtureGroups(leakDir);
+      rmSync(leakDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
 describe('the fixture kill never targets the test process group (ROUND 4 item 4)', () => {
   it('safeGroupsToKill drops the test process own group and keeps every other fixture group', () => {
     expect(safeGroupsToKill([101, 4242, 303], 4242)).toEqual([101, 303]);
@@ -111,12 +158,7 @@ describe('the fixture kill never targets the test process group (ROUND 4 item 4)
 describe('a signal to the lane runner restores the tree its killed prover left (ROUND 2 item 6)', () => {
   it('SIGTERM mid-mutation: the tracked file is restored, the untracked file removed, the tree clean', async () => {
     const dir = fixtureRepo();
-    const proc = Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
-      cwd: dir,
-      env: { ...process.env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' },
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+    const proc = spawnLaneRunner(dir);
     try {
       const mutated = () => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
       expect(await waitFor(mutated)).toBe(true);
@@ -136,12 +178,7 @@ describe('a signal to the lane runner restores the tree its killed prover left (
 
   it('a SIGKILLed runner cannot run its handler, so the prover survives until the test kills its group, and nothing is left', async () => {
     const dir = fixtureRepo();
-    const proc = Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
-      cwd: dir,
-      env: { ...process.env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' },
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+    const proc = spawnLaneRunner(dir);
     try {
       expect(
         await waitFor(() => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n'),

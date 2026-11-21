@@ -36,7 +36,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
     cpSync,
     existsSync,
@@ -50,13 +50,22 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { verifyBytecodeExec } from "../adapters/bytecode-exec-verify.mjs";
+import {
+    mintExecMarker,
+    verifyBytecodeExec,
+    verifyBytecodeModules,
+} from "../adapters/bytecode-exec-verify.mjs";
+import { planIncludes } from "../adapters/compile-embed.mjs";
 import { rewriteVinextHarfbuzzAnchors } from "../adapters/entry-asset-anchor.mjs";
 import {
     ogHarfbuzzWarning,
     resolvePinnedHarfbuzzWasm,
     vinextOgPackageJson,
 } from "../adapters/og-harfbuzz.mjs";
+import {
+    type BytecodeVerdict,
+    enforceBytecodeVerdict,
+} from "./bytecode-enforce";
 import { packageRoot } from "./create";
 import { runQuiet } from "./exec";
 import { ffiOptedIn } from "./ffi-preflight";
@@ -423,33 +432,59 @@ export interface VinextBuildOptions {
 }
 
 /**
+ * The bytecode verdict for the shape the compile script produced, mirroring the
+ * script's own per-shape choice in `vinext-compile.mjs`:
+ *
+ *   - self-contained: `verifyBytecodeExec` (one banner-headed entry);
+ *   - `compile.include` (disk mode): `verifyBytecodeModules`, the entry plus
+ *     every planned module each headed by the banner (`planIncludes` is the
+ *     script's own planner, so the count is the script's count);
+ *   - default: `verifyBytecodeExec`.
+ *
+ * Exported so a test can drive each shape directly.
+ */
+export function vinextBytecodeVerdict(
+    bytes: Uint8Array,
+    marker: string,
+    shape: {
+        readonly cwd: string;
+        readonly selfContained?: boolean;
+        readonly include?: readonly string[];
+    },
+): BytecodeVerdict {
+    const include = shape.include ?? [];
+    if (!shape.selfContained && include.length > 0) {
+        const plan = planIncludes(shape.cwd, [...include]);
+        return verifyBytecodeModules(bytes, marker, 1 + plan.relpaths.length);
+    }
+    return verifyBytecodeExec(bytes, marker);
+}
+
+/**
  * Fail closed unless the compiled vinext executable carries bytecode for the
- * entry whose banner is `marker`. Same verifier as the compiled standalone
- * target (`bytecode-exec-verify.mjs`) -- the compile script checks too, but a
- * build must not trust the script's own claim about its own output.
+ * entry whose banner is `marker`. The compile script checks too, but a build
+ * must not trust the script's own claim about its own output.
  */
 function verifyCompiledExecutable(
     opts: VinextBuildOptions,
     outFile: string,
     marker: string,
 ): void {
+    const abs = resolve(opts.cwd, outFile);
     const read = opts.readArtifact ?? ((p: string) => readFileSync(p));
     let bytes: Uint8Array;
     try {
-        bytes = read(resolve(opts.cwd, outFile));
+        bytes = read(abs);
     } catch (e) {
         throw new UsageError(
-            `The compiled vinext executable '${outFile}' could not be read for the bytecode check: ${e instanceof Error ? e.message : String(e)}`,
+            `The compiled vinext executable '${outFile}' could not be read for the check: ${e instanceof Error ? e.message : String(e)}`,
         );
     }
-    const verdict = verifyBytecodeExec(bytes, marker);
-    if (!verdict.ok) {
-        rmSync(resolve(opts.cwd, outFile), { force: true });
-        throw new UsageError(
-            `The compiled vinext executable failed the bytecode check: ${verdict.reason}.\n\n` +
-                "Refusing to ship it — a binary without bytecode boots, but pays a full compile on every cold start.",
-        );
-    }
+    enforceBytecodeVerdict(
+        vinextBytecodeVerdict(bytes, marker, opts),
+        abs,
+        "vinext",
+    );
 }
 
 /**
@@ -516,7 +551,7 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
     // smoke's host-arch twin) can point it somewhere that does not clobber
     // the ship build's already-staged tree.
     const nativeDirArg = opts.nativeDir ?? "native";
-    const marker = `knext-vinext-exec:${randomBytes(12).toString("hex")}`;
+    const marker = mintExecMarker("knext-vinext-exec");
 
     if (opts.selfContained) {
         // Self-contained: stage sharp's native tree for the target arch FIRST

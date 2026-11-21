@@ -1,13 +1,25 @@
 /**
  * The vinext x bun compiled executable is proved to carry bytecode by the CLI
- * itself, with the SAME verifier the compiled standalone target uses
- * (`bytecode-exec-verify.mjs`) -- independent of whatever the compile script
- * claims. Both directions: a bytecode artifact passes, a plain one (and a
- * stale/foreign one with no marker) is rejected and removed.
+ * itself, with the SAME verifiers the compile script and the compiled
+ * standalone target use (`bytecode-exec-verify.mjs`) -- independent of whatever
+ * the compile script claims, and chosen PER SHAPE:
+ *
+ *   default / self-contained -> verifyBytecodeExec (one banner-headed entry)
+ *   compile.include          -> verifyBytecodeModules (entry + every module)
+ *
+ * Both directions per shape: a realistic bytecode artifact passes, a plain or
+ * under-counted one is rejected with the VERIFIER's reason (not merely
+ * "something said bytecode") and the binary is removed.
  */
 
 import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+    existsSync,
+    mkdirSync,
+    mkdtempSync,
+    rmSync,
+    writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildVinextExecutable } from "../cli/vinext-build";
@@ -17,7 +29,7 @@ afterAll(() => {
     for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
 });
 
-function appWithOutput(): string {
+function appWithOutput(withIncludes = false): string {
     const cwd = mkdtempSync(join(tmpdir(), "knext-vinext-bc-"));
     tempDirs.push(cwd);
     writeFileSync(
@@ -26,6 +38,11 @@ function appWithOutput(): string {
     );
     mkdirSync(join(cwd, ".output", "server"), { recursive: true });
     writeFileSync(join(cwd, ".output", "server", "index.mjs"), "");
+    if (withIncludes) {
+        mkdirSync(join(cwd, "lib"), { recursive: true });
+        writeFileSync(join(cwd, "lib", "a.js"), "export const a = 1;\n");
+        writeFileSync(join(cwd, "lib", "b.js"), "export const b = 2;\n");
+    }
     return cwd;
 }
 
@@ -35,46 +52,122 @@ function markerOf(argv: readonly string[]): string {
     return argv[i + 1] as string;
 }
 
-const bytecodeArtifact = (m: string) =>
+const PAD = "\0".repeat(256);
+/** One compiled module: pragma, then the banner (source), as Bun lays it out. */
+const moduleSrc = (m: string, bytecode: boolean) =>
+    `// @bun ${bytecode ? "@bytecode " : ""}@bun-esm\nglobalThis.__knextVinextExecMarker=${JSON.stringify(m)};export{};\n${PAD}`;
+/** `n` banner-headed modules, plus the constant-pool copy of the marker. */
+const artifact = (m: string, modules: number, bytecode = true) =>
     Buffer.from(
-        `ELF…pool:${m}…// @bun @bytecode @bun-esm\n(function(){globalThis.m="${m}";})`,
-        "latin1",
-    );
-const plainArtifact = (m: string) =>
-    Buffer.from(
-        `ELF…// @bun @bun-esm\n(function(){globalThis.m="${m}";})`,
+        `ELF…${bytecode ? `pool:${m}…` : ""}${Array.from({ length: modules }, () => moduleSrc(m, bytecode)).join("")}`,
         "latin1",
     );
 
-function build(read: (marker: string) => Buffer, selfContained = false) {
-    const cwd = appWithOutput();
-    const argvs: string[][] = [];
-    return buildVinextExecutable({
-        cwd,
-        bunVersion: "1.4.0",
-        selfContained,
-        skipViteBuild: true,
-        run: (argv) => argvs.push([...argv]),
-        readArtifact: () => read(markerOf(argvs[argvs.length - 1] as string[])),
-    });
+interface Shape {
+    readonly selfContained?: boolean;
+    readonly include?: readonly string[];
 }
+function build(read: (marker: string) => Buffer, shape: Shape = {}) {
+    const cwd = appWithOutput(shape.include !== undefined);
+    const argvs: string[][] = [];
+    const outFile = "knext-exec-linux-x64";
+    writeFileSync(join(cwd, outFile), "stale binary");
+    try {
+        return buildVinextExecutable({
+            cwd,
+            bunVersion: "1.4.0",
+            skipViteBuild: true,
+            ...shape,
+            run: (argv) => argvs.push([...argv]),
+            readArtifact: () =>
+                read(markerOf(argvs[argvs.length - 1] as string[])),
+        });
+    } finally {
+        // Fail closed also means the rejected binary is gone.
+        (build as { lastCwd?: string }).lastCwd = cwd;
+    }
+}
+const removed = () =>
+    !existsSync(
+        join(
+            (build as { lastCwd?: string }).lastCwd as string,
+            "knext-exec-linux-x64",
+        ),
+    );
 
-describe("vinext x bun: the CLI verifies the compiled executable", () => {
+const NO_BYTECODE = /compiled WITHOUT --bytecode/;
+const MARKER_MISSING = /marker is not in the executable/;
+
+describe("vinext x bun default shape: the CLI verifies the executable", () => {
     it("accepts an executable that carries bytecode", () => {
-        expect(() => build(bytecodeArtifact)).not.toThrow();
+        expect(() => build((m) => artifact(m, 1))).not.toThrow();
     });
 
-    it("REJECTS an executable compiled without bytecode", () => {
-        expect(() => build(plainArtifact)).toThrow(/bytecode/i);
+    it("REJECTS an executable compiled without bytecode, and removes it", () => {
+        expect(() => build((m) => artifact(m, 1, false))).toThrow(NO_BYTECODE);
+        expect(removed()).toBe(true);
     });
 
     it("REJECTS an executable that lacks the entry marker entirely", () => {
         expect(() => build(() => Buffer.from("ELF no marker here"))).toThrow(
-            /marker|bytecode/i,
+            MARKER_MISSING,
         );
     });
 
-    it("applies to the self-contained shape too", () => {
-        expect(() => build(plainArtifact, true)).toThrow(/bytecode/i);
+    it("an unreadable artifact fails with the read error, not a bytecode verdict", () => {
+        const cwd = appWithOutput();
+        expect(() =>
+            buildVinextExecutable({
+                cwd,
+                bunVersion: "1.4.0",
+                skipViteBuild: true,
+                run: () => {},
+                readArtifact: () => {
+                    throw new Error("EACCES nope");
+                },
+            }),
+        ).toThrow(/could not be read for the check: EACCES nope/);
+    });
+});
+
+describe("vinext x bun self-contained shape", () => {
+    it("accepts a bytecode artifact", () => {
+        expect(() =>
+            build((m) => artifact(m, 1), { selfContained: true }),
+        ).not.toThrow();
+    });
+
+    it("REJECTS one compiled without bytecode", () => {
+        expect(() =>
+            build((m) => artifact(m, 1, false), { selfContained: true }),
+        ).toThrow(NO_BYTECODE);
+        expect(removed()).toBe(true);
+    });
+});
+
+describe("vinext x bun compile.include shape (entry + 2 included modules)", () => {
+    const include = ["lib/*.js"];
+
+    it("ACCEPTS a realistic artifact: three banner-headed bytecode modules", () => {
+        expect(() => build((m) => artifact(m, 3), { include })).not.toThrow();
+    });
+
+    it("REJECTS an artifact where an included module lost its banner/bytecode", () => {
+        expect(() => build((m) => artifact(m, 1), { include })).toThrow(
+            /heads 1 bytecode module\(s\), expected at least 3/,
+        );
+        expect(removed()).toBe(true);
+    });
+
+    it("REJECTS an include artifact compiled without bytecode", () => {
+        expect(() => build((m) => artifact(m, 3, false), { include })).toThrow(
+            NO_BYTECODE,
+        );
+    });
+
+    it("self-contained wins over include: one banner-headed entry is enough, as in the script", () => {
+        expect(() =>
+            build((m) => artifact(m, 1), { include, selfContained: true }),
+        ).not.toThrow();
     });
 });

@@ -47,7 +47,6 @@
  * `.output/server/index.mjs`, so sharp only enters a module graph now.
  */
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import {
     existsSync,
     readdirSync,
@@ -88,7 +87,7 @@ import {
     importedRequireEscapes,
     wrapRequireBindings,
 } from "./entry-require-staticize.mjs";
-import { verifyBytecodeExec, verifyBytecodeModules } from "./bytecode-exec-verify.mjs";
+import { isExecMarker, mintExecMarker, verifyBytecodeExec, verifyBytecodeModules } from "./bytecode-exec-verify.mjs";
 import {
     dataPathsMissing,
     discoverDataLiterals,
@@ -1060,7 +1059,12 @@ const externalSidecar = {
 const EMBEDDED_PREFIX = "knext-embedded:";
 // Unique per build, so a stale binary cannot pass the bytecode proof.
 // The CLI passes its own (`--marker`) so it can re-verify the output independently.
-const BYTECODE_MARKER = args.marker?.trim() || `knext-vinext-exec:${randomBytes(12).toString("hex")}`;
+const MARKER_PREFIX = "knext-vinext-exec";
+const BYTECODE_MARKER = args.marker ?? mintExecMarker(MARKER_PREFIX);
+if (!isExecMarker(MARKER_PREFIX, BYTECODE_MARKER)) {
+    console.error(`[knext compile] --marker must be ${MARKER_PREFIX}:<24 hex chars>, got ${JSON.stringify(BYTECODE_MARKER)}`);
+    process.exit(1);
+}
 const APP_ROOT = dirname(dirname(ENTRY_DIR));
 // Round-2 review (#1877): `planRuntimeRequires`'s embed computation resolves
 // a confirmed require's spec via `Bun.resolveSync(spec, dirname(ENTRY))` —

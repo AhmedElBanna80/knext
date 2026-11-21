@@ -128,10 +128,15 @@ describe("compile argv: byte-identical absent or false; true adds only the self-
                 },
                 ...(selfContained === undefined ? {} : { selfContained }),
             });
-            // The marker is random per build; everything else must be identical.
+            // The marker is random per build: assert it is present and well
+            // formed in EVERY compile argv, then compare the rest verbatim.
             return calls.map((a) => {
                 const i = a.indexOf("--marker");
-                return i < 0 ? a : [...a.slice(0, i), ...a.slice(i + 2)];
+                expect(i, "the compile argv carries --marker").toBeGreaterThan(
+                    -1,
+                );
+                expect(a[i + 1]).toMatch(/^knext-vinext-exec:[0-9a-f]{24}$/);
+                return [...a.slice(0, i), ...a.slice(i + 2)];
             });
         } finally {
             rmSync(cwd, { recursive: true, force: true });

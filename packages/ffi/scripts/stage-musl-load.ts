@@ -24,7 +24,15 @@
 // built for: the mutation the matrix must turn red on (the loader refuses a
 // native/ffi/ that holds only another platform's library).
 
-import { copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { writeNativeIntegrityManifest } from '../../kn-next/src/cli/native-integrity';
@@ -101,6 +109,16 @@ const native = join(out, 'native');
 mkdirSync(join(native, 'ffi', stageTriple), { recursive: true });
 copyFileSync(lib, join(native, 'ffi', stageTriple, basename(lib)));
 writeNativeIntegrityManifest(native, undefined);
+// Read-only, as the image's `COPY --chmod=a-w` leaves it: the loader refuses a library, or a
+// directory above it, that anyone but root can write. The workflow then hands the tree to root.
+for (const p of [
+  join(native, 'ffi', stageTriple, basename(lib)),
+  join(native, 'ffi', stageTriple),
+  join(native, 'ffi'),
+  native,
+]) {
+  chmodSync(p, statSync(p).mode & ~0o222);
+}
 
 console.log(
   `staged ${basename(lib)} (${triple}) under native/ffi/${stageTriple}/; DT_NEEDED: ${needed.join(', ') || 'none'}`,

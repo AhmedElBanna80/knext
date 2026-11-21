@@ -70,7 +70,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     `ResolvedZig`, `AllowEntry`, `AdvisoryFinding`, `DenyReport`, `AdvisoryVerdict`,
     `DenyOptions`, `AuditPackage`, `SupplyChainOptions` and `SupplyChain`.
 - Tests live in `__tests__/`. Shared helpers:
-  - `helpers.ts`: scratch directories (`emptyDir`, removed by `removeScratchDirs`), `PKG_DIR`, `readTree`, `capture` (captured CLI stdout and stderr), synthetic manifest blobs (`blob`, `D`, `record`, `enumRecord`, `fn`) and the `KITCHEN_SINK` manifest.
+  - `helpers.ts`: scratch directories (`emptyDir`, removed by `removeScratchDirs` after `makeWritable` restores the owner's write access to a read-only staged `native/`), `PKG_DIR`, `readTree`, `capture` (captured CLI stdout and stderr), synthetic manifest blobs (`blob`, `D`, `record`, `enumRecord`, `fn`) and the `KITCHEN_SINK` manifest.
   - `toolchain-fake.ts`: `fakeToolchain()`, an on-disk fake of the pinned cargo-subcommand and zig toolchain for tests that must not need Rust, zig or the network, plus `supplyFixture` for the supply-chain fixtures.
   - `integer-matrix.ts`: `integerMatrix`, the integer-argument matrix, stringified and run in a fresh Bun process, shared with `crates/harness/ffi-generated.ts`.
 
@@ -121,14 +121,23 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       keeps it apart from the same file opened by path. Any other platform is refused with an
       `FfiLoadError` naming it (unreachable today, since `$triple()` refuses first; kept so a
       new platform can never fall back to a by-path load).
-    - What this covers: a path swap (rename or symlink over the path) between the check and the
-      load. What it does not stop: a writer of the file's contents (an in-place write, a hard
-      link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. "A
-      writer of `native/` already owns the app JS" holds only when both are in the same
-      read-only image layer, not for a shared, sidecar or fsGroup-writable volume mounted at
-      `native/`. The generated Dockerfile copies `native/` root-owned and non-writable
-      (`--chown=0:0 --chmod=a-w`). On Linux the load needs `/proc` mounted; a failed load closes
-      the descriptor and its error names both the path and the descriptor name.
+    - What the descriptor covers: a path swap (rename or symlink over the path) between the
+      check and the load. It does not cover a writer of the file's contents (an in-place write, a
+      hard link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. So
+      `render.ts:$sealed` refuses the load unless only root can write the library: it stats the
+      hashed descriptor and every directory from the library's parent up to `native/` itself,
+      by owner and mode (`access()` would say yes to root for all of it), before the bytes are
+      read. Each must be owned by uid 0 or by the user the process runs as; none may be writable
+      by group or other; one owned by that non-root user must also have its owner write bit
+      clear. Root ownership with any mode and no group or other write passes. The generated
+      Dockerfile copies `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`), which
+      passes for a non-root app user; a shared, sidecar or fsGroup-writable volume at `native/`
+      is refused. It does not stop root, `CAP_DAC_OVERRIDE`, or a second writable mount of the
+      same files. A sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
+      `bun:ffi`, measured to work on Bun 1.4.2) would bind the bytes against root too, but each
+      module copy and Worker would load its own copy of the library, ending the one library per
+      process that they rely on, so it is not used. On Linux the load needs `/proc` mounted; a
+      failed load closes the descriptor and its error names both the path and the descriptor name.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check.
     - Every `<symbol>_schema` must equal the FNV-1a 64 hash computed at render time.

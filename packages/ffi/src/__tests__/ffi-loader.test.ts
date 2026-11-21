@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -28,6 +29,8 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -101,12 +104,34 @@ function cc(name: string, flags: string[]): string {
 
 const sha256 = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
-/** A fresh "image": <dir>/server (the fake execPath) with native/ffi/<triple>/libfixture beside it. */
+/**
+ * Make a staged tree what the image carries (`COPY --chown=0:0 --chmod=a-w`):
+ * every library and every directory above it, up to native/, read-only. The
+ * integrity manifest is left as it is: the loader does not check its mode.
+ */
+function sealImage(exe: string): void {
+  const native = join(exe, '..', 'native');
+  const readOnly = (p: string) => chmodSync(p, statSync(p).mode & ~0o222); // a-w
+  for (const triple of readdirSync(join(native, 'ffi'))) {
+    for (const f of readdirSync(join(native, 'ffi', triple))) {
+      readOnly(join(native, 'ffi', triple, f));
+    }
+    readOnly(join(native, 'ffi', triple));
+  }
+  readOnly(join(native, 'ffi'));
+  readOnly(native);
+}
+
+/**
+ * A fresh "image": <dir>/server (the fake execPath) with native/ffi/<triple>/libfixture beside it,
+ * read-only like the image's (`seal: false` leaves it writable, for a test that edits it first).
+ */
 function image(
   opts: {
     lib?: string;
     triple?: string;
     integrity?: 'ok' | 'mismatch' | 'unlisted' | 'absent' | 'v2';
+    seal?: boolean;
   } = {},
 ): string {
   const dir = emptyDir('image');
@@ -131,7 +156,9 @@ function image(
       }),
     );
   }
-  return join(dir, 'server');
+  const exe = join(dir, 'server');
+  if (opts.seal !== false) sealImage(exe);
+  return exe;
 }
 
 interface Run {
@@ -850,6 +877,10 @@ describe('the library loaded is the library hashed (nothing swapped in between t
     (globalThis as unknown as { swaps: string[] }).swaps = swaps;
     const swap = (at: string) => {
       if (swaps.length > 0) return;
+      // The staged tree is read-only, and the loader has already accepted it as such: the
+      // swapper stands for a principal that CAN write the directory, so give it that.
+      const dir = process.getBuiltinModule('node:path').dirname(staged);
+      fs.chmodSync(dir, 0o755);
       if (how === 'rename') {
         fs.copyFileSync(evil, `${staged}.new`);
         fs.renameSync(`${staged}.new`, staged);
@@ -1016,12 +1047,13 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       renderModule(m2, { libName: 'other', crate: 'rust' }),
     );
 
-    const exe = image();
+    const exe = image({ seal: false });
     const native = join(exe, '..', 'native');
     copyFileSync(built, join(native, 'ffi', TRIPLE, other));
     const integrity = JSON.parse(readFileSync(join(native, '.integrity.json'), 'utf8'));
     integrity.files[`ffi/${TRIPLE}/${other}`] = sha256(built);
     writeFileSync(join(native, '.integrity.json'), JSON.stringify(integrity));
+    sealImage(exe);
 
     const r = inBun(
       async (m, c) => {
@@ -1036,6 +1068,177 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       second: { ok: 42 },
       again: { ok: 5 },
     });
+  });
+});
+
+describe('the library is refused unless nobody but root can write it (a hash of bytes someone else can still change binds nothing)', () => {
+  /**
+   * BEFORE: report this process as uid FAKE_EUID, and every file or directory the
+   * module stats as owned by uid FAKE_OWNER. Whatever the test's own uid is, the
+   * module sees the ids the scenario names; modes are the real ones on disk.
+   */
+  const FAKE_IDS = () => {
+    const fs = process.getBuiltinModule('node:fs');
+    const mod = process.getBuiltinModule('node:module') as unknown as {
+      syncBuiltinESMExports: () => void;
+    };
+    const { FAKE_EUID: euid, FAKE_OWNER: owner } = process.env as Record<string, string>;
+    (process as unknown as { geteuid: () => number }).geteuid = () => Number(euid);
+    for (const k of ['fstatSync', 'statSync'] as const) {
+      const real = fs[k] as (...x: unknown[]) => object;
+      (fs as unknown as Record<string, unknown>)[k] = function (this: unknown, ...a: unknown[]) {
+        const st = real.apply(this, a);
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid: Number(owner) });
+      };
+    }
+    mod.syncBuiltinESMExports();
+  };
+
+  const nativeOf = (exe: string) => join(exe, '..', 'native');
+  const dirsOf = (exe: string) => [
+    join(nativeOf(exe), 'ffi', TRIPLE),
+    join(nativeOf(exe), 'ffi'),
+    nativeOf(exe),
+  ];
+  const libOf = (exe: string) => join(nativeOf(exe), 'ffi', TRIPLE, LIB);
+  const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  /** Two calls, so a refusal's being cached shows too. */
+  const load = (exe: string, ids?: { euid: number; owner: number }) =>
+    inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+      FAKE_EXEC: exe,
+      ...(ids
+        ? {
+            BEFORE: FAKE_IDS.toString(),
+            FAKE_EUID: String(ids.euid),
+            FAKE_OWNER: String(ids.owner),
+          }
+        : {}),
+    });
+
+  const refused = (r: Run, expected: RegExp) => {
+    const [first, second] = r.result as { cls: string; message: string }[];
+    expect(first?.cls, r.stderr).toBe('FfiLoadError');
+    expect(first?.message).toMatch(expected);
+    // Nothing was loaded, and the refusal is cached like every other load failure.
+    expect(first?.message).toContain('refusing to load');
+    expect(second).toEqual(first as { cls: string; message: string });
+  };
+
+  const loaded = (r: Run) => {
+    expect(r.result, r.stderr).toEqual([{ ok: 'Hello, World!' }, { ok: 3 }]);
+  };
+
+  it('a library its group can write is refused', () => {
+    const exe = image();
+    chmodSync(libOf(exe), 0o464);
+    refused(load(exe), /is writable by its group or by everyone \(mode 0464\)/);
+  });
+
+  it('a library everyone can write is refused', () => {
+    const exe = image();
+    chmodSync(libOf(exe), 0o446);
+    refused(load(exe), /is writable by its group or by everyone \(mode 0446\)/);
+  });
+
+  it('every directory from the library up to native/ itself is checked, and named', () => {
+    for (const mode of [0o775, 0o757]) {
+      for (const i of [0, 1, 2]) {
+        const exe = image();
+        const target = dirsOf(exe)[i] as string;
+        chmodSync(target, mode);
+        refused(
+          load(exe),
+          new RegExp(
+            `: ${reEscape(target)} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
+          ),
+        );
+      }
+    }
+  });
+
+  it('a library owned by someone other than root or the user running the app is refused', () => {
+    refused(
+      load(image(), { euid: 1000, owner: 12345 }),
+      /is owned by uid 12345, but only root or the user this app runs as \(uid 1000\) may own it/,
+    );
+  });
+
+  it('as root, a library owned by anyone else is refused', () => {
+    refused(
+      load(image(), { euid: 0, owner: 1000 }),
+      /is owned by uid 1000, but only root or the user this app runs as \(uid 0\) may own it/,
+    );
+  });
+
+  it('a library the app user owns and can write is refused: a file-write bug in the app could rewrite it', () => {
+    const exe = image();
+    chmodSync(libOf(exe), 0o644);
+    refused(
+      load(exe, { euid: 1000, owner: 1000 }),
+      /is writable by the user this app runs as \(uid 1000, mode 0644\)/,
+    );
+  });
+
+  it('a directory the app user owns and can write is refused too, since it can swap the library', () => {
+    const exe = image();
+    const dir = join(nativeOf(exe), 'ffi');
+    chmodSync(dir, 0o755);
+    refused(
+      load(exe, { euid: 1000, owner: 1000 }),
+      new RegExp(
+        `: ${reEscape(dir)} is writable by the user this app runs as \\(uid 1000, mode 0755\\)`,
+      ),
+    );
+  });
+
+  it('the refusal tells the reader how the image keeps native/ safe', () => {
+    const exe = image();
+    chmodSync(libOf(exe), 0o464);
+    refused(load(exe), /COPY --chown=0:0 --chmod=a-w/);
+  });
+
+  it('a symlink at the staged path is judged by the file it points at, the one that is hashed and loaded', () => {
+    const exe = image({ seal: false });
+    const away = emptyDir('away');
+    const target = join(away, LIB);
+    copyFileSync(libOf(exe), target);
+    chmodSync(target, 0o666);
+    rmSync(libOf(exe));
+    symlinkSync(target, libOf(exe));
+    for (const d of dirsOf(exe)) chmodSync(d, 0o555);
+    // The manifest's hash is right (same bytes): only the writable target is wrong.
+    refused(
+      load(exe),
+      new RegExp(`: ${reEscape(libOf(exe))} is writable by its group or by everyone`),
+    );
+  });
+
+  it('the image layout loads: root-owned, read-only, run by a non-root user', () => {
+    loaded(load(image(), { euid: 65532, owner: 0 }));
+  });
+
+  it('root-owned with the owner-write bit set (a plain COPY) loads for a non-root user', () => {
+    const exe = image();
+    for (const d of dirsOf(exe)) chmodSync(d, 0o755);
+    chmodSync(libOf(exe), 0o644);
+    loaded(load(exe, { euid: 65532, owner: 0 }));
+  });
+
+  it('root-owned loads for root, with or without the write bits', () => {
+    const exe = image();
+    loaded(load(exe, { euid: 0, owner: 0 }));
+    for (const d of dirsOf(exe)) chmodSync(d, 0o755);
+    chmodSync(libOf(exe), 0o644);
+    loaded(load(exe, { euid: 0, owner: 0 }));
+  });
+
+  it('a library the app user owns but nobody can write loads', () => {
+    loaded(load(image(), { euid: 1000, owner: 1000 }));
+  });
+
+  it("a sealed tree under this test's own uid and the real modes loads (no faked ids)", () => {
+    loaded(load(image()));
   });
 });
 

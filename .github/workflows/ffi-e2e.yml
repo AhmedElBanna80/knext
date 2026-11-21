@@ -186,6 +186,10 @@ jobs:
             --out "${RUNNER_TEMP}/musl-wrong" --stage-triple "$OTHER_TRIPLE"
           echo "DT_NEEDED of the zigbuild library:"; cat "${RUNNER_TEMP}/musl/needed"
           cat "${RUNNER_TEMP}/musl/native/.integrity.json"
+          # The image carries native/ owned by root and read-only, and the loader refuses a
+          # library that anyone else could write. The containers below run as root against
+          # these bind mounts, so hand the trees to root, as the image's COPY does.
+          sudo chown -R root:root "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl-wrong/native"
 
       - name: Pull the image and find the bun binary's directory (process.execPath)
         run: |
@@ -274,6 +278,7 @@ jobs:
           (cd "${RUNNER_TEMP}/musl/app" && bun build --compile --target="${{ matrix.bun_target }}" \
             --conditions=react-server driver.ts --outfile "${RUNNER_TEMP}/musl/exe/ffi-caller")
           cp -R "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl/exe/native"
+          sudo chown -R root:root "${RUNNER_TEMP}/musl/exe/native"
           ls -la "${RUNNER_TEMP}/musl/exe"
 
       - name: compiled leg — every export, Err, 1000 panics, timings, leak phases

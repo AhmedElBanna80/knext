@@ -388,6 +388,19 @@ describe('docs — in-process Rust page', () => {
     expectBlock(must(page, /quick start/i), pattern(notice), 'the development-build notice');
   });
 
+  it('quotes the writable-library refusal as the module prints it, and says how the image avoids it', () => {
+    const body = must(page, /where the library is loaded from/i);
+    const refusal = templateAfter(rendered, /if \(why !== ''\) \{\s*throw new FfiLoadError\(\s*`/);
+    expectBlock(body, pattern(refusal), 'the writable-library refusal');
+    expect(body).toContain('COPY --chown=0:0 --chmod=a-w');
+    expect(body).toMatch(/only root can write it/);
+    // The supply-chain section's integrity bullet makes the same claim, and its limit.
+    const chain = must(page, /supply chain/i);
+    expect(chain).toMatch(/only root can write the library/);
+    expect(chain).toMatch(/does not stop root/);
+    expect(chain).not.toMatch(/does \*\*not\*\* stop anything that can write/);
+  });
+
   it('documents slow calls: the threshold, both metrics, the log lines as the module prints them, and that a call is not interrupted', () => {
     const body = must(page, /slow calls/i);
     for (const s of [

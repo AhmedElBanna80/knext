@@ -28,6 +28,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -35,11 +36,13 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { makeWritable } from '../../packages/ffi/src/__tests__/helpers';
 import { integerMatrix } from '../../packages/ffi/src/__tests__/integer-matrix';
 import { runGenerate } from '../../packages/ffi/src/generate';
 import { CRATE_GIT, recordedCrateRev, runInit } from '../../packages/ffi/src/init';
@@ -74,7 +77,10 @@ function tempDir(prefix: string): string {
   return d;
 }
 function cleanup(): void {
-  for (const d of scratch) rmSync(d, { recursive: true, force: true });
+  for (const d of scratch) {
+    makeWritable(d); // a staged native/ is read-only, like the image's
+    rmSync(d, { recursive: true, force: true });
+  }
 }
 
 /** The triple the generated module computes for this host (same rule as its $triple). */
@@ -202,6 +208,16 @@ function wrapper(libPath: string): void {
       },
     }),
   );
+  // As the image carries it: the loader refuses a library, or a directory above
+  // it, that anyone but root can write.
+  for (const part of [
+    join(image, 'native', rel),
+    join(image, 'native', 'ffi', triple),
+    join(image, 'native', 'ffi'),
+    join(image, 'native'),
+  ]) {
+    chmodSync(part, statSync(part).mode & ~0o222);
+  }
 
   const result = inBun(
     dir,

@@ -373,12 +373,15 @@ describe('readiness-probe-summary.py estimators', () => {
   });
 });
 
-// "Ready timing" block: counted by the tool so a write-up quotes it. Arm "t", three wakes (first byte 1000):
+// "Ready timing" block: counted by the tool so a write-up quotes it. Arm "t", five wakes (first byte 1000):
 //   w1 Ready 900  (before first byte), endpoint 1010 (after), queue-proxy probe 1020, timeout stamped +1 s
 //   w2 Ready 1000 (equal: not after),  endpoint 990  (before), queue-proxy probe 800,  no timeout
-//   w3 Ready 12000 (after, >5 s later), endpoint 12010 (after), queue-proxy probe 1100, timeout stamped +2 s
-// Ready>fb = 1/3; eps>fb = 2/3; Ready>fb+5s = 1/3; qp-fb = -200..100; timeout stamps 1.0..2.0 s; 2 timeout pods;
-// gap from first timeout to Ready: w1 0.9-1 = -0.1 s (<9), w3 12-2 = 10 s (>=9) -> gap>=9s 1, gap<9s 1.
+//   w3 Ready 12000 (after, 11 s later), endpoint 12010, queue-proxy probe 1100, timeout stamped +2 s
+//   w4 Ready 3000 (2 s later, under the 5 s bar), endpoint 3010, queue-proxy probe 1000, timeout stamped +1 s
+//   w5 Ready 7500 (6.5 s later), endpoint 7510, queue-proxy probe 1000, timeout stamped +1 s
+// Ready>fb = 3/5 (w3 w4 w5); eps>fb = 4/5 (all but w2); Ready>fb+5s = 2/5 (w3 w5); qp-fb = -200..100;
+// timeout stamps 1.0..2.0 s over 4 timeout pods; gap from the first timeout to Ready: w1 0.9-1 = -0.1 s,
+// w3 12-2 = 10 s, w4 3-1 = 2 s, w5 7.5-1 = 6.5 s -> gap>=9s 1 (w3), gap<9s 3.
 describe('readiness-probe-summary.py Ready timing block', () => {
   const rowT = (pod: string, ready: number, eps: number, qp: number) => ({
     arm: 't',
@@ -391,6 +394,8 @@ describe('readiness-probe-summary.py Ready timing block', () => {
     rowT('w1', 900, 1010, 1020),
     rowT('w2', 1000, 990, 800),
     rowT('w3', 12000, 12010, 1100),
+    rowT('w4', 3000, 3010, 1000),
+    rowT('w5', 7500, 7510, 1000),
   ];
   const events = {
     kind: 'List',
@@ -398,8 +403,12 @@ describe('readiness-probe-summary.py Ready timing block', () => {
       scheduled('w1'),
       scheduled('w2'),
       scheduled('w3'),
+      scheduled('w4'),
+      scheduled('w5'),
       unhealthy('t1', 'w1', TIMEOUT, 1, 1, 1),
       unhealthy('t3', 'w3', TIMEOUT, 1, 2, 2),
+      unhealthy('t4', 'w4', TIMEOUT, 1, 1, 1),
+      unhealthy('t5', 'w5', TIMEOUT, 1, 1, 1),
     ],
   };
   const out = run(rows, [events]);
@@ -410,7 +419,7 @@ describe('readiness-probe-summary.py Ready timing block', () => {
   it('counts Ready and endpoint-ready strictly after the first byte', () => {
     const t = (block.find((l) => l.startsWith('t ')) as string).trim().split(/\s+/);
     // arm Ready>fb eps>fb Ready>fb+5s qp-fb timeout-stamp timeout-pods gap>=9s gap<9s
-    expect(t).toEqual(['t', '1/3', '2/3', '1/3', '-200..100', '1.0..2.0', '2', '1', '1']);
+    expect(t).toEqual(['t', '3/5', '4/5', '2/5', '-200..100', '1.0..2.0', '4', '1', '3']);
   });
 
   it('flags the straddle artefact of the failure count', () => {

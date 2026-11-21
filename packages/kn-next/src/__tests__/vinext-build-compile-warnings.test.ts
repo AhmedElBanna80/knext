@@ -50,7 +50,6 @@ function cwdWithOutput(): string {
     return cwd;
 }
 
-
 /** What a bytecode compile leaves, for the marker the CLI passed (`--marker`). */
 function bytecodeFor(argv: readonly string[] | undefined): Buffer {
     const m = argv?.[argv.indexOf("--marker") + 1] ?? "";

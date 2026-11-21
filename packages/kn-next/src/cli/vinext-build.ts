@@ -544,7 +544,14 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
 
     // 2. compile + bytecode
     run(
-        compileArgv(arch, entry, outFile, opts.include, opts.compilerBin, marker),
+        compileArgv(
+            arch,
+            entry,
+            outFile,
+            opts.include,
+            opts.compilerBin,
+            marker,
+        ),
     );
     verifyCompiledExecutable(opts, outFile, marker);
 

@@ -18,6 +18,14 @@ name: In-process Rust (FFI) — musl load matrix + kind e2e
 #     - native/ffi/ staged for the OTHER triple: the loader must refuse;
 #     - a wrapper mutated to never free a returned buffer: every leak phase
 #       must be flagged (exit 3).
+#   The loader also refuses a native/ that root does not own or that group or
+#   other can write, so the legs run on root-owned trees, and as the image's own
+#   user (uid 65532) as well as root. Proved red: a tree owned by 65532. And the
+#   two recipes the user docs page gives (a Dockerfile; the commands for a
+#   compiled binary outside a container) are extracted from the page and run
+#   VERBATIM (packages/ffi/scripts/doc-recipe.ts): the Dockerfile is built from
+#   a group-writable source, its BuildKit-made modes asserted, loaded as its own
+#   USER; the same recipe with the app directory chowned to 65532 must be refused.
 #
 # kind-e2e (turbopack x bun, the default cell)
 #   apps/file-manager copied outside the repository with the opt-in laid over
@@ -69,6 +77,8 @@ on:
       - 'packages/lib/**'
       - 'packages/db/**'
       - 'packages/kn-next-operator/**'
+      # The musl-load job builds and runs two blocks of this page verbatim.
+      - 'apps/docs/content/docs/rust-in-process.mdx'
       - 'apps/file-manager/**'
       - 'scripts/kind-manifests/**'
       - 'scripts/pack-release-tarballs.mjs'
@@ -87,6 +97,8 @@ on:
       - 'packages/lib/**'
       - 'packages/db/**'
       - 'packages/kn-next-operator/**'
+      # The musl-load job builds and runs two blocks of this page verbatim.
+      - 'apps/docs/content/docs/rust-in-process.mdx'
       - 'apps/file-manager/**'
       - 'scripts/kind-manifests/**'
       - 'scripts/pack-release-tarballs.mjs'
@@ -282,7 +294,12 @@ jobs:
             --conditions=react-server driver.ts --outfile "${RUNNER_TEMP}/musl/exe/ffi-caller")
           cp -R "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl/exe/native"
           # The loader also checks the directory native/ sits in: here the bind mount /opt/caller.
-          sudo chown -R root:root "${RUNNER_TEMP}/musl/exe"
+          # The ownership comes from the docs page's own commands for a compiled binary run
+          # outside a container, extracted and run verbatim (APP_DIR is the page's variable),
+          # not from a hand-written copy of them.
+          bun packages/ffi/scripts/doc-recipe.ts shell "${RUNNER_TEMP}/own-binary.sh"
+          cat "${RUNNER_TEMP}/own-binary.sh"
+          APP_DIR="${RUNNER_TEMP}/musl/exe" bash -euo pipefail "${RUNNER_TEMP}/own-binary.sh"
           ls -la "${RUNNER_TEMP}/musl/exe"
 
       - name: compiled leg — every export, Err, 1000 panics, timings, leak phases
@@ -346,6 +363,49 @@ jobs:
             echo "::error::the app-owned run failed, but not with the loader's ownership refusal"; exit 1
           }
 
+      # The Dockerfile recipe from the user docs, built VERBATIM: extracted from the page and never
+      # edited (the pinned image goes in as its own BASE_IMAGE build argument), then run as the
+      # image's own USER. The source tree is made group-writable on purpose, so the COPY has to
+      # reset what the source says, and the modes BuildKit left are asserted, not assumed.
+      - name: The documented Dockerfile recipe, built verbatim, loads as the image's own USER (uid 65532)
+        run: |
+          set -euo pipefail
+          recipe="${RUNNER_TEMP}/recipe"
+          mkdir -p "$recipe/ctx"
+          bun packages/ffi/scripts/doc-recipe.ts dockerfile "$recipe/Dockerfile"
+          cat "$recipe/Dockerfile"
+          cp "${RUNNER_TEMP}/musl/exe/ffi-caller" "$recipe/ctx/server"
+          cp -R "${RUNNER_TEMP}/musl/native" "$recipe/ctx/native"
+          chmod -R u+rwX,g+w "$recipe/ctx/native"
+          docker build --build-arg BASE_IMAGE="$BUN_IMAGE" -f "$recipe/Dockerfile" -t ffi-recipe "$recipe/ctx"
+          test "$(docker inspect --format '{{.Config.User}}' ffi-recipe)" = "65532:65532"
+          # What the loader will judge: every path under /app, owner and mode, as the image has them.
+          docker run --rm --entrypoint find ffi-recipe /app -exec stat -c '%a %u %n' {} + | tee "$recipe/modes.txt"
+          awk '{ m = $1; n = length(m); g = substr(m, n - 1, 1) + 0; o = substr(m, n, 1) + 0; if ($2 != 0 || g % 4 >= 2 || o % 4 >= 2) { print "not root-owned, or writable by group or other: " $0; bad = 1 } } END { exit bad }' "$recipe/modes.txt"
+          docker run --rm --read-only --network none -e NODE_ENV=production -e TMPDIR=/tmp \
+            ffi-recipe all 2> "$recipe/run.stderr" | tee "$recipe/run.out" \
+            || { tail -n 40 "$recipe/run.stderr"; exit 1; }
+          grep -q '^ffi-musl-driver: PASS$' "$recipe/run.out"
+
+      # The mistake the page warns about, on top of the same recipe: chown the app directory to the app user.
+      - name: Proved red — the recipe with the app directory chowned to the app user is refused
+        run: |
+          set +e -uo pipefail  # the default shell is bash -e; this step reads exit codes itself
+          recipe="${RUNNER_TEMP}/recipe"
+          { cat "$recipe/Dockerfile"; printf 'USER root\nRUN chown -R 65532:65532 /app\nUSER 65532:65532\n'; } > "$recipe/Dockerfile.chown-app"
+          docker build --build-arg BASE_IMAGE="$BUN_IMAGE" -f "$recipe/Dockerfile.chown-app" -t ffi-recipe-chown "$recipe/ctx" \
+            || { echo "::error::the chown variant of the recipe did not build"; exit 1; }
+          docker run --rm --read-only --network none -e NODE_ENV=production -e TMPDIR=/tmp \
+            ffi-recipe-chown all > "$recipe/chown.out" 2>&1
+          code=$?
+          cat "$recipe/chown.out"
+          if [ "$code" -eq 0 ]; then
+            echo "::error::an app directory chowned to the app user (uid 65532) loaded: that user can chmod its own files and rewrite the library after the hash"; exit 1
+          fi
+          grep -q 'is owned by uid 65532, but only root may own it' "$recipe/chown.out" || {
+            echo "::error::the chowned recipe failed, but not with the loader's ownership refusal"; exit 1
+          }
+
       - name: Job summary (Linux numbers for the research note)
         if: always()
         run: |
@@ -384,9 +444,9 @@ jobs:
         if: always()
         run: |
           set +e -uo pipefail  # cleanup is never the red step that matters
-          sudo chown -R "$(id -u):$(id -g)" "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned"
-          chmod -R u+rwX "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned"
-          rm -rf "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned"
+          sudo chown -R "$(id -u):$(id -g)" "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned" "${RUNNER_TEMP}/recipe"
+          chmod -R u+rwX "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned" "${RUNNER_TEMP}/recipe"
+          rm -rf "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned" "${RUNNER_TEMP}/recipe"
           exit 0
 
   kind-e2e:

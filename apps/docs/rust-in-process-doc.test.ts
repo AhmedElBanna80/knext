@@ -400,7 +400,7 @@ describe('docs — in-process Rust page', () => {
     expect(chain).not.toMatch(/does \*\*not\*\* stop anything that can write/);
   });
 
-  it('states the threat model of the ownership rule in user terms: who it stops, who it does not, and that there is no opt-out', () => {
+  it('states the threat model of the ownership rule in user terms: who it stops, who it does not, why the directories count, and that there is no opt-out', () => {
     const flat = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
     // Root owns it; the user the app runs as does not count, because it can chmod what it owns.
     expect(flat).toContain('Root must own the library');
@@ -418,20 +418,36 @@ describe('docs — in-process Rust page', () => {
       /only the permission bits are read[^.]*macOS[^.]*ACL can grant write access/,
     );
     expect(flat).toContain('There is no setting that turns the check off');
-    // What to do in your own image: the parent of native/ and a compiled binary you build yourself.
+    // Why a directory has to be root's too: the one sentence a user who hits the refusal needs.
     expect(flat).toContain(
-      'the directory that holds `native/` (next to the server executable) is owned by root too',
+      'The directory that holds `native/` must be owned by root too, and not writable by group or other',
     );
-    expect(flat).toContain('`chown` of the app directory to the app user does not pass');
-    expect(flat).toMatch(
-      /compiled binary you build yourself[^.]*`chown root`[^.]*no group or other write/,
+    expect(flat).toContain(
+      'lets them rename or replace the library, or the directory itself, before the process opens it',
     );
+    expect(flat).toContain('the module pins only the file it has already opened');
+    // What to do in your own image, and for a compiled binary outside a container.
+    expect(flat).toContain('(`RUN chown -R app /app`) does not pass');
+    expect(flat).toContain(
+      'A compiled binary you run outside a container needs the same ownership',
+    );
+    expect(flat).toContain('A volume mounted at `native/`');
     // The old, weaker rule is gone from the page.
     expect(page).not.toMatch(/or the one the app runs\s+as/);
     expect(page).not.toMatch(/write access for the app's own user are each refused/);
+    expect(page).not.toContain('a compiled binary you build yourself');
   });
 
-  it('records the rule in the threat model and in the ADR, with the measured reason the sealed copy was not used', () => {
+  it('carries both recipes as titled blocks the e2e lane builds and runs verbatim (doc-recipe.test.ts pins what they say)', () => {
+    const body = must(page, /where the library is loaded from/i);
+    expect(body.match(/```dockerfile title="Dockerfile"/g)?.length).toBe(1);
+    expect(body.match(/```bash title="own-binary\.sh"/g)?.length).toBe(1);
+    const lane = repoFile('.github/workflows/ffi-e2e.yml');
+    expect(lane).toContain('packages/ffi/scripts/doc-recipe.ts dockerfile');
+    expect(lane).toContain('packages/ffi/scripts/doc-recipe.ts shell');
+  });
+
+  it('records the rule in the threat model: who it stops, its limits, the files it does not judge, the development path, and why the sealed copy was not used', () => {
     const model = repoFile('docs/security/threat-model.md').replace(/\s+/g, ' ');
     const at = model.indexOf('### The in-process Rust library');
     expect(at, 'no threat-model entry for the in-process Rust library').toBeGreaterThan(-1);
@@ -444,20 +460,90 @@ describe('docs — in-process Rust page', () => {
     expect(entry).toMatch(/second mount/);
     expect(entry).toContain('no opt-out');
     expect(entry).toContain('memfd');
+    // The directories above native/'s parent: what a writer there can and cannot do, stated correctly.
+    expect(entry).not.toContain('whoever can rename one of those can replace the whole tree');
+    expect(entry).toMatch(/cannot change the bytes of a file only root can write/);
+    expect(entry).toMatch(/can make the load refuse/);
+    // The manifest gets no owner check, and why that is not a bypass.
+    expect(entry).toContain('`native/.integrity.json` is not checked for owner or mode');
+    expect(entry).toMatch(/not a bypass/);
+    // The development path: an accepted, dev-only hole, and a refused staged library never reaches it.
+    expect(entry).toContain('**The development build is an accepted, development-only path.**');
+    expect(entry).toMatch(/`NODE_ENV` is not `production`/);
+    expect(entry).toMatch(/no owner check and no hash/);
+    expect(entry).toContain(
+      'A staged library that is refused throws; it never falls through to the development build',
+    );
+    expect(entry).toContain('ffi-loader.test.ts');
+    // Evidence the diff carries, not a measurement made elsewhere.
+    expect(entry).not.toMatch(/image matrix/);
+    expect(entry).toContain('the documented Dockerfile recipe');
+  });
 
-    const adr = repoFile('docs/adr/0069-bun-ffi-inprocess-rust.md').replace(/\s+/g, ' ');
-    const d13 = adr.slice(adr.indexOf('### D13.'), adr.indexOf('### D14.'));
-    expect(d13).toContain('Amendment (2026-11');
-    // The rule: uid 0 owns the file, every directory to native/ and the one native/ sits in.
-    expect(d13).toMatch(/owned by uid 0/);
-    expect(d13).toMatch(/not writable by group or other/);
-    expect(d13).toContain('the directory `native/` sits in');
-    expect(d13).toMatch(/the user the process runs as is not trusted/i);
-    // The alternative rejected, and the measurement behind it.
-    expect(d13).toContain('memfd_create');
-    expect(d13).toMatch(/two file descriptors of one file[^.]*one loaded library/i);
-    expect(d13).toMatch(/two sealed copies[^.]*two libraries/);
-    expect(d13).toMatch(/mode bits only/);
+  it('reconciles the sharp addon tree with the Rust one: one tree, two loaders, and what protects sharp', () => {
+    const model = repoFile('docs/security/threat-model.md').replace(/\s+/g, ' ');
+    const at = model.indexOf('### `/app/native`');
+    expect(at, 'no /app/native section').toBeGreaterThan(-1);
+    const sharp = model.slice(at, model.indexOf(' ### ', at + 10));
+    expect(sharp).not.toContain('That tree is the only remaining path');
+    expect(sharp).toContain('**One tree, two loaders, two rules.**');
+    expect(sharp).toContain('sharp-addon-dlopen.mjs');
+    expect(sharp).toMatch(/hashes the file by path and then `dlopen`s by path/);
+    expect(sharp).toMatch(/no owner or mode check/);
+    expect(sharp).toMatch(/root-owned, read-only layout/);
+    expect(sharp).toMatch(/\*\*Open debt:\*\*/);
+  });
+
+  it('amends the ADR in ADR form: a numbered Amendment with Context, Decision, Options and Consequences, and the sections it changes', () => {
+    const adr = repoFile('docs/adr/0069-bun-ffi-inprocess-rust.md');
+    const h2 = (re: RegExp) => {
+      const lines = adr.split('\n');
+      const i = lines.findIndex((l) => re.test(l));
+      expect(i, `no heading ${re}`).toBeGreaterThan(-1);
+      const rest = lines.slice(i + 1);
+      const j = rest.findIndex((l) => /^## /.test(l));
+      return (j === -1 ? rest : rest.slice(0, j)).join('\n').replace(/\s+/g, ' ');
+    };
+    const amendment = h2(/^## Amendment 1 \(2026-11-21\) — /);
+    for (const h of ['### Context', '### Decision', '### Options considered', '### Consequences']) {
+      expect(amendment, h).toContain(h);
+    }
+    // Decision: the rule, who is not trusted, why directories count, the unjudged manifest, the dev path.
+    expect(amendment).toMatch(/owned by uid 0/);
+    expect(amendment).toMatch(/not writable by group or other/);
+    expect(amendment).toContain('the directory `native/` sits in');
+    expect(amendment).toMatch(/the user the process runs as is not trusted/i);
+    expect(amendment).toMatch(/no opt-out/i);
+    expect(amendment).toMatch(/rename or replace the library/);
+    expect(amendment).toContain('`native/.integrity.json` is not checked for owner or mode');
+    expect(amendment).toContain('never falls through to the development build');
+    // Options: the three the measurement compared, with the measured reason for the one not used.
+    expect(amendment).toContain('memfd_create');
+    expect(amendment).toMatch(/two file descriptors of one file[^.]*one loaded library/i);
+    expect(amendment).toMatch(/two sealed copies[^.]*two libraries/);
+    expect(amendment).toMatch(/mode bits only/);
+    // Consequences: the user-Dockerfile breakage, the wrapper regeneration, the residuals.
+    expect(amendment).toMatch(/user Dockerfile[^.]*\bchown\b/);
+    expect(amendment).toContain('knext ffi check');
+    expect(amendment).toContain('knext ffi generate');
+    expect(amendment).toMatch(/generated before this change/);
+    // D13 points at it instead of carrying a bold paragraph of its own.
+    const d13 = adr.slice(adr.indexOf('### D13.'), adr.indexOf('### D14.')).replace(/\s+/g, ' ');
+    expect(d13).toContain('Amendment 1');
+    expect(d13).not.toContain('Options measured for binding the bytes');
+    // The ADR's own Options considered and Consequences sections carry the change too.
+    expect(h2(/^## Options considered$/)).toContain('Amendment 1');
+    const consequences = h2(/^## Consequences$/);
+    expect(consequences).toContain('Amendment 1');
+    expect(consequences).toMatch(/user Dockerfile/);
+  });
+
+  it('opens the changeset with a sentence that reads: the module `knext ffi generate` writes is the subject', () => {
+    const cs = repoFile('.changeset/ffi-refuse-writable-native.md');
+    expect(cs).toContain(
+      'In-process Rust (Beta): the module that `knext ffi generate` writes now refuses to load a Rust library that anyone but root could change after its sha256 was checked.',
+    );
+    expect(cs).not.toContain('the module `knext ffi generate` writes now');
   });
 
   it('documents slow calls: the threshold, both metrics, the log lines as the module prints them, and that a call is not interrupted', () => {

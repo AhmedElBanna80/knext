@@ -1264,17 +1264,17 @@ describe('the library is refused unless only root can write it and own the way t
     }
   });
 
-  it.skipIf(process.getuid?.() === 0)(
-    'with no faked owner, a tree owned by the user running the tests is refused: the module reads the real owner',
-    () => {
-      const exe = image();
-      const r = inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
-        FAKE_EXEC: exe,
-        FAKE_OWNER: undefined,
-      });
-      refused(r, new RegExp(`is owned by uid ${process.getuid?.()}, but only root may own it`));
-    },
-  );
+  it('with no faked owner the module reads the real one: a tree owned by the user running the tests is refused, unless that user is root', () => {
+    const exe = image();
+    const r = inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+      FAKE_EXEC: exe,
+      FAKE_OWNER: undefined,
+    });
+    const uid = process.getuid?.() ?? -1;
+    // Root running the tests owns the staged tree as uid 0, which is exactly what the rule accepts.
+    if (uid === 0) loaded(r);
+    else refused(r, new RegExp(`is owned by uid ${uid}, but only root may own it`));
+  });
 });
 
 describe('path 2 — the development fallback, only when NODE_ENV !== production', () => {
@@ -1307,6 +1307,73 @@ describe('path 2 — the development fallback, only when NODE_ENV !== production
       NODE_ENV: 'development',
     });
     expect(releaseNewest.result, releaseNewest.stderr).toBe('Hello, dev!');
+  });
+
+  /**
+   * A staged library that is refused must stop the load. In development the host build under
+   * <crate>/target is accepted with no check at all, so a refusal that fell through to it would turn
+   * every integrity and ownership rule into a warning on a machine that has both.
+   */
+  describe('a staged library that is refused never falls through to the development build', () => {
+    const refusals: [string, () => string, Record<string, string>, RegExp][] = [
+      [
+        'a sha256 that does not match',
+        () => image({ integrity: 'mismatch' }),
+        {},
+        /sha256 mismatch/,
+      ],
+      [
+        'a library the manifest does not list',
+        () => image({ integrity: 'unlisted' }),
+        {},
+        /not listed/,
+      ],
+      ['no integrity manifest', () => image({ integrity: 'absent' }), {}, /integrity/],
+      [
+        'a library its group can write',
+        () => {
+          const exe = image();
+          chmodSync(join(exe, '..', 'native', 'ffi', TRIPLE, LIB), 0o464);
+          return exe;
+        },
+        {},
+        /is writable by its group or by everyone/,
+      ],
+      [
+        'a library owned by the user the app runs as',
+        () => image(),
+        { FAKE_OWNER: '1000', FAKE_EUID: '1000' },
+        /is owned by uid 1000, but only root may own it/,
+      ],
+    ];
+
+    for (const [name, make, env, expected] of refusals) {
+      it(`${name}: the call throws the refusal, twice, and the development build is never loaded`, () => {
+        devApp();
+        const r = inBun((m, c) => [c(() => m.greet('x')), c(() => m.add(1, 2))], {
+          FAKE_EXEC: make(),
+          NODE_ENV: 'development',
+          ...env,
+        });
+        const [first, second] = r.result as { cls?: string; message?: string; ok?: unknown }[];
+        expect(first?.cls, r.stderr).toBe('FfiLoadError');
+        expect(first?.message).toMatch(expected);
+        expect(first?.message).not.toContain(join('rust', 'target'));
+        expect(second).toEqual(first as object);
+        // The notice that precedes a development load never printed.
+        expect(r.stderr).not.toContain('loading the development build');
+      });
+    }
+
+    it('a valid staged library still wins over a newer development build', () => {
+      devApp();
+      const now = new Date();
+      utimesSync(join(app, 'rust', 'target', 'debug', LIB), now, now);
+      const r = inBun((m) => m.greet('x'), { FAKE_EXEC: image(), NODE_ENV: 'development' });
+      // The debug build would say "Debug, x!".
+      expect(r.result, r.stderr).toBe('Hello, x!');
+      expect(r.stderr).not.toContain('loading the development build');
+    });
   });
 
   it('is never used in production: the error lists every path tried and names knext ffi build', () => {

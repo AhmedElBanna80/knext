@@ -143,8 +143,17 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       module copy and Worker would load its own copy of the library, ending the one library per
       process that they rely on, so it is not used. On Linux the load needs `/proc` mounted; a
       failed load closes the descriptor and its error names both the path and the descriptor name.
+    - `native/.integrity.json` itself gets no owner or mode check. It is a claim the loader tests:
+      rewriting it can only make the hash mismatch (a refusal), because the bytes it is compared with
+      are a library only root can write. The directories above the one `native/` sits in are not
+      judged either; a writer there can make the load refuse, not change those bytes.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
-      used only when `NODE_ENV !== 'production'`, and without an integrity check.
+      used only when `NODE_ENV !== 'production'`, and without an integrity check or an owner check:
+      an accepted, development-only path. It is reached only when nothing is staged beside the
+      executable. A staged library that is refused throws (`render.ts:$resolve` returns
+      `$verify`'s result or lets its error out) and never falls through to it;
+      `ffi-loader.test.ts` pins that for a hash mismatch, an unlisted library, a missing manifest, a
+      group-writable library and an app-owned one.
     - Every `<symbol>_schema` must equal the FNV-1a 64 hash computed at render time.
     - The first load failure is cached and rethrown as `FfiLoadError`.
 - **Output writes** (`output.ts`)

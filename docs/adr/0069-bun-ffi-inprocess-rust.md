@@ -554,46 +554,9 @@ Rust toolchain, and `knext ffi check` (CI) and `knext ffi build` (image) fail on
 7. One exported, typed function per Rust export, with the Rust doc comment carried over as TSDoc,
    plus the record interfaces, enum unions, and the three error classes.
 
-**Amendment (2026-11-21, TD-S14-6a): the integrity check is bound to the bytes that are mapped, as
-far as file permissions go.** Item 5.1 hashes the file and then `dlopen`s the same descriptor
-(`/proc/self/fd/<n>`, `/dev/fd/<n>` on macOS). That pins the inode against a path swap, not its
-bytes: an in-place write, a hard link to the inode or a writable mapping by another writer changes
-what runs after the hash. The loader therefore also refuses unless the following hold, judged by
-owner and mode on the hashed descriptor (`fstat`) and on each directory (`stat`), never by
-`access()`, which answers yes to root for everything:
-
-- the library, every directory from its parent up to `native/`, and the directory `native/` sits in
-  (beside the executable) are each **owned by uid 0 and not writable by group or other**. These
-  paths exactly: the walk is built from the library's path relative to `native/`, so it cannot run
-  up to `/`.
-- **The user the process runs as is not trusted.** No uid but 0 is accepted as the owner, and the
-  rule never reads the process's own uid: that user can `chmod` what it owns, so an app-owned tree,
-  even read-only, would protect nothing from a file-write bug in the app. There is no opt-out
-  (jev: require root, no opt-out **0.79**).
-- The shipped images pass. BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the files 0444, the
-  directories below `native/` 0555, and `native/` and the directory above it root-owned 0755
-  (measured on the pinned `oven/bun:1.4.2-alpine`; the directory above came out 0755 and root-owned
-  even from a group-writable source directory), and the images run as `USER 65532`. An image
-  matrix run as uid 65532 on a read-only
-  root file system loaded a root-owned tree and refused a group- or world-writable one, an app-owned
-  one, one owned by a third uid, and one whose parent directory was group-writable or app-owned.
-
-The rule reads mode bits only. It does not stop root or anything with `CAP_DAC_OVERRIDE`, a second
-writable mount of the same files, or an ACL that grants write (on macOS an ACL can). The
-`.integrity.json` consumers are unchanged.
-
-Options measured for binding the bytes (Bun 1.4.2, Linux):
-
-| Option | Result |
-|---|---|
-| (a) owner and mode by `fstat`/`stat` | **Chosen.** Cheap, runs before the bytes are read, and needs nothing from the platform. |
-| (b) refuse unless the library is on a read-only mount | Rejected. Read-only is a per-mount flag: a read-only mount with a writable mount of the same files beside it passes, and a user Dockerfile with no mount at all has none to check. |
-| (c) a sealed `memfd` copy (`memfd_create` plus `F_ADD_SEALS` through libc by `bun:ffi`) | Works, and would bind the bytes against root too, but rejected. Two file descriptors of one file `dlopen` as one loaded library; two sealed copies of the same bytes `dlopen` as two libraries. Every module copy (a bundler layer, a Worker) would then load its own library with its own state, ending the one library per process that D13 relies on. |
-
-`TODO(TD-S14-6a)`: binding the bytes against root remains open, and would need the one-library rule
-kept (for example one sealed copy shared by every module copy). The user-facing statement of the
-rule and its limits is in the in-process Rust page (where the library is loaded from) and the
-threat model's "in-process Rust library" entry.
+**Amendment 1 (2026-11-21):** item 5.1's integrity check is bound to the bytes that are mapped, not only
+to the file that was opened: the loader also refuses unless root owns the library, its directories and the
+directory `native/` sits in, and none is writable by group or other. See *Amendment 1* at the end of this ADR.
 
 ### D14. Build and image (jev: host `cargo zigbuild` **1.00**, Docker stage 0.00, `cross` 0.00; `native/ffi/<triple>/` **0.99**, separate tree 0.00, embed 0.01; refuse self-contained mode **0.84**, extract to temp 0.15)
 
@@ -845,6 +808,10 @@ Why not napi-rs, given it is stable and runs on Node too: the founder chose `bun
 2026-10-14) and accepted the Beta label as the cost. This ADR records that choice and contains its
 risk (Beta, opt-in, integrity-checked, panic-safe, zero-diff for everyone else).
 
+The integrity check at load was compared separately, once the descriptor pin of item 5.1 left in-place
+writes open: owner and mode, a read-only mount, a sealed `memfd` copy, and `access()`. The table and the
+measured reason for each rejection are in *Amendment 1*.
+
 ## Consequences
 
 **Positive**
@@ -865,6 +832,9 @@ risk (Beta, opt-in, integrity-checked, panic-safe, zero-diff for everyone else).
 - **Node users cannot use it.** The refusal is explicit, and zone functions are the portable path.
 - **Build-host burden:** Rust, `cargo-zigbuild` and `zig` on the build host (CI images included)
   for any zone that opts in.
+- **A user Dockerfile must give root the tree** (*Amendment 1*): an image whose `native/` or the directory
+  above it belongs to the app user, or is group- or world-writable, no longer loads. There is no opt-out.
+  Committed wrappers must be regenerated for the check to exist at all.
 - **A new optional package** (`@getknext/ffi`) and two crates to maintain; crates.io and npm
   publication are founder actions.
 - **Unverified until the tickets run:** the musl load on real Alpine images (Docker on the spike
@@ -900,3 +870,95 @@ Shared files, so disjoint ownership holds by section, not by file:
 
 Founder actions, not tickets: publishing `@getknext/ffi` to npm and the crates to crates.io, which
 also moves D3's git `rev` pin to a crates.io version.
+
+## Amendment 1 (2026-11-21) — the integrity check binds the mapped bytes to owner and mode (TD-S14-6a)
+
+Status: Proposed (2026-11-21). Implemented in the change that records it; the sprint-close design review
+accepts it or files debt. It amends D13 items 4 and 5.1 and adds consequences to D14 (the image) and D16
+(supply chain). It is an ADR and a security-invariant trigger.
+
+### Context
+
+D13 item 5.1 hashes `native/ffi/<triple>/lib<name>.so` and then `dlopen`s the descriptor it hashed
+(`/proc/self/fd/<n>`, `/dev/fd/<n>` on macOS). That pins the inode against a path swap, a rename or symlink
+over the path between the check and the load. It does not pin the bytes: an in-place write, a hard link to the
+inode or a writable mapping by another writer changes what runs after the hash matched. The library is mapped
+into the server's own address space, so whoever can write it runs native code with the app's privileges and no
+sandbox. The realistic writers are ordinary: the user the app runs as, through a file-write bug in the app; a
+sidecar that shares the volume; an `fsGroup`-writable volume.
+
+### Decision
+
+The generated loader refuses unless the following hold. They are judged by owner and mode on the hashed
+descriptor (`fstat`) and on each directory (`stat`), before the bytes are read, and never by `access()`, which
+answers yes to root for everything.
+
+1. **The rule.** The library, every directory from its parent up to `native/`, and the directory `native/` sits
+   in (beside the executable) are each owned by uid 0 and not writable by group or other. These paths exactly:
+   the walk is built from the library's path relative to `native/`, so it cannot run up to `/`.
+2. **The user the process runs as is not trusted.** No uid but 0 is accepted as the owner, and the rule never
+   reads the process's own uid. That user can `chmod` what it owns, so an app-owned tree, even read-only, would
+   protect nothing from a file-write bug in the app. There is no opt-out (jev: require root, no opt-out
+   **0.79**).
+3. **Why the directories count.** A directory that someone else can write lets them rename or replace the
+   library, or the directory itself, before the process opens it. The descriptor pin covers only what is
+   already open.
+4. **Not judged, and why that is not a bypass.** `native/.integrity.json` is not checked for owner or mode.
+   It is a claim the loader tests, not a capability: rewriting it can only make the load refuse, because the
+   hash it holds is compared with the bytes of a library only root can write. The directories above the one
+   `native/` sits in are not judged either. A writer there can make the load refuse, or aim the path at a tree
+   whose owner the same rule then judges; it cannot change the bytes of a file only root can write.
+5. **The development build is out of scope and accepted.** When `NODE_ENV` is not `production` and no library
+   is staged, the module loads `<crate>/target/{release,debug}` with no check (D13 item 5.2), as before. A staged
+   library that is refused throws and never falls through to the development build; a loader test pins that for
+   a hash mismatch, an unlisted library, a missing manifest, a group-writable library and an app-owned one.
+6. **The shipped images pass.** BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the files 0444, the
+   directories below `native/` 0555, and `native/` and the directory above it root-owned 0755; the images run
+   as `USER 65532`. The musl load lane builds the Dockerfile recipe from the user docs verbatim, from a source
+   tree made group-writable on purpose, asserts those modes, and loads the image as uid 65532.
+
+The rule reads mode bits only. It does not stop root or anything with `CAP_DAC_OVERRIDE`, a second writable
+mount of the same files, or an ACL that grants write (on macOS an ACL can).
+
+### Options considered
+
+Measured on Bun 1.4.2, Linux, unless stated.
+
+| Option | Result |
+|---|---|
+| (a) owner and mode by `fstat`/`stat`, root only | **Chosen.** Cheap, runs before the bytes are read, and needs nothing from the platform. |
+| (a') the same, but also accept a tree owned by the user the process runs as when its owner-write bit is clear | Rejected. That user can `chmod` it back. The first version of this change did this, and review caught it. |
+| (b) refuse unless the library is on a read-only mount | Rejected. Read-only is a per-mount flag: a read-only mount with a writable mount of the same files beside it passes, and a user Dockerfile with no mount at all has none to check. |
+| (c) a sealed `memfd` copy (`memfd_create` plus `F_ADD_SEALS` through libc by `bun:ffi`) | Works, and would bind the bytes against root too, but rejected. Two file descriptors of one file `dlopen` as one loaded library; two sealed copies of the same bytes `dlopen` as two libraries. Every module copy (a bundler layer, a Worker) would then load its own library with its own state, ending the one library per process that D13 relies on. |
+| (d) `access(W_OK)` | Rejected. Root passes it for every file, so it says nothing about the writer that matters. |
+
+### Consequences
+
+- In-place writes, hard links and writable mappings by any non-root writer, the app's own user included, no
+  longer change what runs after the hash. The check costs a few `stat` calls on the first load, and nothing per call.
+- **A user Dockerfile that `chown`s `native/`, or the directory that holds it, to the app user stops loading.**
+  So does an image whose tree is group- or world-writable, and a volume at `native/` that a sidecar or `fsGroup`
+  can write. The first call throws an `FfiLoadError` that names the path and the fix. There is no opt-out: the
+  way out is the layout on the docs page, which CI builds verbatim and loads as uid 65532. A compiled binary run
+  outside a container needs the page's two commands (`chown` to root, `chmod go-w`), also run verbatim by CI.
+- **Committed wrappers must be regenerated.** The loader is generated code, so every committed wrapper changes:
+  `knext ffi check` (CI) and `knext ffi build` report it out of date until `knext ffi generate` is re-run and
+  committed. A wrapper generated before this change keeps the old loader, so it is not protected until it is
+  regenerated. A changeset says so.
+- Residual: root, `CAP_DAC_OVERRIDE`, a second writable mount and an ACL are not stopped. Binding the bytes
+  against root remains open: `TODO(TD-S14-6a)`, and it would need the one-library rule kept, for example one
+  sealed copy shared by every module copy.
+- **One tree, two rules.** The vinext image's `native/` also holds sharp's addon, which
+  `sharp-addon-dlopen.mjs` hashes and loads by path with no owner or mode check, so sharp is protected only by
+  the same image layout. This is recorded in the threat model (`/app/native`) as open debt, and is not changed
+  here: it is core runtime, with its own tests.
+
+### Action items
+
+- [x] `render.ts` `$sealed`; loader tests (faked owners, real modes, the bounded walk, no fall-through to the
+      development build); the zone wrapper's loader byte-compared with the renderer's.
+- [x] The musl load lane: both legs as uid 65532, an app-owned tree refused, the documented Dockerfile recipe and
+      the own-binary commands run verbatim, cleanup of the root-owned staged trees.
+- [x] Docs page, threat model (the in-process Rust entry and the `/app/native` reconciliation), this amendment.
+- [ ] The sharp shim: the descriptor pin and the owner and mode rule (open debt).
+- [ ] `TODO(TD-S14-6a)`: bind the bytes against root.

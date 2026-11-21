@@ -446,14 +446,39 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    the same files, or an access control list: only the permission bits are read, and on macOS an
    ACL can grant write access that they do not show. There is no setting that turns the check off.
 
-   The image `knext build` generates already has this layout. In your own Dockerfile, copy
-   `native/` with `COPY --chown=0:0 --chmod=a-w`, run the app as a non-root user, and make sure
-   the directory that holds `native/` (next to the server executable) is owned by root too and not
-   writable by group or other. A `WORKDIR` or a `COPY` of the executable creates it that way; a
-   `chown` of the app directory to the app user does not pass. A compiled binary you build yourself
-   needs the same: `chown root` on its directory and on `native/`, and no group or other write
-   access. A volume mounted at `native/` (a shared volume, a sidecar's, or one made group-writable
-   by `fsGroup`) is refused.
+   The image `knext build` generates already has this layout. In your own Dockerfile, use this
+   shape. The directory that holds `native/` must be owned by root too, and not writable by group
+   or other: a directory that someone else can write lets them rename or replace the library, or
+   the directory itself, before the process opens it, and the module pins only the file it has
+   already opened. `WORKDIR` creates `/app` that way when it does not exist yet, and a `COPY` into
+   it leaves it so:
+
+   ```dockerfile title="Dockerfile"
+   ARG BASE_IMAGE
+   FROM ${BASE_IMAGE}
+   WORKDIR /app
+   COPY server /app/server
+   COPY --chown=0:0 --chmod=a-w native /app/native
+   USER 65532:65532
+   ENTRYPOINT ["/app/server"]
+   ```
+
+   Build it with `--build-arg BASE_IMAGE=<your runtime base image>`, where `server` is your
+   compiled server executable and `native/` is the tree `knext ffi build` stages. A `chown` of the
+   app directory to the app user (`RUN chown -R app /app`) does not pass.
+
+   A compiled binary you run outside a container needs the same ownership. Hand the directory that
+   holds the executable and `native/` to root, remove group and other write, and run the binary
+   as an ordinary user:
+
+   ```bash title="own-binary.sh"
+   # APP_DIR: the directory that holds your server executable and its native/ directory.
+   sudo chown -R root:root "$APP_DIR"
+   sudo chmod -R go-w "$APP_DIR"
+   ```
+
+   A volume mounted at `native/` (a shared volume, a sidecar's, or one made group-writable by
+   `fsGroup`) is refused.
 
 2. **The development build**, only when `NODE_ENV` is not `production`: `rust/target/release/` or
    `rust/target/debug/`, whichever is newer, with no integrity check and the one-line notice above.

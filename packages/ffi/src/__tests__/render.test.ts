@@ -639,30 +639,69 @@ describe('the full golden module (the fixture app type-checks it with Node types
 
   /**
    * The zone fixture's wrapper is rendered from a real Rust crate's manifest, which this suite
-   * cannot rebuild (no cargo), so its functions are not compared. What every wrapper shares, the
-   * imports and the platform / integrity / load code from `$triple` to `$resolve`, `$sealed`
-   * and `$verify`, does not depend on the manifest, so it must equal what renderModule emits now.
+   * cannot rebuild (no cargo), so its exported functions, `$SPEC` and `$SCHEMAS` are not compared.
+   * Everything else a wrapper carries does not depend on the manifest, so it must equal what
+   * renderModule emits now, byte for byte, once the library and crate names are the zone's own:
+   * the imports, the three error classes, `$LIB` / `$CRATE` / `$PRERENDER`, and the whole
+   * runtime region (`$load`, `$open`, `$resolve`, `$sealed`, `$verify` and the rest, up to the
+   * first marshalling helper).
    */
-  it('the committed zone wrapper carries the loader renderModule emits (imports, $triple through $verify)', () => {
-    const shared = (src: string) => {
-      const imports = src.slice(
-        src.indexOf("import 'server-only';"),
-        src.indexOf('\n\n', src.indexOf("from 'node:path';")),
-      );
-      const from = src.indexOf("/** This process's Rust target triple. */");
-      const to = src.indexOf('/** A Rust-owned (ptr, len) pair');
-      expect(from, 'no $triple').toBeGreaterThan(-1);
-      expect(to, 'no $takeString').toBeGreaterThan(from);
-      return { imports, loader: src.slice(from, to) };
-    };
+  it('the committed zone wrapper carries everything renderModule emits that does not depend on the manifest', () => {
     const zone = join(PKG_DIR, 'fixtures', 'ffi-zone', 'src', 'generated', 'ffi', 'index.ts');
     expect(existsSync(zone)).toBe(true);
-    const fresh = shared(renderModule(scanManifest(blob(KITCHEN_SINK)), OPTS));
-    const committed = shared(readFileSync(zone, 'utf8'));
-    expect(committed.imports).toBe(fresh.imports);
-    expect(committed.loader).toBe(fresh.loader);
-    // A comparison of two empty slices would pass for nothing.
-    expect(fresh.loader).toContain('function $verify(');
+    const committed = readFileSync(zone, 'utf8');
+    const name = /^const \$LIB = '([^']+)';$/m.exec(committed)?.[1];
+    const crate = /^const \$CRATE = '([^']+)';$/m.exec(committed)?.[1];
+    expect(name, 'the zone wrapper declares no $LIB').toBeDefined();
+    expect(crate, 'the zone wrapper declares no $CRATE').toBeDefined();
+    const fresh = renderModule(scanManifest(blob(KITCHEN_SINK)), {
+      libName: name as string,
+      crate: crate as string,
+    });
+
+    /** The text from `from` up to (not including) `to`; both must be found, in order. */
+    const between = (src: string, from: RegExp | string, to: RegExp | string, what: string) => {
+      const a = typeof from === 'string' ? src.indexOf(from) : src.search(from);
+      expect(a, `no start for ${what}`).toBeGreaterThan(-1);
+      const rest = src.slice(a + 1);
+      const b = typeof to === 'string' ? rest.indexOf(to) : rest.search(to);
+      expect(b, `no end for ${what}`).toBeGreaterThan(-1);
+      return src.slice(a, a + 1 + b);
+    };
+    const regions: [string, (src: string) => string][] = [
+      ['the imports', (t) => between(t, "import 'server-only';", '\nexport ', 'the imports')],
+      [
+        'the three error classes',
+        // Through the end of the last class: record interfaces may follow it, manifest-dependent.
+        (t) => {
+          const first = t.indexOf('export class RustError');
+          const last = t.indexOf('export class FfiLoadError');
+          expect(first, 'no RustError').toBeGreaterThan(-1);
+          expect(last, 'no FfiLoadError').toBeGreaterThan(first);
+          return t.slice(first, t.indexOf('\n}\n', last) + 3);
+        },
+      ],
+      [
+        '$LIB, $CRATE and $PRERENDER',
+        (t) => between(t, 'const $LIB = ', 'const $SPEC', 'the constants'),
+      ],
+      [
+        'the runtime region ($load, $open, $resolve, $sealed, $verify, …)',
+        (t) => between(t, 'let $ready = false;', '/** A Rust-owned (ptr, len) pair', 'the runtime'),
+      ],
+    ];
+    for (const [what, pick] of regions) {
+      const a = pick(committed);
+      // A comparison of two empty or trivial slices would pass for nothing.
+      expect(a.length, what).toBeGreaterThan(100);
+      expect(a, `the committed zone wrapper's ${what} differs from renderModule's`).toBe(
+        pick(fresh),
+      );
+    }
+    const runtime = regions[3]?.[1](fresh) ?? '';
+    for (const fnName of ['$load', '$open', '$resolve', '$sealed', '$verify']) {
+      expect(runtime, fnName).toContain(`function ${fnName}(`);
+    }
   });
 
   it('is deterministic and independent of record order in the library', () => {

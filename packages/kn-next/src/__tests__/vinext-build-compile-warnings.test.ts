@@ -34,6 +34,7 @@ const runQuiet = (() => mock())();
 mock.module("../cli/exec", () => ({ runQuiet }));
 
 import { buildVinextExecutable, COMPILE_LOG_PREFIX } from "../cli/vinext-build";
+import { bytecodeFor } from "./helpers/vinext-bytecode-artifact";
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -48,15 +49,6 @@ function cwdWithOutput(): string {
     mkdirSync(join(cwd, ".output", "server"), { recursive: true });
     writeFileSync(join(cwd, ".output", "server", "index.mjs"), "export {};");
     return cwd;
-}
-
-/** What a bytecode compile leaves, for the marker the CLI passed (`--marker`). */
-function bytecodeFor(argv: readonly string[] | undefined): Buffer {
-    const m = argv?.[argv.indexOf("--marker") + 1] ?? "";
-    return Buffer.from(
-        `ELF…pool:${m}…// @bun @bytecode @bun-esm\n(function(){globalThis.m="${m}";})`,
-        "latin1",
-    );
 }
 
 /** The artifact for the compile the (mocked) runner was last asked to run. */

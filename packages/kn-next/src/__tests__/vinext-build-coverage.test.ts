@@ -46,6 +46,7 @@ import {
     extractVerifiedTarball,
     stageSharpNative,
 } from "../cli/vinext-build";
+import { bytecodeFor } from "./helpers/vinext-bytecode-artifact";
 
 /** Every temp dir this file creates, drained after the run (D9, #880). */
 const tempDirs: string[] = [];
@@ -67,15 +68,6 @@ function appWithOutput(prefix: string): string {
         "export default {};\n",
     );
     return cwd;
-}
-
-/** What a bytecode compile leaves, for the marker the CLI passed (`--marker`). */
-function bytecodeFor(argv: readonly string[] | undefined): Buffer {
-    const m = argv?.[argv.indexOf("--marker") + 1] ?? "";
-    return Buffer.from(
-        `ELF…pool:${m}…// @bun @bytecode @bun-esm\n(function(){globalThis.m="${m}";})`,
-        "latin1",
-    );
 }
 
 describe("#ADR-0048 buildVinextExecutable runs the compile + stage tail", () => {

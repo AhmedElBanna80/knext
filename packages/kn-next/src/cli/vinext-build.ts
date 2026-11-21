@@ -40,6 +40,7 @@ import { createHash } from "node:crypto";
 import {
     cpSync,
     existsSync,
+    lstatSync,
     mkdirSync,
     mkdtempSync,
     readdirSync,
@@ -56,6 +57,7 @@ import {
     verifyBytecodeModules,
 } from "../adapters/bytecode-exec-verify.mjs";
 import { rewriteVinextHarfbuzzAnchors } from "../adapters/entry-asset-anchor.mjs";
+import { planIncludes } from "../adapters/include-plan.mjs";
 import {
     ogHarfbuzzWarning,
     resolvePinnedHarfbuzzWasm,
@@ -449,7 +451,7 @@ export function vinextBytecodeVerdict(
     shape: {
         readonly selfContained?: boolean;
         readonly include?: readonly string[];
-        /** The script's planned module count (entry + included), from its sidecar. */
+        /** The planned module count (entry + included), derived by the CLI itself. */
         readonly plannedModules?: number;
     },
 ): BytecodeVerdict {
@@ -490,7 +492,17 @@ function verifyCompiledExecutable(
     let plannedModules: number | undefined;
     if (needsPlan) {
         try {
-            plannedModules = readPlanSidecar(abs, marker);
+            const claimed = readPlanSidecar(abs, marker);
+            // The CLI plans the same globs with the SAME runtime-neutral planner
+            // and does not take the script's word for the count.
+            const own = 1 + cliPlannedIncludes(opts).length;
+            if (claimed !== own) {
+                throw new UsageError(
+                    `The compile script's plan sidecar claims ${claimed} module(s) but the CLI's own plan says ${own} ` +
+                        "(the entry plus every compile.include match).\n\nRefusing to verify the executable against a count it did not derive.",
+                );
+            }
+            plannedModules = own;
         } catch (e) {
             rmSync(abs, { force: true });
             throw e;
@@ -501,6 +513,15 @@ function verifyCompiledExecutable(
         abs,
         "vinext",
     );
+}
+
+/** The compile.include modules THIS process plans (planIncludes is Node-safe). */
+function cliPlannedIncludes(opts: VinextBuildOptions): readonly string[] {
+    try {
+        return planIncludes(opts.cwd, [...(opts.include ?? [])]).relpaths;
+    } catch (e) {
+        throw new UsageError(e instanceof Error ? e.message : String(e));
+    }
 }
 
 /**
@@ -518,17 +539,27 @@ function readPlanSidecar(executable: string, marker: string): number {
         );
     let raw: string;
     try {
+        let st: ReturnType<typeof lstatSync>;
+        try {
+            st = lstatSync(path);
+        } catch {
+            throw bad("is missing");
+        }
+        if (st.isSymbolicLink() || !st.isFile()) {
+            throw bad("is a symlink or not a regular file");
+        }
         raw = readFileSync(path, "utf8");
-    } catch {
-        throw bad("is missing");
     } finally {
         rmSync(path, { force: true });
     }
-    let plan: { marker?: unknown; modules?: unknown };
+    let plan: { marker?: unknown; modules?: unknown } | null;
     try {
         plan = JSON.parse(raw);
     } catch {
         throw bad("is not valid JSON");
+    }
+    if (plan === null || typeof plan !== "object") {
+        throw bad("is not a JSON object");
     }
     if (plan.marker !== marker) {
         throw bad("carries a marker that is not this build's");

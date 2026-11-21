@@ -56,6 +56,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { bytecodeFor } from "./helpers/vinext-bytecode-artifact";
 
 const PKG_ROOT = resolve(import.meta.dirname, "..", "..");
 const DIST = join(PKG_ROOT, "dist");
@@ -146,14 +147,7 @@ describe("#1339 round-3 — compiled adapter script paths resolve from a REAL ts
                 skipViteBuild: true,
                 // The CLI re-verifies the compiled binary against the marker it
                 // passed; stand in a bytecode artifact for that marker.
-                readArtifact: () => {
-                    const m =
-                        capturedArgv[capturedArgv.indexOf("--marker") + 1];
-                    return Buffer.from(
-                        `ELF…pool:${m}…// @bun @bytecode @bun-esm\nglobalThis.m=${JSON.stringify(m)};`,
-                        "latin1",
-                    );
-                },
+                readArtifact: () => bytecodeFor(capturedArgv),
             });
 
             // argv is ["bun", "run", "--no-env-file", <script>, ...] — see compileArgv.

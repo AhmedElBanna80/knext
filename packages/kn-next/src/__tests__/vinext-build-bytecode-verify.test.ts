@@ -18,11 +18,16 @@ import {
     mkdirSync,
     mkdtempSync,
     rmSync,
+    symlinkSync,
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildVinextExecutable } from "../cli/vinext-build";
+import {
+    bytecodeArtifact,
+    markerFromArgv,
+} from "./helpers/vinext-bytecode-artifact";
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -47,21 +52,14 @@ function appWithOutput(withIncludes = false): string {
 }
 
 function markerOf(argv: readonly string[]): string {
-    const i = argv.indexOf("--marker");
-    expect(i, "the CLI must hand the compile a marker").toBeGreaterThan(-1);
-    return argv[i + 1] as string;
+    expect(
+        argv.indexOf("--marker"),
+        "the CLI must hand the compile a marker",
+    ).toBeGreaterThan(-1);
+    return markerFromArgv(argv);
 }
 
-const PAD = "\0".repeat(256);
-/** One compiled module: pragma, then the banner (source), as Bun lays it out. */
-const moduleSrc = (m: string, bytecode: boolean) =>
-    `// @bun ${bytecode ? "@bytecode " : ""}@bun-esm\nglobalThis.__knextVinextExecMarker=${JSON.stringify(m)};export{};\n${PAD}`;
-/** `n` banner-headed modules, plus the constant-pool copy of the marker. */
-const artifact = (m: string, modules: number, bytecode = true) =>
-    Buffer.from(
-        `ELF…${bytecode ? `pool:${m}…` : ""}${Array.from({ length: modules }, () => moduleSrc(m, bytecode)).join("")}`,
-        "latin1",
-    );
+const artifact = bytecodeArtifact;
 
 interface Shape {
     readonly selfContained?: boolean;
@@ -73,6 +71,10 @@ interface Shape {
     readonly plan?: number | null;
     /** Override the marker the sidecar carries (default: the build's own). */
     readonly planMarker?: string;
+    /** Raw sidecar text instead of the JSON (e.g. `null`). */
+    readonly planRaw?: string;
+    /** Make the sidecar a symlink to another file instead of a regular file. */
+    readonly planSymlink?: boolean;
 }
 const sidecarOf = (out: string) => `${out}.knext-plan.json`;
 let lastCwd = "";
@@ -93,13 +95,19 @@ function build(read: (marker: string) => Buffer, shape: Shape = {}) {
             const out = argv[argv.indexOf("--outfile") + 1] as string;
             const plan = shape.plan === undefined ? 3 : shape.plan;
             if (shape.include && !shape.selfContained && plan !== null) {
-                writeFileSync(
-                    sidecarOf(out),
+                const text =
+                    shape.planRaw ??
                     JSON.stringify({
                         marker: shape.planMarker ?? markerOf(argv),
                         modules: plan,
-                    }),
-                );
+                    });
+                if (shape.planSymlink) {
+                    const target = `${out}.elsewhere`;
+                    writeFileSync(target, text);
+                    symlinkSync(target, sidecarOf(out));
+                } else {
+                    writeFileSync(sidecarOf(out), text);
+                }
             }
         },
         readArtifact: () => read(markerOf(argvs[argvs.length - 1] as string[])),
@@ -201,6 +209,33 @@ describe("vinext x bun compile.include shape (entry + 2 included modules)", () =
         expect(() =>
             build((m) => artifact(m, 3), { include, plan: 0 }),
         ).toThrow(/plan sidecar .* module count/);
+    });
+
+    it("the sidecar is NOT trusted: a count that disagrees with the CLI's own plan is refused (claims 2, plan is 3)", () => {
+        // Binary and sidecar agree with each other (2 modules) but the CLI's
+        // own planner says entry + lib/a.js + lib/b.js = 3.
+        expect(() =>
+            build((m) => artifact(m, 2), { include, plan: 2 }),
+        ).toThrow(/claims 2 .* CLI's own plan says 3/);
+        expect(removed()).toBe(true);
+    });
+
+    it("refuses an INFLATED sidecar too (claims 4, plan is 3)", () => {
+        expect(() =>
+            build((m) => artifact(m, 4), { include, plan: 4 }),
+        ).toThrow(/claims 4 .* CLI's own plan says 3/);
+    });
+
+    it("a JSON `null` sidecar is a UsageError, not a TypeError", () => {
+        expect(() =>
+            build((m) => artifact(m, 3), { include, planRaw: "null" }),
+        ).toThrow(/plan sidecar .* is not a JSON object/);
+    });
+
+    it("refuses a sidecar that is a symlink", () => {
+        expect(() =>
+            build((m) => artifact(m, 3), { include, planSymlink: true }),
+        ).toThrow(/plan sidecar .* symlink/);
     });
 
     it("deletes the sidecar after verification, pass or fail", () => {

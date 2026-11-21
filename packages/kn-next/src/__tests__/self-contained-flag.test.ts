@@ -30,6 +30,7 @@ import { buildNextAppCRObject } from "../cli/cr-builder";
 import { validateConfig } from "../cli/validate";
 import { buildVinextExecutable } from "../cli/vinext-build";
 import type { KnativeNextConfig } from "../config";
+import { bytecodeFor } from "./helpers/vinext-bytecode-artifact";
 
 function cfg(over: Record<string, unknown> = {}): KnativeNextConfig {
     return {
@@ -118,14 +119,7 @@ describe("compile argv: byte-identical absent or false; true adds only the self-
                 run: (argv) => calls.push([...argv]),
                 // The CLI re-verifies the executable against the marker it
                 // passed; stand in a bytecode artifact for that marker.
-                readArtifact: () => {
-                    const a = calls[0] ?? [];
-                    const m = a[a.indexOf("--marker") + 1] ?? "";
-                    return Buffer.from(
-                        `ELF…pool:${m}…// @bun @bytecode @bun-esm\n(function(){globalThis.m="${m}";})`,
-                        "latin1",
-                    );
-                },
+                readArtifact: () => bytecodeFor(calls[0]),
                 ...(selfContained === undefined ? {} : { selfContained }),
             });
             // The marker is random per build: assert it is present and well

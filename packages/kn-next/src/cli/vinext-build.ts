@@ -55,7 +55,6 @@ import {
     verifyBytecodeExec,
     verifyBytecodeModules,
 } from "../adapters/bytecode-exec-verify.mjs";
-import { planIncludes } from "../adapters/compile-embed.mjs";
 import { rewriteVinextHarfbuzzAnchors } from "../adapters/entry-asset-anchor.mjs";
 import {
     ogHarfbuzzWarning,
@@ -437,8 +436,8 @@ export interface VinextBuildOptions {
  *
  *   - self-contained: `verifyBytecodeExec` (one banner-headed entry);
  *   - `compile.include` (disk mode): `verifyBytecodeModules`, the entry plus
- *     every planned module each headed by the banner (`planIncludes` is the
- *     script's own planner, so the count is the script's count);
+ *     at least one included module each headed by the banner (the script
+ *     checks the exact planned count; the CLI cannot run its Bun-only planner);
  *   - default: `verifyBytecodeExec`.
  *
  * Exported so a test can drive each shape directly.
@@ -454,8 +453,12 @@ export function vinextBytecodeVerdict(
 ): BytecodeVerdict {
     const include = shape.include ?? [];
     if (!shape.selfContained && include.length > 0) {
-        const plan = planIncludes(shape.cwd, [...include]);
-        return verifyBytecodeModules(bytes, marker, 1 + plan.relpaths.length);
+        // The CLI must stay Bun-free (cli-node-runtime guard), so it cannot run
+        // the script's glob planner. It requires the entry plus at least one
+        // included module under the banner; the script (which can plan) checks
+        // the exact count, and the script's planner already throws when a glob
+        // matches nothing, so "at least one" always holds on a good build.
+        return verifyBytecodeModules(bytes, marker, 2);
     }
     return verifyBytecodeExec(bytes, marker);
 }
@@ -552,6 +555,10 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
     // the ship build's already-staged tree.
     const nativeDirArg = opts.nativeDir ?? "native";
     const marker = mintExecMarker("knext-vinext-exec");
+    // ABSOLUTE, so the compile script (which resolves --outfile against its own
+    // process.cwd()) and the post-compile verify (which resolves against
+    // opts.cwd) can never read two different paths.
+    const compiledAbs = resolve(opts.cwd, outFile);
 
     if (opts.selfContained) {
         // Self-contained: stage sharp's native tree for the target arch FIRST
@@ -563,7 +570,7 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
             ...compileArgv(
                 arch,
                 entry,
-                outFile,
+                compiledAbs,
                 opts.include,
                 opts.compilerBin,
                 marker,
@@ -582,7 +589,7 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
         compileArgv(
             arch,
             entry,
-            outFile,
+            compiledAbs,
             opts.include,
             opts.compilerBin,
             marker,

@@ -24,7 +24,7 @@ import {
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { ACCEPTED_BUILD_FLAGS, BUILD_HELP } from "../cli/build";
 import { buildNextAppCRObject } from "../cli/cr-builder";
 import { validateConfig } from "../cli/validate";
@@ -136,7 +136,12 @@ describe("compile argv: byte-identical absent or false; true adds only the self-
                     -1,
                 );
                 expect(a[i + 1]).toMatch(/^knext-vinext-exec:[0-9a-f]{24}$/);
-                return [...a.slice(0, i), ...a.slice(i + 2)];
+                // --outfile is absolute under THIS call's temp cwd; compare it
+                // relative to that cwd so the three calls stay comparable.
+                const rest = [...a.slice(0, i), ...a.slice(i + 2)];
+                const o = rest.indexOf("--outfile");
+                if (o >= 0) rest[o + 1] = relative(cwd, rest[o + 1] as string);
+                return rest;
             });
         } finally {
             rmSync(cwd, { recursive: true, force: true });

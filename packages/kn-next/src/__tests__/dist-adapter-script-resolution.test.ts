@@ -144,6 +144,16 @@ describe("#1339 round-3 — compiled adapter script paths resolve from a REAL ts
                 run,
                 bunVersion: "1.4.2", // above the floor — skip the real detectBunVersion(run) call
                 skipViteBuild: true,
+                // The CLI re-verifies the compiled binary against the marker it
+                // passed; stand in a bytecode artifact for that marker.
+                readArtifact: () => {
+                    const m =
+                        capturedArgv[capturedArgv.indexOf("--marker") + 1];
+                    return Buffer.from(
+                        `ELF…pool:${m}…// @bun @bytecode @bun-esm\nglobalThis.m=${JSON.stringify(m)};`,
+                        "latin1",
+                    );
+                },
             });
 
             // argv is ["bun", "run", "--no-env-file", <script>, ...] — see compileArgv.

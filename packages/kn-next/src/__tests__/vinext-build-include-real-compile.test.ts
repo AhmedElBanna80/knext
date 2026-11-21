@@ -14,11 +14,13 @@ import {
     existsSync,
     mkdirSync,
     mkdtempSync,
+    readFileSync,
     rmSync,
     writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { verifyBytecodeModules } from "../adapters/bytecode-exec-verify.mjs";
 import { buildVinextExecutable, hostSmokeArch } from "../cli/vinext-build";
 
 const FIXTURE_SRC = join(__dirname, "fixtures", "vinext-bun-og-app");
@@ -58,6 +60,16 @@ describe("real compile.include compile passes the CLI's per-shape bytecode check
                 include: ["lib/*.js"],
             });
             expect(existsSync(join(buildDir, out))).toBe(true);
+            // Explicit verdict: the banner marker the script baked in heads the
+            // entry plus both included modules, each under @bytecode.
+            const bytes = readFileSync(join(buildDir, out));
+            const marker = /knext-vinext-exec:[0-9a-f]{24}/.exec(
+                bytes.toString("latin1"),
+            )?.[0];
+            expect(marker, "the marker is found in the binary").toBeDefined();
+            expect(verifyBytecodeModules(bytes, marker as string, 3)).toEqual({
+                ok: true,
+            });
         } finally {
             process.chdir(prevCwd);
         }

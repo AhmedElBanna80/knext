@@ -67,33 +67,23 @@ interface Shape {
     readonly selfContained?: boolean;
     readonly include?: readonly string[];
 }
+let lastCwd = "";
 function build(read: (marker: string) => Buffer, shape: Shape = {}) {
     const cwd = appWithOutput(shape.include !== undefined);
+    lastCwd = cwd;
     const argvs: string[][] = [];
-    const outFile = "knext-exec-linux-x64";
-    writeFileSync(join(cwd, outFile), "stale binary");
-    try {
-        return buildVinextExecutable({
-            cwd,
-            bunVersion: "1.4.0",
-            skipViteBuild: true,
-            ...shape,
-            run: (argv) => argvs.push([...argv]),
-            readArtifact: () =>
-                read(markerOf(argvs[argvs.length - 1] as string[])),
-        });
-    } finally {
-        // Fail closed also means the rejected binary is gone.
-        (build as { lastCwd?: string }).lastCwd = cwd;
-    }
+    writeFileSync(join(cwd, "knext-exec-linux-x64"), "stale binary");
+    return buildVinextExecutable({
+        cwd,
+        bunVersion: "1.4.0",
+        skipViteBuild: true,
+        ...shape,
+        run: (argv) => argvs.push([...argv]),
+        readArtifact: () => read(markerOf(argvs[argvs.length - 1] as string[])),
+    });
 }
-const removed = () =>
-    !existsSync(
-        join(
-            (build as { lastCwd?: string }).lastCwd as string,
-            "knext-exec-linux-x64",
-        ),
-    );
+/** Fail closed also means the rejected binary is gone. */
+const removed = () => !existsSync(join(lastCwd, "knext-exec-linux-x64"));
 
 const NO_BYTECODE = /compiled WITHOUT --bytecode/;
 const MARKER_MISSING = /marker is not in the executable/;
@@ -154,7 +144,7 @@ describe("vinext x bun compile.include shape (entry + 2 included modules)", () =
 
     it("REJECTS an artifact where an included module lost its banner/bytecode", () => {
         expect(() => build((m) => artifact(m, 1), { include })).toThrow(
-            /heads 1 bytecode module\(s\), expected at least 3/,
+            /heads 1 bytecode module\(s\), expected at least 2/,
         );
         expect(removed()).toBe(true);
     });
@@ -169,5 +159,29 @@ describe("vinext x bun compile.include shape (entry + 2 included modules)", () =
         expect(() =>
             build((m) => artifact(m, 1), { include, selfContained: true }),
         ).not.toThrow();
+    });
+});
+
+describe("the CLI and the compile script resolve the SAME output path", () => {
+    it("passes an ABSOLUTE --outfile even when process.cwd() is not the app dir", () => {
+        const cwd = appWithOutput();
+        expect(process.cwd()).not.toBe(cwd);
+        const argvs: string[][] = [];
+        const ret = buildVinextExecutable({
+            cwd,
+            bunVersion: "1.4.0",
+            skipViteBuild: true,
+            run: (argv) => argvs.push([...argv]),
+            readArtifact: (p) => {
+                // The verifier reads exactly where the script was told to write.
+                const out = argvs[0]?.[argvs[0].indexOf("--outfile") + 1];
+                expect(p).toBe(out as string);
+                return artifact(markerOf(argvs[0] as string[]), 1);
+            },
+        });
+        const out = argvs[0]?.[argvs[0].indexOf("--outfile") + 1] as string;
+        expect(out).toBe(join(cwd, "knext-exec-linux-x64"));
+        // The returned path stays app-relative, as callers expect.
+        expect(ret).toBe("knext-exec-linux-x64");
     });
 });

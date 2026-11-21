@@ -11,17 +11,17 @@ file records no live fields. Every claim marked † in this document rests on th
 
 **Answer.**
 
-1. **The build tool is the larger lever; the runtime is the smaller one.** Day 2 medians (request to
+1. **The build tool is the larger lever†; the runtime is the smaller one†.** Day 2 medians (request to
    first byte, ms): the Turbopack-vs-vinext gap is 581 ms† on Bun and 741 ms on Node. The Node-vs-Bun
    gap is 243 ms† on vinext and 403 ms on Turbopack. Day 1 shows the same ordering: the build gap is
    586 ms† on Bun and 749 ms on Node, and the runtime gap is 288 ms† on vinext and 451 ms on Turbopack.
 2. **vinext is faster on both runtimes†.** The Bun side of that comparison depends on the bun × vinext
    identification. Bun × vinext† is the fastest arm on both days (523 ms median on day 2), and Node ×
    Turbopack is the slowest (1507 ms).
-3. **Bun is faster than Node within each build tool.** On Turbopack, the bun × turbopack arm has a
+3. **Bun is faster than Node within each build tool.†** On Turbopack, the bun × turbopack arm has a
    live argv0 match on its executable (day 2), and the node arms have a live `NODE_COMPILE_CACHE`
-   check (day 2). On vinext† the bun side is identified only as in †. The runtime gap is smaller
-   than the build-tool gap in every pairing†.
+   check (day 2). On vinext†, the bun side is identified only as in the note at the top. The runtime
+   gap is smaller than the build-tool gap in every pairing†.
 4. **The sandbox and container start is 327–403 ms on every arm† across both days and is not what the
    build tool changes.** On bun† it is 327–371 ms. On node it is 395–403 ms by the analyzer's
    definition (see [Sandbox step](#sandbox-step-two-definitions)). On Turbopack the routable step
@@ -31,7 +31,7 @@ file records no live fields. Every claim marked † in this document rests on th
    It has only a build-time pragma differential (`@bytecode` count 2 against a baseline of 1). Build-time
    marker verification for this target was not present when these runs were taken. The harness checks
    only that the process basename is `server`, which confirms the compiled executable's name, not that
-   the runtime is Bun. The evidence records no live fields for this arm.
+   the runtime is Bun†. The evidence records no live fields for this arm.
 
 ## Environment
 
@@ -42,7 +42,7 @@ file records no live fields. Every claim marked † in this document rests on th
 | Workflow | `.github/workflows/coldstart-phases-kind-native.yml` ("Cold-start phases on kind (native amd64, manual)") |
 | Runner | `ubuntu-latest`, amd64, shared VM |
 | Cluster | kind, one node, installed by `helm/kind-action` v1.15.1 (install only). The kind and node-image versions are not recorded in the artifacts. |
-| Arms | `node-turbopack-1000m`, `node-vinext-1000m`, `bun-turbopack-1000m`, `bun-vinext-1000m` (each `knext create` scaffold, 1000m CPU) |
+| Arms | `node-turbopack-1000m`, `node-vinext-1000m`, `bun-turbopack-1000m`, `bun-vinext-1000m`† (each `knext create` scaffold, 1000m CPU) |
 | Samples | n = 12 per arm per day, 48 rows per day, 0 excluded (`valid 48, excluded 0`) |
 | Ready window | 20 s after first byte (the default for a push trigger) |
 
@@ -60,7 +60,7 @@ file records no live fields. Every claim marked † in this document rests on th
 - Phase milestones are those of `scripts/bench-cold-start-phases/analyze.py`. `pod_added` and
   `pod_bound` come from the Pod watch. `ctr_first_log` is the earlier of the first user-container line
   and the first queue-proxy line. `app_listening` is the first user-container line containing
-  `Ready in`. Phases 4 and 5 therefore exist only for the Turbopack arms†: the vinext server logs
+  `Ready in`. Phases 4 and 5 therefore exist only for the Turbopack arms: the vinext server logs
   `LISTENING:3000` instead, so the analyzer never sets `app_listening` for them.
 - p95 is linear interpolation between order statistics. At n = 12 it sits near the maximum, so read
   it as a tail bound.
@@ -143,7 +143,7 @@ carries the † identification) and 395–403 ms on the node arms. The user-cont
 ## Bytecode evidence per arm
 
 Evidence files are in the data directories as `evidence-<arm>-1000m.json`. The live checks are
-listed per arm for day 2. Day 1 has no live check for any arm.
+listed per arm for day 2. Day 1 has no live check for any arm†.
 
 | arm | kind | build-time evidence (day 2; day 1 in parentheses) | live check (day 2) |
 |---|---|---|---|
@@ -170,7 +170,7 @@ runtime identification given above:
 The four arms† kept their order on both days. The largest median move is 32 ms and the largest p95
 move is 83 ms. For bun × turbopack, most of the p95 movement is the sandbox step's p95
 (404 → 469 ms). Its forward-and-render median also moved from 2 to 68 ms, a bimodal step that the
-median hides. Day 1 has no live checks for any arm, so its bytecode evidence is the build-time record
+median hides. Day 1 has no live checks for any arm†, so its bytecode evidence is the build-time record
 only.
 
 ## Caveats
@@ -178,11 +178,15 @@ only.
 - **bun × vinext † has no marker verification and no live runtime check.** Its bytecode claim rests
   on the pragma differential alone. The harness checks only that the process basename is `server`
   (`scripts/bench-cold-start-phases/kind/check-runtime.sh:19` maps `bun-exec` to `server`), which does
-  not show the process is Bun. The bun × vinext evidence file records no live fields.
-- **For bun × vinext †, `spec_runtime` is empty.** The vinext CR omits the runtime by design, so the
-  runtime of that arm is identified only by its arm name and pragma differential. (The node × vinext
-  evidence also has an empty `spec_runtime`, but it records a live `NODE_COMPILE_CACHE` in pid 6180.)
-- **Day 1 had no live checks for any arm.** Only day 2 checked the running processes, and only as
+  not show the process is Bun. The evidence file for bun × vinext † records no live fields.
+- **For bun × vinext †, `spec_runtime` is empty.** The vinext CR omits the runtime by design:
+  `packages/kn-next/src/cli/cr-builder.ts:317-338` emits `runtime` only when the build is not
+  `vinext`, and `packages/kn-next-operator/api/v1alpha1/nextapp_types.go:121-124` states that for a
+  vinext build the runtime is compiled into the executable and does not affect how the container
+  starts. So the runtime of that arm is identified only by its arm name and pragma differential. (The
+  node × vinext evidence also has an empty `spec_runtime`, but it records a live `NODE_COMPILE_CACHE`
+  in pid 6180.)
+- **Day 1 had no live checks for any arm†.** Only day 2 checked the running processes, and only as
   listed in the bytecode table.
 - **kind on a GitHub-hosted runner is not OKE.** These numbers are not comparable to the OKE
   cold-start numbers in the user docs, nor to the spike-zone kind numbers in
@@ -199,7 +203,8 @@ only.
   only from a `Ready in` line, which vinext does not print, so phases 4 and 5 are not split for the
   vinext arms. The unsplit residual at median (total minus phases 1, 2, 3 and 6; medians are not
   additive, so this is approximate) is about 134 ms for bun × vinext † and 296 ms for node × vinext on
-  day 2. That residual is where the vinext listening and ready time sits, and it is not measured here.
+  day 2. The residual includes the unmeasured listening-to-ready time, plus whatever else falls
+  between the measured phases.
 
 ## Reproduce
 

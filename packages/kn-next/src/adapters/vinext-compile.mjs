@@ -1059,7 +1059,8 @@ const externalSidecar = {
  */
 const EMBEDDED_PREFIX = "knext-embedded:";
 // Unique per build, so a stale binary cannot pass the bytecode proof.
-const BYTECODE_MARKER = `knext-vinext-exec:${randomBytes(12).toString("hex")}`;
+// The CLI passes its own (`--marker`) so it can re-verify the output independently.
+const BYTECODE_MARKER = args.marker?.trim() || `knext-vinext-exec:${randomBytes(12).toString("hex")}`;
 const APP_ROOT = dirname(dirname(ENTRY_DIR));
 // Round-2 review (#1877): `planRuntimeRequires`'s embed computation resolves
 // a confirmed require's spec via `Bun.resolveSync(spec, dirname(ENTRY))` —

@@ -50,6 +50,20 @@ function cwdWithOutput(): string {
     return cwd;
 }
 
+
+/** What a bytecode compile leaves, for the marker the CLI passed (`--marker`). */
+function bytecodeFor(argv: readonly string[] | undefined): Buffer {
+    const m = argv?.[argv.indexOf("--marker") + 1] ?? "";
+    return Buffer.from(
+        `ELF…pool:${m}…// @bun @bytecode @bun-esm\n(function(){globalThis.m="${m}";})`,
+        "latin1",
+    );
+}
+
+/** The artifact for the compile the (mocked) runner was last asked to run. */
+const lastCompileArtifact = () =>
+    bytecodeFor(runQuiet.mock.calls.at(-1)?.[0] as string[] | undefined);
+
 beforeEach(() => {
     runQuiet.mockClear();
     runQuiet.mockImplementation(() => {});
@@ -63,6 +77,7 @@ describe("buildVinextExecutable's default run (#1385)", () => {
             cwd: cwdWithOutput(),
             bunVersion: "1.4.0",
             skipViteBuild: true,
+            readArtifact: lastCompileArtifact,
             // opts.run deliberately OMITTED — this is the real `kn-next
             // build` path, not a test double for the exec layer itself.
         });
@@ -85,6 +100,7 @@ describe("buildVinextExecutable's default run (#1385)", () => {
                 cwd: cwdWithOutput(),
                 bunVersion: "1.4.0",
                 skipViteBuild: true,
+                readArtifact: lastCompileArtifact,
             });
             expect(
                 (
@@ -101,6 +117,7 @@ describe("buildVinextExecutable's default run (#1385)", () => {
                 cwd: cwdWithOutput(),
                 bunVersion: "1.4.0",
                 skipViteBuild: true,
+                readArtifact: lastCompileArtifact,
             });
             expect(
                 (

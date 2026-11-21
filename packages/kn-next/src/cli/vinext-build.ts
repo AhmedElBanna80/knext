@@ -36,7 +36,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
     cpSync,
     existsSync,
@@ -50,6 +50,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { verifyBytecodeExec } from "../adapters/bytecode-exec-verify.mjs";
 import { rewriteVinextHarfbuzzAnchors } from "../adapters/entry-asset-anchor.mjs";
 import {
     ogHarfbuzzWarning,
@@ -153,6 +154,12 @@ export function compileArgv(
      * by bun-toolchain.ts). Absent: plain `bun` on PATH, argv unchanged.
      */
     compilerBin?: string,
+    /**
+     * The unique entry marker the compile script bakes into the entry's banner
+     * (it mints its own when absent). The CLI passes one so it can re-verify the
+     * produced executable independently (`verifyCompiledExecutable`).
+     */
+    marker?: string,
 ): string[] {
     const target = bunCompileTarget(arch);
     // `bun run <script>`, not `bun build`. The compile needs BUILD PLUGINS and
@@ -189,6 +196,7 @@ export function compileArgv(
         // The patched toolchain embeds the SAME checked plan through its
         // native `compile.include` (compile-embed.mjs nativeIncludePaths).
         ...(compilerBin && include.length > 0 ? ["--include-native", "1"] : []),
+        ...(marker ? ["--marker", marker] : []),
     ];
 }
 
@@ -410,6 +418,38 @@ export interface VinextBuildOptions {
      * bun-toolchain.ts). Absent: stock `bun` on PATH.
      */
     readonly compilerBin?: string;
+    /** Injectable for tests: read the produced executable. */
+    readonly readArtifact?: (path: string) => Uint8Array;
+}
+
+/**
+ * Fail closed unless the compiled vinext executable carries bytecode for the
+ * entry whose banner is `marker`. Same verifier as the compiled standalone
+ * target (`bytecode-exec-verify.mjs`) -- the compile script checks too, but a
+ * build must not trust the script's own claim about its own output.
+ */
+function verifyCompiledExecutable(
+    opts: VinextBuildOptions,
+    outFile: string,
+    marker: string,
+): void {
+    const read = opts.readArtifact ?? ((p: string) => readFileSync(p));
+    let bytes: Uint8Array;
+    try {
+        bytes = read(resolve(opts.cwd, outFile));
+    } catch (e) {
+        throw new UsageError(
+            `The compiled vinext executable '${outFile}' could not be read for the bytecode check: ${e instanceof Error ? e.message : String(e)}`,
+        );
+    }
+    const verdict = verifyBytecodeExec(bytes, marker);
+    if (!verdict.ok) {
+        rmSync(resolve(opts.cwd, outFile), { force: true });
+        throw new UsageError(
+            `The compiled vinext executable failed the bytecode check: ${verdict.reason}.\n\n` +
+                "Refusing to ship it — a binary without bytecode boots, but pays a full compile on every cold start.",
+        );
+    }
 }
 
 /**
@@ -476,6 +516,7 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
     // smoke's host-arch twin) can point it somewhere that does not clobber
     // the ship build's already-staged tree.
     const nativeDirArg = opts.nativeDir ?? "native";
+    const marker = `knext-vinext-exec:${randomBytes(12).toString("hex")}`;
 
     if (opts.selfContained) {
         // Self-contained: stage sharp's native tree for the target arch FIRST
@@ -490,17 +531,22 @@ export function buildVinextExecutable(opts: VinextBuildOptions): string {
                 outFile,
                 opts.include,
                 opts.compilerBin,
+                marker,
             ),
             "--self-contained",
             "1",
             "--native-dir",
             nativeDirArg,
         ]);
+        verifyCompiledExecutable(opts, outFile, marker);
         return outFile;
     }
 
     // 2. compile + bytecode
-    run(compileArgv(arch, entry, outFile, opts.include, opts.compilerBin));
+    run(
+        compileArgv(arch, entry, outFile, opts.include, opts.compilerBin, marker),
+    );
+    verifyCompiledExecutable(opts, outFile, marker);
 
     // 3. stage sharp's native module beside the binary — for the arch being
     // compiled, which is NOT necessarily the host's (#949).

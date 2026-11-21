@@ -6,7 +6,7 @@ fast-p1t2    12 |            896   1390   1425 |        883   1386   1422  12/12
 Ready timing per arm (Ready>fb = pod Ready strictly after first byte; eps>fb = endpoint ready strictly after first byte)
 arm          Ready>fb  eps>fb Ready>fb+5s        qp-fb ms  timeout stamp s timeout pods gap>=9s gap<9s
 fast-cur         7/12   12/12        1/12          -36..4                -            0       0      0
-fast-p1          8/12   11/12        0/12          -19..3     312.5..312.5            1       0      1
+fast-p1          8/12   11/12        0/12          -19..3                -            0       0      0
 fast-p1t2        5/12   10/12        0/12        -53..347                -            0       0      0
 note: `fails/wake` counts an event that straddles Ready once, so a period-1 arm whose 503 event spans boot and scale-down shows 1.00 with 0 timeouts; that is a counting artefact, not a measured failure.
 

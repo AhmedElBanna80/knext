@@ -1,4 +1,6 @@
+# Service .spec: identical (no differences)
 
+# Service .metadata: differences below
 --- operator ksvc .metadata
 +++ pr-clone .metadata
 @@ -1,26 +1,8 @@
@@ -33,6 +35,7 @@
 + "name": "pr-clone",
 + "namespace": "z2"
  }
+# NetworkPolicy .spec: differences below
 --- operator netpol .spec
 +++ pr-clone netpol .spec
 @@ -125,7 +125,7 @@
@@ -45,6 +48,7 @@
   },
   "policyTypes": [
 
+# NetworkPolicy .metadata: differences below
 --- operator netpol .metadata
 +++ pr-clone netpol .metadata
 @@ -1,22 +1,4 @@

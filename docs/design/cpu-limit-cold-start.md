@@ -3,11 +3,12 @@
 Status: **advisory.** No code, no default change. Any change to the built-in default needs an ADR (see Recommendation).
 Date: 2026-11-21. Base: `integration/v2` at 3fb53a918. Evidence lives in `docs/benchmarks/`.
 
-Line-number citations refer to the PR head at the time of this round, not to the base. Since the base, the cited code
-and data files changed only as follows (`git diff 3fb53a918 HEAD -- <file>`): `scripts/bench-cold-start-phases/kind/arms.sh`
-gained four lines at the top, so the "operator always renders a limit" comment, at 14-15 in the base, is at 20-22, and the
-`node-nolimit` and `bun-nolimit` lines, at 47 and 49 in the base, are at 54 and 56. The run 1 and ladder reports and this
-note are new since the base. Every other cited file is unchanged.
+Line-number citations refer to the PR head at the time of this round, not to the base. Since the base, one cited code
+file changed: `scripts/bench-cold-start-phases/kind/arms.sh` (several hunks), so its line numbers here are from the PR
+head. Every other cited code file and cited report is unchanged (`git diff 3fb53a918 HEAD -- <file>`). New since the
+base: the run 1 report and the ladder report (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md`,
+`docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md`), the run B data files
+(`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*`), and this note.
 
 ## The question
 
@@ -64,6 +65,9 @@ Its gain on OKE is not established.
 | OKE phase breakdown (`cold-start-phase-breakdown-2026-10-01.md`, E2) | OKE, Bun | 1 vs 4 CPU | 9 (baseline) | Runtime boot −37 ms (p = 0.0006). First-request leg +258 ms (not significant). Total not usable | The report's verdict: "not worth it". The total was dominated by a node-local blackhole (the report's term), so the total is not the comparison |
 | OKE 2026-11-02 (`cpu-boost-and-ready-gap-oke-2026-11-02.md`) | OKE, Bun bench image | 1000m vs limit 2000m, request 250m | 20 | Hodges-Lehmann +141 ms; difference of medians +223 ms, 95% CI [−88, +488]; p = 0.18 | Underpowered. Node placement moves the arm medians by 200 to 360 ms (section 4). The interval excludes gains above 88 ms |
 
+**Rounding convention.** Differences in the tables use the medians as printed (rounded). Where the prose gives a
+difference from unrounded medians, it says so, as in the run B and run 1 control gaps (14 ms; 607 and 621 ms).
+
 **Sign convention.** Every "difference" here is treatment minus baseline. For the OKE 2026-11-02 run, the treatment is
 the 2000m arm and the baseline is the 1000m arm (`cpu-base`). So +223 ms means the 2000m arm's median was 223 ms
 *slower*, and a negative number would be a gain. The interval [−88, +488] is for that same difference.
@@ -103,7 +107,7 @@ throttling counter was read on kind. Treat the mechanism as open.
 
 ### Run B (bun set, 2026-11-21)
 
-Workflow `coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442 (https://github.com/AhmedElBanna80/knext/actions/runs/44865490442). Harness: `7e742381a`, the integration/v2 HEAD used for the run (pushed to `bench/run-coldstart-native-bun`; that branch is not on `personal` as of this check). Runs 1 and A used `52a2cff86`. Kind, Bun arms, n = 12 per arm, with the
+Workflow `coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442 (https://github.com/AhmedElBanna80/knext/actions/runs/44865490442). Harness: integration/v2 merge commit `7e742381a`; the bench branch was deleted after the run. Runs 1 and A used `52a2cff86`. Kind, Bun arms, n = 12 per arm, with the
 node-1000m control. Runner type is unverified: the workflow runs on `ubuntu-latest`, and no run logs the vCPU count, so
 "same runner type as run 1 and run A" is not checked. Data:
 `docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*` (combined jsonl, per-arm jsonl, and analysis files).

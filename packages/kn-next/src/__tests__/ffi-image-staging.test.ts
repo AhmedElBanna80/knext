@@ -158,7 +158,7 @@ describe("the staged Dockerfile — flat layout", () => {
             "COPY --chown=0:0 --chmod=a-w native /app/.next/standalone/native",
         );
         const ANCESTORS_RUN =
-            "RUN chmod go-w /app /app/.next /app/.next/standalone";
+            "RUN chmod go-w /app /app/.next /app/.next/standalone /app/.next/standalone/native";
         const lines = stage(text, "standalone-bun");
         const at = lines.indexOf(ANCHOR);
         expect(at).toBeGreaterThan(-1);
@@ -221,7 +221,7 @@ describe("the staged Dockerfile — nested (monorepo root) layout", () => {
         // The directories above the nested exec come out of the copied tree with the build
         // host's mode, so each one is closed, the nested ones included.
         expect(lines[at + 2]).toBe(
-            "RUN chmod go-w /app /app/.next /app/.next/standalone /app/.next/standalone/apps /app/.next/standalone/apps/web",
+            "RUN chmod go-w /app /app/.next /app/.next/standalone /app/.next/standalone/apps /app/.next/standalone/apps/web /app/.next/standalone/apps/web/native",
         );
         expect(text).not.toContain(FFI_NATIVE_COPY);
     });
@@ -453,11 +453,14 @@ describe("every directory above the executable in the image is root-owned and cl
      * directory of a directory COPY is 0755 and root's, whatever the source's mode; a directory
      * INSIDE the copied tree keeps the source's mode; nothing is anyone's but root's without a
      * --chown. Only chmod and chown are understood in a RUN: a chmod it does not know fails the
-     * model rather than being skipped.
+     * model rather than being skipped. With `destFromHost`, a COPY's destination directory takes
+     * the build host's mode too: not what BuildKit does today, and not something it promises, so
+     * the chmod must not depend on it.
      */
     function evaluate(
         instructions: string[],
         hostMode: number,
+        destFromHost = false,
     ): (path: string) => Dir | undefined {
         const explicit = new Map<string, Dir>();
         const trees: string[] = [];
@@ -490,7 +493,10 @@ describe("every directory above the executable in the image is root-owned and cl
                 ensure(dirname(dst));
                 // A destination that already exists keeps what it has.
                 if (!explicit.has(dst) && !inTree(dst)) {
-                    explicit.set(dst, { uid: 0, mode: 0o755 });
+                    explicit.set(dst, {
+                        uid: 0,
+                        mode: destFromHost ? hostMode : 0o755,
+                    });
                 }
                 trees.push(dst);
             }
@@ -538,10 +544,11 @@ describe("every directory above the executable in the image is root-owned and cl
         instructions: string[],
         execDir: string,
         hostMode: number,
+        opts: { destFromHost?: boolean; also?: string[] } = {},
     ): string[] {
-        const modeOf = evaluate(instructions, hostMode);
+        const modeOf = evaluate(instructions, hostMode, opts.destFromHost);
         const bad: string[] = [];
-        for (let d = execDir; d !== "/"; d = dirname(d)) {
+        for (const d of [...(opts.also ?? []), ...ancestors(execDir)]) {
             const dir = modeOf(d);
             if (dir === undefined) bad.push(`${d}: not made by the Dockerfile`);
             else if (dir.uid !== 0) bad.push(`${d}: owned by uid ${dir.uid}`);
@@ -551,6 +558,13 @@ describe("every directory above the executable in the image is root-owned and cl
         }
         return bad;
     }
+
+    /** `dir` and every directory above it, up to (not including) /. */
+    const ancestors = (dir: string) => {
+        const out: string[] = [];
+        for (let d = dir; d !== "/"; d = dirname(d)) out.push(d);
+        return out;
+    };
 
     /** The directory the native/ COPY lands in (the loader looks for native/ beside the exec). */
     const nativeDir = (instructions: string[]) => {
@@ -593,6 +607,26 @@ describe("every directory above the executable in the image is root-owned and cl
         expect(violations(flatWithout, nativeDir(flatWithout), 0o777)).toEqual(
             [],
         );
+    });
+
+    it("native/ itself and every directory above it are closed even on a builder that gives a COPY's destination the build host's mode: the chmod names each of them", () => {
+        for (const host of HOSTS) {
+            for (const lines of [flat(), nested()]) {
+                const exec = nativeDir(lines);
+                const opts = {
+                    destFromHost: true,
+                    also: [`${exec}/native`],
+                };
+                expect(violations(lines, exec, host, opts)).toEqual([]);
+                // The control: without the chmod, that builder leaves the same directories open.
+                const without = lines.filter(
+                    (l) => !l.startsWith("RUN chmod go-w"),
+                );
+                expect(violations(without, exec, host, opts)).toContain(
+                    `${exec}/native: mode ${host.toString(8)}`,
+                );
+            }
+        }
     });
 
     it("the model sees an ancestor chowned to the app user", () => {

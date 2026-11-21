@@ -439,15 +439,35 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    again, for example through a file-write bug in the app. Nothing is loaded:
 
    ```
-   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. The library, its integrity manifest, native/, the directory that holds native/ and every directory above that up to / must be owned by root and not writable by group or other (the image `knext build` generates copies native/ with `COPY --chown=0:0 --chmod=a-w`), and the app should run as a non-root user.
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. The library and its integrity manifest must be owned by root and not writable by group or other (the images `knext deploy` and `knext preview` build copy native/ with `COPY --chown=0:0 --chmod=a-w`), and the app should run as a non-root user; every directory from the library up to / must also be owned by root and not writable by group or other.
+   ```
+
+   A directory that fails is reported the same way: every one of them at once, with the fix for a directory
+   rather than for a file:
+
+   ```
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: 2 directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:
+     /srv/app/native is owned by uid 1000, but only root may own it
+     /srv is writable by its group or by everyone (mode 1777)
+   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. To fix a directory: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or install the executable under a root-owned directory such as /opt/<app>; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode).
    ```
 
    This protects against a writer that is not root, the app's own user among them. It does not
    protect against root, a process allowed to bypass file permissions, a second writable mount of
    the same files, or an access control list: only the permission bits are read, and on macOS an
-   ACL can grant write access that they do not show. There is no setting that turns the check off.
+   ACL can grant write access that they do not show. "Allowed to bypass file permissions" means
+   `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SYS_ADMIN` (mount),
+   `CAP_SYS_PTRACE` and `CAP_MKNOD`. A container that drops every capability and sets
+   `allowPrivilegeEscalation: false`, as the pods the knext operator creates do, takes the whole class
+   away from the app; for a container you run yourself, use `--cap-drop=ALL --security-opt
+   no-new-privileges`. Two more limits: a file-write bug that lets someone write at an offset of a
+   file as the app's user can reach the running process through `/proc/self/mem`, which no rule about
+   files covers; and a container that runs in a user namespace (rootless Podman or Docker, a pod with
+   `hostUsers: false`) has an unprivileged host user behind its `uid 0`, so root owning the files
+   there says nothing about who on the host can write them, so run the app as a non-root user inside
+   it. There is no setting that turns the check off.
 
-   The image `knext build` generates already has this layout. In your own Dockerfile, use this
+   The images `knext deploy` and `knext preview` build already have this layout. In your own Dockerfile, use this
    shape. Every directory above `native/`, up to `/`, must be owned by root too, and not writable by group
    or other: a directory that someone else can write lets them rename or replace the library, or
    the directory itself, before the process opens it, and the same is true of any directory above it.
@@ -470,6 +490,15 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    compiled server executable and `native/` is the tree `knext ffi build` stages. A `chown` of the
    app directory to the app user (`RUN chown -R app /app`) does not pass.
 
+   If your Dockerfile copies a whole source tree instead (`COPY . /app`), the directories inside the copy
+   keep the mode they have on the machine that builds the image, and a build machine with a `umask` of
+   `002` makes them group-writable (`0775`), which the module refuses. Close them after the copy:
+
+   ```dockerfile title="Dockerfile.copied-tree"
+   COPY --chown=0:0 . /app
+   RUN chmod -R go-w /app
+   ```
+
    A compiled binary you run outside a container needs the same ownership, and so does every directory
    above it. Hand the directory that holds the executable and `native/` to root, remove group and
    other write, and run the binary as an ordinary user. The directories above it must already be
@@ -482,11 +511,14 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    sudo chmod -R go-w "$APP_DIR"
    ```
 
-   A volume mounted at `native/` (a shared volume, a sidecar's, or one made group-writable by
-   `fsGroup`) is refused. So is a symbolic link where the library, `native/.integrity.json`,
-   `native/` or any directory on the way should be, whatever it points at: a link is never
-   followed, so keep `native/` as the plain files and directories that `knext ffi build` stages
-   and a `COPY` carries over.
+   A volume mounted at `native/` or above it (a shared volume, a sidecar's, or one made group-writable
+   by `fsGroup`) is refused unless root owns everything on it and group and other cannot write it. One
+   that passes is still writable through its other mounts, which the module cannot see, so do not share
+   it with a sidecar or mount it writable anywhere else. A symbolic link where the library,
+   `native/.integrity.json`, `native/` or any directory on the way should be is refused too, whatever it
+   points at, and so is one at or above the directory that holds the executable: a link is never
+   followed, so run the executable from its real path, and keep `native/` as the plain files and
+   directories that `knext ffi build` stages and a `COPY` carries over.
 
 2. **The development build**, only when `NODE_ENV` is not `production`: `rust/target/release/` or
    `rust/target/debug/`, whichever is newer, with no integrity check and the one-line notice above.
@@ -821,12 +853,13 @@ Every image build runs these checks, and stops on the first one that fails, befo
   file is read. The directories are looked at again after the library is hashed, so a tree renamed
   over the real one in between is refused. A different owner (the app's own user included, since it can change the
   permissions of what it owns) and write access for a group or for everyone are each refused. The
-  image `knext build` generates copies `native/` owned by root and read-only
-  (`COPY --chown=0:0 --chmod=a-w`), and the app runs as a non-root user, so it passes. A shared,
-  sidecar or `fsGroup` volume at `native/` does not. This does not stop root: a process running as
-  root, or one allowed to bypass file permissions, can still change the library, and so can a
-  second, writable mount of the same files or an access control list that grants write access
-  (only the permission bits are read).
+  images `knext deploy` and `knext preview` build copy `native/` owned by root and read-only
+  (`COPY --chown=0:0 --chmod=a-w`), and the app runs as a non-root user, so they pass. A shared,
+  sidecar or `fsGroup` volume at `native/` does not, unless root owns it and group and other cannot
+  write it, and even then it stays writable through its other mounts. This does not stop root: a
+  process running as root, or one allowed to bypass file permissions, can still change the library,
+  and so can a second, writable mount of the same files or an access control list that grants write
+  access (only the permission bits are read).
 - **The module matches the library.** The build regenerates the module from the library it is about
   to ship and stops on any difference, and the module itself checks the library's functions when it
   loads.

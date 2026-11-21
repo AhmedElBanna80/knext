@@ -128,26 +128,40 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       library or swap the tree it is read from: they stat the manifest's and the library's
       descriptors (each opened with `O_NOFOLLOW | O_NONBLOCK` and required to be a regular file),
       and `lstat` every directory from the library's parent up to `/` (below `native/`, `native/`,
-      the directory beside the executable and each one above it; `$home` resolves the executable's
-      directory to its real path once), by owner and mode (`access()` would say yes to root for
+      the directory beside the executable and each one above it; the directory beside the executable
+      must be its own `realpath`, else `$sealed` refuses before it stats anything: a link at or
+      above it is never followed), by owner and mode (`access()` would say yes to root for
       all of it). The directories are judged and pinned before the manifest is read. Each must be
       a real directory (a link is refused), owned by uid 0 and not writable by group or other
-      (a sticky world-writable `/tmp` is refused too), with any owner-write bit
-      (root can write anyway). Why every ancestor: renaming a directory needs write on its parent,
+      (a sticky world-writable `/tmp` is refused too: the conservative reading, as OpenSSH's
+      `StrictModes` has it, not a measured hole), with any owner-write bit (root can write
+      anyway). Every directory that fails is listed in the one refusal, with the fix for a
+      directory (`chmod go-w`, a root-owned install directory, a Dockerfile `RUN chmod go-w`) and
+      the full mode (`& 0o7777`), so a sticky or setgid directory reads as such; `$why` is the
+      shared owner and mode judgement and `$judge` is the file-only refusal with the file hint. Why every ancestor: renaming a directory needs write on its parent,
       so with every directory on the path root's and closed to group and other, no user but root
       can swap any part of it, which makes the by-path lookups sound (Bun has no `openat`; the same
       rule as OpenSSH's `StrictModes`). No other uid is accepted and the process's own uid is never read:
       the user the app runs as can `chmod` what it owns, so an app-owned tree, even read-only,
-      protects nothing from a file-write bug in the app. No opt-out. The generated Dockerfile
-      copies `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`); BuildKit leaves
-      `native/` and the directory above it root-owned 0755, which passes for a non-root app
-      user. The staged standalone Dockerfile adds `RUN chmod go-w` over every directory above the
-      executable (`runtime-image.ts:FFI_ANCESTORS_RUN`), because a nested prefix directory inside
-      a copied tree keeps the build host's mode (0775 under umask 002). A user Dockerfile that
+      protects nothing from a file-write bug in the app. No opt-out. The images `knext deploy` and
+      `knext preview` build copy `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`);
+      BuildKit leaves `native/` and the directory above it root-owned 0755, which passes for a
+      non-root app user. The staged standalone Dockerfile adds `RUN chmod go-w` over `native/`
+      and every directory above the executable (`runtime-image.ts:FFI_ANCESTORS_RUN`), because a
+      nested prefix directory inside a copied tree keeps the build host's mode (0775 under umask
+      002), and `native/` is named so nothing depends on the mode a builder gives a COPY's
+      destination. A user Dockerfile that
       chowns the app directory, or any directory above it, to the app user, a shared, sidecar or
-      fsGroup-writable volume at `native/`, and a compiled binary with any directory above it not
-      root-owned (a home directory, `/tmp`) are refused; one under a root-owned `/opt/<app>` passes. It does not stop root, `CAP_DAC_OVERRIDE`, a second writable
-      mount of the same files, or an ACL (mode bits only; on macOS an ACL can grant write). A
+      fsGroup-writable volume at `native/` (unless root owns all of it and group and other cannot write
+      it; one that passes is still writable through its other mounts), and a compiled binary with
+      any directory above it not root-owned (a home directory, `/tmp`) are refused; one under a
+      root-owned `/opt/<app>` passes. It does not stop root, the capabilities that reach as far
+      (`CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SYS_ADMIN`,
+      `CAP_SYS_PTRACE`, `CAP_MKNOD`), a second writable mount of the same files, an ACL (mode bits
+      only; on macOS an ACL can grant write), a seekable file write as the app user through
+      `/proc/self/mem`, or an app that itself runs in a user namespace (rootless, `hostUsers:
+      false`), where uid 0 is an unprivileged host uid. The operator's pods drop ALL capabilities
+      and set `allowPrivilegeEscalation: false`. A
       sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
       `bun:ffi`, measured to work on Bun 1.4.2) would bind the bytes against root too, but each
       module copy and Worker would load its own copy of the library, ending the one library per
@@ -167,8 +181,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       the library is hashed; a change refuses), and the manifest's and the library's paths must still
       name the files that were read (`$same`). They are looked up by path, so checked, not locked:
       Bun has no `openat` and macOS has no descriptor-relative path. Against a non-root user the
-      walk is what makes that sound. What is not stopped: code running as root or with
-      `CAP_DAC_OVERRIDE` or `CAP_FOWNER`, a second writable mount, an ACL.
+      walk is what makes that sound. What is not stopped is the list above.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check or an owner check:
       an accepted, development-only path. It is reached only when nothing is staged beside the

@@ -36,7 +36,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fnv1a64, type Manifest, scanManifest, schemaString } from '../manifest';
 import { renderModule } from '../render';
 import {
@@ -1520,7 +1520,7 @@ describe('the library is refused unless only root can write it and own the way t
         refused(
           load(exe),
           new RegExp(
-            `: ${reEscape(target)} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
+            `\\n  ${reEscape(target)} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
           ),
         );
       }
@@ -1552,7 +1552,7 @@ describe('the library is refused unless only root can write it and own the way t
       const dir = dirsOf(exe)[i] as string;
       refused(
         load(exe, { at: { [dir]: 1000 } }),
-        new RegExp(`: ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
+        new RegExp(`\\n  ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
       );
     }
   });
@@ -1628,37 +1628,147 @@ describe('the library is refused unless only root can write it and own the way t
     for (const dir of aboveOf(exe)) {
       refused(
         load(exe, { at: { [dir]: 1000 } }),
-        new RegExp(`: ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
+        new RegExp(`\\n  ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
       );
     }
   });
 
-  it('and not writable by group or other, a sticky directory (a /tmp) included: sticky stops deleting what you do not own, not renaming a directory you can write', () => {
+  it('and not writable by group or other, a sticky directory (a /tmp) included, as OpenSSH StrictModes refuses any group- or world-writable directory: the message prints the full mode, so the sticky and setgid bits show', () => {
     const exe = image();
     for (const dir of aboveOf(exe)) {
-      for (const bits of [0o775, 0o757, 0o1777]) {
+      for (const bits of [0o775, 0o757, 0o1777, 0o2775, 0o3777]) {
         refused(
           load(exe, { modes: { [dir]: bits } }),
           new RegExp(
-            `: ${reEscape(dir)} is writable by its group or by everyone \\(mode 0${(bits & 0o777).toString(8)}\\)`,
+            `\\n  ${reEscape(dir)} is writable by its group or by everyone \\(mode ${(bits & 0o7777).toString(8).padStart(4, '0')}\\)`,
           ),
         );
       }
     }
   });
 
-  it('a link in the path to the executable is resolved, and the real directories are the ones judged and named', () => {
-    const exe = image();
-    const via = join(emptyDir('via'), 'bin');
-    symlinkSync(join(exe, '..'), via);
-    const r = inBun(
-      (m, c) => [c(() => m.greet('World')), (globalThis as { statted?: string[] }).statted],
-      { FAKE_EXEC: join(via, 'server') },
-    );
-    const [greet, statted] = r.result as [unknown, string[]];
-    expect(greet, r.stderr).toEqual({ ok: 'Hello, World!' });
-    expect(statted).toContain(join(exe, '..'));
-    expect(statted).not.toContain(via);
+  describe('a directory refusal lists every directory that fails, in one message, and tells the reader how to fix a directory (not a file)', () => {
+    const message = (r: Run) => {
+      refused(
+        r,
+        /directories on the way to it cannot be trusted|directory on the way to it cannot be trusted/,
+      );
+      return (r.result as { message: string }[])[0]?.message as string;
+    };
+
+    it('three bad directories, one message, each named once and nothing else', () => {
+      const exe = image();
+      const [libDir, nativeDir, home] = [
+        dirsOf(exe)[0],
+        dirsOf(exe)[2],
+        dirsOf(exe)[3],
+      ] as string[];
+      const above = aboveOf(exe);
+      const top = above[0] as string; // the directory above the one the executable is in
+      chmodSync(libDir, 0o775);
+      const text = message(load(exe, { at: { [nativeDir]: 1000 }, modes: { [top]: 0o1777 } }));
+      expect(text).toContain('3 directories on the way to it cannot be trusted');
+      const lines = text.split('\n').filter((l) => l.startsWith('  '));
+      expect(lines.map((l) => l.trim().split(' ')[0]).sort()).toEqual(
+        [libDir, nativeDir, top].sort(),
+      );
+      expect(text).toContain(`${libDir} is writable by its group or by everyone (mode 0775)`);
+      expect(text).toContain(`${nativeDir} is owned by uid 1000, but only root may own it`);
+      expect(text).toContain(`${top} is writable by its group or by everyone (mode 1777)`);
+      // The executable's own directory passed, so it is not in the list.
+      expect(lines.some((l) => l.trim().startsWith(`${home} `))).toBe(false);
+    });
+
+    it('one bad directory reads in the singular', () => {
+      const exe = image();
+      const text = message(load(exe, { modes: { [aboveOf(exe)[0] as string]: 0o775 } }));
+      expect(text).toContain('1 directory on the way to it cannot be trusted');
+    });
+
+    it('the hint is for a directory: chmod go-w, a root-owned install directory, a Dockerfile RUN; never the file COPY flags', () => {
+      const exe = image();
+      const text = message(load(exe, { modes: { [aboveOf(exe)[0] as string]: 0o775 } }));
+      expect(text).toContain('chmod go-w');
+      expect(text).toContain('/opt/<app>');
+      expect(text).toContain('RUN chmod go-w');
+      expect(text).toContain('a directory inside a copied tree keeps the build host');
+      expect(text).not.toContain('COPY --chown');
+      expect(text).not.toContain('its bytes could change');
+      expect(text).toContain('could be renamed or replaced after it was checked');
+    });
+
+    it('a file refusal keeps the file hint (COPY --chown=0:0 --chmod=a-w) and does not talk about directories', () => {
+      const exe = image();
+      chmodSync(libOf(exe), 0o464);
+      const [first] = load(exe).result as { message: string }[];
+      expect(first?.message).toContain('its bytes could change after they were checked');
+      expect(first?.message).toContain('COPY --chown=0:0 --chmod=a-w');
+      expect(first?.message).not.toContain('RUN chmod go-w');
+    });
+
+    it('a link on the way is listed with the others, and its fix is the directory itself', () => {
+      const exe = image({ seal: false });
+      const at = join(exe, '..', 'native', 'ffi');
+      const away = join(emptyDir('away'), 'moved');
+      renameSync(at, away);
+      symlinkSync(away, at);
+      sealImage(exe);
+      const text = message(load(exe, { modes: { [aboveOf(exe)[0] as string]: 0o775 } }));
+      expect(text).toContain('2 directories on the way to it cannot be trusted');
+      expect(text).toContain(`${at} is a symbolic link`);
+      expect(text).toContain('replace it with the directory itself');
+    });
+  });
+
+  describe("a link at or above the executable's directory is refused, never followed (the real target is a good tree that loads by its real path)", () => {
+    const refusedLink = (r: Run, via: string) => {
+      refused(r, new RegExp(`${reEscape(via)} is not the real path of its directory`));
+      const text = (r.result as { message: string }[])[0]?.message as string;
+      expect(text).toContain('a symbolic link is in the way at or above it');
+    };
+
+    it("a link AT the executable's directory", () => {
+      const exe = image();
+      // The control: the same tree, by its real path, loads.
+      loaded(load(exe));
+      const via = join(emptyDir('via'), 'bin');
+      symlinkSync(join(exe, '..'), via);
+      refusedLink(load(join(via, 'server')), via);
+    });
+
+    it("a link ABOVE the executable's directory", () => {
+      const exe = image();
+      const home = join(exe, '..');
+      const alias = join(emptyDir('alias'), 'up');
+      symlinkSync(join(home, '..'), alias);
+      const throughLink = join(alias, basename(home));
+      refusedLink(load(join(throughLink, 'server')), throughLink);
+    });
+
+    it('nothing is judged or read once the link is seen: the refusal comes before every stat of the tree', () => {
+      const exe = image();
+      const via = join(emptyDir('via'), 'bin');
+      symlinkSync(join(exe, '..'), via);
+      const r = inBun(
+        (m, c) => [c(() => m.greet('World')), (globalThis as { statted?: string[] }).statted],
+        { FAKE_EXEC: join(via, 'server') },
+      );
+      const [refusal, statted] = r.result as [{ cls: string }, string[]];
+      expect(refusal.cls, r.stderr).toBe('FfiLoadError');
+      // Only the "is anything staged" look at the library's path: no directory, no manifest.
+      expect(statted.filter((p) => p !== 'fd')).toEqual([join(via, 'native', 'ffi', TRIPLE, LIB)]);
+    });
+
+    it('with nothing staged a link in the executable\'s path is not a refusal of its own: the ordinary "cannot find" answer', () => {
+      const empty = emptyDir('bare');
+      const via = join(emptyDir('via'), 'bin');
+      symlinkSync(empty, via);
+      const r = inBun((m, c) => c(() => m.greet('World')), { FAKE_EXEC: join(via, 'server') });
+      const out = r.result as { cls?: string; message?: string };
+      expect(out?.cls, r.stderr).toBe('FfiLoadError');
+      expect(out.message).toContain('cannot find the Rust library');
+      expect(out.message).not.toContain('refusing to load');
+    });
   });
 
   it('a link inside the checked tree is refused wherever it is, whatever it points at: native/ffi and native/ itself', () => {
@@ -1736,11 +1846,16 @@ describe('the library is refused unless only root can write it and own the way t
     }
   });
 
-  it('the refusal tells the reader what the image does and that the directory holding native/ counts too', () => {
+  it('the file refusal tells the reader what the images `knext deploy` and `knext preview` build do, and that the way up to / counts too', () => {
     const exe = image();
     chmodSync(libOf(exe), 0o464);
     refused(load(exe), /COPY --chown=0:0 --chmod=a-w/);
-    refused(load(exe), /the directory that holds native\/ /);
+    refused(load(exe), /the images `knext deploy` and `knext preview` build copy native\//);
+    refused(load(exe), /every directory from the library up to \/ must also be/);
+    // `knext build` does not build the image this refers to.
+    expect(
+      ((load(exe).result as { message: string }[])[0] as { message: string }).message,
+    ).not.toContain('knext build');
   });
 
   it('a symlink at the staged path is refused as a link, never followed: whatever it points at, root-owned and read-only included', () => {

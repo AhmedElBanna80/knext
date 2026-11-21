@@ -12,8 +12,11 @@
 //   wrapper  scan the release-profile fixture library with the generator's own
 //            scanner (every #[export] and #[record] in the fixture source is
 //            there), render the module, stage the library the way an image does
-//            (native/ffi/<triple>/ + a sha256 integrity manifest, NODE_ENV=
-//            production) and call through the generated module: scalars,
+//            (native/ffi/<triple>/ + a sha256 integrity manifest, owned by root
+//            under a root-owned path, NODE_ENV=production: the loader judges
+//            the real owners and modes, so this mode needs root or passwordless
+//            sudo; the same tree made as the running user is first shown to be
+//            refused) and call through the generated module: scalars,
 //            strings, bytes, records with 64-bit fields, enums, Option/Vec,
 //            Err, a panic, and the non-finite float rule in every JSON position
 //            (refused by the wrapper on the way out, by Rust on the way back)
@@ -25,7 +28,7 @@
 //            development build.
 
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
@@ -41,7 +44,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { integerMatrix } from '../../packages/ffi/src/__tests__/integer-matrix';
 import { runGenerate } from '../../packages/ffi/src/generate';
@@ -92,6 +95,66 @@ function cleanup(): void {
     makeWritable(d);
     rmSync(d, { recursive: true, force: true });
   }
+  // Best effort, and never through die(): a failure here must not recurse into cleanup().
+  for (const d of rootScratch) {
+    if (d.startsWith(`${ROOT_STAGE_BASE}/${ROOT_STAGE_PREFIX}`)) runAsRoot(['rm', '-r', '-f', d]);
+  }
+}
+
+// ---- a root-owned staging tree -------------------------------------------------------
+//
+// The loader loads only from a tree that root owns, and it checks every directory from the
+// library up to / (owned by root, not writable by group or other): a user who can write one of
+// them can rename the tree out of it. A tree this lane makes as itself, under the temp
+// directory (a sticky, world-writable /tmp), is refused, as it should be. So the image's
+// native/ is staged the way the image has it, owned by root, under a root-owned path, and the
+// loader's checks run for real. That needs root: a CI runner has passwordless sudo.
+
+/** The root-owned directory the staged image goes under (root's on every Linux runner). */
+const ROOT_STAGE_BASE = '/opt';
+const ROOT_STAGE_PREFIX = 'knext-ffi-gen-';
+const rootScratch: string[] = [];
+
+/** Run argv as root: directly when this process is root, else through non-interactive sudo. */
+function runAsRoot(argv: string[]): { ok: boolean; detail: string } {
+  const full = process.getuid?.() === 0 ? argv : ['sudo', '-n', ...argv];
+  const r = spawnSync(full[0] as string, full.slice(1), { encoding: 'utf8' });
+  return {
+    ok: r.status === 0,
+    detail: `${full.join(' ')} (exit ${r.status}): ${r.stderr}${r.stdout}`,
+  };
+}
+function asRoot(argv: string[]): void {
+  const r = runAsRoot(argv);
+  if (!r.ok) {
+    die(
+      `${r.detail}\n  this lane stages the image's native/ as root, because the loader accepts only a root-owned tree: it needs root or passwordless sudo`,
+    );
+  }
+}
+
+/** A fresh root-owned, 0755 directory under {@link ROOT_STAGE_BASE}; removed by cleanup(). */
+function rootStageDir(): string {
+  const dir = `${ROOT_STAGE_BASE}/${ROOT_STAGE_PREFIX}${randomBytes(6).toString('hex')}`;
+  rootScratch.push(dir); // before it is made, so a half-made one is still removed
+  asRoot(['install', '-d', '-o', 'root', '-m', '0755', dir]);
+  return dir;
+}
+
+/**
+ * Copy `native` (made here, as this user) to `<stage>/image/native` as the image carries it:
+ * every file and directory root's, read-only, and the two directories above it (`image`, the
+ * one native/ sits in, and the stage root) root's and closed to group and other. Returns the
+ * `image` directory.
+ */
+function stageAsRoot(native: string): string {
+  const stage = rootStageDir();
+  const image = join(stage, 'image');
+  asRoot(['install', '-d', '-o', 'root', '-m', '0755', image]);
+  asRoot(['cp', '-R', native, join(image, 'native')]);
+  asRoot(['chown', '-R', 'root', image]);
+  asRoot(['chmod', '-R', 'a-w', image]);
+  return image;
 }
 
 /** The triple the generated module computes for this host (same rule as its $triple). */
@@ -122,23 +185,10 @@ function app(dir: string): void {
 }
 
 const CHILD = `// Runs BODY(m, c) against the generated module; prints RESULT <json>.
+// Nothing is faked: the loader judges the real owners and modes of the tree it loads from, and
+// FAKE_EXEC only says where the executable (so native/) is.
 const fake = process.env.FAKE_EXEC;
 if (fake) process.execPath = fake;
-// The loader accepts only a root-owned tree (an image's native/ is), and the tree staged here is
-// owned by whoever runs this lane: report FAKE_OWNER as the owner of what the module stats. The
-// modes stay real. Ownership by root itself is proved by the musl load lane (ffi-e2e).
-if (process.env.FAKE_OWNER) {
-  const fs = process.getBuiltinModule('node:fs');
-  const owner = Number(process.env.FAKE_OWNER);
-  for (const k of ['fstatSync', 'statSync']) {
-    const real = fs[k];
-    fs[k] = function (...a) {
-      const st = real.apply(this, a);
-      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid: owner });
-    };
-  }
-  process.getBuiltinModule('node:module').syncBuiltinESMExports();
-}
 const m = await import('./src/generated/ffi/index.ts');
 const c = (f) => {
   try {
@@ -234,9 +284,7 @@ function wrapper(libPath: string): void {
       },
     }),
   );
-  // As the image carries it: read-only. The loader also wants root to own the library, its
-  // directories and the one native/ sits in (the image's COPY --chown=0:0); this lane is not root,
-  // so the child reports root as the owner (FAKE_OWNER) and the modes below are the real ones.
+  // As the image carries it: read-only.
   for (const part of [
     join(image, 'native', rel),
     join(image, 'native', 'ffi', triple),
@@ -245,6 +293,46 @@ function wrapper(libPath: string): void {
     image, // the directory native/ sits in
   ]) {
     chmodSync(part, statSync(part).mode & ~0o222);
+  }
+
+  // The tree above is this user's, under the temp directory: the loader must refuse it, whatever
+  // its modes. This is the half that shows the loader's walk is live in this lane; without it,
+  // the load below could pass because nothing was checked.
+  const refused = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+    FAKE_EXEC: join(image, 'server'),
+    NODE_ENV: 'production',
+  }) as { cls?: string; message?: string } | undefined;
+  if (refused !== undefined) {
+    same(
+      refused.cls,
+      'FfiLoadError',
+      'a native/ this user owns, under the temp directory, is refused',
+    );
+    check(
+      /director(?:y|ies) on the way to it cannot be trusted/.test(refused.message ?? ''),
+      `the refusal names the directories that cannot be trusted: ${refused.message}`,
+    );
+  }
+
+  // The image as the image has it: root's, closed, under a root-owned path. The loader judges the
+  // real owners and modes of this tree; nothing in the child is faked.
+  const rootImage = stageAsRoot(join(image, 'native'));
+
+  // The same good tree, reached through a link root made at its parent: the loader never follows a
+  // link at or above the executable's directory, whatever it points at, even a tree it would load
+  // by its real path (the load below).
+  const link = join(dirname(rootImage), 'image-link');
+  asRoot(['ln', '-s', rootImage, link]);
+  const viaLink = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+    FAKE_EXEC: join(link, 'server'),
+    NODE_ENV: 'production',
+  }) as { cls?: string; message?: string } | undefined;
+  if (viaLink !== undefined) {
+    same(viaLink.cls, 'FfiLoadError', 'a good tree reached through a link is refused');
+    check(
+      /is not the real path of its directory/.test(viaLink.message ?? ''),
+      `the refusal says the link is the problem: ${viaLink.message}`,
+    );
   }
 
   const result = inBun(
@@ -302,16 +390,15 @@ function wrapper(libPath: string): void {
         afterRefusals: m.echo_opt_f64(0.25),
       };
     },
-    { FAKE_EXEC: join(image, 'server'), NODE_ENV: 'production', FAKE_OWNER: '0' },
+    { FAKE_EXEC: join(rootImage, 'server'), NODE_ENV: 'production' },
   ) as Record<string, unknown> | undefined;
   if (result === undefined) return;
 
   // Integer arguments (bun:ffi corrupts some: a double to an i32 arrives as 0,
   // and only the low 32 bits cross): every width, through the real library.
   const integers = inBun(dir, integerMatrix, {
-    FAKE_EXEC: join(image, 'server'),
+    FAKE_EXEC: join(rootImage, 'server'),
     NODE_ENV: 'production',
-    FAKE_OWNER: '0',
   }) as { cases: number; problems: string[] } | undefined;
   if (integers !== undefined) {
     check(integers.cases > 150, `the integer matrix ran only ${integers.cases} case(s)`);

@@ -366,26 +366,11 @@ function $musl(): boolean {
   return $existsSync('/etc/alpine-release');
 }
 
-/**
- * The directory the executable is in, by its real path: every link in the way is resolved once,
- * here, so that the directories judged later are the ones the lookups go through. (Bun reports
- * the real path of the executable already; this covers a link in a directory above it.)
- */
-function $home(): string {
-  const dir = $dirname(process.execPath);
-  try {
-    return $realpathSync(dir);
-  } catch {
-    // Not a directory that can be resolved: nothing can be staged beside it.
-    return dir;
-  }
-}
-
 /** [the library's path, for messages; the name to dlopen]. */
 function $resolve(): readonly [string, string] {
   const triple = $triple();
   const file = `lib${$LIB}.${process.platform === 'darwin' ? 'dylib' : 'so'}`;
-  const native = $join($home(), 'native');
+  const native = $join($dirname(process.execPath), 'native');
   const staged = $join(native, 'ffi', triple, file);
   const tried = [staged];
   // lstat, not existsSync: existsSync follows a link and says no to a dangling one, which would
@@ -432,24 +417,30 @@ type $Stat = {
 };
 
 /**
- * Fail closed unless root owns the stat'ed object and group and other cannot write it. Judged by owner and
- * mode, never access(), which answers yes to root for everything. The user this process runs as
- * is NOT trusted: it can chmod what it owns, so a tree it owns protects nothing from a bug that
- * writes files. p is what is being judged, path the library the refusal is about, dir whether p
- * is a directory.
+ * What is wrong with a stat'ed object, or '' when it is root's and group and other cannot write it.
+ * Judged by owner and mode, never access(), which answers yes to root for everything. The user this
+ * process runs as is NOT trusted: it can chmod what it owns, so a tree it owns protects nothing from
+ * a bug that writes files. The mode is printed whole (the sticky, setuid and setgid bits included),
+ * so a 1777 directory reads as 1777.
  */
-function $judge(path: string, p: string, st: $Stat, dir: boolean): void {
+function $why(st: $Stat): string {
   const bits = Number(st.mode);
-  const mode = (bits & 0o777).toString(8).padStart(4, '0');
-  let why = '';
-  if (Number(st.uid) !== 0) {
-    why = `is owned by uid ${st.uid}, but only root may own it`;
-  } else if ((bits & 0o022) !== 0) {
-    why = `is writable by its group or by everyone (mode ${mode})`;
-  }
+  const mode = (bits & 0o7777).toString(8).padStart(4, '0');
+  if (Number(st.uid) !== 0) return `is owned by uid ${st.uid}, but only root may own it`;
+  if ((bits & 0o022) !== 0) return `is writable by its group or by everyone (mode ${mode})`;
+  return '';
+}
+
+/**
+ * Fail closed unless root owns the file and group and other cannot write it. p is the file judged,
+ * path the library the refusal is about. (A directory is judged by $sealed, which lists every one
+ * that fails: the fix for a directory is not the fix for a file.)
+ */
+function $judge(path: string, p: string, st: $Stat): void {
+  const why = $why(st);
   if (why !== '') {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: ${p} ${why}, so ${dir ? 'what is under it could be renamed or replaced after it was checked' : 'its bytes could change after they were checked'}. The library, its integrity manifest, native/, the directory that holds native/ and every directory above that up to / must be owned by root and not writable by group or other (the image \`knext build\` generates copies native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user.`,
+      `knext ffi: refusing to load ${path}: ${p} ${why}, so its bytes could change after they were checked. The library and its integrity manifest must be owned by root and not writable by group or other (the images \`knext deploy\` and \`knext preview\` build copy native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user; every directory from the library up to / must also be owned by root and not writable by group or other.`,
     );
   }
 }
@@ -478,36 +469,66 @@ function $upTo(dir: string): string[] {
 
 /**
  * Judge, and pin, every directory the check relies on: the library's, from the one it sits in up
- * to native/ itself, then the directory native/ sits in, then every directory above that up to
- * the root. Each is looked at with lstat (a link is never followed), must be a real directory,
- * owned by root and not writable by group or other. They are judged here, BEFORE the manifest or
- * the library is opened, and $unchanged looks at the same names again once the bytes are hashed,
- * so a tree renamed over them in between is refused.
+ * to native/ itself, then the directory native/ sits in (beside the executable), then every
+ * directory above that up to the root. Each is looked at with lstat (a link is never followed),
+ * must be a real directory, owned by root and not writable by group or other. They are judged here,
+ * BEFORE the manifest or the library is opened, and $unchanged looks at the same names again once
+ * the bytes are hashed, so a tree renamed over them in between is refused. Every directory that
+ * fails is listed in the one refusal.
+ *
+ * The directory beside the executable must be its own real path: a link at or above it is
+ * refused, never followed, because the lookups would go through the link and the directories
+ * judged would be somebody else's.
  *
  * Why every ancestor: a directory a user can write is one that user can rename the tree out of,
  * and put another in its place. With every directory from native/ up to the root owned by root
  * and closed to group and other, nobody but root can rename or replace any of them, so looking
  * them up by path is sound (Bun has no openat, and macOS has no descriptor-relative path, so a
  * lookup cannot be anchored to a directory descriptor). The pins and the file checks below are
- * defence in depth: what remains is code running as root (or with CAP_DAC_OVERRIDE or
- * CAP_FOWNER), a second writable mount of the same files, or an ACL, and none of that can be
- * told apart from the real tree by any lookup.
+ * defence in depth: what remains is code running as root (or with CAP_DAC_OVERRIDE, CAP_FOWNER,
+ * CAP_CHOWN, CAP_SETUID, CAP_SYS_ADMIN, CAP_SYS_PTRACE or CAP_MKNOD), a second writable mount of
+ * the same files, an ACL, or a write to /proc/self/mem, and none of that can be told apart from
+ * the real tree by any lookup.
  */
 function $sealed(native: string, rel: string, path: string): $Pin[] {
+  const home = $dirname(native);
+  let real: string;
+  try {
+    real = $realpathSync(home);
+  } catch (err) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${path}: cannot resolve the directory ${home} (${err instanceof Error ? err.message : String(err)}).`,
+    );
+  }
+  if (real !== home) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${path}: ${home} is not the real path of its directory (it resolves to ${real}), so a symbolic link is in the way at or above it. A link is never followed, whatever it points at: run the executable from its real path, with no link in the way.`,
+    );
+  }
   const parts = rel.split('/');
   const dirs: string[] = [];
   for (let i = parts.length - 1; i >= 0; i--) dirs.push($join(native, ...parts.slice(0, i)));
-  dirs.push(...$upTo($dirname(native)));
-  return dirs.map((dir): $Pin => {
+  dirs.push(...$upTo(home));
+  const pins: $Pin[] = [];
+  const bad: string[] = [];
+  let link = false;
+  for (const dir of dirs) {
     const st = $lstatSync(dir, { bigint: true });
     if ($type(st) !== $constants.S_IFDIR) {
-      throw new FfiLoadError(
-        `knext ffi: refusing to load ${path}: ${dir} is ${$type(st) === $constants.S_IFLNK ? 'a symbolic link' : 'not a directory'}. Every directory on the way to the library must be the directory itself: a link is never followed, whatever it points at.`,
-      );
+      link = true;
+      bad.push(`${dir} is ${$type(st) === $constants.S_IFLNK ? 'a symbolic link' : 'not a directory'}`);
+      continue;
     }
-    $judge(path, dir, st, true);
-    return [dir, $id(st)];
-  });
+    const why = $why(st);
+    if (why !== '') bad.push(`${dir} ${why}`);
+    pins.push([dir, $id(st)]);
+  }
+  if (bad.length > 0) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${path}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other. To fix a directory: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or install the executable under a root-owned directory such as /opt/<app>; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode).${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}`,
+    );
+  }
+  return pins;
 }
 
 /** Every pinned directory must still be the object that was judged; fail closed if one is not. */
@@ -594,7 +615,7 @@ function $verify(native: string, rel: string, path: string): string {
   );
   let text: string;
   try {
-    $judge(path, manifest, m.st, false);
+    $judge(path, manifest, m.st);
     text = $readFileSync(m.fd, 'utf8');
   } finally {
     $closeSync(m.fd);
@@ -619,7 +640,7 @@ function $verify(native: string, rel: string, path: string): string {
   const lib = $openFile(path, 'the library', path, `knext ffi: refusing to load ${path}: it is gone.`);
   let actual: string;
   try {
-    $judge(path, path, lib.st, false);
+    $judge(path, path, lib.st);
     actual = $createHash('sha256').update($readFileSync(lib.fd)).digest('hex');
     $unchanged(path, pins);
     $same(path, manifest, $id(m.st));

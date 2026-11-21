@@ -656,10 +656,12 @@ export const FFI_NATIVE_COPY = `COPY ${FFI_NATIVE_PERMS} native ${STANDALONE}/na
  * directory COPY's destination 0755 and root's, but a directory INSIDE a copied tree keeps the
  * build host's mode (measured on docker 29: 0775 from a context made under umask 002), so the
  * tracing-root prefix directories of a nested layout can come out group-writable. The line
- * closes every directory above the exec; it runs as root, before the stage's USER.
+ * closes every directory above the exec, and `native/` itself, so none of them depends on the
+ * mode the builder gives a COPY's destination (BuildKit's 0755 is measured, not promised); it
+ * runs as root, before the stage's USER.
  */
 const FFI_ANCESTOR_DIRS = ["/app", "/app/.next", STANDALONE];
-export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${FFI_ANCESTOR_DIRS.join(" ")}`;
+export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, `${STANDALONE}/native`].join(" ")}`;
 
 /** The `standalone-bun` exec COPY the native line goes directly after. */
 const FFI_NATIVE_ANCHOR = `COPY knext-standalone-exec-linux-x64 ${STANDALONE}/knext-standalone-exec`;
@@ -675,7 +677,7 @@ const FFI_NEST_RULE: NestRule = {
 
 /**
  * The nest rule for {@link FFI_ANCESTORS_RUN}: the nested exec sits in `<prefix>`, so each
- * directory of the prefix (`apps`, `apps/web`) is above it too.
+ * directory of the prefix (`apps`, `apps/web`) is above it too, and `native/` moves under it.
  */
 const FFI_ANCESTORS_NEST_RULE: NestRule = {
     kind: "line",
@@ -685,7 +687,7 @@ const FFI_ANCESTORS_NEST_RULE: NestRule = {
         const nested = parts.map(
             (_, i) => `${STANDALONE}/${parts.slice(0, i + 1).join("/")}`,
         );
-        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested].join(" ")}`;
+        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested, `${STANDALONE}/${prefix}native`].join(" ")}`;
     },
     count: 1,
 };

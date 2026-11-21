@@ -175,6 +175,10 @@ jobs:
           fi
 
       - name: Generator — scan, render and call the real fixture library through the generated module
+        # The loader loads only from a tree root owns, under directories root owns and group and
+        # other cannot write, so the harness stages the image's native/ as root under /opt (this
+        # runner has passwordless sudo) and also requires the same tree made by this user, under
+        # the sticky /tmp, to be refused. Nothing in the child process is faked.
         run: bun harness/ffi-generated.ts wrapper target/release/libknext_ffi_fixture.so
 
       - name: Generator — knext ffi init, then generate/check build the crate as written (git dependency at the recorded revision)

@@ -400,6 +400,28 @@ describe('docs — in-process Rust page', () => {
     expect(chain).not.toMatch(/does \*\*not\*\* stop anything that can write/);
   });
 
+  it('quotes the directory refusal: the fix for a directory is on the page word for word and the module carries the same sentence, apart from the file hint', () => {
+    const body = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
+    const tail =
+      "To fix a directory: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or install the executable under a root-owned directory such as /opt/<app>; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode).";
+    // The module's source escapes the backticks it carries inside a template literal.
+    expect(rendered.replace(/\\`/g, '`')).toContain(tail);
+    expect(body).toContain(tail);
+    // The module words the count and the pronoun from the number of failing directories.
+    expect(rendered).toContain('on the way to it cannot be trusted, so what is under ');
+    expect(rendered).toContain(' could be renamed or replaced after it was checked:');
+    expect(body).toContain(
+      'directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:',
+    );
+    // A directory is not a file: the page does not offer the file's COPY flags as its fix.
+    expect(tail).not.toContain('COPY --chown');
+    // Every failing directory is listed, in the one message.
+    expect(body).toContain('2 directories on the way to it');
+    // The refusal the page quotes names the images that carry the file hint.
+    expect(body).toContain('the images `knext deploy` and `knext preview` build copy native/');
+    expect(body).not.toContain('the image `knext build` generates');
+  });
+
   it('states the threat model of the ownership rule in user terms: who it stops, who it does not, why the directories count, and that there is no opt-out', () => {
     const flat = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
     // Root owns it; the user the app runs as does not count, because it can chmod what it owns.
@@ -437,8 +459,9 @@ describe('docs — in-process Rust page', () => {
       'refuses a tree whose directories changed while the library was being checked',
     );
     expect(flat).toContain(
-      'So is a symbolic link where the library, `native/.integrity.json`, `native/` or any directory on the way should be',
+      'A symbolic link where the library, `native/.integrity.json`, `native/` or any directory on the way should be is refused too, whatever it points at, and so is one at or above the directory that holds the executable',
     );
+    expect(flat).toContain('run the executable from its real path');
     expect(flat).not.toContain('the module pins only the file it has already opened');
     // What to do in your own image, and for a compiled binary outside a container.
     expect(flat).toContain('(`RUN chown -R app /app`) does not pass');
@@ -449,7 +472,29 @@ describe('docs — in-process Rust page', () => {
     expect(flat).toContain('a root-owned `/opt/<app>` is fine');
     expect(flat).toContain('a home directory or `/tmp` is not');
     expect(flat).toContain('the refusal names the directory');
-    expect(flat).toContain('A volume mounted at `native/`');
+    expect(flat).toContain('A volume mounted at `native/` or above it');
+    expect(flat).toContain(
+      'is refused unless root owns everything on it and group and other cannot write it',
+    );
+    expect(flat).toContain('is still writable through its other mounts');
+    // The residual, named: the capability class, /proc/self/mem, the user namespace, and what the operator does.
+    expect(flat).toContain(
+      '`CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SYS_ADMIN` (mount), `CAP_SYS_PTRACE` and `CAP_MKNOD`',
+    );
+    expect(flat).toContain('`/proc/self/mem`');
+    expect(flat).toContain('`hostUsers: false`');
+    expect(flat).toContain('has an unprivileged host user behind its `uid 0`');
+    expect(flat).toContain(
+      '`allowPrivilegeEscalation: false`, as the pods the knext operator creates do',
+    );
+    expect(flat).toContain('`--cap-drop=ALL --security-opt no-new-privileges`');
+    // A Dockerfile that copies a whole tree keeps the build host's modes on the directories inside it.
+    expect(flat).toContain('If your Dockerfile copies a whole source tree instead (`COPY . /app`)');
+    expect(flat).toContain('makes them group-writable (`0775`), which the module refuses');
+    expect(must(page, /where the library is loaded from/i)).toContain('RUN chmod -R go-w /app');
+    expect(flat).toContain(
+      'The images `knext deploy` and `knext preview` build already have this layout',
+    );
     // The old, weaker rule is gone from the page.
     expect(page).not.toMatch(/or the one the app runs\s+as/);
     expect(page).not.toMatch(/write access for the app's own user are each refused/);
@@ -473,6 +518,27 @@ describe('docs — in-process Rust page', () => {
     expect(entry).toContain('owned by root');
     expect(entry).toContain('the user the app runs as');
     expect(entry).toMatch(/root or with `CAP_DAC_OVERRIDE` or `CAP_FOWNER`/);
+    for (const cap of ['CAP_CHOWN', 'CAP_SETUID', 'CAP_SYS_ADMIN', 'CAP_SYS_PTRACE', 'CAP_MKNOD']) {
+      expect(entry, cap).toContain(`\`${cap}\``);
+    }
+    expect(entry).toContain('**What is not stopped.**');
+    expect(entry).toContain('`/proc/self/mem`');
+    expect(entry).toMatch(/one the attacker makes for itself gains nothing/);
+    expect(entry).toContain('`hostUsers: false`');
+    expect(entry).toContain('`capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false`');
+    expect(entry).toContain('pod_hardening.go');
+    // What the loader tests fake and what is real: not "faked owners, real modes".
+    expect(entry).not.toContain('faked owners, real modes');
+    expect(entry).toContain(
+      "the **modes of the directories above the executable's directory** (reported as 0755",
+    );
+    expect(entry).toContain('What is real: the modes of the library, the manifest, `native/`');
+    // The links claim says what the code does, and the images are named by the commands that build them.
+    expect(entry).toContain('**No link is followed anywhere on the path:**');
+    expect(entry).toContain('the directory beside the executable must be its own `realpath`');
+    expect(entry).toContain('The images `knext deploy` and `knext preview` build copy `native/`');
+    // Pending, named: the nested layout has no real-Docker CI leg.
+    expect(entry).toContain('model-tested only, with no real-Docker CI leg');
     expect(entry).toMatch(/ACL/);
     expect(entry).toMatch(/macOS/);
     expect(entry).toMatch(/second mount/);
@@ -485,7 +551,9 @@ describe('docs — in-process Rust page', () => {
     expect(entry).toContain('**Every directory above the library is judged, up to `/`.**');
     expect(entry).toMatch(/no user but root can swap any part of it/);
     expect(entry).toContain('StrictModes');
-    expect(entry).toMatch(/refused too: the sticky bit stops deleting/);
+    expect(entry).toMatch(/refused too\. That is the conservative reading, not a measured hole/);
+    expect(entry).not.toMatch(/the sticky bit stops deleting/);
+    expect(entry).toContain('a rename is restricted like an unlink');
     expect(entry).toMatch(/covers `\/`/);
     expect(entry).toMatch(/The owner of a directory on the path is not on this list/);
     // The manifest IS judged: the first version's "not a bypass" reasoning was wrong, and says so.
@@ -593,8 +661,39 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: pending the musl and `ffi-e2e` lanes.**',
+      '**The shipped images pass: the lanes are green on the previous revision and re-run on this one; the nested layout is model-tested only.**',
     );
+    expect(amendment).toContain('**the nested layout: model-tested only, no real-Docker CI leg**');
+    expect(amendment).toContain(
+      'the nested layout is model-tested only, with no real-Docker CI leg',
+    );
+    // The evidence is cited: the previous head and the runs that passed on it.
+    expect(amendment).toContain('6be5939867e0d08d87fc952c0bd982e3f0f76d02');
+    expect(amendment).toContain('actions/runs/44882665743');
+    expect(amendment).toContain('actions/runs/44882665667');
+    // The sticky argument is dropped, and the refusal is justified as the conservative reading.
+    expect(amendment).not.toContain('the sticky bit stops deleting what someone else owns');
+    expect(amendment).toContain('`rename` is restricted like `unlink`');
+    expect(amendment).toContain("what OpenSSH's `StrictModes` does");
+    // The residual names the capability class, /proc/self/mem and the user namespace that is the real gap.
+    for (const cap of ['CAP_CHOWN', 'CAP_SETUID', 'CAP_SYS_ADMIN', 'CAP_SYS_PTRACE', 'CAP_MKNOD']) {
+      expect(amendment, cap).toContain(`\`${cap}\``);
+    }
+    expect(amendment).toContain('`/proc/self/mem`');
+    expect(amendment).toContain('One the attacker makes for itself gains nothing');
+    expect(amendment).toContain('`hostUsers: false`');
+    expect(amendment).toContain('pod_hardening.go');
+    expect(amendment).toContain(
+      'A volume shared with a sidecar or writable through an `fsGroup` is refused unless root owns',
+    );
+    expect(amendment).toMatch(/the directory beside the executable must be its own real path/i);
+    // Option (g): the two things directory-descriptor anchoring alone never closed.
+    expect(amendment).toContain('never closed the first lookup');
+    expect(amendment).toContain('the old-tree repoint');
+    // The numbering in the status paragraph matches the nine items of the Decision.
+    expect(amendment).toContain('all nine items of the Decision');
+    expect(amendment).not.toContain('items 1 to 5, 7 and 8');
+    expect(amendment.match(/ \d\. \*\*/g)?.length).toBe(9);
     expect(amendment).toMatch(/nested \(monorepo\) standalone image did not/);
     expect(amendment).toContain('RUN chmod go-w');
     // Not Accepted, and why: the lane that proves the images pass has not run on this revision.
@@ -615,7 +714,9 @@ describe('docs — in-process Rust page', () => {
     const d14 = adr.slice(adr.indexOf('### D14.'), adr.indexOf('### D15.')).replace(/\s+/g, ' ');
     expect(d14).toContain('Amendment 1');
     expect(d14).toContain('--chown=0:0 --chmod=a-w');
-    expect(d14).toContain('RUN chmod go-w /app /app/.next /app/.next/standalone');
+    expect(d14).toContain(
+      'RUN chmod go-w /app /app/.next /app/.next/standalone /app/.next/standalone/native',
+    );
     expect(d14).toContain('up to `/`');
     const d16 = adr.slice(adr.indexOf('### D16.'), adr.indexOf('### D17.')).replace(/\s+/g, ' ');
     expect(d16).toContain('Amendment 1');
@@ -623,6 +724,11 @@ describe('docs — in-process Rust page', () => {
     expect(d16).toContain('the FFI loader judges');
     expect(d16).toContain(
       'the sharp shim in the vinext image hashes by path and does not judge owner or mode',
+    );
+    // D18 lists the image chmod line among the Rust-specific things core contains.
+    const d18 = adr.slice(adr.indexOf('### D18.'), adr.indexOf('### D19.')).replace(/\s+/g, ' ');
+    expect(d18).toContain(
+      'the `RUN chmod go-w` line that closes `native/` and the directories above the executable',
     );
     // D13 points at it instead of carrying a bold paragraph of its own.
     const d13 = adr.slice(adr.indexOf('### D13.'), adr.indexOf('### D14.')).replace(/\s+/g, ' ');

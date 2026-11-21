@@ -148,8 +148,29 @@ const IMAGE = [
     id: 'I14',
     subject: 'image',
     claim: 'the nested chmod leaves out the tracing-root prefix directories (apps, apps/web)',
-    anchor: '        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested].join(" ")}`;',
-    replacement: '        return `RUN chmod go-w ${FFI_ANCESTOR_DIRS.join(" ")}`;',
+    anchor:
+      '        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested, `${STANDALONE}/${prefix}native`].join(" ")}`;',
+    replacement:
+      '        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, `${STANDALONE}/${prefix}native`].join(" ")}`;',
+  },
+  {
+    id: 'I15',
+    subject: 'image',
+    claim:
+      'the nested chmod leaves out native/ itself (it depends on the mode the builder gives a COPY destination)',
+    anchor:
+      '        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested, `${STANDALONE}/${prefix}native`].join(" ")}`;',
+    replacement: '        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested].join(" ")}`;',
+  },
+  {
+    id: 'I16',
+    subject: 'image',
+    claim:
+      'the flat chmod leaves out native/ itself (it depends on the mode the builder gives a COPY destination)',
+    anchor:
+      'export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, `${STANDALONE}/native`].join(" ")}`;',
+    replacement:
+      'export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${FFI_ANCESTOR_DIRS.join(" ")}`;',
   },
 ];
 

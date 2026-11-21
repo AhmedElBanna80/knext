@@ -125,3 +125,54 @@ describe('the knext-ffi revision this package records (package.json knextFfi.cra
     expect(r.status, `${rev} has no crates/knext-ffi/Cargo.toml`).toBe(0);
   });
 });
+
+describe('knext ffi init: a vinext app carries its own Dockerfile, which init does not edit, so it says what to add', () => {
+  // The scaffolded vinext x bun Dockerfile is the app's own file, not one the build stages, so the
+  // line that closes /app and /app/native has to be added by the app's owner.
+  const VINEXT_DOCKERFILE = join(PKG_DIR, '..', 'kn-next', 'templates', 'app', 'Dockerfile.hbs');
+  const LINE = 'RUN chmod go-w /app /app/native';
+
+  const init = (dockerfile?: string) => {
+    const cwd = emptyDir('init-vinext');
+    if (dockerfile !== undefined) writeFileSync(join(cwd, 'Dockerfile'), dockerfile);
+    const c = capture();
+    expect(runInit({ cwd, io: c.io, crateRev: REV }), c.err()).toBe(0);
+    return { cwd, out: c.out() };
+  };
+
+  it('prints the line, and where it goes, for the Dockerfile a vinext app is scaffolded with, and leaves the file alone', () => {
+    const text = readFileSync(VINEXT_DOCKERFILE, 'utf8');
+    expect(text).not.toContain(LINE); // the template does not carry it: that is why init says so
+    const { cwd, out } = init(text);
+    expect(out).toContain(LINE);
+    expect(out).toContain('after the `COPY` that brings native/ in');
+    expect(out).toContain('before `USER`');
+    expect(out).toContain('knext ffi generate'); // the rest of the output is still there
+    expect(readFileSync(join(cwd, 'Dockerfile'), 'utf8')).toBe(text);
+  });
+
+  it('names the directories it closes and why, so the line is not cargo-culted', () => {
+    const { out } = init(readFileSync(VINEXT_DOCKERFILE, 'utf8'));
+    expect(out).toContain('every directory above the library is owned by root');
+    expect(out).toContain('/app and /app/native');
+  });
+
+  it('says nothing about it when the Dockerfile already has the line', () => {
+    const text = readFileSync(VINEXT_DOCKERFILE, 'utf8').replace(
+      /^COPY --chown=0:0 --chmod=a-w native \/app\/native$/m,
+      `$&\n${LINE}`,
+    );
+    expect(text).toContain(LINE);
+    expect(init(text).out).not.toContain('chmod go-w');
+  });
+
+  it('says nothing about it for an app with no Dockerfile (a standalone app is built from a Dockerfile knext stages, with the line in it)', () => {
+    expect(init().out).not.toContain('chmod go-w');
+  });
+
+  it('says nothing about it for a Dockerfile that does not copy native/ to /app/native', () => {
+    expect(init('FROM scratch\nCOPY server /app/server\nUSER 65532:65532\n').out).not.toContain(
+      'chmod go-w',
+    );
+  });
+});

@@ -88,13 +88,6 @@ COPY .output/public /app/.output/public
 # against a path swap, not against a write into it).
 COPY --chown=0:0 --chmod=a-w native /app/native
 
-# In-process Rust (`@getknext/ffi`): the loader refuses a library unless every directory from it
-# up to / is owned by root and closed to group and other, and the way up passes through /app and
-# /app/native. BuildKit leaves WORKDIR and a directory COPY's destination 0755 and root's (measured,
-# not promised), so close both here rather than rest on it. Runs as root, before USER below. For an
-# app without `knext.ffi.json` it changes nothing: both are already 0755 and root's.
-RUN chmod go-w /app /app/native
-
 # Fail here rather than at the first `/_next/image` request. Without the manifest
 # the binary still runs, warns, and loads the addon UNVERIFIED (older images must
 # not brick) — which is a state to catch at build time, not to discover in a log.

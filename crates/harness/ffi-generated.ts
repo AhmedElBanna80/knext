@@ -18,7 +18,10 @@
 //            so this mode needs root or passwordless sudo), with four controls
 //            that show the loader's walk is live:
 //              1. the same tree made as the running user, under the sticky /tmp,
-//                 is refused, and /tmp itself is listed with its mode (1777);
+//                 is refused, /tmp itself is listed with its mode (1777), and
+//                 the temp directory this run made is listed as owned by the
+//                 running user (when that is not root), so a walk that judged
+//                 modes alone would still go red;
 //              2. the root-owned tree reached through a link is refused for the
 //                 link;
 //              3. the root-owned tree with the directory above the one native/
@@ -29,7 +32,12 @@
 //            Then call through the generated module: scalars, strings, bytes,
 //            records with 64-bit fields, enums, Option/Vec, Err, a panic, and
 //            the non-finite float rule in every JSON position (refused by the
-//            wrapper on the way out, by Rust on the way back)
+//            wrapper on the way out, by Rust on the way back).
+//            With KNEXT_FFI_HARNESS_MUTATE=W01|W02|W04 the rendered loader is
+//            weakened in memory (the walk above the executable's directory, its
+//            last step to /, the sticky exemption), only the four controls run,
+//            and the run must fail; ffi-generated-red.ts requires exactly that
+//            and the controls each weakening turns red.
 //   init     `knext ffi init` with the knext-ffi revision this @getknext/ffi
 //            records, the written Cargo.toml checked for the exact git+rev
 //            line, then `knext ffi generate` builds that crate AS WRITTEN (cargo
@@ -37,7 +45,7 @@
 //            passes, sees a drifted wrapper, and the generated module calls the
 //            development build.
 
-import { spawnSync } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   appendFileSync,
@@ -62,6 +70,7 @@ import { runGenerate } from '../../packages/ffi/src/generate';
 import { CRATE_GIT, recordedCrateRev, runInit } from '../../packages/ffi/src/init';
 import { scanManifest } from '../../packages/ffi/src/manifest';
 import { libNameOf, renderModule } from '../../packages/ffi/src/render';
+import { weaken } from './loader-weakenings';
 import { assertRevOnBase, localCrateSourceEnv } from './local-crates-source';
 
 const HARNESS_ERROR = 10;
@@ -301,31 +310,78 @@ const replacer = (_k, v) => (typeof v === 'bigint' ? v.toString() + 'n' : v inst
 console.log('RESULT ' + JSON.stringify(result, replacer));
 `;
 
-/** Run `body` in a fresh Bun process (the module caches its first load) under react-server. */
+/** The Bun children running now, so an interrupt can stop them before it cleans up. */
+const children = new Set<ChildProcess>();
+
+/**
+ * Run `body` in a fresh Bun process (the module caches its first load) under react-server.
+ * Asynchronous on purpose: a synchronous spawn blocks the event loop, so SIGINT and SIGTERM would
+ * wait for the child (up to two minutes) before the handler below could clean up.
+ */
 function inBun(
   dir: string,
   // biome-ignore lint/suspicious/noExplicitAny: the body runs in another process, untyped.
   body: (m: any, c: (f: () => unknown) => unknown) => unknown,
   env: Record<string, string>,
-): unknown {
+): Promise<unknown> {
   writeFileSync(join(dir, 'child.ts'), CHILD);
-  const r = spawnSync(process.execPath, ['--conditions=react-server', 'child.ts'], {
-    cwd: dir,
-    encoding: 'utf8',
-    env: { ...process.env, NEXT_PHASE: '', BODY: body.toString(), ...env },
-    timeout: 120_000,
+  return new Promise((settle) => {
+    const child = spawn(process.execPath, ['--conditions=react-server', 'child.ts'], {
+      cwd: dir,
+      env: { ...process.env, NEXT_PHASE: '', BODY: body.toString(), ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    children.add(child);
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.setEncoding('utf8').on('data', (d: string) => {
+      stdout += d;
+    });
+    child.stderr?.setEncoding('utf8').on('data', (d: string) => {
+      stderr += d;
+    });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 120_000);
+    const done = (status: number | null, why: string) => {
+      clearTimeout(timer);
+      children.delete(child);
+      const line = stdout.split('\n').find((l) => l.startsWith('RESULT '));
+      if (status !== 0 || line === undefined) {
+        check(false, `the child process failed (${why}):\n${stdout}\n${stderr}`);
+        settle(undefined);
+        return;
+      }
+      settle(JSON.parse(line.slice(7)));
+    };
+    child.on('error', (e) => done(null, `could not start: ${e.message}`));
+    child.on('close', (status, signal) =>
+      done(status, `exit ${status}${signal ? `, ${signal}` : ''}`),
+    );
   });
-  const line = r.stdout.split('\n').find((l) => l.startsWith('RESULT '));
-  if (r.status !== 0 || line === undefined) {
-    check(false, `the child process failed (exit ${r.status}):\n${r.stdout}\n${r.stderr}`);
-    return undefined;
+}
+
+// ---- the weakened loaders the red check applies -----------------------------------
+
+/**
+ * KNEXT_FFI_HARNESS_MUTATE=<id>: weaken the rendered loader in memory (loader-weakenings.ts), so the
+ * controls below can be shown to go red when the loader's walk is weakened
+ * (ffi-generated-red.ts). The anchor must occur exactly once in the rendered text, or the run stops:
+ * an edit that silently changed nothing would prove nothing.
+ */
+const mutating = process.env.KNEXT_FFI_HARNESS_MUTATE;
+
+function renderLoader(manifest: ReturnType<typeof scanManifest>, libName: string): string {
+  const text = renderModule(manifest, { libName, crate: 'rust' });
+  if (mutating === undefined) return text;
+  try {
+    return weaken(text, mutating);
+  } catch (e) {
+    return die(e instanceof Error ? e.message : String(e));
   }
-  return JSON.parse(line.slice(7));
 }
 
 // ---- wrapper: the fixture library ---------------------------------------------------
 
-function wrapper(libPath: string): void {
+async function wrapper(libPath: string): Promise<void> {
   if (!existsSync(libPath)) die(`${libPath} does not exist (build the fixture first)`);
   const libName = libNameOf(basename(libPath));
   if (libName === undefined) die(`${basename(libPath)} is not lib<name>.so/.dylib`);
@@ -357,10 +413,7 @@ function wrapper(libPath: string): void {
   const dir = tempDir('wrapper');
   app(dir);
   mkdirSync(join(dir, 'src', 'generated', 'ffi'), { recursive: true });
-  writeFileSync(
-    join(dir, 'src', 'generated', 'ffi', 'index.ts'),
-    renderModule(manifest, { libName, crate: 'rust' }),
-  );
+  writeFileSync(join(dir, 'src', 'generated', 'ffi', 'index.ts'), renderLoader(manifest, libName));
   const image = join(dir, 'image');
   const triple = hostTriple();
   const rel = `ffi/${triple}/${basename(libPath)}`;
@@ -405,25 +458,35 @@ function wrapper(libPath: string): void {
     );
   }
   const tmpLine = `\n  ${tmp} is writable by its group or by everyone (mode ${tmpBits.toString(8).padStart(4, '0')})`;
-  const refused = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+  // As a user that is not root, the temp directory this run made is also this user's, which a walk
+  // that judged modes alone (it is 0700) would not list. As root it is root's, and is not listed.
+  const uid = process.getuid?.();
+  const ownLine = `\n  ${dir} is owned by uid ${uid}, but only root may own it`;
+  const refused = (await inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
     FAKE_EXEC: join(image, 'server'),
     NODE_ENV: 'production',
-  }) as { cls?: string; message?: string } | undefined;
+  })) as { cls?: string; message?: string } | undefined;
   if (refused !== undefined) {
     same(
       refused.cls,
       'FfiLoadError',
-      'a native/ this user owns, under the temp directory, is refused',
+      'control 1: a native/ this user owns, under the temp directory, is refused',
     );
     check(
       (refused.message ?? '').includes(tmpLine),
-      `the refusal names the temp directory ${tmp} with its mode (the sticky bit is no excuse), so the walk reaches above the executable's directory: ${refused.message}`,
+      `control 1: the refusal names the temp directory ${tmp} with its mode (the sticky bit is no excuse), so the walk reaches above the executable's directory: ${refused.message}`,
     );
+    if (uid !== undefined && uid !== 0) {
+      check(
+        (refused.message ?? '').includes(ownLine),
+        `control 1: the refusal names ${dir} as owned by uid ${uid}, so the walk judges the owner as well as the mode: ${refused.message}`,
+      );
+    }
     check(
       (refused.message ?? '').includes(
-        'install the executable under a root-owned directory such as /opt/<app>',
+        'move the install under a root-owned, closed directory such as /opt/<app> instead',
       ),
-      `the refusal tells the reader to move the install, since the temp directory is shared: ${refused.message}`,
+      `control 1: the refusal tells the reader to move the install, since the temp directory is shared: ${refused.message}`,
     );
   }
 
@@ -436,15 +499,15 @@ function wrapper(libPath: string): void {
   // by its real path (the load below).
   const link = join(dirname(rootImage), 'image-link');
   asRoot(['ln', '-s', rootImage, link]);
-  const viaLink = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+  const viaLink = (await inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
     FAKE_EXEC: join(link, 'server'),
     NODE_ENV: 'production',
-  }) as { cls?: string; message?: string } | undefined;
+  })) as { cls?: string; message?: string } | undefined;
   if (viaLink !== undefined) {
-    same(viaLink.cls, 'FfiLoadError', 'a good tree reached through a link is refused');
+    same(viaLink.cls, 'FfiLoadError', 'control 2: a good tree reached through a link is refused');
     check(
       /is not the real path of its directory/.test(viaLink.message ?? ''),
-      `the refusal says the link is the problem: ${viaLink.message}`,
+      `control 2: the refusal says the link is the problem: ${viaLink.message}`,
     );
   }
 
@@ -454,48 +517,61 @@ function wrapper(libPath: string): void {
   // nothing else in an image whose every other directory is root's and closed. Restored at once.
   const stage = dirname(rootImage);
   asRoot(['chmod', 'g+w', stage]);
-  const open = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+  const open = (await inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
     FAKE_EXEC: join(rootImage, 'server'),
     NODE_ENV: 'production',
-  }) as { cls?: string; message?: string } | undefined;
+  })) as { cls?: string; message?: string } | undefined;
   asRoot(['chmod', 'g-w', stage]);
   if (open !== undefined) {
-    same(open.cls, 'FfiLoadError', 'a group-writable directory above native/ is refused');
+    same(
+      open.cls,
+      'FfiLoadError',
+      'control 3: a group-writable directory above native/ is refused',
+    );
     const message = open.message ?? '';
     same(
       message.split('\n').filter((l) => l.startsWith('  ')),
       [`  ${stage} is writable by its group or by everyone (mode 0775)`],
-      'exactly one directory is listed: the group-writable one above the executable, with its mode',
+      'control 3: exactly one directory is listed: the group-writable one above the executable, with its mode',
     );
     check(
       message.includes('1 directory on the way to it cannot be trusted'),
-      `the refusal counts one directory: ${message}`,
+      `control 3: the refusal counts one directory: ${message}`,
     );
+    // Not sticky and not world-writable, so it may be the app's own (a prefix directory of the
+    // image) or shared: it is told both, each with its condition, never the move alone.
     check(
-      message.includes('install the executable under a root-owned directory such as /opt/<app>') &&
-        !/chmod|chown/.test(message),
-      `the advice for a directory above the executable is to move the install, never chmod or chown: ${message}`,
+      message.includes("if it is part of your app's install, run `chmod go-w <dir>`") &&
+        message.includes(
+          'if it is shared with other software, do not change it, move the install instead',
+        ) &&
+        message.includes('The executable needs a directory of its own') &&
+        !message.includes('A sticky or world-writable directory above the executable'),
+      `control 3: the advice for a group-writable directory above the executable is both pieces, each with its condition: ${message}`,
     );
   }
 
   // Control 4. The same tree with the root directory alone answering 0775: refused, with / the
   // only directory listed. Every real directory above native/ is root's and closed, so only a walk
   // that goes all the way up and judges the root directory itself can name it.
-  const atRoot = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+  const atRoot = (await inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
     FAKE_EXEC: join(rootImage, 'server'),
     FAKE_ROOT_MODE: String(0o775),
     NODE_ENV: 'production',
-  }) as { cls?: string; message?: string } | undefined;
+  })) as { cls?: string; message?: string } | undefined;
   if (atRoot !== undefined) {
-    same(atRoot.cls, 'FfiLoadError', 'a group-writable root directory is refused');
+    same(atRoot.cls, 'FfiLoadError', 'control 4: a group-writable root directory is refused');
     same(
       (atRoot.message ?? '').split('\n').filter((l) => l.startsWith('  ')),
       ['  / is writable by its group or by everyone (mode 0775)'],
-      'exactly one directory is listed: the root directory, with its mode',
+      'control 4: exactly one directory is listed: the root directory, with its mode',
     );
   }
 
-  const result = inBun(
+  // A weakened loader (KNEXT_FFI_HARNESS_MUTATE) is judged by the four controls alone.
+  if (mutating !== undefined) return;
+
+  const result = (await inBun(
     dir,
     (m, c) => {
       const two = (n: number) => BigInt(2) ** BigInt(n);
@@ -551,15 +627,15 @@ function wrapper(libPath: string): void {
       };
     },
     { FAKE_EXEC: join(rootImage, 'server'), NODE_ENV: 'production' },
-  ) as Record<string, unknown> | undefined;
+  )) as Record<string, unknown> | undefined;
   if (result === undefined) return;
 
   // Integer arguments (bun:ffi corrupts some: a double to an i32 arrives as 0,
   // and only the low 32 bits cross): every width, through the real library.
-  const integers = inBun(dir, integerMatrix, {
+  const integers = (await inBun(dir, integerMatrix, {
     FAKE_EXEC: join(rootImage, 'server'),
     NODE_ENV: 'production',
-  }) as { cases: number; problems: string[] } | undefined;
+  })) as { cases: number; problems: string[] } | undefined;
   if (integers !== undefined) {
     check(integers.cases > 150, `the integer matrix ran only ${integers.cases} case(s)`);
     same(integers.problems, [], 'every integer argument is validated before the native call');
@@ -687,7 +763,7 @@ async function init(): Promise<void> {
   check(err.includes('out of date'), `knext ffi check names the drift: ${err}`);
   same(await runGenerate({ cwd: dir, io }), 0, 'knext ffi generate repairs it');
 
-  const greeting = inBun(dir, (m) => m.greet('World'), { NODE_ENV: 'development' });
+  const greeting = await inBun(dir, (m) => m.greet('World'), { NODE_ENV: 'development' });
   same(greeting, 'Hello, World!', 'the starter greet() through the generated module');
 }
 
@@ -701,12 +777,17 @@ function finish(): never {
   process.exit(0);
 }
 
-// An interrupted run still removes what it staged as root (cleanup() never throws).
+// An interrupted run stops its children and still removes what it staged as root (cleanup() never
+// throws). The children are spawned asynchronously (inBun), so the event loop is free and these
+// handlers run at once while one is working. They cannot run inside the short synchronous commands
+// (the `sudo` that stages the tree, cargo in `init`): there the signal is handled when the call
+// returns.
 for (const [sig, code] of [
   ['SIGINT', 130],
   ['SIGTERM', 143],
 ] as const) {
   process.on(sig, () => {
+    for (const child of children) child.kill('SIGKILL');
     cleanup();
     process.exit(code);
   });
@@ -714,7 +795,7 @@ for (const [sig, code] of [
 
 const [mode, arg] = process.argv.slice(2);
 try {
-  if (mode === 'wrapper' && arg !== undefined) wrapper(resolve(arg));
+  if (mode === 'wrapper' && arg !== undefined) await wrapper(resolve(arg));
   else if (mode === 'init') await init();
   else die('usage: bun crates/harness/ffi-generated.ts wrapper <lib> | init');
 } catch (e) {

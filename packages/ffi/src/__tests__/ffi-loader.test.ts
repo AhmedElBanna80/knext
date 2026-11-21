@@ -50,6 +50,7 @@ import {
   removeScratchDirs,
 } from './helpers';
 import { integerMatrix } from './integer-matrix';
+import { isCallOf, isStaticChoice, templateLiterals } from './template-scan';
 
 const FIXTURE_C = join(PKG_DIR, 'fixtures', 'abi-v1', 'fixture.c');
 const EXT = process.platform === 'darwin' ? 'dylib' : 'so';
@@ -1460,6 +1461,23 @@ describe('a whole-tree swap between the checks cannot change what passes (an att
     });
   });
 });
+/**
+ * The characters a refusal must never print as themselves: C0 controls (the message's own newlines
+ * excepted), DEL, C1 controls, and the line and paragraph separators.
+ */
+function rawControls(text: string): string[] {
+  return [...text].filter((ch) => {
+    const n = ch.codePointAt(0) as number;
+    return (
+      (n < 0x20 && n !== 0x0a) ||
+      n === 0x7f ||
+      (n >= 0x80 && n <= 0x9f) ||
+      n === 0x2028 ||
+      n === 0x2029
+    );
+  });
+}
+
 describe('the library is refused unless only root can write it and own the way to it (a hash of bytes someone else can still change binds nothing)', () => {
   const nativeOf = (exe: string) => join(exe, '..', 'native');
   /** The library's directories, deepest first, then the one native/ sits in (beside the executable). */
@@ -1694,67 +1712,126 @@ describe('the library is refused unless only root can write it and own the way t
       expect(text).toContain('1 directory on the way to it cannot be trusted');
     });
 
-    // The advice follows the directory. One at or below the executable's own directory is the app's
-    // to fix in place; one above it, or a sticky or world-writable one (a /tmp), is shared with
-    // everything else on the host, and `chmod go-w /tmp` would break it.
-    const FIX_IN_PLACE = 'To fix the directories at or below the executable';
-    const MOVE = 'install the executable under a root-owned directory such as /opt/<app>';
+    // The advice follows the situation, not the position. A directory inside native/ is the app's
+    // to fix in place. A sticky or world-writable directory above the executable's own directory
+    // is shared with other software (a /tmp), and `chmod go-w /tmp` would break the host. Any other
+    // failing directory (the executable's own, or one above it) is either part of the app's install
+    // or shared, which the loader cannot tell, so it is told both, each with its condition.
+    const FIX = 'To fix a directory inside native/: run `chmod go-w <dir>`';
+    const EITHER =
+      "A directory that holds the executable or sits above it: if it is part of your app's install,";
+    const SHARED_IF =
+      'if it is shared with other software, do not change it, move the install instead';
+    const OWN_DIR =
+      'The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.';
+    const MOVE =
+      "A sticky or world-writable directory above the executable's directory is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.";
+    const count = (text: string, part: string) => text.split(part).length - 1;
 
-    it("a directory at or below the executable's directory gets the fix in place: chmod go-w, chown root, a Dockerfile RUN; never the file COPY flags", () => {
+    it('a directory inside native/ always gets the fix in place: chmod go-w, chown root, a Dockerfile RUN; never the file COPY flags, never the move', () => {
       const exe = image();
-      for (const dir of dirsOf(exe)) {
-        const text = message(load(exe, { modes: { [dir]: 0o775 } }));
-        expect(text).toContain(FIX_IN_PLACE);
+      for (const dir of dirsOf(exe).slice(0, 3)) {
+        // Group-writable, world-writable and sticky: inside native/ none of them is shared.
+        for (const bits of [0o775, 0o777, 0o1777]) {
+          const text = message(load(exe, { modes: { [dir]: bits } }));
+          expect(text, `mode ${bits.toString(8)} at ${dir}`).toContain(FIX);
+          expect(text).toContain('`chown root <dir>`');
+          expect(text).toContain('`RUN chmod go-w <dir>`');
+          expect(text).toContain("a directory inside a copied tree keeps the build host's mode");
+          expect(text).toContain('could be renamed or replaced after it was checked');
+          expect(text).not.toContain(EITHER);
+          expect(text).not.toContain(MOVE);
+          expect(text).not.toContain('COPY --chown');
+          expect(text).not.toContain('its bytes could change');
+        }
+      }
+    });
+
+    it("the executable's own directory gets both pieces of advice, each with its condition: chmod 777 /app, a group-writable /usr/local/bin (root:staff 2775), an /opt/myapp the deploy user owns", () => {
+      const exe = image();
+      const home = dirsOf(exe)[3] as string;
+      for (const bad of [
+        { modes: { [home]: 0o777 } }, // chmod 777 /app
+        { modes: { [home]: 0o2775 } }, // /usr/local/bin as root:staff
+        { modes: { [home]: 0o1777 } }, // the app was dropped into a /tmp: the app tree, so conditional
+        { at: { [home]: 1000 } }, // /opt/myapp owned by the deploy user
+      ]) {
+        const text = message(load(exe, bad));
+        expect(text).toContain(EITHER);
         expect(text).toContain('`chmod go-w <dir>`');
         expect(text).toContain('`chown root <dir>`');
         expect(text).toContain('`RUN chmod go-w <dir>`');
-        expect(text).toContain("a directory inside a copied tree keeps the build host's mode");
-        expect(text).toContain('could be renamed or replaced after it was checked');
-        // Nothing here is shared, so nothing tells the reader to leave a directory alone.
+        expect(text).toContain(SHARED_IF);
+        expect(text).toContain(OWN_DIR);
         expect(text).not.toContain(MOVE);
+        expect(text).not.toContain(FIX);
         expect(text).not.toContain('COPY --chown');
-        expect(text).not.toContain('its bytes could change');
       }
     });
 
-    it("a directory above the executable's directory is never offered chmod or chown: the advice is to move the install under a root-owned directory such as /opt/<app>", () => {
+    it('a directory above the executable that is not sticky or world-writable gets both pieces too: the nested prefix directories (/app/.next), a root:staff /usr/local, an /opt/myapp above the executable', () => {
       const exe = image();
       for (const dir of aboveOf(exe)) {
-        for (const bad of [{ modes: { [dir]: 0o775 } }, { at: { [dir]: 1000 } }]) {
+        for (const bad of [
+          { modes: { [dir]: 0o775 } },
+          { modes: { [dir]: 0o2775 } },
+          { at: { [dir]: 1000 } },
+        ]) {
           const text = message(load(exe, bad));
-          expect(text).toContain(MOVE);
-          expect(text).not.toContain('chmod');
-          expect(text).not.toContain('chown');
-          expect(text).not.toContain(FIX_IN_PLACE);
-          expect(text).not.toContain('COPY --chown');
+          expect(text).toContain(EITHER);
+          // The Dockerfile line a build uses for a prefix directory, as the image stage emits it.
+          expect(text).toContain('`RUN chmod go-w <dir>`');
+          expect(text).toContain(SHARED_IF);
+          expect(text).toContain(OWN_DIR);
+          expect(text).not.toContain(MOVE);
+          expect(text).not.toContain(FIX);
         }
       }
     });
 
-    it("a sticky or world-writable directory is never offered chmod or chown either, wherever it is: a shared directory is not the app's to change", () => {
-      for (const bits of [0o1777, 0o777, 0o757, 0o1775]) {
+    it('a sticky or world-writable directory above the executable is only ever told to move the install: a shared directory is not the app to change', () => {
+      for (const bits of [0o1777, 0o777, 0o757, 0o1775, 0o2777]) {
         const exe = image();
-        // The executable's own directory (a /tmp the app was dropped into), and one below it.
-        for (const dir of [dirsOf(exe)[3], dirsOf(exe)[1]] as string[]) {
+        for (const dir of aboveOf(exe)) {
           const text = message(load(exe, { modes: { [dir]: bits } }));
           expect(text, `mode ${bits.toString(8)} at ${dir}`).toContain(MOVE);
-          expect(text).not.toContain('chmod');
-          expect(text).not.toContain('chown');
+          expect(text).not.toContain(EITHER);
+          expect(text).not.toContain(FIX);
+          expect(text).not.toContain(SHARED_IF);
         }
       }
     });
 
-    it("a mix gets both: the fix in place for the app's own directory, the move for the shared one, each said once", () => {
+    it('each piece of advice is said once however many directories need it; a mix gets exactly the pieces its directories call for', () => {
       const exe = image();
-      const text = message(
+      const [libDir, , nativeDir, home] = dirsOf(exe) as string[];
+      const [parent, grand] = aboveOf(exe) as string[];
+      // inside native/ + shared above: the fix in place and the move, nothing conditional.
+      let text = message(
+        load(exe, { modes: { [libDir as string]: 0o775, [grand as string]: 0o1777 } }),
+      );
+      expect(count(text, FIX)).toBe(1);
+      expect(count(text, MOVE)).toBe(1);
+      expect(text).not.toContain(EITHER);
+      // inside native/ + the executable's directory + shared above: all three, once each.
+      text = message(
         load(exe, {
-          modes: { [dirsOf(exe)[0] as string]: 0o775, [aboveOf(exe)[0] as string]: 0o1777 },
+          modes: {
+            [nativeDir as string]: 0o775,
+            [home as string]: 0o775,
+            [parent as string]: 0o777,
+          },
         }),
       );
-      expect(text).toContain('2 directories on the way to it cannot be trusted');
-      expect(text.split(FIX_IN_PLACE).length - 1).toBe(1);
-      expect(text.split(MOVE).length - 1).toBe(1);
-      expect(text).toContain('`chmod go-w <dir>`');
+      expect(text).toContain('3 directories on the way to it cannot be trusted');
+      expect(count(text, FIX)).toBe(1);
+      expect(count(text, EITHER)).toBe(1);
+      expect(count(text, MOVE)).toBe(1);
+      // two of the conditional kind: one sentence, not two.
+      text = message(load(exe, { modes: { [home as string]: 0o775, [parent as string]: 0o775 } }));
+      expect(count(text, EITHER)).toBe(1);
+      expect(text).not.toContain(FIX);
+      expect(text).not.toContain(MOVE);
     });
 
     it('a file refusal keeps the file hint (COPY --chown=0:0 --chmod=a-w) and does not talk about directories', () => {
@@ -1840,6 +1917,57 @@ describe('the library is refused unless only root can write it and own the way t
       expect(t2).toContain('q^I^[^?');
       expect([...t2].some((ch) => '\t\u001b\u007f'.includes(ch))).toBe(false);
     });
+
+    it('C1 controls and the line and paragraph separators in a directory name are shown too, never printed raw', () => {
+      const exe = image();
+      const odd = join(emptyDir('weird3'), 'x\u0085y\u2028z\u2029w');
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      chmodSync(join(odd, 'x'), 0o775);
+      const text = message(load(join(odd, 'x', 'server')));
+      expect(text).toContain('x\\u0085y\\u2028z\\u2029w');
+      expect(rawControls(text)).toEqual([]);
+    });
+
+    it('the other printed paths are shown escaped too: the platform directories it found, the manifest it could not read, and the file it could not open', () => {
+      // The directories under native/ffi/ it names when none is for this platform.
+      const wrongPlatform = image({ triple: 'zz\u2028q\u0085r\ns' });
+      const [first] = load(wrongPlatform).result as { message: string }[];
+      expect(first?.message).toContain('holds Rust libraries for zz\\u2028q\\u0085r^Js');
+      expect(rawControls(first?.message ?? '')).toEqual([]);
+
+      // A manifest whose version is a string with C1 and separator characters in it: what the
+      // refusal quotes of it is JSON.stringify's output, which prints those raw.
+      const exe = image({ seal: false });
+      writeFileSync(
+        join(exe, '..', 'native', '.integrity.json'),
+        JSON.stringify({ version: 'a\u0085b\u2028c', files: {} }),
+      );
+      sealImage(exe);
+      const [unreadable] = load(exe).result as { message: string }[];
+      const text = unreadable?.message ?? '';
+      expect(text).toContain('cannot read');
+      expect(text).toContain('unsupported version "a\\u0085b\\u2028c"');
+      expect(rawControls(text)).toEqual([]);
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      'a file that cannot be opened is refused with its path shown escaped, in the message and in the system error it quotes',
+      () => {
+        const exe = image();
+        const odd = join(emptyDir('weird4'), 'q\u0085\u2028z');
+        mkdirSync(odd);
+        renameSync(join(exe, '..'), `${odd}/x`);
+        const moved = join(odd, 'x', 'server');
+        // Mode 000 on the manifest: not readable by anyone but root, so the open itself fails and
+        // the system's own message (which quotes the path) is what the refusal repeats.
+        chmodSync(join(odd, 'x', 'native', '.integrity.json'), 0o000);
+        const [first] = load(moved).result as { message: string }[];
+        expect(first?.message).toContain('cannot open');
+        expect(first?.message).toContain('q\\u0085\\u2028z');
+        expect(rawControls(first?.message ?? '')).toEqual([]);
+      },
+    );
   });
 
   describe("a link at or above the executable's directory is refused, never followed (the real target is a good tree that loads by its real path)", () => {
@@ -2093,6 +2221,72 @@ describe('the library is refused unless only root can write it and own the way t
     // Root running the tests owns the staged tree as uid 0, which is exactly what the rule accepts.
     if (uid === 0) loaded(r);
     else refused(r, new RegExp(`is owned by uid ${uid}, but only root may own it`));
+  });
+});
+
+describe('every path and system error a refusal prints goes through $show (a scan of the generated module, so a new message cannot forget it)', () => {
+  /** What a message may interpolate without $show: numbers, modes, fixed text and the generated names. */
+  const norm = (e: string) => e.replace(/\s+/g, ' ').trim();
+  const SAFE = new Set(
+    [
+      'fn', // a Rust function name the generator validated
+      'ms.toFixed(1)',
+      '$slowMs',
+      'JSON.stringify(raw)', // the KNEXT_FFI_SLOW_CALL_MS value, JSON-quoted, not a path
+      'process.version',
+      'process.platform',
+      'process.arch',
+      'triple', // from process.arch and the C library, never from the file system
+      'file', // lib<name>.so: the name the generator validated
+      'rel', // ffi/<triple>/<file>
+      'symbol',
+      'actual', // a sha256 hex digest, or a schema number
+      'expected',
+      'st.uid',
+      'mode',
+      'why', // $why's text: numbers and a mode
+      'what', // 'the library', 'the integrity manifest'
+      'via', // built here from $show'd parts
+      'b', // one entry of the list of failing directories, each already $show'd
+      'lib.fd',
+      'bad.length',
+      "bad.length === 1 ? '1 directory' : `${bad.length} directories`",
+      "bad.map((b) => `  ${b}`).join('\\n')",
+      "tried.map((p) => `  ${$show(p)}`).join('\\n')", // every path tried, each $show'd
+      'status', // a number the library returned
+    ].map(norm),
+  );
+
+  const unescaped = (source: string) =>
+    templateLiterals(source)
+      .filter((t) => t.text.includes('knext ffi:'))
+      .flatMap((t) =>
+        t.exprs
+          .map(norm)
+          .filter((e) => !isCallOf(e, '$show') && !isStaticChoice(e) && !SAFE.has(e))
+          .map((e) => `line ${t.line}: \${${e}}`),
+      );
+
+  it('nothing in the loader interpolates a path, a system error or anything else it did not classify, unescaped', () => {
+    const source = renderModule(manifest, { libName: 'fixture', crate: 'rust' });
+    expect(unescaped(source)).toEqual([]);
+  });
+
+  it('the scan sees what it is meant to: a bare path, a bare error message and a call that only starts with $show are all flagged', () => {
+    const bad = [
+      '`knext ffi: refusing to load ${path}`',
+      '`knext ffi: cannot read ${$show(path)} (${err instanceof Error ? err.message : String(err)})`',
+      '`knext ffi: ${$show(a) + b}`',
+      '`knext ffi: ${lib}: ${x ? `${dir}` : ""}`',
+    ].join('\n');
+    expect(unescaped(bad)).toEqual([
+      'line 1: ${path}',
+      'line 2: ${err instanceof Error ? err.message : String(err)}',
+      'line 3: ${$show(a) + b}',
+      'line 4: ${lib}',
+      'line 4: ${dir}',
+      'line 4: ${x ? `${dir}` : ""}',
+    ]);
   });
 });
 

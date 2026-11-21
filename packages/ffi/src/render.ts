@@ -87,9 +87,12 @@
  *   by the host user who started the container, who can write them whatever the
  *   app runs as inside, so "root owns it" says nothing about who on the host can
  *   write them, and running as a non-root user inside does not remove that
- *   writer. A pod with hostUsers: false: the files are owned by host root (an
- *   idmapped mount, or a per-pod uid range), so running as a non-root user inside
- *   restores the guarantee; an app that runs as uid 0 inside still owns the tree.
+ *   writer. A pod with hostUsers: false: the image's files belong to the pod's
+ *   own root, which is host root where the filesystem supports idmapped mounts
+ *   and otherwise the root of a uid range given to that pod alone (not host
+ *   root); no other user on the host owns or can write them either way, so
+ *   running as a non-root user inside restores the guarantee; an app that runs
+ *   as uid 0 inside still owns the tree.
  *   The operator's pods drop ALL capabilities, set allowPrivilegeEscalation:
  *   false and run as non-root unless spec.security.runAsNonRoot says otherwise,
  *   which removes the whole capability class and uid 0 from an app; a container
@@ -615,7 +618,7 @@ function $load(): void {
       err instanceof FfiLoadError
         ? err
         : new FfiLoadError(
-            \`knext ffi: could not load the Rust library: \${err instanceof Error ? err.message : String(err)}\`,
+            \`knext ffi: could not load the Rust library: \${$show(err instanceof Error ? err.message : String(err))}\`,
           );
     throw $failed;
   }
@@ -721,9 +724,9 @@ function $open(): void {
     const via =
       load === path
         ? ''
-        : \` (opened as \${load}\${load.startsWith('/proc/') ? ', which needs /proc mounted' : ''})\`;
+        : \` (opened as \${$show(load)}\${load.startsWith('/proc/') ? ', which needs /proc mounted' : ''})\`;
     throw new FfiLoadError(
-      \`knext ffi: could not load \${path}\${via}: \${err instanceof Error ? err.message : String(err)}\\n\` +
+      \`knext ffi: could not load \${$show(path)}\${via}: \${$show(err instanceof Error ? err.message : String(err))}\\n\` +
         'If the library does not export a function this module calls, the module is stale: run \`knext ffi generate\` and commit the result.',
     );
   }
@@ -734,7 +737,7 @@ function $open(): void {
     const actual = schema ? String(schema()) : 'missing';
     if (actual !== expected) {
       throw new FfiLoadError(
-        \`knext ffi: \${path} does not match this module: the records or enums \${fn}() uses have changed since it was generated (schema \${actual}, expected \${expected}). \` +
+        \`knext ffi: \${$show(path)} does not match this module: the records or enums \${fn}() uses have changed since it was generated (schema \${actual}, expected \${expected}). \` +
           'The module is stale: run \`knext ffi generate\` and commit the result.',
       );
     }
@@ -801,7 +804,7 @@ function $resolve(): readonly [string, string] {
   }
   if (others.length > 0) {
     throw new FfiLoadError(
-      \`knext ffi: \${$join(native, 'ffi')} holds Rust libraries for \${others.join(', ')}, but this process runs on \${triple}. Build the image for the platform it runs on.\`,
+      \`knext ffi: \${$show($join(native, 'ffi'))} holds Rust libraries for \${$show(others.join(', '))}, but this process runs on \${triple}. Build the image for the platform it runs on.\`,
     );
   }
   if (process.env['NODE_ENV'] !== 'production') {
@@ -812,7 +815,7 @@ function $resolve(): readonly [string, string] {
       .sort((a, b) => $statSync(b).mtimeMs - $statSync(a).mtimeMs);
     if (found[0] !== undefined) {
       console.warn(
-        \`knext ffi: loading the development build \${found[0]} without an integrity check (NODE_ENV is not "production").\`,
+        \`knext ffi: loading the development build \${$show(found[0])} without an integrity check (NODE_ENV is not "production").\`,
       );
       return [found[0], found[0]];
     }
@@ -883,15 +886,20 @@ function $upTo(dir: string): string[] {
 }
 
 /**
- * A path as a refusal prints it. A control character (a newline above all) in a directory name would
- * start a line of its own in the list of directories, which is read as one directory a line, so it is
- * shown in caret notation (a newline as ^J) and never printed as itself.
+ * A path, or a system error that quotes one, as a refusal prints it. A control character (a newline
+ * above all) in a directory name would start a line of its own in the list of directories, which is
+ * read as one directory a line. So a C0 control or DEL is shown in caret notation (a newline as ^J),
+ * and a C1 control or a line or paragraph separator (U+2028, U+2029: a line end to many terminals
+ * and log readers) as a unicode escape (u and four hex digits); none is ever printed as itself.
  */
 function $show(p: string): string {
   let out = '';
   for (const ch of p) {
     const n = ch.codePointAt(0) as number;
-    out += n < 0x20 || n === 0x7f ? \`^\${String.fromCharCode(n ^ 0x40)}\` : ch;
+    if (n < 0x20 || n === 0x7f) out += \`^\${String.fromCharCode(n ^ 0x40)}\`;
+    else if ((n >= 0x80 && n <= 0x9f) || n === 0x2028 || n === 0x2029) {
+      out += \`\\\\u\${n.toString(16).padStart(4, '0')}\`;
+    } else out += ch;
   }
   return out;
 }
@@ -922,10 +930,14 @@ function $show(p: string): string {
  * CAP_SYS_RAWIO, CAP_BPF), a second writable mount of the same files, an ACL, or a write to
  * /proc/self/mem, and none of that can be told apart from the real tree by any lookup.
  *
- * The advice follows the directory. One at or below the executable's own directory belongs to the
- * app, so the refusal says how to fix it in place. One above it, or a sticky or world-writable one
- * (a /tmp), is shared with everything else on the host, and changing its owner or mode would break
- * what else uses it: for those the refusal says to move the install under a root-owned directory.
+ * The advice follows the situation, not the position, because a directory above the executable can
+ * be the app's own (the prefix directories of a nested image, /app/.next) or shared (a /tmp, a
+ * root:staff /usr/local) and the loader cannot tell which. A directory inside native/ is always the
+ * app's: it is told how to fix it in place. A sticky or world-writable directory above the
+ * executable's own is shared with other software, and changing its owner or mode would break what
+ * else uses it: it is told only to move the install. Any other failing directory (the executable's
+ * own, or one above it) is told both, each with its condition (part of the app's install: fix it;
+ * shared: move), and that the executable needs a directory of its own.
  */
 function $sealed(native: string, rel: string, path: string): $Pin[] {
   const home = $dirname(native);
@@ -934,7 +946,7 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
     real = $realpathSync(home);
   } catch (err) {
     throw new FfiLoadError(
-      \`knext ffi: refusing to load \${$show(path)}: cannot resolve the directory \${$show(home)} (\${err instanceof Error ? err.message : String(err)}).\`,
+      \`knext ffi: refusing to load \${$show(path)}: cannot resolve the directory \${$show(home)} (\${$show(err instanceof Error ? err.message : String(err))}).\`,
     );
   }
   if (real !== home) {
@@ -945,12 +957,15 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
   const parts = rel.split('/');
   const dirs: string[] = [];
   for (let i = parts.length - 1; i >= 0; i--) dirs.push($join(native, ...parts.slice(0, i)));
+  // The directories inside native/ (native/ itself too) come first, then the executable's own
+  // directory (at index \`inside\`), then each one above it.
+  const inside = dirs.length;
   const up = $upTo(home);
-  const above = dirs.length + 1; // the index of the first directory above the executable's own
   dirs.push(...up);
   const pins: $Pin[] = [];
   const bad: string[] = [];
   let fix = false;
+  let either = false;
   let move = false;
   let link = false;
   let other = false;
@@ -968,14 +983,15 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
     const why = $why(st);
     if (why !== '') {
       bad.push(\`\${$show(dir)} \${why}\`);
-      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;
-      else fix = true;
+      if (i < inside) fix = true;
+      else if (i > inside && (Number(st.mode) & 0o1002) !== 0) move = true;
+      else either = true;
     }
     pins.push([dir, $id(st)]);
   }
   if (bad.length > 0) {
     throw new FfiLoadError(
-      \`knext ffi: refusing to load \${$show(path)}: \${bad.length === 1 ? '1 directory' : \`\${bad.length} directories\`} on the way to it cannot be trusted, so what is under \${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\\n\${bad.map((b) => \`  \${b}\`).join('\\n')}\\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.\${fix ? " To fix the directories at or below the executable's own directory: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}\${move ? " A directory above the executable's own directory, and a sticky or world-writable one, is shared with everything else on the host, so do not change its owner or mode: install the executable under a root-owned directory such as /opt/<app> instead." : ''}\${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}\${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}\`,
+      \`knext ffi: refusing to load \${$show(path)}: \${bad.length === 1 ? '1 directory' : \`\${bad.length} directories\`} on the way to it cannot be trusted, so what is under \${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\\n\${bad.map((b) => \`  \${b}\`).join('\\n')}\\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.\${fix ? " To fix a directory inside native/: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}\${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root, or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in; if it is shared with other software, do not change it, move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}\${move ? " A sticky or world-writable directory above the executable's directory is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}\${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}\${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}\`,
     );
   }
   return pins;
@@ -1020,7 +1036,7 @@ function $openFile(path: string, what: string, lib: string, missing: string): $O
   const nofollow = $constants.O_NOFOLLOW;
   const nonblock = $constants.O_NONBLOCK;
   if (!(nofollow > 0) || !(nonblock > 0)) {
-    throw new FfiLoadError(\`knext ffi: refusing to load \${lib}: this platform cannot open \${what} without following links or blocking (it needs O_NOFOLLOW and O_NONBLOCK).\`);
+    throw new FfiLoadError(\`knext ffi: refusing to load \${$show(lib)}: this platform cannot open \${what} without following links or blocking (it needs O_NOFOLLOW and O_NONBLOCK).\`);
   }
   let fd: number;
   try {
@@ -1030,14 +1046,14 @@ function $openFile(path: string, what: string, lib: string, missing: string): $O
     if (code === 'ENOENT') throw new FfiLoadError(missing);
     throw new FfiLoadError(
       code === 'ELOOP'
-        ? \`knext ffi: refusing to load \${lib}: \${path} is a symbolic link. \${what} must be the file itself: a link is never followed, whatever it points at.\`
-        : \`knext ffi: refusing to load \${lib}: cannot open \${path} (\${err instanceof Error ? err.message : String(err)}).\`,
+        ? \`knext ffi: refusing to load \${$show(lib)}: \${$show(path)} is a symbolic link. \${what} must be the file itself: a link is never followed, whatever it points at.\`
+        : \`knext ffi: refusing to load \${$show(lib)}: cannot open \${$show(path)} (\${$show(err instanceof Error ? err.message : String(err))}).\`,
     );
   }
   const st = $fstatSync(fd, { bigint: true });
   if ($type(st) !== $constants.S_IFREG) {
     $closeSync(fd);
-    throw new FfiLoadError(\`knext ffi: refusing to load \${lib}: \${path} is not a regular file. \${what} must be a plain file: a pipe, a device or a directory is never read.\`);
+    throw new FfiLoadError(\`knext ffi: refusing to load \${$show(lib)}: \${$show(path)} is not a regular file. \${what} must be a plain file: a pipe, a device or a directory is never read.\`);
   }
   return { fd, st };
 }
@@ -1079,7 +1095,7 @@ function $verify(native: string, rel: string, path: string): string {
     files = parsed.files;
   } catch (err) {
     throw new FfiLoadError(
-      \`knext ffi: refusing to load \${$show(path)}: cannot read \${$show(manifest)} (\${err instanceof Error ? err.message : String(err)}).\`,
+      \`knext ffi: refusing to load \${$show(path)}: cannot read \${$show(manifest)} (\${$show(err instanceof Error ? err.message : String(err))}).\`,
     );
   }
   const expected =

@@ -46,20 +46,36 @@
  *   N01  only the first failing directory is listed
  *   D01  the directory refusal loses the build explanation (a copied tree keeps the host's mode)
  *   D02  the directory refusal carries the FILE hint (COPY --chown=0:0 --chmod=a-w)
- *   Advice (what the refusal tells the reader to do follows the directory)
- *   A01  a shared directory (above the executable, or sticky, or world-writable) is never told
- *        to move the install
- *   A02  only the position decides            A03  the position is off by one
- *   A04  the sticky bit is not looked at      A05  the world-write bit is not looked at
- *   A06  the fix-in-place advice is always given       A07  the move advice is always given
- *   Printing
- *   C01  a control character in a directory name is printed raw (a newline forges a list line)
- *   C02  a delete character is printed raw             C03  the list prints the raw name
+ *   Advice (what the refusal tells the reader to do follows the situation: a directory inside
+ *   native/ is fixed in place; a sticky or world-writable one above the executable is only told
+ *   to move the install; any other, the executable's own or above it, is told both, each with
+ *   its condition)
+ *   A01  a shared directory above the executable is given the conditional advice
+ *   A02  the executable's own directory is counted as shared when world-writable (chmod 777 /app)
+ *   A03  the executable's own directory is counted as inside native/
+ *   A04  native/ itself is not counted as inside native/ (off by one)
+ *   A05  a directory inside native/ is never given the fix in place
+ *   A06  the sticky bit is not looked at              A07  the world-write bit is not looked at
+ *   A08  any other failing directory is told only to fix it in place
+ *   A09  the fix in place is always given     A10  the conditional advice is always given
+ *   A11  the move advice is always given
+ *   Printing (every path and system error a refusal prints goes through $show; the generated
+ *   module is also scanned for any interpolation that is not, so a message cannot forget it)
+ *   C01  a C0 control (a newline forges a list line) is printed raw    C02  a delete character
+ *   C03  the list prints the raw name                 C04  a C1 control    C05  U+2028, U+2029
+ *   E01  the system error of an unparseable manifest  E02  of a file that cannot be opened
+ *   E03  the library path of a not-a-regular-file refusal   E04  of an unresolvable directory
+ *   E05  the platform directory names it found        E06  the system error of a failed load
+ *   E07  the path of the development build
  *   K01  an object that is not a directory or a link is called a link
  *   K02  such an object gets no advice of its own
  *   P01  a relative executable path is blamed on a link
  *   X01  the file refusal names two of the three commands that stage the Dockerfile
  *   X02  the unresolved-library refusal names one     X03  the missing-manifest refusal names two
+ *   Init hint (`knext ffi init`, proved against init.test.ts, its own spec)
+ *   V01  a Dockerfile that already has the line is told again   V02  one without a native/ COPY is told
+ *   V03  the line leaves /app open        V04  the hint is never printed
+ *   V05  init edits the Dockerfile        V06  the reason is dropped    V07  the placement is dropped
  *   Second look
  *   S01  the directories are not looked at again       S02  the second look uses stat, not lstat
  *   S03  the second look checks existence, not identity
@@ -77,15 +93,16 @@
  * restore is content-verified. The loader spec needs a system `cc`. Every
  * replacement is a whole line, so the harness's residue marker (a comment line
  * before it) never comments out the rest of an emitted statement, except
- * the rows marked (fragment): D01, D02, A06, A07, P01 and X01 to X03 anchor a
+ * the rows marked (fragment): D01, D02, P01 and X01 to X03 anchor a
  * piece of an emitted message or expression, and the harness appends its marker
  * after the replacement on the same line. Each of those is chosen so that the
  * fragment ends inside the string it sits in, where the marker is plain text.
  *
- * The harness for the real Rust library (crates/harness/ffi-generated.ts) is
- * proved separately, not here, because it needs cargo and root: W01, W02 and
- * W04 were applied to a copy of render.ts and the harness run against it in a
- * Linux container, and each turned it red (see the pull request).
+ * The harness for the real Rust library (crates/harness/ffi-generated.ts) is proved by its own
+ * committed check, not here, because it needs cargo and root:
+ * crates/harness/ffi-generated-red.ts weakens the rendered loader (the walk above the
+ * executable's directory, its last step to /, the sticky exemption) and requires the harness to
+ * fail on each, naming the controls that go red. It runs in the Rust crates lane.
  *
  * What this does not prove: the kind and musl lanes, which load the same
  * generated module from a root-owned tree on a real Alpine image (they need
@@ -279,78 +296,125 @@ const LOADER = [
     subject: 'render',
     claim:
       'the directory refusal carries the file hint (COPY --chown=0:0 --chmod=a-w) instead of the directory one',
-    anchor: 'own directory: run ',
-    replacement: 'own directory: COPY --chown=0:0 --chmod=a-w it, or run ',
+    anchor: 'inside native/: run ',
+    replacement: 'inside native/: COPY --chown=0:0 --chmod=a-w it, or run ',
   },
   {
     id: 'A01',
     subject: 'render',
     claim:
-      "a directory above the executable, or a sticky or world-writable one, is never told to move the install: it is offered chmod and chown like the app's own",
-    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
-    replacement: '      if (false as boolean) move = true;\n',
+      'a sticky or world-writable directory above the executable is not told only to move the install: it is given the conditional advice (chmod it if it is yours) like any other',
+    anchor: '      else if (i > inside && (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      else if (false as boolean) move = true;\n',
   },
   {
     id: 'A02',
     subject: 'render',
     claim:
-      'a sticky or world-writable directory below the executable is offered chmod (only its position counts)',
-    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
-    replacement: '      if (i >= above) move = true;\n',
+      "the executable's own directory is counted as shared when it is world-writable: chmod 777 /app is told only to move the install",
+    anchor: '      else if (i > inside && (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      else if (i >= inside && (Number(st.mode) & 0o1002) !== 0) move = true;\n',
   },
   {
     id: 'A03',
     subject: 'render',
     claim:
-      "the first directory above the executable is counted as the app's own (an off-by-one in where the advice changes)",
-    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
-    replacement: '      if (i > above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+      "the executable's own directory is counted as inside native/: it is given the unconditional fix and never told it may be shared (a root:staff /usr/local/bin)",
+    anchor: '      if (i < inside) fix = true;\n',
+    replacement: '      if (i <= inside) fix = true;\n',
   },
   {
     id: 'A04',
     subject: 'render',
     claim:
-      'a sticky directory that is not world-writable (1775) is offered chmod: the sticky bit is not looked at',
-    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
-    replacement: '      if (i >= above || (Number(st.mode) & 0o002) !== 0) move = true;\n',
+      'native/ itself is not counted as inside native/ (an off-by-one): it is given the conditional advice, not the fix',
+    anchor: '      if (i < inside) fix = true;\n',
+    replacement: '      if (i < inside - 1) fix = true;\n',
   },
   {
     id: 'A05',
     subject: 'render',
-    claim: 'a world-writable directory is offered chmod: only the sticky bit is looked at',
-    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
-    replacement: '      if (i >= above || (Number(st.mode) & 0o1000) !== 0) move = true;\n',
+    claim: 'a directory inside native/ is never given the unconditional fix',
+    anchor: '      if (i < inside) fix = true;\n',
+    replacement: '      if (false as boolean) fix = true;\n',
   },
   {
     id: 'A06',
     subject: 'render',
     claim:
-      "the fix-in-place advice (chmod, chown, RUN chmod) is given even when no directory of the app's own is bad (fragment)",
-    anchor: '\\${fix ? " To fix',
-    replacement: '\\${true ? " To fix',
+      'a sticky directory that is not world-writable (1775) above the executable is given the conditional advice: the sticky bit is not looked at',
+    anchor: '      else if (i > inside && (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      else if (i > inside && (Number(st.mode) & 0o002) !== 0) move = true;\n',
   },
   {
     id: 'A07',
     subject: 'render',
     claim:
-      "the move-the-install advice is given even when every bad directory is the app's own (fragment)",
-    anchor: '\\${move ? " A directory above',
-    replacement: '\\${true ? " A directory above',
+      'a world-writable directory above the executable that is not sticky is given the conditional advice: only the sticky bit is looked at',
+    anchor: '      else if (i > inside && (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      else if (i > inside && (Number(st.mode) & 0o1000) !== 0) move = true;\n',
+  },
+  {
+    id: 'A08',
+    subject: 'render',
+    claim:
+      "any other failing directory (the executable's own, or one above it) is told only to fix it in place, never that it may be shared",
+    anchor: '      else either = true;\n',
+    replacement: '      else fix = true;\n',
+  },
+  {
+    id: 'A09',
+    subject: 'render',
+    claim: 'the fix-in-place advice is given even when no directory inside native/ is bad',
+    anchor: '  let fix = false;\n',
+    replacement: '  let fix = true;\n',
+  },
+  {
+    id: 'A10',
+    subject: 'render',
+    claim:
+      'the conditional advice is given even when no directory holds the executable or sits above it unsharedly',
+    anchor: '  let either = false;\n',
+    replacement: '  let either = true;\n',
+  },
+  {
+    id: 'A11',
+    subject: 'render',
+    claim:
+      'the move-the-install advice is given even when no sticky or world-writable directory is bad',
+    anchor: '  let move = false;\n',
+    replacement: '  let move = true;\n',
   },
   {
     id: 'C01',
     subject: 'render',
     claim:
-      'a control character in a directory name is printed as itself: a newline forges another line of the list',
-    anchor: '    out += n < 0x20 || n === 0x7f ? \\`^\\${String.fromCharCode(n ^ 0x40)}\\` : ch;\n',
-    replacement: '    out += ch;\n',
+      'a C0 control character in a directory name is printed as itself: a newline forges another line of the list',
+    anchor: '    if (n < 0x20 || n === 0x7f) out += \\`^\\${String.fromCharCode(n ^ 0x40)}\\`;\n',
+    replacement: '    if (n < 0) out += \\`^\\${String.fromCharCode(n ^ 0x40)}\\`;\n',
   },
   {
     id: 'C02',
     subject: 'render',
     claim: 'a delete character (0x7f) in a directory name is printed as itself',
-    anchor: '    out += n < 0x20 || n === 0x7f ? \\`^\\${String.fromCharCode(n ^ 0x40)}\\` : ch;\n',
-    replacement: '    out += n < 0x20 ? \\`^\\${String.fromCharCode(n ^ 0x40)}\\` : ch;\n',
+    anchor: '    if (n < 0x20 || n === 0x7f) out += \\`^\\${String.fromCharCode(n ^ 0x40)}\\`;\n',
+    replacement: '    if (n < 0x20) out += \\`^\\${String.fromCharCode(n ^ 0x40)}\\`;\n',
+  },
+  {
+    id: 'C04',
+    subject: 'render',
+    claim:
+      'a C1 control character (U+0085, which many terminals read as a line end) in a directory name is printed as itself',
+    anchor: '    else if ((n >= 0x80 && n <= 0x9f) || n === 0x2028 || n === 0x2029) {\n',
+    replacement: '    else if (n === 0x2028 || n === 0x2029) {\n',
+  },
+  {
+    id: 'C05',
+    subject: 'render',
+    claim:
+      'the line and paragraph separators (U+2028, U+2029) in a directory name are printed as themselves',
+    anchor: '    else if ((n >= 0x80 && n <= 0x9f) || n === 0x2028 || n === 0x2029) {\n',
+    replacement: '    else if (n >= 0x80 && n <= 0x9f) {\n',
   },
   {
     id: 'C03',
@@ -403,6 +467,72 @@ const LOADER = [
     claim: 'the missing-manifest refusal names only knext deploy and knext preview (fragment)',
     anchor: '. The Dockerfile that \\\\\\`knext build\\\\\\`, ',
     replacement: '. The Dockerfile that ',
+  },
+  {
+    id: 'E01',
+    subject: 'render',
+    claim:
+      'the system error quoted when the manifest cannot be parsed is printed raw (it carries what the manifest holds, and a path)',
+    anchor:
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot read \\${$show(manifest)} (\\${$show(err instanceof Error ? err.message : String(err))}).\\`,\n',
+    replacement:
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot read \\${$show(manifest)} (\\${err instanceof Error ? err.message : String(err)}).\\`,\n',
+  },
+  {
+    id: 'E02',
+    subject: 'render',
+    claim:
+      'the system error quoted when a file cannot be opened is printed raw (it quotes the path)',
+    anchor:
+      '        : \\`knext ffi: refusing to load \\${$show(lib)}: cannot open \\${$show(path)} (\\${$show(err instanceof Error ? err.message : String(err))}).\\`,\n',
+    replacement:
+      '        : \\`knext ffi: refusing to load \\${$show(lib)}: cannot open \\${$show(path)} (\\${err instanceof Error ? err.message : String(err)}).\\`,\n',
+  },
+  {
+    id: 'E03',
+    subject: 'render',
+    claim: 'the library path in the refusal of a file that is not a regular file is printed raw',
+    anchor:
+      '    throw new FfiLoadError(\\`knext ffi: refusing to load \\${$show(lib)}: \\${$show(path)} is not a regular file. \\${what} must be a plain file: a pipe, a device or a directory is never read.\\`);\n',
+    replacement:
+      '    throw new FfiLoadError(\\`knext ffi: refusing to load \\${lib}: \\${$show(path)} is not a regular file. \\${what} must be a plain file: a pipe, a device or a directory is never read.\\`);\n',
+  },
+  {
+    id: 'E04',
+    subject: 'render',
+    claim:
+      "the system error quoted when the executable's directory cannot be resolved is printed raw",
+    anchor:
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot resolve the directory \\${$show(home)} (\\${$show(err instanceof Error ? err.message : String(err))}).\\`,\n',
+    replacement:
+      '      \\`knext ffi: refusing to load \\${$show(path)}: cannot resolve the directory \\${$show(home)} (\\${err instanceof Error ? err.message : String(err)}).\\`,\n',
+  },
+  {
+    id: 'E05',
+    subject: 'render',
+    claim: 'the names of the platform directories it found are printed raw',
+    anchor:
+      "      \\`knext ffi: \\${$show($join(native, 'ffi'))} holds Rust libraries for \\${$show(others.join(', '))}, but this process runs on \\${triple}. Build the image for the platform it runs on.\\`,\n",
+    replacement:
+      "      \\`knext ffi: \\${$show($join(native, 'ffi'))} holds Rust libraries for \\${others.join(', ')}, but this process runs on \\${triple}. Build the image for the platform it runs on.\\`,\n",
+  },
+  {
+    id: 'E06',
+    subject: 'render',
+    claim: 'the system error quoted when the library cannot be loaded is printed raw',
+    anchor:
+      '      \\`knext ffi: could not load \\${$show(path)}\\${via}: \\${$show(err instanceof Error ? err.message : String(err))}\\\\n\\` +\n',
+    replacement:
+      '      \\`knext ffi: could not load \\${$show(path)}\\${via}: \\${err instanceof Error ? err.message : String(err)}\\\\n\\` +\n',
+  },
+  {
+    id: 'E07',
+    subject: 'render',
+    claim: 'the path of the development build in its notice is printed raw',
+    anchor:
+      '        \\`knext ffi: loading the development build \\${$show(found[0])} without an integrity check (NODE_ENV is not "production").\\`,\n',
+    replacement:
+      '        \\`knext ffi: loading the development build \\${found[0]} without an integrity check (NODE_ENV is not "production").\\`,\n',
   },
   {
     id: 'S01',
@@ -472,6 +602,62 @@ const LOADER = [
   },
 ];
 
+// The `knext ffi init` hint for a vinext app (its own Dockerfile, which init never edits).
+const INIT = [
+  {
+    id: 'V01',
+    subject: 'init',
+    claim: 'a Dockerfile that already closes /app/native is told to add the line again',
+    anchor: "  if (!copiesNative || closesIt) return '';\n",
+    replacement: "  if (!copiesNative) return '';\n",
+  },
+  {
+    id: 'V02',
+    subject: 'init',
+    claim: 'a Dockerfile that does not copy native/ to /app/native is given the vinext hint',
+    anchor: "  if (!copiesNative || closesIt) return '';\n",
+    replacement: "  if (closesIt) return '';\n",
+  },
+  {
+    id: 'V03',
+    subject: 'init',
+    claim: 'the line it tells the reader to add leaves /app itself open',
+    anchor: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app /app/native';\n",
+    replacement: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app/native';\n",
+  },
+  {
+    id: 'V04',
+    subject: 'init',
+    claim: 'the hint is never printed',
+    anchor: '      `the typed wrapper to ${DEFAULT_CONFIG.out}/.\\n${dockerfileHint(cwd)}`,\n',
+    replacement: '      `the typed wrapper to ${DEFAULT_CONFIG.out}/.\\n`,\n',
+  },
+  {
+    id: 'V05',
+    subject: 'init',
+    claim:
+      "init edits the app's Dockerfile itself (appends the line) instead of saying what to add",
+    anchor: "    text = readFileSync(join(cwd, 'Dockerfile'), 'utf8');\n",
+    replacement:
+      "    writeFileSync(join(cwd, 'Dockerfile'), `${readFileSync(join(cwd, 'Dockerfile'), 'utf8')}\\n${VINEXT_CLOSE_LINE}\\n`);\n    text = readFileSync(join(cwd, 'Dockerfile'), 'utf8');\n",
+  },
+  {
+    id: 'V06',
+    subject: 'init',
+    claim:
+      "the hint no longer says why every directory above the library has to be root's (fragment)",
+    anchor: 'every directory above the library is owned by root',
+    replacement: 'a directory above the library is owned by root',
+  },
+  {
+    id: 'V07',
+    subject: 'init',
+    claim: 'the hint no longer says where the line goes (fragment)',
+    anchor: 'add this line after the `COPY` that brings native/ in and before `USER`:',
+    replacement: 'add this line to it:',
+  },
+];
+
 // The subject is an inline literal, not a shared constant: the lane's
 // subject-existence audit reads it from the createGuardProver call.
 const loader = createGuardProver({
@@ -482,7 +668,7 @@ const loader = createGuardProver({
 
 console.log('=== mutation proof: the loader against a whole-tree swap (TD-S17-close-1) ===');
 loader.preflight(LOADER);
-declareMutations(LOADER.length);
+declareMutations(LOADER.length + INIT.length);
 
 console.log('\n=== the behaviour, against a real library (ffi-loader.test.ts) ===');
 loader.baseline();
@@ -498,3 +684,23 @@ for (const m of LOADER) {
   recordMutation();
 }
 loader.finish(LOADER.length);
+
+const init = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: 'packages/ffi/src/__tests__/init.test.ts',
+  subjects: { init: 'packages/ffi/src/init.ts' },
+});
+init.preflight(INIT);
+
+console.log('\n=== the vinext Dockerfile hint of knext ffi init (init.test.ts) ===');
+init.baseline();
+init.proveCanSeeRed({
+  subject: 'init',
+  anchor: '  writeFileSync(join(cwd, CONFIG_FILE), serializeConfig(DEFAULT_CONFIG));\n',
+  replacement: '  void serializeConfig(DEFAULT_CONFIG);\n',
+});
+for (const m of INIT) {
+  init.run({ ...m, expect: 'red' });
+  recordMutation();
+}
+init.finish(INIT.length);

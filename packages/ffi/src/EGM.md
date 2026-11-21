@@ -22,7 +22,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     out:'src/generated/ffi'}`), `FfiUsageError`, `parseConfig`, `loadConfig` and `serializeConfig`.
   - Exported type: `FfiConfig`.
 - `init.ts` holds `runInit`, `recordedCrateRev`, `CRATE_GIT` (`https://github.com/getknext-dev/knext`),
-  `TEMPLATE_DIR` and the `RunInitOptions` type.
+  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`) and the `RunInitOptions` type.
 - `generate.ts` holds `runGenerate({cwd, check, io, deps})` and
   `generateFiles(libraryPath, config)`. `generateFiles` returns a `Map` of `.knext-generated.json`
   and `index.ts`. The file also exports the `Io`, `GenerateDeps` and `RunGenerateOptions` types and
@@ -90,6 +90,11 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
 - **Init** (`init.ts:runInit`)
   - It refuses unless the recorded crate revision is a 40-hex commit.
   - It writes nothing if `knext.ffi.json` or any top-level template entry already exists.
+  - After it writes, it reads the app's own `Dockerfile` in `cwd` (`dockerfileHint`, never writing it). When that file
+    copies `native/` to `/app/native` and has no `RUN chmod ... go-w ... /app/native` line (the Dockerfile a vinext x
+    Bun app is scaffolded with, which knext does not edit), the output also says to add `VINEXT_CLOSE_LINE` after
+    that `COPY` and before `USER`, and why. An app with no `Dockerfile`, or one that does not copy `native/` there,
+    or that already has the line, gets no extra output.
 - **Manifest scanning** (`manifest.ts`)
   - The wrapper is derived from the built library's bytes, never from the Rust source
     (`generate.ts:generateFiles` calls `manifest.ts:scanManifest`).
@@ -140,14 +145,24 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       `StrictModes` has it, not a measured hole), with any owner-write bit (root can write
       anyway). Every directory that fails is listed in the one refusal, with the full mode
       (`& 0o7777`), so a sticky or setgid directory reads as such, and the advice follows the
-      directory: the executable's own directory and those below it (index below `above`, computed
-      before the walk adds the ancestors) are fixed in place (`chmod go-w`, `chown root`, a
-      Dockerfile `RUN chmod go-w`); a directory above it, or a sticky or world-writable one
-      (`mode & 0o1002`), is shared with the host and is never to be changed, so the advice is to
-      move the install under a root-owned directory such as `/opt/<app>`. A link or a regular file
+      situation, not the position (`inside` is the number of directories inside `native/`, native/
+      itself included, computed before the walk adds the executable's own directory and its
+      ancestors): a directory inside `native/` (index below `inside`) is the app's and gets the
+      fix in place (`fix`: `chmod go-w`, `chown root`, a Dockerfile `RUN chmod go-w`); a sticky or
+      world-writable directory (`mode & 0o1002`) above the executable's own (index above `inside`)
+      is shared with other software and gets only the move (`move`: a root-owned, closed directory
+      such as `/opt/<app>`); any other failing directory (the executable's own, or one above it, as
+      a prefix directory of a nested image or a `root:staff` `/usr/local`) gets both, each with its
+      condition, and that the executable needs a directory of its own (`either`). Each piece is said
+      once however many directories need it. A link or a regular file
       where a directory belongs is named as such (`link` and `other` flags) and told to be replaced.
-      Every printed path goes through `$show`, which writes a control character in caret notation,
-      so a directory named with a newline cannot forge a line of the list. `$why` is the shared owner
+      Every printed path and every system error that quotes one goes through `$show`, which writes
+      a C0 control or DEL in caret notation and a C1 control or U+2028 and U+2029 as a unicode
+      escape, so a directory named with a newline cannot forge a line of the list and no such
+      character reaches a terminal or a log. `ffi-loader.test.ts` scans the rendered module
+      (`__tests__/template-scan.ts`) and requires every interpolation in a `knext ffi:` message to be
+      a `$show(...)` call, a choice between string literals, or on a short allow-list of values that
+      are never a path (numbers, modes, the generated names), so a new message cannot forget it. `$why` is the shared owner
       and mode judgement and `$judge` is the file-only refusal with the file hint. Why every ancestor: renaming a directory needs write on its parent,
       so with every directory on the path root's and closed to group and other, no user but root
       can swap any part of it, which makes the by-path lookups sound (Bun has no `openat`; the same
@@ -161,8 +176,9 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       and every directory above the executable (`runtime-image.ts:FFI_ANCESTORS_RUN`), because a
       nested prefix directory inside a copied tree keeps the build host's mode (0775 under umask
       002), and `native/` is named so nothing depends on the mode a builder gives a COPY's
-      destination (the vinext template, a literal file, carries `RUN chmod go-w /app /app/native` for
-      every app, a no-op where both are already 0755 and root's). A user Dockerfile that
+      destination (the vinext template, the app's own scaffolded `Dockerfile` that `knext deploy`
+      compares byte for byte, is not changed: `knext ffi init` prints `RUN chmod go-w /app /app/native`
+      for an app that copies `native/` there). A user Dockerfile that
       chowns the app directory, or any directory above it, to the app user, a shared, sidecar or
       fsGroup-writable volume at `native/` (unless root owns all of it and group and other cannot write
       it; one that passes is still writable through its other mounts), and a compiled binary with
@@ -257,7 +273,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
 - **Network.** `supply-chain.ts:resolveZig` downloads the pinned zig from `ZIG_PIN.baseUrl` with
   `globalThis.fetch`, using a 10-minute timeout.
 - **Disk writes**
-  - `init.ts:runInit` writes `knext.ffi.json` and the template tree.
+  - `init.ts:runInit` writes `knext.ffi.json` and the template tree. It reads the app's `Dockerfile` and never writes it.
   - `generate.ts:runGenerate` writes or unlinks files under `config.out`.
   - `build.ts:runBuild` replaces `<native>/ffi/` with `lib<name>.so`, `provenance.json` and
     `sbom.cdx.json` per triple.

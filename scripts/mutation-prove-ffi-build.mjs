@@ -8,9 +8,8 @@
  *   - `ffi-image-staging.test.ts` — the integrity-manifest call on the
  *     standalone compile, the conditional `COPY native` line and its nest rule,
  *     the `RUN chmod go-w` of every directory above the exec and its nest rule
- *     (both halves: opted in AND the D17 zero-diff), the anchor-count check,
- *     vinext's clean-up leaving native/ffi/ alone, and the vinext Dockerfile's own
- *     `RUN chmod go-w /app /app/native`;
+ *     (both halves: opted in AND the D17 zero-diff), the anchor-count check, and
+ *     vinext's clean-up leaving native/ffi/ alone;
  *   - `ffi-preflight.test.ts` — the two refusals and the caller-order scan;
  *   - `ffi-preflight-callers.test.ts` — the refusals reached through
  *     `knext build --skip-next`, `knext deploy --skip-build`,
@@ -172,23 +171,6 @@ const IMAGE = [
       'export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, `${STANDALONE}/native`].join(" ")}`;',
     replacement:
       'export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${FFI_ANCESTOR_DIRS.join(" ")}`;',
-  },
-  {
-    id: 'I17',
-    subject: 'vinextTemplate',
-    claim:
-      'the vinext Dockerfile no longer closes /app and /app/native itself (it depends on the mode the builder gives WORKDIR and a COPY destination)',
-    anchor: 'RUN chmod go-w /app /app/native\n',
-    replacement: '\n',
-    options: { commentPrefix: '#' },
-  },
-  {
-    id: 'I18',
-    subject: 'vinextTemplate',
-    claim: 'the vinext Dockerfile closes /app but leaves out /app/native, the COPY destination',
-    anchor: 'RUN chmod go-w /app /app/native\n',
-    replacement: 'RUN chmod go-w /app\n',
-    options: { commentPrefix: '#' },
   },
 ];
 
@@ -366,7 +348,6 @@ const image = createGuardProver({
     artifact: 'packages/kn-next/src/cli/build-artifact.ts',
     image: 'packages/kn-next/src/cli/runtime-image.ts',
     vinext: 'packages/kn-next/src/cli/vinext-build.ts',
-    vinextTemplate: 'packages/kn-next/templates/app/Dockerfile.hbs',
   },
 });
 const preflight = createGuardProver({

@@ -181,12 +181,21 @@ jobs:
         # is root's and closed: it checks that first, never changes the mode of a system directory
         # (this runner has /opt at 0777, which the loader rightly refuses), and stops with a clear
         # message when neither fits. It then runs four controls, each of which fails if the loader's
-        # walk is weakened: the same tree made by this user under the sticky /tmp is refused and
-        # /tmp is named with its mode; the good tree reached through a link is refused; a
+        # walk is weakened: the same tree made by this user under the sticky /tmp is refused,
+        # /tmp is named with its mode and (as a user that is not root) the temp directory made here
+        # is named as owned by this user; the good tree reached through a link is refused; a
         # group-writable directory above the executable is the one directory listed; and a root
         # directory answering 0775 is the one directory listed. Only the last uses a faked value
         # (the mode of /, in the child). Nothing else in the child process is faked.
         run: bun harness/ffi-generated.ts wrapper target/release/libknext_ffi_fixture.so
+
+      - name: Generator — the wrapper harness's controls go red when the loader's walk is weakened
+        # A control that stays green with its subject removed is decoration. harness/ffi-generated-red.ts
+        # runs the step above once per weakening of the rendered loader (the walk above the executable's
+        # directory, its last step to /, the sticky exemption, the owner check), each in memory through
+        # KNEXT_FFI_HARNESS_MUTATE, and requires exit code 1 and exactly the controls that weakening
+        # affects to fail. It reads the harness's own `control N` labels, never the loader's words.
+        run: bun harness/ffi-generated-red.ts target/release/libknext_ffi_fixture.so
 
       - name: Generator — knext ffi init, then generate/check build the crate as written (git dependency at the recorded revision)
         # The knext crates are served from THIS checkout, not github.com/getknext-dev/knext

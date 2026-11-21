@@ -974,8 +974,9 @@ pinned before the manifest is read.
    is staged, the module loads `<crate>/target/{release,debug}` with no check (D13 item 5.2), as before. A staged
    library that is refused throws and never falls through to the development build; a loader test pins that for
    a hash mismatch, an unlisted library, a missing manifest, a group-writable library and an app-owned one.
-6. **The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the Rust crates lane is
-   pending on the final head; the nested layout is model-tested only (`TD-S18-1b`).** The base images' own directories
+6. **The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and every lane, the Rust crates
+   lane included, is green on `abca3e3`; they are re-run on the final head; the nested layout is model-tested only
+   (`TD-S18-1b`).** The base images' own directories
    (`/`, `/usr`, `/usr/local`, `/usr/local/bin`, `/opt`) are root-owned 0755 (measured on the pinned Bun images).
    BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the copied files 0444, the directories below `native/` 0555,
    and `native/` root-owned 0755; `WORKDIR`, the parents a `COPY` creates and a directory `COPY`'s destination are
@@ -986,11 +987,14 @@ pinned before the manifest is read.
    adds `RUN chmod go-w` over every directory above the executable and over `native/` itself, right after the
    `native/` COPY, with each prefix directory and the nested `native/` in the nested rule (naming `native/` means
    no check depends on the mode a builder gives a COPY's destination, which BuildKit's 0755 shows but does not
-   promise). The vinext template is a literal file with no per-app variation, so it carries the same idea as one line
-   for every app, `RUN chmod go-w /app /app/native`: for an app without `knext.ffi.json` it changes nothing (both
-   directories are already 0755 and root's). `ffi-image-staging.test.ts` models the build host's worst-case modes
-   against the staged Dockerfiles of the flat and nested layouts and against the vinext template, including a builder
-   that gives a COPY destination the host's mode (and fails without the line). The images run as `USER 65532`.
+   promise). The vinext template (`templates/app/Dockerfile.hbs`) is not changed: it is the app's own scaffolded `Dockerfile`,
+   and `knext deploy` recognises it by comparing it byte for byte with the shipped text, so an edit would move every
+   already-scaffolded vinext app onto another path (D2, D17). An app on it adds `RUN chmod go-w /app /app/native` after
+   the `COPY` that brings `native/` in, which closes the two directories whatever mode its builder gives a copy's
+   destination; `knext ffi init` prints that line when the app's `Dockerfile` copies `native/` to `/app/native` and does
+   not already have it, and never edits the file. `ffi-image-staging.test.ts` models the build host's worst-case modes
+   against the staged Dockerfiles of the flat and nested layouts, including a builder that gives a COPY destination the
+   host's mode (and fails without the line). The images run as `USER 65532`.
    The same line is staged by all three commands that stage the Dockerfile (`knext build`, `knext deploy` and
    `knext preview`): `knext build` hands the staged context to a builder of the reader's own.
    Evidence on the earlier revision (`6be5939867e0d08d87fc952c0bd982e3f0f76d02`, before `native/` was added to the
@@ -999,11 +1003,14 @@ pinned before the manifest is read.
    the standalone legs through `kn-next deploy` on kind passed
    (https://github.com/AhmedElBanna80/knext/actions/runs/44882665743, https://github.com/AhmedElBanna80/knext/actions/runs/44882665667). Evidence on
    `dc4eb3b4dfe92eb4afb6059b9cb58e2c25f82b30`: the musl load matrix (x64 and arm64) and the kind e2e passed again
-   (https://github.com/AhmedElBanna80/knext/actions/runs/44887787660). Run by hand: a container from the pinned Alpine Bun image, its own binary at
+   (https://github.com/AhmedElBanna80/knext/actions/runs/44887787660). Evidence on
+   `abca3e3d7ec513f677a19f21d760d85584c811c0` (https://github.com/AhmedElBanna80/knext/actions/runs/44891821597):
+   `knext-ffi crates (fmt, clippy, test, Bun harness)`, `rust-crates gate`, the musl load matrix on both architectures
+   and the kind FFI e2e passed. Run by hand: a container from the pinned Alpine Bun image, its own binary at
    `/usr/local/bin`, loads as uid 65532 and is refused, with the offending path in the message, for each of: a
    group-writable executable directory, ancestor and root directory, a sticky world-writable `/usr`, an ancestor
-   owned by uid 65532, `native` replaced by a link, and a manifest owned by 65532. **Pending:** the Rust crates lane
-   on this change's final head (the other two lanes are re-checked there as well), and **the nested layout:
+   owned by uid 65532, `native` replaced by a link, and a manifest owned by 65532. **Pending:** every lane on this
+   change's final head (the harness, the musl matrix and the kind e2e are re-run there), and **the nested layout:
    model-tested only, no real-Docker CI leg**, which is debt `TD-S18-1b` and not required for Accepted (the by-hand
    build is not a CI proof).
 7. **Links are never followed.** The manifest and the library are opened with `O_NOFOLLOW`, so a symbolic link
@@ -1019,8 +1026,7 @@ pinned before the manifest is read.
    link), which Bun never reports, and it says which of the two it is. **A release-directory deploy tool** (Capistrano
    and its relatives, which keep releases under a `releases/` directory the deploy user owns and point `current` at
    one) is therefore not refused for its link: it is refused by the ownership rule (item 1), because `releases/` is the
-   deploy user's, and the way out is to make the release tree root-owned (the release directory, `releases/` and everything above it root's
-   and closed to group and other), or run the step that puts the files in place as root. A platform where `O_NOFOLLOW`
+   deploy user's. The way out: put `deploy_to` under a parent that root owns and that is closed to group and other, make `deploy_to`, `releases/` and each release root-owned and closed to group and other (run the step that puts the files in place as root), and never change anything above `deploy_to`. A platform where `O_NOFOLLOW`
    or `O_NONBLOCK` is not a positive number is refused, because an absent flag ORs in as 0 and would follow links, or
    block, without a sign. The check that something is staged for this platform is an `lstat`, not `existsSync`, so a
    dangling link is a refusal, never "nothing staged" and a fall-through to the development build.
@@ -1055,9 +1061,7 @@ the loader can tell such an actor's tree from the real one:
   kernel still checks the real uid. The app's own container in one is two cases. **Rootless Podman or Docker:** the
   image's files belong to the host user who started the container, who can write them whatever the app runs as inside,
   so "root owns it" says nothing about who on the host can write them, and running as a non-root user inside does not
-  remove that writer. **A pod with `hostUsers: false`:** the files are owned by host root (through an idmapped mount, or
-  a per-pod uid range), so running as a non-root user inside restores the guarantee; an app that runs as uid 0
-  inside still owns the tree.
+  remove that writer. **A pod with `hostUsers: false`:** the image's files belong to the pod's own root, which is host root where the filesystem supports idmapped mounts and otherwise the root of a uid range given to that pod alone (not host root); no other user on the host owns or can write them either way, so running as a non-root user inside restores the guarantee, and an app that runs as uid 0 inside still owns the tree.
 
 The class is removed from an app by dropping capabilities, and uid 0 by running as a non-root user. The operator's
 pods set `capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false`
@@ -1114,10 +1118,9 @@ Measured on Bun 1.4.2, Linux, unless stated.
   from links must be copied as plain files.
 - **Images change by one line**: with `knext.ffi.json`, the standalone Dockerfile that `knext build`, `knext deploy`
   and `knext preview` stage gains a `RUN chmod go-w` over `native/` and every directory above the executable, after
-  the `native/` COPY. An app without the file gets today's Dockerfile byte for byte (D17). The vinext template, a
-  literal file, gains `RUN chmod go-w /app /app/native` for every vinext app (a no-op where the directories are
-  already 0755 and root's), so it is the one place an app without the file gets a different Dockerfile; its image
-  is unchanged.
+  the `native/` COPY. An app without the file gets today's Dockerfile byte for byte (D17). The vinext template is
+  unchanged, so a vinext app's image is unchanged unless its owner adds `RUN chmod go-w /app /app/native` to their own
+  `Dockerfile`; `knext ffi init` prints that line (it never edits the file).
 - Residual: root and any capability equivalent to root (`CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`,
   `CAP_SETUID`, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`, `CAP_MKNOD`, `CAP_SYS_MODULE`, `CAP_SYS_RAWIO`, `CAP_BPF`, and
   others), a second writable mount, an ACL, a seekable file
@@ -1141,10 +1144,12 @@ Measured on Bun 1.4.2, Linux, unless stated.
       directory). What is real: the modes of the library, the manifest, `native/`, the directories below it and
       the executable's directory, and every file operation. The owners and ancestor modes of a real tree are
       proved by the musl lane, the Rust crates harness (which stages its tree as root under a directory whose whole
-      ancestry is root's and closed, and runs four controls: the same tree made by the running user is refused and the
-      sticky `/tmp` named with its mode, the good tree reached through a link is refused, a group-writable directory
+      ancestry is root's and closed, and runs four controls: the same tree made by the running user is refused, the sticky `/tmp` named with its mode and
+      (when that user is not root) the temp directory this run made named as owned by that user, the good tree reached
+      through a link is refused, a group-writable directory
       above the executable is the one directory listed, and a root directory that answers 0775 is the one directory
-      listed) and the by-hand run in item 6.
+      listed; each control is shown to go red by `crates/harness/ffi-generated-red.ts`, which weakens the rendered loader
+      in memory in four ways and requires exactly the controls each one affects to fail) and the by-hand run in item 6.
 - [x] The musl load lane: both legs as uid 65532, an app-owned tree refused, the documented Dockerfile recipe and
       the own-binary commands run verbatim, cleanup of the root-owned staged trees.
 - [x] TD-S17-close-1: manifest judged, `O_NOFOLLOW`/`O_NONBLOCK`, regular files only, `lstat` of every
@@ -1156,7 +1161,8 @@ Measured on Bun 1.4.2, Linux, unless stated.
       head, then the sprint-close review. They were green on `6be5939867e0d08d87fc952c0bd982e3f0f76d02`, except the
       Rust crates lane (red on the harness's owner fake alone, fixed); on `dc4eb3b4dfe92eb4afb6059b9cb58e2c25f82b30` the
       musl lanes and the kind e2e passed again and the Rust crates lane was red on the harness's staging under `/opt`
-      (0777 on GitHub's runner), fixed here.
+      (0777 on GitHub's runner), fixed; on `abca3e3d7ec513f677a19f21d760d85584c811c0` the Rust crates lane, the musl
+      matrix and the kind e2e were all green (run 44891821597), and they are re-run on the final head.
 - [ ] `TD-S18-1b`, the nested layout: a real-Docker CI leg that builds the nested standalone image and loads from it
       (today a model test and a build by hand). Debt; **not required** for Accepted.
 - [x] Docs page, threat model (the in-process Rust entry and the `/app/native` reconciliation), this amendment.

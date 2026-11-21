@@ -97,7 +97,33 @@ export function runInit(opts: RunInitOptions): number {
   io.stdout(
     `wrote ${CONFIG_FILE} and ${DEFAULT_CONFIG.crate}/ (${templates.length} files).\n` +
       'Next: install Rust (https://rustup.rs), then run `knext ffi generate` to build the crate and write ' +
-      `the typed wrapper to ${DEFAULT_CONFIG.out}/.\n`,
+      `the typed wrapper to ${DEFAULT_CONFIG.out}/.\n${dockerfileHint(cwd)}`,
   );
   return 0;
+}
+
+/** The line that closes the two directories a vinext image's library sits under. */
+export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app /app/native';
+
+/**
+ * What to add to the app's own Dockerfile, or '' when nothing is needed. A vinext x bun app is built
+ * from the `Dockerfile` it was scaffolded with, a file the app owns and the build does not stage, so
+ * unlike the standalone image (whose staged Dockerfile gets the line from knext) init can only say
+ * what to add. It is the vinext Dockerfile when it copies native/ to /app/native; it is told once, and
+ * not when the line is already there. The file is never edited.
+ */
+function dockerfileHint(cwd: string): string {
+  let text: string;
+  try {
+    text = readFileSync(join(cwd, 'Dockerfile'), 'utf8');
+  } catch {
+    return '';
+  }
+  const copiesNative = /^\s*COPY\s+(?:--\S+\s+)*native\s+\/app\/native\/?\s*$/m.test(text);
+  const closesIt = /^\s*RUN\s+chmod\b.*\bgo-w\b.*\/app\/native\b/m.test(text);
+  if (!copiesNative || closesIt) return '';
+  return (
+    "\nYour Dockerfile copies native/ to /app/native. The loader refuses a library unless every directory above the library is owned by root and closed to group and other, and that includes /app and /app/native. BuildKit leaves them that way, but a builder may give a COPY's destination the mode of your build machine, so close them yourself: add this line after the `COPY` that brings native/ in and before `USER`:\n" +
+    `\n  ${VINEXT_CLOSE_LINE}\n`
+  );
 }

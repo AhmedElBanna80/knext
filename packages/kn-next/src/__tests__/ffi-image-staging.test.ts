@@ -578,15 +578,6 @@ describe("every directory above the executable in the image is root-owned and cl
             stageNested({ "apps/web/knext.ffi.json": "{}\n" }),
             "standalone-bun",
         );
-    /** The vinext x bun template, as the instructions a build reads (comments and blanks dropped). */
-    const vinextInstructions = () =>
-        readFileSync(
-            join(dirname(TEMPLATE_DIR), "app", "Dockerfile.hbs"),
-            "utf8",
-        )
-            .split("\n")
-            .map((l) => l.trim())
-            .filter((l) => l !== "" && !l.startsWith("#"));
     const HOSTS = [0o775, 0o777];
 
     for (const host of HOSTS) {
@@ -620,7 +611,7 @@ describe("every directory above the executable in the image is root-owned and cl
 
     it("native/ itself and every directory above it are closed even on a builder that gives a COPY's destination the build host's mode: the chmod names each of them", () => {
         for (const host of HOSTS) {
-            for (const lines of [flat(), nested(), vinextInstructions()]) {
+            for (const lines of [flat(), nested()]) {
                 const exec = nativeDir(lines);
                 const opts = {
                     destFromHost: true,
@@ -645,26 +636,15 @@ describe("every directory above the executable in the image is root-owned and cl
         ]);
     });
 
-    it("the vinext x bun Dockerfile closes /app and /app/native itself, after the COPY that brings native/ in and before USER, so it does not rest on the mode a builder gives a COPY's destination", () => {
-        const lines = vinextInstructions();
-        const at = lines.findIndex((l) => NATIVE_COPY.test(l));
-        const user = lines.findIndex((l) => l.startsWith("USER "));
-        expect(at).toBeGreaterThan(-1);
-        expect(
-            lines.indexOf("RUN chmod go-w /app /app/native"),
-        ).toBeGreaterThan(at);
-        expect(lines.indexOf("RUN chmod go-w /app /app/native")).toBeLessThan(
-            user,
-        );
-        // It names every directory the template makes above the library's: /app (WORKDIR) and the
-        // destination of the native/ COPY. /app/native/ffi and below carry the COPY's --chmod=a-w.
-        expect(lines.filter((l) => l.startsWith("RUN chmod go-w"))).toEqual([
-            "RUN chmod go-w /app /app/native",
-        ]);
-    });
-
     it("the vinext x bun Dockerfile: the executable's directory is /app, made by WORKDIR, whatever the host", () => {
-        const lines = vinextInstructions();
+        const vinextText = readFileSync(
+            join(dirname(TEMPLATE_DIR), "app", "Dockerfile.hbs"),
+            "utf8",
+        );
+        const lines = vinextText
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l !== "" && !l.startsWith("#"));
         expect(nativeDir(lines)).toBe("/app");
         for (const host of HOSTS) {
             expect(violations(lines, "/app", host)).toEqual([]);

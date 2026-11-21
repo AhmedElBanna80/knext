@@ -3,7 +3,15 @@
  * manifest blobs (ADR-0069 D5) and the kitchen-sink manifest every suite uses.
  */
 
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
@@ -18,9 +26,28 @@ export function emptyDir(prefix: string): string {
   return dir;
 }
 
+/**
+ * Give the owner write access to everything under `dir`, so it can be removed:
+ * a staged `native/` tree is read-only, the way the image carries it, and a
+ * non-root user cannot delete entries of a read-only directory.
+ */
+export function makeWritable(dir: string): void {
+  const st = lstatSync(dir, { throwIfNoEntry: false });
+  if (!st || st.isSymbolicLink()) return;
+  if (st.isDirectory()) {
+    chmodSync(dir, st.mode | 0o700);
+    for (const name of readdirSync(dir)) makeWritable(join(dir, name));
+  } else {
+    chmodSync(dir, st.mode | 0o600);
+  }
+}
+
 /** Remove every scratch directory this file created. Call from `afterAll`. */
 export function removeScratchDirs(): void {
-  for (const d of scratchDirs) rmSync(d, { recursive: true, force: true });
+  for (const d of scratchDirs) {
+    makeWritable(d);
+    rmSync(d, { recursive: true, force: true });
+  }
   scratchDirs.length = 0;
 }
 

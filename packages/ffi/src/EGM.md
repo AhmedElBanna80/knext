@@ -70,7 +70,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     `ResolvedZig`, `AllowEntry`, `AdvisoryFinding`, `DenyReport`, `AdvisoryVerdict`,
     `DenyOptions`, `AuditPackage`, `SupplyChainOptions` and `SupplyChain`.
 - Tests live in `__tests__/`. Shared helpers:
-  - `helpers.ts`: scratch directories (`emptyDir`, removed by `removeScratchDirs`), `PKG_DIR`, `readTree`, `capture` (captured CLI stdout and stderr), synthetic manifest blobs (`blob`, `D`, `record`, `enumRecord`, `fn`) and the `KITCHEN_SINK` manifest.
+  - `helpers.ts`: scratch directories (`emptyDir`, removed by `removeScratchDirs` after `makeWritable` restores the owner's write access to a read-only staged `native/`), `PKG_DIR`, `readTree`, `capture` (captured CLI stdout and stderr), synthetic manifest blobs (`blob`, `D`, `record`, `enumRecord`, `fn`) and the `KITCHEN_SINK` manifest.
   - `toolchain-fake.ts`: `fakeToolchain()`, an on-disk fake of the pinned cargo-subcommand and zig toolchain for tests that must not need Rust, zig or the network, plus `supplyFixture` for the supply-chain fixtures.
   - `integer-matrix.ts`: `integerMatrix`, the integer-argument matrix, stringified and run in a fresh Bun process, shared with `crates/harness/ffi-generated.ts`.
 
@@ -121,16 +121,39 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       keeps it apart from the same file opened by path. Any other platform is refused with an
       `FfiLoadError` naming it (unreachable today, since `$triple()` refuses first; kept so a
       new platform can never fall back to a by-path load).
-    - What this covers: a path swap (rename or symlink over the path) between the check and the
-      load. What it does not stop: a writer of the file's contents (an in-place write, a hard
-      link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. "A
-      writer of `native/` already owns the app JS" holds only when both are in the same
-      read-only image layer, not for a shared, sidecar or fsGroup-writable volume mounted at
-      `native/`. The generated Dockerfile copies `native/` root-owned and non-writable
-      (`--chown=0:0 --chmod=a-w`). On Linux the load needs `/proc` mounted; a failed load closes
-      the descriptor and its error names both the path and the descriptor name.
+    - What the descriptor covers: a path swap (rename or symlink over the path) between the
+      check and the load. It does not cover a writer of the file's contents (an in-place write, a
+      hard link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. So
+      `render.ts:$sealed` refuses the load unless only root can write the library: it stats the
+      hashed descriptor, then the library's directories (built from its path relative to
+      `native/`, so the walk cannot run to `/`) and the directory `native/` sits in, by owner
+      and mode (`access()` would say yes to root for all of it), before the bytes are read.
+      Each must be owned by uid 0 and not writable by group or other, with any owner-write bit
+      (root can write anyway). No other uid is accepted and the process's own uid is never read:
+      the user the app runs as can `chmod` what it owns, so an app-owned tree, even read-only,
+      protects nothing from a file-write bug in the app. No opt-out. The generated Dockerfile
+      copies `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`); BuildKit leaves
+      `native/` and the directory above it root-owned 0755, which passes for a non-root app
+      user. A user Dockerfile that chowns the app directory to the app user, a shared, sidecar or
+      fsGroup-writable volume at `native/`, and a compiled binary whose directory is not
+      root-owned are refused. It does not stop root, `CAP_DAC_OVERRIDE`, a second writable
+      mount of the same files, or an ACL (mode bits only; on macOS an ACL can grant write). A
+      sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
+      `bun:ffi`, measured to work on Bun 1.4.2) would bind the bytes against root too, but each
+      module copy and Worker would load its own copy of the library, ending the one library per
+      process that they rely on, so it is not used. On Linux the load needs `/proc` mounted; a
+      failed load closes the descriptor and its error names both the path and the descriptor name.
+    - `native/.integrity.json` itself gets no owner or mode check. It is a claim the loader tests:
+      rewriting it can only make the hash mismatch (a refusal), because the bytes it is compared with
+      are a library only root can write. The directories above the one `native/` sits in are not
+      judged either; a writer there can make the load refuse, not change those bytes.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
-      used only when `NODE_ENV !== 'production'`, and without an integrity check.
+      used only when `NODE_ENV !== 'production'`, and without an integrity check or an owner check:
+      an accepted, development-only path. It is reached only when nothing is staged beside the
+      executable. A staged library that is refused throws (`render.ts:$resolve` returns
+      `$verify`'s result or lets its error out) and never falls through to it;
+      `ffi-loader.test.ts` pins that for a hash mismatch, an unlisted library, a missing manifest, a
+      group-writable library and an app-owned one.
     - Every `<symbol>_schema` must equal the FNV-1a 64 hash computed at render time.
     - The first load failure is cached and rethrown as `FfiLoadError`.
 - **Output writes** (`output.ts`)

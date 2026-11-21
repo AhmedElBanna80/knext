@@ -197,3 +197,103 @@ describe('ffi-e2e.yml compat-smoke gates on the shipped image', () => {
     }
   });
 });
+
+describe('ffi-e2e.yml musl-load: the loader refuses anything but a root-owned tree, and the lane runs the way the image does', () => {
+  const steps = wf.jobs['musl-load']?.steps ?? [];
+  const find = (needle: string) => steps.findIndex((s) => (s.name ?? '').includes(needle));
+  const text = (i: number) => steps[i]?.run ?? '';
+
+  it('hands the directory that holds the compiled executable and its native/ to root by running the docs page commands verbatim, not a hand-written copy of them', () => {
+    const compile = find('Compile the caller');
+    expect(compile).toBeGreaterThanOrEqual(0);
+    const run = text(compile);
+    // The loader also checks the directory native/ sits in (/opt/caller here, a bind mount).
+    expect(run).toContain(
+      'bun packages/ffi/scripts/doc-recipe.ts shell "${RUNNER_TEMP}/own-binary.sh"',
+    );
+    expect(run).toContain(
+      'APP_DIR="${RUNNER_TEMP}/musl/exe" bash -euo pipefail "${RUNNER_TEMP}/own-binary.sh"',
+    );
+    expect(run).not.toMatch(/chown -R root:root/);
+    // The recipe must run after the executable and native/ are in place, and before anything loads them.
+    expect(run.indexOf('cp -R')).toBeGreaterThan(-1);
+    expect(run.indexOf('bash -euo pipefail')).toBeGreaterThan(run.indexOf('cp -R'));
+  });
+
+  it('builds the Dockerfile recipe from the docs page verbatim and loads the image as its own USER, with the modes BuildKit left asserted', () => {
+    const recipe = find('documented Dockerfile recipe');
+    expect(recipe).toBeGreaterThanOrEqual(0);
+    expect(recipe).toBeGreaterThan(find('Compile the caller'));
+    const run = text(recipe);
+    expect(run).toContain('bun packages/ffi/scripts/doc-recipe.ts dockerfile');
+    // The pinned image goes in as the recipe's own build argument; the recipe is not edited.
+    expect(run).toContain('--build-arg BASE_IMAGE="$BUN_IMAGE"');
+    expect(run).not.toMatch(/\bsed\b/);
+    // The source tree is made group-writable on purpose: BuildKit must reset what the source says.
+    expect(run).toMatch(/chmod -R [^\n]*g\+w[^\n]*\/native/);
+    // What the loader will judge: every path under /app, owner and mode, as the image has them.
+    expect(run).toContain("stat -c '%a %u %n'");
+    expect(run).toMatch(/awk [^\n]*\$2 != 0/);
+    // As the recipe's USER, not a flag the lane adds.
+    expect(run).toContain("'{{.Config.User}}'");
+    expect(run).toContain('65532:65532');
+    expect(run).not.toContain('--user');
+    expect(run).toContain('ffi-musl-driver: PASS');
+  });
+
+  it('proves red: the recipe with the app directory chowned to the app user is refused', () => {
+    const red = find('chowned to the app user');
+    expect(red).toBeGreaterThanOrEqual(0);
+    expect(red).toBeGreaterThan(find('documented Dockerfile recipe'));
+    const run = text(red);
+    expect(run).toContain('RUN chown -R 65532:65532 /app');
+    expect(run).toContain('is owned by uid 65532, but only root may own it');
+    // A load that succeeds is the error here.
+    expect(run).toMatch(/-eq 0/);
+  });
+
+  it('re-runs when the docs page changes, since the lane builds and runs two blocks of it', () => {
+    for (const trigger of ['pull_request', 'push'] as const) {
+      expect(wf.on[trigger].paths).toContain('apps/docs/content/docs/rust-in-process.mdx');
+    }
+  });
+
+  it('runs the bun leg and the compiled leg as uid 65532 (the image USER) against the root-owned trees', () => {
+    const nonRoot = find('non-root');
+    expect(nonRoot).toBeGreaterThanOrEqual(0);
+    expect(nonRoot).toBeGreaterThan(find('Compile the caller'));
+    const run = text(nonRoot);
+    expect(run.match(/--user 65532:65532/g)?.length).toBe(2);
+    expect(run).toContain('${RUNNER_TEMP}/musl/native:${BUN_DIR}/native:ro');
+    expect(run).toContain('${RUNNER_TEMP}/musl/exe:/opt/caller:ro');
+    expect(run.match(/ffi-musl-driver: PASS/g)?.length).toBe(2);
+  });
+
+  it('proves red: a tree owned by the app user itself is refused, even read-only', () => {
+    const red = find('owned by the app user');
+    expect(red).toBeGreaterThanOrEqual(0);
+    const run = text(red);
+    expect(run).toContain('chown -R 65532:65532');
+    expect(run).toContain('--user 65532:65532');
+    expect(run).toContain('is owned by uid 65532, but only root may own it');
+    // It must fail on a load that succeeds with the root-owned tree: exit 0 is the error.
+    expect(run).toMatch(/-eq 0/);
+  });
+
+  it('gives the root-owned staged trees back and removes them on every outcome, after the summary reads them', () => {
+    const clean = steps.findIndex((s) => (s.run ?? '').includes('chown -R "$(id -u):$(id -g)"'));
+    expect(clean).toBeGreaterThanOrEqual(0);
+    expect(steps[clean]?.if).toBe('always()');
+    expect(clean).toBeGreaterThan(find('Job summary'));
+    const run = text(clean);
+    // Each of the three commands must name every directory: a directory missing from the
+    // chown (or the chmod) is the one `rm -rf` then cannot remove, on a runner that is reused.
+    for (const cmd of ['sudo chown -R', 'chmod -R u+rwX', 'rm -rf']) {
+      const line = run.split('\n').find((l) => l.includes(cmd)) ?? '';
+      expect(line, `no line runs \`${cmd}\``).not.toBe('');
+      for (const dir of ['musl', 'musl-wrong', 'musl-appowned', 'recipe']) {
+        expect(line, `\`${cmd}\` does not name ${dir}`).toContain(`"\${RUNNER_TEMP}/${dir}"`);
+      }
+    }
+  });
+});

@@ -6,6 +6,7 @@ import { createHash as $createHash } from 'node:crypto';
 import {
   closeSync as $closeSync,
   existsSync as $existsSync,
+  fstatSync as $fstatSync,
   openSync as $openSync,
   readdirSync as $readdirSync,
   readFileSync as $readFileSync,
@@ -924,7 +925,44 @@ function $resolve(): readonly [string, string] {
 }
 
 /**
- * Fail closed: the library must be listed in native/.integrity.json with a matching sha256.
+ * Fail closed unless only root can write the library. The hash covers the bytes
+ * read now, and a descriptor pins the inode, not its bytes, so whoever can write
+ * the file (or swap it, from a directory they can write) changes what gets
+ * mapped. Judged by owner and mode, not access(), which answers yes to root for
+ * everything: the file through the descriptor it was hashed from, then its
+ * directories up to native/ itself, then the directory native/ sits in. Exactly
+ * those, never the rest of the path. Each must be owned by root and not writable
+ * by group or other. The user this process runs as is NOT trusted: it can chmod
+ * what it owns, so a tree it owns protects nothing from a bug that writes files.
+ */
+function $sealed(native: string, rel: string, path: string, fd: number): void {
+  const parts = rel.split('/');
+  const checks: [string, { uid: number; mode: number }][] = [[path, $fstatSync(fd)]];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const dir = $join(native, ...parts.slice(0, i));
+    checks.push([dir, $statSync(dir)]);
+  }
+  const home = $dirname(native);
+  checks.push([home, $statSync(home)]);
+  for (const [p, st] of checks) {
+    const mode = (st.mode & 0o777).toString(8).padStart(4, '0');
+    let why = '';
+    if (st.uid !== 0) {
+      why = `is owned by uid ${st.uid}, but only root may own it`;
+    } else if ((st.mode & 0o022) !== 0) {
+      why = `is writable by its group or by everyone (mode ${mode})`;
+    }
+    if (why !== '') {
+      throw new FfiLoadError(
+        `knext ffi: refusing to load ${path}: ${p} ${why}, so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image \`knext build\` generates copies native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user.`,
+      );
+    }
+  }
+}
+
+/**
+ * Fail closed: the library must be listed in native/.integrity.json with a matching sha256,
+ * and only root may be able to write it (see $sealed).
  * Returns the name to dlopen: the descriptor the hashed bytes were read through
  * (/proc/self/fd/<n> on Linux, /dev/fd/<n> on macOS), so a file renamed or linked
  * over the path after the check is not the one loaded.
@@ -956,6 +994,7 @@ function $verify(native: string, rel: string, path: string): string {
   const fd = $openSync(path, 'r');
   let actual: string;
   try {
+    $sealed(native, rel, path, fd);
     actual = $createHash('sha256').update($readFileSync(fd)).digest('hex');
   } catch (err) {
     $closeSync(fd);

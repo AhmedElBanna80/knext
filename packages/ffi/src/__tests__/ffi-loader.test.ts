@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -28,6 +29,8 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -101,12 +104,34 @@ function cc(name: string, flags: string[]): string {
 
 const sha256 = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
-/** A fresh "image": <dir>/server (the fake execPath) with native/ffi/<triple>/libfixture beside it. */
+/**
+ * Make a staged tree what the image carries (`COPY --chown=0:0 --chmod=a-w`):
+ * every library and every directory above it, up to native/, read-only. The
+ * integrity manifest is left as it is: the loader does not check its mode.
+ */
+function sealImage(exe: string): void {
+  const native = join(exe, '..', 'native');
+  const readOnly = (p: string) => chmodSync(p, statSync(p).mode & ~0o222); // a-w
+  for (const triple of readdirSync(join(native, 'ffi'))) {
+    for (const f of readdirSync(join(native, 'ffi', triple))) {
+      readOnly(join(native, 'ffi', triple, f));
+    }
+    readOnly(join(native, 'ffi', triple));
+  }
+  readOnly(join(native, 'ffi'));
+  readOnly(native);
+}
+
+/**
+ * A fresh "image": <dir>/server (the fake execPath) with native/ffi/<triple>/libfixture beside it,
+ * read-only like the image's (`seal: false` leaves it writable, for a test that edits it first).
+ */
 function image(
   opts: {
     lib?: string;
     triple?: string;
     integrity?: 'ok' | 'mismatch' | 'unlisted' | 'absent' | 'v2';
+    seal?: boolean;
   } = {},
 ): string {
   const dir = emptyDir('image');
@@ -131,7 +156,9 @@ function image(
       }),
     );
   }
-  return join(dir, 'server');
+  const exe = join(dir, 'server');
+  if (opts.seal !== false) sealImage(exe);
+  return exe;
 }
 
 interface Run {
@@ -142,8 +169,41 @@ interface Run {
 }
 
 /**
+ * BEFORE: make the module see the ids a scenario names, whatever uid this test runs as. A staged
+ * tree is only ever owned by the test's own user, and the loader accepts nothing but root's.
+ *   FAKE_OWNER     the uid every stat reports as the owner (unset: the real one)
+ *   FAKE_OWNER_AT  JSON, path -> uid: an override for a directory stat-ed by that path
+ *   FAKE_EUID      what process.geteuid() returns (the loader must not care)
+ * Modes are the real ones on disk. Every path stat-ed is kept in globalThis.statted.
+ */
+const FAKE_IDS = () => {
+  const fs = process.getBuiltinModule('node:fs');
+  const mod = process.getBuiltinModule('node:module') as unknown as {
+    syncBuiltinESMExports: () => void;
+  };
+  const { FAKE_EUID: euid, FAKE_OWNER: owner, FAKE_OWNER_AT: at } = process.env;
+  const overrides = at ? (JSON.parse(at) as Record<string, number>) : {};
+  const statted: string[] = [];
+  (globalThis as unknown as { statted: string[] }).statted = statted;
+  if (euid !== undefined)
+    (process as unknown as { geteuid: () => number }).geteuid = () => Number(euid);
+  for (const k of ['fstatSync', 'statSync'] as const) {
+    const real = fs[k] as (...x: unknown[]) => object;
+    (fs as unknown as Record<string, unknown>)[k] = function (this: unknown, ...a: unknown[]) {
+      const st = real.apply(this, a);
+      statted.push(k === 'fstatSync' ? 'fd' : String(a[0]));
+      const uid = overrides[String(a[0])] ?? (owner === undefined ? undefined : Number(owner));
+      if (uid === undefined) return st;
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid });
+    };
+  }
+  mod.syncBuiltinESMExports();
+};
+
+/**
  * Run `body(m, c, fixture)` in a fresh Bun process with the generated module
- * imported as `m`. An env `BEFORE` (a function's source) runs before that import.
+ * imported as `m`. An env `BEFORE` (a function's source) runs before that import,
+ * after {@link FAKE_IDS}, whose `FAKE_OWNER` defaults to root here.
  */
 function inBun(
   // biome-ignore lint/suspicious/noExplicitAny: the body runs in another process, untyped.
@@ -154,7 +214,20 @@ function inBun(
   const r = spawnSync(process.execPath, [...args, 'harness.ts'], {
     cwd: app,
     encoding: 'utf8',
-    env: { ...process.env, NODE_ENV: 'production', NEXT_PHASE: '', BODY: body.toString(), ...env },
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      NEXT_PHASE: '',
+      BODY: body.toString(),
+      FAKE_OWNER: '0',
+      ...env,
+      // A scenario that stages a tree (FAKE_EXEC) is told its owner; one that does not touches nothing.
+      ...(env.FAKE_EXEC === undefined && env.BEFORE === undefined
+        ? {}
+        : {
+            BEFORE: `async () => { ${env.FAKE_EXEC === undefined ? '' : `(${FAKE_IDS})();`} ${env.BEFORE === undefined ? '' : `await (${env.BEFORE})();`} }`,
+          }),
+    },
     timeout: 60_000,
   });
   const line = r.stdout.split('\n').find((l) => l.startsWith('RESULT '));
@@ -341,6 +414,8 @@ describe('integer arguments, every width, through a real library (the same matri
         NEXT_PHASE: '',
         BODY: integerMatrix.toString(),
         FAKE_EXEC: exe,
+        FAKE_OWNER: '0',
+        BEFORE: FAKE_IDS.toString(),
       },
       timeout: 60_000,
     });
@@ -850,6 +925,10 @@ describe('the library loaded is the library hashed (nothing swapped in between t
     (globalThis as unknown as { swaps: string[] }).swaps = swaps;
     const swap = (at: string) => {
       if (swaps.length > 0) return;
+      // The staged tree is read-only, and the loader has already accepted it as such: the
+      // swapper stands for a principal that CAN write the directory, so give it that.
+      const dir = process.getBuiltinModule('node:path').dirname(staged);
+      fs.chmodSync(dir, 0o755);
       if (how === 'rename') {
         fs.copyFileSync(evil, `${staged}.new`);
         fs.renameSync(`${staged}.new`, staged);
@@ -1016,12 +1095,13 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       renderModule(m2, { libName: 'other', crate: 'rust' }),
     );
 
-    const exe = image();
+    const exe = image({ seal: false });
     const native = join(exe, '..', 'native');
     copyFileSync(built, join(native, 'ffi', TRIPLE, other));
     const integrity = JSON.parse(readFileSync(join(native, '.integrity.json'), 'utf8'));
     integrity.files[`ffi/${TRIPLE}/${other}`] = sha256(built);
     writeFileSync(join(native, '.integrity.json'), JSON.stringify(integrity));
+    sealImage(exe);
 
     const r = inBun(
       async (m, c) => {
@@ -1036,6 +1116,164 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       second: { ok: 42 },
       again: { ok: 5 },
     });
+  });
+});
+
+describe('the library is refused unless only root can write it and own the way to it (a hash of bytes someone else can still change binds nothing)', () => {
+  const nativeOf = (exe: string) => join(exe, '..', 'native');
+  /** The library's directories, deepest first, then the one native/ sits in (beside the executable). */
+  const dirsOf = (exe: string) => [
+    join(nativeOf(exe), 'ffi', TRIPLE),
+    join(nativeOf(exe), 'ffi'),
+    nativeOf(exe),
+    join(exe, '..'),
+  ];
+  const libOf = (exe: string) => join(nativeOf(exe), 'ffi', TRIPLE, LIB);
+  const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  /** Two calls, so a refusal's being cached shows too. */
+  const load = (
+    exe: string,
+    ids: { euid?: number; owner?: number; at?: Record<string, number> } = {},
+  ) =>
+    inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+      FAKE_EXEC: exe,
+      ...(ids.euid === undefined ? {} : { FAKE_EUID: String(ids.euid) }),
+      ...(ids.owner === undefined ? {} : { FAKE_OWNER: String(ids.owner) }),
+      ...(ids.at === undefined ? {} : { FAKE_OWNER_AT: JSON.stringify(ids.at) }),
+    });
+
+  const refused = (r: Run, expected: RegExp) => {
+    const [first, second] = r.result as { cls: string; message: string }[];
+    expect(first?.cls, r.stderr).toBe('FfiLoadError');
+    expect(first?.message).toMatch(expected);
+    // Nothing was loaded, and the refusal is cached like every other load failure.
+    expect(first?.message).toContain('refusing to load');
+    expect(second).toEqual(first as { cls: string; message: string });
+  };
+
+  const loaded = (r: Run) => {
+    expect(r.result, r.stderr).toEqual([{ ok: 'Hello, World!' }, { ok: 3 }]);
+  };
+
+  it('a library its group can write is refused', () => {
+    const exe = image();
+    chmodSync(libOf(exe), 0o464);
+    refused(load(exe), /is writable by its group or by everyone \(mode 0464\)/);
+  });
+
+  it('a library everyone can write is refused', () => {
+    const exe = image();
+    chmodSync(libOf(exe), 0o446);
+    refused(load(exe), /is writable by its group or by everyone \(mode 0446\)/);
+  });
+
+  it('every directory from the library up to the one native/ sits in is checked for group and world write, and named', () => {
+    for (const mode of [0o775, 0o757]) {
+      for (const i of [0, 1, 2, 3]) {
+        const exe = image();
+        const target = dirsOf(exe)[i] as string;
+        chmodSync(target, mode);
+        refused(
+          load(exe),
+          new RegExp(
+            `: ${reEscape(target)} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
+          ),
+        );
+      }
+    }
+  });
+
+  it('a library owned by anyone but root is refused, the user the app runs as included, whoever runs the process', () => {
+    for (const euid of [0, 1000, 65532]) {
+      for (const owner of [1000, 12345, 65532]) {
+        refused(
+          load(image(), { euid, owner }),
+          new RegExp(`is owned by uid ${owner}, but only root may own it`),
+        );
+      }
+    }
+  });
+
+  it('a library its owner cannot write is still refused when the owner is not root: that user can chmod it back', () => {
+    const exe = image(); // sealed: 0555 / 0444
+    refused(
+      load(exe, { euid: 1000, owner: 1000 }),
+      /is owned by uid 1000, but only root may own it/,
+    );
+  });
+
+  it('a directory owned by anyone but root is refused and named, the one native/ sits in included', () => {
+    for (const i of [0, 1, 2, 3]) {
+      const exe = image();
+      const dir = dirsOf(exe)[i] as string;
+      refused(
+        load(exe, { at: { [dir]: 1000 } }),
+        new RegExp(`: ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
+      );
+    }
+  });
+
+  it('the walk is bounded: the library, its three directories and the one native/ sits in, and nothing above', () => {
+    const exe = image();
+    const r = inBun(
+      (m, c) => [c(() => m.greet('World')), (globalThis as { statted?: string[] }).statted],
+      {
+        FAKE_EXEC: exe,
+      },
+    );
+    const [greet, statted] = r.result as [unknown, string[]];
+    expect(greet, r.stderr).toEqual({ ok: 'Hello, World!' });
+    expect([...statted].sort()).toEqual(['fd', ...dirsOf(exe)].sort());
+    expect(statted).not.toContain(join(exe, '..', '..'));
+  });
+
+  it('the refusal tells the reader what the image does and that the directory holding native/ counts too', () => {
+    const exe = image();
+    chmodSync(libOf(exe), 0o464);
+    refused(load(exe), /COPY --chown=0:0 --chmod=a-w/);
+    refused(load(exe), /the directory that holds native\/ /);
+  });
+
+  it('a symlink at the staged path is judged by the file it points at, the one that is hashed and loaded', () => {
+    const exe = image({ seal: false });
+    const away = emptyDir('away');
+    const target = join(away, LIB);
+    copyFileSync(libOf(exe), target);
+    chmodSync(target, 0o666);
+    rmSync(libOf(exe));
+    symlinkSync(target, libOf(exe));
+    for (const d of dirsOf(exe).slice(0, 3)) chmodSync(d, 0o555);
+    // The manifest's hash is right (same bytes): only the writable target is wrong.
+    refused(
+      load(exe),
+      new RegExp(`: ${reEscape(libOf(exe))} is writable by its group or by everyone`),
+    );
+  });
+
+  it('the image layout loads: root-owned, read-only, run by a non-root user or by root', () => {
+    for (const euid of [65532, 0]) loaded(load(image(), { euid }));
+  });
+
+  it('root-owned with the owner-write bit set loads (a plain COPY; BuildKit leaves the top native/ at 0755)', () => {
+    for (const euid of [65532, 0]) {
+      const exe = image();
+      for (const d of dirsOf(exe).slice(0, 3)) chmodSync(d, 0o755);
+      chmodSync(libOf(exe), 0o644);
+      loaded(load(exe, { euid }));
+    }
+  });
+
+  it('with no faked owner the module reads the real one: a tree owned by the user running the tests is refused, unless that user is root', () => {
+    const exe = image();
+    const r = inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+      FAKE_EXEC: exe,
+      FAKE_OWNER: undefined,
+    });
+    const uid = process.getuid?.() ?? -1;
+    // Root running the tests owns the staged tree as uid 0, which is exactly what the rule accepts.
+    if (uid === 0) loaded(r);
+    else refused(r, new RegExp(`is owned by uid ${uid}, but only root may own it`));
   });
 });
 
@@ -1069,6 +1307,73 @@ describe('path 2 — the development fallback, only when NODE_ENV !== production
       NODE_ENV: 'development',
     });
     expect(releaseNewest.result, releaseNewest.stderr).toBe('Hello, dev!');
+  });
+
+  /**
+   * A staged library that is refused must stop the load. In development the host build under
+   * <crate>/target is accepted with no check at all, so a refusal that fell through to it would turn
+   * every integrity and ownership rule into a warning on a machine that has both.
+   */
+  describe('a staged library that is refused never falls through to the development build', () => {
+    const refusals: [string, () => string, Record<string, string>, RegExp][] = [
+      [
+        'a sha256 that does not match',
+        () => image({ integrity: 'mismatch' }),
+        {},
+        /sha256 mismatch/,
+      ],
+      [
+        'a library the manifest does not list',
+        () => image({ integrity: 'unlisted' }),
+        {},
+        /not listed/,
+      ],
+      ['no integrity manifest', () => image({ integrity: 'absent' }), {}, /integrity/],
+      [
+        'a library its group can write',
+        () => {
+          const exe = image();
+          chmodSync(join(exe, '..', 'native', 'ffi', TRIPLE, LIB), 0o464);
+          return exe;
+        },
+        {},
+        /is writable by its group or by everyone/,
+      ],
+      [
+        'a library owned by the user the app runs as',
+        () => image(),
+        { FAKE_OWNER: '1000', FAKE_EUID: '1000' },
+        /is owned by uid 1000, but only root may own it/,
+      ],
+    ];
+
+    for (const [name, make, env, expected] of refusals) {
+      it(`${name}: the call throws the refusal, twice, and the development build is never loaded`, () => {
+        devApp();
+        const r = inBun((m, c) => [c(() => m.greet('x')), c(() => m.add(1, 2))], {
+          FAKE_EXEC: make(),
+          NODE_ENV: 'development',
+          ...env,
+        });
+        const [first, second] = r.result as { cls?: string; message?: string; ok?: unknown }[];
+        expect(first?.cls, r.stderr).toBe('FfiLoadError');
+        expect(first?.message).toMatch(expected);
+        expect(first?.message).not.toContain(join('rust', 'target'));
+        expect(second).toEqual(first as object);
+        // The notice that precedes a development load never printed.
+        expect(r.stderr).not.toContain('loading the development build');
+      });
+    }
+
+    it('a valid staged library still wins over a newer development build', () => {
+      devApp();
+      const now = new Date();
+      utimesSync(join(app, 'rust', 'target', 'debug', LIB), now, now);
+      const r = inBun((m) => m.greet('x'), { FAKE_EXEC: image(), NODE_ENV: 'development' });
+      // The debug build would say "Debug, x!".
+      expect(r.result, r.stderr).toBe('Hello, x!');
+      expect(r.stderr).not.toContain('loading the development build');
+    });
   });
 
   it('is never used in production: the error lists every path tried and names knext ffi build', () => {

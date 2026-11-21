@@ -67,6 +67,7 @@ are unknown-command errors.
 - `buildVinextExecutable`, `bunMeetsFloor`, `stageSharpNative`, `stageSharpForStandalone`, `fetchImgPackage` (`vinext-build.ts`).
 - `assertNodePresetOutput` (`vinext-node-build.ts`).
 - `buildStandaloneExecutable` (`standalone-exec-build.ts`).
+- `enforceBytecodeVerdict` (`bytecode-enforce.ts`): the one place a failed bytecode verdict becomes a failed build. It deletes the executable and throws a `UsageError`. Every compiled target uses it.
 - `resolveStandaloneLayout` (`standalone-layout.ts`).
 - `resolveTracingRoot`, `requireBuildContext` (`tracing-root.ts`).
 - `selectRuntimeImage`, `dockerBuildxArgs`, `stageStandaloneBuildContext`, `stageVinextNodeDockerfile` (`runtime-image.ts`), plus its Dockerfile helpers `runtimeStandaloneTemplateDir`, `STANDALONE_DOCKERFILE_NAME`, `VINEXT_NODE_DOCKERFILE_NAME`, `isKnownGoodTemplateDockerfile`, `standaloneDockerignore`, `dockerignoreExcludes`, `nestStandaloneDockerfile`, `FFI_NATIVE_PERMS`, `FFI_NATIVE_COPY` and `insertFfiNativeCopy`. The native/ COPY (FFI line and the vinext template's) is the only COPY with `--chown=0:0 --chmod=a-w`: root-owned, non-writable for the app user.
@@ -123,6 +124,7 @@ are unknown-command errors.
 - Config validation collects every error into one `ConfigValidationError` with the code `ERR_KN_CONFIG_INVALID`. `runtime` must be `bun` or `node`, and only the `redis` cache provider is implemented [`validate.ts:validateConfig`].
 - Version floors: Node must be at least 24, and the CLI exits 1 at startup otherwise. Bun must be at least 1.4 for compiled executables [`node-floor-guard.cjs`, `vinext-build.ts:bunMeetsFloor`].
 - The deploy image architecture is always `linux-x64`. Self-contained mode is opt-in and defaults to `false` [`build-target.ts`].
+- Standalone self-contained builds verify bytecode with `verifyBytecodeEmbedded` (every embedded module and route chunk 0 must carry it). Other standalone builds use `verifyBytecodeExec` [`standalone-exec-build.ts:buildStandaloneExecutable`].
 - `deploy --skip-build` refuses a compiled executable whose build-identity stamp does not match the current sources [`build-artifact.ts:assertCompiledArtifactFresh`].
 - A patched-Bun download must match the embedded sha256 pin. It never falls back to stock Bun [`bun-toolchain.ts:ensurePatchedBun`].
 - A Next build (not the vinext target) decides its refusals (a custom `distDir`; Bun + Turbopack + `turbopackModuleFragments`; a static export) from the config Next resolved. `runProjectBuild` first runs the text checks as warnings only, creates a temp facts file and sets `KNEXT_CONFIG_FACTS_OUT` and `KNEXT_BUILDER` for the build. It never sets `NEXT_ADAPTER_PATH`: any `adapterPath` changes Next's build output. After the build it decides from, in order: (1) knext's adapter record, ignored when its `projectDir` is another directory, where the adapter already refused inside the build and the CLI re-raises the recorded refusal as a `UsageError`, even when the build exited 0; (2) the resolved `config` in a `required-server-files.json` Next wrote during this build (mtime at or after the build start, with 2 s of slack; nothing is deleted beforehand), in `.next` or a top-level directory of the app; any fresh file carrying a custom `distDir` decides (it is refused), otherwise the newest does; a file that does not parse refuses; (3) neither: a warning, then the text checks below. A record that cannot be read never replaces the build's own error [`project-build.ts:runProjectBuild`, `static-export-guard.ts:assertNotStaticExportFromFacts`, `../adapters/next-config-facts.js`].
@@ -143,7 +145,7 @@ are unknown-command errors.
   - `version --client`.
 - **Builds:**
   - `npm run build` and `npx vite build`.
-  - `bun build --compile --bytecode`, run through the shipped compile scripts.
+  - `bun build --compile --bytecode`, run through the shipped compile scripts. In the vinext include shape the script also writes the plan sidecar described under Filesystem writes.
   - `bun pack` and `tar -xzf` for native image packages.
   - `docker buildx build --push --metadata-file` and `docker inspect`.
   - `git init` / `check-ignore` in a scratch directory, from `create`.
@@ -161,6 +163,8 @@ are unknown-command errors.
   - The patched-Bun cache.
   - Scaffold files from `create`.
   - `.kn-next/loadtest/<app>/` job manifests.
+  - `<outfile>.knext-plan.json`, the plan sidecar. `vinext-compile.mjs` writes it beside the executable in the include shape only, and never in self-contained or default-disk shapes. `readPlanSidecar` (`vinext-build.ts`) reads it and deletes it in a `finally`. A missing, symlinked, unparseable or foreign-marker sidecar fails the build. A module count that is not a positive integer is rejected (`vinext-build.ts`, the `invalid module count` check). Debt: when the executable itself cannot be read, `verifyCompiledExecutable` throws at `vinext-build.ts` (the artifact read catch) before `readPlanSidecar` runs, so the sidecar is never read or deleted and stays beside the binary, as does the binary.
+  - Binary removal. A failed bytecode verdict deletes the executable (`enforceBytecodeVerdict`, `bytecode-enforce.ts`). So does a failed plan-sidecar read on the vinext include shape (the catch around `readPlanSidecar`, `vinext-build.ts`). An executable that cannot be read is not deleted: the vinext path throws a `UsageError` (`vinext-build.ts`), and the standalone path lets the read error propagate (`standalone-exec-build.ts`).
   - Rewritten files under the vinext package in `node_modules` (temporary file, then rename).
 - **Environment:**
   - Reads `KN_CONTEXT`, `KN_REDIS_URL`, `KN_REGISTRY`, `KN_BUCKET`, `KN_IMAGE_TAG`, `KN_NAMESPACE`, `KN_IMAGE`, `KNEXT_VINEXT_PATCHES`, `KNEXT_VERBOSE` and `npm_config_registry`.

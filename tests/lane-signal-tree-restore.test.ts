@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { hermeticLaneEnv, LANE_ENV } from './helpers/lane-env';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -100,54 +101,62 @@ async function waitFor(check: () => boolean, ms = 20_000) {
   return check();
 }
 
-/**
- * The lane's OWN variables must not leak into the runner under test. This spec runs INSIDE the nightly lane
- * (a prover grades it), where `PROVER_LANE_SHA` is the plan's pinned sha: the fixture repo's HEAD is not
- * that sha, so the runner fataled before it ever ran the fixture prover, the file never became MUTATED and
- * the prover's baseline went red on CI while staying green locally. Same list the sharding spec scrubs.
- */
-export const LANE_ENV = [
-  'PROVER_LANE_SHA',
-  'PROVER_LANE_REF',
-  'KNEXT_PROVER_TIMEOUT_MS',
-  'KNEXT_LANE_CARGO_TARGET_DIR',
-  'KNEXT_RUST_CODEGEN_DIR',
-  'CARGO_TARGET_DIR',
-  'KNEXT_LANE_CLEANUP',
-  'KNEXT_LANE_MIN_FREE_DISK_MIB',
-  'KNEXT_LANE_MIN_AVAIL_MEM_MIB',
-  'KNEXT_LANE_SOFT_FREE_DISK_MIB',
-  'KNEXT_LANE_KILL_AVAIL_MEM_MIB',
-  'KNEXT_LANE_MEMINFO_PATH',
-  'KNEXT_LANE_SAMPLE_MS',
-  'KNEXT_LANE_WATCH_MS',
-  'KNEXT_LANE_EXTRAS_CMD',
-];
-
-/** The env the fixture runner gets: ambient minus the lane's own variables, plus the restore opt-in. */
-export function runnerEnv(ambient: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const env: Record<string, string | undefined> = { ...ambient };
-  for (const k of LANE_ENV) delete env[k];
-  return { ...env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' } as Record<
-    string,
-    string
-  >;
+/** The env the fixture runner gets: the ambient env minus the lane's own variables (see helpers/lane-env.ts), plus the restore opt-in. */
+function runnerEnv(): Record<string, string> {
+  return hermeticLaneEnv({ KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' });
 }
 
-describe('the fixture runner env is hermetic against the nightly lane variables', () => {
-  it('drops PROVER_LANE_SHA and every other lane variable, keeps the unrelated ones', () => {
-    const env = runnerEnv({
-      PROVER_LANE_SHA: 'a'.repeat(40),
-      PROVER_LANE_REF: 'integration/v2',
-      KNEXT_LANE_CLEANUP: '1',
-      GITHUB_ACTIONS: 'true',
-      PATH: '/usr/bin',
-    });
-    for (const k of LANE_ENV) expect(k in env).toBe(false);
-    expect(env.PATH).toBe('/usr/bin');
-    expect(env.KNEXT_LANE_RESTORE_AFTER_KILL).toBe('1');
-    expect(env.GITHUB_ACTIONS).toBe('');
+/** THE spawn site of the runner under test (one place, so the env scrub cannot be skipped at one of several). */
+function spawnRunner(dir: string) {
+  return Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
+    cwd: dir,
+    env: runnerEnv(),
+    stdout: 'ignore',
+    stderr: 'ignore',
   });
+}
+
+describe('the runner under test is hermetic against the lane (the S13-5 baseline bug)', () => {
+  it('runnerEnv drops PROVER_LANE_SHA and every other lane variable, keeps unrelated ones', () => {
+    const saved = { sha: process.env.PROVER_LANE_SHA, ci: process.env.GITHUB_ACTIONS };
+    process.env.PROVER_LANE_SHA = 'b'.repeat(40);
+    process.env.GITHUB_ACTIONS = 'true';
+    try {
+      const env = runnerEnv();
+      for (const k of LANE_ENV)
+        if (k !== 'KNEXT_LANE_RESTORE_AFTER_KILL' && k !== 'GITHUB_ACTIONS')
+          expect(k in env).toBe(false);
+      expect(env.PATH).toBe(process.env.PATH ?? '');
+      expect(env.KNEXT_LANE_RESTORE_AFTER_KILL).toBe('1');
+      expect(env.GITHUB_ACTIONS).toBe('');
+    } finally {
+      if (saved.sha === undefined) delete process.env.PROVER_LANE_SHA;
+      else process.env.PROVER_LANE_SHA = saved.sha;
+      if (saved.ci === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = saved.ci;
+    }
+  });
+
+  it('a bogus PROVER_LANE_SHA in the parent env does not stop the fixture prover from running', async () => {
+    const dir = fixtureRepo();
+    const saved = process.env.PROVER_LANE_SHA;
+    process.env.PROVER_LANE_SHA = 'c'.repeat(40); // not the fixture repo's HEAD: leaked, the runner fatals
+    const proc = spawnRunner(dir);
+    try {
+      const mutated = () => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
+      expect(await waitFor(mutated, 10_000)).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.PROVER_LANE_SHA;
+      else process.env.PROVER_LANE_SHA = saved;
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        // already gone
+      }
+      killFixtureGroups(dir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('the fixture kill never targets the test process group (ROUND 4 item 4)', () => {
@@ -161,12 +170,7 @@ describe('the fixture kill never targets the test process group (ROUND 4 item 4)
 describe('a signal to the lane runner restores the tree its killed prover left (ROUND 2 item 6)', () => {
   it('SIGTERM mid-mutation: the tracked file is restored, the untracked file removed, the tree clean', async () => {
     const dir = fixtureRepo();
-    const proc = Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
-      cwd: dir,
-      env: runnerEnv(),
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+    const proc = spawnRunner(dir);
     try {
       const mutated = () => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
       expect(await waitFor(mutated)).toBe(true);
@@ -186,12 +190,7 @@ describe('a signal to the lane runner restores the tree its killed prover left (
 
   it('a SIGKILLed runner cannot run its handler, so the prover survives until the test kills its group, and nothing is left', async () => {
     const dir = fixtureRepo();
-    const proc = Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
-      cwd: dir,
-      env: runnerEnv(),
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+    const proc = spawnRunner(dir);
     try {
       expect(
         await waitFor(() => readFileSync(join(dir, 'fixture.txt'), 'utf8') === 'MUTATED\n'),

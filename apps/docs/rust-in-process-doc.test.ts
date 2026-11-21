@@ -378,7 +378,7 @@ describe('docs — in-process Rust page', () => {
     const body = must(page, /where the library is loaded from/i);
     const mismatch = templateAfter(
       rendered,
-      /if \(actual !== expected\) \{\s*\$closeSync\(fd\);\s*throw new FfiLoadError\(\s*`/,
+      /if \(actual !== expected\) \{\s*\$closeSync\(lib\.fd\);\s*throw new FfiLoadError\(\s*`/,
     );
     expectBlock(body, pattern(mismatch), 'the sha256 mismatch refusal');
     const notice = templateAfter(
@@ -400,11 +400,68 @@ describe('docs — in-process Rust page', () => {
     expect(chain).not.toMatch(/does \*\*not\*\* stop anything that can write/);
   });
 
+  it('quotes the directory refusal: both pieces of advice are on the page word for word and the module carries the same sentences, apart from the file hint', () => {
+    const body = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
+    // The advice follows the situation, not the position: a directory inside native/ is fixed in place,
+    // a sticky one at the executable's level or above it is only ever moved away from, and any other
+    // failing directory (a world-writable one that is not sticky, and a home directory, included) is told
+    // both, each with its condition.
+    const fix =
+      "To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode).";
+    const either =
+      "A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.";
+    const move =
+      'A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.';
+    // Said wherever a directory can be fixed in place: the one Dockerfile line that keeps a vinext app
+    // on the known-good path; and, with a sticky directory on the list with others, that fixing the
+    // others alone is not enough.
+    const vinext =
+      "In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there).";
+    const alone =
+      'The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move.';
+    // The module's source escapes the backticks it carries inside a template literal.
+    const unescaped = rendered.replace(/\\`/g, '`');
+    for (const sentence of [fix, either, move, vinext, alone]) {
+      expect(unescaped).toContain(sentence);
+      expect(body).toContain(sentence);
+    }
+    // The conditional advice names both conditions, so it is never read as an order to chmod a shared directory.
+    expect(either).toContain("if it is part of your app's install");
+    expect(either).toContain(
+      'If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead',
+    );
+    // A home directory is a move, never a chown to root.
+    expect(either).not.toContain('chown root ~');
+    expect(body).toContain('`/home/<user>` belongs to the account that owns it');
+    expect(either).toContain('The executable needs a directory of its own');
+    // A sticky directory is only told to move, and the page says so beside the example.
+    expect(move).not.toContain('chmod go-w');
+    expect(body).toContain('on some hosts `/opt` itself is writable by everyone');
+    // The module words the count and the pronoun from the number of failing directories.
+    expect(rendered).toContain('on the way to it cannot be trusted, so what is under ');
+    expect(rendered).toContain(' could be renamed or replaced after it was checked:');
+    expect(body).toContain(
+      'directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:',
+    );
+    // A directory is not a file: the page does not offer the file's COPY flags as its fix.
+    expect(fix).not.toContain('COPY --chown');
+    expect(either).not.toContain('COPY --chown');
+    // Every failing directory is listed, in the one message.
+    expect(body).toContain('2 directories on the way to it');
+    // The refusal the page quotes names the Dockerfile every command stages, all three of them.
+    expect(body).toContain(
+      'the Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies native/',
+    );
+    expect(body).not.toContain('the images `knext deploy` and `knext preview` build');
+    expect(body).not.toContain('images built by `knext build`');
+  });
+
   it('states the threat model of the ownership rule in user terms: who it stops, who it does not, why the directories count, and that there is no opt-out', () => {
     const flat = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
     // Root owns it; the user the app runs as does not count, because it can chmod what it owns.
     expect(flat).toContain('Root must own the library');
-    expect(flat).toContain('the directory `native/` sits in');
+    expect(flat).toContain('every directory from the library up to `/`');
+    expect(flat).toContain('the directory beside the executable and each directory above that');
     expect(flat).toContain('the user the app runs as included');
     expect(flat).toContain('could change the permissions of what it owns');
     // Who it protects against, and who it does not.
@@ -420,18 +477,85 @@ describe('docs — in-process Rust page', () => {
     expect(flat).toContain('There is no setting that turns the check off');
     // Why a directory has to be root's too: the one sentence a user who hits the refusal needs.
     expect(flat).toContain(
-      'The directory that holds `native/` must be owned by root too, and not writable by group or other',
+      'Every directory above `native/`, up to `/`, must be owned by root too, and not writable by group or other',
     );
     expect(flat).toContain(
       'lets them rename or replace the library, or the directory itself, before the process opens it',
     );
-    expect(flat).toContain('the module pins only the file it has already opened');
+    expect(flat).toContain('and the same is true of any directory above it');
+    expect(flat).toContain('looks at every directory on the way');
+    // What the module does about a swap, stated for users: links, the manifest, directories that changed.
+    expect(flat).toContain(
+      'The module opens the manifest and the library without following symbolic links',
+    );
+    expect(flat).toContain('judges each file it opened by its owner and mode');
+    expect(flat).toContain(
+      'refuses a tree whose directories changed while the library was being checked',
+    );
+    expect(flat).toContain(
+      'A symbolic link where the library, `native/.integrity.json`, `native/` or any directory inside the tree should be is refused too, whatever it points at',
+    );
+    // The executable is judged where it really is: Bun reports its resolved path, so a link in front of
+    // an install is not what is refused, and a release-directory deploy tool is refused for its owner.
+    expect(flat).toContain('Bun reports `process.execPath` already resolved');
+    expect(flat).toContain('an install reached through such a link loads');
+    expect(flat).toContain('the directories judged are those of the real tree');
+    expect(flat).not.toContain(
+      'a link is never followed, so run the executable from its real path',
+    );
+    expect(flat).not.toContain('run the executable from its real path');
+    expect(flat).toContain('A deploy tool that keeps releases in a directory it owns');
+    expect(flat).toContain(
+      'Put `deploy_to` under a parent where every directory from that parent up to `/` is root-owned and closed to group and other, make `deploy_to`, `releases/` and each release root-owned and closed to group and other, and never change anything above `deploy_to`. Switching `current` and `deploy:cleanup` need root too',
+    );
+    expect(flat).not.toContain('make the release tree root-owned');
+    expect(flat).not.toContain('(run the step that puts the files in place as root)');
+    expect(flat).not.toContain('the module pins only the file it has already opened');
     // What to do in your own image, and for a compiled binary outside a container.
     expect(flat).toContain('(`RUN chown -R app /app`) does not pass');
     expect(flat).toContain(
-      'A compiled binary you run outside a container needs the same ownership',
+      'A compiled binary you run outside a container needs the same ownership, and so does every directory above it',
     );
-    expect(flat).toContain('A volume mounted at `native/`');
+    // The consequence a user installing outside a container has to know, with the line between fine and refused.
+    expect(flat).toContain('a root-owned `/opt/<app>` is fine');
+    expect(flat).toContain('a home directory or `/tmp` is not');
+    expect(flat).toContain('the refusal names the directory');
+    expect(flat).toContain('A volume mounted at `native/` or above it');
+    expect(flat).toContain(
+      'is refused unless root owns everything on it and group and other cannot write it',
+    );
+    expect(flat).toContain('is still writable through its other mounts');
+    // The residual, named: the capability class, /proc/self/mem, the user namespace, and what the operator does.
+    expect(flat).toContain(
+      'any capability that is equivalent to root, for example `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SYS_ADMIN` (mount), `CAP_SYS_PTRACE`, `CAP_MKNOD`, `CAP_SYS_MODULE`, `CAP_SYS_RAWIO` and `CAP_BPF`',
+    );
+    expect(flat).toContain('`/proc/self/mem`');
+    expect(flat).toContain('`hostUsers: false`');
+    // A user namespace is two cases, and only one of them is fixed by running as non-root inside.
+    expect(flat).toContain('is two cases');
+    expect(flat).toContain(
+      "Rootless Podman or Docker: the image's files belong to the host user who started the container",
+    );
+    expect(flat).toContain('running as a non-root user inside does not remove that writer');
+    expect(flat).toContain(
+      "A pod with `hostUsers: false`: the image's files belong to the pod's own root, which is host root where the filesystem supports idmapped mounts and otherwise the root of a uid range given to that pod alone (not host root); no other user on the host owns or can write them either way",
+    );
+    expect(flat).not.toContain('the files are owned by host root');
+    expect(flat).toContain('running as a non-root user inside restores the guarantee');
+    expect(flat).toContain(
+      '`allowPrivilegeEscalation: false`, as the pods the knext operator creates do',
+    );
+    // Dropping every capability is not enough for an app that runs as root.
+    expect(flat).toContain('but not `uid 0` itself');
+    expect(flat).toContain('`runAsNonRoot`');
+    expect(flat).toContain('`--cap-drop=ALL --security-opt no-new-privileges --user 65532`');
+    // A Dockerfile that copies a whole tree keeps the build host's modes on the directories inside it.
+    expect(flat).toContain('If your Dockerfile copies a whole source tree instead (`COPY . /app`)');
+    expect(flat).toContain('makes them group-writable (`0775`), which the module refuses');
+    expect(must(page, /where the library is loaded from/i)).toContain('RUN chmod -R go-w /app');
+    expect(flat).toContain(
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage already has this layout',
+    );
     // The old, weaker rule is gone from the page.
     expect(page).not.toMatch(/or the one the app runs\s+as/);
     expect(page).not.toMatch(/write access for the app's own user are each refused/);
@@ -442,9 +566,18 @@ describe('docs — in-process Rust page', () => {
     const body = must(page, /where the library is loaded from/i);
     expect(body.match(/```dockerfile title="Dockerfile"/g)?.length).toBe(1);
     expect(body.match(/```bash title="own-binary\.sh"/g)?.length).toBe(1);
+    // The recipe closes /app and /app/native itself: it does not rest on the mode a builder gives a COPY destination.
+    expect(body).toContain('RUN chmod go-w /app /app/native\n');
+    expect(body).toMatch(
+      /COPY --chown=0:0 --chmod=a-w native \/app\/native\s+RUN chmod go-w \/app \/app\/native\s+USER 65532:65532/,
+    );
+    expect(body.match(/```dockerfile title="Dockerfile\.copied-tree"/g)?.length).toBe(1);
     const lane = repoFile('.github/workflows/ffi-e2e.yml');
     expect(lane).toContain('packages/ffi/scripts/doc-recipe.ts dockerfile');
     expect(lane).toContain('packages/ffi/scripts/doc-recipe.ts shell');
+    // The commands hand a whole directory to root, so they refuse one that can hold other things: the
+    // lane runs them on a directory of its own under /opt, as the page says, not under the temp directory.
+    expect(lane).toContain('APP_DIR="/opt/knext-ffi-caller" bash -euo pipefail');
   });
 
   it('records the rule in the threat model: who it stops, its limits, the files it does not judge, the development path, and why the sealed copy was not used', () => {
@@ -454,19 +587,92 @@ describe('docs — in-process Rust page', () => {
     const entry = model.slice(at, model.indexOf(' ### ', at + 10));
     expect(entry).toContain('owned by root');
     expect(entry).toContain('the user the app runs as');
-    expect(entry).toMatch(/root, `CAP_DAC_OVERRIDE`/);
+    expect(entry).toMatch(/root or with `CAP_DAC_OVERRIDE` or `CAP_FOWNER`/);
+    for (const cap of [
+      'CAP_CHOWN',
+      'CAP_SETUID',
+      'CAP_SYS_ADMIN',
+      'CAP_SYS_PTRACE',
+      'CAP_MKNOD',
+      'CAP_SYS_MODULE',
+      'CAP_SYS_RAWIO',
+      'CAP_BPF',
+    ]) {
+      expect(entry, cap).toContain(`\`${cap}\``);
+    }
+    expect(entry).toContain('any capability that is equivalent to root, for example');
+    expect(entry).toContain('**What is not stopped.**');
+    expect(entry).toContain('`/proc/self/mem`');
+    expect(entry).toMatch(/one the attacker makes for itself gains nothing/);
+    expect(entry).toContain('`hostUsers: false`');
+    expect(entry).toContain('two cases');
+    expect(entry).toContain('does not remove that writer');
+    expect(entry).toContain('`runAsNonRoot`');
+    expect(entry).toContain('`capabilities.drop: [ALL]` and `allowPrivilegeEscalation: false`');
+    expect(entry).toContain('pod_hardening.go');
+    // What the loader tests fake and what is real: not "faked owners, real modes".
+    expect(entry).not.toContain('faked owners, real modes');
+    expect(entry).toContain(
+      "the **modes of the directories above the executable's directory** (reported as 0755",
+    );
+    expect(entry).toContain('What is real: the modes of the library, the manifest, `native/`');
+    // The links claim says what the code does, and the images are named by the commands that build them.
+    expect(entry).toContain('**No link is followed anywhere on the path:**');
+    expect(entry).toContain('Bun reports `process.execPath` already resolved');
+    expect(entry).toContain('the directory beside the executable must still be its own `realpath`');
+    expect(entry).toContain('fail-closed assertion');
+    expect(entry).toContain(
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies `native/`',
+    );
+    // The nested layout has no real-Docker CI leg: named, tracked, and not required for Accepted.
+    expect(entry).toContain('model-tested only, with no real-Docker CI leg');
+    expect(entry).toContain('TD-S18-1b');
     expect(entry).toMatch(/ACL/);
     expect(entry).toMatch(/macOS/);
     expect(entry).toMatch(/second mount/);
     expect(entry).toContain('no opt-out');
     expect(entry).toContain('memfd');
-    // The directories above native/'s parent: what a writer there can and cannot do, stated correctly.
+    // Every directory up to /: why, who it leaves out, and that the old "not judged" claims are gone.
     expect(entry).not.toContain('whoever can rename one of those can replace the whole tree');
-    expect(entry).toMatch(/cannot change the bytes of a file only root can write/);
-    expect(entry).toMatch(/can make the load refuse/);
-    // The manifest gets no owner check, and why that is not a bypass.
-    expect(entry).toContain('`native/.integrity.json` is not checked for owner or mode');
-    expect(entry).toMatch(/not a bypass/);
+    expect(entry).not.toContain('are not judged, and a writer there');
+    expect(entry).not.toMatch(/cannot change the bytes of a file only root can write/);
+    expect(entry).toContain('**Every directory above the library is judged, up to `/`.**');
+    expect(entry).toMatch(/no user but root can swap any part of it/);
+    expect(entry).toContain('StrictModes');
+    expect(entry).toMatch(/refused too\. That is the conservative reading, not a measured hole/);
+    expect(entry).not.toMatch(/the sticky bit stops deleting/);
+    expect(entry).toContain('a rename is restricted like an unlink');
+    expect(entry).toMatch(/covers `\/`/);
+    expect(entry).toMatch(/The owner of a directory on the path is not on this list/);
+    // The manifest IS judged: the first version's "not a bypass" reasoning was wrong, and says so.
+    expect(entry).toContain('`native/.integrity.json` is judged like the library');
+    expect(entry).toMatch(/whoever writes it chooses which bytes pass/);
+    expect(entry).toMatch(/That argument was wrong/);
+    expect(entry).not.toContain('is not checked for owner or mode');
+    expect(entry).not.toMatch(/not a bypass\./);
+    // Links, regular files, pinned directories as a tripwire, and what is still not stopped.
+    expect(entry).toContain('`O_NOFOLLOW`');
+    expect(entry).toContain('`O_NONBLOCK`');
+    expect(entry).toMatch(/refused unless they are regular files/);
+    expect(entry).toContain('**The pins are a tripwire, not the lock.**');
+    expect(entry).toMatch(/checked, not locked/);
+    expect(entry).toMatch(/aiming the path at another complete tree that root wrote/);
+    expect(entry).not.toContain('TODO(TD-S17-close-1)');
+    expect(entry).toMatch(/dangling symbolic link at the staged path counts as staged/);
+    // What the lanes proved, with both runs cited as the ADR cites them, and what is still pending.
+    expect(entry).toContain('**Lanes:**');
+    expect(entry).toContain('actions/runs/44882665743');
+    expect(entry).toContain('actions/runs/44882665667');
+    expect(entry).toContain('actions/runs/44887787660');
+    // The row points at the paragraphs under the table, and says how many there are.
+    const raw = repoFile('docs/security/threat-model.md');
+    const rawStart = raw.indexOf('### The in-process Rust library');
+    const rawEntry = raw.slice(rawStart, raw.indexOf('\n### ', rawStart + 10));
+    const afterTable = rawEntry.slice(rawEntry.lastIndexOf('\n| **T**amper'));
+    const paragraphs = afterTable.split('\n\n').filter((p) => p.startsWith('**'));
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'];
+    expect(paragraphs.length).toBeGreaterThan(0);
+    expect(entry).toContain(`See the ${words[paragraphs.length]} paragraphs below`);
     // The development path: an accepted, dev-only hole, and a refused staged library never reaches it.
     expect(entry).toContain('**The development build is an accepted, development-only path.**');
     expect(entry).toMatch(/`NODE_ENV` is not `production`/);
@@ -511,11 +717,175 @@ describe('docs — in-process Rust page', () => {
     // Decision: the rule, who is not trusted, why directories count, the unjudged manifest, the dev path.
     expect(amendment).toMatch(/owned by uid 0/);
     expect(amendment).toMatch(/not writable by group or other/);
-    expect(amendment).toContain('the directory `native/` sits in');
+    expect(amendment).toContain("every directory from the library's parent up to `/`");
     expect(amendment).toMatch(/the user the process runs as is not trusted/i);
     expect(amendment).toMatch(/no opt-out/i);
-    expect(amendment).toMatch(/rename or replace the library/);
-    expect(amendment).toContain('`native/.integrity.json` is not checked for owner or mode');
+    expect(amendment).toMatch(
+      /Renaming or replacing a directory needs write permission on its parent/,
+    );
+    // The manifest is judged; the first version's reasoning is named and withdrawn, not left standing.
+    expect(amendment).toContain('The manifest is judged like the library.');
+    expect(amendment).toMatch(/That was wrong\. The manifest is what authorises a file/);
+    expect(amendment).not.toContain('is not checked for owner or mode.');
+    // Links are never followed, the directories are pinned, and the limit is stated.
+    expect(amendment).toContain('**Links are never followed.**');
+    expect(amendment).toContain('`O_NOFOLLOW`');
+    expect(amendment).toContain('**Defence in depth: the directories and files are pinned.**');
+    expect(amendment).toContain('**Files must be regular files and must not block.**');
+    expect(amendment).toMatch(/checked, not locked/);
+    expect(amendment).toContain('/dev/fd/<n>/x');
+    // The ancestor walk, argued: why it is sufficient, the StrictModes precedent, and what it costs.
+    expect(amendment).toContain(
+      '**Why every ancestor, and why that is sufficient against a non-root actor.**',
+    );
+    expect(amendment).toContain('StrictModes');
+    expect(amendment).toMatch(/\| \(h\) require every directory from `native\/` up to `\/`/);
+    expect(amendment).toMatch(/\(jev 0\.96;/);
+    expect(amendment).toMatch(/under a root-owned `\/opt\/<app>` is fine/);
+    // Option (g) is no longer argued as "not available": it works on Linux, and fails on portability.
+    expect(amendment).toMatch(/the first version argued it wrongly/);
+    expect(amendment).toMatch(/`\/proc\/self\/fd\/<dirfd>\/x` works there/);
+    // The residual names its actors, and the old repoint residual is closed by the walk.
+    expect(amendment).toContain('**What is not stopped.**');
+    expect(amendment).toMatch(/`CAP_DAC_OVERRIDE` or `CAP_FOWNER`/);
+    expect(amendment).toContain('any capability that is equivalent to root, for example');
+    for (const cap of ['CAP_SYS_MODULE', 'CAP_SYS_RAWIO', 'CAP_BPF']) {
+      expect(amendment, cap).toContain(`\`${cap}\``);
+    }
+    expect(amendment).toContain('`runAsNonRoot`');
+    expect(amendment).toMatch(/The owner of an ancestor is no longer on this list/);
+    expect(amendment).not.toContain('on files and directories it does not own');
+    // The images: what was measured, the line that fixes the nested layout, and the lane pending.
+    expect(amendment).toContain(
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed), on `0c07c17`, where all of them and `Lint & Test` were green, on `78b7acf` (where `Lint & Test` was red, on a type error in two tests, since fixed), and on `d4d7a76`, where all of them and `Lint & Test` were green, and on `0ab20db`, where the musl load matrix, the kind e2e and the Rust crates lane were green and `Lint & Test` was red on one timing assertion of a two-process test this change does not touch (`use-cache-redis-served`; it passes on the same tree when run alone); they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+    );
+    // The CI result on the previous head is recorded, with the one red and how it was fixed.
+    expect(amendment).toContain('b4d81ae9b346023ddea03b5a6c5124588c8d2b3d');
+    expect(amendment).toContain('actions/runs/44900618316');
+    expect(amendment).toContain('the guard is not relaxed');
+    // The amendment names every decision it changes and every trigger it is, and D17 and D18 carry the change.
+    expect(amendment).toContain('It also amends **D17**');
+    expect(amendment).toContain('and **D18**');
+    expect(amendment).toContain(
+      'It is an ADR trigger, a security-invariant trigger and a core-vs-app-boundary trigger',
+    );
+    const flatAdr = adr.replace(/\s+/g, ' ');
+    expect(flatAdr).toContain('with one exception named below');
+    expect(flatAdr).toContain('**The exception (Amendment 1), and why it is safe.**');
+    expect(flatAdr).toContain('is a behaviour change without the opt-in');
+    expect(flatAdr).toContain(
+      "and the recognition of the scaffolded vinext `Dockerfile` with one extra line, `RUN chmod go-w /app /app/native`, directly after its `native/` `COPY` (`isKnownGoodTemplateDockerfile`, D17's exception)",
+    );
+    // The hint comes from all three verbs, for a vinext app only, and says where the line goes.
+    expect(flatAdr).toContain('The hint comes from all three verbs');
+    expect(flatAdr).toContain(
+      'printed for an app built for vinext, and for one whose build cannot be told',
+    );
+    // The hint confirms one form and never claims more: the exact rule is in the ADR, stated and no stronger.
+    expect(flatAdr).toContain('**The hint does not read what a command does.**');
+    expect(flatAdr).toContain(
+      'It confirms one form and says nothing only for it: the scaffolded `COPY` of `native/` (`VINEXT_NATIVE_COPY`), then `VINEXT_CLOSE_LINE` as the very next line of the file, byte for byte',
+    );
+    expect(flatAdr).toContain('The whole file has to be clean as well, **judged first**');
+    expect(flatAdr).toContain('no `<<` anywhere in it');
+    expect(flatAdr).toContain('no `escape` or `syntax` parser directive on any line');
+    expect(flatAdr).toContain('no `SHELL` or `ONBUILD` instruction in any stage');
+    expect(flatAdr).toContain("BuildKit runs a parent stage's `ONBUILD` triggers");
+    expect(flatAdr).toContain('whose first word is not one Docker knows');
+    expect(flatAdr).not.toContain('that does not start with an instruction Docker knows');
+    expect(flatAdr).toContain("BuildKit's syntax detection also reads a `// syntax=` line");
+    expect(flatAdr).toContain('no line that ends in a backslash that no space or tab precedes');
+    expect(flatAdr).toContain('a backslash alone at the start of a line');
+    expect(flatAdr).not.toContain('a lone backslash');
+    expect(flatAdr).toContain(
+      "drops the backslash and joins the next line to it directly, with no space between and that line's indent kept",
+    );
+    expect(flatAdr).toContain(
+      "Go's `ToLower`, which BuildKit applies to a keyword, folds U+0130 and U+212A",
+    );
+    expect(flatAdr).toContain(
+      '`VINEXT_SYNTAX_LINE` (the first line of the scaffolded `Dockerfile`, byte for byte)',
+    );
+    expect(flatAdr).toContain('the spellings of a `COPY` it reads');
+    expect(flatAdr).not.toContain('in any spelling of the `COPY`');
+    expect(flatAdr).toContain('and no character a reader may take for something else');
+    expect(flatAdr).toContain('a read-only check of the shape `RUN test -f <path> ||');
+    expect(flatAdr).toContain(
+      'for a file that is not clean as a whole it prints whenever the file mentions `native` at all',
+    );
+    // The gate is said as what it does, three readings, and not as BuildKit's own join.
+    expect(flatAdr).toContain(
+      'in any of three readings: its text, its instructions joined at a backslash (`instructions`), and its text read loosely',
+    );
+    expect(flatAdr).toContain('It is a gate, not a model of BuildKit');
+    expect(flatAdr).not.toContain('as BuildKit joins its lines');
+    // What the hint does not find is one list, said the same in the hint paragraph and in the action items.
+    const notFound =
+      'an `ADD`, a destination held in a variable, a relative destination under a `WORKDIR` that is itself a variable, a relative destination under a `WORKDIR` inherited from a base or parent stage, `COPY . /app`, `COPY --parents` and `COPY --from=build /app /app`';
+    expect(flatAdr.split(notFound).length - 1).toBe(2);
+    expect(flatAdr).toContain('Neither message says that the loader will accept the directories');
+    expect(flatAdr).toContain(
+      'knext does not read it and `knext deploy` takes the slower image-sourced path for it',
+    );
+    expect(flatAdr).not.toContain('read the way a shell would read them');
+    expect(flatAdr).not.toContain('What cannot be read counts as opening');
+    // What accepts the amendment, and what does not: three lanes on the final head; the nested leg is debt.
+    expect(amendment).toContain(
+      'Accepted requires three lanes green on the final head of this change: the musl load matrix (x64 and arm64), the kind e2e that calls Rust from a Server Action on a Bun zone, and the Rust crates lane',
+    );
+    expect(amendment).toContain(
+      'is **not** required for Accepted: it is tracked as debt `TD-S18-1b`',
+    );
+    expect(amendment).toContain('actions/runs/44887787660');
+    expect(amendment).toContain('dc4eb3b4dfe92eb4afb6059b9cb58e2c25f82b30');
+    expect(amendment).toContain("`/opt`, which GitHub's `ubuntu-latest` runner has at mode 0777");
+    expect(amendment).toContain('**the nested layout: model-tested only, no real-Docker CI leg**');
+    expect(amendment).toContain(
+      'the nested layout is model-tested only, with no real-Docker CI leg',
+    );
+    // The evidence is cited: the previous head and the runs that passed on it.
+    expect(amendment).toContain('6be5939867e0d08d87fc952c0bd982e3f0f76d02');
+    expect(amendment).toContain('actions/runs/44882665743');
+    expect(amendment).toContain('actions/runs/44882665667');
+    // The sticky argument is dropped, and the refusal is justified as the conservative reading.
+    expect(amendment).not.toContain('the sticky bit stops deleting what someone else owns');
+    expect(amendment).toContain('`rename` is restricted like `unlink`');
+    expect(amendment).toContain("what OpenSSH's `StrictModes` does");
+    // The residual names the capability class, /proc/self/mem and the user namespace that is the real gap.
+    for (const cap of ['CAP_CHOWN', 'CAP_SETUID', 'CAP_SYS_ADMIN', 'CAP_SYS_PTRACE', 'CAP_MKNOD']) {
+      expect(amendment, cap).toContain(`\`${cap}\``);
+    }
+    expect(amendment).toContain('`/proc/self/mem`');
+    expect(amendment).toContain('One the attacker makes for itself gains nothing');
+    expect(amendment).toContain('`hostUsers: false`');
+    expect(amendment).toContain('does not remove that writer');
+    expect(amendment).toContain('restores the guarantee');
+    expect(amendment).toContain('pod_hardening.go');
+    expect(amendment).toContain(
+      'A volume shared with a sidecar or writable through an `fsGroup` is refused unless root owns',
+    );
+    expect(amendment).toMatch(/the directory beside the executable must be its own real path/i);
+    // Bun resolves execPath, so the refusal is an assertion; a release-directory deploy tool is refused by ownership.
+    expect(amendment).toContain('Bun reports `process.execPath` already resolved');
+    expect(amendment).toContain('fail-closed assertion');
+    expect(amendment).toContain(
+      'put `deploy_to` under a parent where every directory from that parent up to `/` is root-owned and closed to group and other, make `deploy_to`, `releases/` and each release root-owned and closed to group and other, and never change anything above `deploy_to`. Switching `current` and `deploy:cleanup` need root too',
+    );
+    expect(amendment).not.toContain('make the release tree root-owned');
+    expect(amendment).not.toContain('(run the step that puts the files in place as root)');
+    expect(amendment).not.toContain('run the executable from its real path');
+    // Option (g): the two things directory-descriptor anchoring alone never closed.
+    expect(amendment).toContain('never closed the first lookup');
+    expect(amendment).toContain('the old-tree repoint');
+    // The numbering in the status paragraph matches the nine items of the Decision.
+    expect(amendment).toContain('all nine items of the Decision');
+    expect(amendment).not.toContain('items 1 to 5, 7 and 8');
+    expect(amendment.match(/ \d\. \*\*/g)?.length).toBe(9);
+    expect(amendment).toMatch(/nested \(monorepo\) standalone image did not/);
+    expect(amendment).toContain('RUN chmod go-w');
+    // Not Accepted, and why: the lane that proves the images pass has not run on this revision.
+    expect(amendment).toMatch(/Status: Proposed/);
+    expect(amendment).toContain('Why it stays Proposed');
     expect(amendment).toContain('never falls through to the development build');
     // Options: the three the measurement compared, with the measured reason for the one not used.
     expect(amendment).toContain('memfd_create');
@@ -527,6 +897,26 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).toContain('knext ffi check');
     expect(amendment).toContain('knext ffi generate');
     expect(amendment).toMatch(/generated before this change/);
+    // The amendment says it carries a pointer in D14 and D16: it has to.
+    const d14 = adr.slice(adr.indexOf('### D14.'), adr.indexOf('### D15.')).replace(/\s+/g, ' ');
+    expect(d14).toContain('Amendment 1');
+    expect(d14).toContain('--chown=0:0 --chmod=a-w');
+    expect(d14).toContain(
+      'RUN chmod go-w /app /app/.next /app/.next/standalone /app/.next/standalone/native',
+    );
+    expect(d14).toContain('up to `/`');
+    const d16 = adr.slice(adr.indexOf('### D16.'), adr.indexOf('### D17.')).replace(/\s+/g, ' ');
+    expect(d16).toContain('Amendment 1');
+    expect(d16).toContain('root must own');
+    expect(d16).toContain('the FFI loader judges');
+    expect(d16).toContain(
+      'the sharp shim in the vinext image hashes by path and does not judge owner or mode',
+    );
+    // D18 lists the image chmod line among the Rust-specific things core contains.
+    const d18 = adr.slice(adr.indexOf('### D18.'), adr.indexOf('### D19.')).replace(/\s+/g, ' ');
+    expect(d18).toContain(
+      'the `RUN chmod go-w` line that closes `native/` and the directories above the executable',
+    );
     // D13 points at it instead of carrying a bold paragraph of its own.
     const d13 = adr.slice(adr.indexOf('### D13.'), adr.indexOf('### D14.')).replace(/\s+/g, ' ');
     expect(d13).toContain('Amendment 1');
@@ -536,6 +926,112 @@ describe('docs — in-process Rust page', () => {
     const consequences = h2(/^## Consequences$/);
     expect(consequences).toContain('Amendment 1');
     expect(consequences).toMatch(/user Dockerfile/);
+  });
+
+  it("says the vinext template is not changed: the line is the app owner's to add, `knext ffi init` prints it, and no doc claims the image gets it automatically", () => {
+    const LINE = 'RUN chmod go-w /app /app/native';
+    // The template is the app's own Dockerfile, compared byte for byte by `knext deploy`: it stays as it was.
+    const template = repoFile('packages/kn-next/templates/app/Dockerfile.hbs');
+    expect(template).not.toContain('chmod go-w');
+    // The page tells a vinext app owner what to add, and that `knext ffi init` prints it.
+    const flat = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
+    expect(flat).toContain('An app scaffolded for the vinext build');
+    expect(flat).toContain('That file is yours and knext does not edit it');
+    expect(flat).toContain(
+      `put \`${LINE}\` directly after the \`COPY\` that brings \`native/\` in (and so before \`USER\`)`,
+    );
+    expect(flat).toContain('`knext ffi init` prints that line');
+    expect(flat).toContain('and so do `knext ffi generate` and `knext ffi check`');
+    // The scaffolded file with just that one line stays known-good, so following the advice keeps the build
+    // and the asset upload; under BuildKit nothing changes for an existing app and another builder is told.
+    expect(flat).toContain('change nothing else in the file');
+    expect(flat).toContain('recognises the scaffolded `Dockerfile` byte for byte');
+    expect(flat).toContain(
+      'with just this one line directly after the `COPY` that brings `native/` in as well',
+    );
+    expect(flat).toContain('Under BuildKit nothing changes for an existing app');
+    expect(flat).toContain('With another builder the first call of the module is refused');
+    // Only the one line directly after the COPY is what deploy recognises: a chmod anywhere else closes
+    // the directories but takes the slower path, and the hint says so for a vinext app (or one whose
+    // build cannot be read) and no other.
+    expect(flat).toContain('and `knext deploy` takes the slower path described next');
+    expect(flat).toContain('An app built with another builder is told none of this');
+    expect(flat).toContain('an app whose build cannot be read');
+    expect(flat).toContain('is told as if it were vinext');
+    // The hint does not read commands: one confirmed form, and no claim stronger than that.
+    expect(flat).toContain('They do not read what your commands do. They confirm one form');
+    expect(flat).toContain('then that line as the very next line of the file, byte for byte');
+    expect(flat).toContain('The whole file has to be clean as well');
+    expect(flat).toContain('no `<<` anywhere');
+    expect(flat).toContain('no `escape` or `syntax` parser directive on any line');
+    expect(flat).toContain('no `SHELL` or `ONBUILD` instruction in any stage');
+    expect(flat).toContain('no instruction whose first word is not one Docker knows');
+    expect(flat).not.toContain('does not start with an instruction Docker knows');
+    expect(flat).toContain('no line ending in a backslash that no space or tab precedes');
+    expect(flat).toContain('a backslash alone at the start of a line');
+    expect(flat).not.toContain('a lone backslash');
+    expect(flat).toContain('a control or invisible format character (a byte-order mark)');
+    expect(flat).not.toContain('space-like, control or invisible character');
+    expect(flat).not.toContain('`ksh`');
+    expect(flat).toContain('a read-only check of the shape');
+    expect(flat).toContain('is told so whenever it mentions native at all');
+    expect(flat).not.toContain('the scaffolded read-only check');
+    expect(flat).toContain('and never say that the loader will accept the directories');
+    expect(flat).not.toContain('read the way a shell reads them');
+    expect(flat).toContain('which one line to add');
+    expect(flat).not.toContain('the message names the fix');
+    // The ADR says the template is unchanged, and nothing says it gains the line or that the image is untouched.
+    const adr = repoFile('docs/adr/0069-bun-ffi-inprocess-rust.md').replace(/\s+/g, ' ');
+    expect(adr).toContain('The vinext template (`templates/app/Dockerfile.hbs`) is not changed');
+    expect(adr).toContain('`knext ffi init` prints that line');
+    expect(adr).toContain('`vinextTemplateWithCloseLine(template)`');
+    expect(adr).toContain('Under BuildKit nothing changes for an existing app');
+    const changeset = repoFile('.changeset/ffi-sealed-tree-swap.md');
+    expect(changeset).toContain(
+      "the vinext template is the app's own scaffolded `Dockerfile` and is not changed",
+    );
+    expect(changeset).toContain('Under BuildKit nothing changes for an existing app');
+    expect(changeset).toContain(
+      'with another builder the first call is refused, and the message says how to fix the directories',
+    );
+    // The changeset states the same whole-file rule and the same shell rule as the page.
+    const flatChangeset = changeset.replace(/\s+/g, ' ');
+    expect(flatChangeset).toContain('a read-only check of the shape `RUN test -f <path> ||');
+    expect(flatChangeset).toContain(
+      'The whole file has to be clean as well, judged before anything else is looked at',
+    );
+    expect(flatChangeset).toContain('no `escape` or `syntax` parser directive on any line');
+    expect(flatChangeset).toContain('no `SHELL` or `ONBUILD` instruction in any stage');
+    expect(flatChangeset).toContain('no instruction whose first word is not one Docker knows');
+    expect(flatChangeset).not.toContain('does not start with an instruction Docker knows');
+    expect(flatChangeset).toContain('no line ending in a backslash that no space or tab precedes');
+    expect(flatChangeset).toContain('a backslash alone at the start of a line');
+    expect(flatChangeset).not.toContain('a lone backslash');
+    expect(flatChangeset).toContain('a control or invisible format character');
+    expect(flatChangeset).not.toContain('space-like, control or invisible character');
+    expect(flatChangeset).toContain('whenever it mentions native at all');
+    expect(flatChangeset).not.toContain('`ksh`');
+    expect(flatChangeset).not.toContain('the scaffolded read-only check');
+    expect(flatChangeset).toContain('refuse unless bash runs them');
+    expect(flatChangeset).not.toContain('refuse under `sh`');
+    expect(flat).not.toContain('run under `sh`, `dash` or `zsh`');
+    const model = repoFile('docs/security/threat-model.md').replace(/\s+/g, ' ');
+    expect(model).toContain(
+      "the vinext template is the app's own scaffolded file and is not changed",
+    );
+    for (const [name, text] of [
+      ['the ADR', adr],
+      ['the changeset', changeset],
+      ['the threat model', model],
+      ['the page', flat],
+    ] as const) {
+      expect(text, `${name} claims the vinext template gains the line`).not.toMatch(
+        /vinext template[^.]{0,40}(gains|carries) `RUN chmod/,
+      );
+      expect(text, `${name} claims the vinext image is unchanged by the line`).not.toContain(
+        'its image is unchanged',
+      );
+    }
   });
 
   it('opens the changeset with a sentence that reads: the module `knext ffi generate` writes is the subject', () => {

@@ -5,11 +5,14 @@ import 'server-only';
 import { createHash as $createHash } from 'node:crypto';
 import {
   closeSync as $closeSync,
+  constants as $constants,
   existsSync as $existsSync,
   fstatSync as $fstatSync,
+  lstatSync as $lstatSync,
   openSync as $openSync,
   readdirSync as $readdirSync,
   readFileSync as $readFileSync,
+  realpathSync as $realpathSync,
   statSync as $statSync,
 } from 'node:fs';
 import { dirname as $dirname, join as $join } from 'node:path';
@@ -722,7 +725,7 @@ function $load(): void {
       err instanceof FfiLoadError
         ? err
         : new FfiLoadError(
-            `knext ffi: could not load the Rust library: ${err instanceof Error ? err.message : String(err)}`,
+            `knext ffi: could not load the Rust library: ${$show(err instanceof Error ? err.message : err)}`,
           );
     throw $failed;
   }
@@ -737,7 +740,7 @@ function $threshold(raw: string | undefined): number {
   if (ms === 0) return Infinity;
   if (Number.isFinite(ms) && ms > 0) return ms;
   console.warn(
-    `knext ffi: ignoring KNEXT_FFI_SLOW_CALL_MS=${JSON.stringify(raw)}: it must be a number of milliseconds (0 turns slow-call counting off). Using 50.`,
+    `knext ffi: ignoring KNEXT_FFI_SLOW_CALL_MS="${$show(raw)}": it must be a number of milliseconds (0 turns slow-call counting off). Using 50.`,
   );
   return 50;
 }
@@ -828,9 +831,9 @@ function $open(): void {
     const via =
       load === path
         ? ''
-        : ` (opened as ${load}${load.startsWith('/proc/') ? ', which needs /proc mounted' : ''})`;
+        : ` (opened as ${$show(load)}${load.startsWith('/proc/') ? ', which needs /proc mounted' : ''})`;
     throw new FfiLoadError(
-      `knext ffi: could not load ${path}${via}: ${err instanceof Error ? err.message : String(err)}\n` +
+      `knext ffi: could not load ${$show(path)}${via}: ${$show(err instanceof Error ? err.message : err)}\n` +
         'If the library does not export a function this module calls, the module is stale: run `knext ffi generate` and commit the result.',
     );
   }
@@ -841,7 +844,7 @@ function $open(): void {
     const actual = schema ? String(schema()) : 'missing';
     if (actual !== expected) {
       throw new FfiLoadError(
-        `knext ffi: ${path} does not match this module: the records or enums ${fn}() uses have changed since it was generated (schema ${actual}, expected ${expected}). ` +
+        `knext ffi: ${$show(path)} does not match this module: the records or enums ${fn}() uses have changed since it was generated (schema ${actual}, expected ${expected}). ` +
           'The module is stale: run `knext ffi generate` and commit the result.',
       );
     }
@@ -891,8 +894,10 @@ function $resolve(): readonly [string, string] {
   const native = $join($dirname(process.execPath), 'native');
   const staged = $join(native, 'ffi', triple, file);
   const tried = [staged];
-  if ($existsSync(staged)) {
-    return [staged, $verify(native, `ffi/${triple}/${file}`, staged)];
+  // lstat, not existsSync: existsSync follows a link and says no to a dangling one, which would
+  // read as "nothing staged" and fall through to the unchecked development build.
+  if ($lstatSync(staged, { bigint: true, throwIfNoEntry: false }) !== undefined) {
+    return [staged, $verify(native, $join('ffi', triple, file), staged)];
   }
   let others: string[] = [];
   try {
@@ -902,7 +907,7 @@ function $resolve(): readonly [string, string] {
   }
   if (others.length > 0) {
     throw new FfiLoadError(
-      `knext ffi: ${$join(native, 'ffi')} holds Rust libraries for ${others.join(', ')}, but this process runs on ${triple}. Build the image for the platform it runs on.`,
+      `knext ffi: ${$show($join(native, 'ffi'))} holds Rust libraries for ${$show(others.join(', '))}, but this process runs on ${triple}. Build the image for the platform it runs on.`,
     );
   }
   if (process.env['NODE_ENV'] !== 'production') {
@@ -913,108 +918,369 @@ function $resolve(): readonly [string, string] {
       .sort((a, b) => $statSync(b).mtimeMs - $statSync(a).mtimeMs);
     if (found[0] !== undefined) {
       console.warn(
-        `knext ffi: loading the development build ${found[0]} without an integrity check (NODE_ENV is not "production").`,
+        `knext ffi: loading the development build ${$show(found[0])} without an integrity check (NODE_ENV is not "production").`,
       );
       return [found[0], found[0]];
     }
   }
   throw new FfiLoadError(
-    `knext ffi: cannot find the Rust library ${file} for ${triple}. Tried:\n${tried.map((p) => `  ${p}`).join('\n')}\n` +
-      'Images built by `knext build` stage it beside the server (knext ffi build); in development, run `knext ffi generate`.',
+    `knext ffi: cannot find the Rust library ${$show(file)} for ${triple}. Tried:\n${tried.map((p) => `  ${$show(p)}`).join('\n')}\n` +
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage puts it beside the server (knext ffi build builds it); in development, run `knext ffi generate`.',
   );
 }
 
+/** The part of a stat the checks read; fs.Stats and fs.BigIntStats both fit. */
+type $Stat = {
+  readonly dev: number | bigint;
+  readonly ino: number | bigint;
+  readonly uid: number | bigint;
+  readonly mode: number | bigint;
+};
+
 /**
- * Fail closed unless only root can write the library. The hash covers the bytes
- * read now, and a descriptor pins the inode, not its bytes, so whoever can write
- * the file (or swap it, from a directory they can write) changes what gets
- * mapped. Judged by owner and mode, not access(), which answers yes to root for
- * everything: the file through the descriptor it was hashed from, then its
- * directories up to native/ itself, then the directory native/ sits in. Exactly
- * those, never the rest of the path. Each must be owned by root and not writable
- * by group or other. The user this process runs as is NOT trusted: it can chmod
- * what it owns, so a tree it owns protects nothing from a bug that writes files.
+ * What is wrong with a stat'ed object, or '' when it is root's and group and other cannot write it.
+ * Judged by owner and mode, never access(), which answers yes to root for everything. The user this
+ * process runs as is NOT trusted: it can chmod what it owns, so a tree it owns protects nothing from
+ * a bug that writes files. The mode is printed whole (the sticky, setuid and setgid bits included),
+ * so a 1777 directory reads as 1777.
  */
-function $sealed(native: string, rel: string, path: string, fd: number): void {
-  const parts = rel.split('/');
-  const checks: [string, { uid: number; mode: number }][] = [[path, $fstatSync(fd)]];
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const dir = $join(native, ...parts.slice(0, i));
-    checks.push([dir, $statSync(dir)]);
+function $why(st: $Stat): string {
+  const bits = Number(st.mode);
+  const mode = (bits & 0o7777).toString(8).padStart(4, '0');
+  if (Number(st.uid) !== 0) return `is owned by uid ${st.uid}, but only root may own it`;
+  if ((bits & 0o022) !== 0) return `is writable by its group or by everyone (mode ${mode})`;
+  return '';
+}
+
+/**
+ * Fail closed unless root owns the file and group and other cannot write it. p is the file judged,
+ * path the library the refusal is about. (A directory is judged by $sealed, which lists every one
+ * that fails: the fix for a directory is not the fix for a file.)
+ */
+function $judge(path: string, p: string, st: $Stat): void {
+  const why = $why(st);
+  if (why !== '') {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${$show(path)}: ${$show(p)} ${why}, so its bytes could change after they were checked. The library and its integrity manifest must be owned by root and not writable by group or other (the Dockerfile that \`knext build\`, \`knext deploy\` and \`knext preview\` stage copies native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user; every directory from the library up to / must also be owned by root and not writable by group or other.`,
+    );
   }
+}
+
+/** What a stat says an object is: its type bits (S_IFREG, S_IFDIR, S_IFLNK, ...). */
+function $type(st: $Stat): number {
+  return Number(st.mode) & $constants.S_IFMT;
+}
+
+/** Which object a stat describes. An object keeps it through a rename; a replacement has another. */
+function $id(st: $Stat): string {
+  return `${st.dev}:${st.ino}`;
+}
+
+/** A directory the check relied on, and which object it was: [path, $id]. */
+type $Pin = readonly [string, string];
+
+/** Every directory from dir up to the root, dir first. */
+function $upTo(dir: string): string[] {
+  const out: string[] = [];
+  for (let d = dir; ; d = $dirname(d)) {
+    out.push(d);
+    if ($dirname(d) === d) return out;
+  }
+}
+
+/**
+ * A path, a value read from a file or the environment, or a system error that quotes one, as a
+ * refusal prints it. A control character (a newline above all) in a directory name would start a
+ * line of its own in the list of directories, which is read as one directory a line, and a
+ * bidirectional control would reorder the text around it. So the output is made unambiguous. A C0
+ * control or DEL is shown in caret notation (a newline as ^J). A backslash is doubled and a caret
+ * gets a backslash before it, so a name that really holds ^J, or the text of a unicode escape, can
+ * never be read as a control character. A C1 control, a line or paragraph separator (U+2028,
+ * U+2029: a line end to many terminals and log readers), every format character (Unicode category
+ * Cf, asked of the engine: the bidirectional controls U+061C, U+200E, U+200F, U+202A to U+202E and
+ * U+2066 to U+2069, the zero-width U+200B to U+200D, the word joiner and the invisible operators
+ * U+2060 to U+2064, the soft hyphen U+00AD, the Mongolian vowel separator U+180E, the byte order
+ * mark U+FEFF, the Unicode tag characters U+E0001 and U+E0020 to U+E007F, which spell a string
+ * nobody sees: a name that holds one would read as the name without it), the combining grapheme
+ * joiner U+034F (invisible, though not a format character) and a lone surrogate (a half of a pair:
+ * a JSON string in the manifest can hold one, and what prints it turns it into U+FFFD or into
+ * nothing) are shown as a unicode escape: a backslash, u and four hex digits, or, beyond U+FFFF,
+ * u and the hex digits in braces. None is ever printed as itself.
+ *
+ * It never throws. What is not text is converted with String(); an object that has no text (it has
+ * no prototype, or its toString throws) is shown as [object Object]. Invalid UTF-8 in a file name
+ * or an environment value has already become U+FFFD (the replacement character) by the time it is
+ * a string, and is shown as that character: it is not a control and hides nothing.
+ */
+function $show(p: unknown): string {
+  let text: string;
+  try {
+    text = String(p);
+  } catch {
+    text = '[object Object]';
+  }
+  let out = '';
+  for (const ch of text) {
+    const n = ch.codePointAt(0) as number;
+    if (n < 0x20 || n === 0x7f) out += `^${String.fromCharCode(n ^ 0x40)}`;
+    else if (ch === '\\' || ch === '^') out += `\\${ch}`;
+    else if (
+      (n >= 0x80 && n <= 0x9f) ||
+      n === 0x34f ||
+      n === 0x2028 ||
+      n === 0x2029 ||
+      (n >= 0xd800 && n <= 0xdfff) ||
+      /\p{Cf}/u.test(ch)
+    ) {
+      out += n > 0xffff ? `\\u{${n.toString(16)}}` : `\\u${n.toString(16).padStart(4, '0')}`;
+    } else out += ch;
+  }
+  return out;
+}
+
+/**
+ * Judge, and pin, every directory the check relies on: the library's, from the one it sits in up
+ * to native/ itself, then the directory native/ sits in (beside the executable), then every
+ * directory above that up to the root. Each is looked at with lstat (a link is never followed),
+ * must be a real directory, owned by root and not writable by group or other. They are judged here,
+ * BEFORE the manifest or the library is opened, and $unchanged looks at the same names again once
+ * the bytes are hashed, so a tree renamed over them in between is refused. Every directory that
+ * fails is listed in the one refusal.
+ *
+ * The directory beside the executable must be its own real path. Bun reports process.execPath
+ * already resolved, so an install behind a link (current -> releases/N, /tmp -> /private/tmp) gets
+ * here as the real path and its directories are judged as they are. The comparison is a fail-closed
+ * assertion on that: a path that is not its own real path (a relative one, or one through a link)
+ * is refused, never followed, because the lookups would go through it and the directories judged
+ * would be somebody else's.
+ *
+ * Why every ancestor: a directory a user can write is one that user can rename the tree out of, and
+ * put another in its place. With every directory from native/ up to the root owned by root and
+ * closed to group and other, nobody but root can rename or replace any of them, so looking them up
+ * by path is sound (Bun has no openat, and macOS has no descriptor-relative path, so a lookup cannot
+ * be anchored to a directory descriptor). The pins and the file checks below are defence in depth:
+ * what remains is code running as root (or with a capability equivalent to root: CAP_DAC_OVERRIDE,
+ * CAP_FOWNER, CAP_CHOWN, CAP_SETUID, CAP_SYS_ADMIN, CAP_SYS_PTRACE, CAP_MKNOD, CAP_SYS_MODULE,
+ * CAP_SYS_RAWIO, CAP_BPF), a second writable mount of the same files, an ACL, or a write to
+ * /proc/self/mem, and none of that can be told apart from the real tree by any lookup.
+ *
+ * The advice follows the situation, not the position, because a directory at or above the
+ * executable's can be the app's own (the prefix directories of a nested image, /app/.next, a
+ * chmod 777 /app) or shared (a /tmp, a root:staff /usr/local, a home directory) and the loader
+ * cannot tell which. A directory inside native/ is always the app's: it is told how to fix it in
+ * place. A STICKY directory at the executable's level or above it is a shared one (a /tmp):
+ * changing its owner or mode would break what else uses it, so it is told only to move the install.
+ * Any other failing directory (a world-writable one that is not sticky, one owned by the wrong
+ * user, a group-writable one) is told both, each with its condition (part of the app's install: fix
+ * it; shared, or a home directory: move it, and never give a home directory to root), and that the
+ * executable needs a directory of its own.
+ */
+function $sealed(native: string, rel: string, path: string): $Pin[] {
   const home = $dirname(native);
-  checks.push([home, $statSync(home)]);
-  for (const [p, st] of checks) {
-    const mode = (st.mode & 0o777).toString(8).padStart(4, '0');
-    let why = '';
-    if (st.uid !== 0) {
-      why = `is owned by uid ${st.uid}, but only root may own it`;
-    } else if ((st.mode & 0o022) !== 0) {
-      why = `is writable by its group or by everyone (mode ${mode})`;
+  let real: string;
+  try {
+    real = $realpathSync(home);
+  } catch (err) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${$show(path)}: cannot resolve the directory ${$show(home)} (${$show(err instanceof Error ? err.message : err)}).`,
+    );
+  }
+  if (real !== home) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${$show(path)}: ${$show(home)} is not the real path of its directory (it resolves to ${$show(real)}), ${home.startsWith('/') ? "so the executable's path goes through a symbolic link at or above its directory. A link is never followed, whatever it points at, because the lookups would not go where the judgement did: run the executable by its real path." : "because the executable's path is relative. What is judged must be the directory the lookups reach: run the executable by its absolute path."}`,
+    );
+  }
+  const parts = rel.split('/');
+  const dirs: string[] = [];
+  for (let i = parts.length - 1; i >= 0; i--) dirs.push($join(native, ...parts.slice(0, i)));
+  // The directories inside native/ (native/ itself too) come first, then the executable's own
+  // directory (at index `inside`), then each one above it.
+  const inside = dirs.length;
+  const up = $upTo(home);
+  dirs.push(...up);
+  const pins: $Pin[] = [];
+  const bad: string[] = [];
+  let fix = false;
+  let either = false;
+  let move = false;
+  let link = false;
+  let other = false;
+  // /app or /app/native fails and is one the close line can fix: not a sticky one, which is shared
+  // with other software and is told to move the install, not to run a chmod.
+  let closable = false;
+  for (const [i, dir] of dirs.entries()) {
+    const st = $lstatSync(dir, { bigint: true });
+    const type = $type(st);
+    if (type !== $constants.S_IFDIR) {
+      if (type === $constants.S_IFLNK) link = true;
+      else other = true;
+      bad.push(
+        `${$show(dir)} ${type === $constants.S_IFLNK ? 'is a symbolic link' : type === $constants.S_IFREG ? 'is a regular file, not a directory' : 'is not a directory'}`,
+      );
+      continue;
     }
+    const why = $why(st);
     if (why !== '') {
+      bad.push(`${$show(dir)} ${why}`);
+      const sticky = i >= inside && (Number(st.mode) & 0o1000) !== 0;
+      if (i < inside) fix = true;
+      else if (sticky) move = true;
+      else either = true;
+      if (!sticky && ['/app', '/app/native'].includes(dir)) closable = true;
+    }
+    pins.push([dir, $id(st)]);
+  }
+  if (bad.length > 0) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${$show(path)}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.${fix ? " To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}${closable ? " In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there)." : ''}${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}${move && (fix || either) ? " The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move." : ''}${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}`,
+    );
+  }
+  return pins;
+}
+
+/** Every pinned directory must still be the object that was judged; fail closed if one is not. */
+function $unchanged(path: string, pins: readonly $Pin[]): void {
+  for (const [dir, id] of pins) {
+    const now = $lstatSync(dir, { bigint: true, throwIfNoEntry: false });
+    if (now === undefined || $id(now) !== id) {
       throw new FfiLoadError(
-        `knext ffi: refusing to load ${path}: ${p} ${why}, so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image \`knext build\` generates copies native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user.`,
+        `knext ffi: refusing to load ${$show(path)}: ${$show(dir)} changed while it was being checked (it was renamed, replaced or removed, so it is not the directory that was judged), and the manifest or the library may have come from another tree.`,
       );
     }
   }
 }
 
+/** A file that was read must still be what its path names; fail closed if it is not. */
+function $same(path: string, file: string, id: string): void {
+  const now = $lstatSync(file, { bigint: true, throwIfNoEntry: false });
+  if (now === undefined || $id(now) !== id) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${$show(path)}: ${$show(file)} is no longer the file that was read (it was renamed, replaced or removed while it was being checked), so what was judged may not be what is at that path now.`,
+    );
+  }
+}
+
+/** A file opened for reading, and what it is. */
+interface $Opened {
+  readonly fd: number;
+  readonly st: $Stat;
+}
+
 /**
- * Fail closed: the library must be listed in native/.integrity.json with a matching sha256,
- * and only root may be able to write it (see $sealed).
+ * Open a regular file read-only WITHOUT following a symlink at the end of its path (O_NOFOLLOW)
+ * and WITHOUT waiting on it (O_NONBLOCK: a FIFO opened for reading blocks until a writer
+ * appears, which would hang the first call for ever). A link is refused, never followed to
+ * whatever it points at; anything that is not a regular file (a pipe, a device, a directory) is
+ * refused. missing is the refusal for a file that is not there.
+ */
+function $openFile(path: string, what: string, lib: string, missing: string): $Opened {
+  const nofollow = $constants.O_NOFOLLOW;
+  const nonblock = $constants.O_NONBLOCK;
+  if (!(nofollow > 0) || !(nonblock > 0)) {
+    throw new FfiLoadError(`knext ffi: refusing to load ${$show(lib)}: this platform cannot open ${what} without following links or blocking (it needs O_NOFOLLOW and O_NONBLOCK).`);
+  }
+  let fd: number;
+  try {
+    fd = $openSync(path, $constants.O_RDONLY | nofollow | nonblock);
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    if (code === 'ENOENT') throw new FfiLoadError(missing);
+    throw new FfiLoadError(
+      code === 'ELOOP'
+        ? `knext ffi: refusing to load ${$show(lib)}: ${$show(path)} is a symbolic link. ${what} must be the file itself: a link is never followed, whatever it points at.`
+        : `knext ffi: refusing to load ${$show(lib)}: cannot open ${$show(path)} (${$show(err instanceof Error ? err.message : err)}).`,
+    );
+  }
+  const st = $fstatSync(fd, { bigint: true });
+  if ($type(st) !== $constants.S_IFREG) {
+    $closeSync(fd);
+    throw new FfiLoadError(`knext ffi: refusing to load ${$show(lib)}: ${$show(path)} is not a regular file. ${what} must be a plain file: a pipe, a device or a directory is never read.`);
+  }
+  return { fd, st };
+}
+
+/**
+ * Fail closed: the library must be listed in native/.integrity.json with a matching sha256, and
+ * only root may be able to write the manifest, the library or the way to them (see $sealed and
+ * $judge). Each of the two files is opened without following a link, judged on the descriptor it
+ * was opened as, and read through that descriptor: nothing renamed over its path afterwards can
+ * change what was judged, and after the hash each path is looked at again and must still name the
+ * file that was read. The manifest is judged because it is what authorises a file: one anyone
+ * else could write would let any file root owns pass.
  * Returns the name to dlopen: the descriptor the hashed bytes were read through
  * (/proc/self/fd/<n> on Linux, /dev/fd/<n> on macOS), so a file renamed or linked
  * over the path after the check is not the one loaded.
  */
 function $verify(native: string, rel: string, path: string): string {
+  const pins = $sealed(native, rel, path);
   const manifest = $join(native, '.integrity.json');
-  if (!$existsSync(manifest)) {
-    throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: there is no integrity manifest at ${manifest}. Images built by \`knext build\` carry one.`,
-    );
+  const m = $openFile(
+    manifest,
+    'the integrity manifest',
+    path,
+    `knext ffi: refusing to load ${$show(path)}: there is no integrity manifest at ${$show(manifest)}. The Dockerfile that \`knext build\`, \`knext deploy\` and \`knext preview\` stage copies a native/ that carries one.`,
+  );
+  let text: string;
+  try {
+    $judge(path, manifest, m.st);
+    text = $readFileSync(m.fd, 'utf8');
+  } finally {
+    $closeSync(m.fd);
   }
+  let version: unknown;
   let files: unknown;
   try {
-    const parsed = JSON.parse($readFileSync(manifest, 'utf8')) as { version?: unknown; files?: unknown };
-    if (parsed.version !== 1) {
-      throw new Error(`unsupported version ${JSON.stringify(parsed.version)}`);
-    }
+    const parsed = JSON.parse(text) as { version?: unknown; files?: unknown };
+    version = parsed.version;
     files = parsed.files;
   } catch (err) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: cannot read ${manifest} (${err instanceof Error ? err.message : String(err)}).`,
+      `knext ffi: refusing to load ${$show(path)}: cannot read ${$show(manifest)} (${$show(err instanceof Error ? err.message : err)}).`,
+    );
+  }
+  if (version !== 1) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${$show(path)}: cannot read ${$show(manifest)} (unsupported version ${typeof version === 'string' ? `"${$show(version)}"` : $show(String(JSON.stringify(version)))}).`,
     );
   }
   const expected =
     typeof files === 'object' && files !== null ? (files as Record<string, unknown>)[rel] : undefined;
   if (typeof expected !== 'string') {
-    throw new FfiLoadError(`knext ffi: refusing to load ${path}: ${rel} is not listed in ${manifest}.`);
+    throw new FfiLoadError(`knext ffi: refusing to load ${$show(path)}: ${$show(rel)} is not listed in ${$show(manifest)}.`);
   }
-  const fd = $openSync(path, 'r');
+  // The digest is compared as text and printed on a mismatch, so it must BE a digest first.
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    throw new FfiLoadError(
+      `knext ffi: refusing to load ${$show(path)}: ${$show(manifest)} lists ${$show(rel)} as "${$show(expected)}", which is not a sha256 digest (64 lowercase hexadecimal digits).`,
+    );
+  }
+  const lib = $openFile(path, 'the library', path, `knext ffi: refusing to load ${$show(path)}: it is gone.`);
   let actual: string;
   try {
-    $sealed(native, rel, path, fd);
-    actual = $createHash('sha256').update($readFileSync(fd)).digest('hex');
+    $judge(path, path, lib.st);
+    actual = $createHash('sha256').update($readFileSync(lib.fd)).digest('hex');
+    $unchanged(path, pins);
+    $same(path, manifest, $id(m.st));
+    $same(path, path, $id(lib.st));
   } catch (err) {
-    $closeSync(fd);
+    $closeSync(lib.fd);
     throw err;
   }
   if (actual !== expected) {
-    $closeSync(fd);
+    $closeSync(lib.fd);
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: sha256 mismatch\n  expected ${expected}\n  actual   ${actual}`,
+      `knext ffi: refusing to load ${$show(path)}: sha256 mismatch\n  expected ${expected}\n  actual   ${actual}`,
     );
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
-    $closeSync(fd);
+    $closeSync(lib.fd);
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: ${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).`,
+      `knext ffi: refusing to load ${$show(path)}: ${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).`,
     );
   }
   // Never closed once dlopen has seen its name: glibc finds an already-loaded
   // library by that name, and the next open would reuse the number.
-  return process.platform === 'darwin' ? `/dev/fd/${fd}` : `/proc/self/fd/${fd}`;
+  return process.platform === 'darwin' ? `/dev/fd/${lib.fd}` : `/proc/self/fd/${lib.fd}`;
 }
 
 /** A Rust-owned (ptr, len) pair from the out slot, read as two u32 halves (no BigInt per call). */
@@ -1134,7 +1400,7 @@ function $s64(v: bigint): string {
 
 function $d64(fn: string, at: string, v: unknown): bigint {
   if (typeof v !== 'string' || !/^-?[0-9]+$/.test(v)) {
-    throw new RustError(fn, `${at}: expected a 64-bit integer as a decimal string, got ${JSON.stringify(v)}`);
+    throw new RustError(fn, `${at}: expected a 64-bit integer as a decimal string, got ${$show(JSON.stringify(v))}`);
   }
   return BigInt(v);
 }
@@ -1143,7 +1409,7 @@ function $fin(fn: string, at: string, v: unknown): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) {
     throw new RustError(
       fn,
-      `${at}: expected a finite number, got ${v === null ? 'null (NaN and Infinity cannot cross as JSON)' : JSON.stringify(v)}`,
+      `${at}: expected a finite number, got ${v === null ? 'null (NaN and Infinity cannot cross as JSON)' : $show(JSON.stringify(v))}`,
     );
   }
   return v;

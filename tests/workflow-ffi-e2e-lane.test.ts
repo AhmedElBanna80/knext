@@ -211,13 +211,42 @@ describe('ffi-e2e.yml musl-load: the loader refuses anything but a root-owned tr
     expect(run).toContain(
       'bun packages/ffi/scripts/doc-recipe.ts shell "${RUNNER_TEMP}/own-binary.sh"',
     );
+    // The page's commands refuse a directory that can hold other things (the runner's temp
+    // directory is under /home/runner), so the installed copy is under /opt, as the page says, and
+    // it is that directory the commands are run on and the container mounts.
     expect(run).toContain(
-      'APP_DIR="${RUNNER_TEMP}/musl/exe" bash -euo pipefail "${RUNNER_TEMP}/own-binary.sh"',
+      'APP_DIR="/opt/knext-ffi-caller" bash -euo pipefail "${RUNNER_TEMP}/own-binary.sh"',
     );
     expect(run).not.toMatch(/chown -R root:root/);
     // The recipe must run after the executable and native/ are in place, and before anything loads them.
     expect(run.indexOf('cp -R')).toBeGreaterThan(-1);
     expect(run.indexOf('bash -euo pipefail')).toBeGreaterThan(run.indexOf('cp -R'));
+    // The page's commands accept a directory only when it holds just native/ (with its manifest) and
+    // the one executable, so a leftover from an earlier run on a reused runner is cleared first, as
+    // root (the previous run left it root's), and before the directory is made again.
+    expect(run).toContain('sudo rm -rf /opt/knext-ffi-caller\n');
+    expect(run.indexOf('sudo rm -rf /opt/knext-ffi-caller')).toBeLessThan(
+      run.indexOf('sudo install -d'),
+    );
+    // The staged directory holds exactly what the page's commands require: native/ and the one executable.
+    expect(run).toContain('musl/exe/ffi-caller');
+    expect(run).toContain('musl/exe/native');
+    // Why /opt is fine here though a GitHub runner's /opt is writable by everyone: the loader never
+    // looks at the host's /opt, only at the ancestry the container sees, which the bind mount replaces.
+    expect(run.replace(/\s*\n\s*#\s*/g, ' ')).toContain(
+      "the host's /opt is writable by everyone (mode 0777) on a GitHub runner",
+    );
+    expect(run.replace(/\s*\n\s*#\s*/g, ' ')).toContain('the bind mount replaces that ancestry');
+    // The installed copy starts out the runner user's, so the page's commands are what hand it to root.
+    expect(run).toMatch(
+      /sudo install -d -o "\$\(id -u\)" -g "\$\(id -g\)" -m 0755 \/opt\/knext-ffi-caller\n[\s\S]*cp -R "\$\{RUNNER_TEMP\}\/musl\/exe\/\." \/opt\/knext-ffi-caller\//,
+    );
+  });
+
+  it("stages the compiled leg where the page says an install goes (/opt/<app>), not under the runner's temp directory, which the page's own refusal would reject", () => {
+    const run = text(find('Compile the caller'));
+    expect(run).not.toContain('APP_DIR="${RUNNER_TEMP}');
+    expect(run).toContain('/opt/knext-ffi-caller');
   });
 
   it('builds the Dockerfile recipe from the docs page verbatim and loads the image as its own USER, with the modes BuildKit left asserted', () => {
@@ -265,7 +294,7 @@ describe('ffi-e2e.yml musl-load: the loader refuses anything but a root-owned tr
     const run = text(nonRoot);
     expect(run.match(/--user 65532:65532/g)?.length).toBe(2);
     expect(run).toContain('${RUNNER_TEMP}/musl/native:${BUN_DIR}/native:ro');
-    expect(run).toContain('${RUNNER_TEMP}/musl/exe:/opt/caller:ro');
+    expect(run).toContain('/opt/knext-ffi-caller:/opt/caller:ro');
     expect(run.match(/ffi-musl-driver: PASS/g)?.length).toBe(2);
   });
 
@@ -295,5 +324,8 @@ describe('ffi-e2e.yml musl-load: the loader refuses anything but a root-owned tr
         expect(line, `\`${cmd}\` does not name ${dir}`).toContain(`"\${RUNNER_TEMP}/${dir}"`);
       }
     }
+    // The installed copy of the compiled leg lives outside the runner's temp directory (/opt), and is
+    // root's by then: it is removed too, or a reused runner finds it.
+    expect(run).toMatch(/sudo rm -rf \/opt\/knext-ffi-caller/);
   });
 });

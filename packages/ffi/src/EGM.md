@@ -22,7 +22,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     out:'src/generated/ffi'}`), `FfiUsageError`, `parseConfig`, `loadConfig` and `serializeConfig`.
   - Exported type: `FfiConfig`.
 - `init.ts` holds `runInit`, `recordedCrateRev`, `CRATE_GIT` (`https://github.com/getknext-dev/knext`),
-  `TEMPLATE_DIR` and the `RunInitOptions` type.
+  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`) and `VINEXT_NATIVE_COPY` (the scaffolded `COPY` it follows), both re-exported from `vinext-image.ts` (a module with no imports, also read by `render.ts` for the refusal's sentence, so the hint and the generated module cannot differ), which also defines the scaffolded file's own pinned `syntax` line (`VINEXT_SYNTAX_LINE`, the one parser directive the hint lets through, held to the shipped template by core's drift test) and the two directories once (`VINEXT_DIRS`: the line, the `COPY`, the generated module's test of which failing directories the line fixes and the hint's reading of the `COPY` are all built from it, and `vinext-pair.test.ts` moves it in a copy of the sources and watches them follow), `DEFAULT_BUILD` (`turbopack`, core's default builder, held in step by `ffi-vinext-known-good.test.ts`), `appBuild(cwd)`, `dockerfileHint(cwd, build?)` and the `RunInitOptions` type (`build?` is the app's build target).
 - `generate.ts` holds `runGenerate({cwd, check, io, deps})` and
   `generateFiles(libraryPath, config)`. `generateFiles` returns a `Map` of `.knext-generated.json`
   and `index.ts`. The file also exports the `Io`, `GenerateDeps` and `RunGenerateOptions` types and
@@ -90,6 +90,46 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
 - **Init** (`init.ts:runInit`)
   - It refuses unless the recorded crate revision is a 40-hex commit.
   - It writes nothing if `knext.ffi.json` or any top-level template entry already exists.
+  - After it writes, it reads the app's own `Dockerfile` in `cwd` (`dockerfileHint(cwd, build)`, exported, never writing it).
+    Only a vinext app is told anything: `cli.ts` reads the build once with `appBuild(cwd)` (the way the CLI reads it:
+    `knext.config.ts`, its default export's `build`, `turbopack` when it names none; `undefined` when there is no
+    config, it does not load, or its `build` is not a string, and then the hint is still given) and passes it to
+    `runInit` and `runGenerate`; any other build gets no hint, because it stages a Dockerfile that already has the line.
+    The hint does not read what a command does: it confirms ONE form and says nothing only for it. Silence needs a
+    file that is clean AS A WHOLE, judged first (`unreadable`), before the final stage is cut out, the `COPY` looked
+    for or a line trimmed: no character a reader may take for something else (`UNREADABLE`: a space-like character
+    but a space and a tab, a control or invisible format character, an invalid byte, a carriage return that does not end a line; visible
+    non-ASCII is allowed, the scaffolded file carries em dashes), no `<<` anywhere, no `escape` or `syntax` directive
+    on any line (only the scaffolded file's own pinned `VINEXT_SYNTAX_LINE`, as its first line and byte for byte, passes;
+    `ffi-vinext-known-good.test.ts` holds it to the shipped template), no `SHELL` or `ONBUILD` instruction in any stage, no
+    instruction, in any stage or before the first `FROM`, whose first word is not one Docker knows (`INSTRUCTIONS`: a
+    `// syntax=` line is one BuildKit reads as a directive), and no line ending in a backslash that no space or tab precedes
+    (`GLUED_CONTINUATION`: a backslash alone at the start of a line, a word split in two; an indented one is joined). A file that
+    is not clean as a whole gets the cannot-confirm message whenever it mentions `native` at all, in its text, in its
+    instructions joined at a backslash, or in its text read loosely (`mentionsNative`, `looseInstructions`: a continuation can split
+    the word; the loose reading also continues at a backtick, drops a comment or blank line after trimming any space-like
+    character, U+0085 included, cuts every carriage return off a line end, and joins with nothing between; it errs toward
+    printing and is a gate, not a model of BuildKit). Lines are
+    trimmed of a space, a tab and a carriage return only and continue only at a backslash then spaces and tabs, and are joined as BuildKit joins
+    them: the backslash goes, nothing takes its place, the next line keeps its indent (`instructions`, all stages, a continuation that runs into the end of the file kept). Then the final stage
+    only is read (a `COPY` or a `chmod` in a build stage does not reach the image). When that stage copies `native/` to `/app/native` (any `COPY` flags, the JSON
+    form, `--from=`, trailing slashes, quotes, `.` components, a relative destination under a `WORKDIR` that can be
+    read, line continuations and lower case are found; an `ADD`, a destination in a variable, a relative one under a `WORKDIR` that is a variable or inherited from a base or parent stage, `COPY . /app`, `COPY --parents` and `COPY --from=build /app /app` are not, and nothing is said; the destination is `VINEXT_DIRS[1]`), the output is empty only
+    when the `COPY` is exactly `VINEXT_NATIVE_COPY`, `VINEXT_CLOSE_LINE` is the very next line of the file (each is one physical line compared as the file has it, so a blank line,
+    a comment or a space fails it, as it fails `deploy`'s byte-for-byte recognition), and every instruction after the line is `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`,
+    `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL` or a read-only `RUN test -f <path> || { echo "<text>"
+    >&2; exit 1; }` (`READ_ONLY_RUN`, matched whole, runs of spaces and tabs between its words because the scaffolded check is written over several lines; the scaffolded check is one; the text holds no `$`, backtick, backslash or quote). Any other `RUN`, a
+    `COPY` or `ADD`, `ONBUILD`, `SHELL`, `VOLUME` or an instruction it does not know is not confirmed. When the line is
+    not directly after the `COPY`, the output says to add `VINEXT_CLOSE_LINE` there (before `USER`, changing nothing
+    else, and why: knext recognises the scaffolded Dockerfile with just that line, so the app keeps the build and
+    asset upload it has) and that a Dockerfile that closes them another way may load, but is not read, and takes the
+    slower image-sourced path. When it is directly after but one of the above fails, the output says that knext cannot
+    confirm that `/app` and `/app/native` stay closed, and which it was (the `COPY` is another spelling, a blank
+    line or a comment sits between, a line number for an unread instruction, for an instruction whose first word is not one Docker knows, for a glued continuation or for a character that is not plain text, a heredoc, a directive, a `SHELL`, an `ONBUILD`), never the text of the
+    file (a control character in it would reach the terminal). Neither message says the loader will accept the
+    directories. An app with no `Dockerfile`, or one that does not copy `native/` there, or that is the confirmed
+    form, gets no extra output. `knext ffi generate` and `knext ffi check` print the same hint after their own line, so
+    an app that already has its config sees it too.
 - **Manifest scanning** (`manifest.ts`)
   - The wrapper is derived from the built library's bytes, never from the Rust source
     (`generate.ts:generateFiles` calls `manifest.ts:scanManifest`).
@@ -124,29 +164,113 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     - What the descriptor covers: a path swap (rename or symlink over the path) between the
       check and the load. It does not cover a writer of the file's contents (an in-place write, a
       hard link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. So
-      `render.ts:$sealed` refuses the load unless only root can write the library: it stats the
-      hashed descriptor, then the library's directories (built from its path relative to
-      `native/`, so the walk cannot run to `/`) and the directory `native/` sits in, by owner
-      and mode (`access()` would say yes to root for all of it), before the bytes are read.
-      Each must be owned by uid 0 and not writable by group or other, with any owner-write bit
-      (root can write anyway). No other uid is accepted and the process's own uid is never read:
+      `render.ts:$judge`, `$sealed` and `$verify` refuse the load unless only root can write the
+      library or swap the tree it is read from: they stat the manifest's and the library's
+      descriptors (each opened with `O_NOFOLLOW | O_NONBLOCK` and required to be a regular file),
+      and `lstat` every directory from the library's parent up to `/` (below `native/`, `native/`,
+      the directory beside the executable and each one above it; the directory beside the executable
+      must be its own `realpath`, else `$sealed` refuses before it stats anything. Bun reports
+      `process.execPath` already resolved (measured on macOS and Linux: through a linked directory,
+      a link to the binary, `PATH` through a link, a merged `/usr`), so an install behind a link is
+      judged on its real path and this comparison is a fail-closed assertion that fires only when
+      code reassigns `execPath` to a relative or linked path; its message says which), by owner and mode (`access()` would say yes to root for
+      all of it). The directories are judged and pinned before the manifest is read. Each must be
+      a real directory (a link is refused), owned by uid 0 and not writable by group or other
+      (a sticky world-writable `/tmp` is refused too: the conservative reading, as OpenSSH's
+      `StrictModes` has it, not a measured hole), with any owner-write bit (root can write
+      anyway). Every directory that fails is listed in the one refusal, with the full mode
+      (`& 0o7777`), so a sticky or setgid directory reads as such, and the advice follows the
+      situation, not the position (`inside` is the number of directories inside `native/`, native/
+      itself included, computed before the walk adds the executable's own directory and its
+      ancestors): a directory inside `native/` (index below `inside`) is the app's and gets the
+      fix in place (`fix`: `chmod go-w`, `chown root`, a Dockerfile `RUN chmod go-w`); a STICKY
+      directory (`mode & 0o1000`, tested only after the `inside` check) at the executable's level or
+      above it is shared with other software and gets only the move (`move`: a root-owned, closed
+      directory such as `/opt/<app>`); any other failing directory (the executable's own, or one above
+      it, a world-writable one that is not sticky, a prefix directory of a nested image or a
+      `root:staff` `/usr/local`) gets both, each with its condition, and that the executable needs a
+      directory of its own (`either`); a home directory is named as one to move, never to give to
+      root. Each piece is said
+      once however many directories need it. Where `/app` or `/app/native` is on the list and the line can fix it (`closable`: a directory of the pair `VINEXT_DIRS`
+      that fails and is not a sticky one above native/, which is the move's and not the line's) the
+      message also says to put exactly `RUN chmod go-w /app /app/native` directly after the scaffolded
+      `COPY --chown=0:0 --chmod=a-w native /app/native` line of a vinext app's Dockerfile (a chmod anywhere
+      else, or one per directory, takes the deploy off the known-good path, and `knext ffi check` says whether the
+      line is there); and when `move` and `fix` or `either` both fire (a sticky directory on the way, with
+      others) it says that fixing the others alone will not make the install load. A link or a regular file
+      where a directory belongs is named as such (`link` and `other` flags) and told to be replaced.
+      Every printed path and every system error that quotes one goes through `$show`, which writes
+      a C0 control or DEL in caret notation, and a C1 control, U+2028, U+2029, every format character (Unicode
+      category Cf, asked of the engine: the bidirectional controls, the zero-width characters, the soft hyphen, the
+      invisible operators, the Unicode tag characters), U+034F (the combining grapheme joiner, invisible and not a format
+      character) and a lone surrogate (a JSON string in the manifest can hold one) as a unicode escape (`\uXXXX`, or
+      `\u{X}` beyond U+FFFF), and doubles a backslash and escapes a caret so that the output
+      is unambiguous, so a directory named with a newline cannot forge a line of the list and no
+      such character reaches a terminal or a log; it never throws, whatever it is given (a null-prototype object, one whose
+      `toString` throws). Invalid UTF-8 in a file name or an environment value has already become U+FFFD when the string was made, and is shown as it. The same goes for a value read
+      from a file or the environment (the manifest's key, version and digest, the slow-call
+      threshold). A digest the manifest lists must be 64 lowercase hexadecimal digits or the call
+      is refused with that said. `ffi-loader.test.ts` scans the rendered module
+      (`__tests__/template-scan.ts`, on the TypeScript AST) and requires every interpolation in a
+      template or a `'...' + x` concatenation that reaches an error class (`FfiLoadError`, `Error`, `RustError`,
+      `RustPanicError`, any `*Error`, an alias of one, `Reflect.construct`), `.message =`, `console.log`, `console.warn`,
+      `console.error`, `process.emitWarning`, `process.stderr.write` or a `bad.push` entry (the list of failing
+      directories), or the arguments after the stream of `Bun.write(Bun.stderr, ...)`, under any spelling the scan follows (`console['warn']`,
+      a name bound to one, `const { warn } = console`, `.bind`), or is an argument of `$openFile` that it prints (its 2nd and 4th, the names), as well as every
+      error-building function (`$fail`, `$d64`, `$fin`), to be a `$show(...)` call, a choice between string literals, or on a short
+      allow-list keyed by (function, expression) with a reason for each entry, so a new message
+      cannot forget it and an allowance for one function's `file` is not one for another's. `$why` is the shared owner
+      and mode judgement and `$judge` is the file-only refusal with the file hint. Why every ancestor: renaming a directory needs write on its parent,
+      so with every directory on the path root's and closed to group and other, no user but root
+      can swap any part of it, which makes the by-path lookups sound (Bun has no `openat`; the same
+      rule as OpenSSH's `StrictModes`). No other uid is accepted and the process's own uid is never read:
       the user the app runs as can `chmod` what it owns, so an app-owned tree, even read-only,
-      protects nothing from a file-write bug in the app. No opt-out. The generated Dockerfile
-      copies `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`); BuildKit leaves
-      `native/` and the directory above it root-owned 0755, which passes for a non-root app
-      user. A user Dockerfile that chowns the app directory to the app user, a shared, sidecar or
-      fsGroup-writable volume at `native/`, and a compiled binary whose directory is not
-      root-owned are refused. It does not stop root, `CAP_DAC_OVERRIDE`, a second writable
-      mount of the same files, or an ACL (mode bits only; on macOS an ACL can grant write). A
+      protects nothing from a file-write bug in the app. No opt-out. The Dockerfile that `knext build`,
+      `knext deploy` and `knext preview` stage copies `native/` root-owned and non-writable
+      (`--chown=0:0 --chmod=a-w`);
+      BuildKit leaves `native/` and the directory above it root-owned 0755, which passes for a
+      non-root app user. The staged standalone Dockerfile adds `RUN chmod go-w` over `native/`
+      and every directory above the executable (`runtime-image.ts:FFI_ANCESTORS_RUN`), because a
+      nested prefix directory inside a copied tree keeps the build host's mode (0775 under umask
+      002), and `native/` is named so nothing depends on the mode a builder gives a COPY's
+      destination (the vinext template, the app's own scaffolded `Dockerfile` that `knext deploy`
+      compares byte for byte, is not changed: `knext ffi init` prints `RUN chmod go-w /app /app/native`
+      for an app that copies `native/` there). A user Dockerfile that
+      chowns the app directory, or any directory above it, to the app user, a shared, sidecar or
+      fsGroup-writable volume at `native/` (unless root owns all of it and group and other cannot write
+      it; one that passes is still writable through its other mounts), and a compiled binary with
+      any directory above it not root-owned (a home directory, `/tmp`) are refused; one under a
+      root-owned `/opt/<app>` passes (where `/opt` itself is closed; it is 0777 on some hosts). It
+      does not stop root, any capability that is equivalent to root (for example `CAP_DAC_OVERRIDE`,
+      `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`, `CAP_MKNOD`,
+      `CAP_SYS_MODULE`, `CAP_SYS_RAWIO`, `CAP_BPF`), a second writable mount of the same files, an
+      ACL (mode bits only; on macOS an ACL can grant write), a seekable file write as the app user
+      through `/proc/self/mem`, or an app that itself runs in a user namespace. That is two cases:
+      rootless Podman or Docker (the host user owns the files, so non-root inside does not remove
+      that writer) and `hostUsers: false` (host root owns them, so non-root inside restores the
+      guarantee). The operator's pods drop ALL capabilities, set `allowPrivilegeEscalation: false`
+      and run as non-root (`runAsNonRoot` is needed too: an app running as uid 0 owns the tree
+      whatever it has dropped). A
       sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
       `bun:ffi`, measured to work on Bun 1.4.2) would bind the bytes against root too, but each
       module copy and Worker would load its own copy of the library, ending the one library per
       process that they rely on, so it is not used. On Linux the load needs `/proc` mounted; a
       failed load closes the descriptor and its error names both the path and the descriptor name.
-    - `native/.integrity.json` itself gets no owner or mode check. It is a claim the loader tests:
-      rewriting it can only make the hash mismatch (a refusal), because the bytes it is compared with
-      are a library only root can write. The directories above the one `native/` sits in are not
-      judged either; a writer there can make the load refuse, not change those bytes.
+    - `native/.integrity.json` is judged like the library: it holds the hash that must match, so
+      whoever can write it chooses which bytes pass. (An earlier version left it unjudged on the
+      argument that rewriting it could only make the load refuse; that was wrong, and let a tree
+      swapped in between the loader's by-path steps carry its own manifest.) It is opened with
+      `O_NOFOLLOW`, judged on its own descriptor and read through it. The library is opened with
+      `O_NOFOLLOW` too, so a symbolic link at either path is refused whatever it points at, and
+      both with `O_NONBLOCK` and only if `fstat` says regular file, so a FIFO is a refusal, not a
+      hang; a platform where either flag is not a positive number is refused (it would OR in as 0). "Is anything staged" is
+      an `lstat`, so a dangling link is a refusal and never a fall-through to the development build.
+    - Defence in depth, for an actor the walk does not stop (root, a second mount): the directories
+      are pinned (`dev:ino` as `bigint`, recorded before the manifest is read and re-`lstat`ed after
+      the library is hashed; a change refuses), and the manifest's and the library's paths must still
+      name the files that were read (`$same`). They are looked up by path, so checked, not locked:
+      Bun has no `openat` and macOS has no descriptor-relative path. Against a non-root user the
+      walk is what makes that sound. What is not stopped is the list above.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check or an owner check:
       an accepted, development-only path. It is reached only when nothing is staged beside the
@@ -206,7 +330,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
 - **Network.** `supply-chain.ts:resolveZig` downloads the pinned zig from `ZIG_PIN.baseUrl` with
   `globalThis.fetch`, using a 10-minute timeout.
 - **Disk writes**
-  - `init.ts:runInit` writes `knext.ffi.json` and the template tree.
+  - `init.ts:runInit` writes `knext.ffi.json` and the template tree. It reads the app's `Dockerfile` and never writes it.
   - `generate.ts:runGenerate` writes or unlinks files under `config.out`.
   - `build.ts:runBuild` replaces `<native>/ffi/` with `lib<name>.so`, `provenance.json` and
     `sbom.cdx.json` per triple.

@@ -34,23 +34,37 @@ against a host-arch twin or against the shipped image.
     `node_modules/`), `<dir>/app-leak` (a wrapper with its `knext_ffi_v1_free` calls removed; staging exits 1 unless
     there are exactly 2 to remove),
     `<dir>/native` (with the integrity manifest from
-    `packages/kn-next/src/cli/native-integrity.ts:writeNativeIntegrityManifest`, then the library
-    and every directory up to `native/` made read-only, as the image's `COPY --chmod=a-w` leaves
-    them; the workflow then chowns the tree to root, which the loader requires: root must own the
-    library, its directories, `native/` and the directory `native/` sits in. The musl lane runs
+    `packages/kn-next/src/cli/native-integrity.ts:writeNativeIntegrityManifest`, then the manifest,
+    the library and every directory up to `native/` made read-only, as the image's
+    `COPY --chmod=a-w` leaves them; the workflow then chowns the tree to root, which the loader
+    requires: root must own the manifest, the library, its directories, `native/`, and every
+    directory above it up to `/` (above `native/` those are the image's own, root-owned 0755; the
+    lane asserts `/` and `/app` for the documented recipe). The musl lane runs
     the legs as root and as uid 65532 (the image user), proves a 65532-owned tree is refused,
     builds and loads the docs page's Dockerfile recipe (below), and removes the root-owned staged
     trees at the end) and `<dir>/needed`.
 - `doc-recipe.ts`: `bun doc-recipe.ts dockerfile|shell <out>` writes one fenced block of
   `apps/docs/content/docs/rust-in-process.mdx` to a file, verbatim, so the musl lane runs what the page
   tells a user to copy. A block is found by `title="Dockerfile"` (`dockerfile`) or
-  `title="own-binary.sh"` (`shell`). Zero or several matching blocks, or one never closed, exit 1; an
+  `title="own-binary.sh"` (`shell`). The page's `Dockerfile.copied-tree` fragment (`COPY . /app`)
+  has no recipe here: it is shown to users, and no lane builds it. The `Dockerfile` recipe carries
+  `RUN chmod go-w /app /app/native` after the `native/` COPY, so what the lane loads does not rest on
+  the mode a builder gives a COPY destination. Zero or several matching blocks, or one never closed, exit 1; an
   unknown recipe or missing argument exits 2. `extractRecipe`, `RECIPES` and `DOCS_PAGE` are
   exported for `src/__tests__/doc-recipe.test.ts`. The lane builds the Dockerfile with the pinned
   image as its `BASE_IMAGE` build argument and nothing else changed, from a group-writable source,
   asserts the modes BuildKit left under `/app`, loads it as the image's own USER, and expects the
   same recipe with `RUN chown -R 65532:65532 /app` appended to be refused. It runs the `shell`
-  recipe with `APP_DIR` set to the compiled leg's directory.
+  recipe with `APP_DIR` set to a copy of the compiled leg's directory under `/opt/knext-ffi-caller`:
+  the recipe needs bash and refuses unless bash runs it (its first branch; under `zsh` a glob that matches nothing stops the script with "no matches found"
+  and `local` is not POSIX; it lists entries without a bash option, so even bash in POSIX mode sees a hidden file), resolves the directory to its real path (on macOS `/tmp`, `/etc` and `$TMPDIR` come out under
+  `/private`, which it refuses too) and refuses `/tmp`, a home directory (the runner's temp
+  directory is under `/home/runner`) and other places that can hold other things, and accepts a directory only
+  when it holds `native/` (with its `.integrity.json`) and exactly one other entry, a regular file, so the lane
+  stages the copy where the page says an install goes, with only `native/` and `ffi-caller` in it, clears any
+  leftover of an earlier run with `sudo` before it makes the directory, and removes it with `sudo` at the end. The
+  runner's own `/opt` is mode 0777, which does not matter: the loader judges the ancestry the container sees, and
+  the bind mount `/opt/caller` replaces it.
 - `stage-ffi-zone.sh <repo-root> <dest>` uses `git archive` to copy the tracked
   `apps/file-manager` into `<dest>` and lays the `fixtures/ffi-zone` opt-in over it.
   `FFI_E2E_OVERLAY=none` skips the overlay. `FFI_E2E_MUTATION` accepts `none`, `wrong-triple`,

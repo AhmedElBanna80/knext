@@ -305,9 +305,9 @@ const LOADER = [
     subject: 'render',
     claim: 'the request-time "cannot find the Rust library" error claims prerendering again',
     anchor:
-      "      'Images built by \\`knext build\\` stage it beside the server (knext ffi build); in development, run \\`knext ffi generate\\`.',",
+      "      'The Dockerfile that \\`knext build\\`, \\`knext deploy\\` and \\`knext preview\\` stage puts it beside the server (knext ffi build builds it); in development, run \\`knext ffi generate\\`.',",
     replacement:
-      "      'Images built by \\`knext build\\` stage it beside the server (knext ffi build); in development, run \\`knext ffi generate\\`. ' + $PRERENDER,",
+      "      'The Dockerfile that \\`knext build\\`, \\`knext deploy\\` and \\`knext preview\\` stage puts it beside the server (knext ffi build builds it); in development, run \\`knext ffi generate\\`. ' + $PRERENDER,",
   },
 ];
 

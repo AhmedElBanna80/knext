@@ -12,7 +12,7 @@
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { type GenerateDeps, type Io, runGenerate } from './generate';
-import { runInit } from './init';
+import { appBuild, runInit } from './init';
 import { CARGO_TOOL_PINS, DENY_FILE, SBOM_FILE, ZIG_PIN } from './supply-chain';
 
 /** The shape of this module as core calls it. Bumped only on a breaking change to it. */
@@ -215,11 +215,15 @@ export async function run(
       );
       return 1;
     }
+    // Only a vinext build is built from the app's own Dockerfile, so only it is told about that file.
+    const build = await appBuild(cwd);
+    const withBuild = build === undefined ? {} : { build };
     if (sub === 'init') {
       return runInit({
         cwd,
         io: out,
         ...('crateRev' in io ? { crateRev: io.crateRev ?? null } : {}),
+        ...withBuild,
       });
     }
     return await runGenerate({
@@ -227,6 +231,7 @@ export async function run(
       check: sub === 'check',
       io: out,
       deps: io.buildLibrary ? { buildLibrary: io.buildLibrary } : {},
+      ...withBuild,
     });
   } catch (err) {
     out.stderr(`knext ffi ${sub} failed: ${(err as Error)?.message ?? String(err)}\n`);

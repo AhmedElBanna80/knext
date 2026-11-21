@@ -170,13 +170,59 @@ function stageLiteralTemplate(src: string, dest: string): boolean {
 }
 
 /**
+ * In-process Rust (ADR-0069 Amendment 1): the one line `knext ffi init` tells a
+ * vinext app to add to the `Dockerfile` it was scaffolded with, directly after
+ * the `COPY` that brings `native/` in. The loader refuses a library unless
+ * every directory above it is root's and closed to group and other, which
+ * includes `/app` and `/app/native`; BuildKit leaves them so, a builder that
+ * gives a COPY's destination the build host's mode does not, so the app closes
+ * them itself. The `knext ffi` verbs print the same line, and so does the
+ * refusal the module they generate raises, both from one copy of it and of the
+ * `COPY` below that core never imports. Core owns `VINEXT_FFI_CLOSE_LINE` and
+ * {@link VINEXT_NATIVE_COPY}, and the drift test (`ffi-vinext-known-good.test.ts`,
+ * which lives with the tests, not in core source) fails if either diverges from
+ * that copy, if the generated module stops carrying either line, or if the
+ * shipped template stops holding the `COPY`.
+ */
+export const VINEXT_FFI_CLOSE_LINE = "RUN chmod go-w /app /app/native";
+
+/**
+ * The scaffolded vinext `Dockerfile`'s `native/` COPY, with its line end, which
+ * the close line goes directly after.
+ */
+export const VINEXT_NATIVE_COPY =
+    "COPY --chown=0:0 --chmod=a-w native /app/native\n";
+
+/**
+ * The scaffolded vinext `Dockerfile` text with {@link VINEXT_FFI_CLOSE_LINE}
+ * directly after its `native/` COPY, or `undefined` when the template does not
+ * hold that COPY exactly once (a template that moved on must fail closed, not
+ * match something else). Built from the shipped template's own text, so a change
+ * to the template flows into the variant instead of leaving a stale copy.
+ */
+export function vinextTemplateWithCloseLine(
+    template: string,
+): string | undefined {
+    const at = template.indexOf(VINEXT_NATIVE_COPY);
+    if (at === -1 || template.indexOf(VINEXT_NATIVE_COPY, at + 1) !== -1) {
+        return undefined;
+    }
+    const end = at + VINEXT_NATIVE_COPY.length;
+    return `${template.slice(0, end)}${VINEXT_FFI_CLOSE_LINE}\n${template.slice(end)}`;
+}
+
+/**
  * True when `dockerfilePath`'s content is BYTE-IDENTICAL to one of the two
  * shipped `app-dockerfile` templates (the scaffolded single-stage vinext
  * `Dockerfile`, or `Dockerfile.vinext-node`) — i.e. it `COPY`s host-built
- * artifacts rather than rebuilding the app inside the image (#1283). Both
- * templates are staged LITERALLY (`stageLiteralTemplate` throws on an
- * unsubstituted `{{ }}`, see above), so an exact match is a real invariant,
- * not a heuristic.
+ * artifacts rather than rebuilding the app inside the image (#1283) — or to the
+ * scaffolded vinext `Dockerfile` plus exactly the one line
+ * {@link VINEXT_FFI_CLOSE_LINE} directly after its `native/` COPY (what an
+ * in-process Rust app adds, so a vinext app that follows `knext ffi init`'s
+ * advice stays on this path rather than switching to image-sourced assets and
+ * the in-image lock-step check). Both templates are staged LITERALLY
+ * (`stageLiteralTemplate` throws on an unsubstituted `{{ }}`, see above), so an
+ * exact match is a real invariant, not a heuristic.
  *
  * Used to SCOPE the post-build image lock-step check
  * (`verifyBuiltImageLockstep`) to Dockerfiles that might actually need it: the
@@ -201,13 +247,21 @@ export function isKnownGoodTemplateDockerfile(dockerfilePath: string): boolean {
         return false;
     }
     const templateDir = join(packageRoot(), "templates", "app");
+    const vinextTemplate = join(templateDir, "Dockerfile.hbs");
     const candidates = [
-        join(templateDir, "Dockerfile.hbs"),
+        vinextTemplate,
         join(templateDir, `${VINEXT_NODE_DOCKERFILE_NAME}.hbs`),
     ];
     return candidates.some((tpl) => {
         try {
-            return readFileSync(tpl, "utf-8") === userContent;
+            const text = readFileSync(tpl, "utf-8");
+            if (text === userContent) return true;
+            // The scaffolded vinext Dockerfile plus the one in-process Rust line. The
+            // other template has no `native/` COPY, so it has no such variant.
+            return (
+                tpl === vinextTemplate &&
+                vinextTemplateWithCloseLine(text) === userContent
+            );
         } catch {
             return false;
         }
@@ -540,7 +594,7 @@ const STANDALONE = "/app/.next/standalone";
 
 /**
  * The rules every nested Dockerfile gets. An app with `knext.ffi.json` also
- * gets {@link FFI_NEST_RULE} (see `nestStandaloneDockerfile`).
+ * gets {@link FFI_NEST_RULE} and {@link FFI_ANCESTORS_NEST_RULE} (see `nestStandaloneDockerfile`).
  */
 const BASE_NEST_RULES: readonly NestRule[] = [
     // standalone-bun, standalone-node: the traced tree, then static and public
@@ -649,6 +703,20 @@ const BASE_NEST_RULES: readonly NestRule[] = [
 export const FFI_NATIVE_PERMS = "--chown=0:0 --chmod=a-w";
 export const FFI_NATIVE_COPY = `COPY ${FFI_NATIVE_PERMS} native ${STANDALONE}/native`;
 
+/**
+ * The loader walks every directory from the one `native/` sits in up to `/` and refuses to load,
+ * naming every one that is not root's or that group or other can write: a user who can write
+ * one can rename the whole tree out of it. BuildKit leaves WORKDIR, the parents a COPY creates and a
+ * directory COPY's destination 0755 and root's, but a directory INSIDE a copied tree keeps the
+ * build host's mode (measured on docker 29: 0775 from a context made under umask 002), so the
+ * tracing-root prefix directories of a nested layout can come out group-writable. The line
+ * closes every directory above the exec, and `native/` itself, so none of them depends on the
+ * mode the builder gives a COPY's destination (BuildKit's 0755 is measured, not promised); it
+ * runs as root, before the stage's USER.
+ */
+const FFI_ANCESTOR_DIRS = ["/app", "/app/.next", STANDALONE];
+export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, `${STANDALONE}/native`].join(" ")}`;
+
 /** The `standalone-bun` exec COPY the native line goes directly after. */
 const FFI_NATIVE_ANCHOR = `COPY knext-standalone-exec-linux-x64 ${STANDALONE}/knext-standalone-exec`;
 
@@ -662,8 +730,25 @@ const FFI_NEST_RULE: NestRule = {
 };
 
 /**
- * Insert {@link FFI_NATIVE_COPY} directly after the `standalone-bun` stage's
- * exec COPY. The anchor must occur exactly once as an instruction line, inside
+ * The nest rule for {@link FFI_ANCESTORS_RUN}: the nested exec sits in `<prefix>`, so each
+ * directory of the prefix (`apps`, `apps/web`) is above it too, and `native/` moves under it.
+ */
+const FFI_ANCESTORS_NEST_RULE: NestRule = {
+    kind: "line",
+    from: FFI_ANCESTORS_RUN,
+    to: ({ prefix }) => {
+        const parts = prefix.split("/").filter((p) => p !== "");
+        const nested = parts.map(
+            (_, i) => `${STANDALONE}/${parts.slice(0, i + 1).join("/")}`,
+        );
+        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested, `${STANDALONE}/${prefix}native`].join(" ")}`;
+    },
+    count: 1,
+};
+
+/**
+ * Insert {@link FFI_NATIVE_COPY} and {@link FFI_ANCESTORS_RUN} directly after the
+ * `standalone-bun` stage's exec COPY. The anchor must occur exactly once as an instruction line, inside
  * that stage; anything else means the template moved under this edit, and the
  * staging fails rather than ship an image without its library.
  */
@@ -689,7 +774,12 @@ export function insertFfiNativeCopy(dockerfile: string): string {
         );
     }
     const indent = /^\s*/.exec(lines[at] as string)?.[0] ?? "";
-    lines.splice(at + 1, 0, `${indent}${FFI_NATIVE_COPY}`);
+    lines.splice(
+        at + 1,
+        0,
+        `${indent}${FFI_NATIVE_COPY}`,
+        `${indent}${FFI_ANCESTORS_RUN}`,
+    );
     return lines.join("\n");
 }
 
@@ -716,7 +806,7 @@ export function nestStandaloneDockerfile(
         );
     }
     const NEST_RULES: readonly NestRule[] = opts.ffi
-        ? [...BASE_NEST_RULES, FFI_NEST_RULE]
+        ? [...BASE_NEST_RULES, FFI_NEST_RULE, FFI_ANCESTORS_NEST_RULE]
         : BASE_NEST_RULES;
     const counts = NEST_RULES.map(() => 0);
     const out: string[] = [];

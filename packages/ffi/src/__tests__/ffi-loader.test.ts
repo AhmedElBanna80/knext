@@ -28,17 +28,30 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { fnv1a64, type Manifest, scanManifest, schemaString } from '../manifest';
 import { renderModule } from '../render';
-import { blob, D, emptyDir, fn, KITCHEN_SINK, PKG_DIR, removeScratchDirs } from './helpers';
+import { VINEXT_CLOSE_LINE, VINEXT_NATIVE_COPY } from '../vinext-image';
+import {
+  blob,
+  D,
+  emptyDir,
+  fn,
+  KITCHEN_SINK,
+  makeWritable,
+  PKG_DIR,
+  removeScratchDirs,
+} from './helpers';
 import { integerMatrix } from './integer-matrix';
+import { type Leaf, leaves, sinkCalls } from './template-scan';
 
 const FIXTURE_C = join(PKG_DIR, 'fixtures', 'abi-v1', 'fixture.c');
 const EXT = process.platform === 'darwin' ? 'dylib' : 'so';
@@ -104,14 +117,22 @@ function cc(name: string, flags: string[]): string {
 
 const sha256 = (p: string) => createHash('sha256').update(readFileSync(p)).digest('hex');
 
+/** `dev:ino` of a path: the key FAKE_OWNER_INO answers to (an object keeps it through a rename). */
+function idOf(p: string): string {
+  const st = statSync(p, { bigint: true });
+  return `${st.dev}:${st.ino}`;
+}
+
 /**
  * Make a staged tree what the image carries (`COPY --chown=0:0 --chmod=a-w`):
- * every library and every directory above it, up to native/, read-only. The
- * integrity manifest is left as it is: the loader does not check its mode.
+ * the integrity manifest, every library and every directory above it, up to
+ * native/, read-only. The loader judges the manifest by owner and mode like the
+ * library: a swapped-in manifest is what lets any root-owned file pass.
  */
 function sealImage(exe: string): void {
   const native = join(exe, '..', 'native');
   const readOnly = (p: string) => chmodSync(p, statSync(p).mode & ~0o222); // a-w
+  if (existsSync(join(native, '.integrity.json'))) readOnly(join(native, '.integrity.json'));
   for (const triple of readdirSync(join(native, 'ffi'))) {
     for (const f of readdirSync(join(native, 'ffi', triple))) {
       readOnly(join(native, 'ffi', triple, f));
@@ -161,6 +182,22 @@ function image(
   return exe;
 }
 
+/**
+ * The directories ABOVE the one an executable sits in, nearest first, up to /, by their real
+ * paths: the way the loader walks them. (The executable's own directory is judged for real.)
+ */
+function ancestorsAbove(exe: string): string[] {
+  let home = dirname(exe);
+  try {
+    home = realpathSync(home);
+  } catch {}
+  const out: string[] = [];
+  for (let d = dirname(home); ; d = dirname(d)) {
+    out.push(d);
+    if (dirname(d) === d) return out;
+  }
+}
+
 interface Run {
   status: number | null;
   result: unknown;
@@ -174,27 +211,70 @@ interface Run {
  *   FAKE_OWNER     the uid every stat reports as the owner (unset: the real one)
  *   FAKE_OWNER_AT  JSON, path -> uid: an override for a directory stat-ed by that path
  *   FAKE_EUID      what process.geteuid() returns (the loader must not care)
- * Modes are the real ones on disk. Every path stat-ed is kept in globalThis.statted.
+ *   FAKE_OWNER_INO JSON, "dev:ino" -> uid: an owner that survives a rename
+ *   FAKE_MODE_AT   JSON, path -> permission bits (with the sticky bit): what a directory above
+ *                  the staged tree answers (a host's /tmp is 1777; the test is not about it)
+ *   FAKE_TYPE_AT   JSON, path -> type bits (S_IFREG 0o100000, S_IFIFO 0o010000, ...): what an
+ *                  lstat of that path answers, so a directory position can hold another kind of
+ *                  object (the loader only meets one by a race, which a test cannot stage)
+ * Modes are the real ones on disk, except where FAKE_MODE_AT names a path. Every path stat-ed is
+ * kept in globalThis.statted, and every stat that did not ask for bigint in globalThis.notBigint.
  */
 const FAKE_IDS = () => {
   const fs = process.getBuiltinModule('node:fs');
   const mod = process.getBuiltinModule('node:module') as unknown as {
     syncBuiltinESMExports: () => void;
   };
-  const { FAKE_EUID: euid, FAKE_OWNER: owner, FAKE_OWNER_AT: at } = process.env;
+  const {
+    FAKE_EUID: euid,
+    FAKE_OWNER: owner,
+    FAKE_OWNER_AT: at,
+    FAKE_OWNER_INO: ino,
+    FAKE_MODE_AT: modeAt,
+    FAKE_TYPE_AT: typeAt,
+  } = process.env;
   const overrides = at ? (JSON.parse(at) as Record<string, number>) : {};
+  const modeOverrides = modeAt ? (JSON.parse(modeAt) as Record<string, number>) : {};
+  const typeOverrides = typeAt ? (JSON.parse(typeAt) as Record<string, number>) : {};
+  const notBigint: string[] = [];
+  (globalThis as unknown as { notBigint: string[] }).notBigint = notBigint;
+  // uid by "dev:ino": an object keeps its owner wherever a rename puts it, which a by-path
+  // override cannot say (a swapped-in tree answers to the same path as the one it replaced).
+  const byInode = ino ? (JSON.parse(ino) as Record<string, number>) : {};
   const statted: string[] = [];
   (globalThis as unknown as { statted: string[] }).statted = statted;
   if (euid !== undefined)
     (process as unknown as { geteuid: () => number }).geteuid = () => Number(euid);
-  for (const k of ['fstatSync', 'statSync'] as const) {
-    const real = fs[k] as (...x: unknown[]) => object;
+  for (const k of ['fstatSync', 'statSync', 'lstatSync'] as const) {
+    const real = fs[k] as (...x: unknown[]) => object | undefined;
     (fs as unknown as Record<string, unknown>)[k] = function (this: unknown, ...a: unknown[]) {
-      const st = real.apply(this, a);
+      const st = real.apply(this, a) as
+        | {
+            dev: number | bigint;
+            ino: number | bigint;
+            uid: number | bigint;
+            mode: number | bigint;
+          }
+        | undefined;
+      if (st === undefined) return st;
       statted.push(k === 'fstatSync' ? 'fd' : String(a[0]));
-      const uid = overrides[String(a[0])] ?? (owner === undefined ? undefined : Number(owner));
-      if (uid === undefined) return st;
-      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid });
+      if ((a[1] as { bigint?: boolean } | undefined)?.bigint !== true) {
+        notBigint.push(k === 'fstatSync' ? 'fd' : String(a[0]));
+      }
+      const uid =
+        byInode[`${st.dev}:${st.ino}`] ??
+        overrides[String(a[0])] ??
+        (owner === undefined ? undefined : Number(owner));
+      const bits = k === 'fstatSync' ? undefined : modeOverrides[String(a[0])];
+      const type = k === 'lstatSync' ? typeOverrides[String(a[0])] : undefined;
+      if (uid === undefined && bits === undefined && type === undefined) return st;
+      const withBits =
+        bits === undefined ? Number(st.mode) : (Number(st.mode) & ~0o7777) | (bits & 0o7777);
+      const mode = type === undefined ? withBits : (withBits & 0o7777) | type;
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, {
+        uid: uid === undefined ? st.uid : typeof st.uid === 'bigint' ? BigInt(uid) : uid,
+        mode: typeof st.mode === 'bigint' ? BigInt(mode) : mode,
+      });
     };
   }
   mod.syncBuiltinESMExports();
@@ -221,6 +301,16 @@ function inBun(
       BODY: body.toString(),
       FAKE_OWNER: '0',
       ...env,
+      // Every directory above the staged tree answers like a root-owned 0755 one unless a scenario
+      // says otherwise: a host's own /tmp (1777) is not what these tests are about.
+      ...(env.FAKE_EXEC === undefined
+        ? {}
+        : {
+            FAKE_MODE_AT: JSON.stringify({
+              ...Object.fromEntries(ancestorsAbove(env.FAKE_EXEC).map((d) => [d, 0o755])),
+              ...JSON.parse(env.FAKE_MODE_AT ?? '{}'),
+            }),
+          }),
       // A scenario that stages a tree (FAKE_EXEC) is told its owner; one that does not touches nothing.
       ...(env.FAKE_EXEC === undefined && env.BEFORE === undefined
         ? {}
@@ -228,7 +318,7 @@ function inBun(
             BEFORE: `async () => { ${env.FAKE_EXEC === undefined ? '' : `(${FAKE_IDS})();`} ${env.BEFORE === undefined ? '' : `await (${env.BEFORE})();`} }`,
           }),
     },
-    timeout: 60_000,
+    timeout: Number(env.TIMEOUT_MS ?? 60_000),
   });
   const line = r.stdout.split('\n').find((l) => l.startsWith('RESULT '));
   return {
@@ -415,6 +505,11 @@ describe('integer arguments, every width, through a real library (the same matri
         BODY: integerMatrix.toString(),
         FAKE_EXEC: exe,
         FAKE_OWNER: '0',
+        // A host's own /tmp (1777 on Linux) is not what this test is about: every directory above
+        // the staged tree answers like a root-owned 0755 one, as inBun arranges.
+        FAKE_MODE_AT: JSON.stringify(
+          Object.fromEntries(ancestorsAbove(exe).map((d) => [d, 0o755])),
+        ),
         BEFORE: FAKE_IDS.toString(),
       },
       timeout: 60_000,
@@ -434,7 +529,12 @@ describe('path 1 — native/ffi/<triple> beside the executable, integrity requir
       (m, c, fixture) => {
         const two = (n: number) => BigInt(2) ** BigInt(n);
         const out: Record<string, unknown> = {};
-        out.greet = [m.greet('World'), m.greet(''), m.greet('héllo 🌍 👩‍💻'), m.greet('a\u0000b')];
+        out.greet = [
+          m.greet('World'),
+          m.greet(''),
+          m.greet('héllo 🌍 👩\u200d💻'),
+          m.greet('a\u0000b'),
+        ];
         out.add = m.add(2, 3);
         m.add(-1, 0); // leaves 0xFF in bytes 1..3 of the out slot
         out.tiny = [m.tiny(5), m.tiny(-5)];
@@ -486,7 +586,7 @@ describe('path 1 — native/ffi/<triple> beside the executable, integrity requir
     );
     expect(r.stderr).not.toContain('development build');
     expect(r.result, r.stderr).toEqual({
-      greet: ['Hello, World!', 'Hello, !', 'Hello, héllo 🌍 👩‍💻!', 'Hello, a\u0000b!'],
+      greet: ['Hello, World!', 'Hello, !', 'Hello, héllo 🌍 👩\u200d💻!', 'Hello, a\u0000b!'],
       add: 5,
       tiny: [5, -5],
       flag: [false, true],
@@ -862,6 +962,8 @@ describe('path 1 — native/ffi/<triple> beside the executable, integrity requir
           .update(fs.readFileSync(path.join(native, rel)))
           .digest('hex');
         manifest.files[rel] = hash;
+        // The staged manifest is read-only, like the image's: the fix is made as its owner.
+        fs.chmodSync(path.join(native, '.integrity.json'), 0o644);
         fs.writeFileSync(path.join(native, '.integrity.json'), JSON.stringify(manifest));
         return [first, c(() => m.greet('x'))];
       },
@@ -942,8 +1044,10 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       const read = fs.readFileSync;
       (fs as { readFileSync: unknown }).readFileSync = function (this: unknown, ...a: unknown[]) {
         const out = (read as (...x: unknown[]) => unknown).apply(this, a);
-        // The library's bytes, not the manifest's (read by path as UTF-8).
-        if (typeof a[0] === 'number' || String(a[0]) === staged) swap('read');
+        // The library's bytes (through a descriptor, with no encoding), not the manifest's (UTF-8).
+        if ((typeof a[0] === 'number' && a[1] === undefined) || String(a[0]) === staged) {
+          swap('read');
+        }
         return out;
       };
       mod.syncBuiltinESMExports();
@@ -971,7 +1075,7 @@ describe('the library loaded is the library hashed (nothing swapped in between t
     ['dlopen', 'rename'],
     ['dlopen', 'symlink'],
   ] as const) {
-    it(`a library ${how === 'rename' ? 'renamed over' : 'symlinked at'} the staged path at ${when} is not the one loaded`, () => {
+    it(`a library ${how === 'rename' ? 'renamed over' : 'symlinked at'} the staged path at ${when} is not the one loaded${when === 'read' ? ' (the path no longer names the file that was read: refused)' : ''}`, () => {
       const exe = image();
       const staged = join(exe, '..', 'native', 'ffi', TRIPLE, LIB);
       const r = inBun(
@@ -999,9 +1103,18 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       // The swap really happened, at that moment: the path now holds the other library.
       expect(out?.swaps, r.stderr).toEqual([when]);
       expect(out.atPath).toBe(sha256(libs.debug as string));
-      // ...and the library loaded is still the one whose bytes were hashed, on
-      // Linux (/proc/self/fd/<n>) and macOS (/dev/fd/<n>) alike.
-      expect(out.greet).toEqual({ ok: 'Hello, World!' });
+      if (when === 'read') {
+        // Between the hash and the second look at the path: the path no longer names the file
+        // that was read, so nothing loads (stronger than loading the hashed bytes).
+        expect(out.greet).toMatchObject({ cls: 'FfiLoadError' });
+        expect((out.greet as { message: string }).message).toMatch(
+          /is no longer the file that was read/,
+        );
+      } else {
+        // ...and the library loaded is still the one whose bytes were hashed, on
+        // Linux (/proc/self/fd/<n>) and macOS (/dev/fd/<n>) alike.
+        expect(out.greet).toEqual({ ok: 'Hello, World!' });
+      }
       expect(r.status).toBe(0);
     });
   }
@@ -1020,7 +1133,8 @@ describe('the library loaded is the library hashed (nothing swapped in between t
       const read = fs.readFileSync;
       (fs as { readFileSync: unknown }).readFileSync = function (this: unknown, ...a: unknown[]) {
         const out = (read as (...x: unknown[]) => unknown).apply(this, a);
-        if (String(a[0]).endsWith('.integrity.json')) flipped = true;
+        // The manifest is the one file read as UTF-8, through the descriptor it was opened as.
+        if (typeof a[0] === 'number' && a[1] === 'utf8') flipped = true;
         return out;
       };
       mod.syncBuiltinESMExports();
@@ -1119,6 +1233,269 @@ describe('the library loaded is the library hashed (nothing swapped in between t
   });
 });
 
+describe('a whole-tree swap between the checks cannot change what passes (an attacker who can write a directory above native/)', () => {
+  /**
+   * BEFORE: the attacker renames the whole tree. At the loader's first touch of the integrity
+   * manifest by path, the real directory HOME is renamed to AWAY and EVIL is renamed to HOME.
+   * With BACK=1 the real one is put back at the first directory stat after that: the old order
+   * of checks judged the directories last, so they saw the real tree while the manifest and the
+   * library had come from the attacker's. globalThis.swaps records what happened.
+   */
+  const TREE = () => {
+    const fs = process.getBuiltinModule('node:fs');
+    const mod = process.getBuiltinModule('node:module') as unknown as {
+      syncBuiltinESMExports: () => void;
+    };
+    const {
+      HOME: home,
+      EVIL: evil,
+      AWAY: away,
+      BACK: back,
+    } = process.env as Record<string, string>;
+    const swaps: string[] = [];
+    (globalThis as unknown as { swaps: string[] }).swaps = swaps;
+    for (const k of ['existsSync', 'openSync', 'readFileSync', 'statSync', 'lstatSync'] as const) {
+      const real = fs[k] as (...x: unknown[]) => unknown;
+      (fs as unknown as Record<string, unknown>)[k] = function (this: unknown, ...a: unknown[]) {
+        const p = typeof a[0] === 'string' ? a[0] : '';
+        if (swaps.length === 0 && p.endsWith('/.integrity.json')) {
+          fs.renameSync(home, away);
+          fs.renameSync(evil, home);
+          swaps.push('in');
+        } else if (swaps.length === 1 && back === '1' && (k === 'statSync' || k === 'lstatSync')) {
+          fs.renameSync(home, evil);
+          fs.renameSync(away, home);
+          swaps.push('back');
+        }
+        return real.apply(this, a);
+      };
+    }
+    mod.syncBuiltinESMExports();
+  };
+
+  type Swap = {
+    greet: { ok?: unknown; cls?: string; message?: string };
+    swaps: string[];
+  };
+
+  /**
+   * Run the real tree with the attacker's tree ready beside it. The attacker's is a complete,
+   * sealed image of its own whose manifest lists its own library (libs.debug: its greet says
+   * "Debug"). Who owns what is told by inode, so it survives the renames:
+   *   link       the manifest and every directory are the attacker's (uid 1000); the library is a
+   *              symlink to a root-owned file that already exists (the attacker cannot write one);
+   *   file       the same, but the library is a regular file that passes as root's: a hard link
+   *              where fs.protected_hardlinks is off;
+   *   root-tree  nothing is the attacker's: a tree that passes every file check (root wrote it),
+   *              as an older release left on the host would.
+   * `owns` names the directory above native/ the attacker can write (the one that lets them
+   * rename the tree): the executable's directory's parent, or the one above that.
+   */
+  function attack(
+    kind: 'link' | 'file' | 'root-tree',
+    back: boolean,
+    owns?: 'parent' | 'grandparent',
+  ): { run: Run; ancestor: string } {
+    const exe = image();
+    const home = join(exe, '..');
+    const evilHome = join(image({ lib: libs.debug }), '..');
+    const native = join(evilHome, 'native');
+    const evilTriple = join(native, 'ffi', TRIPLE);
+    const evilLib = join(evilTriple, LIB);
+    if (kind === 'link') {
+      const rootLib = join(emptyDir('root-owned'), LIB);
+      copyFileSync(libs.debug as string, rootLib);
+      chmodSync(rootLib, 0o444);
+      chmodSync(evilTriple, 0o755);
+      rmSync(evilLib);
+      symlinkSync(rootLib, evilLib);
+      chmodSync(evilTriple, 0o555);
+    }
+    const attacker =
+      kind === 'root-tree'
+        ? []
+        : [evilHome, native, join(native, 'ffi'), evilTriple, join(native, '.integrity.json')];
+    const away = `${home}.away`;
+    const above = ancestorsAbove(exe);
+    const ancestor = (owns === 'grandparent' ? above[1] : above[0]) as string;
+    const run = inBun(
+      (m, c) => ({
+        greet: c(() => m.greet('World')),
+        swaps: [...(globalThis as unknown as { swaps: string[] }).swaps],
+      }),
+      {
+        FAKE_EXEC: exe,
+        FAKE_OWNER_INO: JSON.stringify(Object.fromEntries(attacker.map((p) => [idOf(p), 1000]))),
+        ...(owns === undefined ? {} : { FAKE_OWNER_AT: JSON.stringify({ [ancestor]: 1000 }) }),
+        BEFORE: TREE.toString(),
+        HOME: home,
+        EVIL: evilHome,
+        AWAY: away,
+        BACK: back ? '1' : '0',
+      },
+    );
+    // Whichever tree the swap left at AWAY is not a registered scratch directory.
+    makeWritable(away);
+    rmSync(away, { recursive: true, force: true });
+    return { run, ancestor };
+  }
+
+  const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  describe('the way to native/ is root-owned all the way up to /: a user who is not root cannot rename any of it, so there is nothing to swap', () => {
+    const cases = [
+      ['parent', 'link', true], // the reported attack
+      ['parent', 'root-tree', true], // an older release root wrote, put back before the second look
+      ['parent', 'root-tree', false],
+      ['grandparent', 'root-tree', true],
+    ] as const;
+    for (const [owns, kind, back] of cases) {
+      it(`the ${owns} of the executable's directory is the attacker's (${kind}, ${back ? 'put back' : 'left in place'}): refused at the walk, before the manifest is touched`, () => {
+        const { run, ancestor } = attack(kind, back, owns);
+        const out = run.result as Swap;
+        // The loader never reached for the manifest, so the attacker never got to act.
+        expect(out?.swaps, run.stderr).toEqual([]);
+        expect(out.greet).not.toEqual({ ok: 'Debug, World!' });
+        expect(out.greet.cls).toBe('FfiLoadError');
+        expect(out.greet.message).toMatch(
+          new RegExp(`${reEscape(ancestor)} is owned by uid 1000, but only root may own it`),
+        );
+        expect(run.status).toBe(0);
+      });
+    }
+  });
+
+  describe('defence in depth: were a directory above swapped anyway (root-owned, so the walk accepts it: a root-equivalent actor, a mount), the files and directories read are still the ones judged', () => {
+    const defeated = (r: Run, why: RegExp): Swap => {
+      const out = r.result as Swap;
+      // The attacker really acted, at the moment the loader reached for the manifest...
+      expect(out?.swaps[0], r.stderr).toBe('in');
+      // ...and what they put there did not load.
+      expect(out.greet).not.toEqual({ ok: 'Debug, World!' });
+      expect(out.greet.cls).toBe('FfiLoadError');
+      expect(out.greet.message).toMatch(why);
+      expect(r.status).toBe(0);
+      return out;
+    };
+
+    const MANIFEST_OWNER = /\.integrity\.json is owned by uid 1000, but only root may own it/;
+
+    it("the reported attack: the attacker's manifest and a symlink to any root-owned library, the real tree put back before the directories are judged", () => {
+      defeated(attack('link', true).run, MANIFEST_OWNER);
+    });
+
+    it('the same with a root-owned library that is a regular file (a hard link): only the manifest gives it away', () => {
+      defeated(attack('file', true).run, MANIFEST_OWNER);
+    });
+
+    it('a tree that passes every file check, swapped in and left (root wrote all of it): the directories are no longer the ones that were judged', () => {
+      defeated(attack('root-tree', false).run, /changed while it was being checked/);
+    });
+
+    it('a tree root wrote, swapped in and put back before the second look (an older release): the files read are not the ones the paths name now', () => {
+      const out = defeated(
+        attack('root-tree', true).run,
+        /is no longer the file that was read \(it was renamed, replaced or removed/,
+      );
+      // The put-back really happened: the directories all matched, and only the files gave it away.
+      expect(out.swaps).toEqual(['in', 'back']);
+    });
+
+    /**
+     * BEFORE: once the loader has read the library's bytes to hash them (through a descriptor,
+     * with no encoding), do one thing to the tree, once. KIND=manifest: another file is renamed
+     * over the integrity manifest's path (a writable directory, for a principal that can write
+     * it). KIND=self-link: the executable's directory is moved aside and a link to it is left in
+     * its place: the same directory, by the same dev:ino, reached through a link.
+     */
+    const AFTER_HASH = () => {
+      const fs = process.getBuiltinModule('node:fs');
+      const mod = process.getBuiltinModule('node:module') as unknown as {
+        syncBuiltinESMExports: () => void;
+      };
+      const { KIND: kind, TARGET: target } = process.env as Record<string, string>;
+      let done = false;
+      const read = fs.readFileSync as (...x: unknown[]) => unknown;
+      (fs as unknown as Record<string, unknown>).readFileSync = function (
+        this: unknown,
+        ...a: unknown[]
+      ) {
+        const out = read.apply(this, a);
+        if (!done && typeof a[0] === 'number' && a[1] === undefined) {
+          done = true;
+          if (kind === 'manifest') {
+            fs.chmodSync(process.getBuiltinModule('node:path').dirname(target), 0o755);
+            fs.copyFileSync(target, `${target}.new`);
+            fs.renameSync(`${target}.new`, target);
+          } else {
+            fs.renameSync(target, `${target}.away`);
+            fs.symlinkSync(`${target}.away`, target);
+          }
+        }
+        return out;
+      };
+      mod.syncBuiltinESMExports();
+    };
+
+    const afterHash = (kind: 'manifest' | 'self-link') => {
+      const exe = image();
+      const home = join(exe, '..');
+      const target = kind === 'manifest' ? join(home, 'native', '.integrity.json') : home;
+      const run = inBun((m, c) => c(() => m.greet('World')), {
+        FAKE_EXEC: exe,
+        BEFORE: AFTER_HASH.toString(),
+        KIND: kind,
+        TARGET: target,
+      });
+      makeWritable(`${home}.away`);
+      rmSync(`${home}.away`, { recursive: true, force: true });
+      return run;
+    };
+
+    it('the manifest renamed over its own path after it was read: the path no longer names the file that was judged', () => {
+      const r = afterHash('manifest');
+      const out = r.result as { cls?: string; message?: string };
+      expect(out?.cls, r.stderr).toBe('FfiLoadError');
+      expect(out.message).toMatch(/\.integrity\.json is no longer the file that was read/);
+    });
+
+    it('a pinned directory replaced by a link to itself: the same dev:ino through a link is not the directory that was judged', () => {
+      const r = afterHash('self-link');
+      const out = r.result as { cls?: string; message?: string };
+      expect(out?.cls, r.stderr).toBe('FfiLoadError');
+      expect(out.message).toMatch(/changed while it was being checked/);
+    });
+  });
+});
+/**
+ * The characters a refusal must never print as themselves: C0 controls (the message's own newlines
+ * excepted), DEL, C1 controls, the line and paragraph separators, every format character (Unicode
+ * category Cf: the bidirectional controls, the zero-width characters, the soft hyphen, the invisible
+ * operators, the tag characters and the like, which reorder or hide what is around them), the
+ * combining grapheme joiner (U+034F, invisible, not a format character) and a lone surrogate. The
+ * format characters are asked of the engine's own tables, not listed, so this does not share a list
+ * with the code it checks.
+ */
+function rawControls(text: string): string[] {
+  return [...text].filter((ch) => {
+    const n = ch.codePointAt(0) as number;
+    return (
+      (n < 0x20 && n !== 0x0a) ||
+      n === 0x7f ||
+      (n >= 0x80 && n <= 0x9f) ||
+      n === 0x2028 ||
+      n === 0x2029 ||
+      n === 0x34f ||
+      (n >= 0xd800 && n <= 0xdfff) ||
+      /\p{Cf}/u.test(ch)
+    );
+  });
+}
+
+/** How a refusal writes an escaped character: four hex digits, or braces beyond U+FFFF. */
+const escapedAs = (n: number): string =>
+  n > 0xffff ? `\\u{${n.toString(16)}}` : `\\u${n.toString(16).padStart(4, '0')}`;
+
 describe('the library is refused unless only root can write it and own the way to it (a hash of bytes someone else can still change binds nothing)', () => {
   const nativeOf = (exe: string) => join(exe, '..', 'native');
   /** The library's directories, deepest first, then the one native/ sits in (beside the executable). */
@@ -1129,18 +1506,29 @@ describe('the library is refused unless only root can write it and own the way t
     join(exe, '..'),
   ];
   const libOf = (exe: string) => join(nativeOf(exe), 'ffi', TRIPLE, LIB);
+  const aboveOf = (exe: string) => ancestorsAbove(exe);
   const reEscape = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   /** Two calls, so a refusal's being cached shows too. */
   const load = (
     exe: string,
-    ids: { euid?: number; owner?: number; at?: Record<string, number> } = {},
+    ids: {
+      euid?: number;
+      owner?: number;
+      at?: Record<string, number>;
+      modes?: Record<string, number>;
+      types?: Record<string, number>;
+      timeoutMs?: number;
+    } = {},
   ) =>
     inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
       FAKE_EXEC: exe,
       ...(ids.euid === undefined ? {} : { FAKE_EUID: String(ids.euid) }),
       ...(ids.owner === undefined ? {} : { FAKE_OWNER: String(ids.owner) }),
       ...(ids.at === undefined ? {} : { FAKE_OWNER_AT: JSON.stringify(ids.at) }),
+      ...(ids.modes === undefined ? {} : { FAKE_MODE_AT: JSON.stringify(ids.modes) }),
+      ...(ids.types === undefined ? {} : { FAKE_TYPE_AT: JSON.stringify(ids.types) }),
+      ...(ids.timeoutMs === undefined ? {} : { TIMEOUT_MS: String(ids.timeoutMs) }),
     });
 
   const refused = (r: Run, expected: RegExp) => {
@@ -1177,7 +1565,7 @@ describe('the library is refused unless only root can write it and own the way t
         refused(
           load(exe),
           new RegExp(
-            `: ${reEscape(target)} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
+            `\\n  ${reEscape(target)} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
           ),
         );
       }
@@ -1209,46 +1597,1047 @@ describe('the library is refused unless only root can write it and own the way t
       const dir = dirsOf(exe)[i] as string;
       refused(
         load(exe, { at: { [dir]: 1000 } }),
-        new RegExp(`: ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
+        new RegExp(`\\n  ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
       );
     }
   });
 
-  it('the walk is bounded: the library, its three directories and the one native/ sits in, and nothing above', () => {
+  it('the walk is exactly the library, its directories, the one native/ sits in, and every directory above it up to /: nothing else, and every stat is bigint', () => {
     const exe = image();
     const r = inBun(
-      (m, c) => [c(() => m.greet('World')), (globalThis as { statted?: string[] }).statted],
-      {
-        FAKE_EXEC: exe,
-      },
+      (m, c) => [
+        c(() => m.greet('World')),
+        (globalThis as { statted?: string[] }).statted,
+        (globalThis as { notBigint?: string[] }).notBigint,
+      ],
+      { FAKE_EXEC: exe },
     );
-    const [greet, statted] = r.result as [unknown, string[]];
+    const [greet, statted, notBigint] = r.result as [unknown, string[], string[]];
     expect(greet, r.stderr).toEqual({ ok: 'Hello, World!' });
-    expect([...statted].sort()).toEqual(['fd', ...dirsOf(exe)].sort());
-    expect(statted).not.toContain(join(exe, '..', '..'));
+    // Each directory is stat-ed twice (before the manifest is read, and again after the library
+    // is hashed), so judge the set of what was touched, not the count. The library's own path is
+    // looked at too (an lstat: is anything staged?), as is the manifest's, and both once more
+    // after the hash (is the path still the file that was read?).
+    expect([...new Set(statted)].sort()).toEqual(
+      [
+        'fd',
+        libOf(exe),
+        join(nativeOf(exe), '.integrity.json'),
+        ...dirsOf(exe),
+        ...aboveOf(exe),
+      ].sort(),
+    );
+    expect(aboveOf(exe).at(-1)).toBe('/');
+    // dev:ino as Numbers collide above 2^53, so none of it may be asked for as a Number.
+    expect(notBigint).toEqual([]);
   });
 
-  it('the refusal tells the reader what the image does and that the directory holding native/ counts too', () => {
+  it('a directory pinned by dev:ino is compared as a bigint: two inodes that differ only above 2^53 are two directories', () => {
+    const COLLIDE = () => {
+      const fs = process.getBuiltinModule('node:fs');
+      const mod = process.getBuiltinModule('node:module') as unknown as {
+        syncBuiltinESMExports: () => void;
+      };
+      const target = process.env.TARGET as string;
+      let n = 0;
+      const real = fs.lstatSync as (...x: unknown[]) => object | undefined;
+      (fs as unknown as Record<string, unknown>).lstatSync = function (
+        this: unknown,
+        ...a: unknown[]
+      ) {
+        const st = real.apply(this, a);
+        if (st === undefined || String(a[0]) !== target) return st;
+        // 2^53 and 2^53 + 1: one Number, two bigints.
+        const k = n++ === 0 ? 0 : 1;
+        const ino =
+          (a[1] as { bigint?: boolean } | undefined)?.bigint === true
+            ? BigInt('9007199254740992') + BigInt(k)
+            : 9007199254740992 + k;
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { ino });
+      };
+      mod.syncBuiltinESMExports();
+    };
+    const exe = image();
+    const r = inBun((m, c) => c(() => m.greet('World')), {
+      FAKE_EXEC: exe,
+      BEFORE: COLLIDE.toString(),
+      TARGET: join(exe, '..'),
+    });
+    const out = r.result as { cls?: string; message?: string };
+    expect(out?.cls, r.stderr).toBe('FfiLoadError');
+    expect(out.message).toMatch(/changed while it was being checked/);
+  });
+
+  it('every directory above the one native/ sits in, up to /, must be owned by root: one owned by anyone else is refused and named', () => {
+    const exe = image();
+    for (const dir of aboveOf(exe)) {
+      refused(
+        load(exe, { at: { [dir]: 1000 } }),
+        new RegExp(`\\n  ${reEscape(dir)} is owned by uid 1000, but only root may own it`),
+      );
+    }
+  });
+
+  it('and not writable by group or other, a sticky directory (a /tmp) included, as OpenSSH StrictModes refuses any group- or world-writable directory: the message prints the full mode, so the sticky and setgid bits show', () => {
+    const exe = image();
+    for (const dir of aboveOf(exe)) {
+      for (const bits of [0o775, 0o757, 0o1777, 0o2775, 0o3777]) {
+        refused(
+          load(exe, { modes: { [dir]: bits } }),
+          new RegExp(
+            `\\n  ${reEscape(dir)} is writable by its group or by everyone \\(mode ${(bits & 0o7777).toString(8).padStart(4, '0')}\\)`,
+          ),
+        );
+      }
+    }
+  });
+
+  describe('a directory refusal lists every directory that fails, in one message, and tells the reader how to fix a directory (not a file)', () => {
+    const message = (r: Run) => {
+      refused(
+        r,
+        /directories on the way to it cannot be trusted|directory on the way to it cannot be trusted/,
+      );
+      return (r.result as { message: string }[])[0]?.message as string;
+    };
+
+    it('three bad directories, one message, each named once and nothing else', () => {
+      const exe = image();
+      const [libDir, nativeDir, home] = [
+        dirsOf(exe)[0],
+        dirsOf(exe)[2],
+        dirsOf(exe)[3],
+      ] as string[];
+      const above = aboveOf(exe);
+      const top = above[0] as string; // the directory above the one the executable is in
+      chmodSync(libDir, 0o775);
+      const text = message(load(exe, { at: { [nativeDir]: 1000 }, modes: { [top]: 0o1777 } }));
+      expect(text).toContain('3 directories on the way to it cannot be trusted');
+      const lines = text.split('\n').filter((l) => l.startsWith('  '));
+      expect(lines.map((l) => l.trim().split(' ')[0]).sort()).toEqual(
+        [libDir, nativeDir, top].sort(),
+      );
+      expect(text).toContain(`${libDir} is writable by its group or by everyone (mode 0775)`);
+      expect(text).toContain(`${nativeDir} is owned by uid 1000, but only root may own it`);
+      expect(text).toContain(`${top} is writable by its group or by everyone (mode 1777)`);
+      // The executable's own directory passed, so it is not in the list.
+      expect(lines.some((l) => l.trim().startsWith(`${home} `))).toBe(false);
+    });
+
+    it('one bad directory reads in the singular', () => {
+      const exe = image();
+      const text = message(load(exe, { modes: { [aboveOf(exe)[0] as string]: 0o775 } }));
+      expect(text).toContain('1 directory on the way to it cannot be trusted');
+    });
+
+    // The advice follows the situation, not the position. A directory inside native/ is the app's
+    // to fix in place. A STICKY directory, at the executable's own level or above it, is a shared
+    // one (a /tmp), and changing its owner or mode would break the host: it is told only to move
+    // the install. A directory that is merely world-writable (chmod 777 /app, a umask-000 host's
+    // /app/.next/standalone) is the app's own as often as not, and the loader cannot tell, so it is
+    // told both, each with its condition, as is any other failing directory above native/ (owned by
+    // the wrong user, group-writable). A home directory is named as one to move.
+    const FIX = 'To fix a directory inside native/: run `chmod go-w <dir>`';
+    const EITHER =
+      "A directory that holds the executable or sits above it: if it is part of your app's install,";
+    const SHARED_IF =
+      'If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead.';
+    const OWN_DIR =
+      'The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.';
+    const MOVE =
+      'A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.';
+    // The one Dockerfile line that keeps a vinext app on the known-good path (deploy takes the fast
+    // host-built-assets path only for the template, plus exactly this line directly after the COPY of
+    // native/), said where a directory can be fixed in place AND the one that fails is /app or
+    // /app/native, the two a vinext image's line closes, and only there. Built from the two lines the
+    // generator reads (`vinext-image.ts`), so the text is not typed a second time here.
+    const VINEXT = `In a vinext app's Dockerfile, put exactly \`${VINEXT_CLOSE_LINE}\` directly after the \`${VINEXT_NATIVE_COPY}\` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (\`knext ffi check\` says whether the line is there).`;
+    // When a sticky directory is on the way AND other directories fail, fixing the others is not enough.
+    const ALONE =
+      'The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move.';
+    const count = (text: string, part: string) => text.split(part).length - 1;
+
+    it('a directory inside native/ always gets the fix in place: chmod go-w, chown root, a Dockerfile RUN; never the file COPY flags, never the move', () => {
+      const exe = image();
+      for (const dir of dirsOf(exe).slice(0, 3)) {
+        // Group-writable, world-writable and sticky: inside native/ none of them is shared.
+        for (const bits of [0o775, 0o777, 0o1777]) {
+          const text = message(load(exe, { modes: { [dir]: bits } }));
+          expect(text, `mode ${bits.toString(8)} at ${dir}`).toContain(FIX);
+          expect(text).toContain('`chown root <dir>`');
+          expect(text).toContain('`RUN chmod go-w <dir>`');
+          expect(text).toContain("a directory inside a copied tree keeps the build host's mode");
+          expect(text).toContain('could be renamed or replaced after it was checked');
+          // None of these is /app or /app/native (the tree is a temporary one): the vinext line is
+          // for a failing /app or /app/native, and is not said here.
+          expect(text).not.toContain(VINEXT);
+          expect(text).not.toContain(EITHER);
+          expect(text).not.toContain(MOVE);
+          expect(text).not.toContain(ALONE);
+          // The file COPY flags are the file hint's: the only COPY a directory refusal names is the vinext one.
+          expect(text.replace(VINEXT, '')).not.toContain('COPY --chown');
+          expect(text).not.toContain('its bytes could change');
+        }
+      }
+    });
+
+    it("the executable's own directory gets both pieces of advice, each with its condition, unless it is sticky: chmod 777 /app (world-writable, NOT sticky), a umask-000 host's /app/.next/standalone, a group-writable /usr/local/bin (root:staff 2775), an /opt/myapp the deploy user owns", () => {
+      const exe = image();
+      const home = dirsOf(exe)[3] as string;
+      for (const bad of [
+        { modes: { [home]: 0o777 } }, // chmod 777 /app
+        { modes: { [home]: 0o757 } }, // world-writable only
+        { modes: { [home]: 0o2777 } }, // setgid and world-writable, not sticky
+        { modes: { [home]: 0o2775 } }, // /usr/local/bin as root:staff
+        { at: { [home]: 1000 } }, // /opt/myapp owned by the deploy user
+      ]) {
+        const text = message(load(exe, bad));
+        expect(text).toContain(EITHER);
+        expect(text).toContain('`chmod go-w <dir>`');
+        expect(text).toContain('`chown root <dir>`');
+        expect(text).toContain('`RUN chmod go-w <dir>`');
+        expect(text).toContain(SHARED_IF);
+        expect(text).toContain(OWN_DIR);
+        expect(count(text, VINEXT)).toBe(0);
+        expect(text).not.toContain(MOVE);
+        expect(text).not.toContain(ALONE);
+        expect(text).not.toContain(FIX);
+        expect(text.replace(VINEXT, '')).not.toContain('COPY --chown');
+      }
+    });
+
+    it('a directory above the executable that is not sticky gets both pieces too, world-writable ones included: the nested prefix directories (/app/.next, a chmod 777 /app above /app/.next/standalone), a root:staff /usr/local, an /opt/myapp above the executable', () => {
+      const exe = image();
+      for (const dir of aboveOf(exe)) {
+        for (const bad of [
+          { modes: { [dir]: 0o775 } },
+          { modes: { [dir]: 0o2775 } },
+          { modes: { [dir]: 0o777 } },
+          { modes: { [dir]: 0o757 } },
+          { modes: { [dir]: 0o2777 } },
+          { at: { [dir]: 1000 } },
+        ]) {
+          const text = message(load(exe, bad));
+          expect(text).toContain(EITHER);
+          // The Dockerfile line a build uses for a prefix directory, as the image stage emits it.
+          expect(text).toContain('`RUN chmod go-w <dir>`');
+          expect(text).toContain(SHARED_IF);
+          expect(text).toContain(OWN_DIR);
+          expect(count(text, VINEXT)).toBe(0);
+          expect(text).not.toContain(MOVE);
+          expect(text).not.toContain(ALONE);
+          expect(text).not.toContain(FIX);
+        }
+      }
+    });
+
+    it("a sticky directory, at the executable's own level or above it, is only ever told to move the install: a shared directory is not the app to change", () => {
+      for (const bits of [0o1777, 0o1775, 0o1757, 0o3777]) {
+        const exe = image();
+        for (const dir of [dirsOf(exe)[3] as string, ...aboveOf(exe)]) {
+          const text = message(load(exe, { modes: { [dir]: bits } }));
+          expect(text, `mode ${bits.toString(8)} at ${dir}`).toContain(MOVE);
+          expect(text).not.toContain(EITHER);
+          expect(text).not.toContain(FIX);
+          expect(text).not.toContain(SHARED_IF);
+          // Nothing else on the list: a closing chmod cannot help, so neither the vinext line nor
+          // the "fixing the others is not enough" sentence is said.
+          expect(text).not.toContain(VINEXT);
+          expect(text).not.toContain(ALONE);
+        }
+      }
+      // Sticky and owned by somebody else (not world-writable): still shared, still a move.
+      const exe = image();
+      const above = aboveOf(exe)[0] as string;
+      const text = message(load(exe, { modes: { [above]: 0o1755 }, at: { [above]: 1000 } }));
+      expect(text).toContain(MOVE);
+      expect(text).not.toContain(EITHER);
+    });
+
+    it("a world-writable directory that is not sticky is NEVER told to move only: it gets the conditional advice at every level above native/ (a chmod 777 /app is the app's own to fix)", () => {
+      for (const bits of [0o777, 0o757, 0o2777, 0o772]) {
+        const exe = image();
+        for (const dir of [dirsOf(exe)[3] as string, ...aboveOf(exe)]) {
+          const text = message(load(exe, { modes: { [dir]: bits } }));
+          expect(text, `mode ${bits.toString(8)} at ${dir}`).toContain(EITHER);
+          expect(text).toContain('`chmod go-w <dir>`');
+          expect(text).toContain(SHARED_IF);
+          expect(text).not.toContain(MOVE);
+        }
+      }
+    });
+
+    it('the conditional advice names a home directory as one to move and says never to give it to root, so it cannot lead anyone to chown root ~', () => {
+      const exe = image();
+      const text = message(load(exe, { modes: { [dirsOf(exe)[3] as string]: 0o777 } }));
+      expect(text).toContain('or is a home directory such as /home/<user>');
+      expect(text).toContain('never give a home directory to root');
+      // The only chown it offers is the one for the app's own install, on the condition before it.
+      expect(text.indexOf('`chown root <dir>`')).toBeLessThan(text.indexOf('home directory'));
+      expect(text).not.toMatch(/chown root ~/);
+    });
+
+    it('each piece of advice is said once however many directories need it; a mix gets exactly the pieces its directories call for', () => {
+      const exe = image();
+      const [libDir, , nativeDir, home] = dirsOf(exe) as string[];
+      const [parent, grand] = aboveOf(exe) as string[];
+      // inside native/ + shared above: the fix in place and the move, nothing conditional.
+      let text = message(
+        load(exe, { modes: { [libDir as string]: 0o775, [grand as string]: 0o1777 } }),
+      );
+      expect(count(text, FIX)).toBe(1);
+      expect(count(text, MOVE)).toBe(1);
+      expect(count(text, VINEXT)).toBe(0);
+      expect(count(text, ALONE)).toBe(1);
+      expect(text).not.toContain(EITHER);
+      // inside native/ + the executable's directory + shared above: all three, once each.
+      text = message(
+        load(exe, {
+          modes: {
+            [nativeDir as string]: 0o775,
+            [home as string]: 0o775,
+            [parent as string]: 0o1777,
+          },
+        }),
+      );
+      expect(text).toContain('3 directories on the way to it cannot be trusted');
+      expect(count(text, FIX)).toBe(1);
+      expect(count(text, EITHER)).toBe(1);
+      expect(count(text, MOVE)).toBe(1);
+      expect(count(text, VINEXT)).toBe(0);
+      expect(count(text, ALONE)).toBe(1);
+      // two of the conditional kind: one sentence, not two.
+      text = message(load(exe, { modes: { [home as string]: 0o775, [parent as string]: 0o775 } }));
+      expect(count(text, EITHER)).toBe(1);
+      expect(count(text, VINEXT)).toBe(0);
+      expect(text).not.toContain(FIX);
+      expect(text).not.toContain(MOVE);
+      expect(text).not.toContain(ALONE);
+    });
+
+    // A tree at the real /app cannot be staged here, so the child process is shown one: lstat and
+    // realpath answer for /app, /app/native and what is under it as directories (root's, 0755 unless
+    // a mode is named), and the refusal is raised before anything is opened.
+    const VIRTUAL_APP = () => {
+      const fs = process.getBuiltinModule('node:fs') as unknown as Record<
+        string,
+        (...a: unknown[]) => unknown
+      >;
+      const mod = process.getBuiltinModule('node:module') as unknown as {
+        syncBuiltinESMExports: () => void;
+      };
+      const dirs = JSON.parse(process.env.VIRTUAL_DIRS as string) as string[];
+      const modes = JSON.parse(process.env.VIRTUAL_MODES as string) as Record<string, number>;
+      const file = process.env.VIRTUAL_FILE;
+      const realLstat = fs.lstatSync as (...a: unknown[]) => object;
+      const realReal = fs.realpathSync as (...a: unknown[]) => unknown;
+      fs.lstatSync = function (this: unknown, p: unknown, ...a: unknown[]) {
+        const isDir = dirs.includes(String(p));
+        if (!isDir && p !== file) return realLstat.call(this, p, ...a);
+        const st = realLstat.call(this, '/', ...a) as { mode: number | bigint };
+        const type = isDir ? 0o040000 : 0o100000;
+        const bits = type | (isDir ? (modes[String(p)] ?? 0o755) : 0o444);
+        const big = typeof st.mode === 'bigint';
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, {
+          uid: big ? 0n : 0,
+          mode: big ? BigInt(bits) : bits,
+        });
+      };
+      fs.realpathSync = function (this: unknown, p: unknown, ...a: unknown[]) {
+        return dirs.includes(String(p)) ? p : realReal.call(this, p, ...a);
+      };
+      mod.syncBuiltinESMExports();
+    };
+    const atApp = (modes: Record<string, number>) => {
+      const lib = `/app/native/ffi/${TRIPLE}`;
+      const r = inBun((m, c) => c(() => m.greet('World')), {
+        FAKE_EXEC: '/app/server',
+        BEFORE: VIRTUAL_APP.toString(),
+        VIRTUAL_DIRS: JSON.stringify([lib, '/app/native/ffi', '/app/native', '/app']),
+        VIRTUAL_MODES: JSON.stringify(modes),
+        VIRTUAL_FILE: `${lib}/${LIB}`,
+      });
+      const got = r.result as { cls?: string; message?: string };
+      expect(got?.cls, r.stderr).toBe('FfiLoadError');
+      return got.message as string;
+    };
+
+    it('the vinext line is said when /app or /app/native is on the list, once, and only then: a vinext image is closed by that one line, and a failing directory it does not name is not helped by it', () => {
+      // The control: with a directory that cannot be fixed by it failing, the sentence is not there.
+      expect(count(atApp({ '/app/native/ffi': 0o775 }), VINEXT)).toBe(0);
+      expect(count(atApp({ [`/app/native/ffi/${TRIPLE}`]: 0o775 }), VINEXT)).toBe(0);
+      const fixable: Array<Record<string, number>> = [
+        { '/app/native': 0o775 },
+        { '/app': 0o775 },
+        { '/app': 0o777 },
+        { '/app/native': 0o757, '/app': 0o775 },
+        { '/app/native': 0o775, '/app/native/ffi': 0o775 },
+      ];
+      for (const modes of fixable) {
+        const text = atApp(modes);
+        expect(count(text, VINEXT), JSON.stringify(modes)).toBe(1);
+      }
+      // A sticky /app is a shared directory: the install moves, and the line would not help.
+      const sticky = atApp({ '/app': 0o1777 });
+      expect(sticky).toContain(MOVE);
+      expect(sticky).not.toContain(VINEXT);
+      // /app/native failing and /app sticky: both are on the list and the move is the answer for /app,
+      // but /app/native can be closed by the line, so it is said, with the sentence that says the move wins.
+      const mixed = atApp({ '/app/native': 0o775, '/app': 0o1777 });
+      expect(count(mixed, VINEXT)).toBe(1);
+      expect(mixed).toContain(ALONE);
+      // A sticky /app is nobody's to close, and the line names no other directory: with the only
+      // other failure one the line does not name, it fixes neither, and is not said.
+      const stickyAndOther = atApp({ '/app': 0o1777, '/app/native/ffi': 0o775 });
+      expect(stickyAndOther).toContain(MOVE);
+      expect(stickyAndOther).toContain(ALONE);
+      expect(stickyAndOther).not.toContain(VINEXT);
+    });
+
+    it('a failing directory above /app (the root) is not helped by the vinext line either', () => {
+      const lib = `/app/native/ffi/${TRIPLE}`;
+      const r = inBun((m, c) => c(() => m.greet('World')), {
+        FAKE_EXEC: '/app/server',
+        BEFORE: VIRTUAL_APP.toString(),
+        VIRTUAL_DIRS: JSON.stringify([lib, '/app/native/ffi', '/app/native', '/app', '/']),
+        VIRTUAL_MODES: JSON.stringify({ '/': 0o775 }),
+        VIRTUAL_FILE: `${lib}/${LIB}`,
+      });
+      const got = r.result as { cls?: string; message?: string };
+      expect(got?.cls, r.stderr).toBe('FfiLoadError');
+      expect(got.message).toContain(EITHER);
+      expect(got.message).not.toContain(VINEXT);
+    });
+
+    it('a binary under a sticky directory (/tmp/x/server) with its own directory failing too is told the directories listed with it cannot do it alone: fixing /tmp/x leaves a sticky /tmp above it, and the install has to move', () => {
+      const exe = image();
+      const [home] = [dirsOf(exe)[3] as string];
+      const above = aboveOf(exe);
+      // The executable's own directory fails (group-writable) and the one above it is sticky.
+      const text = message(load(exe, { modes: { [home]: 0o775, [above[0] as string]: 0o1777 } }));
+      expect(text).toContain(EITHER);
+      expect(text).toContain(MOVE);
+      expect(text).toContain(ALONE);
+      // The sentence comes after the move advice it qualifies.
+      expect(text.indexOf(MOVE)).toBeLessThan(text.indexOf(ALONE));
+    });
+
+    it('a file refusal keeps the file hint (COPY --chown=0:0 --chmod=a-w) and does not talk about directories', () => {
+      const exe = image();
+      chmodSync(libOf(exe), 0o464);
+      const [first] = load(exe).result as { message: string }[];
+      expect(first?.message).toContain('its bytes could change after they were checked');
+      expect(first?.message).toContain('COPY --chown=0:0 --chmod=a-w');
+      expect(first?.message).not.toContain('RUN chmod go-w');
+    });
+
+    it('a link on the way is listed with the others, and its fix is the directory itself', () => {
+      const exe = image({ seal: false });
+      const at = join(exe, '..', 'native', 'ffi');
+      const away = join(emptyDir('away'), 'moved');
+      renameSync(at, away);
+      symlinkSync(away, at);
+      sealImage(exe);
+      const text = message(load(exe, { modes: { [aboveOf(exe)[0] as string]: 0o775 } }));
+      expect(text).toContain('2 directories on the way to it cannot be trusted');
+      expect(text).toContain(`${at} is a symbolic link`);
+      expect(text).toContain(
+        'A link is never followed, whatever it points at: replace it with the directory itself.',
+      );
+      expect(text).not.toContain('is where a directory must be');
+    });
+
+    it('a regular file or any other object where a directory belongs is named for what it is, and is not called a link', () => {
+      const exe = image();
+      const [libDir, ffi] = dirsOf(exe) as string[];
+      const REG = 0o100000;
+      const FIFO = 0o010000;
+      const SOCK = 0o140000;
+      const named = (dir: string, type: number, words: string) => {
+        const text = message(load(exe, { types: { [dir]: type } }));
+        expect(text).toContain(`\n  ${dir} ${words}`);
+        // Not a link: a link's advice and its name do not apply.
+        expect(text).not.toContain('symbolic link');
+        expect(text).not.toContain('A link is never followed');
+        expect(text).toContain(
+          'Something that is not a directory is where a directory must be: replace it with the directory.',
+        );
+        return text;
+      };
+      named(libDir as string, REG, 'is a regular file, not a directory');
+      named(ffi as string, FIFO, 'is not a directory');
+      named(ffi as string, SOCK, 'is not a directory');
+    });
+
+    it('a link and a regular file together get both pieces of advice, each once', () => {
+      const exe = image();
+      const [libDir, ffi] = dirsOf(exe) as string[];
+      const text = message(
+        load(exe, { types: { [libDir as string]: 0o120000, [ffi as string]: 0o100000 } }),
+      );
+      expect(text).toContain(`${libDir} is a symbolic link`);
+      expect(text).toContain(`${ffi} is a regular file, not a directory`);
+      expect(text.split('A link is never followed').length - 1).toBe(1);
+      expect(text.split('Something that is not a directory').length - 1).toBe(1);
+    });
+
+    it('a control character in a directory name is shown, never printed raw: a newline would forge another line of the list', () => {
+      const exe = image();
+      const base = emptyDir('weird');
+      const home = join(base, 'a\n  forged');
+      mkdirSync(home);
+      renameSync(join(exe, '..'), `${home}/x`);
+      // The image moved whole: its executable is now in x/ under a directory whose name has a newline.
+      const moved = join(home, 'x', 'server');
+      chmodSync(join(home, 'x'), 0o775);
+      const text = message(load(moved));
+      expect(text).toContain(join(home, 'x').replace('\n', '^J'));
+      // Every line of the list is a real directory; the forged line never starts one.
+      const lines = text.split('\n').filter((l) => l.startsWith('  '));
+      expect(lines.length, text).toBe(1);
+      expect(text).not.toContain('\n  forged');
+      // The same for a tab, an escape and a delete character: none of them is printed as itself.
+      const other = join(emptyDir('weird2'), 'q\t\u001b\u007f');
+      mkdirSync(other);
+      renameSync(join(image({ seal: true }), '..'), `${other}/x`);
+      chmodSync(join(other, 'x'), 0o775);
+      const t2 = message(load(join(other, 'x', 'server')));
+      expect(t2).toContain('q^I^[^?');
+      expect([...t2].some((ch) => '\t\u001b\u007f'.includes(ch))).toBe(false);
+    });
+
+    it('C1 controls and the line and paragraph separators in a directory name are shown too, never printed raw', () => {
+      const exe = image();
+      const odd = join(emptyDir('weird3'), 'x\u0085y\u2028z\u2029w');
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      chmodSync(join(odd, 'x'), 0o775);
+      const text = message(load(join(odd, 'x', 'server')));
+      expect(text).toContain('x\\u0085y\\u2028z\\u2029w');
+      expect(rawControls(text)).toEqual([]);
+    });
+
+    it('a backslash and a caret are shown escaped too, so the output is unambiguous: a name with a literal ^J is not read as a newline, and a name with the text \\u0085 in it is not read as the C1 control', () => {
+      // The one place the module prints a name it found without resolving it: the platform
+      // directories under native/ffi/ (a directory with a backslash in its name cannot be the one
+      // the executable is in: Bun's realpathSync refuses such a path on macOS).
+      const [literal] = load(image({ triple: 'a\\u0085b^Jc\\d' })).result as { message: string }[];
+      // `\` -> `\\`, `^` -> `\^`: the literal text of the name, decodable one way only.
+      expect(literal?.message).toContain('holds Rust libraries for a\\\\u0085b\\^Jc\\\\d');
+      // A real newline and a real C1 control in the name stay distinct from those.
+      const [real] = load(image({ triple: 'a\u0085b\nc' })).result as { message: string }[];
+      expect(real?.message).toContain('holds Rust libraries for a\\u0085b^Jc');
+      expect(real?.message).not.toContain('a\\\\u0085b');
+      expect(rawControls(real?.message ?? '')).toEqual([]);
+    });
+
+    it('bidirectional controls in a directory name are shown as unicode escapes, never printed raw: a right-to-left override would reorder what is around it', () => {
+      const exe = image();
+      const marks = [
+        0x61c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068,
+        0x2069,
+      ];
+      const odd = join(emptyDir('weird7'), `q${String.fromCodePoint(...marks)}z`);
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      chmodSync(join(odd, 'x'), 0o775);
+      const text = message(load(join(odd, 'x', 'server')));
+      expect(text).toContain(
+        `q${marks.map((n) => `\\u${n.toString(16).padStart(4, '0')}`).join('')}z`,
+      );
+      expect(rawControls(text)).toEqual([]);
+      // Ordinary text, a space, an accent and an emoji are left as they are.
+      const fine = join(emptyDir('weird8'), 'caf\u00e9 \u{1f600}');
+      mkdirSync(fine);
+      renameSync(join(image(), '..'), `${fine}/x`);
+      chmodSync(join(fine, 'x'), 0o775);
+      expect(message(load(join(fine, 'x', 'server')))).toContain('caf\u00e9 \u{1f600}');
+    });
+
+    it('zero-width and format characters in a directory name are shown as unicode escapes too, never printed raw: a name that holds one must not read as the name without it', () => {
+      const marks = [0x200b, 0x200c, 0x200d, 0x2060, 0xfeff];
+      const exe = image();
+      const odd = join(emptyDir('weird9'), `q${String.fromCodePoint(...marks)}z`);
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      chmodSync(join(odd, 'x'), 0o775);
+      const text = message(load(join(odd, 'x', 'server')));
+      expect(text).toContain(
+        `q${marks.map((n) => `\\u${n.toString(16).padStart(4, '0')}`).join('')}z`,
+      );
+      expect(rawControls(text)).toEqual([]);
+    });
+
+    it('every other format character is shown as an escape too, the soft hyphen, the Mongolian vowel separator, the invisible operators, the interlinear annotation marks, the Unicode tag characters and the combining grapheme joiner included: a name that holds one reads as the name without it', () => {
+      // U+00AD, U+0600, U+06DD, U+070F, U+180E, U+2061 to U+2064, U+206A to U+206F, U+FFF9 to U+FFFB,
+      // U+034F (not a format character, but as invisible), and beyond U+FFFF: U+1D173, U+E0001,
+      // U+E0020 and U+E007F (the tag characters, which spell a hidden string).
+      const marks = [
+        0xad, 0x34f, 0x600, 0x6dd, 0x70f, 0x180e, 0x2061, 0x2062, 0x2063, 0x2064, 0x206a, 0x206f,
+        0xfff9, 0xfffb, 0x1d173, 0xe0001, 0xe0020, 0xe007f,
+      ];
+      const expected = `q${marks.map(escapedAs).join('')}z`;
+      // As a directory name.
+      const exe = image();
+      const odd = join(emptyDir('weird10'), `q${String.fromCodePoint(...marks)}z`);
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      chmodSync(join(odd, 'x'), 0o775);
+      const text = message(load(join(odd, 'x', 'server')));
+      expect(text).toContain(expected);
+      expect(rawControls(text)).toEqual([]);
+      // As a value the manifest holds (a string in a JSON file reaches the loader as it is).
+      const exe2 = image({ seal: false });
+      const file = join(exe2, '..', 'native', '.integrity.json');
+      const doc = JSON.parse(readFileSync(file, 'utf8')) as { files: Record<string, string> };
+      doc.files[`ffi/${TRIPLE}/${LIB}`] = `q${String.fromCodePoint(...marks)}z`;
+      writeFileSync(file, JSON.stringify(doc));
+      sealImage(exe2);
+      const viaManifest = (load(exe2).result as { message: string }[])[0]?.message as string;
+      expect(viaManifest).toContain(`as "${expected}", which is not a sha256 digest`);
+      expect(rawControls(viaManifest)).toEqual([]);
+    });
+
+    it('a lone surrogate in a value the manifest holds is shown as an escape, not printed: JSON can carry one, and a terminal or a log writer would turn it into U+FFFD or into nothing; a valid pair is the character it spells', () => {
+      for (const [bad, shown] of [
+        ['a\ud800b', 'a\\ud800b'],
+        ['a\udfffb', 'a\\udfffb'],
+        ['\udc00\ud800', '\\udc00\\ud800'], // low before high: two lone halves
+        ['x\ud83d', 'x\\ud83d'], // a high surrogate at the end
+        ['\u{1f600}z', '\u{1f600}z'], // a pair is an emoji, left as it is
+      ] as const) {
+        const exe = image({ seal: false });
+        const file = join(exe, '..', 'native', '.integrity.json');
+        const doc = JSON.parse(readFileSync(file, 'utf8')) as { files: Record<string, string> };
+        doc.files[`ffi/${TRIPLE}/${LIB}`] = bad;
+        writeFileSync(file, JSON.stringify(doc));
+        sealImage(exe);
+        const text = (load(exe).result as { message: string }[])[0]?.message as string;
+        expect(text, bad).toContain(`as "${shown}", which is not a sha256 digest`);
+        expect(rawControls(text), bad).toEqual([]);
+      }
+    });
+
+    it('a value that is not text at all is shown without throwing: a thrown object with no prototype, or whose toString throws, is "[object Object]", never a TypeError out of the refusal', () => {
+      const THROW_ODD = () => {
+        const fs = process.getBuiltinModule('node:fs') as unknown as Record<string, unknown>;
+        const mod = process.getBuiltinModule('node:module') as unknown as {
+          syncBuiltinESMExports: () => void;
+        };
+        fs.realpathSync = () => {
+          throw process.env.ODD === 'bare'
+            ? Object.create(null)
+            : {
+                toString() {
+                  throw new Error('no text');
+                },
+              };
+        };
+        mod.syncBuiltinESMExports();
+      };
+      for (const odd of ['bare', 'toString']) {
+        const r = inBun((m, c) => c(() => m.greet('x')), {
+          FAKE_EXEC: image(),
+          BEFORE: THROW_ODD.toString(),
+          ODD: odd,
+        });
+        const got = r.result as { cls: string; message: string };
+        expect(got?.cls, `${odd}: ${r.stderr}`).toBe('FfiLoadError');
+        expect(got.message).toMatch(/cannot resolve the directory .* \(\[object Object\]\)\.$/);
+      }
+    });
+
+    it('through the environment, invalid UTF-8 and a lone surrogate become U+FFFD before the text is shown, which is printed as it is: the replacement character is not a control and hides nothing (a manifest value keeps a lone surrogate, and is shown as an escape: the next tests)', () => {
+      const r = inBun((m) => m.add(1, 2), {
+        FAKE_EXEC: image(),
+        KNEXT_FFI_SLOW_CALL_MS: `a${String.fromCodePoint(0xd800)}b`,
+      });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toContain(`KNEXT_FFI_SLOW_CALL_MS="a${String.fromCodePoint(0xfffd)}b"`);
+      expect(rawControls(r.stderr)).toEqual([]);
+    });
+
+    it('a manifest that lists something that is not a sha256 digest is refused before the library is read, with the value shown escaped', () => {
+      for (const [bad, shown] of [
+        ['ab\u0085cd', 'ab\\u0085cd'],
+        ['AB'.repeat(32), 'AB'.repeat(32)], // 64 digits, but upper case: the manifest is written in lower case
+        ['0'.repeat(63), '0'.repeat(63)],
+        ['0'.repeat(65), '0'.repeat(65)],
+        ['z'.repeat(64), 'z'.repeat(64)],
+        ['x\ny\\z^', 'x^Jy\\\\z\\^'],
+      ] as const) {
+        const exe = image({ seal: false });
+        const file = join(exe, '..', 'native', '.integrity.json');
+        const doc = JSON.parse(readFileSync(file, 'utf8')) as { files: Record<string, string> };
+        doc.files[`ffi/${TRIPLE}/${LIB}`] = bad;
+        writeFileSync(file, JSON.stringify(doc));
+        sealImage(exe);
+        const text = (load(exe).result as { message: string }[])[0]?.message as string;
+        expect(text, bad).toMatch(/refusing to load .*: .*\.integrity\.json lists ffi\//);
+        expect(text).toContain(`as "${shown}", which is not a sha256 digest`);
+        expect(text).toContain('64 lowercase hexadecimal digits');
+        expect(text).not.toContain('sha256 mismatch');
+        expect(rawControls(text)).toEqual([]);
+      }
+    });
+
+    it('the KNEXT_FFI_SLOW_CALL_MS value in the warning is shown escaped, whatever it holds', () => {
+      const run = (value: string) =>
+        inBun((m) => m.add(1, 2), { FAKE_EXEC: image(), KNEXT_FFI_SLOW_CALL_MS: value });
+      const r = run('fast\u0085\u2028\u202e\nx\\y^');
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toContain(
+        'KNEXT_FFI_SLOW_CALL_MS="fast\\u0085\\u2028\\u202e^Jx\\\\y\\^": it must be a number',
+      );
+      expect(rawControls(r.stderr)).toEqual([]);
+    });
+
+    it('the value a decoder quotes when the library returns the wrong kind is shown escaped: a 64-bit integer or a float that arrives as a string with control characters in it', () => {
+      // The fixture library returns a number where a decimal string is due, and a null where a float
+      // is. The one policy for library output: a value that broke the contract is not text anyone
+      // wrote for a reader, and the module quotes it in a message of its own, so it is shown
+      // escaped. (The error text the library's author wrote on purpose, RustError.message, is not
+      // the module's to rewrite: see the $fail::message entry in the allowlist below.) The parse
+      // is patched here to put a string with a C1 control, a line separator, a bidirectional
+      // override and a newline where the value is, and the refusal must quote it escaped.
+      const REPLACE_VALUES = () => {
+        const real = JSON.parse;
+        JSON.parse = function (this: unknown, ...a: Parameters<typeof JSON.parse>) {
+          const v = real.apply(this, a);
+          if (v !== null && typeof v === 'object' && 'inner' in v && 'color' in v) {
+            if (v.id === 1) v.id = 'a\u0085b\u2028c\nd';
+            if (v.x === null) v.x = 'q\u202ez';
+          }
+          return v;
+        } as typeof JSON.parse;
+      };
+      const r = inBun((m, c) => [c(() => m.bad_id()), c(() => m.bad_point())], {
+        FAKE_EXEC: image(),
+        BEFORE: REPLACE_VALUES.toString(),
+      });
+      const [id, point] = r.result as { cls: string; message: string }[];
+      expect(id?.cls, r.stderr).toBe('RustError');
+      expect(id?.message).toBe(
+        'result.id: expected a 64-bit integer as a decimal string, got "a\\u0085b\\u2028c\\\\nd"',
+      );
+      expect(point?.cls).toBe('RustError');
+      expect(point?.message).toBe('result.x: expected a finite number, got "q\\u202ez"');
+      expect(rawControls(id?.message ?? '')).toEqual([]);
+      expect(rawControls(point?.message ?? '')).toEqual([]);
+    });
+
+    it('the other printed paths are shown escaped too: the platform directories it found, the manifest it could not read, and the file it could not open', () => {
+      // The directories under native/ffi/ it names when none is for this platform.
+      const wrongPlatform = image({ triple: 'zz\u2028q\u0085r\ns' });
+      const [first] = load(wrongPlatform).result as { message: string }[];
+      expect(first?.message).toContain('holds Rust libraries for zz\\u2028q\\u0085r^Js');
+      expect(rawControls(first?.message ?? '')).toEqual([]);
+
+      // A manifest whose version is a string with C1 and separator characters in it: what the
+      // refusal quotes of it is JSON.stringify's output, which prints those raw.
+      const exe = image({ seal: false });
+      writeFileSync(
+        join(exe, '..', 'native', '.integrity.json'),
+        JSON.stringify({ version: 'a\u0085b\u2028c', files: {} }),
+      );
+      sealImage(exe);
+      const [unreadable] = load(exe).result as { message: string }[];
+      const text = unreadable?.message ?? '';
+      expect(text).toContain('cannot read');
+      expect(text).toContain('unsupported version "a\\u0085b\\u2028c"');
+      expect(rawControls(text)).toEqual([]);
+    });
+
+    /** An image moved under a directory whose name holds a C1 control and a line separator. */
+    const oddImage = () => {
+      const exe = image();
+      const odd = join(emptyDir('weird4'), `q${String.fromCodePoint(0x85, 0x2028)}z`);
+      mkdirSync(odd);
+      renameSync(join(exe, '..'), `${odd}/x`);
+      return join(odd, 'x', 'server');
+    };
+    const SHOWN = 'q\\u0085\\u2028z';
+
+    it('a file that cannot be opened is refused with its path shown escaped, in the message and in the system error it quotes (the open is made to fail with an EACCES, so it is the same for whoever runs the test)', () => {
+      // The open of the manifest fails with the system's own message, which quotes the path: an
+      // EACCES, as a mode-000 file gives a user that is not root. Faked here, because root reads a
+      // mode-000 file; the test below runs the real one.
+      const DENY_OPEN = () => {
+        const fs = process.getBuiltinModule('node:fs');
+        const mod = process.getBuiltinModule('node:module') as unknown as {
+          syncBuiltinESMExports: () => void;
+        };
+        const real = fs.openSync as (...x: unknown[]) => number;
+        (fs as unknown as Record<string, unknown>).openSync = function (
+          this: unknown,
+          ...a: unknown[]
+        ) {
+          const target = String(a[0]);
+          if (target.endsWith('.integrity.json')) {
+            throw Object.assign(new Error(`EACCES: permission denied, open '${target}'`), {
+              code: 'EACCES',
+            });
+          }
+          return real.apply(this, a);
+        };
+        mod.syncBuiltinESMExports();
+      };
+      const r = inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+        FAKE_EXEC: oddImage(),
+        BEFORE: DENY_OPEN.toString(),
+      });
+      const [first] = r.result as { message: string }[];
+      expect(first?.message, r.stderr).toContain('cannot open');
+      expect(first?.message).toContain('EACCES: permission denied');
+      expect(first?.message).toContain(SHOWN);
+      expect(rawControls(first?.message ?? '')).toEqual([]);
+    });
+
+    it("the same with a real mode-000 manifest, so Bun's own errno mapping and its message are covered: a user that is not root is refused with the system's EACCES; root reads a mode-000 file, so for root the call succeeds (nothing to quote, and no case skips)", () => {
+      const moved = oddImage();
+      chmodSync(join(moved, '..', 'native', '.integrity.json'), 0o000);
+      const r = inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+        FAKE_EXEC: moved,
+      });
+      const [first, second] = r.result as { ok?: unknown; message?: string }[];
+      if (process.getuid?.() === 0) {
+        expect(first?.ok, r.stderr).toBe('Hello, World!');
+        expect(second?.ok).toBe(3);
+      } else {
+        expect(first?.message, r.stderr).toContain('cannot open');
+        expect(first?.message).toContain('EACCES');
+        expect(first?.message).toContain(SHOWN);
+        expect(rawControls(first?.message ?? '')).toEqual([]);
+      }
+    });
+  });
+
+  describe("a link at or above the executable's directory is refused, never followed (the real target is a good tree that loads by its real path)", () => {
+    const refusedLink = (r: Run, via: string) => {
+      refused(r, new RegExp(`${reEscape(via)} is not the real path of its directory`));
+      const text = (r.result as { message: string }[])[0]?.message as string;
+      expect(text).toContain('goes through a symbolic link at or above its directory');
+    };
+
+    it("a link AT the executable's directory", () => {
+      const exe = image();
+      // The control: the same tree, by its real path, loads.
+      loaded(load(exe));
+      const via = join(emptyDir('via'), 'bin');
+      symlinkSync(join(exe, '..'), via);
+      refusedLink(load(join(via, 'server')), via);
+    });
+
+    it("a link ABOVE the executable's directory", () => {
+      const exe = image();
+      const home = join(exe, '..');
+      const alias = join(emptyDir('alias'), 'up');
+      symlinkSync(join(home, '..'), alias);
+      const throughLink = join(alias, basename(home));
+      refusedLink(load(join(throughLink, 'server')), throughLink);
+    });
+
+    it('nothing is judged or read once the link is seen: the refusal comes before every stat of the tree', () => {
+      const exe = image();
+      const via = join(emptyDir('via'), 'bin');
+      symlinkSync(join(exe, '..'), via);
+      const r = inBun(
+        (m, c) => [c(() => m.greet('World')), (globalThis as { statted?: string[] }).statted],
+        { FAKE_EXEC: join(via, 'server') },
+      );
+      const [refusal, statted] = r.result as [{ cls: string }, string[]];
+      expect(refusal.cls, r.stderr).toBe('FfiLoadError');
+      // Only the "is anything staged" look at the library's path: no directory, no manifest.
+      expect(statted.filter((p) => p !== 'fd')).toEqual([join(via, 'native', 'ffi', TRIPLE, LIB)]);
+    });
+
+    it('with nothing staged a link in the executable\'s path is not a refusal of its own: the ordinary "cannot find" answer', () => {
+      const empty = emptyDir('bare');
+      const via = join(emptyDir('via'), 'bin');
+      symlinkSync(empty, via);
+      const r = inBun((m, c) => c(() => m.greet('World')), { FAKE_EXEC: join(via, 'server') });
+      const out = r.result as { cls?: string; message?: string };
+      expect(out?.cls, r.stderr).toBe('FfiLoadError');
+      expect(out.message).toContain('cannot find the Rust library');
+      expect(out.message).not.toContain('refusing to load');
+    });
+  });
+
+  it('a link inside the checked tree is refused wherever it is, whatever it points at: native/ffi and native/ itself', () => {
+    for (const rel of ['native/ffi', 'native']) {
+      const exe = image({ seal: false });
+      const at = join(exe, '..', rel);
+      const away = join(emptyDir('away'), 'moved');
+      renameSync(at, away);
+      symlinkSync(away, at);
+      sealImage(exe);
+      refused(load(exe), new RegExp(`${reEscape(at)} is a symbolic link`));
+    }
+  });
+
+  describe('a manifest or a library that is not a regular file is refused, and never waited for', () => {
+    const manifestOf = (exe: string) => join(nativeOf(exe), '.integrity.json');
+    const mkfifo = (p: string) => {
+      const r = spawnSync('mkfifo', [p]);
+      if (r.status !== 0) throw new Error(`mkfifo ${p}: ${r.stderr}`);
+    };
+    const notRegular = (r: Run, path: string) => {
+      // A load that blocked on the pipe never answers: the harness would have killed it.
+      expect(r.status, `the loader blocked on ${path}: ${r.stderr}`).toBe(0);
+      refused(r, new RegExp(`${reEscape(path)} is not a regular file`));
+    };
+
+    it('a FIFO at the manifest', () => {
+      const exe = image({ seal: false });
+      rmSync(manifestOf(exe));
+      mkfifo(manifestOf(exe));
+      sealImage(exe);
+      notRegular(load(exe, { timeoutMs: 20_000 }), manifestOf(exe));
+    });
+
+    it('a FIFO at the library', () => {
+      const exe = image({ seal: false });
+      rmSync(libOf(exe));
+      mkfifo(libOf(exe));
+      sealImage(exe);
+      notRegular(load(exe, { timeoutMs: 20_000 }), libOf(exe));
+    });
+
+    it('a directory at the manifest (opening it works; reading it does not)', () => {
+      const exe = image({ seal: false });
+      rmSync(manifestOf(exe));
+      mkdirSync(manifestOf(exe));
+      sealImage(exe);
+      notRegular(load(exe), manifestOf(exe));
+    });
+  });
+
+  it('a platform that cannot open without following links or without blocking is refused: an absent or zero flag would OR in as 0 and quietly allow both', () => {
+    const FLAG_GONE = () => {
+      const fs = process.getBuiltinModule('node:fs');
+      const value = process.env.FLAG_VALUE === 'zero' ? 0 : undefined;
+      Object.defineProperty(fs.constants, process.env.FLAG as string, {
+        value,
+        configurable: true,
+      });
+    };
+    for (const flag of ['O_NOFOLLOW', 'O_NONBLOCK']) {
+      for (const value of ['undefined', 'zero']) {
+        const r = inBun((m, c) => c(() => m.greet('World')), {
+          FAKE_EXEC: image(),
+          BEFORE: FLAG_GONE.toString(),
+          FLAG: flag,
+          FLAG_VALUE: value,
+        });
+        const out = r.result as { cls?: string; message?: string };
+        expect(out?.cls, `${flag} ${value}: ${r.stderr}`).toBe('FfiLoadError');
+        expect(out.message, `${flag} ${value}`).toContain(
+          'this platform cannot open the integrity manifest without following links or blocking',
+        );
+      }
+    }
+  });
+
+  it('the file refusal names all three commands that stage the Dockerfile, and says the way up to / counts too', () => {
     const exe = image();
     chmodSync(libOf(exe), 0o464);
     refused(load(exe), /COPY --chown=0:0 --chmod=a-w/);
-    refused(load(exe), /the directory that holds native\/ /);
-  });
-
-  it('a symlink at the staged path is judged by the file it points at, the one that is hashed and loaded', () => {
-    const exe = image({ seal: false });
-    const away = emptyDir('away');
-    const target = join(away, LIB);
-    copyFileSync(libOf(exe), target);
-    chmodSync(target, 0o666);
-    rmSync(libOf(exe));
-    symlinkSync(target, libOf(exe));
-    for (const d of dirsOf(exe).slice(0, 3)) chmodSync(d, 0o555);
-    // The manifest's hash is right (same bytes): only the writable target is wrong.
     refused(
       load(exe),
-      new RegExp(`: ${reEscape(libOf(exe))} is writable by its group or by everyone`),
+      /the Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies native\//,
     );
+    refused(load(exe), /every directory from the library up to \/ must also be/);
+  });
+
+  it("an unresolved library and a missing manifest name the same three commands: knext build stages the Dockerfile for a builder of the reader's own", () => {
+    const bare = inBun((m, c) => c(() => m.greet('World')), {
+      FAKE_EXEC: join(emptyDir('bare'), 'server'),
+    });
+    const out = bare.result as { message?: string };
+    expect(out?.message, bare.stderr).toContain(
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage puts it beside the server',
+    );
+    const exe = image({ integrity: 'absent' });
+    const r = load(exe);
+    const [first] = r.result as { message: string }[];
+    expect(first?.message, r.stderr).toContain(
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies a native/ that carries one',
+    );
+  });
+
+  it('a relative executable path is refused for what it is, not blamed on a link: the lookups would not go where the judgement did', () => {
+    const exe = image();
+    const rel = relative(app, exe);
+    expect(isAbsolute(rel)).toBe(false);
+    const r = load(rel);
+    refused(r, /is not the real path of its directory/);
+    const text = (r.result as { message: string }[])[0]?.message as string;
+    expect(text).toContain("the executable's path is relative");
+    expect(text).toContain('absolute path');
+    // A relative path is not a link, and the refusal does not say it is.
+    expect(text).not.toContain('symbolic link');
+  });
+
+  it('a symlink at the staged path is refused as a link, never followed: whatever it points at, root-owned and read-only included', () => {
+    const exe = image({ seal: false });
+    const target = join(emptyDir('away'), LIB);
+    copyFileSync(libOf(exe), target);
+    chmodSync(target, 0o444);
+    rmSync(libOf(exe));
+    symlinkSync(target, libOf(exe));
+    sealImage(exe);
+    // The manifest's hash is right (same bytes), and a 0444 target passes the owner and mode
+    // rule: only the link itself is wrong. Following it is what let a swapped-in tree point
+    // at any root-owned library.
+    refused(load(exe), new RegExp(`${reEscape(libOf(exe))} is a symbolic link`));
+  });
+
+  it('a symlink at the integrity manifest is refused as a link, whatever it points at', () => {
+    const exe = image({ seal: false });
+    const manifest = join(nativeOf(exe), '.integrity.json');
+    const target = join(emptyDir('away'), 'integrity.json');
+    copyFileSync(manifest, target);
+    chmodSync(target, 0o444);
+    rmSync(manifest);
+    symlinkSync(target, manifest);
+    sealImage(exe);
+    refused(load(exe), new RegExp(`${reEscape(manifest)} is a symbolic link`));
+  });
+
+  describe('the integrity manifest is judged like the library: whoever can write it chooses what loads', () => {
+    const manifestOf = (exe: string) => join(nativeOf(exe), '.integrity.json');
+    const loadWith = (exe: string, ino: Record<string, number>) =>
+      inBun((m, c) => [c(() => m.greet('World')), c(() => m.add(1, 2))], {
+        FAKE_EXEC: exe,
+        FAKE_OWNER_INO: JSON.stringify(ino),
+      });
+
+    it('a manifest owned by anyone but root is refused, and the refusal names it', () => {
+      const exe = image();
+      refused(
+        loadWith(exe, { [idOf(manifestOf(exe))]: 1000 }),
+        new RegExp(`${reEscape(manifestOf(exe))} is owned by uid 1000, but only root may own it`),
+      );
+    });
+
+    it('a manifest its group or everyone can write is refused', () => {
+      for (const mode of [0o464, 0o446]) {
+        const exe = image();
+        chmodSync(manifestOf(exe), mode);
+        refused(
+          load(exe),
+          new RegExp(
+            `${reEscape(manifestOf(exe))} is writable by its group or by everyone \\(mode 0${mode.toString(8)}\\)`,
+          ),
+        );
+      }
+    });
+
+    it('a root-owned manifest with the owner-write bit set still loads (a plain COPY leaves 0644)', () => {
+      const exe = image();
+      chmodSync(manifestOf(exe), 0o644);
+      loaded(load(exe));
+    });
   });
 
   it('the image layout loads: root-owned, read-only, run by a non-root user or by root', () => {
@@ -1274,6 +2663,330 @@ describe('the library is refused unless only root can write it and own the way t
     // Root running the tests owns the staged tree as uid 0, which is exactly what the rule accepts.
     if (uid === 0) loaded(r);
     else refused(r, new RegExp(`is owned by uid ${uid}, but only root may own it`));
+  });
+});
+
+describe('everything the module prints goes through $show, or is classified (a scan of the whole generated module, so a new message cannot forget it)', () => {
+  const IDENT =
+    'a generated identifier: the export name or an argument name, validated by the generator';
+  const PATH =
+    "a path built by the generated code from the generator's own field names and loop indexes";
+  const WORD = 'typeof of a value: one fixed word';
+  const NUM = 'a number';
+  /** The same reason for each expression in each function: a name is allowed per function. */
+  const allow = (fns: string[], exprs: string[], reason: string): Record<string, string> =>
+    Object.fromEntries(fns.flatMap((f) => exprs.map((e) => [`${f}::${e}`, reason])));
+  const CHECKS = ['$int', '$big', '$num', '$bool', '$str', '$bytes'];
+
+  /**
+   * What the module may interpolate or concatenate into text WITHOUT $show, each keyed by the
+   * function it is in and the expression, and each with the reason it is safe. A name is allowed in
+   * ONE function only: the same name in another function is a new finding, not a pass.
+   */
+  const ALLOWED: Record<string, string> = {
+    '$slow::fn': 'a generated function name: an identifier the generator validated',
+    '$slow::ms.toFixed(1)': 'a number',
+    '$slow::$slowMs': 'a number',
+    '$renderMetrics::fn': 'a generated function name (a metric label)',
+    '$renderMetrics::n': 'a count',
+    '$renderMetrics::lib': 'the library name the generator validated (a metric label)',
+    '$renderMetrics::s': 'a number of seconds',
+    "$renderMetrics::out.join('\\n')":
+      'the metric lines built above, from the entries on this list',
+    '$open::$PRERENDER': 'a constant the generator wrote: fixed text',
+    '$open::process.version': 'the Node version string',
+    '$open::via':
+      "built in this function from $show'd parts (and scanned as a template of its own)",
+    '$open::symbol': 'the key of a symbol lookup (`<symbol>_schema`), not printed',
+    '$open::fn': 'a generated function name',
+    '$open::actual': "String() of the number the library's schema function returned, or 'missing'",
+    '$open::expected': 'a schema string the generator wrote',
+    '$triple::arch': "one of the literals chosen above ('x86_64', 'aarch64' or '')",
+    '$triple::process.platform': 'the platform name Bun reports (a fixed word)',
+    '$triple::process.arch': 'the architecture name Bun reports (a fixed word)',
+    '$resolve::$LIB': 'the library name the generator validated; part of `file`, which is shown',
+    '$resolve::triple': 'built from process.arch and the C library, never from the file system',
+    "$resolve::tried.map((p) => ` ${$show(p)}`).join('\\n')": "every path tried, each one $show'd",
+    '$why::st.uid': 'a number',
+    '$why::mode': 'the mode in octal: digits',
+    '$judge::why': "$why's text: a number and a mode",
+    '$id::st.dev': 'a number (an identity, not a message)',
+    '$id::st.ino': 'a number (an identity, not a message)',
+    '$show::String.fromCharCode(n ^ 0x40)': 'one caret-notation character, a printable one',
+    '$show::ch': 'a backslash or a caret, written after the backslash that escapes it',
+    "$show::n.toString(16).padStart(4, '0')": 'four hexadecimal digits',
+    '$show::n.toString(16)': 'hexadecimal digits of a code point beyond U+FFFF',
+    '$sealed::why': "$why's text: a number and a mode",
+    '$sealed::bad.length': 'a count',
+    "$sealed::bad.map((b) => ` ${b}`).join('\\n')":
+      "the entries pushed above, each built from $show'd parts",
+    '$sealed::b':
+      "one entry pushed to bad, each built from $show'd parts (every bad.push is scanned)",
+    // $openFile takes its `what` and `missing` through PARAM_SINKS: the call sites are scanned, so
+    // the parameters are not listed here.
+    '$verify::expected':
+      'a string that matched /^[0-9a-f]{64}$/ a few lines above, or the refusal would have been raised',
+    '$verify::actual': 'a sha256 hex digest the process computed',
+    '$verify::process.platform': 'the platform name Bun reports (a fixed word)',
+    '$verify::lib.fd': 'a file descriptor number',
+    // Past the loader: the wrappers' own errors. The one policy for what a library returns: a value
+    // that broke the contract (the wrong kind, quoted by $d64 and $fin in a message the module
+    // writes) goes through $show; the error text the library's author wrote on purpose for the app
+    // does not. The rest is generated text, numbers and words.
+    '$fail::message':
+      "the error text the Rust code's author wrote for the app, delivered as RustError.message as it is (the module adds only a fixed prefix to an invalid-input one): it is the payload the app's handlers match and log, not a message the module composes about a broken value, so rewriting it would change what the author wrote; the library is the one that was hashed and sealed, and an app that prints it to a terminal chooses how",
+    '$fail::status': 'a number (the status the library returned)',
+    '$shown::hex * 4': 'a number',
+    '$int::$shown(v)': 'a number, bounded: a huge bigint is a bit count',
+    '$big::$shown(v)': 'a number, bounded: a huge bigint is a bit count',
+    '$big::got': 'built on the line above from typeof and $shown: words and a bounded number',
+    '$efin::String(v)': 'a number: v is typeof number here',
+    '$vec::i': NUM,
+    ...allow(['$fail', ...CHECKS, '$d64', '$fin', '$efin'], ['fn'], IDENT),
+    ...allow(CHECKS, ['arg'], IDENT),
+    ...allow(['$d64', '$fin', '$efin', '$vec'], ['at'], PATH),
+    ...allow(['$int', '$big'], ['min', 'max'], 'a bound the generator wrote: a number'),
+    ...allow(['$int', '$big', '$num', '$bool', '$str'], ['typeof v'], WORD),
+  };
+
+  /** Per-export and per-record generated functions, whose names depend on the crate. */
+  const ALLOWED_PATTERNS: [RegExp, string][] = [
+    [/^[A-Za-z_][\w$]*::\$i\d+$/, 'a loop index in an argument path: a number'],
+    [/^\$[de]_\w+::at$/, PATH],
+  ];
+
+  const source = () => renderModule(manifest, { libName: 'fixture', crate: 'rust' });
+  const named = (found: readonly Leaf[]) => found.map((l) => `${l.key} (line ${l.line})`);
+  const classified = (key: string) =>
+    key in ALLOWED || ALLOWED_PATTERNS.some(([re]) => re.test(key));
+
+  it('every value the module puts in text without $show is classified above: no template, concatenation or bare argument of a raise or a warning slips by, whatever the message says and wherever it is', () => {
+    const found = leaves(source());
+    expect(found.length).toBeGreaterThan(50);
+    expect(named(found.filter((l) => !classified(l.key)))).toEqual([]);
+  });
+
+  it('and nothing on the list is stale: every entry is still found, in the function it is listed under', () => {
+    const keys = new Set(leaves(source()).map((l) => l.key));
+    expect(Object.keys(ALLOWED).filter((k) => !keys.has(k))).toEqual([]);
+    expect(
+      ALLOWED_PATTERNS.filter(([re]) => ![...keys].some((k) => re.test(k))).map(([re]) =>
+        String(re),
+      ),
+    ).toEqual([]);
+  });
+
+  it('the scan covers the whole module: it sees the functions that print, the wrappers that fail and the decoders, and it recognises every raising and printing call the source text holds', () => {
+    const src = source();
+    for (const name of [
+      '$load',
+      '$threshold',
+      '$slow',
+      '$open',
+      '$resolve',
+      '$judge',
+      '$sealed',
+      '$unchanged',
+      '$same',
+      '$openFile',
+      '$verify',
+      '$fail',
+      '$int',
+      '$big',
+      '$d64',
+      '$fin',
+      '$efin',
+    ]) {
+      expect(src, name).toContain(`function ${name}(`);
+    }
+    // A call the AST scan does not recognise is one a message could slip through: every line of the
+    // source that holds one (a raise of any Error class, a console call, a stream write, a push to the
+    // list of failing directories) must be a line the scan saw.
+    const textual = src
+      .split('\n')
+      .flatMap((line, i) =>
+        /(?:new\s+)?\b(?:\w*Error|console(?:\.\w+|\s*\[[^\]]*\])|process\.(?:std(?:err|out)\.write|emitWarning)|bad\.push)\(|\bBun\.write\(\s*(?:Bun|process)\.std(?:err|out)\b/.test(
+          line,
+        )
+          ? [i + 1]
+          : [],
+      );
+    expect(textual.length).toBeGreaterThan(30);
+    expect([...new Set(sinkCalls(src).map((s) => s.line))]).toEqual(textual);
+    // A sink bound to another name (`const w = console.warn`, `const { warn } = console`,
+    // `console.warn.bind(console)`) is called as `w(...)`, which no line of text says is a print. The
+    // scan follows such a binding, but the generator has no reason to write one, so it is refused:
+    // a call by a bare name is then always one the scan or this list names.
+    expect(
+      src
+        .split('\n')
+        .flatMap((line, i) =>
+          /=\s*(?:console\b|process\.(?:stderr|stdout)\b|process\.emitWarning\b|Bun\.(?:write|stderr|stdout)\b)|\bconsole\.\w+\.bind\b/.test(
+            line,
+          )
+            ? [i + 1]
+            : [],
+        ),
+    ).toEqual([]);
+    // And the scan is not looking at a slice of it: leaves are found past the loader too.
+    const fns = new Set(leaves(src).map((l) => l.fn));
+    for (const name of ['$fail', '$int', '$d64', '$fin', '$efin', '$vec']) {
+      expect(fns.has(name), name).toBe(true);
+    }
+  });
+
+  it('the scan sees what it is meant to: a bare path, a bare error message, a message that does not say knext ffi:, a concatenation, a bare argument and a call that only starts with $show are all flagged, and strings, comments and arithmetic are not', () => {
+    const snippet = [
+      'function a(path) { throw new FfiLoadError(`knext ffi: refusing to load ${path}`); }',
+      'function b(err) { console.warn(`cannot read ${$show(p)} (${err instanceof Error ? err.message : String(err)})`); }',
+      "function c(path) { throw new FfiLoadError('knext ffi: refusing ' + path); }",
+      'function d(dir) { bad.push(`${dir} is bad`); }',
+      'function e(message) { throw new FfiLoadError(message); }',
+      'function f(a, b) { return `x ${$show(a) + b}`; }',
+      "function g(x, dir) { return `${x ? `${dir}` : ''}`; }",
+      'function h(p) { throw new Error(`cannot read ${p}`); }',
+      'function i(p) { return `${$showy(p)} ${$show(p).length}`; }',
+      "const k = (v) => 'knext ffi: ' + v + ' is bad';",
+      "function ok(p, n) { throw new FfiLoadError(`knext ffi: ${$show(p)} ${n ? $show(p) : 'text'}`); }",
+      "function j(a, b) { const s = '${not} `nor` this'; /* `${nor}` */ return [a + b, 1 + 2, s]; }",
+    ].join('\n');
+    expect(leaves(snippet).map((l) => l.key)).toEqual([
+      'a::path',
+      'b::err.message',
+      'b::String(err)',
+      'c::path',
+      'd::dir',
+      'e::message',
+      'f::$show(a) + b',
+      'g::dir',
+      'h::p',
+      'i::$showy(p)',
+      'i::$show(p).length',
+      'k::v',
+    ]);
+  });
+
+  it('every other way a message reaches a reader is a sink too: any Error class, an alias of one, Reflect.construct, an assignment to .message, console.log/info/debug and process.stderr/stdout.write; and the arguments of $openFile that become message text (the 2nd and the 4th) are checked where they are passed', () => {
+    const snippet = [
+      'function m(p) { throw new TypeError(p); }',
+      'function n(p) { throw Reflect.construct(FfiLoadError, [p]); }',
+      'function o(p) { err.message = p; }',
+      'function q(p) { console.log(p); console.info(p); console.debug(p); }',
+      'function r(p) { process.stderr.write(p); process.stdout.write(p); }',
+      'const Alias = FfiLoadError;',
+      'function s(p) { throw new Alias(p); }',
+      'class Sub extends RustError {}',
+      'function t(p) { throw new Sub(p); }',
+      'function $openFile(path, what, lib, missing) { throw new FfiLoadError(missing); throw new FfiLoadError(`x ${what} ${lib}`); }',
+      'function u(x) { $openFile(x, x, x, x); }',
+      "function v(x) { $openFile(x, 'a phrase', x, `knext ffi: ${$show(x)}`); }",
+      'function w(p) { throw new RangeError(`${$show(p)}`); console.warn($show(p)); }',
+      'function x(p) { throw new Error(p); }',
+    ].join('\n');
+    expect(leaves(snippet).map((l) => l.key)).toEqual([
+      'm::p',
+      'n::p',
+      'o::p',
+      'q::p',
+      'q::p',
+      'q::p',
+      'r::p',
+      'r::p',
+      's::p',
+      't::p',
+      '$openFile::lib',
+      'u::x',
+      'u::x',
+      'x::p',
+    ]);
+  });
+
+  it('the scan also reports the raising and printing calls it recognised, so a count can be checked against the module: a call it does not recognise is the one a message slips through', () => {
+    const snippet = [
+      'function a(p) { throw new FfiLoadError(p); }',
+      'function b(p) { throw new TypeError(p); console.warn(p); bad.push(p); }',
+      'const E = RustError;',
+      'function c(p) { return new E(p); }',
+      'function d(p) { return [p, new Map()]; }',
+      'function e(p) { throw new Error(p); }',
+    ].join('\n');
+    expect(sinkCalls(snippet).map((s) => `${s.fn}::${s.callee}`)).toEqual([
+      'a::FfiLoadError',
+      'b::TypeError',
+      'b::console.warn',
+      'b::bad.push',
+      'c::E',
+      'e::Error',
+    ]);
+  });
+
+  it('the scan sees the same calls under another spelling: a bracket access, a name bound to a sink (also through another name or .bind), one destructured from its object, process.emitWarning and a write to a stream, and not a write to something else', () => {
+    const snippet = [
+      'const w = console.warn;',
+      'function a(p) { w(p); }',
+      'const { warn } = console;',
+      'function b(p) { warn(p); }',
+      'const { error: e2 } = console;',
+      'function c(p) { e2(p); }',
+      'function d(p) { console[\'warn\'](p); console["error"](p); }',
+      'function e(p) { process.emitWarning(p); }',
+      'function f(p) { Bun.write(Bun.stderr, p); }',
+      'const log = w;',
+      'function g(p) { log(p); }',
+      'const h2 = console.error.bind(console);',
+      'function h(p) { h2(p); }',
+      'function i(p) { Bun.write(Bun.stdout, `${p}`, p); }',
+      'function j(p) { Bun.write(path, p); fs.write(p); other.warn(p); }',
+      'function k(p) { Bun.write(process.stderr, p); }',
+      'const { x: plain } = somethingElse;',
+      'function l(p) { plain(p); }',
+    ].join('\n');
+    expect(leaves(snippet).map((l) => l.key)).toEqual([
+      'a::p',
+      'b::p',
+      'c::p',
+      'd::p',
+      'd::p',
+      'e::p',
+      'f::p',
+      'g::p',
+      'h::p',
+      'i::p',
+      'i::p',
+      'k::p',
+    ]);
+    expect(sinkCalls(snippet).map((s) => `${s.fn}::${s.callee}`)).toEqual([
+      'a::w',
+      'b::warn',
+      'c::e2',
+      'd::console.warn',
+      'd::console.error',
+      'e::process.emitWarning',
+      'f::Bun.write',
+      'g::log',
+      'h::h2',
+      'i::Bun.write',
+      'k::Bun.write',
+    ]);
+  });
+
+  it('removing $show from what the module prints is seen: the file, the manifest entry, the library, a raised message and the value a decoder quotes each turn up as a finding the list does not allow', () => {
+    for (const [anchor, plain] of [
+      ['${$show(file)}', '${file}'],
+      ['${$show(rel)}', '${rel}'],
+      ['${$show(raw)}', '${raw}'],
+      ['${$show(path)}: sha256', '${path}: sha256'],
+      ['${$show(manifest)}', '${manifest}'],
+      ['got ${$show(JSON.stringify(v))}`', 'got ${JSON.stringify(v)}`'],
+      [': $show(JSON.stringify(v))}', ': JSON.stringify(v)}'],
+    ] as const) {
+      const text = source();
+      expect(text.split(anchor).length - 1, anchor).toBeGreaterThanOrEqual(1);
+      const weakened = text.replace(anchor, plain);
+      expect(weakened).not.toBe(text);
+      const unlisted = leaves(weakened).filter((l) => !classified(l.key));
+      expect(unlisted.length, anchor).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -1344,6 +3057,24 @@ describe('path 2 — the development fallback, only when NODE_ENV !== production
         () => image(),
         { FAKE_OWNER: '1000', FAKE_EUID: '1000' },
         /is owned by uid 1000, but only root may own it/,
+      ],
+      [
+        // existsSync() follows a link and says no to a dangling one, which would read as "nothing
+        // staged" and fall through to the unchecked development build.
+        'a dangling symlink at the staged path',
+        () => {
+          const exe = image({ seal: false });
+          const native = join(exe, '..', 'native');
+          rmSync(join(native, 'ffi', TRIPLE, LIB));
+          symlinkSync(join(emptyDir('gone'), 'missing.so'), join(native, 'ffi', TRIPLE, LIB));
+          chmodSync(join(native, '.integrity.json'), 0o444);
+          for (const d of [join(native, 'ffi', TRIPLE), join(native, 'ffi'), native]) {
+            chmodSync(d, 0o555);
+          }
+          return exe;
+        },
+        {},
+        /is a symbolic link/,
       ],
     ];
 

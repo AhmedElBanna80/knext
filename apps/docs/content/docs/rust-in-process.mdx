@@ -383,8 +383,8 @@ route fails the build with:
 Error [FfiLoadError]: In-process Rust runs only at request time. This call happened while `next build` was prerendering: Rust functions cannot be called during prerendering, from generateStaticParams, or from generateMetadata of a static route. Make the route dynamic: add `export const dynamic = 'force-dynamic'` to the route segment, or `await connection()` (from 'next/server') before the call.
 ```
 
-The build has no library to load: images get theirs when `knext build` stages it, and the build
-itself runs before that. Make the route dynamic in one of two ways.
+The build has no library to load: the image gets its library when the Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies it
+in, and the build itself runs before that. Make the route dynamic in one of two ways.
 
 Mark the whole route segment dynamic:
 
@@ -420,7 +420,8 @@ missing from where the module looked; see
 Nothing is loaded when the module is imported. On the first call, it looks in this order:
 
 1. **Beside the server executable**: `native/ffi/<target>/lib<name>.so` next to the compiled Bun
-   server, which is where `knext build` puts it in every image. The library must be listed in
+   server, which is where the Dockerfile that `knext build`, `knext deploy` and `knext preview` stage puts it
+   in every image. The library must be listed in
    `native/.integrity.json` (written by the build) with a matching sha256. A missing manifest, an
    unlisted library or a different hash is refused, and nothing is loaded:
 
@@ -431,27 +432,88 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    ```
 
    A hash covers the bytes read at that moment, not what the file holds later, so the module also
-   refuses a library that anyone but root could change. Root must own the library, every directory
-   from it up to `native/`, and the directory `native/` sits in, and none of them may be writable
-   by its group or by everyone. A tree owned by any other user is refused, the user the app runs
+   refuses a library that anyone but root could change. Root must own the library, the integrity
+   manifest and every directory from the library up to `/`: the ones below `native/`, `native/`
+   itself, the directory beside the executable and each directory above that. None of them may be
+   writable by its group or by everyone. A tree owned by any other user is refused, the user the app runs
    as included: that user could change the permissions of what it owns and write the library
    again, for example through a file-write bug in the app. Nothing is loaded:
 
    ```
-   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image `knext build` generates copies native/ with `COPY --chown=0:0 --chmod=a-w`), and the app should run as a non-root user.
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. The library and its integrity manifest must be owned by root and not writable by group or other (the Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies native/ with `COPY --chown=0:0 --chmod=a-w`), and the app should run as a non-root user; every directory from the library up to / must also be owned by root and not writable by group or other.
    ```
+
+   A directory that fails is reported the same way: every one of them at once, with advice that depends on
+   the situation, not on where the directory sits. A directory inside `native/` is yours to fix in place. A
+   sticky directory (a shared one such as `/tmp`) that holds the executable or sits above it is shared with
+   other software, so the advice is only to move the install under a directory root owns and closes, never to
+   change the shared one. Any other failing directory (the one that holds the executable, or a directory above
+   it that is not sticky, a world-writable one such as a `chmod 777 /app` included) may be part of your app's
+   install or may be shared, and the refusal cannot tell which, so it gives both pieces of advice, each with
+   its condition, and says that the executable needs a directory of its own. A home directory such as
+   `/home/<user>` belongs to the account that owns it: the advice for it is to move the install, never to give
+   the home directory to root. Where `/app` or `/app/native` is on the list and can be fixed in place, the
+   refusal also names the one Dockerfile line that keeps a vinext app on the path `knext deploy` takes for its
+   scaffolded `Dockerfile` (below), because that line closes those two and no other; and when a sticky
+   directory is on the list together with others it says that fixing the others alone will not be enough,
+   because the install has to move:
+
+   ```
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: 2 directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:
+     /app/native is owned by uid 1000, but only root may own it
+     /app is writable by its group or by everyone (mode 0775)
+   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode). A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>. In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there).
+   ```
+
+   ```
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: 2 directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:
+     /srv/app/native is owned by uid 1000, but only root may own it
+     /srv is writable by its group or by everyone (mode 1777)
+   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode). A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead. The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move.
+   ```
+
+   ```
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: 2 directories on the way to it cannot be trusted, so what is under them could be renamed or replaced after it was checked:
+     /srv/app is owned by uid 1000, but only root may own it
+     /srv is writable by its group or by everyone (mode 0775)
+   Every directory from the library up to / must be a real directory, owned by root and not writable by group or other. A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.
+   ```
+
+   Each refusal carries only the advice that applies to the directories it lists. Check the parent you choose
+   before you install under it: on some hosts `/opt` itself is writable by everyone, and a tree under it is then
+   refused with `/opt` named. Pick another parent that root owns and closes to group and other, such as
+   `/var/lib`. A symbolic link or a regular file where a directory belongs is named as such, and told to be
+   replaced with the directory.
 
    This protects against a writer that is not root, the app's own user among them. It does not
    protect against root, a process allowed to bypass file permissions, a second writable mount of
    the same files, or an access control list: only the permission bits are read, and on macOS an
-   ACL can grant write access that they do not show. There is no setting that turns the check off.
+   ACL can grant write access that they do not show. "Allowed to bypass file permissions" means
+   any capability that is equivalent to root, for example `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`,
+   `CAP_SETUID`, `CAP_SYS_ADMIN` (mount), `CAP_SYS_PTRACE`, `CAP_MKNOD`, `CAP_SYS_MODULE`, `CAP_SYS_RAWIO`
+   and `CAP_BPF`; the list gives examples and is not a boundary. A container that drops every capability and sets
+   `allowPrivilegeEscalation: false`, as the pods the knext operator creates do, takes that class away
+   from the app, but not `uid 0` itself: an app that runs as root owns the tree whatever it has dropped.
+   Run it as a non-root user too (`runAsNonRoot` in a pod, which the operator sets unless
+   `spec.security.runAsNonRoot` says otherwise); for a container you run yourself, use
+   `--cap-drop=ALL --security-opt no-new-privileges --user 65532`. Two more limits: a file-write bug that
+   lets someone write at an offset of a file as the app's user can reach the running process through
+   `/proc/self/mem`, which no rule about files covers; and a container that runs in a user namespace is two
+   cases. Rootless Podman or Docker: the image's files belong to the host user who started the container, who
+   can write them whatever the app runs as inside, so running as a non-root user inside does not remove that
+   writer. A pod with `hostUsers: false`: the image's files belong to the pod's own root, which is host root
+   where the filesystem supports idmapped mounts and otherwise the root of a uid range given to that pod alone
+   (not host root); no other user on the host owns or can write them either way, so running as a non-root
+   user inside restores the guarantee, and an app that runs as `uid 0` inside still owns the tree. There is no setting that turns the check off.
 
-   The image `knext build` generates already has this layout. In your own Dockerfile, use this
-   shape. The directory that holds `native/` must be owned by root too, and not writable by group
+   The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage already has this layout. In your own
+   Dockerfile, use this shape. Every directory above `native/`, up to `/`, must be owned by root too, and not writable by group
    or other: a directory that someone else can write lets them rename or replace the library, or
-   the directory itself, before the process opens it, and the module pins only the file it has
-   already opened. `WORKDIR` creates `/app` that way when it does not exist yet, and a `COPY` into
-   it leaves it so:
+   the directory itself, before the process opens it, and the same is true of any directory above it.
+   The module opens the manifest and the library without following symbolic links, judges each file it
+   opened by its owner and mode, looks at every directory on the way (a symbolic link in place of one
+   is refused), and refuses a tree whose directories changed while the library was being checked.
+   `WORKDIR` creates `/app` that way when it does not exist yet, and a `COPY` into it leaves it so:
 
    ```dockerfile title="Dockerfile"
    ARG BASE_IMAGE
@@ -459,26 +521,164 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    WORKDIR /app
    COPY server /app/server
    COPY --chown=0:0 --chmod=a-w native /app/native
+   RUN chmod go-w /app /app/native
    USER 65532:65532
    ENTRYPOINT ["/app/server"]
    ```
 
-   Build it with `--build-arg BASE_IMAGE=<your runtime base image>`, where `server` is your
-   compiled server executable and `native/` is the tree `knext ffi build` stages. A `chown` of the
+   The `RUN chmod go-w` line closes `/app` and `/app/native` themselves, so the result does not depend on
+   the mode your builder gives the destination of a `COPY` (BuildKit makes it 0755; another builder may
+   use the mode of the build machine). Build it with `--build-arg BASE_IMAGE=<your runtime base image>`,
+   where `server` is your compiled server executable and `native/` is the tree `knext ffi build` stages. A `chown` of the
    app directory to the app user (`RUN chown -R app /app`) does not pass.
 
-   A compiled binary you run outside a container needs the same ownership. Hand the directory that
-   holds the executable and `native/` to root, remove group and other write, and run the binary
-   as an ordinary user:
+   An app scaffolded for the vinext build (a Bun single executable) is built from the `Dockerfile` it was
+   scaffolded with. That file is yours and knext does not edit it, so the line is yours to add: put
+   `RUN chmod go-w /app /app/native` directly after the `COPY` that brings `native/` in (and so before `USER`),
+   as in the recipe above, and change nothing else in the file. `knext ffi init` prints that line when your
+   `Dockerfile` copies `native/` to `/app/native` and does not have it directly after that `COPY`, and so do
+   `knext ffi generate` and `knext ffi check`. They do not read what your commands do. They confirm one form,
+   and say nothing only for it: the scaffolded `COPY` of `native/`, then that line as the very next line of the
+   file, byte for byte, and after it nothing but `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`, `ENTRYPOINT`,
+   `CMD`, `HEALTHCHECK`, `STOPSIGNAL` and a read-only check of the shape
+   `RUN test -f <path> || { echo "<text>" >&2; exit 1; }` (the scaffolded `RUN test -f /app/native/.integrity.json || { ... }`
+   is one, written over several lines; the text is a plain string with no `$`, backtick or backslash). The whole file has to be clean as well,
+   and that is judged before anything else is looked at: no `<<` anywhere (a heredoc's body is not `Dockerfile` text),
+   no `escape` or `syntax` parser directive on any line (a byte-order mark or an indent does not hide one; the
+   scaffolded file's own pinned `# syntax=` line, as its first line and byte for byte, is the one that passes),
+   no `SHELL` or `ONBUILD` instruction in any stage (a parent stage runs its `ONBUILD` triggers in the stage
+   that builds on it), no instruction whose first word is not one Docker knows (BuildKit reads a
+   `// syntax=` line as a directive), no line ending in a backslash that no space or tab precedes (a backslash
+   alone at the start of a line, or a word split in two; an indented one is joined like any other
+   continuation), and no character that another reader may take for something else: any
+   space-like character but a space and a tab (a no-break space, a form feed), a control or invisible format
+   character (a byte-order mark), an invalid byte, or a carriage return that does not end a line (visible
+   non-ASCII text, such as a dash in a comment, is fine). A `Dockerfile` that fails any of these is not
+   confirmed, and is told so whenever it mentions native at all.
+   Anything else is not confirmed: any other `RUN`, a `COPY` or `ADD` after the line, an instruction they do not
+   know, a blank line or a comment between the `COPY` and the line, a space or anything else on either of the two
+   lines, or a `COPY` of `native/` that is not the scaffolded one. They then say which of these it was, and never say that the loader will accept the directories.
+   A `Dockerfile` that closes them some other way may load, but knext cannot confirm it, and `knext deploy`
+   takes the slower path described next. An app built with another builder is told none of this, because those
+   builds stage a `Dockerfile` that already has the line; an app whose build cannot be read (a
+   `knext.config.ts` that does not load) is told as if it were vinext.
 
-   ```bash title="own-binary.sh"
-   # APP_DIR: the directory that holds your server executable and its native/ directory.
-   sudo chown -R root:root "$APP_DIR"
-   sudo chmod -R go-w "$APP_DIR"
+   Adding that line keeps your app on the path `knext deploy` takes for the scaffolded file. `knext deploy`
+   recognises the scaffolded `Dockerfile` byte for byte, as one that copies your host build, and uploads the
+   assets from that build while the image is pushed; any other `Dockerfile` has its assets taken from the built
+   image and checked against it, which is slower. It recognises the scaffolded file with just this one line
+   directly after the `COPY` that brings `native/` in as well, so an app that follows the advice keeps the build
+   and the asset upload it has; a blank line, a comment, another place for the line, or any other edit takes it
+   off that path. Under BuildKit nothing changes for an existing app: both directories are already root's and
+   closed, so it loads without the line. With another builder the first call of the module is refused, and the
+   message says how to fix the directories and, for a vinext app, which one line to add. A closing `chmod`
+   anywhere else, or one per directory, closes them too and the module loads, but it takes `knext deploy` to
+   the slower path.
+
+   If your Dockerfile copies a whole source tree instead (`COPY . /app`), the directories inside the copy
+   keep the mode they have on the machine that builds the image, and a build machine with a `umask` of
+   `002` makes them group-writable (`0775`), which the module refuses. Close them after the copy:
+
+   ```dockerfile title="Dockerfile.copied-tree"
+   COPY --chown=0:0 . /app
+   RUN chmod -R go-w /app
    ```
 
-   A volume mounted at `native/` (a shared volume, a sidecar's, or one made group-writable by
-   `fsGroup`) is refused.
+   A compiled binary you run outside a container needs the same ownership, and so does every directory
+   above it. Hand the directory that holds the executable and `native/` to root, remove group and
+   other write, and run the binary as an ordinary user. The commands below hand over the whole
+   directory, `-R`, so they check it first and change nothing unless it is exactly an app: after following a link to the real directory,
+   it must hold `native/` (with its `.integrity.json`) and one other entry, your executable as a regular file, and nothing else,
+   and it must not be a system, home or temporary directory (`/`, `/opt` itself, `/tmp`, `/var/lib`, `/dev`, `/run`, `/etc`, a home directory or anything under one, and, on macOS, what `/tmp`, `/etc` and `$TMPDIR` really are under `/private`, and the like).
+   A path that is not absolute, does not exist or fails either check is refused with the reason, and nothing is run.
+   The commands need bash and refuse unless bash runs them, before they look at anything: `sh` where it is bash (as on macOS) runs them; any other shell, `dash` and `zsh` included, does not. `zsh` stops with "no matches found" on a glob that matches nothing, which would refuse a good directory for the wrong reason, and `local`, which the commands use, is not part of POSIX `sh`.
+   `/opt/<app>` and `/usr/local/<app>` pass. The directories above it must
+   already be root's and closed to group and other: a root-owned `/opt/<app>` is fine, a home directory or
+   `/tmp` is not, and the refusal names the directory:
+
+   ```bash title="own-binary.sh"
+   # APP_DIR: the directory that holds your server executable and its native/ directory, and
+   # nothing else (for example /opt/myapp). All of it is handed to root, so this checks first that
+   # it is exactly that, after following any link to the real directory: native/ with its
+   # .integrity.json, and one other entry, the executable, a regular file; and that it is not a
+   # system, home or temporary directory. It needs bash and refuses unless bash runs it.
+   real_dir() {
+     local p lead
+     p=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
+     lead=${p%%[!/]*}
+     printf '/%s\n' "${p#"$lead"}"
+   }
+   unsafe_dir() {
+     local d
+     for d in /tmp /var/tmp /home /Users /root /private/tmp /private/var /private/etc; do
+       case "$1" in "$d" | "$d"/*) return 0 ;; esac
+     done
+     for d in /bin /boot /dev /etc /lib /lib64 /proc /run /sbin /sys /usr/bin /usr/lib /usr/libexec /usr/sbin /usr/share; do
+       case "$1" in "$d" | "$d"/*) return 0 ;; esac
+     done
+     case "$1" in
+       / | /opt | /srv | /mnt | /media | /nix | /snap | /usr | /usr/local | /usr/local/bin | /usr/local/lib | /usr/local/sbin | /usr/local/share | /var | /var/cache | /var/lib | /var/log | /var/spool | /var/www) return 0 ;;
+     esac
+     [ "$2" = / ] && return 1
+     case "$1/" in "$2"/*) return 0 ;; esac
+     case "$2/" in "$1"/*) return 0 ;; esac
+     return 1
+   }
+   holds_only_app() (
+     native=0 exe=0
+     for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+       [ -e "$e" ] || [ -L "$e" ] || continue
+       if [ "${e##*/}" = native ]; then
+         [ -d "$e" ] && [ ! -L "$e" ] && [ -f "$e/.integrity.json" ] && [ ! -L "$e/.integrity.json" ] || return 1
+         native=1
+       else
+         [ -f "$e" ] && [ ! -L "$e" ] || return 1
+         exe=$((exe + 1))
+       fi
+     done
+     [ "$native" = 1 ] && [ "$exe" = 1 ]
+   )
+   if [ -z "${BASH_VERSION:-}" ]; then
+     echo "refusing: this needs bash, and it is running under another shell" >&2
+     false
+   elif [ -z "${APP_DIR:-}" ] || [ "${APP_DIR#/}" = "$APP_DIR" ]; then
+     echo "refusing: APP_DIR must be an absolute path, such as /opt/myapp" >&2
+     false
+   elif ! R=$(real_dir "$APP_DIR"); then
+     echo "refusing: $APP_DIR is not a directory that exists" >&2
+     false
+   elif unsafe_dir "$R" "$(real_dir "${HOME:-/}" || echo /)"; then
+     echo "refusing: $R is a system, home or temporary directory, and handing it to root would change everything else in it: use a directory of its own, such as /opt/myapp" >&2
+     false
+   elif ! holds_only_app "$R"; then
+     echo "refusing: $R must hold only this app: native/ (with its .integrity.json) and your one executable, and nothing else" >&2
+     false
+   else
+     sudo chown -R root:root "$R"
+     sudo chmod -R go-w "$R"
+   fi
+   ```
+
+   A volume mounted at `native/` or above it (a shared volume, a sidecar's, or one made group-writable
+   by `fsGroup`) is refused unless root owns everything on it and group and other cannot write it. One
+   that passes is still writable through its other mounts, which the module cannot see, so do not share
+   it with a sidecar or mount it writable anywhere else. A symbolic link where the library,
+   `native/.integrity.json`, `native/` or any directory inside the tree should be is refused too, whatever it
+   points at: keep `native/` as the plain files and directories that `knext ffi build` stages and a `COPY`
+   carries over.
+
+   The executable's own path is judged where it really is. Bun reports `process.execPath` already resolved,
+   so an install reached through such a link loads (a `current -> releases/12` link, `/var` where it is a
+   link, a merged `/usr`), and the directories judged are those of the real tree. The module also compares
+   the directory beside the executable with its real path and refuses a difference, but only as a
+   fail-closed assertion: it fires only when code has replaced `process.execPath` with a path that is
+   relative or goes through a link, and the message says which of the two it is. A deploy tool that keeps
+   releases in a directory it owns (Capistrano and its relatives put them under `releases/`) is refused, not
+   for its link but because that directory belongs to the deploy user. Put `deploy_to` under a parent where
+   every directory from that parent up to `/` is root-owned and closed to group and other, make `deploy_to`,
+   `releases/` and each release root-owned and closed to group and other, and never change anything above
+   `deploy_to`. Switching `current` and `deploy:cleanup` need root too, as does the step that puts the files in
+   place: the deploy user can no longer write to any of it.
 
 2. **The development build**, only when `NODE_ENV` is not `production`: `rust/target/release/` or
    `rust/target/debug/`, whichever is newer, with no integrity check and the one-line notice above.
@@ -486,8 +686,8 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
 
 There is no environment variable that points it somewhere else. One consequence: `bun --bun next
 start` after a plain `next build` is refused, because there is no `native/` beside the Bun binary
-and `NODE_ENV` is `production`. Use `bun --bun next dev` locally, and images built by `knext build`
-everywhere else. An image built for one CPU architecture and run on another is refused with a
+and `NODE_ENV` is `production`. Use `bun --bun next dev` locally, and an image built from
+the Dockerfile that `knext build`, `knext deploy` and `knext preview` stage everywhere else. An image built for one CPU architecture and run on another is refused with a
 message naming both.
 
 ## Blocking and Workers
@@ -804,16 +1004,23 @@ Every image build runs these checks, and stops on the first one that fails, befo
   file renamed or symlinked over the path between the check and the load is not the one loaded.
   An open file pins the file, not its bytes, so an in-place write, a hard link to the same file or
   a writable memory map by someone else would still change what runs. The module therefore also
-  applies an ownership rule, judged by owner and mode: root must own the library, every directory
-  from it up to `native/` and the directory `native/` sits in, and none of them may be writable by a
-  group or by everyone. A different owner (the app's own user included, since it can change the
+  applies an ownership rule, judged by owner and mode: root must own the library, the integrity
+  manifest and every directory from the library up to `/`, and none of them may be writable by a
+  group or by everyone. Every directory counts because someone who can write one can rename the
+  tree out from under the checks; with all of them root's, no other user can. The manifest counts
+  because it is what says which file may load: one that someone else could write would let any
+  library root owns pass. Both files are opened without following a symbolic link, and only a plain
+  file is read. The directories are looked at again after the library is hashed, so a tree renamed
+  over the real one in between is refused. A different owner (the app's own user included, since it can change the
   permissions of what it owns) and write access for a group or for everyone are each refused. The
-  image `knext build` generates copies `native/` owned by root and read-only
-  (`COPY --chown=0:0 --chmod=a-w`), and the app runs as a non-root user, so it passes. A shared,
-  sidecar or `fsGroup` volume at `native/` does not. This does not stop root: a process running as
-  root, or one allowed to bypass file permissions, can still change the library, and so can a
-  second, writable mount of the same files or an access control list that grants write access
-  (only the permission bits are read).
+  Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies `native/` owned by root and
+  read-only (`COPY --chown=0:0 --chmod=a-w`), and the app runs as a non-root user, so an image built from it
+  passes. A shared,
+  sidecar or `fsGroup` volume at `native/` does not, unless root owns it and group and other cannot
+  write it, and even then it stays writable through its other mounts. This does not stop root: a
+  process running as root, or one allowed to bypass file permissions, can still change the library,
+  and so can a second, writable mount of the same files or an access control list that grants write
+  access (only the permission bits are read).
 - **The module matches the library.** The build regenerates the module from the library it is about
   to ship and stops on any difference, and the module itself checks the library's functions when it
   loads.

@@ -749,25 +749,37 @@ and no sandbox. The module checks the file against `native/.integrity.json`, the
 **descriptor it hashed**, which closes a path swap (a rename or symlink over the path between the
 check and the load). It does not bind the bytes: an open descriptor pins the inode, not its
 contents, so an in-place write, a hard link to the inode or a writable memory map by someone else
-still changes what is mapped after the hash.
+still changes what is mapped after the hash. The checks that decide what loads (the manifest, the
+library, the directories) used to go by path with nothing tying one to the next; they are now each
+judged on the descriptor the file was opened as, with links refused and the directories pinned.
 
 | STRIDE | Threat | Mitigation | Residual / action |
 |---|---|---|---|
-| **T**amper | A writer that is not root changes the library's bytes after they were hashed. The realistic one is **the user the app runs as**, through a file-write bug in the app (an upload path, an arbitrary-file-write CVE in a dependency): it can write a file it owns, or `chmod` it writable first. | The module refuses to load unless **root owns** the library, every directory from it up to `native/`, and the directory `native/` sits in, and none of them is writable by group or other (`$sealed` in `packages/ffi/src/render.ts`: `fstat` on the hashed descriptor and `stat` on each directory, by owner and mode; `access()` is not used because it answers yes to root for everything). The user the app runs as is **not trusted**: a tree it owns is refused even when read-only, because it can change the mode back. **There is no opt-out.** The generated image copies `native/` owned by root and read-only (`COPY --chown=0:0 --chmod=a-w`) and runs as `USER 65532`; BuildKit leaves the top `native/` and the directory above it root-owned and 0755, the rest 0555 and the files 0444, which passes. Proved by the loader tests in `packages/ffi/src/__tests__/ffi-loader.test.ts` (faked owners, real modes) and by the musl load lane in `.github/workflows/ffi-e2e.yml`: both legs run as uid 65532 on root-owned trees, an app-owned tree is refused, the documented Dockerfile recipe from the user docs is built verbatim and loaded as uid 65532 (its BuildKit-made modes asserted, from a source tree made group-writable on purpose), and the same recipe with the app directory `chown`ed to the app user is refused. | **Not stopped:** root, `CAP_DAC_OVERRIDE` and anything else that bypasses file permissions; a **second mount** of the same files that root can write (a read-only mount is a per-mount flag, so it says nothing about another mount); and an **ACL**, because only the mode bits are read (on macOS an ACL can grant write access that the mode does not show). A user Dockerfile that `chown`s the app directory to the app user fails the check by design. See the three paragraphs below for what the rule does not judge. |
+| **T**amper | A writer that is not root changes the library's bytes after they were hashed. The realistic one is **the user the app runs as**, through a file-write bug in the app (an upload path, an arbitrary-file-write CVE in a dependency): it can write a file it owns, or `chmod` it writable first. | The module refuses to load unless **root owns** the integrity manifest, the library, every directory from it up to `native/`, and the directory `native/` sits in, and none of them is writable by group or other (`$judge`, `$sealed` and `$verify` in `packages/ffi/src/render.ts`: `fstat` on the descriptor each file was opened as and `stat` on each directory, by owner and mode; `access()` is not used because it answers yes to root for everything). The user the app runs as is **not trusted**: a tree it owns is refused even when read-only, because it can change the mode back. **There is no opt-out.** The generated image copies `native/` owned by root and read-only (`COPY --chown=0:0 --chmod=a-w`) and runs as `USER 65532`; BuildKit leaves the top `native/` and the directory above it root-owned and 0755, the rest 0555 and the files 0444, which passes. Proved by the loader tests in `packages/ffi/src/__tests__/ffi-loader.test.ts` (faked owners, real modes) and by the musl load lane in `.github/workflows/ffi-e2e.yml`: both legs run as uid 65532 on root-owned trees, an app-owned tree is refused, the documented Dockerfile recipe from the user docs is built verbatim and loaded as uid 65532 (its BuildKit-made modes asserted, from a source tree made group-writable on purpose), and the same recipe with the app directory `chown`ed to the app user is refused. | **Not stopped:** root, `CAP_DAC_OVERRIDE` and anything else that bypasses file permissions; a **second mount** of the same files that root can write (a read-only mount is a per-mount flag, so it says nothing about another mount); and an **ACL**, because only the mode bits are read (on macOS an ACL can grant write access that the mode does not show). A user Dockerfile that `chown`s the app directory to the app user fails the check by design. See the three paragraphs below for what the rule does not judge. |
 | **T**amper | The same, closed against root too: bind the bytes, not the file. | **Not done.** A sealed `memfd` copy (`memfd_create` plus `F_ADD_SEALS` through libc by `bun:ffi`) was measured to work on Bun 1.4.2 and would bind the bytes against root. It is not used because two file descriptors of one file `dlopen` as one loaded library, but two sealed copies of the same bytes load as two: every module copy (a bundler layer, a Worker) would load its own library, ending the one-library-per-process behaviour the generated module relies on (ADR-0069 D13). | `TODO(TD-S14-6a)`: bind the bytes against root, if a measured driver appears and the one-library rule can be kept (for example one sealed copy shared by every module copy). |
 
-**The directories above the one `native/` sits in are not judged, and a writer there gains nothing over the bytes.**
-The file is judged through the descriptor that was hashed, and each directory is judged by owner and mode at the
-path the module resolves. A non-root writer to a higher directory can rename one on the path: that can make the
-load refuse, or aim the path at another tree, where the same rule applies and a tree it made is not root's. It
-cannot change the bytes of a file only root can write, and it cannot make a file it owns pass. What it can do is
-deny the service.
+**The directories above the one `native/` sits in are not judged, and a writer there cannot make a file it owns
+pass.** Each directory is judged by owner and mode and pinned by `dev:ino` before the manifest is read, and looked
+at again after the library is hashed; the manifest and the library are judged through the descriptor they were
+opened as. A non-root writer to a higher directory can rename one on the path: that can make the load refuse,
+or put another tree in its place, but every file the loader reads from that tree must be root's. It cannot
+change the bytes of a file only root can write, and it cannot make a file it owns pass. What it can still do is
+deny the service, and aim the path at **another complete tree that root wrote** (an older release, say), which
+looks the same as the real one and is **not detected** (TD-S17-close-1, open).
 
-**`native/.integrity.json` is not checked for owner or mode.** That is deliberate and not a bypass. The manifest
-is a claim the loader tests, not a capability: the loader compares the hash it holds with the bytes of a library
-that only root can write, in a directory that only root can write. Someone who can rewrite the manifest alone can
-make the load refuse (a hash that no longer matches) and nothing else; to make different bytes load they would
-also have to change the library, which the rule has already denied them.
+**`native/.integrity.json` is judged like the library.** It was not, at first, on the argument that the manifest
+is a claim the loader tests and not a capability, so rewriting it could only make the load refuse. That
+argument was wrong: the manifest holds the hash that must match, so whoever writes it chooses which bytes
+pass. Combined with a tree swapped in by a writer of a higher directory (the manifest and a link to any root-owned
+library, then the real tree renamed back before the directories were stat-ed), every check passed. The manifest is
+now opened with `O_NOFOLLOW`, judged on its descriptor (uid 0, not writable by group or other) and read through
+it, and the library is opened with `O_NOFOLLOW` too, so a link is never followed and an attacker-made file is
+never root's. The loader tests run that attack with a real library, the swap triggered at the moment the loader
+reaches for the manifest, and a mutation prover removes each guard and watches them go red.
+
+**The directories are pinned, not locked.** They are looked up by path: Bun has no `openat`, and macOS has no
+descriptor-relative path (`/dev/fd/<n>/x` is `ENOENT`). A swap that is put back before the second look is
+not seen, and what it can have supplied is bounded by the rules above. `TODO(TD-S17-close-1)` in `render.ts`.
 
 **The development build is an accepted, development-only path.** When `NODE_ENV` is not `production` and no
 library is staged beside the executable, the module loads the newest `<crate>/target/{release,debug}/lib<name>`

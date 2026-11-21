@@ -34,10 +34,11 @@ against a host-arch twin or against the shipped image.
     `node_modules/`), `<dir>/app-leak` (a wrapper with its `knext_ffi_v1_free` calls removed; staging exits 1 unless
     there are exactly 2 to remove),
     `<dir>/native` (with the integrity manifest from
-    `packages/kn-next/src/cli/native-integrity.ts:writeNativeIntegrityManifest`, then the library
-    and every directory up to `native/` made read-only, as the image's `COPY --chmod=a-w` leaves
-    them; the workflow then chowns the tree to root, which the loader requires: root must own the
-    library, its directories, `native/` and the directory `native/` sits in. The musl lane runs
+    `packages/kn-next/src/cli/native-integrity.ts:writeNativeIntegrityManifest`, then the manifest,
+    the library and every directory up to `native/` made read-only, as the image's
+    `COPY --chmod=a-w` leaves them; the workflow then chowns the tree to root, which the loader
+    requires: root must own the manifest, the library, its directories, `native/` and the
+    directory `native/` sits in. The musl lane runs
     the legs as root and as uid 65532 (the image user), proves a 65532-owned tree is refused,
     builds and loads the docs page's Dockerfile recipe (below), and removes the root-owned staged
     trees at the end) and `<dir>/needed`.

@@ -431,14 +431,14 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    ```
 
    A hash covers the bytes read at that moment, not what the file holds later, so the module also
-   refuses a library that anyone but root could change. Root must own the library, every directory
-   from it up to `native/`, and the directory `native/` sits in, and none of them may be writable
-   by its group or by everyone. A tree owned by any other user is refused, the user the app runs
+   refuses a library that anyone but root could change. Root must own the library, the integrity
+   manifest, every directory from it up to `native/`, and the directory `native/` sits in, and none
+   of them may be writable by its group or by everyone. A tree owned by any other user is refused, the user the app runs
    as included: that user could change the permissions of what it owns and write the library
    again, for example through a file-write bug in the app. Nothing is loaded:
 
    ```
-   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image `knext build` generates copies native/ with `COPY --chown=0:0 --chmod=a-w`), and the app should run as a non-root user.
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. The library, its integrity manifest, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image `knext build` generates copies native/ with `COPY --chown=0:0 --chmod=a-w`), and the app should run as a non-root user.
    ```
 
    This protects against a writer that is not root, the app's own user among them. It does not
@@ -449,9 +449,10 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    The image `knext build` generates already has this layout. In your own Dockerfile, use this
    shape. The directory that holds `native/` must be owned by root too, and not writable by group
    or other: a directory that someone else can write lets them rename or replace the library, or
-   the directory itself, before the process opens it, and the module pins only the file it has
-   already opened. `WORKDIR` creates `/app` that way when it does not exist yet, and a `COPY` into
-   it leaves it so:
+   the directory itself, before the process opens it. The module opens the manifest and the
+   library without following symbolic links, judges each file it opened by its owner and mode, and
+   refuses a tree whose directories changed while the library was being checked. `WORKDIR`
+   creates `/app` that way when it does not exist yet, and a `COPY` into it leaves it so:
 
    ```dockerfile title="Dockerfile"
    ARG BASE_IMAGE
@@ -478,7 +479,9 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    ```
 
    A volume mounted at `native/` (a shared volume, a sidecar's, or one made group-writable by
-   `fsGroup`) is refused.
+   `fsGroup`) is refused. So is a symbolic link where the library or `native/.integrity.json`
+   should be, whatever it points at: a link is never followed, so keep `native/` as the plain
+   files and directories that `knext ffi build` stages and a `COPY` carries over.
 
 2. **The development build**, only when `NODE_ENV` is not `production`: `rust/target/release/` or
    `rust/target/debug/`, whichever is newer, with no integrity check and the one-line notice above.
@@ -804,9 +807,12 @@ Every image build runs these checks, and stops on the first one that fails, befo
   file renamed or symlinked over the path between the check and the load is not the one loaded.
   An open file pins the file, not its bytes, so an in-place write, a hard link to the same file or
   a writable memory map by someone else would still change what runs. The module therefore also
-  applies an ownership rule, judged by owner and mode: root must own the library, every directory
-  from it up to `native/` and the directory `native/` sits in, and none of them may be writable by a
-  group or by everyone. A different owner (the app's own user included, since it can change the
+  applies an ownership rule, judged by owner and mode: root must own the library, the integrity
+  manifest, every directory from it up to `native/` and the directory `native/` sits in, and none
+  of them may be writable by a group or by everyone. The manifest counts because it is what says
+  which file may load: one that someone else could write would let any library root owns pass. Both
+  files are opened without following a symbolic link, and the directories are looked at again after
+  the library is hashed, so a tree renamed over the real one in between is refused. A different owner (the app's own user included, since it can change the
   permissions of what it owns) and write access for a group or for everyone are each refused. The
   image `knext build` generates copies `native/` owned by root and read-only
   (`COPY --chown=0:0 --chmod=a-w`), and the app runs as a non-root user, so it passes. A shared,

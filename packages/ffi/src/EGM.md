@@ -124,11 +124,12 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     - What the descriptor covers: a path swap (rename or symlink over the path) between the
       check and the load. It does not cover a writer of the file's contents (an in-place write, a
       hard link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. So
-      `render.ts:$sealed` refuses the load unless only root can write the library: it stats the
-      hashed descriptor, then the library's directories (built from its path relative to
+      `render.ts:$judge`, `$sealed` and `$verify` refuse the load unless only root can write the
+      library: they stat the manifest's and the library's descriptors (each opened with
+      `O_NOFOLLOW`), and the library's directories (built from its path relative to
       `native/`, so the walk cannot run to `/`) and the directory `native/` sits in, by owner
-      and mode (`access()` would say yes to root for all of it), before the bytes are read.
-      Each must be owned by uid 0 and not writable by group or other, with any owner-write bit
+      and mode (`access()` would say yes to root for all of it). The directories are judged and
+      pinned before the manifest is read. Each must be owned by uid 0 and not writable by group or other, with any owner-write bit
       (root can write anyway). No other uid is accepted and the process's own uid is never read:
       the user the app runs as can `chmod` what it owns, so an app-owned tree, even read-only,
       protects nothing from a file-write bug in the app. No opt-out. The generated Dockerfile
@@ -143,10 +144,21 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       module copy and Worker would load its own copy of the library, ending the one library per
       process that they rely on, so it is not used. On Linux the load needs `/proc` mounted; a
       failed load closes the descriptor and its error names both the path and the descriptor name.
-    - `native/.integrity.json` itself gets no owner or mode check. It is a claim the loader tests:
-      rewriting it can only make the hash mismatch (a refusal), because the bytes it is compared with
-      are a library only root can write. The directories above the one `native/` sits in are not
-      judged either; a writer there can make the load refuse, not change those bytes.
+    - `native/.integrity.json` is judged like the library: it holds the hash that must match, so
+      whoever can write it chooses which bytes pass. (An earlier version left it unjudged on the
+      argument that rewriting it could only make the load refuse; that was wrong, and let a tree
+      swapped in between the loader's by-path steps carry its own manifest.) It is opened with
+      `O_NOFOLLOW`, judged on its own descriptor and read through it. The library is opened with
+      `O_NOFOLLOW` too, so a symbolic link at either path is refused whatever it points at; a
+      platform with no `O_NOFOLLOW` is refused (the flag would OR in as 0). "Is anything staged" is
+      an `lstat`, so a dangling link is a refusal and never a fall-through to the development build.
+    - The directories are pinned (`dev:ino` as `bigint`, recorded before the manifest is read and
+      compared after the library is hashed; a change refuses), not locked: they are looked up by
+      path, since Bun has no `openat` and macOS has no descriptor-relative path. A tree swapped in
+      and put back between the two looks is not seen; what it can supply is bounded by the
+      owner rule on the files. Pointing the path at another tree root wrote is not detected
+      (`TODO(TD-S17-close-1)` in `render.ts`). The directories above the one `native/` sits in are
+      not judged.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check or an owner check:
       an accepted, development-only path. It is reached only when nothing is staged beside the

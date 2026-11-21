@@ -425,7 +425,18 @@ describe('docs — in-process Rust page', () => {
     expect(flat).toContain(
       'lets them rename or replace the library, or the directory itself, before the process opens it',
     );
-    expect(flat).toContain('the module pins only the file it has already opened');
+    // What the module does about a swap, stated for users: links, the manifest, directories that changed.
+    expect(flat).toContain(
+      'The module opens the manifest and the library without following symbolic links',
+    );
+    expect(flat).toContain('judges each file it opened by its owner and mode');
+    expect(flat).toContain(
+      'refuses a tree whose directories changed while the library was being checked',
+    );
+    expect(flat).toContain(
+      'So is a symbolic link where the library or `native/.integrity.json` should be',
+    );
+    expect(flat).not.toContain('the module pins only the file it has already opened');
     // What to do in your own image, and for a compiled binary outside a container.
     expect(flat).toContain('(`RUN chown -R app /app`) does not pass');
     expect(flat).toContain(
@@ -464,9 +475,17 @@ describe('docs — in-process Rust page', () => {
     expect(entry).not.toContain('whoever can rename one of those can replace the whole tree');
     expect(entry).toMatch(/cannot change the bytes of a file only root can write/);
     expect(entry).toMatch(/can make the load refuse/);
-    // The manifest gets no owner check, and why that is not a bypass.
-    expect(entry).toContain('`native/.integrity.json` is not checked for owner or mode');
-    expect(entry).toMatch(/not a bypass/);
+    // The manifest IS judged: the first version's "not a bypass" reasoning was wrong, and says so.
+    expect(entry).toContain('`native/.integrity.json` is judged like the library');
+    expect(entry).toMatch(/whoever writes it chooses which bytes pass/);
+    expect(entry).toMatch(/That argument was wrong/);
+    expect(entry).not.toContain('is not checked for owner or mode');
+    expect(entry).not.toMatch(/not a bypass\./);
+    // Links, pinned directories, and the limit that stays open.
+    expect(entry).toContain('`O_NOFOLLOW`');
+    expect(entry).toContain('The directories are pinned, not locked.');
+    expect(entry).toMatch(/another complete tree that root wrote/);
+    expect(entry).toContain('TODO(TD-S17-close-1)');
     // The development path: an accepted, dev-only hole, and a refused staged library never reaches it.
     expect(entry).toContain('**The development build is an accepted, development-only path.**');
     expect(entry).toMatch(/`NODE_ENV` is not `production`/);
@@ -515,7 +534,19 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).toMatch(/the user the process runs as is not trusted/i);
     expect(amendment).toMatch(/no opt-out/i);
     expect(amendment).toMatch(/rename or replace the library/);
-    expect(amendment).toContain('`native/.integrity.json` is not checked for owner or mode');
+    // The manifest is judged; the first version's reasoning is named and withdrawn, not left standing.
+    expect(amendment).toContain('The manifest is judged like the library.');
+    expect(amendment).toMatch(/That was wrong\. The manifest is what authorises a file/);
+    expect(amendment).not.toContain('is not checked for owner or mode.');
+    // Links are never followed, the directories are pinned, and the limit is stated.
+    expect(amendment).toContain('**Links are never followed.**');
+    expect(amendment).toContain('`O_NOFOLLOW`');
+    expect(amendment).toContain('**The directories are pinned.**');
+    expect(amendment).toMatch(/pinned,\s+not locked/);
+    expect(amendment).toContain('/dev/fd/<n>/x');
+    // Not Accepted, and why: the lane that proves the images pass has not run on this revision.
+    expect(amendment).toMatch(/Status: Proposed/);
+    expect(amendment).toContain('Why it stays Proposed');
     expect(amendment).toContain('never falls through to the development build');
     // Options: the three the measurement compared, with the measured reason for the one not used.
     expect(amendment).toContain('memfd_create');
@@ -527,6 +558,13 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).toContain('knext ffi check');
     expect(amendment).toContain('knext ffi generate');
     expect(amendment).toMatch(/generated before this change/);
+    // The amendment says it carries a pointer in D14 and D16: it has to.
+    const d14 = adr.slice(adr.indexOf('### D14.'), adr.indexOf('### D15.')).replace(/\s+/g, ' ');
+    expect(d14).toContain('Amendment 1');
+    expect(d14).toContain('--chown=0:0 --chmod=a-w');
+    const d16 = adr.slice(adr.indexOf('### D16.'), adr.indexOf('### D17.')).replace(/\s+/g, ' ');
+    expect(d16).toContain('Amendment 1');
+    expect(d16).toContain('root must own');
     // D13 points at it instead of carrying a bold paragraph of its own.
     const d13 = adr.slice(adr.indexOf('### D13.'), adr.indexOf('### D14.')).replace(/\s+/g, ' ');
     expect(d13).toContain('Amendment 1');

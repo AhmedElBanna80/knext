@@ -1895,6 +1895,7 @@ describe('#2499 the live tree: every committed prover is in exactly one shard of
         [resolve(REPO_ROOT, RUNNER), '--list', '--shard', `${i}/${n}`],
         {
           encoding: 'utf8',
+          env: hermeticLaneEnv(),
         },
       );
       expect(r.status, r.stderr).toBe(0);

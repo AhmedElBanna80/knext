@@ -169,9 +169,17 @@ const MUTATIONS = [
     anchor: 'killFixtureGroups(dir);',
     replacement: 'void 0;',
   },
+  {
+    label:
+      "the tree-restore spec's runner spawn leaks the lane env again (PROVER_LANE_SHA reaches the fixture runner)",
+    subject: 'restoreSpec',
+    anchor: '    env: runnerEnv(),\n',
+    replacement:
+      "    env: { ...process.env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' },\n",
+  },
 ];
 
-const DECLARED = 15;
+const DECLARED = 16;
 declareMutations(DECLARED);
 if (MUTATIONS.length !== DECLARED) {
   console.error(`FATAL: declared ${DECLARED} mutations, table has ${MUTATIONS.length}`);

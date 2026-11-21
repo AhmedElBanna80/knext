@@ -123,6 +123,9 @@ describe('the runner under test is hermetic against the lane (the S13-5 baseline
     process.env.GITHUB_ACTIONS = 'true';
     try {
       const env = runnerEnv();
+      // Emptying the shared list would make the loop below vacuous: pin its floor.
+      expect(LANE_ENV.length).toBeGreaterThanOrEqual(17);
+      expect(LANE_ENV).toContain('PROVER_LANE_SHA');
       for (const k of LANE_ENV)
         if (k !== 'KNEXT_LANE_RESTORE_AFTER_KILL' && k !== 'GITHUB_ACTIONS')
           expect(k in env).toBe(false);
@@ -144,7 +147,7 @@ describe('the runner under test is hermetic against the lane (the S13-5 baseline
     const proc = spawnRunner(leakDir);
     try {
       const mutated = () => readFileSync(join(leakDir, 'fixture.txt'), 'utf8') === 'MUTATED\n';
-      expect(await waitFor(mutated, 10_000)).toBe(true);
+      expect(await waitFor(mutated)).toBe(true);
     } finally {
       if (saved === undefined) delete process.env.PROVER_LANE_SHA;
       else process.env.PROVER_LANE_SHA = saved;

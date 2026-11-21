@@ -431,19 +431,29 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    ```
 
    A hash covers the bytes read at that moment, not what the file holds later, so the module also
-   refuses a library unless only root can write it. That goes for the library and for every
-   directory from it up to `native/`: one owned by a user other than root and the one the app runs
-   as, one that its group or everyone can write, or one that the app's own user can write is
-   refused, and nothing is loaded:
+   refuses a library that anyone but root could change. Root must own the library, every directory
+   from it up to `native/`, and the directory `native/` sits in, and none of them may be writable
+   by its group or by everyone. A tree owned by any other user is refused, the user the app runs
+   as included: that user could change the permissions of what it owns and write the library
+   again, for example through a file-write bug in the app. Nothing is loaded:
 
    ```
-   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. native/ must be owned by root and read-only (the image `knext build` generates copies it with `COPY --chown=0:0 --chmod=a-w`), and the app must run as a non-root user.
+   knext ffi: refusing to load …/native/ffi/x86_64-unknown-linux-musl/libzone.so: …/native/ffi/x86_64-unknown-linux-musl/libzone.so is writable by its group or by everyone (mode 0664), so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image `knext build` generates copies native/ with `COPY --chown=0:0 --chmod=a-w`), and the app should run as a non-root user.
    ```
+
+   This protects against a writer that is not root, the app's own user among them. It does not
+   protect against root, a process allowed to bypass file permissions, a second writable mount of
+   the same files, or an access control list: only the permission bits are read, and on macOS an
+   ACL can grant write access that they do not show. There is no setting that turns the check off.
 
    The image `knext build` generates already has this layout. In your own Dockerfile, copy
-   `native/` with `COPY --chown=0:0 --chmod=a-w` and run the app as a non-root user. A volume
-   mounted at `native/` (a shared volume, a sidecar's, or one made group-writable by `fsGroup`) is
-   refused.
+   `native/` with `COPY --chown=0:0 --chmod=a-w`, run the app as a non-root user, and make sure
+   the directory that holds `native/` (next to the server executable) is owned by root too and not
+   writable by group or other. A `WORKDIR` or a `COPY` of the executable creates it that way; a
+   `chown` of the app directory to the app user does not pass. A compiled binary you build yourself
+   needs the same: `chown root` on its directory and on `native/`, and no group or other write
+   access. A volume mounted at `native/` (a shared volume, a sidecar's, or one made group-writable
+   by `fsGroup`) is refused.
 
 2. **The development build**, only when `NODE_ENV` is not `production`: `rust/target/release/` or
    `rust/target/debug/`, whichever is newer, with no integrity check and the one-line notice above.
@@ -769,14 +779,16 @@ Every image build runs these checks, and stops on the first one that fails, befo
   file renamed or symlinked over the path between the check and the load is not the one loaded.
   An open file pins the file, not its bytes, so an in-place write, a hard link to the same file or
   a writable memory map by someone else would still change what runs. The module therefore also
-  refuses to load unless only root can write the library and every directory from it up to
-  `native/`, judged by owner and mode: a different owner, write access for a group or for
-  everyone, and write access for the app's own user are each refused. The image `knext build`
-  generates copies `native/` owned by root and read-only (`COPY --chown=0:0 --chmod=a-w`), and
-  the app runs as a non-root user, so it passes. A shared, sidecar or `fsGroup` volume at
-  `native/` does not. This does not stop root: a process running as root, or one allowed to
-  bypass file permissions, can still change the library, and so can a second, writable mount of
-  the same files.
+  applies an ownership rule, judged by owner and mode: root must own the library, every directory
+  from it up to `native/` and the directory `native/` sits in, and none of them may be writable by a
+  group or by everyone. A different owner (the app's own user included, since it can change the
+  permissions of what it owns) and write access for a group or for everyone are each refused. The
+  image `knext build` generates copies `native/` owned by root and read-only
+  (`COPY --chown=0:0 --chmod=a-w`), and the app runs as a non-root user, so it passes. A shared,
+  sidecar or `fsGroup` volume at `native/` does not. This does not stop root: a process running as
+  root, or one allowed to bypass file permissions, can still change the library, and so can a
+  second, writable mount of the same files or an access control list that grants write access
+  (only the permission bits are read).
 - **The module matches the library.** The build regenerates the module from the library it is about
   to ship and stops on any difference, and the module itself checks the library's functions when it
   loads.

@@ -728,6 +728,21 @@ The exception's expiry and its re-raise condition live in
 CI rather than the runtime, because a wall-clock branch inside the shim would brick running pods at
 midnight on the expiry date — the same fleet outage the exception exists to avoid.
 
+### The in-process Rust library: a hash binds nothing unless only root can write what it covered (TD-S14-6a)
+
+The generated module (`@getknext/ffi`, ADR-0069 D13) maps `native/ffi/<triple>/lib<name>.so` into the
+server's own address space, so a writer of that file runs native code with the app's privileges
+and no sandbox. The module checks the file against `native/.integrity.json`, then `dlopen`s the
+**descriptor it hashed**, which closes a path swap (a rename or symlink over the path between the
+check and the load). It does not bind the bytes: an open descriptor pins the inode, not its
+contents, so an in-place write, a hard link to the inode or a writable memory map by someone else
+still changes what is mapped after the hash.
+
+| STRIDE | Threat | Mitigation | Residual / action |
+|---|---|---|---|
+| **T**amper | A writer that is not root changes the library's bytes after they were hashed. The realistic one is **the user the app runs as**, through a file-write bug in the app (an upload path, an arbitrary-file-write CVE in a dependency): it can write a file it owns, or `chmod` it writable first. | The module refuses to load unless **root owns** the library, every directory from it up to `native/`, and the directory `native/` sits in, and none of them is writable by group or other (`$sealed` in `packages/ffi/src/render.ts`: `fstat` on the hashed descriptor and `stat` on each directory, by owner and mode; `access()` is not used because it answers yes to root for everything). The user the app runs as is **not trusted**: a tree it owns is refused even when read-only, because it can change the mode back. **There is no opt-out.** The generated image copies `native/` owned by root and read-only (`COPY --chown=0:0 --chmod=a-w`) and runs as `USER 65532`; BuildKit leaves the top `native/` and the directory above it root-owned and 0755, the rest 0555 and the files 0444, which passes. Proved by the loader tests (faked owners, real modes), by an image matrix run as uid 65532 on a read-only root file system (root-owned loads, as uid 65532 and as root; a group- or world-writable tree, an app-owned tree, a tree owned by a third uid, and a group-writable or app-owned parent are refused), and by the musl load lane, which runs both legs as uid 65532 and proves an app-owned tree is refused. | **Not stopped:** root, `CAP_DAC_OVERRIDE` and anything else that bypasses file permissions; a **second mount** of the same files that root can write (a read-only mount is a per-mount flag, so it says nothing about another mount); and an **ACL**, because only the mode bits are read (on macOS an ACL can grant write access that the mode does not show). The directories above the one `native/` sits in are not checked: whoever can rename one of those can replace the whole tree, so the rule assumes the image's file system above the executable is root-owned, which every layout knext generates is. A user Dockerfile that `chown`s the app directory to the app user fails the check by design. |
+| **T**amper | The same, closed against root too: bind the bytes, not the file. | **Not done.** A sealed `memfd` copy (`memfd_create` plus `F_ADD_SEALS` through libc by `bun:ffi`) was measured to work on Bun 1.4.2 and would bind the bytes against root. It is not used because two file descriptors of one file `dlopen` as one loaded library, but two sealed copies of the same bytes load as two: every module copy (a bundler layer, a Worker) would load its own library, ending the one-library-per-process behaviour the generated module relies on (ADR-0069 D13). | `TODO(TD-S14-6a)`: bind the bytes against root, if a measured driver appears and the one-library rule can be kept (for example one sealed copy shared by every module copy). |
+
 ### Patching policy — `apk upgrade` on a digest-pinned base (#267)
 
 Runner/runtime stages of every shipped alpine image run `apk upgrade --no-cache`

@@ -637,6 +637,34 @@ describe('the full golden module (the fixture app type-checks it with Node types
     expect(src).toBe(readFileSync(GOLDEN, 'utf8'));
   });
 
+  /**
+   * The zone fixture's wrapper is rendered from a real Rust crate's manifest, which this suite
+   * cannot rebuild (no cargo), so its functions are not compared. What every wrapper shares, the
+   * imports and the platform / integrity / load code from `$triple` to `$resolve`, `$sealed`
+   * and `$verify`, does not depend on the manifest, so it must equal what renderModule emits now.
+   */
+  it('the committed zone wrapper carries the loader renderModule emits (imports, $triple through $verify)', () => {
+    const shared = (src: string) => {
+      const imports = src.slice(
+        src.indexOf("import 'server-only';"),
+        src.indexOf('\n\n', src.indexOf("from 'node:path';")),
+      );
+      const from = src.indexOf("/** This process's Rust target triple. */");
+      const to = src.indexOf('/** A Rust-owned (ptr, len) pair');
+      expect(from, 'no $triple').toBeGreaterThan(-1);
+      expect(to, 'no $takeString').toBeGreaterThan(from);
+      return { imports, loader: src.slice(from, to) };
+    };
+    const zone = join(PKG_DIR, 'fixtures', 'ffi-zone', 'src', 'generated', 'ffi', 'index.ts');
+    expect(existsSync(zone)).toBe(true);
+    const fresh = shared(renderModule(scanManifest(blob(KITCHEN_SINK)), OPTS));
+    const committed = shared(readFileSync(zone, 'utf8'));
+    expect(committed.imports).toBe(fresh.imports);
+    expect(committed.loader).toBe(fresh.loader);
+    // A comparison of two empty slices would pass for nothing.
+    expect(fresh.loader).toContain('function $verify(');
+  });
+
   it('is deterministic and independent of record order in the library', () => {
     const a = renderModule(scanManifest(blob(KITCHEN_SINK)), OPTS);
     const b = renderModule(scanManifest(blob([...KITCHEN_SINK].reverse())), OPTS);

@@ -109,8 +109,10 @@ const native = join(out, 'native');
 mkdirSync(join(native, 'ffi', stageTriple), { recursive: true });
 copyFileSync(lib, join(native, 'ffi', stageTriple, basename(lib)));
 writeNativeIntegrityManifest(native, undefined);
-// Read-only, as the image's `COPY --chmod=a-w` leaves it: the loader refuses a library, or a
-// directory above it, that anyone but root can write. The workflow then hands the tree to root.
+// Read-only, as the image's `COPY --chmod=a-w` leaves it. The loader also wants root to OWN the
+// library, its directories up to native/ and the directory native/ sits in: the workflow hands
+// the tree to root (`sudo chown`), the way the image's `COPY --chown=0:0` does, because this
+// script runs as the runner user and cannot.
 for (const p of [
   join(native, 'ffi', stageTriple, basename(lib)),
   join(native, 'ffi', stageTriple),

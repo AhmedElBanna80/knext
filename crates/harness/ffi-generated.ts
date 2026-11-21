@@ -31,6 +31,7 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -42,7 +43,6 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { makeWritable } from '../../packages/ffi/src/__tests__/helpers';
 import { integerMatrix } from '../../packages/ffi/src/__tests__/integer-matrix';
 import { runGenerate } from '../../packages/ffi/src/generate';
 import { CRATE_GIT, recordedCrateRev, runInit } from '../../packages/ffi/src/init';
@@ -76,9 +76,20 @@ function tempDir(prefix: string): string {
   scratch.push(d);
   return d;
 }
+/** Give the owner write access to a tree again: a staged native/ is read-only, like the image's. */
+function makeWritable(path: string): void {
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (!st || st.isSymbolicLink()) return;
+  if (st.isDirectory()) {
+    chmodSync(path, st.mode | 0o700);
+    for (const name of readdirSync(path)) makeWritable(join(path, name));
+  } else {
+    chmodSync(path, st.mode | 0o600);
+  }
+}
 function cleanup(): void {
   for (const d of scratch) {
-    makeWritable(d); // a staged native/ is read-only, like the image's
+    makeWritable(d);
     rmSync(d, { recursive: true, force: true });
   }
 }
@@ -113,6 +124,21 @@ function app(dir: string): void {
 const CHILD = `// Runs BODY(m, c) against the generated module; prints RESULT <json>.
 const fake = process.env.FAKE_EXEC;
 if (fake) process.execPath = fake;
+// The loader accepts only a root-owned tree (an image's native/ is), and the tree staged here is
+// owned by whoever runs this lane: report FAKE_OWNER as the owner of what the module stats. The
+// modes stay real. Ownership by root itself is proved by the musl load lane (ffi-e2e).
+if (process.env.FAKE_OWNER) {
+  const fs = process.getBuiltinModule('node:fs');
+  const owner = Number(process.env.FAKE_OWNER);
+  for (const k of ['fstatSync', 'statSync']) {
+    const real = fs[k];
+    fs[k] = function (...a) {
+      const st = real.apply(this, a);
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { uid: owner });
+    };
+  }
+  process.getBuiltinModule('node:module').syncBuiltinESMExports();
+}
 const m = await import('./src/generated/ffi/index.ts');
 const c = (f) => {
   try {
@@ -208,13 +234,15 @@ function wrapper(libPath: string): void {
       },
     }),
   );
-  // As the image carries it: the loader refuses a library, or a directory above
-  // it, that anyone but root can write.
+  // As the image carries it: read-only. The loader also wants root to own the library, its
+  // directories and the one native/ sits in (the image's COPY --chown=0:0); this lane is not root,
+  // so the child reports root as the owner (FAKE_OWNER) and the modes below are the real ones.
   for (const part of [
     join(image, 'native', rel),
     join(image, 'native', 'ffi', triple),
     join(image, 'native', 'ffi'),
     join(image, 'native'),
+    image, // the directory native/ sits in
   ]) {
     chmodSync(part, statSync(part).mode & ~0o222);
   }
@@ -274,7 +302,7 @@ function wrapper(libPath: string): void {
         afterRefusals: m.echo_opt_f64(0.25),
       };
     },
-    { FAKE_EXEC: join(image, 'server'), NODE_ENV: 'production' },
+    { FAKE_EXEC: join(image, 'server'), NODE_ENV: 'production', FAKE_OWNER: '0' },
   ) as Record<string, unknown> | undefined;
   if (result === undefined) return;
 
@@ -283,6 +311,7 @@ function wrapper(libPath: string): void {
   const integers = inBun(dir, integerMatrix, {
     FAKE_EXEC: join(image, 'server'),
     NODE_ENV: 'production',
+    FAKE_OWNER: '0',
   }) as { cases: number; problems: string[] } | undefined;
   if (integers !== undefined) {
     check(integers.cases > 150, `the integer matrix ran only ${integers.cases} case(s)`);

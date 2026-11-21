@@ -125,15 +125,20 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       check and the load. It does not cover a writer of the file's contents (an in-place write, a
       hard link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. So
       `render.ts:$sealed` refuses the load unless only root can write the library: it stats the
-      hashed descriptor and every directory from the library's parent up to `native/` itself,
-      by owner and mode (`access()` would say yes to root for all of it), before the bytes are
-      read. Each must be owned by uid 0 or by the user the process runs as; none may be writable
-      by group or other; one owned by that non-root user must also have its owner write bit
-      clear. Root ownership with any mode and no group or other write passes. The generated
-      Dockerfile copies `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`), which
-      passes for a non-root app user; a shared, sidecar or fsGroup-writable volume at `native/`
-      is refused. It does not stop root, `CAP_DAC_OVERRIDE`, or a second writable mount of the
-      same files. A sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
+      hashed descriptor, then the library's directories (built from its path relative to
+      `native/`, so the walk cannot run to `/`) and the directory `native/` sits in, by owner
+      and mode (`access()` would say yes to root for all of it), before the bytes are read.
+      Each must be owned by uid 0 and not writable by group or other, with any owner-write bit
+      (root can write anyway). No other uid is accepted and the process's own uid is never read:
+      the user the app runs as can `chmod` what it owns, so an app-owned tree, even read-only,
+      protects nothing from a file-write bug in the app. No opt-out. The generated Dockerfile
+      copies `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`); BuildKit leaves
+      `native/` and the directory above it root-owned 0755, which passes for a non-root app
+      user. A user Dockerfile that chowns the app directory to the app user, a shared, sidecar or
+      fsGroup-writable volume at `native/`, and a compiled binary whose directory is not
+      root-owned are refused. It does not stop root, `CAP_DAC_OVERRIDE`, a second writable
+      mount of the same files, or an ACL (mode bits only; on macOS an ACL can grant write). A
+      sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
       `bun:ffi`, measured to work on Bun 1.4.2) would bind the bytes against root too, but each
       module copy and Worker would load its own copy of the library, ending the one library per
       process that they rely on, so it is not used. On Linux the load needs `/proc` mounted; a

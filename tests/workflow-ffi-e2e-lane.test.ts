@@ -197,3 +197,49 @@ describe('ffi-e2e.yml compat-smoke gates on the shipped image', () => {
     }
   });
 });
+
+describe('ffi-e2e.yml musl-load: the loader refuses anything but a root-owned tree, and the lane runs the way the image does', () => {
+  const steps = wf.jobs['musl-load']?.steps ?? [];
+  const find = (needle: string) => steps.findIndex((s) => (s.name ?? '').includes(needle));
+  const text = (i: number) => steps[i]?.run ?? '';
+
+  it('hands the directory that holds the compiled executable and its native/ to root, not only native/', () => {
+    const compile = find('Compile the caller');
+    expect(compile).toBeGreaterThanOrEqual(0);
+    // The loader also checks the directory native/ sits in (/opt/caller here, a bind mount).
+    expect(text(compile)).toMatch(/chown -R root:root "\$\{RUNNER_TEMP\}\/musl\/exe"/);
+  });
+
+  it('runs the bun leg and the compiled leg as uid 65532 (the image USER) against the root-owned trees', () => {
+    const nonRoot = find('non-root');
+    expect(nonRoot).toBeGreaterThanOrEqual(0);
+    expect(nonRoot).toBeGreaterThan(find('Compile the caller'));
+    const run = text(nonRoot);
+    expect(run.match(/--user 65532:65532/g)?.length).toBe(2);
+    expect(run).toContain('${RUNNER_TEMP}/musl/native:${BUN_DIR}/native:ro');
+    expect(run).toContain('${RUNNER_TEMP}/musl/exe:/opt/caller:ro');
+    expect(run.match(/ffi-musl-driver: PASS/g)?.length).toBe(2);
+  });
+
+  it('proves red: a tree owned by the app user itself is refused, even read-only', () => {
+    const red = find('owned by the app user');
+    expect(red).toBeGreaterThanOrEqual(0);
+    const run = text(red);
+    expect(run).toContain('chown -R 65532:65532');
+    expect(run).toContain('--user 65532:65532');
+    expect(run).toContain('is owned by uid 65532, but only root may own it');
+    // It must fail on a load that succeeds with the root-owned tree: exit 0 is the error.
+    expect(run).toMatch(/-eq 0/);
+  });
+
+  it('gives the root-owned staged trees back and removes them on every outcome, after the summary reads them', () => {
+    const clean = steps.findIndex((s) => (s.run ?? '').includes('chown -R "$(id -u):$(id -g)"'));
+    expect(clean).toBeGreaterThanOrEqual(0);
+    expect(steps[clean]?.if).toBe('always()');
+    expect(clean).toBeGreaterThan(find('Job summary'));
+    const run = text(clean);
+    for (const dir of ['musl', 'musl-wrong', 'musl-appowned']) {
+      expect(run).toContain(`\${RUNNER_TEMP}/${dir}`);
+    }
+  });
+});

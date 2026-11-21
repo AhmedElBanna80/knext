@@ -554,6 +554,47 @@ Rust toolchain, and `knext ffi check` (CI) and `knext ffi build` (image) fail on
 7. One exported, typed function per Rust export, with the Rust doc comment carried over as TSDoc,
    plus the record interfaces, enum unions, and the three error classes.
 
+**Amendment (2026-11-21, TD-S14-6a): the integrity check is bound to the bytes that are mapped, as
+far as file permissions go.** Item 5.1 hashes the file and then `dlopen`s the same descriptor
+(`/proc/self/fd/<n>`, `/dev/fd/<n>` on macOS). That pins the inode against a path swap, not its
+bytes: an in-place write, a hard link to the inode or a writable mapping by another writer changes
+what runs after the hash. The loader therefore also refuses unless the following hold, judged by
+owner and mode on the hashed descriptor (`fstat`) and on each directory (`stat`), never by
+`access()`, which answers yes to root for everything:
+
+- the library, every directory from its parent up to `native/`, and the directory `native/` sits in
+  (beside the executable) are each **owned by uid 0 and not writable by group or other**. These
+  paths exactly: the walk is built from the library's path relative to `native/`, so it cannot run
+  up to `/`.
+- **The user the process runs as is not trusted.** No uid but 0 is accepted as the owner, and the
+  rule never reads the process's own uid: that user can `chmod` what it owns, so an app-owned tree,
+  even read-only, would protect nothing from a file-write bug in the app. There is no opt-out
+  (jev: require root, no opt-out **0.79**).
+- The shipped images pass. BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the files 0444, the
+  directories below `native/` 0555, and `native/` and the directory above it root-owned 0755
+  (measured on the pinned `oven/bun:1.4.2-alpine`; the directory above came out 0755 and root-owned
+  even from a group-writable source directory), and the images run as `USER 65532`. An image
+  matrix run as uid 65532 on a read-only
+  root file system loaded a root-owned tree and refused a group- or world-writable one, an app-owned
+  one, one owned by a third uid, and one whose parent directory was group-writable or app-owned.
+
+The rule reads mode bits only. It does not stop root or anything with `CAP_DAC_OVERRIDE`, a second
+writable mount of the same files, or an ACL that grants write (on macOS an ACL can). The
+`.integrity.json` consumers are unchanged.
+
+Options measured for binding the bytes (Bun 1.4.2, Linux):
+
+| Option | Result |
+|---|---|
+| (a) owner and mode by `fstat`/`stat` | **Chosen.** Cheap, runs before the bytes are read, and needs nothing from the platform. |
+| (b) refuse unless the library is on a read-only mount | Rejected. Read-only is a per-mount flag: a read-only mount with a writable mount of the same files beside it passes, and a user Dockerfile with no mount at all has none to check. |
+| (c) a sealed `memfd` copy (`memfd_create` plus `F_ADD_SEALS` through libc by `bun:ffi`) | Works, and would bind the bytes against root too, but rejected. Two file descriptors of one file `dlopen` as one loaded library; two sealed copies of the same bytes `dlopen` as two libraries. Every module copy (a bundler layer, a Worker) would then load its own library with its own state, ending the one library per process that D13 relies on. |
+
+`TODO(TD-S14-6a)`: binding the bytes against root remains open, and would need the one-library rule
+kept (for example one sealed copy shared by every module copy). The user-facing statement of the
+rule and its limits is in the in-process Rust page (where the library is loaded from) and the
+threat model's "in-process Rust library" entry.
+
 ### D14. Build and image (jev: host `cargo zigbuild` **1.00**, Docker stage 0.00, `cross` 0.00; `native/ffi/<triple>/` **0.99**, separate tree 0.00, embed 0.01; refuse self-contained mode **0.84**, extract to temp 0.15)
 
 `knext build`, when `knext.ffi.json` exists and the resolved runtime is Bun, runs these steps

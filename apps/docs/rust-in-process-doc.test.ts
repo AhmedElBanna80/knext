@@ -393,12 +393,71 @@ describe('docs — in-process Rust page', () => {
     const refusal = templateAfter(rendered, /if \(why !== ''\) \{\s*throw new FfiLoadError\(\s*`/);
     expectBlock(body, pattern(refusal), 'the writable-library refusal');
     expect(body).toContain('COPY --chown=0:0 --chmod=a-w');
-    expect(body).toMatch(/only root can write it/);
     // The supply-chain section's integrity bullet makes the same claim, and its limit.
     const chain = must(page, /supply chain/i);
-    expect(chain).toMatch(/only root can write the library/);
+    expect(chain.replace(/\s+/g, ' ')).toMatch(/root must own the library/);
     expect(chain).toMatch(/does not stop root/);
     expect(chain).not.toMatch(/does \*\*not\*\* stop anything that can write/);
+  });
+
+  it('states the threat model of the ownership rule in user terms: who it stops, who it does not, and that there is no opt-out', () => {
+    const flat = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
+    // Root owns it; the user the app runs as does not count, because it can chmod what it owns.
+    expect(flat).toContain('Root must own the library');
+    expect(flat).toContain('the directory `native/` sits in');
+    expect(flat).toContain('the user the app runs as included');
+    expect(flat).toContain('could change the permissions of what it owns');
+    // Who it protects against, and who it does not.
+    expect(flat).toContain(
+      "protects against a writer that is not root, the app's own user among them",
+    );
+    expect(flat).toMatch(
+      /does not protect against root[^.]*second writable mount[^.]*access control list/,
+    );
+    expect(flat).toMatch(
+      /only the permission bits are read[^.]*macOS[^.]*ACL can grant write access/,
+    );
+    expect(flat).toContain('There is no setting that turns the check off');
+    // What to do in your own image: the parent of native/ and a compiled binary you build yourself.
+    expect(flat).toContain(
+      'the directory that holds `native/` (next to the server executable) is owned by root too',
+    );
+    expect(flat).toContain('`chown` of the app directory to the app user does not pass');
+    expect(flat).toMatch(
+      /compiled binary you build yourself[^.]*`chown root`[^.]*no group or other write/,
+    );
+    // The old, weaker rule is gone from the page.
+    expect(page).not.toMatch(/or the one the app runs\s+as/);
+    expect(page).not.toMatch(/write access for the app's own user are each refused/);
+  });
+
+  it('records the rule in the threat model and in the ADR, with the measured reason the sealed copy was not used', () => {
+    const model = repoFile('docs/security/threat-model.md').replace(/\s+/g, ' ');
+    const at = model.indexOf('### The in-process Rust library');
+    expect(at, 'no threat-model entry for the in-process Rust library').toBeGreaterThan(-1);
+    const entry = model.slice(at, model.indexOf(' ### ', at + 10));
+    expect(entry).toContain('owned by root');
+    expect(entry).toContain('the user the app runs as');
+    expect(entry).toMatch(/root, `CAP_DAC_OVERRIDE`/);
+    expect(entry).toMatch(/ACL/);
+    expect(entry).toMatch(/macOS/);
+    expect(entry).toMatch(/second mount/);
+    expect(entry).toContain('no opt-out');
+    expect(entry).toContain('memfd');
+
+    const adr = repoFile('docs/adr/0069-bun-ffi-inprocess-rust.md').replace(/\s+/g, ' ');
+    const d13 = adr.slice(adr.indexOf('### D13.'), adr.indexOf('### D14.'));
+    expect(d13).toContain('Amendment (2026-11');
+    // The rule: uid 0 owns the file, every directory to native/ and the one native/ sits in.
+    expect(d13).toMatch(/owned by uid 0/);
+    expect(d13).toMatch(/not writable by group or other/);
+    expect(d13).toContain('the directory `native/` sits in');
+    expect(d13).toMatch(/the user the process runs as is not trusted/i);
+    // The alternative rejected, and the measurement behind it.
+    expect(d13).toContain('memfd_create');
+    expect(d13).toMatch(/two file descriptors of one file[^.]*one loaded library/i);
+    expect(d13).toMatch(/two sealed copies[^.]*two libraries/);
+    expect(d13).toMatch(/mode bits only/);
   });
 
   it('documents slow calls: the threshold, both metrics, the log lines as the module prints them, and that a call is not interrupted', () => {

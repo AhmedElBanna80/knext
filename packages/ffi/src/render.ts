@@ -26,15 +26,18 @@
  *   What this covers: a path swap (a rename or symlink over the path) between
  *   the check and the load, and, because the descriptor pins the inode and not
  *   its bytes, a writer of the file's contents (an in-place write, a hard link
- *   to the inode, a writable mmap): the load is refused unless the library and
- *   every directory above it up to native/ are writable by root alone, judged
- *   by owner and mode on the descriptor that was hashed (access() answers yes
- *   to root for everything, so it tells nothing). The user running the app may
- *   own the tree only if it cannot write it either. What it does NOT stop: root
- *   (or anything with CAP_DAC_OVERRIDE), and a second mount of the same files
- *   that root can write. The generated Dockerfile copies native/ root-owned
- *   and non-writable, which is the layout this accepts; a shared, sidecar or
- *   fsGroup-writable volume at native/ is refused.
+ *   to the inode, a writable mmap): the load is refused unless the library, its
+ *   directories up to native/ and the directory native/ sits in are all owned by
+ *   root and not writable by group or other, judged by owner and mode on the
+ *   descriptor that was hashed (access() answers yes to root for everything, so
+ *   it tells nothing). The rule does not depend on the uid the process runs as,
+ *   and the app's own user is not trusted: it can chmod what it owns. What it
+ *   does NOT stop: root (or anything with CAP_DAC_OVERRIDE), a second mount of
+ *   the same files that root can write, and an ACL (mode bits only; on macOS an
+ *   ACL can grant write that the mode does not show). The generated Dockerfile
+ *   copies native/ root-owned and non-writable, which is the layout this
+ *   accepts; a shared, sidecar, fsGroup-writable or app-owned tree is refused.
+ *   There is no opt-out.
  *   Not used: a sealed memfd copy of the hashed bytes (memfd_create and
  *   fcntl(F_ADD_SEALS) reached through libc by bun:ffi; measured to work on
  *   Bun 1.4.2). It would bind the bytes against root too, but every module copy
@@ -757,31 +760,33 @@ function $resolve(): readonly [string, string] {
  * Fail closed unless only root can write the library. The hash covers the bytes
  * read now, and a descriptor pins the inode, not its bytes, so whoever can write
  * the file (or swap it, from a directory they can write) changes what gets
- * mapped. The file is judged through the descriptor it was hashed from, then
- * each directory from its parent up to native/ itself, by owner and mode:
- * access() answers yes to root for everything. The user this process runs as may
- * own the tree only if it cannot write it either.
+ * mapped. Judged by owner and mode, not access(), which answers yes to root for
+ * everything: the file through the descriptor it was hashed from, then its
+ * directories up to native/ itself, then the directory native/ sits in. Exactly
+ * those, never the rest of the path. Each must be owned by root and not writable
+ * by group or other. The user this process runs as is NOT trusted: it can chmod
+ * what it owns, so a tree it owns protects nothing from a bug that writes files.
  */
-function $sealed(path: string, fd: number, native: string): void {
-  const me = process.geteuid?.() ?? -1;
+function $sealed(native: string, rel: string, path: string, fd: number): void {
+  const parts = rel.split('/');
   const checks: [string, { uid: number; mode: number }][] = [[path, $fstatSync(fd)]];
-  for (let dir = $dirname(path); ; dir = $dirname(dir)) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const dir = $join(native, ...parts.slice(0, i));
     checks.push([dir, $statSync(dir)]);
-    if (dir === native || dir === $dirname(dir)) break;
   }
+  const home = $dirname(native);
+  checks.push([home, $statSync(home)]);
   for (const [p, st] of checks) {
     const mode = (st.mode & 0o777).toString(8).padStart(4, '0');
     let why = '';
-    if (st.uid !== 0 && st.uid !== me) {
-      why = \`is owned by uid \${st.uid}, but only root or the user this app runs as (uid \${me}) may own it\`;
+    if (st.uid !== 0) {
+      why = \`is owned by uid \${st.uid}, but only root may own it\`;
     } else if ((st.mode & 0o022) !== 0) {
       why = \`is writable by its group or by everyone (mode \${mode})\`;
-    } else if (st.uid !== 0 && (st.mode & 0o200) !== 0) {
-      why = \`is writable by the user this app runs as (uid \${me}, mode \${mode})\`;
     }
     if (why !== '') {
       throw new FfiLoadError(
-        \`knext ffi: refusing to load \${path}: \${p} \${why}, so its bytes could change after they were checked. native/ must be owned by root and read-only (the image \\\`knext build\\\` generates copies it with \\\`COPY --chown=0:0 --chmod=a-w\\\`), and the app must run as a non-root user.\`,
+        \`knext ffi: refusing to load \${path}: \${p} \${why}, so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image \\\`knext build\\\` generates copies native/ with \\\`COPY --chown=0:0 --chmod=a-w\\\`), and the app should run as a non-root user.\`,
       );
     }
   }
@@ -821,7 +826,7 @@ function $verify(native: string, rel: string, path: string): string {
   const fd = $openSync(path, 'r');
   let actual: string;
   try {
-    $sealed(path, fd, native);
+    $sealed(native, rel, path, fd);
     actual = $createHash('sha256').update($readFileSync(fd)).digest('hex');
   } catch (err) {
     $closeSync(fd);

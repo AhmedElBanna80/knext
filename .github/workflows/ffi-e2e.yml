@@ -187,8 +187,11 @@ jobs:
           echo "DT_NEEDED of the zigbuild library:"; cat "${RUNNER_TEMP}/musl/needed"
           cat "${RUNNER_TEMP}/musl/native/.integrity.json"
           # The image carries native/ owned by root and read-only, and the loader refuses a
-          # library that anyone else could write. The containers below run as root against
-          # these bind mounts, so hand the trees to root, as the image's COPY does.
+          # library, a directory up to native/, or the directory native/ sits in that anyone but
+          # root owns or that group or other can write. The containers below run against these
+          # bind mounts, so hand the trees to root, as the image's COPY --chown=0:0 does. (The
+          # directory native/ sits in is the bun image's own /usr/local/bin here, root-owned; the
+          # compiled leg's is handed to root where it is built.)
           sudo chown -R root:root "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl-wrong/native"
 
       - name: Pull the image and find the bun binary's directory (process.execPath)
@@ -278,7 +281,8 @@ jobs:
           (cd "${RUNNER_TEMP}/musl/app" && bun build --compile --target="${{ matrix.bun_target }}" \
             --conditions=react-server driver.ts --outfile "${RUNNER_TEMP}/musl/exe/ffi-caller")
           cp -R "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl/exe/native"
-          sudo chown -R root:root "${RUNNER_TEMP}/musl/exe/native"
+          # The loader also checks the directory native/ sits in: here the bind mount /opt/caller.
+          sudo chown -R root:root "${RUNNER_TEMP}/musl/exe"
           ls -la "${RUNNER_TEMP}/musl/exe"
 
       - name: compiled leg — every export, Err, 1000 panics, timings, leak phases
@@ -297,6 +301,50 @@ jobs:
           for phase in String 'Vec<u8>' record; do
             run leak "$phase" | tee -a "${RUNNER_TEMP}/exe-leak.out"
           done
+
+      # The image runs as USER 65532, not root, and the loader trusts nothing but root's ownership
+      # of the tree. The legs above run as root, so they cannot show the shipped path: the app
+      # user loading a tree it does not own, read through the same bind mounts.
+      - name: non-root (uid 65532, the image's user) — the bun leg and the compiled leg load the root-owned trees
+        run: |
+          set -euo pipefail
+          docker run --rm --read-only --network none --user 65532:65532 \
+            -e NODE_ENV=production -e TMPDIR=/tmp -e BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 \
+            -v "${RUNNER_TEMP}/musl/app:/work/app:ro" \
+            -v "${RUNNER_TEMP}/musl/native:${BUN_DIR}/native:ro" \
+            -w /work/app "$BUN_IMAGE" bun --conditions=react-server driver.ts all \
+            2> "${RUNNER_TEMP}/bun-nonroot.stderr" | tee "${RUNNER_TEMP}/bun-nonroot.out" \
+            || { tail -n 40 "${RUNNER_TEMP}/bun-nonroot.stderr"; exit 1; }
+          grep -q '^ffi-musl-driver: PASS$' "${RUNNER_TEMP}/bun-nonroot.out"
+          docker run --rm --read-only --network none --user 65532:65532 \
+            -e NODE_ENV=production -e TMPDIR=/tmp \
+            -v "${RUNNER_TEMP}/musl/exe:/opt/caller:ro" --entrypoint /opt/caller/ffi-caller \
+            "$BUN_IMAGE" all 2> "${RUNNER_TEMP}/exe-nonroot.stderr" | tee "${RUNNER_TEMP}/exe-nonroot.out" \
+            || { tail -n 40 "${RUNNER_TEMP}/exe-nonroot.stderr"; exit 1; }
+          grep -q '^ffi-musl-driver: PASS$' "${RUNNER_TEMP}/exe-nonroot.out"
+
+      # The same app user, but a tree it OWNS (read-only, nothing wrong with the bytes): it could
+      # chmod the files writable and rewrite the library after the hash, so the loader must refuse.
+      - name: Proved red — a native/ tree owned by the app user (even read-only) is refused
+        run: |
+          set +e -uo pipefail  # the default shell is bash -e; this step reads exit codes itself
+          mkdir -p "${RUNNER_TEMP}/musl-appowned"
+          cp -R "${RUNNER_TEMP}/musl/native" "${RUNNER_TEMP}/musl-appowned/native"
+          sudo chown -R 65532:65532 "${RUNNER_TEMP}/musl-appowned/native"
+          docker run --rm --read-only --network none --user 65532:65532 \
+            -e NODE_ENV=production -e TMPDIR=/tmp -e BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 \
+            -v "${RUNNER_TEMP}/musl/app:/work/app:ro" \
+            -v "${RUNNER_TEMP}/musl-appowned/native:${BUN_DIR}/native:ro" \
+            -w /work/app "$BUN_IMAGE" bun --conditions=react-server driver.ts all \
+            > "${RUNNER_TEMP}/appowned.out" 2>&1
+          code=$?
+          cat "${RUNNER_TEMP}/appowned.out"
+          if [ "$code" -eq 0 ]; then
+            echo "::error::a native/ tree owned by the app user (uid 65532) loaded: that user can chmod its own files and rewrite the library after the hash"; exit 1
+          fi
+          grep -q 'is owned by uid 65532, but only root may own it' "${RUNNER_TEMP}/appowned.out" || {
+            echo "::error::the app-owned run failed, but not with the loader's ownership refusal"; exit 1
+          }
 
       - name: Job summary (Linux numbers for the research note)
         if: always()
@@ -327,6 +375,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # A report, never a gate: a missing file on a failed run must not
           # add a second red step to the one that matters.
+          exit 0
+
+      # The staged trees are owned by root (and one by 65532), so the runner user could not delete
+      # them: give them back, then remove them, whatever the outcome above. After the summary,
+      # which reads them.
+      - name: Give the root-owned staged trees back and remove them
+        if: always()
+        run: |
+          set +e -uo pipefail  # cleanup is never the red step that matters
+          sudo chown -R "$(id -u):$(id -g)" "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned"
+          chmod -R u+rwX "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned"
+          rm -rf "${RUNNER_TEMP}/musl" "${RUNNER_TEMP}/musl-wrong" "${RUNNER_TEMP}/musl-appowned"
           exit 0
 
   kind-e2e:

@@ -36,7 +36,10 @@ against a host-arch twin or against the shipped image.
     `<dir>/native` (with the integrity manifest from
     `packages/kn-next/src/cli/native-integrity.ts:writeNativeIntegrityManifest`, then the library
     and every directory up to `native/` made read-only, as the image's `COPY --chmod=a-w` leaves
-    them; the workflow then chowns the tree to root, which the loader requires) and `<dir>/needed`.
+    them; the workflow then chowns the tree to root, which the loader requires: root must own the
+    library, its directories, `native/` and the directory `native/` sits in. The musl lane runs
+    the legs as root and as uid 65532 (the image user), proves a 65532-owned tree is refused,
+    and removes the root-owned staged trees at the end) and `<dir>/needed`.
 - `stage-ffi-zone.sh <repo-root> <dest>` uses `git archive` to copy the tracked
   `apps/file-manager` into `<dest>` and lays the `fixtures/ffi-zone` opt-in over it.
   `FFI_E2E_OVERLAY=none` skips the overlay. `FFI_E2E_MUTATION` accepts `none`, `wrong-triple`,

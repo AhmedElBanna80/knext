@@ -1,16 +1,28 @@
 # CPU limit and cold start (design note)
 
 Status: **advisory.** No code, no default change. Any change to the built-in default needs an ADR (see Recommendation).
-Date: 2026-11-20. Base: `integration/v2` at 3fb53a918. Evidence lives in `docs/benchmarks/`.
+Date: 2026-11-21. Base: `integration/v2` at 3fb53a918. Evidence lives in `docs/benchmarks/`.
 
-Every file reference below was checked against that tree.
+Line-number citations refer to the PR head at the time of this round, not to the base. The cited repo paths were
+extracted from this note and diffed against the base (`git diff --numstat 3fb53a918 HEAD -- <paths>`). Changed since the
+base:
+
+- `scripts/bench-cold-start-phases/kind/arms.sh`: 16 insertions, 5 deletions (several hunks). Its line numbers here are
+  from the PR head.
+- `.github/workflows/coldstart-phases-kind-native.yml`: 142 insertions, 38 deletions. The note cites it by name only,
+  with no line numbers.
+- `docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md`: new, 182 insertions.
+
+Also new since the base: the run B data files (`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*`) and
+this note. Every other cited code file and report is unchanged, including the run 1 report
+(`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md`), which is in the base.
 
 ## The question
 
 Should the default CPU limit for a `NextApp` container (1000m today) change, and if so, to what, and by which path?
 
-**Short answer: not the built-in default yet.** The evidence conflicts. Kind and GKE show a gain when the limit goes
-above one CPU. OKE, the target platform, shows none at two CPUs, and its interval excludes gains above 88 ms. A
+**Short answer: not the built-in default yet.** The evidence conflicts. Kind shows a gain when the limit is raised
+above one CPU or removed, and GKE shows one at 4 CPU. OKE, the target platform, shows none at two CPUs, and its interval excludes gains above 88 ms. A
 platform-level setting that an OKE admin can trial is the cheapest option to try, and it needs no knext default change.
 Its gain on OKE is not established.
 
@@ -53,11 +65,18 @@ Its gain on OKE is not established.
 
 | Source | Platform, runtime | Comparison | n per arm | Effect on total | Notes |
 |---|---|---|---|---|---|
-| Kind native, run 1 (`coldstart-phases-kind-native-2026-11-20.md`) | kind on GitHub amd64, node | 1000m vs no limit | 12 | −224 ms (934 to 710) | One run, shared VM |
-| Kind ladder (`coldstart-phases-kind-native-ladder-2026-11-20.md`) | same, node | 1000m vs 2000m / 4000m / no limit | 12 | −324 / −335 / −320 ms | One run. Flat above 2 CPUs. Runner vCPU count not logged |
-| GKE `e2-standard-4` (`cold-start-gke-runtime-and-minimisation-2026-10-01.md`, Run B) | GKE, **Bun** | 1000m vs 4000m | 10 | **−675 ms** (3156 to 2482); Holm p = 0.0005; CI [−850, −553] | The strongest total-level number off kind. Four vCPU is the whole node |
-| OKE phase breakdown (`cold-start-phase-breakdown-2026-10-01.md`, E2) | OKE, Bun | 1 vs 4 CPU | 9 (baseline) | Runtime boot −37 ms (p = 0.0006). First-request leg +258 ms (not significant). Total not usable | The report's verdict: "not worth it". The total was dominated by a roughly 10 s ready-gap artifact |
-| OKE 2026-11-02 (`cpu-boost-and-ready-gap-oke-2026-11-02.md`) | OKE, Bun bench image | 1000m vs limit 2000m, request 250m | 20 | Hodges-Lehmann +141 ms; difference of medians +223 ms, 95% CI [−88, +488]; p = 0.18 | Underpowered. Node placement moves the arm medians by 200 to 360 ms (section 4). The interval excludes gains above 88 ms |
+| Kind native, run 1 (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md`) | kind on GitHub amd64 (`ubuntu-latest`, a floating label, `docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:17`; resolved image and vCPU count not stated in the report), node | 1000m vs no limit (a 64-CPU quota, `docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:26`) | 12 | −224 ms (934 to 710) | One run, shared VM. Control node-1000m 934 ms, bun-1000m 803 ms (no bun-nolimit arm). Absolute times differ from run A and run B, see Run B |
+| Kind run A, ladder (`docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md`) | kind on `ubuntu-latest` (floating label; `docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md:19`; resolved image and vCPU count not logged), node | 1000m vs 2000m / 4000m / no limit | 12 | −324 / −335 / −320 ms | One run. Flat above 2 CPUs. Runner vCPU count not logged |
+| Kind run B, bun set (`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt`) | kind on `ubuntu-latest` (floating label; resolved image and vCPU count not logged), **Bun** | 1000m vs no limit | 12 | −172 ms (1133 to 961) | One run. Node-1000m control 1541 ms. See "Run B" below |
+| GKE `e2-standard-4` (`docs/benchmarks/cold-start-gke-runtime-and-minimisation-2026-10-01.md`, Run B) | GKE, **Bun** | 1000m vs 4000m | 10 | **−675 ms** as the report states it (3156 to 2482 on the rounded medians, which differ by 674); Holm p = 0.0005; CI [−850, −553] | The strongest total-level number off kind. Four vCPU is the whole node |
+| OKE phase breakdown (`docs/benchmarks/cold-start-phase-breakdown-2026-10-01.md`, E2) | OKE, Bun | 1 vs 4 CPU | 9 (baseline) | Runtime boot −37 ms (p = 0.0006). First-request leg +258 ms (not significant). Total not usable | The report's verdict: "not worth it". The total was dominated by a node-local blackhole (the report's term), so the total is not the comparison |
+| OKE 2026-11-02 (`docs/benchmarks/cpu-boost-and-ready-gap-oke-2026-11-02.md`) | OKE, Bun bench image | 1000m vs limit 2000m, request 250m | 20 | Hodges-Lehmann +141 ms; difference of medians +223 ms, 95% CI [−88, +488]; p = 0.18 | Underpowered. Node placement moves the arm medians by 200 to 360 ms (section 4). The interval excludes gains above 88 ms |
+
+**Rounding convention.** Differences in the tables use the printed medians, except where a source report's own unrounded
+difference is quoted. Two rows do that. The GKE row (−675 ms; the printed medians 3156 and 2482 give 674). The OKE
+2026-11-02 row (+223 ms; the printed medians 1276 and 1500 give 224), which is the report's own figure at
+`docs/benchmarks/cpu-boost-and-ready-gap-oke-2026-11-02.md:41`, so it stays 223. Where the prose gives a difference from
+unrounded medians, it says so, as in the run A/run B and run 1 control gaps (14 ms; 607 and 621 ms).
 
 **Sign convention.** Every "difference" here is treatment minus baseline. For the OKE 2026-11-02 run, the treatment is
 the 2000m arm and the baseline is the 1000m arm (`cpu-base`). So +223 ms means the 2000m arm's median was 223 ms
@@ -68,20 +87,26 @@ The same report's `cpu-boost2req` arm (request 1000m, limit 2000m) gave Hodges-L
 
 **The conflict, stated plainly.**
 
-- **Kind and GKE show a gain** of roughly 300 to 700 ms when the limit goes above one CPU.
+- **Kind shows a gain** when the limit is raised above one CPU or removed, and **GKE shows one at 4 CPU.** These are
+  single runs on runners whose absolute times are not comparable (see Run B). Kind on node gives 224 to 335 ms (run 1
+  and run A). Kind on Bun gives 172 ms (run B, no limit rather than a CPU step). GKE on Bun gives 675 ms (1 to 4 CPU
+  only; GKE did not test removing the limit). Read each as a one-run figure; the kind-node values span 224 to 335 ms.
 - **OKE shows none at two CPUs.** The Nov 2 interval excludes a gain larger than 88 ms at 95%. At face value, the
-  kind (−324 ms) and GKE (−675 ms) effects do not reproduce on OKE at two CPUs. A 95% interval from one underpowered
-  run is not proof of no effect, but it is evidence against the size seen elsewhere.
-- **The comparisons are confounded, so the split cannot be attributed to runtime or platform.** The four
-  comparisons differ in three things at once:
-  - **CPU step:** GKE went 1 to 4 CPU. OKE Nov 2 went 1 to 2. OKE Oct 1 went 1 to 4. Kind went 1 to 2 and 1 to 4,
-    on one node.
+  kind effect (−324 ms, node, 1 to 2 CPU) does not reproduce on OKE at two CPUs. The GKE effect (−675 ms) is a 1-to-4
+  CPU step and is not part of this comparison. Comparing the kind-Bun −172 ms
+  with that interval is not a test. The interval is OKE at 2000m against 1000m. The kind-Bun contrast is no limit
+  against 1000m, on a different cluster. A 95% interval from one underpowered run is not proof of no effect, but
+  it is evidence against the size seen elsewhere.
+- **The comparisons are confounded, so the split cannot be attributed to runtime or platform.** The six
+  comparisons in the table differ in three things at once:
+  - **CPU step:** GKE went 1 to 4 CPU. OKE Nov 2 went 1 to 2. OKE Oct 1 went 1 to 4. Kind run A went 1 to 2 and 1 to 4,
+    on one node. Kind run 1 and kind run B went 1000m to no limit.
   - **Platform:** GKE, OKE and kind.
-  - **Runtime:** GKE and both OKE runs used Bun. Kind used node.
+  - **Runtime:** GKE, both OKE runs and kind run B used Bun. Kind run 1 and run A used node.
 
   The closest like-for-like pair is GKE and OKE Oct 1: both Bun at 4 CPU. GKE reports −675 ms on the total. OKE Oct 1
   reports −37 ms on runtime boot only, because its total is unusable. So the one comparable phase is runtime boot, and
-  on OKE it moved 37 ms at 4 CPU, while kind moved it 137 ms at 2 CPU (495 to 358). Neither the runtime nor the
+  on OKE it moved 37 ms at 4 CPU, while kind run A moved it 137 ms at 2 CPU (495 to 358). Neither the runtime nor the
   platform is ruled in or out by this data.
 - **Neither OKE total is clean.** The Nov 2 medians are node-dominated (section 4). The Oct 1 totals were
   blackhole-dominated.
@@ -89,6 +114,47 @@ The same report's `cpu-boost2req` arm (request 1000m, limit 2000m) gave Hodges-L
 The GKE report attributes its gain to CFS throttling of the whole container on shared-core vCPUs. This note does not
 reproduce that. No throttling counter was read on OKE (the Nov 2 report says `nr_throttled` was not readable), and no
 throttling counter was read on kind. Treat the mechanism as open.
+
+### Run B (bun set, 2026-11-21)
+
+Workflow `.github/workflows/coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442 (https://github.com/AhmedElBanna80/knext/actions/runs/44865490442). Harness: integration/v2 merge commit `7e742381a`; the bench branch was deleted after the run. Run 1 used `52a2cff86` (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:16`); run A used `3fb53a918` (Actions run 44725565328). Kind, Bun arms, n = 12 per arm, with the
+node-1000m control. The runner label is `ubuntu-latest`, the same label as run 1 (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:17`) and run A (`docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md:19`). `ubuntu-latest` is a floating alias, so the label does not establish the same runner. The resolved image and the vCPU count are not logged in any run. Data:
+`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*` (combined jsonl, per-arm jsonl, and analysis files).
+Totals are `watch.first_byte` taken unadjusted: `analyze.py:108` reads it with no subtraction. The `watch.t0` key is
+unused by the analysis. (`analyze.py` has its own local `t0`, derived from `wall_start` at line 92, for the controller-log
+windows.)
+
+Reproduce the tables from the repo root with `python3 scripts/bench-cold-start-phases/analyze.py
+docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21.jsonl --no-marker --p95`. Every row has `"marker": false`,
+so `--no-marker` is required. `--p95` adds the p95 column. The output matches
+`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt` except for two rows, `0 autoscaler decides` and `5w
+activator`, which need the control-plane logs. Those logs were not committed, so reproducing them needs `--autoscaler=`
+and `--activator=` with the original files. The rest of the table reproduces from the committed jsonl alone. Methods, as `analyze.py` computes them: p95 is linear
+interpolation between the two nearest order statistics (`q()`, `analyze.py:65-76`). Medians and IQR bounds are printed
+with `:.0f`, and p95 goes through Python `round()` (`analyze.py:145`). Both round exact ties to even. The bracket is the
+IQR: Q1 and Q3 are the medians of the lower and upper halves of the sorted sample. It is not a confidence interval.
+
+| Arm | Median ms | p95 ms | IQR bounds [Q1, Q3] ms |
+|---|---|---|---|
+| bun-1000m | 1133 | 1215 | [1115, 1178] |
+| bun-nolimit | 961 | 985 | [948, 973] |
+| node-1000m (control) | 1541 | 1588 | [1517, 1561] |
+
+- **In run B, no-limit measured 172 ms faster than 1000m** (1133 to 961; one run, n = 12, no CI). In run A, no-limit
+  measured about 320 ms faster than 1000m on node (1556 to 1236; one run, n = 12, no CI).
+- **node-1000m is 14 ms from run A and 607 ms from run 1** (unrounded medians, recomputed from the committed jsonl:
+  1541.2 in run B, 1555.6 in run A, 934.45 in run 1). Run 1's node-1000m control is 934 ms (`docs/benchmarks/data/coldstart-phases-kind-native-2026-11-20-analysis-all.txt`),
+  607 ms below run B and 621 ms below run A (unrounded medians, 934.45 vs 1541.2 and 1555.6). Absolute times drift between runs even for the same arm. The run 1 and run A reports describe their runners as shared VMs (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:17`, `docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md:19`); run B's runner VM type (shared or dedicated) was not logged. Run 1's report says its neighbour noise is uncontrolled (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:170`).
+  So within-run contrasts are the comparisons here. The cross-run gaps (14, 607 and 621 ms) are descriptive, not evidence.
+- **In this run, Bun beats node by 408 ms at 1000m** (1541 to 1133; n = 12, no CI on the difference). Run 1 gives
+  131 ms on the same contrast (803 for bun-1000m against 934 for node-1000m). The within-run gap also moved between runs.
+
+**Conclusion: this does not change the recommendation.** The new data changes one fact. Run B: Bun −172 ms; run A: node −320 ms.
+The data are compatible with runtime dependence, but it is not tested. The no-limit arms come from different runs (node in run 1 and run A, Bun in run B only), and the vCPU count is unlogged, so the runners' capacity is not established. Within-run Bun-vs-node at 1000m is −131 ms in
+run 1 (803 vs 934) and −408 ms in run B (1133 vs 1541), so the Bun advantage also differs by run. Run B has no node-nolimit arm, so the two
+gains were never measured in the same run. The difference itself is not tested either: there is no CI on 320 vs 172 ms. Option 4 stays rejected, on admission and noisy-neighbour risk. Its no-limit gain (about 320 ms on node, run A) is no
+larger than the bounded 2000m and 4000m arms' (−324 and −335 ms, same run), so it adds risk without a larger gain (point estimates from one run, n = 12, no CI). The built-in default stays 1000m / 250m. At 1000m, Bun has two runs (run 1 and run B) and node has two
+(run 1 and run A). No-limit arms: node in run 1 and run A, Bun in run B only. Kind does not decide the default. The OKE A/B in section 4 is still the only test of the 500m / 2000m shape.
 
 ## 3. Options
 
@@ -98,13 +164,13 @@ cold-start metric (request to first byte).
 
 | # | Option | Admission risk | Noisy-neighbour risk | Expected gain on the cold-start metric | Verdict |
 |---|---|---|---|---|---|
-| 1 | **Keep 1000m / 250m built-in; document the opt-in.** | None new. | None new. | None by default. Opt-in users get what they measure: kind −324 ms at 2 CPUs; GKE −675 ms at 4 CPUs (Bun). OKE: none detected at 2 CPUs. | Lowest risk, reversible. This is today's state. |
-| 2 | **Built-in default limit 2000m, request 250m.** | 8:1 ratio. Fails a ratio-4 `LimitRange` (2000 / 250 = 8, above 4). Also fails a `max.cpu` below 2. Every pod adds 1000m to any `limits.cpu` quota. Changes every fleet that falls through to the built-in. | Each concurrent cold start can burst to 2 cores. Moderate. | Kind −324 ms. OKE: none detected; the interval excludes gains above 88 ms. Plausible range 0 to about 300 ms. The OKE evidence argues against the top of that range. | Not as is. It breaks the ratio-4 clusters that the 4000m revert protected, at half the size. |
+| 1 | **Keep 1000m / 250m built-in; document the opt-in.** | None new. | None new. | None by default. Opt-in users get what they measure: kind, node: −324 ms at 2 CPUs; GKE −675 ms at 4 CPUs (Bun). OKE: none detected at 2 CPUs. | Lowest risk, reversible. This is today's state. |
+| 2 | **Built-in default limit 2000m, request 250m.** | 8:1 ratio. Fails a ratio-4 `LimitRange` (2000 / 250 = 8, above 4). Also fails a `max.cpu` below 2. Every pod adds 1000m to any `limits.cpu` quota. Changes every fleet that falls through to the built-in. | Each concurrent cold start can burst to 2 cores. Moderate. | Kind, node: −324 ms. OKE: none detected; the interval excludes gains above 88 ms. A range of 0 to about 300 ms is a judgement, not a measured or sourced range. The OKE evidence argues against its top. | Not as is. It breaks the ratio-4 clusters that the 4000m revert protected, at half the size. |
 | 3 | **Built-in default: 500m request, 2000m limit (ratio 4).** | Passes a ratio-4 `LimitRange`. Each pod reserves 500m instead of 250m, so any `requests.cpu` quota and node packing halve in density. The risk moves from the ratio to the quota. | Same burst as option 2, plus more reserved CPU. | Not measured at 500m / 2000m. The OKE request-1000m arm is a different shape and was underpowered. | A candidate to test. It needs its own A/B and an ADR before it becomes the built-in. |
-| 4 | **No limit by default.** | A ResourceQuota on `limits.cpu` rejects any pod without a limit. A `LimitRange` default re-injects a limit, so "no limit" silently becomes that limit. The operator always renders a limit (`scripts/bench-cold-start-phases/kind/arms.sh:14-16`), so this changes the operator contract, not just the number. | Highest. A cold-starting pod can take every free core on the node, and nothing caps a misbehaving app. | Kind −320 ms (ladder) and −224 ms (run 1). Not measured on OKE. | Reject as a default. The largest kind gain carries the largest risk. |
-| 5 | **In-place resize after the first request is served.** | Create-time admission is unchanged if the starting limit stays at 1000m. The sprint-16 close note says the pod "must still be admitted with the high limit". That assumes the `LimitRange` ratio also runs on the resize; this was not verified. Needs `InPlacePodVerticalScaling` on OKE (not verified). Knative does not own a pod-level patch, so a Service reconcile can revert it. | Bounded by the resized limit, but only from the first request onward. | Near zero on the metric this note tracks. Cold start is request to first byte, and the resize happens after that request is served, so it cannot shorten the wake that triggered it. It helps later requests on a warm pod. | Not a cold-start fix as specified. Needs its own measurement. |
-| 6 | **Platform default set by an OKE admin: `KnextPlatform` `resources.defaults` `cpuRequest` 500m, `cpuLimit` 2000m.** | Admin-owned, per cluster. The admin checks `kubectl get limitrange -A` first. With the 500m request it passes a ratio-4 `LimitRange`. Each pod reserves 500m. No ResourceQuota is changed by knext. | Same burst as option 3, on the clusters that opt in only. | Same plausible range as option 3 (0 to about 300 ms), unmeasured on OKE at 500m / 2000m. Only apps with none of the four resource fields set get it (the CLI back-fill shadows it otherwise). | **An admin opt-in trial, not an established gain.** It needs no knext default change, no CLI change, and no ADR, because it sets an existing field on one cluster, and it is reversible. On OKE, no gain is detected at 2000m, and the 500m / 2000m shape has not been measured anywhere. The admin's own A/B is the only test of it. |
-| 7 | **CLI default for new scaffolds only:** the emitter writes `scaling.cpuRequest` 500m and `cpuLimit` 2000m into new `knext.config.ts`. | New apps only. A 500m request passes a ratio-4 `LimitRange`. Each new pod reserves 500m. The emitter in `packages/kn-next/src/cli/create-options.ts` writes no resource field today, so this is a new emitted field. | Same as option 3, for new apps. | Only for apps created after the change. Existing apps keep 1000m. Same plausible range as option 3, unmeasured. | Low admission risk, but it splits the fleet (new apps differ from old) and makes any later measurement harder. Changes user-visible scaffold output, so it needs docs and a changeset. Decide after the OKE result. |
+| 4 | **No limit by default.** (The "no limit" arms are a 64-CPU quota, `arms.sh:54,56`, not an absent limit.) | A ResourceQuota on `limits.cpu` rejects any pod without a limit. A `LimitRange` default re-injects a limit, so "no limit" silently becomes that limit. The operator always renders a limit (`scripts/bench-cold-start-phases/kind/arms.sh:20-22`), so this changes the operator contract, not just the number. | Highest. A cold-starting pod can take every free core on the node, and nothing caps a misbehaving app. | Kind, node: −320 ms (run A, ladder) and −224 ms (run 1). Kind, Bun: −172 ms (run B). Not measured on OKE. | Reject as a default. The 2000m and 4000m arms already give −324 and −335 ms with a bounded limit, so the no-limit arm adds risk without a larger gain (point estimates from one run, n = 12, no CI). |
+| 5 | **In-place resize after the first request is served.** | Create-time admission is unchanged if the starting limit stays at 1000m. The assumption that the pod is still admitted with the high limit is not sourced. It assumes the `LimitRange` ratio also runs on the resize; this was not verified. Needs `InPlacePodVerticalScaling` on OKE (not verified). Knative does not own a pod-level patch, so a Service reconcile can revert it. | Bounded by the resized limit, but only from the first request onward. | Near zero on the metric this note tracks. Cold start is request to first byte, and the resize happens after that request is served, so it cannot shorten the wake that triggered it. It helps later requests on a warm pod. | Not a cold-start fix as specified. Needs its own measurement. |
+| 6 | **Platform default set by an OKE admin: `KnextPlatform` `resources.defaults` `cpuRequest` 500m, `cpuLimit` 2000m.** | Admin-owned, per cluster. The admin checks `kubectl get limitrange -A` first. With the 500m request it passes a ratio-4 `LimitRange`. Each pod reserves 500m. No ResourceQuota is changed by knext. | Same burst as option 3, on the clusters that opt in only. | Same judgement range as option 3 (0 to about 300 ms, not sourced), unmeasured on OKE at 500m / 2000m. Only apps with none of the four resource fields set get it (the CLI back-fill shadows it otherwise). | **An admin opt-in trial, not an established gain.** It needs no knext default change, no CLI change, and no ADR, because it sets an existing field on one cluster, and it is reversible. On OKE, no gain is detected at 2000m, and the 500m / 2000m shape has not been measured anywhere. The admin's own A/B is the only test of it. |
+| 7 | **CLI default for new scaffolds only:** the emitter writes `scaling.cpuRequest` 500m and `cpuLimit` 2000m into new `knext.config.ts`. | New apps only. A 500m request passes a ratio-4 `LimitRange`. Each new pod reserves 500m. The emitter in `packages/kn-next/src/cli/create-options.ts` writes no resource field today, so this is a new emitted field. | Same as option 3, for new apps. | Only for apps created after the change. Existing apps keep 1000m. Same judgement range as option 3, unmeasured. | Low admission risk, but it splits the fleet (new apps differ from old) and makes any later measurement harder. Changes user-visible scaffold output, so it needs docs and a changeset. Decide after the OKE result. |
 
 Notes on the table:
 
@@ -127,10 +193,11 @@ many wakes are needed.
   sets it. 300 ms is shown as well.
 - **SD: σ = 345 ms.** Pooled within-arm sample SD of the total, from
   `docs/benchmarks/data/cpu-boost-oke-2026-11-02.jsonl`: 60 wakes, 3 arms, residuals about each arm's mean, n − 3
-  degrees of freedom. Per arm: 315 ms (`cpu-base`), 324 ms (`cpu-boost2`), 390 ms (`cpu-boost2req`). A robust
-  cross-check: the `cpu-base` IQR of 376 ms gives σ ≈ 279 ms, so 280 ms is the low case.
+  degrees of freedom (divisor 57). The same residuals divided by N = 60 give 336 ms; the node decomposition below uses that divisor. Per arm: 315 ms (`cpu-base`), 324 ms (`cpu-boost2`), 390 ms (`cpu-boost2req`). A robust
+  cross-check: the `cpu-base` IQR of 369 ms (median of halves, n = 20) gives σ ≈ 273 ms, close to the 280 ms low case used in the table.
+  *Correction:* an earlier version of this note gave 376 ms, which is `statistics.quantiles` exclusive. The note's method gives 369 ms.
 - **Consistency check.** With σ = 345 ms and n = 20, the predicted 95% half-width of the difference of medians is
-  about 268 ms. The Nov 2 report's bootstrap gave 288 ms. So σ = 345 ms reproduces the report.
+  about 268 ms. The 288 ms is a half-width derived here from the report's 95% bootstrap CI [−88, +488] (`docs/benchmarks/cpu-boost-and-ready-gap-oke-2026-11-02.md:41`): (488 − (−88)) / 2. The report does not state a half-width. So 268 is close to 288 (268 vs 288 ms).
 - **α = 0.05** two-sided; **power = 0.80**.
 - **Estimator: the median.** For roughly normal data the median's variance is π/2 ≈ 1.57 times the mean's. Cold-start
   totals are right-skewed, so this is an approximation.
@@ -156,7 +223,7 @@ Power is about 19% at δ = 150 ms and about 59% at δ = 300 ms. So N = 20 cannot
 
 **Corrections to the earlier version of this note.** A 95% half-width of 150 ms means SE ≈ 76.5 ms, which gives about
 50% power at δ = 150 ms, not 80%. For 80% power the standard error must be about δ / 2.80 ≈ 54 ms. That is a 95% half-width of about
-105 ms, not 54 ms. The "hundreds of wakes" figure holds for δ = 100 ms (294 per arm), not for δ = 150 ms (131 per arm).
+105 ms, not the 54 ms SE. The "hundreds of wakes" figure holds for δ = 100 ms (294 per arm), not for δ = 150 ms (131 per arm).
 
 **Pinning nodes.** Two effects, one large and one small.
 
@@ -164,14 +231,14 @@ Power is about 19% at δ = 150 ms and about 59% at δ = 300 ms. So N = 20 cannot
   `cpu-boost2`; 7 and 13 for `cpu-boost2req`). Within one arm, the median differs by 200 to 360 ms between the two
   nodes. That confounds the arm comparison. Pinning all arms to one node, or balancing them across two identical
   nodes, removes this bias. This is the main reason to pin.
-- **Variance (small).** The within-arm SD is 336 ms; the within-arm-by-node SD is 322 ms. So the node component is
+- **Variance (small).** Both use divisor N = 60: the within-arm SD is 336 ms, and the within-arm-by-node SD is 322 ms (residuals about the 6 cell means). So the node component is
   about sqrt(336² − 322²) ≈ 96 ms of SD, under 10% of the variance. Pinning would cut n by about 8% (131 to about 120
   at δ = 150 ms). **Low confidence:** 60 wakes across two nodes, with cells of 6 to 14.
 
 **Paired or interleaved on one pinned node.** The reviewer suggested this to remove the node effect. It removes the
 node effect, but that effect is small in variance terms (above), so it does not cut n. Pairing by round does not help
-either: there are 20 rounds of about three wakes, and the SD of round means is 170 ms, against about 194 ms expected
-if wakes were independent (336 / √3). No shared round component is visible, so the within-pair correlation is about
+either: there are 20 rounds of about three wakes, and the SD of round means is 170 ms (population SD; 174 with n−1), against about 194 ms expected
+if wakes were independent (336 / √3, divisor N as above). No shared round component is visible, so the within-pair correlation is about
 zero, and the paired variance equals the unpaired variance. Interleaving still guards against drift over time, which
 this data cannot test.
 
@@ -216,15 +283,16 @@ Suggested, for review against the evidence above:
 6. **Any built-in default change needs an ADR.** The same PR must move `defaults.go`, `cr-builder.ts`, and the
    `config.ts` doc comment together.
 7. **Founder access is required for any OKE run.** It is not in this sprint's scope and this note does not assume it.
-8. **Drop option 4.** Option 5 needs a measurement of resize admission before it is worth an ADR.
+8. **Reject option 4 as a default,** on admission and noisy-neighbour risk, for the reason in section 3 (its no-limit
+   gain is no larger than the bounded 2000m and 4000m arms' (point estimates from one run, n = 12, no CI), so it adds risk without a larger gain). Option 5 needs a measurement of resize admission before it is worth an ADR.
 
 ## 6. Open questions
 
-- Does a `LimitRange` ratio check run on the pod resize subresource? The sprint-16 close note assumes it does without
-  citing a source. A kind test would settle this.
+- Does a `LimitRange` ratio check run on the pod resize subresource? The note's assumption that it does is not
+  sourced. A kind test would settle this.
 - What is the OKE node shape? The Nov 2 report records 3815m allocatable CPU per node, and nothing else in the
   reviewed notes.
 - Does OKE have a `KnextPlatform` installed, and what does its `resources.defaults` hold? Not checked.
-- How many cores does the kind runner have? The ladder run did not log it. The next run should.
-- Does the OKE gap in runtime boot (−37 ms at 4 CPUs) and the kind gap (−137 ms at 2 CPUs) reflect the same effect at
+- How many cores does the kind runner have? Runs 1, A and B did not log the vCPU count. The next run should.
+- Does the OKE gap in runtime boot (−37 ms at 4 CPUs) and the kind run A gap (−137 ms at 2 CPUs) reflect the same effect at
   different sizes, or a different effect? The data cannot say.

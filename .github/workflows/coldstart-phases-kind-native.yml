@@ -419,10 +419,11 @@ jobs:
             ev="${out}/evidence-${arm}.json"
             # The versions the arm's app actually resolved (shared by every arm with this key).
             versions="$(cd "${RUNNER_TEMP}/zone-${key}" && node -e "const o={}; for (const n of ['next','react','react-dom']) o[n]=require('./node_modules/'+n+'/package.json').version; console.log(JSON.stringify(o))")"
-            # vinext omits spec.runtime, so its empty read is recorded as null, never "": an empty string
-            # would look like a failed read. Non-vinext arms were checked against $runtime above.
+            # vinext omits spec.runtime, so an EMPTY read is recorded as null, never "": an empty string
+            # would look like a failed read. A non-empty value is kept as read. Non-vinext arms were
+            # checked against $runtime above, so their read is never empty here.
             jq --arg sb "${spec_build:-turbopack}" --arg sr "$spec_runtime" --arg b "$build" --arg cpu "$cpulimit" --argjson v "$versions" \
-              '. + {spec_build: $sb, spec_runtime: (if $b == "vinext" then null else $sr end), cpu_limit: $cpu, versions: $v}' "$ev" > "${ev}.tmp"
+              '. + {spec_build: $sb, spec_runtime: (if $sr == "" and $b == "vinext" then null else $sr end), cpu_limit: $cpu, versions: $v}' "$ev" > "${ev}.tmp"
             mv "${ev}.tmp" "$ev"
           done 3< "${RUNNER_TEMP}/arms.txt"
           # next must match on every scaffold arm and react within a build tool; react may differ

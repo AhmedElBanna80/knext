@@ -1587,7 +1587,8 @@ describe('workflow wiring of the evidence and version checks', () => {
 
   it('records spec_runtime as JSON null for vinext arms, never as an empty string', () => {
     // vinext omits spec.runtime from the CR, so its read is legitimately empty. An empty string in
-    // the evidence would look exactly like a failed read, so the filter maps vinext to null. Run the
+    // the evidence would look exactly like a failed read, so the filter maps an EMPTY vinext read to
+    // null (a non-empty vinext value is kept). Run the
     // workflow's own jq filter, not a text match, against a vinext arm and a bun arm.
     const m = text.match(/'(\. \+ \{spec_build: \$sb, [^']*\})'/);
     expect(m).not.toBeNull();
@@ -1621,6 +1622,8 @@ describe('workflow wiring of the evidence and version checks', () => {
       return JSON.parse(r.stdout) as { spec_runtime: unknown };
     };
     expect(run('vinext', '').spec_runtime).toBeNull();
+    // A vinext CR that does emit a runtime keeps it: only an empty read is mapped to null.
+    expect(run('vinext', 'bun').spec_runtime).toBe('bun');
     expect(run('turbopack', 'bun').spec_runtime).toBe('bun');
     expect(run('turbopack', 'node').spec_runtime).toBe('node');
   });

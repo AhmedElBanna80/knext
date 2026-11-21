@@ -100,6 +100,56 @@ async function waitFor(check: () => boolean, ms = 20_000) {
   return check();
 }
 
+/**
+ * The lane's OWN variables must not leak into the runner under test. This spec runs INSIDE the nightly lane
+ * (a prover grades it), where `PROVER_LANE_SHA` is the plan's pinned sha: the fixture repo's HEAD is not
+ * that sha, so the runner fataled before it ever ran the fixture prover, the file never became MUTATED and
+ * the prover's baseline went red on CI while staying green locally. Same list the sharding spec scrubs.
+ */
+export const LANE_ENV = [
+  'PROVER_LANE_SHA',
+  'PROVER_LANE_REF',
+  'KNEXT_PROVER_TIMEOUT_MS',
+  'KNEXT_LANE_CARGO_TARGET_DIR',
+  'KNEXT_RUST_CODEGEN_DIR',
+  'CARGO_TARGET_DIR',
+  'KNEXT_LANE_CLEANUP',
+  'KNEXT_LANE_MIN_FREE_DISK_MIB',
+  'KNEXT_LANE_MIN_AVAIL_MEM_MIB',
+  'KNEXT_LANE_SOFT_FREE_DISK_MIB',
+  'KNEXT_LANE_KILL_AVAIL_MEM_MIB',
+  'KNEXT_LANE_MEMINFO_PATH',
+  'KNEXT_LANE_SAMPLE_MS',
+  'KNEXT_LANE_WATCH_MS',
+  'KNEXT_LANE_EXTRAS_CMD',
+];
+
+/** The env the fixture runner gets: ambient minus the lane's own variables, plus the restore opt-in. */
+export function runnerEnv(ambient: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string | undefined> = { ...ambient };
+  for (const k of LANE_ENV) delete env[k];
+  return { ...env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' } as Record<
+    string,
+    string
+  >;
+}
+
+describe('the fixture runner env is hermetic against the nightly lane variables', () => {
+  it('drops PROVER_LANE_SHA and every other lane variable, keeps the unrelated ones', () => {
+    const env = runnerEnv({
+      PROVER_LANE_SHA: 'a'.repeat(40),
+      PROVER_LANE_REF: 'integration/v2',
+      KNEXT_LANE_CLEANUP: '1',
+      GITHUB_ACTIONS: 'true',
+      PATH: '/usr/bin',
+    });
+    for (const k of LANE_ENV) expect(k in env).toBe(false);
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.KNEXT_LANE_RESTORE_AFTER_KILL).toBe('1');
+    expect(env.GITHUB_ACTIONS).toBe('');
+  });
+});
+
 describe('the fixture kill never targets the test process group (ROUND 4 item 4)', () => {
   it('safeGroupsToKill drops the test process own group and keeps every other fixture group', () => {
     expect(safeGroupsToKill([101, 4242, 303], 4242)).toEqual([101, 303]);
@@ -113,7 +163,7 @@ describe('a signal to the lane runner restores the tree its killed prover left (
     const dir = fixtureRepo();
     const proc = Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
       cwd: dir,
-      env: { ...process.env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' },
+      env: runnerEnv(),
       stdout: 'ignore',
       stderr: 'ignore',
     });
@@ -138,7 +188,7 @@ describe('a signal to the lane runner restores the tree its killed prover left (
     const dir = fixtureRepo();
     const proc = Bun.spawn(['node', join(dir, 'scripts', 'run-mutation-provers.mjs')], {
       cwd: dir,
-      env: { ...process.env, KNEXT_LANE_RESTORE_AFTER_KILL: '1', GITHUB_ACTIONS: '' },
+      env: runnerEnv(),
       stdout: 'ignore',
       stderr: 'ignore',
     });

@@ -3,7 +3,7 @@
 # the tag in UPSTREAM plus patches/*.patch, for ONE linux-gnu target, linked against the glibc 2.31
 # sysroot step 1 produced. Derived from infra/bun-base/build.sh (same pins and the same
 # prefetch-cache proof for the prebuilt WebKit); the differences are the source (a release tag,
-# not a main commit), LLVM 23 (bun-v1.4.4's scripts/build/ci-images/spec.ts pins clang 23.1.x;
+# not a main commit), LLVM 23 (bun-v1.4.5's scripts/build/ci-images/spec.ts pins clang 23.1.x;
 # scripts/build/tools.ts accepts any 23.1 patch release) and glibc instead of musl.
 #
 # This binary is the opt-in `compile.bun: 'knext-patched'` toolchain: knext runs it for the
@@ -26,8 +26,8 @@ LLVM_MAJOR=23
 # apt.llvm.org archive signer, grouped the way `gpg --fingerprint` prints it (see
 # infra/bun-base/README.md "Secret-scan hygiene"); compared with spaces stripped.
 LLVM_SIGNER_FPR='6084 F3CF 814B 57C1 CF12  EFD5 15CF 4D18 AF4F 7421'
-# bun-v1.4.4's ci-images/spec.ts pins the bootstrap Bun at 1.4.2 too.
-BOOTSTRAP_BUN=1.4.2
+# bun-v1.4.5's ci-images/spec.ts pins the bootstrap Bun at 1.4.4.
+BOOTSTRAP_BUN=1.4.4
 RUSTUP_VERSION=1.29.1
 pin() { # pin <file-in-cwd>: exactly one fetch-pins.sha256 line, and it must match
   local line
@@ -79,7 +79,7 @@ pin bun-linux-x64.zip
 curl -fsSLO "$base/SHASUMS256.txt"
 grep -qxF "$(grep -E '  bun-linux-x64\.zip$' "$WS/fetch-pins.sha256")" SHASUMS256.txt
 unzip -q bun-linux-x64.zip && install -m755 bun-linux-x64/bun /usr/local/bin/bun
-# Stock 1.4.2 is also smoke.sh's negative control.
+# Stock 1.4.4 is also smoke.sh's negative control.
 install -m755 bun-linux-x64/bun "$WS/stock-bun"
 curl --proto '=https' --tlsv1.2 -fsSLo /tmp/rustup-init \
   "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init"

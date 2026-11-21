@@ -1,13 +1,13 @@
-From be9e1c8bcc93233c5e4cfde7a7ad1b8b4520608c Mon Sep 17 00:00:00 2001
+From abb5dfa128f16d2783355137b955408aa0d2d8ae Mon Sep 17 00:00:00 2001
 From: Ahmed ElBanna <AhmedElBanna80@users.noreply.github.com>
 Date: Fri, 2 Oct 2026 00:00:00 +0000
 Subject: [PATCH] compile: --include embeds extra files as lazily loaded
  modules
 
-Backport of oven-sh/bun#44059 (feat/compile-include, head 903936e16a6b) onto bun-v1.4.4
-(38afee6c84fcf48c0edb2466aa4b27d287a59c30). The 17 non-merge commits of the PR, cherry-picked
+Backport of oven-sh/bun#44059 (feat/compile-include, head 903936e16a6b) onto bun-v1.4.5
+(a7733435cf40429e3b35c36072769df2052b80f1). The 17 non-merge commits of the PR, cherry-picked
 in order and squashed into this one patch (first onto bun-v1.4.2 with no conflicts; carried to
-bun-v1.4.4 with `git am --3way`, which merged the 1.4.2..1.4.4 upstream edits to
+bun-v1.4.4 and then bun-v1.4.5 with `git am --3way` (1.4.5 applied with no conflicts), which merged the 1.4.2..1.4.4 upstream edits to
 docs/bundler/executables.mdx, bun.d.ts, context.rs, JSBundler.rs, Arguments.rs and
 build_command.rs without conflicts):
 

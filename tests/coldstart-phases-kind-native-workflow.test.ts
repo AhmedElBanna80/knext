@@ -1585,6 +1585,46 @@ describe('workflow wiring of the evidence and version checks', () => {
     }
   });
 
+  it('records spec_runtime as JSON null for vinext arms, never as an empty string', () => {
+    // vinext omits spec.runtime from the CR, so its read is legitimately empty. An empty string in
+    // the evidence would look exactly like a failed read, so the filter maps vinext to null. Run the
+    // workflow's own jq filter, not a text match, against a vinext arm and a bun arm.
+    const m = text.match(/'(\. \+ \{spec_build: \$sb, [^']*\})'/);
+    expect(m).not.toBeNull();
+    const filter = m?.[1] ?? '';
+    expect(filter).not.toMatch(/spec_runtime: \$sr[,}]/);
+    const run = (build: string, runtime: string) => {
+      const r = spawnSync(
+        'jq',
+        [
+          '-c',
+          '--arg',
+          'sb',
+          'turbopack',
+          '--arg',
+          'sr',
+          runtime,
+          '--arg',
+          'b',
+          build,
+          '--arg',
+          'cpu',
+          '1000m',
+          '--argjson',
+          'v',
+          '{"next":"16.4.5"}',
+          filter,
+        ],
+        { input: '{"arm":"x"}', encoding: 'utf8' },
+      );
+      expect(r.status).toBe(0);
+      return JSON.parse(r.stdout) as { spec_runtime: unknown };
+    };
+    expect(run('vinext', '').spec_runtime).toBeNull();
+    expect(run('turbopack', 'bun').spec_runtime).toBe('bun');
+    expect(run('turbopack', 'node').spec_runtime).toBe('node');
+  });
+
   it('keeps every comment line at 110 columns or fewer', () => {
     const long = text
       .split('\n')

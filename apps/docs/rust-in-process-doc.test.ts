@@ -757,7 +757,7 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed), on `0c07c17`, where all of them and `Lint & Test` were green, on `78b7acf` (where `Lint & Test` was red, on a type error in two tests, since fixed) and on `d4d7a76`, where all of them and `Lint & Test` were green; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed), on `0c07c17`, where all of them and `Lint & Test` were green, on `78b7acf` (where `Lint & Test` was red, on a type error in two tests, since fixed) on `d4d7a76`, where all of them and `Lint & Test` were green, and on `0ab20db`, where the musl load matrix, the kind e2e and the Rust crates lane were green and `Lint & Test` was red on one timing assertion of a two-process test this change does not touch (`use-cache-redis-served`; it passes on the same tree when run alone); they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
     );
     // The CI result on the previous head is recorded, with the one red and how it was fixed.
     expect(amendment).toContain('b4d81ae9b346023ddea03b5a6c5124588c8d2b3d');
@@ -789,7 +789,22 @@ describe('docs — in-process Rust page', () => {
     expect(flatAdr).toContain('The whole file has to be clean as well, **judged first**');
     expect(flatAdr).toContain('no `<<` anywhere in it');
     expect(flatAdr).toContain('no `escape` or `syntax` parser directive on any line');
-    expect(flatAdr).toContain('no `SHELL` instruction in any stage');
+    expect(flatAdr).toContain('no `SHELL` or `ONBUILD` instruction in any stage');
+    expect(flatAdr).toContain("BuildKit runs a parent stage's `ONBUILD` triggers");
+    expect(flatAdr).toContain('does not start with an instruction Docker knows');
+    expect(flatAdr).toContain("BuildKit's syntax detection also reads a `// syntax=` line");
+    expect(flatAdr).toContain('no line that ends in a backslash that no space or tab precedes');
+    expect(flatAdr).toContain(
+      "drops the backslash and joins the next line to it directly, with no space between and that line's indent kept",
+    );
+    expect(flatAdr).toContain(
+      "Go's `ToLower`, which BuildKit applies to a keyword, folds U+0130 and U+212A",
+    );
+    expect(flatAdr).toContain(
+      '`VINEXT_SYNTAX_LINE` (the first line of the scaffolded `Dockerfile`, byte for byte)',
+    );
+    expect(flatAdr).toContain('the spellings of a `COPY` it reads');
+    expect(flatAdr).not.toContain('in any spelling of the `COPY`');
     expect(flatAdr).toContain('and no character a reader may take for something else');
     expect(flatAdr).toContain('a read-only check of the shape `RUN test -f <path> ||');
     expect(flatAdr).toContain(
@@ -936,9 +951,14 @@ describe('docs — in-process Rust page', () => {
     expect(flat).toContain('The whole file has to be clean as well');
     expect(flat).toContain('no `<<` anywhere');
     expect(flat).toContain('no `escape` or `syntax` parser directive on any line');
-    expect(flat).toContain('no `SHELL` instruction in any stage');
+    expect(flat).toContain('no `SHELL` or `ONBUILD` instruction in any stage');
+    expect(flat).toContain('no line that does not start with an instruction Docker knows');
+    expect(flat).toContain('no line ending in a backslash that no space or tab precedes');
+    expect(flat).toContain('a control or invisible format character (a byte-order mark)');
+    expect(flat).not.toContain('space-like, control or invisible character');
+    expect(flat).not.toContain('`ksh`');
     expect(flat).toContain('a read-only check of the shape');
-    expect(flat).toContain('is told so whenever it mentions `native/` at all');
+    expect(flat).toContain('is told so whenever it mentions native at all');
     expect(flat).not.toContain('the scaffolded read-only check');
     expect(flat).toContain('and never say that the loader will accept the directories');
     expect(flat).not.toContain('read the way a shell reads them');
@@ -965,7 +985,13 @@ describe('docs — in-process Rust page', () => {
       'The whole file has to be clean as well, judged before anything else is looked at',
     );
     expect(flatChangeset).toContain('no `escape` or `syntax` parser directive on any line');
-    expect(flatChangeset).toContain('no `SHELL` instruction in any stage');
+    expect(flatChangeset).toContain('no `SHELL` or `ONBUILD` instruction in any stage');
+    expect(flatChangeset).toContain('no line that does not start with an instruction Docker knows');
+    expect(flatChangeset).toContain('no line ending in a backslash that no space or tab precedes');
+    expect(flatChangeset).toContain('a control or invisible format character');
+    expect(flatChangeset).not.toContain('space-like, control or invisible character');
+    expect(flatChangeset).toContain('whenever it mentions native at all');
+    expect(flatChangeset).not.toContain('`ksh`');
     expect(flatChangeset).not.toContain('the scaffolded read-only check');
     expect(flatChangeset).toContain('refuse unless bash runs them');
     expect(flatChangeset).not.toContain('refuse under `sh`');

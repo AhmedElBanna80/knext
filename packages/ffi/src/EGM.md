@@ -101,24 +101,27 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     but a space and a tab, a control or invisible format character, an invalid byte, a carriage return that does not end a line; visible
     non-ASCII is allowed, the scaffolded file carries em dashes), no `<<` anywhere, no `escape` or `syntax` directive
     on any line (only the scaffolded file's own pinned `VINEXT_SYNTAX_LINE`, as its first line and byte for byte, passes;
-    `ffi-vinext-known-good.test.ts` holds it to the shipped template), and no `SHELL` instruction in any stage. A file that
+    `ffi-vinext-known-good.test.ts` holds it to the shipped template), no `SHELL` or `ONBUILD` instruction in any stage, no
+    line in any stage (or before the first `FROM`) that does not start with an instruction Docker knows (`INSTRUCTIONS`: a
+    `// syntax=` line is one BuildKit reads as a directive), and no line ending in a backslash that no space or tab precedes
+    (`GLUED_CONTINUATION`: a lone backslash, a word split in two). A file that
     is not clean as a whole gets the cannot-confirm message whenever it mentions `native` at all. Lines are
-    trimmed of a space, a tab and a carriage return only and continue only at a backslash then spaces and tabs, as BuildKit reads
-    them (`instructions`, all stages, a continuation that runs into the end of the file kept). Then the final stage
+    trimmed of a space, a tab and a carriage return only and continue only at a backslash then spaces and tabs, and are joined as BuildKit joins
+    them: the backslash goes, nothing takes its place, the next line keeps its indent (`instructions`, all stages, a continuation that runs into the end of the file kept). Then the final stage
     only is read (a `COPY` or a `chmod` in a build stage does not reach the image). When that stage copies `native/` to `/app/native` (any `COPY` flags, the JSON
     form, `--from=`, trailing slashes, quotes, `.` components, a relative destination under a `WORKDIR` that can be
-    read, line continuations and lower case are found; the destination is `VINEXT_DIRS[1]`), the output is empty only
+    read, line continuations and lower case are found; an `ADD` or a destination in a variable is not, and nothing is said; the destination is `VINEXT_DIRS[1]`), the output is empty only
     when the `COPY` is exactly `VINEXT_NATIVE_COPY`, `VINEXT_CLOSE_LINE` is the very next line of the file (each is one physical line compared as the file has it, so a blank line,
     a comment or a space fails it, as it fails `deploy`'s byte-for-byte recognition), and every instruction after the line is `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`,
-    `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL` or a read-only `RUN test -<x> <path> || { echo "<text>"
-    >&2; exit 1; }` (`READ_ONLY_RUN`, matched whole; the scaffolded check is one; the text holds no `$`, backtick, backslash or quote). Any other `RUN`, a
+    `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL` or a read-only `RUN test -f <path> || { echo "<text>"
+    >&2; exit 1; }` (`READ_ONLY_RUN`, matched whole, runs of spaces and tabs between its words because the scaffolded check is written over several lines; the scaffolded check is one; the text holds no `$`, backtick, backslash or quote). Any other `RUN`, a
     `COPY` or `ADD`, `ONBUILD`, `SHELL`, `VOLUME` or an instruction it does not know is not confirmed. When the line is
     not directly after the `COPY`, the output says to add `VINEXT_CLOSE_LINE` there (before `USER`, changing nothing
     else, and why: knext recognises the scaffolded Dockerfile with just that line, so the app keeps the build and
     asset upload it has) and that a Dockerfile that closes them another way may load, but is not read, and takes the
     slower image-sourced path. When it is directly after but one of the above fails, the output says that knext cannot
     confirm that `/app` and `/app/native` stay closed, and which it was (the `COPY` is another spelling, a blank
-    line or a comment sits between, a line number for an unread instruction or for a character that is not plain text, a heredoc, a directive, a `SHELL`), never the text of the
+    line or a comment sits between, a line number for an unread instruction, for a line that does not start with an instruction, for a glued continuation or for a character that is not plain text, a heredoc, a directive, a `SHELL`, an `ONBUILD`), never the text of the
     file (a control character in it would reach the terminal). Neither message says the loader will accept the
     directories. An app with no `Dockerfile`, or one that does not copy `native/` there, or that is the confirmed
     form, gets no extra output. `knext ffi generate` and `knext ffi check` print the same hint after their own line, so

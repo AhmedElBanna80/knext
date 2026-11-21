@@ -110,8 +110,10 @@
  *   Init hint (`knext ffi init`, proved against init.test.ts, its own spec). The hint does not read
  *   what a command does: it confirms ONE form (the scaffolded COPY, the close line as the very next
  *   line of the file, byte for byte, then only instructions that cannot change a mode and the one
- *   read-only RUN, in a file that is clean as a whole: no unreadable character, no heredoc, no
- *   escape or syntax directive and no SHELL in any stage) and everything else
+ *   read-only RUN, in a file that is clean as a whole: no unreadable character, no continuation
+ *   backslash that no space or tab precedes, no heredoc, no escape or syntax directive, no SHELL or
+ *   ONBUILD in any stage and no line that does not start with an instruction Docker knows) and
+ *   everything else
  *   prints. Each row below widens that rule by one clause, or lets one named form through, and the
  *   spec must go red:
  *   V01  the confirmed form is told it cannot be confirmed    V02  no native/ COPY is told anyway
@@ -120,6 +122,16 @@
  *   V08  "change nothing else" is dropped    V09  the JSON form of COPY is not read
  *   V10  COPY flags are not skipped    V11  a trailing slash on the destination
  *   V12  a backslash continuation is not joined    V13  every stage is read, not the final one
+ *   V120 to V126  the join: a space is put between the lines (V120), the next line's indent is dropped (V121),
+ *        the first line's indent is kept (V122), a lone backslash does not continue (V123), the keyword is
+ *        matched from the start of the joined line (V124), its trailing whitespace is kept (V125), a
+ *        space or tab after the backslash ends the continuation (V126)
+ *   V127 to V131  the glued-continuation rule: absent, a lone backslash passes, a tab counts as no space,
+ *        spaces after the backslash end it, its message names the next line
+ *   V132 to V134  the read-only check is for any test, is on one line with single spaces, takes no tab
+ *   V135 to V137, V142  the instruction list: not looked for, only the final stage, case-sensitive, its
+ *        message names the next line    V138 to V140  MAINTAINER, VOLUME, ADD are not on it
+ *   V74  ONBUILD is not looked for    V141 it is looked for only in the final stage
  *   V26  an app built with another builder is told    V29  a config with no build is not read as turbopack
  *   V30  the CLI never reads the app's build (init.test.ts, through the CLI)
  *   V45  a COPY destination is compared as written    V50  a destination that starts with /app/native
@@ -135,7 +147,7 @@
  *   V66 to V71  the read-only check is matched loosely, one clause at a time: not whole (V66), not
  *        from its start (V67), the text may hold $ (V68), a backtick (V69), a backslash (V70), the
  *        path may be any word (V71)
- *   V72 to V75  COPY, ADD, ONBUILD, VOLUME are taken to leave the directories alone
+ *   V72, V73, V75  COPY, ADD, VOLUME are taken to leave the directories alone
  *   V76 to V94  a named RUN is let through, one row each: sudo -n, xargs -r, ./script, sh /script,
  *        install -d -m, install -m, mkdir -m, --mount, cd -P, a plain chmod, chown, the exec form,
  *        setfacl, umask, python, node, perl, true, echo
@@ -198,7 +210,7 @@
  *   R04  the doubled slashes of //home/me are kept    R05  /dev is not refused
  *   R06  /var/lib is not refused    R07  a directory under the home directory is not refused
  *   R08  a parent of the home directory is not refused    R09  native/ need not hold its manifest
- *   R16  the commands run under any shell (zsh stops on a glob that matches nothing, ksh has no `local`)
+ *   R16  the commands run under any shell (zsh stops on a glob that matches nothing, and `local` is not POSIX)
  *   R17 to R19  /private/tmp, /private/var, /private/etc are not refused (macOS)
  *   R20  hidden entries are not listed    R21  an entry starting with two dots is not
  *   R22  a link that points nowhere is not an entry
@@ -1238,7 +1250,7 @@ const INIT = [
     subject: 'init',
     claim:
       'a backslash continuation is not joined: a COPY or RUN written over several lines is not read',
-    anchor: String.raw`    if (line.endsWith('\\')) {` + '\n',
+    anchor: '    if (CONTINUES.test(piece)) {\n',
     replacement: '    if (false as boolean) {\n',
   },
   {
@@ -1384,17 +1396,17 @@ const INIT = [
     subject: 'init',
     claim:
       'a SHELL instruction is not looked for: it replaces the shell of every RUN, the read-only check included',
-    anchor: "  return all.some((inst) => inst.word === 'SHELL')\n",
-    replacement: "  return all.slice(0, 0).some((inst) => inst.word === 'SHELL')\n",
+    anchor: "  const shell = all.find((inst) => inst.word === 'SHELL');\n",
+    replacement: "  const shell = all.slice(0, 0).find((inst) => inst.word === 'SHELL');\n",
   },
   {
     id: 'V63',
     subject: 'init',
     claim:
       'a SHELL is looked for only in the final stage: one in a stage it builds on (`FROM base`) still changes its RUNs',
-    anchor: "  return all.some((inst) => inst.word === 'SHELL')\n",
+    anchor: "  const shell = all.find((inst) => inst.word === 'SHELL');\n",
     replacement:
-      "  return all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1).some((inst) => inst.word === 'SHELL')\n",
+      "  const shell = all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1).find((inst) => inst.word === 'SHELL');\n",
   },
   {
     id: 'V64',
@@ -1417,18 +1429,18 @@ const INIT = [
     subject: 'init',
     claim: 'the read-only check is not matched whole: anything after its closing brace is allowed',
     anchor:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
     replacement:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}/;\n',
   },
   {
     id: 'V67',
     subject: 'init',
     claim: 'the read-only check may start anywhere: a command before it is allowed',
     anchor:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
     replacement:
-      'const READ_ONLY_RUN = /test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
   },
   {
     id: 'V68',
@@ -1436,64 +1448,65 @@ const INIT = [
     claim:
       'the text the read-only check prints may hold a dollar sign: a command substitution runs',
     anchor:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
     replacement:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
   },
   {
     id: 'V69',
     subject: 'init',
     claim: 'the text the read-only check prints may hold a backtick: a command substitution runs',
     anchor:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
     replacement:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
   },
   {
     id: 'V70',
     subject: 'init',
     claim: 'the text the read-only check prints may hold a backslash',
     anchor:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
     replacement:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
   },
   {
     id: 'V71',
     subject: 'init',
     claim: 'the path the read-only check tests may be any word: a variable is allowed',
     anchor:
-      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
     replacement:
-      'const READ_ONLY_RUN = /^test -[a-z] \\S+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+      '  /^test[ \\t]+-f[ \\t]+\\S+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
   },
   {
     id: 'V72',
     subject: 'init',
     claim: 'COPY is taken to be an instruction that cannot change a mode',
-    anchor: "  'STOPSIGNAL',\n",
-    replacement: "  'STOPSIGNAL',\n  'COPY',\n",
+    anchor: "  'HEALTHCHECK',\n  'STOPSIGNAL',\n",
+    replacement: "  'HEALTHCHECK',\n  'STOPSIGNAL',\n  'COPY',\n",
   },
   {
     id: 'V73',
     subject: 'init',
     claim: 'ADD is taken to be an instruction that cannot change a mode',
-    anchor: "  'STOPSIGNAL',\n",
-    replacement: "  'STOPSIGNAL',\n  'ADD',\n",
+    anchor: "  'HEALTHCHECK',\n  'STOPSIGNAL',\n",
+    replacement: "  'HEALTHCHECK',\n  'STOPSIGNAL',\n  'ADD',\n",
   },
   {
     id: 'V74',
     subject: 'init',
-    claim: 'ONBUILD is taken to be an instruction that cannot change a mode',
-    anchor: "  'STOPSIGNAL',\n",
-    replacement: "  'STOPSIGNAL',\n  'ONBUILD',\n",
+    claim:
+      'an ONBUILD instruction is not looked for: a parent stage runs its triggers in the stage that builds on it, a SHELL among them',
+    anchor: "  const onbuild = all.find((inst) => inst.word === 'ONBUILD');\n",
+    replacement: "  const onbuild = all.slice(0, 0).find((inst) => inst.word === 'ONBUILD');\n",
   },
   {
     id: 'V75',
     subject: 'init',
     claim: 'VOLUME is taken to be an instruction that cannot change a mode',
-    anchor: "  'STOPSIGNAL',\n",
-    replacement: "  'STOPSIGNAL',\n  'VOLUME',\n",
+    anchor: "  'HEALTHCHECK',\n  'STOPSIGNAL',\n",
+    replacement: "  'HEALTHCHECK',\n  'STOPSIGNAL',\n  'VOLUME',\n",
   },
   {
     id: 'V76',
@@ -1886,8 +1899,197 @@ const INIT = [
     claim:
       'a continuation that runs into the end of the file is dropped: a last instruction ending in a backslash is not read',
     anchor:
-      "  if (acc !== '') push(acc.trimEnd(), lines.length - 1); // a continuation that runs into the end of the file\n",
+      '  if (acc !== undefined) push(acc, lines.length - 1); // a continuation that runs into the end of the file\n',
     replacement: '\n',
+  },
+  {
+    id: 'V120',
+    subject: 'init',
+    claim:
+      'a continued line is joined to the next with a space put between them: BuildKit joins directly, and the close line over two lines is then not its own text',
+    anchor: "      acc = (acc ?? '') + piece.replace(CONTINUES, '');\n",
+    replacement: "      acc = (acc ?? '') + piece.replace(CONTINUES, '') + ' ';\n",
+  },
+  {
+    id: 'V121',
+    subject: 'init',
+    claim:
+      'the next line of a continuation loses its indent: BuildKit keeps it, so a close line indented over two lines reads as the close line',
+    anchor: "    const piece = acc === undefined ? raw.replace(/^[ \\t]+/, '') : raw;\n",
+    replacement: "    const piece = raw.replace(/^[ \\t]+/, '');\n",
+  },
+  {
+    id: 'V122',
+    subject: 'init',
+    claim:
+      'the first line of an instruction keeps its indent: BuildKit drops it, and an indented line is read as one that is not the close line',
+    anchor: "    const piece = acc === undefined ? raw.replace(/^[ \\t]+/, '') : raw;\n",
+    replacement: '    const piece = raw;\n',
+  },
+  {
+    id: 'V123',
+    subject: 'init',
+    claim:
+      'a line that holds only a backslash does not continue: the instruction after it is read on its own, one line off',
+    anchor: '    if (CONTINUES.test(piece)) {\n',
+    replacement: "    if (CONTINUES.test(piece) && piece.replace(CONTINUES, '') !== '') {\n",
+  },
+  {
+    id: 'V124',
+    subject: 'init',
+    claim:
+      'the keyword is matched from the start of the joined line: an indented line after a lone backslash is not an instruction, and is dropped',
+    anchor: '    const m = /^\\s*(\\S+)\\s*(.*)$/.exec(text);\n',
+    replacement: '    const m = /^(\\S+)\\s*(.*)$/.exec(text);\n',
+  },
+  {
+    id: 'V125',
+    subject: 'init',
+    claim:
+      'the trailing whitespace of a joined line is kept: a close line followed by a space is the close line',
+    anchor: "    const text = logical.replace(/[ \\t\\r]+$/, '');\n",
+    replacement: '    const text = logical;\n',
+  },
+  {
+    id: 'V126',
+    subject: 'init',
+    claim:
+      'a backslash continues only when it is the last character: a space or a tab after it ends the continuation',
+    anchor: 'const CONTINUES = /\\\\[ \\t]*$/;\n',
+    replacement: 'const CONTINUES = /\\\\$/;\n',
+  },
+  {
+    id: 'V127',
+    subject: 'init',
+    claim:
+      'a continuation backslash that no space or tab precedes is not looked for: a lone backslash and a word split in two (`SHE` over `LL`, `<` over `<EOF`) are joined without a gap and read as one thing',
+    anchor: '  const glued = lines.findIndex((l) => GLUED_CONTINUATION.test(l));\n',
+    replacement: '  const glued = -1;\n',
+  },
+  {
+    id: 'V128',
+    subject: 'init',
+    claim:
+      'a lone backslash is not a glued continuation: the rule needs a character before the backslash',
+    anchor: 'const GLUED_CONTINUATION = /(^|[^ \\t])\\\\[ \\t]*$/;\n',
+    replacement: 'const GLUED_CONTINUATION = /[^ \\t]\\\\[ \\t]*$/;\n',
+  },
+  {
+    id: 'V129',
+    subject: 'init',
+    claim:
+      'a tab before the backslash counts as no space: the rule refuses a continuation that follows a tab',
+    anchor: 'const GLUED_CONTINUATION = /(^|[^ \\t])\\\\[ \\t]*$/;\n',
+    replacement: 'const GLUED_CONTINUATION = /(^|[^ ])\\\\[ \\t]*$/;\n',
+  },
+  {
+    id: 'V130',
+    subject: 'init',
+    claim:
+      'spaces and tabs after the backslash end the rule: `SHE\\ ` over `LL` is not a glued continuation',
+    anchor: 'const GLUED_CONTINUATION = /(^|[^ \\t])\\\\[ \\t]*$/;\n',
+    replacement: 'const GLUED_CONTINUATION = /(^|[^ \\t])\\\\$/;\n',
+  },
+  {
+    id: 'V131',
+    subject: 'init',
+    claim: 'the glued-continuation message names the line next to it (fragment)',
+    anchor: '${glued + 1}',
+    replacement: '${glued + 2}',
+  },
+  {
+    id: 'V132',
+    subject: 'init',
+    claim:
+      'the read-only check is for any test (`-d`, `-e`): only the one for a file is on the list',
+    anchor:
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
+    replacement:
+      '  /^test[ \\t]+-[a-z][ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
+  },
+  {
+    id: 'V133',
+    subject: 'init',
+    claim:
+      'the read-only check is written on one line with single spaces: the scaffolded check, written over several lines and indented, is not it',
+    anchor:
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
+    replacement: '  /^test -f [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+  },
+  {
+    id: 'V134',
+    subject: 'init',
+    claim: 'the read-only check takes spaces only between its words: a tab is not one',
+    anchor:
+      '  /^test[ \\t]+-f[ \\t]+[\\w./-]+[ \\t]+\\|\\|[ \\t]+\\{[ \\t]+echo[ \\t]+"[^"$`\\\\]*"[ \\t]+>&2;[ \\t]+exit[ \\t]+1;[ \\t]+\\}$/;\n',
+    replacement:
+      '  /^test +-f +[\\w./-]+ +\\|\\| +\\{ +echo +"[^"$`\\\\]*" +>&2; +exit +1; +\\}$/;\n',
+  },
+  {
+    id: 'V135',
+    subject: 'init',
+    claim:
+      'a line that does not start with an instruction Docker knows is not looked for: a `// syntax=` line is taken for an instruction and dropped',
+    anchor: '  const unknown = all.find((inst) => !INSTRUCTIONS.has(inst.word));\n',
+    replacement:
+      '  const unknown = all.slice(0, 0).find((inst) => !INSTRUCTIONS.has(inst.word));\n',
+  },
+  {
+    id: 'V136',
+    subject: 'init',
+    claim:
+      'such a line is looked for only in the final stage: one before the first FROM or in a stage the last builds on is not',
+    anchor: '  const unknown = all.find((inst) => !INSTRUCTIONS.has(inst.word));\n',
+    replacement:
+      "  const unknown = all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1).find((inst) => !INSTRUCTIONS.has(inst.word));\n",
+  },
+  {
+    id: 'V137',
+    subject: 'init',
+    claim:
+      'the instructions are compared as written, not without regard to case: a lower-case `from` or `run` is not one',
+    anchor: '  const unknown = all.find((inst) => !INSTRUCTIONS.has(inst.word));\n',
+    replacement:
+      "  const unknown = all.find((inst) => !INSTRUCTIONS.has(inst.text.split(/\\s/)[0] ?? ''));\n",
+  },
+  {
+    id: 'V138',
+    subject: 'init',
+    claim:
+      'MAINTAINER is not an instruction Docker knows: a Dockerfile that has one in a build stage is not confirmed',
+    anchor: "  'MAINTAINER',\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V139',
+    subject: 'init',
+    claim:
+      'VOLUME is not an instruction Docker knows: a Dockerfile that has one in a build stage is not confirmed',
+    anchor: "  'VOLUME',\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V140',
+    subject: 'init',
+    claim:
+      'ADD is not an instruction Docker knows: a Dockerfile that has one in a build stage is not confirmed',
+    anchor: "  'ADD',\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V141',
+    subject: 'init',
+    claim: 'ONBUILD is looked for only in the final stage: a parent stage that has one is not seen',
+    anchor: "  const onbuild = all.find((inst) => inst.word === 'ONBUILD');\n",
+    replacement:
+      "  const onbuild = all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1).find((inst) => inst.word === 'ONBUILD');\n",
+  },
+  {
+    id: 'V142',
+    subject: 'init',
+    claim: 'the unknown-instruction message names the line next to it (fragment)',
+    anchor: '${unknown.first + 1}',
+    replacement: '${unknown.first + 2}',
   },
 ];
 
@@ -2256,7 +2458,7 @@ const DOC = [
     id: 'R16',
     subject: 'page',
     claim:
-      'the guard against another shell is removed: zsh stops with "no matches found" on a glob that matches nothing and refuses a good directory for the wrong reason, ksh has no `local`, and dash goes on to hand a directory to root without ever being asked to',
+      'the guard against another shell is removed: zsh stops with "no matches found" on a glob that matches nothing and refuses a good directory for the wrong reason, `local` is not POSIX, and dash goes on to hand a directory to root without ever being asked to',
     anchor: '   if [ -z "${BASH_VERSION:-}" ]; then\n',
     replacement: '   if false; then\n',
     options: { commentPrefix: '#' },

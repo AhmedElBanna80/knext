@@ -542,14 +542,18 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    file, byte for byte, and after it nothing but `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`, `ENTRYPOINT`,
    `CMD`, `HEALTHCHECK`, `STOPSIGNAL` and a read-only check of the shape
    `RUN test -f <path> || { echo "<text>" >&2; exit 1; }` (the scaffolded `RUN test -f /app/native/.integrity.json || { ... }`
-   is one; the text is a plain string with no `$`, backtick or backslash). The whole file has to be clean as well,
+   is one, written over several lines; the text is a plain string with no `$`, backtick or backslash). The whole file has to be clean as well,
    and that is judged before anything else is looked at: no `<<` anywhere (a heredoc's body is not `Dockerfile` text),
    no `escape` or `syntax` parser directive on any line (a byte-order mark or an indent does not hide one; the
    scaffolded file's own pinned `# syntax=` line, as its first line and byte for byte, is the one that passes),
-   no `SHELL` instruction in any stage, and no character that another reader may take for something else: a
-   byte-order mark, a no-break space, a form feed or any other space-like, control or invisible character
-   (visible non-ASCII text, such as a dash in a comment, is fine). A `Dockerfile` that fails any of these is not
-   confirmed, and is told so whenever it mentions `native/` at all.
+   no `SHELL` or `ONBUILD` instruction in any stage (a parent stage runs its `ONBUILD` triggers in the stage
+   that builds on it), no line that does not start with an instruction Docker knows (BuildKit reads a
+   `// syntax=` line as a directive), no line ending in a backslash that no space or tab precedes (a lone
+   backslash, or a word split in two), and no character that another reader may take for something else: any
+   space-like character but a space and a tab (a no-break space, a form feed), a control or invisible format
+   character (a byte-order mark), an invalid byte, or a carriage return that does not end a line (visible
+   non-ASCII text, such as a dash in a comment, is fine). A `Dockerfile` that fails any of these is not
+   confirmed, and is told so whenever it mentions native at all.
    Anything else is not confirmed: any other `RUN`, a `COPY` or `ADD` after the line, an instruction they do not
    know, a blank line or a comment between the `COPY` and the line, a space or anything else on either of the two
    lines, or a `COPY` of `native/` that is not the scaffolded one. They then say which of these it was, and never say that the loader will accept the directories.
@@ -586,7 +590,7 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    it must hold `native/` (with its `.integrity.json`) and one other entry, your executable as a regular file, and nothing else,
    and it must not be a system, home or temporary directory (`/`, `/opt` itself, `/tmp`, `/var/lib`, `/dev`, `/run`, `/etc`, a home directory or anything under one, and, on macOS, what `/tmp`, `/etc` and `$TMPDIR` really are under `/private`, and the like).
    A path that is not absolute, does not exist or fails either check is refused with the reason, and nothing is run.
-   The commands need bash and refuse unless bash runs them, before they look at anything: `sh` where it is bash (as on macOS) runs them, `dash`, `zsh` and `ksh` do not. `zsh` stops with "no matches found" on a glob that matches nothing, which would refuse a good directory for the wrong reason, and `local`, which the commands use, is not part of POSIX `sh` (`ksh` has none).
+   The commands need bash and refuse unless bash runs them, before they look at anything: `sh` where it is bash (as on macOS) runs them; any other shell, `dash` and `zsh` included, does not. `zsh` stops with "no matches found" on a glob that matches nothing, which would refuse a good directory for the wrong reason, and `local`, which the commands use, is not part of POSIX `sh`.
    `/opt/<app>` and `/usr/local/<app>` pass. The directories above it must
    already be root's and closed to group and other: a root-owned `/opt/<app>` is fine, a home directory or
    `/tmp` is not, and the refusal names the directory:

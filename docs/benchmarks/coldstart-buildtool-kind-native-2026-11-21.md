@@ -13,18 +13,21 @@ Measured on two days, so the day-to-day spread is part of the result.
    749 ms; runtime gap 288 and 451 ms).
 2. **vinext is faster on both runtimes.** Bun × vinext is the fastest arm on both days (523 ms median
    on day 2), and Node × Turbopack is the slowest (1507 ms).
-3. **Bun is faster than Node within each build tool.** The runtime gap is smaller than the build-tool
-   gap in every pairing.
-4. **The sandbox and container start is about 330–400 ms on every arm and is not what the build tool
-   changes.** On bun it is 327–371 ms across both days. On node it is 395–403 ms by the analyzer's
+3. **Bun is faster than Node within each build tool.** On Turbopack this rests on live-checked
+   runtimes. On vinext the bun runtime has no live check and is identified only by its arm name and
+   the bytecode pragma differential, so the vinext comparison carries that identification. The runtime
+   gap is smaller than the build-tool gap in every pairing.
+4. **The sandbox and container start is 327–403 ms on every arm across both days and is not what the
+   build tool changes.** On bun it is 327–371 ms. On node it is 395–403 ms by the analyzer's
    definition (see [Sandbox step](#sandbox-step-two-definitions)). On Turbopack the routable step
-   (listening to ready) is 478 ms on Bun and 564 ms on Node on day 2 (488 and 576 ms on day 1).
+   (listening to ready) is 478 ms on Bun and 564 ms on Node on day 2 (488 and 576 ms on day 1). On the
+   vinext arms this step is unmeasured, as described under Caveats.
 5. **bun × vinext has the weakest bytecode evidence, and its live check is not a runtime check.**
-   It has only a build-time pragma differential (`@bytecode` count 2 against a baseline of 1), with no
-   marker verification (a fix adding marker verification is in flight). Its live process check is by
-   basename `server` only, which confirms the compiled executable's name, not that the runtime is Bun.
-   The evidence records no live fields for this arm. The vinext CR omits the runtime by design, so
-   `spec_runtime` is empty in both vinext arms.
+   It has only a build-time pragma differential (`@bytecode` count 2 against a baseline of 1). Build-time
+   marker verification for this target was not present when these runs were taken. Its live process
+   check is by basename `server` only, which confirms the compiled executable's name, not that the
+   runtime is Bun. The evidence records no live fields for this arm. The vinext CR omits the runtime by
+   design, so `spec_runtime` is empty in both vinext arms.
 
 ## Environment
 
@@ -67,7 +70,7 @@ Verbatim from `analysis-*.txt` (in the data directories). Times in ms, median an
 
 | phase | day 1 median · p95 | day 2 median · p95 |
 |---|---|---|
-| 1 activation: request → Pod object | 35 · 40 | 36 · 50 |
+| 1 activation: request → Pod object | 35 · 42 | 36 · 50 |
 | 2 scheduling: Pod → bound | 12 · 17 | 11 · 17 |
 | 3 sandbox + containers start: bound → first log | 327 · 365 | 342 · 402 |
 | 4–5 runtime boot and routable | not split (no `Ready in` line) | not split |
@@ -113,19 +116,23 @@ Verbatim from `analysis-*.txt` (in the data directories). Times in ms, median an
 
 Phase 3 is `pod_bound` to `ctr_first_log`. The reported figures use the analyzer's definition, which
 takes the earlier of the user-container and queue-proxy first lines. For the Node arms the
-queue-proxy starts first, so the two definitions differ by about 60–130 ms. A user-container-only
-definition is shown for comparison.
+queue-proxy starts first, so the two definitions differ at the median by 59 ms (node × turbopack,
+day 2) and 131 ms (node × vinext, day 2). The bun arms are identical under both definitions. The
+user-container-only column is a manual re-derivation: `analyze.py` does not produce it, and it is
+not in the committed analysis tables. Its command, run on a phases file, is:
 
-| arm | day 1, analyzer | day 2, analyzer | day 2, user-container line only |
-|---|---|---|---|
-| bun × vinext | 327 | 342 | 342 |
-| bun × turbopack | 366 | 371 | 371 |
-| node × vinext | 396 | 395 | 526 |
-| node × turbopack | 403 | 395 | 454 |
+`python3 -c "import json,statistics,sys; rows=[json.loads(l) for l in open(sys.argv[1])]; print(round(statistics.median(min(x['t'] for x in r['logs']['user-container'])-r['watch']['pod_bound'] for r in rows)))" <phases-file>`
 
-Across both days, the sandbox step is 327–371 ms on the bun arms and 395–403 ms on the node arms,
-by the analyzer's definition. The user-container-only definition gives 454–528 ms on the node arms.
-The analyzer's figures are the ones to quote.
+| arm | day 1, analyzer | day 1, user-container line only | day 2, analyzer | day 2, user-container line only |
+|---|---|---|---|---|
+| bun × vinext | 327 | 327 | 342 | 342 |
+| bun × turbopack | 366 | 366 | 371 | 371 |
+| node × vinext | 396 | 528 | 395 | 526 |
+| node × turbopack | 403 | 473 | 395 | 454 |
+
+Across both days, the analyzer's sandbox step is 327–371 ms on the bun arms and 395–403 ms on the
+node arms. The user-container-only column gives 327–528 ms across all cells. The analyzer's figures
+are the ones to quote.
 
 ## Bytecode evidence per arm
 
@@ -173,9 +180,14 @@ median hides. Day 1 has no live checks, so its bytecode evidence is the build-ti
   not run-to-run variance.
 - **n = 12 per arm**, so p95 is close to the maximum.
 - **Kind and node-image versions are not recorded** in the artifacts.
-- **Which phase dominates.** The sandbox and container start is the largest split phase on the vinext
-  arms, and it is about 330–400 ms on every arm. On Turbopack, the routable step (listening to ready)
-  is about 480 ms on Bun and about 565 ms on Node. That step is Turbopack-specific.
+- **Which phase dominates.** The sandbox and container start is the only split phase on the vinext
+  arms, and it is 327–403 ms on every arm. On Turbopack, the routable step (listening to ready) is
+  about 480 ms on Bun and about 565 ms on Node.
+- **The vinext listening-to-ready step is unmeasured, not absent.** `analyze.py` sets `app_listening`
+  only from a `Ready in` line, which vinext does not print, so phases 4 and 5 are not split for the
+  vinext arms. The unsplit residual at median (total minus phases 1, 2, 3 and 6; medians are not
+  additive, so this is approximate) is about 134 ms for bun × vinext and 296 ms for node × vinext on
+  day 2. That residual is where the vinext listening and ready time sits, and it is not measured here.
 
 ## Reproduce
 
@@ -184,7 +196,9 @@ median hides. Day 1 has no live checks, so its bytecode evidence is the build-ti
   holds the JSONL and the analysis.
 - Run the analyzer on a committed phases file:
   `python3 scripts/bench-cold-start-phases/analyze.py <phases-file> --no-marker --p95 --namespace=z2`.
-  On the day-2 data this reproduces every table row except phase 0 (autoscaler) and phase 5w
-  (activator), which need the activator and autoscaler logs. Those logs are not committed; the
-  autoscaler log is 2.7 MB and is kept out of the repository, as in the sibling study; it is in the run's artifact.
+  On both days this reproduces every table row in the committed `analysis-*.txt` except phase 0
+  (autoscaler) and phase 5w (activator), which need the activator and autoscaler logs. Those logs are
+  not committed; the autoscaler log is 2.7 MB and is kept out of the repository, as in the sibling
+  study, and it is in the run's artifact. The user-container-only sandbox column is not produced by
+  the analyzer (see Sandbox step).
 - Runs: day 1 `44808959901` (`0218bdaab`), day 2 `44841667176` (`a4de6621b`).

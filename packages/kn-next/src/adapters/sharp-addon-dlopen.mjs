@@ -204,9 +204,12 @@ function findManifest(startDir) {
   return null;
 }
 
-/** `.node`, `.dylib`, `.so`, `.so.42` — the files an OS loader will execute. */
+/**
+ * `.node`, `.dylib`, `.so`, `.so.42`, `.so.8.18.6` — the files an OS loader will
+ * execute. Versioned sonames may carry any number of numeric parts.
+ */
 function isNativePayload(file) {
-  return /\.(node|dylib|so)$|\.so\.[0-9]+$/.test(file);
+  return /\.(node|dylib)$|\.so(\.[0-9]+)*$/.test(file);
 }
 
 function sha256(file) {

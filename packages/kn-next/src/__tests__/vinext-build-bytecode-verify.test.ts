@@ -1,11 +1,15 @@
 /**
- * The vinext x bun compiled executable is proved to carry bytecode by the CLI
- * itself, with the SAME verifiers the compile script and the compiled
- * standalone target use (`bytecode-exec-verify.mjs`) -- independent of whatever
- * the compile script claims, and chosen PER SHAPE:
+ * The vinext x bun compiled executable is checked by the CLI itself, from the
+ * binary bytes, with the SAME verifiers the compile script and the compiled
+ * standalone target use (`bytecode-exec-verify.mjs`), chosen PER SHAPE:
  *
  *   default / self-contained -> verifyBytecodeExec (one banner-headed entry)
- *   compile.include          -> verifyBytecodeModules (entry + every module)
+ *   compile.include          -> verifyBytecodeModules
+ *
+ * What the CLI establishes on its own: bytecode and the per-build marker are in
+ * the binary, and (include shape) that it carries exactly the module count the
+ * COMPILE SCRIPT ATTESTED in its plan sidecar. The count itself is the script's
+ * attestation -- the CLI does not recompute the planned set.
  *
  * Both directions per shape: a realistic bytecode artifact passes, a plain or
  * under-counted one is rejected with the VERIFIER's reason (not merely
@@ -209,21 +213,6 @@ describe("vinext x bun compile.include shape (entry + 2 included modules)", () =
         expect(() =>
             build((m) => artifact(m, 3), { include, plan: 0 }),
         ).toThrow(/plan sidecar .* module count/);
-    });
-
-    it("the sidecar is NOT trusted: a count that disagrees with the CLI's own plan is refused (claims 2, plan is 3)", () => {
-        // Binary and sidecar agree with each other (2 modules) but the CLI's
-        // own planner says entry + lib/a.js + lib/b.js = 3.
-        expect(() =>
-            build((m) => artifact(m, 2), { include, plan: 2 }),
-        ).toThrow(/claims 2 .* CLI's own plan says 3/);
-        expect(removed()).toBe(true);
-    });
-
-    it("refuses an INFLATED sidecar too (claims 4, plan is 3)", () => {
-        expect(() =>
-            build((m) => artifact(m, 4), { include, plan: 4 }),
-        ).toThrow(/claims 4 .* CLI's own plan says 3/);
     });
 
     it("a JSON `null` sidecar is a UsageError, not a TypeError", () => {

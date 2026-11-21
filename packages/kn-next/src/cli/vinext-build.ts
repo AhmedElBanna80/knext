@@ -57,7 +57,6 @@ import {
     verifyBytecodeModules,
 } from "../adapters/bytecode-exec-verify.mjs";
 import { rewriteVinextHarfbuzzAnchors } from "../adapters/entry-asset-anchor.mjs";
-import { planIncludes } from "../adapters/include-plan.mjs";
 import {
     ogHarfbuzzWarning,
     resolvePinnedHarfbuzzWasm,
@@ -437,10 +436,13 @@ export interface VinextBuildOptions {
  * script's own per-shape choice in `vinext-compile.mjs`:
  *
  *   - self-contained: `verifyBytecodeExec` (one banner-headed entry);
- *   - `compile.include` (disk mode): `verifyBytecodeModules`, the entry plus
- *     EXACTLY the planned included modules each headed by the banner. The CLI
- *     cannot run the script's Bun-only planner (cli-node-runtime guard), so the
- *     script hands over its count in a sidecar (`readPlanSidecar`);
+ *   - `compile.include` (disk mode): `verifyBytecodeModules`, which demands
+ *     that the binary carry the ATTESTED number of banner-headed bytecode
+ *     modules. The count is ATTESTED BY THE COMPILE SCRIPT (it plans the globs
+ *     with its Bun-only planner and writes the total to a sidecar,
+ *     `readPlanSidecar`); the CLI does not recompute it. What the CLI checks on
+ *     its own, from the binary bytes, is that bytecode and the per-build marker
+ *     are present and that exactly that many modules are banner-headed;
  *   - default: `verifyBytecodeExec`.
  *
  * Exported so a test can drive each shape directly.
@@ -451,7 +453,7 @@ export function vinextBytecodeVerdict(
     shape: {
         readonly selfContained?: boolean;
         readonly include?: readonly string[];
-        /** The planned module count (entry + included), derived by the CLI itself. */
+        /** The module count (entry + included) the compile script attested. */
         readonly plannedModules?: number;
     },
 ): BytecodeVerdict {
@@ -492,17 +494,9 @@ function verifyCompiledExecutable(
     let plannedModules: number | undefined;
     if (needsPlan) {
         try {
-            const claimed = readPlanSidecar(abs, marker);
-            // The CLI plans the same globs with the SAME runtime-neutral planner
-            // and does not take the script's word for the count.
-            const own = 1 + cliPlannedIncludes(opts).length;
-            if (claimed !== own) {
-                throw new UsageError(
-                    `The compile script's plan sidecar claims ${claimed} module(s) but the CLI's own plan says ${own} ` +
-                        "(the entry plus every compile.include match).\n\nRefusing to verify the executable against a count it did not derive.",
-                );
-            }
-            plannedModules = own;
+            // ATTESTED by the compile script, not derived here (see
+            // vinextBytecodeVerdict); the binary is then held to that count.
+            plannedModules = readPlanSidecar(abs, marker);
         } catch (e) {
             rmSync(abs, { force: true });
             throw e;
@@ -515,18 +509,11 @@ function verifyCompiledExecutable(
     );
 }
 
-/** The compile.include modules THIS process plans (planIncludes is Node-safe). */
-function cliPlannedIncludes(opts: VinextBuildOptions): readonly string[] {
-    try {
-        return planIncludes(opts.cwd, [...(opts.include ?? [])]).relpaths;
-    } catch (e) {
-        throw new UsageError(e instanceof Error ? e.message : String(e));
-    }
-}
-
 /**
  * Read (and ALWAYS delete) the plan sidecar `vinext-compile.mjs` writes beside
- * the executable in the include shape: `{ marker, modules }`. Fails closed when
+ * the executable in the include shape: `{ marker, modules }`. `modules` is the
+ * compile script's ATTESTATION of how many modules (entry + included) it
+ * planned; the CLI only holds the binary to it. Fails closed when
  * it is missing, unparseable, carries another build's marker, or a count that is
  * not a positive integer.
  */

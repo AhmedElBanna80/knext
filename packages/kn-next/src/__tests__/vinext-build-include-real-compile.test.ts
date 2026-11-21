@@ -2,9 +2,9 @@
  * A REAL `compile.include`-shape compile (vite build + vinext-compile.mjs on
  * the host, stock Bun), driven through `buildVinextExecutable` exactly as
  * `vinext-compile-og-exec.test.ts` drives the default shape. It proves the
- * CLI's per-shape verifier (`verifyBytecodeModules` over the entry plus every
- * planned module) accepts what Bun REALLY emits for this shape -- a stand-in
- * artifact only proves the author's model of the layout.
+ * CLI's per-shape verifier (`verifyBytecodeModules`, held to the module count
+ * the compile script attested in its sidecar) accepts what Bun REALLY emits for
+ * this shape -- a stand-in artifact only proves the author's model of the layout.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";

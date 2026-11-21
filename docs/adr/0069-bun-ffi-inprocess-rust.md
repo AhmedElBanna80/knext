@@ -787,7 +787,7 @@ a developer machine (D20).
   `native/` `COPY` (`isKnownGoodTemplateDockerfile`, D17's exception). The line's text and the `COPY` it follows
   are two constants core owns (`VINEXT_FFI_CLOSE_LINE` and `VINEXT_NATIVE_COPY`, in `runtime-image.ts`).
   `@getknext/ffi` keeps its own pair in one module (`vinext-image.ts`, which has no imports) that the hint it
-  prints and the refusal the generated module raises both read, so those two cannot differ.
+  prints and the refusal the generated module raises both read, so those two cannot differ. The same module defines the two directories once (`VINEXT_DIRS`): the line, the `COPY`, the generated module's test of which failing directories the line fixes and the hint's reading of the `COPY` are all built from that pair, and `vinext-pair.test.ts` changes it in a copy of the sources and watches every one of them move.
   `ffi-vinext-known-good.test.ts` (which lives in core's test directory, never in core's source) holds core's
   pair and the package's pair in step, checks that the generated module carries both lines in the sentence it
   tells an app, and checks that the shipped template holds the `COPY` exactly once, so a template that moves on
@@ -862,7 +862,7 @@ measured reason for each rejection are in *Amendment 1*.
 - Hot Rust code runs in-process with a typed TS API and no network hop or extra cold start.
 - The manifest is part of the shipped binary, so the wrapper in an image is provably the one for the
   library in that image (D5, D14 step 5), and a stale wrapper cannot call a changed signature (D4).
-- No core runtime change; every core change is inert without opt-in (D17).
+- No core runtime change; every core change is inert without opt-in (D17), except one: a vinext app that adds the close line to its own `Dockerfile` is recognised as the scaffolded one even without `knext.ffi.json` (D17's exception).
 
 **Negative / risks**
 
@@ -916,7 +916,7 @@ also moves D3's git `rev` pin to a crates.io version.
 
 ## Amendment 1 (2026-11-21) — the integrity check binds the mapped bytes to owner and mode, and no non-root user can swap the tree it reads (TD-S14-6a, TD-S17-close-1)
 
-Status: Proposed (2026-11-21), revised after each review round the same day for TD-S17-close-1 (seven so far). Implemented in the change that
+Status: Proposed (2026-11-21), revised after each review round the same day for TD-S17-close-1 (nine so far). Implemented in the change that
 records it; the sprint-close design review accepts it or files debt. It amends D13 items 4 and 5.1, and
 carries a pointer in D14 (the image's `native/` COPY and the line that closes `native/` and the directories above
 it) and D16 (integrity at load). It also amends **D17** (the zero-diff guarantee: one core change, the recognition of the
@@ -942,8 +942,7 @@ walking up to `/`, refused it correctly. The harness now chooses a parent whose 
 (`/var/lib`, then `/`), checks that before it stages anything, and stops with a clear message when no candidate
 passes. On `abca3e3d7ec513f677a19f21d760d85584c811c0` the Rust crates lane, the musl matrix (both architectures) and
 the kind FFI e2e all passed, and they passed again on `81753d6b843e5d6f9e0c9167ac4c151ec31ac5b4` (https://github.com/AhmedElBanna80/knext/actions/runs/44895838473 for the musl matrix
-and the kind e2e, https://github.com/AhmedElBanna80/knext/actions/runs/44895838614 for the Rust crates lane, red-proof step included); they are
-re-run on this change's final head. Then the sprint-close review accepts the amendment or files debt.
+and the kind e2e, https://github.com/AhmedElBanna80/knext/actions/runs/44895838614 for the Rust crates lane, red-proof step included); on `b4d81ae9b346023ddea03b5a6c5124588c8d2b3d` the musl matrix, the kind e2e and the Rust crates lane passed and `Lint & Test` was red, on a comment in core (since fixed); and on `0c07c17bafb87d92454f870bd1352960b21a30fb` everything was green: the musl matrix (both architectures) and the kind FFI e2e (https://github.com/AhmedElBanna80/knext/actions/runs/44914456786), the Rust crates lane (https://github.com/AhmedElBanna80/knext/actions/runs/44914456150) and `Lint & Test` (https://github.com/AhmedElBanna80/knext/actions/runs/44914456630). They are re-run on this change's final head. Then the sprint-close review accepts the amendment or files debt.
 
 ### Context
 
@@ -1005,7 +1004,7 @@ pinned before the manifest is read.
    library that is refused throws and never falls through to the development build; a loader test pins that for
    a hash mismatch, an unlisted library, a missing manifest, a group-writable library and an app-owned one.
 6. **The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates
-   lane are green on `abca3e3`, on `81753d6` and on `b4d81ae` (on `b4d81ae` the `Lint & Test` job was red, on a comment in core, since fixed); they are re-run on the final head; the nested layout is model-tested only
+   lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed) and on `0c07c17`, where all of them and `Lint & Test` were green; they are re-run on the final head; the nested layout is model-tested only
    (`TD-S18-1b`).** The base images' own directories
    (`/`, `/usr`, `/usr/local`, `/usr/local/bin`, `/opt`) are root-owned 0755 (measured on the pinned Bun images).
    BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the copied files 0444, the directories below `native/` 0555,
@@ -1034,26 +1033,7 @@ pinned before the manifest is read.
    printed for an app built for vinext, and for one whose build cannot be told (the build is read from `knext.config.ts`
    the way the CLI reads it, its `build` or the default `turbopack`, and is unknown when the config cannot be loaded:
    a Node process cannot import it, for one); the other builds stage a Dockerfile that already has the line, so they hear
-   nothing. It is printed when the final stage of the app's `Dockerfile` copies `native/` to `/app/native` and `/app` and
-   `/app/native` are not both closed to group and other by the chmods after that `COPY`. What counts as closing is
-   judged the way the loader would, and the `RUN`s are read the way a shell would read them: quoted words, any path to
-   `chmod` or `chown` (`/bin/chmod`), `sudo` and its relatives, a path with a dot in it (`/app/.`, `.` after
-   `WORKDIR /app`), the working directory (a relative `COPY` destination too), the exec form, `sh -c`, `cd`,
-   `find -exec` and a heredoc body of a `RUN`. A mode with no who-letter (`-w`, `=rx`) is subject to the umask and
-   does not count, a later `chmod g+w` or `o+w`, or a `chown` to somebody but root, on the same directories takes the
-   close back, and the body of a `COPY` or `ADD` heredoc is never read as instructions (nor is the text of a `LABEL`
-   or an `ENV` that holds `<<`). What cannot be read counts as opening, never as closing (a path with a variable or a
-   glob in it, `xargs`), because a wrong hint to add the line costs nothing and a wrong claim that the directories
-   are closed costs a refused load. When a `RUN` after the `COPY` opens them, or may, the line directly after the
-   `COPY` would not help, so the hint says that a later `RUN` opens them and where to close them again. When both are closed but the scaffolded `COPY` is not
-   directly followed by the one line, the hint warns instead that `knext deploy` takes the slower image-sourced
-   path. Under BuildKit nothing changes for an existing app (both directories are already root's and 0755); with
-   another builder the first call is refused, and the message says how to fix the directories and, for a vinext
-   app, which one line to add (a closing `chmod` anywhere else closes them too and the module loads, but it takes
-   `knext deploy` to the slower path). Not covered by the hint, and debt: a `RUN` that is not a shell command (a
-   distroless or scratch final stage has no shell to run a `chmod`, and the line would fail there), a mode with no
-   who-letter such as `=rx` (read as no change), one line of advice for a directory below `native/` under a builder that
-   ignores `--chmod` on directories, and a versioned set of known-good variants instead of this one. `ffi-image-staging.test.ts` models the build host's worst-case modes
+   nothing. It is printed when the final stage of the app's `Dockerfile` copies `native/` to `/app/native` (in any spelling of the `COPY`, a relative destination under `WORKDIR` included) and the file is not the one form knext can confirm. **The hint does not read what a command does.** An earlier revision modelled the shell (quoted words, `sudo` and its relatives, `sh -c`, `cd`, `find -exec`, heredoc bodies), and every round of review found another way a command can be dressed that it read as a close, so that analyser was removed rather than patched again. It confirms one form and says nothing only for it: the scaffolded `COPY` of `native/` (`VINEXT_NATIVE_COPY`), then `VINEXT_CLOSE_LINE` as the very next line of the file, byte for byte, and after it nothing but an instruction that cannot change a mode (`ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`, `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL`) or the scaffolded read-only check (`RUN test -f <path> || { echo "<text>" >&2; exit 1; }`, matched whole, the text a plain string with no `$`, backtick or backslash in it), in a `Dockerfile` with no `<<` anywhere in it, no `escape=` directive (it moves the line-continuation character, so lines run together differently) and no `SHELL` instruction (it changes what every `RUN` runs, the read-only check included). Anything else is not confirmed, and the hint prints. When the line is not directly after the `COPY`, it asks for the line there, and says that a `Dockerfile` that closes them another way may load, but knext does not read it and `knext deploy` takes the slower image-sourced path for it. When the line is directly after but the `COPY` is another spelling, a blank line or a comment sits between them, either line has anything else on it (a space included), any other `RUN`, a `COPY` or an `ADD`, or an instruction knext does not read comes after it, or the file has a heredoc, an `escape=` directive or a `SHELL` instruction, it says that it cannot confirm that `/app` and `/app/native` stay closed, which of these it was (a line number, never the text of the file), and to move anything else above the `COPY`. Neither message says that the loader will accept the directories: that is for the loader to say when it loads, and a wrong hint to add the line costs nothing where a wrong claim that they are closed costs a refused load. Under BuildKit nothing changes for an existing app (both directories are already root's and 0755); with another builder the first call is refused, and the message says how to fix the directories and, for a vinext app, which one line to add (a closing `chmod` anywhere else closes them too and the module loads, but it takes `knext deploy` to the slower path). Not covered by the hint, and debt: a `RUN` that is not a shell command (a distroless or scratch final stage has no shell to run a `chmod`, and the line would fail there), a `Dockerfile` that is closed some other way and is told it is not confirmed anyway (the price of not reading commands), one line of advice for a directory below `native/` under a builder that ignores `--chmod` on directories, and a versioned set of known-good variants instead of this one. `ffi-image-staging.test.ts` models the build host's worst-case modes
    against the staged Dockerfiles of the flat and nested layouts, including a builder that gives a COPY destination the
    host's mode (and fails without the line). The images run as `USER 65532`.
    The same line is staged by all three commands that stage the Dockerfile (`knext build`, `knext deploy` and
@@ -1072,7 +1052,7 @@ pinned before the manifest is read.
    `b4d81ae9b346023ddea03b5a6c5124588c8d2b3d` (https://github.com/AhmedElBanna80/knext/actions/runs/44900618316): the musl load matrix (x64 and arm64), the kind FFI e2e and
    the Rust crates lane passed. The one red was `Lint & Test`, `ffi-dispatch.test.ts` (the only mention of the package in core source is the lazy dispatcher):
    a comment in core had named the package. It is fixed in core, by removing the name (the guard is not relaxed), and the line's
-   text stays a core-owned constant. Run by hand: a container from the pinned Alpine Bun image, its own binary at
+   text stays a core-owned constant. Evidence on `0c07c17bafb87d92454f870bd1352960b21a30fb`: the musl load matrix (x64 and arm64) and the kind FFI e2e (https://github.com/AhmedElBanna80/knext/actions/runs/44914456786), the Rust crates lane (https://github.com/AhmedElBanna80/knext/actions/runs/44914456150) and `Lint & Test` (https://github.com/AhmedElBanna80/knext/actions/runs/44914456630) all passed. Run by hand: a container from the pinned Alpine Bun image, its own binary at
    `/usr/local/bin`, loads as uid 65532 and is refused, with the offending path in the message, for each of: a
    group-writable executable directory, ancestor and root directory, a sticky world-writable `/usr`, an ancestor
    owned by uid 65532, `native` replaced by a link, and a manifest owned by 65532. **Pending:** every lane on this
@@ -1244,7 +1224,7 @@ Measured on Bun 1.4.2, Linux, unless stated.
       (0777 on GitHub's runner), fixed; on `abca3e3d7ec513f677a19f21d760d85584c811c0` the Rust crates lane, the musl
       matrix and the kind e2e were all green (run 44891821597), and again on `81753d6b843e5d6f9e0c9167ac4c151ec31ac5b4` (runs 44895838473 and
       44895838614); on `b4d81ae9b346023ddea03b5a6c5124588c8d2b3d` (run 44900618316) the musl matrix (both architectures), the kind e2e and the
-      Rust crates lane were green and the one red was core's ffi-dispatch guard, fixed by removing the package's name from core source; they are re-run on the final head.
+      Rust crates lane were green and the one red was core's ffi-dispatch guard, fixed by removing the package's name from core source; on `0c07c17bafb87d92454f870bd1352960b21a30fb` (runs 44914456786, 44914456150 and 44914456630) the musl matrix, the kind e2e, the Rust crates lane and `Lint & Test` were all green; they are re-run on the final head.
 - [ ] `TD-S18-1b`, the nested layout: a real-Docker CI leg that builds the nested standalone image and loads from it
       (today a model test and a build by hand). Debt; **not required** for Accepted.
 - [ ] Debt: `@getknext/ffi` hard-codes the shape of core's vinext template (the `/app/native` destination and its

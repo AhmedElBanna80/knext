@@ -1966,13 +1966,14 @@ describe('the library is refused unless only root can write it and own the way t
       // The control: with a directory that cannot be fixed by it failing, the sentence is not there.
       expect(count(atApp({ '/app/native/ffi': 0o775 }), VINEXT)).toBe(0);
       expect(count(atApp({ [`/app/native/ffi/${TRIPLE}`]: 0o775 }), VINEXT)).toBe(0);
-      for (const modes of [
+      const fixable: Array<Record<string, number>> = [
         { '/app/native': 0o775 },
         { '/app': 0o775 },
         { '/app': 0o777 },
         { '/app/native': 0o757, '/app': 0o775 },
         { '/app/native': 0o775, '/app/native/ffi': 0o775 },
-      ]) {
+      ];
+      for (const modes of fixable) {
         const text = atApp(modes);
         expect(count(text, VINEXT), JSON.stringify(modes)).toBe(1);
       }
@@ -1985,6 +1986,12 @@ describe('the library is refused unless only root can write it and own the way t
       const mixed = atApp({ '/app/native': 0o775, '/app': 0o1777 });
       expect(count(mixed, VINEXT)).toBe(1);
       expect(mixed).toContain(ALONE);
+      // A sticky /app is nobody's to close, and the line names no other directory: with the only
+      // other failure one the line does not name, it fixes neither, and is not said.
+      const stickyAndOther = atApp({ '/app': 0o1777, '/app/native/ffi': 0o775 });
+      expect(stickyAndOther).toContain(MOVE);
+      expect(stickyAndOther).toContain(ALONE);
+      expect(stickyAndOther).not.toContain(VINEXT);
     });
 
     it('a failing directory above /app (the root) is not helped by the vinext line either', () => {

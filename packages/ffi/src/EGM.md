@@ -22,7 +22,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     out:'src/generated/ffi'}`), `FfiUsageError`, `parseConfig`, `loadConfig` and `serializeConfig`.
   - Exported type: `FfiConfig`.
 - `init.ts` holds `runInit`, `recordedCrateRev`, `CRATE_GIT` (`https://github.com/getknext-dev/knext`),
-  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`) and `VINEXT_NATIVE_COPY` (the scaffolded `COPY` it follows), both re-exported from `vinext-image.ts` (a module with no imports, also read by `render.ts` for the refusal's sentence, so the hint and the generated module cannot differ), `DEFAULT_BUILD` (`turbopack`, core's default builder, held in step by `ffi-vinext-known-good.test.ts`), `appBuild(cwd)`, `dockerfileHint(cwd, build?)` and the `RunInitOptions` type (`build?` is the app's build target).
+  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`) and `VINEXT_NATIVE_COPY` (the scaffolded `COPY` it follows), both re-exported from `vinext-image.ts` (a module with no imports, also read by `render.ts` for the refusal's sentence, so the hint and the generated module cannot differ), which also defines the two directories once (`VINEXT_DIRS`: the line, the `COPY`, the generated module's test of which failing directories the line fixes and the hint's reading of the `COPY` are all built from it, and `vinext-pair.test.ts` moves it in a copy of the sources and watches them follow), `DEFAULT_BUILD` (`turbopack`, core's default builder, held in step by `ffi-vinext-known-good.test.ts`), `appBuild(cwd)`, `dockerfileHint(cwd, build?)` and the `RunInitOptions` type (`build?` is the app's build target).
 - `generate.ts` holds `runGenerate({cwd, check, io, deps})` and
   `generateFiles(libraryPath, config)`. `generateFiles` returns a `Map` of `.knext-generated.json`
   and `index.ts`. The file also exports the `Io`, `GenerateDeps` and `RunGenerateOptions` types and
@@ -95,28 +95,27 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     `knext.config.ts`, its default export's `build`, `turbopack` when it names none; `undefined` when there is no
     config, it does not load, or its `build` is not a string, and then the hint is still given) and passes it to
     `runInit` and `runGenerate`; any other build gets no hint, because it stages a Dockerfile that already has the line.
-    The final stage only is read (a `COPY` or a `chmod` in a build stage does not reach the image). A heredoc is only
-    opened by a `RUN`, `COPY` or `ADD` (a `LABEL x="<<EOF"` opens none), its body is never read as Dockerfile instructions,
-    and a `RUN`'s body is kept and read as the commands it holds. When that
-    stage copies `native/` to `/app/native` (any `COPY` flags, the JSON form, `--from=`, trailing slashes, quotes, `.`
-    components, a relative destination under a `WORKDIR` that can be read, line continuations and lower case are
-    read), the commands of the `RUN` lines after the last such `COPY` are read the way a shell reads them (`shellCommands`:
-    quoted words, `&&`, `||`, `;`, `|`, the exec form, `sh -c`, `cd`, `find -exec`, `sudo`/`env`/`busybox` and their options,
-    any path to the tool) and the `chmod` and `chown` among them are applied in order to the two directories (`applyCommand`): a mode closes one (octal with no group or other write, or
-    symbolic `go-w`, `g-w,o-w`, `go=rx`) or does not (`modeEffect`: a mode with no who-letter, `-w` or `=rx`, is
-    subject to the umask and closes nothing; a later `g+w`, `o+w` or a who-less `+w` reopens it; one that cannot be read
-    counts as opening); a `chown` to somebody but root also reopens; a recursive one on `/app` or `/` covers both; a path
-    that cannot be read (a variable, a glob, `{}`, a relative one with no `WORKDIR` known, anything `xargs` is given) or a command
-    this does not know that runs a `chmod` counts as possibly opening both, never as closing. When something after the
-    `COPY` opens them, or may, the output says that a `RUN` after that `COPY` opens them and to close them again after the
-    last such `RUN`, not to add the line after the `COPY` (it would not help). Otherwise, when
-    both are not closed at the end, the output says to add `VINEXT_CLOSE_LINE` directly after that `COPY` and before
-    `USER`, to change nothing else in the file, and why (knext recognises the scaffolded Dockerfile with just that
-    line, so the app keeps the build and asset upload it has). When both ARE closed but the scaffolded `COPY` line is
-    not directly followed by that line (CRLF read as LF), it warns instead that `knext deploy` takes the slower
-    image-sourced path, and says where the line goes. An app with no `Dockerfile`, or one that does not copy
-    `native/` there, or that closes both with the line in place, gets no extra output. `knext ffi generate` and
-    `knext ffi check` print the same hint after their own line, so an app that already has its config sees it too.
+    The final stage only is read (a `COPY` or a `chmod` in a build stage does not reach the image), as instructions
+    with their line continuations joined (`finalStage`). The hint does not read what a command does: it confirms ONE
+    form and says nothing only for it. When that stage copies `native/` to `/app/native` (any `COPY` flags, the JSON
+    form, `--from=`, trailing slashes, quotes, `.` components, a relative destination under a `WORKDIR` that can be
+    read, line continuations and lower case are found; the destination is `VINEXT_DIRS[1]`), the output is empty only
+    when the `COPY` is exactly `VINEXT_NATIVE_COPY`, `VINEXT_CLOSE_LINE` is the very next line of the file (each is one physical line compared as the file has it, so a blank line,
+    a comment or a space fails it, as it fails `deploy`'s byte-for-byte recognition), the file has no `<<`
+    anywhere, no `# escape=` directive and no `SHELL` instruction (it replaces the shell of every `RUN`), and every instruction after the line is `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`,
+    `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL` or the scaffolded read-only `RUN test -f <path> || { echo "<text>"
+    >&2; exit 1; }` (`READ_ONLY_RUN`, matched whole; the text holds no `$`, backtick, backslash or quote). Any other `RUN`, a
+    `COPY` or `ADD`, `ONBUILD`, `SHELL`, `VOLUME` or an instruction it does not know is not confirmed. When the line is
+    not directly after the `COPY`, the output says to add `VINEXT_CLOSE_LINE` there (before `USER`, changing nothing
+    else, and why: knext recognises the scaffolded Dockerfile with just that line, so the app keeps the build and
+    asset upload it has) and that a Dockerfile that closes them another way may load, but is not read, and takes the
+    slower image-sourced path. When it is directly after but one of the above fails, the output says that knext cannot
+    confirm that `/app` and `/app/native` stay closed, and which it was (the `COPY` is another spelling, a blank
+    line or a comment sits between, a line number for an unread instruction, or a heredoc), never the text of the
+    file (a control character in it would reach the terminal). Neither message says the loader will accept the
+    directories. An app with no `Dockerfile`, or one that does not copy `native/` there, or that is the confirmed
+    form, gets no extra output. `knext ffi generate` and `knext ffi check` print the same hint after their own line, so
+    an app that already has its config sees it too.
 - **Manifest scanning** (`manifest.ts`)
   - The wrapper is derived from the built library's bytes, never from the Rust source
     (`generate.ts:generateFiles` calls `manifest.ts:scanManifest`).
@@ -178,7 +177,8 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       `root:staff` `/usr/local`) gets both, each with its condition, and that the executable needs a
       directory of its own (`either`); a home directory is named as one to move, never to give to
       root. Each piece is said
-      once however many directories need it. Where `/app` or `/app/native` is on the list (`closable`) and a directory can be fixed in place (`fix` or `either`) the
+      once however many directories need it. Where `/app` or `/app/native` is on the list and the line can fix it (`closable`: a directory of the pair `VINEXT_DIRS`
+      that fails and is not a sticky one above native/, which is the move's and not the line's) the
       message also says to put exactly `RUN chmod go-w /app /app/native` directly after the scaffolded
       `COPY --chown=0:0 --chmod=a-w native /app/native` line of a vinext app's Dockerfile (a chmod anywhere
       else, or one per directory, takes the deploy off the known-good path, and `knext ffi check` says whether the

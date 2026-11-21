@@ -19,6 +19,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOCS_PAGE, extractRecipe, RECIPES } from '../../scripts/doc-recipe';
 import { emptyDir, removeScratchDirs } from './helpers';
@@ -152,7 +153,8 @@ describe('the commands for a compiled binary run outside a container', () => {
    * which is what a directory the test stages needs. One list, replaced once: the rest of the
    * script is the page's.
    */
-  const LIST = 'for d in /tmp /var/tmp /home /Users /root; do';
+  const LIST =
+    'for d in /tmp /var/tmp /home /Users /root /private/tmp /private/var /private/etc; do';
   const lifted = () => {
     expect(script.split(LIST).length - 1, 'the list of places moved').toBe(1);
     return script.replace(LIST, 'for d in /nonexistent; do');
@@ -163,10 +165,22 @@ describe('the commands for a compiled binary run outside a container', () => {
     expect(at, 'no if after the functions').toBeGreaterThan(0);
     return script.slice(0, at);
   };
+  /** `unsafe_dir` on the path exactly as given: for a place that does not exist on this machine. */
   const unsafe = (path: string, home = '/') =>
     spawnSync('bash', ['-c', `${definitions()}\nunsafe_dir "$1" "$2"`, '_', path, home], {
       encoding: 'utf8',
     }).status === 0;
+  /**
+   * `unsafe_dir` on what the script judges: the path after `real_dir` has followed every link, as the
+   * script does before it asks. On macOS `/tmp`, `/etc` and `$TMPDIR` come back under `/private`, and
+   * a test that skips the resolution judges a path the script never sees.
+   */
+  const unsafeResolved = (path: string) =>
+    spawnSync(
+      'bash',
+      ['-c', `${definitions()}\nr=$(real_dir "$1") || exit 9\nunsafe_dir "$r" /`, '_', path],
+      { encoding: 'utf8' },
+    );
 
   it('hands the real directory, its executable and native/ to root, then removes group and other write', () => {
     expect(script).toContain('sudo chown -R root:root "$R"');
@@ -196,7 +210,7 @@ describe('the commands for a compiled binary run outside a container', () => {
       'it must hold `native/` (with its `.integrity.json`) and one other entry, your executable as a regular file, and nothing else',
     );
     expect(pageText).toContain(
-      'and it must not be a system, home or temporary directory (`/`, `/opt` itself, `/tmp`, `/var/lib`, `/dev`, `/run`, `/etc`, a home directory or anything under one, and the like)',
+      'and it must not be a system, home or temporary directory (`/`, `/opt` itself, `/tmp`, `/var/lib`, `/dev`, `/run`, `/etc`, a home directory or anything under one, and, on macOS, what `/tmp`, `/etc` and `$TMPDIR` really are under `/private`, and the like)',
     );
     expect(pageText).toContain('`/opt/<app>` and `/usr/local/<app>` pass');
     // It never claims a rule it does not apply.
@@ -294,6 +308,15 @@ describe('the commands for a compiled binary run outside a container', () => {
       '/Users/me/app',
       '/root',
       '/root/app',
+      // What /tmp, /var/tmp, /etc and $TMPDIR are on macOS, once a link is followed.
+      '/private/tmp',
+      '/private/tmp/x',
+      '/private/var',
+      '/private/var/tmp',
+      '/private/var/folders/g0/abc/T/app',
+      '/private/var/db/app',
+      '/private/etc',
+      '/private/etc/app',
     ]) {
       expect(unsafe(dir), dir).toBe(true);
     }
@@ -303,6 +326,22 @@ describe('the commands for a compiled binary run outside a container', () => {
     expect(unsafe('/data', '/data/me')).toBe(true);
     expect(unsafe('/data/other', '/data/me')).toBe(false);
     expect(unsafe('/data/me2', '/data/me')).toBe(false);
+  });
+
+  it('judges a place by where it really is: /tmp, /var/tmp, /etc and the temporary directory are unsafe after the links are followed (macOS: under /private), and a directory staged in the temporary directory is refused for that', () => {
+    for (const written of ['/tmp', '/var/tmp', '/etc', tmpdir(), process.env.TMPDIR ?? '/tmp']) {
+      const r = unsafeResolved(written);
+      expect(r.status, `${written} resolves to something the list lets through: ${r.stderr}`).toBe(
+        0,
+      );
+    }
+    // The whole script, nothing lifted: a real directory made in the temporary directory is an app
+    // by every other test, and is refused here because of where it is.
+    const dir = stage();
+    const { r, calls } = runScript(dir);
+    expect(r.status, `${dir} was handed over`).not.toBe(0);
+    expect(r.stderr).toContain('system, home or temporary directory');
+    expect(calls).toEqual([]);
   });
 
   it('resolves a path before it is judged, so what is written cannot hide where it goes: a doubled slash, a trailing one, a dot component, a link', () => {
@@ -428,10 +467,21 @@ describe('the commands for a compiled binary run outside a container', () => {
     const cases: [string, (dir: string) => void][] = [
       ['a stray file', (d) => writeFileSync(join(d, 'notes.txt'), 'x')],
       ['a hidden file', (d) => writeFileSync(join(d, '.env'), 'x')],
+      ['a file whose name starts with two dots', (d) => writeFileSync(join(d, '..x'), 'x')],
+      [
+        'a link that points nowhere',
+        (d) => symlinkSync('/nonexistent-target', join(d, '.dangling')),
+      ],
       ['a stray directory', (d) => mkdirSync(join(d, 'data'))],
       ['a second executable', (d) => writeFileSync(join(d, 'worker'), 'x', { mode: 0o755 })],
       ['no executable', (d) => rmSync(join(d, 'server'))],
-      ['an empty directory', (d) => rmSync(d, { recursive: true, force: true }) || mkdirSync(d)],
+      [
+        'an empty directory',
+        (d) => {
+          rmSync(d, { recursive: true, force: true });
+          mkdirSync(d);
+        },
+      ],
       ['no native/', (d) => rmSync(join(d, 'native'), { recursive: true })],
       ['no manifest', (d) => rmSync(join(d, 'native', '.integrity.json'))],
       [
@@ -520,7 +570,58 @@ describe('the commands for a compiled binary run outside a container', () => {
     }
   });
 
-  it('does not rely on `set -e` to stop: pasted into a shell that has none, a refusal runs nothing after it, and the glob options it uses are not left on', () => {
+  /** The shells on this machine that are not bash (a `sh` that is bash is not one), by the name they are run as. */
+  const otherShells = () =>
+    ['dash', 'zsh', 'ksh', 'ash', 'busybox'].filter(
+      (sh) =>
+        spawnSync(sh, ['-c', 'echo "${BASH_VERSION:-none}"'], {
+          encoding: 'utf8',
+        }).stdout?.trim() === 'none',
+    );
+
+  it('refuses under any shell that is not bash, before it looks at anything: a directory that holds a hidden file would otherwise pass for one that holds only the app', () => {
+    const shells = otherShells();
+    expect(shells.length, 'no shell but bash on this machine to try').toBeGreaterThan(0);
+    // An app that is exactly one, plus a hidden .env: the one thing only a listing that sees dotfiles refuses.
+    const dir = stage((d) => writeFileSync(join(d, '.env'), 'x'));
+    for (const sh of shells) {
+      const sudo = fakeSudo('record');
+      const r = spawnSync(sh, ['-c', lifted()], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${sudo.bin}:${process.env.PATH}`,
+          APP_DIR: dir,
+          HOME: NOHOME,
+        },
+      });
+      expect(r.status, `${sh}: ${r.stderr}`).not.toBe(0);
+      expect(r.stderr, sh).toContain('needs bash');
+      expect(existsSync(sudo.log), `sudo ran under ${sh}`).toBe(false);
+    }
+  });
+
+  it('lists every entry without a bash option: a hidden file is seen by the same script run by bash in posix mode, where shopt is no help', () => {
+    const dir = stage((d) => writeFileSync(join(d, '.env'), 'x'));
+    const sudo = fakeSudo('record');
+    const r = spawnSync('bash', ['--posix', '-c', lifted()], {
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${sudo.bin}:${process.env.PATH}`, APP_DIR: dir, HOME: NOHOME },
+    });
+    expect(r.status, r.stderr).not.toBe(0);
+    expect(r.stderr).toContain('must hold only this app');
+    expect(existsSync(sudo.log)).toBe(false);
+    expect(script).not.toContain('shopt');
+  });
+
+  it('says on the page that the commands need bash', () => {
+    expect(page.replace(/\s+/g, ' ')).toContain(
+      'The commands need bash: run under `sh`, `dash` or `zsh` they refuse before they look at anything.',
+    );
+    expect(script).toContain('${BASH_VERSION:-}');
+  });
+
+  it('does not rely on `set -e` to stop: pasted into a shell that has none, a refusal runs nothing after it, and no glob option is left on', () => {
     const r = spawnSync('bash', ['-c', `${script}\necho "after: $?"; shopt nullglob dotglob`], {
       encoding: 'utf8',
       env: {

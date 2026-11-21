@@ -536,15 +536,20 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    scaffolded with. That file is yours and knext does not edit it, so the line is yours to add: put
    `RUN chmod go-w /app /app/native` directly after the `COPY` that brings `native/` in (and so before `USER`),
    as in the recipe above, and change nothing else in the file. `knext ffi init` prints that line when your
-   `Dockerfile` copies `native/` to `/app/native` and does not already close both directories, and so do
-   `knext ffi generate` and `knext ffi check`. When both are closed, but not by that one line directly after
-   the `COPY`, they warn that `knext deploy` takes the slower path described next. An app built with another
-   builder is told none of this, because those builds stage a `Dockerfile` that already has the line; an app whose
-   build cannot be read (a `knext.config.ts` that does not load) is told as if it were vinext.
-   The `RUN`s are read the way a shell reads them (quoted words, `/bin/chmod`, `sudo`, a path with a dot in it, the
-   `WORKDIR`, the exec form, `sh -c`, `cd`, `find -exec`, a heredoc body), and what cannot be read counts as opening
-   the directories, never as closing them: when a `RUN` after the `COPY` opens them, or may, they say so and where to
-   close them again, instead of asking for a line that would not help.
+   `Dockerfile` copies `native/` to `/app/native` and does not have it directly after that `COPY`, and so do
+   `knext ffi generate` and `knext ffi check`. They do not read what your commands do. They confirm one form,
+   and say nothing only for it: the scaffolded `COPY` of `native/`, then that line as the very next line of the
+   file, byte for byte, and after it nothing but `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`, `ENTRYPOINT`,
+   `CMD`, `HEALTHCHECK`, `STOPSIGNAL` and the scaffolded read-only check
+   (`RUN test -f /app/native/.integrity.json || { echo "..." >&2; exit 1; }`), in a `Dockerfile` with no heredoc, no `escape`
+   directive and no `SHELL` instruction.
+   Anything else is not confirmed: any other `RUN`, a `COPY` or `ADD` after the line, an instruction they do not
+   know, a blank line or a comment between the `COPY` and the line, a space or anything else on either of the two
+   lines, or a `COPY` of `native/` that is not the scaffolded one. They then say which of these it was, and never say that the loader will accept the directories.
+   A `Dockerfile` that closes them some other way may load, but knext cannot confirm it, and `knext deploy`
+   takes the slower path described next. An app built with another builder is told none of this, because those
+   builds stage a `Dockerfile` that already has the line; an app whose build cannot be read (a
+   `knext.config.ts` that does not load) is told as if it were vinext.
 
    Adding that line keeps your app on the path `knext deploy` takes for the scaffolded file. `knext deploy`
    recognises the scaffolded `Dockerfile` byte for byte, as one that copies your host build, and uploads the
@@ -572,8 +577,9 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    other write, and run the binary as an ordinary user. The commands below hand over the whole
    directory, `-R`, so they check it first and change nothing unless it is exactly an app: after following a link to the real directory,
    it must hold `native/` (with its `.integrity.json`) and one other entry, your executable as a regular file, and nothing else,
-   and it must not be a system, home or temporary directory (`/`, `/opt` itself, `/tmp`, `/var/lib`, `/dev`, `/run`, `/etc`, a home directory or anything under one, and the like).
+   and it must not be a system, home or temporary directory (`/`, `/opt` itself, `/tmp`, `/var/lib`, `/dev`, `/run`, `/etc`, a home directory or anything under one, and, on macOS, what `/tmp`, `/etc` and `$TMPDIR` really are under `/private`, and the like).
    A path that is not absolute, does not exist or fails either check is refused with the reason, and nothing is run.
+   The commands need bash: run under `sh`, `dash` or `zsh` they refuse before they look at anything.
    `/opt/<app>` and `/usr/local/<app>` pass. The directories above it must
    already be root's and closed to group and other: a root-owned `/opt/<app>` is fine, a home directory or
    `/tmp` is not, and the refusal names the directory:
@@ -583,7 +589,7 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    # nothing else (for example /opt/myapp). All of it is handed to root, so this checks first that
    # it is exactly that, after following any link to the real directory: native/ with its
    # .integrity.json, and one other entry, the executable, a regular file; and that it is not a
-   # system, home or temporary directory.
+   # system, home or temporary directory. It needs bash and refuses under any other shell.
    real_dir() {
      local p lead
      p=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
@@ -592,7 +598,7 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    }
    unsafe_dir() {
      local d
-     for d in /tmp /var/tmp /home /Users /root; do
+     for d in /tmp /var/tmp /home /Users /root /private/tmp /private/var /private/etc; do
        case "$1" in "$d" | "$d"/*) return 0 ;; esac
      done
      for d in /bin /boot /dev /etc /lib /lib64 /proc /run /sbin /sys /usr/bin /usr/lib /usr/libexec /usr/sbin /usr/share; do
@@ -607,9 +613,9 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
      return 1
    }
    holds_only_app() (
-     shopt -s nullglob dotglob
      native=0 exe=0
-     for e in "$1"/*; do
+     for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+       [ -e "$e" ] || [ -L "$e" ] || continue
        if [ "${e##*/}" = native ]; then
          [ -d "$e" ] && [ ! -L "$e" ] && [ -f "$e/.integrity.json" ] && [ ! -L "$e/.integrity.json" ] || return 1
          native=1
@@ -620,7 +626,10 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
      done
      [ "$native" = 1 ] && [ "$exe" = 1 ]
    )
-   if [ -z "${APP_DIR:-}" ] || [ "${APP_DIR#/}" = "$APP_DIR" ]; then
+   if [ -z "${BASH_VERSION:-}" ]; then
+     echo "refusing: this needs bash, and it is running under another shell" >&2
+     false
+   elif [ -z "${APP_DIR:-}" ] || [ "${APP_DIR#/}" = "$APP_DIR" ]; then
      echo "refusing: APP_DIR must be an absolute path, such as /opt/myapp" >&2
      false
    elif ! R=$(real_dir "$APP_DIR"); then

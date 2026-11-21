@@ -116,7 +116,7 @@
   "scripts/mutation-prove-s13-5-allowlist-note.mjs": 10,
   "scripts/mutation-prove-s13-5-lane-private-tmp.mjs": 15,
   "scripts/mutation-prove-s13-5-timeout-rule.mjs": 8,
-  "scripts/mutation-prove-s18-1-ffi-sealed-tree-swap.mjs": 16,
+  "scripts/mutation-prove-s18-1-ffi-sealed-tree-swap.mjs": 30,
   "scripts/mutation-prove-s8-1-z11-policyoff.mjs": 27,
   "scripts/mutation-prove-s8-5-z8-am3-am6.mjs": 24,
   "scripts/mutation-prove-s9-1-z11-rotation-held.mjs": 64,

@@ -67,6 +67,7 @@
  *   A15  it is named only next to the in-place fix of native/ (fragment)
  *   A16  it is no longer said to go DIRECTLY after the COPY (fragment)
  *   A19  it is named for any directory that can be fixed in place, not only /app and /app/native
+ *   A24  a sticky directory counts toward it    A25  any failing directory counts toward it
  *        (fragment)    A20  /app/native is not counted among those two    A21  /app is not
  *   A22  the sentence names another line than core recognises (it is not built from the constant)
  *        (fragment)    A23  it names another COPY than the scaffolded one (fragment)
@@ -106,36 +107,44 @@
  *   P01  a relative executable path is blamed on a link
  *   X01  the file refusal names two of the three commands that stage the Dockerfile
  *   X02  the unresolved-library refusal names one     X03  the missing-manifest refusal names two
- *   Init hint (`knext ffi init`, proved against init.test.ts, its own spec)
- *   V01  a Dockerfile that already closes both is told again   V02  one without a native/ COPY is told
- *   V03  the line leaves /app open        V04  the hint is never printed
- *   V05  init edits the Dockerfile        V06  the reason is dropped    V07  the placement is dropped
- *   V08  "change nothing else" is dropped          V09  the JSON form of COPY is not read
- *   V10  COPY flags are not skipped                V11  a trailing slash on the destination
+ *   Init hint (`knext ffi init`, proved against init.test.ts, its own spec). The hint does not read
+ *   what a command does: it confirms ONE form (the scaffolded COPY, the close line as the very next
+ *   line of the file, byte for byte, then only instructions that cannot change a mode and the one
+ *   read-only RUN, in a file with no heredoc, no escape directive and no SHELL) and everything else
+ *   prints. Each row below widens that rule by one clause, or lets one named form through, and the
+ *   spec must go red:
+ *   V01  the confirmed form is told it cannot be confirmed    V02  no native/ COPY is told anyway
+ *   V03  the pair names /app/native twice (the line leaves /app open)    V04  the hint is never printed
+ *   V05  init edits the Dockerfile    V06  the reason is dropped    V07  the placement is dropped
+ *   V08  "change nothing else" is dropped    V09  the JSON form of COPY is not read
+ *   V10  COPY flags are not skipped    V11  a trailing slash on the destination
  *   V12  a backslash continuation is not joined    V13  every stage is read, not the final one
- *   V14  /app/native alone is enough               V15  /app alone is enough
- *   V16  a chmod before the copy counts            V17  any chmod counts, go+w included
- *   V18  a recursive chmod of /app is not taken to close /app/native
- *   V19  a RUN line is read as one command (a chmod after &&, ;, || or | is missed)
- *   V20  a mode with no who-letter (-w, =rx) is taken to close the directories (it is subject to the umask)
- *   V21  a later who-less +w is not seen to open them again
- *   V22  a later g+w or o+w does not take an earlier close back
- *   V23  a later chown to somebody but root does not take an earlier close back
- *   V24  a heredoc body is read as instructions     V25  the tabs of a <<- heredoc are not stripped
- *   V26  an app built with another builder is told   V27  the slower-path warning is never given
- *   V28  the slower-path warning is always given     V29  a config with no build is not read as turbopack
+ *   V26  an app built with another builder is told    V29  a config with no build is not read as turbopack
  *   V30  the CLI never reads the app's build (init.test.ts, through the CLI)
- *   V31  the tabs before the terminator of a plain << heredoc are stripped too
- *   V32  a heredoc is opened by any instruction (a LABEL holding "<<EOF" swallows the file)
- *   V33  the body of a RUN heredoc is not read as commands    V34  quotes are not taken off a path
- *   V35  a path to chmod (/bin/chmod) is not the command    V36  a path is not normalised (/app/.)
- *   V37  the WORKDIR is not tracked                          V38  an unreadable path is skipped
- *   V39  a RUN that reopens the directories is told to add the line anyway
- *   V40  sh -c is not read    V41  find -exec is not read    V42  sudo is not a wrapper
- *   V43  an unknown wrapper that runs chmod counts as nothing    V44  xargs is not told apart
- *   V45  a COPY destination is compared as written (relative, quoted, dotted)
- *   V46  the exec form of RUN is not read    V47  cd is not followed
- *   V48  -R is not told apart    V49  a recursive chmod of / does not reach /app
+ *   V45  a COPY destination is compared as written    V50  a destination that starts with /app/native
+ *   V51  the WORKDIR is not tracked
+ *   V52  the line may be anywhere after the COPY    V53  the line is matched by its start
+ *   V54  the COPY's spelling is not compared    V55  the COPY is compared trimmed
+ *   V56  the line need not be the next line (a blank line or a comment between)
+ *   V57  the line is compared trimmed    V58  a CRLF file is read with its carriage returns
+ *   V59  a heredoc is not looked for    V60  only the usual heredoc spellings (<<\EOF is missed)
+ *   V61  an escape directive is not looked for    V62  a SHELL is not looked for
+ *   V63  a SHELL is looked for only after the line
+ *   V64  an unknown instruction is allowed    V65  any RUN is allowed
+ *   V66 to V71  the read-only check is matched loosely, one clause at a time: not whole (V66), not
+ *        from its start (V67), the text may hold $ (V68), a backtick (V69), a backslash (V70), the
+ *        path may be any word (V71)
+ *   V72 to V75  COPY, ADD, ONBUILD, VOLUME are taken to leave the directories alone
+ *   V76 to V94  a named RUN is let through, one row each: sudo -n, xargs -r, ./script, sh /script,
+ *        install -d -m, install -m, mkdir -m, --mount, cd -P, a plain chmod, chown, the exec form,
+ *        setfacl, umask, python, node, perl, true, echo
+ *   V95  a heredoc into cat (`RUN cat > /entry.sh <<'ENV'`) is let through
+ *   V96  the cannot-confirm message says the loader should accept the directories (fragment)
+ *   V97  the add-this-line message says it of a Dockerfile closed another way (fragment)
+ *   V98  the cannot-confirm message prints the text of the instruction (a control character reaches the terminal)
+ *   Directory pair (vinext-pair.test.ts, its own spec; the package's sources copied with the pair changed)
+ *   Z01  the line is typed out, not built from the pair    Z02  the scaffolded COPY is
+ *   Z03  the generated module's test of which directories the line fixes is    Z04  the hint's reading of the COPY is
  *   Known-good variant (core, ffi-vinext-known-good.test.ts, its own spec): `knext deploy` knows
  *   the scaffolded vinext Dockerfile byte for byte and takes another path for any other; the one
  *   line the hint adds must not take an app off it
@@ -145,6 +154,7 @@
  *   G07  the build the hint assumes for a config that names none drifts from core's default builder
  *   G08  the one build the hint speaks to is not the builder core calls vinext
  *   G09  the COPY the hint and the refusal look for drifts from core's    G12  so does the line
+ *   G13  the directory pair moves in the package and core's two lines still name /app and /app/native
  *   G10  the refusal's sentence is not built from the line constant (fragment)    G11  nor from the
  *        COPY constant (fragment)
  *   Generate and check (generate-check.test.ts, its own spec)
@@ -174,6 +184,10 @@
  *   R04  the doubled slashes of //home/me are kept    R05  /dev is not refused
  *   R06  /var/lib is not refused    R07  a directory under the home directory is not refused
  *   R08  a parent of the home directory is not refused    R09  native/ need not hold its manifest
+ *   R16  the commands run under any shell (a hidden file is invisible without dotglob)
+ *   R17 to R19  /private/tmp, /private/var, /private/etc are not refused (macOS)
+ *   R20  hidden entries are not listed    R21  an entry starting with two dots is not
+ *   R22  a link that points nowhere is not an entry
  *   R10  native/ may be a link    R11  the executable may be anything that exists
  *   R12  more than one other entry is accepted    R13  the commands run on APP_DIR as typed, not on
  *        the checked real directory    R14  a path that does not exist is not refused as that
@@ -496,7 +510,7 @@ const LOADER = [
     subject: 'render',
     claim:
       'a sticky directory at or above the executable is not told only to move the install: it is given the conditional advice (chmod it if it is yours) like any other',
-    anchor: String.raw`      else if ((Number(st.mode) & 0o1000) !== 0) move = true;` + '\n',
+    anchor: '      else if (sticky) move = true;\n',
     replacement: '      else if (false as boolean) move = true;\n',
   },
   {
@@ -504,8 +518,8 @@ const LOADER = [
     subject: 'render',
     claim:
       "the executable's own directory is left out of the move advice: a sticky one (the app dropped into a /tmp) is given the conditional advice",
-    anchor: String.raw`      else if ((Number(st.mode) & 0o1000) !== 0) move = true;` + '\n',
-    replacement: '      else if (i > inside && (Number(st.mode) & 0o1000) !== 0) move = true;\n',
+    anchor: '      else if (sticky) move = true;\n',
+    replacement: '      else if (i > inside && sticky) move = true;\n',
   },
   {
     id: 'A03',
@@ -535,16 +549,16 @@ const LOADER = [
     subject: 'render',
     claim:
       'the setgid bit is looked at instead of the sticky bit: a sticky directory (1775) is given the conditional advice and a setgid one (2775) is told only to move',
-    anchor: String.raw`      else if ((Number(st.mode) & 0o1000) !== 0) move = true;` + '\n',
-    replacement: '      else if ((Number(st.mode) & 0o2000) !== 0) move = true;\n',
+    anchor: '      const sticky = i >= inside && (Number(st.mode) & 0o1000) !== 0;\n',
+    replacement: '      const sticky = i >= inside && (Number(st.mode) & 0o2000) !== 0;\n',
   },
   {
     id: 'A07',
     subject: 'render',
     claim:
       'a world-writable directory that is not sticky (chmod 777 /app) is told only to move the install: the world-write bit is counted as shared, which was the rule before the sticky bit alone decided',
-    anchor: String.raw`      else if ((Number(st.mode) & 0o1000) !== 0) move = true;` + '\n',
-    replacement: '      else if ((Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    anchor: '      const sticky = i >= inside && (Number(st.mode) & 0o1000) !== 0;\n',
+    replacement: '      const sticky = i >= inside && (Number(st.mode) & 0o1002) !== 0;\n',
   },
   {
     id: 'A08',
@@ -583,15 +597,9 @@ const LOADER = [
     claim:
       'the sticky bit is checked before the directory is known to be inside native/: a sticky directory inside native/ is told to move the install instead of being fixed in place',
     anchor:
-      String.raw`      if (i < inside) fix = true;` +
-      '\n' +
-      String.raw`      else if ((Number(st.mode) & 0o1000) !== 0) move = true;` +
-      '\n',
+      '      const sticky = i >= inside && (Number(st.mode) & 0o1000) !== 0;\n      if (i < inside) fix = true;\n      else if (sticky) move = true;\n',
     replacement:
-      String.raw`      if ((Number(st.mode) & 0o1000) !== 0) move = true;` +
-      '\n' +
-      String.raw`      else if (i < inside) fix = true;` +
-      '\n',
+      '      const sticky = (Number(st.mode) & 0o1000) !== 0;\n      if (sticky) move = true;\n      else if (i < inside) fix = true;\n',
   },
   {
     id: 'A13',
@@ -742,16 +750,16 @@ const LOADER = [
     subject: 'render',
     claim:
       'the one Dockerfile line that keeps a vinext app on the known-good path is never named in the refusal (fragment)',
-    anchor: String.raw`\${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly`,
-    replacement: String.raw`\${false ? " In a vinext app's Dockerfile, put exactly`,
+    anchor: '\\${closable ? " In a vinext app\'s Dockerfile, put exactly',
+    replacement: '\\${false ? " In a vinext app\'s Dockerfile, put exactly',
   },
   {
     id: 'A15',
     subject: 'render',
     claim:
       'the vinext line is named only where a directory inside native/ is fixed in place, and not for the conditional advice (fragment)',
-    anchor: String.raw`\${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly`,
-    replacement: String.raw`\${closable && fix ? " In a vinext app's Dockerfile, put exactly`,
+    anchor: '\\${closable ? " In a vinext app\'s Dockerfile, put exactly',
+    replacement: '\\${closable && fix ? " In a vinext app\'s Dockerfile, put exactly',
   },
   {
     id: 'A16',
@@ -766,22 +774,40 @@ const LOADER = [
     subject: 'render',
     claim:
       'the vinext line is named for any directory that can be fixed in place, /app and /app/native or not: a refusal about /srv/app is told to edit a Dockerfile line that cannot help it (fragment)',
-    anchor: String.raw`\${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly`,
-    replacement: String.raw`\${(fix || either) ? " In a vinext app's Dockerfile, put exactly`,
+    anchor: '\\${closable ? " In a vinext app\'s Dockerfile, put exactly',
+    replacement: '\\${(fix || either) ? " In a vinext app\'s Dockerfile, put exactly',
   },
   {
     id: 'A20',
     subject: 'render',
     claim: '/app/native is not counted among the directories the vinext line closes',
-    anchor: "      if (dir === '/app' || dir === '/app/native') closable = true;\n",
-    replacement: "      if (dir === '/app') closable = true;\n",
+    anchor: '      if (!sticky && ${VINEXT_DIRS_LITERAL}.includes(dir)) closable = true;\n',
+    replacement:
+      '      if (!sticky && ${VINEXT_DIRS_LITERAL}.slice(0, 1).includes(dir)) closable = true;\n',
   },
   {
     id: 'A21',
     subject: 'render',
     claim: '/app is not counted among the directories the vinext line closes',
-    anchor: "      if (dir === '/app' || dir === '/app/native') closable = true;\n",
-    replacement: "      if (dir === '/app/native') closable = true;\n",
+    anchor: '      if (!sticky && ${VINEXT_DIRS_LITERAL}.includes(dir)) closable = true;\n',
+    replacement:
+      '      if (!sticky && ${VINEXT_DIRS_LITERAL}.slice(1).includes(dir)) closable = true;\n',
+  },
+  {
+    id: 'A24',
+    subject: 'render',
+    claim:
+      "a sticky directory counts toward the vinext sentence: a sticky /app (the move's, not the line's) with another failing directory prints a line that fixes neither",
+    anchor: '      if (!sticky && ${VINEXT_DIRS_LITERAL}.includes(dir)) closable = true;\n',
+    replacement: '      if (${VINEXT_DIRS_LITERAL}.includes(dir)) closable = true;\n',
+  },
+  {
+    id: 'A25',
+    subject: 'render',
+    claim:
+      'any failing directory counts toward the vinext sentence, the pair or not: a refusal about /app/native/ffi is told to add a line that cannot help it',
+    anchor: '      if (!sticky && ${VINEXT_DIRS_LITERAL}.includes(dir)) closable = true;\n',
+    replacement: '      if (!sticky) closable = true;\n',
   },
   {
     id: 'A22',
@@ -1109,9 +1135,18 @@ const INIT = [
   {
     id: 'V01',
     subject: 'init',
-    claim: 'a Dockerfile that already closes /app and /app/native is told to add the line again',
-    anchor: "  if (!(walk.closed.has('/app') && walk.closed.has('/app/native'))) {\n",
-    replacement: '  if (true as boolean) {\n',
+    claim:
+      'the one form knext can confirm is told it cannot be confirmed: the hint never goes quiet',
+    anchor: "  if (why === undefined) return '';\n",
+    replacement: '\n',
+  },
+  {
+    id: 'V03',
+    subject: 'vimage',
+    claim:
+      'the pair names /app/native twice: the line it tells the reader to add leaves /app itself open',
+    anchor: "export const VINEXT_DIRS = ['/app', '/app/native'] as const;\n",
+    replacement: "export const VINEXT_DIRS = ['/app/native', '/app/native'] as const;\n",
   },
   {
     id: 'V02',
@@ -1119,13 +1154,6 @@ const INIT = [
     claim: 'a Dockerfile that does not copy native/ to /app/native is given the vinext hint',
     anchor: "  if (copy === -1) return '';\n",
     replacement: '\n',
-  },
-  {
-    id: 'V03',
-    subject: 'vimage',
-    claim: 'the line it tells the reader to add leaves /app itself open',
-    anchor: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app /app/native';\n",
-    replacement: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app/native';\n",
   },
   {
     id: 'V04',
@@ -1199,127 +1227,12 @@ const INIT = [
     replacement: '    if (false as boolean) {\n',
   },
   {
-    id: 'V13',
-    subject: 'init',
-    claim:
-      'every stage is read, not the final one: a copy or a chmod in a build stage counts for the image',
-    anchor: '  return all.slice(from + 1);\n',
-    replacement: '  return all;\n',
-  },
-  {
-    id: 'V14',
-    subject: 'init',
-    claim: 'closing /app/native alone is enough: /app is left as the builder made it',
-    anchor: "  if (!(walk.closed.has('/app') && walk.closed.has('/app/native'))) {\n",
-    replacement: "  if (!walk.closed.has('/app/native')) {\n",
-  },
-  {
-    id: 'V15',
-    subject: 'init',
-    claim: 'closing /app alone is enough: /app/native is left as the builder made it',
-    anchor: "  if (!(walk.closed.has('/app') && walk.closed.has('/app/native'))) {\n",
-    replacement: "  if (!walk.closed.has('/app')) {\n",
-  },
-  {
-    id: 'V16',
-    subject: 'init',
-    claim: 'a chmod before the copy counts: the copy then makes the directory again',
-    anchor: '  const walk = walkRuns(stage, copy + 1, cwds);\n',
-    replacement: '  const walk = walkRuns(stage, 0, cwds);\n',
-  },
-  {
-    id: 'V17',
-    subject: 'init',
-    claim: 'any chmod counts, whatever mode it sets (go+w opens the directories)',
-    anchor: "  if (effect === 'closes') {\n",
-    replacement: "  if (effect !== 'neither') {\n",
-  },
-  {
-    id: 'V18',
-    subject: 'init',
-    claim: 'a recursive chmod of /app is not taken to close /app/native too',
-    anchor: "    (d) => d === path || (recursive && (path === '/' || d.startsWith(`${path}/`))),\n",
-    replacement: '    (d) => d === path,\n',
-  },
-  {
-    id: 'V19',
-    subject: 'init',
-    claim: 'a RUN line is read as one command: a chmod after && or ; is not seen',
-    anchor: "    } else if (c === '\\n' || c === ';' || c === '&' || c === '|') endCommand();\n",
-    replacement: "    } else if (c === '\\n') endCommand();\n",
-  },
-  {
-    id: 'V20',
-    subject: 'init',
-    claim:
-      'a mode with no who-letter (-w, =rx) is taken as go-w: it is subject to the umask, so it closes nothing the loader needs',
-    anchor: '    const who = m[1] as string;\n',
-    replacement: "    const who = (m[1] as string) || 'go';\n",
-  },
-  {
-    id: 'V21',
-    subject: 'init',
-    claim:
-      'a later mode with no who-letter that gives write (+w) is not seen to open the directories again',
-    anchor: "      if (writes && m[2] !== '-') for (const c of ['g', 'o']) last.set(c, 'open');\n",
-    replacement: '\n',
-  },
-  {
-    id: 'V22',
-    subject: 'init',
-    claim: 'a later chmod that gives group or other write does not take back an earlier close',
-    anchor: '    walk.closed.delete(d);\n    if (!unknown) walk.opened.add(d);\n',
-    replacement: '    if (!unknown) walk.opened.add(d);\n',
-  },
-  {
-    id: 'V23',
-    subject: 'init',
-    claim: 'a later chown to somebody but root does not take back an earlier close',
-    anchor:
-      "  const effect = tool === 'chown' ? (staysRootOwned(what) ? 'neither' : 'opens') : modeEffect(what);\n",
-    replacement: "  const effect = tool === 'chown' ? 'neither' : modeEffect(what);\n",
-  },
-  {
-    id: 'V24',
-    subject: 'init',
-    claim:
-      'the body of a heredoc is read as instructions: a chmod, a COPY or a FROM inside one is taken for a real one',
-    anchor: '      open = HEREDOC_WORDS.has(word) ? heredocsOf(m[2] as string) : [];\n',
-    replacement: '      open = [];\n',
-  },
-  {
-    id: 'V25',
-    subject: 'init',
-    claim:
-      'the tabs before the terminator of a <<- heredoc are not stripped: the heredoc never ends and swallows what follows',
-    anchor:
-      String.raw`      if ((inside.stripTabs ? raw.replace(/^\t+/, '') : raw).trimEnd() === inside.terminator) {` +
-      '\n',
-    replacement: '      if (raw.trimEnd() === inside.terminator) {\n',
-  },
-  {
     id: 'V26',
     subject: 'init',
     claim:
       'the hint is printed for an app built with another builder too (turbopack, webpack): its image already has the line',
     anchor: "  if (build !== undefined && build !== VINEXT_BUILD) return '';\n",
     replacement: '\n',
-  },
-  {
-    id: 'V27',
-    subject: 'init',
-    claim:
-      'a Dockerfile that closes both directories somewhere other than directly after the scaffolded COPY is never warned that deploy takes the slower path',
-    anchor: '  if (at !== -1 && lines[at + 1] !== VINEXT_CLOSE_LINE) {\n',
-    replacement: '  if (false as boolean) {\n',
-  },
-  {
-    id: 'V28',
-    subject: 'init',
-    claim:
-      'the slower-path warning is given even where the line IS directly after the COPY: the hint never goes quiet',
-    anchor: '  if (at !== -1 && lines[at + 1] !== VINEXT_CLOSE_LINE) {\n',
-    replacement: '  if (at !== -1) {\n',
   },
   {
     id: 'V29',
@@ -1330,162 +1243,465 @@ const INIT = [
     replacement: '    const build = (config as { build?: unknown }).build;\n',
   },
   {
-    id: 'V32',
-    subject: 'init',
-    claim:
-      'a heredoc opened by an instruction that only holds text (LABEL x="<<EOF") swallows the rest of the file',
-    anchor: '      open = HEREDOC_WORDS.has(word) ? heredocsOf(m[2] as string) : [];\n',
-    replacement: '      open = heredocsOf(m[2] as string);\n',
-  },
-  {
-    id: 'V33',
-    subject: 'init',
-    claim: 'the body of a RUN heredoc is not read as commands: a chmod inside one is missed',
-    anchor:
-      '  return [...(exec ? [exec] : shellCommands(run.rest)), ...run.body.flatMap(shellCommands)];\n',
-    replacement: '  return [...(exec ? [exec] : shellCommands(run.rest))];\n',
-  },
-  {
-    id: 'V34',
-    subject: 'init',
-    claim: 'a quoted path ("/app") is read with its quotes on: a close or an open of it is missed',
-    anchor: '  return m ? (m[2] as string) : text.trim();\n',
-    replacement: '  return text.trim();\n',
-  },
-  {
-    id: 'V35',
-    subject: 'init',
-    claim: 'a path to chmod (/bin/chmod) is not the command chmod',
-    anchor: "const base = (word: string): string => word.slice(word.lastIndexOf('/') + 1);\n",
-    replacement: 'const base = (word: string): string => word;\n',
-  },
-  {
-    id: 'V36',
-    subject: 'init',
-    claim: 'a path is not normalised: /app/. and /app//native name other directories',
-    anchor:
-      String.raw`  return abs === undefined ? undefined : posix.normalize(abs).replace(/(?<=.)\/+$/, '');` +
-      '\n',
-    replacement:
-      String.raw`  return abs === undefined ? undefined : abs.replace(/(?<=.)\/+$/, '');` + '\n',
-  },
-  {
-    id: 'V37',
-    subject: 'init',
-    claim:
-      'the WORKDIR is not tracked: a relative path after WORKDIR /app is not read, and a relative COPY destination is not found',
-    anchor: "    if (inst.word === 'WORKDIR') dir = resolvePath(inst.rest, dir);\n",
-    replacement: "    if (inst.word === 'WORKDIR') dir = undefined;\n",
-  },
-  {
-    id: 'V38',
-    subject: 'init',
-    claim:
-      'a path that cannot be read (a variable, a glob) is skipped: a chmod that may open the directories is taken for one that does not',
-    anchor: '    if (p === undefined) unknown = true;\n',
-    replacement: '    if (p === undefined) continue;\n',
-  },
-  {
-    id: 'V39',
-    subject: 'init',
-    claim:
-      'a RUN after the copy that opens the directories is told to add the line anyway, which would not help',
-    anchor: '    if (walk.opened.size > 0 || walk.maybe) {\n',
-    replacement: '    if (false as boolean) {\n',
-  },
-  {
-    id: 'V40',
-    subject: 'init',
-    claim: 'sh -c "..." is not read: a chmod inside the string is missed',
-    anchor: '    if (at !== -1 && script !== undefined) {\n',
-    replacement: '    if (false as boolean) {\n',
-  },
-  {
-    id: 'V41',
-    subject: 'init',
-    claim: 'find -exec is not read: a chmod it runs is missed',
-    anchor: '      if (!/^-(?:exec|execdir|ok|okdir)$/.test(w)) return;\n',
-    replacement: "      if (w !== '') return;\n",
-  },
-  {
-    id: 'V42',
-    subject: 'init',
-    claim: 'sudo is not a wrapper: a chmod behind it is not the command chmod',
-    anchor: "  'sudo',\n",
-    replacement: '\n',
-  },
-  {
-    id: 'V43',
-    subject: 'init',
-    claim:
-      'a command that runs a chmod this does not know (an unknown wrapper) is taken for one that does not',
-    anchor: '      words.some((w) => /^(?:chmod|chown)$/.test(base(w)))\n',
-    replacement: '      false\n',
-  },
-  {
-    id: 'V44',
-    subject: 'init',
-    claim: 'xargs is not told apart: the paths it hands a chmod are taken as read',
-    anchor: "    if (name === 'xargs') stdin = true;\n",
-    replacement: '\n',
-  },
-  {
-    id: 'V45',
-    subject: 'init',
-    claim:
-      'a COPY destination is compared as written: a relative one, a quoted one or one with a dot is not /app/native',
-    anchor: "    if (dest !== undefined && resolvePath(dest, dir) === '/app/native') copy = n;\n",
-    replacement: "    if (dest !== undefined && dest === '/app/native') copy = n;\n",
-  },
-  {
-    id: 'V46',
-    subject: 'init',
-    claim: 'the exec form of a RUN is not read: a chmod written as a JSON array is missed',
-    anchor:
-      "      if (Array.isArray(parsed) && parsed.every((p) => typeof p === 'string')) exec = parsed;\n",
-    replacement: '      exec = undefined;\n',
-  },
-  {
-    id: 'V47',
-    subject: 'init',
-    claim: 'cd is not followed: a relative path after a cd names the wrong directory',
-    anchor: "  if (tool === 'cd') {\n",
-    replacement: '  if (false as boolean) {\n',
-  },
-  {
-    id: 'V48',
-    subject: 'init',
-    claim:
-      'a recursive chmod is not told apart from a plain one: -R on /app does not reach /app/native',
-    anchor:
-      "  const recursive = args.some((a) => a === '--recursive' || /^-[A-Za-z]*R[A-Za-z]*$/.test(a));\n",
-    replacement: '  const recursive = false;\n',
-  },
-  {
-    id: 'V49',
-    subject: 'init',
-    claim: 'a recursive chmod of / does not reach /app',
-    anchor: "    (d) => d === path || (recursive && (path === '/' || d.startsWith(`${path}/`))),\n",
-    replacement: '    (d) => d === path || (recursive && d.startsWith(`${path}/`)),\n',
-  },
-  {
-    id: 'V31',
-    subject: 'init',
-    claim:
-      'the tabs before the terminator of a plain << heredoc are stripped too: the heredoc ends where it does not, and the chmod inside it is read as one',
-    anchor:
-      String.raw`      if ((inside.stripTabs ? raw.replace(/^\t+/, '') : raw).trimEnd() === inside.terminator) {` +
-      '\n',
-    replacement:
-      String.raw`      if (raw.replace(/^\t+/, '').trimEnd() === inside.terminator) {` + '\n',
-  },
-  {
     id: 'V30',
     subject: 'cli',
     claim:
       "the CLI never reads the app's build: init and generate tell every app, whatever it builds with",
     anchor: '    const build = await appBuild(cwd);\n',
     replacement: '    const build = undefined;\n',
+  },
+  {
+    id: 'V13',
+    subject: 'init',
+    claim: 'every stage is read, not the final one: a copy in a build stage counts for the image',
+    anchor: "  return all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1);\n",
+    replacement: '  return all;\n',
+  },
+  {
+    id: 'V45',
+    subject: 'init',
+    claim:
+      'a COPY destination is compared as written: a relative one, a quoted one or one with a dot is not /app/native',
+    anchor: '    if (dest !== undefined && resolvePath(dest, dir) === VINEXT_DIRS[1]) copy = n;\n',
+    replacement: '    if (dest !== undefined && dest === VINEXT_DIRS[1]) copy = n;\n',
+  },
+  {
+    id: 'V50',
+    subject: 'init',
+    claim:
+      "a COPY of another destination that merely starts with /app/native (/app/natives) is the app's native/",
+    anchor: '    if (dest !== undefined && resolvePath(dest, dir) === VINEXT_DIRS[1]) copy = n;\n',
+    replacement:
+      '    if (dest !== undefined && resolvePath(dest, dir)?.startsWith(VINEXT_DIRS[1])) copy = n;\n',
+  },
+  {
+    id: 'V51',
+    subject: 'init',
+    claim:
+      'the WORKDIR is not tracked: a relative COPY destination under WORKDIR /app is not /app/native',
+    anchor: "    if (inst.word === 'WORKDIR') dir = resolvePath(inst.rest, dir);\n",
+    replacement: "    if (inst.word === 'WORKDIR') dir = undefined;\n",
+  },
+  {
+    id: 'V52',
+    subject: 'init',
+    claim:
+      'the close line may be anywhere after the COPY: a file that has it later, past a RUN, is not asked to put it directly after',
+    anchor: '  if (next?.text !== VINEXT_CLOSE_LINE) {\n',
+    replacement: '  if (next === undefined) {\n',
+  },
+  {
+    id: 'V53',
+    subject: 'init',
+    claim:
+      'the close line is matched by its start: the line followed by a second command is taken for the line',
+    anchor: '  if (next?.text !== VINEXT_CLOSE_LINE) {\n',
+    replacement: '  if (!next?.text.startsWith(VINEXT_CLOSE_LINE)) {\n',
+  },
+  {
+    id: 'V54',
+    subject: 'init',
+    claim:
+      "the COPY's spelling is not compared: any COPY of native/ to /app/native is the scaffolded one",
+    anchor: '    at.first !== at.last || lines[at.first] !== VINEXT_NATIVE_COPY\n',
+    replacement: '    false\n',
+  },
+  {
+    id: 'V55',
+    subject: 'init',
+    claim:
+      'the COPY is compared with its spaces trimmed: a space around it is the same bytes (deploy reads it byte for byte)',
+    anchor: '    at.first !== at.last || lines[at.first] !== VINEXT_NATIVE_COPY\n',
+    replacement: '    at.text !== VINEXT_NATIVE_COPY\n',
+  },
+  {
+    id: 'V56',
+    subject: 'init',
+    claim:
+      'the line need not be the next line of the file: a blank line or a comment between it and the COPY is fine',
+    anchor: '      : next.first !== at.last + 1 || lines[next.first] !== VINEXT_CLOSE_LINE\n',
+    replacement: '      : lines[next.first] !== VINEXT_CLOSE_LINE\n',
+  },
+  {
+    id: 'V57',
+    subject: 'init',
+    claim: 'the line is compared with its spaces trimmed: a space around it is the same bytes',
+    anchor: '      : next.first !== at.last + 1 || lines[next.first] !== VINEXT_CLOSE_LINE\n',
+    replacement: '      : next.first !== at.last + 1 || next.text !== VINEXT_CLOSE_LINE\n',
+  },
+  {
+    id: 'V58',
+    subject: 'init',
+    claim:
+      'a CRLF file is read with its carriage returns on: the scaffolded file with the line is not confirmed',
+    anchor: '  const lines = text.split(/\\r?\\n/);\n',
+    replacement: "  const lines = text.split('\\n');\n",
+  },
+  {
+    id: 'V59',
+    subject: 'init',
+    claim:
+      'a heredoc is not looked for: a body that reads as the confirmed form, ended by a word that is an allowed instruction, is confirmed',
+    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
+    replacement: '        : /^#\\s*escape\\s*=/im.test(text)\n',
+  },
+  {
+    id: 'V60',
+    subject: 'init',
+    claim:
+      'a heredoc is looked for only in the forms a reader expects (<<EOF, <<-EOF, <<"EOF"): <<\\EOF is missed',
+    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
+    replacement: '        : /<<-?\\s*["\']?\\w|^#\\s*escape\\s*=/im.test(text)\n',
+  },
+  {
+    id: 'V61',
+    subject: 'init',
+    claim:
+      'an escape directive is not looked for: the continuation character moves, and a line that ends in a backslash continues nothing',
+    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
+    replacement: '        : /<</.test(text)\n',
+  },
+  {
+    id: 'V62',
+    subject: 'init',
+    claim:
+      'a SHELL instruction is not looked for: it replaces the shell of every RUN, the read-only check included',
+    anchor: "          : stage.some((inst) => inst.word === 'SHELL')\n",
+    replacement: '          : false\n',
+  },
+  {
+    id: 'V63',
+    subject: 'init',
+    claim:
+      'a SHELL is looked for only after the line: one before the COPY still runs the check after it',
+    anchor: "          : stage.some((inst) => inst.word === 'SHELL')\n",
+    replacement: "          : after.some((inst) => inst.word === 'SHELL')\n",
+  },
+  {
+    id: 'V64',
+    subject: 'init',
+    claim: 'an instruction knext does not know is taken to leave the directories alone',
+    anchor:
+      '  return `line ${inst.first + 1} comes after it, and knext does not know that it leaves them alone`;\n',
+    replacement: '  return undefined;\n',
+  },
+  {
+    id: 'V65',
+    subject: 'init',
+    claim: 'any RUN after the line is taken to leave the directories alone',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement: "  if (METADATA.has(inst.word) || inst.word === 'RUN') {\n",
+  },
+  {
+    id: 'V66',
+    subject: 'init',
+    claim: 'the read-only check is not matched whole: anything after its closing brace is allowed',
+    anchor:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+    replacement:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}/;\n',
+  },
+  {
+    id: 'V67',
+    subject: 'init',
+    claim: 'the read-only check may start anywhere: a command before it is allowed',
+    anchor:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+    replacement:
+      'const READ_ONLY_RUN = /test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+  },
+  {
+    id: 'V68',
+    subject: 'init',
+    claim:
+      'the text the read-only check prints may hold a dollar sign: a command substitution runs',
+    anchor:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+    replacement:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"`\\\\]*" >&2; exit 1; \\}$/;\n',
+  },
+  {
+    id: 'V69',
+    subject: 'init',
+    claim: 'the text the read-only check prints may hold a backtick: a command substitution runs',
+    anchor:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+    replacement:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$\\\\]*" >&2; exit 1; \\}$/;\n',
+  },
+  {
+    id: 'V70',
+    subject: 'init',
+    claim: 'the text the read-only check prints may hold a backslash',
+    anchor:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+    replacement:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`]*" >&2; exit 1; \\}$/;\n',
+  },
+  {
+    id: 'V71',
+    subject: 'init',
+    claim: 'the path the read-only check tests may be any word: a variable is allowed',
+    anchor:
+      'const READ_ONLY_RUN = /^test -[a-z] [\\w./-]+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+    replacement:
+      'const READ_ONLY_RUN = /^test -[a-z] \\S+ \\|\\| \\{ echo "[^"$`\\\\]*" >&2; exit 1; \\}$/;\n',
+  },
+  {
+    id: 'V72',
+    subject: 'init',
+    claim: 'COPY is taken to be an instruction that cannot change a mode',
+    anchor: "  'STOPSIGNAL',\n",
+    replacement: "  'STOPSIGNAL',\n  'COPY',\n",
+  },
+  {
+    id: 'V73',
+    subject: 'init',
+    claim: 'ADD is taken to be an instruction that cannot change a mode',
+    anchor: "  'STOPSIGNAL',\n",
+    replacement: "  'STOPSIGNAL',\n  'ADD',\n",
+  },
+  {
+    id: 'V74',
+    subject: 'init',
+    claim: 'ONBUILD is taken to be an instruction that cannot change a mode',
+    anchor: "  'STOPSIGNAL',\n",
+    replacement: "  'STOPSIGNAL',\n  'ONBUILD',\n",
+  },
+  {
+    id: 'V75',
+    subject: 'init',
+    claim: 'VOLUME is taken to be an instruction that cannot change a mode',
+    anchor: "  'STOPSIGNAL',\n",
+    replacement: "  'STOPSIGNAL',\n  'VOLUME',\n",
+  },
+  {
+    id: 'V76',
+    subject: 'init',
+    claim:
+      '`RUN sudo -n chmod -R 777 /app` after the line is taken to leave the directories alone (sudo -n: the option takes the next word with it)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "sudo -n chmod -R 777 /app"))) {\n',
+  },
+  {
+    id: 'V77',
+    subject: 'init',
+    claim:
+      '`RUN find /app | xargs -r chmod g+w` after the line is taken to leave the directories alone (xargs -r: the paths come from a pipe)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "find /app | xargs -r chmod g+w"))) {\n',
+  },
+  {
+    id: 'V78',
+    subject: 'init',
+    claim:
+      '`RUN ./fix-perms.sh` after the line is taken to leave the directories alone (a script in the build context)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "./fix-perms.sh"))) {\n',
+  },
+  {
+    id: 'V79',
+    subject: 'init',
+    claim:
+      '`RUN sh /fix.sh` after the line is taken to leave the directories alone (sh with a script and no -c)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "sh /fix.sh"))) {\n',
+  },
+  {
+    id: 'V80',
+    subject: 'init',
+    claim:
+      '`RUN install -d -m 0777 /app` after the line is taken to leave the directories alone (install -d -m)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "install -d -m 0777 /app"))) {\n',
+  },
+  {
+    id: 'V81',
+    subject: 'init',
+    claim:
+      '`RUN install -m 0666 x /app/native/x` after the line is taken to leave the directories alone (install -m)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "install -m 0666 x /app/native/x"))) {\n',
+  },
+  {
+    id: 'V82',
+    subject: 'init',
+    claim:
+      '`RUN mkdir -m 777 /app/data` after the line is taken to leave the directories alone (mkdir -m)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "mkdir -m 777 /app/data"))) {\n',
+  },
+  {
+    id: 'V83',
+    subject: 'init',
+    claim:
+      '`RUN --mount=type=bind,source=.,target=/src chmod -R 777 /app` after the line is taken to leave the directories alone (a RUN with a --mount flag)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "--mount=type=bind,source=.,target=/src chmod -R 777 /app"))) {\n',
+  },
+  {
+    id: 'V84',
+    subject: 'init',
+    claim:
+      '`RUN cd -P /app && chmod g+w .` after the line is taken to leave the directories alone (cd -P: the flag is not the directory)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "cd -P /app && chmod g+w ."))) {\n',
+  },
+  {
+    id: 'V85',
+    subject: 'init',
+    claim:
+      '`RUN chmod g+w /app` after the line is taken to leave the directories alone (a plain chmod that opens /app)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "chmod g+w /app"))) {\n',
+  },
+  {
+    id: 'V86',
+    subject: 'init',
+    claim:
+      '`RUN chown -R app /app` after the line is taken to leave the directories alone (a chown to the app user)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "chown -R app /app"))) {\n',
+  },
+  {
+    id: 'V87',
+    subject: 'init',
+    claim:
+      '`RUN ["chmod", "777", "/app"]` after the line is taken to leave the directories alone (the exec form)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "[\\"chmod\\", \\"777\\", \\"/app\\"]"))) {\n',
+  },
+  {
+    id: 'V88',
+    subject: 'init',
+    claim:
+      '`RUN setfacl -m u::rwx /app` after the line is taken to leave the directories alone (an ACL)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "setfacl -m u::rwx /app"))) {\n',
+  },
+  {
+    id: 'V89',
+    subject: 'init',
+    claim:
+      '`RUN umask 000 && mkdir /app/x` after the line is taken to leave the directories alone (a umask)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "umask 000 && mkdir /app/x"))) {\n',
+  },
+  {
+    id: 'V90',
+    subject: 'init',
+    claim:
+      '`RUN python3 -c "import os; os.chmod(\'/app\', 0o777)"` after the line is taken to leave the directories alone (an interpreter (python))',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "python3 -c \\"import os; os.chmod(\'/app\', 0o777)\\""))) {\n',
+  },
+  {
+    id: 'V91',
+    subject: 'init',
+    claim:
+      "`RUN node -e \"require('fs').chmodSync('/app', 0o777)\"` after the line is taken to leave the directories alone (an interpreter (node))",
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === \"node -e \\\"require('fs').chmodSync('/app', 0o777)\\\"\"))) {\n",
+  },
+  {
+    id: 'V92',
+    subject: 'init',
+    claim:
+      '`RUN perl -e "chmod 0777, q(/app)"` after the line is taken to leave the directories alone (an interpreter (perl))',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "perl -e \\"chmod 0777, q(/app)\\""))) {\n',
+  },
+  {
+    id: 'V93',
+    subject: 'init',
+    claim:
+      '`RUN true` after the line is taken to leave the directories alone (a command that does nothing)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "true"))) {\n',
+  },
+  {
+    id: 'V94',
+    subject: 'init',
+    claim:
+      '`RUN echo hi` after the line is taken to leave the directories alone (a command that only prints)',
+    anchor:
+      "  if (METADATA.has(inst.word) || (inst.word === 'RUN' && READ_ONLY_RUN.test(inst.rest))) {\n",
+    replacement:
+      '  if (METADATA.has(inst.word) || (inst.word === \'RUN\' && (READ_ONLY_RUN.test(inst.rest) || inst.rest === "echo hi"))) {\n',
+  },
+  {
+    id: 'V95',
+    subject: 'init',
+    claim:
+      "a heredoc into cat that writes a script (`RUN cat > /entry.sh <<'ENV'`) is let through: its body is read as Dockerfile instructions",
+    anchor: '        : /<<|^#\\s*escape\\s*=/im.test(text)\n',
+    replacement:
+      '        : (/<<|^#\\s*escape\\s*=/im.test(text) && !text.includes("cat > /entry.sh <<\'ENV\'"))\n',
+  },
+  {
+    id: 'V96',
+    subject: 'init',
+    claim: 'the cannot-confirm message says the loader should accept the directories (fragment)',
+    anchor:
+      'This is not a finding that the loader will refuse them: knext does not read what your commands do, so it cannot confirm either way',
+    replacement:
+      'The loader should accept them: knext does not read what your commands do, so it cannot confirm either way',
+  },
+  {
+    id: 'V97',
+    subject: 'init',
+    claim:
+      'the add-this-line message says the loader should accept a Dockerfile that closes them another way (fragment)',
+    anchor: 'A Dockerfile that closes them another way may load, but knext does not read it',
+    replacement:
+      'The loader should accept a Dockerfile that closes them another way, but knext does not read it',
+  },
+  {
+    id: 'V98',
+    subject: 'init',
+    claim:
+      'the cannot-confirm message prints the text of the instruction it did not know (a control character in it reaches the terminal)',
+    anchor:
+      '  return `line ${inst.first + 1} comes after it, and knext does not know that it leaves them alone`;\n',
+    replacement:
+      '  return `${inst.text} comes after it, and knext does not know that it leaves them alone`;\n',
   },
 ];
 
@@ -1560,9 +1776,9 @@ const KNOWN = [
     claim:
       'the COPY the hint and the refusal look for drifts from the one core holds (a newline apart is the only difference allowed)',
     anchor:
-      "export const VINEXT_NATIVE_COPY = 'COPY --chown=0:0 --chmod=a-w native /app/native';\n",
+      'export const VINEXT_NATIVE_COPY = `COPY --chown=0:0 --chmod=a-w native ${VINEXT_DIRS[1]}`;\n',
     replacement:
-      "export const VINEXT_NATIVE_COPY = 'COPY --chown=0:0 --chmod=a-w native /app/native/';\n",
+      'export const VINEXT_NATIVE_COPY = `COPY --chown=0:0 --chmod=a-w native ${VINEXT_DIRS[1]}/`;\n',
   },
   {
     id: 'G10',
@@ -1583,8 +1799,17 @@ const KNOWN = [
     id: 'G12',
     subject: 'vimage',
     claim: 'the line the hint prints drifts from the one core recognises',
-    anchor: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app /app/native';\n",
-    replacement: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app/native /app';\n",
+    anchor: "export const VINEXT_CLOSE_LINE = `RUN chmod go-w ${VINEXT_DIRS.join(' ')}`;\n",
+    replacement:
+      "export const VINEXT_CLOSE_LINE = `RUN chmod go-w ${VINEXT_DIRS.join(' ')} /srv`;\n",
+  },
+  {
+    id: 'G13',
+    subject: 'vimage',
+    claim:
+      "the directory pair moves in the package and core's two lines still name /app and /app/native",
+    anchor: "export const VINEXT_DIRS = ['/app', '/app/native'] as const;\n",
+    replacement: "export const VINEXT_DIRS = ['/app', '/app/legacy'] as const;\n",
   },
 ];
 
@@ -1626,6 +1851,46 @@ const GENERATE = [
   },
 ];
 
+// The directory pair a vinext image's close line names is defined once (vinext-image.ts). The line, the
+// COPY, the generated module's test of which failing directories the line fixes and the hint's reading of
+// the COPY are built from it; vinext-pair.test.ts runs the package's own sources, copied, with the pair
+// changed in the copy, and requires every one to follow.
+const PAIR = [
+  {
+    id: 'Z01',
+    subject: 'vimage',
+    claim:
+      'the line is typed out, not built from the pair: a pair that moves leaves the line saying /app and /app/native',
+    anchor: "export const VINEXT_CLOSE_LINE = `RUN chmod go-w ${VINEXT_DIRS.join(' ')}`;\n",
+    replacement: "export const VINEXT_CLOSE_LINE = 'RUN chmod go-w /app /app/native';\n",
+  },
+  {
+    id: 'Z02',
+    subject: 'vimage',
+    claim: 'the scaffolded COPY is typed out, not built from the pair',
+    anchor:
+      'export const VINEXT_NATIVE_COPY = `COPY --chown=0:0 --chmod=a-w native ${VINEXT_DIRS[1]}`;\n',
+    replacement:
+      "export const VINEXT_NATIVE_COPY = 'COPY --chown=0:0 --chmod=a-w native /app/native';\n",
+  },
+  {
+    id: 'Z03',
+    subject: 'render',
+    claim:
+      "the generated module's test of which failing directories the line fixes is typed out, not built from the pair",
+    anchor: "const VINEXT_DIRS_LITERAL = `[${VINEXT_DIRS.map((d) => `'${d}'`).join(', ')}]`;\n",
+    replacement: "const VINEXT_DIRS_LITERAL = \"['/app', '/app/native']\";\n",
+  },
+  {
+    id: 'Z04',
+    subject: 'init',
+    claim: "the hint's reading of the COPY (its destination) is typed out, not built from the pair",
+    anchor: '    if (dest !== undefined && resolvePath(dest, dir) === VINEXT_DIRS[1]) copy = n;\n',
+    replacement:
+      "    if (dest !== undefined && resolvePath(dest, dir) === '/app/native') copy = n;\n",
+  },
+];
+
 // The musl lane's workflow is read as text by its spec, so the lint counts its rows as wiring. The
 // page's recipe is run, not read, but through a helper that extracts it, which the lint cannot
 // follow: those rows are unattributed (the baseline says how many).
@@ -1639,8 +1904,8 @@ const DOC = [
     subject: 'page',
     claim:
       'an empty or relative APP_DIR is accepted: cd "" stays where it is, and the commands run on whatever that is',
-    anchor: '   if [ -z "${APP_DIR:-}" ] || [ "${APP_DIR#/}" = "$APP_DIR" ]; then\n',
-    replacement: '   if false; then\n',
+    anchor: '   elif [ -z "${APP_DIR:-}" ] || [ "${APP_DIR#/}" = "$APP_DIR" ]; then\n',
+    replacement: '   elif false; then\n',
     options: { commentPrefix: '#' },
   },
   {
@@ -1766,6 +2031,68 @@ const DOC = [
       '       / | /opt | /srv | /mnt | /media | /nix | /snap | /usr | /usr/local | /usr/local/* | /usr/local/bin | /usr/local/lib | /usr/local/sbin | /usr/local/share | /var | /var/cache | /var/lib | /var/log | /var/spool | /var/www) return 0 ;;\n',
     options: { commentPrefix: '#' },
   },
+  {
+    id: 'R16',
+    subject: 'page',
+    claim:
+      'the commands run under any shell: a hidden file is invisible to a shell that has no dotglob, and a directory that holds a .env passes',
+    anchor: '   if [ -z "${BASH_VERSION:-}" ]; then\n',
+    replacement: '   if false; then\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R17',
+    subject: 'page',
+    claim:
+      '/private/tmp is missing from the places that can hold other things: on macOS /tmp resolves to it',
+    anchor:
+      '     for d in /tmp /var/tmp /home /Users /root /private/tmp /private/var /private/etc; do\n',
+    replacement: '     for d in /tmp /var/tmp /home /Users /root /private/var /private/etc; do\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R18',
+    subject: 'page',
+    claim: '/private/var is missing: on macOS $TMPDIR (/var/folders) resolves under it',
+    anchor:
+      '     for d in /tmp /var/tmp /home /Users /root /private/tmp /private/var /private/etc; do\n',
+    replacement: '     for d in /tmp /var/tmp /home /Users /root /private/tmp /private/etc; do\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R19',
+    subject: 'page',
+    claim: '/private/etc is missing: on macOS /etc resolves to it',
+    anchor:
+      '     for d in /tmp /var/tmp /home /Users /root /private/tmp /private/var /private/etc; do\n',
+    replacement: '     for d in /tmp /var/tmp /home /Users /root /private/tmp /private/var; do\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R20',
+    subject: 'page',
+    claim: 'hidden entries are not listed: a .env in the directory is handed to root with the rest',
+    anchor: '     for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do\n',
+    replacement: '     for e in "$1"/* "$1"/..?*; do\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R21',
+    subject: 'page',
+    claim: 'an entry whose name starts with two dots is not listed',
+    anchor: '     for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do\n',
+    replacement: '     for e in "$1"/* "$1"/.[!.]*; do\n',
+    options: { commentPrefix: '#' },
+  },
+  {
+    id: 'R22',
+    subject: 'page',
+    claim:
+      'a link that points nowhere is not an entry: the directory holds something the check never sees',
+    anchor: '       [ -e "$e" ] || [ -L "$e" ] || continue\n',
+    replacement: '       [ -e "$e" ] || continue\n',
+    options: { commentPrefix: '#' },
+  },
 ];
 
 // The musl lane stages the directory the page's commands accept (tests/workflow-ffi-e2e-lane.test.ts).
@@ -1810,6 +2137,7 @@ declareMutations(
     SCAN.length +
     INIT.length +
     KNOWN.length +
+    PAIR.length +
     GENERATE.length +
     DOC.length +
     LANE.length,
@@ -1880,6 +2208,30 @@ for (const m of KNOWN) {
   recordMutation();
 }
 known.finish(KNOWN.length);
+
+const pair = createGuardProver({
+  repoRoot: REPO_ROOT,
+  spec: 'packages/ffi/src/__tests__/vinext-pair.test.ts',
+  subjects: {
+    init: 'packages/ffi/src/init.ts',
+    vimage: 'packages/ffi/src/vinext-image.ts',
+    render: 'packages/ffi/src/render.ts',
+  },
+});
+pair.preflight(PAIR);
+
+console.log('\n=== the vinext directory pair is defined once (vinext-pair.test.ts) ===');
+pair.baseline();
+pair.proveCanSeeRed({
+  subject: 'vimage',
+  anchor: "export const VINEXT_DIRS = ['/app', '/app/native'] as const;\n",
+  replacement: "export const VINEXT_DIRS = ['/app', '/app/legacy'] as const;\n",
+});
+for (const m of PAIR) {
+  pair.run({ ...m, expect: 'red' });
+  recordMutation();
+}
+pair.finish(PAIR.length);
 
 const generate = createGuardProver({
   repoRoot: REPO_ROOT,

@@ -757,7 +757,7 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6` and on `b4d81ae` (on `b4d81ae` the `Lint & Test` job was red, on a comment in core, since fixed); they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed) and on `0c07c17`, where all of them and `Lint & Test` were green; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
     );
     // The CI result on the previous head is recorded, with the one red and how it was fixed.
     expect(amendment).toContain('b4d81ae9b346023ddea03b5a6c5124588c8d2b3d');
@@ -781,9 +781,18 @@ describe('docs — in-process Rust page', () => {
     expect(flatAdr).toContain(
       'printed for an app built for vinext, and for one whose build cannot be told',
     );
+    // The hint confirms one form and never claims more: the exact rule is in the ADR, stated and no stronger.
+    expect(flatAdr).toContain('**The hint does not read what a command does.**');
     expect(flatAdr).toContain(
-      'the hint warns instead that `knext deploy` takes the slower image-sourced path',
+      'It confirms one form and says nothing only for it: the scaffolded `COPY` of `native/` (`VINEXT_NATIVE_COPY`), then `VINEXT_CLOSE_LINE` as the very next line of the file, byte for byte',
     );
+    expect(flatAdr).toContain('in a `Dockerfile` with no `<<` anywhere in it');
+    expect(flatAdr).toContain('Neither message says that the loader will accept the directories');
+    expect(flatAdr).toContain(
+      'knext does not read it and `knext deploy` takes the slower image-sourced path for it',
+    );
+    expect(flatAdr).not.toContain('read the way a shell would read them');
+    expect(flatAdr).not.toContain('What cannot be read counts as opening');
     // What accepts the amendment, and what does not: three lanes on the final head; the nested leg is debt.
     expect(amendment).toContain(
       'Accepted requires three lanes green on the final head of this change: the musl load matrix (x64 and arm64), the kind e2e that calls Rust from a Server Action on a Bun zone, and the Rust crates lane',
@@ -909,13 +918,16 @@ describe('docs — in-process Rust page', () => {
     // Only the one line directly after the COPY is what deploy recognises: a chmod anywhere else closes
     // the directories but takes the slower path, and the hint says so for a vinext app (or one whose
     // build cannot be read) and no other.
-    expect(flat).toContain('they warn that `knext deploy` takes the slower path');
+    expect(flat).toContain('and `knext deploy` takes the slower path described next');
     expect(flat).toContain('An app built with another builder is told none of this');
     expect(flat).toContain('an app whose build cannot be read');
     expect(flat).toContain('is told as if it were vinext');
-    expect(flat).toContain(
-      'and what cannot be read counts as opening the directories, never as closing them',
-    );
+    // The hint does not read commands: one confirmed form, and no claim stronger than that.
+    expect(flat).toContain('They do not read what your commands do. They confirm one form');
+    expect(flat).toContain('then that line as the very next line of the file, byte for byte');
+    expect(flat).toContain('in a `Dockerfile` with no heredoc');
+    expect(flat).toContain('and never say that the loader will accept the directories');
+    expect(flat).not.toContain('read the way a shell reads them');
     expect(flat).toContain('which one line to add');
     expect(flat).not.toContain('the message names the fix');
     // The ADR says the template is unchanged, and nothing says it gains the line or that the image is untouched.

@@ -1105,7 +1105,8 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
   let move = false;
   let link = false;
   let other = false;
-  // /app or /app/native fails: the two a vinext image's one close line names.
+  // /app or /app/native fails and is one the close line can fix: not a sticky one, which is shared
+  // with other software and is told to move the install, not to run a chmod.
   let closable = false;
   for (const [i, dir] of dirs.entries()) {
     const st = $lstatSync(dir, { bigint: true });
@@ -1121,16 +1122,17 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
     const why = $why(st);
     if (why !== '') {
       bad.push(`${$show(dir)} ${why}`);
-      if (dir === '/app' || dir === '/app/native') closable = true;
+      const sticky = i >= inside && (Number(st.mode) & 0o1000) !== 0;
       if (i < inside) fix = true;
-      else if ((Number(st.mode) & 0o1000) !== 0) move = true;
+      else if (sticky) move = true;
       else either = true;
+      if (!sticky && ['/app', '/app/native'].includes(dir)) closable = true;
     }
     pins.push([dir, $id(st)]);
   }
   if (bad.length > 0) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${$show(path)}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.${fix ? " To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}${closable && (fix || either) ? " In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there)." : ''}${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}${move && (fix || either) ? " The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move." : ''}${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}`,
+      `knext ffi: refusing to load ${$show(path)}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.${fix ? " To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}${closable ? " In a vinext app's Dockerfile, put exactly `RUN chmod go-w /app /app/native` directly after the `COPY --chown=0:0 --chmod=a-w native /app/native` line: that keeps the app on the known-good path, and a chmod anywhere else, or one per directory, takes the deploy off it (`knext ffi check` says whether the line is there)." : ''}${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}${move && (fix || either) ? " The other directories on this list can be fixed, but that alone will not make this install load while a sticky one is on the way: the install has to move." : ''}${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}`,
     );
   }
   return pins;

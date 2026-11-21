@@ -36,7 +36,10 @@ import {
 } from "../../../ffi/src/init";
 import { scanManifest } from "../../../ffi/src/manifest";
 import { renderModule } from "../../../ffi/src/render";
-import { VINEXT_NATIVE_COPY as FFI_NATIVE_COPY } from "../../../ffi/src/vinext-image";
+import {
+    VINEXT_NATIVE_COPY as FFI_NATIVE_COPY,
+    VINEXT_DIRS,
+} from "../../../ffi/src/vinext-image";
 import { BUILDERS, DEFAULT_BUILDER_ID } from "../adapters/artifact-contract";
 import { packageRoot } from "../cli/create";
 import {
@@ -83,6 +86,15 @@ describe("the scaffolded vinext Dockerfile plus the one line knext ffi init adds
         expect(VINEXT_NATIVE_COPY.endsWith("\n")).toBe(true);
     });
 
+    it("core's two lines name the directory pair the ffi package defines (`VINEXT_DIRS`): the package builds its own from that pair, so a pair that moves fails here until core follows", () => {
+        expect(VINEXT_FFI_CLOSE_LINE).toBe(
+            `RUN chmod go-w ${VINEXT_DIRS.join(" ")}`,
+        );
+        expect(VINEXT_NATIVE_COPY.trimEnd()).toBe(
+            `COPY --chown=0:0 --chmod=a-w native ${VINEXT_DIRS[1]}`,
+        );
+    });
+
     it("the shipped template holds the COPY exactly once, as a line of its own: a template that moves on makes this fail, not the hint go quiet", () => {
         // The hint looks for the scaffolded COPY by its text; one it cannot find is a Dockerfile it
         // takes to be somebody else's and says nothing about. So a template that changed that line
@@ -95,9 +107,9 @@ describe("the scaffolded vinext Dockerfile plus the one line knext ffi init adds
         expect(template().split(VINEXT_NATIVE_COPY).length - 1).toBe(1);
     });
 
-    it("a close that is not directly after the template's COPY is warned about, so the COPY the hint looks for is the template's own", () => {
+    it("a close that is not directly after the template's COPY is not confirmed: the hint asks for it there, so the COPY the hint looks for is the template's own", () => {
         const cwd = tmp();
-        // The line after USER: closed, but not where deploy recognises it.
+        // The line after USER: not where deploy recognises it, and not the form the hint confirms.
         writeFileSync(
             join(cwd, "Dockerfile"),
             template().replace(
@@ -106,9 +118,10 @@ describe("the scaffolded vinext Dockerfile plus the one line knext ffi init adds
             ),
         );
         const out = dockerfileHint(cwd, "vinext");
-        expect(out).toContain("slower");
+        expect(out).toContain("add this one line");
         expect(out).toContain(`  ${LINE}\n`);
-        expect(out).not.toContain("add this one line");
+        expect(out).toContain("slower");
+        expect(out).not.toContain("should accept");
     });
 
     it("the generated module tells an app the same two lines core recognises: both halves of the sentence are in what the generator renders", () => {

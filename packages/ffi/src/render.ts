@@ -39,7 +39,10 @@
  *   fcntl(F_ADD_SEALS) reached through libc by bun:ffi; measured to work on
  *   Bun 1.4.2). It would bind the bytes against root too, but every module copy
  *   and Worker would get its own copy of the library, which ends the one
- *   library per process that the module copies and Workers rely on.
+ *   library per process that the module copies and Workers rely on (measured:
+ *   two fds of one file dlopen as one library, two sealed copies as two).
+ *   TODO(TD-S14-6a): bind the bytes against root too, once a sealed copy can
+ *   be shared by every opener in the process without a creation race.
  *   The development build
  *   is used only when `NODE_ENV !== 'production'`; every function's `_schema`
  *   value must match the one computed here; any failure is one cached

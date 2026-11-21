@@ -555,10 +555,11 @@ Rust toolchain, and `knext ffi check` (CI) and `knext ffi build` (image) fail on
    plus the record interfaces, enum unions, and the three error classes.
 
 **Amendment 1 (2026-11-21):** item 5.1's integrity check is bound to the bytes that are mapped, not only
-to the file that was opened: the loader also refuses unless root owns the library, the integrity manifest, the
-directories and the directory `native/` sits in, and none is writable by group or other; it opens the manifest
-and the library without following links, and refuses a tree whose directories changed while it was checked.
-See *Amendment 1* at the end of this ADR.
+to the file that was opened: the loader also refuses unless root owns the library, the integrity manifest and
+every directory from the library's parent up to `/`, and none is writable by group or other, so that no user
+but root can rename the tree out from under the checks; it opens the manifest and the library without following
+links or blocking, requires regular files and real directories, and refuses a tree whose directories changed
+while it was checked. See *Amendment 1* at the end of this ADR.
 
 ### D14. Build and image (jev: host `cargo zigbuild` **1.00**, Docker stage 0.00, `cross` 0.00; `native/ffi/<triple>/` **0.99**, separate tree 0.00, embed 0.01; refuse self-contained mode **0.84**, extract to temp 0.15)
 
@@ -628,7 +629,8 @@ Image changes:
 
 - `vinext × bun`: none — a `COPY` of `native` to `/app/native` already ships it beside `/app/server`.
   **As shipped (Amendment 1), every `native/` COPY carries `--chown=0:0 --chmod=a-w`** (the lines below
-  are written without the flags for brevity): the loader refuses a tree that anyone but root owns or can write.
+  are written without the flags for brevity): the loader refuses a tree that anyone but root owns or can write,
+  and it applies the same rule to every directory above `native/`, up to `/`.
 - `turbopack|webpack × bun`, disk mode: the image needs
   `COPY native /app/.next/standalone/native` in the `standalone-bun` stage, so the tree sits
   beside `/app/.next/standalone/knext-standalone-exec` (D13 path 1). `Dockerfile.standalone.hbs`
@@ -644,7 +646,12 @@ Image changes:
   it applies is built **conditionally**: only when `knext.ffi.json` exists does it include a
   `NEST_RULES` entry (`runtime-image.ts`, `count: 1`) that rewrites the inserted line to
   `COPY <prefix>native /app/.next/standalone/<prefix>native`, so `native/` stays beside the
-  nested `<prefix>knext-standalone-exec`. Every rule keeps its exact count, and a non-ffi app's
+  nested `<prefix>knext-standalone-exec`. **A second inserted line (Amendment 1):** directly after that
+  COPY, `RUN chmod go-w /app /app/.next /app/.next/standalone` (and, nested, each prefix directory under
+  `/app/.next/standalone`, from a second rule with `count: 1`). A directory inside a copied tree keeps the
+  build host's mode (0775 under umask 002, measured on Docker 29), which the loader would refuse; `WORKDIR`
+  and the parents a COPY creates are already 0755 and root's, so the line is a no-op there and closes the
+  rest. Every rule keeps its exact count, and a non-ffi app's
   rule list and nested Dockerfile are unchanged (jev 0.91 vs count 0-or-1 or reusing the exec
   rule's append lines). The nested-layout test covers both: an opted-in app gets the rewritten line,
   and a non-ffi app's nested Dockerfile is byte-identical to today's; a mutation that drops the
@@ -717,9 +724,11 @@ a developer machine (D20).
 - **Provenance:** `provenance.json` (D14) travels inside `native/`, so it is hashed into
   `native/.integrity.json`; any signature or attestation over the image covers both, and the loader
   re-checks the library's hash at run time.
-- **Integrity at load:** fail-closed sha256 check (D13), against a manifest that root must own and that is
-  opened without following links (Amendment 1): the manifest names the bytes that pass, so it is as much a
-  trust root as the library.
+- **Integrity at load:** the FFI loader judges, fail-closed, a sha256 check (D13) against a manifest that
+  root must own and that is opened without following links (Amendment 1): the manifest names the bytes that
+  pass, so it is as much a trust root as the library. The loader also refuses unless every directory from the
+  library up to `/` is root's and closed to group and other. This is the FFI loader's rule only: the sharp
+  shim in the vinext image hashes by path and does not judge owner or mode (open debt in Amendment 1).
 - `crates/` itself gets `cargo deny check`, `cargo test`, `cargo clippy -D warnings` and
   `cargo fmt --check` in CI.
 
@@ -838,7 +847,7 @@ measured reason for each rejection are in *Amendment 1*.
 - **Node users cannot use it.** The refusal is explicit, and zone functions are the portable path.
 - **Build-host burden:** Rust, `cargo-zigbuild` and `zig` on the build host (CI images included)
   for any zone that opts in.
-- **A user Dockerfile must give root the tree** (*Amendment 1*): an image whose `native/` or the directory
+- **A user Dockerfile must give root the tree** (*Amendment 1*): an image whose `native/` or any directory
   above it belongs to the app user, or is group- or world-writable, no longer loads. There is no opt-out.
   Committed wrappers must be regenerated for the check to exist at all.
 - **A new optional package** (`@getknext/ffi`) and two crates to maintain; crates.io and npm
@@ -877,20 +886,19 @@ Shared files, so disjoint ownership holds by section, not by file:
 Founder actions, not tickets: publishing `@getknext/ffi` to npm and the crates to crates.io, which
 also moves D3's git `rev` pin to a crates.io version.
 
-## Amendment 1 (2026-11-21) — the integrity check binds the mapped bytes to owner and mode, and a tree swapped between its steps changes nothing (TD-S14-6a, TD-S17-close-1)
+## Amendment 1 (2026-11-21) — the integrity check binds the mapped bytes to owner and mode, and no non-root user can swap the tree it reads (TD-S14-6a, TD-S17-close-1)
 
-Status: Proposed (2026-11-21), revised the same day for TD-S17-close-1. Implemented in the change that
+Status: Proposed (2026-11-21), revised twice the same day for TD-S17-close-1. Implemented in the change that
 records it; the sprint-close design review accepts it or files debt. It amends D13 items 4 and 5.1, and
-carries a pointer in D14 (the image's `native/` COPY) and D16 (integrity at load): the first version named
-both in this sentence and never edited either. It is an ADR and a security-invariant trigger.
+carries a pointer in D14 (the image's `native/` COPY and the line that closes the directories above it) and
+D16 (integrity at load). It is an ADR and a security-invariant trigger.
 
 **Why it stays Proposed.** The code matches items 1 to 5, 7 and 8: the loader tests run a real library against
 each, and `scripts/mutation-prove-s18-1-ffi-sealed-tree-swap.mjs` removes each guard and watches them go red.
-It does not yet match item 6 as a *proved* claim: the musl load lane and the documented-recipe legs that prove
-the shipped images pass need docker, root and a zig cross-build, and have not run on this revision, which adds
-a file (the manifest) to what they must hand to root. Item 8 also states a limit that stays open (the
-directories are pinned, not locked). Accepting it waits for that lane to run green and for the sprint-close
-review to take the limit as debt.
+Item 6 is **pending**: the musl load lane and the `ffi-e2e` documented-recipe legs, which prove the shipped
+images pass, need docker, root and a zig cross-build, and have not run on this revision. That revision adds a
+file (the manifest) to what they must hand to root, and a `chmod` line to the images. What was measured by hand
+(item 6) is evidence, not the lane. Accepting it waits for that lane to run green and for the sprint-close review.
 
 ### Context
 
@@ -904,7 +912,7 @@ sidecar that shares the volume; an `fsGroup`-writable volume.
 
 **The gap in the first version (TD-S17-close-1).** Each check went by path and nothing tied one step to the next:
 the manifest was read by path, the library opened by path, and the directories stat-ed by path afterwards. A
-writer of the parent of the executable's directory (which the rule does not judge) can rename the whole tree away
+writer of the parent of the executable's directory (which the rule did not judge) can rename the whole tree away
 between those steps. The tree they swap in carries their own manifest and a link to any library root owns; the
 real tree is renamed back before the directories are stat-ed, so every check passes and the library root owns
 loads. It does not reach the shipped images (nothing there can write that parent); it does reach a compiled binary
@@ -913,57 +921,80 @@ run outside a container, which this amendment's own recipe invites.
 ### Decision
 
 The generated loader refuses unless the following hold. They are judged by owner and mode on the descriptor
-each file was opened as (`fstat`: the manifest, and the library that is hashed) and on each directory (`stat`),
-and never by `access()`, which answers yes to root for everything. The directories are judged and pinned before
-the manifest is read.
+each file was opened as (`fstat`: the manifest, and the library that is hashed) and on each directory
+(`lstat`), and never by `access()`, which answers yes to root for everything. The directories are judged and
+pinned before the manifest is read.
 
-1. **The rule.** The integrity manifest, the library, every directory from the library's parent up to `native/`,
-   and the directory `native/` sits in (beside the executable) are each owned by uid 0 and not writable by group
-   or other. These paths exactly: the walk is built from the library's path relative to `native/`, so it cannot
-   run up to `/`.
+1. **The rule.** The integrity manifest, the library, **and every directory from the library's parent up to
+   `/`**, which is every directory below `native/`, `native/` itself, the directory beside the executable and
+   each directory above that, are owned by uid 0 and not writable by group or other. The walk starts from the
+   real path of the executable's directory, resolved once, so the directories judged are the ones the lookups go
+   through. The mode bits are the whole test: a sticky, world-writable directory such as `/tmp` is refused,
+   because the sticky bit stops deleting what someone else owns and does not stop renaming a directory you can
+   write.
 2. **The user the process runs as is not trusted.** No uid but 0 is accepted as the owner, and the rule never
    reads the process's own uid. That user can `chmod` what it owns, so an app-owned tree, even read-only, would
    protect nothing from a file-write bug in the app. There is no opt-out (jev: require root, no opt-out
    **0.79**).
-3. **Why the directories count.** A directory that someone else can write lets them rename or replace the
-   library, or the directory itself, before the process opens it. The descriptor pin covers only what is
-   already open, which is why item 8 also pins the directories themselves.
+3. **Why every ancestor, and why that is sufficient against a non-root actor.** Renaming or replacing a
+   directory needs write permission on its parent, so someone who can swap the tree has to be able to write some
+   directory on the path from `native/` to `/`. The rule closes every one of them to group and other and gives
+   every one to root, so no user but root can. If one is open the walk refuses at it, and which one it meets
+   first does not matter: the refusal is the same. This is the rule OpenSSH's `StrictModes` applies to a user's
+   key files, for the same reason (every directory above the file, up to `/`). It makes the by-path lookups
+   sound without anchoring them to a directory descriptor, which Bun cannot do (option g). It closes the
+   residual the previous revision recorded, redirecting the path to an older tree root also wrote: to aim the
+   path at another tree an actor has to write a directory on it, and now only root can.
 4. **The manifest is judged like the library.** The first version of this amendment left
    `native/.integrity.json` unjudged, reasoning that it is "a claim the loader tests, not a capability" and that
    rewriting it can only make the load refuse. That was wrong. The manifest is what authorises a file: it holds
-   the hash that must match, so whoever can write it chooses which bytes pass. The reasoning held only while the
-   library was known to be the real, root-owned one, and that is exactly what a swapped tree changes: the
-   attacker's manifest lists the digest of whatever the path now leads to. Judged on its own descriptor (uid 0,
-   not writable by group or other) and read through that descriptor, a manifest the attacker made cannot pass,
-   and one root wrote can only bless a library root wrote. The directories above the one `native/` sits in are
-   still not judged: a writer there can rename the tree that is there, but what it puts in its place has to pass
-   items 1, 7 and 8 on files and directories it does not own. What remains is aiming the path at another complete
-   tree that root wrote (an older release, say), which looks the same as the real one and is not detected.
+   the hash that must match, so whoever can write it chooses which bytes pass. Judged on its own descriptor
+   (uid 0, not writable by group or other) and read through that descriptor, a manifest that someone else made
+   cannot pass, and one root wrote can only bless a library root wrote.
 5. **The development build is out of scope and accepted.** When `NODE_ENV` is not `production` and no library
    is staged, the module loads `<crate>/target/{release,debug}` with no check (D13 item 5.2), as before. A staged
    library that is refused throws and never falls through to the development build; a loader test pins that for
    a hash mismatch, an unlisted library, a missing manifest, a group-writable library and an app-owned one.
-6. **The shipped images pass.** BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the files 0444, the
-   directories below `native/` 0555, and `native/` and the directory above it root-owned 0755; the images run
-   as `USER 65532`. The musl load lane builds the Dockerfile recipe from the user docs verbatim, from a source
-   tree made group-writable on purpose, asserts those modes, and loads the image as uid 65532.
+6. **The shipped images pass: pending the musl and `ffi-e2e` lanes.** The base images' own directories
+   (`/`, `/usr`, `/usr/local`, `/usr/local/bin`, `/opt`) are root-owned 0755 (measured on the pinned Bun images).
+   BuildKit's `COPY --chown=0:0 --chmod=a-w` leaves the copied files 0444, the directories below `native/` 0555,
+   and `native/` root-owned 0755; `WORKDIR`, the parents a `COPY` creates and a directory `COPY`'s destination are
+   0755 and root's whatever the build host's modes are, so the vinext image (`/app`) and the flat standalone image
+   (`/app`, `/app/.next`, `/app/.next/standalone`) pass as they are. **A nested (monorepo) standalone image
+   did not:** `apps` and `apps/web` sit inside the copied tree and keep the build host's mode, which is 0775
+   under umask 002 (measured on Docker 29), and the loader would refuse them. `stageStandaloneBuildContext` now
+   adds `RUN chmod go-w` over every directory above the executable, right after the `native/` COPY, with each
+   prefix directory in the nested rule; `ffi-image-staging.test.ts` models the build host's worst-case modes
+   against the staged Dockerfiles of all three layouts (and fails without the line). The images run as
+   `USER 65532`. Run by hand on this revision: a container from the pinned Alpine Bun image, its own binary at
+   `/usr/local/bin`, loads as uid 65532 and is refused, with the offending path in the message, for each of: a
+   group-writable executable directory, ancestor and root directory, a sticky world-writable `/usr`, an ancestor
+   owned by uid 65532, `native` replaced by a link, and a manifest owned by 65532. The lanes remain the proof.
 7. **Links are never followed.** The manifest and the library are opened with `O_NOFOLLOW`, so a symbolic link
-   at either path is refused, whatever it points at, even a library root owns (a link would otherwise let any
-   root-owned file stand in). A platform with no `O_NOFOLLOW` is refused, because an absent flag ORs in as 0 and
-   would follow links without a sign. The check that something is staged for this platform is an `lstat`, not
-   `existsSync`, so a dangling link is a refusal, never "nothing staged" and a fall-through to the development
-   build.
-8. **The directories are pinned.** Each directory item 1 names is judged and its `dev:ino` recorded (as `bigint`,
-   so an inode above 2^53 does not collide) **before** the manifest is read, and compared again after the library
-   is hashed; one that changed, or is gone, is a refusal.
-   **Limit (TD-S17-close-1, `TODO` in `render.ts`):** the directories are looked up by path, so they are pinned,
-   not locked. Bun's `fs` has no `openat`, and macOS has no descriptor-relative path (`/dev/fd/<n>/x` is `ENOENT`,
-   measured on Bun 1.4.2); Linux's `/proc/self/fd/<dirfd>/` would have stood in for one, and was dropped rather
-   than ship a rule that holds on one platform. A tree swapped in and put back between two looks is not seen,
-   and does not need to be: what it can supply is bounded by items 1, 4 and 7.
+   at either path is refused, whatever it points at, even a library root owns. Each directory on the path is
+   `lstat`-ed and must be a real directory: a link at `native/`, at `native/ffi` or at any ancestor is refused
+   rather than followed (the executable's own directory is resolved once, at the start, so a link above it is
+   resolved and the directories judged are the real ones). A platform where `O_NOFOLLOW` or `O_NONBLOCK` is not
+   a positive number is refused, because an absent flag ORs in as 0 and would follow links, or block, without a
+   sign. The check that something is staged for this platform is an `lstat`, not `existsSync`, so a dangling
+   link is a refusal, never "nothing staged" and a fall-through to the development build.
+8. **Files must be regular files and must not block.** Both files are opened with `O_NONBLOCK` and refused
+   unless `fstat` says regular file, so a FIFO at either path is a cached refusal and not a call that hangs for
+   ever, and a directory or a device is never read.
+9. **Defence in depth: the directories and files are pinned.** Each directory item 1 names has its `dev:ino`
+   recorded (as `bigint`, so an inode above 2^53 does not collide) **before** the manifest is read, and
+   compared again, by `lstat`, after the library is hashed; one that changed, or is gone, is a refusal. The
+   manifest's and the library's paths are also looked at again and must still name the files that were read.
+   None of this stops a non-root actor, which the rule already does; it makes a tree swapped by an actor the
+   rule does not stop (root, a second mount) a refusal when it is seen, and it is why the swap-and-put-back
+   case has a test.
 
-The rule reads mode bits only. It does not stop root or anything with `CAP_DAC_OVERRIDE`, a second writable
-mount of the same files, or an ACL that grants write (on macOS an ACL can).
+**What is not stopped.** Code that runs as uid 0, or with `CAP_DAC_OVERRIDE` or `CAP_FOWNER` (a process that is
+root in its own user namespace is root as far as the rule can tell, which is why the app is to run as a non-root
+user); a second writable mount of the same files; and an ACL that grants write (the rule reads mode bits only, and
+on macOS an ACL can). Nothing in the loader can tell such an actor's tree from the real one. The owner of an
+ancestor is no longer on this list: every ancestor is root's. The directories are still looked up by path, so
+they are checked, not locked, and the check holds against anyone the permission model stops.
 
 ### Options considered
 
@@ -976,48 +1007,59 @@ Measured on Bun 1.4.2, Linux, unless stated.
 | (b) refuse unless the library is on a read-only mount | Rejected. Read-only is a per-mount flag: a read-only mount with a writable mount of the same files beside it passes, and a user Dockerfile with no mount at all has none to check. |
 | (c) a sealed `memfd` copy (`memfd_create` plus `F_ADD_SEALS` through libc by `bun:ffi`) | Works, and would bind the bytes against root too, but rejected. Two file descriptors of one file `dlopen` as one loaded library; two sealed copies of the same bytes `dlopen` as two libraries. Every module copy (a bundler layer, a Worker) would then load its own library with its own state, ending the one library per process that D13 relies on. |
 | (d) `access(W_OK)` | Rejected. Root passes it for every file, so it says nothing about the writer that matters. |
-| (e) pin the directories by `dev:ino` only, leaving the manifest unjudged (the first answer to TD-S17-close-1) | Rejected as the whole fix. A path-based pin is defeated by a swap that is put back before the second look, and it leaves the real hole, which is that the manifest authorises the file. Kept as a tripwire (item 8). |
-| (f) judge the manifest and the library on their own descriptors, and open both with `O_NOFOLLOW` | **Chosen, with (e) as the tripwire.** An attacker-made file cannot be root's, and a link is never followed, so a swapped tree can supply only what root wrote. |
-| (g) anchor every lookup to a directory descriptor (`openat`, or `/proc/self/fd/<dirfd>/…`) | Not available. Bun's `fs` has no `openat`; `/dev/fd/<n>/x` is `ENOENT` on macOS. Recorded as the `TODO` under item 8. |
+| (e) pin the directories by `dev:ino` only, leaving the manifest unjudged (the first answer to TD-S17-close-1) | Rejected as the whole fix. A path-based pin is defeated by a swap that is put back before the second look, and it leaves the real hole, which is that the manifest authorises the file. Kept as a tripwire (item 9). |
+| (f) judge the manifest and the library on their own descriptors, and open both with `O_NOFOLLOW` | **Chosen, with (e) as the tripwire.** An attacker-made file cannot be root's, and a link is never followed. On its own it still left the rule's one gap: a swapped-in tree could supply any complete tree root wrote. |
+| (g) anchor every lookup to a directory descriptor (`openat`, or `/proc/self/fd/<dirfd>/…`) | Not chosen, and the first version argued it wrongly. It is *not* unavailable on Linux: `/proc/self/fd/<dirfd>/x` works there. What fails is the portable form: Bun's `fs` has no `openat`, and macOS has no descriptor-relative path (`/dev/fd/<n>/x` is `ENOENT`, measured on Bun 1.4.2), so it would be a rule that holds on one platform. It also adds nothing against a non-root actor once (h) holds. Not pursued; revisit only if Bun gains `openat`. |
+| (h) require every directory from `native/` up to `/` to be root-owned and closed to group and other, as OpenSSH `StrictModes` does | **Chosen (jev 0.96; a wording-only fix that left the gap 0.04).** Renaming a directory needs write on its parent, so a user who is not root can swap no part of the path, and the by-path lookups are sound without any descriptor anchor. The same rule on every platform. The price is that a binary installed under a directory root does not own (a home directory, `/tmp`, a deploy user's `/opt/<app>`) is refused, where one under a root-owned `/opt/<app>` is fine; the refusal names the directory. |
 
 ### Consequences
 
 - In-place writes, hard links and writable mappings by any non-root writer, the app's own user included, no
-  longer change what runs after the hash. The check costs a few `stat` calls on the first load, and nothing per call.
-- **A user Dockerfile that `chown`s `native/`, or the directory that holds it, to the app user stops loading.**
-  So does an image whose tree is group- or world-writable, and a volume at `native/` that a sidecar or `fsGroup`
-  can write. The first call throws an `FfiLoadError` that names the path and the fix. There is no opt-out: the
-  way out is the layout on the docs page, which CI builds verbatim and loads as uid 65532. A compiled binary run
-  outside a container needs the page's two commands (`chown` to root, `chmod go-w`), also run verbatim by CI.
+  longer change what runs after the hash, and no non-root writer can swap the tree it is read from. The check
+  costs a few `lstat` calls on the first load, and nothing per call.
+- **A user Dockerfile that `chown`s `native/`, the directory that holds it or any directory above it to the app
+  user stops loading.** So does an image whose tree, or any directory on the way to it, is group- or
+  world-writable, and a volume at one of those paths that a sidecar or `fsGroup` can write. The first call
+  throws an `FfiLoadError` that names the path and the fix. There is no opt-out: the way out is the layout on the
+  docs page, which CI builds verbatim and loads as uid 65532.
+- **A compiled binary run outside a container** is refused when any directory above it is not root's or is
+  writable by group or other: a binary under a user's home directory or `/tmp` is, one installed under a
+  root-owned `/opt/<app>` or `/usr/local` is not. The page's two commands (`chown` to root, `chmod go-w`) cover
+  `native/`; the directories above it must already be root's.
 - **Committed wrappers must be regenerated.** The loader is generated code, so every committed wrapper changes:
   `knext ffi check` (CI) and `knext ffi build` report it out of date until `knext ffi generate` is re-run and
   committed. A wrapper generated before this change keeps the old loader, so it is not protected until it is
   regenerated. A changeset says so.
 - **The manifest must be root-owned too**, so a user Dockerfile or run script that handed `native/` to root
   before keeps passing, and one that left the manifest to another user now fails with the manifest's path. A
-  symbolic link anywhere on the library's or the manifest's own path is refused, so a `native/` assembled from
-  links must be copied as plain files.
-- Residual: root, `CAP_DAC_OVERRIDE`, a second writable mount and an ACL are not stopped; the directories are
-  pinned, not locked (item 8); and redirecting the path to another tree root wrote is not detected. Binding the
-  bytes against root remains open: `TODO(TD-S14-6a)`, and it would need the one-library rule kept, for example one
-  sealed copy shared by every module copy.
+  symbolic link at the manifest, the library or any directory on the path is refused, so a `native/` assembled
+  from links must be copied as plain files.
+- **Images change by one line**: with `knext.ffi.json`, the staged standalone Dockerfile gains a `RUN chmod
+  go-w` after the `native/` COPY. An app without the file gets today's Dockerfile byte for byte (D17).
+- Residual: root, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, a second writable mount and an ACL are not stopped, and
+  the directories are checked, not locked. Binding the bytes against root remains open: `TODO(TD-S14-6a)`, and it
+  would need the one-library rule kept, for example one sealed copy shared by every module copy.
 - **One tree, two rules.** The vinext image's `native/` also holds sharp's addon, which
   `sharp-addon-dlopen.mjs` hashes and loads by path with no owner or mode check, so sharp is protected only by
   the same image layout. This is recorded in the threat model (`/app/native`) as open debt, and is not changed
-  here: it is core runtime, with its own tests.
+  here: it is core runtime, with its own tests. The next change (S18-2) is to move the judgement (`$judge`, the
+  ancestor walk and `$openFile`) into one core-owned fragment that the generated loader and that shim both use,
+  kept identical by a byte-compare test.
 
 ### Action items
 
-- [x] `render.ts` `$sealed`; loader tests (faked owners, real modes, the bounded walk, no fall-through to the
+- [x] `render.ts` `$sealed`; loader tests (faked owners, real modes, the walk to `/`, no fall-through to the
       development build); the zone wrapper's loader byte-compared with the renderer's.
 - [x] The musl load lane: both legs as uid 65532, an app-owned tree refused, the documented Dockerfile recipe and
       the own-binary commands run verbatim, cleanup of the root-owned staged trees.
-- [x] TD-S17-close-1: manifest judged, `O_NOFOLLOW`, `lstat`, directory pins; loader tests with a real library and
-      the attacker's tree renamed in at the moment the loader reaches for the manifest; the mutation prover.
-- [ ] Run the musl load lane on this revision (it needs docker, root and a zig cross-build), then take the
-      amendment to Accepted at the sprint-close review.
-- [ ] `TODO(TD-S17-close-1)`: anchor the directory lookups to a descriptor, if Bun gains `openat` or a portable
-      stand-in appears.
+- [x] TD-S17-close-1: manifest judged, `O_NOFOLLOW`/`O_NONBLOCK`, regular files only, `lstat` of every
+      directory, the walk from `native/` to `/`, directory and file pins; loader tests with a real library and the
+      attacker's tree renamed in at the moment the loader reaches for the manifest; the mutation prover.
+- [x] The images: the `chmod go-w` line over the directories above the executable, for the flat and nested
+      layouts; a layout model test; a real build on Docker 29 (measured by hand).
+- [ ] Run the musl load lane and the `ffi-e2e` legs on this revision (docker, root, a zig cross-build), then
+      take the amendment to Accepted at the sprint-close review.
 - [x] Docs page, threat model (the in-process Rust entry and the `/app/native` reconciliation), this amendment.
-- [ ] The sharp shim: the descriptor pin and the owner and mode rule (open debt).
+- [ ] The sharp shim: the descriptor pin, the ancestor walk and the owner and mode rule, from the shared fragment
+      (S18-2; open debt).
 - [ ] `TODO(TD-S14-6a)`: bind the bytes against root.

@@ -378,7 +378,7 @@ describe('docs — in-process Rust page', () => {
     const body = must(page, /where the library is loaded from/i);
     const mismatch = templateAfter(
       rendered,
-      /if \(actual !== expected\) \{\s*\$closeSync\(fd\);\s*throw new FfiLoadError\(\s*`/,
+      /if \(actual !== expected\) \{\s*\$closeSync\(lib\.fd\);\s*throw new FfiLoadError\(\s*`/,
     );
     expectBlock(body, pattern(mismatch), 'the sha256 mismatch refusal');
     const notice = templateAfter(
@@ -404,7 +404,8 @@ describe('docs — in-process Rust page', () => {
     const flat = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
     // Root owns it; the user the app runs as does not count, because it can chmod what it owns.
     expect(flat).toContain('Root must own the library');
-    expect(flat).toContain('the directory `native/` sits in');
+    expect(flat).toContain('every directory from the library up to `/`');
+    expect(flat).toContain('the directory beside the executable and each directory above that');
     expect(flat).toContain('the user the app runs as included');
     expect(flat).toContain('could change the permissions of what it owns');
     // Who it protects against, and who it does not.
@@ -420,11 +421,13 @@ describe('docs — in-process Rust page', () => {
     expect(flat).toContain('There is no setting that turns the check off');
     // Why a directory has to be root's too: the one sentence a user who hits the refusal needs.
     expect(flat).toContain(
-      'The directory that holds `native/` must be owned by root too, and not writable by group or other',
+      'Every directory above `native/`, up to `/`, must be owned by root too, and not writable by group or other',
     );
     expect(flat).toContain(
       'lets them rename or replace the library, or the directory itself, before the process opens it',
     );
+    expect(flat).toContain('and the same is true of any directory above it');
+    expect(flat).toContain('looks at every directory on the way');
     // What the module does about a swap, stated for users: links, the manifest, directories that changed.
     expect(flat).toContain(
       'The module opens the manifest and the library without following symbolic links',
@@ -434,14 +437,18 @@ describe('docs — in-process Rust page', () => {
       'refuses a tree whose directories changed while the library was being checked',
     );
     expect(flat).toContain(
-      'So is a symbolic link where the library or `native/.integrity.json` should be',
+      'So is a symbolic link where the library, `native/.integrity.json`, `native/` or any directory on the way should be',
     );
     expect(flat).not.toContain('the module pins only the file it has already opened');
     // What to do in your own image, and for a compiled binary outside a container.
     expect(flat).toContain('(`RUN chown -R app /app`) does not pass');
     expect(flat).toContain(
-      'A compiled binary you run outside a container needs the same ownership',
+      'A compiled binary you run outside a container needs the same ownership, and so does every directory above it',
     );
+    // The consequence a user installing outside a container has to know, with the line between fine and refused.
+    expect(flat).toContain('a root-owned `/opt/<app>` is fine');
+    expect(flat).toContain('a home directory or `/tmp` is not');
+    expect(flat).toContain('the refusal names the directory');
     expect(flat).toContain('A volume mounted at `native/`');
     // The old, weaker rule is gone from the page.
     expect(page).not.toMatch(/or the one the app runs\s+as/);
@@ -465,27 +472,48 @@ describe('docs — in-process Rust page', () => {
     const entry = model.slice(at, model.indexOf(' ### ', at + 10));
     expect(entry).toContain('owned by root');
     expect(entry).toContain('the user the app runs as');
-    expect(entry).toMatch(/root, `CAP_DAC_OVERRIDE`/);
+    expect(entry).toMatch(/root or with `CAP_DAC_OVERRIDE` or `CAP_FOWNER`/);
     expect(entry).toMatch(/ACL/);
     expect(entry).toMatch(/macOS/);
     expect(entry).toMatch(/second mount/);
     expect(entry).toContain('no opt-out');
     expect(entry).toContain('memfd');
-    // The directories above native/'s parent: what a writer there can and cannot do, stated correctly.
+    // Every directory up to /: why, who it leaves out, and that the old "not judged" claims are gone.
     expect(entry).not.toContain('whoever can rename one of those can replace the whole tree');
-    expect(entry).toMatch(/cannot change the bytes of a file only root can write/);
-    expect(entry).toMatch(/can make the load refuse/);
+    expect(entry).not.toContain('are not judged, and a writer there');
+    expect(entry).not.toMatch(/cannot change the bytes of a file only root can write/);
+    expect(entry).toContain('**Every directory above the library is judged, up to `/`.**');
+    expect(entry).toMatch(/no user but root can swap any part of it/);
+    expect(entry).toContain('StrictModes');
+    expect(entry).toMatch(/refused too: the sticky bit stops deleting/);
+    expect(entry).toMatch(/covers `\/`/);
+    expect(entry).toMatch(/The owner of a directory on the path is not on this list/);
     // The manifest IS judged: the first version's "not a bypass" reasoning was wrong, and says so.
     expect(entry).toContain('`native/.integrity.json` is judged like the library');
     expect(entry).toMatch(/whoever writes it chooses which bytes pass/);
     expect(entry).toMatch(/That argument was wrong/);
     expect(entry).not.toContain('is not checked for owner or mode');
     expect(entry).not.toMatch(/not a bypass\./);
-    // Links, pinned directories, and the limit that stays open.
+    // Links, regular files, pinned directories as a tripwire, and what is still not stopped.
     expect(entry).toContain('`O_NOFOLLOW`');
-    expect(entry).toContain('The directories are pinned, not locked.');
-    expect(entry).toMatch(/another complete tree that root wrote/);
-    expect(entry).toContain('TODO(TD-S17-close-1)');
+    expect(entry).toContain('`O_NONBLOCK`');
+    expect(entry).toMatch(/refused unless they are regular files/);
+    expect(entry).toContain('**The pins are a tripwire, not the lock.**');
+    expect(entry).toMatch(/checked, not locked/);
+    expect(entry).toMatch(/aiming the path at another complete tree that root wrote/);
+    expect(entry).not.toContain('TODO(TD-S17-close-1)');
+    expect(entry).toMatch(/dangling symbolic link at the staged path counts as staged/);
+    // The musl lane is named as pending, not claimed.
+    expect(entry).toContain('**Pending on this revision:**');
+    // The row points at the paragraphs under the table, and says how many there are.
+    const raw = repoFile('docs/security/threat-model.md');
+    const rawStart = raw.indexOf('### The in-process Rust library');
+    const rawEntry = raw.slice(rawStart, raw.indexOf('\n### ', rawStart + 10));
+    const afterTable = rawEntry.slice(rawEntry.lastIndexOf('\n| **T**amper'));
+    const paragraphs = afterTable.split('\n\n').filter((p) => p.startsWith('**'));
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six'];
+    expect(paragraphs.length).toBeGreaterThan(0);
+    expect(entry).toContain(`See the ${words[paragraphs.length]} paragraphs below`);
     // The development path: an accepted, dev-only hole, and a refused staged library never reaches it.
     expect(entry).toContain('**The development build is an accepted, development-only path.**');
     expect(entry).toMatch(/`NODE_ENV` is not `production`/);
@@ -530,10 +558,12 @@ describe('docs — in-process Rust page', () => {
     // Decision: the rule, who is not trusted, why directories count, the unjudged manifest, the dev path.
     expect(amendment).toMatch(/owned by uid 0/);
     expect(amendment).toMatch(/not writable by group or other/);
-    expect(amendment).toContain('the directory `native/` sits in');
+    expect(amendment).toContain("every directory from the library's parent up to `/`");
     expect(amendment).toMatch(/the user the process runs as is not trusted/i);
     expect(amendment).toMatch(/no opt-out/i);
-    expect(amendment).toMatch(/rename or replace the library/);
+    expect(amendment).toMatch(
+      /Renaming or replacing a directory needs write permission on its parent/,
+    );
     // The manifest is judged; the first version's reasoning is named and withdrawn, not left standing.
     expect(amendment).toContain('The manifest is judged like the library.');
     expect(amendment).toMatch(/That was wrong\. The manifest is what authorises a file/);
@@ -541,9 +571,32 @@ describe('docs — in-process Rust page', () => {
     // Links are never followed, the directories are pinned, and the limit is stated.
     expect(amendment).toContain('**Links are never followed.**');
     expect(amendment).toContain('`O_NOFOLLOW`');
-    expect(amendment).toContain('**The directories are pinned.**');
-    expect(amendment).toMatch(/pinned,\s+not locked/);
+    expect(amendment).toContain('**Defence in depth: the directories and files are pinned.**');
+    expect(amendment).toContain('**Files must be regular files and must not block.**');
+    expect(amendment).toMatch(/checked, not locked/);
     expect(amendment).toContain('/dev/fd/<n>/x');
+    // The ancestor walk, argued: why it is sufficient, the StrictModes precedent, and what it costs.
+    expect(amendment).toContain(
+      '**Why every ancestor, and why that is sufficient against a non-root actor.**',
+    );
+    expect(amendment).toContain('StrictModes');
+    expect(amendment).toMatch(/\| \(h\) require every directory from `native\/` up to `\/`/);
+    expect(amendment).toMatch(/\(jev 0\.96;/);
+    expect(amendment).toMatch(/under a root-owned `\/opt\/<app>` is fine/);
+    // Option (g) is no longer argued as "not available": it works on Linux, and fails on portability.
+    expect(amendment).toMatch(/the first version argued it wrongly/);
+    expect(amendment).toMatch(/`\/proc\/self\/fd\/<dirfd>\/x` works there/);
+    // The residual names its actors, and the old repoint residual is closed by the walk.
+    expect(amendment).toContain('**What is not stopped.**');
+    expect(amendment).toMatch(/`CAP_DAC_OVERRIDE` or `CAP_FOWNER`/);
+    expect(amendment).toMatch(/The owner of an ancestor is no longer on this list/);
+    expect(amendment).not.toContain('on files and directories it does not own');
+    // The images: what was measured, the line that fixes the nested layout, and the lane pending.
+    expect(amendment).toContain(
+      '**The shipped images pass: pending the musl and `ffi-e2e` lanes.**',
+    );
+    expect(amendment).toMatch(/nested \(monorepo\) standalone image did not/);
+    expect(amendment).toContain('RUN chmod go-w');
     // Not Accepted, and why: the lane that proves the images pass has not run on this revision.
     expect(amendment).toMatch(/Status: Proposed/);
     expect(amendment).toContain('Why it stays Proposed');
@@ -562,9 +615,15 @@ describe('docs — in-process Rust page', () => {
     const d14 = adr.slice(adr.indexOf('### D14.'), adr.indexOf('### D15.')).replace(/\s+/g, ' ');
     expect(d14).toContain('Amendment 1');
     expect(d14).toContain('--chown=0:0 --chmod=a-w');
+    expect(d14).toContain('RUN chmod go-w /app /app/.next /app/.next/standalone');
+    expect(d14).toContain('up to `/`');
     const d16 = adr.slice(adr.indexOf('### D16.'), adr.indexOf('### D17.')).replace(/\s+/g, ' ');
     expect(d16).toContain('Amendment 1');
     expect(d16).toContain('root must own');
+    expect(d16).toContain('the FFI loader judges');
+    expect(d16).toContain(
+      'the sharp shim in the vinext image hashes by path and does not judge owner or mode',
+    );
     // D13 points at it instead of carrying a bold paragraph of its own.
     const d13 = adr.slice(adr.indexOf('### D13.'), adr.indexOf('### D14.')).replace(/\s+/g, ' ');
     expect(d13).toContain('Amendment 1');

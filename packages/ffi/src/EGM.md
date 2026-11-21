@@ -125,19 +125,28 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       check and the load. It does not cover a writer of the file's contents (an in-place write, a
       hard link to the inode, a writable mmap): the descriptor pins the inode, not its bytes. So
       `render.ts:$judge`, `$sealed` and `$verify` refuse the load unless only root can write the
-      library: they stat the manifest's and the library's descriptors (each opened with
-      `O_NOFOLLOW`), and the library's directories (built from its path relative to
-      `native/`, so the walk cannot run to `/`) and the directory `native/` sits in, by owner
-      and mode (`access()` would say yes to root for all of it). The directories are judged and
-      pinned before the manifest is read. Each must be owned by uid 0 and not writable by group or other, with any owner-write bit
-      (root can write anyway). No other uid is accepted and the process's own uid is never read:
+      library or swap the tree it is read from: they stat the manifest's and the library's
+      descriptors (each opened with `O_NOFOLLOW | O_NONBLOCK` and required to be a regular file),
+      and `lstat` every directory from the library's parent up to `/` (below `native/`, `native/`,
+      the directory beside the executable and each one above it; `$home` resolves the executable's
+      directory to its real path once), by owner and mode (`access()` would say yes to root for
+      all of it). The directories are judged and pinned before the manifest is read. Each must be
+      a real directory (a link is refused), owned by uid 0 and not writable by group or other
+      (a sticky world-writable `/tmp` is refused too), with any owner-write bit
+      (root can write anyway). Why every ancestor: renaming a directory needs write on its parent,
+      so with every directory on the path root's and closed to group and other, no user but root
+      can swap any part of it, which makes the by-path lookups sound (Bun has no `openat`; the same
+      rule as OpenSSH's `StrictModes`). No other uid is accepted and the process's own uid is never read:
       the user the app runs as can `chmod` what it owns, so an app-owned tree, even read-only,
       protects nothing from a file-write bug in the app. No opt-out. The generated Dockerfile
       copies `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`); BuildKit leaves
       `native/` and the directory above it root-owned 0755, which passes for a non-root app
-      user. A user Dockerfile that chowns the app directory to the app user, a shared, sidecar or
-      fsGroup-writable volume at `native/`, and a compiled binary whose directory is not
-      root-owned are refused. It does not stop root, `CAP_DAC_OVERRIDE`, a second writable
+      user. The staged standalone Dockerfile adds `RUN chmod go-w` over every directory above the
+      executable (`runtime-image.ts:FFI_ANCESTORS_RUN`), because a nested prefix directory inside
+      a copied tree keeps the build host's mode (0775 under umask 002). A user Dockerfile that
+      chowns the app directory, or any directory above it, to the app user, a shared, sidecar or
+      fsGroup-writable volume at `native/`, and a compiled binary with any directory above it not
+      root-owned (a home directory, `/tmp`) are refused; one under a root-owned `/opt/<app>` passes. It does not stop root, `CAP_DAC_OVERRIDE`, a second writable
       mount of the same files, or an ACL (mode bits only; on macOS an ACL can grant write). A
       sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
       `bun:ffi`, measured to work on Bun 1.4.2) would bind the bytes against root too, but each
@@ -149,16 +158,17 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       argument that rewriting it could only make the load refuse; that was wrong, and let a tree
       swapped in between the loader's by-path steps carry its own manifest.) It is opened with
       `O_NOFOLLOW`, judged on its own descriptor and read through it. The library is opened with
-      `O_NOFOLLOW` too, so a symbolic link at either path is refused whatever it points at; a
-      platform with no `O_NOFOLLOW` is refused (the flag would OR in as 0). "Is anything staged" is
+      `O_NOFOLLOW` too, so a symbolic link at either path is refused whatever it points at, and
+      both with `O_NONBLOCK` and only if `fstat` says regular file, so a FIFO is a refusal, not a
+      hang; a platform where either flag is not a positive number is refused (it would OR in as 0). "Is anything staged" is
       an `lstat`, so a dangling link is a refusal and never a fall-through to the development build.
-    - The directories are pinned (`dev:ino` as `bigint`, recorded before the manifest is read and
-      compared after the library is hashed; a change refuses), not locked: they are looked up by
-      path, since Bun has no `openat` and macOS has no descriptor-relative path. A tree swapped in
-      and put back between the two looks is not seen; what it can supply is bounded by the
-      owner rule on the files. Pointing the path at another tree root wrote is not detected
-      (`TODO(TD-S17-close-1)` in `render.ts`). The directories above the one `native/` sits in are
-      not judged.
+    - Defence in depth, for an actor the walk does not stop (root, a second mount): the directories
+      are pinned (`dev:ino` as `bigint`, recorded before the manifest is read and re-`lstat`ed after
+      the library is hashed; a change refuses), and the manifest's and the library's paths must still
+      name the files that were read (`$same`). They are looked up by path, so checked, not locked:
+      Bun has no `openat` and macOS has no descriptor-relative path. Against a non-root user the
+      walk is what makes that sound. What is not stopped: code running as root or with
+      `CAP_DAC_OVERRIDE` or `CAP_FOWNER`, a second writable mount, an ACL.
     - The crate's `<cwd>/<crate>/target/{release,debug}` development build (newest by mtime) is
       used only when `NODE_ENV !== 'production'`, and without an integrity check or an owner check:
       an accepted, development-only path. It is reached only when nothing is staged beside the

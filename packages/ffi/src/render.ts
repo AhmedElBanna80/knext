@@ -27,24 +27,35 @@
  *   the check and the load, and, because the descriptor pins the inode and not
  *   its bytes, a writer of the file's contents (an in-place write, a hard link
  *   to the inode, a writable mmap): the load is refused unless the library, its
- *   integrity manifest, its directories up to native/ and the directory native/
- *   sits in are all owned by root and not writable by group or other, judged by
- *   owner and mode: the library and the manifest on the descriptor each was
- *   opened as and read through (access() answers yes to root for everything, so
- *   it tells nothing). Both are opened with O_NOFOLLOW, so a symlink is refused
- *   and never followed. The manifest is judged because it is what authorises a
- *   file: one anyone else could write (a tree renamed over the real one by a
- *   writer of the directory above it) would let any library root owns pass.
- *   The directories are pinned (dev:ino) before the manifest is read and looked
- *   at again after the library is hashed; a changed one is a refusal. The rule
- *   does not depend on the uid the process runs as,
+ *   integrity manifest, its directories up to native/, the directory native/
+ *   sits in and every directory above that up to / are all owned by root and not
+ *   writable by group or other, judged by owner and mode: the library and the
+ *   manifest on the descriptor each was opened as and read through (access()
+ *   answers yes to root for everything, so it tells nothing), each directory by
+ *   lstat. The manifest is judged because it is what authorises a file: one
+ *   anyone else could write would let any library root owns pass.
+ *   Why every ancestor: a directory a user can write is one that user can
+ *   rename the tree out of, and put another tree in its place between the
+ *   loader's by-path steps. With every directory from native/ up to / owned by
+ *   root and closed to group and other, nobody but root can rename or replace
+ *   any of them, so the by-path lookups are sound (the same rule as OpenSSH's
+ *   StrictModes). A binary outside a container is refused only when its
+ *   ancestry is not root's (under /opt/<app> it is fine; under a home directory
+ *   it is not).
+ *   Defence in depth on top of that: both files are opened with O_NOFOLLOW (a
+ *   link is refused, never followed) and O_NONBLOCK, and must be regular files
+ *   (a FIFO would block the first call for ever); every directory is a real
+ *   directory (lstat) and is pinned (dev:ino, as bigint) before the manifest is
+ *   read and looked at again after the library is hashed; the manifest's and
+ *   the library's paths must still name the files that were read. Any change is
+ *   a refusal. The rule does not depend on the uid the process runs as,
  *   and the app's own user is not trusted: it can chmod what it owns. What it
- *   does NOT stop: root (or anything with CAP_DAC_OVERRIDE), a second mount of
- *   the same files that root can write, and an ACL (mode bits only; on macOS an
- *   ACL can grant write that the mode does not show). The generated Dockerfile
- *   copies native/ root-owned and non-writable, which is the layout this
- *   accepts; a shared, sidecar, fsGroup-writable or app-owned tree is refused.
- *   There is no opt-out.
+ *   does NOT stop: root (or anything with CAP_DAC_OVERRIDE or CAP_FOWNER), a
+ *   second mount of the same files that root can write, and an ACL (mode bits
+ *   only; on macOS an ACL can grant write that the mode does not show). The
+ *   generated Dockerfile copies native/ root-owned and non-writable, which is
+ *   the layout this accepts; a shared, sidecar, fsGroup-writable or app-owned
+ *   tree is refused. There is no opt-out.
  *   Not used: a sealed memfd copy of the hashed bytes (memfd_create and
  *   fcntl(F_ADD_SEALS) reached through libc by bun:ffi; measured to work on
  *   Bun 1.4.2). It would bind the bytes against root too, but every module copy
@@ -53,14 +64,11 @@
  *   two fds of one file dlopen as one library, two sealed copies as two).
  *   TODO(TD-S14-6a): bind the bytes against root too, once a sealed copy can
  *   be shared by every opener in the process without a creation race.
- *   TODO(TD-S17-close-1): the directories are looked up by path (pinned, not
- *   locked): Bun's fs has no openat, and the Linux stand-in
- *   (/proc/self/fd/<dirfd>/...) has no macOS equivalent (/dev/fd/<n>/x is
- *   ENOENT, measured on Bun 1.4.2). What keeps a swap from changing what loads
- *   is the per-descriptor judgement above. What remains: a writer of the
- *   directory above can aim the path at another tree that root wrote (for
- *   example an older release left on the host); the loader cannot tell that
- *   from the real one.
+ *   Not used either: anchoring every lookup to a directory descriptor (Bun's fs
+ *   has no openat, and the Linux stand-in /proc/self/fd/<dirfd>/... has no
+ *   macOS equivalent: /dev/fd/<n>/x is ENOENT, measured on Bun 1.4.2). With
+ *   the ancestor rule it is not needed against anyone who is not root, and
+ *   against root nothing a lookup does helps.
  *   The development build
  *   is used only when `NODE_ENV !== 'production'`; every function's `_schema`
  *   value must match the one computed here; any failure is one cached
@@ -731,16 +739,31 @@ function $musl(): boolean {
   return $existsSync('/etc/alpine-release');
 }
 
+/**
+ * The directory the executable is in, by its real path: every link in the way is resolved once,
+ * here, so that the directories judged later are the ones the lookups go through. (Bun reports
+ * the real path of the executable already; this covers a link in a directory above it.)
+ */
+function $home(): string {
+  const dir = $dirname(process.execPath);
+  try {
+    return $realpathSync(dir);
+  } catch {
+    // Not a directory that can be resolved: nothing can be staged beside it.
+    return dir;
+  }
+}
+
 /** [the library's path, for messages; the name to dlopen]. */
 function $resolve(): readonly [string, string] {
   const triple = $triple();
   const file = \`lib\${$LIB}.\${process.platform === 'darwin' ? 'dylib' : 'so'}\`;
-  const native = $join($dirname(process.execPath), 'native');
+  const native = $join($home(), 'native');
   const staged = $join(native, 'ffi', triple, file);
   const tried = [staged];
   // lstat, not existsSync: existsSync follows a link and says no to a dangling one, which would
   // read as "nothing staged" and fall through to the unchecked development build.
-  if ($lstatSync(staged, { throwIfNoEntry: false }) !== undefined) {
+  if ($lstatSync(staged, { bigint: true, throwIfNoEntry: false }) !== undefined) {
     return [staged, $verify(native, \`ffi/\${triple}/\${file}\`, staged)];
   }
   let others: string[] = [];
@@ -773,13 +796,22 @@ function $resolve(): readonly [string, string] {
   );
 }
 
+/** The part of a stat the checks read; fs.Stats and fs.BigIntStats both fit. */
+type $Stat = {
+  readonly dev: number | bigint;
+  readonly ino: number | bigint;
+  readonly uid: number | bigint;
+  readonly mode: number | bigint;
+};
+
 /**
  * Fail closed unless root owns the stat'ed object and group and other cannot write it. Judged by owner and
  * mode, never access(), which answers yes to root for everything. The user this process runs as
  * is NOT trusted: it can chmod what it owns, so a tree it owns protects nothing from a bug that
- * writes files. p is what is being judged, path the library the refusal is about.
+ * writes files. p is what is being judged, path the library the refusal is about, dir whether p
+ * is a directory.
  */
-function $judge(path: string, p: string, st: { uid: number | bigint; mode: number | bigint }): void {
+function $judge(path: string, p: string, st: $Stat, dir: boolean): void {
   const bits = Number(st.mode);
   const mode = (bits & 0o777).toString(8).padStart(4, '0');
   let why = '';
@@ -790,41 +822,63 @@ function $judge(path: string, p: string, st: { uid: number | bigint; mode: numbe
   }
   if (why !== '') {
     throw new FfiLoadError(
-      \`knext ffi: refusing to load \${path}: \${p} \${why}, so its bytes could change after they were checked. The library, its integrity manifest, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image \\\`knext build\\\` generates copies native/ with \\\`COPY --chown=0:0 --chmod=a-w\\\`), and the app should run as a non-root user.\`,
+      \`knext ffi: refusing to load \${path}: \${p} \${why}, so \${dir ? 'what is under it could be renamed or replaced after it was checked' : 'its bytes could change after they were checked'}. The library, its integrity manifest, native/, the directory that holds native/ and every directory above that up to / must be owned by root and not writable by group or other (the image \\\`knext build\\\` generates copies native/ with \\\`COPY --chown=0:0 --chmod=a-w\\\`), and the app should run as a non-root user.\`,
     );
   }
 }
 
+/** What a stat says an object is: its type bits (S_IFREG, S_IFDIR, S_IFLNK, ...). */
+function $type(st: $Stat): number {
+  return Number(st.mode) & $constants.S_IFMT;
+}
+
 /** Which object a stat describes. An object keeps it through a rename; a replacement has another. */
-function $id(st: { dev: number | bigint; ino: number | bigint }): string {
+function $id(st: $Stat): string {
   return \`\${st.dev}:\${st.ino}\`;
 }
 
 /** A directory the check relied on, and which object it was: [path, $id]. */
 type $Pin = readonly [string, string];
 
+/** Every directory from dir up to the root, dir first. */
+function $upTo(dir: string): string[] {
+  const out: string[] = [];
+  for (let d = dir; ; d = $dirname(d)) {
+    out.push(d);
+    if ($dirname(d) === d) return out;
+  }
+}
+
 /**
  * Judge, and pin, every directory the check relies on: the library's, from the one it sits in up
- * to native/ itself, then the directory native/ sits in. Exactly those, never the rest of the
- * path. Each must be owned by root and not writable by group or other. They are stat-ed here,
- * BEFORE the manifest or the library is opened, and $unchanged looks at the same names again
- * once the bytes are hashed, so a tree renamed over them in between is refused.
+ * to native/ itself, then the directory native/ sits in, then every directory above that up to
+ * the root. Each is looked at with lstat (a link is never followed), must be a real directory,
+ * owned by root and not writable by group or other. They are judged here, BEFORE the manifest or
+ * the library is opened, and $unchanged looks at the same names again once the bytes are hashed,
+ * so a tree renamed over them in between is refused.
  *
- * Limit: these are looked up by path, so they are pinned, not locked (Bun has no openat, and
- * there is no descriptor-relative path on macOS). What stops a swap from changing what loads is
- * not the pin: the manifest and the library are each judged on the descriptor they are read
- * through, so a tree an attacker made cannot pass. The pin turns a swap seen in the window into
- * a refusal. It cannot see one put back before the second look, and does not need to: a tree
- * that root wrote is the only thing left to aim the path at.
+ * Why every ancestor: a directory a user can write is one that user can rename the tree out of,
+ * and put another in its place. With every directory from native/ up to the root owned by root
+ * and closed to group and other, nobody but root can rename or replace any of them, so looking
+ * them up by path is sound (Bun has no openat, and macOS has no descriptor-relative path, so a
+ * lookup cannot be anchored to a directory descriptor). The pins and the file checks below are
+ * defence in depth: what remains is code running as root (or with CAP_DAC_OVERRIDE or
+ * CAP_FOWNER), a second writable mount of the same files, or an ACL, and none of that can be
+ * told apart from the real tree by any lookup.
  */
 function $sealed(native: string, rel: string, path: string): $Pin[] {
   const parts = rel.split('/');
   const dirs: string[] = [];
   for (let i = parts.length - 1; i >= 0; i--) dirs.push($join(native, ...parts.slice(0, i)));
-  dirs.push($dirname(native));
+  dirs.push(...$upTo($dirname(native)));
   return dirs.map((dir): $Pin => {
-    const st = $statSync(dir, { bigint: true });
-    $judge(path, dir, st);
+    const st = $lstatSync(dir, { bigint: true });
+    if ($type(st) !== $constants.S_IFDIR) {
+      throw new FfiLoadError(
+        \`knext ffi: refusing to load \${path}: \${dir} is \${$type(st) === $constants.S_IFLNK ? 'a symbolic link' : 'not a directory'}. Every directory on the way to the library must be the directory itself: a link is never followed, whatever it points at.\`,
+      );
+    }
+    $judge(path, dir, st, true);
     return [dir, $id(st)];
   });
 }
@@ -832,7 +886,7 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
 /** Every pinned directory must still be the object that was judged; fail closed if one is not. */
 function $unchanged(path: string, pins: readonly $Pin[]): void {
   for (const [dir, id] of pins) {
-    const now = $statSync(dir, { bigint: true, throwIfNoEntry: false });
+    const now = $lstatSync(dir, { bigint: true, throwIfNoEntry: false });
     if (now === undefined || $id(now) !== id) {
       throw new FfiLoadError(
         \`knext ffi: refusing to load \${path}: \${dir} changed while it was being checked (it was renamed, replaced or removed, so it is not the directory that was judged), and the manifest or the library may have come from another tree.\`,
@@ -841,18 +895,38 @@ function $unchanged(path: string, pins: readonly $Pin[]): void {
   }
 }
 
-/**
- * Open a file read-only WITHOUT following a symlink at the end of its path (O_NOFOLLOW): a link
- * is refused, never followed to whatever it points at. missing is the refusal for a file that
- * is not there.
- */
-function $openFile(path: string, what: string, lib: string, missing: string): number {
-  const nofollow = $constants.O_NOFOLLOW;
-  if (typeof nofollow !== 'number') {
-    throw new FfiLoadError(\`knext ffi: refusing to load \${lib}: this platform cannot open \${what} without following links.\`);
+/** A file that was read must still be what its path names; fail closed if it is not. */
+function $same(path: string, file: string, id: string): void {
+  const now = $lstatSync(file, { bigint: true, throwIfNoEntry: false });
+  if (now === undefined || $id(now) !== id) {
+    throw new FfiLoadError(
+      \`knext ffi: refusing to load \${path}: \${file} is no longer the file that was read (it was renamed, replaced or removed while it was being checked), so what was judged may not be what is at that path now.\`,
+    );
   }
+}
+
+/** A file opened for reading, and what it is. */
+interface $Opened {
+  readonly fd: number;
+  readonly st: $Stat;
+}
+
+/**
+ * Open a regular file read-only WITHOUT following a symlink at the end of its path (O_NOFOLLOW)
+ * and WITHOUT waiting on it (O_NONBLOCK: a FIFO opened for reading blocks until a writer
+ * appears, which would hang the first call for ever). A link is refused, never followed to
+ * whatever it points at; anything that is not a regular file (a pipe, a device, a directory) is
+ * refused. missing is the refusal for a file that is not there.
+ */
+function $openFile(path: string, what: string, lib: string, missing: string): $Opened {
+  const nofollow = $constants.O_NOFOLLOW;
+  const nonblock = $constants.O_NONBLOCK;
+  if (!(nofollow > 0) || !(nonblock > 0)) {
+    throw new FfiLoadError(\`knext ffi: refusing to load \${lib}: this platform cannot open \${what} without following links or blocking (it needs O_NOFOLLOW and O_NONBLOCK).\`);
+  }
+  let fd: number;
   try {
-    return $openSync(path, $constants.O_RDONLY | nofollow);
+    fd = $openSync(path, $constants.O_RDONLY | nofollow | nonblock);
   } catch (err) {
     const code = (err as { code?: unknown }).code;
     if (code === 'ENOENT') throw new FfiLoadError(missing);
@@ -862,6 +936,12 @@ function $openFile(path: string, what: string, lib: string, missing: string): nu
         : \`knext ffi: refusing to load \${lib}: cannot open \${path} (\${err instanceof Error ? err.message : String(err)}).\`,
     );
   }
+  const st = $fstatSync(fd, { bigint: true });
+  if ($type(st) !== $constants.S_IFREG) {
+    $closeSync(fd);
+    throw new FfiLoadError(\`knext ffi: refusing to load \${lib}: \${path} is not a regular file. \${what} must be a plain file: a pipe, a device or a directory is never read.\`);
+  }
+  return { fd, st };
 }
 
 /**
@@ -869,8 +949,9 @@ function $openFile(path: string, what: string, lib: string, missing: string): nu
  * only root may be able to write the manifest, the library or the way to them (see $sealed and
  * $judge). Each of the two files is opened without following a link, judged on the descriptor it
  * was opened as, and read through that descriptor: nothing renamed over its path afterwards can
- * change what was judged. The manifest is judged because it is what authorises a file: one
- * anyone else could write would let any file root owns pass.
+ * change what was judged, and after the hash each path is looked at again and must still name the
+ * file that was read. The manifest is judged because it is what authorises a file: one anyone
+ * else could write would let any file root owns pass.
  * Returns the name to dlopen: the descriptor the hashed bytes were read through
  * (/proc/self/fd/<n> on Linux, /dev/fd/<n> on macOS), so a file renamed or linked
  * over the path after the check is not the one loaded.
@@ -878,7 +959,7 @@ function $openFile(path: string, what: string, lib: string, missing: string): nu
 function $verify(native: string, rel: string, path: string): string {
   const pins = $sealed(native, rel, path);
   const manifest = $join(native, '.integrity.json');
-  const mfd = $openFile(
+  const m = $openFile(
     manifest,
     'the integrity manifest',
     path,
@@ -886,10 +967,10 @@ function $verify(native: string, rel: string, path: string): string {
   );
   let text: string;
   try {
-    $judge(path, manifest, $fstatSync(mfd, { bigint: true }));
-    text = $readFileSync(mfd, 'utf8');
+    $judge(path, manifest, m.st, false);
+    text = $readFileSync(m.fd, 'utf8');
   } finally {
-    $closeSync(mfd);
+    $closeSync(m.fd);
   }
   let files: unknown;
   try {
@@ -908,31 +989,33 @@ function $verify(native: string, rel: string, path: string): string {
   if (typeof expected !== 'string') {
     throw new FfiLoadError(\`knext ffi: refusing to load \${path}: \${rel} is not listed in \${manifest}.\`);
   }
-  const fd = $openFile(path, 'the library', path, \`knext ffi: refusing to load \${path}: it is gone.\`);
+  const lib = $openFile(path, 'the library', path, \`knext ffi: refusing to load \${path}: it is gone.\`);
   let actual: string;
   try {
-    $judge(path, path, $fstatSync(fd, { bigint: true }));
-    actual = $createHash('sha256').update($readFileSync(fd)).digest('hex');
+    $judge(path, path, lib.st, false);
+    actual = $createHash('sha256').update($readFileSync(lib.fd)).digest('hex');
     $unchanged(path, pins);
+    $same(path, manifest, $id(m.st));
+    $same(path, path, $id(lib.st));
   } catch (err) {
-    $closeSync(fd);
+    $closeSync(lib.fd);
     throw err;
   }
   if (actual !== expected) {
-    $closeSync(fd);
+    $closeSync(lib.fd);
     throw new FfiLoadError(
       \`knext ffi: refusing to load \${path}: sha256 mismatch\\n  expected \${expected}\\n  actual   \${actual}\`,
     );
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
-    $closeSync(fd);
+    $closeSync(lib.fd);
     throw new FfiLoadError(
       \`knext ffi: refusing to load \${path}: \${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).\`,
     );
   }
   // Never closed once dlopen has seen its name: glibc finds an already-loaded
   // library by that name, and the next open would reuse the number.
-  return process.platform === 'darwin' ? \`/dev/fd/\${fd}\` : \`/proc/self/fd/\${fd}\`;
+  return process.platform === 'darwin' ? \`/dev/fd/\${lib.fd}\` : \`/proc/self/fd/\${lib.fd}\`;
 }
 
 /** A Rust-owned (ptr, len) pair from the out slot, read as two u32 halves (no BigInt per call). */
@@ -1167,6 +1250,7 @@ export function renderModule(manifest: Manifest, options: RenderOptions): string
     '  openSync as $openSync,',
     '  readdirSync as $readdirSync,',
     '  readFileSync as $readFileSync,',
+    '  realpathSync as $realpathSync,',
     '  statSync as $statSync,',
     "} from 'node:fs';",
     "import { dirname as $dirname, join as $join } from 'node:path';",

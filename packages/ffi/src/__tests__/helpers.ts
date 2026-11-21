@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
 } from 'node:fs';
@@ -19,9 +20,14 @@ export const PKG_DIR = resolve(import.meta.dir, '..', '..');
 
 const scratchDirs: string[] = [];
 
-/** An empty scratch directory, removed by {@link removeScratchDirs}. */
+/**
+ * An empty scratch directory, removed by {@link removeScratchDirs}. Its REAL path: the loader
+ * resolves the directory the executable is in before it judges the way to it, so a path with a
+ * link in it (macOS's /var is /private/var) would name different directories in a message than the
+ * ones the test built.
+ */
 export function emptyDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `knext-ffi-${prefix}-`));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `knext-ffi-${prefix}-`)));
   scratchDirs.push(dir);
   return dir;
 }

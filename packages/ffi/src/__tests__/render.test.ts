@@ -468,7 +468,10 @@ describe('D13 — the module contract', () => {
   });
 
   it('path resolution: native/ffi/<triple> beside the executable first, dev fallback gated on NODE_ENV', () => {
-    expect(src).toContain("$join($dirname(process.execPath), 'native')");
+    // The executable's directory, by its real path (every link in the way resolved once).
+    expect(src).toContain("$join($home(), 'native')");
+    expect(src).toContain('const dir = $dirname(process.execPath);');
+    expect(src).toContain('return $realpathSync(dir);');
     expect(src).toContain("process.env['NODE_ENV'] !== 'production'");
     expect(src).toContain("const $LIB = 'zone';");
     expect(src).toContain("const $CRATE = 'rust';");

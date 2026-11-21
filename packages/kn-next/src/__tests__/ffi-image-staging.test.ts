@@ -2,11 +2,14 @@
  * In-process Rust (Beta) — the image side of ADR-0069 D14 and the D17
  * zero-diff guarantee.
  *
- *  1. The staged `Dockerfile.standalone` gains exactly one line,
- *     `COPY native /app/.next/standalone/native`, directly after the
- *     `standalone-bun` stage's exec COPY — only when `knext.ffi.json` exists.
- *     Without it, byte-identical to the template. A moved or duplicated anchor
- *     fails the staging.
+ *  1. The staged `Dockerfile.standalone` gains exactly two lines, directly after
+ *     the `standalone-bun` stage's exec COPY — only when `knext.ffi.json`
+ *     exists: `COPY --chown=0:0 --chmod=a-w native /app/.next/standalone/native`
+ *     and `RUN chmod go-w` on every directory above the exec (the loader walks
+ *     them up to `/` and refuses one that group or other can write; a nested
+ *     directory inside a copied tree keeps the build host's mode, which is 0775
+ *     under umask 002). Without the file, byte-identical to the template. A
+ *     moved or duplicated anchor fails the staging.
  *  2. Nested (monorepo tracing-root) layout: the line is inserted BEFORE
  *     nesting and rewritten by a NEST_RULES entry present only when opted in,
  *     so `native/` lands beside the nested exec; a non-ffi app's nested
@@ -149,21 +152,28 @@ describe("the staged Dockerfile — flat layout", () => {
         expect(stageFlat({})).toBe(TEMPLATE);
     });
 
-    it("opted in: exactly one line is added, directly after the standalone-bun exec COPY", () => {
+    it("opted in: exactly two lines are added, directly after the standalone-bun exec COPY: the native/ COPY and the chmod of every directory above the exec", () => {
         const text = stageFlat(OPT_IN);
         expect(FFI_NATIVE_COPY).toBe(
             "COPY --chown=0:0 --chmod=a-w native /app/.next/standalone/native",
         );
+        const ANCESTORS_RUN =
+            "RUN chmod go-w /app /app/.next /app/.next/standalone";
         const lines = stage(text, "standalone-bun");
         const at = lines.indexOf(ANCHOR);
         expect(at).toBeGreaterThan(-1);
         expect(lines[at + 1]).toBe(FFI_NATIVE_COPY);
-        // Nothing else changed: removing the one line gives the template back.
+        expect(lines[at + 2]).toBe(ANCESTORS_RUN);
+        // Nothing else changed: removing the two lines gives the template back.
         const added = text
             .split("\n")
             .filter((l) => !TEMPLATE.split("\n").includes(l));
-        expect(added).toEqual([FFI_NATIVE_COPY]);
-        expect(text.split("\n").length).toBe(TEMPLATE.split("\n").length + 1);
+        expect(added).toEqual([FFI_NATIVE_COPY, ANCESTORS_RUN]);
+        expect(text.split("\n").length).toBe(TEMPLATE.split("\n").length + 2);
+        // Before the stage's USER line: the chmod runs as root.
+        expect(lines.indexOf(ANCESTORS_RUN)).toBeLessThan(
+            lines.findIndex((l) => l.startsWith("USER ")),
+        );
         // No other stage ships native/.
         for (const s of ["standalone-bun-self-contained", "standalone-node"]) {
             expect(stage(text, s).join("\n")).not.toMatch(NATIVE_COPY);
@@ -207,6 +217,11 @@ describe("the staged Dockerfile — nested (monorepo root) layout", () => {
         expect(at).toBeGreaterThan(-1);
         expect(lines[at + 1]).toBe(
             "COPY --chown=0:0 --chmod=a-w apps/web/native /app/.next/standalone/apps/web/native",
+        );
+        // The directories above the nested exec come out of the copied tree with the build
+        // host's mode, so each one is closed, the nested ones included.
+        expect(lines[at + 2]).toBe(
+            "RUN chmod go-w /app /app/.next /app/.next/standalone /app/.next/standalone/apps /app/.next/standalone/apps/web",
         );
         expect(text).not.toContain(FFI_NATIVE_COPY);
     });
@@ -417,5 +432,188 @@ describe("native/ ships root-owned and non-writable, in every image that carries
             .filter((l) => l.startsWith("COPY ") && !NATIVE_COPY.test(l));
         expect(others.length).toBeGreaterThan(0);
         for (const l of others) expect(l).not.toContain("--chmod=a-w");
+    });
+});
+// ---------------------------------------------------------------------------
+// Every directory above the executable must be root's and closed to group and
+// other: the loader walks them up to / and refuses the first that is not
+// (ADR-0069 Amendment 1), because a user who can write one can rename the tree
+// out of it. So the IMAGE has to leave them that way, on any build host.
+// ---------------------------------------------------------------------------
+
+describe("every directory above the executable in the image is root-owned and closed to group and other, whatever mode the build host's files have", () => {
+    interface Dir {
+        uid: number;
+        mode: number;
+    }
+
+    /**
+     * What BuildKit leaves, as measured on docker 29 with a context made under umask 002 (0775
+     * directories): WORKDIR and the parents a COPY creates are 0755 and root's; the destination
+     * directory of a directory COPY is 0755 and root's, whatever the source's mode; a directory
+     * INSIDE the copied tree keeps the source's mode; nothing is anyone's but root's without a
+     * --chown. Only chmod and chown are understood in a RUN: a chmod it does not know fails the
+     * model rather than being skipped.
+     */
+    function evaluate(
+        instructions: string[],
+        hostMode: number,
+    ): (path: string) => Dir | undefined {
+        const explicit = new Map<string, Dir>();
+        const trees: string[] = [];
+        const inTree = (p: string) =>
+            trees.some((t) => p !== t && p.startsWith(`${t}/`));
+        const ensure = (dir: string) => {
+            for (let d = dir; d !== "/"; d = dirname(d)) {
+                if (!explicit.has(d) && !inTree(d)) {
+                    explicit.set(d, { uid: 0, mode: 0o755 });
+                }
+            }
+        };
+        const modeOf = (p: string): Dir | undefined =>
+            explicit.get(p) ??
+            (inTree(p) ? { uid: 0, mode: hostMode } : undefined);
+        const joined: string[] = [];
+        for (const l of instructions) {
+            const last = joined.length - 1;
+            if (last >= 0 && joined[last]?.endsWith("\\")) {
+                joined[last] = `${joined[last]?.slice(0, -1)} ${l}`;
+            } else joined.push(l);
+        }
+        for (const line of joined) {
+            const [word, ...rest] = line.split(/\s+/);
+            if (word === "WORKDIR") ensure(rest[0] as string);
+            if (word === "COPY") {
+                const args = rest.filter((a) => !a.startsWith("--"));
+                const dst = args[args.length - 1] as string;
+                if (!dst.startsWith("/")) continue;
+                ensure(dirname(dst));
+                // A destination that already exists keeps what it has.
+                if (!explicit.has(dst) && !inTree(dst)) {
+                    explicit.set(dst, { uid: 0, mode: 0o755 });
+                }
+                trees.push(dst);
+            }
+            if (word === "RUN") {
+                for (const cmd of line.slice(4).split("&&")) {
+                    const [tool, ...args] = cmd.trim().split(/\s+/);
+                    if (tool === "chmod") {
+                        const [spec, ...paths] = args as string[];
+                        for (const p of paths) {
+                            const cur = modeOf(p) ?? { uid: 0, mode: 0o755 };
+                            const mode =
+                                spec === "go-w"
+                                    ? cur.mode & ~0o022
+                                    : /^[0-7]{3,4}$/.test(spec as string)
+                                      ? Number.parseInt(spec as string, 8)
+                                      : Number.NaN;
+                            if (Number.isNaN(mode)) {
+                                throw new Error(
+                                    `the model does not know chmod ${spec}`,
+                                );
+                            }
+                            explicit.set(p, { ...cur, mode });
+                        }
+                    } else if (tool === "chown") {
+                        const [owner, ...paths] = args as string[];
+                        for (const p of paths) {
+                            const cur = modeOf(p) ?? { uid: 0, mode: 0o755 };
+                            explicit.set(p, {
+                                ...cur,
+                                uid: Number.parseInt(
+                                    (owner as string).split(":")[0] as string,
+                                    10,
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        return modeOf;
+    }
+
+    /** Every directory from `execDir` up to (not including) / that is not root's, or that group or other can write. */
+    function violations(
+        instructions: string[],
+        execDir: string,
+        hostMode: number,
+    ): string[] {
+        const modeOf = evaluate(instructions, hostMode);
+        const bad: string[] = [];
+        for (let d = execDir; d !== "/"; d = dirname(d)) {
+            const dir = modeOf(d);
+            if (dir === undefined) bad.push(`${d}: not made by the Dockerfile`);
+            else if (dir.uid !== 0) bad.push(`${d}: owned by uid ${dir.uid}`);
+            else if ((dir.mode & 0o022) !== 0) {
+                bad.push(`${d}: mode ${dir.mode.toString(8)}`);
+            }
+        }
+        return bad;
+    }
+
+    /** The directory the native/ COPY lands in (the loader looks for native/ beside the exec). */
+    const nativeDir = (instructions: string[]) => {
+        const line = instructions.find((l) => NATIVE_COPY.test(l)) as string;
+        return dirname(line.trim().split(/\s+/).pop() as string);
+    };
+
+    const flat = () => stage(stageFlat(OPT_IN), "standalone-bun");
+    const nested = () =>
+        stage(
+            stageNested({ "apps/web/knext.ffi.json": "{}\n" }),
+            "standalone-bun",
+        );
+    const HOSTS = [0o775, 0o777];
+
+    for (const host of HOSTS) {
+        it(`flat standalone-bun, build host directories 0${host.toString(8)}: /app, /app/.next and the exec's directory are root's and closed`, () => {
+            const lines = flat();
+            expect(nativeDir(lines)).toBe("/app/.next/standalone");
+            expect(violations(lines, nativeDir(lines), host)).toEqual([]);
+        });
+
+        it(`nested standalone-bun, build host directories 0${host.toString(8)}: the tracing-root prefix directories the copy brings are closed too`, () => {
+            const lines = nested();
+            expect(nativeDir(lines)).toBe("/app/.next/standalone/apps/web");
+            expect(violations(lines, nativeDir(lines), host)).toEqual([]);
+        });
+    }
+
+    it("the model sees the gap the chmod closes: without it a nested prefix directory comes out group-writable under umask 002", () => {
+        const without = nested().filter((l) => !l.startsWith("RUN chmod go-w"));
+        expect(violations(without, nativeDir(without), 0o775)).toEqual([
+            "/app/.next/standalone/apps/web: mode 775",
+            "/app/.next/standalone/apps: mode 775",
+        ]);
+        // The flat layout never had the gap: the copy's destination is 0755 (measured).
+        const flatWithout = flat().filter(
+            (l) => !l.startsWith("RUN chmod go-w"),
+        );
+        expect(violations(flatWithout, nativeDir(flatWithout), 0o777)).toEqual(
+            [],
+        );
+    });
+
+    it("the model sees an ancestor chowned to the app user", () => {
+        const lines = [...flat(), "RUN chown 65532:65532 /app/.next"];
+        expect(violations(lines, nativeDir(lines), 0o775)).toEqual([
+            "/app/.next: owned by uid 65532",
+        ]);
+    });
+
+    it("the vinext x bun Dockerfile: the executable's directory is /app, made by WORKDIR, whatever the host", () => {
+        const vinextText = readFileSync(
+            join(dirname(TEMPLATE_DIR), "app", "Dockerfile.hbs"),
+            "utf8",
+        );
+        const lines = vinextText
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l !== "" && !l.startsWith("#"));
+        expect(nativeDir(lines)).toBe("/app");
+        for (const host of HOSTS) {
+            expect(violations(lines, "/app", host)).toEqual([]);
+        }
     });
 });

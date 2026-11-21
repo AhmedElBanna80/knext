@@ -37,8 +37,9 @@ against a host-arch twin or against the shipped image.
     `packages/kn-next/src/cli/native-integrity.ts:writeNativeIntegrityManifest`, then the manifest,
     the library and every directory up to `native/` made read-only, as the image's
     `COPY --chmod=a-w` leaves them; the workflow then chowns the tree to root, which the loader
-    requires: root must own the manifest, the library, its directories, `native/` and the
-    directory `native/` sits in. The musl lane runs
+    requires: root must own the manifest, the library, its directories, `native/`, and every
+    directory above it up to `/` (above `native/` those are the image's own, root-owned 0755; the
+    lane asserts `/` and `/app` for the documented recipe). The musl lane runs
     the legs as root and as uid 65532 (the image user), proves a 65532-owned tree is refused,
     builds and loads the docs page's Dockerfile recipe (below), and removes the root-owned staged
     trees at the end) and `<dir>/needed`.

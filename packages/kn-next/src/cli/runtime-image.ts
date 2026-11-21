@@ -540,7 +540,7 @@ const STANDALONE = "/app/.next/standalone";
 
 /**
  * The rules every nested Dockerfile gets. An app with `knext.ffi.json` also
- * gets {@link FFI_NEST_RULE} (see `nestStandaloneDockerfile`).
+ * gets {@link FFI_NEST_RULE} and {@link FFI_ANCESTORS_NEST_RULE} (see `nestStandaloneDockerfile`).
  */
 const BASE_NEST_RULES: readonly NestRule[] = [
     // standalone-bun, standalone-node: the traced tree, then static and public
@@ -649,6 +649,18 @@ const BASE_NEST_RULES: readonly NestRule[] = [
 export const FFI_NATIVE_PERMS = "--chown=0:0 --chmod=a-w";
 export const FFI_NATIVE_COPY = `COPY ${FFI_NATIVE_PERMS} native ${STANDALONE}/native`;
 
+/**
+ * The loader walks every directory from the one `native/` sits in up to `/` and refuses the
+ * first that is not root's or that group or other can write: a user who can write one can
+ * rename the whole tree out of it. BuildKit leaves WORKDIR, the parents a COPY creates and a
+ * directory COPY's destination 0755 and root's, but a directory INSIDE a copied tree keeps the
+ * build host's mode (measured on docker 29: 0775 from a context made under umask 002), so the
+ * tracing-root prefix directories of a nested layout can come out group-writable. The line
+ * closes every directory above the exec; it runs as root, before the stage's USER.
+ */
+const FFI_ANCESTOR_DIRS = ["/app", "/app/.next", STANDALONE];
+export const FFI_ANCESTORS_RUN = `RUN chmod go-w ${FFI_ANCESTOR_DIRS.join(" ")}`;
+
 /** The `standalone-bun` exec COPY the native line goes directly after. */
 const FFI_NATIVE_ANCHOR = `COPY knext-standalone-exec-linux-x64 ${STANDALONE}/knext-standalone-exec`;
 
@@ -662,8 +674,25 @@ const FFI_NEST_RULE: NestRule = {
 };
 
 /**
- * Insert {@link FFI_NATIVE_COPY} directly after the `standalone-bun` stage's
- * exec COPY. The anchor must occur exactly once as an instruction line, inside
+ * The nest rule for {@link FFI_ANCESTORS_RUN}: the nested exec sits in `<prefix>`, so each
+ * directory of the prefix (`apps`, `apps/web`) is above it too.
+ */
+const FFI_ANCESTORS_NEST_RULE: NestRule = {
+    kind: "line",
+    from: FFI_ANCESTORS_RUN,
+    to: ({ prefix }) => {
+        const parts = prefix.split("/").filter((p) => p !== "");
+        const nested = parts.map(
+            (_, i) => `${STANDALONE}/${parts.slice(0, i + 1).join("/")}`,
+        );
+        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested].join(" ")}`;
+    },
+    count: 1,
+};
+
+/**
+ * Insert {@link FFI_NATIVE_COPY} and {@link FFI_ANCESTORS_RUN} directly after the
+ * `standalone-bun` stage's exec COPY. The anchor must occur exactly once as an instruction line, inside
  * that stage; anything else means the template moved under this edit, and the
  * staging fails rather than ship an image without its library.
  */
@@ -689,7 +718,12 @@ export function insertFfiNativeCopy(dockerfile: string): string {
         );
     }
     const indent = /^\s*/.exec(lines[at] as string)?.[0] ?? "";
-    lines.splice(at + 1, 0, `${indent}${FFI_NATIVE_COPY}`);
+    lines.splice(
+        at + 1,
+        0,
+        `${indent}${FFI_NATIVE_COPY}`,
+        `${indent}${FFI_ANCESTORS_RUN}`,
+    );
     return lines.join("\n");
 }
 
@@ -716,7 +750,7 @@ export function nestStandaloneDockerfile(
         );
     }
     const NEST_RULES: readonly NestRule[] = opts.ffi
-        ? [...BASE_NEST_RULES, FFI_NEST_RULE]
+        ? [...BASE_NEST_RULES, FFI_NEST_RULE, FFI_ANCESTORS_NEST_RULE]
         : BASE_NEST_RULES;
     const counts = NEST_RULES.map(() => 0);
     const out: string[] = [];

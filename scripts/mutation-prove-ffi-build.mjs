@@ -6,7 +6,8 @@
  * Four guards, four specs, each run one file per process:
  *
  *   - `ffi-image-staging.test.ts` — the integrity-manifest call on the
- *     standalone compile, the conditional `COPY native` line and its nest rule
+ *     standalone compile, the conditional `COPY native` line and its nest rule,
+ *     the `RUN chmod go-w` of every directory above the exec and its nest rule
  *     (both halves: opted in AND the D17 zero-diff), the anchor-count check, and
  *     vinext's clean-up leaving native/ffi/ alone;
  *   - `ffi-preflight.test.ts` — the two refusals and the caller-order scan;
@@ -60,7 +61,7 @@ const IMAGE = [
     id: 'I02',
     subject: 'image',
     claim: 'the nest rule for the native COPY is dropped (opted-in nested app keeps the flat path)',
-    anchor: '        ? [...BASE_NEST_RULES, FFI_NEST_RULE]',
+    anchor: '        ? [...BASE_NEST_RULES, FFI_NEST_RULE, FFI_ANCESTORS_NEST_RULE]',
     replacement: '        ? [...BASE_NEST_RULES]',
   },
   {
@@ -119,6 +120,36 @@ const IMAGE = [
     claim: 'vinext clean-up clears native/ffi/ even while the app opts in',
     anchor: '    clearStagedNative(dest, { keepFfi: ffiOptedIn(cwd) });',
     replacement: '    clearStagedNative(dest, { keepFfi: false });',
+  },
+  {
+    id: 'I11',
+    subject: 'image',
+    claim:
+      'the nest rule for the chmod of the directories above the exec is dropped (a nested layout keeps group-writable prefix directories the loader refuses)',
+    anchor: '        ? [...BASE_NEST_RULES, FFI_NEST_RULE, FFI_ANCESTORS_NEST_RULE]',
+    replacement: '        ? [...BASE_NEST_RULES, FFI_NEST_RULE]',
+  },
+  {
+    id: 'I12',
+    subject: 'image',
+    claim:
+      'the chmod of the directories above the exec is not inserted (the image inherits the build host modes)',
+    anchor: '        `${indent}${FFI_ANCESTORS_RUN}`,',
+    replacement: '',
+  },
+  {
+    id: 'I13',
+    subject: 'image',
+    claim: 'the chmod leaves out /app/.next (an ancestor of the exec the loader walks)',
+    anchor: 'const FFI_ANCESTOR_DIRS = ["/app", "/app/.next", STANDALONE];',
+    replacement: 'const FFI_ANCESTOR_DIRS = ["/app", STANDALONE];',
+  },
+  {
+    id: 'I14',
+    subject: 'image',
+    claim: 'the nested chmod leaves out the tracing-root prefix directories (apps, apps/web)',
+    anchor: '        return `RUN chmod go-w ${[...FFI_ANCESTOR_DIRS, ...nested].join(" ")}`;',
+    replacement: '        return `RUN chmod go-w ${FFI_ANCESTOR_DIRS.join(" ")}`;',
   },
 ];
 

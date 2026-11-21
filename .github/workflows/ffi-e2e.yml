@@ -379,8 +379,10 @@ jobs:
           chmod -R u+rwX,g+w "$recipe/ctx/native"
           docker build --build-arg BASE_IMAGE="$BUN_IMAGE" -f "$recipe/Dockerfile" -t ffi-recipe "$recipe/ctx"
           test "$(docker inspect --format '{{.Config.User}}' ffi-recipe)" = "65532:65532"
-          # What the loader will judge: every path under /app, owner and mode, as the image has them.
+          # What the loader will judge: every path under /app and the root directory above it, owner and mode, as the image has them.
           docker run --rm --entrypoint find ffi-recipe /app -exec stat -c '%a %u %n' {} + | tee "$recipe/modes.txt"
+          # The loader walks up to / as well, so the base image's root directory is held to the same rule.
+          docker run --rm --entrypoint stat ffi-recipe -c '%a %u %n' / | tee -a "$recipe/modes.txt"
           awk '{ m = $1; n = length(m); g = substr(m, n - 1, 1) + 0; o = substr(m, n, 1) + 0; if ($2 != 0 || g % 4 >= 2 || o % 4 >= 2) { print "not root-owned, or writable by group or other: " $0; bad = 1 } } END { exit bad }' "$recipe/modes.txt"
           docker run --rm --read-only --network none -e NODE_ENV=production -e TMPDIR=/tmp \
             ffi-recipe all 2> "$recipe/run.stderr" | tee "$recipe/run.out" \

@@ -36,7 +36,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { fnv1a64, type Manifest, scanManifest, schemaString } from '../manifest';
 import { renderModule } from '../render';
 import {
@@ -212,6 +212,9 @@ interface Run {
  *   FAKE_OWNER_INO JSON, "dev:ino" -> uid: an owner that survives a rename
  *   FAKE_MODE_AT   JSON, path -> permission bits (with the sticky bit): what a directory above
  *                  the staged tree answers (a host's /tmp is 1777; the test is not about it)
+ *   FAKE_TYPE_AT   JSON, path -> type bits (S_IFREG 0o100000, S_IFIFO 0o010000, ...): what an
+ *                  lstat of that path answers, so a directory position can hold another kind of
+ *                  object (the loader only meets one by a race, which a test cannot stage)
  * Modes are the real ones on disk, except where FAKE_MODE_AT names a path. Every path stat-ed is
  * kept in globalThis.statted, and every stat that did not ask for bigint in globalThis.notBigint.
  */
@@ -226,9 +229,11 @@ const FAKE_IDS = () => {
     FAKE_OWNER_AT: at,
     FAKE_OWNER_INO: ino,
     FAKE_MODE_AT: modeAt,
+    FAKE_TYPE_AT: typeAt,
   } = process.env;
   const overrides = at ? (JSON.parse(at) as Record<string, number>) : {};
   const modeOverrides = modeAt ? (JSON.parse(modeAt) as Record<string, number>) : {};
+  const typeOverrides = typeAt ? (JSON.parse(typeAt) as Record<string, number>) : {};
   const notBigint: string[] = [];
   (globalThis as unknown as { notBigint: string[] }).notBigint = notBigint;
   // uid by "dev:ino": an object keeps its owner wherever a rename puts it, which a by-path
@@ -259,9 +264,11 @@ const FAKE_IDS = () => {
         overrides[String(a[0])] ??
         (owner === undefined ? undefined : Number(owner));
       const bits = k === 'fstatSync' ? undefined : modeOverrides[String(a[0])];
-      if (uid === undefined && bits === undefined) return st;
-      const mode =
+      const type = k === 'lstatSync' ? typeOverrides[String(a[0])] : undefined;
+      if (uid === undefined && bits === undefined && type === undefined) return st;
+      const withBits =
         bits === undefined ? Number(st.mode) : (Number(st.mode) & ~0o7777) | (bits & 0o7777);
+      const mode = type === undefined ? withBits : (withBits & 0o7777) | type;
       return Object.assign(Object.create(Object.getPrototypeOf(st)), st, {
         uid: uid === undefined ? st.uid : typeof st.uid === 'bigint' ? BigInt(uid) : uid,
         mode: typeof st.mode === 'bigint' ? BigInt(mode) : mode,
@@ -1474,6 +1481,7 @@ describe('the library is refused unless only root can write it and own the way t
       owner?: number;
       at?: Record<string, number>;
       modes?: Record<string, number>;
+      types?: Record<string, number>;
       timeoutMs?: number;
     } = {},
   ) =>
@@ -1483,6 +1491,7 @@ describe('the library is refused unless only root can write it and own the way t
       ...(ids.owner === undefined ? {} : { FAKE_OWNER: String(ids.owner) }),
       ...(ids.at === undefined ? {} : { FAKE_OWNER_AT: JSON.stringify(ids.at) }),
       ...(ids.modes === undefined ? {} : { FAKE_MODE_AT: JSON.stringify(ids.modes) }),
+      ...(ids.types === undefined ? {} : { FAKE_TYPE_AT: JSON.stringify(ids.types) }),
       ...(ids.timeoutMs === undefined ? {} : { TIMEOUT_MS: String(ids.timeoutMs) }),
     });
 
@@ -1685,16 +1694,67 @@ describe('the library is refused unless only root can write it and own the way t
       expect(text).toContain('1 directory on the way to it cannot be trusted');
     });
 
-    it('the hint is for a directory: chmod go-w, a root-owned install directory, a Dockerfile RUN; never the file COPY flags', () => {
+    // The advice follows the directory. One at or below the executable's own directory is the app's
+    // to fix in place; one above it, or a sticky or world-writable one (a /tmp), is shared with
+    // everything else on the host, and `chmod go-w /tmp` would break it.
+    const FIX_IN_PLACE = 'To fix the directories at or below the executable';
+    const MOVE = 'install the executable under a root-owned directory such as /opt/<app>';
+
+    it("a directory at or below the executable's directory gets the fix in place: chmod go-w, chown root, a Dockerfile RUN; never the file COPY flags", () => {
       const exe = image();
-      const text = message(load(exe, { modes: { [aboveOf(exe)[0] as string]: 0o775 } }));
-      expect(text).toContain('chmod go-w');
-      expect(text).toContain('/opt/<app>');
-      expect(text).toContain('RUN chmod go-w');
-      expect(text).toContain('a directory inside a copied tree keeps the build host');
-      expect(text).not.toContain('COPY --chown');
-      expect(text).not.toContain('its bytes could change');
-      expect(text).toContain('could be renamed or replaced after it was checked');
+      for (const dir of dirsOf(exe)) {
+        const text = message(load(exe, { modes: { [dir]: 0o775 } }));
+        expect(text).toContain(FIX_IN_PLACE);
+        expect(text).toContain('`chmod go-w <dir>`');
+        expect(text).toContain('`chown root <dir>`');
+        expect(text).toContain('`RUN chmod go-w <dir>`');
+        expect(text).toContain("a directory inside a copied tree keeps the build host's mode");
+        expect(text).toContain('could be renamed or replaced after it was checked');
+        // Nothing here is shared, so nothing tells the reader to leave a directory alone.
+        expect(text).not.toContain(MOVE);
+        expect(text).not.toContain('COPY --chown');
+        expect(text).not.toContain('its bytes could change');
+      }
+    });
+
+    it("a directory above the executable's directory is never offered chmod or chown: the advice is to move the install under a root-owned directory such as /opt/<app>", () => {
+      const exe = image();
+      for (const dir of aboveOf(exe)) {
+        for (const bad of [{ modes: { [dir]: 0o775 } }, { at: { [dir]: 1000 } }]) {
+          const text = message(load(exe, bad));
+          expect(text).toContain(MOVE);
+          expect(text).not.toContain('chmod');
+          expect(text).not.toContain('chown');
+          expect(text).not.toContain(FIX_IN_PLACE);
+          expect(text).not.toContain('COPY --chown');
+        }
+      }
+    });
+
+    it("a sticky or world-writable directory is never offered chmod or chown either, wherever it is: a shared directory is not the app's to change", () => {
+      for (const bits of [0o1777, 0o777, 0o757, 0o1775]) {
+        const exe = image();
+        // The executable's own directory (a /tmp the app was dropped into), and one below it.
+        for (const dir of [dirsOf(exe)[3], dirsOf(exe)[1]] as string[]) {
+          const text = message(load(exe, { modes: { [dir]: bits } }));
+          expect(text, `mode ${bits.toString(8)} at ${dir}`).toContain(MOVE);
+          expect(text).not.toContain('chmod');
+          expect(text).not.toContain('chown');
+        }
+      }
+    });
+
+    it("a mix gets both: the fix in place for the app's own directory, the move for the shared one, each said once", () => {
+      const exe = image();
+      const text = message(
+        load(exe, {
+          modes: { [dirsOf(exe)[0] as string]: 0o775, [aboveOf(exe)[0] as string]: 0o1777 },
+        }),
+      );
+      expect(text).toContain('2 directories on the way to it cannot be trusted');
+      expect(text.split(FIX_IN_PLACE).length - 1).toBe(1);
+      expect(text.split(MOVE).length - 1).toBe(1);
+      expect(text).toContain('`chmod go-w <dir>`');
     });
 
     it('a file refusal keeps the file hint (COPY --chown=0:0 --chmod=a-w) and does not talk about directories', () => {
@@ -1716,7 +1776,69 @@ describe('the library is refused unless only root can write it and own the way t
       const text = message(load(exe, { modes: { [aboveOf(exe)[0] as string]: 0o775 } }));
       expect(text).toContain('2 directories on the way to it cannot be trusted');
       expect(text).toContain(`${at} is a symbolic link`);
-      expect(text).toContain('replace it with the directory itself');
+      expect(text).toContain(
+        'A link is never followed, whatever it points at: replace it with the directory itself.',
+      );
+      expect(text).not.toContain('is where a directory must be');
+    });
+
+    it('a regular file or any other object where a directory belongs is named for what it is, and is not called a link', () => {
+      const exe = image();
+      const [libDir, ffi] = dirsOf(exe) as string[];
+      const REG = 0o100000;
+      const FIFO = 0o010000;
+      const SOCK = 0o140000;
+      const named = (dir: string, type: number, words: string) => {
+        const text = message(load(exe, { types: { [dir]: type } }));
+        expect(text).toContain(`\n  ${dir} ${words}`);
+        // Not a link: a link's advice and its name do not apply.
+        expect(text).not.toContain('symbolic link');
+        expect(text).not.toContain('A link is never followed');
+        expect(text).toContain(
+          'Something that is not a directory is where a directory must be: replace it with the directory.',
+        );
+        return text;
+      };
+      named(libDir as string, REG, 'is a regular file, not a directory');
+      named(ffi as string, FIFO, 'is not a directory');
+      named(ffi as string, SOCK, 'is not a directory');
+    });
+
+    it('a link and a regular file together get both pieces of advice, each once', () => {
+      const exe = image();
+      const [libDir, ffi] = dirsOf(exe) as string[];
+      const text = message(
+        load(exe, { types: { [libDir as string]: 0o120000, [ffi as string]: 0o100000 } }),
+      );
+      expect(text).toContain(`${libDir} is a symbolic link`);
+      expect(text).toContain(`${ffi} is a regular file, not a directory`);
+      expect(text.split('A link is never followed').length - 1).toBe(1);
+      expect(text.split('Something that is not a directory').length - 1).toBe(1);
+    });
+
+    it('a control character in a directory name is shown, never printed raw: a newline would forge another line of the list', () => {
+      const exe = image();
+      const base = emptyDir('weird');
+      const home = join(base, 'a\n  forged');
+      mkdirSync(home);
+      renameSync(join(exe, '..'), `${home}/x`);
+      // The image moved whole: its executable is now in x/ under a directory whose name has a newline.
+      const moved = join(home, 'x', 'server');
+      chmodSync(join(home, 'x'), 0o775);
+      const text = message(load(moved));
+      expect(text).toContain(join(home, 'x').replace('\n', '^J'));
+      // Every line of the list is a real directory; the forged line never starts one.
+      const lines = text.split('\n').filter((l) => l.startsWith('  '));
+      expect(lines.length, text).toBe(1);
+      expect(text).not.toContain('\n  forged');
+      // The same for a tab, an escape and a delete character: none of them is printed as itself.
+      const other = join(emptyDir('weird2'), 'q\t\u001b\u007f');
+      mkdirSync(other);
+      renameSync(join(image({ seal: true }), '..'), `${other}/x`);
+      chmodSync(join(other, 'x'), 0o775);
+      const t2 = message(load(join(other, 'x', 'server')));
+      expect(t2).toContain('q^I^[^?');
+      expect([...t2].some((ch) => '\t\u001b\u007f'.includes(ch))).toBe(false);
     });
   });
 
@@ -1724,7 +1846,7 @@ describe('the library is refused unless only root can write it and own the way t
     const refusedLink = (r: Run, via: string) => {
       refused(r, new RegExp(`${reEscape(via)} is not the real path of its directory`));
       const text = (r.result as { message: string }[])[0]?.message as string;
-      expect(text).toContain('a symbolic link is in the way at or above it');
+      expect(text).toContain('goes through a symbolic link at or above its directory');
     };
 
     it("a link AT the executable's directory", () => {
@@ -1846,16 +1968,44 @@ describe('the library is refused unless only root can write it and own the way t
     }
   });
 
-  it('the file refusal tells the reader what the images `knext deploy` and `knext preview` build do, and that the way up to / counts too', () => {
+  it('the file refusal names all three commands that stage the Dockerfile, and says the way up to / counts too', () => {
     const exe = image();
     chmodSync(libOf(exe), 0o464);
     refused(load(exe), /COPY --chown=0:0 --chmod=a-w/);
-    refused(load(exe), /the images `knext deploy` and `knext preview` build copy native\//);
+    refused(
+      load(exe),
+      /the Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies native\//,
+    );
     refused(load(exe), /every directory from the library up to \/ must also be/);
-    // `knext build` does not build the image this refers to.
-    expect(
-      ((load(exe).result as { message: string }[])[0] as { message: string }).message,
-    ).not.toContain('knext build');
+  });
+
+  it("an unresolved library and a missing manifest name the same three commands: knext build stages the Dockerfile for a builder of the reader's own", () => {
+    const bare = inBun((m, c) => c(() => m.greet('World')), {
+      FAKE_EXEC: join(emptyDir('bare'), 'server'),
+    });
+    const out = bare.result as { message?: string };
+    expect(out?.message, bare.stderr).toContain(
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage puts it beside the server',
+    );
+    const exe = image({ integrity: 'absent' });
+    const r = load(exe);
+    const [first] = r.result as { message: string }[];
+    expect(first?.message, r.stderr).toContain(
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage copies a native/ that carries one',
+    );
+  });
+
+  it('a relative executable path is refused for what it is, not blamed on a link: the lookups would not go where the judgement did', () => {
+    const exe = image();
+    const rel = relative(app, exe);
+    expect(isAbsolute(rel)).toBe(false);
+    const r = load(rel);
+    refused(r, /is not the real path of its directory/);
+    const text = (r.result as { message: string }[])[0]?.message as string;
+    expect(text).toContain("the executable's path is relative");
+    expect(text).toContain('absolute path');
+    // A relative path is not a link, and the refusal does not say it is.
+    expect(text).not.toContain('symbolic link');
   });
 
   it('a symlink at the staged path is refused as a link, never followed: whatever it points at, root-owned and read-only included', () => {

@@ -46,6 +46,20 @@
  *   N01  only the first failing directory is listed
  *   D01  the directory refusal loses the build explanation (a copied tree keeps the host's mode)
  *   D02  the directory refusal carries the FILE hint (COPY --chown=0:0 --chmod=a-w)
+ *   Advice (what the refusal tells the reader to do follows the directory)
+ *   A01  a shared directory (above the executable, or sticky, or world-writable) is never told
+ *        to move the install
+ *   A02  only the position decides            A03  the position is off by one
+ *   A04  the sticky bit is not looked at      A05  the world-write bit is not looked at
+ *   A06  the fix-in-place advice is always given       A07  the move advice is always given
+ *   Printing
+ *   C01  a control character in a directory name is printed raw (a newline forges a list line)
+ *   C02  a delete character is printed raw             C03  the list prints the raw name
+ *   K01  an object that is not a directory or a link is called a link
+ *   K02  such an object gets no advice of its own
+ *   P01  a relative executable path is blamed on a link
+ *   X01  the file refusal names two of the three commands that stage the Dockerfile
+ *   X02  the unresolved-library refusal names one     X03  the missing-manifest refusal names two
  *   Second look
  *   S01  the directories are not looked at again       S02  the second look uses stat, not lstat
  *   S03  the second look checks existence, not identity
@@ -61,8 +75,17 @@
  * output), every anchor must occur exactly once (preflight first), the baseline
  * must be green, a canary must go red before any green is trusted, and every
  * restore is content-verified. The loader spec needs a system `cc`. Every
- * replacement is a whole line, so the harness's residue marker never comments
- * out the rest of an emitted statement.
+ * replacement is a whole line, so the harness's residue marker (a comment line
+ * before it) never comments out the rest of an emitted statement, except
+ * the rows marked (fragment): D01, D02, A06, A07, P01 and X01 to X03 anchor a
+ * piece of an emitted message or expression, and the harness appends its marker
+ * after the replacement on the same line. Each of those is chosen so that the
+ * fragment ends inside the string it sits in, where the marker is plain text.
+ *
+ * The harness for the real Rust library (crates/harness/ffi-generated.ts) is
+ * proved separately, not here, because it needs cargo and root: W01, W02 and
+ * W04 were applied to a copy of render.ts and the harness run against it in a
+ * Linux container, and each turned it red (see the pull request).
  *
  * What this does not prove: the kind and musl lanes, which load the same
  * generated module from a root-owned tree on a real Alpine image (they need
@@ -177,7 +200,7 @@ const LOADER = [
     id: 'W01',
     subject: 'render',
     claim: 'the directories above the one native/ sits in are never walked',
-    anchor: '  dirs.push(...$upTo(home));\n',
+    anchor: '  dirs.push(...up);\n',
     replacement: '  dirs.push(home);\n',
   },
   {
@@ -191,7 +214,7 @@ const LOADER = [
     id: 'W03',
     subject: 'render',
     claim: 'the directories are looked at but not judged by owner and mode',
-    anchor: "    if (why !== '') bad.push(\\`\\${dir} \\${why}\\`);\n",
+    anchor: '      bad.push(\\`\\${$show(dir)} \\${why}\\`);\n',
     replacement: '\n',
   },
   {
@@ -216,7 +239,7 @@ const LOADER = [
     id: 'W06',
     subject: 'render',
     claim: 'a directory that is a link (or anything but a directory) is not refused',
-    anchor: '    if ($type(st) !== $constants.S_IFDIR) {\n',
+    anchor: '    if (type !== $constants.S_IFDIR) {\n',
     replacement: '    if (false as boolean) {\n',
   },
   {
@@ -256,8 +279,130 @@ const LOADER = [
     subject: 'render',
     claim:
       'the directory refusal carries the file hint (COPY --chown=0:0 --chmod=a-w) instead of the directory one',
-    anchor: 'To fix a directory: run ',
-    replacement: 'To fix a directory: COPY --chown=0:0 --chmod=a-w it, or run ',
+    anchor: 'own directory: run ',
+    replacement: 'own directory: COPY --chown=0:0 --chmod=a-w it, or run ',
+  },
+  {
+    id: 'A01',
+    subject: 'render',
+    claim:
+      "a directory above the executable, or a sticky or world-writable one, is never told to move the install: it is offered chmod and chown like the app's own",
+    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      if (false as boolean) move = true;\n',
+  },
+  {
+    id: 'A02',
+    subject: 'render',
+    claim:
+      'a sticky or world-writable directory below the executable is offered chmod (only its position counts)',
+    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      if (i >= above) move = true;\n',
+  },
+  {
+    id: 'A03',
+    subject: 'render',
+    claim:
+      "the first directory above the executable is counted as the app's own (an off-by-one in where the advice changes)",
+    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      if (i > above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+  },
+  {
+    id: 'A04',
+    subject: 'render',
+    claim:
+      'a sticky directory that is not world-writable (1775) is offered chmod: the sticky bit is not looked at',
+    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      if (i >= above || (Number(st.mode) & 0o002) !== 0) move = true;\n',
+  },
+  {
+    id: 'A05',
+    subject: 'render',
+    claim: 'a world-writable directory is offered chmod: only the sticky bit is looked at',
+    anchor: '      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;\n',
+    replacement: '      if (i >= above || (Number(st.mode) & 0o1000) !== 0) move = true;\n',
+  },
+  {
+    id: 'A06',
+    subject: 'render',
+    claim:
+      "the fix-in-place advice (chmod, chown, RUN chmod) is given even when no directory of the app's own is bad (fragment)",
+    anchor: '\\${fix ? " To fix',
+    replacement: '\\${true ? " To fix',
+  },
+  {
+    id: 'A07',
+    subject: 'render',
+    claim:
+      "the move-the-install advice is given even when every bad directory is the app's own (fragment)",
+    anchor: '\\${move ? " A directory above',
+    replacement: '\\${true ? " A directory above',
+  },
+  {
+    id: 'C01',
+    subject: 'render',
+    claim:
+      'a control character in a directory name is printed as itself: a newline forges another line of the list',
+    anchor: '    out += n < 0x20 || n === 0x7f ? \\`^\\${String.fromCharCode(n ^ 0x40)}\\` : ch;\n',
+    replacement: '    out += ch;\n',
+  },
+  {
+    id: 'C02',
+    subject: 'render',
+    claim: 'a delete character (0x7f) in a directory name is printed as itself',
+    anchor: '    out += n < 0x20 || n === 0x7f ? \\`^\\${String.fromCharCode(n ^ 0x40)}\\` : ch;\n',
+    replacement: '    out += n < 0x20 ? \\`^\\${String.fromCharCode(n ^ 0x40)}\\` : ch;\n',
+  },
+  {
+    id: 'C03',
+    subject: 'render',
+    claim: 'the failing directories are listed by their raw names, not as shown',
+    anchor: '      bad.push(\\`\\${$show(dir)} \\${why}\\`);\n',
+    replacement: '      bad.push(\\`\\${dir} \\${why}\\`);\n',
+  },
+  {
+    id: 'K01',
+    subject: 'render',
+    claim:
+      'a regular file or other object where a directory belongs is treated as a link (it is told a link is never followed)',
+    anchor: '      if (type === $constants.S_IFLNK) link = true;\n',
+    replacement: '      if (true as boolean) link = true;\n',
+  },
+  {
+    id: 'K02',
+    subject: 'render',
+    claim: 'an object that is neither a link nor a directory gets no advice of its own',
+    anchor: '      else other = true;\n',
+    replacement: '\n',
+  },
+  {
+    id: 'P01',
+    subject: 'render',
+    claim: 'a relative executable path is blamed on a symbolic link (fragment)',
+    anchor: "\\${home.startsWith('/') ? \"so the",
+    replacement: '\\${true ? "so the',
+  },
+  {
+    id: 'X01',
+    subject: 'render',
+    claim:
+      'the file refusal names only knext deploy and knext preview as the commands that stage the Dockerfile (fragment)',
+    anchor: '(the Dockerfile that \\\\\\`knext build\\\\\\`, ',
+    replacement: '(the Dockerfile that ',
+  },
+  {
+    id: 'X02',
+    subject: 'render',
+    claim: 'the unresolved-library refusal names only knext build (fragment)',
+    anchor:
+      "'The Dockerfile that \\`knext build\\`, \\`knext deploy\\` and \\`knext preview\\` stage puts",
+    replacement: "'The Dockerfile that \\`knext build\\` stage puts",
+  },
+  {
+    id: 'X03',
+    subject: 'render',
+    claim: 'the missing-manifest refusal names only knext deploy and knext preview (fragment)',
+    anchor: '. The Dockerfile that \\\\\\`knext build\\\\\\`, ',
+    replacement: '. The Dockerfile that ',
   },
   {
     id: 'S01',

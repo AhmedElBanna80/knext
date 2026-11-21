@@ -13,13 +13,23 @@
 //            scanner (every #[export] and #[record] in the fixture source is
 //            there), render the module, stage the library the way an image does
 //            (native/ffi/<triple>/ + a sha256 integrity manifest, owned by root
-//            under a root-owned path, NODE_ENV=production: the loader judges
-//            the real owners and modes, so this mode needs root or passwordless
-//            sudo; the same tree made as the running user is first shown to be
-//            refused) and call through the generated module: scalars,
-//            strings, bytes, records with 64-bit fields, enums, Option/Vec,
-//            Err, a panic, and the non-finite float rule in every JSON position
-//            (refused by the wrapper on the way out, by Rust on the way back)
+//            under a root-owned path whose every ancestor is root's and closed,
+//            NODE_ENV=production: the loader judges the real owners and modes,
+//            so this mode needs root or passwordless sudo), with four controls
+//            that show the loader's walk is live:
+//              1. the same tree made as the running user, under the sticky /tmp,
+//                 is refused, and /tmp itself is listed with its mode (1777);
+//              2. the root-owned tree reached through a link is refused for the
+//                 link;
+//              3. the root-owned tree with the directory above the one native/
+//                 sits in made group-writable by root is refused, and that one
+//                 directory is the only one listed (mode 0775);
+//              4. the same tree with the root directory alone answering 0775 is
+//                 refused, with / the only one listed.
+//            Then call through the generated module: scalars, strings, bytes,
+//            records with 64-bit fields, enums, Option/Vec, Err, a panic, and
+//            the non-finite float rule in every JSON position (refused by the
+//            wrapper on the way out, by Rust on the way back)
 //   init     `knext ffi init` with the knext-ffi revision this @getknext/ffi
 //            records, the written Cargo.toml checked for the exact git+rev
 //            line, then `knext ffi generate` builds that crate AS WRITTEN (cargo
@@ -39,6 +49,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -75,7 +86,10 @@ function same(actual: unknown, expected: unknown, what: string): void {
   );
 }
 function tempDir(prefix: string): string {
-  const d = mkdtempSync(join(tmpdir(), `knext-ffi-gen-${prefix}-`));
+  // The temp directory by its real path: the loader refuses a path that is not its own real path
+  // (a link at or above the executable's directory), and a temp directory that is a link (macOS's
+  // /var) would be refused for that, not for what a control here is about.
+  const d = mkdtempSync(join(realpathSync(tmpdir()), `knext-ffi-gen-${prefix}-`));
   scratch.push(d);
   return d;
 }
@@ -91,13 +105,27 @@ function makeWritable(path: string): void {
   }
 }
 function cleanup(): void {
-  for (const d of scratch) {
-    makeWritable(d);
-    rmSync(d, { recursive: true, force: true });
-  }
   // Best effort, and never through die(): a failure here must not recurse into cleanup().
+  // The trees root staged go first: they live outside the temp directory, so a failure removing
+  // this user's scratch must not leave one behind under the staging parent. Each removal is
+  // tried on its own.
   for (const d of rootScratch) {
-    if (d.startsWith(`${ROOT_STAGE_BASE}/${ROOT_STAGE_PREFIX}`)) runAsRoot(['rm', '-r', '-f', d]);
+    try {
+      if (basename(d).startsWith(ROOT_STAGE_PREFIX) && ROOT_STAGE_PARENTS.includes(dirname(d))) {
+        const r = runAsRoot(['rm', '-r', '-f', d]);
+        if (!r.ok) console.error(`ffi-generated: could not remove ${d}: ${r.detail}`);
+      }
+    } catch (e) {
+      console.error(`ffi-generated: could not remove ${d}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+  for (const d of scratch) {
+    try {
+      makeWritable(d);
+      rmSync(d, { recursive: true, force: true });
+    } catch (e) {
+      console.error(`ffi-generated: could not remove ${d}: ${e instanceof Error ? e.message : e}`);
+    }
   }
 }
 
@@ -109,11 +137,63 @@ function cleanup(): void {
 // directory (a sticky, world-writable /tmp), is refused, as it should be. So the image's
 // native/ is staged the way the image has it, owned by root, under a root-owned path, and the
 // loader's checks run for real. That needs root: a CI runner has passwordless sudo.
+//
+// Which parent is a fact about the host, not a constant: /opt is 0777 on GitHub's ubuntu-latest
+// runner (and 0755 in most images), and the loader is right to refuse a tree under it. So the
+// parent is chosen by walking its ancestry first, and nothing on the host is ever chmod-ed to
+// make it pass.
 
-/** The root-owned directory the staged image goes under (root's on every Linux runner). */
-const ROOT_STAGE_BASE = '/opt';
+/** Where the staged image may go, in order: a directory under each must be root's all the way up. */
+const ROOT_STAGE_PARENTS = ['/var/lib', '/'];
 const ROOT_STAGE_PREFIX = 'knext-ffi-gen-';
 const rootScratch: string[] = [];
+
+/**
+ * Why a directory is not a place the loader would accept a tree under: itself and every directory
+ * above it must be a real directory, owned by root and not writable by group or other (the loader's
+ * rule, applied here BEFORE staging so a host that fails it is reported as that, not as a loader
+ * refusal with the walk looking broken). [] when it is fit.
+ */
+function ancestryProblems(dir: string): string[] {
+  const problems: string[] = [];
+  let real = dir;
+  try {
+    real = realpathSync(dir);
+  } catch (e) {
+    problems.push(`${dir} cannot be resolved: ${e instanceof Error ? e.message : e}`);
+  }
+  if (real !== dir) problems.push(`${dir} is not its own real path (it resolves to ${real})`);
+  for (let d = dir; ; d = dirname(d)) {
+    const st = lstatSync(d, { throwIfNoEntry: false });
+    if (st === undefined) problems.push(`${d} does not exist`);
+    else if (!st.isDirectory()) problems.push(`${d} is not a directory`);
+    else if (st.uid !== 0) problems.push(`${d} is owned by uid ${st.uid}, not root`);
+    else if ((st.mode & 0o022) !== 0) {
+      problems.push(
+        `${d} is writable by its group or by everyone (mode ${(st.mode & 0o7777).toString(8).padStart(4, '0')})`,
+      );
+    }
+    if (dirname(d) === d) return problems;
+  }
+}
+
+let rootStageParent: string | undefined;
+/** The first of {@link ROOT_STAGE_PARENTS} whose whole ancestry is root's and closed; else a clear stop. */
+function stageParent(): string {
+  if (rootStageParent !== undefined) return rootStageParent;
+  const tried: string[] = [];
+  for (const parent of ROOT_STAGE_PARENTS) {
+    const problems = ancestryProblems(parent);
+    if (problems.length === 0) {
+      rootStageParent = parent;
+      return parent;
+    }
+    tried.push(`${parent}:\n    ${problems.join('\n    ')}`);
+  }
+  die(
+    `no directory on this host can hold the staged image: the loader accepts a tree only under directories that root owns and group and other cannot write, all the way up to /, and none of ${ROOT_STAGE_PARENTS.join(', ')} is one:\n  ${tried.join('\n  ')}\n  (this lane does not change the mode of a system directory to make one fit)`,
+  );
+}
 
 /** Run argv as root: directly when this process is root, else through non-interactive sudo. */
 function runAsRoot(argv: string[]): { ok: boolean; detail: string } {
@@ -133,11 +213,11 @@ function asRoot(argv: string[]): void {
   }
 }
 
-/** A fresh root-owned, 0755 directory under {@link ROOT_STAGE_BASE}; removed by cleanup(). */
+/** A fresh root-owned, 0755 directory under {@link stageParent}; removed by cleanup(). */
 function rootStageDir(): string {
-  const dir = `${ROOT_STAGE_BASE}/${ROOT_STAGE_PREFIX}${randomBytes(6).toString('hex')}`;
+  const dir = join(stageParent(), `${ROOT_STAGE_PREFIX}${randomBytes(6).toString('hex')}`);
   rootScratch.push(dir); // before it is made, so a half-made one is still removed
-  asRoot(['install', '-d', '-o', 'root', '-m', '0755', dir]);
+  asRoot(['install', '-d', '-o', 'root', '-g', 'root', '-m', '0755', dir]);
   return dir;
 }
 
@@ -186,9 +266,24 @@ function app(dir: string): void {
 
 const CHILD = `// Runs BODY(m, c) against the generated module; prints RESULT <json>.
 // Nothing is faked: the loader judges the real owners and modes of the tree it loads from, and
-// FAKE_EXEC only says where the executable (so native/) is.
+// FAKE_EXEC only says where the executable (so native/) is. The one probe: FAKE_ROOT_MODE makes
+// an lstat of / (and nothing else) answer that mode, because the harness cannot make / writable
+// on a real machine; it shows the loader's walk reaches the root directory and judges it.
 const fake = process.env.FAKE_EXEC;
 if (fake) process.execPath = fake;
+if (process.env.FAKE_ROOT_MODE) {
+  const fs = process.getBuiltinModule('node:fs');
+  const real = fs.lstatSync;
+  fs.lstatSync = function (...a) {
+    const st = real.apply(this, a);
+    if (st === undefined || String(a[0]) !== '/') return st;
+    const mode = (Number(st.mode) & ~0o7777) | Number(process.env.FAKE_ROOT_MODE);
+    return Object.assign(Object.create(Object.getPrototypeOf(st)), st, {
+      mode: typeof st.mode === 'bigint' ? BigInt(mode) : mode,
+    });
+  };
+  process.getBuiltinModule('node:module').syncBuiltinESMExports();
+}
 const m = await import('./src/generated/ffi/index.ts');
 const c = (f) => {
   try {
@@ -295,9 +390,21 @@ function wrapper(libPath: string): void {
     chmodSync(part, statSync(part).mode & ~0o222);
   }
 
-  // The tree above is this user's, under the temp directory: the loader must refuse it, whatever
-  // its modes. This is the half that shows the loader's walk is live in this lane; without it,
-  // the load below could pass because nothing was checked.
+  // Control 1. The tree above is this user's, under the temp directory (a sticky, world-writable
+  // /tmp on every Linux runner): the loader must refuse it, and the refusal must name the temp
+  // directory itself with its mode. Which directories fail below it depends on who runs this (as
+  // a user they are all this user's; as root none is), but the temp directory is group- and
+  // world-writable either way, and only a walk that goes ABOVE the executable's directory, all
+  // the way up and with the sticky bit no excuse, can name it. Accepting any directory refusal
+  // here would stay green with that walk removed.
+  const tmp = realpathSync(tmpdir());
+  const tmpBits = statSync(tmp).mode & 0o7777;
+  if ((tmpBits & 0o022) === 0) {
+    die(
+      `${tmp} is not writable by group or other (mode ${tmpBits.toString(8).padStart(4, '0')}), so this lane cannot show that the loader refuses a shared directory above the executable's: run it with a temp directory like /tmp (set TMPDIR)`,
+    );
+  }
+  const tmpLine = `\n  ${tmp} is writable by its group or by everyone (mode ${tmpBits.toString(8).padStart(4, '0')})`;
   const refused = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
     FAKE_EXEC: join(image, 'server'),
     NODE_ENV: 'production',
@@ -309,8 +416,14 @@ function wrapper(libPath: string): void {
       'a native/ this user owns, under the temp directory, is refused',
     );
     check(
-      /director(?:y|ies) on the way to it cannot be trusted/.test(refused.message ?? ''),
-      `the refusal names the directories that cannot be trusted: ${refused.message}`,
+      (refused.message ?? '').includes(tmpLine),
+      `the refusal names the temp directory ${tmp} with its mode (the sticky bit is no excuse), so the walk reaches above the executable's directory: ${refused.message}`,
+    );
+    check(
+      (refused.message ?? '').includes(
+        'install the executable under a root-owned directory such as /opt/<app>',
+      ),
+      `the refusal tells the reader to move the install, since the temp directory is shared: ${refused.message}`,
     );
   }
 
@@ -318,7 +431,7 @@ function wrapper(libPath: string): void {
   // real owners and modes of this tree; nothing in the child is faked.
   const rootImage = stageAsRoot(join(image, 'native'));
 
-  // The same good tree, reached through a link root made at its parent: the loader never follows a
+  // Control 2. The same good tree, reached through a link root made at its parent: the loader never follows a
   // link at or above the executable's directory, whatever it points at, even a tree it would load
   // by its real path (the load below).
   const link = join(dirname(rootImage), 'image-link');
@@ -332,6 +445,53 @@ function wrapper(libPath: string): void {
     check(
       /is not the real path of its directory/.test(viaLink.message ?? ''),
       `the refusal says the link is the problem: ${viaLink.message}`,
+    );
+  }
+
+  // Control 3. The good tree, with the directory above the one native/ sits in made
+  // group-writable by root: refused, and that one directory is the only one listed, with its mode.
+  // The loader's walk is what finds it (it is above the executable's directory), and it must find
+  // nothing else in an image whose every other directory is root's and closed. Restored at once.
+  const stage = dirname(rootImage);
+  asRoot(['chmod', 'g+w', stage]);
+  const open = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+    FAKE_EXEC: join(rootImage, 'server'),
+    NODE_ENV: 'production',
+  }) as { cls?: string; message?: string } | undefined;
+  asRoot(['chmod', 'g-w', stage]);
+  if (open !== undefined) {
+    same(open.cls, 'FfiLoadError', 'a group-writable directory above native/ is refused');
+    const message = open.message ?? '';
+    same(
+      message.split('\n').filter((l) => l.startsWith('  ')),
+      [`  ${stage} is writable by its group or by everyone (mode 0775)`],
+      'exactly one directory is listed: the group-writable one above the executable, with its mode',
+    );
+    check(
+      message.includes('1 directory on the way to it cannot be trusted'),
+      `the refusal counts one directory: ${message}`,
+    );
+    check(
+      message.includes('install the executable under a root-owned directory such as /opt/<app>') &&
+        !/chmod|chown/.test(message),
+      `the advice for a directory above the executable is to move the install, never chmod or chown: ${message}`,
+    );
+  }
+
+  // Control 4. The same tree with the root directory alone answering 0775: refused, with / the
+  // only directory listed. Every real directory above native/ is root's and closed, so only a walk
+  // that goes all the way up and judges the root directory itself can name it.
+  const atRoot = inBun(dir, (m, c) => c(() => m.echo_opt_f64(0.25)), {
+    FAKE_EXEC: join(rootImage, 'server'),
+    FAKE_ROOT_MODE: String(0o775),
+    NODE_ENV: 'production',
+  }) as { cls?: string; message?: string } | undefined;
+  if (atRoot !== undefined) {
+    same(atRoot.cls, 'FfiLoadError', 'a group-writable root directory is refused');
+    same(
+      (atRoot.message ?? '').split('\n').filter((l) => l.startsWith('  ')),
+      ['  / is writable by its group or by everyone (mode 0775)'],
+      'exactly one directory is listed: the root directory, with its mode',
     );
   }
 
@@ -539,6 +699,17 @@ function finish(): never {
   }
   console.log('ffi-generated: ok');
   process.exit(0);
+}
+
+// An interrupted run still removes what it staged as root (cleanup() never throws).
+for (const [sig, code] of [
+  ['SIGINT', 130],
+  ['SIGTERM', 143],
+] as const) {
+  process.on(sig, () => {
+    cleanup();
+    process.exit(code);
+  });
 }
 
 const [mode, arg] = process.argv.slice(2);

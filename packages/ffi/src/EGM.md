@@ -129,39 +129,55 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       descriptors (each opened with `O_NOFOLLOW | O_NONBLOCK` and required to be a regular file),
       and `lstat` every directory from the library's parent up to `/` (below `native/`, `native/`,
       the directory beside the executable and each one above it; the directory beside the executable
-      must be its own `realpath`, else `$sealed` refuses before it stats anything: a link at or
-      above it is never followed), by owner and mode (`access()` would say yes to root for
+      must be its own `realpath`, else `$sealed` refuses before it stats anything. Bun reports
+      `process.execPath` already resolved (measured on macOS and Linux: through a linked directory,
+      a link to the binary, `PATH` through a link, a merged `/usr`), so an install behind a link is
+      judged on its real path and this comparison is a fail-closed assertion that fires only when
+      code reassigns `execPath` to a relative or linked path; its message says which), by owner and mode (`access()` would say yes to root for
       all of it). The directories are judged and pinned before the manifest is read. Each must be
       a real directory (a link is refused), owned by uid 0 and not writable by group or other
       (a sticky world-writable `/tmp` is refused too: the conservative reading, as OpenSSH's
       `StrictModes` has it, not a measured hole), with any owner-write bit (root can write
-      anyway). Every directory that fails is listed in the one refusal, with the fix for a
-      directory (`chmod go-w`, a root-owned install directory, a Dockerfile `RUN chmod go-w`) and
-      the full mode (`& 0o7777`), so a sticky or setgid directory reads as such; `$why` is the
-      shared owner and mode judgement and `$judge` is the file-only refusal with the file hint. Why every ancestor: renaming a directory needs write on its parent,
+      anyway). Every directory that fails is listed in the one refusal, with the full mode
+      (`& 0o7777`), so a sticky or setgid directory reads as such, and the advice follows the
+      directory: the executable's own directory and those below it (index below `above`, computed
+      before the walk adds the ancestors) are fixed in place (`chmod go-w`, `chown root`, a
+      Dockerfile `RUN chmod go-w`); a directory above it, or a sticky or world-writable one
+      (`mode & 0o1002`), is shared with the host and is never to be changed, so the advice is to
+      move the install under a root-owned directory such as `/opt/<app>`. A link or a regular file
+      where a directory belongs is named as such (`link` and `other` flags) and told to be replaced.
+      Every printed path goes through `$show`, which writes a control character in caret notation,
+      so a directory named with a newline cannot forge a line of the list. `$why` is the shared owner
+      and mode judgement and `$judge` is the file-only refusal with the file hint. Why every ancestor: renaming a directory needs write on its parent,
       so with every directory on the path root's and closed to group and other, no user but root
       can swap any part of it, which makes the by-path lookups sound (Bun has no `openat`; the same
       rule as OpenSSH's `StrictModes`). No other uid is accepted and the process's own uid is never read:
       the user the app runs as can `chmod` what it owns, so an app-owned tree, even read-only,
-      protects nothing from a file-write bug in the app. No opt-out. The images `knext deploy` and
-      `knext preview` build copy `native/` root-owned and non-writable (`--chown=0:0 --chmod=a-w`);
+      protects nothing from a file-write bug in the app. No opt-out. The Dockerfile that `knext build`,
+      `knext deploy` and `knext preview` stage copies `native/` root-owned and non-writable
+      (`--chown=0:0 --chmod=a-w`);
       BuildKit leaves `native/` and the directory above it root-owned 0755, which passes for a
       non-root app user. The staged standalone Dockerfile adds `RUN chmod go-w` over `native/`
       and every directory above the executable (`runtime-image.ts:FFI_ANCESTORS_RUN`), because a
       nested prefix directory inside a copied tree keeps the build host's mode (0775 under umask
       002), and `native/` is named so nothing depends on the mode a builder gives a COPY's
-      destination. A user Dockerfile that
+      destination (the vinext template, a literal file, carries `RUN chmod go-w /app /app/native` for
+      every app, a no-op where both are already 0755 and root's). A user Dockerfile that
       chowns the app directory, or any directory above it, to the app user, a shared, sidecar or
       fsGroup-writable volume at `native/` (unless root owns all of it and group and other cannot write
       it; one that passes is still writable through its other mounts), and a compiled binary with
       any directory above it not root-owned (a home directory, `/tmp`) are refused; one under a
-      root-owned `/opt/<app>` passes. It does not stop root, the capabilities that reach as far
-      (`CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SYS_ADMIN`,
-      `CAP_SYS_PTRACE`, `CAP_MKNOD`), a second writable mount of the same files, an ACL (mode bits
-      only; on macOS an ACL can grant write), a seekable file write as the app user through
-      `/proc/self/mem`, or an app that itself runs in a user namespace (rootless, `hostUsers:
-      false`), where uid 0 is an unprivileged host uid. The operator's pods drop ALL capabilities
-      and set `allowPrivilegeEscalation: false`. A
+      root-owned `/opt/<app>` passes (where `/opt` itself is closed; it is 0777 on some hosts). It
+      does not stop root, any capability that is equivalent to root (for example `CAP_DAC_OVERRIDE`,
+      `CAP_FOWNER`, `CAP_CHOWN`, `CAP_SETUID`, `CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`, `CAP_MKNOD`,
+      `CAP_SYS_MODULE`, `CAP_SYS_RAWIO`, `CAP_BPF`), a second writable mount of the same files, an
+      ACL (mode bits only; on macOS an ACL can grant write), a seekable file write as the app user
+      through `/proc/self/mem`, or an app that itself runs in a user namespace. That is two cases:
+      rootless Podman or Docker (the host user owns the files, so non-root inside does not remove
+      that writer) and `hostUsers: false` (host root owns them, so non-root inside restores the
+      guarantee). The operator's pods drop ALL capabilities, set `allowPrivilegeEscalation: false`
+      and run as non-root (`runAsNonRoot` is needed too: an app running as uid 0 owns the tree
+      whatever it has dropped). A
       sealed memfd copy (`memfd_create` + `F_ADD_SEALS` through libc by
       `bun:ffi`, measured to work on Bun 1.4.2) would bind the bytes against root too, but each
       module copy and Worker would load its own copy of the library, ending the one library per

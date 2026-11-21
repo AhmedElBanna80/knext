@@ -114,9 +114,9 @@ const MUTATIONS = [
       'the request-time "cannot find the Rust library" error carries the prerender advice again',
     subject: 'render',
     anchor:
-      "      'Images built by \\`knext build\\` stage it beside the server (knext ffi build); in development, run \\`knext ffi generate\\`.',",
+      "      'The Dockerfile that \\`knext build\\`, \\`knext deploy\\` and \\`knext preview\\` stage puts it beside the server (knext ffi build builds it); in development, run \\`knext ffi generate\\`.',",
     replacement:
-      "      'Images built by \\`knext build\\` stage it beside the server (knext ffi build); in development, run \\`knext ffi generate\\`. ' + $PRERENDER,",
+      "      'The Dockerfile that \\`knext build\\`, \\`knext deploy\\` and \\`knext preview\\` stage puts it beside the server (knext ffi build builds it); in development, run \\`knext ffi generate\\`. ' + $PRERENDER,",
   },
   // ── The toolchain install commands and pins (build.ts, supply-chain.ts) ─
   {

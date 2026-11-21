@@ -403,8 +403,8 @@ function $resolve(): readonly [string, string] {
     }
   }
   throw new FfiLoadError(
-    `knext ffi: cannot find the Rust library ${file} for ${triple}. Tried:\n${tried.map((p) => `  ${p}`).join('\n')}\n` +
-      'Images built by `knext build` stage it beside the server (knext ffi build); in development, run `knext ffi generate`.',
+    `knext ffi: cannot find the Rust library ${file} for ${triple}. Tried:\n${tried.map((p) => `  ${$show(p)}`).join('\n')}\n` +
+      'The Dockerfile that `knext build`, `knext deploy` and `knext preview` stage puts it beside the server (knext ffi build builds it); in development, run `knext ffi generate`.',
   );
 }
 
@@ -440,7 +440,7 @@ function $judge(path: string, p: string, st: $Stat): void {
   const why = $why(st);
   if (why !== '') {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: ${p} ${why}, so its bytes could change after they were checked. The library and its integrity manifest must be owned by root and not writable by group or other (the images \`knext deploy\` and \`knext preview\` build copy native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user; every directory from the library up to / must also be owned by root and not writable by group or other.`,
+      `knext ffi: refusing to load ${$show(path)}: ${$show(p)} ${why}, so its bytes could change after they were checked. The library and its integrity manifest must be owned by root and not writable by group or other (the Dockerfile that \`knext build\`, \`knext deploy\` and \`knext preview\` stage copies native/ with \`COPY --chown=0:0 --chmod=a-w\`), and the app should run as a non-root user; every directory from the library up to / must also be owned by root and not writable by group or other.`,
     );
   }
 }
@@ -468,6 +468,20 @@ function $upTo(dir: string): string[] {
 }
 
 /**
+ * A path as a refusal prints it. A control character (a newline above all) in a directory name would
+ * start a line of its own in the list of directories, which is read as one directory a line, so it is
+ * shown in caret notation (a newline as ^J) and never printed as itself.
+ */
+function $show(p: string): string {
+  let out = '';
+  for (const ch of p) {
+    const n = ch.codePointAt(0) as number;
+    out += n < 0x20 || n === 0x7f ? `^${String.fromCharCode(n ^ 0x40)}` : ch;
+  }
+  return out;
+}
+
+/**
  * Judge, and pin, every directory the check relies on: the library's, from the one it sits in up
  * to native/ itself, then the directory native/ sits in (beside the executable), then every
  * directory above that up to the root. Each is looked at with lstat (a link is never followed),
@@ -476,19 +490,27 @@ function $upTo(dir: string): string[] {
  * the bytes are hashed, so a tree renamed over them in between is refused. Every directory that
  * fails is listed in the one refusal.
  *
- * The directory beside the executable must be its own real path: a link at or above it is
- * refused, never followed, because the lookups would go through the link and the directories
- * judged would be somebody else's.
+ * The directory beside the executable must be its own real path. Bun reports process.execPath
+ * already resolved, so an install behind a link (current -> releases/N, /tmp -> /private/tmp) gets
+ * here as the real path and its directories are judged as they are. The comparison is a fail-closed
+ * assertion on that: a path that is not its own real path (a relative one, or one through a link)
+ * is refused, never followed, because the lookups would go through it and the directories judged
+ * would be somebody else's.
  *
- * Why every ancestor: a directory a user can write is one that user can rename the tree out of,
- * and put another in its place. With every directory from native/ up to the root owned by root
- * and closed to group and other, nobody but root can rename or replace any of them, so looking
- * them up by path is sound (Bun has no openat, and macOS has no descriptor-relative path, so a
- * lookup cannot be anchored to a directory descriptor). The pins and the file checks below are
- * defence in depth: what remains is code running as root (or with CAP_DAC_OVERRIDE, CAP_FOWNER,
- * CAP_CHOWN, CAP_SETUID, CAP_SYS_ADMIN, CAP_SYS_PTRACE or CAP_MKNOD), a second writable mount of
- * the same files, an ACL, or a write to /proc/self/mem, and none of that can be told apart from
- * the real tree by any lookup.
+ * Why every ancestor: a directory a user can write is one that user can rename the tree out of, and
+ * put another in its place. With every directory from native/ up to the root owned by root and
+ * closed to group and other, nobody but root can rename or replace any of them, so looking them up
+ * by path is sound (Bun has no openat, and macOS has no descriptor-relative path, so a lookup cannot
+ * be anchored to a directory descriptor). The pins and the file checks below are defence in depth:
+ * what remains is code running as root (or with a capability equivalent to root: CAP_DAC_OVERRIDE,
+ * CAP_FOWNER, CAP_CHOWN, CAP_SETUID, CAP_SYS_ADMIN, CAP_SYS_PTRACE, CAP_MKNOD, CAP_SYS_MODULE,
+ * CAP_SYS_RAWIO, CAP_BPF), a second writable mount of the same files, an ACL, or a write to
+ * /proc/self/mem, and none of that can be told apart from the real tree by any lookup.
+ *
+ * The advice follows the directory. One at or below the executable's own directory belongs to the
+ * app, so the refusal says how to fix it in place. One above it, or a sticky or world-writable one
+ * (a /tmp), is shared with everything else on the host, and changing its owner or mode would break
+ * what else uses it: for those the refusal says to move the install under a root-owned directory.
  */
 function $sealed(native: string, rel: string, path: string): $Pin[] {
   const home = $dirname(native);
@@ -497,35 +519,48 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
     real = $realpathSync(home);
   } catch (err) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: cannot resolve the directory ${home} (${err instanceof Error ? err.message : String(err)}).`,
+      `knext ffi: refusing to load ${$show(path)}: cannot resolve the directory ${$show(home)} (${err instanceof Error ? err.message : String(err)}).`,
     );
   }
   if (real !== home) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: ${home} is not the real path of its directory (it resolves to ${real}), so a symbolic link is in the way at or above it. A link is never followed, whatever it points at: run the executable from its real path, with no link in the way.`,
+      `knext ffi: refusing to load ${$show(path)}: ${$show(home)} is not the real path of its directory (it resolves to ${$show(real)}), ${home.startsWith('/') ? "so the executable's path goes through a symbolic link at or above its directory. A link is never followed, whatever it points at, because the lookups would not go where the judgement did: run the executable by its real path." : "because the executable's path is relative. What is judged must be the directory the lookups reach: run the executable by its absolute path."}`,
     );
   }
   const parts = rel.split('/');
   const dirs: string[] = [];
   for (let i = parts.length - 1; i >= 0; i--) dirs.push($join(native, ...parts.slice(0, i)));
-  dirs.push(...$upTo(home));
+  const up = $upTo(home);
+  const above = dirs.length + 1; // the index of the first directory above the executable's own
+  dirs.push(...up);
   const pins: $Pin[] = [];
   const bad: string[] = [];
+  let fix = false;
+  let move = false;
   let link = false;
-  for (const dir of dirs) {
+  let other = false;
+  for (const [i, dir] of dirs.entries()) {
     const st = $lstatSync(dir, { bigint: true });
-    if ($type(st) !== $constants.S_IFDIR) {
-      link = true;
-      bad.push(`${dir} is ${$type(st) === $constants.S_IFLNK ? 'a symbolic link' : 'not a directory'}`);
+    const type = $type(st);
+    if (type !== $constants.S_IFDIR) {
+      if (type === $constants.S_IFLNK) link = true;
+      else other = true;
+      bad.push(
+        `${$show(dir)} ${type === $constants.S_IFLNK ? 'is a symbolic link' : type === $constants.S_IFREG ? 'is a regular file, not a directory' : 'is not a directory'}`,
+      );
       continue;
     }
     const why = $why(st);
-    if (why !== '') bad.push(`${dir} ${why}`);
+    if (why !== '') {
+      bad.push(`${$show(dir)} ${why}`);
+      if (i >= above || (Number(st.mode) & 0o1002) !== 0) move = true;
+      else fix = true;
+    }
     pins.push([dir, $id(st)]);
   }
   if (bad.length > 0) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other. To fix a directory: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or install the executable under a root-owned directory such as /opt/<app>; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode).${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}`,
+      `knext ffi: refusing to load ${$show(path)}: ${bad.length === 1 ? '1 directory' : `${bad.length} directories`} on the way to it cannot be trusted, so what is under ${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\n${bad.map((b) => `  ${b}`).join('\n')}\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.${fix ? " To fix the directories at or below the executable's own directory: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}${move ? " A directory above the executable's own directory, and a sticky or world-writable one, is shared with everything else on the host, so do not change its owner or mode: install the executable under a root-owned directory such as /opt/<app> instead." : ''}${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}`,
     );
   }
   return pins;
@@ -537,7 +572,7 @@ function $unchanged(path: string, pins: readonly $Pin[]): void {
     const now = $lstatSync(dir, { bigint: true, throwIfNoEntry: false });
     if (now === undefined || $id(now) !== id) {
       throw new FfiLoadError(
-        `knext ffi: refusing to load ${path}: ${dir} changed while it was being checked (it was renamed, replaced or removed, so it is not the directory that was judged), and the manifest or the library may have come from another tree.`,
+        `knext ffi: refusing to load ${$show(path)}: ${$show(dir)} changed while it was being checked (it was renamed, replaced or removed, so it is not the directory that was judged), and the manifest or the library may have come from another tree.`,
       );
     }
   }
@@ -548,7 +583,7 @@ function $same(path: string, file: string, id: string): void {
   const now = $lstatSync(file, { bigint: true, throwIfNoEntry: false });
   if (now === undefined || $id(now) !== id) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: ${file} is no longer the file that was read (it was renamed, replaced or removed while it was being checked), so what was judged may not be what is at that path now.`,
+      `knext ffi: refusing to load ${$show(path)}: ${$show(file)} is no longer the file that was read (it was renamed, replaced or removed while it was being checked), so what was judged may not be what is at that path now.`,
     );
   }
 }
@@ -611,7 +646,7 @@ function $verify(native: string, rel: string, path: string): string {
     manifest,
     'the integrity manifest',
     path,
-    `knext ffi: refusing to load ${path}: there is no integrity manifest at ${manifest}. Images built by \`knext build\` carry one.`,
+    `knext ffi: refusing to load ${$show(path)}: there is no integrity manifest at ${$show(manifest)}. The Dockerfile that \`knext build\`, \`knext deploy\` and \`knext preview\` stage copies a native/ that carries one.`,
   );
   let text: string;
   try {
@@ -629,15 +664,15 @@ function $verify(native: string, rel: string, path: string): string {
     files = parsed.files;
   } catch (err) {
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: cannot read ${manifest} (${err instanceof Error ? err.message : String(err)}).`,
+      `knext ffi: refusing to load ${$show(path)}: cannot read ${$show(manifest)} (${err instanceof Error ? err.message : String(err)}).`,
     );
   }
   const expected =
     typeof files === 'object' && files !== null ? (files as Record<string, unknown>)[rel] : undefined;
   if (typeof expected !== 'string') {
-    throw new FfiLoadError(`knext ffi: refusing to load ${path}: ${rel} is not listed in ${manifest}.`);
+    throw new FfiLoadError(`knext ffi: refusing to load ${$show(path)}: ${rel} is not listed in ${$show(manifest)}.`);
   }
-  const lib = $openFile(path, 'the library', path, `knext ffi: refusing to load ${path}: it is gone.`);
+  const lib = $openFile(path, 'the library', path, `knext ffi: refusing to load ${$show(path)}: it is gone.`);
   let actual: string;
   try {
     $judge(path, path, lib.st);
@@ -652,13 +687,13 @@ function $verify(native: string, rel: string, path: string): string {
   if (actual !== expected) {
     $closeSync(lib.fd);
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: sha256 mismatch\n  expected ${expected}\n  actual   ${actual}`,
+      `knext ffi: refusing to load ${$show(path)}: sha256 mismatch\n  expected ${expected}\n  actual   ${actual}`,
     );
   }
   if (process.platform !== 'linux' && process.platform !== 'darwin') {
     $closeSync(lib.fd);
     throw new FfiLoadError(
-      `knext ffi: refusing to load ${path}: ${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).`,
+      `knext ffi: refusing to load ${$show(path)}: ${process.platform} has no descriptor path to load the checked bytes through (only linux and darwin do).`,
     );
   }
   // Never closed once dlopen has seen its name: glibc finds an already-loaded

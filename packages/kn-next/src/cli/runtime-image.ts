@@ -650,9 +650,9 @@ export const FFI_NATIVE_PERMS = "--chown=0:0 --chmod=a-w";
 export const FFI_NATIVE_COPY = `COPY ${FFI_NATIVE_PERMS} native ${STANDALONE}/native`;
 
 /**
- * The loader walks every directory from the one `native/` sits in up to `/` and refuses the
- * first that is not root's or that group or other can write: a user who can write one can
- * rename the whole tree out of it. BuildKit leaves WORKDIR, the parents a COPY creates and a
+ * The loader walks every directory from the one `native/` sits in up to `/` and refuses to load,
+ * naming every one that is not root's or that group or other can write: a user who can write
+ * one can rename the whole tree out of it. BuildKit leaves WORKDIR, the parents a COPY creates and a
  * directory COPY's destination 0755 and root's, but a directory INSIDE a copied tree keeps the
  * build host's mode (measured on docker 29: 0775 from a context made under umask 002), so the
  * tracing-root prefix directories of a nested layout can come out group-writable. The line

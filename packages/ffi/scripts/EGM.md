@@ -46,7 +46,10 @@ against a host-arch twin or against the shipped image.
 - `doc-recipe.ts`: `bun doc-recipe.ts dockerfile|shell <out>` writes one fenced block of
   `apps/docs/content/docs/rust-in-process.mdx` to a file, verbatim, so the musl lane runs what the page
   tells a user to copy. A block is found by `title="Dockerfile"` (`dockerfile`) or
-  `title="own-binary.sh"` (`shell`). Zero or several matching blocks, or one never closed, exit 1; an
+  `title="own-binary.sh"` (`shell`). The page's `Dockerfile.copied-tree` fragment (`COPY . /app`)
+  has no recipe here: it is shown to users, and no lane builds it. The `Dockerfile` recipe carries
+  `RUN chmod go-w /app /app/native` after the `native/` COPY, so what the lane loads does not rest on
+  the mode a builder gives a COPY destination. Zero or several matching blocks, or one never closed, exit 1; an
   unknown recipe or missing argument exits 2. `extractRecipe`, `RECIPES` and `DOCS_PAGE` are
   exported for `src/__tests__/doc-recipe.test.ts`. The lane builds the Dockerfile with the pinned
   image as its `BASE_IMAGE` build argument and nothing else changed, from a group-writable source,

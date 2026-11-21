@@ -6,29 +6,196 @@
  * RUNTIME-NEUTRAL by contract: node builtins only (`node:fs`, `node:path`) -- no
  * `Bun` global, no `bun` import -- so the SAME code runs inside the compile
  * script (under Bun) and inside the CLI (under Node), and the CLI can derive the
- * planned module count independently of the script's claim. Globbing is
- * `fs.globSync` / `path.matchesGlob`, which Node >=24 and Bun both ship. The
- * parity test (`include-plan-runtime-parity.test.ts`) runs one fixture under
- * both runtimes and demands identical plans and identical refusals.
+ * planned module count independently of the script's claim.
+ *
+ * Globbing is implemented HERE (a small segment matcher + directory walk), not
+ * with `fs.globSync`, `path.matchesGlob` or Bun's own glob: those three disagree with
+ * each other on case sensitivity, dotfiles and `./` prefixes (measured on Node
+ * 24 and Bun 1.4.2), and the planner's set decides what is embedded. The
+ * behaviour reproduces the original Bun-glob planner exactly, pinned by
+ * `include-plan-golden.test.ts` against a golden generated from that planner:
+ *
+ *   - `*` `?` `[...]` `{a,b}` and `**` (zero or more directories);
+ *   - case-SENSITIVE;
+ *   - a scan never matches a dot entry with a wildcard (`*`, `**`, `?`, a class),
+ *     only a segment that itself starts with `.`; an exclude (a path match, not
+ *     a scan) is dot-permissive;
+ *   - a scan descends real directories only under `**`/wildcards, but steps
+ *     through a symlinked directory that the pattern NAMES literally (the
+ *     real-path guard in planIncludes then checks where its files land);
+ *   - a symlinked FILE is never returned by a scan;
+ *   - a leading `./` is honoured and echoed (`./lib/*.js` yields `./lib/a.js`).
  */
-import { existsSync, globSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MODULE_EXT = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 const GLOB_META = /[*?[\]{}]/;
 
-/** Files (not directories) under `cwd` matching `pattern`, as `fs.globSync` reports them. */
-function scanFiles(pattern, cwd) {
-  return globSync(pattern, { cwd }).filter((rel) => {
-    try {
-      // lstat: a symlinked FILE is never returned by a glob scan (as Bun's own glob
-      // file scan never did); only a literal path can name one, and the
-      // real-path guard in planIncludes then checks where it lands.
-      return lstatSync(resolve(cwd, rel)).isFile();
-    } catch {
-      return false;
+/** Expand `{a,b}` alternatives (nestable); a brace without a top-level comma is literal. */
+function expandBraces(pattern) {
+  let depth = 0;
+  let open = -1;
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '\\') {
+      i++;
+    } else if (ch === '{') {
+      if (depth === 0) open = i;
+      depth++;
+    } else if (ch === '}' && depth > 0) {
+      depth--;
+      if (depth === 0) {
+        const parts = [];
+        let level = 0;
+        let from = open + 1;
+        for (let j = open + 1; j < i; j++) {
+          const c = pattern[j];
+          if (c === '\\') j++;
+          else if (c === '{') level++;
+          else if (c === '}') level--;
+          else if (c === ',' && level === 0) {
+            parts.push(pattern.slice(from, j));
+            from = j + 1;
+          }
+        }
+        parts.push(pattern.slice(from, i));
+        if (parts.length < 2) return [pattern]; // `{x}` is literal
+        const head = pattern.slice(0, open);
+        const tail = pattern.slice(i + 1);
+        return parts.flatMap((p) => expandBraces(head + p + tail));
+      }
     }
-  });
+  }
+  return [pattern];
+}
+
+const REGEX_SPECIAL = /[.+^$()|\\]/g;
+const hasMeta = (segment) => /[*?[\\]/.test(segment);
+
+/** One path segment of a glob -> an anchored RegExp (case-sensitive). */
+function segmentRegex(segment, dot) {
+  let re = dot || segment.startsWith('.') ? '' : '(?!\\.)';
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (ch === '\\' && i + 1 < segment.length) {
+      re += segment[++i].replace(REGEX_SPECIAL, '\\$&');
+    } else if (ch === '*') {
+      while (segment[i + 1] === '*') i++;
+      re += '[^/]*';
+    } else if (ch === '?') {
+      re += '[^/]';
+    } else if (ch === '[') {
+      let j = i + 1;
+      const negate = segment[j] === '!' || segment[j] === '^';
+      if (negate) j++;
+      let k = j;
+      if (segment[k] === ']') k++;
+      while (k < segment.length && segment[k] !== ']') k++;
+      if (k >= segment.length) {
+        re += '\\['; // no closing bracket: literal
+      } else {
+        const body = segment.slice(j, k).replace(/[\\\]^]/g, '\\$&');
+        re += `[${negate ? '^' : ''}${body}]`;
+        i = k;
+      }
+    } else {
+      re += ch.replace(REGEX_SPECIAL, '\\$&').replace(/[{}]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+/** A glob as the list of its alternatives, each a list of segments (`**` kept whole). */
+function compileGlob(pattern, dot) {
+  return expandBraces(pattern).map((p) =>
+    p.split('/').map((seg) => (seg === '**' ? '**' : { seg, meta: hasMeta(seg), re: segmentRegex(seg, dot) })),
+  );
+}
+
+function matchSegments(parts, segs, pi = 0, si = 0) {
+  if (pi === parts.length) return si === segs.length;
+  const p = parts[pi];
+  if (p === '**') {
+    for (let k = si; k <= segs.length; k++) if (matchSegments(parts, segs, pi + 1, k)) return true;
+    return false;
+  }
+  if (si >= segs.length) return false;
+  const ok = p.meta ? p.re.test(segs[si]) : p.seg === segs[si];
+  return ok && matchSegments(parts, segs, pi + 1, si + 1);
+}
+
+/**
+ * Does the relative path `rel` match `pattern`? A path match (used for
+ * `exclude`): case-sensitive, wildcards match dot entries, and a leading `./`
+ * on the pattern is literal (it never matches a plain relative path).
+ */
+function matchesGlobPath(rel, pattern) {
+  const segs = rel.split('/');
+  return compileGlob(pattern, true).some((parts) => matchSegments(parts, segs));
+}
+
+/**
+ * Files (never directories, never symlinked files) under `cwd` matching
+ * `pattern`, as relative POSIX paths; see the header for the exact semantics.
+ */
+function scanFiles(pattern, cwd) {
+  const lead = /^(?:\.\/)+/.exec(pattern)?.[0] ?? '';
+  const out = new Set();
+  for (const parts of compileGlob(pattern.slice(lead.length), false)) {
+    walkScan(parts, 0, cwd, '', out);
+  }
+  return [...out].map((rel) => lead + rel);
+}
+
+function readEntries(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+function walkScan(parts, pi, cwd, rel, out) {
+  if (pi >= parts.length) return;
+  const here = rel === '' ? cwd : join(cwd, rel);
+  const p = parts[pi];
+  const last = pi === parts.length - 1;
+  const at = (name) => (rel === '' ? name : `${rel}/${name}`);
+  if (p === '**') {
+    // Zero directories: the rest of the pattern applies right here.
+    if (!last) walkScan(parts, pi + 1, cwd, rel, out);
+    for (const e of readEntries(here)) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      if (e.isDirectory()) walkScan(parts, pi, cwd, at(e.name), out);
+      else if (last && e.isFile()) out.add(at(e.name));
+    }
+    return;
+  }
+  if (!p.meta) {
+    // A literal segment: step into it (a named symlinked directory included).
+    const name = p.seg.replace(/\\(.)/g, '$1');
+    const next = at(name);
+    try {
+      const st = lstatSync(join(cwd, next));
+      if (last) {
+        if (st.isFile()) out.add(next);
+      } else if (statSync(join(cwd, next)).isDirectory()) {
+        walkScan(parts, pi + 1, cwd, next, out);
+      }
+    } catch {
+      // does not exist: no match
+    }
+    return;
+  }
+  for (const e of readEntries(here)) {
+    if (!p.re.test(e.name)) continue;
+    if (last) {
+      if (e.isFile()) out.add(at(e.name));
+    } else if (e.isDirectory()) {
+      walkScan(parts, pi + 1, cwd, at(e.name), out);
+    }
+  }
 }
 
 /**
@@ -210,7 +377,7 @@ export function planEmbed({ root, include, exclude = [] }) {
   const nonModule = [];
   const byEmbedded = new Map();
   for (const rel of [...found].sort()) {
-    if (exclude.some((g) => matchesGlob(rel, g))) {
+    if (exclude.some((g) => matchesGlobPath(rel, g))) {
       excluded.push(rel);
       continue;
     }

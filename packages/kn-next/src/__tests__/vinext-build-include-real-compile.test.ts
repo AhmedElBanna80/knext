@@ -74,4 +74,28 @@ describe("real compile.include compile passes the CLI's per-shape bytecode check
             process.chdir(prevCwd);
         }
     }, 240_000);
+
+    it("a include glob that matches the ENTRY itself fails closed with the script's own message (never a silent mis-count)", () => {
+        // The entry is compiled under its own name; planning it a second time
+        // as an included module cannot embed it twice, so the script's
+        // embedded-path check refuses it BEFORE any count is compared. The CLI
+        // surfaces that failure; it does not ship the binary.
+        const prevCwd = process.cwd();
+        process.chdir(buildDir);
+        try {
+            expect(() =>
+                buildVinextExecutable({
+                    cwd: buildDir,
+                    arch: hostSmokeArch(),
+                    outFile: "knext-include-entry-exec",
+                    include: [".output/server/index.mjs"],
+                }),
+            ).toThrow(/Command failed: bun run .*vinext-compile/);
+            expect(existsSync(join(buildDir, "knext-include-entry-exec"))).toBe(
+                false,
+            );
+        } finally {
+            process.chdir(prevCwd);
+        }
+    }, 240_000);
 });

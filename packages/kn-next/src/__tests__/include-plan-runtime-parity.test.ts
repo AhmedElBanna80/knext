@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { BUN_BIN, NODE_BIN } from "../../../../tests/helpers/runtime-binaries";
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -83,18 +84,22 @@ function run(bin: string, root: string): Result[] {
 
 describe("planIncludes behaves identically under node and bun", () => {
     const root = fixture();
-    const underNode = run("node", root);
-    const underBun = run("bun", root);
+    const underNode = run(NODE_BIN, root);
+    // Bun is only present when bun runs the suite: the bun legs are VISIBLE skips.
+    const underBun = BUN_BIN ? run(BUN_BIN, root) : undefined;
 
-    it("node and bun produce byte-identical plans and refusals", () => {
-        expect(underBun).toEqual(underNode);
-    });
+    it.skipIf(!BUN_BIN)(
+        "node and bun produce byte-identical plans and refusals",
+        () => {
+            expect(underBun).toEqual(underNode);
+        },
+    );
 
     const byCase = (r: Result[], ...include: string[]) =>
         r.find((c) => JSON.stringify(c.include) === JSON.stringify(include));
 
     it("the plans are what the filters promise (under both runtimes)", () => {
-        for (const r of [underNode, underBun]) {
+        for (const r of [underNode, underBun].filter((x) => x !== undefined)) {
             expect(byCase(r, "lib/deep")?.relpaths).toEqual(["lib/deep/c.js"]);
             expect(byCase(r, "lib/[id]/page.js")?.relpaths).toEqual([
                 "lib/[id]/page.js",
@@ -115,7 +120,7 @@ describe("planIncludes behaves identically under node and bun", () => {
             ["/etc/passwd", /is absolute/],
             ["lib/../../outside/secret.js", /contains '\.\.'/],
         ];
-        for (const r of [underNode, underBun]) {
+        for (const r of [underNode, underBun].filter((x) => x !== undefined)) {
             for (const [pattern, re] of expectations) {
                 const c = byCase(r, pattern);
                 expect(c?.error, `${pattern} must be refused`).toMatch(re);

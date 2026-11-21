@@ -1,0 +1,861 @@
+[
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/*.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/**"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.js",
+      "lib/x.js",
+      "lib/z.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.mjs",
+      "lib/x.ts",
+      "lib/z.cjs"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "./lib/**/*.js"
+    ],
+    "relpaths": [
+      "./lib/Case.js",
+      "./lib/a.js",
+      "./lib/b.js",
+      "./lib/c.js",
+      "./lib/deep/d1.js",
+      "./lib/f1.js",
+      "./lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "./lib/*.js"
+    ],
+    "relpaths": [
+      "./lib/Case.js",
+      "./lib/a.js",
+      "./lib/b.js",
+      "./lib/c.js",
+      "./lib/f1.js",
+      "./lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "./lib"
+    ],
+    "relpaths": [
+      "lib/.dot/inner.js",
+      "lib/.hidden.js",
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/.d2.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.js",
+      "lib/x.js",
+      "lib/z.js"
+    ],
+    "entrypoints": [
+      "lib/.dot/inner.js",
+      "lib/.hidden.js",
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/.d2.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.mjs",
+      "lib/x.ts",
+      "lib/z.cjs"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/[ab].js"
+    ],
+    "relpaths": [
+      "lib/a.js",
+      "lib/b.js"
+    ],
+    "entrypoints": [
+      "lib/a.js",
+      "lib/b.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/f[0-9].js"
+    ],
+    "relpaths": [
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/[!a].js"
+    ],
+    "relpaths": [
+      "lib/b.js",
+      "lib/c.js"
+    ],
+    "entrypoints": [
+      "lib/b.js",
+      "lib/c.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/{a,b}.js"
+    ],
+    "relpaths": [
+      "lib/a.js",
+      "lib/b.js"
+    ],
+    "entrypoints": [
+      "lib/a.js",
+      "lib/b.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/?.js"
+    ],
+    "relpaths": [
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js"
+    ],
+    "entrypoints": [
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/.*.js"
+    ],
+    "relpaths": [
+      "lib/.hidden.js"
+    ],
+    "entrypoints": [
+      "lib/.hidden.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/**/.*.js"
+    ],
+    "relpaths": [
+      "lib/.hidden.js",
+      "lib/deep/.d2.js"
+    ],
+    "entrypoints": [
+      "lib/.hidden.js",
+      "lib/deep/.d2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/c*.js"
+    ],
+    "relpaths": [
+      "lib/c.js"
+    ],
+    "entrypoints": [
+      "lib/c.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/C*.js"
+    ],
+    "relpaths": [
+      "lib/Case.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/case*.js"
+    ],
+    "error": "compile.include: no file matches 'lib/case*.js' under <root>"
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/b.js",
+      "lib/a.js"
+    ],
+    "relpaths": [
+      "lib/a.js",
+      "lib/b.js"
+    ],
+    "entrypoints": [
+      "lib/a.js",
+      "lib/b.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/*.ts",
+      "lib/*.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/x.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/x.ts"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/linkdir/**"
+    ],
+    "relpaths": [
+      "lib/linkdir/s.js"
+    ],
+    "entrypoints": [
+      "lib/linkdir/s.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/linkdir/*.js"
+    ],
+    "relpaths": [
+      "lib/linkdir/s.js"
+    ],
+    "entrypoints": [
+      "lib/linkdir/s.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "lib/outdir/**"
+    ],
+    "error": "compile.include: these matches resolve (through a symlink) outside the app root <root>: lib/outdir/o.js"
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      ".output/server/*.mjs"
+    ],
+    "relpaths": [
+      ".output/server/chunk.js",
+      ".output/server/index.js"
+    ],
+    "entrypoints": [
+      ".output/server/chunk.mjs",
+      ".output/server/index.mjs"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      ".output/server/index.mjs"
+    ],
+    "relpaths": [
+      ".output/server/index.js"
+    ],
+    "entrypoints": [
+      ".output/server/index.mjs"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planIncludes",
+    "include": [
+      "node_modules/**/*.js"
+    ],
+    "error": "compile.include: no file matches 'node_modules/**/*.js' under <root>"
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/a.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [
+        "lib/a.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "**/a.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [
+        "lib/a.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "./lib/a.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/*.ts"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/.*"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/**/.*.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/A.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/Case.js"
+    ],
+    "relpaths": [
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [
+        "lib/Case.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/{a,b}.js"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/c.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [
+        "lib/a.js",
+        "lib/b.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib/**/*.js"
+    ],
+    "exclude": [
+      "lib/deep/**"
+    ],
+    "relpaths": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "entrypoints": [
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/f1.js",
+      "lib/f2.js"
+    ],
+    "report": {
+      "excluded": [
+        "lib/deep/d1.js"
+      ],
+      "nonModule": [],
+      "unmatched": []
+    }
+  },
+  {
+    "fn": "planEmbed",
+    "include": [
+      "lib"
+    ],
+    "exclude": [
+      "lib/deep"
+    ],
+    "relpaths": [
+      "lib/.dot/inner.js",
+      "lib/.hidden.js",
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/.d2.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.js",
+      "lib/x.js",
+      "lib/z.js"
+    ],
+    "entrypoints": [
+      "lib/.dot/inner.js",
+      "lib/.hidden.js",
+      "lib/Case.js",
+      "lib/a.js",
+      "lib/b.js",
+      "lib/c.js",
+      "lib/deep/.d2.js",
+      "lib/deep/d1.js",
+      "lib/f1.js",
+      "lib/f2.js",
+      "lib/m.mjs",
+      "lib/x.ts",
+      "lib/z.cjs"
+    ],
+    "report": {
+      "excluded": [],
+      "nonModule": [],
+      "unmatched": []
+    }
+  }
+]

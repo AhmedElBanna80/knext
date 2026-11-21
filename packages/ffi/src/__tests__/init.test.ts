@@ -557,18 +557,18 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
   // A line continues at a backslash and then at most spaces and tabs, and BuildKit joins the next line to
   // it directly: the backslash goes, nothing is put in its place, and the next line's indent stays.
 
-  it('does not confirm a file with a continuation backslash that no space or tab precedes: a lone backslash and a word split in two are read as one thing by BuildKit and as another by a reader that adds a space', () => {
+  it('does not confirm a file with a continuation backslash that no space or tab precedes: a backslash alone at the start of a line and a word split in two are read as one thing by BuildKit and as another by a reader that adds a space', () => {
     const shellArg = '["/bin/sh", "-c", "chmod -R 777 /app; true"]';
     for (const dockerfile of [
-      // a lone backslash, then a chmod of its own after the line
+      // a backslash alone on a line, then a chmod of its own after the line
       FINAL(COPY_LINE, CLOSE_RUN, '\\', 'RUN chmod -R 777 /app'),
       // ... and then something harmless, which only the rule says anything about
       FINAL(COPY_LINE, CLOSE_RUN, '\\', 'USER 1'),
-      // a lone backslash over a COPY into native/, before the scaffolded one
+      // a backslash alone on a line over a COPY into native/, before the scaffolded one
       ['FROM alpine', 'WORKDIR /app', '\\', 'COPY x /app/native', COPY_LINE, CLOSE_RUN, ''].join(
         '\n',
       ),
-      // a lone backslash over a FROM
+      // a backslash alone on a line over a FROM
       FINAL(COPY_LINE, CLOSE_RUN, '\\', 'FROM other'),
       // a word split in two: SHELL in a parent stage, a heredoc, a path
       `FROM alpine AS base\nSHE\\\nLL ${shellArg}\nFROM base\nWORKDIR /app\n${COPY_LINE}\n${CLOSE_RUN}\n`,
@@ -600,8 +600,8 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     expect(hinted(FINAL(COPY_LINE, CLOSE_RUN, 'ENV A=b \\ \t\n    C=d'))).toBe(false);
   });
 
-  it('joins a continued line the way BuildKit does: the backslash goes, nothing takes its place, the next line keeps its indent, and a lone backslash continues like any other', () => {
-    // An indented lone backslash is not what the rule above refuses, so only the join sees what follows it.
+  it('joins a continued line the way BuildKit does: the backslash goes, nothing takes its place, the next line keeps its indent, and a backslash alone on its line continues like any other', () => {
+    // An indented backslash alone on its line is not what the rule above refuses, so only the join sees what follows it.
     const out = init(FINAL(COPY_LINE, CLOSE_RUN, '  \\', '  RUN chmod -R 777 /app')).out;
     expect(out).toContain('cannot confirm');
     expect(out).toContain('line 5 comes after it');
@@ -696,6 +696,74 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     }
     // The gate still stays quiet for a file that does not mention native in any way, split or not.
     expect(hinted(FINAL('COPY serv\\', 'er /app/server'))).toBe(false);
+  });
+
+  it('prints for a native split where BuildKit joins lines that the line reader does not: a backtick escape, a comment or blank line led by a space-like character, a double carriage return', () => {
+    // Each of these is read by BuildKit as `COPY native/ /app/native/`, with no close line after it, and
+    // each is refused first by a rule of its own, so the message has to be that rule's, not a silence.
+    const split = (word: string, continuation: string, between: string[] = []) =>
+      FINAL(
+        `COPY ${word.slice(0, 3)}${continuation}`,
+        ...between,
+        `${word.slice(3)}/ /app/${word.slice(0, 3)}${continuation}`,
+        ...between,
+        `${word.slice(3)}/`,
+      );
+    const cases: [string, string, string][] = [
+      // the escape directive moves the continuation to a backtick
+      ['backtick', `# escape=\`\n${split('native', '`')}`, `line 1 ${WHY.directive}`],
+      [
+        'backtick, then a space',
+        `# escape=\`\n${split('NATIVE', '` ')}`,
+        `line 1 ${WHY.directive}`,
+      ],
+      ['backtick, then a tab', `# escape=\`\n${split('native', '`\t')}`, `line 1 ${WHY.directive}`],
+      // a comment inside a continuation, led by a form feed, a vertical tab, a no-break space, a next-line character
+      ['form feed comment', split('native', '\\', ['\f# a note']), `line 4 ${WHY.char}`],
+      ['vertical tab comment', split('native', '\\', ['\v# a note']), `line 4 ${WHY.char}`],
+      ['no-break space comment', split('NATIVE', '\\', [' # a note']), `line 4 ${WHY.char}`],
+      ['next-line comment', split('native', '\\', ['\u0085# a note']), `line 4 ${WHY.char}`],
+      ['ideographic space comment', split('native', '\\ ', ['　# a note']), `line 4 ${WHY.char}`],
+      // a blank line inside a continuation that holds a space-like character alone
+      ['form feed alone', split('native', '\\', ['\f']), `line 4 ${WHY.char}`],
+      ['vertical tab alone', split('native', '\\', ['\v']), `line 4 ${WHY.char}`],
+      ['no-break space alone', split('NATIVE', '\\', [' ']), `line 4 ${WHY.char}`],
+      ['next-line alone', split('native', '\\', ['\u0085']), `line 4 ${WHY.char}`],
+      // a continuation that runs into the end of the file, with a comment led by a form feed before it
+      [
+        'continuation into the end of the file',
+        'FROM alpine\nWORKDIR /app\nCOPY nat\\\n\f# a note\nive\\\n',
+        `line 4 ${WHY.char}`,
+      ],
+      // a carriage return that is doubled at a line end, which BuildKit cuts off whole
+      [
+        'double carriage return',
+        FINAL('COPY nat\\\r\r', 'ive/ /app/nat\\\r\r', 'ive/'),
+        `line 3 ${WHY.char}`,
+      ],
+      [
+        'triple carriage return',
+        FINAL('COPY nat\\\r\r\r', 'ive/ /app/nat\\\r\r\r', 'ive/'),
+        `line 3 ${WHY.char}`,
+      ],
+    ];
+    for (const [label, dockerfile, rule] of cases) {
+      const out = init(dockerfile).out;
+      expect(out, label).toContain('cannot confirm');
+      expect(out, label).toContain(rule);
+      expect(out, label).not.toMatch(CLAIM);
+    }
+    // The same breaks around a word that is not native stay quiet: the gate joins, it does not always speak.
+    for (const dockerfile of [
+      `# escape=\`\n${FINAL('COPY serv`', 'er /app/server')}`,
+      FINAL('COPY serv\\', '\f# a note', 'er /app/server'),
+      FINAL('COPY serv\\', ' ', 'er /app/server'),
+      FINAL('COPY serv\\\r\r', 'er /app/server'),
+    ]) {
+      expect(hinted(dockerfile), JSON.stringify(dockerfile)).toBe(false);
+    }
+    // A line that does not continue ends the instruction: two instructions are not one word.
+    expect(hinted(FINAL('COPY nat', '\f# a note', 'ive /app/server'))).toBe(false);
   });
 
   it('says nothing about a file it cannot read that does not mention native at all, and prints for one that does, a stage that is not the last one included', () => {

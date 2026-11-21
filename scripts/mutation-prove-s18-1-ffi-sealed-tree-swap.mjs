@@ -112,7 +112,7 @@
  *   line of the file, byte for byte, then only instructions that cannot change a mode and the one
  *   read-only RUN, in a file that is clean as a whole: no unreadable character, no continuation
  *   backslash that no space or tab precedes, no heredoc, no escape or syntax directive, no SHELL or
- *   ONBUILD in any stage and no line that does not start with an instruction Docker knows) and
+ *   ONBUILD in any stage and no instruction whose first word is not one Docker knows) and
  *   everything else
  *   prints. Each row below widens that rule by one clause, or lets one named form through, and the
  *   spec must go red:
@@ -123,10 +123,10 @@
  *   V10  COPY flags are not skipped    V11  a trailing slash on the destination
  *   V12  a backslash continuation is not joined    V13  every stage is read, not the final one
  *   V120 to V126  the join: a space is put between the lines (V120), the next line's indent is dropped (V121),
- *        the first line's indent is kept (V122), a lone backslash does not continue (V123), the keyword is
+ *        the first line's indent is kept (V122), a backslash alone on its line does not continue (V123), the keyword is
  *        matched from the start of the joined line (V124), its trailing whitespace is kept (V125), a
  *        space or tab after the backslash ends the continuation (V126)
- *   V127 to V131  the glued-continuation rule: absent, a lone backslash passes, a tab counts as no space,
+ *   V127 to V131  the glued-continuation rule: absent, a backslash alone at the start of a line passes, a tab counts as no space,
  *        spaces after the backslash end it, its message names the next line
  *   V132 to V134  the read-only check is for any test, is on one line with single spaces, takes no tab
  *   V135 to V137, V142  the instruction list: not looked for, only the final stage, case-sensitive, its
@@ -161,8 +161,17 @@
  *        does not end a line, and the lookahead that lets a space, tab and line end through
  *   V106 the line number is off by one    V107 a file that is not clean is told nothing
  *   V108 it is told even without a mention of native    V109 it needs native/ with a slash
- *   V143 to V145  the mention is looked for in the text only, in the joined instructions only, or in the text with
- *        its continuation breaks cut out (a word split by a continuation, comment lines between the pieces)
+ *   V143 to V145  the mention gate reads three ways (the text, the instructions joined at a backslash, the text read
+ *        loosely): the text only (V143), not the text (V144), not the loose reading (V145)
+ *   V146 to V161  the loose reading, one step each: a trailing carriage return is not cut (V146), only one is
+ *        (V147), only a space and a tab are trimmed (V148), U+0085 is not (V149), a blank line is not dropped
+ *        (V150), a comment is not (V151), a comment is judged untrimmed (V152), a backtick does not continue
+ *        (V153), a backslash does not (V154), spaces and tabs after the character end it (V155), the pieces
+ *        are joined with a space (V156) or with the character kept (V157), a line that does not continue
+ *        still joins the next (V158), a continuation into the end of the file is dropped (V159), the case is
+ *        not folded (V160), the text is not split in lines (V161). The reading of the instructions joined
+ *        at a backslash (`instructions`) has no row: everything it finds that BuildKit reads, the loose
+ *        reading finds too, so removing it changes no verdict a test can see (an equivalent mutant)
  *   V110 a heredoc is looked for only from the last FROM on
  *   V111 to V115  one clause of the directive pattern each: an indent, the case, escape only, syntax only,
  *        the space after the hash    V116 the pinned syntax line passes on any line
@@ -1818,9 +1827,10 @@ const INIT = [
     id: 'V109',
     subject: 'init',
     claim: 'a file that is not clean as a whole is told only when it mentions native/ with a slash',
-    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
+    anchor:
+      '    /native/i.test(text) ||\n    all.some((inst) => /native/i.test(inst.text)) ||\n    looseInstructions(text).some((inst) => /native/i.test(inst))\n',
     replacement:
-      '  return /native\\//i.test(text) || all.some((inst) => /native\\//i.test(inst.text));\n',
+      '    /native\\//i.test(text) ||\n    all.some((inst) => /native\\//i.test(inst.text)) ||\n    looseInstructions(text).some((inst) => /native\\//i.test(inst))\n',
   },
   {
     id: 'V110',
@@ -1939,7 +1949,7 @@ const INIT = [
     id: 'V124',
     subject: 'init',
     claim:
-      'the keyword is matched from the start of the joined line: an indented line after a lone backslash is not an instruction, and is dropped',
+      'the keyword is matched from the start of the joined line: an indented line after a backslash alone on its line is not an instruction, and is dropped',
     anchor: '    const m = /^\\s*(\\S+)\\s*(.*)$/.exec(text);\n',
     replacement: '    const m = /^(\\S+)\\s*(.*)$/.exec(text);\n',
   },
@@ -1963,7 +1973,7 @@ const INIT = [
     id: 'V127',
     subject: 'init',
     claim:
-      'a continuation backslash that no space or tab precedes is not looked for: a lone backslash and a word split in two (`SHE` over `LL`, `<` over `<EOF`) are joined without a gap and read as one thing',
+      'a continuation backslash that no space or tab precedes is not looked for: a backslash alone at the start of a line and a word split in two (`SHE` over `LL`, `<` over `<EOF`) are joined without a gap and read as one thing',
     anchor: '  const glued = lines.findIndex((l) => GLUED_CONTINUATION.test(l));\n',
     replacement: '  const glued = -1;\n',
   },
@@ -1971,7 +1981,7 @@ const INIT = [
     id: 'V128',
     subject: 'init',
     claim:
-      'a lone backslash is not a glued continuation: the rule needs a character before the backslash',
+      'a backslash alone at the start of a line is not a glued continuation: the rule needs a character before the backslash',
     anchor: 'const GLUED_CONTINUATION = /(^|[^ \\t])\\\\[ \\t]*$/;\n',
     replacement: 'const GLUED_CONTINUATION = /[^ \\t]\\\\[ \\t]*$/;\n',
   },
@@ -2030,7 +2040,7 @@ const INIT = [
     id: 'V135',
     subject: 'init',
     claim:
-      'a line that does not start with an instruction Docker knows is not looked for: a `// syntax=` line is taken for an instruction and dropped',
+      'an instruction whose first word is not one Docker knows is not looked for: a `// syntax=` line is taken for an instruction and dropped',
     anchor: '  const unknown = all.find((inst) => !INSTRUCTIONS.has(inst.word));\n',
     replacement:
       '  const unknown = all.slice(0, 0).find((inst) => !INSTRUCTIONS.has(inst.word));\n',
@@ -2096,25 +2106,147 @@ const INIT = [
     id: 'V143',
     subject: 'init',
     claim:
-      'the mention that decides whether a file that is not clean is told anything is looked for in the text as written only: BuildKit joins nat over ive into native, and the hint stays silent for a COPY of native/ it reads',
-    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
-    replacement: '  return /native/i.test(text);\n',
+      'the mention that decides whether a file that is not clean is told anything is looked for in the text as written only: a word split by a continuation (nat over ive) is not seen, and the hint stays silent for a COPY of native/ that BuildKit reads',
+    anchor:
+      '    /native/i.test(text) ||\n    all.some((inst) => /native/i.test(inst.text)) ||\n    looseInstructions(text).some((inst) => /native/i.test(inst))\n',
+    replacement: '    /native/i.test(text)\n',
   },
   {
     id: 'V144',
     subject: 'init',
     claim:
-      'the mention is looked for in the joined instructions only: a file that mentions native in a comment alone is not told',
-    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
-    replacement: '  return all.some((inst) => /native/i.test(inst.text));\n',
+      'the text as written is not looked at: a file that mentions native in a comment alone is not told',
+    anchor: '    /native/i.test(text) ||\n',
+    replacement: '    false ||\n',
   },
   {
     id: 'V145',
     subject: 'init',
     claim:
-      'the mention is looked for in the text with its continuation breaks cut out, not in the instructions as BuildKit joins them: a comment line between the pieces of a split word is not dropped',
-    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
-    replacement: "  return /native/i.test(text.replace(/\\\\[ \\t]*\\r?\\n/g, ''));\n",
+      'the loose reading is not looked at: a native split under an escape directive, by a comment led by a space-like character or by a doubled carriage return is not seen',
+    anchor: '    looseInstructions(text).some((inst) => /native/i.test(inst))\n',
+    replacement: '    false\n',
+  },
+  {
+    id: 'V146',
+    subject: 'init',
+    claim:
+      'a carriage return at the end of a line is not cut off: a continuation with a doubled one after it is not a continuation',
+    anchor: "    const line = raw.replace(/\\r+$/, '');\n",
+    replacement: '    const line = raw;\n',
+  },
+  {
+    id: 'V147',
+    subject: 'init',
+    claim:
+      'one carriage return at a line end is cut off, not all of them: a doubled one still hides the continuation',
+    anchor: "    const line = raw.replace(/\\r+$/, '');\n",
+    replacement: "    const line = raw.replace(/\\r?$/, '');\n",
+  },
+  {
+    id: 'V148',
+    subject: 'init',
+    claim:
+      'a line is trimmed of a space and a tab only: a comment or a blank line led by a form feed, a vertical tab or a no-break space is a piece of the instruction',
+    anchor: "    const bare = line.replace(/^[\\s\\u0085]+/, '');\n",
+    replacement: "    const bare = line.replace(/^[ \\t]+/, '');\n",
+  },
+  {
+    id: 'V149',
+    subject: 'init',
+    claim:
+      "U+0085 is not a space: a comment or a blank line led by a next-line character is a piece of the instruction (Go trims it, JavaScript's whitespace class does not)",
+    anchor: "    const bare = line.replace(/^[\\s\\u0085]+/, '');\n",
+    replacement: "    const bare = line.replace(/^\\s+/, '');\n",
+  },
+  {
+    id: 'V150',
+    subject: 'init',
+    claim: 'a comment line inside a continuation is not dropped',
+    anchor: "    if (bare === '' || bare.startsWith('#')) continue;\n",
+    replacement: "    if (bare === '') continue;\n",
+  },
+  {
+    id: 'V151',
+    subject: 'init',
+    claim: 'a blank line inside a continuation is not dropped',
+    anchor: "    if (bare === '' || bare.startsWith('#')) continue;\n",
+    replacement: "    if (bare.startsWith('#')) continue;\n",
+  },
+  {
+    id: 'V152',
+    subject: 'init',
+    claim:
+      'a comment is judged on the line as written, not on the line without its leading space-like characters',
+    anchor: "    if (bare === '' || bare.startsWith('#')) continue;\n",
+    replacement: "    if (bare === '' || line.startsWith('#')) continue;\n",
+  },
+  {
+    id: 'V153',
+    subject: 'init',
+    claim:
+      'a backtick does not continue a line: the continuation character an escape directive sets is not looked for',
+    anchor: '    const continued = /[\\\\`][ \\t]*$/.exec(line);\n',
+    replacement: '    const continued = /\\\\[ \\t]*$/.exec(line);\n',
+  },
+  {
+    id: 'V154',
+    subject: 'init',
+    claim: 'a backslash does not continue a line in the loose reading',
+    anchor: '    const continued = /[\\\\`][ \\t]*$/.exec(line);\n',
+    replacement: '    const continued = /`[ \\t]*$/.exec(line);\n',
+  },
+  {
+    id: 'V155',
+    subject: 'init',
+    claim:
+      'a continuation must end the line at once: spaces and tabs after the backslash or backtick end it',
+    anchor: '    const continued = /[\\\\`][ \\t]*$/.exec(line);\n',
+    replacement: '    const continued = /[\\\\`]$/.exec(line);\n',
+  },
+  {
+    id: 'V156',
+    subject: 'init',
+    claim:
+      'the pieces of a continued line are joined with a space between them, so nat over ive is not native',
+    anchor: '      acc += line.slice(0, continued.index);\n',
+    replacement: '      acc += `${line.slice(0, continued.index)} `;\n',
+  },
+  {
+    id: 'V157',
+    subject: 'init',
+    claim: 'the continuation character is kept in the joined text, so nat over ive is not native',
+    anchor: '      acc += line.slice(0, continued.index);\n',
+    replacement: '      acc += line;\n',
+  },
+  {
+    id: 'V158',
+    subject: 'init',
+    claim:
+      'a line that does not continue still joins the next one: two instructions are read as one word',
+    anchor: "      acc = '';\n",
+    replacement: '      acc += line;\n',
+  },
+  {
+    id: 'V159',
+    subject: 'init',
+    claim: 'a continuation that runs into the end of the file is dropped from the loose reading',
+    anchor: "  if (acc !== '') out.push(acc);\n",
+    replacement: '  void acc;\n',
+  },
+  {
+    id: 'V160',
+    subject: 'init',
+    claim: 'the loose reading does not fold the case: NATIVE split by a continuation is not seen',
+    anchor: '    looseInstructions(text).some((inst) => /native/i.test(inst))\n',
+    replacement: '    looseInstructions(text).some((inst) => /native/.test(inst))\n',
+  },
+  {
+    id: 'V161',
+    subject: 'init',
+    claim: 'the loose reading is not split in lines: the whole text is one line',
+    anchor: "  for (const raw of text.split('\\n')) {\n",
+    replacement: '  for (const raw of [text]) {\n',
   },
 ];
 

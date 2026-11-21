@@ -343,7 +343,7 @@ function unreadable(
   }
   const shell = all.find((inst) => inst.word === 'SHELL');
   if (shell !== undefined) {
-    return 'a SHELL instruction (in a stage this one may build on, or in this one) changes how every RUN is run';
+    return 'a SHELL instruction (refused in any stage) changes how every RUN is run';
   }
   const onbuild = all.find((inst) => inst.word === 'ONBUILD');
   if (onbuild !== undefined) {
@@ -356,13 +356,47 @@ function unreadable(
 }
 
 /**
- * Whether a Dockerfile mentions native at all: in its text, or in an instruction as BuildKit joins
- * its lines. A continuation can split the word (`nat` over `ive`) and BuildKit drops a comment line
- * between the pieces, so the text alone, or the text with its line breaks cut out, can miss a `COPY`
- * of `native/` that BuildKit reads.
+ * The instructions of a Dockerfile, read loosely, for one question only: is `native` in one of them.
+ * A backslash or a backtick ends a line that continues (BuildKit continues on a backtick under an
+ * `escape` directive), the lines are joined with nothing between, a line that is blank or starts with
+ * `#` once any leading space-like character is cut off is dropped (BuildKit trims with Go's
+ * `unicode.IsSpace`, which JavaScript's `\s` and U+0085 cover), and every carriage return at a line
+ * end goes, so a doubled one cannot hide a continuation. A loose reading can only find a word that a
+ * stricter one would not, so a mistake here makes the hint speak more, never less.
+ */
+function looseInstructions(text: string): string[] {
+  const out: string[] = [];
+  let acc = '';
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/\r+$/, '');
+    const bare = line.replace(/^[\s\u0085]+/, '');
+    if (bare === '' || bare.startsWith('#')) continue;
+    const continued = /[\\`][ \t]*$/.exec(line);
+    if (continued === null) {
+      out.push(acc + line);
+      acc = '';
+    } else {
+      acc += line.slice(0, continued.index);
+    }
+  }
+  if (acc !== '') out.push(acc);
+  return out;
+}
+
+/**
+ * Whether a Dockerfile mentions native at all, in any of three readings: its text; its instructions as
+ * `instructions` joins them (a backslash continues, a space, a tab and a carriage return are trimmed);
+ * and the same text read loosely (`looseInstructions`). A continuation can split the word (`nat` over
+ * `ive`) with a comment line between the pieces, and a reading that is exact about one rule of
+ * BuildKit's is wrong about another (an `escape` directive, a comment led by a no-break space, a
+ * doubled carriage return), so no one reading is trusted to see a `COPY` of `native/` that BuildKit reads.
  */
 function mentionsNative(text: string, all: readonly Instruction[]): boolean {
-  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));
+  return (
+    /native/i.test(text) ||
+    all.some((inst) => /native/i.test(inst.text)) ||
+    looseInstructions(text).some((inst) => /native/i.test(inst))
+  );
 }
 
 const DIRS = `${VINEXT_DIRS[0]} and ${VINEXT_DIRS[1]}`;
@@ -405,8 +439,8 @@ function cannotConfirm(why: string): string {
  * Anything else is not confirmed, and is told so:
  *
  *  - the file is not clean as a whole: it says it cannot confirm, and why, for any file that
- *    mentions native at all, in any case, in its text or as BuildKit joins its lines (a file that
- *    cannot be read is not known to have no COPY of it);
+ *    mentions native at all, in any case, in its text, in its instructions joined at a backslash, or
+ *    in the text joined loosely (a file that cannot be read is not known to have no COPY of it);
  *  - the line is not directly after the COPY: it says to add it there, whatever else the file does;
  *  - it is, but the COPY is another spelling, or a blank line or a comment sits between them, or
  *    something after it is not on the list above: it says it cannot confirm, and why.

@@ -757,7 +757,7 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed), on `0c07c17`, where all of them and `Lint & Test` were green, on `78b7acf` (where `Lint & Test` was red, on a type error in two tests, since fixed) and on `d4d7a76`, where all of them and `Lint & Test` were green, and on `0ab20db`, where the musl load matrix, the kind e2e and the Rust crates lane were green and `Lint & Test` was red on one timing assertion of a two-process test this change does not touch (`use-cache-redis-served`; it passes on the same tree when run alone); they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and the musl load matrix, the kind e2e and the Rust crates lane are green on `abca3e3`, on `81753d6`, on `b4d81ae` (where `Lint & Test` was red, on a comment in core, since fixed), on `0c07c17`, where all of them and `Lint & Test` were green, on `78b7acf` (where `Lint & Test` was red, on a type error in two tests, since fixed), and on `d4d7a76`, where all of them and `Lint & Test` were green, and on `0ab20db`, where the musl load matrix, the kind e2e and the Rust crates lane were green and `Lint & Test` was red on one timing assertion of a two-process test this change does not touch (`use-cache-redis-served`; it passes on the same tree when run alone); they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
     );
     // The CI result on the previous head is recorded, with the one red and how it was fixed.
     expect(amendment).toContain('b4d81ae9b346023ddea03b5a6c5124588c8d2b3d');
@@ -813,6 +813,16 @@ describe('docs — in-process Rust page', () => {
     expect(flatAdr).toContain(
       'for a file that is not clean as a whole it prints whenever the file mentions `native` at all',
     );
+    // The gate is said as what it does, three readings, and not as BuildKit's own join.
+    expect(flatAdr).toContain(
+      'in any of three readings: its text, its instructions joined at a backslash (`instructions`), and its text read loosely',
+    );
+    expect(flatAdr).toContain('It is a gate, not a model of BuildKit');
+    expect(flatAdr).not.toContain('as BuildKit joins its lines');
+    // What the hint does not find is one list, said the same in the hint paragraph and in the action items.
+    const notFound =
+      'an `ADD`, a destination held in a variable, a relative destination under a `WORKDIR` that is itself a variable, a relative destination under a `WORKDIR` inherited from a base or parent stage, `COPY . /app`, `COPY --parents` and `COPY --from=build /app /app`';
+    expect(flatAdr.split(notFound).length - 1).toBe(2);
     expect(flatAdr).toContain('Neither message says that the loader will accept the directories');
     expect(flatAdr).toContain(
       'knext does not read it and `knext deploy` takes the slower image-sourced path for it',

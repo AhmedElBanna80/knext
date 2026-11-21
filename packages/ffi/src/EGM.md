@@ -105,13 +105,16 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     instruction, in any stage or before the first `FROM`, whose first word is not one Docker knows (`INSTRUCTIONS`: a
     `// syntax=` line is one BuildKit reads as a directive), and no line ending in a backslash that no space or tab precedes
     (`GLUED_CONTINUATION`: a backslash alone at the start of a line, a word split in two; an indented one is joined). A file that
-    is not clean as a whole gets the cannot-confirm message whenever it mentions `native` at all, in its text or in an
-    instruction as BuildKit joins it (`mentionsNative`: a continuation can split the word). Lines are
+    is not clean as a whole gets the cannot-confirm message whenever it mentions `native` at all, in its text, in its
+    instructions joined at a backslash, or in its text read loosely (`mentionsNative`, `looseInstructions`: a continuation can split
+    the word; the loose reading also continues at a backtick, drops a comment or blank line after trimming any space-like
+    character, U+0085 included, cuts every carriage return off a line end, and joins with nothing between; it errs toward
+    printing and is a gate, not a model of BuildKit). Lines are
     trimmed of a space, a tab and a carriage return only and continue only at a backslash then spaces and tabs, and are joined as BuildKit joins
     them: the backslash goes, nothing takes its place, the next line keeps its indent (`instructions`, all stages, a continuation that runs into the end of the file kept). Then the final stage
     only is read (a `COPY` or a `chmod` in a build stage does not reach the image). When that stage copies `native/` to `/app/native` (any `COPY` flags, the JSON
     form, `--from=`, trailing slashes, quotes, `.` components, a relative destination under a `WORKDIR` that can be
-    read, line continuations and lower case are found; an `ADD` or a destination in a variable is not, and nothing is said; the destination is `VINEXT_DIRS[1]`), the output is empty only
+    read, line continuations and lower case are found; an `ADD`, a destination in a variable, a relative one under a `WORKDIR` that is a variable or inherited from a base or parent stage, `COPY . /app`, `COPY --parents` and `COPY --from=build /app /app` are not, and nothing is said; the destination is `VINEXT_DIRS[1]`), the output is empty only
     when the `COPY` is exactly `VINEXT_NATIVE_COPY`, `VINEXT_CLOSE_LINE` is the very next line of the file (each is one physical line compared as the file has it, so a blank line,
     a comment or a space fails it, as it fails `deploy`'s byte-for-byte recognition), and every instruction after the line is `ENV`, `ARG`, `LABEL`, `EXPOSE`, `USER`, `WORKDIR`,
     `ENTRYPOINT`, `CMD`, `HEALTHCHECK`, `STOPSIGNAL` or a read-only `RUN test -f <path> || { echo "<text>"

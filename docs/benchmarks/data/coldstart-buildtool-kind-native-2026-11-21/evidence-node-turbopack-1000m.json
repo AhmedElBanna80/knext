@@ -1,0 +1,27 @@
+{
+  "arm": "node-turbopack-1000m",
+  "runtime": "node",
+  "build_target": "turbopack",
+  "app": "scaffold",
+  "image": "localhost:5001/node-turbopack-1000m:r44841667176-node-turbopack-1000m@sha256:0bcbefa550bfa379fe6e699ddfd56a9c54a383c32bdb3fcd1859fa7a5d31422c",
+  "bytecode": {
+    "kind": "v8-compile-cache",
+    "cache_dir": "/app/.next/standalone/.next/compile-cache",
+    "bytes": 1433804,
+    "files": 465,
+    "floor": 262144,
+    "env_NODE_COMPILE_CACHE": "/app/.next/standalone/.next/compile-cache",
+    "bake_line": "#20 1.026 compile cache baked: 1433804 bytes in 465 file(s)",
+    "live_pid": 5494,
+    "live_via": "supervisor-child",
+    "live_env_NODE_COMPILE_CACHE": "/app/.next/standalone/.next/compile-cache"
+  },
+  "spec_build": "turbopack",
+  "spec_runtime": "node",
+  "cpu_limit": "1000m",
+  "versions": {
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

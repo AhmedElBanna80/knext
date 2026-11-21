@@ -1,0 +1,19 @@
+{
+  "arm": "node-turbopack-1000m",
+  "runtime": "node",
+  "build_target": "turbopack",
+  "app": "scaffold",
+  "image": "localhost:5001/node-turbopack-1000m:r44808959901-node-turbopack-1000m@sha256:8803bf881d20920c1dee38c766e4d3f3db2d23679190190bb57f791fca6f7380",
+  "bytecode": {
+    "kind": "v8-compile-cache",
+    "cache_dir": "/app/.next/standalone/.next/compile-cache",
+    "bytes": 1433780,
+    "files": 465,
+    "floor": 262144,
+    "env_NODE_COMPILE_CACHE": "/app/.next/standalone/.next/compile-cache",
+    "bake_line": "#20 0.910 compile cache baked: 1433780 bytes in 465 file(s)"
+  },
+  "spec_build": "turbopack",
+  "spec_runtime": "node",
+  "cpu_limit": "1000m"
+}

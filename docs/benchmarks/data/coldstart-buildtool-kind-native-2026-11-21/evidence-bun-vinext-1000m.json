@@ -1,0 +1,22 @@
+{
+  "arm": "bun-vinext-1000m",
+  "runtime": "bun",
+  "build_target": "vinext",
+  "app": "scaffold",
+  "image": "localhost:5001/bun-vinext-1000m:r44841667176-bun-vinext-1000m@sha256:6f6f643724cbeb73d8262f5905f272ab3e6aac23fdc44896497aa02a0abf68f3",
+  "bytecode": {
+    "kind": "bun-bytecode",
+    "binary": "/app/server",
+    "size_bytes": 84678192,
+    "method": "pragma-differential",
+    "verdict": "the build requested bytecode (pragma differential): @bytecode pragma count app=2 baseline=1"
+  },
+  "spec_build": "vinext",
+  "spec_runtime": "",
+  "cpu_limit": "1000m",
+  "versions": {
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

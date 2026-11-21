@@ -65,9 +65,9 @@ Its gain on OKE is not established.
 
 | Source | Platform, runtime | Comparison | n per arm | Effect on total | Notes |
 |---|---|---|---|---|---|
-| Kind native, run 1 (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md`) | kind on GitHub amd64 (`ubuntu-latest`, per the run 1 report), node | 1000m vs no limit (a 64-CPU quota, `docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:26`) | 12 | −224 ms (934 to 710) | One run, shared VM. Control node-1000m 934 ms, bun-1000m 803 ms (no bun-nolimit arm). Absolute times differ from run A and run B, see Run B |
-| Kind run A, ladder (`docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md`) | kind (runner type unverified), node | 1000m vs 2000m / 4000m / no limit | 12 | −324 / −335 / −320 ms | One run. Flat above 2 CPUs. Runner vCPU count not logged |
-| Kind run B, bun set (`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt`) | kind on `ubuntu-latest` (runner type unverified), **Bun** | 1000m vs no limit | 12 | −172 ms (1133 to 961) | One run. Node-1000m control 1541 ms. See "Run B" below |
+| Kind native, run 1 (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md`) | kind on GitHub amd64 (`ubuntu-latest`, run 1 report:17), node | 1000m vs no limit (a 64-CPU quota, `docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:26`) | 12 | −224 ms (934 to 710) | One run, shared VM. Control node-1000m 934 ms, bun-1000m 803 ms (no bun-nolimit arm). Absolute times differ from run A and run B, see Run B |
+| Kind run A, ladder (`docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md`) | kind on `ubuntu-latest` (ladder report:19; vCPU count not logged), node | 1000m vs 2000m / 4000m / no limit | 12 | −324 / −335 / −320 ms | One run. Flat above 2 CPUs. Runner vCPU count not logged |
+| Kind run B, bun set (`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt`) | kind on `ubuntu-latest` (vCPU count not logged), **Bun** | 1000m vs no limit | 12 | −172 ms (1133 to 961) | One run. Node-1000m control 1541 ms. See "Run B" below |
 | GKE `e2-standard-4` (`docs/benchmarks/cold-start-gke-runtime-and-minimisation-2026-10-01.md`, Run B) | GKE, **Bun** | 1000m vs 4000m | 10 | **−675 ms** as the report states it (3156 to 2482 on the rounded medians, which differ by 674); Holm p = 0.0005; CI [−850, −553] | The strongest total-level number off kind. Four vCPU is the whole node |
 | OKE phase breakdown (`docs/benchmarks/cold-start-phase-breakdown-2026-10-01.md`, E2) | OKE, Bun | 1 vs 4 CPU | 9 (baseline) | Runtime boot −37 ms (p = 0.0006). First-request leg +258 ms (not significant). Total not usable | The report's verdict: "not worth it". The total was dominated by a node-local blackhole (the report's term), so the total is not the comparison |
 | OKE 2026-11-02 (`docs/benchmarks/cpu-boost-and-ready-gap-oke-2026-11-02.md`) | OKE, Bun bench image | 1000m vs limit 2000m, request 250m | 20 | Hodges-Lehmann +141 ms; difference of medians +223 ms, 95% CI [−88, +488]; p = 0.18 | Underpowered. Node placement moves the arm medians by 200 to 360 ms (section 4). The interval excludes gains above 88 ms |
@@ -118,8 +118,7 @@ throttling counter was read on kind. Treat the mechanism as open.
 ### Run B (bun set, 2026-11-21)
 
 Workflow `.github/workflows/coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442 (https://github.com/AhmedElBanna80/knext/actions/runs/44865490442). Harness: integration/v2 merge commit `7e742381a`; the bench branch was deleted after the run. Run 1 used `52a2cff86` (`docs/benchmarks/coldstart-phases-kind-native-2026-11-20.md:16`); run A used `3fb53a918` (Actions run 44725565328). Kind, Bun arms, n = 12 per arm, with the
-node-1000m control. Runner type is unverified: the workflow runs on `ubuntu-latest`, and no run logs the vCPU count, so
-"same runner type as run 1 and run A" is not checked. Data:
+node-1000m control. The runner label is `ubuntu-latest`, the same as run 1 and run A (`docs/benchmarks/coldstart-phases-kind-native-ladder-2026-11-20.md:19`). No run logs the vCPU count. Data:
 `docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*` (combined jsonl, per-arm jsonl, and analysis files).
 Totals are `watch.first_byte` taken unadjusted: `analyze.py:108` reads it with no subtraction. The `watch.t0` key is
 unused by the analysis. (`analyze.py` has its own local `t0`, derived from `wall_start` at line 92, for the controller-log
@@ -152,7 +151,7 @@ IQR: Q1 and Q3 are the medians of the lower and upper halves of the sorted sampl
   131 ms on the same contrast (803 for bun-1000m against 934 for node-1000m). The within-run gap also moved between runs.
 
 **Conclusion: this does not change the recommendation.** The new data changes one fact. Run B: Bun −172 ms; run A: node −320 ms.
-The data are compatible with runtime dependence, but it is not tested. The no-limit arms come from different runs (node in run 1 and run A, Bun in run B only), and the runner type is unverified. Within-run Bun-vs-node at 1000m is −131 ms in
+The data are compatible with runtime dependence, but it is not tested. The no-limit arms come from different runs (node in run 1 and run A, Bun in run B only), and the vCPU count is unlogged, so the runners' capacity is not established. Within-run Bun-vs-node at 1000m is −131 ms in
 run 1 (803 vs 934) and −408 ms in run B (1133 vs 1541), so the Bun advantage also differs by run. Run B has no node-nolimit arm, so the two
 gains were never measured in the same run. The difference itself is not tested either: there is no CI on 320 vs 172 ms. Option 4 stays rejected, on admission and noisy-neighbour risk. Its no-limit gain (about 320 ms on node, run A) is no
 larger than the bounded 2000m and 4000m arms' (−324 and −335 ms, same run), so it adds risk without a larger gain (point estimates from one run, n = 12, no CI). The built-in default stays 1000m / 250m. At 1000m, Bun has two runs (run 1 and run B) and node has two

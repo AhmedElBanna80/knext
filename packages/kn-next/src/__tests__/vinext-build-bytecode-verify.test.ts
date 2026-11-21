@@ -66,7 +66,15 @@ const artifact = (m: string, modules: number, bytecode = true) =>
 interface Shape {
     readonly selfContained?: boolean;
     readonly include?: readonly string[];
+    /**
+     * What the compile script's plan sidecar says (entry + included modules);
+     * `null` = the script wrote none. Default: 3, the fixture's include plan.
+     */
+    readonly plan?: number | null;
+    /** Override the marker the sidecar carries (default: the build's own). */
+    readonly planMarker?: string;
 }
+const sidecarOf = (out: string) => `${out}.knext-plan.json`;
 let lastCwd = "";
 function build(read: (marker: string) => Buffer, shape: Shape = {}) {
     const cwd = appWithOutput(shape.include !== undefined);
@@ -77,11 +85,28 @@ function build(read: (marker: string) => Buffer, shape: Shape = {}) {
         cwd,
         bunVersion: "1.4.0",
         skipViteBuild: true,
-        ...shape,
-        run: (argv) => argvs.push([...argv]),
+        include: shape.include,
+        selfContained: shape.selfContained,
+        run: (argv) => {
+            argvs.push([...argv]);
+            // The script's plan sidecar (include shape only), beside --outfile.
+            const out = argv[argv.indexOf("--outfile") + 1] as string;
+            const plan = shape.plan === undefined ? 3 : shape.plan;
+            if (shape.include && !shape.selfContained && plan !== null) {
+                writeFileSync(
+                    sidecarOf(out),
+                    JSON.stringify({
+                        marker: shape.planMarker ?? markerOf(argv),
+                        modules: plan,
+                    }),
+                );
+            }
+        },
         readArtifact: () => read(markerOf(argvs[argvs.length - 1] as string[])),
     });
 }
+const sidecarGone = () =>
+    !existsSync(sidecarOf(join(lastCwd, "knext-exec-linux-x64")));
 /** Fail closed also means the rejected binary is gone. */
 const removed = () => !existsSync(join(lastCwd, "knext-exec-linux-x64"));
 
@@ -144,9 +169,45 @@ describe("vinext x bun compile.include shape (entry + 2 included modules)", () =
 
     it("REJECTS an artifact where an included module lost its banner/bytecode", () => {
         expect(() => build((m) => artifact(m, 1), { include })).toThrow(
-            /heads 1 bytecode module\(s\), expected at least 2/,
+            /heads 1 bytecode module\(s\), expected at least 3/,
         );
         expect(removed()).toBe(true);
+    });
+
+    it("REJECTS a 3-module plan whose binary has only 2 banner-headed modules (exact count)", () => {
+        expect(() => build((m) => artifact(m, 2), { include })).toThrow(
+            /heads 2 bytecode module\(s\), expected at least 3/,
+        );
+        expect(removed()).toBe(true);
+    });
+
+    it("fails closed when the script left no plan sidecar", () => {
+        expect(() =>
+            build((m) => artifact(m, 3), { include, plan: null }),
+        ).toThrow(/plan sidecar .* is missing/);
+        expect(removed()).toBe(true);
+    });
+
+    it("fails closed when the sidecar's marker is not this build's", () => {
+        expect(() =>
+            build((m) => artifact(m, 3), {
+                include,
+                planMarker: "knext-vinext-exec:000000000000000000000000",
+            }),
+        ).toThrow(/plan sidecar .* marker/);
+    });
+
+    it("fails closed on a malformed sidecar count", () => {
+        expect(() =>
+            build((m) => artifact(m, 3), { include, plan: 0 }),
+        ).toThrow(/plan sidecar .* module count/);
+    });
+
+    it("deletes the sidecar after verification, pass or fail", () => {
+        build((m) => artifact(m, 3), { include });
+        expect(sidecarGone()).toBe(true);
+        expect(() => build((m) => artifact(m, 2), { include })).toThrow();
+        expect(sidecarGone()).toBe(true);
     });
 
     it("REJECTS an include artifact compiled without bytecode", () => {

@@ -436,8 +436,9 @@ export interface VinextBuildOptions {
  *
  *   - self-contained: `verifyBytecodeExec` (one banner-headed entry);
  *   - `compile.include` (disk mode): `verifyBytecodeModules`, the entry plus
- *     at least one included module each headed by the banner (the script
- *     checks the exact planned count; the CLI cannot run its Bun-only planner);
+ *     EXACTLY the planned included modules each headed by the banner. The CLI
+ *     cannot run the script's Bun-only planner (cli-node-runtime guard), so the
+ *     script hands over its count in a sidecar (`readPlanSidecar`);
  *   - default: `verifyBytecodeExec`.
  *
  * Exported so a test can drive each shape directly.
@@ -446,19 +447,21 @@ export function vinextBytecodeVerdict(
     bytes: Uint8Array,
     marker: string,
     shape: {
-        readonly cwd: string;
         readonly selfContained?: boolean;
         readonly include?: readonly string[];
+        /** The script's planned module count (entry + included), from its sidecar. */
+        readonly plannedModules?: number;
     },
 ): BytecodeVerdict {
     const include = shape.include ?? [];
     if (!shape.selfContained && include.length > 0) {
-        // The CLI must stay Bun-free (cli-node-runtime guard), so it cannot run
-        // the script's glob planner. It requires the entry plus at least one
-        // included module under the banner; the script (which can plan) checks
-        // the exact count, and the script's planner already throws when a glob
-        // matches nothing, so "at least one" always holds on a good build.
-        return verifyBytecodeModules(bytes, marker, 2);
+        if (shape.plannedModules === undefined) {
+            return {
+                ok: false,
+                reason: "no planned module count for the include shape",
+            };
+        }
+        return verifyBytecodeModules(bytes, marker, shape.plannedModules);
     }
     return verifyBytecodeExec(bytes, marker);
 }
@@ -483,11 +486,61 @@ function verifyCompiledExecutable(
             `The compiled vinext executable '${outFile}' could not be read for the check: ${e instanceof Error ? e.message : String(e)}`,
         );
     }
+    const needsPlan = !opts.selfContained && (opts.include?.length ?? 0) > 0;
+    let plannedModules: number | undefined;
+    if (needsPlan) {
+        try {
+            plannedModules = readPlanSidecar(abs, marker);
+        } catch (e) {
+            rmSync(abs, { force: true });
+            throw e;
+        }
+    }
     enforceBytecodeVerdict(
-        vinextBytecodeVerdict(bytes, marker, opts),
+        vinextBytecodeVerdict(bytes, marker, { ...opts, plannedModules }),
         abs,
         "vinext",
     );
+}
+
+/**
+ * Read (and ALWAYS delete) the plan sidecar `vinext-compile.mjs` writes beside
+ * the executable in the include shape: `{ marker, modules }`. Fails closed when
+ * it is missing, unparseable, carries another build's marker, or a count that is
+ * not a positive integer.
+ */
+function readPlanSidecar(executable: string, marker: string): number {
+    const path = `${executable}.knext-plan.json`;
+    const bad = (why: string) =>
+        new UsageError(
+            `The compile.include plan sidecar '${path}' ${why}.\n\n` +
+                "Refusing to trust the executable's module count without it.",
+        );
+    let raw: string;
+    try {
+        raw = readFileSync(path, "utf8");
+    } catch {
+        throw bad("is missing");
+    } finally {
+        rmSync(path, { force: true });
+    }
+    let plan: { marker?: unknown; modules?: unknown };
+    try {
+        plan = JSON.parse(raw);
+    } catch {
+        throw bad("is not valid JSON");
+    }
+    if (plan.marker !== marker) {
+        throw bad("carries a marker that is not this build's");
+    }
+    if (
+        typeof plan.modules !== "number" ||
+        !Number.isInteger(plan.modules) ||
+        plan.modules < 1
+    ) {
+        throw bad("has an invalid module count");
+    }
+    return plan.modules;
 }
 
 /**

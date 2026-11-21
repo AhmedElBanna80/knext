@@ -1582,6 +1582,13 @@ if (INCLUDE_PLAN && !SELF_CONTAINED) {
         console.error(`[knext compile] the executable failed the bytecode check: ${verdict.reason}`);
         process.exit(1);
     }
+    // Hand the CLI the exact planned module count so it can re-verify the binary
+    // itself without running this Bun-only planner. The CLI deletes it after
+    // reading; it is never COPYed into an image (exact-name COPYs only).
+    writeFileSync(
+        `${OUTFILE}.knext-plan.json`,
+        JSON.stringify({ marker: BYTECODE_MARKER, modules: 1 + INCLUDE_PLAN.relpaths.length }),
+    );
 }
 if (INCLUDE_PLAN) {
     console.log(

@@ -316,7 +316,9 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   modules.
   - `vinext-compile.mjs` takes `--entry`, `--outfile`, `--target`,
     `--self-contained`, `--native-dir`, `--include-json` and
-    `--include-native`. It reads `KNEXT_COMPILE_STRICT_REQUIRES`.
+    `--include-native` and `--marker`. `--marker` is the per-build bytecode
+    proof marker the CLI mints; when it is absent the script mints one with
+    `mintExecMarker`. It reads `KNEXT_COMPILE_STRICT_REQUIRES`.
   - `standalone-compile.mjs` takes `--server` and `--outfile` (both required),
     plus `--root`, `--target`, `--marker` and `--self-contained`. It reads
     `KNEXT_STANDALONE_DIR` (written into the compiled banner),
@@ -337,7 +339,8 @@ These are the `exports` entries in `packages/kn-next/package.json`:
   `bunBaseExeCompileOptions`, `BunBaseExeError` and `BUN_BASE_EXE_ENV`. It
   reads `KNEXT_BUN_BASE_EXE`.
 - `bytecode-exec-verify.mjs` exports `verifyBytecodeExec`,
-  `verifyBytecodeModules`, `verifyBytecodeEmbedded` and `routeMarker`.
+  `verifyBytecodeModules`, `verifyBytecodeEmbedded`, `routeMarker`,
+  `mintExecMarker` and `isExecMarker`.
 - The static analyzers are:
   - `create-require-analyze.mjs`: `analyzeCreateRequire` and
     `FOLDED_RUNTIME_PACKAGE = "ioredis"`;
@@ -672,7 +675,7 @@ The compile pipeline fails closed.
 - When a post-build bytecode check fails, `OUTFILE` is deleted and the script
   exits 1:
   - `standalone-compile.mjs` always runs the check.
-  - `vinext-compile.mjs` runs it only in self-contained or include mode.
+  - `vinext-compile.mjs` runs it in every shape.
 - `compile-embed.mjs:planIncludes` and `app-data-embed.mjs:planAppData` reject
   paths outside the app root and secret-looking names (`.env*`, `*.pem`,
   `*.key`, `id_*`) unless they are named exactly. They also reject native
@@ -756,6 +759,9 @@ The compile pipeline fails closed.
 - `vinext-compile.mjs` always writes a third-party notices file,
   `HARFBUZZ_NOTICE_FILE` (`knext-third-party-notices.txt`), next to `OUTFILE`.
   It carries the HarfBuzz licence text only when `hb.wasm` was embedded.
+- In the include shape, `vinext-compile.mjs` writes the plan sidecar
+  `<OUTFILE>.knext-plan.json` (`{ marker, modules }`) beside the executable.
+  The CLI reads it and deletes it. It is never copied into an image.
 - `sharp-native-extract.mjs` writes native files under
   `<tmp>/knext-native-<uid>-<hash>`.
 - `next-config-facts.js:recordNextConfigFacts` writes the facts record to the

@@ -1,0 +1,19 @@
+valid 12, excluded 0: []
+
+### node-1000m (n=12)
+
+| phase | median ms | p95 ms | IQR [Q1, Q3] | min–max |
+|---|---|---|---|---|
+| 0 autoscaler decides 0->1 (log; inside phase 1) | 16 | 21 | 3 [15, 18] | 14–22 |
+| 1 activation: request -> Pod object | 39 | 49 | 7 [35, 42] | 30–52 |
+| 2 scheduling: Pod -> bound to node | 10 | 23 | 9 [9, 18] | 6–24 |
+| 3 sandbox + containers start: bound -> first log line | 408 | 467 | 36 [390, 426] | 370–490 |
+| 4 runtime boot: first log -> Next listening | 474 | 508 | 33 [462, 495] | 406–513 |
+| 5 routable: listening -> ready | 586 | 612 | 30 [571, 601] | 557–615 |
+| 6 forward + render: ready -> first byte | 16 | 46 | 7 [14, 20] | 11–54 |
+| total: request -> first byte | 1541 | 1588 | 44 [1517, 1561] | 1501–1597 |
+|   5x kubelet status lag: first log -> pod IP visible in API | 9 | 15 | 10 [4, 14] | -16–15 |
+|   5y net: first log -> TCP :3000 from the other node | 475 | 512 | 51 [446, 497] | 406–514 |
+|   5y net: first log -> TCP :3000 from the same node | 478 | 508 | 51 [446, 497] | 402–515 |
+|   5z app: listening -> /api/health 200 (same node, direct) | 429 | 462 | 13 [424, 438] | 401–471 |
+|   5w activator: first log -> activator marks pod healthy | 1053 | 1105 | 35 [1036, 1071] | 993–1111 |

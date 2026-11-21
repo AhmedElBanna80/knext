@@ -55,6 +55,7 @@ Its gain on OKE is not established.
 |---|---|---|---|---|---|
 | Kind native, run 1 (`coldstart-phases-kind-native-2026-11-20.md`) | kind on GitHub amd64, node | 1000m vs no limit | 12 | −224 ms (934 to 710) | One run, shared VM |
 | Kind ladder (`coldstart-phases-kind-native-ladder-2026-11-20.md`) | same, node | 1000m vs 2000m / 4000m / no limit | 12 | −324 / −335 / −320 ms | One run. Flat above 2 CPUs. Runner vCPU count not logged |
+| Kind run B, bun set (`coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt`) | same, **Bun** | 1000m vs no limit | 12 | −172 ms (1133 to 961) | One run. Node-1000m control 1541 ms. See "Run B" below |
 | GKE `e2-standard-4` (`cold-start-gke-runtime-and-minimisation-2026-10-01.md`, Run B) | GKE, **Bun** | 1000m vs 4000m | 10 | **−675 ms** (3156 to 2482); Holm p = 0.0005; CI [−850, −553] | The strongest total-level number off kind. Four vCPU is the whole node |
 | OKE phase breakdown (`cold-start-phase-breakdown-2026-10-01.md`, E2) | OKE, Bun | 1 vs 4 CPU | 9 (baseline) | Runtime boot −37 ms (p = 0.0006). First-request leg +258 ms (not significant). Total not usable | The report's verdict: "not worth it". The total was dominated by a roughly 10 s ready-gap artifact |
 | OKE 2026-11-02 (`cpu-boost-and-ready-gap-oke-2026-11-02.md`) | OKE, Bun bench image | 1000m vs limit 2000m, request 250m | 20 | Hodges-Lehmann +141 ms; difference of medians +223 ms, 95% CI [−88, +488]; p = 0.18 | Underpowered. Node placement moves the arm medians by 200 to 360 ms (section 4). The interval excludes gains above 88 ms |
@@ -89,6 +90,31 @@ The same report's `cpu-boost2req` arm (request 1000m, limit 2000m) gave Hodges-L
 The GKE report attributes its gain to CFS throttling of the whole container on shared-core vCPUs. This note does not
 reproduce that. No throttling counter was read on OKE (the Nov 2 report says `nr_throttled` was not readable), and no
 throttling counter was read on kind. Treat the mechanism as open.
+
+### Run B (bun set, 2026-11-21)
+
+Workflow `coldstart-phases-kind-native.yml`, GitHub Actions run 44865490442. Kind on the same runner type as run 1 and
+the ladder, Bun arms, n = 12 per arm, with the node-1000m control. Data:
+`docs/benchmarks/data/coldstart-phases-kind-native-bun-2026-11-21*` (combined jsonl, per-arm jsonl, and analysis files).
+Totals are request to first byte, `watch.first_byte` minus `watch.t0` per wake. Recomputed from the jsonl, they match
+`coldstart-phases-kind-native-bun-2026-11-21-analysis-all.txt`. The bracket is the IQR (Q1, Q3) from that file, not a
+confidence interval.
+
+| Arm | Median ms | p95 ms | IQR ms |
+|---|---|---|---|
+| bun-1000m | 1133 | 1215 | [1115, 1178] |
+| bun-nolimit | 961 | 985 | [948, 973] |
+| node-1000m (control) | 1541 | 1588 | [1517, 1561] |
+
+- **Removing the limit saves 172 ms on Bun** (1133 to 961). Run A saved about 320 ms on node (1556 to 1236).
+- **node-1000m reproduces across runs.** 1541 ms here, 1556 ms in run A: 15 ms apart on rounded medians (14.4 ms unrounded).
+- **Bun beats node by 408 ms at 1000m** (1541 to 1133).
+
+**Conclusion: this does not change the recommendation.** The new data changes one fact. The kind gain from removing
+the limit depends on the runtime: 172 ms on Bun, about 320 ms on node. The "kind −320 ms" figures in section 3 are node
+numbers, and option 4 should carry that caveat. Option 4 stays rejected. It was rejected on admission and noisy-neighbour
+risk, not on gain size. The built-in default stays 1000m / 250m. This is one run per runtime on kind, and kind does not
+decide the default. The OKE A/B in section 4 is still the only test of the 500m / 2000m shape.
 
 ## 3. Options
 

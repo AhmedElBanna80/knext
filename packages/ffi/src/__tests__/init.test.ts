@@ -145,8 +145,10 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     expect(text).not.toContain(LINE); // the template does not carry it: that is why init says so
     const { cwd, out } = init(text);
     expect(out).toContain(LINE);
-    expect(out).toContain('after the `COPY` that brings native/ in');
+    expect(out).toContain('directly after the `COPY` that brings native/ in');
     expect(out).toContain('before `USER`');
+    // Why it matters: the Dockerfile must stay the one knext recognises, or deploy takes another path.
+    expect(out).toContain('change nothing else');
     expect(out).toContain('knext ffi generate'); // the rest of the output is still there
     expect(readFileSync(join(cwd, 'Dockerfile'), 'utf8')).toBe(text);
   });
@@ -174,5 +176,109 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     expect(init('FROM scratch\nCOPY server /app/server\nUSER 65532:65532\n').out).not.toContain(
       'chmod go-w',
     );
+  });
+
+  // The hint has to be right about which Dockerfile it is looking at.
+  const hinted = (dockerfile: string) => init(dockerfile).out.includes(LINE);
+  const FINAL = (...lines: string[]) =>
+    ['FROM alpine', 'WORKDIR /app', ...lines, 'USER 65532:65532', ''].join('\n');
+
+  it('recognises every way a Dockerfile writes the copy of native/ to /app/native', () => {
+    for (const copy of [
+      'COPY native /app/native',
+      'COPY native/ /app/native/',
+      'COPY ./native /app/native',
+      'COPY ./native/ /app/native/',
+      'copy --chown=0:0 --chmod=a-w native /app/native',
+      'Copy native /app/native',
+      'COPY ["native", "/app/native"]',
+      'COPY --chown=0:0 ["native/", "/app/native/"]',
+      'COPY --chown=0:0 --chmod=a-w \\\n    native \\\n    /app/native',
+      'COPY --from=build /out/native /app/native',
+      'COPY --from=build --chown=0:0 --chmod=a-w /out/native/ /app/native/',
+      'COPY   native   /app/native   ',
+    ]) {
+      expect(hinted(FINAL(copy)), copy).toBe(true);
+    }
+  });
+
+  it('does not take other copies for it: another destination, the JSON form of one, a build stage that is not the image', () => {
+    for (const copy of [
+      'COPY native /srv/native',
+      'COPY native /app/natives',
+      'COPY native /app',
+      'COPY ["native", "/srv/native"]',
+      'COPY native',
+      '# COPY native /app/native',
+    ]) {
+      expect(hinted(FINAL(copy)), copy).toBe(false);
+    }
+    // The copy is in an earlier stage: the image the app ships is the last one.
+    expect(
+      hinted(
+        'FROM alpine AS build\nCOPY native /app/native\nFROM alpine\nCOPY server /app/server\nUSER 65532:65532\n',
+      ),
+    ).toBe(false);
+  });
+
+  it('needs BOTH /app and /app/native closed, after the copy, in the final stage, before it says nothing', () => {
+    const COPY = 'COPY --chown=0:0 --chmod=a-w native /app/native';
+    for (const closes of [
+      'RUN chmod go-w /app /app/native',
+      'RUN chmod go-w /app/native /app',
+      'RUN chmod go-w /app/ /app/native/',
+      'RUN chmod og-w /app /app/native',
+      'RUN chmod a-w /app /app/native',
+      'RUN chmod g-w,o-w /app /app/native',
+      'RUN chmod 755 /app /app/native',
+      'RUN chmod 0755 /app /app/native',
+      'RUN chmod go-w /app && chmod go-w /app/native',
+      'RUN set -e; chmod go-w /app /app/native; echo done',
+      'RUN chmod go-w /app \\\n    /app/native',
+      'RUN chmod -R go-w /app',
+      'RUN chmod --recursive go-w /app',
+    ]) {
+      expect(hinted(FINAL(COPY, closes)), closes).toBe(false);
+    }
+    for (const closes of [
+      'RUN chmod go-w /app/native', // /app is left as the builder made it
+      'RUN chmod go-w /app', // /app/native is left as the builder made it
+      'RUN chmod go-w /app/server /app/native',
+      'RUN chmod go+w /app /app/native',
+      'RUN chmod u-w /app /app/native',
+      'RUN chmod g-w /app /app/native',
+      'RUN chmod 775 /app /app/native',
+      'RUN chmod 777 /app /app/native',
+      'RUN chown 0:0 /app /app/native',
+      'RUN echo chmod go-w /app /app/native',
+      '# RUN chmod go-w /app /app/native',
+      'RUN chmod go-w /app || true; chmod go-w /app/server',
+    ]) {
+      expect(hinted(FINAL(COPY, closes)), closes).toBe(true);
+    }
+    // Before the copy it closes nothing the copy then makes.
+    expect(hinted(FINAL('RUN chmod go-w /app /app/native', COPY))).toBe(true);
+    // In an earlier stage it closes nothing in the image.
+    expect(hinted(`FROM alpine AS build\nRUN chmod go-w /app /app/native\n${FINAL(COPY)}`)).toBe(
+      true,
+    );
+    // Closed in the final stage after a copy in an earlier stage too.
+    expect(
+      hinted(
+        `FROM alpine AS build\n${COPY}\nFROM alpine\n${COPY}\nRUN chmod go-w /app /app/native\n`,
+      ),
+    ).toBe(false);
+  });
+
+  it('the line the hint prints, put directly after the copy of the scaffolded Dockerfile, is what silences it', () => {
+    const text = readFileSync(VINEXT_DOCKERFILE, 'utf8');
+    const line = /^ {2}(RUN chmod go-w .*)$/m.exec(init(text).out)?.[1];
+    expect(line).toBe(LINE);
+    const followed = text.replace(
+      /^COPY --chown=0:0 --chmod=a-w native \/app\/native$/m,
+      `$&\n${line}`,
+    );
+    expect(followed).not.toBe(text);
+    expect(init(followed).out).not.toContain('chmod go-w');
   });
 });

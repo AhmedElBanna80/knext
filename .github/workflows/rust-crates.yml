@@ -192,7 +192,7 @@ jobs:
       - name: Generator — the wrapper harness's controls go red when the loader's walk is weakened
         # A control that stays green with its subject removed is decoration. harness/ffi-generated-red.ts
         # runs the step above once per weakening of the rendered loader (the walk above the executable's
-        # directory, its last step to /, the sticky exemption, the owner check), each in memory through
+        # directory, its last step to /, the real-path assertion, the sticky exemption, the owner check), each in memory through
         # KNEXT_FFI_HARNESS_MUTATE, and requires exit code 1 and exactly the controls that weakening
         # affects to fail. It reads the harness's own `control N` labels, never the loader's words.
         run: bun harness/ffi-generated-red.ts target/release/libknext_ffi_fixture.so

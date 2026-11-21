@@ -33,11 +33,12 @@
 //            records with 64-bit fields, enums, Option/Vec, Err, a panic, and
 //            the non-finite float rule in every JSON position (refused by the
 //            wrapper on the way out, by Rust on the way back).
-//            With KNEXT_FFI_HARNESS_MUTATE=W01|W02|W04 the rendered loader is
-//            weakened in memory (the walk above the executable's directory, its
-//            last step to /, the sticky exemption), only the four controls run,
-//            and the run must fail; ffi-generated-red.ts requires exactly that
-//            and the controls each weakening turns red.
+//            With KNEXT_FFI_HARNESS_MUTATE=W01|W02|W03|W04|W05 the rendered loader
+//            is weakened in memory (the walk above the executable's directory, its
+//            last step to /, the real-path assertion, the sticky exemption, the
+//            owner check), only the four controls run, and the run must fail;
+//            ffi-generated-red.ts requires exactly that and the controls each
+//            weakening turns red.
 //   init     `knext ffi init` with the knext-ffi revision this @getknext/ffi
 //            records, the written Cargo.toml checked for the exact git+rev
 //            line, then `knext ffi generate` builds that crate AS WRITTEN (cargo
@@ -543,10 +544,10 @@ async function wrapper(libPath: string): Promise<void> {
     check(
       message.includes("if it is part of your app's install, run `chmod go-w <dir>`") &&
         message.includes(
-          'if it is shared with other software, do not change it, move the install instead',
+          'If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead.',
         ) &&
         message.includes('The executable needs a directory of its own') &&
-        !message.includes('A sticky or world-writable directory above the executable'),
+        !message.includes('A sticky directory (a shared one such as /tmp)'),
       `control 3: the advice for a group-writable directory above the executable is both pieces, each with its condition: ${message}`,
     );
   }

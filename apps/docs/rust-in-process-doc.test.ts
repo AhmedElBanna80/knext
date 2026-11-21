@@ -403,14 +403,15 @@ describe('docs — in-process Rust page', () => {
   it('quotes the directory refusal: both pieces of advice are on the page word for word and the module carries the same sentences, apart from the file hint', () => {
     const body = must(page, /where the library is loaded from/i).replace(/\s+/g, ' ');
     // The advice follows the situation, not the position: a directory inside native/ is fixed in place,
-    // a sticky or world-writable one above the executable is only ever moved away from, and any other
-    // failing directory is told both, each with its condition.
+    // a sticky one at the executable's level or above it is only ever moved away from, and any other
+    // failing directory (a world-writable one that is not sticky, and a home directory, included) is told
+    // both, each with its condition.
     const fix =
       "To fix a directory inside native/: run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root; or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode).";
     const either =
-      "A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in; if it is shared with other software, do not change it, move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.";
+      "A directory that holds the executable or sits above it: if it is part of your app's install, run `chmod go-w <dir>` (and `chown root <dir>` if root does not own it), as root, or, in a Dockerfile, `RUN chmod go-w <dir>` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>.";
     const move =
-      "A sticky or world-writable directory above the executable's directory is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.";
+      'A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead.';
     // The module's source escapes the backticks it carries inside a template literal.
     const unescaped = rendered.replace(/\\`/g, '`');
     for (const sentence of [fix, either, move]) {
@@ -420,10 +421,13 @@ describe('docs — in-process Rust page', () => {
     // The conditional advice names both conditions, so it is never read as an order to chmod a shared directory.
     expect(either).toContain("if it is part of your app's install");
     expect(either).toContain(
-      'if it is shared with other software, do not change it, move the install instead',
+      'If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead',
     );
+    // A home directory is a move, never a chown to root.
+    expect(either).not.toContain('chown root ~');
+    expect(body).toContain('`/home/<user>` belongs to the account that owns it');
     expect(either).toContain('The executable needs a directory of its own');
-    // A shared (sticky or world-writable) directory is only told to move, and the page says so beside the example.
+    // A sticky directory is only told to move, and the page says so beside the example.
     expect(move).not.toContain('chmod go-w');
     expect(body).toContain('on some hosts `/opt` itself is writable by everyone');
     // The module words the count and the pronoun from the number of failing directories.
@@ -495,9 +499,10 @@ describe('docs — in-process Rust page', () => {
     expect(flat).not.toContain('run the executable from its real path');
     expect(flat).toContain('A deploy tool that keeps releases in a directory it owns');
     expect(flat).toContain(
-      'Put `deploy_to` under a parent that root owns and that is closed to group and other, make `deploy_to`, `releases/` and each release root-owned and closed to group and other (run the step that puts the files in place as root), and never change anything above `deploy_to`',
+      'Put `deploy_to` under a parent where every directory from that parent up to `/` is root-owned and closed to group and other, make `deploy_to`, `releases/` and each release root-owned and closed to group and other, and never change anything above `deploy_to`. Switching `current` and `deploy:cleanup` need root too',
     );
     expect(flat).not.toContain('make the release tree root-owned');
+    expect(flat).not.toContain('(run the step that puts the files in place as root)');
     expect(flat).not.toContain('the module pins only the file it has already opened');
     // What to do in your own image, and for a compiled binary outside a container.
     expect(flat).toContain('(`RUN chown -R app /app`) does not pass');
@@ -742,7 +747,7 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).not.toContain('on files and directories it does not own');
     // The images: what was measured, the line that fixes the nested layout, and the lane pending.
     expect(amendment).toContain(
-      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and every lane, the Rust crates lane included, is green on `abca3e3`; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
+      '**The shipped images pass: the lanes are green on `6be5939` and again on `dc4eb3b`, and every lane, the Rust crates lane included, is green on `abca3e3` and again on `81753d6`; they are re-run on the final head; the nested layout is model-tested only (`TD-S18-1b`).**',
     );
     // What accepts the amendment, and what does not: three lanes on the final head; the nested leg is debt.
     expect(amendment).toContain(
@@ -784,9 +789,10 @@ describe('docs — in-process Rust page', () => {
     expect(amendment).toContain('Bun reports `process.execPath` already resolved');
     expect(amendment).toContain('fail-closed assertion');
     expect(amendment).toContain(
-      'put `deploy_to` under a parent that root owns and that is closed to group and other, make `deploy_to`, `releases/` and each release root-owned and closed to group and other (run the step that puts the files in place as root), and never change anything above `deploy_to`',
+      'put `deploy_to` under a parent where every directory from that parent up to `/` is root-owned and closed to group and other, make `deploy_to`, `releases/` and each release root-owned and closed to group and other, and never change anything above `deploy_to`. Switching `current` and `deploy:cleanup` need root too',
     );
     expect(amendment).not.toContain('make the release tree root-owned');
+    expect(amendment).not.toContain('(run the step that puts the files in place as root)');
     expect(amendment).not.toContain('run the executable from its real path');
     // Option (g): the two things directory-descriptor anchoring alone never closed.
     expect(amendment).toContain('never closed the first lookup');
@@ -855,13 +861,29 @@ describe('docs — in-process Rust page', () => {
       `put \`${LINE}\` after the \`COPY\` that brings \`native/\` in and before \`USER\``,
     );
     expect(flat).toContain('`knext ffi init` prints that line');
+    expect(flat).toContain('and so do `knext ffi generate` and `knext ffi check`');
+    // The scaffolded file with just that one line stays known-good, so following the advice keeps the build
+    // and the asset upload; under BuildKit nothing changes for an existing app and another builder is told.
+    expect(flat).toContain('change nothing else in the file');
+    expect(flat).toContain('recognises the scaffolded `Dockerfile` byte for byte');
+    expect(flat).toContain(
+      'with just this one line directly after the `COPY` that brings `native/` in as well',
+    );
+    expect(flat).toContain('Under BuildKit nothing changes for an existing app');
+    expect(flat).toContain('With another builder the first call of the module is refused');
     // The ADR says the template is unchanged, and nothing says it gains the line or that the image is untouched.
     const adr = repoFile('docs/adr/0069-bun-ffi-inprocess-rust.md').replace(/\s+/g, ' ');
     expect(adr).toContain('The vinext template (`templates/app/Dockerfile.hbs`) is not changed');
     expect(adr).toContain('`knext ffi init` prints that line');
+    expect(adr).toContain('`vinextTemplateWithCloseLine(template)`');
+    expect(adr).toContain('Under BuildKit nothing changes for an existing app');
     const changeset = repoFile('.changeset/ffi-sealed-tree-swap.md');
     expect(changeset).toContain(
       "the vinext template is the app's own scaffolded `Dockerfile` and is not changed",
+    );
+    expect(changeset).toContain('Under BuildKit nothing changes for an existing app');
+    expect(changeset).toContain(
+      'with another builder the first call is refused, and the message names the fix',
     );
     const model = repoFile('docs/security/threat-model.md').replace(/\s+/g, ' ');
     expect(model).toContain(

@@ -170,13 +170,51 @@ function stageLiteralTemplate(src: string, dest: string): boolean {
 }
 
 /**
+ * In-process Rust (ADR-0069 Amendment 1): the one line `knext ffi init` tells a
+ * vinext app to add to the `Dockerfile` it was scaffolded with, directly after
+ * the `COPY` that brings `native/` in. The loader refuses a library unless
+ * every directory above it is root's and closed to group and other, which
+ * includes `/app` and `/app/native`; BuildKit leaves them so, a builder that
+ * gives a COPY's destination the build host's mode does not, so the app closes
+ * them itself. `@getknext/ffi` (a separate, unpublished package) prints the same
+ * line as its own constant (`VINEXT_CLOSE_LINE`); `ffi-vinext-known-good.test.ts`
+ * fails if the two drift apart.
+ */
+export const VINEXT_FFI_CLOSE_LINE = "RUN chmod go-w /app /app/native";
+
+/** The scaffolded vinext `Dockerfile`'s `native/` COPY, which the close line goes directly after. */
+const VINEXT_NATIVE_COPY = "COPY --chown=0:0 --chmod=a-w native /app/native\n";
+
+/**
+ * The scaffolded vinext `Dockerfile` text with {@link VINEXT_FFI_CLOSE_LINE}
+ * directly after its `native/` COPY, or `undefined` when the template does not
+ * hold that COPY exactly once (a template that moved on must fail closed, not
+ * match something else). Built from the shipped template's own text, so a change
+ * to the template flows into the variant instead of leaving a stale copy.
+ */
+export function vinextTemplateWithCloseLine(
+    template: string,
+): string | undefined {
+    const at = template.indexOf(VINEXT_NATIVE_COPY);
+    if (at === -1 || template.indexOf(VINEXT_NATIVE_COPY, at + 1) !== -1) {
+        return undefined;
+    }
+    const end = at + VINEXT_NATIVE_COPY.length;
+    return `${template.slice(0, end)}${VINEXT_FFI_CLOSE_LINE}\n${template.slice(end)}`;
+}
+
+/**
  * True when `dockerfilePath`'s content is BYTE-IDENTICAL to one of the two
  * shipped `app-dockerfile` templates (the scaffolded single-stage vinext
  * `Dockerfile`, or `Dockerfile.vinext-node`) — i.e. it `COPY`s host-built
- * artifacts rather than rebuilding the app inside the image (#1283). Both
- * templates are staged LITERALLY (`stageLiteralTemplate` throws on an
- * unsubstituted `{{ }}`, see above), so an exact match is a real invariant,
- * not a heuristic.
+ * artifacts rather than rebuilding the app inside the image (#1283) — or to the
+ * scaffolded vinext `Dockerfile` plus exactly the one line
+ * {@link VINEXT_FFI_CLOSE_LINE} directly after its `native/` COPY (what an
+ * in-process Rust app adds, so a vinext app that follows `knext ffi init`'s
+ * advice stays on this path rather than switching to image-sourced assets and
+ * the in-image lock-step check). Both templates are staged LITERALLY
+ * (`stageLiteralTemplate` throws on an unsubstituted `{{ }}`, see above), so an
+ * exact match is a real invariant, not a heuristic.
  *
  * Used to SCOPE the post-build image lock-step check
  * (`verifyBuiltImageLockstep`) to Dockerfiles that might actually need it: the
@@ -201,13 +239,21 @@ export function isKnownGoodTemplateDockerfile(dockerfilePath: string): boolean {
         return false;
     }
     const templateDir = join(packageRoot(), "templates", "app");
+    const vinextTemplate = join(templateDir, "Dockerfile.hbs");
     const candidates = [
-        join(templateDir, "Dockerfile.hbs"),
+        vinextTemplate,
         join(templateDir, `${VINEXT_NODE_DOCKERFILE_NAME}.hbs`),
     ];
     return candidates.some((tpl) => {
         try {
-            return readFileSync(tpl, "utf-8") === userContent;
+            const text = readFileSync(tpl, "utf-8");
+            if (text === userContent) return true;
+            // The scaffolded vinext Dockerfile plus the one in-process Rust line. The
+            // other template has no `native/` COPY, so it has no such variant.
+            return (
+                tpl === vinextTemplate &&
+                vinextTemplateWithCloseLine(text) === userContent
+            );
         } catch {
             return false;
         }

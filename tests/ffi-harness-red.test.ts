@@ -54,6 +54,7 @@ describe('the verdict on a weakened harness run', () => {
   it('accepts exactly the controls each weakening lists, with exit code 1', () => {
     expect(judge('W01', 1, FAIL(1) + FAIL(3) + FAIL(4))).toEqual([]);
     expect(judge('W02', 1, FAIL(4))).toEqual([]);
+    expect(judge('W03', 1, FAIL(2))).toEqual([]);
     expect(judge('W04', 1, FAIL(1))).toEqual([]);
   });
 
@@ -66,6 +67,8 @@ describe('the verdict on a weakened harness run', () => {
   it('refuses a control that did not go red, an extra one, and a failure without a label', () => {
     expect(judge('W01', 1, FAIL(1) + FAIL(4))[0]).toContain('[1,4] went red');
     expect(judge('W02', 1, FAIL(4) + FAIL(2))[0]).toContain('[2,4] went red');
+    expect(judge('W03', 1, FAIL(2) + FAIL(3))[0]).toContain('[2,3] went red');
+    expect(judge('W03', 1, FAIL(1))[0]).toContain('[1] went red');
     expect(judge('W04', 1, `${FAIL(1)}ffi-generated: FAIL: calls\n`)[0]).toContain(
       'no control label',
     );

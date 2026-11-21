@@ -13,6 +13,8 @@
 //
 //   W01  the directories above the one native/ sits in are never walked   controls 1, 3, 4
 //   W02  the walk stops one short of the root directory                   control 4
+//   W03  a path that is not its directory's real path is let through      control 2
+//        (the assertion that the executable's directory is its own real path)
 //   W04  a sticky, world-writable directory (a /tmp) is let through       control 1
 //   W05  the owner of a directory is not judged (a walk by mode alone)    control 1
 //        (only as a user that is not root: a root-owned tree has nothing to show it)
@@ -21,7 +23,8 @@
 // reads the loader's own words. Like the harness it needs root or passwordless sudo, and it stops
 // its child on SIGINT and SIGTERM (the child removes what it staged).
 //
-// Exit: 0 every weakening was caught as listed, 1 one was not, 10 it could not run.
+// Exit: 0 every weakening was caught as listed, 1 one was not, 10 it could not run, 130 and 143 it
+// was stopped by SIGINT or SIGTERM (what it had running was stopped first; nothing was proved).
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { resolve } from 'node:path';

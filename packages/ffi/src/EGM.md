@@ -22,7 +22,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     out:'src/generated/ffi'}`), `FfiUsageError`, `parseConfig`, `loadConfig` and `serializeConfig`.
   - Exported type: `FfiConfig`.
 - `init.ts` holds `runInit`, `recordedCrateRev`, `CRATE_GIT` (`https://github.com/getknext-dev/knext`),
-  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`) and the `RunInitOptions` type.
+  `TEMPLATE_DIR`, `VINEXT_CLOSE_LINE` (`RUN chmod go-w /app /app/native`), `dockerfileHint(cwd)` and the `RunInitOptions` type.
 - `generate.ts` holds `runGenerate({cwd, check, io, deps})` and
   `generateFiles(libraryPath, config)`. `generateFiles` returns a `Map` of `.knext-generated.json`
   and `index.ts`. The file also exports the `Io`, `GenerateDeps` and `RunGenerateOptions` types and
@@ -90,11 +90,16 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
 - **Init** (`init.ts:runInit`)
   - It refuses unless the recorded crate revision is a 40-hex commit.
   - It writes nothing if `knext.ffi.json` or any top-level template entry already exists.
-  - After it writes, it reads the app's own `Dockerfile` in `cwd` (`dockerfileHint`, never writing it). When that file
-    copies `native/` to `/app/native` and has no `RUN chmod ... go-w ... /app/native` line (the Dockerfile a vinext x
-    Bun app is scaffolded with, which knext does not edit), the output also says to add `VINEXT_CLOSE_LINE` after
-    that `COPY` and before `USER`, and why. An app with no `Dockerfile`, or one that does not copy `native/` there,
-    or that already has the line, gets no extra output.
+  - After it writes, it reads the app's own `Dockerfile` in `cwd` (`dockerfileHint(cwd)`, exported, never writing it).
+    The final stage only is read (a `COPY` or a `chmod` in a build stage does not reach the image). When that stage
+    copies `native/` to `/app/native` (any `COPY` flags, the JSON form, `--from=`, trailing slashes, line
+    continuations and lower case are read) and, after the last such `COPY`, a `RUN chmod` that removes group and other
+    write has not closed BOTH `/app` and `/app/native` (a recursive chmod of `/app` covers both), the output also
+    says to add `VINEXT_CLOSE_LINE` directly after that `COPY` and before `USER`, to change nothing else in the file,
+    and why (knext recognises the scaffolded Dockerfile with just that line, so the app keeps the build and asset
+    upload it has). An app with no `Dockerfile`, or one that does not copy `native/` there, or that already closes
+    both, gets no extra output. `knext ffi generate` and `knext ffi check` print the same hint after their own
+    line, so an app that already has its config sees it too.
 - **Manifest scanning** (`manifest.ts`)
   - The wrapper is derived from the built library's bytes, never from the Rust source
     (`generate.ts:generateFiles` calls `manifest.ts:scanManifest`).
@@ -148,21 +153,30 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
       situation, not the position (`inside` is the number of directories inside `native/`, native/
       itself included, computed before the walk adds the executable's own directory and its
       ancestors): a directory inside `native/` (index below `inside`) is the app's and gets the
-      fix in place (`fix`: `chmod go-w`, `chown root`, a Dockerfile `RUN chmod go-w`); a sticky or
-      world-writable directory (`mode & 0o1002`) above the executable's own (index above `inside`)
-      is shared with other software and gets only the move (`move`: a root-owned, closed directory
-      such as `/opt/<app>`); any other failing directory (the executable's own, or one above it, as
-      a prefix directory of a nested image or a `root:staff` `/usr/local`) gets both, each with its
-      condition, and that the executable needs a directory of its own (`either`). Each piece is said
+      fix in place (`fix`: `chmod go-w`, `chown root`, a Dockerfile `RUN chmod go-w`); a STICKY
+      directory (`mode & 0o1000`, tested only after the `inside` check) at the executable's level or
+      above it is shared with other software and gets only the move (`move`: a root-owned, closed
+      directory such as `/opt/<app>`); any other failing directory (the executable's own, or one above
+      it, a world-writable one that is not sticky, a prefix directory of a nested image or a
+      `root:staff` `/usr/local`) gets both, each with its condition, and that the executable needs a
+      directory of its own (`either`); a home directory is named as one to move, never to give to
+      root. Each piece is said
       once however many directories need it. A link or a regular file
       where a directory belongs is named as such (`link` and `other` flags) and told to be replaced.
       Every printed path and every system error that quotes one goes through `$show`, which writes
-      a C0 control or DEL in caret notation and a C1 control or U+2028 and U+2029 as a unicode
-      escape, so a directory named with a newline cannot forge a line of the list and no such
-      character reaches a terminal or a log. `ffi-loader.test.ts` scans the rendered module
-      (`__tests__/template-scan.ts`) and requires every interpolation in a `knext ffi:` message to be
-      a `$show(...)` call, a choice between string literals, or on a short allow-list of values that
-      are never a path (numbers, modes, the generated names), so a new message cannot forget it. `$why` is the shared owner
+      a C0 control or DEL in caret notation, a C1 control, U+2028, U+2029 and the bidirectional
+      controls as a unicode escape, and doubles a backslash and escapes a caret so that the output
+      is unambiguous, so a directory named with a newline cannot forge a line of the list and no
+      such character reaches a terminal or a log; it never throws. The same goes for a value read
+      from a file or the environment (the manifest's key, version and digest, the slow-call
+      threshold). A digest the manifest lists must be 64 lowercase hexadecimal digits or the call
+      is refused with that said. `ffi-loader.test.ts` scans the rendered module
+      (`__tests__/template-scan.ts`, on the TypeScript AST) and requires every interpolation in a
+      template or a `'...' + x` concatenation that reaches `FfiLoadError`, `Error`, `RustError`,
+      `RustPanicError`, `console.warn`, `console.error` or a `bad.push` entry (the list of failing
+      directories) to be a `$show(...)` call, a choice between string literals, or on a short
+      allow-list keyed by (function, expression) with a reason for each entry, so a new message
+      cannot forget it and an allowance for one function's `file` is not one for another's. `$why` is the shared owner
       and mode judgement and `$judge` is the file-only refusal with the file hint. Why every ancestor: renaming a directory needs write on its parent,
       so with every directory on the path root's and closed to group and other, no user but root
       can swap any part of it, which makes the by-path lookups sound (Bun has no `openat`; the same

@@ -14,6 +14,7 @@ import { existsSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { basename, join, sep } from 'node:path';
 import { hostBuild } from './cargo';
 import { type FfiConfig, FfiUsageError, loadConfig } from './config';
+import { dockerfileHint } from './init';
 import { ManifestError, scanManifest } from './manifest';
 import { ConfinedWriter, diffOutput, MANIFEST } from './output';
 import { libNameOf, renderModule } from './render';
@@ -76,7 +77,9 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<number> {
 
     if (opts.check) {
       if (drift.length === 0) {
-        io.stdout(`generated code in ${config.out} is up to date (${expected.size} files)\n`);
+        io.stdout(
+          `generated code in ${config.out} is up to date (${expected.size} files)\n${dockerfileHint(cwd)}`,
+        );
         return 0;
       }
       io.stderr(
@@ -101,9 +104,11 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<number> {
       }
     }
     io.stdout(
-      drift.length === 0
-        ? `generated code in ${config.out} is already up to date\n`
-        : `wrote ${config.out} (${drift.length} file${drift.length === 1 ? '' : 's'} changed)\n`,
+      `${
+        drift.length === 0
+          ? `generated code in ${config.out} is already up to date\n`
+          : `wrote ${config.out} (${drift.length} file${drift.length === 1 ? '' : 's'} changed)\n`
+      }${dockerfileHint(cwd)}`,
     );
     return 0;
   } catch (err) {

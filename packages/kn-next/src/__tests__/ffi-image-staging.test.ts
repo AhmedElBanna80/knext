@@ -64,6 +64,7 @@ const {
     nestStandaloneDockerfile,
     runtimeStandaloneTemplateDir,
     stageStandaloneBuildContext,
+    VINEXT_FFI_CLOSE_LINE,
 } = await import("../cli/runtime-image");
 const { stageSharpNative } = await import("../cli/vinext-build");
 
@@ -648,6 +649,32 @@ describe("every directory above the executable in the image is root-owned and cl
         expect(nativeDir(lines)).toBe("/app");
         for (const host of HOSTS) {
             expect(violations(lines, "/app", host)).toEqual([]);
+        }
+    });
+
+    it("the vinext x bun Dockerfile plus the one line knext ffi init adds closes /app and /app/native even on a builder that gives a COPY's destination the build host's mode; without the line /app/native is left open", () => {
+        const vinextText = readFileSync(
+            join(dirname(TEMPLATE_DIR), "app", "Dockerfile.hbs"),
+            "utf8",
+        );
+        const lines = vinextText
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l !== "" && !l.startsWith("#"));
+        const at = lines.findIndex((l) => NATIVE_COPY.test(l));
+        expect(at).toBeGreaterThan(-1);
+        const withLine = [
+            ...lines.slice(0, at + 1),
+            VINEXT_FFI_CLOSE_LINE,
+            ...lines.slice(at + 1),
+        ];
+        for (const host of HOSTS) {
+            const opts = { destFromHost: true, also: ["/app/native"] };
+            expect(violations(withLine, "/app", host, opts)).toEqual([]);
+            // The control: the template alone leaves /app/native as the builder made it.
+            expect(violations(lines, "/app", host, opts)).toEqual([
+                `/app/native: mode ${host.toString(8)}`,
+            ]);
         }
     });
 });

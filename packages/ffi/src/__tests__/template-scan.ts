@@ -1,160 +1,148 @@
 /**
- * A scanner for the template literals of a generated module, so a test can say something about EVERY
- * interpolation in a message instead of the ones somebody remembered to list.
+ * A scan of the generated module for every value that can reach a printed message, so a test can say
+ * something about EVERY interpolation and concatenation instead of the ones somebody remembered to
+ * list.
  *
- * It reads TypeScript source text and knows just enough of the grammar to not be fooled by what the
- * generated loader contains: single- and double-quoted strings, comments, regular-expression literals,
- * and template literals nested inside the `${...}` of another. It does not parse expressions; it only
- * finds where each one starts and ends.
+ * It parses the source with the TypeScript compiler (so strings, comments, regular expressions and
+ * templates nested in templates are never mistaken for each other) and reports each "leaf": a value
+ * that ends up in text without going through `$show`. A leaf is found in
+ *
+ * - every `${...}` of every template literal (whatever the template says: nothing is filtered by its
+ *   text, so a message that does not start with `knext ffi:` is scanned like any other);
+ * - every `+` chain that has a string or a template among its operands (`'text ' + path`);
+ * - every argument of a call that prints or raises: `new FfiLoadError(...)`, `new Error(...)`,
+ *   `new RustError(...)`, `new RustPanicError(...)`, `console.warn(...)`, `console.error(...)` and
+ *   `bad.push(...)` (the list of failing directories a refusal prints), so a bare variable handed to
+ *   one of them is a leaf too.
+ *
+ * A conditional or a `||`/`&&`/`??` is looked through to the values it can yield. A string literal, a
+ * template (its own interpolations are leaves of their own) and a call of `$show(...)` are not leaves.
+ * Each leaf is keyed by the top-level function it is in and the text of the expression, so what a
+ * test allows is allowed in ONE function, not everywhere the same name appears.
  */
+import ts from 'typescript';
 
-export interface TemplateLiteral {
-  /** The literal as written, backticks included. */
-  readonly text: string;
-  /** The 1-based line it starts on. */
+export interface Leaf {
+  /** The top-level function, class or variable the leaf is in (`<top>` outside one). */
+  readonly fn: string;
+  /** The expression's source, whitespace collapsed. */
+  readonly expr: string;
+  /** `fn::expr`: what an allowlist is keyed by. */
+  readonly key: string;
+  /** The 1-based line it is on. */
   readonly line: number;
-  /** The source of every `${...}` in it, those of templates nested in an interpolation included. */
-  readonly exprs: readonly string[];
 }
 
-/** Every outermost template literal in `source`, with the interpolations inside it. */
-export function templateLiterals(source: string): TemplateLiteral[] {
-  const out: TemplateLiteral[] = [];
-  let i = 0;
-  let collect: string[] = [];
+/** What a call must be named to count as printing or raising. */
+const SINKS = new Set([
+  'FfiLoadError',
+  'Error',
+  'RustError',
+  'RustPanicError',
+  'console.warn',
+  'console.error',
+  'bad.push',
+]);
 
-  const skipString = (quote: string): void => {
-    i++;
-    while (i < source.length && source[i] !== quote) i += source[i] === '\\' ? 2 : 1;
-    i++;
+const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/** Every value in `source` that reaches text without going through `$show`, in source order. */
+export function leaves(source: string): Leaf[] {
+  const sf = ts.createSourceFile(
+    'module.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const found = new Map<number, Leaf>();
+
+  const owner = (node: ts.Node): string => {
+    let top: ts.Node = node;
+    while (top.parent && top.parent.kind !== ts.SyntaxKind.SourceFile) top = top.parent;
+    if (ts.isFunctionDeclaration(top) || ts.isClassDeclaration(top)) {
+      return top.name?.text ?? '<anonymous>';
+    }
+    if (ts.isVariableStatement(top)) {
+      const decl = top.declarationList.declarations[0];
+      return decl && ts.isIdentifier(decl.name) ? decl.name.text : '<top>';
+    }
+    return '<top>';
   };
-  const skipRegex = (): void => {
-    i++;
-    let inClass = false;
-    while (i < source.length) {
-      const ch = source[i] as string;
-      if (ch === '\\') {
-        i += 2;
-        continue;
+
+  const unwrap = (e: ts.Expression): ts.Expression =>
+    ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e)
+      ? unwrap(e.expression)
+      : e;
+
+  const isPlus = (e: ts.Expression): e is ts.BinaryExpression =>
+    ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken;
+
+  /** The operands of a `+` chain, left to right. */
+  const operands = (e: ts.Expression): ts.Expression[] => {
+    const u = unwrap(e);
+    return isPlus(u) ? [...operands(u.left), ...operands(u.right)] : [u];
+  };
+
+  /** A `+` chain with a string or a template among its operands is a concatenation, not arithmetic. */
+  const isConcat = (e: ts.Expression): boolean =>
+    isPlus(e) && operands(e).some((o) => ts.isStringLiteralLike(o) || ts.isTemplateExpression(o));
+
+  const collect = (e: ts.Expression, out: ts.Expression[]): void => {
+    const u = unwrap(e);
+    if (ts.isStringLiteralLike(u) || ts.isTemplateExpression(u)) return; // its spans are leaves of their own
+    if (ts.isConditionalExpression(u)) {
+      collect(u.whenTrue, out);
+      collect(u.whenFalse, out);
+      return;
+    }
+    if (ts.isBinaryExpression(u)) {
+      const k = u.operatorToken.kind;
+      if (
+        (k === ts.SyntaxKind.PlusToken && isConcat(u)) ||
+        k === ts.SyntaxKind.BarBarToken ||
+        k === ts.SyntaxKind.QuestionQuestionToken ||
+        k === ts.SyntaxKind.AmpersandAmpersandToken
+      ) {
+        collect(u.left, out);
+        collect(u.right, out);
+        return;
       }
-      if (ch === '[') inClass = true;
-      else if (ch === ']') inClass = false;
-      else if (ch === '/' && !inClass) break;
-      i++;
     }
-    i++;
-  };
-  // A slash starts a regular expression, not a division, after one of these.
-  const regexAllowed = (): boolean => {
-    let j = i - 1;
-    while (j >= 0 && /\s/.test(source[j] as string)) j--;
-    return (
-      j < 0 ||
-      '(,=:[!&|?{};'.includes(source[j] as string) ||
-      /\breturn$/.test(source.slice(0, j + 1))
-    );
-  };
-  const comment = (): boolean => {
-    if (source[i] !== '/') return false;
-    if (source[i + 1] === '/') {
-      while (i < source.length && source[i] !== '\n') i++;
-      return true;
+    if (ts.isCallExpression(u) && ts.isIdentifier(u.expression) && u.expression.text === '$show') {
+      return;
     }
-    if (source[i + 1] === '*') {
-      i = source.indexOf('*/', i + 2) + 2;
-      return true;
-    }
-    return false;
-  };
-  // Scan up to the unmatched closing brace of an interpolation, which is left at i.
-  const expression = (): void => {
-    let depth = 0;
-    while (i < source.length) {
-      const ch = source[i] as string;
-      if (ch === '`') template();
-      else if (ch === "'" || ch === '"') skipString(ch);
-      else if (comment()) continue;
-      else if (ch === '/' && regexAllowed()) skipRegex();
-      else if (ch === '{') {
-        depth++;
-        i++;
-      } else if (ch === '}') {
-        if (depth === 0) return;
-        depth--;
-        i++;
-      } else i++;
-    }
-  };
-  // The backtick at i opens a template literal; leave i after the one that closes it.
-  const template = (): void => {
-    i++;
-    while (i < source.length && source[i] !== '`') {
-      if (source[i] === '\\') {
-        i += 2;
-      } else if (source[i] === '$' && source[i + 1] === '{') {
-        const start = i + 2;
-        i = start;
-        expression();
-        collect.push(source.slice(start, i));
-        i++;
-      } else i++;
-    }
-    i++;
+    out.push(u);
   };
 
-  while (i < source.length) {
-    const ch = source[i] as string;
-    if (ch === '`') {
-      const start = i;
-      collect = [];
-      template();
-      out.push({
-        text: source.slice(start, i),
-        line: source.slice(0, start).split('\n').length,
-        exprs: collect,
+  const record = (e: ts.Expression): void => {
+    const out: ts.Expression[] = [];
+    collect(e, out);
+    for (const l of out) {
+      const start = l.getStart(sf);
+      const expr = collapse(l.getText(sf));
+      const fn = owner(l);
+      found.set(start, {
+        fn,
+        expr,
+        key: `${fn}::${expr}`,
+        line: sf.getLineAndCharacterOfPosition(start).line + 1,
       });
-    } else if (ch === "'" || ch === '"') skipString(ch);
-    else if (comment()) continue;
-    else if (ch === '/' && regexAllowed()) skipRegex();
-    else i++;
-  }
-  return out;
-}
+    }
+  };
 
-/** The index of the parenthesis that closes the one at `open`, or -1. Strings are skipped. */
-function closeOf(expr: string, open: number): number {
-  let depth = 0;
-  for (let i = open; i < expr.length; i++) {
-    const ch = expr[i] as string;
-    if (ch === "'" || ch === '"' || ch === '`') {
-      i++;
-      while (i < expr.length && expr[i] !== ch) i += expr[i] === '\\' ? 2 : 1;
-    } else if (ch === '(') depth++;
-    else if (ch === ')' && --depth === 0) return i;
-  }
-  return -1;
-}
-
-/** Whether the whole expression is one call of `fn(...)`: the call must end the expression. */
-export function isCallOf(expr: string, fn: string): boolean {
-  const e = expr.trim();
-  return e.startsWith(`${fn}(`) && closeOf(e, fn.length) === e.length - 1;
-}
-
-/**
- * Whether the expression can only ever print text written in the source: every value it can
- * yield is a string literal (`a ? 'x' : b ? 'y' : 'z'`). What the conditions test does not matter.
- */
-export function isStaticChoice(expr: string): boolean {
-  let placeholder = '';
-  const e = expr.trim();
-  for (let i = 0; i < e.length; i++) {
-    const ch = e[i] as string;
-    if (ch === "'" || ch === '"') {
-      i++;
-      while (i < e.length && e[i] !== ch) i += e[i] === '\\' ? 2 : 1;
-      placeholder += 'S';
-    } else placeholder += ch;
-  }
-  return /^(?:[^?:`]+ \? S : )*S$/.test(placeholder);
+  const visit = (node: ts.Node): void => {
+    if (ts.isTemplateExpression(node)) {
+      for (const span of node.templateSpans) record(span.expression);
+    } else if (ts.isBinaryExpression(node) && isConcat(node)) {
+      record(node);
+    } else if (ts.isNewExpression(node) || ts.isCallExpression(node)) {
+      if (SINKS.has(collapse(node.expression.getText(sf)))) {
+        for (const arg of node.arguments ?? []) record(arg);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return [...found.entries()].sort(([a], [b]) => a - b).map(([, leaf]) => leaf);
 }

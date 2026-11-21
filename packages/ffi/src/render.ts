@@ -633,7 +633,7 @@ function $threshold(raw: string | undefined): number {
   if (ms === 0) return Infinity;
   if (Number.isFinite(ms) && ms > 0) return ms;
   console.warn(
-    \`knext ffi: ignoring KNEXT_FFI_SLOW_CALL_MS=\${JSON.stringify(raw)}: it must be a number of milliseconds (0 turns slow-call counting off). Using 50.\`,
+    \`knext ffi: ignoring KNEXT_FFI_SLOW_CALL_MS="\${$show(raw)}": it must be a number of milliseconds (0 turns slow-call counting off). Using 50.\`,
   );
   return 50;
 }
@@ -794,7 +794,7 @@ function $resolve(): readonly [string, string] {
   // lstat, not existsSync: existsSync follows a link and says no to a dangling one, which would
   // read as "nothing staged" and fall through to the unchecked development build.
   if ($lstatSync(staged, { bigint: true, throwIfNoEntry: false }) !== undefined) {
-    return [staged, $verify(native, \`ffi/\${triple}/\${file}\`, staged)];
+    return [staged, $verify(native, $join('ffi', triple, file), staged)];
   }
   let others: string[] = [];
   try {
@@ -821,7 +821,7 @@ function $resolve(): readonly [string, string] {
     }
   }
   throw new FfiLoadError(
-    \`knext ffi: cannot find the Rust library \${file} for \${triple}. Tried:\\n\${tried.map((p) => \`  \${$show(p)}\`).join('\\n')}\\n\` +
+    \`knext ffi: cannot find the Rust library \${$show(file)} for \${triple}. Tried:\\n\${tried.map((p) => \`  \${$show(p)}\`).join('\\n')}\\n\` +
       'The Dockerfile that \`knext build\`, \`knext deploy\` and \`knext preview\` stage puts it beside the server (knext ffi build builds it); in development, run \`knext ffi generate\`.',
   );
 }
@@ -886,18 +886,33 @@ function $upTo(dir: string): string[] {
 }
 
 /**
- * A path, or a system error that quotes one, as a refusal prints it. A control character (a newline
- * above all) in a directory name would start a line of its own in the list of directories, which is
- * read as one directory a line. So a C0 control or DEL is shown in caret notation (a newline as ^J),
- * and a C1 control or a line or paragraph separator (U+2028, U+2029: a line end to many terminals
- * and log readers) as a unicode escape (u and four hex digits); none is ever printed as itself.
+ * A path, a value read from a file or the environment, or a system error that quotes one, as a
+ * refusal prints it. A control character (a newline above all) in a directory name would start a
+ * line of its own in the list of directories, which is read as one directory a line, and a
+ * bidirectional control would reorder the text around it. So the output is made unambiguous. A C0
+ * control or DEL is shown in caret notation (a newline as ^J). A backslash is doubled and a caret
+ * gets a backslash before it, so a name that really holds ^J, or the text of a unicode escape, can
+ * never be read as a control character. A C1 control, a line or paragraph separator (U+2028,
+ * U+2029: a line end to many terminals and log readers) and a bidirectional control (U+061C,
+ * U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) are shown as a unicode escape (a backslash,
+ * u and four hex digits). None is ever printed as itself, and it never throws.
  */
 function $show(p: string): string {
   let out = '';
-  for (const ch of p) {
+  for (const ch of String(p)) {
     const n = ch.codePointAt(0) as number;
     if (n < 0x20 || n === 0x7f) out += \`^\${String.fromCharCode(n ^ 0x40)}\`;
-    else if ((n >= 0x80 && n <= 0x9f) || n === 0x2028 || n === 0x2029) {
+    else if (ch === '\\\\' || ch === '^') out += \`\\\\\${ch}\`;
+    else if (
+      (n >= 0x80 && n <= 0x9f) ||
+      n === 0x61c ||
+      n === 0x200e ||
+      n === 0x200f ||
+      n === 0x2028 ||
+      n === 0x2029 ||
+      (n >= 0x202a && n <= 0x202e) ||
+      (n >= 0x2066 && n <= 0x2069)
+    ) {
       out += \`\\\\u\${n.toString(16).padStart(4, '0')}\`;
     } else out += ch;
   }
@@ -930,14 +945,16 @@ function $show(p: string): string {
  * CAP_SYS_RAWIO, CAP_BPF), a second writable mount of the same files, an ACL, or a write to
  * /proc/self/mem, and none of that can be told apart from the real tree by any lookup.
  *
- * The advice follows the situation, not the position, because a directory above the executable can
- * be the app's own (the prefix directories of a nested image, /app/.next) or shared (a /tmp, a
- * root:staff /usr/local) and the loader cannot tell which. A directory inside native/ is always the
- * app's: it is told how to fix it in place. A sticky or world-writable directory above the
- * executable's own is shared with other software, and changing its owner or mode would break what
- * else uses it: it is told only to move the install. Any other failing directory (the executable's
- * own, or one above it) is told both, each with its condition (part of the app's install: fix it;
- * shared: move), and that the executable needs a directory of its own.
+ * The advice follows the situation, not the position, because a directory at or above the
+ * executable's can be the app's own (the prefix directories of a nested image, /app/.next, a
+ * chmod 777 /app) or shared (a /tmp, a root:staff /usr/local, a home directory) and the loader
+ * cannot tell which. A directory inside native/ is always the app's: it is told how to fix it in
+ * place. A STICKY directory at the executable's level or above it is a shared one (a /tmp):
+ * changing its owner or mode would break what else uses it, so it is told only to move the install.
+ * Any other failing directory (a world-writable one that is not sticky, one owned by the wrong
+ * user, a group-writable one) is told both, each with its condition (part of the app's install: fix
+ * it; shared, or a home directory: move it, and never give a home directory to root), and that the
+ * executable needs a directory of its own.
  */
 function $sealed(native: string, rel: string, path: string): $Pin[] {
   const home = $dirname(native);
@@ -984,14 +1001,14 @@ function $sealed(native: string, rel: string, path: string): $Pin[] {
     if (why !== '') {
       bad.push(\`\${$show(dir)} \${why}\`);
       if (i < inside) fix = true;
-      else if (i > inside && (Number(st.mode) & 0o1002) !== 0) move = true;
+      else if ((Number(st.mode) & 0o1000) !== 0) move = true;
       else either = true;
     }
     pins.push([dir, $id(st)]);
   }
   if (bad.length > 0) {
     throw new FfiLoadError(
-      \`knext ffi: refusing to load \${$show(path)}: \${bad.length === 1 ? '1 directory' : \`\${bad.length} directories\`} on the way to it cannot be trusted, so what is under \${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\\n\${bad.map((b) => \`  \${b}\`).join('\\n')}\\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.\${fix ? " To fix a directory inside native/: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}\${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root, or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in; if it is shared with other software, do not change it, move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}\${move ? " A sticky or world-writable directory above the executable's directory is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}\${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}\${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}\`,
+      \`knext ffi: refusing to load \${$show(path)}: \${bad.length === 1 ? '1 directory' : \`\${bad.length} directories\`} on the way to it cannot be trusted, so what is under \${bad.length === 1 ? 'it' : 'them'} could be renamed or replaced after it was checked:\\n\${bad.map((b) => \`  \${b}\`).join('\\n')}\\nEvery directory from the library up to / must be a real directory, owned by root and not writable by group or other.\${fix ? " To fix a directory inside native/: run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root; or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in (a directory inside a copied tree keeps the build host's mode)." : ''}\${either ? " A directory that holds the executable or sits above it: if it is part of your app's install, run \`chmod go-w <dir>\` (and \`chown root <dir>\` if root does not own it), as root, or, in a Dockerfile, \`RUN chmod go-w <dir>\` after the COPY that brought it in. If it is shared with other software, or is a home directory such as /home/<user>, do not change its owner or mode (never give a home directory to root): move the install instead. The executable needs a directory of its own, owned by root and closed to group and other, such as /opt/<app>." : ''}\${move ? " A sticky directory (a shared one such as /tmp) that holds the executable or sits above it is shared with other software, so do not change its owner or mode: move the install under a root-owned, closed directory such as /opt/<app> instead." : ''}\${link ? ' A link is never followed, whatever it points at: replace it with the directory itself.' : ''}\${other ? ' Something that is not a directory is where a directory must be: replace it with the directory.' : ''}\`,
     );
   }
   return pins;
@@ -1086,22 +1103,32 @@ function $verify(native: string, rel: string, path: string): string {
   } finally {
     $closeSync(m.fd);
   }
+  let version: unknown;
   let files: unknown;
   try {
     const parsed = JSON.parse(text) as { version?: unknown; files?: unknown };
-    if (parsed.version !== 1) {
-      throw new Error(\`unsupported version \${JSON.stringify(parsed.version)}\`);
-    }
+    version = parsed.version;
     files = parsed.files;
   } catch (err) {
     throw new FfiLoadError(
       \`knext ffi: refusing to load \${$show(path)}: cannot read \${$show(manifest)} (\${$show(err instanceof Error ? err.message : String(err))}).\`,
     );
   }
+  if (version !== 1) {
+    throw new FfiLoadError(
+      \`knext ffi: refusing to load \${$show(path)}: cannot read \${$show(manifest)} (unsupported version \${typeof version === 'string' ? \`"\${$show(version)}"\` : $show(String(JSON.stringify(version)))}).\`,
+    );
+  }
   const expected =
     typeof files === 'object' && files !== null ? (files as Record<string, unknown>)[rel] : undefined;
   if (typeof expected !== 'string') {
-    throw new FfiLoadError(\`knext ffi: refusing to load \${$show(path)}: \${rel} is not listed in \${$show(manifest)}.\`);
+    throw new FfiLoadError(\`knext ffi: refusing to load \${$show(path)}: \${$show(rel)} is not listed in \${$show(manifest)}.\`);
+  }
+  // The digest is compared as text and printed on a mismatch, so it must BE a digest first.
+  if (!/^[0-9a-f]{64}$/.test(expected)) {
+    throw new FfiLoadError(
+      \`knext ffi: refusing to load \${$show(path)}: \${$show(manifest)} lists \${$show(rel)} as "\${$show(expected)}", which is not a sha256 digest (64 lowercase hexadecimal digits).\`,
+    );
   }
   const lib = $openFile(path, 'the library', path, \`knext ffi: refusing to load \${$show(path)}: it is gone.\`);
   let actual: string;

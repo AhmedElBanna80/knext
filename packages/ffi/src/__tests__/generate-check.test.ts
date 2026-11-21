@@ -19,6 +19,7 @@ import {
   emptyDir,
   fn,
   KITCHEN_SINK,
+  PKG_DIR,
   readTree,
   removeScratchDirs,
 } from './helpers';
@@ -186,5 +187,60 @@ describe('knext ffi check', () => {
     expect(r.err).toMatch(/missing\s+index\.ts/);
     expect(r.err).toMatch(/missing\s+\.knext-generated\.json/);
     expect(existsSync(a.outDir)).toBe(false);
+  });
+});
+
+describe('knext ffi generate and check say what a vinext app still has to add to its own Dockerfile', () => {
+  // An app that already has knext.ffi.json never runs `knext ffi init` again, so the line that closes
+  // /app and /app/native (ADR-0069 Amendment 1) has to reach it from the commands it does run.
+  const VINEXT_DOCKERFILE = join(PKG_DIR, '..', 'kn-next', 'templates', 'app', 'Dockerfile.hbs');
+  const LINE = 'RUN chmod go-w /app /app/native';
+  const withDockerfile = (text: string) => {
+    const a = app();
+    writeFileSync(join(a.cwd, 'Dockerfile'), text);
+    return a;
+  };
+  const scaffolded = () => readFileSync(VINEXT_DOCKERFILE, 'utf8');
+  const closed = () =>
+    scaffolded().replace(/^COPY --chown=0:0 --chmod=a-w native \/app\/native$/m, `$&\n${LINE}`);
+
+  it('generate prints it after what it wrote, and again on a run that changed nothing', async () => {
+    const a = withDockerfile(scaffolded());
+    const first = await a.gen();
+    expect(first.code, first.err).toBe(0);
+    expect(first.out).toContain('wrote src/generated/ffi (2 files changed)');
+    expect(first.out).toContain(LINE);
+    expect(first.out.indexOf(LINE)).toBeGreaterThan(first.out.indexOf('wrote src/generated/ffi'));
+    const second = await a.gen();
+    expect(second.out).toContain('already up to date');
+    expect(second.out).toContain(LINE);
+  });
+
+  it('check prints it when the module is up to date', async () => {
+    const a = withDockerfile(scaffolded());
+    await a.gen();
+    const r = await a.gen(true);
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain('generated code in src/generated/ffi is up to date (2 files)');
+    expect(r.out).toContain(LINE);
+  });
+
+  it('check on a stale module prints its failure and nothing about the Dockerfile', async () => {
+    const a = withDockerfile(scaffolded());
+    const r = await a.gen(true);
+    expect(r.code).toBe(1);
+    expect(r.out).toBe('');
+    expect(r.err).not.toContain(LINE);
+  });
+
+  it('say nothing when the Dockerfile already closes both directories, when there is none, or when it is not a vinext one', async () => {
+    for (const dockerfile of [closed(), undefined, 'FROM scratch\nCOPY server /app/server\n']) {
+      const a = dockerfile === undefined ? app() : withDockerfile(dockerfile);
+      for (const check of [false, true]) {
+        const r = await a.gen(check);
+        if (check) expect(r.code, r.err).toBe(0);
+        expect(r.out).not.toContain('chmod go-w');
+      }
+    }
   });
 });

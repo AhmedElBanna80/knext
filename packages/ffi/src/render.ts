@@ -24,13 +24,28 @@
  *   on macOS (dyld shares one instance among `/dev/fd` names but keeps it
  *   apart from the same file opened by path). Any other platform is refused.
  *   What this covers: a path swap (a rename or symlink over the path) between
- *   the check and the load. What it does NOT stop: a writer of the file's
- *   contents (an in-place write, a hard link to the inode, a writable mmap),
- *   since the descriptor pins the inode, not its bytes. "Whoever can write
- *   native/ already owns the app's JS" holds only when both sit in the same
- *   read-only image layer; it does not hold for a shared, sidecar or
- *   fsGroup-writable volume mounted at native/. The generated Dockerfile
- *   copies native/ root-owned and non-writable; keep it that way.
+ *   the check and the load, and, because the descriptor pins the inode and not
+ *   its bytes, a writer of the file's contents (an in-place write, a hard link
+ *   to the inode, a writable mmap): the load is refused unless the library, its
+ *   directories up to native/ and the directory native/ sits in are all owned by
+ *   root and not writable by group or other, judged by owner and mode on the
+ *   descriptor that was hashed (access() answers yes to root for everything, so
+ *   it tells nothing). The rule does not depend on the uid the process runs as,
+ *   and the app's own user is not trusted: it can chmod what it owns. What it
+ *   does NOT stop: root (or anything with CAP_DAC_OVERRIDE), a second mount of
+ *   the same files that root can write, and an ACL (mode bits only; on macOS an
+ *   ACL can grant write that the mode does not show). The generated Dockerfile
+ *   copies native/ root-owned and non-writable, which is the layout this
+ *   accepts; a shared, sidecar, fsGroup-writable or app-owned tree is refused.
+ *   There is no opt-out.
+ *   Not used: a sealed memfd copy of the hashed bytes (memfd_create and
+ *   fcntl(F_ADD_SEALS) reached through libc by bun:ffi; measured to work on
+ *   Bun 1.4.2). It would bind the bytes against root too, but every module copy
+ *   and Worker would get its own copy of the library, which ends the one
+ *   library per process that the module copies and Workers rely on (measured:
+ *   two fds of one file dlopen as one library, two sealed copies as two).
+ *   TODO(TD-S14-6a): bind the bytes against root too, once a sealed copy can
+ *   be shared by every opener in the process without a creation race.
  *   The development build
  *   is used only when `NODE_ENV !== 'production'`; every function's `_schema`
  *   value must match the one computed here; any failure is one cached
@@ -742,7 +757,44 @@ function $resolve(): readonly [string, string] {
 }
 
 /**
- * Fail closed: the library must be listed in native/.integrity.json with a matching sha256.
+ * Fail closed unless only root can write the library. The hash covers the bytes
+ * read now, and a descriptor pins the inode, not its bytes, so whoever can write
+ * the file (or swap it, from a directory they can write) changes what gets
+ * mapped. Judged by owner and mode, not access(), which answers yes to root for
+ * everything: the file through the descriptor it was hashed from, then its
+ * directories up to native/ itself, then the directory native/ sits in. Exactly
+ * those, never the rest of the path. Each must be owned by root and not writable
+ * by group or other. The user this process runs as is NOT trusted: it can chmod
+ * what it owns, so a tree it owns protects nothing from a bug that writes files.
+ */
+function $sealed(native: string, rel: string, path: string, fd: number): void {
+  const parts = rel.split('/');
+  const checks: [string, { uid: number; mode: number }][] = [[path, $fstatSync(fd)]];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const dir = $join(native, ...parts.slice(0, i));
+    checks.push([dir, $statSync(dir)]);
+  }
+  const home = $dirname(native);
+  checks.push([home, $statSync(home)]);
+  for (const [p, st] of checks) {
+    const mode = (st.mode & 0o777).toString(8).padStart(4, '0');
+    let why = '';
+    if (st.uid !== 0) {
+      why = \`is owned by uid \${st.uid}, but only root may own it\`;
+    } else if ((st.mode & 0o022) !== 0) {
+      why = \`is writable by its group or by everyone (mode \${mode})\`;
+    }
+    if (why !== '') {
+      throw new FfiLoadError(
+        \`knext ffi: refusing to load \${path}: \${p} \${why}, so its bytes could change after they were checked. The library, native/ and the directory that holds native/ must be owned by root and not writable by group or other (the image \\\`knext build\\\` generates copies native/ with \\\`COPY --chown=0:0 --chmod=a-w\\\`), and the app should run as a non-root user.\`,
+      );
+    }
+  }
+}
+
+/**
+ * Fail closed: the library must be listed in native/.integrity.json with a matching sha256,
+ * and only root may be able to write it (see $sealed).
  * Returns the name to dlopen: the descriptor the hashed bytes were read through
  * (/proc/self/fd/<n> on Linux, /dev/fd/<n> on macOS), so a file renamed or linked
  * over the path after the check is not the one loaded.
@@ -774,6 +826,7 @@ function $verify(native: string, rel: string, path: string): string {
   const fd = $openSync(path, 'r');
   let actual: string;
   try {
+    $sealed(native, rel, path, fd);
     actual = $createHash('sha256').update($readFileSync(fd)).digest('hex');
   } catch (err) {
     $closeSync(fd);
@@ -1022,6 +1075,7 @@ export function renderModule(manifest: Manifest, options: RenderOptions): string
     'import {',
     '  closeSync as $closeSync,',
     '  existsSync as $existsSync,',
+    '  fstatSync as $fstatSync,',
     '  openSync as $openSync,',
     '  readdirSync as $readdirSync,',
     '  readFileSync as $readFileSync,',

@@ -701,11 +701,11 @@ const MUTATIONS = [
   },
   {
     id: 'T01',
-    subject: 'spec',
+    subject: 'laneEnv',
     claim:
       'the runner tests stop scrubbing the lane’s own variables (they go red inside the lane, as they did live)',
-    anchor: '    for (const k of LANE_ENV) delete env[k];',
-    replacement: '    void LANE_ENV;',
+    anchor: '  for (const k of LANE_ENV) delete env[k];',
+    replacement: '  void LANE_ENV;',
   },
 ];
 
@@ -725,7 +725,7 @@ const prover = createGuardProver({
     wf: '.github/workflows/mutation-prover-nightly.yml',
     lib: 'scripts/lib/prover-shard.mjs',
     runner: 'scripts/run-mutation-provers.mjs',
-    spec: 'tests/mutation-prover-lane-sharding.test.ts',
+    laneEnv: 'tests/helpers/lane-env.ts',
     res: 'scripts/lib/lane-resources.mjs',
     known: 'scripts/lib/known-red-provers.mjs',
     agg: 'scripts/prover-lane-aggregate.mjs',

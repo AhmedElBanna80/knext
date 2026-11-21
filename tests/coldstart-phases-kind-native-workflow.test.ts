@@ -1255,7 +1255,9 @@ describe('kind/record-evidence.sh (behaviour, docker shimmed)', () => {
     );
     expect(vn.status).toBe(1);
     expect(vn.err).toContain('scaled away');
-  });
+    // Budget only: this block runs ~20 shimmed bash+jq spawns, which takes ~5 s under host load
+    // (bun's default per-test timeout is 5 s). The assertions are unchanged.
+  }, 60_000);
 
   it('node: a zombie child, or one with an unreadable stat, is scaled away, never a match', () => {
     const withState = (state: string) =>

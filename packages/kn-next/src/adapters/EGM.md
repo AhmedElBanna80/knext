@@ -761,7 +761,9 @@ The compile pipeline fails closed.
   It carries the HarfBuzz licence text only when `hb.wasm` was embedded.
 - In the include shape, `vinext-compile.mjs` writes the plan sidecar
   `<OUTFILE>.knext-plan.json` (`{ marker, modules }`) beside the executable.
-  The CLI reads it and deletes it. It is never copied into an image.
+  The CLI reads it and deletes it, except when the executable itself cannot
+  be read: then the CLI throws before reading the sidecar, and the sidecar
+  stays beside the binary (debt). It is never copied into an image.
 - `sharp-native-extract.mjs` writes native files under
   `<tmp>/knext-native-<uid>-<hash>`.
 - `next-config-facts.js:recordNextConfigFacts` writes the facts record to the

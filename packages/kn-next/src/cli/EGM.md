@@ -163,7 +163,7 @@ are unknown-command errors.
   - The patched-Bun cache.
   - Scaffold files from `create`.
   - `.kn-next/loadtest/<app>/` job manifests.
-  - `<outfile>.knext-plan.json`, the plan sidecar. `vinext-compile.mjs` writes it beside the executable in the include shape only, and never in self-contained or default-disk shapes. `readPlanSidecar` (`vinext-build.ts`) reads it and deletes it in a `finally`. A missing, symlinked, unparseable or foreign-marker sidecar fails the build.
+  - `<outfile>.knext-plan.json`, the plan sidecar. `vinext-compile.mjs` writes it beside the executable in the include shape only, and never in self-contained or default-disk shapes. `readPlanSidecar` (`vinext-build.ts`) reads it and deletes it in a `finally`. A missing, symlinked, unparseable or foreign-marker sidecar fails the build. A module count that is not a positive integer is rejected (`vinext-build.ts`, the `invalid module count` check). Debt: when the executable itself cannot be read, `verifyCompiledExecutable` throws at `vinext-build.ts` (the artifact read catch) before `readPlanSidecar` runs, so the sidecar is never read or deleted and stays beside the binary, as does the binary.
   - Binary removal. A failed bytecode verdict deletes the executable (`enforceBytecodeVerdict`, `bytecode-enforce.ts`). So does a failed plan-sidecar read on the vinext include shape (the catch around `readPlanSidecar`, `vinext-build.ts`). An executable that cannot be read is not deleted: the vinext path throws a `UsageError` (`vinext-build.ts`), and the standalone path lets the read error propagate (`standalone-exec-build.ts`).
   - Rewritten files under the vinext package in `node_modules` (temporary file, then rename).
 - **Environment:**

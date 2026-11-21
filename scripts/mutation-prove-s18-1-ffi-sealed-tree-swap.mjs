@@ -160,7 +160,9 @@
  *        invisible format characters, space-like characters, an invalid byte, a carriage return that
  *        does not end a line, and the lookahead that lets a space, tab and line end through
  *   V106 the line number is off by one    V107 a file that is not clean is told nothing
- *   V108 it is told even without a mention of native/    V109 it needs native/ with a slash
+ *   V108 it is told even without a mention of native    V109 it needs native/ with a slash
+ *   V143 to V145  the mention is looked for in the text only, in the joined instructions only, or in the text with
+ *        its continuation breaks cut out (a word split by a continuation, comment lines between the pieces)
  *   V110 a heredoc is looked for only from the last FROM on
  *   V111 to V115  one clause of the directive pattern each: an indent, the case, escape only, syntax only,
  *        the space after the hash    V116 the pinned syntax line passes on any line
@@ -1801,25 +1803,24 @@ const INIT = [
     claim:
       'a file that is not clean as a whole is never told anything: it is taken for one with nothing to say',
     anchor:
-      "  if (unclean !== undefined) return /native/i.test(text) ? cannotConfirm(unclean) : '';\n",
+      "  if (unclean !== undefined) return mentionsNative(text, all) ? cannotConfirm(unclean) : '';\n",
     replacement: "  if (unclean !== undefined) return '';\n",
   },
   {
     id: 'V108',
     subject: 'init',
-    claim: 'a file that is not clean as a whole is told even when it never mentions native/',
+    claim: 'a file that is not clean as a whole is told even when it never mentions native',
     anchor:
-      "  if (unclean !== undefined) return /native/i.test(text) ? cannotConfirm(unclean) : '';\n",
+      "  if (unclean !== undefined) return mentionsNative(text, all) ? cannotConfirm(unclean) : '';\n",
     replacement: '  if (unclean !== undefined) return cannotConfirm(unclean);\n',
   },
   {
     id: 'V109',
     subject: 'init',
     claim: 'a file that is not clean as a whole is told only when it mentions native/ with a slash',
-    anchor:
-      "  if (unclean !== undefined) return /native/i.test(text) ? cannotConfirm(unclean) : '';\n",
+    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
     replacement:
-      "  if (unclean !== undefined) return /native\\//i.test(text) ? cannotConfirm(unclean) : '';\n",
+      '  return /native\\//i.test(text) || all.some((inst) => /native\\//i.test(inst.text));\n',
   },
   {
     id: 'V110',
@@ -2090,6 +2091,30 @@ const INIT = [
     claim: 'the unknown-instruction message names the line next to it (fragment)',
     anchor: '${unknown.first + 1}',
     replacement: '${unknown.first + 2}',
+  },
+  {
+    id: 'V143',
+    subject: 'init',
+    claim:
+      'the mention that decides whether a file that is not clean is told anything is looked for in the text as written only: BuildKit joins nat over ive into native, and the hint stays silent for a COPY of native/ it reads',
+    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
+    replacement: '  return /native/i.test(text);\n',
+  },
+  {
+    id: 'V144',
+    subject: 'init',
+    claim:
+      'the mention is looked for in the joined instructions only: a file that mentions native in a comment alone is not told',
+    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
+    replacement: '  return all.some((inst) => /native/i.test(inst.text));\n',
+  },
+  {
+    id: 'V145',
+    subject: 'init',
+    claim:
+      'the mention is looked for in the text with its continuation breaks cut out, not in the instructions as BuildKit joins them: a comment line between the pieces of a split word is not dropped',
+    anchor: '  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));\n',
+    replacement: "  return /native/i.test(text.replace(/\\\\[ \\t]*\\r?\\n/g, ''));\n",
   },
 ];
 

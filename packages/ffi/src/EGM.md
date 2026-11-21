@@ -102,10 +102,11 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     non-ASCII is allowed, the scaffolded file carries em dashes), no `<<` anywhere, no `escape` or `syntax` directive
     on any line (only the scaffolded file's own pinned `VINEXT_SYNTAX_LINE`, as its first line and byte for byte, passes;
     `ffi-vinext-known-good.test.ts` holds it to the shipped template), no `SHELL` or `ONBUILD` instruction in any stage, no
-    line in any stage (or before the first `FROM`) that does not start with an instruction Docker knows (`INSTRUCTIONS`: a
+    instruction, in any stage or before the first `FROM`, whose first word is not one Docker knows (`INSTRUCTIONS`: a
     `// syntax=` line is one BuildKit reads as a directive), and no line ending in a backslash that no space or tab precedes
-    (`GLUED_CONTINUATION`: a lone backslash, a word split in two). A file that
-    is not clean as a whole gets the cannot-confirm message whenever it mentions `native` at all. Lines are
+    (`GLUED_CONTINUATION`: a backslash alone at the start of a line, a word split in two; an indented one is joined). A file that
+    is not clean as a whole gets the cannot-confirm message whenever it mentions `native` at all, in its text or in an
+    instruction as BuildKit joins it (`mentionsNative`: a continuation can split the word). Lines are
     trimmed of a space, a tab and a carriage return only and continue only at a backslash then spaces and tabs, and are joined as BuildKit joins
     them: the backslash goes, nothing takes its place, the next line keeps its indent (`instructions`, all stages, a continuation that runs into the end of the file kept). Then the final stage
     only is read (a `COPY` or a `chmod` in a build stage does not reach the image). When that stage copies `native/` to `/app/native` (any `COPY` flags, the JSON
@@ -121,7 +122,7 @@ committed wrapper has drifted. The bundled entries are `cli`, `render` and `buil
     asset upload it has) and that a Dockerfile that closes them another way may load, but is not read, and takes the
     slower image-sourced path. When it is directly after but one of the above fails, the output says that knext cannot
     confirm that `/app` and `/app/native` stay closed, and which it was (the `COPY` is another spelling, a blank
-    line or a comment sits between, a line number for an unread instruction, for a line that does not start with an instruction, for a glued continuation or for a character that is not plain text, a heredoc, a directive, a `SHELL`, an `ONBUILD`), never the text of the
+    line or a comment sits between, a line number for an unread instruction, for an instruction whose first word is not one Docker knows, for a glued continuation or for a character that is not plain text, a heredoc, a directive, a `SHELL`, an `ONBUILD`), never the text of the
     file (a control character in it would reach the terminal). Neither message says the loader will accept the
     directories. An app with no `Dockerfile`, or one that does not copy `native/` there, or that is the confirmed
     form, gets no extra output. `knext ffi generate` and `knext ffi check` print the same hint after their own line, so

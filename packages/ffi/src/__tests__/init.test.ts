@@ -210,7 +210,7 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     directive: 'is a parser directive',
     shell: 'changes how every RUN is run',
     onbuild: 'in every stage built on it',
-    unknown: 'does not start with an instruction Docker knows',
+    unknown: 'has an instruction whose first word is not one Docker knows',
   } as const;
 
   it('recognises every way a Dockerfile writes the copy of native/ to /app/native', () => {
@@ -627,7 +627,7 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     expect(cannotConfirm(FINAL(COPY_LINE, CLOSE_RUN, split.replace('-f', '-d')))).toBe(true);
   });
 
-  it('does not confirm a file with a line that does not start with an instruction Docker knows, in any stage or before the first FROM: BuildKit reads a `// syntax=` line as a directive', () => {
+  it('does not confirm a file with an instruction whose first word is not one Docker knows, in any stage or before the first FROM: BuildKit reads a `// syntax=` line as a directive', () => {
     for (const dockerfile of [
       `// syntax=evil/fe\n${BODY}`,
       `${PINNED}\n// syntax=evil/fe\n${BODY}`,
@@ -680,6 +680,24 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
     }
   });
 
+  it('prints for a file whose mention of native is split by a continuation: BuildKit joins nat over ive into native, so the gate that decides whether to speak reads the joined text', () => {
+    // BuildKit reads these as `COPY native/ /app/native/`, with no close line after it.
+    for (const dockerfile of [
+      FINAL('COPY nat\\', 'ive/ /app/nat\\', 'ive/'),
+      // a comment between the pieces is dropped by BuildKit, so the raw text with the breaks cut out is not enough
+      FINAL('COPY nat\\', '# a note', 'ive/ /app/nat\\', '# another', 'ive/'),
+      // a trailing space or tab after the backslash is still a continuation
+      FINAL('COPY nat\\ ', 'ive/ /app/nat\\\t', 'ive/'),
+    ]) {
+      const out = init(dockerfile).out;
+      expect(out, JSON.stringify(dockerfile)).toContain('cannot confirm');
+      expect(out, JSON.stringify(dockerfile)).toContain(`line 3 ${WHY.glued}`);
+      expect(out, JSON.stringify(dockerfile)).not.toMatch(CLAIM);
+    }
+    // The gate still stays quiet for a file that does not mention native in any way, split or not.
+    expect(hinted(FINAL('COPY serv\\', 'er /app/server'))).toBe(false);
+  });
+
   it('says nothing about a file it cannot read that does not mention native at all, and prints for one that does, a stage that is not the last one included', () => {
     expect(hinted('FROM alpine\nRUN cat <<EOF\nx\nEOF\n')).toBe(false);
     expect(hinted('\ufeffFROM alpine\nCOPY server /app/server\n')).toBe(false);
@@ -689,6 +707,8 @@ describe('knext ffi init: a vinext app carries its own Dockerfile, which init do
       ),
     ).toBe(true);
     expect(cannotConfirm('\ufeffFROM alpine\nCOPY native /srv/native\n')).toBe(true);
+    // a mention in a comment alone is a mention, in a file that cannot be read
+    expect(cannotConfirm('FROM alpine\n# the native tree\nRUN cat <<EOF\nx\nEOF\n')).toBe(true);
   });
   it('does not confirm a COPY that is another spelling of the scaffolded one, or a line that is not the very next line of the file, and says which', () => {
     for (const copy of [

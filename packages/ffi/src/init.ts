@@ -287,7 +287,7 @@ const DIRECTIVE = /^[ \t]*#[ \t]*(?:escape|syntax)[ \t]*=/i;
 
 /**
  * A line that ends in a continuation backslash with nothing before it, or a character that is not a
- * space or a tab: a lone backslash, or a word split in two (`SHE\` over `LL`, `<\` over `<EOF`). Joined
+ * space or a tab: a backslash alone at the start of a line, or a word split in two (`SHE\` over `LL`, `<\` over `<EOF`). Joined
  * as BuildKit joins, with nothing between, such a line makes a word the file does not show on any one
  * line. The scaffolded file's continuations all follow a space.
  */
@@ -332,7 +332,7 @@ function unreadable(
   }
   const glued = lines.findIndex((l) => GLUED_CONTINUATION.test(l));
   if (glued !== -1) {
-    return `line ${glued + 1} ends in a backslash that no space or tab precedes (a lone backslash, or a word split in two), which joins to the next line without a gap`;
+    return `line ${glued + 1} ends in a backslash that no space or tab precedes (a backslash alone at the start of a line, or a word split in two), which joins to the next line without a gap`;
   }
   if (text.includes('<<')) return 'the Dockerfile has a heredoc (`<<`), which knext does not read';
   const directive = lines.findIndex(
@@ -347,12 +347,22 @@ function unreadable(
   }
   const onbuild = all.find((inst) => inst.word === 'ONBUILD');
   if (onbuild !== undefined) {
-    return 'an ONBUILD instruction (in a stage this one may build on) runs another instruction, a SHELL included, in every stage built on it';
+    return 'an ONBUILD instruction (refused in any stage) runs another instruction, a SHELL included, in every stage built on it';
   }
   const unknown = all.find((inst) => !INSTRUCTIONS.has(inst.word));
   return unknown === undefined
     ? undefined
-    : `line ${unknown.first + 1} does not start with an instruction Docker knows (a comment starts with \`#\`, and BuildKit also reads a \`// syntax=\` line as a directive)`;
+    : `line ${unknown.first + 1} has an instruction whose first word is not one Docker knows (a comment starts with \`#\`, and BuildKit also reads a \`// syntax=\` line as a directive)`;
+}
+
+/**
+ * Whether a Dockerfile mentions native at all: in its text, or in an instruction as BuildKit joins
+ * its lines. A continuation can split the word (`nat` over `ive`) and BuildKit drops a comment line
+ * between the pieces, so the text alone, or the text with its line breaks cut out, can miss a `COPY`
+ * of `native/` that BuildKit reads.
+ */
+function mentionsNative(text: string, all: readonly Instruction[]): boolean {
+  return /native/i.test(text) || all.some((inst) => /native/i.test(inst.text));
 }
 
 const DIRS = `${VINEXT_DIRS[0]} and ${VINEXT_DIRS[1]}`;
@@ -368,7 +378,7 @@ function addLine(): string {
 
 /** What knext reads, and why it cannot confirm this file: said when the one form it confirms does not hold. */
 function cannotConfirm(why: string): string {
-  return `\nknext cannot confirm that your Dockerfile leaves ${DIRS} closed to group and other: ${why}. The loader refuses a library under a directory they can write. knext confirms only the scaffolded \`${VINEXT_NATIVE_COPY}\` with \`${VINEXT_CLOSE_LINE}\` as the very next line, and after that line only instructions that cannot change a mode (ENV, ARG, LABEL, EXPOSE, USER, WORKDIR, ENTRYPOINT, CMD, HEALTHCHECK, STOPSIGNAL, and a read-only check such as the scaffolded \`RUN test -f ${VINEXT_DIRS[1]}/.integrity.json || { echo "..." >&2; exit 1; }\`), in a file with no heredoc, no parser directive, no SHELL or ONBUILD instruction, no line that does not start with an instruction, no backslash at the end of a line that no space precedes and no character that is not plain text: put the file in that form, or move anything else above the COPY. This is not a finding that the loader will refuse them: knext does not read what your commands do, so it cannot confirm either way, and knext deploy takes the slower image-sourced path for a Dockerfile that is not the scaffolded one with this line.\n`;
+  return `\nknext cannot confirm that your Dockerfile leaves ${DIRS} closed to group and other: ${why}. The loader refuses a library under a directory they can write. knext confirms only the scaffolded \`${VINEXT_NATIVE_COPY}\` with \`${VINEXT_CLOSE_LINE}\` as the very next line, and after that line only instructions that cannot change a mode (ENV, ARG, LABEL, EXPOSE, USER, WORKDIR, ENTRYPOINT, CMD, HEALTHCHECK, STOPSIGNAL, and a read-only check such as the scaffolded \`RUN test -f ${VINEXT_DIRS[1]}/.integrity.json || { echo "..." >&2; exit 1; }\`), in a file with no heredoc, no parser directive, no SHELL or ONBUILD instruction, no instruction whose first word is not one Docker knows, no backslash at the end of a line that no space or tab precedes and no character that is not plain text: put the file in that form, or move anything else above the COPY. This is not a finding that the loader will refuse them: knext does not read what your commands do, so it cannot confirm either way, and knext deploy takes the slower image-sourced path for a Dockerfile that is not the scaffolded one with this line.\n`;
 }
 
 /**
@@ -387,15 +397,16 @@ function cannotConfirm(why: string): string {
  * (a heredoc's body is not Dockerfile text), no `escape` or `syntax` directive (the scaffolded
  * file's own pinned `syntax` line aside), no `SHELL` or `ONBUILD` instruction in any stage (the first
  * changes what every `RUN` runs, the read-only one included, and a stage that builds on this one runs the
- * second's trigger), no line that does not start with a Dockerfile instruction (a `//` line is read by
- * BuildKit as a directive), and no continuation backslash that no space or tab precedes (a lone
- * backslash, a word split in two). On top of that: the scaffolded `COPY` of native/
+ * second's trigger), no instruction whose first word is not one Docker knows (a `//` line is read by
+ * BuildKit as a directive), and no continuation backslash that no space or tab precedes (a backslash
+ * alone at the start of a line, a word split in two). On top of that: the scaffolded `COPY` of native/
  * with the close line (`VINEXT_CLOSE_LINE`) as the very next line, byte for byte, and after that line
  * nothing but instructions that cannot change a mode (`METADATA`, the one read-only `RUN`).
  * Anything else is not confirmed, and is told so:
  *
  *  - the file is not clean as a whole: it says it cannot confirm, and why, for any file that
- *    mentions native at all, in any case (a file that cannot be read is not known to have no COPY of it);
+ *    mentions native at all, in any case, in its text or as BuildKit joins its lines (a file that
+ *    cannot be read is not known to have no COPY of it);
  *  - the line is not directly after the COPY: it says to add it there, whatever else the file does;
  *  - it is, but the COPY is another spelling, or a blank line or a comment sits between them, or
  *    something after it is not on the list above: it says it cannot confirm, and why.
@@ -415,7 +426,7 @@ export function dockerfileHint(cwd: string, build?: string): string {
   const lines = text.split(/\r?\n/);
   const all = instructions(lines);
   const unclean = unreadable(text, lines, all);
-  if (unclean !== undefined) return /native/i.test(text) ? cannotConfirm(unclean) : '';
+  if (unclean !== undefined) return mentionsNative(text, all) ? cannotConfirm(unclean) : '';
   // The final stage is the image the app ships: everything after the last FROM.
   const stage = all.slice(all.map((i) => i.word).lastIndexOf('FROM') + 1);
   // The last COPY whose destination is /app/native, under the WORKDIR in force at that point.

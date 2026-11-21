@@ -547,9 +547,10 @@ Nothing is loaded when the module is imported. On the first call, it looks in th
    no `escape` or `syntax` parser directive on any line (a byte-order mark or an indent does not hide one; the
    scaffolded file's own pinned `# syntax=` line, as its first line and byte for byte, is the one that passes),
    no `SHELL` or `ONBUILD` instruction in any stage (a parent stage runs its `ONBUILD` triggers in the stage
-   that builds on it), no line that does not start with an instruction Docker knows (BuildKit reads a
-   `// syntax=` line as a directive), no line ending in a backslash that no space or tab precedes (a lone
-   backslash, or a word split in two), and no character that another reader may take for something else: any
+   that builds on it), no instruction whose first word is not one Docker knows (BuildKit reads a
+   `// syntax=` line as a directive), no line ending in a backslash that no space or tab precedes (a backslash
+   alone at the start of a line, or a word split in two; an indented one is joined like any other
+   continuation), and no character that another reader may take for something else: any
    space-like character but a space and a tab (a no-break space, a form feed), a control or invisible format
    character (a byte-order mark), an invalid byte, or a carriage return that does not end a line (visible
    non-ASCII text, such as a dash in a comment, is fine). A `Dockerfile` that fails any of these is not
